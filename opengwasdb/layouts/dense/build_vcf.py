@@ -15,14 +15,23 @@ import multiprocessing
 import shutil
 import tempfile
 import time
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from numcodecs import Blosc
 
+from opengwasdb.build.eaf_orientation import (
+    DEFAULT_SAMPLE_SITES,
+    apply_orientation_evidence,
+    sample_column,
+    site_hashes,
+    verify_eaf_orientation,
+)
 from opengwasdb.build.liftover import LiftoverFailureError, build_liftover_lookup, normalise_build
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import (
@@ -521,6 +530,9 @@ def build_dense_from_vcf_manifest(
     dtype: str = DEFAULT_DTYPE,
     overwrite: bool = False,
     n_workers: int = 1,
+    eaf_reference: str | Path | None = None,
+    eaf_reference_ancestry: str | None = None,
+    allow_unverified_eaf: bool = False,
 ) -> DenseBuildResult:
     """Build a Dense Observed-Only Store from a manifest of GWAS-VCF files.
 
@@ -562,6 +574,16 @@ def build_dense_from_vcf_manifest(
     n_workers:
         Process pool size for Pass 1 and Pass 2. 1 (default) runs both passes
         as a plain sequential loop. Requires the fork start method (Linux).
+    eaf_reference / eaf_reference_ancestry:
+        Reference frequencies each Analysis's stored EAF is correlated against
+        before any statistic array is written (issue #115, ADR 0037 §6): a
+        panel directory plus the population to read from it, or a single table
+        with an ``eaf`` column. Without one, a build of three or more Analyses
+        falls back to their consensus; a smaller build records `unverified`.
+    allow_unverified_eaf:
+        Accept Analyses a supplied reference could not verify -- too little
+        overlap, too little frequency spread -- instead of failing. Recorded in
+        the store's provenance, so the override is visible rather than implied.
     """
     manifest_rows = _read_manifest(manifest_path)
     if not manifest_rows:
@@ -657,6 +679,7 @@ def build_dense_from_vcf_manifest(
             n_analyses, n_variants, n_workers,
         )
         pass2_start = time.monotonic()
+        id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
         spill_dir = Path(
             tempfile.mkdtemp(prefix=f".{out.name}.pass2spill.", dir=staged.path.parent)
         )
@@ -681,7 +704,6 @@ def build_dense_from_vcf_manifest(
                 _pass2_keys_sorted = keys_sorted
                 _pass2_rows_sorted = rows_sorted
                 _pass2_spill_dir = spill_dir
-                id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
                 try:
                     with _fork_pool(n_workers) as pool:
                         tasks = [
@@ -707,6 +729,22 @@ def build_dense_from_vcf_manifest(
                     _pass2_spill_dir = None
 
             # --------------------------------------------------------------
+            # EAF orientation (issue #115): correlate each Analysis's stored
+            # frequencies against the reference before anything is written. A
+            # build that is going to fail should fail here, not after an hour
+            # of band-writing -- and a store must never come into existence
+            # holding a frequency column reported against the other allele.
+            # --------------------------------------------------------------
+            eaf_report = verify_eaf_orientation(
+                _eaf_observations_from_spills(
+                    spill_dir, id_by_col, hg38_alids, site_hashes(hg38_alids)
+                ),
+                eaf_reference=eaf_reference,
+                eaf_reference_ancestry=eaf_reference_ancestry,
+                allow_unverified=allow_unverified_eaf,
+            )
+
+            # --------------------------------------------------------------
             # Band-write phase: stream the retained column spills into the zarr in
             # chunk-column bands, harvesting top-hit candidates as we go. Peak memory
             # is one band (n_variants × chunk-analysis-width), not the full matrix.
@@ -718,11 +756,14 @@ def build_dense_from_vcf_manifest(
             shutil.rmtree(spill_dir, ignore_errors=True)
 
         _write_manifest(
-            staged, store_id, release_id, n_variants, n_analyses, chain_file, chunk_shape, dtype
+            staged, store_id, release_id, n_variants, n_analyses, chain_file, chunk_shape, dtype,
+            eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
         )
         log.info("Writing top-hit index from %d harvested candidate cells", len(all_rows))
         write_top_hit_indexes(staged.path, all_rows, all_cols, all_z, all_se)
-        analyses = _apply_eaf_scope(analyses, column_has_eaf)
+        analyses = apply_orientation_evidence(
+            _apply_eaf_scope(analyses, column_has_eaf), eaf_report
+        )
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
         log.info("Build complete: %d variants × %d analyses", n_variants, n_analyses)
 
@@ -999,6 +1040,53 @@ def _create_dense_zarr(
     return effective_chunks
 
 
+# ── EAF orientation (issue #115, ADR 0037 §6) ────────────────────────────────
+#
+# Shared with the Hybrid builder, which spills the same per-column arrays. The
+# check runs off the spills rather than re-reading the sources: the spilled
+# `eaf` is exactly what the band-write is about to store, so what is verified
+# is what a query will read back, and it costs no extra pass over the source
+# files.
+
+
+def _eaf_observations_from_spills(
+    spill_dir: Path,
+    id_by_col: Mapping[int, str],
+    alids: Sequence[str],
+    hashes: np.ndarray,
+    *,
+    k: int = DEFAULT_SAMPLE_SITES,
+    suffix: str = "",
+    index_key: str = "rows",
+    row_map: np.ndarray | None = None,
+) -> dict[str, dict[str, float]]:
+    """``{analysis_id: {alid: eaf}}``, sampled per Analysis, read from the spills.
+
+    Every Analysis appears, including ones whose source carried no frequency:
+    an absent key would read as "not checked yet" downstream, where the honest
+    answer is "checked, and there was nothing to check."
+
+    `row_map` translates a spill's own row indices onto the axis `alids` and
+    `hashes` describe — the Hybrid builder's Dense Component spills are indexed
+    by dense row, while both of its components are sampled on the shared axis
+    so that an Analysis living mostly off-panel is checked on the same footing
+    as one sitting on it.
+    """
+    observations: dict[str, dict[str, float]] = {aid: {} for aid in id_by_col.values()}
+    for col, analysis_id in id_by_col.items():
+        path = spill_dir / f"{col}{suffix}.npz"
+        if not path.exists():
+            continue
+        with np.load(path) as data:
+            rows = data[index_key].astype(np.int64)
+            if row_map is not None:
+                rows = row_map[rows].astype(np.int64)
+            observations[analysis_id].update(
+                sample_column(rows, data["eaf"], alids, hashes, k=k)
+            )
+    return observations
+
+
 def _write_dense_bands(
     staged: StagedRelease,
     spill_dir: Path,
@@ -1117,6 +1205,7 @@ def _write_manifest(
     chain_file: str | Path | None,
     chunk_shape: tuple[int, int],
     dtype: str,
+    eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
     manifest = StoreManifest(
         store_id=store_id,
@@ -1139,6 +1228,7 @@ def _write_manifest(
                 "compressor": DEFAULT_COMPRESSOR,
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
             },
+            **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
         },
     )
     staged.write_manifest(manifest)

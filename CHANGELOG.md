@@ -15,6 +15,27 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Added
 
+- **Allele-flipped EAF is rejected at build time** (#115, ADR 0037 §6). Each
+  Analysis's A1-oriented `eaf` is correlated against a reference over a
+  deterministic sample of variants before any statistic array is written;
+  `r < 0` fails the build, naming the Analysis and the observed `r`. This
+  catches `GCST003566` in the `gwas-catalog-eur-hybrid` pilot, which reports
+  `effect_allele_frequency` against the *other* allele (r = -0.9992 against the
+  EUR panel, where every other study in the release reads +0.999). A
+  correlation rather than a difference threshold, so a bottlenecked cohort
+  whose frequencies differ from the panel by 3000x still passes.
+  - New `--eaf-reference` / `--eaf-reference-ancestry` /
+    `--allow-unverified-eaf` options on `build-dense-vcf`, `build-hybrid` and
+    `build-ragged-ssf`, reading either an LD panel directory or a table with an
+    `eaf` column.
+  - With no reference and three or more Analyses, the consensus of the other
+    Analyses is used instead; a build whose Analyses contradict each other
+    fails rather than guessing which is right.
+  - Outcomes are persisted: `eaf_orientation`, `eaf_orientation_r` and
+    `eaf_orientation_n` in `analyses.tsv`, plus the reference's identity and
+    checksum in `manifest.json`'s `provenance.eaf_orientation`.
+  - `audit-eaf-orientation` re-runs the correlation against a supplied panel
+    over a built store's own arrays, for stores built before the check existed.
 - CI (`.github/workflows/ci.yml`): tests, tooling baselines, and a changelog
   gate on every pull request and push to `dev`/`main`. The repository had no CI
   at all before this.
@@ -25,6 +46,21 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Changed
 
+- **`validate` now rejects a store that carries EAF it never checked** (#115).
+  Every Analysis with `eaf_scope=association` must record EAF orientation
+  evidence; `unverified` is reported as a warning. This invalidates Store
+  Releases built between ADR 0036 (which began retaining EAF) and this change —
+  including all four pilots — until they are rebuilt or audited with
+  `audit-eaf-orientation`. Deliberate: a frequency column nobody has checked is
+  indistinguishable from one reported against the other allele.
+- `analyses.tsv` gains three columns (`eaf_orientation`, `eaf_orientation_r`,
+  `eaf_orientation_n`, #115). Store-only: a release manifest neither carries
+  nor needs them, and `opengwasdb-stores` accepts them through the schema's
+  existing superset property (nothing there enumerates the column list). Its
+  build generators, however, invoke the CLI: they should start passing
+  `--eaf-reference` so pilot rebuilds are verified rather than `unverified`.
+  `GCST003566` itself is already excluded from the EUR hybrid pilot there, with
+  the evidence recorded in `inclusion_reason` (`opengwasdb-stores` eefcc81).
 - `CONTRIBUTING.md` gains a Documentation section: what goes stale, what
   regenerates it, that benchmark numbers are re-run rather than edited, that
   `opengwasdb-stores` holds docs depending on this package's CLI surface, and

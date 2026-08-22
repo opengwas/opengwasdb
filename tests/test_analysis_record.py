@@ -56,6 +56,9 @@ _FULL_ANALYSIS = Analysis(
     completion_median_pearson_r="0.91",
     completion_n_imputed_total="1200",
     completion_n_missing_total="3",
+    eaf_orientation="passed",
+    eaf_orientation_r="0.999200",
+    eaf_orientation_n="18422",
     n_hits_5e8="42",
     n_hits_5e6="120",
     n_hits_5e4="900",
@@ -72,6 +75,8 @@ def test_analysis_model_has_no_retired_identifier_fields():
 def test_analysis_columns_match_the_adr_0035_order():
     # `eaf_scope` joined the list in ADR 0036, between the sample-size
     # interpretation columns and the effect-scale ones it sits alongside.
+    # `eaf_orientation*` joined it for issue #115, alongside the other
+    # build-time evidence columns a store carries and a manifest cannot.
     assert ANALYSIS_COLUMNS == (
         "analysis_index",
         "analysis_id",
@@ -104,6 +109,9 @@ def test_analysis_columns_match_the_adr_0035_order():
         "completion_median_pearson_r",
         "completion_n_imputed_total",
         "completion_n_missing_total",
+        "eaf_orientation",
+        "eaf_orientation_r",
+        "eaf_orientation_n",
         "n_hits_5e8",
         "n_hits_5e6",
         "n_hits_5e4",
@@ -120,6 +128,24 @@ def test_minimal_analysis_is_representable_with_every_optional_field_blank():
         if column in ("analysis_index", "analysis_id"):
             continue
         assert row[column] == "", f"{column} was fabricated: {row[column]!r}"
+
+
+def test_the_round_trip_fixture_populates_every_column():
+    """Guard on the round-trip tests below, which are only as complete as this
+    fixture is.
+
+    `_analysis_row`/`_analysis_from_row` map each column by hand, so a field
+    added to `Analysis` and to `ANALYSIS_COLUMNS` but forgotten in the mappers
+    writes a permanently blank column -- and a round-trip test whose fixture
+    leaves that field blank passes anyway, proving nothing. This asserts the
+    fixture is meaningful before anything is asserted about it.
+    """
+    blank = [
+        name
+        for name, value in dataclasses.asdict(_FULL_ANALYSIS).items()
+        if name != "analysis_index" and not value
+    ]
+    assert blank == [], f"_FULL_ANALYSIS leaves {blank} blank, so the round trip skips them"
 
 
 def test_write_then_read_round_trips_every_populated_column(tmp_path):

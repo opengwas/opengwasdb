@@ -21,10 +21,17 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import numpy as np
 
+from opengwasdb.build.eaf_orientation import (
+    apply_orientation_evidence,
+    check_eaf_orientation,
+    enforce_eaf_orientation,
+    load_eaf_reference,
+    select_sites,
+)
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -239,8 +246,20 @@ def build_ragged_from_ssf(
     release_id: str,
     stored_effect_scale: str = StoredEffectScale.SD.value,
     overwrite: bool = False,
+    eaf_reference: str | Path | None = None,
+    eaf_reference_ancestry: str | None = None,
+    allow_unverified_eaf: bool = False,
 ) -> RaggedBuildResult:
-    """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs."""
+    """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs.
+
+    ``eaf_reference``/``eaf_reference_ancestry``/``allow_unverified_eaf`` drive
+    the EAF orientation check (issue #115): each Analysis's A1-oriented EAF is
+    correlated against the reference, or -- with no reference and three or more
+    Analyses -- against the consensus of the others, before any array is
+    written. A Ragged store is where the metabolome and eQTL pilots live, and
+    those manifests routinely carry a single Analysis, so `unverified` is a
+    normal outcome here; it is recorded per Analysis rather than passed over.
+    """
     try:
         StoredEffectScale(stored_effect_scale)
     except ValueError as exc:
@@ -277,6 +296,31 @@ def build_ragged_from_ssf(
                     f"{n_conflicting} conflicting duplicate(s) dropped)"
                 )
             print(msg)
+
+        # ── EAF orientation (issue #115, ADR 0037 §6) ───────────────────────────
+        # Before the variant axis, the CSR, or anything else is written: a
+        # source reporting `effect_allele_frequency` against the other allele
+        # must not produce a store at all.
+        eaf_sites = select_sites(alid_variant.keys())
+        wanted_sites = set(eaf_sites)
+        eaf_reference_loaded = (
+            None
+            if eaf_reference is None
+            else load_eaf_reference(eaf_reference, eaf_sites, ancestry=eaf_reference_ancestry)
+        )
+        eaf_report = check_eaf_orientation(
+            {
+                a.analysis_id: {
+                    r.alid: r.eaf
+                    for r in recs
+                    if r.eaf is not None and r.alid in wanted_sites
+                }
+                for a, recs in zip(analytes, per_analysis, strict=True)
+            },
+            reference=eaf_reference_loaded,
+            n_sites=len(eaf_sites),
+        )
+        enforce_eaf_orientation(eaf_report, allow_unverified=allow_unverified_eaf)
 
         # ── Variant axis: sort unique variants by (chr,pos), assign variant_index ─
         variants = sorted(
@@ -344,7 +388,8 @@ def build_ragged_from_ssf(
             for a, eaf_scope in zip(analytes, eaf_scopes, strict=True)
         ]
         write_analysis_records(
-            staged.path / "analyses.tsv", add_hit_counts(staged.path, analyses)
+            staged.path / "analyses.tsv",
+            add_hit_counts(staged.path, apply_orientation_evidence(analyses, eaf_report)),
         )
 
         _write_manifest(
@@ -353,6 +398,7 @@ def build_ragged_from_ssf(
             n_associations=csr.n_associations, manifest_path=str(manifest_path),
             stored_effect_scale=stored_effect_scale,
             mhc_analyses=[a.analysis_id for a in analytes if a.mhc],
+            eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
         )
 
         result = RaggedBuildResult(out, len(variants), len(analytes), csr.n_associations)
@@ -367,6 +413,7 @@ def _write_manifest(
     staged: StagedRelease, store_id: str, release_id: str, *,
     n_variants: int, n_analyses: int, n_associations: int,
     manifest_path: str, stored_effect_scale: str, mhc_analyses: list[str],
+    eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
     manifest = StoreManifest(
         store_id=store_id,
@@ -385,6 +432,7 @@ def _write_manifest(
             "n_variants": n_variants,
             "n_analyses": n_analyses,
             "n_associations": n_associations,
+            **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
             "ragged": {
                 "statistic_arrays": ["z", "se"],
                 "dtype": "float16",

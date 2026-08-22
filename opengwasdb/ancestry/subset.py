@@ -154,6 +154,9 @@ def build_hybrid_from_catalogue(
     n_workers: int = 1,
     chunk_shape: tuple[int, int] | None = None,
     manifest_path: str | Path | None = None,
+    eaf_reference: str | Path | None = None,
+    eaf_reference_ancestry: str | None = None,
+    allow_unverified_eaf: bool = False,
 ) -> SubsetResult:
     """Subset the Catalogue to ``ancestry`` and build a Hybrid store from it.
 
@@ -167,6 +170,12 @@ def build_hybrid_from_catalogue(
     manifest -- Assigned Ancestry rides through into ``analyses.tsv`` as part
     of the build itself -- then folds release-level Catalogue provenance into
     ``manifest.json``.
+
+    ``eaf_reference``/``eaf_reference_ancestry``/``allow_unverified_eaf`` pass
+    straight through to the EAF orientation check (issue #115). This is the
+    path the `gwas-catalog-eur-hybrid` pilot is built by, and the path whose
+    store the flipped `GCST003566` frequencies ended up in, so it is the one
+    that most needs a reference supplied.
     """
     # Imported here to keep the ancestry package importable without the heavy
     # build stack (and to avoid a build → ancestry → build import cycle).
@@ -195,6 +204,9 @@ def build_hybrid_from_catalogue(
         overwrite=overwrite,
         n_workers=n_workers,
         chunk_shape=chunk_shape or DEFAULT_CHUNK_SHAPE,
+        eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf,
     )
     record_catalogue_provenance(output_path, subset)
     return subset

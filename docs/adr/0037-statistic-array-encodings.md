@@ -237,6 +237,35 @@ to 3000× in magnitude but not in direction.
 | FinnGen (bottlenecked isolate) | +0.9954 |
 | Metabolome | +0.9996 |
 
+**As implemented** (issue #115, store-format spec §9.1). This part of the ADR
+landed ahead of the encoding work, since it needs no codec and no
+`format_version` bump. Three details were settled during implementation and are
+recorded here rather than left to the code:
+
+- The outcome is three-valued, not two. `unverified` covers the cases where a
+  correlation must not be interpreted — too few overlapping variants, too
+  little frequency variance on either side, or an Analysis that stores no EAF —
+  and is recorded per Analysis rather than passing quietly as `passed`.
+- **The reference is checked before it is trusted.** A panel column that is
+  minor allele frequency rather than allele-oriented EAF is symmetric about 0.5
+  and would correlate a flipped source at r ≈ +1, certifying the exact defect
+  this check exists to find. A reference reporting a frequency above 0.5 for
+  only a negligible fraction of its variants is refused outright — a single
+  rounded row must not be enough to get a MAF column accepted.
+- **A build with no panel falls back to the consensus of the other Analyses**
+  when there are at least three — any layout, not only Dense/Ragged. A
+  consensus can establish that Analyses disagree but not which is right, so an
+  inconsistent build fails rather than dropping an Analysis.
+- **The correlation is computed per Analysis, over that Analysis's own
+  variants.** Sampling the store's variant axis instead looks equivalent and is
+  not: `GCST90199621` in the metabolome pilot covers 0.8% of the axis and drew
+  89 of 20,000 axis-sampled sites against the EUR panel — too few to say
+  anything — where 20,000 of its own variants are ample.
+
+The evidence — reference identity and checksum, overlap `n`, observed `r`,
+outcome — is persisted in `analyses.tsv` and `manifest.json`, because
+standalone validation cannot depend on a panel that may no longer be available.
+
 ## Consequences
 
 - **This is a breaking format change**, unlike ADR 0036. It needs a

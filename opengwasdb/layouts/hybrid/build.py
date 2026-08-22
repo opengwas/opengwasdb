@@ -22,9 +22,15 @@ from concurrent.futures import as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
+from opengwasdb.build.eaf_orientation import (
+    apply_orientation_evidence,
+    site_hashes,
+    verify_eaf_orientation,
+)
 from opengwasdb.build.liftover import LiftoverFailureError
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
@@ -33,6 +39,7 @@ from opengwasdb.layouts.dense.build_vcf import (
     _apply_eaf_scope,
     _apply_se_divisor,
     _create_dense_zarr,
+    _eaf_observations_from_spills,
     _encode_variant_keys,
     _fork_pool,
     _lift_manifest_variants,
@@ -396,6 +403,9 @@ def build_hybrid_from_vcf_manifest(
     dtype: str = DEFAULT_DTYPE,
     overwrite: bool = False,
     n_workers: int = 1,
+    eaf_reference: str | Path | None = None,
+    eaf_reference_ancestry: str | None = None,
+    allow_unverified_eaf: bool = False,
 ) -> HybridBuildResult:
     """Build a Hybrid store from a manifest of GWAS-VCF files and a reference panel.
 
@@ -405,6 +415,14 @@ def build_hybrid_from_vcf_manifest(
     assumed hg19 and lifted to hg38 inline, unless its manifest row declares
     ``source_assembly=hg38`` (issue #85, e.g. a harmonised GWAS-SSF source),
     in which case it passes through unchanged -- see `_read_manifest`.
+
+    ``eaf_reference``/``eaf_reference_ancestry``/``allow_unverified_eaf`` drive
+    the EAF orientation check (issue #115), exactly as for the dense builder --
+    over both components, since an Analysis's off-panel frequencies are as
+    capable of being reported against the wrong allele as its on-panel ones.
+    Note that ``reference_panel`` is a *variant set* (it defines the Dense
+    Component axis) and carries no frequencies, so it cannot serve as the
+    reference here; the two are separate inputs.
     """
     manifest_rows = _read_manifest(manifest_path)
     if not manifest_rows:
@@ -485,6 +503,7 @@ def build_hybrid_from_vcf_manifest(
             tempfile.mkdtemp(prefix=f".{out.name}.hybridspill.", dir=staged.path.parent)
         )
         try:
+            id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
             if n_workers <= 1:
                 for i, row in enumerate(manifest_rows):
                     col = analysis_index[row.trait_id]
@@ -506,7 +525,6 @@ def build_hybrid_from_vcf_manifest(
                 _pass2_targets_sorted = targets_sorted
                 _pass2_ispanel_sorted = ispanel_sorted
                 _pass2_spill_dir = spill_dir
-                id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
                 try:
                     with _fork_pool(n_workers) as pool:
                         tasks = [
@@ -530,6 +548,30 @@ def build_hybrid_from_vcf_manifest(
                     _pass2_ispanel_sorted = None
                     _pass2_spill_dir = None
 
+            # EAF orientation (issue #115): both components at once, sampled
+            # on the shared axis so an Analysis whose frequencies live mostly
+            # in the overflow is checked on the same footing as one sitting on
+            # the panel. The two components are sampled separately and merged,
+            # so an Analysis present in both contributes up to twice the
+            # per-Analysis budget -- more evidence than asked for, never less.
+            # As in the dense builder, this runs before anything is written.
+            shared_hashes = site_hashes(shared_sorted)
+            eaf_observations = _eaf_observations_from_spills(
+                spill_dir, id_by_col, shared_sorted, shared_hashes,
+                row_map=dense_to_shared,
+            )
+            for analysis_id, off_panel in _eaf_observations_from_spills(
+                spill_dir, id_by_col, shared_sorted, shared_hashes,
+                suffix=".ovf", index_key="variant_index",
+            ).items():
+                eaf_observations[analysis_id].update(off_panel)
+            eaf_report = verify_eaf_orientation(
+                eaf_observations,
+                eaf_reference=eaf_reference,
+                eaf_reference_ancestry=eaf_reference_ancestry,
+                allow_unverified=allow_unverified_eaf,
+            )
+
             # Dense band-write (reuses the dense builder's band-streamer + top-hit harvest).
             all_rows, all_cols, all_z, all_se, column_has_eaf = _write_dense_bands(
                 dense_staged, spill_dir, n_panel, n_analyses, effective_chunks, dtype, t2
@@ -543,11 +585,17 @@ def build_hybrid_from_vcf_manifest(
             # have been read (ADR 0036).
             log.info("Assembling Ragged Overflow CSR from %d columns", n_analyses)
             csr, overflow_has_eaf = _assemble_overflow_csr(spill_dir, n_analyses)
-            analyses = _apply_eaf_scope(analyses, column_has_eaf | overflow_has_eaf)
+            analyses = apply_orientation_evidence(
+                _apply_eaf_scope(analyses, column_has_eaf | overflow_has_eaf), eaf_report
+            )
 
             # manifest.json before analyses.tsv/overview.html: overview.html
             # reads manifest.json fresh from output_path for its header (ADR 0032).
-            _write_dense_manifest(dense_staged, store_id, release_id, n_panel, n_analyses, chain_file, dtype)
+            eaf_provenance = eaf_report.provenance(allow_unverified=allow_unverified_eaf)
+            _write_dense_manifest(
+                dense_staged, store_id, release_id, n_panel, n_analyses, chain_file, dtype,
+                eaf_orientation=eaf_provenance,
+            )
             write_analyses_tsv(dense_dir, add_hit_counts(dense_dir, analyses))
         finally:
             shutil.rmtree(spill_dir, ignore_errors=True)
@@ -561,7 +609,7 @@ def build_hybrid_from_vcf_manifest(
         # Dense Component write above.
         _write_hybrid_manifest(
             staged, store_id, release_id, n_shared, n_analyses, n_panel, n_off_panel,
-            n_overflow, chain_file, chunk_shape, dtype,
+            n_overflow, chain_file, chunk_shape, dtype, eaf_orientation=eaf_provenance,
         )
 
         # ── Shared union table + shared index ─────────────────────────────────────
@@ -617,6 +665,7 @@ def _write_dense_manifest(
     n_analyses: int,
     chain_file: str | Path | None,
     dtype: str,
+    eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
     manifest = StoreManifest(
         store_id=f"{store_id}-dense",
@@ -633,6 +682,7 @@ def _write_dense_manifest(
             "n_variants": n_variants,
             "n_analyses": n_analyses,
             "dense": {"statistic_arrays": ["z", "se"], "dtype": dtype},
+            **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
         },
     )
     dense_staged.write_manifest(manifest)
@@ -650,6 +700,7 @@ def _write_hybrid_manifest(
     chain_file: str | Path | None,
     chunk_shape: tuple[int, int],
     dtype: str,
+    eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
     manifest = StoreManifest(
         store_id=store_id,
@@ -674,6 +725,7 @@ def _write_hybrid_manifest(
                 "chunk_shape": list(chunk_shape),
                 "compressor": DEFAULT_COMPRESSOR,
             },
+            **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
         },
     )
     staged.write_manifest(manifest)

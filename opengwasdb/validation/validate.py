@@ -23,6 +23,8 @@ from opengwasdb.model.analyses import (
 from opengwasdb.model.enums import (
     AncestryAssignmentMethod,
     CompletionState,
+    EafOrientationOutcome,
+    EafScope,
     OriginalSdMethod,
     PrimaryStorageLayout,
     StoredEffectScale,
@@ -85,6 +87,7 @@ def validate_store(
 
     store_path = Path(path)
     errors: list[str] = []
+    warnings: list[str] = []
     store = _load_manifest(store_path, errors)
     if store is None:
         return ValidationResult(errors=errors)
@@ -92,24 +95,27 @@ def validate_store(
 
     if manifest.primary_layout is PrimaryStorageLayout.RAGGED:
         _validate_ragged_store(store, errors)
+        _validate_eaf_orientation(store, errors, warnings)
         if source is not None:
             errors.append("source-fidelity check is only supported for dense stores")
-        return ValidationResult(errors=errors)
+        return ValidationResult(errors=errors, warnings=warnings)
 
     if manifest.primary_layout is PrimaryStorageLayout.HYBRID:
         _validate_hybrid_store(store, errors)
+        _validate_eaf_orientation(store, errors, warnings)
         if source is not None:
             errors.append("source-fidelity check is only supported for dense stores")
-        return ValidationResult(errors=errors)
+        return ValidationResult(errors=errors, warnings=warnings)
 
     _validate_dense_store(store, errors)
+    _validate_eaf_orientation(store, errors, warnings)
     if source is not None and not errors:
         _validate_source_fidelity(
             store, source, errors,
             n_samples=fidelity_samples, seed=fidelity_seed,
             source_assembly=source_assembly, chain_file=chain_file,
         )
-    return ValidationResult(errors=errors)
+    return ValidationResult(errors=errors, warnings=warnings)
 
 
 def _validate_closed_envelope(
@@ -747,6 +753,76 @@ def _reject_stray_analyses_table(connection: sqlite3.Connection, errors: list[st
         )
 
 
+def _validate_eaf_orientation(
+    store: OpenGWASDBStore, errors: list[str], warnings: list[str]
+) -> None:
+    """Every Analysis storing EAF must carry orientation evidence (issue #115).
+
+    Checks the *recorded* evidence, not the reference panel: a Store Release is
+    meant to be interpretable on its own, long after the panel it was built
+    against has moved or been superseded. `opengwasdb audit-eaf-orientation`
+    re-runs the correlation when a panel is supplied.
+
+    A blank `eaf_orientation` on an Analysis whose `eaf_scope` is `association`
+    is an error, not a shrug: it means the store was built before the check
+    existed, and its frequency column has never been confirmed to describe the
+    allele the store says it does -- which is exactly the state
+    `gwas-catalog-eur-hybrid` was in. `unverified` is a warning: honestly
+    recorded, still not evidence of correctness.
+    """
+    analyses_path = store.analyses_path
+    if not analyses_path.exists():
+        return
+    try:
+        table = read_analyses(analyses_path)
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        errors.append(f"cannot read analyses.tsv for the EAF orientation check: {exc}")
+        return
+    recorded = store.manifest.provenance.get("eaf_orientation") or {}
+    by_id = {
+        str(entry.get("analysis_id", "")): entry for entry in recorded.get("analyses", [])
+    }
+    for row in table.rows:
+        analysis_id = row.get("analysis_id", "")
+        if row.get("eaf_scope", "") != EafScope.ASSOCIATION.value:
+            continue
+        outcome = row.get("eaf_orientation", "")
+        if not outcome:
+            errors.append(
+                f"analysis {analysis_id!r} stores per-association EAF but carries no "
+                "eaf_orientation evidence -- its frequencies have never been checked "
+                "against a reference, so a column reported against the other allele "
+                "would be indistinguishable from a correct one (issue #115). Rebuild "
+                "the store, or audit it with a reference panel"
+            )
+            continue
+        if outcome == EafOrientationOutcome.FAILED.value:
+            errors.append(
+                f"analysis {analysis_id!r} recorded eaf_orientation=failed "
+                f"(r = {row.get('eaf_orientation_r', '?')}): its stored EAF is reported "
+                "against the other allele and must not be read as a frequency of the "
+                "stored effect allele"
+            )
+        elif outcome == EafOrientationOutcome.UNVERIFIED.value:
+            entry = by_id.get(analysis_id, {})
+            warnings.append(
+                f"analysis {analysis_id!r} stores EAF whose orientation is unverified"
+                + (f": {entry['note']}" if entry.get("note") else "")
+            )
+        entry = by_id.get(analysis_id)
+        if entry is None:
+            errors.append(
+                f"analysis {analysis_id!r} records eaf_orientation={outcome!r} in "
+                "analyses.tsv, but manifest.json's provenance has no orientation "
+                "evidence for it -- the two must agree on what was checked"
+            )
+        elif str(entry.get("outcome", "")) != outcome:
+            errors.append(
+                f"analysis {analysis_id!r} records eaf_orientation={outcome!r} in "
+                f"analyses.tsv but {entry.get('outcome')!r} in manifest.json provenance"
+            )
+
+
 def _validate_analyses_tsv(analyses_path: Path, errors: list[str]) -> int:
     """Validate `analyses.tsv` (store-format spec §20, ADR 0030) and return its
     row count -- the `n_analyses` the rest of dense validation cross-checks
@@ -797,6 +873,7 @@ def _validate_analyses_tsv(analyses_path: Path, errors: list[str]) -> int:
             ("stored_effect_scale", StoredEffectScale),
             ("original_sd_method", OriginalSdMethod),
             ("ancestry_assignment_method", AncestryAssignmentMethod),
+            ("eaf_orientation", EafOrientationOutcome),
         ):
             value = row.get(column, "")
             if not value:

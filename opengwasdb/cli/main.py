@@ -15,6 +15,7 @@ import typer
 from opengwasdb.ancestry.mixture import Gates
 from opengwasdb.ancestry.pipeline import annotate_catalogue, read_source_manifest
 from opengwasdb.ancestry.reference import load_reference
+from opengwasdb.build.eaf_orientation import DEFAULT_SAMPLE_SITES
 from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import (
@@ -58,6 +59,22 @@ class OutputFormat(StrEnum):
     json = "json"
 
 
+# EAF orientation options (issue #115, ADR 0037 §6), shared by every build
+# command that can store a frequency. Declared once: a build path that took a
+# reference under a different flag name would be a build path whose stores
+# nobody could compare.
+_EAF_REFERENCE_HELP = (
+    "Reference frequencies to check each Analysis's stored EAF against: an LD "
+    "panel directory (with --eaf-reference-ancestry) or a table with an 'eaf' "
+    "column. A source reporting frequency against the other allele fails the build."
+)
+_EAF_ANCESTRY_HELP = "Population to read from an --eaf-reference panel directory, e.g. EUR"
+_ALLOW_UNVERIFIED_HELP = (
+    "Accept Analyses the supplied --eaf-reference could not verify (too little "
+    "overlap or frequency spread) instead of failing. Recorded in the store's provenance."
+)
+
+
 @app.command()
 def info(store_path: Path) -> None:
     """Print basic manifest information for a local Store Release."""
@@ -78,11 +95,70 @@ def validate_command(store_path: Path) -> None:
     """Validate a local Store Release."""
 
     result = validate_store(store_path)
+    for warning in result.warnings:
+        typer.echo(f"warning: {warning}", err=True)
     if result.ok:
         typer.echo("valid")
         return
     for error in result.errors:
         typer.echo(f"error: {error}", err=True)
+    raise typer.Exit(1)
+
+
+@app.command("audit-eaf-orientation")
+def audit_eaf_orientation_command(
+    store_path: Path,
+    eaf_reference: Path = typer.Option(..., help=_EAF_REFERENCE_HELP),
+    eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
+    n_sites: int = typer.Option(
+        DEFAULT_SAMPLE_SITES, help="How many variants to correlate over"
+    ),
+) -> None:
+    """Re-run the EAF orientation check over a built store's stored frequencies.
+
+    `validate` checks the evidence a build recorded, because a Store Release
+    must be readable without the panel it was built against. This re-derives the
+    answer from the store's own arrays, which is how a store built before the
+    check existed gets one -- and how a recorded `passed` gets tested against a
+    second reference rather than taken on trust (issue #115).
+
+    Exits non-zero when an Analysis correlates negatively, or when the audit
+    does not reproduce what the store recorded.
+    """
+    from opengwasdb.validation.eaf_audit import audit_eaf_orientation
+
+    result = audit_eaf_orientation(
+        store_path,
+        eaf_reference,
+        ancestry=eaf_reference_ancestry,
+        n_sites=n_sites,
+    )
+    typer.echo(
+        json.dumps(
+            {
+                "store_path": str(store_path),
+                "recorded": result.recorded,
+                "disagreements": list(result.disagreements),
+                **result.report.provenance(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    if result.ok:
+        return
+    for evidence in result.report.failures:
+        typer.echo(
+            f"error: analysis {evidence.analysis_id} reports EAF against the other "
+            f"allele (r = {evidence.r:+.4f} over {evidence.n_overlap} variants)",
+            err=True,
+        )
+    for analysis_id in result.disagreements:
+        typer.echo(
+            f"error: analysis {analysis_id} recorded "
+            f"{result.recorded.get(analysis_id)!r} but this audit did not reproduce it",
+            err=True,
+        )
     raise typer.Exit(1)
 
 
@@ -131,6 +207,9 @@ def build_dense_vcf_command(
     chunk_analyses: int = typer.Option(
         DEFAULT_CHUNK_SHAPE[1], help="Zarr chunk size along the analysis (trait) axis"
     ),
+    eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
+    eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
+    allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
 ) -> None:
     """Build a Dense Observed-Only store from a manifest of GWAS-VCF files.
 
@@ -154,6 +233,9 @@ def build_dense_vcf_command(
         overwrite=overwrite,
         n_workers=n_workers,
         chunk_shape=(chunk_variants, chunk_analyses),
+        eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf,
     )
     typer.echo(
         json.dumps(
@@ -184,6 +266,9 @@ def build_hybrid_command(
     chunk_analyses: int = typer.Option(
         DEFAULT_CHUNK_SHAPE[1], help="Zarr chunk size along the analysis (trait) axis"
     ),
+    eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
+    eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
+    allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
 ) -> None:
     """Build a Hybrid store (Dense Component + Ragged Overflow) from a VCF manifest.
 
@@ -203,6 +288,9 @@ def build_hybrid_command(
         overwrite=overwrite,
         n_workers=n_workers,
         chunk_shape=(chunk_variants, chunk_analyses),
+        eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf,
     )
     typer.echo(
         json.dumps(
@@ -249,6 +337,9 @@ def build_hybrid_from_catalogue_command(
     n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 2"),
     chunk_variants: int = typer.Option(DEFAULT_CHUNK_SHAPE[0]),
     chunk_analyses: int = typer.Option(DEFAULT_CHUNK_SHAPE[1]),
+    eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
+    eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
+    allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
 ) -> None:
     """Subset the Catalogue to one ancestry and build a Hybrid store from it.
 
@@ -274,6 +365,9 @@ def build_hybrid_from_catalogue_command(
         overwrite=overwrite,
         n_workers=n_workers,
         chunk_shape=(chunk_variants, chunk_analyses),
+        eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf,
     )
     typer.echo(
         json.dumps(
@@ -531,6 +625,9 @@ def build_ragged_ssf_command(
     release_id: str = typer.Option(...),
     stored_effect_scale: str = typer.Option("sd", help="sd, log_or, or log_hazard"),
     overwrite: bool = typer.Option(False),
+    eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
+    eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
+    allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
@@ -549,6 +646,9 @@ def build_ragged_ssf_command(
         release_id=release_id,
         stored_effect_scale=stored_effect_scale,
         overwrite=overwrite,
+        eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf,
     )
     typer.echo(
         json.dumps(

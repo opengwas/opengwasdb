@@ -543,14 +543,23 @@ class VariantAxis:
         }
 
     def all(self) -> list[VariantRecord]:
-        with pysam.BGZFile(str(self.table_path), "r") as handle:  # type: ignore[call-arg]
-            records: list[VariantRecord] = []
-            for raw_line in handle:
-                line = raw_line.decode("utf-8")
-                if line.startswith("#"):
-                    continue
-                records.append(_parse_variant_line(line))
-        return records
+        return list(iter_variant_records(self.table_path))
+
+
+def iter_variant_records(table_path: str | Path) -> Iterator[VariantRecord]:
+    """Stream a Store Variant Table row by row, in `variant_index` order.
+
+    What `VariantAxis.all` materialises. A caller that only needs one field per
+    row -- the EAF orientation audit needs `variant_index` and `alid` -- would
+    otherwise pay tens of millions of `VariantRecord` objects to get at them,
+    on stores where that is gigabytes.
+    """
+    with pysam.BGZFile(str(table_path), "r") as handle:  # type: ignore[call-arg]
+        for raw_line in handle:
+            line = raw_line.decode("utf-8")
+            if line.startswith("#"):
+                continue
+            yield _parse_variant_line(line)
 
 
 def _parse_variant_line(line: str) -> VariantRecord:

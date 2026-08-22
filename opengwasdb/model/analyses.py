@@ -33,6 +33,7 @@ from typing import Any
 
 from opengwasdb.model.enums import (
     AncestryAssignmentMethod,
+    EafOrientationOutcome,
     EafScope,
     OriginalSdMethod,
     SampleSizeKind,
@@ -74,6 +75,18 @@ SHARED_CORE_COLUMNS: tuple[str, ...] = (
 # -- it is also the schema opengwasdb-stores validates manifests against.
 TOP_HIT_COUNT_COLUMNS: tuple[str, ...] = ("n_hits_5e8", "n_hits_5e6", "n_hits_5e4")
 
+# EAF orientation evidence (issue #115, ADR 0037 §6): the outcome of
+# correlating this Analysis's A1-oriented EAF against a reference, the observed
+# r, and how many variants it was computed over. Persisted per Analysis because
+# standalone validation cannot depend on the reference panel still being
+# available -- it checks the recorded evidence, and a separate audit re-runs the
+# correlation when a panel is supplied.
+EAF_ORIENTATION_COLUMNS: tuple[str, ...] = (
+    "eaf_orientation",
+    "eaf_orientation_r",
+    "eaf_orientation_n",
+)
+
 # Produced during or after the build; must not be required of a release
 # manifest, which is generated before a build runs.
 STORE_ONLY_COLUMNS: tuple[str, ...] = (
@@ -81,6 +94,7 @@ STORE_ONLY_COLUMNS: tuple[str, ...] = (
     "completion_median_pearson_r",
     "completion_n_imputed_total",
     "completion_n_missing_total",
+    *EAF_ORIENTATION_COLUMNS,
     *TOP_HIT_COUNT_COLUMNS,
 )
 
@@ -138,6 +152,7 @@ _VOCABULARIES: dict[str, type[StrEnum]] = {
     "original_sd_method": OriginalSdMethod,
     "ancestry_assignment_method": AncestryAssignmentMethod,
     "eaf_scope": EafScope,
+    "eaf_orientation": EafOrientationOutcome,
 }
 
 _CASE_CONTROL_SCALE_VALUES = {StoredEffectScale.LOG_OR.value, StoredEffectScale.LOG_HAZARD.value}
@@ -339,6 +354,7 @@ ANALYSIS_COLUMNS: tuple[str, ...] = (
     "completion_median_pearson_r",
     "completion_n_imputed_total",
     "completion_n_missing_total",
+    *EAF_ORIENTATION_COLUMNS,
     *TOP_HIT_COUNT_COLUMNS,
 )
 
@@ -421,6 +437,12 @@ class Analysis:
     completion_median_pearson_r: str = ""
     completion_n_imputed_total: str = ""
     completion_n_missing_total: str = ""
+    # EAF orientation evidence (issue #115). Blank on an Analysis no build-time
+    # check ever ran over -- which validation treats as a store that predates
+    # the check, not as one that passed it.
+    eaf_orientation: str = ""
+    eaf_orientation_r: str = ""
+    eaf_orientation_n: str = ""
     n_hits_5e8: str = ""
     n_hits_5e6: str = ""
     n_hits_5e4: str = ""
@@ -544,6 +566,9 @@ def _analysis_row(index: int, a: Analysis, fieldnames: tuple[str, ...]) -> dict[
         "completion_median_pearson_r": a.completion_median_pearson_r,
         "completion_n_imputed_total": a.completion_n_imputed_total,
         "completion_n_missing_total": a.completion_n_missing_total,
+        "eaf_orientation": a.eaf_orientation,
+        "eaf_orientation_r": a.eaf_orientation_r,
+        "eaf_orientation_n": a.eaf_orientation_n,
         "n_hits_5e8": a.n_hits_5e8,
         "n_hits_5e6": a.n_hits_5e6,
         "n_hits_5e4": a.n_hits_5e4,
@@ -592,6 +617,9 @@ def _analysis_from_row(row: dict[str, str], fieldnames: tuple[str, ...]) -> Anal
         completion_median_pearson_r=row.get("completion_median_pearson_r", ""),
         completion_n_imputed_total=row.get("completion_n_imputed_total", ""),
         completion_n_missing_total=row.get("completion_n_missing_total", ""),
+        eaf_orientation=row.get("eaf_orientation", ""),
+        eaf_orientation_r=row.get("eaf_orientation_r", ""),
+        eaf_orientation_n=row.get("eaf_orientation_n", ""),
         n_hits_5e8=row.get("n_hits_5e8", ""),
         n_hits_5e6=row.get("n_hits_5e6", ""),
         n_hits_5e4=row.get("n_hits_5e4", ""),

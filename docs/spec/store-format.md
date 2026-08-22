@@ -262,6 +262,9 @@ completed_against   (Reference-Completed releases only; null when unimputed)
 completion_median_pearson_r   (Reference-Completed releases only)
 completion_n_imputed_total
 completion_n_missing_total
+eaf_orientation      (see §9.1; `passed`, `failed` or `unverified`; blank only on a store built before the check existed)
+eaf_orientation_r    (the observed correlation; blank when none was computed)
+eaf_orientation_n    (variants the correlation was computed over)
 n_hits_5e8   (count of associations at p <= 5e-8, genome-wide significant)
 n_hits_5e6   (count of associations at p <= 5e-6, suggestive)
 n_hits_5e4   (count of associations at p <= 5e-4, nominal)
@@ -357,6 +360,57 @@ copied from a build manifest. Builders emit `absent` or `association`;
 establish that one value is genuinely shared. Reference Completion carries
 observed EAF across unchanged; supplying reference-panel EAF for imputed
 cells is not yet implemented, and those cells read as NaN.
+
+### 9.1 EAF orientation is verified, and the verification is recorded
+
+Stored EAF MUST describe the *stored* effect allele (§5). A source that
+reports `effect_allele_frequency` against the other allele produces a store
+whose every frequency is wrong by `1 - f`, with nothing in the row to show it:
+`0.42` where the truth is `0.58` is a perfectly plausible frequency. This is
+not hypothetical — `GCST003566` in the `gwas-catalog-eur-hybrid` pilot does
+exactly this (ADR 0037 §6, issue #115).
+
+Builders MUST therefore correlate each Analysis's A1-oriented EAF against a
+reference over a deterministic sample of the overlapping variants, and MUST
+fail the build when the correlation is negative. The reference is an external
+panel where one is supplied; otherwise, for a build of three or more Analyses,
+it is the consensus of the other Analyses — which can establish that Analyses
+disagree but not which is right, so an inconsistent build fails rather than
+dropping a study.
+
+The check MUST NOT be interpreted where it cannot be. Below a minimum overlap,
+or below a minimum frequency variance on either side, the Analysis records
+`unverified` — never `passed`. An Analysis that stores no EAF likewise records
+`unverified`: there is no wrong column, but neither is there a checked one, and
+the two must not read alike.
+
+The reference itself is checked before it is trusted: one whose frequencies
+exceed 0.5 for only a negligible fraction of its variants is minor allele
+frequency, which is symmetric about 0.5 and would correlate a flipped source at
+r ≈ +1. Such a reference is **refused outright** — the build fails on the
+reference, not on the Analyses, because nothing correlated against it would mean
+anything.
+
+The threshold is on the *sign* of `r`, not its strength. A genuine study can
+correlate weakly with a reference panel — `GCST007320` in the
+`gwas-catalog-eur-hybrid` pilot reads +0.878 against the UKB EUR panel where the
+other nine read above +0.99 — so a floor on `|r|` would reject real data while
+adding nothing: the defect this catches sits at −0.999.
+
+The outcome is Analytical Metadata: `eaf_orientation` (`passed`/`failed`/
+`unverified`), `eaf_orientation_r` and `eaf_orientation_n` in `analyses.tsv`,
+with the reference's identity and checksum, the sample size, and each
+Analysis's evidence in `manifest.json`'s `provenance.eaf_orientation`.
+Validation checks the recorded evidence rather than the panel, since a Store
+Release must stay interpretable after the panel it was built against has moved;
+re-deriving the answer from the store's arrays is a separate audit that takes a
+panel as input.
+
+A correlation is deliberately used in preference to any threshold on the *size*
+of the difference: a bottlenecked cohort's frequencies legitimately differ from
+a reference panel's by three orders of magnitude (FinnGen, max log-residual
+8.07) while still correlating at r = +0.995, because a bottleneck changes
+magnitudes, not direction.
 
 ## 10. Dense Observed-Only layout
 
@@ -644,6 +698,7 @@ Validators MUST check at least:
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se` and holds no finite value outside `[0, 1]` (ADR 0036);
+- every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115): a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
 
 ## 21. Compatibility

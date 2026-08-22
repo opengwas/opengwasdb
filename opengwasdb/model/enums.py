@@ -66,6 +66,25 @@ class EafScope(StrEnum):
     ASSOCIATION = "association"
 
 
+# EAF orientation verification (issue #115, ADR 0037 §6). A source that reports
+# `effect_allele_frequency` against the *other* allele produces a store whose
+# frequency column is systematically wrong with nothing in the row to show it,
+# so the outcome of the build-time check is persisted per Analysis rather than
+# left implicit in the build having succeeded.
+class EafOrientationOutcome(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    UNVERIFIED = "unverified"
+
+
+class EafOrientationMethod(StrEnum):
+    """What the check correlated each Analysis's EAF against."""
+
+    REFERENCE_PANEL = "reference_panel"
+    CONSENSUS = "consensus"
+    NONE = "none"
+
+
 class InfoScope(StrEnum):
     ABSENT = "absent"
     VARIANT = "variant"
