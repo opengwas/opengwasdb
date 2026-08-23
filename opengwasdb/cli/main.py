@@ -88,6 +88,12 @@ def info(store_path: Path) -> None:
     typer.echo(f"association_coverage: {manifest.association_coverage.value}")
     typer.echo(f"completion_state: {manifest.completion_state.value}")
     typer.echo(f"reference_assembly: {manifest.reference_assembly}")
+    # The encoding a release declares is what its bytes mean (ADR 0037), so it
+    # belongs next to format_version rather than being something an operator
+    # has to open manifest.json to see.
+    encoding = manifest.encoding
+    scale = "" if encoding.z.scale is None else f" (scale 1/{encoding.z.scale})"
+    typer.echo(f"encoding: z={encoding.z.kind}{scale}, se={encoding.se.kind}")
 
 
 @app.command("validate")

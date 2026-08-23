@@ -39,6 +39,7 @@ from pathlib import Path
 import numpy as np
 import zarr
 
+from opengwasdb.encoding import DenseZPlane, StoreEncoding
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import _alid_sort_key, _write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
@@ -145,7 +146,7 @@ def complete_hybrid_store(
         offsets = src_csr._offsets[:]
         n_analyses = len(offsets) - 1
         src_vi = src_csr._variant_index[:]
-        src_z = src_csr._z[:]
+        src_z = src_csr.z_all()
         src_se = src_csr._se[:]
         src_eaf = src_csr.eaf_slice(0, len(src_vi))
 
@@ -174,6 +175,7 @@ def complete_hybrid_store(
         n_reclaimed_imputed = _fold_panel_crossovers(
             dense_component_path(staged.path), dense_alid_to_row,
             offsets, src_z, src_se, src_eaf, overflow_alids, is_crossover,
+            encoding=src_manifest.encoding,
         )
         n_imputed = dense_result.n_imputed - n_reclaimed_imputed
         if is_crossover.any():
@@ -192,7 +194,9 @@ def complete_hybrid_store(
             # fold, are not similarly recomputed -- an accepted, narrow
             # imprecision limited to summary statistics for the crossed-over
             # cells, not a correctness invariant like top-hit presence.
-            build_dense_top_hit_indexes(dense_component_path(staged.path))
+            build_dense_top_hit_indexes(
+                dense_component_path(staged.path), encoding=src_manifest.encoding
+            )
 
         union = sorted(set(dense_alids) | set(overflow_alids.tolist()), key=_alid_sort_key)
         new_shared_index = {alid: i for i, alid in enumerate(union)}
@@ -216,14 +220,18 @@ def complete_hybrid_store(
 
         # ── 5. Rebuild the overflow CSR with remapped shared indices, excluding
         #        any association folded into the Dense Component in step 2 ──────
-        csr = RaggedCSRWriter()
+        # Completion writes into the source's arrays, so it writes in the
+        # source's encoding -- never re-encoding data an operator asked only to
+        # complete (ADR 0038 §4). `check_writable_format_version` above is what
+        # makes that honest.
+        csr = RaggedCSRWriter(src_manifest.encoding)
         for ai in range(n_analyses):
             s, e = int(offsets[ai]), int(offsets[ai + 1])
             keep = ~is_crossover[s:e] if e > s else np.empty(0, dtype=bool)
             if s == e or not keep.any():
                 csr.add_analysis(
                     np.empty(0, dtype=np.int32),
-                    np.empty(0, dtype=np.float16),
+                    np.empty(0, dtype=np.float32),
                     np.empty(0, dtype=np.float16),
                 )
                 continue
@@ -231,7 +239,7 @@ def complete_hybrid_store(
                 [new_shared_index[vi_to_record[int(v)].alid] for v in src_vi[s:e][keep]],
                 dtype=np.int32,
             )
-            z = src_z[s:e][keep].astype(np.float16)
+            z = src_z[s:e][keep].astype(np.float32)
             se = src_se[s:e][keep].astype(np.float16)
             # Observed EAF survives the remap (ADR 0036), like rsids above:
             # Reference Completion adds rows, it does not change what the
@@ -255,7 +263,7 @@ def complete_hybrid_store(
             csr.n_associations, n_imputed,
         )
 
-        build_ragged_top_hit_indexes(staged.path)
+        build_ragged_top_hit_indexes(staged.path, encoding=src_manifest.encoding)
         # Dense Component counts already live on `analyses` (read back from
         # complete_dense_store's already-completed output); add the Ragged
         # Overflow Component's counts on top -- the two partition an
@@ -284,6 +292,7 @@ def _fold_panel_crossovers(
     src_eaf: np.ndarray,
     overflow_alids: np.ndarray,
     is_crossover: np.ndarray,
+    encoding: StoreEncoding,
 ) -> int:
     """Write every crossover association's real observed value into the
     completed Dense Component at ``(dense_row, analysis)``, marked
@@ -308,14 +317,16 @@ def _fold_panel_crossovers(
         dtype=np.int64, count=len(crossover_idx),
     )
     col_idx = assoc_ai[crossover_idx].astype(np.int64)
-    z_vals = src_z[crossover_idx].astype(np.float16)
+    z_vals = src_z[crossover_idx].astype(np.float32)
     se_vals = src_se[crossover_idx].astype(np.float16)
     eaf_vals = src_eaf[crossover_idx].astype(np.float32)
 
     root = zarr.open_group(str(dense_dir / "data.zarr"), mode="a")
     was_imputed = np.asarray(root["imputed"].vindex[row_idx, col_idx])
     n_reclaimed = int(was_imputed.sum())
-    root["z"].vindex[row_idx, col_idx] = z_vals
+    # Through the plane, so the Dense Component's overflow table moves with the
+    # cells being overwritten rather than being left describing their old values.
+    DenseZPlane.open(root, encoding).patch(row_idx, col_idx, z_vals)
     root["se"].vindex[row_idx, col_idx] = se_vals
     root["imputed"].vindex[row_idx, col_idx] = 0
     # The crossed-over cell's EAF moves with its z/se (ADR 0036) -- the whole
@@ -352,6 +363,9 @@ def _write_completed_manifest(
     n_imputed: int,
 ) -> None:
     manifest = StoreManifest(
+        # Preserved with the format version below: a completed release is
+        # written into its source's arrays, so it is in its source's encoding.
+        encoding=src_manifest.encoding,
         store_id=src_manifest.store_id,
         release_id=release_id,
         # Preserved, not re-stamped -- see ADR 0038 §4 and the dense path,

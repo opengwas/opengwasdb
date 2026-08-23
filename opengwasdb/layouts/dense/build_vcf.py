@@ -33,6 +33,12 @@ from opengwasdb.build.eaf_orientation import (
     verify_eaf_orientation,
 )
 from opengwasdb.build.liftover import LiftoverFailureError, build_liftover_lookup, normalise_build
+from opengwasdb.encoding import (
+    EncodingMeasurements,
+    StoreCodec,
+    StoreEncoding,
+    ZOverflowBuilder,
+)
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import (
     DenseBuildResult,
@@ -668,7 +674,12 @@ def build_dense_from_vcf_manifest(
         # column to disk; the band-write phase then fills chunk-column bands without
         # ever holding the full (n_variants × n_analyses) matrix in memory (issue 043).
         # ------------------------------------------------------------------
-        effective_chunks = _create_dense_zarr(staged, n_variants, n_analyses, chunk_shape, dtype)
+        # One encoding plan per build, decided here from the build's own
+        # measurements and recorded in manifest.json (ADR 0037, issue #119).
+        encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=n_analyses))
+        effective_chunks = _create_dense_zarr(
+            staged, n_variants, n_analyses, chunk_shape, dtype, encoding
+        )
 
         # ------------------------------------------------------------------
         # Pass 2 fill: resolve each analysis column and spill it to disk. No matrix is
@@ -750,13 +761,15 @@ def build_dense_from_vcf_manifest(
             # is one band (n_variants × chunk-analysis-width), not the full matrix.
             # --------------------------------------------------------------
             all_rows, all_cols, all_z, all_se, column_has_eaf = _write_dense_bands(
-                staged, spill_dir, n_variants, n_analyses, effective_chunks, dtype, pass2_start
+                staged, spill_dir, n_variants, n_analyses, effective_chunks, dtype,
+                pass2_start, encoding,
             )
         finally:
             shutil.rmtree(spill_dir, ignore_errors=True)
 
         _write_manifest(
             staged, store_id, release_id, n_variants, n_analyses, chain_file, chunk_shape, dtype,
+            encoding=encoding,
             eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
         )
         log.info("Writing top-hit index from %d harvested candidate cells", len(all_rows))
@@ -938,7 +951,11 @@ def _write_index(
         set_metadata(
             connection,
             "dense",
-            {"dtype": dtype, "chunk_shape": list(chunk_shape), "compressor": DEFAULT_COMPRESSOR},
+            {
+                "se_dtype": dtype,
+                "chunk_shape": list(chunk_shape),
+                "compressor": DEFAULT_COMPRESSOR,
+            },
         )
         connection.executemany(
             """
@@ -1014,24 +1031,32 @@ def _create_dense_zarr(
     n_analyses: int,
     chunk_shape: tuple[int, int],
     dtype: str,
+    encoding: StoreEncoding,
 ) -> tuple[int, int]:
-    """Create the empty NaN-filled z/se datasets and return the effective chunks.
+    """Create the empty missing-filled z/se datasets and return the effective chunks.
 
     Chunk shape is clipped to the array dimensions (ADR-0021) so zarr's declared
     chunks match what is physically stored. The arrays are created without data;
-    ``_write_dense_bands`` fills them by chunk-column band afterwards.
+    ``_write_dense_bands`` fills them by chunk-column band afterwards. Each plane
+    is filled with **its own** missing marker (spec §15): NaN for `se`, the
+    reserved sentinel for a fixed-point `z`, so an untouched cell reads as
+    missing under either encoding.
     """
     compressor = _DENSE_COMPRESSOR
+    codec = StoreCodec(encoding)
     effective_chunks = (min(chunk_shape[0], n_variants), min(chunk_shape[1], n_analyses))
     root = staged.arrays(mode="w")
-    for name in ("z", "se"):
+    for name, plane_dtype, fill in (
+        ("z", codec.z_dtype, codec.z_fill_value),
+        ("se", dtype, float("nan")),
+    ):
         root.create_dataset(
             name,
             shape=(n_variants, n_analyses),
             chunks=effective_chunks,
             compressor=compressor,
-            dtype=dtype,
-            fill_value=float("nan"),
+            dtype=plane_dtype,
+            fill_value=fill,
         )
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"
@@ -1095,22 +1120,28 @@ def _write_dense_bands(
     effective_chunks: tuple[int, int],
     dtype: str,
     pass2_start: float,
+    encoding: StoreEncoding,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Stream the retained per-column spills into the zarr in chunk-column bands.
 
-    ``z`` and ``se`` are written in two separate passes over a **single reused**
-    ``(n_variants × band_cols)`` buffer, so only one band is ever resident —
-    halving the band-write peak versus holding z and se together. The top-hit
-    harvest runs in the z-pass and reads each hit's ``se`` straight from the spill
-    (rounded to the stored dtype), so the se-band is never needed for it. Spills
-    are retained until the se-pass consumes them. Returns the concatenated top-hit
-    candidate arrays ``(rows, cols, z, se)`` for the index build.
+    ``z`` and ``se`` are written in two separate passes over one
+    ``(n_variants × band_cols)`` buffer at a time, so only one band is ever
+    resident — halving the band-write peak versus holding z and se together.
+    The two planes no longer share a dtype (ADR 0037), so the z buffer is
+    released before the se buffer is allocated rather than being reused. The
+    top-hit harvest runs in the z-pass, thresholding on the **stored** z and
+    reading each hit's ``se`` straight from the spill (rounded to the stored
+    dtype), so the se-band is never needed for it. Spills are retained until
+    the se-pass consumes them. Returns the concatenated top-hit candidate
+    arrays ``(rows, cols, z, se)`` for the index build.
     """
     root = staged.arrays(mode="a")
     z_arr = root["z"]
     se_arr = root["se"]
     band_cols = effective_chunks[1]
-    band = np.empty((n_variants, band_cols), dtype=dtype)  # reused for z then se
+    codec = StoreCodec(encoding)
+    overflow = ZOverflowBuilder()
+    band = np.empty((n_variants, band_cols), dtype=codec.z_dtype)
 
     hit_rows_parts: list[np.ndarray] = []
     hit_cols_parts: list[np.ndarray] = []
@@ -1124,26 +1155,36 @@ def _write_dense_bands(
     for c0 in range(0, n_analyses, band_cols):
         c1 = min(c0 + band_cols, n_analyses)
         w = c1 - c0
-        band[:, :w] = np.nan
+        band[:, :w] = codec.z_fill_value
         for c in range(c0, c1):
             local = c - c0
             with np.load(spill_dir / f"{c}.npz") as data:
                 rows = data["rows"]
                 column_has_eaf[c] = bool(np.isfinite(data["eaf"]).any())
-                band[rows, local] = data["z"]
-                zc = band[rows, local]  # stored float16 z
-                hit = np.abs(zc.astype(np.float32)) >= _TOP_HIT_Z_CRIT
+                band[rows, local] = codec.encode_z(
+                    data["z"],
+                    positions=rows.astype(np.int64) * n_analyses + c,
+                    overflow=overflow,
+                )
+                zc = codec.quantise_z(data["z"])  # what a query will read back
+                hit = np.abs(zc) >= _TOP_HIT_Z_CRIT
                 if np.any(hit):
                     hit_rows_parts.append(rows[hit])
                     hit_cols_parts.append(np.full(int(np.count_nonzero(hit)), c, dtype=np.int64))
-                    hit_z_parts.append(zc[hit].astype(np.float32))
+                    hit_z_parts.append(zc[hit])
                     hit_se_parts.append(data["se"][hit].astype(dtype).astype(np.float32))
         z_arr[:, c0:c1] = band[:, :w]
         _log_progress(
             "Band-write z", c1, n_analyses, pass2_start, f"cols {c0}:{c1}", every=band_cols
         )
 
-    # Pass 2 — se. Reuse the buffer; fill, write se, and delete each spill.
+    # The overflow table is part of the z plane, not an addendum to it: write it
+    # in the same pass that finished writing z.
+    overflow.table().write(root)
+    del band
+    band = np.empty((n_variants, band_cols), dtype=dtype)
+
+    # Pass 2 — se. Fill, write se, and delete each spill.
     for c0 in range(0, n_analyses, band_cols):
         c1 = min(c0 + band_cols, n_analyses)
         w = c1 - c0
@@ -1205,9 +1246,11 @@ def _write_manifest(
     chain_file: str | Path | None,
     chunk_shape: tuple[int, int],
     dtype: str,
+    encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
     manifest = StoreManifest(
+        encoding=encoding,
         store_id=store_id,
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
@@ -1223,7 +1266,7 @@ def _write_manifest(
             "n_analyses": n_analyses,
             "dense": {
                 "statistic_arrays": ["z", "se"],
-                "dtype": dtype,
+                "se_dtype": dtype,
                 "chunk_shape": list(chunk_shape),
                 "compressor": DEFAULT_COMPRESSOR,
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],

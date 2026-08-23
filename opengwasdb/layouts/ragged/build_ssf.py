@@ -32,6 +32,7 @@ from opengwasdb.build.eaf_orientation import (
     load_eaf_reference,
     select_sites,
 )
+from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -337,19 +338,22 @@ def build_ragged_from_ssf(
         staged.index_connection().close()
 
         # ── Stream per-analysis associations into the CSR store ──────────────────
-        csr = RaggedCSRWriter()
+        # One encoding plan per build, decided here and recorded in the manifest
+        # (ADR 0037, issue #119).
+        encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=len(analytes)))
+        csr = RaggedCSRWriter(encoding)
         eaf_scopes: list[str] = []
         for recs in per_analysis:
             if not recs:
                 csr.add_analysis(
-                    np.empty(0, np.int32), np.empty(0, np.float16), np.empty(0, np.float16)
+                    np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float16)
                 )
                 eaf_scopes.append(EafScope.ABSENT.value)
                 continue
             vi = np.fromiter(
                 (alid_to_idx[r.alid] for r in recs), dtype=np.int32, count=len(recs)
             )
-            z_arr = np.fromiter((r.z for r in recs), dtype=np.float16, count=len(recs))
+            z_arr = np.fromiter((r.z for r in recs), dtype=np.float32, count=len(recs))
             se_arr = np.fromiter((r.se for r in recs), dtype=np.float16, count=len(recs))
             eaf_arr = np.fromiter(
                 (np.nan if r.eaf is None else r.eaf for r in recs),
@@ -369,7 +373,7 @@ def build_ragged_from_ssf(
             )
         csr.flush(staged.path)
 
-        build_ragged_top_hit_indexes(staged.path)
+        build_ragged_top_hit_indexes(staged.path, encoding=encoding)
 
         print("Writing analyses.tsv...")
         analyses = [
@@ -398,6 +402,7 @@ def build_ragged_from_ssf(
             n_associations=csr.n_associations, manifest_path=str(manifest_path),
             stored_effect_scale=stored_effect_scale,
             mhc_analyses=[a.analysis_id for a in analytes if a.mhc],
+            encoding=encoding,
             eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
         )
 
@@ -413,9 +418,11 @@ def _write_manifest(
     staged: StagedRelease, store_id: str, release_id: str, *,
     n_variants: int, n_analyses: int, n_associations: int,
     manifest_path: str, stored_effect_scale: str, mhc_analyses: list[str],
+    encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
     manifest = StoreManifest(
+        encoding=encoding,
         store_id=store_id,
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
@@ -435,7 +442,7 @@ def _write_manifest(
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
             "ragged": {
                 "statistic_arrays": ["z", "se"],
-                "dtype": "float16",
+                "se_dtype": "float16",
                 "variant_axis": {
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,

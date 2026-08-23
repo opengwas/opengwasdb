@@ -32,6 +32,7 @@ from opengwasdb.build.eaf_orientation import (
     verify_eaf_orientation,
 )
 from opengwasdb.build.liftover import LiftoverFailureError
+from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     _RESOLVE_BATCH,
@@ -349,7 +350,7 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
 
 
 def _assemble_overflow_csr(
-    spill_dir: Path, n_analyses: int
+    spill_dir: Path, n_analyses: int, encoding: StoreEncoding
 ) -> tuple[RaggedCSRWriter, np.ndarray]:
     """Assemble the overflow CSR from per-column ``.ovf.npz`` spills, in analysis
     order (so CSR offsets align with analysis_index).
@@ -359,20 +360,20 @@ def _assemble_overflow_csr(
     on it, so `eaf_scope` is the union of this and the Dense Component's own
     answer, never either alone (ADR 0036).
     """
-    csr = RaggedCSRWriter()
+    csr = RaggedCSRWriter(encoding)
     column_has_eaf = np.zeros(n_analyses, dtype=bool)
     for col in range(n_analyses):
         path = spill_dir / f"{col}.ovf.npz"
         if not path.exists():
             csr.add_analysis(
                 np.empty(0, dtype=np.int32),
-                np.empty(0, dtype=np.float16),
+                np.empty(0, dtype=np.float32),
                 np.empty(0, dtype=np.float16),
             )
             continue
         with np.load(path) as data:
             vi = data["variant_index"].astype(np.int32)
-            z = data["z"].astype(np.float16)
+            z = data["z"].astype(np.float32)
             se = data["se"].astype(np.float16)
             eaf = data["eaf"].astype(np.float32)
         # Sort by variant_index for consistent within-analysis ordering (matches
@@ -484,7 +485,13 @@ def build_hybrid_from_vcf_manifest(
         # ── Write the Dense Component skeleton (a valid dense store) ──────────────
         _write_index(dense_staged, panel_sorted, analyses, chunk_shape, dtype)
         _write_variant_table(dense_dir, panel_sorted, hg38_to_source, rsid_by_alid)
-        effective_chunks = _create_dense_zarr(dense_staged, n_panel, n_analyses, chunk_shape, dtype)
+        # One plan for both components (issue #119): the Dense Component and
+        # the Ragged Overflow partition one Analysis's associations, so a
+        # shared result contract needs a shared encoding.
+        encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=n_analyses))
+        effective_chunks = _create_dense_zarr(
+            dense_staged, n_panel, n_analyses, chunk_shape, dtype, encoding
+        )
 
         # dense row -> shared variant_index (ascending — panel keeps genomic order).
         dense_to_shared = np.array(
@@ -574,7 +581,8 @@ def build_hybrid_from_vcf_manifest(
 
             # Dense band-write (reuses the dense builder's band-streamer + top-hit harvest).
             all_rows, all_cols, all_z, all_se, column_has_eaf = _write_dense_bands(
-                dense_staged, spill_dir, n_panel, n_analyses, effective_chunks, dtype, t2
+                dense_staged, spill_dir, n_panel, n_analyses, effective_chunks, dtype, t2,
+                encoding,
             )
             log.info("Writing Dense Component top-hit index (%d candidates)", len(all_rows))
             write_top_hit_indexes(dense_dir, all_rows, all_cols, all_z, all_se)
@@ -584,7 +592,7 @@ def build_hybrid_from_vcf_manifest(
             # the two components stored, so neither can be stamped until both
             # have been read (ADR 0036).
             log.info("Assembling Ragged Overflow CSR from %d columns", n_analyses)
-            csr, overflow_has_eaf = _assemble_overflow_csr(spill_dir, n_analyses)
+            csr, overflow_has_eaf = _assemble_overflow_csr(spill_dir, n_analyses, encoding)
             analyses = apply_orientation_evidence(
                 _apply_eaf_scope(analyses, column_has_eaf | overflow_has_eaf), eaf_report
             )
@@ -594,6 +602,7 @@ def build_hybrid_from_vcf_manifest(
             eaf_provenance = eaf_report.provenance(allow_unverified=allow_unverified_eaf)
             _write_dense_manifest(
                 dense_staged, store_id, release_id, n_panel, n_analyses, chain_file, dtype,
+                encoding=encoding,
                 eaf_orientation=eaf_provenance,
             )
             write_analyses_tsv(dense_dir, add_hit_counts(dense_dir, analyses))
@@ -603,13 +612,14 @@ def build_hybrid_from_vcf_manifest(
         csr.flush(staged.path)
         n_overflow = csr.n_associations
         log.info("Building Ragged Overflow top-hit index")
-        build_ragged_top_hit_indexes(staged.path)
+        build_ragged_top_hit_indexes(staged.path, encoding=encoding)
 
         # manifest.json before analyses.tsv/overview.html, same reasoning as the
         # Dense Component write above.
         _write_hybrid_manifest(
             staged, store_id, release_id, n_shared, n_analyses, n_panel, n_off_panel,
-            n_overflow, chain_file, chunk_shape, dtype, eaf_orientation=eaf_provenance,
+            n_overflow, chain_file, chunk_shape, dtype, encoding=encoding,
+            eaf_orientation=eaf_provenance,
         )
 
         # ── Shared union table + shared index ─────────────────────────────────────
@@ -665,9 +675,11 @@ def _write_dense_manifest(
     n_analyses: int,
     chain_file: str | Path | None,
     dtype: str,
+    encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
     manifest = StoreManifest(
+        encoding=encoding,
         store_id=f"{store_id}-dense",
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
@@ -681,7 +693,7 @@ def _write_dense_manifest(
             "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
             "n_variants": n_variants,
             "n_analyses": n_analyses,
-            "dense": {"statistic_arrays": ["z", "se"], "dtype": dtype},
+            "dense": {"statistic_arrays": ["z", "se"], "se_dtype": dtype},
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
         },
     )
@@ -700,9 +712,11 @@ def _write_hybrid_manifest(
     chain_file: str | Path | None,
     chunk_shape: tuple[int, int],
     dtype: str,
+    encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
     manifest = StoreManifest(
+        encoding=encoding,
         store_id=store_id,
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
@@ -721,7 +735,7 @@ def _write_hybrid_manifest(
                 "n_panel": n_panel,
                 "n_off_panel": n_off_panel,
                 "n_overflow_associations": n_overflow,
-                "dtype": dtype,
+                "se_dtype": dtype,
                 "chunk_shape": list(chunk_shape),
                 "compressor": DEFAULT_COMPRESSOR,
             },

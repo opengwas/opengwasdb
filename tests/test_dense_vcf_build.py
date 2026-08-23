@@ -767,9 +767,10 @@ class TestTopHitHarvest:
         assert sorted(harvested[5e-4].tolist()) == [-12.0, -5.0, -4.0]
 
     def test_index_z_equals_stored_matrix(self, tmp_path):
-        """Issue 046: the top-hit index z must equal the stored (float16) matrix
-        value exactly, so the index agrees with what a query reads from `z`, and
-        the store validates cleanly."""
+        """Issue 046: the top-hit index z must equal the stored matrix value
+        exactly -- as decoded through the store's own encoding (ADR 0037) --
+        so the index agrees with what a query reads from `z`, and the store
+        validates cleanly."""
         from opengwasdb.layouts.dense.top_hits import threshold_key
 
         vcf = _make_vcf(
@@ -787,15 +788,18 @@ class TestTopHitHarvest:
 
         assert validate_store(store).ok
 
-        root = open_store(store).arrays(mode="r")
-        z_matrix = root["z"][:]
+        from opengwasdb.encoding import DenseZPlane
+
+        opened = open_store(store)
+        root = opened.arrays(mode="r")
+        z_plane = DenseZPlane.open(root, opened.manifest.encoding)
         for t in (5e-4, 5e-6, 5e-8):
             g = root[f"top_hits/{threshold_key(t)}"]
             assert "imputed" not in g
             rows = g["variant_index"][:]
             cols = g["analysis_index"][:]
             index_z = g["z"][:]
-            gathered = z_matrix[rows, cols].astype("float32")
+            gathered = z_plane.points(rows, cols)
             np.testing.assert_array_equal(index_z, gathered)
 
 

@@ -11,6 +11,7 @@ import numpy as np
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.besd_reader import BESDReader, read_epi, read_esi
+from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.model.analyses import Analysis, write_analysis_records
@@ -192,7 +193,9 @@ def build_ragged_from_besd(
         besd = BESDReader(f"{prefix}.besd", len(probes))
         print(f"BESD format: SPARSE_FILE_TYPE_{besd.format_type}")
 
-        csr = RaggedCSRWriter()
+        # One encoding plan per build (ADR 0037, issue #119).
+        encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=len(probes)))
+        csr = RaggedCSRWriter(encoding)
         skipped_probes = 0
 
         for probe in probes:
@@ -201,7 +204,7 @@ def build_ragged_from_besd(
             if len(raw_snp_idx) == 0:
                 csr.add_analysis(
                     np.empty(0, dtype=np.int32),
-                    np.empty(0, dtype=np.float16),
+                    np.empty(0, dtype=np.float32),
                     np.empty(0, dtype=np.float16),
                 )
                 continue
@@ -232,14 +235,14 @@ def build_ragged_from_besd(
                 order = np.argsort(vi_list)
                 csr.add_analysis(
                     np.array(vi_list, dtype=np.int32)[order],
-                    np.array(z_list, dtype=np.float16)[order],
+                    np.array(z_list, dtype=np.float32)[order],
                     np.array(se_list, dtype=np.float16)[order],
                 )
             else:
                 skipped_probes += 1
                 csr.add_analysis(
                     np.empty(0, dtype=np.int32),
-                    np.empty(0, dtype=np.float16),
+                    np.empty(0, dtype=np.float32),
                     np.empty(0, dtype=np.float16),
                 )
 
@@ -254,7 +257,7 @@ def build_ragged_from_besd(
 
         # ── 7. Build top-hit indexes ─────────────────────────────────────────────
         print("Building top-hit indexes ...")
-        build_ragged_top_hit_indexes(staged.path)
+        build_ragged_top_hit_indexes(staged.path, encoding=encoding)
 
         # ── 7b. Write analyses.tsv ────────────────────────────────────────────────
         print("Writing analyses.tsv ...")
@@ -270,6 +273,7 @@ def build_ragged_from_besd(
             n_associations=csr.n_associations,
             besd_prefix=str(prefix),
             source_build=source_build,
+            encoding=encoding,
         )
 
         result = RaggedBuildResult(
@@ -295,9 +299,11 @@ def _write_manifest(
     n_analyses: int,
     n_associations: int,
     besd_prefix: str,
+    encoding: StoreEncoding,
     source_build: str = "hg38",
 ) -> None:
     manifest = StoreManifest(
+        encoding=encoding,
         store_id=store_id,
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
@@ -315,7 +321,7 @@ def _write_manifest(
             "n_associations": n_associations,
             "ragged": {
                 "statistic_arrays": ["z", "se"],
-                "dtype": "float16",
+                "se_dtype": "float16",
                 "variant_axis": {
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,

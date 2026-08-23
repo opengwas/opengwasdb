@@ -15,6 +15,58 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Added
 
+- **`z` is stored as `int16` fixed point, and `format_version` moves to `1.0`**
+  (#114, ADR 0037 §1). `float16`'s step doubles with magnitude, so it was least
+  precise exactly where p-values are steepest: worst-case p error was 26.4% at
+  |z| = 30 and the actual error at the FADS1/FADS2 hit (|z| = 47.8) was a factor
+  of 1.82. Stored `z` is now `round(z x 1024)` with uniform precision — 1.6%
+  worst-case p error at the range edge, 0.24% at z = 5 — and smaller: **1.400
+  against 1.591 B/cell, −12%**, measured by re-encoding a 50.3M-cell band
+  (28.5M present) of the `ukb-b` pilot under the store's own zstd-3 + bitshuffle
+  codec. Bitshuffle groups the near-constant high bytes of a bounded quantity,
+  where `float16`'s exponent bits churn for the small values that dominate.
+  (ADR 0037 reports −20% from a different sample; the `int16` side agrees at
+  ~1.4–1.47 B/cell and the `float16` baseline is what varies with the data.)
+  - **Two codes are reserved**, because an integer plane cannot hold NaN and the
+    missing-cell contract depended on it: `-32768` is missing (decodes to NaN,
+    paired `se` must also be missing), `-32767` is out of range. Spec §15 now
+    defines missingness per plane's declared codec rather than as NaN.
+  - **Out-of-range values are held exactly, not clipped and not rejected.** The
+    `ukb-b` survey found max |z| = 137.5 (HERC2/OCA2) with 6,346 cells above 32
+    (6,312 in the copy re-surveyed here, at `/data/opengwasdb/wip/ukb-b`),
+    so the representable range is backed by a sparse `z_overflow_index` /
+    `z_overflow_value` table beside each plane — 74 KB against a multi-gigabyte
+    store. The 500 strongest cells of that pilot, |z| up to 137.5, round-trip
+    through the table exactly (max |Δz| = 0.000000, p ratio 1.000000; the
+    largest is log10 p = −4107.68). A build now fails only on a non-finite or
+    malformed statistic.
+  - **`se` stays `float16`,** deliberately: it spans 3.2 decades and needs
+    relative precision, which a float exponent already provides. The right
+    encoding follows from the shape of the quantity; this is not a preference
+    for integers.
+  - **`StoreEncoding` and `StoreCodec`** (`opengwasdb.encoding`, issue #119) —
+    the plan is decided once per build in `StoreEncoding.decide()`, recorded in
+    `manifest.json`, and read back by every builder, completion pass, query
+    adapter and validation rule. No read path re-derives it, and a reader
+    meeting an encoding kind it does not implement rejects the release.
+    `StoreEncoding.legacy()` covers pre-#114 stores, whose planes are `float16`.
+  - **Validation cross-checks the plan against the arrays**: a plane whose dtype
+    contradicts the manifest, an out-of-range cell with no overflow entry, a
+    table describing a cell that is not out of range, or a Hybrid release whose
+    two components declare different plans all fail the store.
+  - **A release at `format_version` 1.0 or above must declare its encoding.** A
+    missing block is refused rather than falling back to the legacy plan, which
+    would decode an `int16` plane as `float16` and return z-scores a thousand
+    times too large — a plausible number, and so the worst possible outcome.
+    The codec refuses the same disagreement reached directly.
+  - **Manifest change**: the per-layout `provenance.*.dtype` field is now
+    `se_dtype`. It only ever described the float planes, and leaving it named
+    `dtype` next to an `int16` `z` would have made the manifest quietly wrong.
+    A reader of the old key gets nothing rather than a wrong answer.
+  - `format_version` becomes `1.0`. `0.1` releases stay readable — they decode
+    under the legacy plan — and are never written again; **completing a `0.1`
+    store is now refused** (ADR 0038 §4) rather than stamping its version onto
+    newly encoded arrays. Rebuild instead.
 - **Allele-flipped EAF is rejected at build time** (#115, ADR 0037 §6). Each
   Analysis's A1-oriented `eaf` is correlated against a reference over a
   deterministic sample of variants before any statistic array is written;
@@ -190,10 +242,11 @@ user would notice across the whole history to date.
 
 ### Known limitations
 
-- `z` and `se` are `float16`. At the significant tail this costs real accuracy:
-  worst-case p error is 26% at |z| = 30, and the 568 cells above |z| = 64 in a
-  UK Biobank-scale store have no meaningful precision. Tracked as #114; see
-  ADR 0037.
+- Compressed sizes and the overflow table's real cost are measured in ADR 0037
+  on pilot data, not yet on a rebuilt genome-scale store (#117).
+- `eaf` is still `float32` and `se` is still `float16` per stored cell; the
+  residual encodings that shrink them are #116 and #118, and the plan carries
+  only `z` and `se` until then.
 - Reference-Completed releases carry no EAF on imputed cells (#113, #116).
 - Existing Store Releases predate every build-time fix above and must be
   rebuilt to gain them (#117).
@@ -207,6 +260,7 @@ it can read.
 | package | writes `format_version` | reads |
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
+| unreleased (`dev`) | 1.0 | 0.x, 1.0 |
 
 [Unreleased]: https://github.com/opengwas/opengwasdb/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/opengwas/opengwasdb/releases/tag/v0.2.0

@@ -49,6 +49,13 @@ from opengwasdb.completion.ld_panel import (
 from opengwasdb.completion.manifest import build_completion_provenance
 from opengwasdb.completion.parallel import init_block_worker
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
+from opengwasdb.encoding import (
+    DenseZPlane,
+    StoreCodec,
+    StoreEncoding,
+    ZOverflowBuilder,
+    positions_row_band,
+)
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
@@ -118,8 +125,10 @@ def _make_reader(task: _BlockTask):
     def make_reader(block, canonical_alids: list[str | None]):
         src_axis = VariantAxis(task.source_path)
         try:
-            src_root = open_store(task.source_path).arrays(mode="r")
-            n_analyses = int(src_root["z"].shape[1])
+            src_store = open_store(task.source_path)
+            src_root = src_store.arrays(mode="r")
+            src_plane = DenseZPlane.open(src_root, src_store.manifest.encoding)
+            n_analyses = src_plane.n_analyses
 
             src_rows: list[int | None] = []
             for alid in canonical_alids:
@@ -133,7 +142,7 @@ def _make_reader(task: _BlockTask):
             z_obs = np.full((len(canonical_alids), n_analyses), np.nan, dtype=np.float64)
             se_obs = np.full((len(canonical_alids), n_analyses), np.nan, dtype=np.float64)
             if matched_local:
-                z_obs[matched_local, :] = src_root["z"].oindex[matched_src, :].astype(np.float64)
+                z_obs[matched_local, :] = src_plane.rows(np.asarray(matched_src))
                 se_obs[matched_local, :] = src_root["se"].oindex[matched_src, :].astype(np.float64)
         finally:
             src_axis.close()
@@ -463,7 +472,7 @@ def _run_completion(
         src_has_eaf = "eaf" in src_root
         effective_chunks = _create_completed_zarr(
             staged, n_variants, n_analyses, on_panel, DEFAULT_CHUNK_SHAPE, DEFAULT_DTYPE,
-            src_has_eaf=src_has_eaf,
+            manifest.encoding, src_has_eaf=src_has_eaf,
         )
         band_rows = _completion_band_rows(effective_chunks)
         fill_shard_dir, quality_count = _shard_checkpoint_fills_by_band(
@@ -477,6 +486,7 @@ def _run_completion(
             staged, src_root, out_to_src, on_panel,
             fill_shard_dir,
             effective_chunks, n_variants, n_analyses,
+            manifest.encoding,
             impute_mask=impute_mask,
         )
         shutil.rmtree(fill_shard_dir, ignore_errors=True)
@@ -493,6 +503,10 @@ def _run_completion(
         # it must already reflect the completed release, not the source's.
         new_release_id = release_id or f"{manifest.release_id}-completed"
         completed_manifest = StoreManifest(
+            # Same reasoning as `format_version` below: the completed release
+            # is in its source's encoding, because it is written into its
+            # source's arrays.
+            encoding=manifest.encoding,
             store_id=manifest.store_id,
             release_id=new_release_id,
             # Preserved, not re-stamped: completion writes into the source's
@@ -546,7 +560,7 @@ def _run_completion(
         ]
 
         print("Building top-hit indexes...")
-        build_top_hit_indexes(staged.path)
+        build_top_hit_indexes(staged.path, encoding=manifest.encoding)
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, dst_analyses))
 
         result = CompletionResult(
@@ -702,18 +716,27 @@ def _create_completed_zarr(
     on_panel: np.ndarray,
     chunk_shape: tuple[int, int],
     dtype: str,
+    encoding: StoreEncoding,
     src_has_eaf: bool = False,
 ) -> tuple[int, int]:
-    """Create empty z/se (NaN), imputed (0), and the 1-D on_panel datasets, plus
-    `eaf` when the observed store carried one (ADR 0036). The matrices are
-    filled by ``_write_completed_bands``; on_panel is small enough to write in
-    one shot."""
+    """Create empty z/se (missing-filled), imputed (0), and the 1-D on_panel
+    datasets, plus `eaf` when the observed store carried one (ADR 0036). The
+    matrices are filled by ``_write_completed_bands``; on_panel is small enough
+    to write in one shot.
+
+    The planes are created in the **source's** encoding, which completion
+    preserves rather than re-stamping (ADR 0038 §4), and each is filled with
+    its own missing marker (spec §15)."""
     effective_chunks = (min(chunk_shape[0], n_variants), min(chunk_shape[1], n_analyses))
+    codec = StoreCodec(encoding)
     root = staged.arrays(mode="w")
-    for name in ("z", "se"):
+    for name, plane_dtype, fill in (
+        ("z", codec.z_dtype, codec.z_fill_value),
+        ("se", dtype, float("nan")),
+    ):
         root.create_dataset(
             name, shape=(n_variants, n_analyses), chunks=effective_chunks,
-            compressor=_COMPRESSOR, dtype=dtype, fill_value=float("nan"),
+            compressor=_COMPRESSOR, dtype=plane_dtype, fill_value=fill,
         )
     root.create_dataset(
         "imputed", shape=(n_variants, n_analyses), chunks=effective_chunks,
@@ -748,6 +771,7 @@ def _write_completed_bands(
     effective_chunks: tuple[int, int],
     n_variants: int,
     n_analyses: int,
+    encoding: StoreEncoding,
     impute_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, int, int]:
     """Seed z/se from the source, apply the imputed fills, and write z/se/imputed
@@ -767,7 +791,12 @@ def _write_completed_bands(
     """
     root = staged.arrays(mode="a")
     z_arr, se_arr, imp_arr = root["z"], root["se"], root["imputed"]
-    src_z, src_se = src_root["z"], src_root["se"]
+    src_se = src_root["se"]
+    # Source z is read decoded and written re-encoded, through the same plan --
+    # completion moves values between two planes, it does not reinterpret them.
+    src_plane = DenseZPlane.open(src_root, encoding)
+    codec = StoreCodec(encoding)
+    overflow = ZOverflowBuilder()
     band_rows = _completion_band_rows(effective_chunks)
 
     n_missing_off_panel = np.zeros(n_analyses, dtype=np.int64)
@@ -786,7 +815,7 @@ def _write_completed_bands(
         valid = np.where(out_to_src[r0:r1] >= 0)[0]
         if len(valid):
             srows = out_to_src[r0:r1][valid]
-            zb[valid, :] = src_z.oindex[srows, :].astype(np.float32)
+            zb[valid, :] = src_plane.rows(srows)
 
         off_local = np.where(on_panel[r0:r1] == 0)[0]
         if len(off_local):
@@ -809,8 +838,12 @@ def _write_completed_bands(
         if len(on_local):
             n_missing_imputation_failed += int(np.isnan(zb[on_local, :]).sum())
 
-        z_arr[r0:r1] = zb
+        z_arr[r0:r1] = codec.encode_z(
+            zb, positions=positions_row_band(r0, n_analyses), overflow=overflow
+        )
         imp_arr[r0:r1] = imp_band
+
+    overflow.table().write(root)
 
     # Pass 2 — se (same cells filled, by the missingness-consistency invariant).
     for band_index, r0 in enumerate(range(0, n_variants, band_rows)):

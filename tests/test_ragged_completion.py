@@ -13,6 +13,7 @@ import pytest
 from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation.validate import validate_store
@@ -777,7 +778,9 @@ class TestQuery:
         ragged = root["ragged"]
         offsets = ragged["offsets"][:]
         start, end = int(offsets[0]), int(offsets[1])  # analysis_index 0 == ENSG00000000001::Blood
-        z_segment = ragged["z"][start:end].astype("float32")
+        # Decoded, not raw: a missing cell in a fixed-point plane is a sentinel,
+        # which `isfinite` would happily accept (ADR 0037).
+        z_segment = RaggedCSRReader(completed_store).z_slice(start, end)
         finite = np.where(np.isfinite(z_segment))[0]
         assert len(finite) >= 2, "fixture must have >=2 finite associations in analysis 0"
         forced_offset = start + int(finite[0])

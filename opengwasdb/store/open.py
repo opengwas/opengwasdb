@@ -33,15 +33,16 @@ if TYPE_CHECKING:
 #: above the one recorded here is read with a warning, because "minor" is
 #: defined as a change an older reader still reads correctly.
 #:
-#: ADR 0037's encodings take this to ``{0: 1, 1: 0}`` (#114): ``0.1`` stays
-#: readable and is never written again.
-SUPPORTED_FORMAT_VERSIONS: Mapping[int, int] = MappingProxyType({0: 1})
+#: ``0.1`` (major 0) stays readable and is never written again: its planes are
+#: ``float16`` throughout and decode under `StoreEncoding.legacy()`. Major 1 is
+#: ADR 0037's fixed-point ``z`` (#114).
+SUPPORTED_FORMAT_VERSIONS: Mapping[int, int] = MappingProxyType({0: 1, 1: 0})
 
 #: format_version stamped on releases written by this build. A build writes
 #: exactly one version and reads several (ADR 0038 §3): supporting the *writing*
 #: of historical formats would mean keeping every retired encoder alive and
 #: tested, for a use case nobody has.
-CURRENT_FORMAT_VERSION = "0.1"
+CURRENT_FORMAT_VERSION = "1.0"
 
 log = logging.getLogger(__name__)
 
@@ -108,9 +109,9 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
     lies about its own encoding, which is the failure class this project exists
     to avoid.
 
-    Nothing can reach this today: every readable version is also the written
-    one. It is here so that the day #114 changes that, the answer is an error
-    rather than a wrong store.
+    Reachable since #114: a ``0.1`` release is readable (its ``float16`` planes
+    decode under the legacy plan) but not writable, so completing one is
+    refused and the operator rebuilds instead.
     """
     check_format_version(version, source=source)
     if version != CURRENT_FORMAT_VERSION:

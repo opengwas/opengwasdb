@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from opengwasdb.encoding import DenseZPlane
 from opengwasdb.index import connect, get_metadata
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
@@ -30,7 +31,9 @@ def test_dense_build_writes_standard_envelope_and_metadata(dense_store_path):
 
     import math
 
-    z = root["z"][:].astype("float32")
+    z = DenseZPlane.open(root, open_store(dense_store_path).manifest.encoding).band(
+        0, root["z"].shape[0]
+    )
     se = root["se"][:].astype("float32")
     assert z[0, 0] == 2.0
     assert z[0, 1] == 6.0
@@ -182,7 +185,9 @@ def test_lookup_surgical_read_matches_direct_matrix(dense_store_path):
     aids = [a["analysis_id"] for a in analyses.values()]
 
     result = query.lookup(alids, aids)
-    z = root["z"][:].astype("float32")
+    z = DenseZPlane.open(root, open_store(dense_store_path).manifest.encoding).band(
+        0, root["z"].shape[0]
+    )
     se = root["se"][:].astype("float32")
 
     returned = set()

@@ -10,6 +10,12 @@ import numpy as np
 from numcodecs import Blosc
 
 from opengwasdb.build.source import NormalisedAssociation
+from opengwasdb.encoding import (
+    EncodingMeasurements,
+    StoreCodec,
+    StoreEncoding,
+    ZOverflowBuilder,
+)
 from opengwasdb.index import create_lookup_indexes, initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -100,7 +106,9 @@ def build_dense_observed_store(
         variant_index = {variant.alid: i for i, variant in enumerate(variants)}
         analysis_index = {analysis.analysis_id: i for i, analysis in enumerate(analyses)}
 
-        z = np.full((len(variants), len(analyses)), np.nan, dtype=dtype)
+        # z is accumulated in float32 and quantised once, by the codec, on the
+        # way to disk -- never pre-rounded into the stored dtype here.
+        z = np.full((len(variants), len(analyses)), np.nan, dtype=np.float32)
         se = np.full((len(variants), len(analyses)), np.nan, dtype=dtype)
 
         seen_cells: set[tuple[int, int]] = set()
@@ -117,12 +125,18 @@ def build_dense_observed_store(
             z[row, col] = record.z
             se[row, col] = record.se
 
+        # The encoding plan is decided once, here, and read back from the
+        # manifest by everything downstream (ADR 0037, issue #119).
+        encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=len(analyses)))
         rsid_by_alid = _first_rsids_by_alid(records)
-        _write_manifest(staged, store_id, release_id, reference_assembly, records, chunk_shape, dtype)
+        _write_manifest(
+            staged, store_id, release_id, reference_assembly, records, chunk_shape, dtype,
+            encoding,
+        )
         write_variant_axis(staged.path, variants, rsid_by_alid)
         _write_index(staged, variants, analyses, records, chunk_shape, dtype)
-        _write_zarr(staged, z, se, chunk_shape, dtype)
-        build_top_hit_indexes(staged.path)
+        _write_zarr(staged, z, se, chunk_shape, dtype, encoding)
+        build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
 
@@ -172,8 +186,10 @@ def _write_manifest(
     records: list[NormalisedAssociation],
     chunk_shape: tuple[int, int],
     dtype: str,
+    encoding: StoreEncoding,
 ) -> None:
     manifest = StoreManifest(
+        encoding=encoding,
         store_id=store_id,
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
@@ -187,7 +203,7 @@ def _write_manifest(
             "source_record_count": len(records),
             "dense": {
                 "statistic_arrays": ["z", "se"],
-                "dtype": dtype,
+                "se_dtype": dtype,
                 "chunk_shape": list(chunk_shape),
                 "compressor": DEFAULT_COMPRESSOR,
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
@@ -220,7 +236,7 @@ def _write_index(
             connection,
             "dense",
             {
-                "dtype": dtype,
+                "se_dtype": dtype,
                 "chunk_shape": list(chunk_shape),
                 "compressor": DEFAULT_COMPRESSOR,
                 "variant_axis": {
@@ -262,6 +278,7 @@ def _write_zarr(
     se: np.ndarray,
     chunk_shape: tuple[int, int],
     dtype: str,
+    encoding: StoreEncoding,
 ) -> None:
     compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
     # Clip chunk shape to array dimensions so zarr's declared shape matches what
@@ -269,8 +286,16 @@ def _write_zarr(
     # decompression buffer even when the array is narrower than chunk_shape[1].
     effective_chunks = (min(chunk_shape[0], z.shape[0]), min(chunk_shape[1], z.shape[1]))
     root = staged.arrays(mode="w")
-    root.create_dataset("z", data=z, chunks=effective_chunks, compressor=compressor, dtype=dtype)
+    # Flat C-order position is exactly `flatnonzero` over the whole grid, which
+    # is what the overflow table keys on.
+    codec = StoreCodec(encoding)
+    overflow = ZOverflowBuilder()
+    codes = codec.encode_z(z, positions=np.flatnonzero, overflow=overflow)
+    root.create_dataset(
+        "z", data=codes, chunks=effective_chunks, compressor=compressor, dtype=codec.z_dtype
+    )
     root.create_dataset("se", data=se, chunks=effective_chunks, compressor=compressor, dtype=dtype)
+    overflow.table().write(root)
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"
     root.attrs["compressor"] = DEFAULT_COMPRESSOR

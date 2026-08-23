@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.cli.main import app
+from opengwasdb.encoding import DenseZPlane
 from opengwasdb.layouts.dense.rho import (
     build_dense_rho,
     estimate_rho_cml,
@@ -168,7 +169,9 @@ def test_build_dense_rho_round_trips_against_direct_estimation(rho_store_path):
     stored_rho = float(pair["rho"][0])
     stored_n = int(pair["n_null"][0])
 
-    z_all = root["z"][:]
+    z_all = DenseZPlane.open(root, open_store(rho_store_path).manifest.encoding).band(
+        0, root["z"].shape[0]
+    )
     z0 = z_all[thinned, 0].astype(np.float64)
     z1 = z_all[thinned, 1].astype(np.float64)
     direct = estimate_rho_cml(z0, z1, z_thresh=1.0, min_nulls=20)
@@ -177,7 +180,7 @@ def test_build_dense_rho_round_trips_against_direct_estimation(rho_store_path):
     assert stored_n == int(mask.sum())
     assert not math.isnan(direct)
     assert not math.isnan(stored_rho)
-    # float16 storage tolerance.
+    # Rho itself is stored float16 (ADR 0025).
     assert stored_rho == pytest.approx(direct, abs=1e-2)
 
 
@@ -203,8 +206,9 @@ def test_imputed_cells_are_excluded_from_null_support(rho_store_path):
 
     rho_group = open_store(rho_store_path).arrays(mode="r")["rho"]
     thinned = np.asarray(rho_group["variant_index"][:])
-    z0 = np.asarray(root["z"][:, 0], dtype=np.float64)[thinned]
-    z1 = np.asarray(root["z"][:, 1], dtype=np.float64)[thinned]
+    plane = DenseZPlane.open(root, open_store(rho_store_path).manifest.encoding)
+    z0 = np.asarray(plane.column(0), dtype=np.float64)[thinned]
+    z1 = np.asarray(plane.column(1), dtype=np.float64)[thinned]
     imp0 = imputed[:, 0][thinned]
     imp1 = imputed[:, 1][thinned]
     expected_mask = (

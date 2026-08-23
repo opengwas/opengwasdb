@@ -78,6 +78,7 @@ Required fields:
 | `reference_assembly` | One genome assembly for all coordinates in the release |
 | `created_at` | Release creation timestamp |
 | `provenance` | Source and build provenance object |
+| `encoding` | How the statistic planes are encoded (§6a). Absent on `format_version` 0.x, which is `float16` throughout |
 
 Reference-Completed releases MUST additionally declare:
 
@@ -197,7 +198,71 @@ Requirements:
 - p-value is queryable but derived from Z.
 - EAF, INFO, and sample size MUST NOT be required to reconstruct beta, SE, Z, or p-value.
 
-The v0.1 target dtype for dense statistics is `float16`, subject to validation benchmarks.
+Statistic planes are not required to be floating point, and `z` is not. Their
+physical encoding is declared per release, in `manifest.json` (§6a), and is
+read from that declaration rather than inferred from a dtype.
+
+## 6a. Statistic encodings
+
+A Store Release at `format_version` 1.0 or above MUST declare an `encoding`
+object in `manifest.json`:
+
+```json
+"encoding": {
+  "version": 1,
+  "z": {"kind": "int16_fixed", "scale": 1024},
+  "se": {"kind": "float16"}
+}
+```
+
+- The declaration is authoritative. A reader decodes what the manifest says;
+  validation checks that the arrays agree with it (§20).
+- A reader meeting a `kind` it does not implement MUST reject the release
+  (§21), not guess and not fall back.
+- A release declaring no `encoding` — every release up to `format_version` 0.1
+  — is `float16` for both planes, with NaN as the missing marker.
+
+**`z` — `int16` fixed point plus an exact overflow table** (ADR 0037 §1). The
+stored code is `round(z × scale)`, `scale` = 1024 by default, with two
+reserved codes:
+
+| code | meaning |
+|---|---|
+| `-32768` | missing — decodes to NaN, and the paired `se` MUST also be missing (§15) |
+| `-32767` | out of range — the exact `float32` is in the plane's overflow table |
+| `-32766 … 32767` | `z × scale`, i.e. −31.998046875 … +31.9990234375 |
+
+The representable interval is stated as exact endpoints rather than "±32":
+signed fixed point is asymmetric, and reserving codes makes it more so.
+
+A value outside that interval is **not** clipped and does **not** fail the
+build — genuine associations reach |z| = 137.5. It is held exactly, in two
+parallel arrays beside its plane:
+
+```text
+z_overflow_index   int64, sorted, unique — the cell's flat position in its plane
+z_overflow_value   float32               — the exact z
+```
+
+A cell's flat position is `variant_index × n_analyses + analysis_index` for a
+Dense grid, and the association's ordinal in the concatenated CSR arrays for a
+Ragged sequence. The arrays are present whenever `z` is `int16_fixed`, even
+when empty. Every out-of-range cell MUST have an entry and the table MUST NOT
+describe any other cell (§20).
+
+A build MUST fail on a non-finite `z` that is not a recorded absence (±inf, or
+a malformed statistic): it is neither a value nor an absence, and no encoding
+of it is honest.
+
+**`se` — `float16`.** `se` spans about 3.2 decades and needs *relative*
+precision, which a float exponent already provides; `z` is bounded and needs
+*uniform* precision, which is why the two planes are encoded differently. This
+is recorded so `se` is not later "fixed" by analogy with `z`.
+
+Derived artifacts that hold their own copies of `z` — top-hit indexes (§18)
+and the Rho Matrix — remain decoded `float32` and are explicitly rebuildable
+from the encoded planes. A top-hit index's `z` MUST equal what a query reads
+back from the plane, so candidate selection is done on the **stored** value.
 
 ## 7. Effect scale
 
@@ -429,13 +494,16 @@ data.zarr/z
 data.zarr/se
 ```
 
+`z` is encoded as §6a declares, and carries `data.zarr/z_overflow_index` and
+`data.zarr/z_overflow_value` beside it when that encoding is `int16_fixed`.
+
 Optional (ADR 0036), same shape and chunking as the required arrays:
 
 ```text
 data.zarr/eaf
 ```
 
-`eaf` is `float32` where `z`/`se` are `float16`: the canonical A1 is the
+`eaf` is `float32` where `se` is `float16`: the canonical A1 is the
 lexicographically smaller allele rather than the minor one, so EAF near 1 is
 ordinary, and `float16` spacing near 1.0 (0.00049) would round a MAF of 1e-4
 to zero. The array is absent entirely when no Analysis in the release carries
@@ -443,8 +511,9 @@ a frequency; per-cell NaN carries per-Analysis and per-cell absence alike.
 
 In Observed-Only Dense stores:
 
-- every finite cell represents an observed association;
-- unavailable associations are represented by canonical NaN in both `z` and `se`;
+- every present cell represents an observed association;
+- unavailable associations are represented by each plane's missing marker
+  (§6a, §15) in both `z` and `se`;
 - no imputed mask is required;
 - the dense variant axis is source-faithful and does not require an LD Reference Panel.
 
@@ -462,6 +531,10 @@ variant_idx
 z
 se
 ```
+
+`z` is encoded as §6a declares, with its overflow arrays
+(`data.zarr/ragged/z_overflow_index`, `…_value`) keyed by the association's
+ordinal in the concatenated CSR arrays.
 
 `eaf` (ADR 0036) is an optional fourth parallel array (`data.zarr/ragged/eaf`,
 `float32`), aligned with the CSR `z`/`se` and absent when no Analysis in the
@@ -631,7 +704,7 @@ Each completed region contains:
 
 - the full slice of Reference Variant Set variants within the region boundary;
 - observed off-panel variants inside the same boundary;
-- NaN statistic rows for reference-panel variants that were neither observed nor imputed.
+- missing-marked statistic rows (§6a, §15) for reference-panel variants that were neither observed nor imputed.
 
 Observed, imputed, and missing rows belong to the same ragged association sequence. Ragged Reference-Completed stores do not create a separate imputed-ragged component.
 
@@ -687,7 +760,9 @@ Validators MUST check at least:
 - canonical variant identity is valid and unique within the Store Variant Table;
 - signed statistics have been normalised to canonical allele orientation;
 - `se >= 0` for all finite SE values;
-- Z and SE missingness is consistent;
+- Z and SE missingness is consistent, each read through its own plane's missing marker (§6a, §15);
+- each statistic plane's dtype matches the `encoding` the manifest declares, and a plane with a declared `kind` this build does not implement fails the release rather than being decoded (§6a);
+- every out-of-range Z cell has an entry in the plane's overflow table, and the table describes no other cell (§6a) — a lost entry is the *largest* |z| in the store, which is the one value that must never read as something plausible instead;
 - Stored Effect Scale values are in the controlled vocabulary;
 - Dense arrays match declared dimensions;
 - Reference-Completed releases declare LD Reference Panel and Reference Completion Method;

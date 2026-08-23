@@ -12,6 +12,15 @@ import numpy as np
 import zarr
 
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
+from opengwasdb.encoding import (
+    Z_OVERFLOW,
+    Z_OVERFLOW_INDEX,
+    Z_OVERFLOW_VALUE,
+    DenseZPlane,
+    StoreCodec,
+    StoreEncoding,
+    ZOverflowTable,
+)
 from opengwasdb.layouts.dense.top_hits import threshold_key, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -187,12 +196,14 @@ def _validate_dense_store(
                 imputed_arr, on_panel_arr = _validate_completion_metadata(
                     root, connection, analyses_path, n_variants, n_analyses, errors
                 )
+            _validate_encoding_plan(root, manifest.encoding, errors, label="data.zarr")
             if not errors:
                 _validate_dense_arrays(
-                    root, n_variants, n_analyses, errors, imputed_arr, on_panel_arr
+                    root, n_variants, n_analyses, errors, manifest.encoding,
+                    imputed_arr, on_panel_arr,
                 )
             if not errors:
-                _validate_top_hits(root, errors)
+                _validate_top_hits(root, errors, manifest.encoding)
             if not errors:
                 _validate_rho(root, n_analyses, errors)
     except Exception as exc:  # noqa: BLE001 - validators should report actionable failures
@@ -317,6 +328,9 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
         if errors:
             return ValidationResult(errors=errors)
 
+        _validate_encoding_plan(root, manifest.encoding, errors, label="data.zarr/ragged")
+        if errors:
+            return ValidationResult(errors=errors)
         offsets = root["offsets"][:]
         n_assoc = int(offsets[-1])
         for name in ("variant_index", "z", "se"):
@@ -325,6 +339,14 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
                     f"data.zarr/ragged/{name} has {len(root[name])} entries "
                     f"but offsets imply {n_assoc}"
                 )
+        if manifest.encoding.z.is_fixed_point:
+            raw_z = np.asarray(root["z"][:])
+            _overflow_positions_match(
+                "data.zarr/ragged/z",
+                np.flatnonzero(raw_z == Z_OVERFLOW).astype(np.int64),
+                ZOverflowTable.read(root),
+                errors,
+            )
         se_vals = root["se"][:].astype("float32")
         if np.any(np.isfinite(se_vals) & (se_vals < 0)):
             errors.append("se contains negative finite values")
@@ -389,23 +411,25 @@ def _validate_ragged_completion(
     if not np.all((imp == 0) | (imp == 1)):
         errors.append("data.zarr/ragged/imputed contains values other than 0 and 1")
 
-    # Where imputed=1: z and se must both be finite
-    z_vals = root["z"][:].astype("float32")
+    # Where imputed=1: z and se must both be present. "Present" is the
+    # complement of the plane's own missing marker (spec §15), not `isfinite`
+    # of a float: an integer plane holds no NaN to test for.
+    codec = StoreCodec(store.manifest.encoding)
+    z_missing = codec.missing_mask(root["z"][:])
     se_vals = root["se"][:].astype("float32")
     imp_mask = imp == 1
     if imp_mask.any():
-        if not np.all(np.isfinite(z_vals[imp_mask])):
-            errors.append("imputed=1 rows have NaN z-scores")
+        if np.any(z_missing[imp_mask]):
+            errors.append("imputed=1 rows have missing z-scores")
         if not np.all(np.isfinite(se_vals[imp_mask])):
             errors.append("imputed=1 rows have NaN se values")
 
-    # Where z is NaN: se must also be NaN and imputed must be 0
-    nan_z = ~np.isfinite(z_vals)
-    if nan_z.any():
-        if not np.all(~np.isfinite(se_vals[nan_z])):
-            errors.append("NaN z rows have finite se values (inconsistent missingness)")
-        if np.any(imp[nan_z] == 1):
-            errors.append("NaN z rows have imputed=1 (inconsistent)")
+    # Where z is missing: se must also be missing and imputed must be 0
+    if z_missing.any():
+        if not np.all(~np.isfinite(se_vals[z_missing])):
+            errors.append("missing z rows have finite se values (inconsistent missingness)")
+        if np.any(imp[z_missing] == 1):
+            errors.append("missing z rows have imputed=1 (inconsistent)")
 
     with store.index_connection() as conn:
         tables = {r[0] for r in conn.execute(
@@ -444,7 +468,7 @@ def _validate_ragged_top_hits(
     csr = RaggedCSRReader(store_path)
     offsets = csr._offsets[:]
     vi_all = csr._variant_index[:].astype(np.int32)
-    z_all = csr._z[:].astype(np.float32)
+    z_all = csr.z_all()
 
     for key in top:
         group = top[key]
@@ -577,6 +601,18 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
             f"(got {dense_store.manifest.primary_layout.value})"
         )
         return ValidationResult(errors=errors)
+    # One plan for both components (issue #119). They partition one Analysis's
+    # associations, so a result assembled from both is only coherent if they
+    # were encoded the same way -- and each component carries its own manifest,
+    # so nothing but this check couples them.
+    if dense_store.manifest.encoding != manifest.encoding:
+        errors.append(
+            "the Dense Component and the Hybrid release declare different statistic "
+            f"encodings ({dense_store.manifest.encoding.to_manifest()} vs "
+            f"{manifest.encoding.to_manifest()}); both components of a Hybrid release "
+            "are written under one plan"
+        )
+        return ValidationResult(errors=errors)
     before = len(errors)
     _validate_dense_store(dense_store, errors, envelope=HYBRID_DENSE_COMPONENT_ENVELOPE)
     if len(errors) > before:
@@ -598,7 +634,7 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
         return ValidationResult(errors=errors)
 
     # 3. Ragged Overflow structural checks + observed-only invariant.
-    _validate_overflow(store_path, ragged_path, n_shared, errors)
+    _validate_overflow(store_path, ragged_path, n_shared, errors, manifest.encoding)
     if errors:
         return ValidationResult(errors=errors)
     # 4. Hybrid cross-component invariants (coverage + disjoint partition).
@@ -614,7 +650,11 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
 
 
 def _validate_overflow(
-    store_path: Path, ragged_path: Path, n_shared: int, errors: list[str]
+    store_path: Path,
+    ragged_path: Path,
+    n_shared: int,
+    errors: list[str],
+    encoding: StoreEncoding,
 ) -> None:
     """Validate the Ragged Overflow CSR: array lengths, se sign, shared-index
     bounds, and that it is observed-only (never imputed, even after completion)."""
@@ -626,6 +666,12 @@ def _validate_overflow(
     for name in ("offsets", "variant_index", "z", "se"):
         if name not in root:
             errors.append(f"missing data.zarr/ragged/{name}")
+    if errors:
+        return
+    # Both Hybrid components are written under one plan (issue #119): the
+    # Dense Component and the Ragged Overflow partition one Analysis's
+    # associations, so a shared result contract needs a shared encoding.
+    _validate_encoding_plan(root, encoding, errors, label="data.zarr/ragged")
     if errors:
         return
     offsets = root["offsets"][:]
@@ -652,6 +698,14 @@ def _validate_overflow(
     se_vals = root["se"][:].astype("float32")
     if np.any(np.isfinite(se_vals) & (se_vals < 0)):
         errors.append("Ragged Overflow se contains negative finite values")
+    if encoding.z.is_fixed_point:
+        raw_z = np.asarray(root["z"][:])
+        _overflow_positions_match(
+            "Ragged Overflow z",
+            np.flatnonzero(raw_z == Z_OVERFLOW).astype(np.int64),
+            ZOverflowTable.read(root),
+            errors,
+        )
 
 
 def _validate_hybrid_invariants(
@@ -1000,11 +1054,86 @@ def _representative_variant_indices(n_variants: int) -> list[int]:
 _VALIDATE_BAND_ROWS = 250_000
 
 
+def _validate_encoding_plan(
+    group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
+) -> None:
+    """Check the arrays against the plan the manifest declares (issue #119).
+
+    The plan is authoritative: a reader decodes what the manifest says, so a
+    store whose `z` plane is not in its declared encoding does not read as
+    "the other encoding" -- it reads as plausible, wrong z-scores. That is the
+    disagreement between declared metadata and actual arrays that got through
+    review once already (#106), and it is why the check exists at all.
+    """
+    for name, declared_plane in (("z", encoding.z), ("se", encoding.se)):
+        if name not in group:
+            continue
+        actual = str(group[name].dtype)
+        if actual != declared_plane.dtype:
+            errors.append(
+                f"{label}/{name} has dtype {actual} but the manifest declares "
+                f"{declared_plane.kind} ({declared_plane.dtype})"
+            )
+    if errors or "z" not in group:
+        return
+    declared = encoding.z
+    has_table = Z_OVERFLOW_INDEX in group or Z_OVERFLOW_VALUE in group
+    if not declared.is_fixed_point:
+        if has_table:
+            errors.append(
+                f"{label} carries a z overflow table but declares no fixed-point z encoding"
+            )
+        return
+    if Z_OVERFLOW_INDEX not in group or Z_OVERFLOW_VALUE not in group:
+        errors.append(
+            f"{label} declares fixed-point z but is missing "
+            f"{Z_OVERFLOW_INDEX}/{Z_OVERFLOW_VALUE}, which hold the exact values of "
+            "any cell outside the representable range"
+        )
+        return
+    table = ZOverflowTable.read(group)
+    if len(table.index) != len(table.value):
+        errors.append(
+            f"{label} z overflow table has {len(table.index)} positions but "
+            f"{len(table.value)} values"
+        )
+    elif len(table.index) > 1 and np.any(table.index[1:] <= table.index[:-1]):
+        errors.append(f"{label} z overflow table is not sorted by position, or repeats one")
+    elif len(table.index) and not np.all(np.isfinite(table.value)):
+        errors.append(f"{label} z overflow table contains non-finite values")
+
+
+def _overflow_positions_match(
+    label: str, observed: np.ndarray, table: ZOverflowTable, errors: list[str]
+) -> None:
+    """Every out-of-range cell has an exact value, and nothing else does.
+
+    A plane that says "overflow" for a cell the table does not describe has
+    lost that association outright, and it would be the *largest* |z| in the
+    store -- exactly the value nothing may be quietly wrong about.
+    """
+    if np.array_equal(np.sort(observed), table.index):
+        return
+    orphan = np.setdiff1d(observed, table.index)
+    stray = np.setdiff1d(table.index, observed)
+    if len(orphan):
+        errors.append(
+            f"{label}: {len(orphan)} out-of-range z cell(s) have no entry in the overflow "
+            f"table (first at flat position {int(orphan[0])})"
+        )
+    if len(stray):
+        errors.append(
+            f"{label}: z overflow table describes {len(stray)} cell(s) that are not marked "
+            f"out of range (first at flat position {int(stray[0])})"
+        )
+
+
 def _validate_dense_arrays(
     root: Any,
     n_variants: int,
     n_analyses: int,
     errors: list[str],
+    encoding: StoreEncoding,
     imputed_arr: Any = None,
     on_panel: np.ndarray | None = None,
 ) -> None:
@@ -1039,8 +1168,13 @@ def _validate_dense_arrays(
     if errors:
         return
 
-    # Stream in row-bands; the finite/sign checks work on float16 directly, so
-    # there is no full-matrix load and no float32 upcast.
+    # Stream in row-bands. Missingness is read through the plane's declared
+    # missing *marker* (spec §15) -- NaN for a float plane, the reserved
+    # sentinel for an integer one -- so nothing here decodes a value it does
+    # not need, and no band is upcast.
+    codec = StoreCodec(encoding)
+    fixed_point = encoding.z.is_fixed_point
+    overflow_positions: list[np.ndarray] = []
     neg_se = False
     missingness = False
     imp_not_binary = False
@@ -1052,6 +1186,11 @@ def _validate_dense_arrays(
         r1 = min(r0 + _VALIDATE_BAND_ROWS, n_variants)
         z = z_arr[r0:r1]
         se = se_arr[r0:r1]
+        z_missing = codec.missing_mask(z)
+        if fixed_point:
+            overflow_positions.append(
+                np.flatnonzero(np.asarray(z) == Z_OVERFLOW).astype(np.int64) + r0 * n_analyses
+            )
         if not neg_se and np.any(np.isfinite(se) & (se < 0)):
             neg_se = True
         if eaf_arr is not None and not eaf_out_of_range:
@@ -1059,7 +1198,7 @@ def _validate_dense_arrays(
             finite = np.isfinite(eaf)
             if np.any(finite & ((eaf < 0.0) | (eaf > 1.0))):
                 eaf_out_of_range = True
-        if not missingness and np.any(np.isnan(z) != np.isnan(se)):
+        if not missingness and np.any(z_missing != np.isnan(se)):
             missingness = True
         if imputed_arr is not None:
             imp = imputed_arr[r0:r1]
@@ -1067,7 +1206,7 @@ def _validate_dense_arrays(
                 imp_not_binary = True
             imp_mask = imp == 1
             if imp_mask.any():
-                if not imp_nan_z and not np.all(np.isfinite(z[imp_mask])):
+                if not imp_nan_z and np.any(z_missing[imp_mask]):
                     imp_nan_z = True
                 if not imp_nan_se and not np.all(np.isfinite(se[imp_mask])):
                     imp_nan_se = True
@@ -1083,7 +1222,7 @@ def _validate_dense_arrays(
     if imp_not_binary:
         errors.append("data.zarr/imputed contains values other than 0 and 1")
     if imp_nan_z:
-        errors.append("imputed=1 cells have NaN z-scores")
+        errors.append("imputed=1 cells have missing z-scores")
     if imp_nan_se:
         errors.append("imputed=1 cells have NaN se values")
     if off_panel_imputed:
@@ -1092,13 +1231,22 @@ def _validate_dense_arrays(
         )
     if eaf_out_of_range:
         errors.append("data.zarr/eaf contains finite values outside [0, 1]")
+    if fixed_point:
+        _overflow_positions_match(
+            "data.zarr/z",
+            np.concatenate(overflow_positions) if overflow_positions
+            else np.empty(0, dtype=np.int64),
+            ZOverflowTable.read(root),
+            errors,
+        )
 
 
-def _validate_top_hits(root: Any, errors: list[str]) -> None:
+def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) -> None:
     if "top_hits" not in root:
         return
     top = root["top_hits"]
-    z_arr = root["z"]
+    z_plane = DenseZPlane.open(root, encoding)
+    z_arr = z_plane.array
     imputed_arr = root["imputed"] if "imputed" in root else None
     n_variants, n_analyses = int(z_arr.shape[0]), int(z_arr.shape[1])
 
@@ -1186,7 +1334,7 @@ def _validate_top_hits(root: Any, errors: list[str]) -> None:
     # (matrix z finite, matches the stored index z, and itself clears the cutoff).
     for r0 in range(0, n_variants, _VALIDATE_BAND_ROWS):
         r1 = min(r0 + _VALIDATE_BAND_ROWS, n_variants)
-        z_band = z_arr[r0:r1].astype("float32")
+        z_band = z_plane.band(r0, r1)
         abs_band = np.abs(z_band)
         for g in groups.values():
             g["pass_count"] += int(np.count_nonzero(abs_band >= g["z_crit"]))
@@ -1289,15 +1437,15 @@ def _validate_rho(root: Any, n_analyses: int, errors: list[str]) -> None:
 # Confirm the store faithfully persisted the *values* of the original dataset —
 # the one class of bug internal validation structurally cannot catch (a store
 # that is self-consistent but systematically wrong: sign flip, allele
-# orientation, z/se swap, wrong analysis column, liftover mis-map, float16
+# orientation, z/se swap, wrong analysis column, liftover mis-map, quantisation
 # corruption). We reuse the build's own readers, so this is a round-trip
 # persistence check, not an independent oracle of the normalisation maths.
 
 _FIDELITY_MAX_FILES = 25
 _FIDELITY_SCAN_PER_FILE = 100_000
-# A sampled cell is stored float16; compare against the source rounded the same
-# way, with a tolerance loose enough for float16 quantisation but far tighter
-# than any sign/scale/column bug.
+# A sampled cell is compared against the source value put through the store's
+# own codec -- the same quantisation the store applied -- with a tolerance
+# loose enough for that rounding but far tighter than any sign/scale/column bug.
 _FIDELITY_RTOL = 1e-2
 _FIDELITY_ATOL = 1e-2
 
@@ -1519,7 +1667,8 @@ def _validate_source_fidelity(
     ucols = sorted({pr[1] for pr in pairs})
     ri = {r: i for i, r in enumerate(urows)}
     ci = {c: i for i, c in enumerate(ucols)}
-    z_blk = root["z"].oindex[urows, :][:, ucols].astype("float32")
+    codec = StoreCodec(store.manifest.encoding)
+    z_blk = DenseZPlane.open(root, store.manifest.encoding).block(urows, ucols)
     se_blk = root["se"].oindex[urows, :][:, ucols].astype("float32")
 
     n_compared = 0
@@ -1532,7 +1681,7 @@ def _validate_source_fidelity(
             n_missing_in_store += 1
             continue
         n_compared += 1
-        z_ref = float(np.float16(z_src))
+        z_ref = float(codec.quantise_z(np.array([z_src]))[0])
         se_ref = float(np.float16(se_src))
         if not (
             np.isclose(sz, z_ref, rtol=_FIDELITY_RTOL, atol=_FIDELITY_ATOL)

@@ -155,6 +155,31 @@ at |z| > 64; the `ukb-b` survey shows that would reject real pigmentation hits.
 `se` stays `float16`. Both choices follow from the shape of the quantity, not
 from a general preference for integers.
 
+**As implemented** (issue #114, store-format spec §6a, §15, §20). Four details
+were settled during implementation and are recorded here rather than left to
+the code:
+
+- **The overflow table is keyed by flat position**, `variant_index x
+  n_analyses + analysis_index` for a Dense grid and the association's ordinal
+  for a CSR, in two sorted arrays (`z_overflow_index`, `z_overflow_value`)
+  beside the plane they describe. Keying it by position rather than by
+  (variant, analysis) is what lets one implementation serve both layout shapes,
+  and it is why every read of a fixed-point plane says *where* its values came
+  from: the codec cannot resolve an out-of-range cell it cannot locate.
+- **The arrays are written even when empty**, so "this plane is fixed point"
+  and "this plane has a table" are the same statement, and validation needs no
+  special case for the store that overflows nothing.
+- **`decode_se(raw_se)` is deliberately absent** while `decode_z()` is public.
+  `z` is independently meaningful — Rho and the top-hit harvest need nothing
+  else to interpret it — but once #118 codes `se` as a residual it cannot be
+  decoded without EAF, and a function that looked decodable without it would
+  invite exactly the half-done read that returns silent nonsense.
+- **The plan carries `z` and `se` only.** `eaf`'s physical encoding is
+  unchanged by this issue — it is still ADR 0036's `float32` plane, present or
+  absent per source — so it joins `StoreEncoding` with #116, the change that
+  gives it something to declare. The scaffolding is proven on the two planes
+  whose encoding this issue actually decides.
+
 ### 2. EAF is a per-variant baseline plus a per-cell `int8` log-residual
 
 - `eaf_baseline` — one `float32` per variant, the within-store representative

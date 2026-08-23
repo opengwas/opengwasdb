@@ -52,6 +52,7 @@ from opengwasdb.completion.ld_panel import (
 from opengwasdb.completion.manifest import build_completion_provenance
 from opengwasdb.completion.parallel import init_block_worker
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
+from opengwasdb.encoding import StoreCodec, ZOverflowBuilder, positions_flat
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
@@ -619,7 +620,7 @@ def _run_completion(
 
             order = np.argsort(ref_vi)
             vi_arr = np.array(ref_vi, dtype=np.int32)[order]
-            z_arr = np.array(ref_z, dtype=np.float16)[order]
+            z_arr = np.array(ref_z, dtype=np.float32)[order]
             se_arr = np.array(ref_se, dtype=np.float16)[order]
             eaf_arr = np.array(ref_eaf, dtype=np.float32)[order]
             imp_arr = np.array(ref_imp, dtype=np.uint8)[order]
@@ -645,7 +646,7 @@ def _run_completion(
         n_total = offsets[-1]
         offsets_arr = np.array(offsets, dtype=np.int64)
         vi_all = np.concatenate(all_vi) if all_vi else np.empty(0, dtype=np.int32)
-        z_all = np.concatenate(all_z) if all_z else np.empty(0, dtype=np.float16)
+        z_all = np.concatenate(all_z) if all_z else np.empty(0, dtype=np.float32)
         se_all = np.concatenate(all_se) if all_se else np.empty(0, dtype=np.float16)
         eaf_all = np.concatenate(all_eaf) if all_eaf else np.empty(0, dtype=np.float32)
         imp_all = np.concatenate(all_imp) if all_imp else np.empty(0, dtype=np.uint8)
@@ -661,9 +662,17 @@ def _run_completion(
             "variant_index", data=vi_all, chunks=(_ASSOC_CHUNK,),
             compressor=_COMPRESSOR, dtype=np.int32,
         )
+        # Completion writes into the source's arrays, so it encodes with the
+        # source's plan (ADR 0038 §4) -- the overflow table travels with the
+        # plane it belongs to.
+        codec = StoreCodec(manifest.encoding)
+        z_overflow = ZOverflowBuilder()
         root.create_dataset(
-            "z", data=z_all, chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=np.float16
+            "z",
+            data=codec.encode_z(z_all, positions=positions_flat(0), overflow=z_overflow),
+            chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=codec.z_dtype,
         )
+        z_overflow.table().write(root)
         root.create_dataset(
             "se", data=se_all, chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=np.float16
         )
@@ -684,7 +693,7 @@ def _run_completion(
         root.attrs["n_associations"] = n_total
 
         print("Building top-hit indexes...")
-        build_ragged_top_hit_indexes(staged.path)
+        build_ragged_top_hit_indexes(staged.path, encoding=manifest.encoding)
 
         print("Writing analyses.tsv...")
         with staged.index_connection() as quality_db:
@@ -717,6 +726,9 @@ def _run_completion(
 
         new_release_id = release_id or f"{manifest.release_id}-completed"
         completed_manifest = StoreManifest(
+            # Preserved with the format version below: a completed release is
+            # written into its source's arrays, so it is in its source's encoding.
+            encoding=manifest.encoding,
             store_id=manifest.store_id,
             release_id=new_release_id,
             # Preserved, not re-stamped -- see ADR 0038 §4 and the dense path.

@@ -358,12 +358,18 @@ class TestValidation:
         imputed = root["imputed"][:]
         imputed[r, c] = 1
         root["imputed"][:] = imputed
+        # "Missing" is whatever this store's declared encoding marks it with
+        # (spec §15) -- NaN for a float plane, the reserved sentinel for a
+        # fixed-point one -- so write it through the codec rather than assuming.
+        from opengwasdb.encoding import StoreCodec
+
+        codec = StoreCodec(open_store(completed_store).manifest.encoding)
         z = root["z"][:]
-        z[r, c] = np.nan
+        z[r, c] = codec.encode_z(np.array([np.nan]))[0]
         root["z"][:] = z
         result = validate_store(completed_store)
         assert not result.ok
-        assert any("NaN z" in e for e in result.errors), result.errors
+        assert any("missing z" in e for e in result.errors), result.errors
 
     def test_corrupt_top_hit_imputed_index_fails(self, completed_store):
         from opengwasdb.layouts.dense.top_hits import threshold_key
