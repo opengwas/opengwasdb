@@ -64,11 +64,13 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   carries the capability through, so it can now drive a build of those sources.
 - **`validate` now rejects a store that carries EAF it never checked** (#115).
   Every Analysis with `eaf_scope=association` must record EAF orientation
-  evidence; `unverified` is reported as a warning. This invalidates Store
-  Releases built between ADR 0036 (which began retaining EAF) and this change —
-  including all four pilots — until they are rebuilt or audited with
-  `audit-eaf-orientation`. Deliberate: a frequency column nobody has checked is
-  indistinguishable from one reported against the other allele.
+  evidence; `unverified` is reported as a warning. Deliberate: a frequency
+  column nobody has checked is indistinguishable from one reported against the
+  other allele. It invalidates any Store Release built between ADR 0036 (which
+  began retaining EAF) and this change, until it is rebuilt or audited with
+  `audit-eaf-orientation` — but no such release exists today: every pilot on
+  disk predates ADR 0036 and carries no `eaf_scope` column at all, so the rule
+  does not apply to them.
 - The Analysis Catalogue gains `eaf_orientation`, `eaf_orientation_r`,
   `source_reader_capability` and `gate_orientation_flip_r` columns (#115), and
   `assign-ancestry` gains `--orientation-flip-r`. All are annotation columns:
