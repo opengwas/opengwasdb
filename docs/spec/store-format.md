@@ -571,21 +571,23 @@ That prior art uses LD block TSV files alongside `.unphased.vcor1.gz` LD matrice
 
 ## 15. Association Status encoding
 
-Reference-Completed Stores encode Association Status using statistic NaNs plus an imputed mask.
+Reference-Completed Stores encode Association Status using a per-plane **missing marker** plus an imputed mask.
+
+Each statistic plane's missing marker is defined by that plane's declared encoding, not by its dtype: a floating-point plane marks a missing cell with NaN, and an integer plane with the reserved sentinel its codec declares. Where a store declares no encoding, its planes are `float16` and the marker is NaN — the case every release up to `format_version` 0.1 is in. Stating it in terms of the codec rather than of NaN is what lets an integer `z` plane, which cannot hold NaN, express the same contract (ADR 0037, ADR 0038 §6).
 
 State derivation:
 
 | Z | SE | imputed mask | Association Status |
 |---|---|---|---|
-| finite | finite | false | observed |
-| finite | finite | true | imputed |
-| NaN | NaN | false | missing |
+| present | present | false | observed |
+| present | present | true | imputed |
+| missing | missing | false | missing |
 
 Invalid states:
 
-- only one of Z or SE is NaN;
-- imputed mask is true while Z or SE is NaN;
-- NaN payloads are non-canonical.
+- only one of Z or SE is missing — the two markers MUST agree;
+- imputed mask is true while Z or SE is missing;
+- a marker payload is non-canonical (for a float plane, a non-canonical NaN).
 
 Builders and validators MUST reject invalid states.
 
@@ -703,8 +705,52 @@ Validators MUST check at least:
 
 ## 21. Compatibility
 
-`format_version` describes compatibility of the store representation. It does not describe biological data release version or source publication version.
+`format_version` describes compatibility of the store representation. It does not describe biological data release version or source publication version. The **package version and `format_version` are independent**: a package release may change neither, one, or both. Which package reads and writes which format is recorded in the package's `CHANGELOG.md` compatibility table.
 
-Readers MUST reject Store Releases with unsupported major format versions. Readers MAY support older minor versions when validation can establish compatibility.
+`format_version` is `MAJOR.MINOR`, both non-negative integers. A release whose `format_version` is not of that shape MUST be rejected (ADR 0038).
+
+### 21.1 What bumps major, what bumps minor
+
+The distinction is defined by **what a reader that does not know about the change would do**, not by the size of the change:
+
+- **MAJOR** — a reader that does not know about the change would *misinterpret* the store: the encoding of an existing array changes; a required entry is removed, renamed, or restructured; the meaning of an existing field changes while its name and type do not.
+- **MINOR** — a reader that does not know about the change still reads correctly everything it already knew, and the new thing is discoverable through the manifest: a new optional array, index, or sidecar; a new `analyses.tsv` column; a new `provenance` block.
+
+| change | bump |
+|---|---|
+| a new optional array (e.g. `eaf`, ADR 0036) | minor |
+| a new `analyses.tsv` column | minor |
+| a required column removed or renamed (ADR 0034) | **major** |
+| the encoding of `z`, `se` or `eaf` changes (ADR 0037) | **major** |
+
+### 21.2 Reader obligations
+
+For a release at `M.m`, a reader that fully understands major `M` up to minor `k`:
+
+| condition | behaviour |
+|---|---|
+| `M` unknown | MUST reject |
+| `M` known, `m <= k` | MUST accept |
+| `M` known, `m > k` | MUST accept, and SHOULD warn |
+
+Accepting a newer minor follows from the definition of minor: if an older reader could not read it correctly, the change was major and was classified wrong. The warning is what makes such a misclassification visible instead of silently returning partial data.
+
+A reader meeting a feature it does not implement — an encoding kind, an index type — MUST reject the release rather than guess or fall back.
 
 Future format versions may add fields, arrays, or indexes, but MUST preserve explicit manifest-based feature discovery.
+
+### 21.3 Writing
+
+A build writes exactly one `format_version` and reads every major it implements. There is no facility for writing an older format: a store that needs to be in an older format already exists in that format.
+
+### 21.4 I have an old store — now what?
+
+Store Releases are immutable. Reference Completion, re-indexing and migration all produce a **new release**, with one narrow exception: a **Provenance Amendment** may fold additional facts into an existing release's `provenance` dict in place, including a format migration recording what it did to that release. Anything that changes association data or Analytical Metadata is outside the exception.
+
+1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/migrate_store_to_analyses_tsv.py` is the only such tool at present, and it predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+3. **Rejected** — a store whose major version this build does not implement cannot be read, and no amount of validation makes it readable.
+
+There is no support window for older minors: a known major reads every minor within it.
+
+**Reference Completion preserves its source's `format_version`**, because it writes into the source's arrays and therefore its encoding — a completed release is the same format as its source. A build that can read a source but cannot write that format MUST refuse to complete it, rather than stamp a version onto arrays it did not encode that way.

@@ -59,7 +59,12 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.open import OpenGWASDBStore, StagedRelease, open_store
+from opengwasdb.store.open import (
+    OpenGWASDBStore,
+    StagedRelease,
+    check_writable_format_version,
+    open_store,
+)
 from opengwasdb.variants import VariantAxis
 
 log = logging.getLogger(__name__)
@@ -96,6 +101,10 @@ def complete_hybrid_store(
 
     source = open_store(src)
     src_manifest = source.manifest
+    # See the dense path: refused before the work, not after it (ADR 0038 §4).
+    check_writable_format_version(
+        src_manifest.format_version, source=f"source release {src}"
+    )
     if src_manifest.primary_layout is not PrimaryStorageLayout.HYBRID:
         raise ValueError(
             f"source store is not Hybrid (primary_layout={src_manifest.primary_layout})"
@@ -345,6 +354,8 @@ def _write_completed_manifest(
     manifest = StoreManifest(
         store_id=src_manifest.store_id,
         release_id=release_id,
+        # Preserved, not re-stamped -- see ADR 0038 §4 and the dense path,
+        # which checked it writable before any work began.
         format_version=src_manifest.format_version,
         primary_layout=PrimaryStorageLayout.HYBRID,
         association_coverage=AssociationCoverage.FULL,

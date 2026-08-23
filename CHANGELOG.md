@@ -44,6 +44,28 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
     AFR at 0.696, above the τ = 0.50 gate. Recalibrating τ/δ cannot re-admit it.
   - `audit-eaf-orientation` re-runs the correlation against a supplied panel
     over a built store's own arrays, for stores built before the check existed.
+- **A store-format versioning and migration policy** (#112, ADR 0038).
+  `format_version` is `MAJOR.MINOR`, with the split defined by what a reader
+  that does not know about a change would do: major if it would misinterpret
+  the store, minor if it would still read correctly everything it knew about.
+  Spec §21 now answers what bumps which, what a reader owes a store it did not
+  write, and "I have an old store — now what?".
+  - `SUPPORTED_FORMAT_VERSIONS` becomes a major → highest-known-minor mapping.
+    An unknown major is rejected; a newer minor within a known major is read
+    with a warning. It was previously `frozenset({"0.1"})`, exact-set
+    membership over opaque strings, against which §21's "reject unsupported
+    *major* versions, MAY support older *minor* versions" was not implementable
+    — and which had no test coverage at all.
+  - A `format_version` that is not `MAJOR.MINOR` is rejected
+    (`MalformedFormatVersion`, a subclass of `UnsupportedFormatVersion`: to a
+    caller deciding whether it can read a release, unparseable and
+    from-the-future are the same answer).
+  - Migration expectations are documented against the **Provenance Amendment**
+    exception CONTEXT.md already defines. Noted rather than smoothed over:
+    `scripts/migrate_store_to_analyses_tsv.py` rewrites `analyses.tsv` in place,
+    which is outside that exception. It predates the policy and its targets are
+    stores that should be rebuilt instead; bringing it into line is a change of
+    its own.
 - CI (`.github/workflows/ci.yml`): tests, tooling baselines, and a changelog
   gate on every pull request and push to `dev`/`main`. The repository had no CI
   at all before this.
@@ -92,6 +114,15 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Fixed
 
+- **Reference Completion could stamp a `format_version` onto arrays it had not
+  encoded that way** (#112). All three completion paths copied the source's
+  `format_version` into the completed release, which is the right rule —
+  completion writes into the source's arrays and therefore its encoding — but
+  did it incidentally. The moment `CURRENT_FORMAT_VERSION` moves ahead of a
+  store on disk (which #114 does), that produces a release that lies about its
+  own encoding. Completion now refuses a source it can read but cannot write,
+  and does so *before* the imputation rather than at manifest-write time.
+  Nothing can reach it today; that is why it was worth adding now.
 - `benchmarks/README.md` documented seven commands as `uv run`, which stopped
   working when the project moved to Pixi.
 - `README.md` described a two-month-old codebase as "newly scaffolded".

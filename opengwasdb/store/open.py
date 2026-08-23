@@ -10,12 +10,15 @@ those artifacts: callers still work with ``zarr.Group`` and
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import sqlite3
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any
 
 import zarr
 
@@ -25,15 +28,99 @@ from opengwasdb.model.manifest import StoreManifest
 if TYPE_CHECKING:
     from opengwasdb.query.facade import StoreQuery
 
-#: format_version values this build of opengwasdb can interpret.
-SUPPORTED_FORMAT_VERSIONS = frozenset({"0.1"})
+#: The highest ``MINOR`` this build fully understands, per readable ``MAJOR``
+#: (ADR 0038, spec §21). A major absent from this mapping is rejected; a minor
+#: above the one recorded here is read with a warning, because "minor" is
+#: defined as a change an older reader still reads correctly.
+#:
+#: ADR 0037's encodings take this to ``{0: 1, 1: 0}`` (#114): ``0.1`` stays
+#: readable and is never written again.
+SUPPORTED_FORMAT_VERSIONS: Mapping[int, int] = MappingProxyType({0: 1})
 
-#: format_version stamped on releases written by this build.
+#: format_version stamped on releases written by this build. A build writes
+#: exactly one version and reads several (ADR 0038 §3): supporting the *writing*
+#: of historical formats would mean keeping every retired encoder alive and
+#: tested, for a use case nobody has.
 CURRENT_FORMAT_VERSION = "0.1"
+
+log = logging.getLogger(__name__)
 
 
 class UnsupportedFormatVersion(Exception):
     """A release declares a format_version this build cannot interpret."""
+
+
+class MalformedFormatVersion(UnsupportedFormatVersion):
+    """A release's format_version is not ``MAJOR.MINOR``.
+
+    A subclass rather than a `ValueError`: to a caller deciding whether it can
+    read a release, "the version is nonsense" and "the version is from the
+    future" are the same answer, and both must stop the read.
+    """
+
+
+def parse_format_version(version: str) -> tuple[int, int]:
+    """``"1.2"`` -> ``(1, 2)``. Raises `MalformedFormatVersion` otherwise."""
+    major, _, minor = str(version).partition(".")
+    if not major.isdigit() or not minor.isdigit():
+        raise MalformedFormatVersion(
+            f"format_version {version!r} is not MAJOR.MINOR (ADR 0038, spec §21)"
+        )
+    return int(major), int(minor)
+
+
+def check_format_version(version: str, *, source: str = "release") -> None:
+    """Reject a `format_version` this build cannot interpret (ADR 0038 §2).
+
+    Rejection is on the **major** alone: a build carries the majors it
+    implements, not a list of every version it has ever seen. A *newer minor*
+    within a known major is accepted and warned about -- accepting it is the
+    definition of minor, and the warning is how a mis-classified change (one
+    that should have been major) becomes visible instead of silently returning
+    partial data.
+    """
+    major, minor = parse_format_version(version)
+    known_minor = SUPPORTED_FORMAT_VERSIONS.get(major)
+    if known_minor is None:
+        raise UnsupportedFormatVersion(
+            f"{source} declares format_version={version!r}, whose major version {major} "
+            f"this build does not implement; readable majors: "
+            f"{sorted(SUPPORTED_FORMAT_VERSIONS)}"
+        )
+    if minor > known_minor:
+        log.warning(
+            "%s declares format_version=%s, a newer minor than this build knows (%d.%d). "
+            "Reading it as %d.%d: anything added after that is not visible here, and if "
+            "any of it changes how existing arrays decode it was misclassified as minor.",
+            source, version, major, known_minor, major, known_minor,
+        )
+
+
+def check_writable_format_version(version: str, *, source: str = "release") -> str:
+    """Return `version` if this build can write it; raise otherwise (ADR 0038 §4).
+
+    Reference Completion writes into the source's arrays and therefore into the
+    source's encoding, so a completed release keeps its source's
+    `format_version` rather than being stamped with the current one. That is
+    only honest while this build can actually write that format. Once
+    `CURRENT_FORMAT_VERSION` moves ahead of a store on disk, completing it would
+    otherwise stamp a version onto arrays that are not in it -- a store that
+    lies about its own encoding, which is the failure class this project exists
+    to avoid.
+
+    Nothing can reach this today: every readable version is also the written
+    one. It is here so that the day #114 changes that, the answer is an error
+    rather than a wrong store.
+    """
+    check_format_version(version, source=source)
+    if version != CURRENT_FORMAT_VERSION:
+        raise UnsupportedFormatVersion(
+            f"{source} is format_version={version!r}, which this build reads but cannot "
+            f"write (it writes {CURRENT_FORMAT_VERSION!r}). Completion preserves its "
+            "source's format rather than re-encoding it (ADR 0038 §4), so this release "
+            "cannot be completed by this build -- rebuild it from source instead"
+        )
+    return version
 
 
 # --- Store Release envelope (store-format spec §1/§10/§11/§16/§17) --------
@@ -302,14 +389,10 @@ def open_store(path: str | Path) -> OpenGWASDBStore:
     The function intentionally opens exactly the path supplied by the
     caller. Release discovery and default selection belong to a higher-level
     catalogue. Raises ``UnsupportedFormatVersion`` if the release declares a
-    format_version this build cannot interpret.
+    format_version this build cannot interpret (ADR 0038 §2).
     """
 
     store_path = Path(path)
     manifest = StoreManifest.load(store_path)
-    if manifest.format_version not in SUPPORTED_FORMAT_VERSIONS:
-        raise UnsupportedFormatVersion(
-            f"release at {store_path} declares format_version={manifest.format_version!r}; "
-            f"supported: {sorted(SUPPORTED_FORMAT_VERSIONS)}"
-        )
+    check_format_version(manifest.format_version, source=f"release at {store_path}")
     return OpenGWASDBStore(path=store_path, manifest=manifest)

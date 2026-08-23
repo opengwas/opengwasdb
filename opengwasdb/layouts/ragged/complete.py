@@ -58,7 +58,11 @@ from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.model.analyses import read_analysis_records, write_analysis_records
 from opengwasdb.model.enums import CompletionState
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store.open import (
+    OpenGWASDBStore,
+    check_writable_format_version,
+    open_store,
+)
 from opengwasdb.variants.axis import (
     VariantAxis,
     write_variant_axis,
@@ -311,6 +315,10 @@ def _run_completion(
 
     source = open_store(src)
     manifest = source.manifest
+    # See the dense path: refused before the work, not after it (ADR 0038 §4).
+    source_format_version = check_writable_format_version(
+        manifest.format_version, source=f"source release {src}"
+    )
     print(f"Source store: {manifest.store_id} / {manifest.release_id}")
     print(f"  completion_state: {manifest.completion_state}")
 
@@ -711,7 +719,8 @@ def _run_completion(
         completed_manifest = StoreManifest(
             store_id=manifest.store_id,
             release_id=new_release_id,
-            format_version=manifest.format_version,
+            # Preserved, not re-stamped -- see ADR 0038 §4 and the dense path.
+            format_version=source_format_version,
             primary_layout=manifest.primary_layout,
             association_coverage=manifest.association_coverage,
             completion_state=CompletionState.REFERENCE_COMPLETED,

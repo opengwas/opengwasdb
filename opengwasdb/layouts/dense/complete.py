@@ -60,7 +60,12 @@ from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.analyses import read_analyses, read_analysis_records
 from opengwasdb.model.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.open import OpenGWASDBStore, StagedRelease, open_store
+from opengwasdb.store.open import (
+    OpenGWASDBStore,
+    StagedRelease,
+    check_writable_format_version,
+    open_store,
+)
 from opengwasdb.variants import (
     CanonicalVariant,
     VariantAxis,
@@ -281,6 +286,12 @@ def _run_completion(
     with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
         source = open_store(src)
         manifest = source.manifest
+        # Checked here, with the other source preconditions, rather than at
+        # manifest-write time: a completion that cannot honour its source's
+        # format should fail before it spends an hour imputing (ADR 0038 §4).
+        source_format_version = check_writable_format_version(
+            manifest.format_version, source=f"source release {src}"
+        )
         if manifest.primary_layout is not PrimaryStorageLayout.DENSE:
             raise ValueError(
                 f"source store is not Dense (primary_layout={manifest.primary_layout})"
@@ -484,7 +495,11 @@ def _run_completion(
         completed_manifest = StoreManifest(
             store_id=manifest.store_id,
             release_id=new_release_id,
-            format_version=manifest.format_version,
+            # Preserved, not re-stamped: completion writes into the source's
+            # arrays and therefore its encoding, so the completed release is the
+            # same format as its source (ADR 0038 §4), and was checked writable
+            # at the top of this function.
+            format_version=source_format_version,
             primary_layout=manifest.primary_layout,
             association_coverage=manifest.association_coverage,
             completion_state=CompletionState.REFERENCE_COMPLETED,
