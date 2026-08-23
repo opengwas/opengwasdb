@@ -399,6 +399,13 @@ def assign_ancestry_command(
     delta: float = typer.Option(0.20, help="Gate: min margin over the runner-up"),
     n_min: int = typer.Option(5_000, help="Gate: min overlapping reference sites"),
     residual_max: float = typer.Option(0.06, help="Gate: max RMS NNLS residual"),
+    orientation_flip_r: float = typer.Option(
+        -0.5,
+        help=(
+            "Gate: at or below this correlation against the reference consensus, an "
+            "Analysis's EAF is reported as mis-oriented rather than as a residual failure"
+        ),
+    ),
     workers: int = typer.Option(1, help="Fork-based process pool size"),
     catalogue_version: str = typer.Option("v1", help="Recorded in the Catalogue"),
     reference_version: str = typer.Option(
@@ -407,14 +414,34 @@ def assign_ancestry_command(
 ) -> None:
     """Annotate a raw source manifest into the versioned Analysis Catalogue.
 
-    MANIFEST_PATH is a TSV with columns trait_id, file_path, trait_name, n and an
-    optional reported_population. AF is extracted at the reference sites (targeted,
-    parallel), fit to the fine reference by NNLS, aggregated to super-populations,
-    and gated into an Assigned Ancestry or Unassigned. Non-EUR/Unassigned Analyses
-    are retained (parked) in the Catalogue.
+    MANIFEST_PATH is a TSV with columns trait_id, file_path, trait_name, n and
+    optional reported_population and source_reader_capability columns. AF is
+    extracted at the reference sites (targeted, parallel), fit to the fine
+    reference by NNLS, aggregated to super-populations, and gated into an
+    Assigned Ancestry or Unassigned. Non-EUR/Unassigned Analyses are retained
+    (parked) in the Catalogue.
+
+    source_reader_capability selects the Source Format reader (issue #115); it
+    defaults to opengwasdb.gwas-vcf, the only format this could read before, so
+    a manifest written without the column keeps its meaning. Set it to
+    opengwasdb.gwas-ssf or opengwasdb.finngen-r13 to assign a tabular family --
+    without it those sources cannot be checked against reference frequencies at
+    all, which is how GCST003566's inverted EAF column went unexamined.
+
+    Each Analysis's EAF orientation is recorded in the Catalogue
+    (eaf_orientation, eaf_orientation_r): an Analysis whose frequencies are
+    anti-correlated with the reference is left Unassigned with
+    gate_reason=eaf_orientation, which is the signal to exclude the source or
+    report it upstream rather than to loosen a threshold.
     """
     reference = load_reference(ancestry_reference, ancestry_groups, maf_floor=maf_floor)
-    gates = Gates(tau=tau, delta=delta, n_min=n_min, residual_max=residual_max)
+    gates = Gates(
+        tau=tau,
+        delta=delta,
+        n_min=n_min,
+        residual_max=residual_max,
+        orientation_flip_r=orientation_flip_r,
+    )
     source_rows = read_source_manifest(manifest_path)
     rows = annotate_catalogue(
         source_rows,

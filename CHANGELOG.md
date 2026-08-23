@@ -34,6 +34,14 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   - Outcomes are persisted: `eaf_orientation`, `eaf_orientation_r` and
     `eaf_orientation_n` in `analyses.tsv`, plus the reference's identity and
     checksum in `manifest.json`'s `provenance.eaf_orientation`.
+  - **The same check at ancestry assignment**, where the frequencies were
+    already being compared to a reference: a mis-oriented Analysis is left
+    Unassigned with `gate_reason=eaf_orientation`, and the evidence is written
+    into the Analysis Catalogue (`eaf_orientation`, `eaf_orientation_r`). The
+    NNLS residual gate already rejected such an Analysis (0.5788 against a
+    threshold of 0.06 for `GCST003566`) but could not say why, and an inverted
+    Analysis does not merely fail to fit — it fits as another super-population,
+    AFR at 0.696, above the τ = 0.50 gate. Recalibrating τ/δ cannot re-admit it.
   - `audit-eaf-orientation` re-runs the correlation against a supplied panel
     over a built store's own arrays, for stores built before the check existed.
 - CI (`.github/workflows/ci.yml`): tests, tooling baselines, and a changelog
@@ -46,6 +54,14 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Changed
 
+- **Ancestry assignment reads any Source Format, not only GWAS-VCF** (#115).
+  `assign_from_source` resolves the reader through
+  `opengwasdb.readers.registry`; a source manifest may now carry an optional
+  `source_reader_capability` column, defaulting to `opengwasdb.gwas-vcf`. The
+  old restriction is why `GCST003566` was never examined: the
+  `gwas-catalog-eur-hybrid` family is harmonised GWAS-SSF, so every Analysis in
+  it carries `ancestry_assignment_method=source_trusted_no_af`. The Catalogue
+  carries the capability through, so it can now drive a build of those sources.
 - **`validate` now rejects a store that carries EAF it never checked** (#115).
   Every Analysis with `eaf_scope=association` must record EAF orientation
   evidence; `unverified` is reported as a warning. This invalidates Store
@@ -53,6 +69,12 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   including all four pilots — until they are rebuilt or audited with
   `audit-eaf-orientation`. Deliberate: a frequency column nobody has checked is
   indistinguishable from one reported against the other allele.
+- The Analysis Catalogue gains `eaf_orientation`, `eaf_orientation_r`,
+  `source_reader_capability` and `gate_orientation_flip_r` columns (#115), and
+  `assign-ancestry` gains `--orientation-flip-r`. All are annotation columns:
+  the build-manifest superset invariant (`BUILD_COLUMNS` first, in order) is
+  unchanged. Recalibrating an older Catalogue appends the new gate column
+  rather than failing on it.
 - `analyses.tsv` gains three columns (`eaf_orientation`, `eaf_orientation_r`,
   `eaf_orientation_n`, #115). Store-only: a release manifest neither carries
   nor needs them, and `opengwasdb-stores` accepts them through the schema's

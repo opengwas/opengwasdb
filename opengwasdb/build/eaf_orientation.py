@@ -78,10 +78,12 @@ __all__ = [
     "EafOrientationReport",
     "EafReference",
     "EafReferenceError",
+    "FrequencyCorrelation",
     "OrientationEvidence",
     "MIN_FRACTION_ABOVE_HALF",
     "apply_orientation_evidence",
     "check_eaf_orientation",
+    "correlate_frequencies",
     "enforce_eaf_orientation",
     "load_eaf_reference",
     "sample_column",
@@ -509,6 +511,62 @@ def load_eaf_reference(
 # ── The check ────────────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class FrequencyCorrelation:
+    """The verdict on one pair of aligned frequency arrays."""
+
+    outcome: EafOrientationOutcome
+    r: float
+    n: int
+    note: str = ""
+
+
+def correlate_frequencies(
+    observed: np.ndarray,
+    reference: np.ndarray,
+    *,
+    min_overlap: int = DEFAULT_MIN_OVERLAP,
+    min_variance: float = DEFAULT_MIN_VARIANCE,
+) -> FrequencyCorrelation:
+    """Read a direction from two aligned, A1-oriented frequency arrays.
+
+    The rule itself, on arrays: every gate in order, then the sign of `r`. Split
+    out from the dict-shaped `_correlate` above so ancestry assignment
+    (`opengwasdb.ancestry.mixture`) applies exactly this rule to the arrays its
+    NNLS fit already holds, rather than growing a second, drifting copy of it.
+    Callers that hold `{alid: eaf}` want `check_eaf_orientation` instead.
+    """
+    n = int(observed.size)
+    if n < min_overlap:
+        return FrequencyCorrelation(
+            outcome=EafOrientationOutcome.UNVERIFIED,
+            r=float("nan"),
+            n=n,
+            note=f"only {n} variants overlap the reference, fewer than {min_overlap}",
+        )
+    var_a, var_b = float(np.var(observed)), float(np.var(reference))
+    if var_a < min_variance or var_b < min_variance:
+        return FrequencyCorrelation(
+            outcome=EafOrientationOutcome.UNVERIFIED,
+            r=float("nan"),
+            n=n,
+            note=(
+                f"frequency variance too low to read a direction from "
+                f"(analysis {var_a:.5f}, reference {var_b:.5f}, minimum {min_variance})"
+            ),
+        )
+    r = float(np.corrcoef(observed, reference)[0, 1])
+    if not np.isfinite(r):
+        return FrequencyCorrelation(
+            outcome=EafOrientationOutcome.UNVERIFIED,
+            r=float("nan"),
+            n=n,
+            note="correlation is not finite",
+        )
+    outcome = EafOrientationOutcome.FAILED if r < 0.0 else EafOrientationOutcome.PASSED
+    return FrequencyCorrelation(outcome=outcome, r=r, n=n)
+
+
 def _correlate(
     analysis_id: str,
     observed: Mapping[str, float],
@@ -517,44 +575,22 @@ def _correlate(
     min_overlap: int,
     min_variance: float,
 ) -> OrientationEvidence:
-    """One Analysis against one baseline, with every gate applied in order."""
+    """One Analysis against one baseline, keyed by ALID."""
     shared = [alid for alid in observed if alid in baseline]
     n = len(shared)
-    if n < min_overlap:
-        return OrientationEvidence(
-            analysis_id=analysis_id,
-            outcome=EafOrientationOutcome.UNVERIFIED,
-            n_overlap=n,
-            r=float("nan"),
-            note=f"only {n} variants overlap the reference, fewer than {min_overlap}",
-        )
-    a = np.fromiter((observed[alid] for alid in shared), dtype=np.float64, count=n)
-    b = np.fromiter((baseline[alid] for alid in shared), dtype=np.float64, count=n)
-    var_a, var_b = float(np.var(a)), float(np.var(b))
-    if var_a < min_variance or var_b < min_variance:
-        return OrientationEvidence(
-            analysis_id=analysis_id,
-            outcome=EafOrientationOutcome.UNVERIFIED,
-            n_overlap=n,
-            r=float("nan"),
-            note=(
-                f"frequency variance too low to read a direction from "
-                f"(analysis {var_a:.5f}, reference {var_b:.5f}, minimum {min_variance})"
-            ),
-        )
-    r = float(np.corrcoef(a, b)[0, 1])
-    if not np.isfinite(r):
-        return OrientationEvidence(
-            analysis_id=analysis_id,
-            outcome=EafOrientationOutcome.UNVERIFIED,
-            n_overlap=n,
-            r=float("nan"),
-            note="correlation is not finite",
-        )
-    outcome = (
-        EafOrientationOutcome.FAILED if r < 0.0 else EafOrientationOutcome.PASSED
+    correlation = correlate_frequencies(
+        np.fromiter((observed[alid] for alid in shared), dtype=np.float64, count=n),
+        np.fromiter((baseline[alid] for alid in shared), dtype=np.float64, count=n),
+        min_overlap=min_overlap,
+        min_variance=min_variance,
     )
-    return OrientationEvidence(analysis_id=analysis_id, outcome=outcome, n_overlap=n, r=r)
+    return OrientationEvidence(
+        analysis_id=analysis_id,
+        outcome=correlation.outcome,
+        n_overlap=n,
+        r=correlation.r,
+        note=correlation.note,
+    )
 
 
 def _consensus_baselines(

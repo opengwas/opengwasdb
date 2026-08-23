@@ -161,7 +161,10 @@ def test_relabel_preserves_catalogue_as_manifest_columns(tmp_path):
     out = tmp_path / "relabelled.tsv"
     args = ["calibrate-ancestry", str(catalogue)]
     args += ["--tau", "0.85", "--delta", "0.2", "--out", str(out)]
-    runner.invoke(app, args)
+    result = runner.invoke(app, args)
+    # Asserted before anything downstream: without it, a CLI that failed
+    # outright reads as an empty output file, not as a broken command.
+    assert result.exit_code == 0, result.output
     with open(out, newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh, delimiter="\t"))
     assert [r["trait_id"] for r in rows] == ["eur1", "eur2", "afr1", "mix1", "eas1"]

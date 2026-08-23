@@ -115,6 +115,13 @@ def relabel(rows: list[dict[str, str]], gates: Gates) -> list[dict[str, str]]:
 
     Recomputes ``gate_reason`` and ``assigned_ancestry`` and stamps the new gate
     provenance columns. Returns fresh row dicts; input rows are not mutated.
+
+    ``eaf_orientation_r`` is carried into the gates too (issue #115), so no τ/δ
+    pick can re-admit an Analysis whose frequency column is reported against the
+    other allele -- that verdict is not a threshold anyone is calibrating. A
+    Catalogue written before the column existed has no value there, and
+    ``apply_gates`` skips the gate rather than failing it, so those rows relabel
+    exactly as they did before.
     """
     out: list[dict[str, str]] = []
     for row in rows:
@@ -129,6 +136,7 @@ def relabel(rows: list[dict[str, str]], gates: Gates) -> list[dict[str, str]]:
             residual=residual,
             dominant_proportion=dominant_proportion,
             margin=margin,
+            eaf_orientation_r=_to_float(row.get("eaf_orientation_r")),
         )
         dominant = row.get("dominant_superpop", "")
         new["gate_reason"] = reason
@@ -137,6 +145,7 @@ def relabel(rows: list[dict[str, str]], gates: Gates) -> list[dict[str, str]]:
         new["gate_delta"] = f"{gates.delta:.6g}"
         new["gate_n_min"] = str(gates.n_min)
         new["gate_residual_max"] = f"{gates.residual_max:.6g}"
+        new["gate_orientation_flip_r"] = f"{gates.orientation_flip_r:.6g}"
         out.append(new)
     return out
 
@@ -197,10 +206,20 @@ def write_disagreements(path: str | Path, items: list[Disagreement]) -> Path:
 
 
 def write_rows(path: str | Path, rows: list[dict[str, str]], fieldnames: list[str]) -> Path:
-    """Write raw Catalogue dict rows back out in the given column order."""
+    """Write raw Catalogue dict rows back out in the given column order.
+
+    A key present in the rows but absent from `fieldnames` is appended rather
+    than raising: `relabel` stamps the gate provenance columns that produced the
+    new labels, and a Catalogue written before one of those gates existed has no
+    column for it. Dropping it would leave the file claiming an operating point
+    it was not relabelled at; raising would mean every new gate breaks
+    recalibration of every older Catalogue (issue #115 added one).
+    """
     path = Path(path)
+    extra = [key for row in rows for key in row if key not in set(fieldnames)]
+    ordered = [*fieldnames, *dict.fromkeys(extra)]
     with open(path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames, delimiter="\t")
+        writer = csv.DictWriter(fh, fieldnames=ordered, delimiter="\t")
         writer.writeheader()
         writer.writerows(rows)
     return path

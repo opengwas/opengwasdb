@@ -19,9 +19,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.ancestry.catalogue import CatalogueRow, write_catalogue
-from opengwasdb.ancestry.mixture import AncestryAssignment, Gates, assign_from_vcf
+from opengwasdb.ancestry.mixture import AncestryAssignment, Gates, assign_from_source
 from opengwasdb.ancestry.reference import AncestryReference
-from opengwasdb.readers.gwas_vcf import write_regions_file
+from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, write_regions_file
 
 log = logging.getLogger(__name__)
 
@@ -35,13 +35,17 @@ class SourceRow:
     trait_name: str
     n: int
     reported_population: str
+    source_reader_capability: str = GWAS_VCF_CAPABILITY
 
 
 def read_source_manifest(path: str | Path) -> list[SourceRow]:
     """Read the raw source manifest TSV.
 
     Requires ``trait_id`` and ``file_path``; ``trait_name`` defaults to the
-    trait id, ``n`` to 0, and ``reported_population`` to empty when absent.
+    trait id, ``n`` to 0, ``reported_population`` to empty, and
+    ``source_reader_capability`` to GWAS-VCF when absent -- the only format
+    ancestry assignment could read before issue #115, so a manifest written
+    without the column keeps its meaning.
     """
     with open(path, newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
@@ -52,6 +56,9 @@ def read_source_manifest(path: str | Path) -> list[SourceRow]:
                 trait_name=row.get("trait_name") or row["trait_id"],
                 n=int(row.get("n") or 0),
                 reported_population=(row.get("reported_population") or "").strip(),
+                source_reader_capability=(
+                    row.get("source_reader_capability") or GWAS_VCF_CAPABILITY
+                ),
             )
             for row in reader
         ]
@@ -72,11 +79,16 @@ def _fork_pool(n_workers: int) -> ProcessPoolExecutor:
     return ProcessPoolExecutor(max_workers=n_workers, mp_context=fork_ctx)
 
 
-def _annotate_one(file_path: str) -> AncestryAssignment:
-    """Worker: extract AF at reference sites and assign ancestry for one VCF."""
+def _annotate_one(task: tuple[str, str]) -> AncestryAssignment:
+    """Worker: extract AF at reference sites and assign ancestry for one source."""
     assert _WORKER_REFERENCE is not None and _WORKER_GATES is not None
-    return assign_from_vcf(
-        file_path, _WORKER_REFERENCE, _WORKER_GATES, regions_file=_WORKER_REGIONS
+    file_path, capability = task
+    return assign_from_source(
+        file_path,
+        _WORKER_REFERENCE,
+        _WORKER_GATES,
+        capability=capability,
+        regions_file=_WORKER_REGIONS,
     )
 
 
@@ -112,13 +124,13 @@ def annotate_catalogue(
     _WORKER_REGIONS = regions_file
 
     t0 = time.monotonic()
-    paths = [row.file_path for row in source_rows]
+    tasks = [(row.file_path, row.source_reader_capability) for row in source_rows]
     if n_workers <= 1:
-        assignments = [_annotate_one(p) for p in paths]
+        assignments = [_annotate_one(t) for t in tasks]
     else:
         with _fork_pool(n_workers) as pool:
             # executor.map preserves input order regardless of completion order.
-            assignments = list(pool.map(_annotate_one, paths))
+            assignments = list(pool.map(_annotate_one, tasks))
 
     rows = [
         CatalogueRow(
@@ -128,6 +140,7 @@ def annotate_catalogue(
             n=src.n,
             reported_population=src.reported_population,
             assignment=a,
+            source_reader_capability=src.source_reader_capability,
         )
         for src, a in zip(source_rows, assignments, strict=True)
     ]

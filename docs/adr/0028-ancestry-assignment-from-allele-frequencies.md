@@ -24,8 +24,9 @@ because our LD panels are keyed to super-populations. Fit-fine, label-coarse.
 
 An Analysis's **Assigned Ancestry** is the dominant super-population, admitted only
 if it clears a **multi-gate rule**: proportion ≥ τ, margin over the runner-up ≥ δ,
-reference-SNP overlap ≥ N_min, and NNLS fit residual below a gate. Failing any gate
-leaves the Analysis **Unassigned** rather than force-labelled. τ/δ are **calibrated**
+reference-SNP overlap ≥ N_min, EAF orientation not inverted, and NNLS fit residual
+below a gate. Failing any gate leaves the Analysis **Unassigned** rather than
+force-labelled. τ/δ are **calibrated**
 against the **Reported Population** across the collection — which is used only to
 choose the operating point and to audit disagreements, **never to route**.
 
@@ -54,10 +55,63 @@ missingness (non-overlapping off-panel tails) and only EUR has an LD panel today
 - **A single dominant-proportion threshold.** Rejected in favour of the multi-gate
   rule: overlap and residual gates catch corrupt / mis-oriented AF that a bare
   proportion threshold would force-label; the margin gate catches near-ties.
+- **Leaving mis-orientation to the residual gate** (the original decision;
+  amended below). Rejected on evidence: it detects the condition but cannot name
+  it, and it carries more weight alone than it should.
 - **Store-level ancestry as a homogeneity requirement.** Rejected: a per-Analysis
   attribute + Ancestry-Matched Completion is strictly more general (supports future
   multi-panel completion) and costs nothing here, where we still choose a homogeneous
   build.
+
+### Amendment: EAF orientation is its own gate (issue #115)
+
+The residual gate does catch a mis-oriented AF column — measured on the real
+`GCST003566`, chr22 against the Ancestry Reference Panel:
+
+| | NNLS residual | correlation vs reference consensus | gate |
+|---|---|---|---|
+| `GCST005076` as published | 0.0090 | +0.98 | ok → EUR (0.951) |
+| `GCST005076` deliberately inverted | 0.5853 | −0.98 | residual |
+| `GCST003566` as published | 0.5788 | −0.9992 | residual |
+| `GCST003566` with AF un-inverted | 0.0146 | +0.9992 | ok → EUR (1.000) |
+
+Two things that measurement shows the residual gate cannot do on its own:
+
+- **It cannot name the cause.** A flipped Analysis, a corrupt AF column and a
+  cohort the reference cannot represent all report `gate_reason="residual"`.
+  Only the first is something a curator can act on — by excluding the source or
+  reporting it upstream — and only if they are told which it is.
+- **It is carrying the ancestry label alone.** An inverted Analysis does not
+  merely fail to fit; it fits as a *different* super-population. `GCST003566`
+  comes back as **AFR at 0.696**, above the τ = 0.50 proportion gate. The
+  residual gate is the only thing between an inverted frequency column and a
+  confidently wrong Assigned Ancestry, which is too much for one
+  general-purpose gate.
+
+So the correlation is computed explicitly — it is free, over arrays the fit
+already holds — and gets its own gate, checked *before* the residual because it
+is the more specific reading of the same evidence. Its threshold
+(`orientation_flip_r`, default −0.5) is deliberately not the build-time rule:
+`opengwasdb.build.eaf_orientation` fails on the *sign*, because any negative
+correlation makes a stored column untrustworthy, whereas this gate is claiming
+a *cause* and needs the evidence to support it. An inverted column reads about
+−1; an otherwise-corrupt one sits near zero and could fall either side. A study
+between the two is still refused — by the residual gate, which is the honest
+answer when the cause is not established.
+
+Ancestry assignment also stops being GWAS-VCF-only, and resolves its reader
+through `opengwasdb.readers.registry`. That restriction is why this defect went
+unexamined: the `gwas-catalog-eur-hybrid` family is harmonised GWAS-SSF, so
+every Analysis in the pilot carries
+`ancestry_assignment_method=source_trusted_no_af` — the source's declared
+population, taken on trust, with its frequencies never compared to anything.
+
+This does not replace the build-time check. A build can be driven by a manifest
+that never went through the Catalogue, the build-time check reads back what was
+actually stored (after orientation, liftover and dedup) rather than what the
+source file said, and ADR 0030 requires the store to carry its own evidence.
+The two are the same rule at different points, and the earlier one is the one
+that saves an hour of building.
 
 ## Consequences
 
@@ -71,8 +125,8 @@ missingness (non-overlapping off-panel tails) and only EUR has an LD panel today
   source and normalise. The liftover is a one-off on a fixed file, cheaper than
   standing up a raw callset.
 - Ancestry assignment is an **annotator that writes into the Analysis Catalogue**
-  (ADR 0027): Assigned Ancestry, Ancestry Composition, gate results, and the
-  Reported-Population comparison. Stores inherit Assigned Ancestry via the subset
+  (ADR 0027): Assigned Ancestry, Ancestry Composition, gate results, EAF
+  orientation evidence (issue #115), and the Reported-Population comparison. Stores inherit Assigned Ancestry via the subset
   they are built from.
 - Unassigned and non-target-ancestry Analyses are annotated and **parked in the
   Catalogue**, not dropped — re-routable when their panel exists, without

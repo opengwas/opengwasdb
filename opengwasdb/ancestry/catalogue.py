@@ -15,6 +15,7 @@ from pathlib import Path
 
 from opengwasdb.ancestry.mixture import AncestryAssignment, Gates
 from opengwasdb.model.enums import AncestryAssignmentMethod
+from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 
 # The build-manifest columns, first and in this order (superset invariant).
 BUILD_COLUMNS = ["trait_id", "file_path", "trait_name", "n"]
@@ -31,11 +32,24 @@ _ANNOTATION_COLUMNS = [
     "dominant_proportion",
     "runner_up_margin",
     "gate_reason",
+    # Issue #115. Annotation rather than build columns, so the superset
+    # invariant above is untouched -- but `source_reader_capability` is read by
+    # the Dense/Hybrid builders' manifest reader when present, so carrying it
+    # here is what lets a Catalogue of non-GWAS-VCF sources drive a build.
+    "eaf_orientation",
+    "eaf_orientation_r",
+    "source_reader_capability",
 ]
 _VERSION_COLUMNS = ["catalogue_version", "ancestry_reference_version"]
 # Gate provenance: the admission thresholds that produced this Catalogue's labels.
 # Recorded so a calibrated τ/δ pick (issue 064) is explicit and reproducible.
-_GATE_COLUMNS = ["gate_tau", "gate_delta", "gate_n_min", "gate_residual_max"]
+_GATE_COLUMNS = [
+    "gate_tau",
+    "gate_delta",
+    "gate_n_min",
+    "gate_residual_max",
+    "gate_orientation_flip_r",
+]
 
 UNASSIGNED = "Unassigned"
 _UNASSIGNED = UNASSIGNED
@@ -51,6 +65,7 @@ class CatalogueRow:
     n: int
     reported_population: str
     assignment: AncestryAssignment
+    source_reader_capability: str = GWAS_VCF_CAPABILITY
 
 
 def _prop_column(superpop: str) -> str:
@@ -95,12 +110,16 @@ def _row_to_dict(
         "dominant_proportion": _fmt(a.dominant_proportion),
         "runner_up_margin": _fmt(a.runner_up_margin),
         "gate_reason": a.gate_reason,
+        "eaf_orientation": a.eaf_orientation,
+        "eaf_orientation_r": _fmt(a.eaf_orientation_r),
+        "source_reader_capability": row.source_reader_capability,
         "catalogue_version": catalogue_version,
         "ancestry_reference_version": ancestry_reference_version,
         "gate_tau": _fmt(gates.tau),
         "gate_delta": _fmt(gates.delta),
         "gate_n_min": str(gates.n_min),
         "gate_residual_max": _fmt(gates.residual_max),
+        "gate_orientation_flip_r": _fmt(gates.orientation_flip_r),
     }
     for sp in superpops:
         out[_prop_column(sp)] = _fmt(a.superpop_composition.get(sp, 0.0))
