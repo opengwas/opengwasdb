@@ -166,6 +166,47 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Fixed
 
+- **Reference Completion refuses a panel no Analysis matches, instead of
+  completing to nothing** (#98, ADR 0039 §2). `derive_impute_analysis_ids`
+  compared the `--ancestry` flag to each Analysis's `assigned_ancestry` by
+  string equality, and the two carry different vocabularies — panel
+  directories are named `EUR`, the registry may record `European`. A store
+  recording the word therefore matched **zero** Analyses, and completion ran to
+  a successful finish, produced a release stamped `reference_completed`, passed
+  `validate_store()`, and reported `0 imputed` in a line that reads as "nothing
+  was imputable". The LD work had all succeeded: `completion_quality`, written
+  before the filter applies, held correlations up to 0.97 and 51M+ imputable
+  cells across 1,357 blocks. Two changes:
+  - spellings of one ancestry are reconciled through an explicit alias table,
+    matched exactly on a normalised label, in either direction. Not through
+    `ancestry.routing.reported_to_superpop`, whose ordered substring matching
+    answers `AFR` for `"North African"` — fine for guessing at a cohort's
+    free-text description, not for deciding which Analyses a panel may impute.
+    A panel named outside the vocabulary still matches on exact equality;
+  - a genuinely empty match raises `AncestryFilterError`, naming the panel, the
+    values the store holds, and whether the panel's own name was understood.
+- **Ragged Reference Completion no longer does nothing for a Store Family with
+  no gene target** (#102, ADR 0039 §1, spec §17). Regions were identified only
+  from a cis window around `trait_chr`/`trait_bp`, so an Analysis without one —
+  small-molecule metabolomics, by design — was silently passed through: 0
+  blocks enumerated, 0 imputed, a "completed" store byte-identical to its
+  source. All four `metabolome-plasma-2023` full releases (4,443 Analyses)
+  completed this way. Such an Analysis's regions are now the LD blocks it
+  already holds enough observations in.
+  - "Enough" is `impute.min_observed_points()` (4), the number the imputation
+    gate actually enforces: `poly_rescale` returns NaN below it and
+    `impute_z_block` then rejects the block, so a lower threshold enumerates
+    blocks that add panel variants as missing rows and impute none of them.
+    The constant is exported from `impute` rather than restated.
+  - The count is over the Analysis's observations **at the block's own panel
+    variants**, which is what `run_block` fits on — not over its variants
+    falling inside the block's base-pair extent, which an off-panel variant
+    inflates.
+  - The panel is read once per completion, one chromosome at a time: holding a
+    genome-wide panel's blocks resident costs roughly a gigabyte, and these are
+    the families that span the genome.
+  - `RaggedCSRReader.variant_indices()` exposes an Analysis's variant footprint
+    without decoding its statistics.
 - **Reference Completion could stamp a `format_version` onto arrays it had not
   encoded that way** (#112). All three completion paths copied the source's
   `format_version` into the completed release, which is the right rule —

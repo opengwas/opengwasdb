@@ -182,3 +182,121 @@ class TestScalarNSe:
         se_ref = scalar_n_se(se_obs, eaf_obs, eaf_ref)
         expected = C / np.sqrt(2 * eaf_ref * (1 - eaf_ref))
         np.testing.assert_allclose(se_ref, expected, rtol=1e-3)
+
+
+class TestBlocksOverVariants:
+    """Issue #102's block-enumeration rule, unit-level.
+
+    An Analysis with no Trait position is completed over the blocks it already
+    holds enough of a region in. "Enough" is `impute.min_observed_points()` --
+    the number `poly_rescale` actually requires before it returns anything but
+    NaN -- and "holds" counts the Analysis's observations **at the block's own
+    panel SNPs**, which is what `completion.block.run_block` counts when it
+    decides whether it can fit. Counting positions inside the block's
+    base-pair extent instead would include off-panel variants and enumerate
+    blocks that go on to impute nothing.
+
+    Spec §17's "do not expand singleton suggestive associations" falls out of
+    the same threshold.
+    """
+
+    @staticmethod
+    def _panel_dir(tmp_path, blocks: dict[str, list[str]]) -> Path:
+        """A panel of one chromosome, each block listing the given ALIDs.
+
+        The LD matrix beside each TSV is not incidental: `load_block` returns
+        None without either a matrix or an eigendecomposition, so a panel of
+        bare TSVs reads as no blocks at all.
+        """
+        import gzip
+        import io
+
+        chrom_dir = tmp_path / "panel" / "EUR" / "1"
+        chrom_dir.mkdir(parents=True, exist_ok=True)
+        for name, alids in blocks.items():
+            lines = ["CHR\tSNP\tOA\tEA\tEAF\tBP"]
+            for alid in alids:
+                chrom, pos, a1, a2 = alid.split(":")
+                lines.append(f"{chrom}\t{chrom}:{pos}_{a1}_{a2}\t{a2}\t{a1}\t0.3\t{pos}")
+            (chrom_dir / f"{name}.tsv").write_text("\n".join(lines) + "\n")
+            n = len(alids)
+            rng = np.random.default_rng(0)
+            A = rng.standard_normal((n, n))
+            ld = A @ A.T + np.eye(n) * n * 0.1
+            buf = io.BytesIO()
+            with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+                for row in ld:
+                    gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
+            (chrom_dir / f"{name}.unphased.vcor1.gz").write_bytes(buf.getvalue())
+        return tmp_path / "panel"
+
+    @staticmethod
+    def _alids(*positions: int) -> list[str]:
+        return [f"1:{p}:A:G" for p in positions]
+
+    def test_a_block_the_analysis_has_enough_of_is_enumerated(self, tmp_path):
+        from opengwasdb.completion.impute import min_observed_points
+        from opengwasdb.completion.ld_panel import blocks_over_variants
+
+        n = min_observed_points()
+        panel = self._panel_dir(tmp_path, {"1-1000": self._alids(*range(100, 100 + 10 * n, 10))})
+        observed = {alid: [7] for alid in self._alids(*range(100, 100 + 10 * n, 10))}
+
+        found = blocks_over_variants(panel, "EUR", observed, ["1"])
+        assert [b.block_id for b in found[7]] == ["1/1-1000"]
+
+    def test_one_observation_short_is_not_enumerated(self, tmp_path):
+        """The boundary, asserted rather than assumed: at `n - 1` observed
+        points `poly_rescale` returns NaN and imputation is rejected, so
+        enumerating the block would add its panel variants as missing rows and
+        fill none of them."""
+        from opengwasdb.completion.impute import min_observed_points
+        from opengwasdb.completion.ld_panel import blocks_over_variants
+
+        n = min_observed_points()
+        all_positions = list(range(100, 100 + 10 * n, 10))
+        panel = self._panel_dir(tmp_path, {"1-1000": self._alids(*all_positions)})
+        observed = {alid: [7] for alid in self._alids(*all_positions[: n - 1])}
+
+        assert blocks_over_variants(panel, "EUR", observed, ["1"]) == {}
+
+    def test_an_off_panel_variant_does_not_count_towards_the_threshold(self, tmp_path):
+        """The distinction the position-based version got wrong: a variant
+        inside the block's extent but absent from its SNP list is not
+        something imputation can fit on."""
+        from opengwasdb.completion.impute import min_observed_points
+        from opengwasdb.completion.ld_panel import blocks_over_variants
+
+        n = min_observed_points()
+        on_panel = list(range(100, 100 + 10 * (n - 1), 10))
+        panel = self._panel_dir(tmp_path, {"1-1000": self._alids(*on_panel)})
+        observed = {alid: [7] for alid in self._alids(*on_panel, 555)}  # 555 is off-panel
+
+        assert blocks_over_variants(panel, "EUR", observed, ["1"]) == {}
+
+    def test_each_analysis_is_judged_on_its_own_observations(self, tmp_path):
+        from opengwasdb.completion.impute import min_observed_points
+        from opengwasdb.completion.ld_panel import blocks_over_variants
+
+        n = min_observed_points()
+        positions = list(range(100, 100 + 10 * n, 10))
+        panel = self._panel_dir(tmp_path, {"1-1000": self._alids(*positions)})
+        observed: dict[str, list[int]] = {}
+        for j, alid in enumerate(self._alids(*positions)):
+            observed[alid] = [1] if j == 0 else [1, 2]  # analysis 2 is one short
+
+        found = blocks_over_variants(panel, "EUR", observed, ["1"])
+        assert set(found) == {1}
+
+    def test_a_panel_with_no_blocks_for_the_chromosome_is_not_an_error(self, tmp_path):
+        from opengwasdb.completion.ld_panel import blocks_over_variants
+
+        (tmp_path / "panel" / "EUR").mkdir(parents=True)
+        assert blocks_over_variants(
+            tmp_path / "panel", "EUR", {"1:100:A:G": [0]}, ["1"]
+        ) == {}
+
+    def test_no_gene_target_less_analyses_reads_no_panel_at_all(self, tmp_path):
+        from opengwasdb.completion.ld_panel import blocks_over_variants
+
+        assert blocks_over_variants(tmp_path / "nonexistent", "EUR", {}, ["1"]) == {}

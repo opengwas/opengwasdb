@@ -84,6 +84,18 @@ def _ratio_outlier_mask(truth: np.ndarray, predicted: np.ndarray) -> np.ndarray:
     return keep
 
 
+def min_observed_points(npoly: int = 3) -> int:
+    """Fewest observed points a block needs before imputation can succeed.
+
+    `poly_rescale` fits a degree-`npoly` polynomial and returns `pearson_r` of
+    NaN below this, which `impute_z_block` rejects -- so a block with fewer
+    observed points than this yields no fills however good its LD is. Exposed
+    so callers deciding *which* blocks to attempt use the number the gate
+    actually enforces rather than a second copy of it (issue #102).
+    """
+    return max(npoly + 1, 2)
+
+
 def poly_rescale(
     truth: np.ndarray,
     predicted: np.ndarray,
@@ -97,14 +109,14 @@ def poly_rescale(
     Returns (rescaled_array, pearson_r). pearson_r is NaN when too few clean points.
     """
     obs_mask = np.isfinite(truth)
-    if obs_mask.sum() < max(npoly + 1, 2):
+    if obs_mask.sum() < min_observed_points(npoly):
         return predicted.copy(), float("nan")
 
     t_obs = truth[obs_mask]
     p_obs = predicted[obs_mask]
 
     keep = _ratio_outlier_mask(t_obs, p_obs)
-    if keep.sum() < max(npoly + 1, 2):
+    if keep.sum() < min_observed_points(npoly):
         return predicted.copy(), float("nan")
 
     t_clean = t_obs[keep]

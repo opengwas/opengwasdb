@@ -46,6 +46,8 @@ from opengwasdb.completion.checkpoint import (
     write_block_checkpoint,
 )
 from opengwasdb.completion.ld_panel import (
+    LDBlock,
+    blocks_over_variants,
     canonical_panel_alid,
     find_blocks,
 )
@@ -351,7 +353,37 @@ def _run_completion(
             n_match = int(impute_mask.sum())
             print(f"Ancestry-match filter: imputing {n_match:,}/{n_analyses:,} analyses")
 
-        print("Scanning cis windows for LD blocks + new panel variants...")
+        # A Store Family with no single encoding gene per Analysis carries no
+        # trait position at all (issue #102), so there is no cis window to scan
+        # from. Those Analyses are enumerated from their own retained variants
+        # instead -- every block holding an association they already have.
+        # An Analysis with no Trait position has no cis window to scan from, so
+        # its blocks are the ones it already holds enough observations in
+        # (issue #102). Resolved for all such Analyses in one pass, keyed by
+        # ALID, so the panel is read once rather than once per Analysis.
+        src_csr = RaggedCSRReader(src)
+        gene_target_less = [
+            i for i, a in enumerate(src_analyses)
+            if not (a.trait_chr and a.trait_bp) and (impute_mask is None or impute_mask[i])
+        ]
+        own_variant_blocks: dict[int, list[LDBlock]] = {}
+        if gene_target_less:
+            analyses_by_alid: dict[str, list[int]] = {}
+            chromosomes: set[str] = set()
+            for i in gene_target_less:
+                for vi in src_csr.variant_indices(i).tolist():
+                    analyses_by_alid.setdefault(src_alids[vi], []).append(i)
+                    chromosomes.add(src_variants[vi].chromosome)
+            print(
+                f"  {len(gene_target_less):,} analyses have no Trait position; scanning "
+                f"{len(chromosomes)} chromosome(s) of panel blocks for regions they hold"
+            )
+            own_variant_blocks = blocks_over_variants(
+                ld_dir, ancestry, analyses_by_alid, sorted(chromosomes)
+            )
+
+        print("Scanning for LD blocks + new panel variants (cis windows where a "
+              "Trait position exists, the Analysis's own variants otherwise)...")
         new_alids: set[str] = set()
         block_to_tsv: dict[str, Path] = {}
         block_to_analyses: dict[str, list[int]] = {}
@@ -367,14 +399,12 @@ def _run_completion(
             if impute_mask is not None and not impute_mask[i]:
                 analysis_to_blocks[i] = []
                 continue
-            if not a.trait_chr or not a.trait_bp:
-                analysis_to_blocks[i] = []
-                continue
-            chrom = a.trait_chr
-            start = max(1, int(a.trait_bp) - cis_window_bp)
-            end = int(a.trait_bp) + cis_window_bp
-
-            blocks = find_blocks(ld_dir, ancestry, chrom, start, end)
+            if a.trait_chr and a.trait_bp:
+                start = max(1, int(a.trait_bp) - cis_window_bp)
+                end = int(a.trait_bp) + cis_window_bp
+                blocks = find_blocks(ld_dir, ancestry, a.trait_chr, start, end)
+            else:
+                blocks = own_variant_blocks.get(i, [])
             analysis_to_blocks[i] = [b.block_id for b in blocks]
             for block in blocks:
                 block_to_analyses.setdefault(block.block_id, []).append(i)
@@ -511,7 +541,6 @@ def _run_completion(
         print(f"Wrote {quality_count:,} completion quality rows")
 
         print("Assembling completed CSR per analysis...")
-        src_csr = RaggedCSRReader(src)
         all_vi: list[np.ndarray] = []
         all_z: list[np.ndarray] = []
         all_se: list[np.ndarray] = []

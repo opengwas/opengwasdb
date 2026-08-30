@@ -165,10 +165,14 @@ class RaggedCSRReader:
     def n_associations(self) -> int:
         return int(self._root.attrs.get("n_associations", len(self._variant_index)))
 
+    def _span(self, analysis_index: int) -> tuple[int, int]:
+        """The `[start, end)` slice of the flat arrays one Analysis occupies."""
+        offsets = self._offsets[analysis_index: analysis_index + 2]
+        return int(offsets[0]), int(offsets[1])
+
     def get_analysis(self, analysis_index: int) -> AnalysisAssociations:
         """Return (variant_index, z, se, eaf) arrays for one analysis. O(1) zarr reads."""
-        offsets = self._offsets[analysis_index: analysis_index + 2]
-        start, end = int(offsets[0]), int(offsets[1])
+        start, end = self._span(analysis_index)
         if start == end:
             return AnalysisAssociations(
                 variant_index=np.empty(0, dtype=np.int32),
@@ -182,6 +186,19 @@ class RaggedCSRReader:
             se=self._se[start:end],
             eaf=self.eaf_slice(start, end),
         )
+
+    def variant_indices(self, analysis_index: int) -> np.ndarray:
+        """The variant indices one Analysis holds associations at.
+
+        Separate from `get_analysis` because the callers that need only the
+        Analysis's genomic footprint -- LD-block enumeration for a Store
+        Family with no gene target (issue #102) -- should not decode its
+        statistics to find it.
+        """
+        start, end = self._span(analysis_index)
+        if start == end:
+            return np.empty(0, dtype=np.int32)
+        return np.asarray(self._variant_index[start:end], dtype=np.int32)
 
     def z_slice(self, start: int, end: int) -> np.ndarray:
         """Decoded `z[start:end]` -- the only way a caller gets z-scores."""
