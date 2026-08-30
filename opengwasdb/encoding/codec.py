@@ -535,10 +535,11 @@ class StoreCodec:
         exactly. A frequency outside `[0, 1]` fails: it is not a frequency.
         """
         v = np.asarray(values, dtype=np.float64)
-        if not self.encoding.eaf.is_residual:
-            return v.astype(np.float32)
-
         absent = np.isnan(v)
+        # Checked before the kind is consulted: an out-of-range frequency is
+        # malformed whether the plane that would hold it is `float32` or a
+        # residual, and a `float32` plane that accepted it would carry it all
+        # the way to a query (spec §6a).
         invalid = ~absent & (~np.isfinite(v) | (v < 0.0) | (v > 1.0))
         if np.any(invalid):
             example = v[invalid].ravel()[:3].tolist()
@@ -547,6 +548,9 @@ class StoreCodec:
                 "[0, 1] is not a frequency, and must fail the build rather than be "
                 "encoded as something (ADR 0036 §9)"
             )
+        if not self.encoding.eaf.is_residual:
+            return v.astype(np.float32)
+
         if baseline is None:
             raise EafBaselineError(
                 "encoding an int8_residual eaf plane needs the per-cell eaf_baseline; "

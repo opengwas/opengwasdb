@@ -859,7 +859,8 @@ def _validate_eaf_orientation(
             "encoding declares no eaf plane; the store's metadata and its arrays disagree "
             "about whether it holds frequencies (ADR 0036, ADR 0037)"
         )
-    if not store.manifest.encoding.eaf.is_absent and not declares_association:
+    declared_eaf = store.manifest.encoding.eaf
+    if declared_eaf.kind in ("float32", "int8_residual") and not declares_association:
         errors.append(
             "the manifest declares an eaf plane but no Analysis declares "
             "eaf_scope=association; a release stores frequencies for the Analyses that "

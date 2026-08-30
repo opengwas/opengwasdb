@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -30,7 +30,6 @@ from typing import Any
 import numpy as np
 from numcodecs import Blosc
 
-from opengwasdb.build.eaf_orientation import panel_a1_eaf
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
@@ -49,6 +48,7 @@ from opengwasdb.completion.ld_panel import (
 )
 from opengwasdb.completion.manifest import build_completion_provenance
 from opengwasdb.completion.parallel import init_block_worker
+from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
     EAF_BASELINE,
@@ -74,7 +74,6 @@ from opengwasdb.model.analyses import read_analyses, read_analysis_records
 from opengwasdb.model.enums import (
     AssociationCoverage,
     CompletionState,
-    EafScope,
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
@@ -487,7 +486,7 @@ def _run_completion(
         # frequencies differ from the EUR panel by up to 3000x.
         src_has_eaf = not manifest.encoding.eaf.is_absent
         eaf_reference = (
-            _panel_reference_eaf(ld_dir, ancestry, merged_variants) if src_has_eaf else None
+            panel_reference_eaf(ld_dir, ancestry, merged_variants) if src_has_eaf else None
         )
         encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
         effective_chunks = _create_completed_zarr(
@@ -573,7 +572,7 @@ def _run_completion(
                 # what the release actually holds, not copied forward -- the
                 # declaration disagreeing with the arrays is the defect that
                 # got through review on #106.
-                eaf_scope=_completed_eaf_scope(a, quality_rollup[i], eaf_reference is not None),
+                eaf_scope=completed_eaf_scope(a, quality_rollup[i], eaf_reference is not None),
                 completion_median_pearson_r=quality_rollup[i].median_pearson_r,
                 completion_n_imputed_total=quality_rollup[i].n_imputed_total,
                 completion_n_missing_total=str(int(n_missing_off_panel[i])),
@@ -737,38 +736,6 @@ def _shard_checkpoint_fills_by_band(
         _insert_completion_quality_batch(dst_db, quality_batch)
 
     return fill_shard_dir, quality_count
-
-
-def _completed_eaf_scope(analysis: Any, rollup: Any, carries_reference: bool) -> str:
-    """`eaf_scope` for a completed Analysis, from what the release now holds."""
-    if carries_reference and int(rollup.n_imputed_total or 0) > 0:
-        return str(EafScope.ASSOCIATION.value)
-    return str(analysis.eaf_scope)
-
-
-def _panel_reference_eaf(
-    ld_dir: str | Path, ancestry: str, variants: Sequence[CanonicalVariant]
-) -> np.ndarray | None:
-    """One A1-oriented panel frequency per variant of the completed axis.
-
-    `None` when the panel declares none, so a release only claims to carry
-    reference EAF when it has some to carry. Variants the panel does not hold
-    -- every off-panel row the source contributed -- are NaN, which is correct:
-    they have no imputed cells to describe.
-    """
-    panel = panel_a1_eaf(ld_dir, ancestry)
-    if not panel:
-        return None
-    reference = np.fromiter(
-        (panel.get(v.alid, np.nan) for v in variants), dtype=np.float32, count=len(variants)
-    )
-    if not np.any(np.isfinite(reference)):
-        return None
-    print(
-        f"Reference EAF: {int(np.count_nonzero(np.isfinite(reference))):,} of "
-        f"{len(reference):,} variants carry a panel frequency"
-    )
-    return reference
 
 
 def _create_completed_zarr(

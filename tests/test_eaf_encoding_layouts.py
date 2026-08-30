@@ -17,6 +17,7 @@ from __future__ import annotations
 import gzip
 import io
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -36,7 +37,11 @@ from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
-from opengwasdb.model.analyses import read_analyses
+from opengwasdb.model.analyses import (
+    read_analyses,
+    read_analysis_records,
+    write_analysis_records,
+)
 from opengwasdb.model.enums import EafScope
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
@@ -591,4 +596,90 @@ def test_a_hybrid_component_with_no_frequencies_still_carries_the_declared_plane
     assert str(dense_root["eaf"].dtype) == "int8"
     assert np.all(np.asarray(dense_root["eaf"][:]) == EAF_ABSENT)
     result = validate_store(out)
+    assert result.ok, result.errors
+
+
+def test_a_1_0_release_that_stores_no_frequencies_still_validates(dense_store: Path):
+    """`1.0` releases stay readable (spec §21). Their `eaf` kind is
+    `float32_optional`, whose whole point is that the plane may or may not be
+    there -- so the plan-versus-`eaf_scope` cross-check must not read it as a
+    promise that some Analysis declares `association`."""
+    manifest_path = dense_store / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["format_version"] = "1.0"
+    manifest["encoding"] = {
+        "version": 1,
+        "z": manifest["encoding"]["z"],
+        "se": manifest["encoding"]["se"],
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a")
+    for name in ("eaf", EAF_BASELINE, "eaf_exception_index", "eaf_exception_value"):
+        if name in root:
+            del root[name]
+    rows = read_analyses(dense_store / "analyses.tsv")
+    write_analysis_records(
+        dense_store / "analyses.tsv",
+        [replace(a, eaf_scope=EafScope.ABSENT.value, eaf_orientation="")
+         for a in read_analysis_records(dense_store / "analyses.tsv")],
+    )
+    assert rows  # the fixture had analyses to rewrite
+
+    result = validate_store(dense_store)
+    assert result.ok, result.errors
+
+
+def test_completion_stamps_eaf_scope_on_an_analysis_that_gains_imputed_cells(
+    tmp_path: Path,
+):
+    """An Analysis whose source reported no frequency stores one for its
+    imputed cells once the release carries reference EAF, so its `eaf_scope`
+    follows what the release holds rather than what its source reported
+    (ADR 0037 §4). Both completion pipelines call one helper for this."""
+    manifest_rows = [
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method"
+        "\tsource_assembly"
+    ]
+    for index, analysis in enumerate(_ANALYSES):
+        path = tmp_path / f"scope_{analysis}.vcf"
+        lines = [_VCF_HEADER.format(sample=analysis.upper())]
+        for pos in _POSITIONS:
+            z = 0.5 + 0.1 * index + 0.001 * pos
+            if analysis == "a4":  # reports no frequency anywhere
+                lines.append(f"1\t{pos}\t.\tA\tG\t.\tPASS\t.\tES:SE\t{z * 0.3:.6f}:0.3\n")
+            else:
+                eaf = 0.2 + 0.01 * index
+                lines.append(
+                    f"1\t{pos}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t"
+                    f"{z * 0.3:.6f}:0.3:{1 - eaf:.6f}\n"
+                )
+        path.write_text("".join(lines), encoding="utf-8")
+        manifest_rows.append(
+            f"{analysis}\t{path}\t{analysis}\t10000\tsd\tdeclared_standardised\thg38"
+        )
+    manifest = tmp_path / "scope_manifest.tsv"
+    manifest.write_text("\n".join(manifest_rows) + "\n", encoding="utf-8")
+    observed = tmp_path / "scope.opengwasdb"
+    build_dense_from_vcf_manifest(
+        manifest, observed, store_id="eafenc", release_id="v1", allow_unverified_eaf=True
+    )
+    before = {
+        r["analysis_id"]: r["eaf_scope"] for r in read_analyses(observed / "analyses.tsv").rows
+    }
+    assert before["a4"] == EafScope.ABSENT.value, before
+
+    completed = tmp_path / "scope-completed.opengwasdb"
+    complete_dense_store(
+        observed, completed, _ld_panel(tmp_path), ancestry="EUR", min_cor=0.0, thresh=0.99
+    )
+    with query_store(completed) as query:
+        status = query.analysis("a4")["association_status"]
+    assert int((status == "imputed").sum()) > 0, (
+        "a4 gained no imputed cells, so this test could not fail"
+    )
+    after = {
+        r["analysis_id"]: r["eaf_scope"] for r in read_analyses(completed / "analyses.tsv").rows
+    }
+    assert after["a4"] == EafScope.ASSOCIATION.value, after
+    result = validate_store(completed)
     assert result.ok, result.errors

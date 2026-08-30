@@ -395,9 +395,9 @@ def panel_a1_eaf(root: str | Path, ancestry: str) -> dict[str, float]:
     Reference Completion needs this to store a per-variant `eaf_reference` for
     its imputed cells (ADR 0037 §4). It is read through the same orientation as
     the build-time check (§9.1) rather than off `LDBlock.eaf`, because a block
-    carries its frequency against the panel's own `EA` column while its SNP id
-    is canonicalised to A1 = min(ref, alt) -- and the two are not always the
-    same allele. Reading it any other way would store `1 - f` for a share of
+    carries its frequency against the panel's own `EA` column while its `SNP`
+    column is canonicalised to A1 = min(ref, alt) -- and the two are not always
+    the same allele. Reading it any other way would store `1 - f` for a share of
     the panel, which is exactly the defect §9.1 exists to catch.
     """
     return dict(_iter_panel_directory(Path(root), ancestry))

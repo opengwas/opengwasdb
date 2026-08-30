@@ -59,7 +59,14 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
     costs **0.718 B/cell against `float32`'s 1.373, −48%**; GWAS Catalog EUR
     (419,192 x 9 studies, 4.86 cells/variant) picks ±1.0 and costs **2.023
     against 5.072, −60%**. The per-variant baseline measures 0.424 B/cell
-    across 8 Analyses, which is ADR 0037's own prediction of 0.42.
+    across 8 Analyses, which is ADR 0037's own prediction of 0.42. The *plane*
+    figures do not reproduce ADR 0037 §2's 0.14 / 0.52 B/cell — the same
+    encoding measures 0.294 / 1.245 here, 2.1x and 2.4x — so the issue's
+    "within 20% of the table" criterion is **not met by these numbers**. It
+    cannot be settled from source files anyway: it is a measurement on rebuilt
+    Store Releases, which is #117, and whichever way that lands one of the two
+    tables is wrong. The decision is unaffected — the residual coding is
+    48–60% smaller than the plane it replaces on both pilots.
   - **Reference-panel EAF for imputed cells** (#113, superseded in approach). An
     imputed cell's EAF *is* the panel's and is identical for every Analysis
     imputed at that variant, so it is a per-variant `eaf_reference` array at

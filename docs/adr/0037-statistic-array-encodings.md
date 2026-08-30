@@ -285,9 +285,28 @@ rather than left to the code, and the spec states them normatively.
   1 − EAF, against half-step bounds of 0.197% and 0.394%.
 
   The baseline figure of 0.424 B/cell across 8 Analyses is this ADR's own
-  prediction (0.42), measured. Absolute `float32` figures differ from the 3.39
-  B/cell quoted above because these are chr1 subsets measured as Dense grids
-  rather than whole stores; the ratio, not the absolute, is what carries over.
+  prediction (0.42), measured.
+
+  **The plane figures in §2's table above do not reproduce, and are left
+  standing with this correction rather than quietly adjusted.** That table
+  gives 0.14 B/cell for one cohort and 0.52 for mixed studies; the same
+  encoding measured here costs **0.294** and **1.245**, a factor of 2.1 and
+  2.4. Both sets of numbers are compressed bytes under the same codec, so the
+  gap is in what was compressed, not how — most likely a different variant
+  ordering or chunking, since a residual plane's compressibility depends
+  entirely on how well neighbouring cells agree. The direction and the decision
+  are unaffected: the residual coding is 48–60% smaller than the `float32`
+  plane it replaces on both pilots, which is the comparison the choice rests
+  on. But the issue's acceptance criterion "measured size on a rebuilt pilot
+  matches the table to within 20%" is **not met by these numbers**, and it
+  cannot be settled from source files at all — it is a measurement on rebuilt
+  Store Releases, which is #117. Whichever way #117 lands, one of the two
+  tables is wrong and the ADR must say which.
+
+  Absolute `float32` figures also differ from the 3.39 B/cell quoted earlier
+  because these are chr1 subsets measured as Dense grids rather than whole
+  stores; for the GWAS Catalog pilot, which is Hybrid, a Dense grid overstates
+  the `float32` plane by counting cells no Analysis reports.
 
 - **`int16_log_maf` is not implemented.** The decision tree in #119 named it as
   the escape valve for data no range fits. `float32` is a better one: it is

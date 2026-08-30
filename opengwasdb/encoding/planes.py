@@ -226,6 +226,19 @@ class _EafPlaneBase:
     def _missing(shape: int | tuple[int, ...]) -> np.ndarray:
         return np.full(shape, np.nan, dtype=np.float32)
 
+    @staticmethod
+    def _gather(array: Any, rows: np.ndarray) -> np.ndarray | None:
+        """One per-variant value per cell, or None when there is no array.
+
+        The gather that has to be against the *right* variant axis: a Hybrid
+        release's Dense Component is panel-sized where its Ragged Overflow
+        covers the shared union, and a baseline gathered against the other
+        one decodes to plausible, wrong frequencies (issue #99, #106).
+        """
+        if array is None:
+            return None
+        return np.asarray(np.asarray(array[:], dtype=np.float32)[rows], dtype=np.float32)
+
 
 class DenseEafPlane(_EafPlaneBase):
     """The `n_variants x n_analyses` frequency grid, decoded on read."""
@@ -327,14 +340,6 @@ class DenseEafPlane(_EafPlaneBase):
             return None
         return per_row[:, None].repeat(n_analyses, axis=1)
 
-    @staticmethod
-    def _gather(array: Any, rows: np.ndarray) -> np.ndarray | None:
-        """One per-variant value per cell, or None when there is no array."""
-        if array is None:
-            return None
-        return np.asarray(np.asarray(array[:], dtype=np.float32)[rows], dtype=np.float32)
-
-
 class RaggedEafPlane(_EafPlaneBase):
     """The flat CSR frequency sequence, decoded on read.
 
@@ -410,11 +415,6 @@ class RaggedEafPlane(_EafPlaneBase):
             return None
         return np.asarray(np.asarray(self._imputed[:], dtype=bool)[positions], dtype=bool)
 
-    @staticmethod
-    def _gather(array: Any, rows: np.ndarray) -> np.ndarray | None:
-        if array is None:
-            return None
-        return np.asarray(np.asarray(array[:], dtype=np.float32)[rows], dtype=np.float32)
 
 
 # ── Writing an `eaf` plane ──────────────────────────────────────────────────
@@ -425,19 +425,33 @@ class RaggedEafPlane(_EafPlaneBase):
 # builder can produce two of the three.
 
 
+def write_per_variant_array(
+    group: Any,
+    name: str,
+    values: np.ndarray,
+    *,
+    compressor: Any = None,
+    chunk: int | None = None,
+) -> None:
+    """Write (or replace) one `float32` per variant of a component's axis."""
+    data = np.asarray(values, dtype=np.float32)
+    if name in group:
+        del group[name]
+    group.create_dataset(
+        name,
+        data=data,
+        chunks=(min(chunk or max(len(data), 1), max(len(data), 1)),),
+        compressor=compressor,
+        dtype="float32",
+    )
+
+
 def write_eaf_baseline(
     group: Any, baseline: np.ndarray, *, compressor: Any = None, chunk: int | None = None
 ) -> None:
-    """Write (or replace) the per-variant `eaf_baseline` array."""
-    values = np.asarray(baseline, dtype=np.float32)
-    if EAF_BASELINE in group:
-        del group[EAF_BASELINE]
-    group.create_dataset(
-        EAF_BASELINE,
-        data=values,
-        chunks=(min(chunk or max(len(values), 1), max(len(values), 1)),),
-        compressor=compressor,
-        dtype="float32",
+    """Write the per-variant `eaf_baseline` the residual coding decodes against."""
+    write_per_variant_array(
+        group, EAF_BASELINE, baseline, compressor=compressor, chunk=chunk
     )
 
 
@@ -450,15 +464,8 @@ def write_eaf_reference(
     the panel's, identical for every Analysis imputed at that variant, so it is
     a per-variant constant rather than per-cell data.
     """
-    values = np.asarray(reference, dtype=np.float32)
-    if EAF_REFERENCE in group:
-        del group[EAF_REFERENCE]
-    group.create_dataset(
-        EAF_REFERENCE,
-        data=values,
-        chunks=(min(chunk or max(len(values), 1), max(len(values), 1)),),
-        compressor=compressor,
-        dtype="float32",
+    write_per_variant_array(
+        group, EAF_REFERENCE, reference, compressor=compressor, chunk=chunk
     )
 
 

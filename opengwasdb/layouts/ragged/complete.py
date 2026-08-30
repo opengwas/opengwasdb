@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -37,7 +36,6 @@ import numpy as np
 import zarr
 from numcodecs import Blosc
 
-from opengwasdb.build.eaf_orientation import panel_a1_eaf
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
@@ -55,6 +53,7 @@ from opengwasdb.completion.ld_panel import (
 )
 from opengwasdb.completion.manifest import build_completion_provenance
 from opengwasdb.completion.parallel import init_block_worker
+from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
     EAF_BASELINE,
@@ -707,7 +706,7 @@ def _run_completion(
         # its source's bytes.
         src_has_eaf = not manifest.encoding.eaf.is_absent and src_csr.has_eaf
         eaf_reference = (
-            _panel_reference_eaf(ld_dir, ancestry, merged_variants) if src_has_eaf else None
+            panel_reference_eaf(ld_dir, ancestry, merged_variants) if src_has_eaf else None
         )
         encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
         codec = StoreCodec(encoding)
@@ -761,6 +760,13 @@ def _run_completion(
                     ancestry
                     if impute_analysis_ids is None or a.analysis_id in impute_analysis_ids
                     else ""
+                ),
+                # An Analysis that gained imputed cells in a release carrying
+                # reference EAF now stores a frequency for them, whatever its
+                # source reported (ADR 0037 §4), so `eaf_scope` follows what
+                # the release holds rather than being copied forward.
+                eaf_scope=completed_eaf_scope(
+                    a, quality_rollup[i], eaf_reference is not None
                 ),
                 completion_median_pearson_r=quality_rollup[i].median_pearson_r,
                 completion_n_imputed_total=quality_rollup[i].n_imputed_total,
@@ -843,26 +849,3 @@ def _source_eaf_baseline(source_path: Path) -> np.ndarray | None:
     if EAF_BASELINE not in group:
         return None
     return np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
-
-
-def _panel_reference_eaf(
-    ld_dir: str | Path, ancestry: str, variants: Sequence[CanonicalVariant]
-) -> np.ndarray | None:
-    """One A1-oriented panel frequency per variant of the completed axis.
-
-    `None` when the panel declares none, so a release only claims to carry
-    reference EAF when it has some to carry.
-    """
-    panel = panel_a1_eaf(ld_dir, ancestry)
-    if not panel:
-        return None
-    reference = np.fromiter(
-        (panel.get(v.alid, np.nan) for v in variants), dtype=np.float32, count=len(variants)
-    )
-    if not np.any(np.isfinite(reference)):
-        return None
-    print(
-        f"Reference EAF: {int(np.count_nonzero(np.isfinite(reference))):,} of "
-        f"{len(reference):,} variants carry a panel frequency"
-    )
-    return reference
