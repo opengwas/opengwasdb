@@ -240,12 +240,18 @@ object in `manifest.json`. At 2.0 it MUST also declare `eaf`:
 - A release declaring no `encoding` — every release up to `format_version` 0.1
   — is `float16` for `z` and `se`, with NaN as the missing marker, and
   `float32_optional` for `eaf`.
-- A release whose `encoding` declares no `eaf` — a `format_version` 1.0
-  release — is `float32_optional` for `eaf`: ADR 0036's plane, present when any
-  Analysis reports a frequency and absent otherwise. That weaker contract has a
-  name so that every other `kind` can mean exactly what it says, and so
-  validation can hold the newer ones to plan-versus-arrays agreement without
-  exempting the older ones by accident.
+- A release whose `encoding` declares no `eaf` **and whose `encoding.version`
+  is below 2** — a `format_version` 1.0 release — is `float32_optional` for
+  `eaf`: ADR 0036's plane, present when any Analysis reports a frequency and
+  absent otherwise. That weaker contract has a name so that every other `kind`
+  can mean exactly what it says, and so validation can hold the newer ones to
+  plan-versus-arrays agreement without exempting the older ones by accident.
+  An `encoding` block with no `version` at all is read as version 1: `version`
+  was added with the plan, so its absence dates the block rather than
+  describing this one.
+- An `encoding` block of version 2 or above MUST declare its `eaf` plan, and a
+  reader MUST reject one that does not. Reading it as the older contract would
+  be the inference-from-absence this section exists to remove.
 
 **`z` — `int16` fixed point plus an exact overflow table** (ADR 0037 §1). The
 stored code is `round(z × scale)`, `scale` = 1024 by default, with two
@@ -391,13 +397,26 @@ panel frequency for a missing cohort one would hand a user a plausible number
 that is wrong by three orders of magnitude, precisely for the rare variants
 they filter on.
 
-Reference Completion may only add `eaf_reference` to a release whose source
-stored EAF. A release whose *only* frequencies were the panel's would invite
-exactly that reading, and its Analyses' `eaf_scope` would contradict it.
+`eaf_reference` is declared independently of the plane, `absent` included. A
+source whose Analyses reported no frequency at all still gains imputed cells
+when it is completed, and those cells have the panel's frequency: such a release
+carries `eaf_reference`, no `eaf` array, and reads NaN on every observed cell.
+Its Analyses that gained imputed cells declare `eaf_scope=association`, which is
+a statement about the arrays and not a contradiction of them — a release holding
+only the panel's frequencies still holds frequencies.
+
+The panel may itself declare none. An LD Reference Panel is supplied for
+imputation and its frequencies are optional; a completion against one that has
+none carries no `eaf_reference` and leaves imputed cells NaN, rather than
+failing.
 
 Constraint: **one LD Reference Panel per completed release**. True of the
 completion pipeline today, but load-bearing here, so it is recorded in
-`manifest.json` rather than left implicit.
+`manifest.json` rather than left implicit: `provenance.completion` names the
+`ld_panel_id` and `ancestry` the release was completed against. A Hybrid
+release records it at the top level as well as inside its Dense Component —
+the component is where the imputation happened, but the release is what a
+reader opens.
 
 Derived artifacts that hold their own copies of `z` — top-hit indexes (§18)
 and the Rho Matrix — remain decoded `float32` and are explicitly rebuildable
@@ -576,7 +595,12 @@ release holds rather than what its source reported.
 `eaf_scope` is per Analysis and the `encoding` block (§6a) is per release: two
 granularities of the same fact, which validation cross-checks (§20). A release
 declaring no `eaf` plane while an Analysis declares `eaf_scope=association` is
-invalid, and so is the reverse.
+invalid, and so is the reverse — unless the release declares `eaf_reference`,
+in which case it does hold frequencies for its imputed cells and the Analyses
+that gained them say so. On a Hybrid release the question is asked of **every**
+component: `analyses.tsv` describes the Analyses of both, and `eaf_reference`
+is per component, so a release whose frequencies are all in its Dense Component
+is not a contradiction of its top-level plan.
 
 ### 9.1 EAF orientation is verified, and the verification is recorded
 
@@ -942,7 +966,7 @@ Validators MUST check at least:
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
-- the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it and carries an imputed mask;
+- the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115): a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).

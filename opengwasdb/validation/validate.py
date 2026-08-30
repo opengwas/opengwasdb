@@ -23,6 +23,7 @@ from opengwasdb.encoding import (
     Z_OVERFLOW_VALUE,
     DenseEafPlane,
     DenseZPlane,
+    EafEncoding,
     EafExceptionTable,
     RaggedEafPlane,
     StoreCodec,
@@ -818,6 +819,22 @@ def _reject_stray_analyses_table(connection: sqlite3.Connection, errors: list[st
         )
 
 
+def _component_eaf_plans(store: OpenGWASDBStore) -> list[EafEncoding]:
+    """Every `eaf` plan that describes some part of this release's arrays.
+
+    One for a Dense or Ragged release. Two for a Hybrid one, whose nested
+    Dense Component declares its own (spec §6a, §16) -- and whose `analyses.tsv`
+    describes the Analyses of both.
+    """
+    plans = [store.manifest.encoding.eaf]
+    if store.manifest.primary_layout is PrimaryStorageLayout.HYBRID:
+        try:
+            plans.append(store.dense_component().manifest.encoding.eaf)
+        except Exception:  # noqa: BLE001 - the component's own checks report it
+            pass
+    return plans
+
+
 def _validate_eaf_orientation(
     store: OpenGWASDBStore, errors: list[str], warnings: list[str]
 ) -> None:
@@ -852,14 +869,30 @@ def _validate_eaf_orientation(
         for row in table.rows
         if row.get("eaf_scope", "") == EafScope.ASSOCIATION.value
     ]
-    if store.manifest.encoding.eaf.is_absent and declares_association:
+    declared_eaf = store.manifest.encoding.eaf
+    # `reference` excepted: a completed release whose Analyses reported no
+    # frequency of their own still holds one for every cell it imputed -- the
+    # panel's -- so an Analysis that gained imputed cells declaring
+    # `eaf_scope=association` is stating a fact about its arrays, not
+    # disagreeing with them (ADR 0037 §4, issue #113).
+    #
+    # A Hybrid release's Analyses span both components, and `eaf_reference` is
+    # per component (spec §6a): its Dense Component has imputed cells where its
+    # observed-only Ragged Overflow does not. So the question "does this
+    # release hold frequencies" is asked of every component, not only of the
+    # top-level plan -- the top-level plan alone would call a Hybrid release
+    # whose frequencies are all in its Dense Component a contradiction.
+    holds_frequencies = any(
+        not plan.is_absent or plan.reference for plan in _component_eaf_plans(store)
+    )
+    if not holds_frequencies and declares_association:
         errors.append(
             f"{len(declares_association)} analysis/analyses declare "
-            f"eaf_scope=association (first {declares_association[0]!r}) but the manifest's "
-            "encoding declares no eaf plane; the store's metadata and its arrays disagree "
-            "about whether it holds frequencies (ADR 0036, ADR 0037)"
+            f"eaf_scope=association (first {declares_association[0]!r}) but no component "
+            "of this release declares an eaf plane or reference EAF; the store's metadata "
+            "and its arrays disagree about whether it holds frequencies "
+            "(ADR 0036, ADR 0037)"
         )
-    declared_eaf = store.manifest.encoding.eaf
     if declared_eaf.kind in ("float32", "int8_residual") and not declares_association:
         errors.append(
             "the manifest declares an eaf plane but no Analysis declares "
@@ -1172,6 +1205,13 @@ def _validate_eaf_plan(
             f"{label} carries {EAF_REFERENCE} but the manifest does not declare it; a "
             "reader following the plan would never read those frequencies"
         )
+    elif has_reference and not _frequencies_in_unit_interval(group[EAF_REFERENCE]):
+        # A panel frequency is returned to the caller as it stands, so it is
+        # checked as a frequency here rather than only where a plane is decoded
+        # -- a release that carries reference EAF and no plane of its own has
+        # no decode to check it in (issue #113). Inclusive, unlike the
+        # baseline: 0 and 1 have no logit but are perfectly good frequencies.
+        errors.append(f"{label}/{EAF_REFERENCE} holds a finite value outside [0, 1]")
 
 
 def _validate_ragged_eaf_values(
@@ -1210,6 +1250,12 @@ def _baseline_in_unit_interval(array: Any) -> bool:
     values = np.asarray(array[:], dtype=np.float64)
     finite = np.isfinite(values)
     return not bool(np.any(finite & ((values <= 0.0) | (values >= 1.0))))
+
+
+def _frequencies_in_unit_interval(array: Any) -> bool:
+    values = np.asarray(array[:], dtype=np.float64)
+    finite = np.isfinite(values)
+    return not bool(np.any(finite & ((values < 0.0) | (values > 1.0))))
 
 
 def _validate_encoding_plan(
@@ -1334,19 +1380,29 @@ def _validate_dense_arrays(
     if eaf_arr is not None and tuple(eaf_arr.shape) != expected_shape:
         errors.append(f"eaf shape {tuple(eaf_arr.shape)} does not match {expected_shape}")
         eaf_arr = None
-    if eaf_arr is not None and EAF_BASELINE in root and len(root[EAF_BASELINE]) != n_variants:
+    if EAF_BASELINE in root and len(root[EAF_BASELINE]) != n_variants:
         errors.append(
             f"{EAF_BASELINE} has {len(root[EAF_BASELINE])} entries but the variant axis "
             f"has {n_variants}"
         )
-    if eaf_arr is not None and EAF_REFERENCE in root and len(root[EAF_REFERENCE]) != n_variants:
+    # Checked whether or not there is an `eaf` plane: a completed release whose
+    # Analyses reported no frequency carries `eaf_reference` and nothing else,
+    # and a mis-sized one there would hand every imputed cell the frequency of
+    # some other variant (issue #113).
+    if EAF_REFERENCE in root and len(root[EAF_REFERENCE]) != n_variants:
         errors.append(
             f"{EAF_REFERENCE} has {len(root[EAF_REFERENCE])} entries but the variant axis "
             f"has {n_variants}"
         )
     if errors:
         return
-    eaf_plane = DenseEafPlane.open(root, encoding) if eaf_arr is not None else None
+    # Opened when there is a plane to decode *or* a panel frequency to
+    # substitute: both are frequencies a query returns, so both are checked.
+    eaf_plane = (
+        DenseEafPlane.open(root, encoding)
+        if eaf_arr is not None or encoding.eaf.reference
+        else None
+    )
 
     # Stream in row-bands. Missingness is read through the plane's declared
     # missing *marker* (spec §15) -- NaN for a float plane, the reserved

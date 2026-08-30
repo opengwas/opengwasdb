@@ -352,7 +352,9 @@ def sample_column_rows(
 # ── Reference loading ────────────────────────────────────────────────────────
 
 
-def _iter_panel_directory(root: Path, ancestry: str) -> Iterator[tuple[str, float]]:
+def _iter_panel_directory(
+    root: Path, ancestry: str, *, required: bool = True
+) -> Iterator[tuple[str, float]]:
     """A1-oriented `(alid, eaf)` from an LD reference panel's block tables.
 
     The layout `opengwasdb.completion.ld_panel` already reads:
@@ -361,9 +363,21 @@ def _iter_panel_directory(root: Path, ancestry: str) -> Iterator[tuple[str, floa
     values agree, and the file order is sorted, so the checksum is
     deterministic either way. Files directly under the ancestry directory
     (the panel's own block lookup table) are not block tables and are skipped.
+
+    `required=False` says the caller is *asking* this panel whether it has
+    frequencies rather than depending on it for them: a panel with no `EAF`
+    column, no ancestry directory, or no block tables yields nothing instead of
+    failing. An LD panel is supplied for imputation and its frequencies are
+    optional (`completion.ld_panel` already reads a missing one as NaN), so
+    Reference Completion asks and stores NaN for whatever the panel does not
+    answer (issue #113). The orientation check at build time asks with
+    `required=True`, because there the operator supplied the file *as* an EAF
+    reference and one that holds no frequencies is not one.
     """
     ancestry_dir = root / ancestry
     if not ancestry_dir.is_dir():
+        if not required:
+            return
         raise EafReferenceError(
             f"EAF reference {root} has no {ancestry!r} subdirectory; "
             f"present: {sorted(p.name for p in root.iterdir() if p.is_dir())}"
@@ -374,11 +388,18 @@ def _iter_panel_directory(root: Path, ancestry: str) -> Iterator[tuple[str, floa
         key=lambda p: (p.parent.name, p.name),
     )
     if not block_files:
+        if not required:
+            return
         raise EafReferenceError(f"EAF reference {ancestry_dir} contains no block tables")
     for path in block_files:
         with open(path, newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle, delimiter="\t")
-            missing = [c for c in _PANEL_BLOCK_COLUMNS if c not in (reader.fieldnames or ())]
+            fields = reader.fieldnames or ()
+            missing = [c for c in _PANEL_BLOCK_COLUMNS if c not in fields]
+            if missing == ["EAF"] and not required:
+                # A panel with no frequencies, not a broken one. Its variants
+                # simply contribute none, and their imputed cells read NaN.
+                continue
             if missing:
                 raise EafReferenceError(
                     f"EAF reference block {path} is missing column(s): {', '.join(missing)}"
@@ -389,7 +410,9 @@ def _iter_panel_directory(root: Path, ancestry: str) -> Iterator[tuple[str, floa
                     yield oriented
 
 
-def panel_a1_eaf(root: str | Path, ancestry: str) -> dict[str, float]:
+def panel_a1_eaf(
+    root: str | Path, ancestry: str, *, required: bool = True
+) -> dict[str, float]:
     """`{canonical ALID: A1-oriented EAF}` for one ancestry of an LD panel.
 
     Reference Completion needs this to store a per-variant `eaf_reference` for
@@ -399,8 +422,11 @@ def panel_a1_eaf(root: str | Path, ancestry: str) -> dict[str, float]:
     column is canonicalised to A1 = min(ref, alt) -- and the two are not always
     the same allele. Reading it any other way would store `1 - f` for a share of
     the panel, which is exactly the defect §9.1 exists to catch.
+
+    `required=False` returns `{}` for a panel that has no frequencies to give,
+    rather than failing: see `_iter_panel_directory`.
     """
-    return dict(_iter_panel_directory(Path(root), ancestry))
+    return dict(_iter_panel_directory(Path(root), ancestry, required=required))
 
 
 def _iter_panel_table(path: Path) -> Iterator[tuple[str, float]]:

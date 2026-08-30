@@ -289,6 +289,11 @@ def complete_hybrid_store(
         _write_completed_manifest(
             staged, src_manifest, new_release, n_shared, n_analyses, n_panel, n_off_panel,
             csr.n_associations, n_imputed,
+            # Read back from the component that did the imputation rather than
+            # re-stamped from this function's arguments, so the two manifests
+            # cannot name different panels (issue #116: one panel per completed
+            # store, recorded in `manifest.json`).
+            dense_completion=_dense_completion_provenance(staged.path),
         )
 
         build_ragged_top_hit_indexes(staged.path, encoding=src_manifest.encoding)
@@ -385,6 +390,23 @@ def _read_analyses(dense_dir: Path) -> list[Analysis]:
     )
 
 
+def _dense_completion_provenance(staged_path: Path) -> Mapping[str, Any]:
+    """The completed Dense Component's own `provenance["completion"]`.
+
+    The Hybrid release is completed by completing that component, so the panel
+    identity is a fact recorded there. Copying it up is how the outer manifest
+    states it without a second, independently-stamped copy that could disagree.
+    """
+    try:
+        completion = open_store(dense_component_path(staged_path)).manifest.provenance.get(
+            "completion", {}
+        )
+        return dict(completion) if isinstance(completion, dict) else {}
+    except Exception as exc:  # noqa: BLE001 - the manifest is the authority, not this
+        log.warning("could not read the Dense Component's completion provenance: %s", exc)
+        return {}
+
+
 def _write_completed_manifest(
     staged: StagedRelease,
     src_manifest: StoreManifest,
@@ -395,6 +417,7 @@ def _write_completed_manifest(
     n_off_panel: int,
     n_overflow: int,
     n_imputed: int,
+    dense_completion: Mapping[str, Any] | None = None,
 ) -> None:
     manifest = StoreManifest(
         # Preserved with the format version below: a completed release is
@@ -424,6 +447,14 @@ def _write_completed_manifest(
             "n_variants": n_variants,
             "n_analyses": n_analyses,
             "completion": {
+                # The panel this release was completed against, at the top
+                # level and not only inside the Dense Component: "one panel per
+                # completed store" is load-bearing once `eaf_reference` holds
+                # that panel's frequencies, so it is recorded where a reader of
+                # the Hybrid store looks (issue #116).
+                "method": (dense_completion or {}).get("method"),
+                "ld_panel_id": (dense_completion or {}).get("ld_panel_id"),
+                "ancestry": (dense_completion or {}).get("ancestry"),
                 "component_completed": "dense",
                 "overflow_completion_state": "observed_only",
                 "n_imputed_dense": n_imputed,

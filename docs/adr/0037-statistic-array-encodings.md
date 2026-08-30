@@ -368,14 +368,23 @@ settled during implementation:
   observed cells — the 3000× error above. The failure mode of getting this
   half-right is silent, so it is made unrepresentable instead of documented.
 
-- **Reference EAF is only added to a release whose source stored EAF.** A
-  completed release whose *only* frequencies were the panel's would be read as
-  a frequency column, and every Analysis in it declares `eaf_scope=absent`,
-  which the arrays would then contradict. Conversely an Analysis that *gains*
-  imputed cells in a release carrying `eaf_reference` has its `eaf_scope`
-  stamped `association` by completion: it now stores a frequency for those
-  cells, and the declaration follows what the release holds rather than what
-  its source reported.
+- **Reference EAF is added independently of the observed plane** — including
+  to a release whose source stored no EAF at all, which is the case issue #113
+  was raised about. Such a release carries `eaf_reference` and no `eaf` array:
+  NaN on every observed cell, the panel's frequency on every imputed one. The
+  first implementation refused that pairing, on the argument that a release
+  whose *only* frequencies were the panel's would be read as a frequency
+  column contradicting its Analyses' `eaf_scope=absent`. That gets the
+  direction wrong — `eaf_scope` is derived from what the release holds, so an
+  Analysis that gains imputed cells is stamped `association` by completion and
+  the declaration and the arrays agree. Refusing the pairing made the release
+  with no frequencies of its own the one release that could not hold the
+  panel's, which is precisely what #113 asked for.
+
+  The panel may equally hold none: an LD Reference Panel is supplied for
+  imputation and its `EAF` column is optional, so a completion against one
+  without it carries no `eaf_reference` and leaves imputed cells NaN, rather
+  than failing the run.
 
 The baselines and the exception values travel with the observed cells across
 Reference Completion's variant remap rather than being recomputed from the

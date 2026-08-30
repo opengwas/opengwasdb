@@ -50,9 +50,9 @@ from opengwasdb.layouts.dense.build_vcf import (
     _log_progress,
     _manifest_row_to_analysis,
     _read_manifest,
-    _survey_eaf_spills,
     _write_dense_bands,
     _write_index,
+    survey_eaf_spills,
 )
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -559,11 +559,11 @@ def build_hybrid_from_vcf_manifest(
             # per-Analysis budget -- more evidence than asked for, never less.
             # As in the dense builder, this runs before anything is written.
             shared_hashes = site_hashes(shared_sorted)
-            dense_survey = _survey_eaf_spills(
+            dense_survey = survey_eaf_spills(
                 spill_dir, id_by_col, shared_sorted, shared_hashes,
                 row_map=dense_to_shared,
             )
-            overflow_survey = _survey_eaf_spills(
+            overflow_survey = survey_eaf_spills(
                 spill_dir, id_by_col, shared_sorted, shared_hashes,
                 suffix=".ovf", index_key="variant_index",
             )

@@ -14,6 +14,7 @@ import pytest
 from opengwasdb.encoding import (
     EAF_ABSENT,
     EAF_EXCEPTION,
+    ENCODING_VERSION,
     EafBaselineError,
     EafEncoding,
     EafExceptionBuilder,
@@ -140,10 +141,42 @@ def test_reader_rejects_an_eaf_encoding_kind_it_does_not_implement():
         StoreEncoding.from_manifest(payload)
 
 
-def test_a_component_cannot_carry_reference_eaf_while_declaring_no_eaf_plane():
+def test_a_component_with_no_eaf_plane_can_still_carry_reference_eaf():
+    """The case issue #113 was raised about: a source whose Analyses reported
+    no frequency at all still gains imputed cells when it is completed, and an
+    imputed cell's frequency is the panel's. Refusing the combination would
+    have made the release with no frequencies of its own the one release that
+    could not hold the panel's."""
     plan = StoreEncoding.decide(EncodingMeasurements(n_analyses=8))
-    with pytest.raises(EafBaselineError, match="no eaf plane"):
-        plan.with_eaf_reference(True)
+    assert plan.eaf.is_absent
+
+    with_reference = plan.with_eaf_reference(True)
+    assert with_reference.eaf.is_absent
+    assert with_reference.eaf.reference
+    assert StoreEncoding.from_manifest(
+        json.loads(json.dumps(with_reference.to_manifest()))
+    ) == with_reference
+
+
+def test_an_encoding_block_of_this_version_must_declare_its_eaf_plan():
+    """A missing `eaf` key names ADR 0036's optional plane only on a release
+    old enough to predate the key. On a block of this version it is a
+    malformed release, and reading it as an older one would be exactly the
+    inference-from-absence the persisted plan exists to stop (issue #119)."""
+    payload = StoreEncoding.decide(_measurements()).to_manifest()
+    assert payload["version"] == ENCODING_VERSION
+    payload.pop("eaf")
+    with pytest.raises(UnsupportedEncoding, match="must declare an eaf plan"):
+        StoreEncoding.from_manifest(payload)
+
+
+def test_an_encoding_block_with_no_version_at_all_is_read_as_the_older_schema():
+    """`version` was added with the plan itself, so a block without one is
+    older than the `eaf` key rather than a current block that lost it."""
+    plan = StoreEncoding.from_manifest(
+        {"z": {"kind": "int16_fixed", "scale": 1024}, "se": {"kind": "float16"}}
+    )
+    assert plan.eaf.is_optional_plane
 
 
 # ── The baseline ────────────────────────────────────────────────────────────

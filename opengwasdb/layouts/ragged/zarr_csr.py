@@ -296,7 +296,10 @@ class RaggedCSRReader:
         taking a neighbour's frequency.
         """
         out = np.full(len(variant_index), np.nan, dtype=np.float32)
-        if not self.has_eaf or len(variant_index) == 0:
+        # The plane's own answer, not `has_eaf`: a release carrying only the
+        # panel's frequencies has no `eaf` array and still has frequencies to
+        # report on its imputed cells (issue #113).
+        if not self._eaf_plane.can_report_frequencies or len(variant_index) == 0:
             return out
         offsets = self._offsets[:]
         # Resolve every pair to a flat CSR position first, then decode once:

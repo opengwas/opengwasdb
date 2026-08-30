@@ -476,6 +476,305 @@ def test_a_reference_array_the_plan_does_not_declare_is_rejected(completed_store
     assert any(EAF_REFERENCE in error for error in result.errors), result.errors
 
 
+# ── A release with no frequencies of its own (issue #113) ───────────────────
+
+
+def _vcf_without_frequencies(tmp_path: Path, analysis: str) -> Path:
+    """The same Analysis, with no `AF` field on any record."""
+    path = tmp_path / f"{analysis}-nofreq.vcf"
+    lines = [_VCF_HEADER.format(sample=analysis.upper())]
+    for pos in _POSITIONS:
+        z = _z_for(analysis, pos)
+        lines.append(f"1\t{pos}\t.\tA\tG\t.\tPASS\t.\tES:SE\t{z * 0.3:.6f}:0.3\n")
+    path.write_text("".join(lines), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def store_with_no_frequencies(tmp_path: Path) -> Path:
+    manifest_path = tmp_path / "nofreq-manifest.tsv"
+    rows = [
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method"
+        "\tsource_assembly"
+    ]
+    for analysis in _ANALYSES:
+        rows.append(
+            f"{analysis}\t{_vcf_without_frequencies(tmp_path, analysis)}\t{analysis}"
+            "\t10000\tsd\tdeclared_standardised\thg38"
+        )
+    manifest_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    out = tmp_path / "nofreq.opengwasdb"
+    build_dense_from_vcf_manifest(
+        manifest_path, out, store_id="nofreq", release_id="v1", allow_unverified_eaf=True
+    )
+    return out
+
+
+@pytest.fixture
+def completed_store_with_no_source_frequencies(
+    tmp_path: Path, store_with_no_frequencies: Path
+) -> Path:
+    out = tmp_path / "nofreq-completed.opengwasdb"
+    complete_dense_store(
+        store_with_no_frequencies, out, _ld_panel(tmp_path),
+        ancestry="EUR", min_cor=0.0, thresh=0.99,
+    )
+    return out
+
+
+def test_a_source_with_no_frequencies_declares_absent_and_no_reference(
+    store_with_no_frequencies: Path,
+):
+    """The fixture is asserted meaningful before anything is asserted about
+    what completion does to it: an observed store with no frequencies, so the
+    completed one's frequencies can only have come from the panel."""
+    manifest = json.loads((store_with_no_frequencies / "manifest.json").read_text())
+    assert manifest["encoding"]["eaf"]["kind"] == "absent"
+    assert "reference" not in manifest["encoding"]["eaf"]
+    root = zarr.open_group(str(store_with_no_frequencies / "data.zarr"), mode="r")
+    assert "eaf" not in root
+
+
+def test_completing_a_source_with_no_frequencies_still_carries_panel_eaf(
+    completed_store_with_no_source_frequencies: Path,
+):
+    """Issue #113's whole point, and the case it is easiest to skip: the
+    release has no `eaf` plane to put anything in, and its imputed cells still
+    have a frequency -- the panel's. A completion that stored none here would
+    hand every imputed cell NaN for a value it holds."""
+    store = completed_store_with_no_source_frequencies
+    manifest = json.loads((store / "manifest.json").read_text())
+    assert manifest["encoding"]["eaf"]["kind"] == "absent"
+    assert manifest["encoding"]["eaf"]["reference"] is True
+
+    root = zarr.open_group(str(store / "data.zarr"), mode="r")
+    assert "eaf" not in root, "there are no observed frequencies to store"
+    assert EAF_REFERENCE in root
+
+    with query_store(store) as query:
+        result = query.phewas("1:900:A:G")
+    imputed = result["association_status"] == "imputed"
+    assert imputed.any(), "the fixture imputed nothing, so this test could not fail"
+    np.testing.assert_allclose(result["eaf"][imputed], PANEL_ONLY_EAF, atol=1e-6)
+
+
+def test_an_observed_cell_of_a_source_with_no_frequencies_stays_nan(
+    completed_store_with_no_source_frequencies: Path,
+):
+    """The other half of the criterion, and the one that costs users if it
+    fails: an observed cell whose source reported no frequency does not
+    quietly acquire the panel's (ADR 0037 §4)."""
+    observed = _observed(completed_store_with_no_source_frequencies)
+    on_panel = [(pos, a) for (pos, a) in observed if pos in _POSITIONS]
+    assert on_panel, "no observed cells in the fixture"
+    assert all(np.isnan(observed[key]) for key in on_panel)
+
+
+def test_a_release_with_no_plane_but_panel_frequencies_validates(
+    completed_store_with_no_source_frequencies: Path,
+):
+    result = validate_store(completed_store_with_no_source_frequencies)
+    assert result.ok, result.errors
+
+
+def test_completion_stamps_eaf_scope_when_the_source_declared_none(
+    completed_store_with_no_source_frequencies: Path,
+):
+    """`eaf_scope` follows what the release holds. An Analysis that gained
+    imputed cells now stores a frequency for them even though its source
+    reported none, and saying otherwise is #106's defect (declared metadata
+    disagreeing with the arrays) in a new place."""
+    rows = read_analyses(
+        completed_store_with_no_source_frequencies / "analyses.tsv"
+    ).rows
+    scopes = {row["analysis_id"]: row["eaf_scope"] for row in rows}
+    assert any(scope == EafScope.ASSOCIATION.value for scope in scopes.values()), scopes
+
+
+@pytest.fixture
+def ragged_store_with_no_frequencies(tmp_path: Path) -> Path:
+    """The same source with no frequencies, in the other CSR pipeline.
+
+    Dense and Ragged completion are separately implemented, and the Ragged one
+    is where this was found: covering only Dense would leave the half that
+    failed uncovered.
+    """
+    filtered = tmp_path / "ssf-nofreq"
+    filtered.mkdir()
+    manifest_rows = ["analysis_index\tanalysis_id\tfiltered_file\tn"]
+    for index, analysis in enumerate(_ANALYSES):
+        with gzip.open(filtered / f"{analysis}.tsv.gz", "wt", encoding="utf-8") as fh:
+            fh.write(
+                "chromosome\tbase_pair_location\teffect_allele\tother_allele\t"
+                "beta\tstandard_error\teffect_allele_frequency\n"
+            )
+            for pos in _POSITIONS:
+                fh.write(f"1\t{pos}\tA\tG\t{_z_for(analysis, pos) * 0.3:.6f}\t0.3\t\n")
+        manifest_rows.append(f"{index}\t{analysis}\t{analysis}.tsv.gz\t10000")
+    manifest = tmp_path / "ssf_nofreq_manifest.tsv"
+    manifest.write_text("\n".join(manifest_rows) + "\n", encoding="utf-8")
+    out = tmp_path / "ragged-nofreq.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered, out, store_id="nofreq", release_id="v1",
+        allow_unverified_eaf=True,
+    )
+    return out
+
+
+def test_completing_a_ragged_source_with_no_frequencies_carries_panel_eaf(
+    tmp_path: Path, ragged_store_with_no_frequencies: Path
+):
+    from opengwasdb.layouts.ragged.complete import complete_ragged_store
+
+    source_manifest = json.loads(
+        (ragged_store_with_no_frequencies / "manifest.json").read_text()
+    )
+    assert source_manifest["encoding"]["eaf"]["kind"] == "absent"
+
+    out = tmp_path / "ragged-nofreq-completed.opengwasdb"
+    complete_ragged_store(
+        ragged_store_with_no_frequencies, out, _ld_panel(tmp_path),
+        ancestry="EUR", min_cor=0.0, thresh=0.99,
+    )
+    manifest = json.loads((out / "manifest.json").read_text())
+    assert manifest["encoding"]["eaf"]["reference"] is True
+    assert validate_store(out).ok, validate_store(out).errors
+
+    with query_store(out) as query:
+        result = query.phewas("1:900:A:G")
+    imputed = result["association_status"] == "imputed"
+    assert imputed.any(), "the fixture imputed nothing, so this test could not fail"
+    np.testing.assert_allclose(result["eaf"][imputed], PANEL_ONLY_EAF, atol=1e-6)
+
+    observed = _observed(out)
+    on_panel = [key for key in observed if key[0] in _POSITIONS]
+    assert on_panel and all(np.isnan(observed[key]) for key in on_panel)
+
+    # The pair-resolving read shape too (top hits go through it), which has its
+    # own short circuit on "this component stores no eaf array" -- true here,
+    # and not the same question as "this component has a frequency to report".
+    from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+
+    reader = RaggedCSRReader(out)
+    pairs = [
+        (vi, ai) for ai in range(len(_ANALYSES)) for vi in range(len(_POSITIONS) + 1)
+    ]
+    rows = np.array([vi for vi, _ in pairs], dtype=np.int64)
+    cols = np.array([ai for _, ai in pairs], dtype=np.int64)
+    by_pair = reader.eaf_pairs(rows, cols)
+    assert np.any(np.isfinite(by_pair)), (
+        "eaf_pairs reported no frequency at all for a release that holds the panel's"
+    )
+    np.testing.assert_allclose(by_pair[np.isfinite(by_pair)], PANEL_ONLY_EAF, atol=1e-6)
+
+
+def test_a_completed_hybrid_whose_only_frequencies_are_the_panels_validates(
+    tmp_path: Path,
+):
+    """`eaf_reference` is per component, and a Hybrid release's top-level plan
+    describes its observed-only Ragged Overflow, which has no imputed cells and
+    so declares none. Judging "does this release hold frequencies" from that
+    plan alone calls the release a contradiction of its own `analyses.tsv`
+    (spec §6a, §9)."""
+    from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+
+    manifest_path = tmp_path / "hybrid-nofreq-manifest.tsv"
+    rows = [
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method"
+        "\tsource_assembly"
+    ]
+    for analysis in _ANALYSES:
+        rows.append(
+            f"{analysis}\t{_vcf_without_frequencies(tmp_path, analysis)}\t{analysis}"
+            "\t10000\tsd\tdeclared_standardised\thg38"
+        )
+    manifest_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    panel_file = tmp_path / "hybrid-nofreq-panel.txt"
+    # Wider than `_ON_PANEL`: the Dense Component has to hold enough observed
+    # variants for the LD block to impute the one it lacks, or the fixture
+    # imputes nothing and the rule under test is never reached. One position is
+    # left off so there is still a Ragged Overflow.
+    panel_file.write_text(
+        "\n".join(f"1:{pos}:A:G" for pos in _POSITIONS[:-1]) + "\n", encoding="utf-8"
+    )
+    observed = tmp_path / "hybrid-nofreq.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest_path, observed, reference_panel=panel_file,
+        store_id="nofreq", release_id="v1", allow_unverified_eaf=True,
+    )
+    assert json.loads((observed / "manifest.json").read_text())["encoding"]["eaf"][
+        "kind"
+    ] == "absent"
+
+    out = tmp_path / "hybrid-nofreq-completed.opengwasdb"
+    complete_hybrid_store(
+        observed, out, _ld_panel(tmp_path), ancestry="EUR", min_cor=0.0, thresh=0.99
+    )
+    dense_plan = json.loads(
+        (dense_component_path(out) / "manifest.json").read_text()
+    )["encoding"]["eaf"]
+    assert dense_plan["reference"] is True, "the Dense Component imputed nothing"
+    assert "reference" not in json.loads((out / "manifest.json").read_text())[
+        "encoding"
+    ]["eaf"], "the observed-only Ragged Overflow has no imputed cells to describe"
+
+    scopes = [row["eaf_scope"] for row in read_analyses(out / "analyses.tsv").rows]
+    assert EafScope.ASSOCIATION.value in scopes, (
+        "no Analysis gained imputed cells, so the rule under test is never reached"
+    )
+
+    result = validate_store(out)
+    assert result.ok, result.errors
+
+
+def _panel_without_frequencies(tmp_path: Path) -> Path:
+    """The same LD panel with its `EAF` column removed.
+
+    `completion.ld_panel` has always read a missing panel frequency as NaN, so
+    a panel without one is a panel this pipeline supports (issue #113) -- not
+    an error, and not a reason to refuse to complete a store.
+    """
+    root = _ld_panel(tmp_path)
+    block = root / "EUR" / "1" / "block1.tsv"
+    lines = block.read_text(encoding="utf-8").splitlines()
+    header = lines[0].split("\t")
+    keep = [i for i, name in enumerate(header) if name != "EAF"]
+    block.write_text(
+        "\n".join("\t".join(line.split("\t")[i] for i in keep) for line in lines) + "\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_a_panel_with_no_eaf_column_completes_with_nan_on_imputed_cells(
+    tmp_path: Path, dense_store: Path
+):
+    """Such a panel completes; it does not fail the run.
+
+    Nothing is imputed against it, because the imputed `se` is scaled by the
+    panel's heterozygosity and there is none -- that is this pipeline's
+    long-standing behaviour and not what is under test here. What is under
+    test is that asking the panel for reference EAF does not turn a supported
+    panel into a failed completion, taking the store's *own* frequencies down
+    with it.
+    """
+    out = tmp_path / "nofreq-panel-completed.opengwasdb"
+    complete_dense_store(
+        dense_store, out, _panel_without_frequencies(tmp_path),
+        ancestry="EUR", min_cor=0.0, thresh=0.99,
+    )
+    manifest = json.loads((out / "manifest.json").read_text())
+    assert "reference" not in manifest["encoding"]["eaf"]
+    assert EAF_REFERENCE not in zarr.open_group(str(out / "data.zarr"), mode="r")
+    assert validate_store(out).ok, validate_store(out).errors
+
+    observed = _observed(out)
+    assert observed[(100, "a1")] == pytest.approx(_EAF["a1"][100], rel=1e-2)
+    with query_store(out) as query:
+        result = query.phewas("1:900:A:G")
+    assert np.all(np.isnan(result["eaf"])), "no panel frequency, no imputed frequency"
+
+
 def test_ogdb_info_reports_the_eaf_encoding(dense_store: Path):
     """CLI surface, which `opengwasdb-stores`' walkthrough quotes verbatim
     (CONTRIBUTING, "The walkthrough lives in the other repository")."""
@@ -597,6 +896,31 @@ def test_a_hybrid_component_with_no_frequencies_still_carries_the_declared_plane
     assert np.all(np.asarray(dense_root["eaf"][:]) == EAF_ABSENT)
     result = validate_store(out)
     assert result.ok, result.errors
+
+
+def test_a_completed_hybrid_records_the_panel_it_was_completed_against(
+    tmp_path: Path, hybrid_store: Path
+):
+    """One panel per completed store, recorded in `manifest.json` (#116).
+
+    Load-bearing once `eaf_reference` holds that panel's frequencies: a reader
+    of the top-level Hybrid store has to be able to see which panel supplied
+    them without descending into the Dense Component's own manifest.
+    """
+    from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+
+    out = tmp_path / "hybrid-completed.opengwasdb"
+    complete_hybrid_store(
+        hybrid_store, out, _ld_panel(tmp_path), ancestry="EUR", min_cor=0.0, thresh=0.99
+    )
+    completion = json.loads((out / "manifest.json").read_text())["provenance"]["completion"]
+    dense_completion = json.loads(
+        (dense_component_path(out) / "manifest.json").read_text()
+    )["provenance"]["completion"]
+
+    assert completion["ancestry"] == "EUR"
+    assert completion["ld_panel_id"] == dense_completion["ld_panel_id"]
+    assert completion["method"] == dense_completion["method"]
 
 
 def test_a_1_0_release_that_stores_no_frequencies_still_validates(dense_store: Path):

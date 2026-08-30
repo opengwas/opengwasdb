@@ -222,9 +222,40 @@ class _EafPlaneBase:
     def carries_reference(self) -> bool:
         return bool(self._codec.encoding.eaf.reference)
 
+    @property
+    def can_report_frequencies(self) -> bool:
+        """Whether reading this plane can return anything but NaN.
+
+        Not the same as `has_values`. A release with no `eaf` array still
+        reports the panel's frequency on its imputed cells (issue #113), so a
+        caller that short-circuits on the array's absence drops exactly the
+        values that release holds -- silently, and only for the imputed cells.
+        """
+        return self.has_values or self.carries_reference
+
     @staticmethod
     def _missing(shape: int | tuple[int, ...]) -> np.ndarray:
         return np.full(shape, np.nan, dtype=np.float32)
+
+    def _no_plane(
+        self,
+        shape: int | tuple[int, ...],
+        *,
+        imputed: np.ndarray | None,
+        reference: np.ndarray | None,
+    ) -> np.ndarray:
+        """What a component with no `eaf` plane reads: NaN, unless a panel speaks.
+
+        A completed release whose Analyses reported no frequency at all still
+        holds one for every cell it imputed -- the panel's (issue #113). There
+        is nothing to decode, but the substitution is the same substitution, so
+        it goes through the codec rather than being written out a second time
+        here.
+        """
+        blank = self._missing(shape)
+        if not self.carries_reference:
+            return blank
+        return self._codec.decode_eaf(blank, imputed=imputed, reference=reference)
 
     @staticmethod
     def _gather(array: Any, rows: np.ndarray) -> np.ndarray | None:
@@ -256,38 +287,56 @@ class DenseEafPlane(_EafPlaneBase):
 
     @property
     def n_analyses(self) -> int:
-        return int(self._array.shape[1])
+        """The grid's width -- read from a sibling plane when `eaf` is absent.
+
+        A component can legitimately have no `eaf` array while the rest of the
+        release is a full grid: a `format_version` 1.0 release with no
+        frequencies, or a completed one that carries only the panel's (issue
+        #113). The width is a property of the release, not of this plane.
+        """
+        for candidate in (self._array, self._imputed):
+            if candidate is not None:
+                return int(candidate.shape[1])
+        if self._group is not None and "z" in self._group:
+            return int(self._group["z"].shape[1])
+        raise EafBaselineError(
+            "this component has no eaf plane and no sibling plane to take its width from"
+        )
 
     def points(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
         """Elementwise cells `(rows[i], cols[i])`."""
         rows = np.asarray(rows, dtype=np.int64)
         cols = np.asarray(cols, dtype=np.int64)
-        if self._array is None or len(rows) == 0:
-            return self._missing(len(rows))
+        if len(rows) == 0:
+            return self._missing(0)
+        imputed = (
+            self._imputed.vindex[rows, cols].astype(bool) if self.carries_reference else None
+        )
+        reference = self._gather(self._reference, rows)
+        if self._array is None:
+            return self._no_plane(len(rows), imputed=imputed, reference=reference)
         return self._codec.decode_eaf(
             self._array.vindex[rows, cols],
             baseline=self._gather(self._baseline, rows),
             positions=positions_pairs(rows, cols, self.n_analyses),
-            imputed=(
-                self._imputed.vindex[rows, cols].astype(bool)
-                if self.carries_reference
-                else None
-            ),
-            reference=self._gather(self._reference, rows),
+            imputed=imputed,
+            reference=reference,
         )
 
     def band(self, r0: int, r1: int) -> np.ndarray:
         """Rows `[r0:r1)`, all analyses."""
         n_analyses = self.n_analyses
+        imputed = self._imputed[r0:r1].astype(bool) if self.carries_reference else None
+        reference = self._reference_band(r0, r1, n_analyses)
         if self._array is None:
-            return self._missing((r1 - r0, n_analyses))
+            return self._no_plane((r1 - r0, n_analyses), imputed=imputed, reference=reference)
         per_row = self._gather(self._baseline, np.arange(r0, r1, dtype=np.int64))
         return self._codec.decode_eaf(
             self._array[r0:r1],
             baseline=None if per_row is None else per_row[:, None].repeat(n_analyses, axis=1),
             positions=positions_row_band(r0, n_analyses),
-            imputed=self._imputed[r0:r1].astype(bool) if self.carries_reference else None,
-            reference=self._reference_band(r0, r1, n_analyses),
+            imputed=imputed,
+            reference=reference,
         )
 
     def patch(self, rows: np.ndarray, cols: np.ndarray, values: np.ndarray) -> None:
@@ -381,33 +430,41 @@ class RaggedEafPlane(_EafPlaneBase):
     def slice(self, start: int, end: int) -> np.ndarray:
         """`eaf[start:end]` in flat CSR order."""
         start, end = int(start), int(end)
-        if self._array is None or end <= start:
-            return self._missing(max(end - start, 0))
+        if end <= start:
+            return self._missing(0)
         rows = np.asarray(self._variant_index[start:end], dtype=np.int64)
+        imputed = (
+            np.asarray(self._imputed[start:end], dtype=bool)
+            if self.carries_reference
+            else None
+        )
+        reference = self._gather(self._reference, rows)
+        if self._array is None:
+            return self._no_plane(end - start, imputed=imputed, reference=reference)
         return self._codec.decode_eaf(
             self._array[start:end],
             baseline=self._gather(self._baseline, rows),
             positions=positions_flat(start),
-            imputed=(
-                np.asarray(self._imputed[start:end], dtype=bool)
-                if self.carries_reference
-                else None
-            ),
-            reference=self._gather(self._reference, rows),
+            imputed=imputed,
+            reference=reference,
         )
 
     def at(self, positions: np.ndarray) -> np.ndarray:
         """Frequencies at arbitrary flat CSR positions."""
         positions = np.asarray(positions, dtype=np.int64)
-        if self._array is None or len(positions) == 0:
-            return self._missing(len(positions))
+        if len(positions) == 0:
+            return self._missing(0)
         rows = np.asarray(self._variant_index[:], dtype=np.int64)[positions]
+        imputed = self._imputed_at(positions)
+        reference = self._gather(self._reference, rows)
+        if self._array is None:
+            return self._no_plane(len(positions), imputed=imputed, reference=reference)
         return self._codec.decode_eaf(
             np.asarray(self._array[:])[positions],
             baseline=self._gather(self._baseline, rows),
             positions=positions_at(positions),
-            imputed=self._imputed_at(positions),
-            reference=self._gather(self._reference, rows),
+            imputed=imputed,
+            reference=reference,
         )
 
     def _imputed_at(self, positions: np.ndarray) -> np.ndarray | None:

@@ -745,7 +745,7 @@ def build_dense_from_vcf_manifest(
             # of band-writing -- and a store must never come into existence
             # holding a frequency column reported against the other allele.
             # --------------------------------------------------------------
-            eaf_survey = _survey_eaf_spills(
+            eaf_survey = survey_eaf_spills(
                 spill_dir, id_by_col, hg38_alids, site_hashes(hg38_alids)
             )
             eaf_report = verify_eaf_orientation(
@@ -1217,7 +1217,7 @@ class EafSpillSurvey:
         )
 
 
-def _survey_eaf_spills(
+def survey_eaf_spills(
     spill_dir: Path,
     id_by_col: Mapping[int, str],
     alids: Sequence[str],

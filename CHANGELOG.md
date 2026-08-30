@@ -85,6 +85,41 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
     Component has imputed cells where its Ragged Overflow does not, and each
     carries its own manifest; it is the one field on which the two components'
     plans may differ, and validation compares them with it normalised away.
+  - **A release whose Analyses reported no frequency at all still carries panel
+    EAF on the cells it imputes** — the case #113 was actually raised about. It
+    carries `eaf_reference` and no `eaf` array: NaN on every observed cell, the
+    panel's frequency on every imputed one, and `eaf_scope=association` on the
+    Analyses that gained them. Both completion pipelines and both read planes
+    do this; declaring `reference` beside an `absent` plane is legal, and
+    validation no longer reads that pairing as a contradiction.
+  - **An LD Reference Panel that declares no EAF completes rather than
+    failing.** The panel is supplied for imputation and its frequencies are
+    optional (`completion.ld_panel` has always read a missing one as NaN), so
+    asking it for reference EAF must not turn a supported panel into a failed
+    completion that takes the store's own frequencies with it. The same holds
+    for a panel with no ancestry directory or no block tables: it is asked, not
+    depended on.
+  - **A Hybrid release's `eaf_scope` cross-check reads both components.**
+    `eaf_reference` is per component, and a Hybrid release's Ragged Overflow is
+    observed-only, so its top-level plan declares none while its Dense
+    Component does. Judging the release from the top-level plan alone called a
+    Hybrid store whose only frequencies were the panel's a contradiction of its
+    own `analyses.tsv`.
+  - **A pair-resolving CSR read reports the panel's frequencies too.**
+    `eaf_pairs` short-circuited on "this component stores no `eaf` array",
+    which is true of a release carrying only reference EAF — and is not the
+    same question as "this component has a frequency to report". Top-hit reads
+    go through it.
+  - **A completed Hybrid release records the panel at the top level**, not only
+    inside its Dense Component: `provenance.completion` now names the
+    `ld_panel_id`, `ancestry` and `method`, read back from the component that
+    did the imputation so the two manifests cannot name different panels.
+    Manifest surface, so `opengwasdb-stores` needs it too.
+  - **An `encoding` block of this version must declare its `eaf` plan.** A
+    missing `eaf` key names ADR 0036's optional plane only below plan-schema
+    version 2; at or above it the release is malformed and is rejected rather
+    than read as an older one. A block with no `version` at all is read as
+    version 1, since `version` was added with the plan itself.
   - **Validation gains the plan-versus-arrays rules for `eaf`**: a plane whose
     dtype contradicts the manifest, a residual plane missing its baseline or its
     exception table, an exception cell with no entry, a table describing a cell

@@ -485,9 +485,12 @@ def _run_completion(
         # per-cell data. Observed cells never fall back to it: FinnGen's
         # frequencies differ from the EUR panel by up to 3000x.
         src_has_eaf = not manifest.encoding.eaf.is_absent
-        eaf_reference = (
-            panel_reference_eaf(ld_dir, ancestry, merged_variants) if src_has_eaf else None
-        )
+        # Asked for whatever the source declares, `absent` included: a release
+        # whose Analyses reported no frequency still gains imputed cells, and
+        # those cells have the panel's frequency (issue #113). It gets an
+        # `eaf_reference` array and no `eaf` plane -- NaN on every observed
+        # cell, the panel's value on every imputed one.
+        eaf_reference = panel_reference_eaf(ld_dir, ancestry, merged_variants)
         encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
         effective_chunks = _create_completed_zarr(
             staged, n_variants, n_analyses, on_panel, DEFAULT_CHUNK_SHAPE, DEFAULT_DTYPE,

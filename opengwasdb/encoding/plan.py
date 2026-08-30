@@ -50,6 +50,11 @@ DEFAULT_Z_SCALE = 1024
 #: 1 declared `z` and `se`; version 2 adds `eaf` (issue #116).
 ENCODING_VERSION = 2
 
+#: First plan-schema version whose encoding block states its `eaf` plan. Below
+#: it, a missing `eaf` key names ADR 0036's optional plane; at or above it, a
+#: missing key is a malformed release.
+_EAF_PLAN_VERSION = 2
+
 
 class UnsupportedEncoding(Exception):
     """A store declares a statistic encoding this build does not implement."""
@@ -388,13 +393,15 @@ class StoreEncoding:
         Reference EAF is the one part of the plan that legitimately differs
         between a Hybrid release's two components, so it is set per component
         rather than decided by the tree (ADR 0037 §4).
+
+        It is set independently of the observed plane, `absent` included. A
+        source whose Analyses reported no frequency at all still gains imputed
+        cells when it is completed, and an imputed cell's frequency *is* the
+        panel's -- so such a release carries panel EAF on those cells and NaN
+        on every observed one, which is what issue #113 asked for. Refusing the
+        combination would have made the release with no frequencies of its own
+        the one release that could not hold the panel's.
         """
-        if present and self.eaf.is_absent:
-            raise EafBaselineError(
-                "a component cannot carry reference EAF for its imputed cells while "
-                "declaring no eaf plane at all: the two say different things about "
-                "whether this release has frequencies"
-            )
         return StoreEncoding(
             z=self.z,
             se=self.se,
@@ -417,7 +424,12 @@ class StoreEncoding:
     @classmethod
     def from_manifest(cls, data: dict[str, Any]) -> StoreEncoding:
         """Read a declared plan. Never re-derives it, and never falls back."""
-        version = int(data.get("version", ENCODING_VERSION))
+        # A block with no `version` was written before the plan's schema
+        # carried one, which is version 1 -- not whatever this build happens to
+        # be. Defaulting to the current version would let a malformed release
+        # of *this* format be read as an older one, which is the inference from
+        # absence the persisted plan exists to stop (issue #119).
+        version = int(data.get("version", 1))
         if version > ENCODING_VERSION:
             raise UnsupportedEncoding(
                 f"encoding block version {version} is newer than this build "
@@ -427,11 +439,19 @@ class StoreEncoding:
         # its frequencies are ADR 0036's `float32` plane, present or absent on
         # disk. That is a real encoding, and naming it here is what keeps the
         # "never infer from array presence" rule true for those releases too.
-        eaf = (
-            EafEncoding.from_manifest(data["eaf"])
-            if "eaf" in data
-            else EafEncoding(kind="float32_optional")
-        )
+        # Only for those releases, though: an encoding block of this version
+        # states its `eaf` plan, and one that does not is malformed rather than
+        # old (issue #119).
+        if "eaf" in data:
+            eaf = EafEncoding.from_manifest(data["eaf"])
+        elif version < _EAF_PLAN_VERSION:
+            eaf = EafEncoding(kind="float32_optional")
+        else:
+            raise UnsupportedEncoding(
+                f"encoding block version {version} must declare an eaf plan and does "
+                "not; this release cannot be read without inferring one, which is what "
+                "the declared plan exists to prevent (spec §21)"
+            )
         return cls(
             z=ZEncoding.from_manifest(data["z"]),
             se=SeEncoding.from_manifest(data["se"]),

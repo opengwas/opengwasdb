@@ -47,7 +47,7 @@ One `float32` per variant of a component's own variant axis: the median, taken i
 _Avoid_: "the variant's EAF" — the baseline is a within-store representative, not a claim about any Analysis or any population.
 
 **Reference EAF**:
-The LD Reference Panel's allele frequency, stored once per variant (`eaf_reference`) and read back on **imputed** cells only. An imputed cell's frequency is the panel's by construction and is identical for every Analysis imputed at that variant, which is what makes it per-variant rather than per-cell. It is never substituted for an observed cell: a cohort's own frequency can differ from a panel's by three orders of magnitude (ADR 0037 §4), so an observed cell whose source reported none stays absent.
+The LD Reference Panel's allele frequency, stored once per variant (`eaf_reference`) and read back on **imputed** cells only. An imputed cell's frequency is the panel's by construction and is identical for every Analysis imputed at that variant, which is what makes it per-variant rather than per-cell. It is never substituted for an observed cell: a cohort's own frequency can differ from a panel's by three orders of magnitude (ADR 0037 §4), so an observed cell whose source reported none stays absent. A release may carry it with no `eaf` plane at all — a source that reported no frequency still has imputed cells, and those cells have the panel's.
 _Avoid_: using it as a fallback, a default, or "the" allele frequency of a variant.
 
 **Missing Marker**:

@@ -30,9 +30,22 @@ def panel_reference_eaf(
     reference EAF when it has some to carry. Variants the panel does not hold
     -- every off-panel row the source contributed -- are NaN, which is correct:
     they have no imputed cells to describe.
+
+    The panel is *asked*, not depended on. One with no `EAF` column, or no
+    block tables at all, has no frequencies to give and is not an error (issue
+    #113): its imputed cells read NaN, the same answer they gave before this
+    encoding existed. A panel this pipeline can complete against must not
+    become one it refuses to complete against merely because it was also asked
+    for frequencies.
+
+    Asked whatever the source declares, `absent` included. A source whose
+    Analyses reported no frequency at all is the case #113 was raised about,
+    and its completed release carries the panel's frequency on the cells it
+    imputed and NaN on every observed one.
     """
-    panel = panel_a1_eaf(ld_dir, ancestry)
+    panel = panel_a1_eaf(ld_dir, ancestry, required=False)
     if not panel:
+        print("Reference EAF: the LD panel declares none; imputed cells will read NaN")
         return None
     reference = np.fromiter(
         (panel.get(v.alid, np.nan) for v in variants), dtype=np.float32, count=len(variants)
