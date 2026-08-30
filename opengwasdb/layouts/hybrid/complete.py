@@ -32,14 +32,21 @@ favour of an estimate (issue #99).
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import zarr
 
-from opengwasdb.encoding import DenseZPlane, StoreEncoding
+from opengwasdb.encoding import (
+    EAF_BASELINE,
+    DenseEafPlane,
+    DenseZPlane,
+    StoreEncoding,
+)
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import _alid_sort_key, _write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
@@ -52,7 +59,11 @@ from opengwasdb.layouts.hybrid.layout import (
     dense_to_shared_path,
 )
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
+from opengwasdb.layouts.ragged.zarr_csr import (
+    RAGGED_ZARR_PATH,
+    RaggedCSRReader,
+    RaggedCSRWriter,
+)
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.enums import (
     AssociationCoverage,
@@ -172,10 +183,15 @@ def complete_hybrid_store(
         is_crossover = np.array(
             [alid in dense_alid_to_row for alid in overflow_alids], dtype=bool
         ) if len(overflow_alids) else np.empty(0, dtype=bool)
+        # The Dense Component's own plan, read from the manifest
+        # `complete_dense_store` just wrote: identical to the source's for
+        # `z`/`se`, plus the `eaf_reference` that completion gave it.
+        dense_encoding = open_store(dense_component_path(staged.path)).manifest.encoding
         n_reclaimed_imputed = _fold_panel_crossovers(
             dense_component_path(staged.path), dense_alid_to_row,
             offsets, src_z, src_se, src_eaf, overflow_alids, is_crossover,
             encoding=src_manifest.encoding,
+            dense_encoding=dense_encoding,
         )
         n_imputed = dense_result.n_imputed - n_reclaimed_imputed
         if is_crossover.any():
@@ -224,7 +240,15 @@ def complete_hybrid_store(
         # source's encoding -- never re-encoding data an operator asked only to
         # complete (ADR 0038 §4). `check_writable_format_version` above is what
         # makes that honest.
-        csr = RaggedCSRWriter(src_manifest.encoding)
+        csr = RaggedCSRWriter(n_shared)
+        # The Ragged Overflow's per-variant baselines travel with its values
+        # across the shared-axis remap. Recomputing them from the decoded
+        # frequencies would move every baseline by up to half a step and
+        # re-quantise every cell against it, so a completed release would be
+        # less accurate than the source it was completed from (ADR 0037 §2).
+        overflow_baseline = _remapped_overflow_baseline(
+            src, vi_to_record, new_shared_index, n_shared
+        )
         for ai in range(n_analyses):
             s, e = int(offsets[ai]), int(offsets[ai + 1])
             keep = ~is_crossover[s:e] if e > s else np.empty(0, dtype=bool)
@@ -252,7 +276,11 @@ def complete_hybrid_store(
                 se[order],
                 eaf=eaf[order] if np.isfinite(eaf).any() else None,
             )
-        csr.flush(staged.path)
+        # The Ragged Overflow has no imputed cells -- completion imputes into
+        # the Dense Component alone -- so it declares no `eaf_reference`, where
+        # the nested Dense Component's own manifest does. Each component's plan
+        # describes that component (ADR 0037 §4).
+        csr.flush(staged.path, src_manifest.encoding, eaf_baseline=overflow_baseline)
 
         # ── 6. Hybrid manifest (reference-completed) ──────────────────────────
         # Written before analyses.tsv/overview.html below: overview.html
@@ -293,6 +321,7 @@ def _fold_panel_crossovers(
     overflow_alids: np.ndarray,
     is_crossover: np.ndarray,
     encoding: StoreEncoding,
+    dense_encoding: StoreEncoding,
 ) -> int:
     """Write every crossover association's real observed value into the
     completed Dense Component at ``(dense_row, analysis)``, marked
@@ -330,9 +359,14 @@ def _fold_panel_crossovers(
     root["se"].vindex[row_idx, col_idx] = se_vals
     root["imputed"].vindex[row_idx, col_idx] = 0
     # The crossed-over cell's EAF moves with its z/se (ADR 0036) -- the whole
-    # point of the fold is that this is one real observation, not two.
-    if "eaf" in root and np.isfinite(eaf_vals).any():
-        root["eaf"].vindex[row_idx, col_idx] = eaf_vals
+    # point of the fold is that this is one real observation, not two. Through
+    # the plane, so the cell is coded against the Dense Component's own
+    # baseline and its exception table moves with it. The Dense Component has
+    # already been completed at this point, so its plan carries reference EAF;
+    # the fold clears `imputed` above, which is what stops the panel value from
+    # standing in for the observation now being written.
+    if "eaf" in root:
+        DenseEafPlane.open(root, dense_encoding).patch(row_idx, col_idx, eaf_vals)
     return n_reclaimed
 
 
@@ -397,3 +431,26 @@ def _write_completed_manifest(
         },
     )
     staged.write_manifest(manifest)
+
+
+def _remapped_overflow_baseline(
+    source_path: Path,
+    vi_to_record: Mapping[int, Any],
+    new_shared_index: Mapping[str, int],
+    n_shared: int,
+) -> np.ndarray | None:
+    """The source overflow's `eaf_baseline`, moved onto the completed axis.
+
+    A variant with no overflow association after the remap keeps a NaN
+    baseline: it has no cell to code against one.
+    """
+    group = zarr.open_group(str(Path(source_path) / RAGGED_ZARR_PATH), mode="r")
+    if EAF_BASELINE not in group:
+        return None
+    src_baseline = np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
+    out = np.full(int(n_shared), np.nan, dtype=np.float32)
+    for src_index, record in vi_to_record.items():
+        new_index = new_shared_index.get(record.alid)
+        if new_index is not None and 0 <= int(src_index) < len(src_baseline):
+            out[new_index] = src_baseline[int(src_index)]
+    return out

@@ -314,14 +314,39 @@ def sample_column(
     there, NaN is not evidence, and sampling first would spend the budget on
     variants that carry none.
     """
+    selected, values = sample_column_rows(rows, eaf, hashes, k=k)
+    return {
+        alids[row]: float(value)
+        for row, value in zip(selected.tolist(), values.tolist(), strict=True)
+    }
+
+
+def sample_column_rows(
+    rows: np.ndarray,
+    eaf: np.ndarray,
+    hashes: np.ndarray,
+    *,
+    k: int = DEFAULT_SAMPLE_SITES,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The `(row, eaf)` pairs `sample_column` reports, as parallel arrays.
+
+    The encoding tree measures its residual spread on the same sample the
+    orientation check uses (issue #116): both want "this Analysis's own
+    frequencies at a deterministic set of variants", the selection is by
+    variant hash so the same variants are drawn in every Analysis that carries
+    them, and drawing it twice would cost a second pass over the spills.
+    """
     if rows.size == 0:
-        return {}
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
     with_eaf = rows[np.isfinite(eaf)]
     if with_eaf.size == 0:
-        return {}
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
     selected = select_rows(hashes, with_eaf, k=k)
     lookup = dict(zip(rows.tolist(), eaf.tolist(), strict=True))
-    return {alids[row]: float(lookup[row]) for row in selected.tolist()}
+    values = np.fromiter(
+        (lookup[row] for row in selected.tolist()), dtype=np.float64, count=len(selected)
+    )
+    return np.asarray(selected, dtype=np.int64), values
 
 
 # ── Reference loading ────────────────────────────────────────────────────────
@@ -362,6 +387,20 @@ def _iter_panel_directory(root: Path, ancestry: str) -> Iterator[tuple[str, floa
                 oriented = _orient_row(row["CHR"], row["BP"], row["EA"], row["OA"], row["EAF"])
                 if oriented is not None:
                     yield oriented
+
+
+def panel_a1_eaf(root: str | Path, ancestry: str) -> dict[str, float]:
+    """`{canonical ALID: A1-oriented EAF}` for one ancestry of an LD panel.
+
+    Reference Completion needs this to store a per-variant `eaf_reference` for
+    its imputed cells (ADR 0037 §4). It is read through the same orientation as
+    the build-time check (§9.1) rather than off `LDBlock.eaf`, because a block
+    carries its frequency against the panel's own `EA` column while its SNP id
+    is canonicalised to A1 = min(ref, alt) -- and the two are not always the
+    same allele. Reading it any other way would store `1 - f` for a share of
+    the panel, which is exactly the defect §9.1 exists to catch.
+    """
+    return dict(_iter_panel_directory(Path(root), ancestry))
 
 
 def _iter_panel_table(path: Path) -> Iterator[tuple[str, float]]:

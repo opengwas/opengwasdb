@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -36,6 +37,7 @@ import numpy as np
 import zarr
 from numcodecs import Blosc
 
+from opengwasdb.build.eaf_orientation import panel_a1_eaf
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
@@ -54,7 +56,14 @@ from opengwasdb.completion.ld_panel import (
 from opengwasdb.completion.manifest import build_completion_provenance
 from opengwasdb.completion.parallel import init_block_worker
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
-from opengwasdb.encoding import StoreCodec, ZOverflowBuilder, positions_flat
+from opengwasdb.encoding import (
+    EAF_BASELINE,
+    StoreCodec,
+    ZOverflowBuilder,
+    positions_flat,
+    write_eaf_csr,
+    write_eaf_reference,
+)
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
@@ -693,8 +702,20 @@ def _run_completion(
         )
         # Completion writes into the source's arrays, so it encodes with the
         # source's plan (ADR 0038 §4) -- the overflow table travels with the
-        # plane it belongs to.
-        codec = StoreCodec(manifest.encoding)
+        # plane it belongs to. The one addition is `eaf_reference`, which
+        # records a physical fact about this release rather than reinterpreting
+        # its source's bytes.
+        src_has_eaf = not manifest.encoding.eaf.is_absent and src_csr.has_eaf
+        eaf_reference = (
+            _panel_reference_eaf(ld_dir, ancestry, merged_variants) if src_has_eaf else None
+        )
+        encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
+        codec = StoreCodec(encoding)
+        src_baseline = _source_eaf_baseline(src)
+        out_baseline = None
+        if src_baseline is not None:
+            out_baseline = np.full(len(merged_variants), np.nan, dtype=np.float32)
+            out_baseline[np.asarray(src_idx_remap, dtype=np.int64)] = src_baseline
         z_overflow = ZOverflowBuilder()
         root.create_dataset(
             "z",
@@ -709,20 +730,26 @@ def _run_completion(
             "imputed", data=imp_all, chunks=(_ASSOC_CHUNK,),
             compressor=_COMPRESSOR, dtype=np.uint8,
         )
-        # Only when the observed store had EAF: a completed store must not
-        # gain an all-NaN array its source never had (ADR 0036).
-        if np.isfinite(eaf_all).any():
-            root.create_dataset(
-                "eaf", data=eaf_all, chunks=(_ASSOC_CHUNK,),
-                compressor=_COMPRESSOR, dtype=np.float32,
+        # Observed frequencies only. An imputed cell's frequency is the
+        # panel's, stored once per variant in `eaf_reference` and applied on
+        # read (ADR 0037 §4); an observed cell whose source reported none stays
+        # absent. The per-variant baseline travels with the values across the
+        # variant remap rather than being recomputed from them, so a value
+        # decoded from the source re-encodes to the same code.
+        if not encoding.eaf.is_absent:
+            write_eaf_csr(
+                root, codec, vi_all, eaf_all,
+                baseline=out_baseline, compressor=_COMPRESSOR, chunks=(_ASSOC_CHUNK,),
             )
+        if eaf_reference is not None:
+            write_eaf_reference(root, eaf_reference, compressor=_COMPRESSOR)
         root.attrs["layout"] = "ragged"
         root.attrs["completion_state"] = "reference_completed"
         root.attrs["n_analyses"] = n_analyses
         root.attrs["n_associations"] = n_total
 
         print("Building top-hit indexes...")
-        build_ragged_top_hit_indexes(staged.path, encoding=manifest.encoding)
+        build_ragged_top_hit_indexes(staged.path, encoding=encoding)
 
         print("Writing analyses.tsv...")
         with staged.index_connection() as quality_db:
@@ -756,8 +783,10 @@ def _run_completion(
         new_release_id = release_id or f"{manifest.release_id}-completed"
         completed_manifest = StoreManifest(
             # Preserved with the format version below: a completed release is
-            # written into its source's arrays, so it is in its source's encoding.
-            encoding=manifest.encoding,
+            # written into its source's arrays, so it is in its source's
+            # encoding -- plus `eaf_reference`, which says this release carries
+            # panel frequencies for the cells it imputed (ADR 0037 §4).
+            encoding=encoding,
             store_id=manifest.store_id,
             release_id=new_release_id,
             # Preserved, not re-stamped -- see ADR 0038 §4 and the dense path.
@@ -799,3 +828,41 @@ def _run_completion(
             f"({result.n_imputed:,} imputed, {result.n_missing:,} missing)"
         )
     return result
+
+
+def _source_eaf_baseline(source_path: Path) -> np.ndarray | None:
+    """The observed release's per-variant `eaf_baseline`, or None if it has none.
+
+    Read straight from the source's CSR group rather than recomputed from the
+    values it holds: recomputing from *decoded* frequencies would shift each
+    baseline by up to half a step and re-quantise every cell against the moved
+    baseline, so a completed release would be less accurate than its source for
+    no reason (ADR 0037 §2).
+    """
+    group = zarr.open_group(str(Path(source_path) / RAGGED_ZARR_PATH), mode="r")
+    if EAF_BASELINE not in group:
+        return None
+    return np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
+
+
+def _panel_reference_eaf(
+    ld_dir: str | Path, ancestry: str, variants: Sequence[CanonicalVariant]
+) -> np.ndarray | None:
+    """One A1-oriented panel frequency per variant of the completed axis.
+
+    `None` when the panel declares none, so a release only claims to carry
+    reference EAF when it has some to carry.
+    """
+    panel = panel_a1_eaf(ld_dir, ancestry)
+    if not panel:
+        return None
+    reference = np.fromiter(
+        (panel.get(v.alid, np.nan) for v in variants), dtype=np.float32, count=len(variants)
+    )
+    if not np.any(np.isfinite(reference)):
+        return None
+    print(
+        f"Reference EAF: {int(np.count_nonzero(np.isfinite(reference))):,} of "
+        f"{len(reference):,} variants carry a panel frequency"
+    )
+    return reference

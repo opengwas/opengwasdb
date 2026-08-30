@@ -348,7 +348,7 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
 
     n_reclaimed = _fold_panel_crossovers(
         dense_dir, dense_alid_to_row, offsets, src_z, src_se, src_eaf,
-        overflow_alids, is_crossover, encoding=encoding,
+        overflow_alids, is_crossover, encoding=encoding, dense_encoding=encoding,
     )
 
     assert n_reclaimed == 1

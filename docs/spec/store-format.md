@@ -1,20 +1,22 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `1.0`  
-Also readable: `0.1` — never written again (§21)
+Format version described: `2.0`  
+Also readable: `1.0`, `0.1` — never written again (§21)
 
 This document defines the contract for valid OpenGWASDB Store Releases. It
-describes `format_version` **1.0**, the version this build writes: statistic
-planes carry a declared encoding (§6a), and `z` is `int16` fixed point rather
-than `float16`.
+describes `format_version` **2.0**, the version this build writes: statistic
+planes carry a declared encoding (§6a), `z` is `int16` fixed point rather than
+`float16`, and `eaf` is a per-variant baseline plus a per-cell `int8` logit
+residual rather than a `float32` plane.
 
-`0.1` releases remain readable and are not re-stamped. Where the two versions
-differ, the difference is stated in place rather than kept in a separate
-document — §6a for the encoding a `0.1` release is in (`float16` throughout,
-declaring nothing), §15 for what marks a missing cell in each, and §21 for
-what a reader owes a release it did not write. A `0.1` release cannot be
-*completed* by a build that writes 1.0 (§21.3, ADR 0038 §4); it is rebuilt.
+`1.0` and `0.1` releases remain readable and are not re-stamped. Where the
+versions differ, the difference is stated in place rather than kept in a
+separate document — §6a for the encoding each older release is in (`0.1`:
+`float16` throughout, declaring nothing; `1.0`: fixed-point `z` and ADR 0036's
+optional `float32` `eaf`), §15 for what marks a missing cell in each, and §21
+for what a reader owes a release it did not write. An older release cannot be
+*completed* by a build that writes 2.0 (§21.3, ADR 0038 §4); it is rebuilt.
 
 Sections that say "v0.1" below describe vocabularies and column contracts
 settled at that version and unchanged since; they are not statements about
@@ -220,13 +222,14 @@ read from that declaration rather than inferred from a dtype.
 ## 6a. Statistic encodings
 
 A Store Release at `format_version` 1.0 or above MUST declare an `encoding`
-object in `manifest.json`:
+object in `manifest.json`. At 2.0 it MUST also declare `eaf`:
 
 ```json
 "encoding": {
-  "version": 1,
+  "version": 2,
   "z": {"kind": "int16_fixed", "scale": 1024},
-  "se": {"kind": "float16"}
+  "se": {"kind": "float16"},
+  "eaf": {"kind": "int8_residual", "residual_range": 0.5}
 }
 ```
 
@@ -235,7 +238,14 @@ object in `manifest.json`:
 - A reader meeting a `kind` it does not implement MUST reject the release
   (§21), not guess and not fall back.
 - A release declaring no `encoding` — every release up to `format_version` 0.1
-  — is `float16` for both planes, with NaN as the missing marker.
+  — is `float16` for `z` and `se`, with NaN as the missing marker, and
+  `float32_optional` for `eaf`.
+- A release whose `encoding` declares no `eaf` — a `format_version` 1.0
+  release — is `float32_optional` for `eaf`: ADR 0036's plane, present when any
+  Analysis reports a frequency and absent otherwise. That weaker contract has a
+  name so that every other `kind` can mean exactly what it says, and so
+  validation can hold the newer ones to plan-versus-arrays agreement without
+  exempting the older ones by accident.
 
 **`z` — `int16` fixed point plus an exact overflow table** (ADR 0037 §1). The
 stored code is `round(z × scale)`, `scale` = 1024 by default, with two
@@ -273,6 +283,121 @@ of it is honest.
 precision, which a float exponent already provides; `z` is bounded and needs
 *uniform* precision, which is why the two planes are encoded differently. This
 is recorded so `se` is not later "fixed" by analogy with `z`.
+
+**`eaf` — one of four kinds** (ADR 0037 §2). EAF's *semantics* are unchanged by
+the encoding: it is still per (variant, Analysis), still oriented to the stored
+effect allele (§5, §9.1), still declared per Analysis by `eaf_scope` (§9).
+
+| `kind` | what the plane holds | written by |
+|---|---|---|
+| `absent` | nothing — the release has no `eaf` array | yes |
+| `float32` | ADR 0036's exact plane | yes |
+| `int8_residual` | a quantised logit residual against a per-variant baseline | yes |
+| `float32_optional` | ADR 0036's plane, present-or-absent | no — read only |
+
+**The residual coding.** Three arrays beside the plane, all in the same group:
+
+```text
+eaf                   int8    — the quantised residual, one per cell
+eaf_baseline          float32 — one per variant of *this component's* axis
+eaf_exception_index   int64, sorted, unique — flat position in the plane
+eaf_exception_value   float32 — the exact frequency
+```
+
+The transform is the **logit**, `logit(f) = log(f / (1 − f))`, and the stored
+code is `round((logit(f) − logit(b)) / step)` where `b` is the variant's
+`eaf_baseline` and `step = residual_range / 127`. The logit, and not `log(f)`,
+because a residual error of `d` moves `f` by a relative `(1 − f)·d` and `1 − f`
+by a relative `f·d`: neither the effect allele frequency nor the minor allele
+frequency a user filters on can be wrong by more than `d`. `log(f)` is blind to
+the minor side, which for a frequency near 1 is the only side anyone reads.
+Measured on real data the two transforms leave residuals of the same width
+(FinnGen chr1, 8 endpoints: sd 0.0170 against 0.0169), so the choice costs
+nothing.
+
+Two of the 256 codes are reserved, leaving **254** levels:
+
+| code | meaning |
+|---|---|
+| `-128` | this Analysis reports no EAF at this cell — decodes to NaN |
+| `-127` | exception — the exact `float32` is in the plane's exception table |
+| `-126 … 127` | `round((logit(f) − logit(b)) / step)` |
+
+so the representable residual interval is `[−126·step, +127·step]`, stated as
+exact endpoints for the same reason `z`'s is. A cell that is not an exception
+round-trips to within **half a step**, which is a function of the declared
+range and must be quoted per range:
+
+| `residual_range` | step (logit) | worst-case relative error |
+|---|---|---|
+| 0.5 | 0.003937 | **0.197%** |
+| 1.0 | 0.007874 | 0.394% |
+| 2.0 | 0.015748 | 0.787% |
+
+Three kinds of cell are **exceptions**, held exactly rather than approximated:
+a residual outside the interval; a frequency of exactly 0 or 1, which has no
+logit; and a cell at a variant with no usable baseline. The exception table has
+the same shape and the same rules as `z`'s overflow table: present whenever
+`eaf` is `int8_residual`, even when empty; every exception cell MUST have an
+entry and the table MUST NOT describe any other cell (§20).
+
+`eaf_baseline[v]` is the median, taken in logit space, of the frequencies the
+release's Analyses report at variant `v` that lie strictly inside `(0, 1)`. The
+median of an even count is the mean of the two central logits. A variant at
+which no Analysis reports such a frequency has a NaN baseline, and every
+EAF-bearing cell at it is an exception — there is no honest baseline to code
+against, and a substituted one (0.5, say, or a store-wide mean) is exactly the
+plausible-looking default this format refuses.
+
+A build MUST fail on a value outside `[0, 1]`: it is not a frequency.
+
+**Which kind a build writes is measured, not inferred from the layout.** The
+builder measures the residual spread over its own data and picks the smallest
+`residual_range` whose exception fraction is within budget, then compares the
+resulting byte total against the `float32` plane and writes `float32` when the
+residual coding would not be smaller. A store with roughly one EAF-bearing cell
+per variant pays more for the per-variant baseline than the `int8` cell saves,
+and nothing stops a Dense manifest spanning several cohorts — a store that
+assumed otherwise would clip silently against a range chosen for data it does
+not hold.
+
+**Every component writes its own baseline and its own exception table**, against
+its own variant axis. A Hybrid release has two: its Dense Component's is
+panel-sized, its Ragged Overflow's covers the shared union table. Both
+components share one `kind` and one `residual_range`, because they partition one
+Analysis's associations and a result assembled from both must be coherent.
+
+**`eaf_reference` — the panel frequency for imputed cells** (ADR 0037 §4). An
+imputed cell's EAF *is* the LD Reference Panel's, and it is identical for every
+Analysis imputed at that variant, so it is a per-variant constant rather than
+per-cell data:
+
+```text
+eaf_reference   float32 — one per variant of this component's axis
+```
+
+declared by `"reference": true` in the `eaf` block. Which cells it describes is
+already recorded, by Association Status (§9, §15): a reader substitutes it on
+imputed cells and on no others. It is per **component**, not per release — a
+Hybrid release's Dense Component has imputed cells where its Ragged Overflow
+does not, and each declares its own plan in its own manifest. A component
+declaring it MUST carry the array and an imputed mask; a component carrying the
+array MUST declare it.
+
+**An observed cell whose source reported no EAF stays NaN.** It does not fall
+back to the panel. FinnGen's frequencies differ from the EUR panel by up to
+3000× (max log-residual 8.07, the Finnish founder effect), so substituting a
+panel frequency for a missing cohort one would hand a user a plausible number
+that is wrong by three orders of magnitude, precisely for the rare variants
+they filter on.
+
+Reference Completion may only add `eaf_reference` to a release whose source
+stored EAF. A release whose *only* frequencies were the panel's would invite
+exactly that reading, and its Analyses' `eaf_scope` would contradict it.
+
+Constraint: **one LD Reference Panel per completed release**. True of the
+completion pipeline today, but load-bearing here, so it is recorded in
+`manifest.json` rather than left implicit.
 
 Derived artifacts that hold their own copies of `z` — top-hit indexes (§18)
 and the Rho Matrix — remain decoded `float32` and are explicitly rebuildable
@@ -428,18 +553,30 @@ EAF and INFO are optional. They are not required for statistical reconstruction.
 
 Variant-scoped EAF or INFO is valid only when the builder can establish that one value is genuinely shared. Builders MUST NOT average differing association values into variant-scoped values.
 
-For imputed associations, EAF comes from the LD Reference Panel when stored. In v0.1, EAF provenance is inferred from Association Status:
+For imputed associations, EAF comes from the LD Reference Panel when stored. EAF provenance is inferred from Association Status:
 
-- observed association: source EAF;
-- imputed association: reference-panel EAF.
+- observed association: source EAF, or NaN where the source reported none;
+- imputed association: reference-panel EAF, held once per variant in
+  `eaf_reference` (§6a).
+
+An observed cell never takes the panel's frequency: the two are not
+interchangeable, and the difference between them can be three orders of
+magnitude (§6a, ADR 0037 §4).
 
 Each Analysis declares its EAF Scope in `analyses.tsv`'s `eaf_scope` column
 (ADR 0036), derived by the builder from what it actually stored rather than
 copied from a build manifest. Builders emit `absent` or `association`;
 `variant` remains specified but unimplemented, since no ingestion path can
 establish that one value is genuinely shared. Reference Completion carries
-observed EAF across unchanged; supplying reference-panel EAF for imputed
-cells is not yet implemented, and those cells read as NaN.
+observed EAF across unchanged, and stamps `association` on an Analysis that
+gained imputed cells in a release carrying `eaf_reference` — that Analysis now
+stores a frequency for those cells, and the declaration follows what the
+release holds rather than what its source reported.
+
+`eaf_scope` is per Analysis and the `encoding` block (§6a) is per release: two
+granularities of the same fact, which validation cross-checks (§20). A release
+declaring no `eaf` plane while an Analysis declares `eaf_scope=association` is
+invalid, and so is the reverse.
 
 ### 9.1 EAF orientation is verified, and the verification is recorded
 
@@ -804,7 +941,9 @@ Validators MUST check at least:
 - `index.sqlite` does not contain an `analyses` table;
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
-- `eaf`, when present, has the same shape/length as `z`/`se` and holds no finite value outside `[0, 1]` (ADR 0036);
+- `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
+- the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it and carries an imputed mask;
+- `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115): a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
 

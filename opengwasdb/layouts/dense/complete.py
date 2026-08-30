@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -30,6 +30,7 @@ from typing import Any
 import numpy as np
 from numcodecs import Blosc
 
+from opengwasdb.build.eaf_orientation import panel_a1_eaf
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
 from opengwasdb.completion.checkpoint import (
@@ -50,11 +51,16 @@ from opengwasdb.completion.manifest import build_completion_provenance
 from opengwasdb.completion.parallel import init_block_worker
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
+    EAF_BASELINE,
+    DenseEafPlane,
     DenseZPlane,
+    EafExceptionBuilder,
     StoreCodec,
     StoreEncoding,
     ZOverflowBuilder,
     positions_row_band,
+    write_eaf_baseline,
+    write_eaf_reference,
 )
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
@@ -65,7 +71,12 @@ from opengwasdb.layouts.dense.constants import (
 )
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.analyses import read_analyses, read_analysis_records
-from opengwasdb.model.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.model.enums import (
+    AssociationCoverage,
+    CompletionState,
+    EafScope,
+    PrimaryStorageLayout,
+)
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.open import (
     OpenGWASDBStore,
@@ -469,10 +480,19 @@ def _run_completion(
         union_alids_s = union_alids[o]
         union_rows_s = union_rows[o]
 
-        src_has_eaf = "eaf" in src_root
+        # Reference EAF for imputed cells (ADR 0037 §4). An imputed cell's
+        # frequency *is* the panel's -- identical for every Analysis imputed at
+        # that variant -- so it is one `float32` per variant rather than
+        # per-cell data. Observed cells never fall back to it: FinnGen's
+        # frequencies differ from the EUR panel by up to 3000x.
+        src_has_eaf = not manifest.encoding.eaf.is_absent
+        eaf_reference = (
+            _panel_reference_eaf(ld_dir, ancestry, merged_variants) if src_has_eaf else None
+        )
+        encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
         effective_chunks = _create_completed_zarr(
             staged, n_variants, n_analyses, on_panel, DEFAULT_CHUNK_SHAPE, DEFAULT_DTYPE,
-            manifest.encoding, src_has_eaf=src_has_eaf,
+            encoding, src_has_eaf=src_has_eaf, eaf_reference=eaf_reference,
         )
         band_rows = _completion_band_rows(effective_chunks)
         fill_shard_dir, quality_count = _shard_checkpoint_fills_by_band(
@@ -487,6 +507,7 @@ def _run_completion(
             fill_shard_dir,
             effective_chunks, n_variants, n_analyses,
             manifest.encoding,
+            encoding,
             impute_mask=impute_mask,
         )
         shutil.rmtree(fill_shard_dir, ignore_errors=True)
@@ -505,8 +526,10 @@ def _run_completion(
         completed_manifest = StoreManifest(
             # Same reasoning as `format_version` below: the completed release
             # is in its source's encoding, because it is written into its
-            # source's arrays.
-            encoding=manifest.encoding,
+            # source's arrays. The one addition is `eaf_reference`, which
+            # records a physical fact about *this* release: it carries panel
+            # frequencies for the cells it just imputed (ADR 0037 §4).
+            encoding=encoding,
             store_id=manifest.store_id,
             release_id=new_release_id,
             # Preserved, not re-stamped: completion writes into the source's
@@ -544,6 +567,13 @@ def _run_completion(
             replace(
                 a,
                 completed_against=ancestry if impute_mask is None or impute_mask[i] else "",
+                # An Analysis that gained imputed cells in a release carrying
+                # reference EAF now stores a frequency for them, whatever its
+                # source reported (ADR 0037 §4). `eaf_scope` is derived from
+                # what the release actually holds, not copied forward -- the
+                # declaration disagreeing with the arrays is the defect that
+                # got through review on #106.
+                eaf_scope=_completed_eaf_scope(a, quality_rollup[i], eaf_reference is not None),
                 completion_median_pearson_r=quality_rollup[i].median_pearson_r,
                 completion_n_imputed_total=quality_rollup[i].n_imputed_total,
                 completion_n_missing_total=str(int(n_missing_off_panel[i])),
@@ -709,6 +739,38 @@ def _shard_checkpoint_fills_by_band(
     return fill_shard_dir, quality_count
 
 
+def _completed_eaf_scope(analysis: Any, rollup: Any, carries_reference: bool) -> str:
+    """`eaf_scope` for a completed Analysis, from what the release now holds."""
+    if carries_reference and int(rollup.n_imputed_total or 0) > 0:
+        return str(EafScope.ASSOCIATION.value)
+    return str(analysis.eaf_scope)
+
+
+def _panel_reference_eaf(
+    ld_dir: str | Path, ancestry: str, variants: Sequence[CanonicalVariant]
+) -> np.ndarray | None:
+    """One A1-oriented panel frequency per variant of the completed axis.
+
+    `None` when the panel declares none, so a release only claims to carry
+    reference EAF when it has some to carry. Variants the panel does not hold
+    -- every off-panel row the source contributed -- are NaN, which is correct:
+    they have no imputed cells to describe.
+    """
+    panel = panel_a1_eaf(ld_dir, ancestry)
+    if not panel:
+        return None
+    reference = np.fromiter(
+        (panel.get(v.alid, np.nan) for v in variants), dtype=np.float32, count=len(variants)
+    )
+    if not np.any(np.isfinite(reference)):
+        return None
+    print(
+        f"Reference EAF: {int(np.count_nonzero(np.isfinite(reference))):,} of "
+        f"{len(reference):,} variants carry a panel frequency"
+    )
+    return reference
+
+
 def _create_completed_zarr(
     staged: StagedRelease,
     n_variants: int,
@@ -718,6 +780,7 @@ def _create_completed_zarr(
     dtype: str,
     encoding: StoreEncoding,
     src_has_eaf: bool = False,
+    eaf_reference: np.ndarray | None = None,
 ) -> tuple[int, int]:
     """Create empty z/se (missing-filled), imputed (0), and the 1-D on_panel
     datasets, plus `eaf` when the observed store carried one (ADR 0036). The
@@ -747,14 +810,16 @@ def _create_completed_zarr(
         chunks=(effective_chunks[0],), compressor=_COMPRESSOR, dtype="uint8",
     )
     if src_has_eaf:
-        # float32, unlike z/se -- see `build_vcf._create_eaf_array` for why
-        # float16 cannot hold an EAF near 1 (ADR 0036). Created only when the
-        # observed store had one: completion adds panel rows, it does not
-        # invent frequencies the source never reported.
+        # Never float16 -- see `build_vcf._create_eaf_array` for why it cannot
+        # hold an EAF near 1 (ADR 0036). Created only when the observed store
+        # had one: completion adds panel rows, it does not invent frequencies
+        # the source never reported.
         root.create_dataset(
             "eaf", shape=(n_variants, n_analyses), chunks=effective_chunks,
-            compressor=_COMPRESSOR, dtype="float32", fill_value=float("nan"),
+            compressor=_COMPRESSOR, dtype=codec.eaf_dtype, fill_value=codec.eaf_fill_value,
         )
+    if eaf_reference is not None:
+        write_eaf_reference(root, eaf_reference, compressor=_COMPRESSOR)
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "reference_completed"
     root.attrs["compressor"] = DEFAULT_COMPRESSOR
@@ -771,6 +836,7 @@ def _write_completed_bands(
     effective_chunks: tuple[int, int],
     n_variants: int,
     n_analyses: int,
+    source_encoding: StoreEncoding,
     encoding: StoreEncoding,
     impute_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, int, int]:
@@ -794,7 +860,7 @@ def _write_completed_bands(
     src_se = src_root["se"]
     # Source z is read decoded and written re-encoded, through the same plan --
     # completion moves values between two planes, it does not reinterpret them.
-    src_plane = DenseZPlane.open(src_root, encoding)
+    src_plane = DenseZPlane.open(src_root, source_encoding)
     codec = StoreCodec(encoding)
     overflow = ZOverflowBuilder()
     band_rows = _completion_band_rows(effective_chunks)
@@ -869,12 +935,29 @@ def _write_completed_bands(
 
         se_arr[r0:r1] = sb
 
-    # Pass 3 -- eaf (ADR 0036). Observed frequencies carried across the row
-    # remap; imputed cells stay NaN, since the panel EAF is not yet carried
-    # through the completion checkpoint. Its own float32 buffer, because eaf
-    # cannot share z/se's float16 (see `build_vcf._create_eaf_array`).
+    # Pass 3 -- eaf. Observed frequencies are carried across the row remap and
+    # nothing else: an imputed cell's frequency is the panel's, stored once per
+    # variant in `eaf_reference` and applied on read (ADR 0037 §4), and an
+    # observed cell whose source reported none stays absent. The per-variant
+    # baseline travels with the values rather than being recomputed, so a cell
+    # decoded from the source and re-encoded here lands on the same code --
+    # completion moves values between two planes, it does not requantise them.
     if "eaf" in root and "eaf" in src_root:
-        eaf_arr, src_eaf = root["eaf"], src_root["eaf"]
+        src_eaf_plane = DenseEafPlane.open(src_root, source_encoding)
+        eaf_codec = StoreCodec(encoding)
+        exceptions = EafExceptionBuilder()
+        src_baseline = (
+            np.asarray(src_root[EAF_BASELINE][:], dtype=np.float32)
+            if EAF_BASELINE in src_root
+            else None
+        )
+        out_baseline = (
+            np.full(n_variants, np.nan, dtype=np.float32) if src_baseline is not None else None
+        )
+        if out_baseline is not None and src_baseline is not None:
+            carried = out_to_src >= 0
+            out_baseline[carried] = src_baseline[out_to_src[carried]]
+        eaf_arr = root["eaf"]
         eaf_band = np.empty((band_rows, n_analyses), dtype=np.float32)
         for r0 in range(0, n_variants, band_rows):
             r1 = min(r0 + band_rows, n_variants)
@@ -882,7 +965,23 @@ def _write_completed_bands(
             eb[:] = np.nan
             valid = np.where(out_to_src[r0:r1] >= 0)[0]
             if len(valid):
-                eb[valid, :] = src_eaf.oindex[out_to_src[r0:r1][valid], :].astype(np.float32)
-            eaf_arr[r0:r1] = eb
+                eb[valid, :] = src_eaf_plane.points(
+                    np.repeat(out_to_src[r0:r1][valid], n_analyses),
+                    np.tile(np.arange(n_analyses, dtype=np.int64), len(valid)),
+                ).reshape(len(valid), n_analyses)
+            band_baseline = (
+                None
+                if out_baseline is None
+                else np.repeat(out_baseline[r0:r1, None], n_analyses, axis=1)
+            )
+            eaf_arr[r0:r1] = eaf_codec.encode_eaf(
+                eb,
+                baseline=band_baseline,
+                positions=positions_row_band(r0, n_analyses),
+                exceptions=exceptions,
+            )
+        if out_baseline is not None:
+            write_eaf_baseline(root, out_baseline, compressor=_COMPRESSOR)
+            exceptions.table().write(root)
 
     return n_missing_off_panel, n_missing_imputation_failed, total_imputed

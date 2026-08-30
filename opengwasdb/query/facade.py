@@ -71,7 +71,7 @@ from pathlib import Path
 import numpy as np
 import zarr
 
-from opengwasdb.encoding import DenseZPlane
+from opengwasdb.encoding import DenseEafPlane, DenseZPlane
 from opengwasdb.index import AnalysesIndex
 from opengwasdb.layouts.dense.rho import DenseRhoReader
 from opengwasdb.layouts.dense.top_hits import DenseTopHitReader, threshold_key
@@ -161,10 +161,12 @@ class StoreQuery:
         self._imputed: zarr.Array | None = (
             self._root["imputed"] if self._is_completed and "imputed" in self._root else None
         )
-        self._eaf: zarr.Array | None = self._root["eaf"] if "eaf" in self._root else None
-        # Every z read goes through the plane: the store's declared encoding
-        # (ADR 0037) is applied in one place rather than at each result site.
+        # Every z and eaf read goes through its plane: the store's declared
+        # encoding (ADR 0037) is applied in one place rather than at each
+        # result site, and the eaf plane gathers the per-variant baseline and
+        # the reference frequency for imputed cells with it.
         self._z = DenseZPlane.open(self._root, store.manifest.encoding)
+        self._eaf = DenseEafPlane.open(self._root, store.manifest.encoding)
         self._rho_reader: DenseRhoReader | None = (
             DenseRhoReader(self._root["rho"], self._z.n_analyses)
             if "rho" in self._root
@@ -178,16 +180,16 @@ class StoreQuery:
         return self._imputed.vindex[rows, cols].astype(np.uint8)
 
     def _eaf_pairs(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
-        """EAF for elementwise (row, col) pairs (ADR 0036).
+        """Decoded EAF for elementwise (row, col) pairs (ADR 0036, ADR 0037).
 
-        All-NaN when the store has no `eaf` array -- built before ADR 0036, or
-        from sources that report no frequency. Per-cell NaN already means "no
-        EAF here", so an absent array and an absent cell read the same way and
-        callers need no separate has-EAF check.
+        All-NaN when the store declares no `eaf` plane, and per cell when this
+        Analysis reported no frequency there. Per-cell NaN already means "no
+        EAF here", so an absent plane and an absent cell read the same way and
+        callers need no separate has-EAF check. On a Reference-Completed
+        release carrying reference EAF, an imputed cell reads the panel's
+        frequency and an observed cell never does (ADR 0037 §4).
         """
-        if self._eaf is None or len(rows) == 0:
-            return np.full(len(rows), np.nan, dtype="float32")
-        return np.asarray(self._eaf.vindex[rows, cols], dtype="float32")
+        return self._eaf.points(rows, cols)
 
     @staticmethod
     def _contiguous_row_slice(row_indices: np.ndarray) -> slice | None:

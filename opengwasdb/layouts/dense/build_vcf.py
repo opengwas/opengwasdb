@@ -28,16 +28,22 @@ from numcodecs import Blosc
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
     apply_orientation_evidence,
-    sample_column,
+    sample_column_rows,
     site_hashes,
     verify_eaf_orientation,
 )
 from opengwasdb.build.liftover import LiftoverFailureError, build_liftover_lookup, normalise_build
 from opengwasdb.encoding import (
+    EafExceptionBuilder,
+    EafMeasurements,
     EncodingMeasurements,
     StoreCodec,
     StoreEncoding,
     ZOverflowBuilder,
+    eaf_baseline_from_grid,
+    measure_eaf_sample,
+    positions_row_band,
+    write_eaf_baseline,
 )
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import (
@@ -674,13 +680,6 @@ def build_dense_from_vcf_manifest(
         # column to disk; the band-write phase then fills chunk-column bands without
         # ever holding the full (n_variants × n_analyses) matrix in memory (issue 043).
         # ------------------------------------------------------------------
-        # One encoding plan per build, decided here from the build's own
-        # measurements and recorded in manifest.json (ADR 0037, issue #119).
-        encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=n_analyses))
-        effective_chunks = _create_dense_zarr(
-            staged, n_variants, n_analyses, chunk_shape, dtype, encoding
-        )
-
         # ------------------------------------------------------------------
         # Pass 2 fill: resolve each analysis column and spill it to disk. No matrix is
         # resident here — the parent only waits for completion.
@@ -746,13 +745,30 @@ def build_dense_from_vcf_manifest(
             # of band-writing -- and a store must never come into existence
             # holding a frequency column reported against the other allele.
             # --------------------------------------------------------------
+            eaf_survey = _survey_eaf_spills(
+                spill_dir, id_by_col, hg38_alids, site_hashes(hg38_alids)
+            )
             eaf_report = verify_eaf_orientation(
-                _eaf_observations_from_spills(
-                    spill_dir, id_by_col, hg38_alids, site_hashes(hg38_alids)
-                ),
+                eaf_survey.observations,
                 eaf_reference=eaf_reference,
                 eaf_reference_ancestry=eaf_reference_ancestry,
                 allow_unverified=allow_unverified_eaf,
+            )
+
+            # One encoding plan per build, decided here -- after Pass 2, because
+            # the `eaf` rules read the frequencies the sources actually carried
+            # -- and recorded in manifest.json (ADR 0037, issue #119).
+            encoding = StoreEncoding.decide(
+                EncodingMeasurements(
+                    n_analyses=n_analyses,
+                    eaf=eaf_survey.measurements(
+                        n_cells=n_variants * n_analyses, n_variants=n_variants
+                    ),
+                )
+            )
+            log.info("Encoding plan: %s", encoding.to_manifest())
+            effective_chunks = _create_dense_zarr(
+                staged, n_variants, n_analyses, chunk_shape, dtype, encoding
             )
 
             # --------------------------------------------------------------
@@ -999,29 +1015,127 @@ def _apply_eaf_scope(analyses: list[Analysis], column_has_eaf: np.ndarray) -> li
     ]
 
 
-def _create_eaf_array(
-    staged: StagedRelease, n_variants: int, n_analyses: int, effective_chunks: tuple[int, int]
-) -> None:
-    """Create the NaN-filled `eaf` array (ADR 0036).
+def _eaf_row_band(effective_chunks: tuple[int, int], n_analyses: int) -> int:
+    """Rows per band for the re-encode pass: whole chunk rows, ~50M cells."""
+    chunk_rows = max(int(effective_chunks[0]), 1)
+    target = max(50_000_000 // max(n_analyses, 1), 1)
+    return max(chunk_rows, (target // chunk_rows) * chunk_rows)
 
-    Created after Pass 2, not alongside `z`/`se`, because whether *any*
-    Analysis has a usable frequency is only known once the sources have been
-    read. A build that found none writes no array at all, so its store is
+
+def _write_dense_eaf(
+    staged: StagedRelease,
+    spill_dir: Path,
+    n_variants: int,
+    n_analyses: int,
+    effective_chunks: tuple[int, int],
+    band_cols: int,
+    codec: StoreCodec,
+    pass2_start: float,
+) -> None:
+    """Write the `eaf` plane the store's plan declares.
+
+    A `float32` plane is written straight from the spills, one chunk-column
+    band at a time, exactly as ADR 0036 shipped it.
+
+    An `int8_residual` plane cannot be, and this is the one place in the build
+    where that costs a pass. The baseline is per *variant*, so encoding a cell
+    needs every Analysis's frequency at that variant; the spills are per
+    *Analysis*. So the frequencies are staged as `float32` in column bands, and
+    then read back in row bands -- where a whole variant is resident -- to
+    compute each baseline and encode against it. The staging array is deleted
+    afterwards, and peak disk is 5 bytes per cell against the 4 the `float32`
+    plane occupied on its own.
+    """
+    residual = codec.encoding.eaf.is_residual
+    staging = _EAF_STAGING if residual else "eaf"
+    _create_eaf_array(staged, n_variants, n_analyses, effective_chunks, name=staging)
+    root = staged.arrays(mode="a")
+    eaf_zarr = root[staging]
+    eaf_band = np.empty((n_variants, band_cols), dtype="float32")
+    for c0 in range(0, n_analyses, band_cols):
+        c1 = min(c0 + band_cols, n_analyses)
+        w = c1 - c0
+        eaf_band[:, :w] = np.nan
+        for c in range(c0, c1):
+            local = c - c0
+            with np.load(spill_dir / f"{c}.npz") as data:
+                eaf_band[data["rows"], local] = data["eaf"]
+        eaf_zarr[:, c0:c1] = eaf_band[:, :w]
+        _log_progress(
+            "Band-write eaf", c1, n_analyses, pass2_start, f"cols {c0}:{c1}", every=band_cols
+        )
+    del eaf_band
+    if not residual:
+        return
+
+    encoded = _create_eaf_array(
+        staged, n_variants, n_analyses, effective_chunks,
+        dtype=codec.eaf_dtype, fill_value=codec.eaf_fill_value,
+    )
+    baseline = np.full(n_variants, np.nan, dtype=np.float32)
+    exceptions = EafExceptionBuilder()
+    band_rows = _eaf_row_band(effective_chunks, n_analyses)
+    for r0 in range(0, n_variants, band_rows):
+        r1 = min(r0 + band_rows, n_variants)
+        block = np.asarray(eaf_zarr[r0:r1], dtype=np.float32)
+        rows_baseline = eaf_baseline_from_grid(block)
+        baseline[r0:r1] = rows_baseline
+        encoded[r0:r1] = codec.encode_eaf(
+            block,
+            baseline=np.repeat(rows_baseline[:, None], n_analyses, axis=1),
+            positions=positions_row_band(r0, n_analyses),
+            exceptions=exceptions,
+        )
+        _log_progress(
+            "Encode eaf", r1, n_variants, pass2_start, f"rows {r0}:{r1}", every=band_rows
+        )
+    write_eaf_baseline(root, baseline, compressor=_DENSE_COMPRESSOR)
+    exceptions.table().write(root)
+    log.info(
+        "eaf: int8 residual at +/-%.1f, %d exception cell(s)",
+        codec.encoding.eaf.residual_range, len(exceptions),
+    )
+    del root[_EAF_STAGING]
+
+
+#: Name of the transient `float32` plane a residual-coded build stages into.
+#: The spills are per Analysis and the baseline is per variant, so the grid has
+#: to be transposed through something; staging it is the honest way to say so.
+_EAF_STAGING = "eaf_source"
+
+
+def _create_eaf_array(
+    staged: StagedRelease,
+    n_variants: int,
+    n_analyses: int,
+    effective_chunks: tuple[int, int],
+    *,
+    name: str = "eaf",
+    dtype: str = "float32",
+    fill_value: Any = float("nan"),
+) -> Any:
+    """Create the missing-filled `eaf` array (ADR 0036, ADR 0037 §2).
+
+    Created after Pass 2, not alongside `z`/`se`, because how -- and whether --
+    a build stores frequencies is only known once the sources have been read.
+    A build whose plan says `absent` writes no array at all, so its store is
     byte-identical in shape to one built before EAF existed.
 
-    `float32`, unlike `z`/`se`: `float16` spacing near 1.0 is 0.00049, and the
-    canonical A1 is the lexicographically smaller allele rather than the minor
-    one, so EAF near 1 is ordinary here -- `float16` would silently round
-    "MAF 1e-4" to "MAF 0" for half the ALID space.
+    Never `float16`: its spacing near 1.0 is 0.00049, and the canonical A1 is
+    the lexicographically smaller allele rather than the minor one, so EAF near
+    1 is ordinary here -- `float16` would silently round "MAF 1e-4" to "MAF 0"
+    for half the ALID space.
     """
     root = staged.arrays(mode="a")
-    root.create_dataset(
-        "eaf",
+    if name in root:
+        del root[name]
+    return root.create_dataset(
+        name,
         shape=(n_variants, n_analyses),
         chunks=effective_chunks,
         compressor=_DENSE_COMPRESSOR,
-        dtype="float32",
-        fill_value=float("nan"),
+        dtype=dtype,
+        fill_value=fill_value,
     )
 
 
@@ -1074,7 +1188,36 @@ def _create_dense_zarr(
 # files.
 
 
-def _eaf_observations_from_spills(
+@dataclass(frozen=True)
+class EafSpillSurvey:
+    """One pass over the column spills, answering both EAF questions at once.
+
+    The orientation check (§9.1) needs a deterministic per-Analysis sample of
+    frequencies; the encoding tree (ADR 0037 §2) needs the residual spread over
+    the same sample plus the build's exact cell counts. They are read together
+    because the spills are large and the sample is the same one.
+    """
+
+    observations: dict[str, dict[str, float]]
+    #: Cells the spills hold, whether or not they carry a frequency. For a
+    #: Dense component this is not the plane's size -- the plane is the whole
+    #: grid -- so the caller says which count the bytes should be reckoned on.
+    n_spill_cells: int
+    n_eaf_cells: int
+    sample_rows: np.ndarray
+    sample_values: np.ndarray
+
+    def measurements(self, *, n_cells: int, n_variants: int) -> EafMeasurements:
+        return measure_eaf_sample(
+            self.sample_rows,
+            self.sample_values,
+            n_variants=n_variants,
+            n_cells=n_cells,
+            n_eaf_cells=self.n_eaf_cells,
+        )
+
+
+def _survey_eaf_spills(
     spill_dir: Path,
     id_by_col: Mapping[int, str],
     alids: Sequence[str],
@@ -1084,12 +1227,13 @@ def _eaf_observations_from_spills(
     suffix: str = "",
     index_key: str = "rows",
     row_map: np.ndarray | None = None,
-) -> dict[str, dict[str, float]]:
-    """``{analysis_id: {alid: eaf}}``, sampled per Analysis, read from the spills.
+) -> EafSpillSurvey:
+    """Sample each Analysis's frequencies and count them, from the spills.
 
-    Every Analysis appears, including ones whose source carried no frequency:
-    an absent key would read as "not checked yet" downstream, where the honest
-    answer is "checked, and there was nothing to check."
+    Every Analysis appears in `observations`, including ones whose source
+    carried no frequency: an absent key would read as "not checked yet"
+    downstream, where the honest answer is "checked, and there was nothing to
+    check."
 
     `row_map` translates a spill's own row indices onto the axis `alids` and
     `hashes` describe — the Hybrid builder's Dense Component spills are indexed
@@ -1098,6 +1242,10 @@ def _eaf_observations_from_spills(
     as one sitting on it.
     """
     observations: dict[str, dict[str, float]] = {aid: {} for aid in id_by_col.values()}
+    n_spill_cells = 0
+    n_eaf_cells = 0
+    sample_rows: list[np.ndarray] = []
+    sample_values: list[np.ndarray] = []
     for col, analysis_id in id_by_col.items():
         path = spill_dir / f"{col}{suffix}.npz"
         if not path.exists():
@@ -1106,10 +1254,29 @@ def _eaf_observations_from_spills(
             rows = data[index_key].astype(np.int64)
             if row_map is not None:
                 rows = row_map[rows].astype(np.int64)
+            eaf = np.asarray(data["eaf"], dtype=np.float64)
+            n_spill_cells += int(eaf.size)
+            n_eaf_cells += int(np.count_nonzero(np.isfinite(eaf)))
+            selected, values = sample_column_rows(rows, eaf, hashes, k=k)
+            sample_rows.append(selected)
+            sample_values.append(values)
             observations[analysis_id].update(
-                sample_column(rows, data["eaf"], alids, hashes, k=k)
+                {
+                    alids[row]: float(value)
+                    for row, value in zip(selected.tolist(), values.tolist(), strict=True)
+                }
             )
-    return observations
+    return EafSpillSurvey(
+        observations=observations,
+        n_spill_cells=n_spill_cells,
+        n_eaf_cells=n_eaf_cells,
+        sample_rows=(
+            np.concatenate(sample_rows) if sample_rows else np.empty(0, dtype=np.int64)
+        ),
+        sample_values=(
+            np.concatenate(sample_values) if sample_values else np.empty(0, dtype=np.float64)
+        ),
+    )
 
 
 def _write_dense_bands(
@@ -1198,25 +1365,25 @@ def _write_dense_bands(
             "Band-write se", c1, n_analyses, pass2_start, f"cols {c0}:{c1}", every=band_cols
         )
 
-    # Pass 3 -- eaf (ADR 0036). Its own float32 buffer, since eaf cannot share
-    # z/se's float16 (see `create_eaf_array`). Skipped whole when no source
-    # reported a frequency.
-    if column_has_eaf.any():
-        _create_eaf_array(staged, n_variants, n_analyses, effective_chunks)
-        eaf_zarr = staged.arrays(mode="a")["eaf"]
-        eaf_band = np.empty((n_variants, band_cols), dtype="float32")
-        for c0 in range(0, n_analyses, band_cols):
-            c1 = min(c0 + band_cols, n_analyses)
-            w = c1 - c0
-            eaf_band[:, :w] = np.nan
-            for c in range(c0, c1):
-                local = c - c0
-                with np.load(spill_dir / f"{c}.npz") as data:
-                    eaf_band[data["rows"], local] = data["eaf"]
-            eaf_zarr[:, c0:c1] = eaf_band[:, :w]
-            _log_progress(
-                "Band-write eaf", c1, n_analyses, pass2_start, f"cols {c0}:{c1}", every=band_cols
-            )
+    # Pass 3 -- eaf. Its own float32 buffer, since eaf cannot share z/se's
+    # float16 (see `_create_eaf_array`). What is written is decided by the
+    # plan, not by whether the array happens to be wanted here.
+    if column_has_eaf.any() and encoding.eaf.is_absent:
+        raise ValueError(
+            "the encoding plan declares no eaf plane, but "
+            f"{int(column_has_eaf.sum())} of {n_analyses} Analyses carried a frequency; "
+            "the plan and the data disagree (ADR 0037 §2)"
+        )
+    if not encoding.eaf.is_absent:
+        # Written whenever the plan says so, even if *this* component carries
+        # no frequency: a Hybrid release's two components share one plan, and
+        # a Dense Component with no EAF where the Ragged Overflow has some
+        # would otherwise declare a plane it does not have. An all-absent
+        # `int8` plane costs essentially nothing compressed.
+        _write_dense_eaf(
+            staged, spill_dir, n_variants, n_analyses, effective_chunks, band_cols,
+            codec, pass2_start,
+        )
     for c in range(n_analyses):
         (spill_dir / f"{c}.npz").unlink(missing_ok=True)
 

@@ -338,10 +338,7 @@ def build_ragged_from_ssf(
         staged.index_connection().close()
 
         # ── Stream per-analysis associations into the CSR store ──────────────────
-        # One encoding plan per build, decided here and recorded in the manifest
-        # (ADR 0037, issue #119).
-        encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=len(analytes)))
-        csr = RaggedCSRWriter(encoding)
+        csr = RaggedCSRWriter(len(variants))
         eaf_scopes: list[str] = []
         for recs in per_analysis:
             if not recs:
@@ -371,7 +368,12 @@ def build_ragged_from_ssf(
                 se_arr[order],
                 eaf=eaf_arr[order] if has_eaf else None,
             )
-        csr.flush(staged.path)
+        # One encoding plan per build, decided here from the frequencies the
+        # build actually holds and recorded in the manifest (ADR 0037, #119).
+        encoding = StoreEncoding.decide(
+            EncodingMeasurements(n_analyses=len(analytes), eaf=csr.eaf_measurements())
+        )
+        csr.flush(staged.path, encoding)
 
         build_ragged_top_hit_indexes(staged.path, encoding=encoding)
 
