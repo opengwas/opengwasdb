@@ -30,7 +30,7 @@ from opengwasdb.encoding.plan import (
 )
 
 
-def exception_fractions(residual: np.ndarray, n_eaf_cells: int) -> dict[float, float]:
+def _exception_fractions(residual: np.ndarray, n_eaf_cells: int) -> dict[float, float]:
     """Share of EAF-bearing cells that each candidate range cannot code.
 
     `residual` holds one entry per EAF-bearing cell, NaN where the cell has no
@@ -98,7 +98,7 @@ def measure_eaf_sample(
         n_cells=int(n_cells),
         n_eaf_cells=int(n_eaf_cells),
         n_variants=int(n_variants),
-        exception_fraction=exception_fractions(residual, int(np.count_nonzero(finite))),
+        exception_fraction=_exception_fractions(residual, int(np.count_nonzero(finite))),
     )
 
 
@@ -121,7 +121,7 @@ def measure_eaf_grid(values: np.ndarray) -> EafMeasurements:
         n_cells=int(block.size),
         n_eaf_cells=n_eaf_cells,
         n_variants=int(block.shape[0]),
-        exception_fraction=exception_fractions(residual, n_eaf_cells),
+        exception_fraction=_exception_fractions(residual, n_eaf_cells),
     )
 
 

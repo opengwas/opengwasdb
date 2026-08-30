@@ -482,7 +482,7 @@ class RaggedEafPlane(_EafPlaneBase):
 # builder can produce two of the three.
 
 
-def write_per_variant_array(
+def _write_per_variant_array(
     group: Any,
     name: str,
     values: np.ndarray,
@@ -507,7 +507,7 @@ def write_eaf_baseline(
     group: Any, baseline: np.ndarray, *, compressor: Any = None, chunk: int | None = None
 ) -> None:
     """Write the per-variant `eaf_baseline` the residual coding decodes against."""
-    write_per_variant_array(
+    _write_per_variant_array(
         group, EAF_BASELINE, baseline, compressor=compressor, chunk=chunk
     )
 
@@ -521,7 +521,7 @@ def write_eaf_reference(
     the panel's, identical for every Analysis imputed at that variant, so it is
     a per-variant constant rather than per-cell data.
     """
-    write_per_variant_array(
+    _write_per_variant_array(
         group, EAF_REFERENCE, reference, compressor=compressor, chunk=chunk
     )
 

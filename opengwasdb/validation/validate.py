@@ -209,7 +209,7 @@ def _validate_dense_store(
             if not errors:
                 _validate_dense_arrays(
                     root, n_variants, n_analyses, errors, manifest.encoding,
-                    imputed_arr, on_panel_arr,
+                    imputed_arr, on_panel_arr, analyses_path,
                 )
             if not errors:
                 _validate_top_hits(root, errors, manifest.encoding)
@@ -991,6 +991,32 @@ def _validate_analyses_tsv(analyses_path: Path, errors: list[str]) -> int:
     if seen_index and seen_index != set(range(n)):
         errors.append(f"analyses.tsv analysis_index values are not exactly the range 0..{n - 1}")
     for row in table.rows:
+        # An Analysis completed against no ancestry gained no imputed cells.
+        # The two columns are written by different steps -- `completed_against`
+        # from the ancestry-match filter, `completion_n_imputed_total` from the
+        # per-block quality rollup -- so their disagreement is what a filter
+        # applied to one and not the other looks like from outside (ADR 0028).
+        # It is also what `eaf_scope` is derived from, which is why it is
+        # checked here rather than left to the reader to notice.
+        if row.get("completed_against", ""):
+            continue
+        try:
+            n_imputed = int(row.get("completion_n_imputed_total", "") or 0)
+        except ValueError:
+            errors.append(
+                f"analyses.tsv row {row.get('analysis_id', '')!r} has a non-integer "
+                f"completion_n_imputed_total {row.get('completion_n_imputed_total', '')!r}"
+            )
+            continue
+        if n_imputed:
+            errors.append(
+                f"analysis {row.get('analysis_id', '')!r} declares "
+                f"completion_n_imputed_total={n_imputed} but completed_against is blank; "
+                "it was not completed against any ancestry, so it holds no imputed cells "
+                "and the count -- and any eaf_scope derived from it -- describes cells "
+                "the release does not contain (ADR 0028, ADR 0037 §4)"
+            )
+    for row in table.rows:
         for column, vocabulary in (
             ("stored_effect_scale", StoredEffectScale),
             ("original_sd_method", OriginalSdMethod),
@@ -1343,6 +1369,50 @@ def _overflow_positions_match(
         )
 
 
+def _imputed_declaration_matches_arrays(
+    analyses_path: Path,
+    imputed_per_analysis: np.ndarray,
+    errors: list[str],
+) -> None:
+    """Each Analysis holds imputed cells if and only if it says it does.
+
+    Categorical, not a count comparison: `completion_n_imputed_total` is rolled
+    up from per-block quality and the arrays hold what was actually written, so
+    the two need not agree to the cell. What they may not do is disagree about
+    *whether there are any* -- that is the shape the ancestry-match filter's
+    defect took, an Analysis carried through observed-only while its metadata
+    claimed thousands of imputed cells, and `eaf_scope` derived from the claim
+    (ADR 0028, ADR 0037 §4). #106's defect was the same disagreement one
+    granularity up.
+    """
+    for row in read_analyses(analyses_path).rows:
+        try:
+            index = int(row.get("analysis_index", ""))
+        except ValueError:
+            continue  # already reported by _validate_analyses_tsv
+        if not 0 <= index < len(imputed_per_analysis):
+            continue
+        try:
+            declared = int(row.get("completion_n_imputed_total", "") or 0)
+        except ValueError:
+            continue  # already reported by _validate_analyses_tsv
+        actual = int(imputed_per_analysis[index])
+        analysis_id = row.get("analysis_id", "")
+        if declared and not actual:
+            errors.append(
+                f"analysis {analysis_id!r} declares completion_n_imputed_total={declared} "
+                "but has no imputed=1 cell in data.zarr/imputed; the metadata describes "
+                "cells the release does not contain"
+            )
+        elif actual and not declared:
+            errors.append(
+                f"analysis {analysis_id!r} has {actual} imputed=1 cell(s) in "
+                "data.zarr/imputed but declares completion_n_imputed_total="
+                f"{row.get('completion_n_imputed_total', '')!r}; the release holds "
+                "imputed cells its metadata does not account for"
+            )
+
+
 def _validate_dense_arrays(
     root: Any,
     n_variants: int,
@@ -1351,6 +1421,7 @@ def _validate_dense_arrays(
     encoding: StoreEncoding,
     imputed_arr: Any = None,
     on_panel: np.ndarray | None = None,
+    analyses_path: Path | None = None,
 ) -> None:
     """Stream the dense z/se (and, for a completed store, imputed) matrices in
     row-bands and run every matrix-touching content check in one pass.
@@ -1359,7 +1430,10 @@ def _validate_dense_arrays(
     stores (from ``_validate_completion_metadata``); when present, the imputed
     checks that used to load the whole matrix are folded into this same band
     loop so peak memory stays at one band rather than the full matrices
-    (issue 045).
+    (issue 045). ``analyses_path`` lets the same pass answer the per-Analysis
+    question -- does each Analysis hold the imputed cells it declares? -- for
+    the cost of one ``int64`` per analysis, since the loop already reads
+    ``imputed``.
     """
     for name in ("z", "se"):
         if name not in root:
@@ -1419,6 +1493,7 @@ def _validate_dense_arrays(
     imp_nan_z = False
     imp_nan_se = False
     off_panel_imputed = False
+    imputed_per_analysis = np.zeros(n_analyses, dtype=np.int64)
     eaf_out_of_range = False
     for r0 in range(0, n_variants, _VALIDATE_BAND_ROWS):
         r1 = min(r0 + _VALIDATE_BAND_ROWS, n_variants)
@@ -1458,6 +1533,7 @@ def _validate_dense_arrays(
             if not imp_not_binary and not np.all((imp == 0) | (imp == 1)):
                 imp_not_binary = True
             imp_mask = imp == 1
+            imputed_per_analysis += imp_mask.sum(axis=0, dtype=np.int64)
             if imp_mask.any():
                 if not imp_nan_z and np.any(z_missing[imp_mask]):
                     imp_nan_z = True
@@ -1482,6 +1558,8 @@ def _validate_dense_arrays(
         errors.append(
             "off-panel (on_panel=0) rows have imputed=1 cells — off-panel is never imputable"
         )
+    if imputed_arr is not None and analyses_path is not None:
+        _imputed_declaration_matches_arrays(analyses_path, imputed_per_analysis, errors)
     if eaf_out_of_range:
         errors.append("data.zarr/eaf contains finite values outside [0, 1]")
     if fixed_point:

@@ -408,7 +408,13 @@ only the panel's frequencies still holds frequencies.
 The panel may itself declare none. An LD Reference Panel is supplied for
 imputation and its frequencies are optional; a completion against one that has
 none carries no `eaf_reference` and leaves imputed cells NaN, rather than
-failing.
+failing. In this pipeline that case is vacuous, and deliberately so: an imputed
+`se` is scaled by the panel's heterozygosity, so a panel with no frequencies
+imputes nothing at all rather than deriving an `se` from a substituted one.
+What such a completion protects is the release's *own* frequencies — the run
+succeeds and the observed plane survives it. A reader must still handle NaN
+here, because the rule is about the panel and not about how any one pipeline
+derives `se`.
 
 Constraint: **one LD Reference Panel per completed release**. True of the
 completion pipeline today, but load-bearing here, so it is recorded in
@@ -968,6 +974,7 @@ Validators MUST check at least:
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
+- each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115): a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
 

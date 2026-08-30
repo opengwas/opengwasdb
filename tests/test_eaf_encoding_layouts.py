@@ -746,17 +746,19 @@ def _panel_without_frequencies(tmp_path: Path) -> Path:
     return root
 
 
-def test_a_panel_with_no_eaf_column_completes_with_nan_on_imputed_cells(
+def test_a_panel_with_no_eaf_column_completes_and_keeps_the_stores_own_frequencies(
     tmp_path: Path, dense_store: Path
 ):
     """Such a panel completes; it does not fail the run.
 
     Nothing is imputed against it, because the imputed `se` is scaled by the
-    panel's heterozygosity and there is none -- that is this pipeline's
-    long-standing behaviour and not what is under test here. What is under
-    test is that asking the panel for reference EAF does not turn a supported
-    panel into a failed completion, taking the store's *own* frequencies down
-    with it.
+    panel's heterozygosity and there is none (`completion/impute.py`, and a
+    non-finite `se` is skipped in `completion/block.py`). That is deliberate --
+    an `se` derived from a substituted heterozygosity is a fabricated one --
+    and the spec says so (§6a), so "no imputed frequency" here is "no imputed
+    cell", not a frequency dropped. What is under test is that asking the panel
+    for reference EAF does not turn a supported panel into a failed completion,
+    taking the store's *own* frequencies down with it.
     """
     out = tmp_path / "nofreq-panel-completed.opengwasdb"
     complete_dense_store(
@@ -921,6 +923,48 @@ def test_a_completed_hybrid_records_the_panel_it_was_completed_against(
     assert completion["ancestry"] == "EUR"
     assert completion["ld_panel_id"] == dense_completion["ld_panel_id"]
     assert completion["method"] == dense_completion["method"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (lambda m: m["provenance"].pop("completion"), "records no completion provenance"),
+        (lambda m: m["provenance"]["completion"].pop("ld_panel_id"), "without ld_panel_id"),
+        (lambda m: m["provenance"]["completion"].update(ancestry=None), "without ancestry"),
+    ],
+    ids=["no-completion-block", "no-panel-id", "null-ancestry"],
+)
+def test_a_hybrid_refuses_to_write_a_manifest_that_names_no_panel(
+    tmp_path: Path, hybrid_store: Path, mutate, expected: str
+):
+    """The copy-up fails the completion; it does not write nulls and warn.
+
+    A completed Hybrid manifest with a null `ld_panel_id` is not a smaller
+    answer than one naming the panel -- it is a release that cannot say where
+    the frequencies on its imputed cells came from, and nothing downstream
+    reads it strictly enough to notice (CONTRIBUTING.md, "fail loudly over
+    degrading quietly"; #116's one-panel constraint).
+    """
+    from opengwasdb.layouts.hybrid.complete import (
+        HybridCompletionError,
+        _dense_completion_provenance,
+        complete_hybrid_store,
+    )
+
+    out = tmp_path / "hybrid-completed-broken.opengwasdb"
+    complete_hybrid_store(
+        hybrid_store, out, _ld_panel(tmp_path), ancestry="EUR", min_cor=0.0, thresh=0.99
+    )
+    # Fixture meaningfulness: it reads cleanly before the mutation.
+    assert _dense_completion_provenance(out)["ld_panel_id"]
+
+    component_manifest = dense_component_path(out) / "manifest.json"
+    manifest = json.loads(component_manifest.read_text())
+    mutate(manifest)
+    component_manifest.write_text(json.dumps(manifest))
+
+    with pytest.raises(HybridCompletionError, match=expected):
+        _dense_completion_provenance(out)
 
 
 def test_a_1_0_release_that_stores_no_frequencies_still_validates(dense_store: Path):

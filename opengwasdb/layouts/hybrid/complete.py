@@ -81,7 +81,12 @@ from opengwasdb.variants import VariantAxis
 
 log = logging.getLogger(__name__)
 
-__all__ = ["complete_hybrid_store", "HybridCompletionResult"]
+
+class HybridCompletionError(RuntimeError):
+    """A completed Hybrid release cannot be written as the format requires."""
+
+
+__all__ = ["HybridCompletionError", "HybridCompletionResult", "complete_hybrid_store"]
 
 
 @dataclass(frozen=True)
@@ -390,21 +395,49 @@ def _read_analyses(dense_dir: Path) -> list[Analysis]:
     )
 
 
+#: Keys the outer Hybrid manifest copies up from its Dense Component, and
+#: cannot be written without. `ld_panel_id` and `ancestry` are the panel
+#: identity that `eaf_reference` made load-bearing (issue #116); `method` says
+#: how the cells were filled.
+_REQUIRED_DENSE_COMPLETION_KEYS = ("method", "ld_panel_id", "ancestry")
+
+
 def _dense_completion_provenance(staged_path: Path) -> Mapping[str, Any]:
     """The completed Dense Component's own `provenance["completion"]`.
 
     The Hybrid release is completed by completing that component, so the panel
     identity is a fact recorded there. Copying it up is how the outer manifest
     states it without a second, independently-stamped copy that could disagree.
+
+    Raises rather than degrading. A completed Hybrid manifest with a null
+    `ld_panel_id` is not a smaller answer than one with the panel named -- it
+    is a release that cannot say which panel its imputed frequencies came from,
+    and nothing downstream would notice (CONTRIBUTING.md, "fail loudly over
+    degrading quietly").
     """
+    component = dense_component_path(staged_path)
     try:
-        completion = open_store(dense_component_path(staged_path)).manifest.provenance.get(
-            "completion", {}
+        provenance = open_store(component).manifest.provenance
+    except Exception as exc:
+        raise HybridCompletionError(
+            f"the Dense Component just written at {component} could not be read back to "
+            f"copy up its completion provenance: {exc}"
+        ) from exc
+    completion = provenance.get("completion")
+    if not isinstance(completion, dict):
+        raise HybridCompletionError(
+            f"the completed Dense Component at {component} records no completion "
+            "provenance, so the Hybrid release cannot state which LD panel its imputed "
+            "cells came from (issue #116)"
         )
-        return dict(completion) if isinstance(completion, dict) else {}
-    except Exception as exc:  # noqa: BLE001 - the manifest is the authority, not this
-        log.warning("could not read the Dense Component's completion provenance: %s", exc)
-        return {}
+    missing = [k for k in _REQUIRED_DENSE_COMPLETION_KEYS if not completion.get(k)]
+    if missing:
+        raise HybridCompletionError(
+            f"the completed Dense Component at {component} records completion provenance "
+            f"without {', '.join(missing)}; the Hybrid release would name no panel for "
+            "the frequencies its imputed cells carry (issue #116)"
+        )
+    return dict(completion)
 
 
 def _write_completed_manifest(
@@ -417,7 +450,7 @@ def _write_completed_manifest(
     n_off_panel: int,
     n_overflow: int,
     n_imputed: int,
-    dense_completion: Mapping[str, Any] | None = None,
+    dense_completion: Mapping[str, Any],
 ) -> None:
     manifest = StoreManifest(
         # Preserved with the format version below: a completed release is
@@ -452,9 +485,9 @@ def _write_completed_manifest(
                 # completed store" is load-bearing once `eaf_reference` holds
                 # that panel's frequencies, so it is recorded where a reader of
                 # the Hybrid store looks (issue #116).
-                "method": (dense_completion or {}).get("method"),
-                "ld_panel_id": (dense_completion or {}).get("ld_panel_id"),
-                "ancestry": (dense_completion or {}).get("ancestry"),
+                "method": dense_completion["method"],
+                "ld_panel_id": dense_completion["ld_panel_id"],
+                "ancestry": dense_completion["ancestry"],
                 "component_completed": "dense",
                 "overflow_completion_state": "observed_only",
                 "n_imputed_dense": n_imputed,

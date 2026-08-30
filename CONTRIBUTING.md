@@ -140,14 +140,17 @@ pixi run -e dev pytest
 Both carry pre-existing findings. **The rule is that a change adds none** —
 compare against the baseline rather than aiming for a clean run:
 
-| | baseline at v0.2.0 | on `dev` |
+| | enforced (`.baselines.json`) | on `dev` |
 |---|---|---|
-| `pixi run -e dev lint` | 65 errors | 66 |
+| `pixi run -e dev lint` | 66 errors | 66 |
 | `pixi run -e dev typecheck` | 40 errors | 40 |
-| `pixi run -e dev test` | 543 passed, 1 skipped | 732 passed, 1 skipped |
+| `pixi run -e dev test` | — | 732 passed, 1 skipped |
 
-`.baselines.json` carries the enforced numbers; the `dev` column is what they
-are now, re-measured at the version being cut.
+`.baselines.json` carries the enforced numbers and is the only place they are
+stated; this table repeats them so the two can be seen to agree. Both columns
+are re-measured whenever either moves — the enforced count is lowered as
+findings are fixed, so a version tag is not what dates it, and
+`.baselines.json` says which change last moved it.
 
 The useful check is a diff, not a count, since line numbers shift as code moves:
 

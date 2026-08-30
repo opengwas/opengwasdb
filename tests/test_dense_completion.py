@@ -22,6 +22,7 @@ from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
     resume_dense_completion,
 )
+from opengwasdb.model.analyses import read_analyses, write_analyses
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation.validate import validate_store
@@ -849,3 +850,88 @@ class TestEigendecompositionOnlyPanelImputesRealCells:
 
         root = open_store(dst).arrays(mode="r")
         assert root["imputed"][:].sum() > 0
+
+
+# ── The declaration and the arrays are two accounts of the same cells ────────
+#
+# `analyses.tsv` says how many cells an Analysis gained; `data.zarr/imputed`
+# holds them. Nothing made the two agree, and the ancestry-match filter made
+# them disagree in a way no query would show: the excluded Analysis reads
+# observed-only and its metadata claimed otherwise (ADR 0028, ADR 0037 §4).
+#
+# These use the signal fixtures because the small `completed_store` imputes
+# nothing at all -- against it every rule below is vacuously satisfied.
+
+
+@pytest.fixture
+def imputing_completed_store(
+    tmp_path: Path, signal_observed_store: Path, signal_panel_npz_only: Path
+) -> Path:
+    """A completed store that actually gained cells, and says so.
+
+    Not a *valid* store: its source carries EAF with no orientation evidence,
+    so `validate_store` objects for an unrelated reason. The tests below
+    therefore assert on the presence of their own error rather than on
+    `result.ok`, and check it is absent first.
+    """
+    dst = tmp_path / "signal_declared.opengwasdb"
+    complete_dense_store(
+        signal_observed_store, dst, signal_panel_npz_only,
+        ancestry="EUR", min_cor=0.0, release_id="comp-signal-v1",
+    )
+    assert open_store(dst).arrays(mode="r")["imputed"][:].sum() > 0, (
+        "nothing was imputed, so nothing below is under test"
+    )
+    assert int(read_analyses(dst / "analyses.tsv").rows[0]["completion_n_imputed_total"]) > 0
+    return dst
+
+
+def _rewrite_analyses(store: Path, **columns: str) -> None:
+    """Overwrite `columns` on the first Analysis row of a store."""
+    table = read_analyses(store / "analyses.tsv")
+    table.rows[0].update(columns)
+    write_analyses(store / "analyses.tsv", table)
+
+
+def _matching(store: Path, *fragments: str) -> list[str]:
+    return [
+        e for e in validate_store(store).errors if all(f in e for f in fragments)
+    ]
+
+
+def test_validator_rejects_imputed_cells_declared_but_not_held(imputing_completed_store: Path):
+    """A count of imputed cells the arrays do not contain."""
+    fragments = ("declares completion_n_imputed_total", "no imputed=1 cell")
+    assert not _matching(imputing_completed_store, *fragments)
+
+    arrays = open_store(imputing_completed_store).arrays(mode="a")
+    band = arrays["imputed"][:, :]
+    band[:, 0] = 0
+    arrays["imputed"][:, :] = band
+
+    assert _matching(imputing_completed_store, *fragments)
+
+
+def test_validator_rejects_imputed_cells_held_but_not_declared(imputing_completed_store: Path):
+    """The same disagreement the other way round: cells nothing accounts for."""
+    fragment = "imputed cells its metadata does not account for"
+    assert not _matching(imputing_completed_store, fragment)
+
+    _rewrite_analyses(imputing_completed_store, completion_n_imputed_total="0")
+
+    assert _matching(imputing_completed_store, fragment)
+
+
+def test_validator_rejects_a_completion_count_without_a_completion(
+    imputing_completed_store: Path,
+):
+    """`completed_against` blank and a nonzero count: not completed, yet counted.
+
+    Read from `analyses.tsv` alone, so it holds for Ragged and Hybrid too,
+    where there is no dense `imputed` matrix to compare against.
+    """
+    assert not _matching(imputing_completed_store, "completed_against is blank")
+
+    _rewrite_analyses(imputing_completed_store, completed_against="")
+
+    assert _matching(imputing_completed_store, "completed_against is blank")

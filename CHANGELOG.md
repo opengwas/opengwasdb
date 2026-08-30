@@ -128,6 +128,37 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
     contradicts the release's declared plan.
   - **`ogdb info` reports the `eaf` encoding** alongside `z` and `se`. Manifest
     and CLI surface, so `opengwasdb-stores` needs the same change.
+  - **An ancestry-excluded Analysis no longer declares completion it did not
+    get.** Dense completion imputes every LD block for every Analysis and
+    applies the ancestry-match filter afterwards (ADR 0028); the filter was
+    applied to the fills at the write but not to the `completion_quality` rows
+    they came with, so a nonmatching Analysis carried through observed-only
+    declared a nonzero `completion_n_imputed_total` — and, on a source with no
+    frequencies of its own completed against a panel with some, an `eaf_scope`
+    of `association` derived from that count, on an Analysis whose every cell
+    reads NaN. The filter is now applied once, where checkpoint output becomes
+    the release's, so the table and the arrays cannot disagree; the writer
+    checks the shards honour it rather than silently re-filtering. Ragged was
+    never affected — it excludes nonmatching Analyses at block assignment.
+  - **Validation compares each Analysis's completion metadata with its own
+    cells**, not only the store's plan with the store's arrays: an Analysis
+    that declares imputed cells must hold at least one, and one that holds them
+    must account for them. Categorical rather than a count comparison, since
+    the rollup and the arrays count different things. Alongside it, a
+    layout-independent rule read from `analyses.tsv` alone — a blank
+    `completed_against` and a nonzero `completion_n_imputed_total` are a
+    contradiction.
+  - **A completed Hybrid release fails rather than name no panel.** Copying the
+    panel identity up from the Dense Component caught every exception and wrote
+    nulls, so a manifest could reach `reference_completed` with no
+    `ld_panel_id` at all — the field #116 made load-bearing — and only a log
+    line to say so.
+  - **A panel with no `EAF` imputes nothing, and the spec now says so.** An
+    imputed `se` is scaled by the panel's heterozygosity, so such a panel
+    produces no imputed cells rather than an `se` derived from a substituted
+    frequency. The completion succeeds and the release's own frequencies
+    survive it, which is what the fix above is for; "imputed cells read NaN" is
+    vacuous here, and §6a no longer implies otherwise.
 
 - **`z` is stored as `int16` fixed point, and `format_version` moves to `1.0`**
   (#114, ADR 0037 §1). `float16`'s step doubles with magnitude, so it was least

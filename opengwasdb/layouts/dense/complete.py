@@ -498,7 +498,8 @@ def _run_completion(
         )
         band_rows = _completion_band_rows(effective_chunks)
         fill_shard_dir, quality_count = _shard_checkpoint_fills_by_band(
-            blocks_dir, staged, union_alids_s, union_rows_s, n_variants, band_rows
+            blocks_dir, staged, union_alids_s, union_rows_s, n_variants, band_rows,
+            impute_mask=impute_mask,
         )
         print(f"Wrote {quality_count:,} completion quality rows")
         del union_alids, union_rows, union_alids_s, union_rows_s, o
@@ -664,6 +665,7 @@ def _shard_checkpoint_fills_by_band(
     union_rows_s: np.ndarray,
     n_variants: int,
     band_rows: int,
+    impute_mask: np.ndarray | None = None,
 ) -> tuple[Path, int]:
     """Resolve checkpoint fills into raw row-band shard files.
 
@@ -671,6 +673,16 @@ def _shard_checkpoint_fills_by_band(
     by the parent. This pass resolves those ALIDs once, writes compact
     ``(row, analysis, z, se)`` records to per-band files, and streams
     completion_quality directly into SQLite.
+
+    ``impute_mask`` (bool per analysis; ``None`` = impute all) is applied here,
+    because this is where a worker's *candidate* fills become the release's.
+    The blocks are imputed for every Analysis and the ancestry-match filter
+    (ADR 0028) is decided afterwards, so a nonmatching Analysis arrives with
+    both fills and completion-quality rows. Dropping only the fills, later, at
+    the write, left ``completion_quality`` -- and through it ``analyses.tsv``'s
+    ``completion_n_imputed_total`` and ``eaf_scope`` -- counting cells the
+    release does not contain. Filtered once, here, the table and the arrays
+    cannot disagree.
     """
     fill_shard_dir = staged.path / "fill_shards"
     if fill_shard_dir.exists():
@@ -688,6 +700,8 @@ def _shard_checkpoint_fills_by_band(
                 for ai, p, ni, nm in zip(
                     d["q_ai"], d["q_pearson"], d["q_nimp"], d["q_nmiss"], strict=True
                 ):
+                    if impute_mask is not None and not impute_mask[int(ai)]:
+                        continue
                     quality_batch.append(
                         (
                             int(ai),
@@ -724,6 +738,11 @@ def _shard_checkpoint_fills_by_band(
                 ai = d["f_ai"][matched].astype(np.int32, copy=False)[in_bounds]
                 z = d["f_z"][matched].astype(np.float32, copy=False)[in_bounds]
                 se = d["f_se"][matched].astype(np.float32, copy=False)[in_bounds]
+                if impute_mask is not None:
+                    keep = impute_mask[ai]
+                    if not keep.any():
+                        continue
+                    rows, ai, z, se = rows[keep], ai[keep], z[keep], se[keep]
                 band_ids = rows // band_rows
 
                 for band_index in np.unique(band_ids):
@@ -821,9 +840,11 @@ def _write_completed_bands(
     chunks.
 
     ``impute_mask`` (bool per analysis; ``None`` = impute all) is the per-Analysis
-    ancestry-match filter (ADR 0028): fills for a masked-out analysis are dropped,
-    so its cells stay observed-only (NaN, ``imputed=0``) — never imputed against a
-    non-matching-ancestry panel.
+    ancestry-match filter (ADR 0028): a masked-out analysis stays observed-only
+    (NaN, ``imputed=0``) — never imputed against a non-matching-ancestry panel.
+    It is applied at checkpoint resolution, not here, so that
+    ``completion_quality`` and the arrays are filtered by the same act; this
+    function only checks that the shards it reads honour it.
     """
     root = staged.arrays(mode="a")
     z_arr, se_arr, imp_arr = root["z"], root["se"], root["imputed"]
@@ -861,9 +882,18 @@ def _write_completed_bands(
         for records in _iter_fill_records(shard_path):
             lr = records["row"] - r0
             ai = records["ai"]
+            if impute_mask is not None and len(ai) and not impute_mask[ai].all():
+                # The shards are filtered at resolution, so a nonmatching
+                # Analysis reaching here means the filter and the write
+                # disagree about which analyses were completed -- the
+                # disagreement that let `completion_quality` count cells the
+                # release did not hold. Said, not silently re-filtered.
+                raise ValueError(
+                    "fill shard contains analyses excluded by the ancestry-match filter "
+                    f"(first {int(ai[~impute_mask[ai]][0])}); the filter applied at "
+                    "checkpoint resolution and the one applied here disagree"
+                )
             fillable = ~np.isfinite(zb[lr, ai])
-            if impute_mask is not None:
-                fillable &= impute_mask[ai]
             if fillable.any():
                 lrm, aim = lr[fillable], ai[fillable]
                 zb[lrm, aim] = records["z"][fillable]
@@ -897,9 +927,11 @@ def _write_completed_bands(
         for records in _iter_fill_records(shard_path):
             lr = records["row"] - r0
             ai = records["ai"]
+            # No mask check here: pass 1 read the same shards and would have
+            # raised. Both passes must fill the same cells (the
+            # missingness-consistency invariant), so a second filter is a
+            # second chance for the two to differ.
             fillable = ~np.isfinite(sb[lr, ai])
-            if impute_mask is not None:
-                fillable &= impute_mask[ai]
             if fillable.any():
                 sb[lr[fillable], ai[fillable]] = records["se"][fillable]
 

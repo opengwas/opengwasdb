@@ -460,7 +460,7 @@ class StoreEncoding:
         )
 
 
-def eaf_residual_bytes(measurements: EafMeasurements, residual_range: float) -> int:
+def _eaf_residual_bytes(measurements: EafMeasurements, residual_range: float) -> int:
     """Raw bytes the residual coding would occupy at `residual_range`."""
     fraction = measurements.exception_fraction.get(residual_range, 0.0)
     exceptions = math.ceil(fraction * measurements.n_eaf_cells)
@@ -471,7 +471,7 @@ def eaf_residual_bytes(measurements: EafMeasurements, residual_range: float) -> 
     )
 
 
-def eaf_float32_bytes(measurements: EafMeasurements) -> int:
+def _eaf_float32_bytes(measurements: EafMeasurements) -> int:
     """Raw bytes ADR 0036's `float32` plane would occupy."""
     return 4 * measurements.n_cells
 
@@ -507,6 +507,6 @@ def _decide_eaf(measurements: EafMeasurements | None) -> EafEncoding:
         ),
         EAF_RANGE_CANDIDATES[-1],
     )
-    if eaf_residual_bytes(measurements, chosen) >= eaf_float32_bytes(measurements):
+    if _eaf_residual_bytes(measurements, chosen) >= _eaf_float32_bytes(measurements):
         return EafEncoding(kind="float32")
     return EafEncoding(kind="int8_residual", residual_range=chosen)
