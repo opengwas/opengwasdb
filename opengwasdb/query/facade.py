@@ -71,6 +71,7 @@ from pathlib import Path
 import numpy as np
 import zarr
 
+from opengwasdb.encoding import DenseZPlane
 from opengwasdb.index import AnalysesIndex
 from opengwasdb.layouts.dense.rho import DenseRhoReader
 from opengwasdb.layouts.dense.top_hits import DenseTopHitReader, threshold_key
@@ -161,8 +162,11 @@ class StoreQuery:
             self._root["imputed"] if self._is_completed and "imputed" in self._root else None
         )
         self._eaf: zarr.Array | None = self._root["eaf"] if "eaf" in self._root else None
+        # Every z read goes through the plane: the store's declared encoding
+        # (ADR 0037) is applied in one place rather than at each result site.
+        self._z = DenseZPlane.open(self._root, store.manifest.encoding)
         self._rho_reader: DenseRhoReader | None = (
-            DenseRhoReader(self._root["rho"], int(self._root["z"].shape[1]))
+            DenseRhoReader(self._root["rho"], self._z.n_analyses)
             if "rho" in self._root
             else None
         )
@@ -239,7 +243,7 @@ class StoreQuery:
         if analysis is None:
             return _empty_result()
         col = int(analysis["analysis_index"])
-        z_col = self._root["z"][:, col].astype("float32")
+        z_col = self._z.column(col)
         se_col = self._root["se"][:, col].astype("float32")
         mask = np.isfinite(z_col) & np.isfinite(se_col)
         rows = np.where(mask)[0].astype("int32")
@@ -267,7 +271,7 @@ class StoreQuery:
         if variant is None:
             return _empty_result()
         row = variant.variant_index
-        z_row = self._root["z"][row, :].astype("float32")
+        z_row = self._z.row(row)
         se_row = self._root["se"][row, :].astype("float32")
         mask = np.isfinite(z_row) & np.isfinite(se_row)
         cols = np.where(mask)[0].astype("int32")
@@ -296,7 +300,7 @@ class StoreQuery:
         row_indices = self._variant_axis.range_indices(chromosome, start, end)
         if len(row_indices) == 0:
             return _empty_result()
-        z_block = self._read_row_block(self._root["z"], row_indices, "float32")
+        z_block = self._z.rows(row_indices)
         se_block = self._read_row_block(self._root["se"], row_indices, "float32")
         mask = np.isfinite(z_block) & np.isfinite(se_block)
         rows_rel, cols = np.where(mask)
@@ -345,7 +349,7 @@ class StoreQuery:
         # Surgical orthogonal read: fetch only the chunks intersecting the
         # requested rows × cols, not the full analysis width per row. Under a
         # narrow analysis chunk this reads far fewer chunks (issue 052).
-        z_block = self._root["z"].oindex[row_indices, col_indices].astype("float32")
+        z_block = self._z.block(row_indices, col_indices)
         se_block = self._root["se"].oindex[row_indices, col_indices].astype("float32")
         mask = np.isfinite(z_block) & np.isfinite(se_block)
         rows_rel, cols_rel = np.where(mask)
@@ -576,7 +580,7 @@ class RaggedStoreQuery:
         if start == end:
             return _empty_result()
         vi = self._csr._variant_index[start:end].astype("int32")
-        z = self._csr._z[start:end].astype("float32")
+        z = self._csr.z_slice(start, end)
         se = self._csr._se[start:end].astype("float32")
         eaf = self._csr.eaf_slice(start, end)
         imp = self._get_imputed_slice(start, end)
@@ -610,7 +614,7 @@ class RaggedStoreQuery:
 
         offsets = self._csr._offsets[:]
         vi_all = self._csr._variant_index[:]
-        z_all = self._csr._z[:]
+        z_all = self._csr.z_all()
         se_all = self._csr._se[:]
 
         mask = np.isin(vi_all, np.array(sorted(variant_set), dtype=np.int32))
@@ -680,7 +684,7 @@ class RaggedStoreQuery:
             if s == e:
                 continue
             vi = self._csr._variant_index[s:e].astype("int32")
-            z = self._csr._z[s:e].astype("float32")
+            z = self._csr.z_slice(s, e)
             se = self._csr._se[s:e].astype("float32")
             eaf = self._csr.eaf_slice(s, e)
             imp = self._get_imputed_slice(s, e)
@@ -720,7 +724,7 @@ class RaggedStoreQuery:
 
         offsets = self._csr._offsets[:]
         vi_all = self._csr._variant_index[:]
-        z_all = self._csr._z[:]
+        z_all = self._csr.z_all()
         se_all = self._csr._se[:]
 
         hit_positions = np.where(vi_all == target_vi)[0]
@@ -814,7 +818,7 @@ class RaggedStoreQuery:
 
         offsets = self._csr._offsets[:]
         vi_all = self._csr._variant_index[:]
-        z_all = self._csr._z[:]
+        z_all = self._csr.z_all()
         se_all = self._csr._se[:]
 
         sqrt2 = math.sqrt(2.0)
@@ -899,7 +903,7 @@ class RaggedStoreQuery:
             if s == e:
                 continue
             vi = self._csr._variant_index[s:e].astype("int32")
-            z = self._csr._z[s:e].astype("float32")
+            z = self._csr.z_slice(s, e)
             se = self._csr._se[s:e].astype("float32")
             eaf = self._csr.eaf_slice(s, e)
             imp = self._get_imputed_slice(s, e)
@@ -1043,7 +1047,7 @@ class HybridStoreQuery:
         if s == e:
             return _empty_result()
         vi = self._csr._variant_index[s:e].astype("int32")
-        z = self._csr._z[s:e].astype("float32")
+        z = self._csr.z_slice(s, e)
         se = self._csr._se[s:e].astype("float32")
         return {
             "variant_index": vi,
@@ -1066,7 +1070,7 @@ class HybridStoreQuery:
         if len(hits) == 0:
             return _empty_result()
         analysis_indices = np.searchsorted(offsets[1:], hits, side="right").astype("int32")
-        z = self._csr._z[:][hits].astype("float32")
+        z = self._csr.z_at(hits)
         se = self._csr._se[:][hits].astype("float32")
         eaf = self._csr.eaf_at(hits)
         return {

@@ -9,6 +9,16 @@ import numpy as np
 import zarr
 from numcodecs import Blosc
 
+from opengwasdb.encoding import (
+    StoreCodec,
+    StoreEncoding,
+    ZOverflowBuilder,
+    ZOverflowTable,
+    positions_at,
+    positions_flat,
+)
+from opengwasdb.model.manifest import StoreManifest
+
 RAGGED_ZARR_PATH = "data.zarr/ragged"
 _COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
 # Chunk size for the flat association arrays (~400 KB per chunk at float16).
@@ -18,15 +28,21 @@ _OFFSET_CHUNK = 10_000
 
 class AnalysisAssociations(NamedTuple):
     variant_index: np.ndarray  # int32
-    z: np.ndarray              # float16
+    z: np.ndarray              # float32, decoded from the plane's own encoding
     se: np.ndarray             # float16
     eaf: np.ndarray            # float32, all-NaN when the store carries no EAF
 
 
 class RaggedCSRWriter:
-    """Accumulate per-analysis associations and flush to zarr CSR arrays."""
+    """Accumulate per-analysis associations and flush to zarr CSR arrays.
 
-    def __init__(self) -> None:
+    `encoding` is the store's declared plan (ADR 0037), decided once per build
+    and passed in: the writer encodes `z` through it rather than choosing a
+    dtype of its own.
+    """
+
+    def __init__(self, encoding: StoreEncoding) -> None:
+        self._encoding = encoding
         self._variant_indices: list[np.ndarray] = []
         self._zscores: list[np.ndarray] = []
         self._ses: list[np.ndarray] = []
@@ -51,7 +67,9 @@ class RaggedCSRWriter:
         """
         n = len(variant_index)
         self._variant_indices.append(np.asarray(variant_index, dtype=np.int32))
-        self._zscores.append(np.asarray(z, dtype=np.float16))
+        # Held as float32 and quantised once, by the codec, at flush -- never
+        # pre-rounded into a stored dtype here.
+        self._zscores.append(np.asarray(z, dtype=np.float32))
         self._ses.append(np.asarray(se, dtype=np.float16))
         if eaf is None:
             self._eafs.append(np.full(n, np.nan, dtype=np.float32))
@@ -75,16 +93,21 @@ class RaggedCSRWriter:
 
         offsets_arr = np.asarray(self._offsets, dtype=np.int64)
 
+        codec = StoreCodec(self._encoding)
         if self.n_associations > 0:
             vi_arr = np.concatenate(self._variant_indices).astype(np.int32)
-            z_arr = np.concatenate(self._zscores).astype(np.float16)
+            z_values = np.concatenate(self._zscores).astype(np.float32)
             se_arr = np.concatenate(self._ses).astype(np.float16)
             eaf_arr = np.concatenate(self._eafs).astype(np.float32)
         else:
             vi_arr = np.empty(0, dtype=np.int32)
-            z_arr = np.empty(0, dtype=np.float16)
+            z_values = np.empty(0, dtype=np.float32)
             se_arr = np.empty(0, dtype=np.float16)
             eaf_arr = np.empty(0, dtype=np.float32)
+        # A CSR cell's flat position is its ordinal in the concatenated array,
+        # which is what its overflow entry is keyed on.
+        overflow = ZOverflowBuilder()
+        z_arr = codec.encode_z(z_values, positions=positions_flat(0), overflow=overflow)
 
         root.create_dataset(
             "offsets", data=offsets_arr,
@@ -96,8 +119,9 @@ class RaggedCSRWriter:
         )
         root.create_dataset(
             "z", data=z_arr,
-            chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=np.float16,
+            chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=codec.z_dtype,
         )
+        overflow.table().write(root)
         root.create_dataset(
             "se", data=se_arr,
             chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=np.float16,
@@ -116,13 +140,19 @@ class RaggedCSRWriter:
 class RaggedCSRReader:
     """Read per-analysis associations from zarr CSR arrays."""
 
-    def __init__(self, store_path: str | Path):
+    def __init__(self, store_path: str | Path, encoding: StoreEncoding | None = None):
         path = Path(store_path) / RAGGED_ZARR_PATH
         self._root = zarr.open_group(str(path), mode="r")
         self._offsets: zarr.Array = self._root["offsets"]
         self._variant_index: zarr.Array = self._root["variant_index"]
         self._z: zarr.Array = self._root["z"]
         self._se: zarr.Array = self._root["se"]
+        # The plan is read from the release's manifest, never inferred from the
+        # array's dtype: a store that disagrees with its own manifest must fail
+        # validation, not decode as whatever the bytes happen to look like.
+        if encoding is None:
+            encoding = StoreManifest.load(Path(store_path)).encoding
+        self._codec = StoreCodec(encoding, z_overflow=ZOverflowTable.read(self._root))
         # Absent on stores built before ADR 0036, and on stores whose sources
         # report no frequency at all -- both read back as all-NaN.
         self._eaf: zarr.Array | None = self._root["eaf"] if "eaf" in self._root else None
@@ -142,16 +172,35 @@ class RaggedCSRReader:
         if start == end:
             return AnalysisAssociations(
                 variant_index=np.empty(0, dtype=np.int32),
-                z=np.empty(0, dtype=np.float16),
+                z=np.empty(0, dtype=np.float32),
                 se=np.empty(0, dtype=np.float16),
                 eaf=np.empty(0, dtype=np.float32),
             )
         return AnalysisAssociations(
             variant_index=self._variant_index[start:end],
-            z=self._z[start:end],
+            z=self.z_slice(start, end),
             se=self._se[start:end],
             eaf=self.eaf_slice(start, end),
         )
+
+    def z_slice(self, start: int, end: int) -> np.ndarray:
+        """Decoded `z[start:end]` -- the only way a caller gets z-scores."""
+        return self._codec.decode_z(
+            self._z[start:end], positions=positions_flat(int(start))
+        )
+
+    def z_at(self, positions: np.ndarray) -> np.ndarray:
+        """Decoded z at arbitrary flat CSR positions."""
+        positions = np.asarray(positions, dtype=np.int64)
+        if len(positions) == 0:
+            return np.empty(0, dtype=np.float32)
+        return self._codec.decode_z(
+            np.asarray(self._z[:])[positions], positions=positions_at(positions)
+        )
+
+    def z_all(self) -> np.ndarray:
+        """Every decoded z, in flat CSR order."""
+        return self.z_slice(0, int(len(self._z)))
 
     @property
     def has_eaf(self) -> bool:

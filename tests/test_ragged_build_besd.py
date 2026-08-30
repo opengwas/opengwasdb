@@ -183,10 +183,10 @@ def test_z_scores_computed_correctly(tmp_path):
     build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
 
     csr = RaggedCSRReader(out)
-    # Probe 1: single assoc beta=0.5, se=0.05 → z=10.0 (stored as float16)
+    # Probe 1: single assoc beta=0.5, se=0.05 → z=10.0
     a1 = csr.get_analysis(1)
     assert len(a1.z) == 1
-    assert abs(float(a1.z[0]) - 10.0) < 0.1  # float16 tolerance
+    assert abs(float(a1.z[0]) - 10.0) < 0.001  # fixed-point 1/1024 (ADR 0037)
 
 
 def test_top_hit_index_built_inline(tmp_path):
@@ -220,7 +220,7 @@ def test_top_hit_index_schema(tmp_path):
 
 
 def test_top_hit_z_values_match_csr(tmp_path):
-    """Top-hit z values round-trip through the float16 CSR correctly."""
+    """Top-hit z values round-trip through the stored CSR correctly."""
     prefix = _make_besd_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
     build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
@@ -237,7 +237,7 @@ def test_top_hit_z_values_match_csr(tmp_path):
 
     offsets = csr._offsets[:]
     vi_all = csr._variant_index[:]
-    z_all = csr._z[:]
+    z_all = csr.z_all()
 
     for vi, ai, z_hit in zip(vis, ais, zs):
         start, end = int(offsets[ai]), int(offsets[ai + 1])

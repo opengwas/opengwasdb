@@ -122,19 +122,16 @@ def test_the_current_version_is_writable():
     assert check_writable_format_version(CURRENT_FORMAT_VERSION) == CURRENT_FORMAT_VERSION
 
 
-def test_a_readable_but_unwritable_version_is_refused(monkeypatch):
-    """The state ADR 0038 §4 exists for, which #114 creates: `0.1` stays
+def test_a_readable_but_unwritable_version_is_refused():
+    """The state ADR 0038 §4 exists for, which #114 created: `0.1` stays
     readable and stops being written."""
-    monkeypatch.setattr(store_open, "CURRENT_FORMAT_VERSION", "1.0")
-    monkeypatch.setattr(store_open, "SUPPORTED_FORMAT_VERSIONS", {0: 1, 1: 0})
-
     store_open.check_format_version("0.1")  # still readable
     with pytest.raises(UnsupportedFormatVersion, match="reads but cannot write"):
         store_open.check_writable_format_version("0.1", source="source release X")
 
 
 def test_completion_refuses_a_source_it_cannot_write_before_doing_any_work(
-    tmp_path, dense_store_path, monkeypatch
+    tmp_path, dense_store_path
 ):
     """Completion preserves its source's format_version because it writes into
     the source's arrays. Once this build writes a newer format, stamping the
@@ -142,8 +139,7 @@ def test_completion_refuses_a_source_it_cannot_write_before_doing_any_work(
     its own encoding -- so it fails instead, and fails *before* the imputation
     rather than at manifest-write time an hour later.
     """
-    monkeypatch.setattr(store_open, "CURRENT_FORMAT_VERSION", "1.0")
-    monkeypatch.setattr(store_open, "SUPPORTED_FORMAT_VERSIONS", {0: 1, 1: 0})
+    _set_version(dense_store_path, "0.1")
     out = tmp_path / "completed.opengwasdb"
 
     with pytest.raises(UnsupportedFormatVersion, match="rebuild it from source"):

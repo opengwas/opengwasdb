@@ -26,6 +26,8 @@ from scipy.optimize import minimize_scalar  # type: ignore[import-untyped]
 from scipy.stats import multivariate_normal  # type: ignore[import-untyped]
 from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
 
+from opengwasdb.encoding import DenseZPlane, StoreEncoding
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.variants import VariantAxis
 
 RHO_METHOD = "pleiodb-cml"
@@ -155,7 +157,7 @@ def estimate_rho_cml(
 
 
 def _null_matrices(
-    root: Any, thinned_rows: np.ndarray, z_thresh: float
+    root: Any, thinned_rows: np.ndarray, z_thresh: float, encoding: StoreEncoding
 ) -> tuple[np.ndarray, np.ndarray]:
     """Observed, nulls-zeroed Z and the null mask at the thinned rows.
 
@@ -163,7 +165,7 @@ def _null_matrices(
     Rho is estimated from source-observed statistics only (PRD "Estimation
     inputs").
     """
-    z = np.asarray(root["z"].oindex[thinned_rows, :], dtype=np.float64)
+    z = np.asarray(DenseZPlane.open(root, encoding).rows(thinned_rows), dtype=np.float64)
     finite = np.isfinite(z)
     if "imputed" in root:
         imputed = np.asarray(root["imputed"].oindex[thinned_rows, :], dtype=np.uint8)
@@ -329,6 +331,7 @@ def build_dense_rho(
     Dense-only: Ragged stores have no shared variant axis to thin.
     """
     store_path = Path(store_path)
+    encoding = StoreManifest.load(store_path).encoding
     root = zarr.open_group(str(store_path / "data.zarr"), mode="r")
     n_analyses = int(root["z"].shape[1])
 
@@ -341,7 +344,7 @@ def build_dense_rho(
     positions = np.array([r.position for r in records], dtype=np.int64)
     thinned_rows = select_thinned_variants(chromosomes, positions, window_bp)
 
-    z_nulls_zeroed, mask = _null_matrices(root, thinned_rows, z_thresh)
+    z_nulls_zeroed, mask = _null_matrices(root, thinned_rows, z_thresh, encoding)
     A, B, C, n = _pairwise_sufficient_statistics(z_nulls_zeroed, mask)
 
     rows, cols = np.tril_indices(n_analyses, k=-1)

@@ -11,6 +11,17 @@ format:
 jupyter: python3
 ---
 
+::: {.callout-important}
+## Measured at `format_version` 0.1, not re-run for the fixed-point `z` encoding
+
+Every figure below was measured against stores whose `z` plane is `float16`.
+Issue #114 (ADR 0037 §1) changed `z` to `int16` fixed point with an exact
+overflow table, which changes stored size and adds a decode step to every read,
+so the sizes and timings here describe the previous encoding. They are
+re-measured against rebuilt stores in #117, before the version that ships the
+encoding is cut (`CONTRIBUTING.md`, "Benchmarks are measurements, not prose").
+:::
+
 ```{python}
 #| echo: false
 import json

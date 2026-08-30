@@ -314,17 +314,27 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
     LD blocks), so this exercises `_fold_panel_crossovers`'s `was_imputed`
     branch directly against a synthetic completed-dense zarr array instead of
     routing through a real completion run."""
+    from opengwasdb.encoding import (
+        DenseZPlane,
+        EncodingMeasurements,
+        StoreCodec,
+        StoreEncoding,
+    )
     from opengwasdb.layouts.hybrid.complete import _fold_panel_crossovers
 
+    encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=1))
+    codec = StoreCodec(encoding)
     dense_dir = tmp_path / "dense"
     root = zarr.open_group(str(dense_dir / "data.zarr"), mode="w")
-    root.create_dataset("z", shape=(2, 2), dtype="float16", fill_value=np.nan)
+    root.create_dataset(
+        "z", shape=(2, 2), dtype=codec.z_dtype, fill_value=codec.z_fill_value
+    )
     root.create_dataset("se", shape=(2, 2), dtype="float16", fill_value=np.nan)
     root.create_dataset("imputed", shape=(2, 2), dtype="uint8", fill_value=0)
 
     # Row 1 / analysis column 0: dense completion already wrote an LD-imputed
     # guess here before the fold runs.
-    root["z"][1, 0] = 1.23
+    DenseZPlane.open(root, encoding).patch(np.array([1]), np.array([0]), np.array([1.23]))
     root["se"][1, 0] = 0.5
     root["imputed"][1, 0] = 1
 
@@ -338,12 +348,14 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
 
     n_reclaimed = _fold_panel_crossovers(
         dense_dir, dense_alid_to_row, offsets, src_z, src_se, src_eaf,
-        overflow_alids, is_crossover,
+        overflow_alids, is_crossover, encoding=encoding,
     )
 
     assert n_reclaimed == 1
     written = zarr.open_group(str(dense_dir / "data.zarr"), mode="r")
-    assert float(written["z"][1, 0]) == pytest.approx(-4.0, rel=1e-3)
+    assert float(DenseZPlane.open(written, encoding).points([1], [0])[0]) == pytest.approx(
+        -4.0, rel=1e-3
+    )
     assert float(written["se"][1, 0]) == pytest.approx(0.3, rel=1e-3)
     assert int(written["imputed"][1, 0]) == 0
     # The crossed-over cell's EAF moves with its z/se (ADR 0036); this

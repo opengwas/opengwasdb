@@ -8,6 +8,7 @@ import numpy as np
 import zarr
 from numcodecs import Blosc
 
+from opengwasdb.encoding import StoreEncoding
 from opengwasdb.layouts.dense.constants import TOP_HIT_THRESHOLDS
 from opengwasdb.layouts.dense.top_hits import TOP_HIT_CHUNK_SIZE, threshold_key, z_critical
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -16,18 +17,24 @@ from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 def build_ragged_top_hit_indexes(
     store_path: str | Path,
     thresholds: tuple[float, ...] = TOP_HIT_THRESHOLDS,
+    encoding: StoreEncoding | None = None,
 ) -> None:
     """Build ranked top-hit arrays for each configured p-value threshold.
 
     Writes to data.zarr/top_hits/<key>/ using the same schema as the dense
     builder so the query facade and validator can share one code path.
+
+    Thresholding is on the **stored** z, decoded through the store's own codec:
+    an index built from unrounded values would name hits the store itself
+    contradicts (issue 046). ``encoding`` is supplied by a builder that has not
+    written its manifest yet; otherwise it is read from the release.
     """
     store_path = Path(store_path)
-    csr = RaggedCSRReader(store_path)
+    csr = RaggedCSRReader(store_path, encoding)
 
     offsets = csr._offsets[:]
     vi_all = csr._variant_index[:].astype(np.int32)
-    z_all = csr._z[:].astype(np.float32)
+    z_all = csr.z_all()
     se_all = csr._se[:].astype(np.float32)
     n_analyses = len(offsets) - 1
     imputed_all = (

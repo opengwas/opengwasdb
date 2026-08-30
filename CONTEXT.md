@@ -38,6 +38,13 @@ _Avoid_: trait annotation, display metadata.
 **Format Version**:
 The version of the OpenGWASDB storage contract required to interpret a Store Release. It describes representation compatibility, not the version of the biological data.
 
+**Store Encoding**:
+How a Store Release's statistic planes physically encode their values — the plan, decided once per build from measured properties of the data and recorded in `manifest.json`, that every builder, completion pass, query and validation rule reads back rather than re-deriving (ADR 0037, ADR 0038 §6). It is authoritative over the arrays: a plane that disagrees with the declared encoding fails validation, and a reader meeting an encoding it does not implement rejects the release rather than guessing. Distinct from **Format Version**, which says which contract a release is written against; the encoding says what this particular release's bytes mean within it. Distinct too from compression, which is how those bytes are stored, not what they mean.
+_Avoid_: dtype, when the encoding is what is meant — a plane's dtype is one part of its encoding, and the scale, reserved codes and overflow table are the rest. `z` is stored as `int16` and is not an integer.
+
+**Missing Marker**:
+The value a statistic plane uses to say "no association here", defined by that plane's declared **Store Encoding** rather than by its dtype: NaN for a floating-point plane, a reserved sentinel code for an integer one. The `z` and `se` markers must agree, and a cell either marker calls missing is never imputed (spec §15, ADR 0013). Stating the contract in terms of the encoding rather than of NaN is what lets an integer plane, which cannot hold a NaN, express the same invariant.
+
 **Primary Storage Layout**:
 The main physical organisation of associations within a Store. Dense, Ragged, and Hybrid are alternative primary layouts behind the same metadata, identity, validation, and query concepts.
 

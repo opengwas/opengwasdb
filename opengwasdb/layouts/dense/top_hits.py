@@ -10,8 +10,10 @@ import zarr
 from numcodecs import Blosc
 from scipy.special import erfc, erfcinv  # type: ignore[import-untyped]
 
+from opengwasdb.encoding import DenseZPlane, StoreEncoding
 from opengwasdb.layouts.dense.constants import TOP_HIT_THRESHOLDS
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
+from opengwasdb.model.manifest import StoreManifest
 
 TOP_HIT_CHUNK_SIZE = 16_384
 
@@ -193,18 +195,27 @@ def write_top_hit_indexes(
 def build_top_hit_indexes(
     store_path: str | Path,
     thresholds: tuple[float, ...] = TOP_HIT_THRESHOLDS,
+    encoding: StoreEncoding | None = None,
 ) -> None:
     """(Re)build ranked top-hit arrays by scanning the stored dense matrix.
 
     Used by build paths that do not harvest hits inline, and to rebuild the index
     on an existing store. Scans ``z`` in row-bands (never the full matrix in RAM)
-    and thresholds on the **stored** values, so the index matches exactly what a
-    query reads back from ``z`` (issue 046). Collects only candidate cells
+    and thresholds on the **stored** values -- decoded through the store's own
+    codec, so the index matches exactly what a query reads back from ``z``
+    (issue 046, ADR 0037). Collects only candidate cells
     (``|z| >= z_critical(loosest)``).
+
+    ``encoding`` is the store's declared plan; when omitted it is read from the
+    release's manifest, never re-derived from the arrays.
     """
 
-    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="r")
-    z_arr = root["z"]
+    store_path = Path(store_path)
+    if encoding is None:
+        encoding = StoreManifest.load(store_path).encoding
+    root = zarr.open_group(str(store_path / "data.zarr"), mode="r")
+    z_plane = DenseZPlane.open(root, encoding)
+    z_arr = z_plane.array
     se_arr = root["se"]
     imputed_arr = root["imputed"] if "imputed" in root else None
     n_variants = int(z_arr.shape[0])
@@ -218,14 +229,14 @@ def build_top_hit_indexes(
     imputed_parts: list[np.ndarray] = []
     for r0 in range(0, n_variants, band_rows):
         r1 = min(r0 + band_rows, n_variants)
-        z_band = z_arr[r0:r1]
-        mask = np.abs(z_band.astype("float32")) >= loosest  # NaN compares False
+        z_band = z_plane.band(r0, r1)
+        mask = np.abs(z_band) >= loosest  # NaN compares False
         br, bc = np.where(mask)
         if len(br):
             se_band = se_arr[r0:r1]
             rows_parts.append(br.astype(np.int64) + r0)
             cols_parts.append(bc.astype(np.int64))
-            z_parts.append(z_band[br, bc].astype("float32"))
+            z_parts.append(z_band[br, bc])
             se_parts.append(se_band[br, bc].astype("float32"))
             if imputed_arr is not None:
                 imputed_band = imputed_arr[r0:r1]

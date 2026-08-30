@@ -3,17 +3,26 @@
 import numpy as np
 import pytest
 
+from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
+
+# These tests exercise the CSR arrays directly, in a bare directory with no
+# manifest.json, so they pass the plan explicitly where a real store's reader
+# would read it from the release (ADR 0037).
+ENCODING = StoreEncoding.decide(EncodingMeasurements(n_analyses=1))
+# Half a fixed-point step at scale 1/1024, which is the most a round trip can
+# move a z-score.
+Z_TOL = 1.0 / 2048
 
 
 def _make_writer(n_analyses: int, seed: int = 42) -> tuple[RaggedCSRWriter, list[tuple]]:
     rng = np.random.default_rng(seed)
-    writer = RaggedCSRWriter()
+    writer = RaggedCSRWriter(ENCODING)
     expected = []
     for i in range(n_analyses):
         count = int(rng.integers(0, 500))
         vi = np.sort(rng.integers(0, 10_000_000, size=count)).astype(np.int32)
-        z = rng.standard_normal(count).astype(np.float16)
+        z = rng.standard_normal(count).astype(np.float32)
         se = np.abs(rng.standard_normal(count)).astype(np.float16)
         writer.add_analysis(vi, z, se)
         expected.append((vi, z, se))
@@ -24,13 +33,13 @@ def test_round_trip_small(tmp_path):
     writer, expected = _make_writer(20)
     writer.flush(tmp_path)
 
-    reader = RaggedCSRReader(tmp_path)
+    reader = RaggedCSRReader(tmp_path, ENCODING)
     assert reader.n_analyses == 20
 
     for i, (vi, z, se) in enumerate(expected):
         result = reader.get_analysis(i)
         np.testing.assert_array_equal(result.variant_index, vi)
-        np.testing.assert_array_equal(result.z, z)
+        np.testing.assert_allclose(result.z, z, atol=Z_TOL)
         np.testing.assert_array_equal(result.se, se)
 
 
@@ -38,7 +47,7 @@ def test_round_trip_large(tmp_path):
     writer, expected = _make_writer(1000)
     writer.flush(tmp_path)
 
-    reader = RaggedCSRReader(tmp_path)
+    reader = RaggedCSRReader(tmp_path, ENCODING)
     assert reader.n_analyses == 1000
     assert reader.n_associations == sum(len(v) for v, _, _ in expected)
 
@@ -47,15 +56,15 @@ def test_round_trip_large(tmp_path):
         vi, z, se = expected[i]
         result = reader.get_analysis(i)
         np.testing.assert_array_equal(result.variant_index, vi)
-        np.testing.assert_array_equal(result.z, z)
+        np.testing.assert_allclose(result.z, z, atol=Z_TOL)
         np.testing.assert_array_equal(result.se, se)
 
 
 def test_empty_analysis(tmp_path):
-    writer = RaggedCSRWriter()
+    writer = RaggedCSRWriter(ENCODING)
     writer.add_analysis(
         np.array([1, 2, 3], dtype=np.int32),
-        np.array([1.0, -2.0, 0.5], dtype=np.float16),
+        np.array([1.0, -2.0, 0.5], dtype=np.float32),
         np.array([0.1, 0.2, 0.3], dtype=np.float16),
     )
     writer.add_analysis(
@@ -70,7 +79,7 @@ def test_empty_analysis(tmp_path):
     )
     writer.flush(tmp_path)
 
-    reader = RaggedCSRReader(tmp_path)
+    reader = RaggedCSRReader(tmp_path, ENCODING)
     assert reader.n_analyses == 3
 
     empty = reader.get_analysis(1)
@@ -84,7 +93,7 @@ def test_empty_analysis(tmp_path):
 
 
 def test_all_empty_analyses(tmp_path):
-    writer = RaggedCSRWriter()
+    writer = RaggedCSRWriter(ENCODING)
     for _ in range(5):
         writer.add_analysis(
             np.empty(0, dtype=np.int32),
@@ -93,7 +102,7 @@ def test_all_empty_analyses(tmp_path):
         )
     writer.flush(tmp_path)
 
-    reader = RaggedCSRReader(tmp_path)
+    reader = RaggedCSRReader(tmp_path, ENCODING)
     assert reader.n_analyses == 5
     assert reader.n_associations == 0
     for i in range(5):
@@ -102,7 +111,7 @@ def test_all_empty_analyses(tmp_path):
 
 
 def test_n_associations_counter(tmp_path):
-    writer = RaggedCSRWriter()
+    writer = RaggedCSRWriter(ENCODING)
     writer.add_analysis(
         np.array([1, 2], dtype=np.int32),
         np.array([1.0, 2.0], dtype=np.float16),
@@ -116,7 +125,7 @@ def test_n_associations_counter(tmp_path):
     assert writer.n_associations == 5
     writer.flush(tmp_path)
 
-    reader = RaggedCSRReader(tmp_path)
+    reader = RaggedCSRReader(tmp_path, ENCODING)
     assert reader.n_associations == 5
 
 
@@ -124,7 +133,7 @@ def test_get_analyses_batch(tmp_path):
     writer, expected = _make_writer(10)
     writer.flush(tmp_path)
 
-    reader = RaggedCSRReader(tmp_path)
+    reader = RaggedCSRReader(tmp_path, ENCODING)
     results = reader.get_analyses([0, 5, 9])
     assert len(results) == 3
     for result, idx in zip(results, [0, 5, 9]):
