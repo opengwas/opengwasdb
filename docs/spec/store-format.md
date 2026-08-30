@@ -1,9 +1,24 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `0.1`
+Format version described: `1.0`  
+Also readable: `0.1` — never written again (§21)
 
-This document defines the contract for valid OpenGWASDB Store Releases. The v0.1 implementation target is **Dense Observed-Only**, but the specification also records accepted design semantics for Ragged layout and Reference-Completed releases so the first implementation does not block later extensions.
+This document defines the contract for valid OpenGWASDB Store Releases. It
+describes `format_version` **1.0**, the version this build writes: statistic
+planes carry a declared encoding (§6a), and `z` is `int16` fixed point rather
+than `float16`.
+
+`0.1` releases remain readable and are not re-stamped. Where the two versions
+differ, the difference is stated in place rather than kept in a separate
+document — §6a for the encoding a `0.1` release is in (`float16` throughout,
+declaring nothing), §15 for what marks a missing cell in each, and §21 for
+what a reader owes a release it did not write. A `0.1` release cannot be
+*completed* by a build that writes 1.0 (§21.3, ADR 0038 §4); it is rebuilt.
+
+Sections that say "v0.1" below describe vocabularies and column contracts
+settled at that version and unchanged since; they are not statements about
+`format_version` 0.1 as against 1.0.
 
 Normative language:
 
