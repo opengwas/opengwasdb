@@ -18,7 +18,6 @@ from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation.validate import validate_store
 
-
 # ── Synthetic BESD fixture (reused from test_ragged_build_besd.py) ─────────
 
 def _write_esi(path: Path, snps: list[dict]) -> None:
@@ -867,3 +866,230 @@ class TestQuery:
         statuses = set(result["association_status"].tolist())
         assert "imputed" not in statuses
         q.close()
+
+
+# Panel SNPs for the gene-target-less fixture: six in one chr1 block, of which
+# the store observes five. Enough observed points for `poly_rescale` to fit
+# (`min_observed_points()` == 4), and one panel-only variant to prove the block
+# was enumerated.
+_RICH_PANEL_SNPS = [
+    ("1:900000:A:G", 0.35, 900_000),
+    ("1:950000:A:C", 0.32, 950_000),
+    ("1:1000000:A:G", 0.30, 1_000_000),
+    ("1:1050500:C:T", 0.40, 1_050_500),   # panel-only: never observed by the store
+    ("1:1100000:C:T", 0.45, 1_100_000),
+    ("1:1150000:A:G", 0.28, 1_150_000),
+]
+_RICH_OBSERVED = [snp for snp in _RICH_PANEL_SNPS if snp[0] != "1:1050500:C:T"]
+
+
+def _make_rich_ld_panel(tmp_path: Path) -> Path:
+    """One chr1 block over `_RICH_PANEL_SNPS`, in the panel's native id form."""
+    panel_dir = tmp_path / "rich_panel" / "EUR" / "1"
+    panel_dir.mkdir(parents=True)
+    lines = ["CHR\tSNP\tOA\tEA\tEAF\tBP"]
+    for alid, eaf, _bp in _RICH_PANEL_SNPS:
+        chrom, pos, a1, a2 = alid.split(":")
+        lines.append(f"{chrom}\t{chrom}:{pos}_{a1}_{a2}\t{a2}\t{a1}\t{eaf}\t{pos}")
+    (panel_dir / "900000-1300000.tsv").write_text("\n".join(lines) + "\n")
+
+    n = len(_RICH_PANEL_SNPS)
+    rng = np.random.default_rng(0)
+    A = rng.standard_normal((n, n))
+    ld = A @ A.T + np.eye(n) * n * 0.1
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+        for row in ld:
+            gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
+    (panel_dir / "900000-1300000.unphased.vcor1.gz").write_bytes(buf.getvalue())
+    return tmp_path / "rich_panel"
+
+
+def _make_rich_besd_fixture(tmp_path: Path) -> Path:
+    """One probe observing five of the block's six panel SNPs."""
+    fixture = tmp_path / "rich_fixture"
+    fixture.mkdir()
+    snps = []
+    for alid, _eaf, bp in _RICH_OBSERVED:
+        chrom, pos, a1, a2 = alid.split(":")
+        snps.append({"chr": chrom, "snp_id": f"rs{pos}", "bp": bp, "a1": a1, "a2": a2})
+    probes = [{"chr": "1", "probe_id": "ENSG00000000001", "bp": 1_050_000, "gene": "GENE1"}]
+    # Distinct effect sizes: `elastic_net_impute` refuses a block whose observed
+    # z-scores are all identical.
+    assocs = [[(i, 0.1 * (i + 1), 0.02) for i in range(len(snps))]]
+    _write_esi(fixture / "test.esi", snps)
+    _write_epi(fixture / "test.epi", probes)
+    _write_besd_sparse_3f(fixture / "test.besd", len(probes), assocs)
+    return fixture / "test"
+
+
+class TestGeneTargetLessAnalyses:
+    """Issue #102: a Store Family with no single encoding gene per Analysis
+    (small-molecule metabolomics, say) has no `trait_chr`/`trait_bp` at all --
+    by design, and documented as such in the registry's schema. Block
+    enumeration was scoped entirely to a cis window around that position, so
+    for those families Reference Completion was a **complete no-op**: 0 blocks
+    enumerated, 0 new panel variants, 0 imputed, and a release stamped
+    `reference_completed` whose associations are byte-identical to its
+    observed-only source. All four of opengwasdb-stores'
+    `metabolome-plasma-2023` full releases (4,443 real Analyses) completed
+    this way and did nothing.
+
+    These tests assert on **block enumeration** -- did the store gain the
+    panel-only variants of a block it should have completed -- rather than on
+    imputed counts, because whether `ElasticNetCV` converges on a fixture this
+    small is not deterministic (`test_dense_completion.py` notes the same
+    fragility). Enumeration is what #102 is about: the blocks were never
+    reached at all.
+    """
+
+    #: In the fixture's panel block and never observed by the store, so it can
+    #: only reach the completed store if that block was enumerated.
+    PANEL_ONLY_ALID = "1:1050500:C:T"
+
+    @pytest.fixture
+    def rich_observed_store(self, tmp_path):
+        prefix = _make_rich_besd_fixture(tmp_path)
+        out = tmp_path / "rich_obs.opengwasdb"
+        build_ragged_from_besd(prefix, out, store_id="test", release_id="obs-v1", tissue="Blood")
+        return out
+
+    @pytest.fixture
+    def rich_panel(self, tmp_path):
+        return _make_rich_ld_panel(tmp_path)
+
+    @staticmethod
+    def _drop_trait_positions(store: Path) -> None:
+        """Blank `trait_chr`/`trait_bp` and nothing else, so the only
+        difference from a store that does get completed is the one thing this
+        issue is about."""
+        from opengwasdb.model.analyses import read_analyses, write_analyses
+
+        table = read_analyses(store / "analyses.tsv")
+        rows = [{**row, "trait_chr": "", "trait_bp": ""} for row in table.rows]
+        write_analyses(
+            store / "analyses.tsv", type(table)(fieldnames=table.fieldnames, rows=tuple(rows))
+        )
+
+    @staticmethod
+    def _alids(store: Path) -> set[str]:
+        from opengwasdb.variants.axis import VariantAxis
+
+        axis = VariantAxis(store)
+        try:
+            return {v.alid for v in axis.all()}
+        finally:
+            axis.close()
+
+    def test_the_fixture_is_meaningful_before_anything_is_asserted_about_it(
+        self, rich_observed_store, rich_panel
+    ):
+        """The Analysis must observe enough of the block to be imputable at
+        all (`min_observed_points()`), and the panel-only variant must be
+        absent from the source -- or the assertions below prove nothing."""
+        from opengwasdb.completion.impute import min_observed_points
+
+        observed = self._alids(rich_observed_store)
+        assert self.PANEL_ONLY_ALID not in observed
+        panel_alids = {alid for alid, _eaf, _bp in _RICH_PANEL_SNPS}
+        assert len(observed & panel_alids) >= min_observed_points()
+        assert "1:1050500_C_T" in (
+            rich_panel / "EUR" / "1" / "900000-1300000.tsv"
+        ).read_text()
+
+    def test_an_analysis_with_a_trait_position_still_uses_its_cis_window(
+        self, tmp_path, rich_observed_store, rich_panel
+    ):
+        """The unchanged path, asserted so the new one cannot be mistaken for
+        it."""
+        dst = tmp_path / "with_positions.opengwasdb"
+        complete_ragged_store(
+            rich_observed_store, dst, rich_panel,
+            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+        )
+        assert self.PANEL_ONLY_ALID in self._alids(dst)
+
+    def test_an_analysis_with_no_trait_position_is_completed_from_its_own_variants(
+        self, tmp_path, rich_observed_store, rich_panel
+    ):
+        self._drop_trait_positions(rich_observed_store)
+        dst = tmp_path / "no_positions.opengwasdb"
+
+        complete_ragged_store(
+            rich_observed_store, dst, rich_panel,
+            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+        )
+
+        assert self.PANEL_ONLY_ALID in self._alids(dst), (
+            "no LD block was enumerated for a gene-target-less Analysis: reference "
+            "completion did nothing but relabel the store"
+        )
+
+    def test_a_block_the_analysis_barely_touches_is_not_enumerated(
+        self, tmp_path, rich_observed_store, rich_panel
+    ):
+        """Below `min_observed_points()` the block cannot be fitted, so
+        enumerating it would add its panel variants as missing rows and impute
+        none of them -- and spec §17 forbids expanding a suggestive singleton
+        into a whole region. Here the Analysis keeps only two of the block's
+        SNPs."""
+        from opengwasdb.model.analyses import read_analyses, write_analyses
+        from opengwasdb.variants.axis import VariantAxis
+
+        self._drop_trait_positions(rich_observed_store)
+        # Rebuild the source with only two of the block's panel SNPs observed.
+        thin = tmp_path / "thin_fixture"
+        thin.mkdir()
+        snps = []
+        for alid, _eaf, bp in _RICH_OBSERVED[:2]:
+            chrom, pos, a1, a2 = alid.split(":")
+            snps.append({"chr": chrom, "snp_id": f"rs{pos}", "bp": bp, "a1": a1, "a2": a2})
+        _write_esi(thin / "test.esi", snps)
+        _write_epi(thin / "test.epi", [
+            {"chr": "1", "probe_id": "ENSG00000000001", "bp": 1_050_000, "gene": "GENE1"}
+        ])
+        _write_besd_sparse_3f(
+            thin / "test.besd", 1, [[(0, 0.1, 0.02), (1, 0.3, 0.02)]]
+        )
+        thin_store = tmp_path / "thin_obs.opengwasdb"
+        build_ragged_from_besd(
+            thin / "test", thin_store, store_id="test", release_id="obs-v1", tissue="Blood"
+        )
+        table = read_analyses(thin_store / "analyses.tsv")
+        write_analyses(
+            thin_store / "analyses.tsv",
+            type(table)(
+                fieldnames=table.fieldnames,
+                rows=tuple({**r, "trait_chr": "", "trait_bp": ""} for r in table.rows),
+            ),
+        )
+
+        dst = tmp_path / "thin_completed.opengwasdb"
+        result = complete_ragged_store(
+            thin_store, dst, rich_panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+        )
+
+        assert result.n_imputed == 0
+        axis = VariantAxis(dst)
+        try:
+            assert self.PANEL_ONLY_ALID not in {v.alid for v in axis.all()}
+        finally:
+            axis.close()
+
+    def test_an_analysis_whose_variants_touch_no_block_is_left_alone(
+        self, tmp_path, rich_observed_store
+    ):
+        """The pass-through path still exists -- it is now reached by holding
+        no completable region, rather than by having no gene target."""
+        self._drop_trait_positions(rich_observed_store)
+        empty_panel = tmp_path / "empty_panel"
+        (empty_panel / "EUR" / "22").mkdir(parents=True)
+        dst = tmp_path / "no_blocks.opengwasdb"
+
+        result = complete_ragged_store(
+            rich_observed_store, dst, empty_panel,
+            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+        )
+
+        assert result.n_imputed == 0
+        assert self._alids(dst) == self._alids(rich_observed_store)

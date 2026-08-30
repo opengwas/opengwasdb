@@ -13,12 +13,14 @@ matrix alone is retained for panels predating that contract.
 from __future__ import annotations
 
 import logging
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from opengwasdb.completion.impute import ld_pca
+from opengwasdb.completion.impute import ld_pca, min_observed_points
 from opengwasdb.variants import VariantNormalisationError, orient_to_canonical
 
 log = logging.getLogger(__name__)
@@ -159,6 +161,60 @@ def find_blocks(
             continue
         blocks.append(block)
     return blocks
+
+
+def blocks_over_variants(
+    ld_dir: str | Path,
+    ancestry: str,
+    analyses_by_alid: Mapping[str, Sequence[int]],
+    chromosomes: Iterable[str],
+    *,
+    min_observed: int | None = None,
+) -> dict[int, list[LDBlock]]:
+    """Per Analysis, the LD blocks it already holds enough observations in.
+
+    The block-enumeration path for an Analysis with no Trait position to scan a
+    cis window around -- a Store Family with no single encoding gene per
+    Analysis has no `trait_chr`/`trait_bp` by design, and completion was a
+    silent no-op for every one of them (issue #102). Where the cis path asks
+    "which blocks are near this Analysis's gene", this asks "which blocks does
+    this Analysis already have enough of a region in to impute from".
+
+    `analyses_by_alid` maps a canonical ALID to the Analyses observing it, so
+    the count is over **the Analysis's observations at the block's own panel
+    SNPs** -- the same set `completion.block.run_block` counts when it decides
+    whether it can fit. Counting positions inside the block's base-pair extent
+    instead would include off-panel variants and enumerate blocks that then
+    impute nothing.
+
+    `min_observed` defaults to `impute.min_observed_points()`: below it,
+    `poly_rescale` returns NaN and imputation is rejected, so enumerating the
+    block would add its panel variants to the axis as missing rows and fill
+    none of them. Spec §17's "do not expand singleton suggestive associations"
+    falls out of the same threshold.
+
+    Blocks are read one chromosome at a time and only the selected ones are
+    retained: a whole panel's blocks carry every SNP id and EAF they hold, and
+    the Store Families this path exists for span the genome.
+    """
+    if min_observed is None:
+        min_observed = min_observed_points()
+    per_analysis: dict[int, list[LDBlock]] = defaultdict(list)
+    if not analyses_by_alid:
+        return {}
+    for chrom in chromosomes:
+        for block in list_all_blocks(ld_dir, ancestry, chrom):
+            observed: Counter[int] = Counter()
+            for snp_id in block.snp_ids:
+                alid = canonical_panel_alid(snp_id)
+                if alid is None:
+                    continue
+                for analysis_index in analyses_by_alid.get(alid, ()):
+                    observed[analysis_index] += 1
+            for analysis_index, n_observed in observed.items():
+                if n_observed >= min_observed:
+                    per_analysis[analysis_index].append(block)
+    return dict(per_analysis)
 
 
 def list_chromosomes(ld_dir: str | Path, ancestry: str) -> list[str]:

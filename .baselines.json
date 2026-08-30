@@ -1,6 +1,6 @@
 {
   "_comment": "Pre-existing ruff/mypy findings. CONTRIBUTING.md: a change adds none. Lowering these is welcome as a change of its own; raising one needs a reason in the commit message.",
   "measured_at": "v0.2.0",
-  "ruff": 68,
+  "ruff": 67,
   "mypy": 40
 }

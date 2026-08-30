@@ -715,6 +715,21 @@ For Ragged Cis-and-Signals molecular Stores, Reference Completion is bounded to 
 - complete significant trans regions within existing trans-region boundaries;
 - do not expand singleton suggestive associations.
 
+A **region** is identified from the Analysis's Trait position where it has one.
+Not every Store Family has one: a family with no single encoding gene per
+Analysis (small-molecule metabolomics, say) carries no `trait_chr`/`trait_bp`
+at all, by design. For those Analyses the retained regions are identified from
+**the Analysis's own retained associations** instead: an LD block is a region
+of that Analysis when the Analysis already holds at least
+`impute.min_observed_points()` observations at that block's own panel
+variants. Below that threshold the block cannot be fitted, so completing it
+would add its panel variants as missing rows and impute none of them; the
+"do not expand singleton suggestive associations" rule above is the same
+threshold seen from the other side. Counting a variant that merely falls
+inside a block's base-pair extent, rather than one of the block's own panel
+variants, is not the same count and MUST NOT be substituted for it (ADR 0039,
+issue #102).
+
 Each completed region contains:
 
 - the full slice of Reference Variant Set variants within the region boundary;
