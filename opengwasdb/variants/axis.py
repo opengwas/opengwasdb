@@ -33,9 +33,20 @@ VARIANT_HEADER = (
     "#chromosome\tposition\tvariant_index\teffect_allele\tother_allele\talid\trsid"
     "\tsource_alid\n"
 )
-# Fixed byte-width for ALID encoding in the mmap'd search index.
-# Supports chromosomes up to 3 chars, positions up to 9 digits, alleles up to ~20 chars.
-_ALID_DTYPE = "|S64"
+# Fixed byte-width for ALID encoding in the mmap'd search index. Fixed, because
+# that is what lets `np.searchsorted` run over the array as an mmap without
+# parsing it. Measured across the FinnGen, GWAS Catalog and metabolome pilots,
+# ALID length is mean 14.9 and p99 21; the slack is for indels.
+#
+# An ALID wider than this is *left out* of the index, never cast into it:
+# `np.array(..., dtype="|S32")` truncates silently, and two indels at one
+# position agreeing over the slot width then collapse to a single key, so a
+# lookup by either full ALID returned whichever row sorted first (issue #127 --
+# on the published finngen-r13 release, 342 variants answering to another's
+# name). Excluded ALIDs stay reachable: `by_alid` resolves them by exact scan
+# over the position instead, which is slower and right.
+_ALID_WIDTH = 32
+_ALID_DTYPE = f"|S{_ALID_WIDTH}"
 
 # Fixed byte-width for rsid encoding in the mmap'd rsid search index. An rsid is
 # "rs" + digits, far inside this; the width exists so a malformed or non-rs
@@ -44,6 +55,17 @@ _ALID_DTYPE = "|S64"
 # counted in a warning) rather than stored truncated -- see `_write_rsid_index`.
 _RSID_WIDTH = 24
 _RSID_DTYPE = f"|S{_RSID_WIDTH}"
+
+
+def is_indexable_alid(alid: str) -> bool:
+    """Whether `alid` fits the fixed-width ALID search index (issue #127).
+
+    The one place the rule lives: `write_variant_axis` decides what to index by
+    it, `VariantAxis.by_alid` decides whether a miss means "absent" or "ask the
+    exact scan" by it, and `opengwasdb.validation.validate` checks the index
+    holds no key shared by two variants -- which is what this rule prevents.
+    """
+    return len(alid.encode("utf-8")) <= _ALID_WIDTH
 
 
 def is_indexable_rsid(rsid: str | None) -> bool:
@@ -204,9 +226,19 @@ def write_variant_axis(
         force=True,
     )
     # Write mmap'd ALID search index: two parallel arrays sorted by ALID bytes.
-    alid_bytes = np.array([v.alid for v in variants], dtype=_ALID_DTYPE)
-    row_indices = np.arange(len(variants), dtype="int32")
-    sort_order = np.argsort(alid_bytes)
+    # Over-wide ALIDs are left out rather than truncated in -- see `_ALID_WIDTH`.
+    indexable = [(v.alid, i) for i, v in enumerate(variants) if is_indexable_alid(v.alid)]
+    n_too_long = len(variants) - len(indexable)
+    if n_too_long:
+        log.warning(
+            "%d ALID(s) longer than %d bytes left out of the ALID search index: "
+            "they resolve by exact scan instead, which is slower and correct",
+            n_too_long,
+            _ALID_WIDTH,
+        )
+    alid_bytes = np.array([alid for alid, _ in indexable], dtype=_ALID_DTYPE)
+    row_indices = np.array([i for _, i in indexable], dtype="int32")
+    sort_order = np.argsort(alid_bytes, kind="stable")
     np.save(variant_alid_bytes_path(store), alid_bytes[sort_order])
     np.save(variant_alid_rows_path(store), row_indices[sort_order])
     _write_rsid_index(store, variants, rsid_by_alid)
@@ -382,18 +414,26 @@ class VariantAxis:
         indices: list[int] = []
         if parsed_pairs:
             alid_bytes, alid_rows = self._alid_bytes, self._alid_rows
+            # Over-wide ALIDs are not in the index and must not be cast into a
+            # query against it: the cast truncates, and a truncated query
+            # matches a different variant's key (issue #127). They take the
+            # exact scan, the same split `by_alid` makes for one identifier.
+            indexable = [(q, p) for q, p in parsed_pairs if is_indexable_alid(q)]
+            scanned = [p for q, p in parsed_pairs if not is_indexable_alid(q)]
             if alid_bytes is not None and alid_rows is not None:
-                queries = np.array([q for q, _ in parsed_pairs], dtype=_ALID_DTYPE)
-                positions = np.searchsorted(alid_bytes, queries)
-                in_bounds = positions < len(alid_bytes)
-                hit = np.zeros(len(queries), dtype=bool)
-                hit[in_bounds] = alid_bytes[positions[in_bounds]] == queries[in_bounds]
-                indices.extend(int(row) for row in alid_rows[positions[hit]])
+                if indexable:
+                    queries = np.array([q for q, _ in indexable], dtype=_ALID_DTYPE)
+                    positions = np.searchsorted(alid_bytes, queries)
+                    in_bounds = positions < len(alid_bytes)
+                    hit = np.zeros(len(queries), dtype=bool)
+                    hit[in_bounds] = alid_bytes[positions[in_bounds]] == queries[in_bounds]
+                    indices.extend(int(row) for row in alid_rows[positions[hit]])
             else:
-                for _, parsed in parsed_pairs:
-                    record = self.by_alid(parsed)
-                    if record is not None:
-                        indices.append(record.variant_index)
+                scanned = [p for _, p in parsed_pairs]
+            for parsed in scanned:
+                record = self.by_alid(parsed)
+                if record is not None:
+                    indices.append(record.variant_index)
 
         for identifier in alias_identifiers:
             # Every row the rsid names, not just the first: a phewas over
@@ -409,11 +449,15 @@ class VariantAxis:
         return np.array(indices, dtype="int32")
 
     def by_alid(self, parsed: ParsedAlid) -> VariantRecord | None:
-        if self._alid_bytes is not None:
-            query = np.array(
-                [f"{parsed.chromosome}:{parsed.position}:{parsed.effect_allele}:{parsed.other_allele}"],
-                dtype=_ALID_DTYPE,
-            )
+        alid = (
+            f"{parsed.chromosome}:{parsed.position}:"
+            f"{parsed.effect_allele}:{parsed.other_allele}"
+        )
+        # Only ask the index about ALIDs it could hold. A wider one was never
+        # indexed (issue #127), and casting it to the slot width to ask would
+        # match a *different* variant's truncated key -- the defect itself.
+        if self._alid_bytes is not None and is_indexable_alid(alid):
+            query = np.array([alid], dtype=_ALID_DTYPE)
             idx = int(np.searchsorted(self._alid_bytes, query[0]))
             if idx < len(self._alid_bytes) and self._alid_bytes[idx] == query[0]:
                 return self.by_index(int(self._alid_rows[idx]))

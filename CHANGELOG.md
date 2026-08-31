@@ -13,6 +13,42 @@ the end of this file.
 Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 `main`, at which point it is cut into a version.
 
+### Fixed
+
+- **A long indel could answer another variant's lookup** (#127). The ALID
+  search index is a fixed-width array — that is what makes `np.searchsorted`
+  work over it as an mmap — but it was built with
+  `np.array(..., dtype="|S64")`, which truncates silently. Two indels at one
+  position whose alleles agreed over 64 bytes collapsed to one key, and a
+  lookup by either full ALID returned whichever row sorted first. On the
+  published `finngen-r13/r13-pilot-20` release: 6,216 truncated ALIDs, 248
+  keys shared by more than one variant, **342 variants answering to another's
+  name**, through both `by_alid` and the vectorised `indices_by_identifiers`
+  that dense `lookup()` uses. An over-wide ALID is now left out of the index
+  and counted, the rule `_write_rsid_index` has followed since #109; it stays
+  reachable by exact scan over its position. `validate_store` rejects an index
+  holding a key shared by two variants, so an affected store says so.
+
+### Changed
+
+- **The Store Variant Axis no longer keeps a relational copy of itself**
+  (#128). `index.sqlite`'s `variants` table duplicated every column of
+  `variants.tsv.gz` — which carries `source_alid` besides — was written by one
+  builder, read by one self-described "legacy" function that nothing called,
+  and had a `rsid` column left `NULL` in all 21,230,615 FinnGen rows while the
+  TSV had rsids for 96.9% of them. Dropped, along with its range index and
+  `variant_by_identifier()`. Its duplicate-ALID validation moves onto the ALID
+  search index — the structure queries actually read, and the one that also
+  catches #127's collisions. Measured on the #117 rebuilds, the variant axis is
+  69–88% of a pilot store against the statistics' 11–31%: **803 MB of FinnGen's
+  4.86 GB** was this table.
+- **The ALID index slot narrows from 64 to 32 bytes**, now that an over-wide
+  ALID is excluded rather than truncated and the width is a size/latency trade
+  rather than a correctness one. Measured across the FinnGen, GWAS Catalog and
+  metabolome pilots, ALID length is mean 14.9 and p99 21; at 32 bytes the index
+  halves (**1,359 MB → 679 MB on FinnGen**) and 0.21% of variants resolve by
+  exact scan instead of binary search.
+
 ### Added
 
 - **`eaf` is stored as a per-variant baseline plus a per-cell `int8` logit

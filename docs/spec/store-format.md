@@ -68,6 +68,22 @@ source that names no variants indexes none — but a release whose
 every rsid lookup against such a release returns an empty result
 indistinguishable from a real absence.
 
+`index.sqlite` MUST NOT contain a `variants` table. The variant axis is
+`variants.tsv.gz` plus the offset and search sidecars above; a relational copy
+duplicated every column of the table it shadowed, was read by nothing, and
+carried a `rsid` column that no builder populated — a fourth copy of the axis
+that disagreed with the other three (issue #128).
+
+Both search indexes are fixed-width arrays, because that is what allows a
+binary search over them without parsing. An identifier too wide for its slot
+MUST be left out of the index and the omission counted — never cast into it.
+Casting truncates, and two variants whose identifiers agree over the slot width
+then share one key, so a lookup by either returns whichever row sorts first: one
+variant answering to another's name, with nothing to show it (issue #127). An
+ALID omitted this way stays reachable, resolved by exact scan over its position;
+an rsid omitted this way is not resolvable by name, which is why the widths are
+chosen from measured data and the omission is reported at build time.
+
 This is the complete envelope for a standalone Dense or Ragged Store Release.
 A Hybrid release additionally nests a `dense/` Dense Component directory
 holding a self-contained Dense Store Release of its own (same envelope as
@@ -968,7 +984,8 @@ Validators MUST check at least:
 - Ragged Reference-Completed regions include all Reference Variant Set variants within completed boundaries;
 - top-hit indexes, when present, are consistent with stored Z values;
 - `analyses.tsv` contains exactly one row per Analysis, covering every `analysis_index` referenced by `index.sqlite` (this is the one place SQLite cannot enforce the relationship as a foreign key, since `analyses.tsv` is a separate file);
-- `index.sqlite` does not contain an `analyses` table;
+- `index.sqlite` does not contain an `analyses` table, nor a `variants` table (§1, issue #128);
+- `variant_alid_bytes.npy` holds one entry per ALID narrow enough to index, and no key in it is shared by two variants — a shared key is what silently truncating an over-wide ALID produced, and it makes one variant answer another's lookup (issue #127);
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;

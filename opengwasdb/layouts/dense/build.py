@@ -16,7 +16,7 @@ from opengwasdb.encoding import (
     StoreEncoding,
     ZOverflowBuilder,
 )
-from opengwasdb.index import create_lookup_indexes, initialise_schema, set_metadata
+from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_COMPRESSOR,
