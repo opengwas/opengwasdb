@@ -46,11 +46,17 @@ def test_dense_build_writes_standard_envelope_and_metadata(dense_store_path):
         assert get_metadata(connection, "n_variants") == 3
         assert get_metadata(connection, "n_analyses") == 2
         dense_meta = get_metadata(connection, "dense")
-        variant_rows = connection.execute("SELECT COUNT(*) AS n FROM variants").fetchone()["n"]
+        tables = {
+            row["name"]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
         aliases = connection.execute(
             "SELECT alias, variant_index FROM variant_aliases ORDER BY alias, variant_index"
         ).fetchall()
-    assert variant_rows == 0
+    # The variant axis has no relational copy (issue #128). This assertion used
+    # to read `variant_rows == 0` -- the table was already vestigial on this
+    # build path; now it is not created at all.
+    assert "variants" not in tables, tables
     assert [(row["alias"], row["variant_index"]) for row in aliases] == [
         ("rs1", 0),
         ("rs2", 1),

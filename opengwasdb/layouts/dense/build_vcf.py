@@ -973,24 +973,7 @@ def _write_index(
                 "compressor": DEFAULT_COMPRESSOR,
             },
         )
-        connection.executemany(
-            """
-            INSERT INTO variants(
-                variant_index, alid, chromosome, position, effect_allele, other_allele
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (i, alid, *_parse_alid(alid))
-                for i, alid in enumerate(hg38_alids)
-            ],
-        )
         connection.commit()
-
-
-def _parse_alid(alid: str) -> tuple[str, int, str, str]:
-    parts = alid.split(":")
-    return parts[0], int(parts[1]), parts[2], parts[3]
 
 
 def _apply_eaf_scope(analyses: list[Analysis], column_has_eaf: np.ndarray) -> list[Analysis]:

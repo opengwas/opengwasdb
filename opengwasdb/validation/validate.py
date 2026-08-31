@@ -58,6 +58,7 @@ from opengwasdb.store.open import (
     open_store,
 )
 from opengwasdb.variants import (
+    is_indexable_alid,
     VariantAxis,
     VariantRecord,
     is_indexable_rsid,
@@ -786,16 +787,10 @@ def _validate_sqlite(
     n_variants: int,
     errors: list[str],
 ) -> None:
-    duplicates = connection.execute(
-        """
-        SELECT alid, COUNT(*) AS n
-        FROM variants
-        GROUP BY alid
-        HAVING n > 1
-        """
-    ).fetchall()
-    if duplicates:
-        errors.append("duplicate canonical variants in variants table")
+    # No duplicate-ALID query here any more: SQLite holds no variant rows
+    # (issue #128). `_validate_variant_axis` checks the same thing against
+    # `variants.tsv.gz` and the ALID search index -- the structures queries
+    # actually read -- which is strictly stronger.
     alias_rows = connection.execute("SELECT alias, variant_index FROM variant_aliases").fetchall()
     for row in alias_rows:
         variant_index = int(row["variant_index"])
@@ -1111,11 +1106,27 @@ def _validate_variant_axis(variant_axis: VariantAxis, errors: list[str]) -> int:
             f"variant_offsets.npy has {variant_axis.n_variants} rows but "
             f"variants.tsv.gz has {len(records)} rows"
         )
-    if variant_axis._alid_bytes is not None and len(variant_axis._alid_bytes) != len(records):
-        errors.append(
-            f"variant_alid_bytes.npy has {len(variant_axis._alid_bytes)} entries but "
-            f"variants.tsv.gz has {len(records)} rows"
-        )
+    if variant_axis._alid_bytes is not None:
+        # One entry per *indexable* ALID, not per variant: an ALID too wide for
+        # the slot is left out rather than truncated into a key it shares with
+        # another variant (issue #127). Those resolve by exact scan.
+        indexable = sum(1 for record in records if is_indexable_alid(record.alid))
+        if len(variant_axis._alid_bytes) != indexable:
+            errors.append(
+                f"variant_alid_bytes.npy has {len(variant_axis._alid_bytes)} entries but "
+                f"variants.tsv.gz has {indexable} ALID(s) narrow enough to index "
+                f"(of {len(records)} rows)"
+            )
+        keys = np.asarray(variant_axis._alid_bytes)
+        if len(keys) > 1:
+            collisions = int(np.count_nonzero(keys[1:] == keys[:-1]))
+            if collisions:
+                errors.append(
+                    f"variant_alid_bytes.npy holds {collisions} key(s) shared by more than "
+                    "one variant: a lookup by one variant's ALID returns another's row. "
+                    "This is what silently truncating an over-wide ALID produced before "
+                    "issue #127 — rebuild the store"
+                )
     _validate_rsid_index(variant_axis, records, errors)
     seen_alids: set[str] = set()
     for expected_index, record in enumerate(records):
