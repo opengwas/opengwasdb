@@ -153,6 +153,18 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
     nulls, so a manifest could reach `reference_completed` with no
     `ld_panel_id` at all — the field #116 made load-bearing — and only a log
     line to say so.
+  - **A release whose only frequencies are the panel's needs no orientation
+    evidence.** Found by rebuilding `eqtlgen-cis-pilot` on the merged code, not
+    by a test: it is built from BESD, which carries no EAF at all, so its build
+    runs no orientation check and leaves `eaf_orientation` blank. Completion
+    then stamps `eaf_scope=association` for the panel's reference EAF, and
+    §9.1's evidence rule rejected the release — demanding a check on a cohort
+    frequency column that does not exist and that no build could supply. Every
+    Reference-Completed release built from an EAF-less source failed
+    `validate_store`. The rule now applies only where some component declares
+    an `eaf` plane; reference EAF is oriented by construction, through the same
+    reader the check itself uses. Both no-frequency fixtures missed it because
+    their builders record `unverified`, which warns rather than fails.
   - **A panel with no `EAF` imputes nothing, and the spec now says so.** An
     imputed `se` is scaled by the panel's heterozygosity, so such a panel
     produces no imputed cells rather than an `se` derived from a substituted

@@ -904,11 +904,24 @@ def _validate_eaf_orientation(
     by_id = {
         str(entry.get("analysis_id", "")): entry for entry in recorded.get("analyses", [])
     }
+    # Whether any component stores frequencies *of its own*. When none does,
+    # every `eaf_scope=association` in this release is describing the panel's
+    # reference EAF and nothing else (issue #113): there is no cohort column to
+    # be reported against the other allele, and `panel_a1_eaf` orients what
+    # there is by construction. Demanding orientation evidence there asks for a
+    # check on a column that does not exist, which no build can supply -- it
+    # rejected every Reference-Completed release whose source reported no
+    # frequency, which is exactly the release #113 was raised about.
+    stores_own_frequencies = any(
+        not plan.is_absent for plan in _component_eaf_plans(store)
+    )
     for row in table.rows:
         analysis_id = row.get("analysis_id", "")
         if row.get("eaf_scope", "") != EafScope.ASSOCIATION.value:
             continue
         outcome = row.get("eaf_orientation", "")
+        if not outcome and not stores_own_frequencies:
+            continue
         if not outcome:
             errors.append(
                 f"analysis {analysis_id!r} stores per-association EAF but carries no "

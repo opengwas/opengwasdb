@@ -40,6 +40,7 @@ from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.analyses import (
     read_analyses,
     read_analysis_records,
+    write_analyses,
     write_analysis_records,
 )
 from opengwasdb.model.enums import EafScope
@@ -666,6 +667,47 @@ def test_completing_a_ragged_source_with_no_frequencies_carries_panel_eaf(
         "eaf_pairs reported no frequency at all for a release that holds the panel's"
     )
     np.testing.assert_allclose(by_pair[np.isfinite(by_pair)], PANEL_ONLY_EAF, atol=1e-6)
+
+
+def test_orientation_evidence_is_not_required_of_panel_only_frequencies(
+    tmp_path: Path, ragged_store_with_no_frequencies: Path
+):
+    """A release whose only frequencies are the panel's has no column to check.
+
+    Found on real data, not here: `eqtlgen-cis-pilot` is built from BESD, which
+    carries no EAF at all, so its build runs no orientation check and leaves
+    `eaf_orientation` *blank*. Completion then stamps `eaf_scope=association`
+    for the panel's reference EAF, and §9.1's evidence rule rejected the
+    release -- demanding a check on a cohort frequency column that does not
+    exist, which no build could ever supply.
+
+    The fixtures could not catch it: both the Dense and the Ragged no-frequency
+    fixtures go through builders that record `unverified`, which warns rather
+    than fails. Blanking the column is what reaching the real path costs here.
+    """
+    from opengwasdb.layouts.ragged.complete import complete_ragged_store
+
+    out = tmp_path / "ragged-nofreq-noorientation.opengwasdb"
+    complete_ragged_store(
+        ragged_store_with_no_frequencies, out, _ld_panel(tmp_path),
+        ancestry="EUR", min_cor=0.0, thresh=0.99,
+    )
+    # Fixture meaningfulness: the release must be the panel-only shape, and
+    # must declare `association` -- otherwise the rule is never reached.
+    plan = json.loads((out / "manifest.json").read_text())["encoding"]["eaf"]
+    assert plan == {"kind": "absent", "reference": True}, plan
+
+    table = read_analyses(out / "analyses.tsv")
+    for row in table.rows:
+        row["eaf_orientation"] = ""
+        row["eaf_orientation_r"] = ""
+    write_analyses(out / "analyses.tsv", table)
+    assert any(
+        row["eaf_scope"] == EafScope.ASSOCIATION.value for row in table.rows
+    ), "no Analysis declares association, so the rule under test is never reached"
+
+    result = validate_store(out)
+    assert result.ok, result.errors
 
 
 def test_a_completed_hybrid_whose_only_frequencies_are_the_panels_validates(

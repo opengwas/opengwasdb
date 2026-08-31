@@ -631,6 +631,19 @@ or below a minimum frequency variance on either side, the Analysis records
 `unverified`: there is no wrong column, but neither is there a checked one, and
 the two must not read alike.
 
+The evidence is about a **stored, source-derived** frequency column, and only
+about that. A Reference-Completed release whose components declare no `eaf`
+plane at all carries the panel's `eaf_reference` and nothing else (§6a): its
+Analyses declare `eaf_scope=association` because the release holds frequencies
+for their imputed cells, but no cohort reported those frequencies and none can
+be reported against the wrong allele — `panel_a1_eaf` orients the panel by
+construction, through the same reader this check uses. Such an Analysis
+therefore requires no orientation evidence, and a blank `eaf_orientation` on it
+is correct rather than missing. Requiring evidence there asks for a check on a
+column that does not exist, which no build can supply: it rejected every
+Reference-Completed release built from a source with no frequencies of its own,
+which is the release §6a exists for.
+
 The reference itself is checked before it is trusted: one whose frequencies
 exceed 0.5 for only a negligible fraction of its variants is minor allele
 frequency, which is symmetric about 0.5 and would correlate a flipped source at
@@ -975,7 +988,7 @@ Validators MUST check at least:
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
-- every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115): a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
+- every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
 
 ## 21. Compatibility
