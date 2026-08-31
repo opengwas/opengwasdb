@@ -8,10 +8,11 @@ from pathlib import Path
 
 import numpy as np
 
+from opengwasdb.build.liftover import build_liftover_lookup
+from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.besd_reader import BESDReader, read_epi, read_esi
-from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.model.analyses import Analysis, write_analysis_records
@@ -24,11 +25,10 @@ from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants.axis import (
     VARIANT_AXIS_FORMAT,
-    VARIANT_TABLE_FILENAME,
     VARIANT_TABIX_FILENAME,
+    VARIANT_TABLE_FILENAME,
     write_variant_axis,
 )
-from opengwasdb.build.liftover import build_liftover_lookup
 from opengwasdb.variants.normalise import (
     CanonicalVariant,
     VariantNormalisationError,
@@ -193,9 +193,7 @@ def build_ragged_from_besd(
         besd = BESDReader(f"{prefix}.besd", len(probes))
         print(f"BESD format: SPARSE_FILE_TYPE_{besd.format_type}")
 
-        # One encoding plan per build (ADR 0037, issue #119).
-        encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=len(probes)))
-        csr = RaggedCSRWriter(encoding)
+        csr = RaggedCSRWriter(len(variants))
         skipped_probes = 0
 
         for probe in probes:
@@ -249,8 +247,15 @@ def build_ragged_from_besd(
             if (probe.row_idx + 1) % 1000 == 0:
                 print(f"  Processed {probe.row_idx + 1} / {len(probes)} probes")
 
+        # One encoding plan per build, decided from what the build holds
+        # (ADR 0037, issue #119). BESD carries no frequencies, so this settles
+        # on `eaf: absent` -- stated by the plan rather than left to be
+        # inferred from a missing array.
+        encoding = StoreEncoding.decide(
+            EncodingMeasurements(n_analyses=len(probes), eaf=csr.eaf_measurements())
+        )
         print(f"Flushing zarr CSR ({csr.n_associations:,} associations) ...")
-        csr.flush(staged.path)
+        csr.flush(staged.path, encoding)
 
         if skipped_probes:
             print(f"  {skipped_probes} probes had no valid associations after filtering")

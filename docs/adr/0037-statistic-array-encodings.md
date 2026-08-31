@@ -202,9 +202,120 @@ chosen on the assumption it did not.
 | ±1.0 | 0.00791 | 0.40% | 0.52 (mixed studies) | 0.11% |
 | ±2.0 | 0.01581 | **0.79%** | 0.39 | 0.07% |
 
-253 levels across a width of 2·range, so accuracy is a function of the range
+254 levels across a width of 2·range, so accuracy is a function of the range
 chosen — a fixed "within 0.5%" acceptance criterion is unsatisfiable at ±2.0
-and must be stated per range.
+and must be stated per range. (The table's error column was computed for 254;
+an earlier draft said "two reserved, 253 remain", which does not add up for a
+type with 256 codes.)
+
+**As implemented** (issue #116, store-format spec §6a, §9, §20). This section
+was under-specified at the mathematical, side-table and Hybrid-component
+levels, so implementation had to settle six things. They are recorded here
+rather than left to the code, and the spec states them normatively.
+
+- **The transform is the logit**, `log(f / (1 − f))`, not `log(f)` and not
+  `log(MAF)`. The draft moved between all three. The logit is the only one
+  whose error is bounded on *both* sides of the frequency: a residual error of
+  `d` moves `f` by a relative `(1 − f)·d` and `1 − f` by a relative `f·d`, so
+  neither the effect allele frequency nor the minor allele frequency users
+  filter on can be wrong by more than `d`. `log(f)` is blind to the minor side,
+  which for a frequency near 1 is the only side anyone reads; a signed log-MAF
+  would need a sign bit there is no room for and a rule for a cohort crossing
+  0.5 relative to its baseline. Measured on FinnGen chr1 (8 endpoints, 429,961
+  variants, 3.44M EAF-bearing cells) the logit and log-EAF residuals are the
+  same width — sd 0.0170 against 0.0169, p99 0.081 against 0.081, max 0.632
+  for both — so the choice costs nothing in bytes and buys the bound.
+
+- **The code map**: `-128` absent, `-127` exception, `-126 … 127` residual.
+  254 levels, `step = range / 127`, representable interval
+  `[−126·step, +127·step]`. Half a step is the round-trip bound, measured at
+  0.219% / 0.419% / 0.812% worst case at ±0.5 / ±1.0 / ±2.0 against the
+  0.197% / 0.394% / 0.787% half-step, the difference being the `float32`
+  result type's own rounding.
+
+- **The baseline** is the median, in logit space, of the frequencies the
+  release's Analyses report at that variant *strictly inside* (0, 1); the
+  median of an even count is the mean of the two central logits. A variant
+  with none gets a NaN baseline and all its cells become exceptions. A variant
+  seen in one Analysis gets that Analysis's frequency and a residual of zero —
+  correct, and the reason the byte rule below exists.
+
+- **Frequency 0 and 1 have no logit, so they are exceptions**, stored exactly.
+  No clamping and no epsilon: a monomorphic cohort is a fact about the data,
+  not a number to nudge. Crossing 0.5 relative to the baseline needs no rule at
+  all, which is the second reason the logit wins over a signed log-MAF.
+
+- **The exception table is `z`'s overflow table with a different name.** Same
+  structure (`eaf_exception_index` / `eaf_exception_value`, `int64` positions
+  sorted and unique, `float32` values), same flat-position keying, same rule
+  that it is written even when empty, same validation that every exception cell
+  has an entry and the table describes no other cell. One implementation serves
+  both, so they cannot drift. Measured lookup cost, which the review asked for
+  alongside the bytes: **109 ns/cell** against a 1,000-entry table, 219 ns
+  against 100,000, 684 ns against 1,000,000 — a binary search per cell, paid
+  only for the cells that are exceptions.
+
+- **The range is chosen by measured bytes, not by a clipping threshold.** The
+  draft's 1e-3 rule was self-contradicting: the measured Hybrid clipping of
+  0.11% exceeds it, so the rule would have picked ±2.0 and invalidated the
+  scenario it was quoted for. Replaced by: the smallest candidate whose
+  exception fraction is at most **2%** — an exception costs 12 raw bytes
+  against the plane's 1 byte per cell, so 2% caps the side table at 24% of the
+  plane — and within that budget the smaller range always wins, because it is
+  2–4× more accurate on every cell that is not an exception and an exception is
+  exact either way. Then the resulting raw byte total is compared against
+  ADR 0036's `float32` plane and **`float32` is written when the residual
+  coding would not be smaller**. That is where the baseline's economics are
+  decided rather than assumed: the saving is per *cell*, the cost is per
+  *variant*, so a sparse Ragged store with roughly one EAF-bearing cell per
+  variant stays in `float32`, exactly as the review required.
+
+  On this project's own data the rule reproduces the scenarios above. Measured
+  by running the shipped encoder over chr1 of two pilots' source files, as a
+  Dense grid, under the store's own codec:
+
+  | store | cells/variant | chosen | `float32` B/cell | chosen B/cell | round-trip p99 / max |
+  |---|---|---|---|---|---|
+  | FinnGen R13, 8 endpoints | 8.00 | **±0.5** | 1.373 | **0.718** = 0.294 plane + 0.424 baseline + 0.000 table, **−48%** | 0.184% / 0.262% |
+  | GWAS Catalog EUR, 9 studies | 4.86 | **±1.0** | 5.072 | **2.023** = 1.245 + 0.696 + 0.082, **−60%** | 0.374% / 0.394% |
+
+  Exception fractions at ±0.5 / ±1.0 / ±2.0: FinnGen 0.0003% / 0% / 0%, GWAS
+  Catalog 3.75% / 1.71% / 0.87%. Every exception cell round-trips **exactly**.
+  The round-trip figures are the worse of the relative error on EAF and on
+  1 − EAF, against half-step bounds of 0.197% and 0.394%.
+
+  The baseline figure of 0.424 B/cell across 8 Analyses is this ADR's own
+  prediction (0.42), measured.
+
+  **The plane figures in §2's table above do not reproduce, and are left
+  standing with this correction rather than quietly adjusted.** That table
+  gives 0.14 B/cell for one cohort and 0.52 for mixed studies; the same
+  encoding measured here costs **0.294** and **1.245**, a factor of 2.1 and
+  2.4. Both sets of numbers are compressed bytes under the same codec, so the
+  gap is in what was compressed, not how — most likely a different variant
+  ordering or chunking, since a residual plane's compressibility depends
+  entirely on how well neighbouring cells agree. The direction and the decision
+  are unaffected: the residual coding is 48–60% smaller than the `float32`
+  plane it replaces on both pilots, which is the comparison the choice rests
+  on. But the issue's acceptance criterion "measured size on a rebuilt pilot
+  matches the table to within 20%" is **not met by these numbers**, and it
+  cannot be settled from source files at all — it is a measurement on rebuilt
+  Store Releases, which is #117. Whichever way #117 lands, one of the two
+  tables is wrong and the ADR must say which.
+
+  Absolute `float32` figures also differ from the 3.39 B/cell quoted earlier
+  because these are chr1 subsets measured as Dense grids rather than whole
+  stores; for the GWAS Catalog pilot, which is Hybrid, a Dense grid overstates
+  the `float32` plane by counting cells no Analysis reports.
+
+- **`int16_log_maf` is not implemented.** The decision tree in #119 named it as
+  the escape valve for data no range fits. `float32` is a better one: it is
+  exact where `int16_log_maf` is lossy, it already exists, and the byte
+  comparison above reaches it by measurement rather than by a special case. The
+  saving forgone is real (1.94 against 3.39 B/cell on a store with no
+  cross-Analysis redundancy at all), and it can be added later as a fourth
+  `kind` without changing anything else; it is left out because a third lossy
+  encoding is a third thing to get wrong, for a case no pilot exhibits.
 
 ### 3. `se` may be coded as an `int8` residual, but only where every Analysis has EAF
 
@@ -235,6 +346,51 @@ shards; as a per-variant constant read straight from the panel, it does not.
 Constraint: one panel per completed store. True of
 `complete_{dense,ragged,hybrid}_store` today, but it becomes load-bearing
 here, so it is recorded in `manifest.json` rather than left implicit.
+
+**As implemented** (issue #116, store-format spec §6a, §9). Three details were
+settled during implementation:
+
+- **`eaf_reference` is per component, not per release.** A single
+  release-level flag cannot say *which* component holds the array, and a
+  Hybrid release's Dense Component has imputed cells where its Ragged Overflow
+  does not. Each component already carries its own manifest — spec §16 nests
+  the Dense Component as a self-contained Dense release — so the flag lives in
+  the component's own `encoding` block, and it is the one field on which the
+  two components of a Hybrid release are allowed to differ. Validation compares
+  their plans with it normalised away, so a real disagreement about the
+  *encoding* still fails the store.
+
+- **Decoding is one operation, not three.** `decode_eaf` requires the imputed
+  mask and the reference array whenever the plan declares `eaf_reference`,
+  rather than defaulting them: a decode that quietly skipped the substitution
+  would return NaN for every imputed cell in a store that holds the value, and
+  one that applied it without the mask would return the panel's frequency for
+  observed cells — the 3000× error above. The failure mode of getting this
+  half-right is silent, so it is made unrepresentable instead of documented.
+
+- **Reference EAF is added independently of the observed plane** — including
+  to a release whose source stored no EAF at all, which is the case issue #113
+  was raised about. Such a release carries `eaf_reference` and no `eaf` array:
+  NaN on every observed cell, the panel's frequency on every imputed one. The
+  first implementation refused that pairing, on the argument that a release
+  whose *only* frequencies were the panel's would be read as a frequency
+  column contradicting its Analyses' `eaf_scope=absent`. That gets the
+  direction wrong — `eaf_scope` is derived from what the release holds, so an
+  Analysis that gains imputed cells is stamped `association` by completion and
+  the declaration and the arrays agree. Refusing the pairing made the release
+  with no frequencies of its own the one release that could not hold the
+  panel's, which is precisely what #113 asked for.
+
+  The panel may equally hold none: an LD Reference Panel is supplied for
+  imputation and its `EAF` column is optional, so a completion against one
+  without it carries no `eaf_reference` and leaves imputed cells NaN, rather
+  than failing the run.
+
+The baselines and the exception values travel with the observed cells across
+Reference Completion's variant remap rather than being recomputed from the
+decoded frequencies. Recomputing would move every baseline by up to half a step
+and re-quantise every cell against the moved baseline, so a completed release
+would be *less* accurate than the source it was completed from, for no reason.
 
 ### 5. Scenarios
 
@@ -295,7 +451,10 @@ standalone validation cannot depend on a panel that may no longer be available.
 
 - **This is a breaking format change**, unlike ADR 0036. It needs a
   `format_version` bump and therefore depends on #112 settling the
-  compatibility and migration policy first.
+  compatibility and migration policy first. Landed as `format_version` 1.0
+  (#114, fixed-point `z`) and 2.0 (#116, residual-coded `eaf`). `0.1` and `1.0`
+  stay readable and are never written again; neither can be *completed*, since
+  completion writes into its source's encoding (ADR 0038 §4).
 - **Existing stores must be rebuilt** to gain any of it. All four pilots need
   rebuilding regardless, since #83/#106/#109 were all build-time defects.
 - **Arrays stop being independently interpretable.** An `int8` `eaf` plane is

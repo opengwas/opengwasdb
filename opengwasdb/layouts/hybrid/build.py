@@ -32,7 +32,11 @@ from opengwasdb.build.eaf_orientation import (
     verify_eaf_orientation,
 )
 from opengwasdb.build.liftover import LiftoverFailureError
-from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
+from opengwasdb.encoding import (
+    EncodingMeasurements,
+    StoreEncoding,
+    combine_eaf_measurements,
+)
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     _RESOLVE_BATCH,
@@ -40,7 +44,6 @@ from opengwasdb.layouts.dense.build_vcf import (
     _apply_eaf_scope,
     _apply_se_divisor,
     _create_dense_zarr,
-    _eaf_observations_from_spills,
     _encode_variant_keys,
     _fork_pool,
     _lift_manifest_variants,
@@ -49,6 +52,7 @@ from opengwasdb.layouts.dense.build_vcf import (
     _read_manifest,
     _write_dense_bands,
     _write_index,
+    survey_eaf_spills,
 )
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -350,7 +354,7 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
 
 
 def _assemble_overflow_csr(
-    spill_dir: Path, n_analyses: int, encoding: StoreEncoding
+    spill_dir: Path, n_analyses: int, n_variants: int
 ) -> tuple[RaggedCSRWriter, np.ndarray]:
     """Assemble the overflow CSR from per-column ``.ovf.npz`` spills, in analysis
     order (so CSR offsets align with analysis_index).
@@ -360,7 +364,7 @@ def _assemble_overflow_csr(
     on it, so `eaf_scope` is the union of this and the Dense Component's own
     answer, never either alone (ADR 0036).
     """
-    csr = RaggedCSRWriter(encoding)
+    csr = RaggedCSRWriter(n_variants)
     column_has_eaf = np.zeros(n_analyses, dtype=bool)
     for col in range(n_analyses):
         path = spill_dir / f"{col}.ovf.npz"
@@ -485,14 +489,6 @@ def build_hybrid_from_vcf_manifest(
         # ── Write the Dense Component skeleton (a valid dense store) ──────────────
         _write_index(dense_staged, panel_sorted, analyses, chunk_shape, dtype)
         _write_variant_table(dense_dir, panel_sorted, hg38_to_source, rsid_by_alid)
-        # One plan for both components (issue #119): the Dense Component and
-        # the Ragged Overflow partition one Analysis's associations, so a
-        # shared result contract needs a shared encoding.
-        encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=n_analyses))
-        effective_chunks = _create_dense_zarr(
-            dense_staged, n_panel, n_analyses, chunk_shape, dtype, encoding
-        )
-
         # dense row -> shared variant_index (ascending — panel keeps genomic order).
         dense_to_shared = np.array(
             [shared_index[alid] for alid in panel_sorted], dtype=np.int32
@@ -563,20 +559,46 @@ def build_hybrid_from_vcf_manifest(
             # per-Analysis budget -- more evidence than asked for, never less.
             # As in the dense builder, this runs before anything is written.
             shared_hashes = site_hashes(shared_sorted)
-            eaf_observations = _eaf_observations_from_spills(
+            dense_survey = survey_eaf_spills(
                 spill_dir, id_by_col, shared_sorted, shared_hashes,
                 row_map=dense_to_shared,
             )
-            for analysis_id, off_panel in _eaf_observations_from_spills(
+            overflow_survey = survey_eaf_spills(
                 spill_dir, id_by_col, shared_sorted, shared_hashes,
                 suffix=".ovf", index_key="variant_index",
-            ).items():
+            )
+            eaf_observations = dense_survey.observations
+            for analysis_id, off_panel in overflow_survey.observations.items():
                 eaf_observations[analysis_id].update(off_panel)
             eaf_report = verify_eaf_orientation(
                 eaf_observations,
                 eaf_reference=eaf_reference,
                 eaf_reference_ancestry=eaf_reference_ancestry,
                 allow_unverified=allow_unverified_eaf,
+            )
+
+            # One plan for both components (issue #119): the Dense Component
+            # and the Ragged Overflow partition one Analysis's associations, so
+            # a shared result contract needs a shared encoding. Their
+            # measurements are combined rather than either one taken alone --
+            # each writes its own baseline array against its own variant axis,
+            # which is why `n_variants` is the sum (ADR 0037 §2).
+            encoding = StoreEncoding.decide(
+                EncodingMeasurements(
+                    n_analyses=n_analyses,
+                    eaf=combine_eaf_measurements([
+                        dense_survey.measurements(
+                            n_cells=n_panel * n_analyses, n_variants=n_panel
+                        ),
+                        overflow_survey.measurements(
+                            n_cells=overflow_survey.n_spill_cells, n_variants=n_shared
+                        ),
+                    ]),
+                )
+            )
+            log.info("Encoding plan: %s", encoding.to_manifest())
+            effective_chunks = _create_dense_zarr(
+                dense_staged, n_panel, n_analyses, chunk_shape, dtype, encoding
             )
 
             # Dense band-write (reuses the dense builder's band-streamer + top-hit harvest).
@@ -592,7 +614,7 @@ def build_hybrid_from_vcf_manifest(
             # the two components stored, so neither can be stamped until both
             # have been read (ADR 0036).
             log.info("Assembling Ragged Overflow CSR from %d columns", n_analyses)
-            csr, overflow_has_eaf = _assemble_overflow_csr(spill_dir, n_analyses, encoding)
+            csr, overflow_has_eaf = _assemble_overflow_csr(spill_dir, n_analyses, n_shared)
             analyses = apply_orientation_evidence(
                 _apply_eaf_scope(analyses, column_has_eaf | overflow_has_eaf), eaf_report
             )
@@ -609,7 +631,7 @@ def build_hybrid_from_vcf_manifest(
         finally:
             shutil.rmtree(spill_dir, ignore_errors=True)
 
-        csr.flush(staged.path)
+        csr.flush(staged.path, encoding)
         n_overflow = csr.n_associations
         log.info("Building Ragged Overflow top-hit index")
         build_ragged_top_hit_indexes(staged.path, encoding=encoding)

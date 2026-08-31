@@ -53,8 +53,16 @@ from opengwasdb.completion.ld_panel import (
 )
 from opengwasdb.completion.manifest import build_completion_provenance
 from opengwasdb.completion.parallel import init_block_worker
+from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
-from opengwasdb.encoding import StoreCodec, ZOverflowBuilder, positions_flat
+from opengwasdb.encoding import (
+    EAF_BASELINE,
+    StoreCodec,
+    ZOverflowBuilder,
+    positions_flat,
+    write_eaf_csr,
+    write_eaf_reference,
+)
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
@@ -693,8 +701,22 @@ def _run_completion(
         )
         # Completion writes into the source's arrays, so it encodes with the
         # source's plan (ADR 0038 §4) -- the overflow table travels with the
-        # plane it belongs to.
-        codec = StoreCodec(manifest.encoding)
+        # plane it belongs to. The one addition is `eaf_reference`, which
+        # records a physical fact about this release rather than reinterpreting
+        # its source's bytes.
+        # Asked for whatever the source declares, `absent` included: a release
+        # whose Analyses reported no frequency still gains imputed cells, and
+        # those cells have the panel's frequency (issue #113). It gets an
+        # `eaf_reference` array and no `eaf` plane -- NaN on every observed
+        # cell, the panel's value on every imputed one.
+        eaf_reference = panel_reference_eaf(ld_dir, ancestry, merged_variants)
+        encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
+        codec = StoreCodec(encoding)
+        src_baseline = _source_eaf_baseline(src)
+        out_baseline = None
+        if src_baseline is not None:
+            out_baseline = np.full(len(merged_variants), np.nan, dtype=np.float32)
+            out_baseline[np.asarray(src_idx_remap, dtype=np.int64)] = src_baseline
         z_overflow = ZOverflowBuilder()
         root.create_dataset(
             "z",
@@ -709,20 +731,26 @@ def _run_completion(
             "imputed", data=imp_all, chunks=(_ASSOC_CHUNK,),
             compressor=_COMPRESSOR, dtype=np.uint8,
         )
-        # Only when the observed store had EAF: a completed store must not
-        # gain an all-NaN array its source never had (ADR 0036).
-        if np.isfinite(eaf_all).any():
-            root.create_dataset(
-                "eaf", data=eaf_all, chunks=(_ASSOC_CHUNK,),
-                compressor=_COMPRESSOR, dtype=np.float32,
+        # Observed frequencies only. An imputed cell's frequency is the
+        # panel's, stored once per variant in `eaf_reference` and applied on
+        # read (ADR 0037 §4); an observed cell whose source reported none stays
+        # absent. The per-variant baseline travels with the values across the
+        # variant remap rather than being recomputed from them, so a value
+        # decoded from the source re-encodes to the same code.
+        if not encoding.eaf.is_absent:
+            write_eaf_csr(
+                root, codec, vi_all, eaf_all,
+                baseline=out_baseline, compressor=_COMPRESSOR, chunks=(_ASSOC_CHUNK,),
             )
+        if eaf_reference is not None:
+            write_eaf_reference(root, eaf_reference, compressor=_COMPRESSOR)
         root.attrs["layout"] = "ragged"
         root.attrs["completion_state"] = "reference_completed"
         root.attrs["n_analyses"] = n_analyses
         root.attrs["n_associations"] = n_total
 
         print("Building top-hit indexes...")
-        build_ragged_top_hit_indexes(staged.path, encoding=manifest.encoding)
+        build_ragged_top_hit_indexes(staged.path, encoding=encoding)
 
         print("Writing analyses.tsv...")
         with staged.index_connection() as quality_db:
@@ -734,6 +762,13 @@ def _run_completion(
                     ancestry
                     if impute_analysis_ids is None or a.analysis_id in impute_analysis_ids
                     else ""
+                ),
+                # An Analysis that gained imputed cells in a release carrying
+                # reference EAF now stores a frequency for them, whatever its
+                # source reported (ADR 0037 §4), so `eaf_scope` follows what
+                # the release holds rather than being copied forward.
+                eaf_scope=completed_eaf_scope(
+                    a, quality_rollup[i], eaf_reference is not None
                 ),
                 completion_median_pearson_r=quality_rollup[i].median_pearson_r,
                 completion_n_imputed_total=quality_rollup[i].n_imputed_total,
@@ -756,8 +791,10 @@ def _run_completion(
         new_release_id = release_id or f"{manifest.release_id}-completed"
         completed_manifest = StoreManifest(
             # Preserved with the format version below: a completed release is
-            # written into its source's arrays, so it is in its source's encoding.
-            encoding=manifest.encoding,
+            # written into its source's arrays, so it is in its source's
+            # encoding -- plus `eaf_reference`, which says this release carries
+            # panel frequencies for the cells it imputed (ADR 0037 §4).
+            encoding=encoding,
             store_id=manifest.store_id,
             release_id=new_release_id,
             # Preserved, not re-stamped -- see ADR 0038 §4 and the dense path.
@@ -799,3 +836,18 @@ def _run_completion(
             f"({result.n_imputed:,} imputed, {result.n_missing:,} missing)"
         )
     return result
+
+
+def _source_eaf_baseline(source_path: Path) -> np.ndarray | None:
+    """The observed release's per-variant `eaf_baseline`, or None if it has none.
+
+    Read straight from the source's CSR group rather than recomputed from the
+    values it holds: recomputing from *decoded* frequencies would shift each
+    baseline by up to half a step and re-quantise every cell against the moved
+    baseline, so a completed release would be less accurate than its source for
+    no reason (ADR 0037 §2).
+    """
+    group = zarr.open_group(str(Path(source_path) / RAGGED_ZARR_PATH), mode="r")
+    if EAF_BASELINE not in group:
+        return None
+    return np.asarray(group[EAF_BASELINE][:], dtype=np.float32)

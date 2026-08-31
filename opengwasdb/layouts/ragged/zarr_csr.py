@@ -10,12 +10,17 @@ import zarr
 from numcodecs import Blosc
 
 from opengwasdb.encoding import (
+    EafMeasurements,
+    RaggedEafPlane,
     StoreCodec,
     StoreEncoding,
     ZOverflowBuilder,
     ZOverflowTable,
+    eaf_baseline_from_pairs,
+    measure_eaf,
     positions_at,
     positions_flat,
+    write_eaf_csr,
 )
 from opengwasdb.model.manifest import StoreManifest
 
@@ -36,18 +41,18 @@ class AnalysisAssociations(NamedTuple):
 class RaggedCSRWriter:
     """Accumulate per-analysis associations and flush to zarr CSR arrays.
 
-    `encoding` is the store's declared plan (ADR 0037), decided once per build
-    and passed in: the writer encodes `z` through it rather than choosing a
-    dtype of its own.
+    The store's plan (ADR 0037) is passed to `flush`, not to the constructor,
+    because deciding it needs the frequencies this writer is still being fed:
+    a build calls `eaf_measurements()` once everything is in, runs
+    `StoreEncoding.decide()` once, and flushes with the answer.
     """
 
-    def __init__(self, encoding: StoreEncoding) -> None:
-        self._encoding = encoding
+    def __init__(self, n_variants: int) -> None:
+        self._n_variants = int(n_variants)
         self._variant_indices: list[np.ndarray] = []
         self._zscores: list[np.ndarray] = []
         self._ses: list[np.ndarray] = []
         self._eafs: list[np.ndarray] = []
-        self._any_eaf = False
         self._offsets: list[int] = [0]
 
     def add_analysis(
@@ -75,7 +80,6 @@ class RaggedCSRWriter:
             self._eafs.append(np.full(n, np.nan, dtype=np.float32))
         else:
             self._eafs.append(np.asarray(eaf, dtype=np.float32))
-            self._any_eaf = True
         self._offsets.append(self._offsets[-1] + n)
 
     @property
@@ -86,14 +90,46 @@ class RaggedCSRWriter:
     def n_associations(self) -> int:
         return self._offsets[-1]
 
-    def flush(self, store_path: str | Path) -> None:
-        """Write CSR arrays to data.zarr/ragged/ inside store_path."""
+    def _flat(self) -> tuple[np.ndarray, np.ndarray]:
+        """The concatenated `(variant_index, eaf)` this writer holds."""
+        if self.n_associations == 0:
+            return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.float32)
+        return (
+            np.concatenate(self._variant_indices).astype(np.int32),
+            np.concatenate(self._eafs).astype(np.float32),
+        )
+
+    def eaf_measurements(self) -> EafMeasurements:
+        """What the encoding tree needs to know about this component's EAF.
+
+        Measured, not inferred from the layout: a Ragged manifest can span one
+        cohort or twenty, and a store built on the assumption that it spanned
+        one would clip silently against a range chosen for the wrong data
+        (ADR 0037 §2).
+        """
+        variant_index, eaf = self._flat()
+        return measure_eaf(variant_index, eaf, n_variants=self._n_variants)
+
+    def flush(
+        self,
+        store_path: str | Path,
+        encoding: StoreEncoding,
+        *,
+        eaf_baseline: np.ndarray | None = None,
+    ) -> None:
+        """Write CSR arrays to data.zarr/ragged/ inside store_path.
+
+        `eaf_baseline` lets Reference Completion carry its source's baselines
+        across a variant remap instead of recomputing them from the decoded
+        frequencies -- recomputation would move every baseline by up to half a
+        step and re-quantise every cell against it (ADR 0037 §2).
+        """
         out = Path(store_path) / RAGGED_ZARR_PATH
         root = zarr.open_group(str(out), mode="w")
 
         offsets_arr = np.asarray(self._offsets, dtype=np.int64)
 
-        codec = StoreCodec(self._encoding)
+        codec = StoreCodec(encoding)
         if self.n_associations > 0:
             vi_arr = np.concatenate(self._variant_indices).astype(np.int32)
             z_values = np.concatenate(self._zscores).astype(np.float32)
@@ -108,6 +144,12 @@ class RaggedCSRWriter:
         # which is what its overflow entry is keyed on.
         overflow = ZOverflowBuilder()
         z_arr = codec.encode_z(z_values, positions=positions_flat(0), overflow=overflow)
+        if not encoding.eaf.is_residual:
+            baseline = None
+        elif eaf_baseline is not None:
+            baseline = np.asarray(eaf_baseline, dtype=np.float32)
+        else:
+            baseline = eaf_baseline_from_pairs(vi_arr, eaf_arr, self._n_variants)
 
         root.create_dataset(
             "offsets", data=offsets_arr,
@@ -126,10 +168,10 @@ class RaggedCSRWriter:
             "se", data=se_arr,
             chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=np.float16,
         )
-        if self._any_eaf:
-            root.create_dataset(
-                "eaf", data=eaf_arr,
-                chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=np.float32,
+        if not encoding.eaf.is_absent:
+            write_eaf_csr(
+                root, codec, vi_arr, eaf_arr,
+                baseline=baseline, compressor=_COMPRESSOR, chunks=(_ASSOC_CHUNK,),
             )
         root.attrs["layout"] = "ragged"
         root.attrs["completion_state"] = "observed_only"
@@ -153,9 +195,15 @@ class RaggedCSRReader:
         if encoding is None:
             encoding = StoreManifest.load(Path(store_path)).encoding
         self._codec = StoreCodec(encoding, z_overflow=ZOverflowTable.read(self._root))
-        # Absent on stores built before ADR 0036, and on stores whose sources
-        # report no frequency at all -- both read back as all-NaN.
-        self._eaf: zarr.Array | None = self._root["eaf"] if "eaf" in self._root else None
+        # Every EAF read goes through the plane, which gathers the per-variant
+        # baseline (and, on a Reference-Completed release, the panel frequency
+        # for imputed cells) onto the cells being read. Absent on stores whose
+        # sources report no frequency at all -- those read back as all-NaN.
+        self._eaf_plane = RaggedEafPlane.open(
+            self._root,
+            encoding,
+            imputed=self._root["imputed"] if "imputed" in self._root else None,
+        )
 
     @property
     def n_analyses(self) -> int:
@@ -222,13 +270,11 @@ class RaggedCSRReader:
     @property
     def has_eaf(self) -> bool:
         """Whether this component stores EAF at all (ADR 0036)."""
-        return self._eaf is not None
+        return self._eaf_plane.has_values
 
     def eaf_slice(self, start: int, end: int) -> np.ndarray:
-        """`eaf[start:end]`, or all-NaN when this store carries no EAF array."""
-        if self._eaf is None:
-            return np.full(end - start, np.nan, dtype=np.float32)
-        return np.asarray(self._eaf[start:end], dtype=np.float32)
+        """Decoded `eaf[start:end]`, or all-NaN when this store carries none."""
+        return self._eaf_plane.slice(start, end)
 
     def eaf_at(self, positions: np.ndarray) -> np.ndarray:
         """EAF at arbitrary flat CSR positions; all-NaN when there is no array.
@@ -237,9 +283,7 @@ class RaggedCSRReader:
         the concatenated arrays and would otherwise pay `eaf_pairs`'
         per-Analysis searchsorted to recover what they already know.
         """
-        if self._eaf is None:
-            return np.full(len(positions), np.nan, dtype=np.float32)
-        return np.asarray(np.asarray(self._eaf[:], dtype=np.float32)[positions], dtype=np.float32)
+        return self._eaf_plane.at(positions)
 
     def eaf_pairs(self, variant_index: np.ndarray, analysis_index: np.ndarray) -> np.ndarray:
         """EAF for elementwise (variant, analysis) pairs (ADR 0036).
@@ -252,9 +296,17 @@ class RaggedCSRReader:
         taking a neighbour's frequency.
         """
         out = np.full(len(variant_index), np.nan, dtype=np.float32)
-        if self._eaf is None or len(variant_index) == 0:
+        # The plane's own answer, not `has_eaf`: a release carrying only the
+        # panel's frequencies has no `eaf` array and still has frequencies to
+        # report on its imputed cells (issue #113).
+        if not self._eaf_plane.can_report_frequencies or len(variant_index) == 0:
             return out
         offsets = self._offsets[:]
+        # Resolve every pair to a flat CSR position first, then decode once:
+        # the plane needs the position to resolve an exception cell, and a
+        # per-Analysis decode would gather the baseline slice by slice.
+        slots: list[np.ndarray] = []
+        found: list[np.ndarray] = []
         for ai in np.unique(analysis_index):
             ai_int = int(ai)
             if ai_int < 0 or ai_int + 1 >= len(offsets):
@@ -269,7 +321,10 @@ class RaggedCSRReader:
             hit = np.zeros(len(slot), dtype=bool)
             hit[in_bounds] = slice_vi[pos[in_bounds]] == variant_index[slot][in_bounds]
             if hit.any():
-                out[slot[hit]] = self.eaf_slice(start, end)[pos[hit]]
+                slots.append(slot[hit])
+                found.append(pos[hit].astype(np.int64) + start)
+        if slots:
+            out[np.concatenate(slots)] = self.eaf_at(np.concatenate(found))
         return out
 
     def get_analyses(self, analysis_indices: list[int]) -> list[AnalysisAssociations]:

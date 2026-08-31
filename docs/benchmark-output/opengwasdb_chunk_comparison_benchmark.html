@@ -2215,11 +2215,20 @@ vertical-align: -.125em;
 <i class="callout-icon"></i>
 </div>
 <div class="callout-title-container flex-fill">
-<span class="screen-reader-only">Important</span>Measured at <code>format_version</code> 0.1, not re-run for the fixed-point <code>z</code> encoding
+<span class="screen-reader-only">Important</span>Measured at <code>format_version</code> 0.1, not re-run for the <code>z</code> or <code>eaf</code> encodings
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>Every figure below was measured against stores whose <code>z</code> plane is <code>float16</code>. Issue #114 (ADR 0037 §1) changed <code>z</code> to <code>int16</code> fixed point with an exact overflow table, which changes stored size and adds a decode step to every read, so the sizes and timings here describe the previous encoding. They are re-measured against rebuilt stores in #117, before the version that ships the encoding is cut (<code>CONTRIBUTING.md</code>, “Benchmarks are measurements, not prose”).</p>
+<p>Every figure below was measured against stores whose <code>z</code> plane is
+<code>float16</code> and which carry no <code>eaf</code> at all. Two changes have
+landed since, both of which move stored size and add a decode step to every read:
+issue #114 (ADR 0037 §1) made <code>z</code> <code>int16</code> fixed point with an
+exact overflow table, and issue #116 (ADR 0037 §2, §4) made <code>eaf</code> a
+per-variant baseline plus an <code>int8</code> logit residual and moved
+<code>format_version</code> to 2.0. The sizes and timings here describe neither.
+They are re-measured against rebuilt stores in #117, before the version that ships
+the encodings is cut (<code>CONTRIBUTING.md</code>, “Benchmarks are measurements,
+not prose”).</p>
 </div>
 </div>
 <section id="overview" class="level2">

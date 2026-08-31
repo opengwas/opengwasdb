@@ -35,14 +35,16 @@ if TYPE_CHECKING:
 #:
 #: ``0.1`` (major 0) stays readable and is never written again: its planes are
 #: ``float16`` throughout and decode under `StoreEncoding.legacy()`. Major 1 is
-#: ADR 0037's fixed-point ``z`` (#114).
-SUPPORTED_FORMAT_VERSIONS: Mapping[int, int] = MappingProxyType({0: 1, 1: 0})
+#: ADR 0037's fixed-point ``z`` (#114); major 2 adds its residual-coded ``eaf``
+#: (#116). Both older majors stay readable -- an `eaf` plane at major 1 is
+#: ADR 0036's `float32`, which the plan names rather than infers.
+SUPPORTED_FORMAT_VERSIONS: Mapping[int, int] = MappingProxyType({0: 1, 1: 0, 2: 0})
 
 #: format_version stamped on releases written by this build. A build writes
 #: exactly one version and reads several (ADR 0038 §3): supporting the *writing*
 #: of historical formats would mean keeping every retired encoder alive and
 #: tested, for a use case nobody has.
-CURRENT_FORMAT_VERSION = "1.0"
+CURRENT_FORMAT_VERSION = "2.0"
 
 log = logging.getLogger(__name__)
 
@@ -111,7 +113,8 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
 
     Reachable since #114: a ``0.1`` release is readable (its ``float16`` planes
     decode under the legacy plan) but not writable, so completing one is
-    refused and the operator rebuilds instead.
+    refused and the operator rebuilds instead. Since #116 the same is true of
+    ``1.0``, whose `eaf` plane is ADR 0036's `float32`.
     """
     check_format_version(version, source=source)
     if version != CURRENT_FORMAT_VERSION:

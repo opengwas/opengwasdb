@@ -15,6 +15,151 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Added
 
+- **`eaf` is stored as a per-variant baseline plus a per-cell `int8` logit
+  residual, and `format_version` moves to `2.0`** (#116, ADR 0037 §2/§4).
+  ADR 0036 shipped EAF as a `float32` plane parallel to `z`/`se`, which nearly
+  doubled a store's statistic bytes for a column that is annotation rather than
+  the finding. The semantics are unchanged — EAF is still per (variant,
+  Analysis), still oriented to the stored effect allele, still declared per
+  Analysis by `eaf_scope`. Only the physical encoding changes.
+  - **The transform is the logit**, `log(f / (1 − f))`, not `log(f)`: a residual
+    error of `d` moves `f` by a relative `(1 − f)·d` and `1 − f` by a relative
+    `f·d`, so neither the effect allele frequency nor the minor allele frequency
+    users filter on can be wrong by more than `d`. `log(f)` is blind to the
+    minor side, which for a frequency near 1 is the only side anyone reads.
+    Measured on FinnGen chr1 (8 endpoints, 429,961 variants, 3.44M EAF-bearing
+    cells) the two transforms leave residuals of the same width — sd **0.0170
+    against 0.0169**, max 0.632 for both — so the bound costs nothing.
+  - **Two of the 256 codes are reserved**, leaving 254 levels: `-128` is "this
+    Analysis reports no EAF here" (decodes to NaN, and is *not* a residual of
+    zero), `-127` is "exception — exact `float32` in the plane's table". A cell
+    that is neither round-trips to within half a step. On real pilot
+    frequencies: **p99 0.184% / max 0.262%** at ±0.5 (FinnGen) and **p99
+    0.374% / max 0.394%** at ±1.0 (GWAS Catalog), against half-step bounds of
+    0.197% and 0.394%; on a synthetic sweep spanning all three ranges, max
+    0.219% / 0.419% / 0.812%. All figures are the worse of the relative error
+    on EAF and on 1 − EAF, because the minor allele frequency is what users
+    filter on. Every exception cell round-trips exactly.
+  - **Frequencies of 0 and 1, residuals outside the range, and cells at a
+    variant with no usable baseline are held exactly** in an
+    `eaf_exception_index` / `eaf_exception_value` table beside the plane — the
+    same structure, keying and validation as `z`'s overflow table, sharing one
+    implementation so the two cannot drift. Resolving one costs **109 ns/cell**
+    against a 1,000-entry table, 219 ns against 100,000 and 684 ns against
+    1,000,000, paid only for the cells that are exceptions.
+  - **The range is chosen from measured data and measured bytes**, never
+    inferred from the layout: the smallest of ±0.5 / ±1.0 / ±2.0 whose exception
+    fraction is within 2%, then compared against ADR 0036's `float32` plane, and
+    `float32` is written when the residual coding would not be smaller. A sparse
+    store with roughly one EAF-bearing cell per variant pays more for the
+    per-variant baseline than the `int8` cell saves, and stays in `float32`.
+    Measured by running the shipped encoder over chr1 of two pilots' sources as
+    a Dense grid, under the store's own zstd-3 + bitshuffle codec: FinnGen
+    (429,961 variants x 8 endpoints, 8.00 EAF cells/variant) picks ±0.5 and
+    costs **0.718 B/cell against `float32`'s 1.373, −48%**; GWAS Catalog EUR
+    (419,192 x 9 studies, 4.86 cells/variant) picks ±1.0 and costs **2.023
+    against 5.072, −60%**. The per-variant baseline measures 0.424 B/cell
+    across 8 Analyses, which is ADR 0037's own prediction of 0.42. The *plane*
+    figures do not reproduce ADR 0037 §2's 0.14 / 0.52 B/cell — the same
+    encoding measures 0.294 / 1.245 here, 2.1x and 2.4x — so the issue's
+    "within 20% of the table" criterion is **not met by these numbers**. It
+    cannot be settled from source files anyway: it is a measurement on rebuilt
+    Store Releases, which is #117, and whichever way that lands one of the two
+    tables is wrong. The decision is unaffected — the residual coding is
+    48–60% smaller than the plane it replaces on both pilots.
+  - **Reference-panel EAF for imputed cells** (#113, superseded in approach). An
+    imputed cell's EAF *is* the panel's and is identical for every Analysis
+    imputed at that variant, so it is a per-variant `eaf_reference` array at
+    ~0 B/cell rather than per-cell data, applied on read through the imputed
+    mask that Association Status already records. Read straight from the panel,
+    it never travels through the resumable completion checkpoint — which was
+    #113's stated blocker.
+  - **An observed cell whose source reported no EAF stays NaN.** It does not
+    fall back to the panel: FinnGen's frequencies differ from the EUR panel by
+    up to **3000×**, so substituting one would hand a user a plausible number
+    that is wrong by three orders of magnitude, precisely for the rare variants
+    they filter on. `decode_eaf` requires the imputed mask and the reference
+    array together whenever a release declares reference EAF, so the
+    substitution cannot be half-applied.
+  - **`eaf_reference` is declared per component.** A Hybrid release's Dense
+    Component has imputed cells where its Ragged Overflow does not, and each
+    carries its own manifest; it is the one field on which the two components'
+    plans may differ, and validation compares them with it normalised away.
+  - **A release whose Analyses reported no frequency at all still carries panel
+    EAF on the cells it imputes** — the case #113 was actually raised about. It
+    carries `eaf_reference` and no `eaf` array: NaN on every observed cell, the
+    panel's frequency on every imputed one, and `eaf_scope=association` on the
+    Analyses that gained them. Both completion pipelines and both read planes
+    do this; declaring `reference` beside an `absent` plane is legal, and
+    validation no longer reads that pairing as a contradiction.
+  - **An LD Reference Panel that declares no EAF completes rather than
+    failing.** The panel is supplied for imputation and its frequencies are
+    optional (`completion.ld_panel` has always read a missing one as NaN), so
+    asking it for reference EAF must not turn a supported panel into a failed
+    completion that takes the store's own frequencies with it. The same holds
+    for a panel with no ancestry directory or no block tables: it is asked, not
+    depended on.
+  - **A Hybrid release's `eaf_scope` cross-check reads both components.**
+    `eaf_reference` is per component, and a Hybrid release's Ragged Overflow is
+    observed-only, so its top-level plan declares none while its Dense
+    Component does. Judging the release from the top-level plan alone called a
+    Hybrid store whose only frequencies were the panel's a contradiction of its
+    own `analyses.tsv`.
+  - **A pair-resolving CSR read reports the panel's frequencies too.**
+    `eaf_pairs` short-circuited on "this component stores no `eaf` array",
+    which is true of a release carrying only reference EAF — and is not the
+    same question as "this component has a frequency to report". Top-hit reads
+    go through it.
+  - **A completed Hybrid release records the panel at the top level**, not only
+    inside its Dense Component: `provenance.completion` now names the
+    `ld_panel_id`, `ancestry` and `method`, read back from the component that
+    did the imputation so the two manifests cannot name different panels.
+    Manifest surface, so `opengwasdb-stores` needs it too.
+  - **An `encoding` block of this version must declare its `eaf` plan.** A
+    missing `eaf` key names ADR 0036's optional plane only below plan-schema
+    version 2; at or above it the release is malformed and is rejected rather
+    than read as an older one. A block with no `version` at all is read as
+    version 1, since `version` was added with the plan itself.
+  - **Validation gains the plan-versus-arrays rules for `eaf`**: a plane whose
+    dtype contradicts the manifest, a residual plane missing its baseline or its
+    exception table, an exception cell with no entry, a table describing a cell
+    that is not an exception, an `eaf_reference` array the plan does not declare,
+    and — the disagreement that got through review on #106 — an `eaf_scope` that
+    contradicts the release's declared plan.
+  - **`ogdb info` reports the `eaf` encoding** alongside `z` and `se`. Manifest
+    and CLI surface, so `opengwasdb-stores` needs the same change.
+  - **An ancestry-excluded Analysis no longer declares completion it did not
+    get.** Dense completion imputes every LD block for every Analysis and
+    applies the ancestry-match filter afterwards (ADR 0028); the filter was
+    applied to the fills at the write but not to the `completion_quality` rows
+    they came with, so a nonmatching Analysis carried through observed-only
+    declared a nonzero `completion_n_imputed_total` — and, on a source with no
+    frequencies of its own completed against a panel with some, an `eaf_scope`
+    of `association` derived from that count, on an Analysis whose every cell
+    reads NaN. The filter is now applied once, where checkpoint output becomes
+    the release's, so the table and the arrays cannot disagree; the writer
+    checks the shards honour it rather than silently re-filtering. Ragged was
+    never affected — it excludes nonmatching Analyses at block assignment.
+  - **Validation compares each Analysis's completion metadata with its own
+    cells**, not only the store's plan with the store's arrays: an Analysis
+    that declares imputed cells must hold at least one, and one that holds them
+    must account for them. Categorical rather than a count comparison, since
+    the rollup and the arrays count different things. Alongside it, a
+    layout-independent rule read from `analyses.tsv` alone — a blank
+    `completed_against` and a nonzero `completion_n_imputed_total` are a
+    contradiction.
+  - **A completed Hybrid release fails rather than name no panel.** Copying the
+    panel identity up from the Dense Component caught every exception and wrote
+    nulls, so a manifest could reach `reference_completed` with no
+    `ld_panel_id` at all — the field #116 made load-bearing — and only a log
+    line to say so.
+  - **A panel with no `EAF` imputes nothing, and the spec now says so.** An
+    imputed `se` is scaled by the panel's heterozygosity, so such a panel
+    produces no imputed cells rather than an `se` derived from a substituted
+    frequency. The completion succeeds and the release's own frequencies
+    survive it, which is what the fix above is for; "imputed cells read NaN" is
+    vacuous here, and §6a no longer implies otherwise.
+
 - **`z` is stored as `int16` fixed point, and `format_version` moves to `1.0`**
   (#114, ADR 0037 §1). `float16`'s step doubles with magnitude, so it was least
   precise exactly where p-values are steepest: worst-case p error was 26.4% at
@@ -301,7 +446,7 @@ it can read.
 | package | writes `format_version` | reads |
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
-| unreleased (`dev`) | 1.0 | 0.x, 1.0 |
+| unreleased (`dev`) | 2.0 | 0.x, 1.x, 2.0 |
 
 [Unreleased]: https://github.com/opengwas/opengwasdb/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/opengwas/opengwasdb/releases/tag/v0.2.0

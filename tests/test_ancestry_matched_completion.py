@@ -148,6 +148,38 @@ def test_mixed_store_imputes_only_matching_ancestry(tmp_path):
     assert analyses["trait_eas"]["assigned_ancestry"] == "EAS"  # still recorded
 
 
+def test_an_excluded_analysis_declares_none_of_the_completion_it_did_not_get(tmp_path):
+    """The metadata of an ancestry-excluded Analysis must describe its own cells.
+
+    The blocks are imputed for every Analysis and the ancestry-match filter is
+    applied afterwards, so a nonmatching Analysis arrives at the writer with
+    both fills and completion-quality rows. Dropping only the fills left
+    `completion_n_imputed_total` counting cells the release does not hold --
+    and, because these VCFs carry no frequency while the panel does,
+    `eaf_scope` was derived from that count and stamped `association` on an
+    Analysis whose every cell reads NaN (ADR 0028, ADR 0037 §4).
+    """
+    src = _build_source(tmp_path, {"trait_eur": "EUR", "trait_eas": "EAS"})
+    dst = tmp_path / "dst.opengwasdb"
+    complete_hybrid_store(
+        src, dst, _make_ld_panel(tmp_path), ancestry="EUR", min_cor=0.0, thresh=0.9
+    )
+
+    analyses = _analyses_by_id(dst)
+    eur, eas = analyses["trait_eur"], analyses["trait_eas"]
+    # Fixture meaningfulness: without a completed Analysis to compare against,
+    # "declares nothing" would hold for a run that imputed nothing at all.
+    assert int(eur["completion_n_imputed_total"]) > 0, "nothing was imputed; nothing is under test"
+    assert eur["eaf_scope"] == "association", "the panel's frequencies never reached the release"
+
+    assert int(eas["completion_n_imputed_total"] or 0) == 0
+    assert eas["completion_median_pearson_r"] == ""
+    assert eas["eaf_scope"] != "association", (
+        "an Analysis excluded from completion holds no imputed cell, so it holds no "
+        "frequency for one"
+    )
+
+
 def test_homogeneous_eur_store_no_regression(tmp_path):
     # Same store, both EUR: every analysis matches → both targets imputed.
     src = _build_source(tmp_path, {"trait_eur": "EUR", "trait_eur2": "EUR"})

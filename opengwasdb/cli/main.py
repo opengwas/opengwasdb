@@ -93,7 +93,14 @@ def info(store_path: Path) -> None:
     # has to open manifest.json to see.
     encoding = manifest.encoding
     scale = "" if encoding.z.scale is None else f" (scale 1/{encoding.z.scale})"
-    typer.echo(f"encoding: z={encoding.z.kind}{scale}, se={encoding.se.kind}")
+    eaf = encoding.eaf.kind
+    if encoding.eaf.residual_range is not None:
+        eaf += f" (range +/-{encoding.eaf.residual_range:g})"
+    if encoding.eaf.reference:
+        eaf += " + reference"
+    typer.echo(
+        f"encoding: z={encoding.z.kind}{scale}, se={encoding.se.kind}, eaf={eaf}"
+    )
 
 
 @app.command("validate")

@@ -48,13 +48,19 @@ from opengwasdb.completion.ld_panel import (
 )
 from opengwasdb.completion.manifest import build_completion_provenance
 from opengwasdb.completion.parallel import init_block_worker
+from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
+    EAF_BASELINE,
+    DenseEafPlane,
     DenseZPlane,
+    EafExceptionBuilder,
     StoreCodec,
     StoreEncoding,
     ZOverflowBuilder,
     positions_row_band,
+    write_eaf_baseline,
+    write_eaf_reference,
 )
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
@@ -65,7 +71,11 @@ from opengwasdb.layouts.dense.constants import (
 )
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.analyses import read_analyses, read_analysis_records
-from opengwasdb.model.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.model.enums import (
+    AssociationCoverage,
+    CompletionState,
+    PrimaryStorageLayout,
+)
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.open import (
     OpenGWASDBStore,
@@ -469,14 +479,27 @@ def _run_completion(
         union_alids_s = union_alids[o]
         union_rows_s = union_rows[o]
 
-        src_has_eaf = "eaf" in src_root
+        # Reference EAF for imputed cells (ADR 0037 §4). An imputed cell's
+        # frequency *is* the panel's -- identical for every Analysis imputed at
+        # that variant -- so it is one `float32` per variant rather than
+        # per-cell data. Observed cells never fall back to it: FinnGen's
+        # frequencies differ from the EUR panel by up to 3000x.
+        src_has_eaf = not manifest.encoding.eaf.is_absent
+        # Asked for whatever the source declares, `absent` included: a release
+        # whose Analyses reported no frequency still gains imputed cells, and
+        # those cells have the panel's frequency (issue #113). It gets an
+        # `eaf_reference` array and no `eaf` plane -- NaN on every observed
+        # cell, the panel's value on every imputed one.
+        eaf_reference = panel_reference_eaf(ld_dir, ancestry, merged_variants)
+        encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
         effective_chunks = _create_completed_zarr(
             staged, n_variants, n_analyses, on_panel, DEFAULT_CHUNK_SHAPE, DEFAULT_DTYPE,
-            manifest.encoding, src_has_eaf=src_has_eaf,
+            encoding, src_has_eaf=src_has_eaf, eaf_reference=eaf_reference,
         )
         band_rows = _completion_band_rows(effective_chunks)
         fill_shard_dir, quality_count = _shard_checkpoint_fills_by_band(
-            blocks_dir, staged, union_alids_s, union_rows_s, n_variants, band_rows
+            blocks_dir, staged, union_alids_s, union_rows_s, n_variants, band_rows,
+            impute_mask=impute_mask,
         )
         print(f"Wrote {quality_count:,} completion quality rows")
         del union_alids, union_rows, union_alids_s, union_rows_s, o
@@ -487,6 +510,7 @@ def _run_completion(
             fill_shard_dir,
             effective_chunks, n_variants, n_analyses,
             manifest.encoding,
+            encoding,
             impute_mask=impute_mask,
         )
         shutil.rmtree(fill_shard_dir, ignore_errors=True)
@@ -505,8 +529,10 @@ def _run_completion(
         completed_manifest = StoreManifest(
             # Same reasoning as `format_version` below: the completed release
             # is in its source's encoding, because it is written into its
-            # source's arrays.
-            encoding=manifest.encoding,
+            # source's arrays. The one addition is `eaf_reference`, which
+            # records a physical fact about *this* release: it carries panel
+            # frequencies for the cells it just imputed (ADR 0037 §4).
+            encoding=encoding,
             store_id=manifest.store_id,
             release_id=new_release_id,
             # Preserved, not re-stamped: completion writes into the source's
@@ -544,6 +570,13 @@ def _run_completion(
             replace(
                 a,
                 completed_against=ancestry if impute_mask is None or impute_mask[i] else "",
+                # An Analysis that gained imputed cells in a release carrying
+                # reference EAF now stores a frequency for them, whatever its
+                # source reported (ADR 0037 §4). `eaf_scope` is derived from
+                # what the release actually holds, not copied forward -- the
+                # declaration disagreeing with the arrays is the defect that
+                # got through review on #106.
+                eaf_scope=completed_eaf_scope(a, quality_rollup[i], eaf_reference is not None),
                 completion_median_pearson_r=quality_rollup[i].median_pearson_r,
                 completion_n_imputed_total=quality_rollup[i].n_imputed_total,
                 completion_n_missing_total=str(int(n_missing_off_panel[i])),
@@ -632,6 +665,7 @@ def _shard_checkpoint_fills_by_band(
     union_rows_s: np.ndarray,
     n_variants: int,
     band_rows: int,
+    impute_mask: np.ndarray | None = None,
 ) -> tuple[Path, int]:
     """Resolve checkpoint fills into raw row-band shard files.
 
@@ -639,6 +673,16 @@ def _shard_checkpoint_fills_by_band(
     by the parent. This pass resolves those ALIDs once, writes compact
     ``(row, analysis, z, se)`` records to per-band files, and streams
     completion_quality directly into SQLite.
+
+    ``impute_mask`` (bool per analysis; ``None`` = impute all) is applied here,
+    because this is where a worker's *candidate* fills become the release's.
+    The blocks are imputed for every Analysis and the ancestry-match filter
+    (ADR 0028) is decided afterwards, so a nonmatching Analysis arrives with
+    both fills and completion-quality rows. Dropping only the fills, later, at
+    the write, left ``completion_quality`` -- and through it ``analyses.tsv``'s
+    ``completion_n_imputed_total`` and ``eaf_scope`` -- counting cells the
+    release does not contain. Filtered once, here, the table and the arrays
+    cannot disagree.
     """
     fill_shard_dir = staged.path / "fill_shards"
     if fill_shard_dir.exists():
@@ -656,6 +700,8 @@ def _shard_checkpoint_fills_by_band(
                 for ai, p, ni, nm in zip(
                     d["q_ai"], d["q_pearson"], d["q_nimp"], d["q_nmiss"], strict=True
                 ):
+                    if impute_mask is not None and not impute_mask[int(ai)]:
+                        continue
                     quality_batch.append(
                         (
                             int(ai),
@@ -692,6 +738,11 @@ def _shard_checkpoint_fills_by_band(
                 ai = d["f_ai"][matched].astype(np.int32, copy=False)[in_bounds]
                 z = d["f_z"][matched].astype(np.float32, copy=False)[in_bounds]
                 se = d["f_se"][matched].astype(np.float32, copy=False)[in_bounds]
+                if impute_mask is not None:
+                    keep = impute_mask[ai]
+                    if not keep.any():
+                        continue
+                    rows, ai, z, se = rows[keep], ai[keep], z[keep], se[keep]
                 band_ids = rows // band_rows
 
                 for band_index in np.unique(band_ids):
@@ -718,6 +769,7 @@ def _create_completed_zarr(
     dtype: str,
     encoding: StoreEncoding,
     src_has_eaf: bool = False,
+    eaf_reference: np.ndarray | None = None,
 ) -> tuple[int, int]:
     """Create empty z/se (missing-filled), imputed (0), and the 1-D on_panel
     datasets, plus `eaf` when the observed store carried one (ADR 0036). The
@@ -747,14 +799,16 @@ def _create_completed_zarr(
         chunks=(effective_chunks[0],), compressor=_COMPRESSOR, dtype="uint8",
     )
     if src_has_eaf:
-        # float32, unlike z/se -- see `build_vcf._create_eaf_array` for why
-        # float16 cannot hold an EAF near 1 (ADR 0036). Created only when the
-        # observed store had one: completion adds panel rows, it does not
-        # invent frequencies the source never reported.
+        # Never float16 -- see `build_vcf._create_eaf_array` for why it cannot
+        # hold an EAF near 1 (ADR 0036). Created only when the observed store
+        # had one: completion adds panel rows, it does not invent frequencies
+        # the source never reported.
         root.create_dataset(
             "eaf", shape=(n_variants, n_analyses), chunks=effective_chunks,
-            compressor=_COMPRESSOR, dtype="float32", fill_value=float("nan"),
+            compressor=_COMPRESSOR, dtype=codec.eaf_dtype, fill_value=codec.eaf_fill_value,
         )
+    if eaf_reference is not None:
+        write_eaf_reference(root, eaf_reference, compressor=_COMPRESSOR)
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "reference_completed"
     root.attrs["compressor"] = DEFAULT_COMPRESSOR
@@ -771,6 +825,7 @@ def _write_completed_bands(
     effective_chunks: tuple[int, int],
     n_variants: int,
     n_analyses: int,
+    source_encoding: StoreEncoding,
     encoding: StoreEncoding,
     impute_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, int, int]:
@@ -785,16 +840,18 @@ def _write_completed_bands(
     chunks.
 
     ``impute_mask`` (bool per analysis; ``None`` = impute all) is the per-Analysis
-    ancestry-match filter (ADR 0028): fills for a masked-out analysis are dropped,
-    so its cells stay observed-only (NaN, ``imputed=0``) — never imputed against a
-    non-matching-ancestry panel.
+    ancestry-match filter (ADR 0028): a masked-out analysis stays observed-only
+    (NaN, ``imputed=0``) — never imputed against a non-matching-ancestry panel.
+    It is applied at checkpoint resolution, not here, so that
+    ``completion_quality`` and the arrays are filtered by the same act; this
+    function only checks that the shards it reads honour it.
     """
     root = staged.arrays(mode="a")
     z_arr, se_arr, imp_arr = root["z"], root["se"], root["imputed"]
     src_se = src_root["se"]
     # Source z is read decoded and written re-encoded, through the same plan --
     # completion moves values between two planes, it does not reinterpret them.
-    src_plane = DenseZPlane.open(src_root, encoding)
+    src_plane = DenseZPlane.open(src_root, source_encoding)
     codec = StoreCodec(encoding)
     overflow = ZOverflowBuilder()
     band_rows = _completion_band_rows(effective_chunks)
@@ -825,9 +882,18 @@ def _write_completed_bands(
         for records in _iter_fill_records(shard_path):
             lr = records["row"] - r0
             ai = records["ai"]
+            if impute_mask is not None and len(ai) and not impute_mask[ai].all():
+                # The shards are filtered at resolution, so a nonmatching
+                # Analysis reaching here means the filter and the write
+                # disagree about which analyses were completed -- the
+                # disagreement that let `completion_quality` count cells the
+                # release did not hold. Said, not silently re-filtered.
+                raise ValueError(
+                    "fill shard contains analyses excluded by the ancestry-match filter "
+                    f"(first {int(ai[~impute_mask[ai]][0])}); the filter applied at "
+                    "checkpoint resolution and the one applied here disagree"
+                )
             fillable = ~np.isfinite(zb[lr, ai])
-            if impute_mask is not None:
-                fillable &= impute_mask[ai]
             if fillable.any():
                 lrm, aim = lr[fillable], ai[fillable]
                 zb[lrm, aim] = records["z"][fillable]
@@ -861,20 +927,39 @@ def _write_completed_bands(
         for records in _iter_fill_records(shard_path):
             lr = records["row"] - r0
             ai = records["ai"]
+            # No mask check here: pass 1 read the same shards and would have
+            # raised. Both passes must fill the same cells (the
+            # missingness-consistency invariant), so a second filter is a
+            # second chance for the two to differ.
             fillable = ~np.isfinite(sb[lr, ai])
-            if impute_mask is not None:
-                fillable &= impute_mask[ai]
             if fillable.any():
                 sb[lr[fillable], ai[fillable]] = records["se"][fillable]
 
         se_arr[r0:r1] = sb
 
-    # Pass 3 -- eaf (ADR 0036). Observed frequencies carried across the row
-    # remap; imputed cells stay NaN, since the panel EAF is not yet carried
-    # through the completion checkpoint. Its own float32 buffer, because eaf
-    # cannot share z/se's float16 (see `build_vcf._create_eaf_array`).
+    # Pass 3 -- eaf. Observed frequencies are carried across the row remap and
+    # nothing else: an imputed cell's frequency is the panel's, stored once per
+    # variant in `eaf_reference` and applied on read (ADR 0037 §4), and an
+    # observed cell whose source reported none stays absent. The per-variant
+    # baseline travels with the values rather than being recomputed, so a cell
+    # decoded from the source and re-encoded here lands on the same code --
+    # completion moves values between two planes, it does not requantise them.
     if "eaf" in root and "eaf" in src_root:
-        eaf_arr, src_eaf = root["eaf"], src_root["eaf"]
+        src_eaf_plane = DenseEafPlane.open(src_root, source_encoding)
+        eaf_codec = StoreCodec(encoding)
+        exceptions = EafExceptionBuilder()
+        src_baseline = (
+            np.asarray(src_root[EAF_BASELINE][:], dtype=np.float32)
+            if EAF_BASELINE in src_root
+            else None
+        )
+        out_baseline = (
+            np.full(n_variants, np.nan, dtype=np.float32) if src_baseline is not None else None
+        )
+        if out_baseline is not None and src_baseline is not None:
+            carried = out_to_src >= 0
+            out_baseline[carried] = src_baseline[out_to_src[carried]]
+        eaf_arr = root["eaf"]
         eaf_band = np.empty((band_rows, n_analyses), dtype=np.float32)
         for r0 in range(0, n_variants, band_rows):
             r1 = min(r0 + band_rows, n_variants)
@@ -882,7 +967,23 @@ def _write_completed_bands(
             eb[:] = np.nan
             valid = np.where(out_to_src[r0:r1] >= 0)[0]
             if len(valid):
-                eb[valid, :] = src_eaf.oindex[out_to_src[r0:r1][valid], :].astype(np.float32)
-            eaf_arr[r0:r1] = eb
+                eb[valid, :] = src_eaf_plane.points(
+                    np.repeat(out_to_src[r0:r1][valid], n_analyses),
+                    np.tile(np.arange(n_analyses, dtype=np.int64), len(valid)),
+                ).reshape(len(valid), n_analyses)
+            band_baseline = (
+                None
+                if out_baseline is None
+                else np.repeat(out_baseline[r0:r1, None], n_analyses, axis=1)
+            )
+            eaf_arr[r0:r1] = eaf_codec.encode_eaf(
+                eb,
+                baseline=band_baseline,
+                positions=positions_row_band(r0, n_analyses),
+                exceptions=exceptions,
+            )
+        if out_baseline is not None:
+            write_eaf_baseline(root, out_baseline, compressor=_COMPRESSOR)
+            exceptions.table().write(root)
 
     return n_missing_off_panel, n_missing_imputation_failed, total_imputed

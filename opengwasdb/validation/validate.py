@@ -13,10 +13,19 @@ import zarr
 
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
+    EAF_BASELINE,
+    EAF_EXCEPTION,
+    EAF_EXCEPTION_INDEX,
+    EAF_EXCEPTION_VALUE,
+    EAF_REFERENCE,
     Z_OVERFLOW,
     Z_OVERFLOW_INDEX,
     Z_OVERFLOW_VALUE,
+    DenseEafPlane,
     DenseZPlane,
+    EafEncoding,
+    EafExceptionTable,
+    RaggedEafPlane,
     StoreCodec,
     StoreEncoding,
     ZOverflowTable,
@@ -200,7 +209,7 @@ def _validate_dense_store(
             if not errors:
                 _validate_dense_arrays(
                     root, n_variants, n_analyses, errors, manifest.encoding,
-                    imputed_arr, on_panel_arr,
+                    imputed_arr, on_panel_arr, analyses_path,
                 )
             if not errors:
                 _validate_top_hits(root, errors, manifest.encoding)
@@ -359,10 +368,7 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
                     f"but offsets imply {n_assoc}"
                 )
             else:
-                eaf_vals = root["eaf"][:].astype("float32")
-                finite = np.isfinite(eaf_vals)
-                if np.any(finite & ((eaf_vals < 0.0) | (eaf_vals > 1.0))):
-                    errors.append("data.zarr/ragged/eaf contains finite values outside [0, 1]")
+                _validate_ragged_eaf_values(root, manifest.encoding, n_assoc, errors)
 
         n_analyses_csr = len(offsets) - 1
         n_analyses_tsv = _validate_analyses_tsv(analyses_path, errors)
@@ -605,7 +611,13 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
     # associations, so a result assembled from both is only coherent if they
     # were encoded the same way -- and each component carries its own manifest,
     # so nothing but this check couples them.
-    if dense_store.manifest.encoding != manifest.encoding:
+    #
+    # `eaf_reference` is the one field that legitimately differs: it records a
+    # physical fact about the component that declares it, and only the Dense
+    # Component has imputed cells for a reference frequency to describe
+    # (ADR 0037 §4). Compared with it normalised away, so a real disagreement
+    # about the *encoding* still fails.
+    if dense_store.manifest.encoding.with_eaf_reference(False) != manifest.encoding:
         errors.append(
             "the Dense Component and the Hybrid release declare different statistic "
             f"encodings ({dense_store.manifest.encoding.to_manifest()} vs "
@@ -807,6 +819,22 @@ def _reject_stray_analyses_table(connection: sqlite3.Connection, errors: list[st
         )
 
 
+def _component_eaf_plans(store: OpenGWASDBStore) -> list[EafEncoding]:
+    """Every `eaf` plan that describes some part of this release's arrays.
+
+    One for a Dense or Ragged release. Two for a Hybrid one, whose nested
+    Dense Component declares its own (spec §6a, §16) -- and whose `analyses.tsv`
+    describes the Analyses of both.
+    """
+    plans = [store.manifest.encoding.eaf]
+    if store.manifest.primary_layout is PrimaryStorageLayout.HYBRID:
+        try:
+            plans.append(store.dense_component().manifest.encoding.eaf)
+        except Exception:  # noqa: BLE001 - the component's own checks report it
+            pass
+    return plans
+
+
 def _validate_eaf_orientation(
     store: OpenGWASDBStore, errors: list[str], warnings: list[str]
 ) -> None:
@@ -832,6 +860,46 @@ def _validate_eaf_orientation(
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         errors.append(f"cannot read analyses.tsv for the EAF orientation check: {exc}")
         return
+    # `eaf_scope` is per Analysis and the encoding plan is per store: two
+    # granularities of the same fact, so they must agree. Their *disagreement*
+    # is what got through review on #106 -- `analyses.tsv` declared
+    # `eaf_scope=association` for a store that had no `eaf` array at all.
+    declares_association = [
+        str(row.get("analysis_id", ""))
+        for row in table.rows
+        if row.get("eaf_scope", "") == EafScope.ASSOCIATION.value
+    ]
+    declared_eaf = store.manifest.encoding.eaf
+    # `reference` excepted: a completed release whose Analyses reported no
+    # frequency of their own still holds one for every cell it imputed -- the
+    # panel's -- so an Analysis that gained imputed cells declaring
+    # `eaf_scope=association` is stating a fact about its arrays, not
+    # disagreeing with them (ADR 0037 §4, issue #113).
+    #
+    # A Hybrid release's Analyses span both components, and `eaf_reference` is
+    # per component (spec §6a): its Dense Component has imputed cells where its
+    # observed-only Ragged Overflow does not. So the question "does this
+    # release hold frequencies" is asked of every component, not only of the
+    # top-level plan -- the top-level plan alone would call a Hybrid release
+    # whose frequencies are all in its Dense Component a contradiction.
+    holds_frequencies = any(
+        not plan.is_absent or plan.reference for plan in _component_eaf_plans(store)
+    )
+    if not holds_frequencies and declares_association:
+        errors.append(
+            f"{len(declares_association)} analysis/analyses declare "
+            f"eaf_scope=association (first {declares_association[0]!r}) but no component "
+            "of this release declares an eaf plane or reference EAF; the store's metadata "
+            "and its arrays disagree about whether it holds frequencies "
+            "(ADR 0036, ADR 0037)"
+        )
+    if declared_eaf.kind in ("float32", "int8_residual") and not declares_association:
+        errors.append(
+            "the manifest declares an eaf plane but no Analysis declares "
+            "eaf_scope=association; a release stores frequencies for the Analyses that "
+            "say they have them, or for none"
+        )
+
     recorded = store.manifest.provenance.get("eaf_orientation") or {}
     by_id = {
         str(entry.get("analysis_id", "")): entry for entry in recorded.get("analyses", [])
@@ -922,6 +990,32 @@ def _validate_analyses_tsv(analyses_path: Path, errors: list[str]) -> int:
         seen_id.add(analysis_id)
     if seen_index and seen_index != set(range(n)):
         errors.append(f"analyses.tsv analysis_index values are not exactly the range 0..{n - 1}")
+    for row in table.rows:
+        # An Analysis completed against no ancestry gained no imputed cells.
+        # The two columns are written by different steps -- `completed_against`
+        # from the ancestry-match filter, `completion_n_imputed_total` from the
+        # per-block quality rollup -- so their disagreement is what a filter
+        # applied to one and not the other looks like from outside (ADR 0028).
+        # It is also what `eaf_scope` is derived from, which is why it is
+        # checked here rather than left to the reader to notice.
+        if row.get("completed_against", ""):
+            continue
+        try:
+            n_imputed = int(row.get("completion_n_imputed_total", "") or 0)
+        except ValueError:
+            errors.append(
+                f"analyses.tsv row {row.get('analysis_id', '')!r} has a non-integer "
+                f"completion_n_imputed_total {row.get('completion_n_imputed_total', '')!r}"
+            )
+            continue
+        if n_imputed:
+            errors.append(
+                f"analysis {row.get('analysis_id', '')!r} declares "
+                f"completion_n_imputed_total={n_imputed} but completed_against is blank; "
+                "it was not completed against any ancestry, so it holds no imputed cells "
+                "and the count -- and any eaf_scope derived from it -- describes cells "
+                "the release does not contain (ADR 0028, ADR 0037 §4)"
+            )
     for row in table.rows:
         for column, vocabulary in (
             ("stored_effect_scale", StoredEffectScale),
@@ -1054,6 +1148,142 @@ def _representative_variant_indices(n_variants: int) -> list[int]:
 _VALIDATE_BAND_ROWS = 250_000
 
 
+def _validate_eaf_plan(
+    group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
+) -> None:
+    """The `eaf` plane, its baseline, its exception table and its reference.
+
+    They are one artifact in up to four arrays, and a component holding some of
+    them and not others cannot be decoded: an `int8` residual plane without its
+    baseline is meaningless, and an exception cell with no table entry has lost
+    its value entirely. The plan says which should be there; this is where that
+    stops being a claim.
+    """
+    declared = encoding.eaf
+    present = "eaf" in group
+    if declared.is_absent and present:
+        errors.append(
+            f"{label} carries an eaf plane but the manifest declares eaf absent"
+        )
+    if not present and declared.kind in ("float32", "int8_residual"):
+        errors.append(
+            f"{label} declares an eaf encoding of {declared.kind!r} but carries no eaf plane"
+        )
+
+    has_baseline = EAF_BASELINE in group
+    has_table = EAF_EXCEPTION_INDEX in group or EAF_EXCEPTION_VALUE in group
+    if not declared.is_residual:
+        if has_baseline:
+            errors.append(
+                f"{label} carries {EAF_BASELINE} but declares no residual-coded eaf plane"
+            )
+        if has_table:
+            errors.append(
+                f"{label} carries an eaf exception table but declares no residual-coded "
+                "eaf plane"
+            )
+    else:
+        if not has_baseline:
+            errors.append(
+                f"{label} declares a residual-coded eaf plane but is missing {EAF_BASELINE}, "
+                "without which the plane cannot be decoded"
+            )
+        elif not _baseline_in_unit_interval(group[EAF_BASELINE]):
+            errors.append(f"{label}/{EAF_BASELINE} holds a finite value outside (0, 1)")
+        if EAF_EXCEPTION_INDEX not in group or EAF_EXCEPTION_VALUE not in group:
+            errors.append(
+                f"{label} declares a residual-coded eaf plane but is missing "
+                f"{EAF_EXCEPTION_INDEX}/{EAF_EXCEPTION_VALUE}, which hold the exact values "
+                "of any cell the residual coding cannot express"
+            )
+        else:
+            table = EafExceptionTable.read(group)
+            if len(table.index) != len(table.value):
+                errors.append(
+                    f"{label} eaf exception table has {len(table.index)} positions but "
+                    f"{len(table.value)} values"
+                )
+            elif len(table.index) > 1 and np.any(table.index[1:] <= table.index[:-1]):
+                errors.append(
+                    f"{label} eaf exception table is not sorted by position, or repeats one"
+                )
+            elif len(table.value) and not np.all(
+                np.isfinite(table.value) & (table.value >= 0.0) & (table.value <= 1.0)
+            ):
+                errors.append(
+                    f"{label} eaf exception table holds a value that is not a frequency "
+                    "in [0, 1]"
+                )
+
+    has_reference = EAF_REFERENCE in group
+    if declared.reference and not has_reference:
+        errors.append(
+            f"{label} declares reference EAF for its imputed cells but carries no "
+            f"{EAF_REFERENCE} array"
+        )
+    if declared.reference and "imputed" not in group:
+        errors.append(
+            f"{label} declares reference EAF but carries no imputed mask to say which "
+            "cells it describes (spec §9, §15)"
+        )
+    if has_reference and not declared.reference:
+        errors.append(
+            f"{label} carries {EAF_REFERENCE} but the manifest does not declare it; a "
+            "reader following the plan would never read those frequencies"
+        )
+    elif has_reference and not _frequencies_in_unit_interval(group[EAF_REFERENCE]):
+        # A panel frequency is returned to the caller as it stands, so it is
+        # checked as a frequency here rather than only where a plane is decoded
+        # -- a release that carries reference EAF and no plane of its own has
+        # no decode to check it in (issue #113). Inclusive, unlike the
+        # baseline: 0 and 1 have no logit but are perfectly good frequencies.
+        errors.append(f"{label}/{EAF_REFERENCE} holds a finite value outside [0, 1]")
+
+
+def _validate_ragged_eaf_values(
+    root: Any, encoding: StoreEncoding, n_assoc: int, errors: list[str]
+) -> None:
+    """Decoded frequencies are frequencies, and every exception cell is held.
+
+    Decoded, not raw: an `int8` residual plane's bytes are codes, and checking
+    those against `[0, 1]` would pass every store while saying nothing about
+    what a query returns.
+    """
+    if encoding.eaf.is_residual:
+        before = len(errors)
+        _overflow_positions_match(
+            "data.zarr/ragged/eaf",
+            np.flatnonzero(np.asarray(root["eaf"][:]) == EAF_EXCEPTION).astype(np.int64),
+            EafExceptionTable.read(root),
+            errors,
+            what="eaf exception",
+            table_name="eaf exception",
+        )
+        if len(errors) > before:
+            # The plane cannot be decoded at all while its table disagrees with
+            # it, and saying so twice adds nothing.
+            return
+    plane = RaggedEafPlane.open(
+        root, encoding, imputed=root["imputed"] if "imputed" in root else None
+    )
+    values = plane.slice(0, n_assoc)
+    finite = np.isfinite(values)
+    if np.any(finite & ((values < 0.0) | (values > 1.0))):
+        errors.append("data.zarr/ragged/eaf contains finite values outside [0, 1]")
+
+
+def _baseline_in_unit_interval(array: Any) -> bool:
+    values = np.asarray(array[:], dtype=np.float64)
+    finite = np.isfinite(values)
+    return not bool(np.any(finite & ((values <= 0.0) | (values >= 1.0))))
+
+
+def _frequencies_in_unit_interval(array: Any) -> bool:
+    values = np.asarray(array[:], dtype=np.float64)
+    finite = np.isfinite(values)
+    return not bool(np.any(finite & ((values < 0.0) | (values > 1.0))))
+
+
 def _validate_encoding_plan(
     group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
 ) -> None:
@@ -1065,7 +1295,9 @@ def _validate_encoding_plan(
     disagreement between declared metadata and actual arrays that got through
     review once already (#106), and it is why the check exists at all.
     """
-    for name, declared_plane in (("z", encoding.z), ("se", encoding.se)):
+    for name, declared_plane in (
+        ("z", encoding.z), ("se", encoding.se), ("eaf", encoding.eaf)
+    ):
         if name not in group:
             continue
         actual = str(group[name].dtype)
@@ -1074,6 +1306,7 @@ def _validate_encoding_plan(
                 f"{label}/{name} has dtype {actual} but the manifest declares "
                 f"{declared_plane.kind} ({declared_plane.dtype})"
             )
+    _validate_eaf_plan(group, encoding, errors, label=label)
     if errors or "z" not in group:
         return
     declared = encoding.z
@@ -1104,13 +1337,21 @@ def _validate_encoding_plan(
 
 
 def _overflow_positions_match(
-    label: str, observed: np.ndarray, table: ZOverflowTable, errors: list[str]
+    label: str,
+    observed: np.ndarray,
+    table: ZOverflowTable | EafExceptionTable,
+    errors: list[str],
+    *,
+    what: str = "out-of-range z",
+    table_name: str = "overflow",
 ) -> None:
-    """Every out-of-range cell has an exact value, and nothing else does.
+    """Every side-table cell has an exact value, and nothing else does.
 
-    A plane that says "overflow" for a cell the table does not describe has
-    lost that association outright, and it would be the *largest* |z| in the
-    store -- exactly the value nothing may be quietly wrong about.
+    A plane that says "look in the table" for a cell the table does not
+    describe has lost that association outright. For `z` it would be the
+    *largest* |z| in the store -- exactly the value nothing may be quietly
+    wrong about -- and for `eaf` it is the frequency furthest from its
+    baseline, which is the rare variant a user is filtering on.
     """
     if np.array_equal(np.sort(observed), table.index):
         return
@@ -1118,14 +1359,58 @@ def _overflow_positions_match(
     stray = np.setdiff1d(table.index, observed)
     if len(orphan):
         errors.append(
-            f"{label}: {len(orphan)} out-of-range z cell(s) have no entry in the overflow "
+            f"{label}: {len(orphan)} {what} cell(s) have no entry in the {table_name} "
             f"table (first at flat position {int(orphan[0])})"
         )
     if len(stray):
         errors.append(
-            f"{label}: z overflow table describes {len(stray)} cell(s) that are not marked "
-            f"out of range (first at flat position {int(stray[0])})"
+            f"{label}: {table_name} table describes {len(stray)} cell(s) that are not marked "
+            f"{what} (first at flat position {int(stray[0])})"
         )
+
+
+def _imputed_declaration_matches_arrays(
+    analyses_path: Path,
+    imputed_per_analysis: np.ndarray,
+    errors: list[str],
+) -> None:
+    """Each Analysis holds imputed cells if and only if it says it does.
+
+    Categorical, not a count comparison: `completion_n_imputed_total` is rolled
+    up from per-block quality and the arrays hold what was actually written, so
+    the two need not agree to the cell. What they may not do is disagree about
+    *whether there are any* -- that is the shape the ancestry-match filter's
+    defect took, an Analysis carried through observed-only while its metadata
+    claimed thousands of imputed cells, and `eaf_scope` derived from the claim
+    (ADR 0028, ADR 0037 §4). #106's defect was the same disagreement one
+    granularity up.
+    """
+    for row in read_analyses(analyses_path).rows:
+        try:
+            index = int(row.get("analysis_index", ""))
+        except ValueError:
+            continue  # already reported by _validate_analyses_tsv
+        if not 0 <= index < len(imputed_per_analysis):
+            continue
+        try:
+            declared = int(row.get("completion_n_imputed_total", "") or 0)
+        except ValueError:
+            continue  # already reported by _validate_analyses_tsv
+        actual = int(imputed_per_analysis[index])
+        analysis_id = row.get("analysis_id", "")
+        if declared and not actual:
+            errors.append(
+                f"analysis {analysis_id!r} declares completion_n_imputed_total={declared} "
+                "but has no imputed=1 cell in data.zarr/imputed; the metadata describes "
+                "cells the release does not contain"
+            )
+        elif actual and not declared:
+            errors.append(
+                f"analysis {analysis_id!r} has {actual} imputed=1 cell(s) in "
+                "data.zarr/imputed but declares completion_n_imputed_total="
+                f"{row.get('completion_n_imputed_total', '')!r}; the release holds "
+                "imputed cells its metadata does not account for"
+            )
 
 
 def _validate_dense_arrays(
@@ -1136,6 +1421,7 @@ def _validate_dense_arrays(
     encoding: StoreEncoding,
     imputed_arr: Any = None,
     on_panel: np.ndarray | None = None,
+    analyses_path: Path | None = None,
 ) -> None:
     """Stream the dense z/se (and, for a completed store, imputed) matrices in
     row-bands and run every matrix-touching content check in one pass.
@@ -1144,7 +1430,10 @@ def _validate_dense_arrays(
     stores (from ``_validate_completion_metadata``); when present, the imputed
     checks that used to load the whole matrix are folded into this same band
     loop so peak memory stays at one band rather than the full matrices
-    (issue 045).
+    (issue 045). ``analyses_path`` lets the same pass answer the per-Analysis
+    question -- does each Analysis hold the imputed cells it declares? -- for
+    the cost of one ``int64`` per analysis, since the loop already reads
+    ``imputed``.
     """
     for name in ("z", "se"):
         if name not in root:
@@ -1165,8 +1454,29 @@ def _validate_dense_arrays(
     if eaf_arr is not None and tuple(eaf_arr.shape) != expected_shape:
         errors.append(f"eaf shape {tuple(eaf_arr.shape)} does not match {expected_shape}")
         eaf_arr = None
+    if EAF_BASELINE in root and len(root[EAF_BASELINE]) != n_variants:
+        errors.append(
+            f"{EAF_BASELINE} has {len(root[EAF_BASELINE])} entries but the variant axis "
+            f"has {n_variants}"
+        )
+    # Checked whether or not there is an `eaf` plane: a completed release whose
+    # Analyses reported no frequency carries `eaf_reference` and nothing else,
+    # and a mis-sized one there would hand every imputed cell the frequency of
+    # some other variant (issue #113).
+    if EAF_REFERENCE in root and len(root[EAF_REFERENCE]) != n_variants:
+        errors.append(
+            f"{EAF_REFERENCE} has {len(root[EAF_REFERENCE])} entries but the variant axis "
+            f"has {n_variants}"
+        )
     if errors:
         return
+    # Opened when there is a plane to decode *or* a panel frequency to
+    # substitute: both are frequencies a query returns, so both are checked.
+    eaf_plane = (
+        DenseEafPlane.open(root, encoding)
+        if eaf_arr is not None or encoding.eaf.reference
+        else None
+    )
 
     # Stream in row-bands. Missingness is read through the plane's declared
     # missing *marker* (spec §15) -- NaN for a float plane, the reserved
@@ -1175,12 +1485,15 @@ def _validate_dense_arrays(
     codec = StoreCodec(encoding)
     fixed_point = encoding.z.is_fixed_point
     overflow_positions: list[np.ndarray] = []
+    eaf_exception_positions: list[np.ndarray] = []
+    eaf_undecodable = False
     neg_se = False
     missingness = False
     imp_not_binary = False
     imp_nan_z = False
     imp_nan_se = False
     off_panel_imputed = False
+    imputed_per_analysis = np.zeros(n_analyses, dtype=np.int64)
     eaf_out_of_range = False
     for r0 in range(0, n_variants, _VALIDATE_BAND_ROWS):
         r1 = min(r0 + _VALIDATE_BAND_ROWS, n_variants)
@@ -1193,11 +1506,26 @@ def _validate_dense_arrays(
             )
         if not neg_se and np.any(np.isfinite(se) & (se < 0)):
             neg_se = True
-        if eaf_arr is not None and not eaf_out_of_range:
-            eaf = eaf_arr[r0:r1]
-            finite = np.isfinite(eaf)
-            if np.any(finite & ((eaf < 0.0) | (eaf > 1.0))):
-                eaf_out_of_range = True
+        if eaf_plane is not None:
+            # Decoded, not raw: an `int8` residual plane's bytes are codes, and
+            # checking those for "in [0, 1]" would pass every store while
+            # saying nothing about the frequencies a query returns. A decode
+            # that cannot resolve an exception cell is not reported from here:
+            # the position check below says exactly which cell and why.
+            if not eaf_out_of_range and not eaf_undecodable:
+                try:
+                    eaf = eaf_plane.band(r0, r1)
+                except ValueError:
+                    eaf_undecodable = True
+                else:
+                    finite = np.isfinite(eaf)
+                    if np.any(finite & ((eaf < 0.0) | (eaf > 1.0))):
+                        eaf_out_of_range = True
+            if encoding.eaf.is_residual and eaf_arr is not None:
+                eaf_exception_positions.append(
+                    np.flatnonzero(np.asarray(eaf_arr[r0:r1]) == EAF_EXCEPTION).astype(np.int64)
+                    + r0 * n_analyses
+                )
         if not missingness and np.any(z_missing != np.isnan(se)):
             missingness = True
         if imputed_arr is not None:
@@ -1205,6 +1533,7 @@ def _validate_dense_arrays(
             if not imp_not_binary and not np.all((imp == 0) | (imp == 1)):
                 imp_not_binary = True
             imp_mask = imp == 1
+            imputed_per_analysis += imp_mask.sum(axis=0, dtype=np.int64)
             if imp_mask.any():
                 if not imp_nan_z and np.any(z_missing[imp_mask]):
                     imp_nan_z = True
@@ -1229,6 +1558,8 @@ def _validate_dense_arrays(
         errors.append(
             "off-panel (on_panel=0) rows have imputed=1 cells — off-panel is never imputable"
         )
+    if imputed_arr is not None and analyses_path is not None:
+        _imputed_declaration_matches_arrays(analyses_path, imputed_per_analysis, errors)
     if eaf_out_of_range:
         errors.append("data.zarr/eaf contains finite values outside [0, 1]")
     if fixed_point:
@@ -1239,6 +1570,19 @@ def _validate_dense_arrays(
             ZOverflowTable.read(root),
             errors,
         )
+    if eaf_plane is not None and encoding.eaf.is_residual:
+        before = len(errors)
+        _overflow_positions_match(
+            "data.zarr/eaf",
+            np.concatenate(eaf_exception_positions) if eaf_exception_positions
+            else np.empty(0, dtype=np.int64),
+            EafExceptionTable.read(root),
+            errors,
+            what="eaf exception",
+            table_name="eaf exception",
+        )
+        if eaf_undecodable and len(errors) == before:
+            errors.append("data.zarr/eaf cannot be decoded under the declared plan")
 
 
 def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) -> None:

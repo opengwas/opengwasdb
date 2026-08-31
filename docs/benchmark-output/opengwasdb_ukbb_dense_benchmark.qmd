@@ -12,14 +12,17 @@ jupyter: python3
 ---
 
 ::: {.callout-important}
-## Measured at `format_version` 0.1, not re-run for the fixed-point `z` encoding
+## Measured at `format_version` 0.1, not re-run for the `z` or `eaf` encodings
 
-Every figure below was measured against stores whose `z` plane is `float16`.
-Issue #114 (ADR 0037 §1) changed `z` to `int16` fixed point with an exact
-overflow table, which changes stored size and adds a decode step to every read,
-so the sizes and timings here describe the previous encoding. They are
-re-measured against rebuilt stores in #117, before the version that ships the
-encoding is cut (`CONTRIBUTING.md`, "Benchmarks are measurements, not prose").
+Every figure below was measured against stores whose `z` plane is `float16`
+and which carry no `eaf` at all. Two changes have landed since, both of which
+move stored size and add a decode step to every read: issue #114 (ADR 0037 §1)
+made `z` `int16` fixed point with an exact overflow table, and issue #116
+(ADR 0037 §2, §4) made `eaf` a per-variant baseline plus an `int8` logit
+residual and moved `format_version` to 2.0. The sizes and timings here describe
+neither. They are re-measured against rebuilt stores in #117, before the version
+that ships the encodings is cut (`CONTRIBUTING.md`, "Benchmarks are
+measurements, not prose").
 :::
 
 ```{python}
