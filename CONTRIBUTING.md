@@ -263,6 +263,18 @@ If a change touches the CLI surface or a manifest column, either update the
 sibling repository in the same piece of work or open an issue there before
 merging. Do not merge and intend to come back.
 
+### Local quality gates: cleat
+
+`python3 quality/bin/gate.py` runs the repository's deterministic quality
+gates. Treat a failing gate as a hard standards failure: fix the reported file
+and line rather than working around the gate. Code review's Standards axis
+should report any cleat failure it observes, but should not duplicate checks the
+gate already enforces.
+
+Do not edit `quality.json`, files under `quality/`, hooks, or baselines to make
+a gate pass. Do not run `--write-baseline` unless the baseline change is the
+explicit purpose of a reviewed commit.
+
 ### Enforced by CI
 
 `.github/workflows/ci.yml` runs on every pull request and every push to `dev`
