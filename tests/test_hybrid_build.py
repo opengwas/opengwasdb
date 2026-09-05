@@ -17,7 +17,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import zarr
 
+from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.manifest import StoreManifest
@@ -359,6 +361,37 @@ def test_top_hits_reads_both_component_frequencies_from_indexes(hybrid_store):
     result = q.top_hits(threshold=5e-4)
     np.testing.assert_array_equal(result["eaf"], expected)
     q.close()
+
+
+@pytest.mark.parametrize(
+    ("drop_dense", "drop_overflow"),
+    [(True, False), (False, True), (True, True)],
+    ids=["dense-legacy", "overflow-legacy", "both-legacy"],
+)
+def test_top_hits_match_with_legacy_component_indexes(hybrid_store, drop_dense, drop_overflow):
+    """One consistent result whether either, both or neither index carries eaf.
+
+    All three combinations that need a fallback, including the two where the
+    components disagree about where their frequencies come from.
+    """
+    q = query_store(hybrid_store)
+    expected = q.top_hits(threshold=5e-4)["eaf"]
+    q.close()
+    assert len(expected) > 0, "fixture produced no top hits; the comparison would be vacuous"
+    assert np.isfinite(expected).all(), "fixture carries no frequencies to compare"
+
+    key = threshold_key(5e-4)
+    if drop_dense:
+        root = zarr.open_group(str(hybrid_store / "dense" / "data.zarr"), mode="a")
+        del root[f"top_hits/{key}"]["eaf"]
+    if drop_overflow:
+        root = zarr.open_group(str(hybrid_store / "data.zarr"), mode="a")
+        del root[f"top_hits/{key}"]["eaf"]
+
+    q = query_store(hybrid_store)
+    actual = q.top_hits(threshold=5e-4)["eaf"]
+    q.close()
+    np.testing.assert_array_equal(actual, expected)
 
 
 def test_top_hits_selects_and_merges_one_analysis(hybrid_store):

@@ -268,20 +268,28 @@ def test_vcf_builds_populate_frequency_in_every_top_hit_tier(
             assert "eaf" in root[f"top_hits/{key}"]
 
 
-def test_hybrid_top_hits_mix_new_and_legacy_component_indexes(hybrid_store: Path):
-    with query_store(hybrid_store) as query:
-        expected = query.top_hits(threshold=5e-4)
-    dense_root = zarr.open_group(str(hybrid_store / "dense" / "data.zarr"), mode="a")
-    del dense_root[f"top_hits/{threshold_key(5e-4)}"]["eaf"]
-    with query_store(hybrid_store) as query:
-        dense_legacy = query.top_hits(threshold=5e-4)
-    np.testing.assert_array_equal(dense_legacy["eaf"], expected["eaf"])
+def test_ragged_top_hits_index_agrees_with_the_plane_it_was_built_from(ragged_store: Path):
+    """The indexed frequencies must equal what the CSR gather returns.
 
-    overflow_root = zarr.open_group(str(hybrid_store / "data.zarr"), mode="a")
-    del overflow_root[f"top_hits/{threshold_key(5e-4)}"]["eaf"]
-    with query_store(hybrid_store) as query:
-        both_legacy = query.top_hits(threshold=5e-4)
-    np.testing.assert_array_equal(both_legacy["eaf"], expected["eaf"])
+    `test_rebuilt_top_hit_index_carries_decoded_frequency` proves the plane is
+    not read while the array is present, so both of its readings come from the
+    index and a wrong stored value would match itself. Reading the same hits
+    with the array removed is the only way the two sources are compared.
+
+    The Hybrid equivalents live in `test_hybrid_build.py`, whose fixture is the
+    one whose components both produce hits to compare.
+    """
+    build_ragged_top_hit_indexes(ragged_store, thresholds=(1.0,))
+    with query_store(ragged_store) as query:
+        indexed = query.top_hits(threshold=1.0)["eaf"]
+    assert len(indexed) > 0, "fixture produced no top hits; the comparison would be vacuous"
+    assert np.isfinite(indexed).any(), "fixture carries no frequencies to compare"
+
+    root = zarr.open_group(str(ragged_store / "data.zarr"), mode="a")
+    del root[f"top_hits/{threshold_key(1.0)}"]["eaf"]
+    with query_store(ragged_store) as query:
+        fallback = query.top_hits(threshold=1.0)["eaf"]
+    np.testing.assert_array_equal(indexed, fallback)
 
 
 # ── The acceptance criteria ─────────────────────────────────────────────────
