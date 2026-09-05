@@ -126,6 +126,66 @@ display(Markdown(md_table(rows, [
 ])))
 ```
 
+## Actual sampled encode/decode round trip
+
+This is the R² that matters for the representation: observed `log(SE)` versus
+`log(SE)` reconstructed from the MAF prediction plus the quantised residual.
+It is deliberately different from the lower MAF-only fit R² below. The side
+table restores every exception exactly.
+
+```{python}
+rows = []
+for r in results:
+    for c in r["components"]:
+        roundtrip = c["candidates"]["2.0"]
+        rows.append({
+            "component": c["name"],
+            "encoded cells compared": roundtrip["roundtrip_sample_cells"],
+            "decoded-vs-true log(SE) R²": roundtrip["roundtrip_log_se_r2"],
+        })
+display(Markdown(md_table(rows, [
+    ("component", "component", None),
+    ("encoded cells compared", "encoded cells compared", integer),
+    ("decoded-vs-true log(SE) R²", "decoded-vs-true log(SE) R²", lambda x: f"{x:.6f}"),
+])))
+```
+
+```{python}
+#| fig-width: 12
+#| fig-height: 4
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(1, len(results), figsize=(12, 4))
+for ax, result in zip(axes, results):
+    true = []
+    decoded = []
+    labels = []
+    for component in result["components"]:
+        candidate = component["candidates"]["2.0"]
+        true.extend(candidate["scatter_true_se"])
+        decoded.extend(candidate["scatter_decoded_se"])
+        labels.append(
+            f"{component['name'].replace(result['name'], '').strip() or 'store'} "
+            f"R²={candidate['roundtrip_log_se_r2']:.6f}"
+        )
+    ax.scatter(true, decoded, s=1, alpha=0.15, rasterized=True)
+    lower = min(min(true), min(decoded))
+    upper = max(max(true), max(decoded))
+    ax.plot([lower, upper], [lower, upper], color="black", linewidth=1)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("true stored SE")
+    ax.set_ylabel("decoded residual SE")
+    ax.set_title(result["name"] + "\n" + "; ".join(labels))
+fig.tight_layout()
+```
+
+The near-one values are expected if the codec is correctly constructed: it
+stores the part the MAF-only model does not explain. They establish that a low
+MAF-only fit R² is not synonymous with inaccurate decoded SE. They do **not**
+by themselves prove the encoding is economically worthwhile; storage and
+query-coupling remain separate decisions.
+
 ## Storage footprint
 
 ```{python}

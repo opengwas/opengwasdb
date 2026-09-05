@@ -19,7 +19,6 @@ import argparse
 import json
 import math
 import os
-import tempfile
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -41,7 +40,10 @@ EXCEPTION_BUDGET = 0.02
 DEFAULT_STORES = {
     "finngen-r13 pilot-20": "/data/opengwasdb/wip/rebuild-117/finngen-r13__r13-pilot-20",
     "ukb-b dense observed": "/data/opengwasdb/wip/rebuild-117/ukb-b__dense-observed-vcf-c128",
-    "EBI GWAS Catalog hybrid": "/data/opengwasdb/wip/rebuild-117/gwas-catalog-eur-hybrid__eur-hybrid-pilot-10",
+    "EBI GWAS Catalog hybrid": (
+        "/data/opengwasdb/wip/rebuild-117/"
+        "gwas-catalog-eur-hybrid__eur-hybrid-pilot-10"
+    ),
 }
 
 
@@ -138,7 +140,9 @@ def evenly_spaced_starts(length: int, chunk: int, max_chunks: int) -> list[int]:
     return [starts[int(i)] for i in idx]
 
 
-def residual_dense(se: np.ndarray, eaf: np.ndarray, intercept: np.ndarray, slope: np.ndarray) -> np.ndarray:
+def residual_dense(
+    se: np.ndarray, eaf: np.ndarray, intercept: np.ndarray, slope: np.ndarray
+) -> np.ndarray:
     se64 = np.asarray(se, dtype=np.float64)
     eaf64 = np.asarray(eaf, dtype=np.float64)
     residual = np.full(se64.shape, np.nan, dtype=np.float64)
@@ -151,7 +155,11 @@ def residual_dense(se: np.ndarray, eaf: np.ndarray, intercept: np.ndarray, slope
 
 
 def residual_ragged(
-    analysis_index: np.ndarray, se: np.ndarray, eaf: np.ndarray, intercept: np.ndarray, slope: np.ndarray
+    analysis_index: np.ndarray,
+    se: np.ndarray,
+    eaf: np.ndarray,
+    intercept: np.ndarray,
+    slope: np.ndarray,
 ) -> np.ndarray:
     ai = np.asarray(analysis_index, dtype=np.int64)
     se64 = np.asarray(se, dtype=np.float64)
@@ -164,14 +172,18 @@ def residual_ragged(
     return residual
 
 
-def code_residual(residual: np.ndarray, residual_range: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def code_residual(
+    residual: np.ndarray, residual_range: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     step = residual_range / 127.0
     codes = np.full(residual.shape, MISSING, dtype=np.int8)
     finite = np.isfinite(residual)
     exception = finite & ((residual < -126.0 * step) | (residual > 127.0 * step))
     encodable = finite & ~exception
     codes[exception] = EXCEPTION
-    codes[encodable] = np.rint(residual[encodable] / step).astype(np.int16).clip(-126, 127).astype(np.int8)
+    codes[encodable] = (
+        np.rint(residual[encodable] / step).astype(np.int16).clip(-126, 127).astype(np.int8)
+    )
     quantised = np.full(residual.shape, np.nan, dtype=np.float64)
     quantised[encodable] = codes[encodable].astype(np.float64) * step
     # Exceptions would be exact in the side table, so their residual error is zero.
@@ -179,6 +191,66 @@ def code_residual(residual: np.ndarray, residual_range: float) -> tuple[np.ndarr
     rel_error[encodable] = np.abs(np.exp(quantised[encodable] - residual[encodable]) - 1.0)
     rel_error[~finite] = np.nan
     return codes, exception, rel_error
+
+
+def _new_accumulators(ranges: Iterable[float]) -> dict[float, dict[str, Any]]:
+    return {
+        r: {
+            "compressed": 0,
+            "exceptions": 0,
+            "finite": 0,
+            "errors": [],
+            "roundtrip_sse": 0.0,
+            "roundtrip_sum": 0.0,
+            "roundtrip_sumsq": 0.0,
+            "roundtrip_n": 0,
+            "scatter_true": [],
+            "scatter_decoded": [],
+        }
+        for r in ranges
+    }
+
+
+def record_roundtrip(
+    accumulator: dict[str, Any],
+    residual: np.ndarray,
+    se: np.ndarray,
+    codes: np.ndarray,
+    exception: np.ndarray,
+    residual_range: float,
+) -> None:
+    """Record true-versus-decoded SE on this real encoded sample.
+
+    Exceptions stand for exact side-table values. This answers the representation
+    question, rather than the different question the MAF-only regression R²
+    answers: after adding the stored residual back to the predictor, how close
+    is decoded SE to the SE now held in the Store Release?
+    """
+    finite = np.isfinite(residual)
+    if not np.any(finite):
+        return
+    step = residual_range / 127.0
+    decoded_residual = np.asarray(residual, dtype=np.float64).copy()
+    encoded = finite & ~exception
+    decoded_residual[encoded] = codes[encoded].astype(np.float64) * step
+    true_log_se = np.log(np.asarray(se, dtype=np.float64)[finite])
+    decoded_log_se = true_log_se + (decoded_residual[finite] - residual[finite])
+    delta = decoded_log_se - true_log_se
+    accumulator["roundtrip_sse"] += float(np.dot(delta, delta))
+    accumulator["roundtrip_sum"] += float(true_log_se.sum())
+    accumulator["roundtrip_sumsq"] += float(np.dot(true_log_se, true_log_se))
+    accumulator["roundtrip_n"] += int(len(true_log_se))
+
+    # The ±2.0 range is the widest candidate and the one used for the visual
+    # decision; retain a bounded deterministic scatter sample in physical SE.
+    if residual_range != 2.0:
+        return
+    remaining = 3_000 - len(accumulator["scatter_true"])
+    if remaining <= 0:
+        return
+    stride = max(1, math.ceil(len(true_log_se) / remaining))
+    accumulator["scatter_true"].extend(np.exp(true_log_se[::stride]).tolist())
+    accumulator["scatter_decoded"].extend(np.exp(decoded_log_se[::stride]).tolist())
 
 
 def compressed_len(compressor: Any, data: np.ndarray) -> int:
@@ -192,7 +264,9 @@ class Component:
         self.root = root
         self.encoding = encoding
         self.kind = kind
-        self.se = root["se"] if kind == "dense" else root["ragged/se"] if "ragged" in root else root["se"]
+        self.se = (
+            root["se"] if kind == "dense" else root["ragged/se"] if "ragged" in root else root["se"]
+        )
 
     @property
     def n_cells(self) -> int:
@@ -211,12 +285,44 @@ def components_for_store(name: str, store_path: Path) -> list[Component]:
     out: list[Component] = []
     if manifest.primary_layout == "hybrid":
         dense_manifest = StoreManifest.load(store_path / "dense")
-        out.append(Component(f"{name} dense", store_path / "dense", zarr.open(store_path / "dense/data.zarr", mode="r"), dense_manifest.encoding, "dense"))
-        out.append(Component(f"{name} overflow", store_path, zarr.open(store_path / "data.zarr", mode="r"), manifest.encoding, "ragged"))
+        out.append(
+            Component(
+                f"{name} dense",
+                store_path / "dense",
+                zarr.open(store_path / "dense/data.zarr", mode="r"),
+                dense_manifest.encoding,
+                "dense",
+            )
+        )
+        out.append(
+            Component(
+                f"{name} overflow",
+                store_path,
+                zarr.open(store_path / "data.zarr", mode="r"),
+                manifest.encoding,
+                "ragged",
+            )
+        )
     elif manifest.primary_layout == "ragged":
-        out.append(Component(name, store_path, zarr.open(store_path / "data.zarr", mode="r"), manifest.encoding, "ragged"))
+        out.append(
+            Component(
+                name,
+                store_path,
+                zarr.open(store_path / "data.zarr", mode="r"),
+                manifest.encoding,
+                "ragged",
+            )
+        )
     else:
-        out.append(Component(name, store_path, zarr.open(store_path / "data.zarr", mode="r"), manifest.encoding, "dense"))
+        out.append(
+            Component(
+                name,
+                store_path,
+                zarr.open(store_path / "data.zarr", mode="r"),
+                manifest.encoding,
+                "dense",
+            )
+        )
     return out
 
 
@@ -229,7 +335,9 @@ def add_fit_sums(component: Component, sums: Sums, max_chunks: int) -> None:
             sums.add_dense(component.se[start:end, :], eaf_plane.band(start, end))
     else:
         group = component.root["ragged"] if "ragged" in component.root else component.root
-        eaf_plane = RaggedEafPlane.open(group, component.encoding, imputed=group["imputed"] if "imputed" in group else None)
+        eaf_plane = RaggedEafPlane.open(
+            group, component.encoding, imputed=group["imputed"] if "imputed" in group else None
+        )
         offsets = np.asarray(group["offsets"][:], dtype=np.int64)
         chunk = int(group["se"].chunks[0])
         for start in evenly_spaced_starts(int(group["se"].shape[0]), chunk, max_chunks):
@@ -247,14 +355,16 @@ def estimate_component(
     max_chunks: int,
 ) -> dict[str, Any]:
     candidates: dict[str, dict[str, Any]] = {}
-    se_array_path = component.path / "data.zarr" / ("se" if component.kind == "dense" else "ragged/se")
+    se_array_path = (
+        component.path / "data.zarr" / ("se" if component.kind == "dense" else "ragged/se")
+    )
     current_bytes = dir_size(se_array_path)
     if component.kind == "dense":
         eaf_plane = DenseEafPlane.open(component.root, component.encoding)
         row_chunk, col_chunk = (int(x) for x in component.se.chunks)
         starts = evenly_spaced_starts(int(component.se.shape[0]), row_chunk, max_chunks)
         total_sample_cells = 0
-        accum = {r: {"compressed": 0, "exceptions": 0, "finite": 0, "errors": []} for r in ranges}
+        accum = _new_accumulators(ranges)
         read_seconds = 0.0
         se_read_seconds = 0.0
         eaf_read_seconds = 0.0
@@ -276,21 +386,26 @@ def estimate_component(
             for r in ranges:
                 codes, exception, rel_error = code_residual(residual, r)
                 for c0 in range(0, codes.shape[1], col_chunk):
-                    accum[r]["compressed"] += compressed_len(component.se.compressor, codes[:, c0:c0 + col_chunk])
+                    accum[r]["compressed"] += compressed_len(
+                        component.se.compressor, codes[:, c0 : c0 + col_chunk]
+                    )
                 accum[r]["exceptions"] += int(exception.sum())
                 accum[r]["finite"] += int(np.isfinite(residual).sum())
                 finite_err = rel_error[np.isfinite(rel_error)]
                 if len(finite_err):
                     # keep a bounded deterministic sample of error values
                     accum[r]["errors"].append(finite_err[:: max(1, len(finite_err) // 20_000)])
+                record_roundtrip(accum[r], residual, se, codes, exception, r)
     else:
         group = component.root["ragged"] if "ragged" in component.root else component.root
-        eaf_plane = RaggedEafPlane.open(group, component.encoding, imputed=group["imputed"] if "imputed" in group else None)
+        eaf_plane = RaggedEafPlane.open(
+            group, component.encoding, imputed=group["imputed"] if "imputed" in group else None
+        )
         offsets = np.asarray(group["offsets"][:], dtype=np.int64)
         chunk = int(group["se"].chunks[0])
         starts = evenly_spaced_starts(int(group["se"].shape[0]), chunk, max_chunks)
         total_sample_cells = 0
-        accum = {r: {"compressed": 0, "exceptions": 0, "finite": 0, "errors": []} for r in ranges}
+        accum = _new_accumulators(ranges)
         read_seconds = 0.0
         se_read_seconds = 0.0
         eaf_read_seconds = 0.0
@@ -319,12 +434,15 @@ def estimate_component(
                 finite_err = rel_error[np.isfinite(rel_error)]
                 if len(finite_err):
                     accum[r]["errors"].append(finite_err[:: max(1, len(finite_err) // 20_000)])
+                record_roundtrip(accum[r], residual, se, codes, exception, r)
 
     scale = component.n_cells / max(total_sample_cells, 1)
     for r, a in accum.items():
         errors = np.concatenate(a["errors"]) if a["errors"] else np.empty(0)
         projected = (a["compressed"] + a["exceptions"] * 12) * scale
         finite = max(a["finite"], 1)
+        roundtrip_n = int(a["roundtrip_n"])
+        roundtrip_sst = a["roundtrip_sumsq"] - (a["roundtrip_sum"] ** 2 / max(roundtrip_n, 1))
         candidates[str(r)] = {
             "projected_bytes": projected,
             "projected_bpcell": projected / component.n_cells,
@@ -333,6 +451,12 @@ def estimate_component(
             "relative_error_median": float(np.nanmedian(errors)) if len(errors) else None,
             "relative_error_p99": float(np.nanquantile(errors, 0.99)) if len(errors) else None,
             "relative_error_max_sample": float(np.nanmax(errors)) if len(errors) else None,
+            "roundtrip_log_se_r2": (
+                float(1.0 - a["roundtrip_sse"] / roundtrip_sst) if roundtrip_sst > 0 else None
+            ),
+            "roundtrip_sample_cells": roundtrip_n,
+            "scatter_true_se": a["scatter_true"] if r == 2.0 else [],
+            "scatter_decoded_se": a["scatter_decoded"] if r == 2.0 else [],
         }
     return {
         "name": component.name,
@@ -358,7 +482,9 @@ def analyse_store(name: str, path: Path, max_chunks: int) -> dict[str, Any]:
     for c in components:
         add_fit_sums(c, sums, max_chunks=max_chunks)
     intercept, slope, r2 = coefficients(sums)
-    component_results = [estimate_component(c, intercept, slope, CANDIDATE_RANGES, max_chunks) for c in components]
+    component_results = [
+        estimate_component(c, intercept, slope, CANDIDATE_RANGES, max_chunks) for c in components
+    ]
     totals: dict[str, Any] = {}
     n_cells = sum(c["n_cells"] for c in component_results)
     current = sum(c["current_se_bytes"] for c in component_results)
@@ -377,7 +503,11 @@ def analyse_store(name: str, path: Path, max_chunks: int) -> dict[str, Any]:
             "saving_fraction": (current - projected) / current,
             "exception_fraction": exceptions / max(finite, 1),
         }
-    feasible = bool(np.all(np.isfinite(r2)) and np.nanmin(r2) >= 0.99 and np.all(sums.finite_pair == sums.finite_se))
+    feasible = bool(
+        np.all(np.isfinite(r2))
+        and np.nanmin(r2) >= 0.99
+        and np.all(sums.finite_pair == sums.finite_se)
+    )
     chosen_range = None
     if feasible:
         for r in CANDIDATE_RANGES:
@@ -410,7 +540,11 @@ def analyse_store(name: str, path: Path, max_chunks: int) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output", type=Path, default=Path("docs/benchmark-output/opengwasdb_se_residual_expectation.json"))
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("docs/benchmark-output/opengwasdb_se_residual_expectation.json"),
+    )
     parser.add_argument("--max-chunks", type=int, default=40)
     args = parser.parse_args()
     results = []

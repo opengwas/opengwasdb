@@ -17,7 +17,8 @@ docs/benchmark-output/*_combined_source.tsv.gz
 # transient build logs (build.sh writes + rotates these)
 data/**/build.log
 data/**/build.log.*
-# local Claude Code state (not shared)
+# local agent state (not shared)
+.pi/settings.json
 .claude/settings.local.json
 .claude/*.lock
 .claude/worktrees/
