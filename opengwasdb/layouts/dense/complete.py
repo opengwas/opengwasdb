@@ -36,6 +36,7 @@ from opengwasdb.completion.checkpoint import (
     ALID_DTYPE,
     BlockCompletionResult,
     checkpoint_dir_for,
+    require_fresh_destination,
     sanitize_block_id,
     write_block_checkpoint,
 )
@@ -43,6 +44,7 @@ from opengwasdb.completion.ld_panel import (
     canonical_panel_alid as _canonical_panel_alid,
 )
 from opengwasdb.completion.ld_panel import (
+    check_panel_has_chromosomes,
     list_all_blocks,
     list_chromosomes,
 )
@@ -210,17 +212,8 @@ def complete_dense_store(
     """
     dst = Path(dest_path)
     checkpoint_dir = checkpoint_dir_for(dst)
-
-    if dst.exists() and not overwrite:
-        raise FileExistsError(f"Destination already exists: {dst}. Use overwrite=True.")
-
-    if checkpoint_dir.exists():
-        if not overwrite:
-            raise FileExistsError(
-                f"A checkpoint directory already exists at {checkpoint_dir}. "
-                "Use resume_dense_completion() to continue it, or overwrite=True to discard it."
-            )
-        shutil.rmtree(checkpoint_dir)
+    require_fresh_destination(dst, checkpoint_dir, overwrite, "resume_dense_completion")
+    check_panel_has_chromosomes(ld_dir, ancestry)
 
     if impute_analysis_ids is None:
         impute_analysis_ids = derive_impute_analysis_ids(

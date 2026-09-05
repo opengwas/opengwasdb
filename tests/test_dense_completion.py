@@ -12,6 +12,7 @@ import pytest
 from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
 from opengwasdb.completion.ld_panel import (
+    LdPanelNotFoundError,
     canonical_panel_alid,
     load_block,
     load_ld_eigenvectors,
@@ -269,6 +270,19 @@ class TestCompletionFiles:
     ):
         with pytest.raises(FileExistsError):
             complete_dense_store(observed_store, completed_store, ld_panel, min_cor=0.0)
+
+    def test_ld_dir_already_holding_the_ancestry_directory_raises(
+        self, tmp_path, observed_store, ld_panel
+    ):
+        """See the matching Ragged test: passing ``ld_panel/EUR`` as ``ld_dir``
+        resolves every chromosome to a nonexistent ``ld_panel/EUR/EUR/{chr}``
+        and must refuse up front rather than complete to "0 imputed"."""
+        dst = tmp_path / "should_not_exist.opengwasdb"
+        with pytest.raises(LdPanelNotFoundError):
+            complete_dense_store(
+                observed_store, dst, ld_panel / "EUR", ancestry="EUR", min_cor=0.0,
+            )
+        assert not dst.exists()
 
     def test_stray_file_fails_validation(self, completed_store):
         # Issue #80: the closed-envelope check applies to Reference-Completed

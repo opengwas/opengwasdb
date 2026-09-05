@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from opengwasdb.completion.ld_panel import LdPanelNotFoundError
 from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
@@ -386,6 +387,24 @@ class TestCompletionFiles:
     def test_overwrite_raises_without_flag(self, tmp_path, observed_store, ld_panel, completed_store):
         with pytest.raises(FileExistsError):
             complete_ragged_store(observed_store, completed_store, ld_panel, min_cor=0.0)
+
+    def test_ld_dir_already_holding_the_ancestry_directory_raises(
+        self, tmp_path, observed_store, ld_panel
+    ):
+        """A caller passing ``ld_panel/EUR`` instead of ``ld_panel`` as ``ld_dir``
+        resolves every chromosome to ``ld_panel/EUR/EUR/{chr}``, which never
+        exists. Before this check, that scanned every analysis, touched zero LD
+        blocks, and finished reporting "0 imputed" indistinguishably from a
+        genuine result (this exact shape reached eqtlgen-cis-pilot's own
+        Reference-Completed evidence for #133). It must now refuse up front
+        instead, and must not create the destination.
+        """
+        dst = tmp_path / "should_not_exist.opengwasdb"
+        with pytest.raises(LdPanelNotFoundError):
+            complete_ragged_store(
+                observed_store, dst, ld_panel / "EUR", ancestry="EUR", min_cor=0.0,
+            )
+        assert not dst.exists()
 
 
 class TestPanelAlidCanonicalisation:

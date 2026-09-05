@@ -7,6 +7,7 @@ atomically, independent of every other block's.
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -22,6 +23,26 @@ ALID_DTYPE = "S64"
 def checkpoint_dir_for(dest_path: Path) -> Path:
     dest_path = Path(dest_path)
     return dest_path.parent / f".{dest_path.name}.checkpoint"
+
+
+def require_fresh_destination(
+    dst: Path, checkpoint_dir: Path, overwrite: bool, resume_fn: str
+) -> None:
+    """Raise unless *dst* and *checkpoint_dir* are clear to write into.
+
+    Shared by `complete_dense_store` and `complete_ragged_store`, which faced
+    off identically here before this was extracted: only the resume function
+    named in the checkpoint's error message differed between them.
+    """
+    if dst.exists() and not overwrite:
+        raise FileExistsError(f"Destination already exists: {dst}. Use overwrite=True.")
+    if checkpoint_dir.exists():
+        if not overwrite:
+            raise FileExistsError(
+                f"A checkpoint directory already exists at {checkpoint_dir}. "
+                f"Use {resume_fn}() to continue it, or overwrite=True to discard it."
+            )
+        shutil.rmtree(checkpoint_dir)
 
 
 def sanitize_block_id(block_id: str) -> str:

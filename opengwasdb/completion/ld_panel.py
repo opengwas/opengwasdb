@@ -228,6 +228,41 @@ def list_chromosomes(ld_dir: str | Path, ancestry: str) -> list[str]:
     )
 
 
+class LdPanelNotFoundError(Exception):
+    """``ld_dir``/``ancestry`` has no chromosome directories to read blocks from."""
+
+
+def check_panel_has_chromosomes(ld_dir: str | Path, ancestry: str) -> None:
+    """Raise if the panel has no chromosome directory for *ancestry*.
+
+    `list_all_blocks`/`find_blocks` treat a missing `ld_dir/{ancestry}/{chr}`
+    as "no blocks here" and return `[]` -- correct when scanning one
+    chromosome a real panel simply has nothing on, wrong when `ld_dir` or
+    `ancestry` is misconfigured: every chromosome then reports the same empty
+    result, and completion runs to a successful finish with the "0 imputed"
+    line reading like a genuine finding rather than a broken path. That is the
+    same completes-and-contains-nothing shape ADR 0039 closed for ancestry
+    mismatches and gene-target-less Store Families, reached here by a
+    different route -- called once, up front, so it fails before the
+    LD-block scan rather than after it.
+    """
+    ancestry_dir = Path(ld_dir) / ancestry
+    if not list_chromosomes(ld_dir, ancestry):
+        hint = ""
+        if Path(ld_dir).name == ancestry:
+            hint = (
+                f" ld_dir={str(ld_dir)!r} already ends in the ancestry directory -- "
+                "ld_dir must be the panel *root* (blocks live at "
+                "ld_dir/{ancestry}/{chr}/...), not the ancestry directory itself."
+            )
+        raise LdPanelNotFoundError(
+            f"No chromosome directories under {ancestry_dir} (ld_dir={str(ld_dir)!r}, "
+            f"ancestry={ancestry!r}) -- completion would scan every chromosome, find "
+            "no blocks anywhere, and finish reporting 0 imputed as if that were a "
+            f"genuine result.{hint}"
+        )
+
+
 def list_all_blocks(ld_dir: str | Path, ancestry: str, chrom: str) -> list[LDBlock]:
     """Return every LD block for one chromosome, genome-wide (no region filter).
 
