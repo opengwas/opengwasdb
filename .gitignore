@@ -20,3 +20,6 @@ data/**/build.log.*
 # local Claude Code state (not shared)
 .claude/settings.local.json
 .claude/*.lock
+.claude/worktrees/
+quality/.running/
+quality/.events.jsonl

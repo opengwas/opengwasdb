@@ -1,0 +1,5 @@
+analysis_id	analysis_label	chromosome	position	effect_allele	other_allele	z	se	rsid	stored_effect_scale	trait_ontology_id	trait_ontology_label
+height_eur	Height EUR pilot	1	100	A	G	2.0	0.10	rs111	sd	EFO:0004339	body height
+ldl_eur	LDL EUR pilot	1	100	A	G	-6.0	0.20	rs111	sd	EFO:0004611	low density lipoprotein cholesterol measurement
+height_eur	Height EUR pilot	1	200	T	C	6.0	0.12	rs222	sd	EFO:0004339	body height
+ldl_eur	LDL EUR pilot	1	300	G	A	-5.0	0.25	rs333	sd	EFO:0004611	low density lipoprotein cholesterol measurement

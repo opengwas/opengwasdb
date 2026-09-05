@@ -33,6 +33,13 @@ The design baseline lives in:
 
 Work lands on `dev`; every merge to `main` cuts a tagged version.
 
+## Getting started
+
+Use [docs/getting-started.md](./docs/getting-started.md) for a first run:
+install with Pixi, build an in-repository tiny Dense Store Release, validate it,
+and run PheWAS, exact-lookup, and top-hit queries. The example needs no external
+production data.
+
 ## Development
 
 All Python dependencies and native tooling (bcftools) are managed by

@@ -51,6 +51,12 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Added
 
+- **Getting-started documentation now covers the first local Store Release**
+  (#110). A fresh checkout can follow `docs/getting-started.md` to install with
+  Pixi, build and validate the in-repository tiny Dense fixture, run PheWAS,
+  exact-lookup and top-hit queries, and distinguish absent EAF from a fabricated
+  value.
+
 - **Top-hit indexes carry decoded effect allele frequency** (#131–#134,
   ADR 0040). Dense, Ragged, and both Hybrid components now answer `top_hits()`
   from one compact derived structure without reopening or gathering from the
@@ -115,11 +121,13 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
     48–60% smaller than the plane it replaces on both pilots.
   - **Reference-panel EAF for imputed cells** (#113, superseded in approach). An
     imputed cell's EAF *is* the panel's and is identical for every Analysis
-    imputed at that variant, so it is a per-variant `eaf_reference` array at
-    ~0 B/cell rather than per-cell data, applied on read through the imputed
-    mask that Association Status already records. Read straight from the panel,
-    it never travels through the resumable completion checkpoint — which was
-    #113's stated blocker.
+    imputed at that variant, so it is a per-variant `eaf_reference` array rather
+    than per-cell data, applied on read through the imputed mask that Association
+    Status already records. It amortises to ~0 B/cell on wide Dense grids, but
+    #117 measured **3.206 B/cell** on completed `eqtlgen`, where a sparse Ragged
+    store has only 2.4 cells per variant. Read straight from the panel, it never
+    travels through the resumable completion checkpoint — which was #113's
+    stated blocker.
   - **An observed cell whose source reported no EAF stays NaN.** It does not
     fall back to the panel: FinnGen's frequencies differ from the EUR panel by
     up to **3000×**, so substituting one would hand a user a plausible number

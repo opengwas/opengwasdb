@@ -72,3 +72,15 @@ prove a thing survives real input, which has flipped alleles, missing columns,
 3,000-fold frequency differences and |z| of 137. On IEU compute nodes, pilot
 stores and LD reference panels are under `/data/opengwasdb/`. Put the numbers
 in the commit message.
+
+## Quality gates (cleat)
+
+`python3 quality/bin/gate.py` runs every quality gate; it also runs when you
+stop, and a failing gate is handed back to you as the next thing to fix. A
+failure names the file, the line and what fixes it — split the function, give
+the value its real type, make the test pass, handle the error.
+
+Do not edit `quality.json`, anything under `quality/`, or the hooks to make a
+gate pass, and do not run `--write-baseline`: the baselines record debt a
+person accepted, and only a person loosens them, in a reviewed commit. The
+gates only ever tighten; that is the point.

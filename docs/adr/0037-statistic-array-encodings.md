@@ -18,7 +18,9 @@ raw size is not what a Store Release occupies.
 
 ### `float16` is the wrong encoding for `z`, and always was
 
-`z` is bounded (|z| ≤ 48.4 across every pilot) and needs *uniform* precision,
+`z` is finite but not usefully bounded by the pilot values first sampled for
+this ADR: the later #117 rebuild found |z| up to **163.66** in pilot stores,
+and the `ukb-b` top-hit index reaches **137.5**. It needs *uniform* precision
 because p-value error scales with `z · Δz`. `float16` gives the opposite:
 precision degrades exactly where p-values are steepest.
 
@@ -183,8 +185,10 @@ the code:
 ### 2. EAF is a per-variant baseline plus a per-cell `int8` log-residual
 
 - `eaf_baseline` — one `float32` per variant, the within-store representative
-  observed EAF. Amortises to nothing: 0.42 B/cell across 8 Analyses, 0.014
-  across 1000.
+  observed EAF. It amortises only when many Analyses share a variant axis: a
+  per-variant array costs roughly `4 / cells_per_variant` raw B/cell, which is
+  negligible on a 2,514-Analysis Dense grid and material on sparse Ragged
+  stores (#117).
 - `eaf` — one `int8` per cell, the quantised log-ratio to that baseline.
 
 Two codes are reserved: one for "this Analysis has no EAF here", one for "out
@@ -196,11 +200,11 @@ than inferring it from the layout. Nothing stops a Dense manifest spanning
 several cohorts, and a store that did would silently clip against a range
 chosen on the assumption it did not.
 
-| range | step (log) | **worst-case** error | B/cell | measured clipping |
-|---|---|---|---|---|
-| ±0.5 | 0.00395 | 0.20% | 0.14 (one cohort) | 1 in 2M |
-| ±1.0 | 0.00791 | 0.40% | 0.52 (mixed studies) | 0.11% |
-| ±2.0 | 0.01581 | **0.79%** | 0.39 | 0.07% |
+| range | step (logit) | **worst-case** error | rebuilt-pilot plane B/cell (#117) |
+|---|---|---|---|
+| ±0.5 | 0.00395 | 0.20% | 0.276 FinnGen; 0.492 metabolome; 0.558 GWAS Catalog quant |
+| ±1.0 | 0.00791 | 0.40% | 0.790 GWAS Catalog case-control |
+| ±2.0 | 0.01581 | **0.79%** | not selected by the rebuilt pilots |
 
 254 levels across a width of 2·range, so accuracy is a function of the range
 chosen — a fixed "within 0.5%" acceptance criterion is unsatisfiable at ±2.0
@@ -287,21 +291,13 @@ rather than left to the code, and the spec states them normatively.
   The baseline figure of 0.424 B/cell across 8 Analyses is this ADR's own
   prediction (0.42), measured.
 
-  **The plane figures in §2's table above do not reproduce, and are left
-  standing with this correction rather than quietly adjusted.** That table
-  gives 0.14 B/cell for one cohort and 0.52 for mixed studies; the same
-  encoding measured here costs **0.294** and **1.245**, a factor of 2.1 and
-  2.4. Both sets of numbers are compressed bytes under the same codec, so the
-  gap is in what was compressed, not how — most likely a different variant
-  ordering or chunking, since a residual plane's compressibility depends
-  entirely on how well neighbouring cells agree. The direction and the decision
-  are unaffected: the residual coding is 48–60% smaller than the `float32`
-  plane it replaces on both pilots, which is the comparison the choice rests
-  on. But the issue's acceptance criterion "measured size on a rebuilt pilot
-  matches the table to within 20%" is **not met by these numbers**, and it
-  cannot be settled from source files at all — it is a measurement on rebuilt
-  Store Releases, which is #117. Whichever way #117 lands, one of the two
-  tables is wrong and the ADR must say which.
+  **The rebuilt pilots in #117 settled which table was wrong.** The earlier
+  §2 table predicted 0.14 B/cell for one cohort and 0.52 for mixed studies;
+  measured Store Releases miss those figures by 1.5–4.0×. The chr1 dry-run
+  reproduced for FinnGen (0.276 full rebuild against 0.294 dry-run), so the
+  error was the original prediction, not the implementation note. The decision
+  still holds: the range-selection rule chose the expected ranges unprompted,
+  and residual coding remains smaller than the `float32` plane it replaces.
 
   Absolute `float32` figures also differ from the 3.39 B/cell quoted earlier
   because these are chr1 subsets measured as Dense grids rather than whole
@@ -333,8 +329,11 @@ the Hybrid case differs from Dense/Ragged.
 
 An imputed cell's EAF *is* the panel's, identical for every Analysis imputed
 at that variant, so it is a per-variant constant: `eaf_reference`, one
-`float32` per variant, ~0 B/cell. Which cells it describes is already
-recorded, by `association_status` (ADR 0013), exactly as spec §9 specifies.
+`float32` per variant. It is ~0 B/cell only on Dense grids with many Analyses
+per variant; #117 measured **3.206 B/cell** on completed `eqtlgen`, where the
+Ragged store has only 2.4 cells per variant. Which cells it describes is
+already recorded, by `association_status` (ADR 0013), exactly as spec §9
+specifies.
 
 Observed cells whose source reported no EAF stay NaN. They do **not** fall
 back to the panel value — see the 3000× result above.
@@ -397,12 +396,17 @@ would be *less* accurate than the source it was completed from, for no reason.
 | | z | se | eaf | total | vs today |
 |---|---|---|---|---|---|
 | **A** Dense/Ragged, no EAF | int16 1.47 | f16 1.75 | — | **3.22** | −11% |
-| **B** Dense/Ragged, EAF | int16 1.47 | int8 0.86 | 0.14 | **2.47** | −31% |
+| **B** Dense/Ragged, EAF, after #118 | int16 1.47 | int8 0.86 | 0.14 | **2.47** | −31% |
+| **B′** Dense/Ragged, EAF, shipped before #118 | int16 1.47 | f16 1.75 | 0.14 | **3.36** | −7% |
 | **C** Hybrid, mixed | int16 1.47 | f16 1.75 | 0.52 | **3.74** | +4% |
-| **D** + Reference-Completed | | | +ref ~0.00 | | |
+| **D** + Reference-Completed | | | +ref, `4 / cells_per_variant` raw B/cell | | |
 
-Today's baseline is 3.60 B/cell carrying no EAF at all. Every scenario stores
-strictly more information than that; two of the three are smaller.
+Today's baseline is 3.60 B/cell carrying no EAF at all. The B row is
+conditional on #118: shipped `format_version` 2.0 stores still declare
+`"se": {"kind": "float16"}`. In #117, EAF-bearing pilot stores with few
+cells per variant were often larger than these scenario totals because the
+per-variant `eaf_baseline` cost was not negligible; the 2,514-Analysis `ukb-b`
+case is the Dense grid where the baseline is expected to amortise away.
 
 ### 6. Allele-flipped EAF is rejected at build time
 
@@ -496,3 +500,8 @@ three errors caught in review of #119:
    overflow table.
 3. **The decision tree was not executable**, and integer planes had no
    missing-value contract at all. Both are addressed above.
+4. **The EAF byte table was a prediction, not a rebuilt-store measurement.**
+   #117 rebuilt the pilots and found the original 0.14 / 0.52 B/cell plane
+   figures were too optimistic by 1.5–4.0×; the ADR now quotes the rebuilt
+   Store Release measurements and qualifies per-variant baseline/reference
+   costs by cells per variant.

@@ -1,0 +1,97 @@
+{
+  "project": "opengwasdb",
+  "doc_size": [
+    {
+      "file": "CLAUDE.md",
+      "ceiling": 750
+    },
+    {
+      "file": "README.md",
+      "ceiling": 350
+    }
+  ],
+  "escapes": {
+    "roots": [
+      "."
+    ],
+    "languages": [
+      "python",
+      "shell"
+    ],
+    "skip_dirs": [
+      "quality"
+    ],
+    "baseline": "quality/escapes-baseline.json"
+  },
+  "duplication": {
+    "roots": [
+      "."
+    ],
+    "languages": [
+      "python",
+      "shell"
+    ],
+    "skip_dirs": [
+      "quality"
+    ],
+    "min_lines": 6,
+    "baseline": "quality/duplication-baseline.json"
+  },
+  "hygiene": {
+    "roots": [
+      "docs/spec",
+      "tests"
+    ],
+    "skip_dirs": [],
+    "extensions": [
+      ".bash",
+      ".py",
+      ".sh",
+      ".zsh"
+    ],
+    "habits": {
+      "fixed sleeps": {
+        "pattern": "(?:time\\.sleep\\()|(?:\\bsleep\\s+[0-9])",
+        "ceiling": 0,
+        "use": "wait for the condition, not the clock"
+      }
+    }
+  },
+  "complexity": {
+    "tool": "lizard",
+    "sources": [
+      "."
+    ],
+    "languages": [
+      "python"
+    ],
+    "exclude": [
+      "*/.build/*",
+      "*/.claude/*",
+      "*/.git/*",
+      "*/.github/*",
+      "*/.idea/*",
+      "*/.next/*",
+      "*/.venv/*",
+      "*/.vscode/*",
+      "*/DerivedData/*",
+      "*/Pods/*",
+      "*/__pycache__/*",
+      "*/build/*",
+      "*/coverage/*",
+      "*/dist/*",
+      "*/fixtures/*",
+      "*/node_modules/*",
+      "*/out/*",
+      "*/quality/*",
+      "*/target/*",
+      "*/vendor/*",
+      "*/venv/*"
+    ],
+    "ceilings": {
+      "cc": 8,
+      "lines": 60
+    },
+    "baseline": "quality/complexity-baseline.json"
+  }
+}
