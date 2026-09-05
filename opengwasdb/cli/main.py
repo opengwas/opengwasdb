@@ -40,6 +40,7 @@ from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
 from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
+from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
 
@@ -116,6 +117,17 @@ def validate_command(store_path: Path) -> None:
     for error in result.errors:
         typer.echo(f"error: {error}", err=True)
     raise typer.Exit(1)
+
+
+@app.command("repair-eaf-chunks")
+def repair_eaf_chunks_command(store_path: Path) -> None:
+    """Rechunk EAF baseline/reference arrays in an existing store in place."""
+    repaired = repair_eaf_chunks(store_path)
+    if not repaired:
+        typer.echo("already repaired")
+        return
+    for item in repaired:
+        typer.echo(f"{item.array}: {item.old_chunk} -> {item.new_chunk}")
 
 
 @app.command("audit-eaf-orientation")

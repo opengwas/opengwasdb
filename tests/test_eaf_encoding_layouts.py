@@ -31,6 +31,7 @@ from opengwasdb.encoding import (
     EAF_EXCEPTION_VALUE,
     EAF_REFERENCE,
     UnsupportedEncoding,
+    write_eaf_reference,
 )
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import complete_dense_store
@@ -45,6 +46,7 @@ from opengwasdb.model.analyses import (
 )
 from opengwasdb.model.enums import EafScope
 from opengwasdb.query import query_store
+from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 
@@ -234,6 +236,91 @@ def test_the_plane_is_int8_with_a_baseline_and_an_exception_table(
 
 
 # ── The acceptance criteria ─────────────────────────────────────────────────
+
+
+def test_fresh_dense_build_chunks_baseline_like_variant_axis(tmp_path: Path):
+    out = tmp_path / "chunked-dense.opengwasdb"
+    build_dense_from_vcf_manifest(
+        _vcf_manifest(tmp_path), out, store_id="eafenc", release_id="v1",
+        chunk_shape=(3, 2), allow_unverified_eaf=True,
+    )
+    root = open_store(out).arrays(mode="r")
+    assert root[EAF_BASELINE].chunks == (3,)
+    assert root[EAF_BASELINE].chunks[0] < len(root[EAF_BASELINE])
+
+
+def test_reference_array_uses_same_per_variant_chunking(tmp_path: Path):
+    root = zarr.open_group(str(tmp_path / "arrays.zarr"), mode="w")
+    root.create_dataset("z", shape=(10, 2), chunks=(3, 2), dtype="float32")
+    write_eaf_reference(root, np.linspace(0.1, 0.9, 10, dtype=np.float32))
+    assert root[EAF_REFERENCE].chunks == (3,)
+
+
+def test_existing_store_can_be_repaired_without_changing_values(
+    tmp_path: Path,
+):
+    out = tmp_path / "repair-dense.opengwasdb"
+    build_dense_from_vcf_manifest(
+        _vcf_manifest(tmp_path), out, store_id="eafenc", release_id="v1",
+        chunk_shape=(3, 2), allow_unverified_eaf=True,
+    )
+    before = _observed(out)
+    manifest_before = (out / "manifest.json").read_bytes()
+    root = open_store(out).arrays(mode="r+")
+    baseline = root[EAF_BASELINE][:]
+    compressor = root[EAF_BASELINE].compressor
+    del root[EAF_BASELINE]
+    root.create_dataset(
+        EAF_BASELINE, data=baseline, chunks=(len(baseline),),
+        compressor=compressor, dtype="float32",
+    )
+
+    invalid = validate_store(out)
+    assert not invalid.ok
+    assert any("variant/read axis" in error for error in invalid.errors)
+
+    repaired = repair_eaf_chunks(out)
+    assert [(item.old_chunk, item.new_chunk) for item in repaired] == [(8, 3)]
+    assert (out / "manifest.json").read_bytes() == manifest_before
+    assert validate_store(out).ok
+    after = _observed(out)
+    assert before.keys() == after.keys()
+    for key in before:
+        np.testing.assert_equal(after[key], before[key])
+
+
+def test_dense_range_phewas_decodes_frequency_as_a_row_band(dense_store: Path):
+    with query_store(dense_store) as query:
+        def fail_points(rows, cols):  # noqa: ARG001
+            raise AssertionError("range_phewas must not gather EAF pointwise")
+
+        query._eaf.points = fail_points
+        result = query.range_phewas("1", 100, 800)
+    assert len(result["eaf"]) == len(result["z"])
+    assert np.any(np.isfinite(result["eaf"]))
+
+
+def test_point_frequency_read_indexes_only_requested_baseline_rows(dense_store: Path):
+    class ReadSpy:
+        def __init__(self, array):
+            self.array = array
+            self.keys = []
+
+        @property
+        def oindex(self):
+            return self
+
+        def __getitem__(self, key):
+            self.keys.append(key)
+            return self.array.oindex[key]
+
+    with query_store(dense_store) as query:
+        spy = ReadSpy(query._eaf._baseline)
+        query._eaf._baseline = spy
+        result = query.phewas("1:100:A:G")
+    assert len(result["eaf"]) == len(_ANALYSES)
+    assert spy.keys
+    assert not any(isinstance(key, slice) and key == slice(None) for key in spy.keys)
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged"])

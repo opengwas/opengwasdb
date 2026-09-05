@@ -29,6 +29,7 @@ from opengwasdb.encoding import (
     StoreCodec,
     StoreEncoding,
     ZOverflowTable,
+    per_variant_chunk_size,
 )
 from opengwasdb.layouts.dense.top_hits import threshold_key, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
@@ -58,9 +59,9 @@ from opengwasdb.store.open import (
     open_store,
 )
 from opengwasdb.variants import (
-    is_indexable_alid,
     VariantAxis,
     VariantRecord,
+    is_indexable_alid,
     is_indexable_rsid,
     variant_alid_bytes_path,
     variant_alid_rows_path,
@@ -1329,6 +1330,17 @@ def _validate_encoding_plan(
             errors.append(
                 f"{label}/{name} has dtype {actual} but the manifest declares "
                 f"{declared_plane.kind} ({declared_plane.dtype})"
+            )
+    for name in (EAF_BASELINE, EAF_REFERENCE):
+        if name not in group:
+            continue
+        array = group[name]
+        expected = per_variant_chunk_size(group, len(array))
+        if int(array.chunks[0]) > expected:
+            errors.append(
+                f"{label}/{name} has chunk shape {tuple(array.chunks)}; its per-variant "
+                f"chunk must be no larger than {expected}, matching this component's "
+                "variant/read axis rather than spanning the whole array"
             )
     _validate_eaf_plan(group, encoding, errors, label=label)
     if errors or "z" not in group:

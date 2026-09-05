@@ -326,6 +326,12 @@ eaf_exception_index   int64, sorted, unique — flat position in the plane
 eaf_exception_value   float32 — the exact frequency
 ```
 
+Per-variant frequency arrays (`eaf_baseline` and `eaf_reference`) are chunked
+along the variant axis, no more coarsely than the component plane they serve
+and never above 200,000 variants per chunk. A multi-chunk-sized variant axis
+stored as one chunk is invalid: point queries must not decompress the full
+per-variant array.
+
 The transform is the **logit**, `logit(f) = log(f / (1 − f))`, and the stored
 code is `round((logit(f) − logit(b)) / step)` where `b` is the variant's
 `eaf_baseline` and `step = residual_range / 127`. The logit, and not `log(f)`,

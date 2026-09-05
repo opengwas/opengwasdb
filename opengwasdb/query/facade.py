@@ -310,6 +310,11 @@ class StoreQuery:
         cols = cols.astype("int32")
         z_vals = z_block[mask]
         se_vals = se_block[mask]
+        row_slice = self._contiguous_row_slice(row_indices)
+        if row_slice is not None:
+            eaf_vals = self._eaf.band(row_slice.start, row_slice.stop)[mask]
+        else:
+            eaf_vals = self._eaf_pairs(rows, cols)
         if self._imputed is None:
             imp = np.zeros(len(z_vals), dtype=np.uint8)
         else:
@@ -317,15 +322,15 @@ class StoreQuery:
             imp = imp_block[mask]
         if observed_only:
             keep = imp == 0
-            rows, cols, z_vals, se_vals, imp = (
-                rows[keep], cols[keep], z_vals[keep], se_vals[keep], imp[keep]
+            rows, cols, z_vals, se_vals, eaf_vals, imp = (
+                rows[keep], cols[keep], z_vals[keep], se_vals[keep], eaf_vals[keep], imp[keep]
             )
         return {
             "variant_index": rows,
             "analysis_index": cols,
             "z": z_vals,
             "se": se_vals,
-            "eaf": self._eaf_pairs(rows, cols),
+            "eaf": eaf_vals,
             "association_status": _status_array(imp, z_vals, se_vals),
         }
 

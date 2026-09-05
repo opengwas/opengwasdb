@@ -37,6 +37,22 @@ from opengwasdb.encoding.codec import (
 )
 from opengwasdb.encoding.plan import EafBaselineError, StoreEncoding
 
+# Per-variant side arrays must follow the variant-axis chunking of the planes
+# they serve.  This fallback is used only when a group has no suitable sibling
+# (principally tiny synthetic groups); real Dense and Ragged writers expose a
+# sibling whose first dimension is the variant/read axis.
+DEFAULT_PER_VARIANT_CHUNK = 200_000
+
+
+def per_variant_chunk_size(group: Any, length: int) -> int:
+    """Return the component-local chunk size for a per-variant side array."""
+    for sibling in ("eaf", "z", "imputed", "variant_index"):
+        if sibling in group and group[sibling].ndim:
+            return min(
+                int(group[sibling].chunks[0]), DEFAULT_PER_VARIANT_CHUNK, max(length, 1)
+            )
+    return min(DEFAULT_PER_VARIANT_CHUNK, max(length, 1))
+
 
 class DenseZPlane:
     """The `n_variants x n_analyses` z grid, decoded on read."""
@@ -268,7 +284,15 @@ class _EafPlaneBase:
         """
         if array is None:
             return None
-        return np.asarray(np.asarray(array[:], dtype=np.float32)[rows], dtype=np.float32)
+        rows = np.asarray(rows, dtype=np.int64)
+        if len(rows) == 0:
+            return np.empty(0, dtype=np.float32)
+        start, stop = int(rows[0]), int(rows[-1]) + 1
+        if stop - start == len(rows) and np.array_equal(
+            rows, np.arange(start, stop, dtype=rows.dtype)
+        ):
+            return np.asarray(array[start:stop], dtype=np.float32)
+        return np.asarray(array.oindex[rows], dtype=np.float32)
 
 
 class DenseEafPlane(_EafPlaneBase):
@@ -454,13 +478,13 @@ class RaggedEafPlane(_EafPlaneBase):
         positions = np.asarray(positions, dtype=np.int64)
         if len(positions) == 0:
             return self._missing(0)
-        rows = np.asarray(self._variant_index[:], dtype=np.int64)[positions]
+        rows = np.asarray(self._variant_index.oindex[positions], dtype=np.int64)
         imputed = self._imputed_at(positions)
         reference = self._gather(self._reference, rows)
         if self._array is None:
             return self._no_plane(len(positions), imputed=imputed, reference=reference)
         return self._codec.decode_eaf(
-            np.asarray(self._array[:])[positions],
+            np.asarray(self._array.oindex[positions]),
             baseline=self._gather(self._baseline, rows),
             positions=positions_at(positions),
             imputed=imputed,
@@ -470,7 +494,7 @@ class RaggedEafPlane(_EafPlaneBase):
     def _imputed_at(self, positions: np.ndarray) -> np.ndarray | None:
         if not self.carries_reference:
             return None
-        return np.asarray(np.asarray(self._imputed[:], dtype=bool)[positions], dtype=bool)
+        return np.asarray(self._imputed.oindex[positions], dtype=bool)
 
 
 
@@ -492,12 +516,13 @@ def _write_per_variant_array(
 ) -> None:
     """Write (or replace) one `float32` per variant of a component's axis."""
     data = np.asarray(values, dtype=np.float32)
+    chunk = chunk or per_variant_chunk_size(group, len(data))
     if name in group:
         del group[name]
     group.create_dataset(
         name,
         data=data,
-        chunks=(min(chunk or max(len(data), 1), max(len(data), 1)),),
+        chunks=(min(chunk, max(len(data), 1)),),
         compressor=compressor,
         dtype="float32",
     )
