@@ -53,8 +53,25 @@ The corrected millisecond-aware parser records the original build duration as
 0.115089, SE 0.005386, p=2.60e-101 with 66 instruments.
 
 The complete post-hoc migration (stored-Z scan, decoded-EAF collection, and
-three tier writes) took approximately 21 minutes on this host. That entire
-operation is 3.0% of the original 11.59-hour VCF build and is a conservative
-upper bound for #132's added inline collection pass, which does not repeat the
-stored-Z scan or rebuild work. The added pass is separately logged as
-`Collecting top-hit EAF in variant-row order` in Dense and Hybrid builds.
+three tier writes) took approximately 21 minutes on this host, 3.0% of the
+original 11.59-hour VCF build.
+
+#132's added *inline* pass is much cheaper than that upper bound, and is now
+measured rather than bounded. On a `ukb-b` Dense-from-VCF pilot build (10
+analyses, 9,847,701 variants, 422.007 s wall), the pass logs its own start and
+end:
+
+```
+16:10:11,898 Collecting top-hit EAF in variant-row order for 1517509 candidate cells
+16:10:15,686 Writing top-hit index from 1517509 harvested candidate cells
+```
+
+**3.788 s for 1,517,509 candidate cells — 0.898% of build wall time.** It does
+not repeat the stored-Z scan, because the build already holds the candidate
+coordinates. This is consistent with the genome-scale result: `finngen-r13`
+r13-pilot-20 (21,230,615 variants) built in 4,414.7 s against 4,539.9 s for the
+same release before the pass existed, i.e. 2.8% faster, within run-to-run
+variation.
+
+Those log lines are only visible if the caller configures logging; the store
+registry's generators did not, which is fixed in opengwasdb-stores.
