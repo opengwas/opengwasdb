@@ -425,8 +425,8 @@ def main() -> None:
         "mr": mr,
         "regional_imputation_check": regional_imputation_check(q, analyses_by_id),
         "labels": {
-            EXPOSURE: an[analyses_by_id[EXPOSURE]]["phenotype_label"],
-            OUTCOME: an[analyses_by_id[OUTCOME]]["phenotype_label"],
+            EXPOSURE: an[analyses_by_id[EXPOSURE]]["analysis_label"],
+            OUTCOME: an[analyses_by_id[OUTCOME]]["analysis_label"],
         },
     }
     args.output.write_text(json.dumps(result, indent=2))

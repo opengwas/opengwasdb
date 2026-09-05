@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from opengwasdb.variants import VariantNormalisationError
 from opengwasdb.variants.normalise import normalise_allele, normalise_chromosome
@@ -27,30 +27,11 @@ def initialise_schema(connection: sqlite3.Connection) -> None:
             value TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS variants (
-            variant_index INTEGER PRIMARY KEY,
-            alid TEXT NOT NULL,
-            chromosome TEXT NOT NULL,
-            position INTEGER NOT NULL,
-            effect_allele TEXT NOT NULL,
-            other_allele TEXT NOT NULL,
-            rsid TEXT
-        );
-
         CREATE TABLE IF NOT EXISTS variant_aliases (
             alias TEXT NOT NULL,
             variant_index INTEGER NOT NULL,
             PRIMARY KEY(alias, variant_index)
         );
-        """
-    )
-
-
-def create_lookup_indexes(connection: sqlite3.Connection) -> None:
-    connection.executescript(
-        """
-        CREATE INDEX IF NOT EXISTS idx_variants_range
-            ON variants(chromosome, position, variant_index);
         """
     )
 
@@ -73,24 +54,6 @@ def get_metadata(connection: sqlite3.Connection, key: str, default: Any = None) 
 def count_rows(connection: sqlite3.Connection, table: str) -> int:
     row = connection.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
     return int(row["n"])
-
-
-def variant_by_identifier(connection: sqlite3.Connection, identifier: str) -> sqlite3.Row | None:
-    """Legacy SQLite variant lookup for stores that still populate variants."""
-
-    row = connection.execute("SELECT * FROM variants WHERE alid = ?", (identifier,)).fetchone()
-    if row is not None:
-        return cast(sqlite3.Row, row)
-    alias = connection.execute(
-        """
-        SELECT v.*
-        FROM variant_aliases a
-        JOIN variants v ON v.variant_index = a.variant_index
-        WHERE a.alias = ?
-        """,
-        (identifier,),
-    ).fetchone()
-    return cast(sqlite3.Row | None, alias)
 
 
 def _parse_canonical_alid(identifier: str) -> tuple[str, int, str, str] | None:

@@ -68,6 +68,22 @@ source that names no variants indexes none — but a release whose
 every rsid lookup against such a release returns an empty result
 indistinguishable from a real absence.
 
+`index.sqlite` MUST NOT contain a `variants` table. The variant axis is
+`variants.tsv.gz` plus the offset and search sidecars above; a relational copy
+duplicated every column of the table it shadowed, was read by nothing, and
+carried a `rsid` column that no builder populated — a fourth copy of the axis
+that disagreed with the other three (issue #128).
+
+Both search indexes are fixed-width arrays, because that is what allows a
+binary search over them without parsing. An identifier too wide for its slot
+MUST be left out of the index and the omission counted — never cast into it.
+Casting truncates, and two variants whose identifiers agree over the slot width
+then share one key, so a lookup by either returns whichever row sorts first: one
+variant answering to another's name, with nothing to show it (issue #127). An
+ALID omitted this way stays reachable, resolved by exact scan over its position;
+an rsid omitted this way is not resolvable by name, which is why the widths are
+chosen from measured data and the omission is reported at build time.
+
 This is the complete envelope for a standalone Dense or Ragged Store Release.
 A Hybrid release additionally nests a `dense/` Dense Component directory
 holding a self-contained Dense Store Release of its own (same envelope as
@@ -309,6 +325,12 @@ eaf_baseline          float32 — one per variant of *this component's* axis
 eaf_exception_index   int64, sorted, unique — flat position in the plane
 eaf_exception_value   float32 — the exact frequency
 ```
+
+Per-variant frequency arrays (`eaf_baseline` and `eaf_reference`) are chunked
+along the variant axis, no more coarsely than the component plane they serve
+and never above 200,000 variants per chunk. A multi-chunk-sized variant axis
+stored as one chunk is invalid: point queries must not decompress the full
+per-variant array.
 
 The transform is the **logit**, `logit(f) = log(f / (1 − f))`, and the stored
 code is `round((logit(f) − logit(b)) / step)` where `b` is the variant's
@@ -630,6 +652,19 @@ or below a minimum frequency variance on either side, the Analysis records
 `unverified` — never `passed`. An Analysis that stores no EAF likewise records
 `unverified`: there is no wrong column, but neither is there a checked one, and
 the two must not read alike.
+
+The evidence is about a **stored, source-derived** frequency column, and only
+about that. A Reference-Completed release whose components declare no `eaf`
+plane at all carries the panel's `eaf_reference` and nothing else (§6a): its
+Analyses declare `eaf_scope=association` because the release holds frequencies
+for their imputed cells, but no cohort reported those frequencies and none can
+be reported against the wrong allele — `panel_a1_eaf` orients the panel by
+construction, through the same reader this check uses. Such an Analysis
+therefore requires no orientation evidence, and a blank `eaf_orientation` on it
+is correct rather than missing. Requiring evidence there asks for a check on a
+column that does not exist, which no build can supply: it rejected every
+Reference-Completed release built from a source with no frequencies of its own,
+which is the release §6a exists for.
 
 The reference itself is checked before it is trusted: one whose frequencies
 exceed 0.5 for only a negligible fraction of its variants is minor allele
@@ -968,14 +1003,15 @@ Validators MUST check at least:
 - Ragged Reference-Completed regions include all Reference Variant Set variants within completed boundaries;
 - top-hit indexes, when present, are consistent with stored Z values;
 - `analyses.tsv` contains exactly one row per Analysis, covering every `analysis_index` referenced by `index.sqlite` (this is the one place SQLite cannot enforce the relationship as a foreign key, since `analyses.tsv` is a separate file);
-- `index.sqlite` does not contain an `analyses` table;
+- `index.sqlite` does not contain an `analyses` table, nor a `variants` table (§1, issue #128);
+- `variant_alid_bytes.npy` holds one entry per ALID narrow enough to index, and no key in it is shared by two variants — a shared key is what silently truncating an over-wide ALID produced, and it makes one variant answer another's lookup (issue #127);
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
-- every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115): a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
+- every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
 
 ## 21. Compatibility

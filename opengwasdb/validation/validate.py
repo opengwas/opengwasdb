@@ -29,6 +29,7 @@ from opengwasdb.encoding import (
     StoreCodec,
     StoreEncoding,
     ZOverflowTable,
+    per_variant_chunk_size,
 )
 from opengwasdb.layouts.dense.top_hits import threshold_key, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
@@ -60,6 +61,7 @@ from opengwasdb.store.open import (
 from opengwasdb.variants import (
     VariantAxis,
     VariantRecord,
+    is_indexable_alid,
     is_indexable_rsid,
     variant_alid_bytes_path,
     variant_alid_rows_path,
@@ -786,16 +788,10 @@ def _validate_sqlite(
     n_variants: int,
     errors: list[str],
 ) -> None:
-    duplicates = connection.execute(
-        """
-        SELECT alid, COUNT(*) AS n
-        FROM variants
-        GROUP BY alid
-        HAVING n > 1
-        """
-    ).fetchall()
-    if duplicates:
-        errors.append("duplicate canonical variants in variants table")
+    # No duplicate-ALID query here any more: SQLite holds no variant rows
+    # (issue #128). `_validate_variant_axis` checks the same thing against
+    # `variants.tsv.gz` and the ALID search index -- the structures queries
+    # actually read -- which is strictly stronger.
     alias_rows = connection.execute("SELECT alias, variant_index FROM variant_aliases").fetchall()
     for row in alias_rows:
         variant_index = int(row["variant_index"])
@@ -904,11 +900,24 @@ def _validate_eaf_orientation(
     by_id = {
         str(entry.get("analysis_id", "")): entry for entry in recorded.get("analyses", [])
     }
+    # Whether any component stores frequencies *of its own*. When none does,
+    # every `eaf_scope=association` in this release is describing the panel's
+    # reference EAF and nothing else (issue #113): there is no cohort column to
+    # be reported against the other allele, and `panel_a1_eaf` orients what
+    # there is by construction. Demanding orientation evidence there asks for a
+    # check on a column that does not exist, which no build can supply -- it
+    # rejected every Reference-Completed release whose source reported no
+    # frequency, which is exactly the release #113 was raised about.
+    stores_own_frequencies = any(
+        not plan.is_absent for plan in _component_eaf_plans(store)
+    )
     for row in table.rows:
         analysis_id = row.get("analysis_id", "")
         if row.get("eaf_scope", "") != EafScope.ASSOCIATION.value:
             continue
         outcome = row.get("eaf_orientation", "")
+        if not outcome and not stores_own_frequencies:
+            continue
         if not outcome:
             errors.append(
                 f"analysis {analysis_id!r} stores per-association EAF but carries no "
@@ -1098,11 +1107,27 @@ def _validate_variant_axis(variant_axis: VariantAxis, errors: list[str]) -> int:
             f"variant_offsets.npy has {variant_axis.n_variants} rows but "
             f"variants.tsv.gz has {len(records)} rows"
         )
-    if variant_axis._alid_bytes is not None and len(variant_axis._alid_bytes) != len(records):
-        errors.append(
-            f"variant_alid_bytes.npy has {len(variant_axis._alid_bytes)} entries but "
-            f"variants.tsv.gz has {len(records)} rows"
-        )
+    if variant_axis._alid_bytes is not None:
+        # One entry per *indexable* ALID, not per variant: an ALID too wide for
+        # the slot is left out rather than truncated into a key it shares with
+        # another variant (issue #127). Those resolve by exact scan.
+        indexable = sum(1 for record in records if is_indexable_alid(record.alid))
+        if len(variant_axis._alid_bytes) != indexable:
+            errors.append(
+                f"variant_alid_bytes.npy has {len(variant_axis._alid_bytes)} entries but "
+                f"variants.tsv.gz has {indexable} ALID(s) narrow enough to index "
+                f"(of {len(records)} rows)"
+            )
+        keys = np.asarray(variant_axis._alid_bytes)
+        if len(keys) > 1:
+            collisions = int(np.count_nonzero(keys[1:] == keys[:-1]))
+            if collisions:
+                errors.append(
+                    f"variant_alid_bytes.npy holds {collisions} key(s) shared by more than "
+                    "one variant: a lookup by one variant's ALID returns another's row. "
+                    "This is what silently truncating an over-wide ALID produced before "
+                    "issue #127 — rebuild the store"
+                )
     _validate_rsid_index(variant_axis, records, errors)
     seen_alids: set[str] = set()
     for expected_index, record in enumerate(records):
@@ -1305,6 +1330,17 @@ def _validate_encoding_plan(
             errors.append(
                 f"{label}/{name} has dtype {actual} but the manifest declares "
                 f"{declared_plane.kind} ({declared_plane.dtype})"
+            )
+    for name in (EAF_BASELINE, EAF_REFERENCE):
+        if name not in group:
+            continue
+        array = group[name]
+        expected = per_variant_chunk_size(group, len(array))
+        if int(array.chunks[0]) > expected:
+            errors.append(
+                f"{label}/{name} has chunk shape {tuple(array.chunks)}; its per-variant "
+                f"chunk must be no larger than {expected}, matching this component's "
+                "variant/read axis rather than spanning the whole array"
             )
     _validate_eaf_plan(group, encoding, errors, label=label)
     if errors or "z" not in group:
