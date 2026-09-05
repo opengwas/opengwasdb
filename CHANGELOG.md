@@ -57,6 +57,12 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   exact-lookup and top-hit queries, and distinguish absent EAF from a fabricated
   value.
 
+- **The SE residual-coding expectation is measured on EAF-bearing stores**
+  (#118). `benchmarks/estimate_se_residual.py` samples rebuilt FinnGen, UKB and
+  EBI Hybrid Store Releases, projects residual-coded SE bytes, and renders the
+  query-speed/precision/storage trade-off in
+  `docs/benchmark-output/opengwasdb_se_residual_expectation.qmd`.
+
 - **Top-hit indexes carry decoded effect allele frequency** (#131–#134,
   ADR 0040). Dense, Ragged, and both Hybrid components now answer `top_hits()`
   from one compact derived structure without reopening or gathering from the

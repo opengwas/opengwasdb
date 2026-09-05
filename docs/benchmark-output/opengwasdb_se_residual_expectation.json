@@ -1,0 +1,399 @@
+{
+  "method": "sampled log(se) ~ a + b*log(2*eaf*(1-eaf)); int8 residual projection",
+  "exception_budget": 0.02,
+  "ranges": [
+    0.25,
+    0.5,
+    1.0,
+    2.0
+  ],
+  "max_chunks_per_component": 30,
+  "results": [
+    {
+      "name": "finngen-r13 pilot-20",
+      "path": "/data/opengwasdb/wip/rebuild-117/finngen-r13__r13-pilot-20",
+      "n_analyses": 20,
+      "components": [
+        {
+          "name": "finngen-r13 pilot-20",
+          "kind": "dense",
+          "shape": [
+            21230615,
+            20
+          ],
+          "chunks": [
+            1000,
+            20
+          ],
+          "n_cells": 424612300,
+          "current_se_bytes": 579834601,
+          "current_se_bpcell": 1.365562422473395,
+          "sample_cells": 592300,
+          "read_seconds": 1.0136728808283806,
+          "se_read_seconds": 0.007571677793748677,
+          "eaf_read_seconds": 1.006101203034632,
+          "residual_compute_seconds": 0.030838751350529492,
+          "candidates": {
+            "0.25": {
+              "projected_bytes": 592753179.0796894,
+              "projected_bpcell": 1.3959868309978052,
+              "exception_fraction": 0.06358442014547862,
+              "sample_finite_cells": 592252,
+              "relative_error_median": 0.0004582352509363008,
+              "relative_error_p99": 0.0009735262314858417,
+              "relative_error_max_sample": 0.000984719528247302
+            },
+            "0.5": {
+              "projected_bytes": 347404263.36704373,
+              "projected_bpcell": 0.8181681580280263,
+              "exception_fraction": 0.023356611712581805,
+              "sample_finite_cells": 592252,
+              "relative_error_median": 0.0009599910415182822,
+              "relative_error_p99": 0.0019486217591196742,
+              "relative_error_max_sample": 0.0019704351499501005
+            },
+            "1.0": {
+              "projected_bytes": 216053319.49535707,
+              "projected_bpcell": 0.5088249198041532,
+              "exception_fraction": 0.006735308618628557,
+              "sample_finite_cells": 592252,
+              "relative_error_median": 0.0019106814093929336,
+              "relative_error_p99": 0.00389541184860697,
+              "relative_error_max_sample": 0.003944766123764154
+            },
+            "2.0": {
+              "projected_bytes": 140899164.74573696,
+              "projected_bpcell": 0.33183015363835894,
+              "exception_fraction": 0.000986066741859884,
+              "sample_finite_cells": 592252,
+              "relative_error_median": 0.004039511364881787,
+              "relative_error_p99": 0.007797341684642353,
+              "relative_error_max_sample": 0.007905065171284642
+            }
+          }
+        }
+      ],
+      "current_se_bytes": 579834601,
+      "current_se_bpcell": 1.365562422473395,
+      "n_cells": 424612300,
+      "fit": {
+        "min_r2": 0.9804984169348601,
+        "median_r2": 0.9815766526165977,
+        "max_r2": 0.9820425783479937,
+        "min_slope": -0.5302569648490751,
+        "median_slope": -0.5295417875255344,
+        "max_slope": -0.5293022840409746,
+        "min_eaf_coverage": 1.0,
+        "analyses_below_0_99_r2": 20
+      },
+      "feasible_all_or_none_r2_0_99": false,
+      "chosen_range_at_2pct_exceptions": null,
+      "totals_by_range": {
+        "0.25": {
+          "projected_bytes": 592753179.0796894,
+          "projected_bpcell": 1.3959868309978052,
+          "saving_bytes": -12918578.079689384,
+          "saving_fraction": -0.022279764017893413,
+          "exception_fraction": 0.06358442014547862
+        },
+        "0.5": {
+          "projected_bytes": 347404263.36704373,
+          "projected_bpcell": 0.8181681580280263,
+          "saving_bytes": 232430337.63295627,
+          "saving_fraction": 0.4008562738962111,
+          "exception_fraction": 0.023356611712581805
+        },
+        "1.0": {
+          "projected_bytes": 216053319.49535707,
+          "projected_bpcell": 0.5088249198041532,
+          "saving_bytes": 363781281.50464296,
+          "saving_fraction": 0.6273880187164667,
+          "exception_fraction": 0.006735308618628557
+        },
+        "2.0": {
+          "projected_bytes": 140899164.74573696,
+          "projected_bpcell": 0.33183015363835894,
+          "saving_bytes": 438935436.25426304,
+          "saving_fraction": 0.7570011094495946,
+          "exception_fraction": 0.000986066741859884
+        }
+      }
+    },
+    {
+      "name": "ukb-b dense observed",
+      "path": "/data/opengwasdb/wip/rebuild-117/ukb-b__dense-observed-vcf-c128",
+      "n_analyses": 2511,
+      "components": [
+        {
+          "name": "ukb-b dense observed",
+          "kind": "dense",
+          "shape": [
+            9847701,
+            2511
+          ],
+          "chunks": [
+            1000,
+            1000
+          ],
+          "n_cells": 24727577211,
+          "current_se_bytes": 21183067239,
+          "current_se_bpcell": 0.8566576117929081,
+          "sample_cells": 74579211,
+          "read_seconds": 2.0535193910473026,
+          "se_read_seconds": 0.20220716117182747,
+          "eaf_read_seconds": 1.8513122298754752,
+          "residual_compute_seconds": 1.8189127632067539,
+          "candidates": {
+            "0.25": {
+              "projected_bytes": 6661498412.168109,
+              "projected_bpcell": 0.2693955155948217,
+              "exception_fraction": 0.0012825007331671327,
+              "sample_finite_cells": 41532140,
+              "relative_error_median": 0.0004904397776123726,
+              "relative_error_p99": 0.0009745553626452554,
+              "relative_error_max_sample": 0.0009847356644849814
+            },
+            "0.5": {
+              "projected_bytes": 4345097057.235784,
+              "projected_bpcell": 0.17571867312996917,
+              "exception_fraction": 0.0003844974036974738,
+              "sample_finite_cells": 41532140,
+              "relative_error_median": 0.0009475260701009014,
+              "relative_error_p99": 0.001947410920729703,
+              "relative_error_max_sample": 0.0019704418717265693
+            },
+            "1.0": {
+              "projected_bytes": 2813368913.1145754,
+              "projected_bpcell": 0.1137745477087442,
+              "exception_fraction": 0.0,
+              "sample_finite_cells": 41532140,
+              "relative_error_median": 0.002178294493482613,
+              "relative_error_p99": 0.0039052746796536075,
+              "relative_error_max_sample": 0.003944762077422448
+            },
+            "2.0": {
+              "projected_bytes": 1693841375.2999227,
+              "projected_bpcell": 0.06850009448343454,
+              "exception_fraction": 0.0,
+              "sample_finite_cells": 41532140,
+              "relative_error_median": 0.003449919094153875,
+              "relative_error_p99": 0.007749844277231811,
+              "relative_error_max_sample": 0.00790508360463571
+            }
+          }
+        }
+      ],
+      "current_se_bytes": 21183067239,
+      "current_se_bpcell": 0.8566576117929081,
+      "n_cells": 24727577211,
+      "fit": {
+        "min_r2": 0.3296152591877257,
+        "median_r2": 0.991905744309535,
+        "max_r2": 0.9990790619172883,
+        "min_slope": -0.5085623077452972,
+        "median_slope": -0.5018810923786531,
+        "max_slope": -0.49026743993815997,
+        "min_eaf_coverage": 1.0,
+        "analyses_below_0_99_r2": 1165
+      },
+      "feasible_all_or_none_r2_0_99": false,
+      "chosen_range_at_2pct_exceptions": null,
+      "totals_by_range": {
+        "0.25": {
+          "projected_bytes": 6661498412.168109,
+          "projected_bpcell": 0.2693955155948217,
+          "saving_bytes": 14521568826.83189,
+          "saving_fraction": 0.6855272025996466,
+          "exception_fraction": 0.0012825007331671327
+        },
+        "0.5": {
+          "projected_bytes": 4345097057.235784,
+          "projected_bpcell": 0.17571867312996917,
+          "saving_bytes": 16837970181.764217,
+          "saving_fraction": 0.7948787581981492,
+          "exception_fraction": 0.0003844974036974738
+        },
+        "1.0": {
+          "projected_bytes": 2813368913.1145754,
+          "projected_bpcell": 0.1137745477087442,
+          "saving_bytes": 18369698325.885426,
+          "saving_fraction": 0.8671878401096278,
+          "exception_fraction": 0.0
+        },
+        "2.0": {
+          "projected_bytes": 1693841375.2999227,
+          "projected_bpcell": 0.06850009448343454,
+          "saving_bytes": 19489225863.700077,
+          "saving_fraction": 0.9200379550237464,
+          "exception_fraction": 0.0
+        }
+      }
+    },
+    {
+      "name": "EBI GWAS Catalog hybrid",
+      "path": "/data/opengwasdb/wip/rebuild-117/gwas-catalog-eur-hybrid__eur-hybrid-pilot-10",
+      "n_analyses": 9,
+      "components": [
+        {
+          "name": "EBI GWAS Catalog hybrid dense",
+          "kind": "dense",
+          "shape": [
+            9847807,
+            9
+          ],
+          "chunks": [
+            1000,
+            9
+          ],
+          "n_cells": 88630263,
+          "current_se_bytes": 147999272,
+          "current_se_bpcell": 1.6698503083534797,
+          "sample_cells": 268263,
+          "read_seconds": 0.41210180398775265,
+          "se_read_seconds": 0.006763838115148246,
+          "eaf_read_seconds": 0.4053379658726044,
+          "residual_compute_seconds": 0.011100268049631268,
+          "candidates": {
+            "0.25": {
+              "projected_bytes": 336877133.28869057,
+              "projected_bpcell": 3.8009267025269975,
+              "exception_fraction": 0.3001193726760061,
+              "sample_finite_cells": 218643,
+              "relative_error_median": 0.0002816283045059542,
+              "relative_error_p99": 0.0009703286929491872,
+              "relative_error_max_sample": 0.000984732324126325
+            },
+            "0.5": {
+              "projected_bytes": 205363465.28362465,
+              "projected_bpcell": 2.3170806261019967,
+              "exception_fraction": 0.14311457490063711,
+              "sample_finite_cells": 218643,
+              "relative_error_median": 0.0008198724713808225,
+              "relative_error_p99": 0.001945264999145133,
+              "relative_error_max_sample": 0.001970397721242634
+            },
+            "1.0": {
+              "projected_bytes": 85105708.19488712,
+              "projected_bpcell": 0.9602330548752531,
+              "exception_fraction": 0.004033973189171389,
+              "sample_finite_cells": 218643,
+              "relative_error_median": 0.0019649346316519267,
+              "relative_error_p99": 0.0038962624074361193,
+              "relative_error_max_sample": 0.003944753498844156
+            },
+            "2.0": {
+              "projected_bytes": 78459999.54238938,
+              "projected_bpcell": 0.8852506681875623,
+              "exception_fraction": 0.0,
+              "sample_finite_cells": 218643,
+              "relative_error_median": 0.003941928726103772,
+              "relative_error_p99": 0.007794194902268403,
+              "relative_error_max_sample": 0.007904787316842077
+            }
+          }
+        },
+        {
+          "name": "EBI GWAS Catalog hybrid overflow",
+          "kind": "ragged",
+          "shape": [
+            27369974
+          ],
+          "chunks": [
+            200000
+          ],
+          "n_cells": 27369974,
+          "current_se_bytes": 44103576,
+          "current_se_bpcell": 1.6113853816594783,
+          "sample_cells": 5969974,
+          "read_seconds": 1.9680056828656234,
+          "se_read_seconds": 0.027388314891140908,
+          "eaf_read_seconds": 1.9406173679744825,
+          "residual_compute_seconds": 0.11420488974545151,
+          "candidates": {
+            "0.25": {
+              "projected_bytes": 185175863.5966006,
+              "projected_bpcell": 6.765657270869187,
+              "exception_fraction": 0.4979996844080805,
+              "sample_finite_cells": 5957060,
+              "relative_error_median": 1.3023094449726713e-05,
+              "relative_error_p99": 0.0009648011585012828,
+              "relative_error_max_sample": 0.0009847029761831383
+            },
+            "0.5": {
+              "projected_bytes": 93260163.29339088,
+              "projected_bpcell": 3.4073895464201347,
+              "exception_fraction": 0.20589619711736998,
+              "sample_finite_cells": 5957060,
+              "relative_error_median": 0.000740872004510118,
+              "relative_error_p99": 0.001943074191255527,
+              "relative_error_max_sample": 0.001970426891178878
+            },
+            "1.0": {
+              "projected_bytes": 36976885.882317744,
+              "projected_bpcell": 1.3510018636597076,
+              "exception_fraction": 0.03444534720147187,
+              "sample_finite_cells": 5957060,
+              "relative_error_median": 0.0018943687756323158,
+              "relative_error_p99": 0.00389358141803831,
+              "relative_error_max_sample": 0.003944750105897787
+            },
+            "2.0": {
+              "projected_bytes": 25081031.902587514,
+              "projected_bpcell": 0.9163703225508184,
+              "exception_fraction": 0.004213152125377284,
+              "sample_finite_cells": 5957060,
+              "relative_error_median": 0.00391535823392819,
+              "relative_error_p99": 0.007791375540135636,
+              "relative_error_max_sample": 0.007905069552766708
+            }
+          }
+        }
+      ],
+      "current_se_bytes": 192102848,
+      "current_se_bpcell": 1.6560556509897475,
+      "n_cells": 116000237,
+      "fit": {
+        "min_r2": 0.5900333907752131,
+        "median_r2": 0.804471074827701,
+        "max_r2": 0.9948628108546861,
+        "min_slope": -0.7435793003695204,
+        "median_slope": -0.6080475414228225,
+        "max_slope": -0.3527365404788359,
+        "min_eaf_coverage": 0.9843423736404738,
+        "analyses_below_0_99_r2": 8
+      },
+      "feasible_all_or_none_r2_0_99": false,
+      "chosen_range_at_2pct_exceptions": null,
+      "totals_by_range": {
+        "0.25": {
+          "projected_bytes": 522052996.88529116,
+          "projected_bpcell": 4.500447674820623,
+          "saving_bytes": -329950148.88529116,
+          "saving_fraction": -1.7175703136128995,
+          "exception_fraction": 0.4909939807662383
+        },
+        "0.5": {
+          "projected_bytes": 298623628.5770155,
+          "projected_bpcell": 2.5743363660284206,
+          "saving_bytes": -106520780.57701552,
+          "saving_fraction": -0.5544987056986033,
+          "exception_fraction": 0.20367349271815693
+        },
+        "1.0": {
+          "projected_bytes": 122082594.07720485,
+          "projected_bpcell": 1.052434005606427,
+          "saving_bytes": 70020253.92279515,
+          "saving_fraction": 0.36449357545597216,
+          "exception_fraction": 0.03336867074080473
+        },
+        "2.0": {
+          "projected_bytes": 103541031.4449769,
+          "projected_bpcell": 0.8925932750031959,
+          "saving_bytes": 88561816.5550231,
+          "saving_fraction": 0.4610125121883831,
+          "exception_fraction": 0.004063990771576936
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,237 @@
+---
+title: "SE residual-coding expectation"
+format:
+  html:
+    toc: true
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+execute:
+  echo: false
+---
+
+```{python}
+import json
+from pathlib import Path
+from IPython.display import Markdown, display
+
+payload = json.loads(Path("opengwasdb_se_residual_expectation.json").read_text())
+results = payload["results"]
+
+def gib(x):
+    return x / 1024 ** 3
+
+def md_table(rows, columns):
+    def cell(value, fmt):
+        if value is None:
+            return ""
+        if fmt:
+            return fmt(value)
+        return str(value)
+    header = "| " + " | ".join(label for label, _, _ in columns) + " |"
+    sep = "|" + "|".join("---" for _ in columns) + "|"
+    body = [
+        "| " + " | ".join(cell(row.get(key), fmt) for _, key, fmt in columns) + " |"
+        for row in rows
+    ]
+    return "\n".join([header, sep, *body])
+
+def pct(x):
+    return f"{x:.1%}"
+
+def pct2(x):
+    return f"{x:.2%}"
+
+def f2(x):
+    return f"{x:.2f}"
+
+def f3(x):
+    return f"{x:.3f}"
+
+def integer(x):
+    return f"{int(x):,}"
+```
+
+## Question
+
+Issue #118 proposes coding Standard Error as an `int8` residual from the MAF-predicted value:
+
+\[
+\log(se) = a_i + b_i \log(2f(1-f)) + \epsilon
+\]
+
+with `a_i` and `b_i` fitted per Analysis. This document asks what that would buy on real `format_version` 2.0 Store Releases that already carry EAF:
+
+- `finngen-r13` pilot-20, Dense;
+- `ukb-b` Dense observed store;
+- EBI GWAS Catalog EUR Hybrid case-control pilot.
+
+The measurement is an estimate, not an implementation. `benchmarks/estimate_se_residual.py` samples real `se` and decoded `eaf`, fits the model, quantises the residual to `int8`, compresses sampled chunks with the current `se` compressor, and extrapolates to the full plane. Exception cells are charged conservatively at raw side-table cost (`int64` flat position + `float32` exact value).
+
+## Headline
+
+The storage upside is real, but the original all-or-none R² gate in #118 is probably the wrong decision rule. Low R² does not make the encoding inaccurate: the residual itself is what is quantised, and exceptions are exact. R² mostly predicts whether the residual plane is still small enough to be worth writing.
+
+```{python}
+rows = []
+for r in results:
+    best = r["totals_by_range"]["2.0"]
+    one = r["totals_by_range"]["1.0"]
+    rows.append({
+        "store": r["name"],
+        "current se GiB": gib(r["current_se_bytes"]),
+        "current se B/cell": r["current_se_bpcell"],
+        "range 1.0 projected B/cell": one["projected_bpcell"],
+        "range 1.0 saving": one["saving_fraction"],
+        "range 2.0 projected B/cell": best["projected_bpcell"],
+        "range 2.0 saving": best["saving_fraction"],
+        "range 2.0 exception rate": best["exception_fraction"],
+        "min R²": r["fit"]["min_r2"],
+        "analyses R²<0.99": r["fit"]["analyses_below_0_99_r2"],
+    })
+display(Markdown(md_table(rows, [
+    ("store", "store", None),
+    ("current se GiB", "current se GiB", f2),
+    ("current se B/cell", "current se B/cell", f3),
+    ("range 1.0 projected B/cell", "range 1.0 projected B/cell", f3),
+    ("range 1.0 saving", "range 1.0 saving", pct),
+    ("range 2.0 projected B/cell", "range 2.0 projected B/cell", f3),
+    ("range 2.0 saving", "range 2.0 saving", pct),
+    ("range 2.0 exception rate", "range 2.0 exception rate", pct2),
+    ("min R²", "min R²", f3),
+    ("analyses R²<0.99", "analyses R²<0.99", integer),
+])))
+```
+
+At residual range ±2.0, all three stores stay below the 1% relative-error target for non-exception cells and below the 2% exception budget:
+
+```{python}
+rows = []
+for r in results:
+    for c in r["components"]:
+        cand = c["candidates"]["2.0"]
+        rows.append({
+            "component": c["name"],
+            "sample cells": c["sample_cells"],
+            "p99 relative error": cand["relative_error_p99"],
+            "max sampled relative error": cand["relative_error_max_sample"],
+            "exception rate": cand["exception_fraction"],
+        })
+display(Markdown(md_table(rows, [
+    ("component", "component", None),
+    ("sample cells", "sample cells", integer),
+    ("p99 relative error", "p99 relative error", lambda x: f"{x:.3%}"),
+    ("max sampled relative error", "max sampled relative error", lambda x: f"{x:.3%}"),
+    ("exception rate", "exception rate", pct2),
+])))
+```
+
+## Storage footprint
+
+```{python}
+rows = []
+for r in results:
+    current = r["current_se_bytes"]
+    for residual_range, total in r["totals_by_range"].items():
+        rows.append({
+            "store": r["name"],
+            "range": residual_range,
+            "projected GiB": gib(total["projected_bytes"]),
+            "projected B/cell": total["projected_bpcell"],
+            "saving GiB": gib(total["saving_bytes"]),
+            "saving": total["saving_fraction"],
+            "exception rate": total["exception_fraction"],
+        })
+display(Markdown(md_table(rows, [
+    ("store", "store", None),
+    ("range", "range", None),
+    ("projected GiB", "projected GiB", f2),
+    ("projected B/cell", "projected B/cell", f3),
+    ("saving GiB", "saving GiB", f2),
+    ("saving", "saving", pct),
+    ("exception rate", "exception rate", pct2),
+])))
+```
+
+Range ±2.0 is the storage-maximising choice in this sample because it nearly eliminates the side table. Its worst-case quantisation error is about `exp((2/127)/2)-1 = 0.79%`, still under #118's 1% target. If the project wants stricter precision by default, ±1.0 is the relevant comparison: it still saves 63% on FinnGen and 87% on UKB, but misses the 2% exception budget on the EBI Hybrid pilot.
+
+The realistic storage conclusion:
+
+- **UKB is the strongest case**: same cohort across many Analyses, dense grid, EAF already amortised. The estimate is a 87–92% reduction in the SE plane.
+- **FinnGen still saves materially** even though its R² is only ~0.98: 63–76% depending on whether ±1.0 or ±2.0 is accepted.
+- **EBI Hybrid is not the original clean scenario**: heterogeneous studies and an Overflow Component widen residuals. It still saves about 46% at ±2.0, but only if the decision rule is byte/exception/precision-based rather than an R²≥0.99 all-or-none gate.
+
+## Fit quality
+
+```{python}
+fit = [
+    {
+        "store": r["name"],
+        "min R²": r["fit"]["min_r2"],
+        "median R²": r["fit"]["median_r2"],
+        "max R²": r["fit"]["max_r2"],
+        "median slope": r["fit"]["median_slope"],
+        "min EAF coverage": r["fit"]["min_eaf_coverage"],
+        "analyses R²<0.99": r["fit"]["analyses_below_0_99_r2"],
+    }
+    for r in results
+]
+display(Markdown(md_table(fit, [
+    ("store", "store", None),
+    ("min R²", "min R²", f3),
+    ("median R²", "median R²", f3),
+    ("max R²", "max R²", f3),
+    ("median slope", "median slope", f3),
+    ("min EAF coverage", "min EAF coverage", pct2),
+    ("analyses R²<0.99", "analyses R²<0.99", integer),
+])))
+```
+
+The fitted slopes are close enough to the theoretical −0.5 for FinnGen and UKB to justify per-Analysis coefficients rather than one global constant. EBI Hybrid is wider and more heterogeneous, which is exactly where the format needs the byte comparison and exception accounting rather than a silent fallback.
+
+## Query-speed expectation
+
+Residual-coded SE changes the read path. Today `se` is independently readable as a `float16` plane. With #118, a query that wants SE also needs the same cell's EAF to reconstruct it. That has two consequences:
+
+1. **Top-hit queries should be almost unchanged** if the top-hit index continues to carry decoded `float32 se`; the query never needs to open the SE plane for indexed hits.
+2. **SE-only query paths become coupled to EAF.** PheWAS, range PheWAS, exact lookup and analysis extraction would read the residual-code plane plus EAF, then run `exp(a + b x + residual)`.
+
+The sampled throughput below is for reading the current `se` plane, reading decoded EAF, and computing the residual model over the same sample. It is not a full query benchmark, but it shows the direction of the cost.
+
+```{python}
+rows = []
+for r in results:
+    for c in r["components"]:
+        n = c["sample_cells"]
+        rows.append({
+            "component": c["name"],
+            "sample cells": n,
+            "current se read ns/cell": c["se_read_seconds"] / n * 1e9,
+            "eaf read ns/cell": c["eaf_read_seconds"] / n * 1e9,
+            "residual compute ns/cell": c["residual_compute_seconds"] / n * 1e9,
+        })
+display(Markdown(md_table(rows, [
+    ("component", "component", None),
+    ("sample cells", "sample cells", integer),
+    ("current se read ns/cell", "current se read ns/cell", lambda x: f"{x:.1f}"),
+    ("eaf read ns/cell", "eaf read ns/cell", lambda x: f"{x:.1f}"),
+    ("residual compute ns/cell", "residual compute ns/cell", lambda x: f"{x:.1f}"),
+])))
+```
+
+The query-speed conclusion is therefore cautious: #118 is primarily a storage win. It should not be expected to speed ordinary queries unless the smaller residual plane offsets the added EAF read. On stores where EAF is already being returned, the incremental cost is mostly the vectorised arithmetic. On default query shapes that do not return EAF today, the new coupling may be a measurable slowdown and should be benchmarked before landing.
+
+## Recommendation
+
+Implement #118 only behind a persisted plan with an explicit escape hatch back to `float16`. The decision should be based on measured bytes, exception fraction and the chosen precision bound, not R² alone.
+
+A plausible acceptance rule from this evidence:
+
+- fit per-Analysis `log(se) ~ a + b log(2f(1-f))`;
+- test candidate residual ranges, probably including ±2.0;
+- require finite EAF wherever finite SE is encoded this way, or record exact exceptions/fallback loudly;
+- require projected compressed bytes plus side table to beat current `float16` by a meaningful margin;
+- require the range's half-step error bound to stay under the chosen relative-error contract;
+- persist the coefficients, range, exception table and fallback decision in the Store Release plan.
+
+Do not use an R²≥0.99 all-or-none rule as the only gate: it would reject every store measured here, including UKB, despite the largest estimated storage saving.
