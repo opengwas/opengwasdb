@@ -57,7 +57,10 @@ from opengwasdb.layouts.dense.constants import (
     DEFAULT_DTYPE,
     TOP_HIT_THRESHOLDS,
 )
-from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes, z_critical
+from opengwasdb.layouts.dense.top_hits import (
+    write_top_hit_indexes_for_store,
+    z_critical,
+)
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata
 from opengwasdb.model.enums import (
     AssociationCoverage,
@@ -788,8 +791,7 @@ def build_dense_from_vcf_manifest(
             encoding=encoding,
             eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
         )
-        log.info("Writing top-hit index from %d harvested candidate cells", len(all_rows))
-        write_top_hit_indexes(staged.path, all_rows, all_cols, all_z, all_se)
+        write_top_hit_indexes_for_store(staged.path, all_rows, all_cols, all_z, all_se, encoding)
         analyses = apply_orientation_evidence(
             _apply_eaf_scope(analyses, column_has_eaf), eaf_report
         )

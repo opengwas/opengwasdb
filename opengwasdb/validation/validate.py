@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -462,6 +462,57 @@ def _validate_ragged_completion(
 _TOP_HIT_SAMPLE_SIZE = 1000  # cross-validate this many sampled entries against the CSR
 
 
+def _slices_are_ordered(
+    ais: np.ndarray, vis: np.ndarray, analysis_offsets: np.ndarray, n_analyses: int
+) -> bool:
+    """Whether each analysis's slice holds only its own hits, in genomic order."""
+    for analysis_index in range(n_analyses):
+        start = int(analysis_offsets[analysis_index])
+        end = int(analysis_offsets[analysis_index + 1])
+        if np.any(ais[start:end] != analysis_index):
+            return False
+        if end - start > 1 and np.any(vis[start : end - 1] >= vis[start + 1 : end]):
+            return False
+    return True
+
+
+def _sample_csr_positions(
+    key: str,
+    sample: np.ndarray,
+    vis: np.ndarray,
+    ais: np.ndarray,
+    zs: np.ndarray,
+    threshold: float,
+    offsets: np.ndarray,
+    vi_all: np.ndarray,
+    z_all: np.ndarray,
+    errors: list[str],
+) -> list[int]:
+    """Locate each sampled hit in the CSR and check what it claims about it.
+
+    Returns the CSR positions found, which is short of `sample` exactly when a
+    check failed -- the caller uses that to skip the frequency comparison
+    rather than compare against positions it never resolved.
+    """
+    positions: list[int] = []
+    for idx in sample.tolist():
+        ai, vi = int(ais[idx]), int(vis[idx])
+        start, end = int(offsets[ai]), int(offsets[ai + 1])
+        pos = start + int(np.searchsorted(vi_all[start:end], vi))
+        if pos >= end or int(vi_all[pos]) != vi:
+            errors.append(f"top-hit index {key} references missing association")
+            return positions
+        stored_z = float(z_all[pos])
+        if not np.isclose(stored_z, float(zs[idx]), rtol=1e-3, atol=1e-3):
+            errors.append(f"top-hit index {key} z value inconsistent with CSR")
+            return positions
+        if p_value_from_z(stored_z) > threshold:
+            errors.append(f"top-hit index {key} contains association above threshold")
+            return positions
+        positions.append(pos)
+    return positions
+
+
 def _validate_ragged_top_hits(
     store_path: Path,
     data_root: Any,
@@ -477,6 +528,7 @@ def _validate_ragged_top_hits(
     offsets = csr._offsets[:]
     vi_all = csr._variant_index[:].astype(np.int32)
     z_all = csr.z_all()
+    n_analyses = len(offsets) - 1
 
     for key in top:
         group = top[key]
@@ -495,16 +547,17 @@ def _validate_ragged_top_hits(
         abs_zs = group["abs_z"][:].astype(np.float32)
         analysis_offsets = group["analysis_offsets"][:].astype(np.int64)
         imputed = group["imputed"][:].astype(np.uint8) if "imputed" in group else None
+        eaf = group["eaf"][:].astype(np.float32) if "eaf" in group else None
 
         if not (
             len(vis) == len(ais) == len(zs) == len(abs_zs)
             == len(group["se"]) == len(group["p_value"])
             and (imputed is None or len(imputed) == len(vis))
+            and (eaf is None or len(eaf) == len(vis))
         ):
             errors.append(f"top-hit index {key} has inconsistent array lengths")
             continue
 
-        n_analyses = len(offsets) - 1
         if (
             len(analysis_offsets) != n_analyses + 1
             or analysis_offsets[0] != 0
@@ -513,17 +566,7 @@ def _validate_ragged_top_hits(
         ):
             errors.append(f"top-hit index {key} has invalid analysis offsets")
             continue
-        ordered = True
-        for analysis_index in range(n_analyses):
-            start = int(analysis_offsets[analysis_index])
-            end = int(analysis_offsets[analysis_index + 1])
-            if np.any(ais[start:end] != analysis_index):
-                ordered = False
-                break
-            if end - start > 1 and np.any(vis[start : end - 1] >= vis[start + 1 : end]):
-                ordered = False
-                break
-        if not ordered:
+        if not _slices_are_ordered(ais, vis, analysis_offsets, n_analyses):
             errors.append(f"top-hit index {key} has incorrect or non-genomic analysis slices")
             continue
         if "imputed" in csr._root and imputed is None:
@@ -543,22 +586,13 @@ def _validate_ragged_top_hits(
             continue
         rng = np.random.default_rng(0)
         sample = rng.choice(n, size=min(_TOP_HIT_SAMPLE_SIZE, n), replace=False)
-        for idx in sample.tolist():
-            ai = int(ais[idx])
-            vi = int(vis[idx])
-            start = int(offsets[ai])
-            end = int(offsets[ai + 1])
-            pos = start + int(np.searchsorted(vi_all[start:end], vi))
-            if pos >= end or int(vi_all[pos]) != vi:
-                errors.append(f"top-hit index {key} references missing association")
-                break
-            stored_z = float(z_all[pos])
-            if not np.isclose(stored_z, float(zs[idx]), rtol=1e-3, atol=1e-3):
-                errors.append(f"top-hit index {key} z value inconsistent with CSR")
-                break
-            if p_value_from_z(stored_z) > threshold:
-                errors.append(f"top-hit index {key} contains association above threshold")
-                break
+        sample_positions = _sample_csr_positions(
+            key, sample, vis, ais, zs, threshold, offsets, vi_all, z_all, errors
+        )
+        if eaf is not None and len(sample_positions) == len(sample):
+            expected_eaf = csr.eaf_at(np.asarray(sample_positions, dtype=np.int64))
+            if not np.allclose(eaf[sample], expected_eaf, equal_nan=True):
+                errors.append(f"top-hit index {key} eaf value inconsistent with CSR")
 
 
 def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> ValidationResult:
@@ -1309,28 +1343,13 @@ def _frequencies_in_unit_interval(array: Any) -> bool:
     return not bool(np.any(finite & ((values < 0.0) | (values > 1.0))))
 
 
-def _validate_encoding_plan(
-    group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
-) -> None:
-    """Check the arrays against the plan the manifest declares (issue #119).
+def _validate_per_variant_chunking(group: Any, errors: list[str], *, label: str) -> None:
+    """Reject a per-variant array chunked as one block (issue #135).
 
-    The plan is authoritative: a reader decodes what the manifest says, so a
-    store whose `z` plane is not in its declared encoding does not read as
-    "the other encoding" -- it reads as plausible, wrong z-scores. That is the
-    disagreement between declared metadata and actual arrays that got through
-    review once already (#106), and it is why the check exists at all.
+    A whole-array chunk means every read of the frequency plane decompresses
+    the entire baseline, whatever it asked for, so the chunking is part of the
+    release's contract rather than a detail of how it was written.
     """
-    for name, declared_plane in (
-        ("z", encoding.z), ("se", encoding.se), ("eaf", encoding.eaf)
-    ):
-        if name not in group:
-            continue
-        actual = str(group[name].dtype)
-        if actual != declared_plane.dtype:
-            errors.append(
-                f"{label}/{name} has dtype {actual} but the manifest declares "
-                f"{declared_plane.kind} ({declared_plane.dtype})"
-            )
     for name in (EAF_BASELINE, EAF_REFERENCE):
         if name not in group:
             continue
@@ -1342,6 +1361,30 @@ def _validate_encoding_plan(
                 f"chunk must be no larger than {expected}, matching this component's "
                 "variant/read axis rather than spanning the whole array"
             )
+
+
+def _validate_encoding_plan(
+    group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
+) -> None:
+    """Check the arrays against the plan the manifest declares (issue #119).
+
+    The plan is authoritative: a reader decodes what the manifest says, so a
+    store whose `z` plane is not in its declared encoding does not read as
+    "the other encoding" -- it reads as plausible, wrong z-scores. That is the
+    disagreement between declared metadata and actual arrays that got through
+    review once already (#106), and it is why the check exists at all.
+    """
+    planes = (("z", encoding.z), ("se", encoding.se), ("eaf", encoding.eaf))
+    for name, declared_plane in planes:
+        if name not in group:
+            continue
+        actual = str(group[name].dtype)
+        if actual != declared_plane.dtype:
+            errors.append(
+                f"{label}/{name} has dtype {actual} but the manifest declares "
+                f"{declared_plane.kind} ({declared_plane.dtype})"
+            )
+    _validate_per_variant_chunking(group, errors, label=label)
     _validate_eaf_plan(group, encoding, errors, label=label)
     if errors or "z" not in group:
         return
@@ -1621,6 +1664,168 @@ def _validate_dense_arrays(
             errors.append("data.zarr/eaf cannot be decoded under the declared plan")
 
 
+def _read_top_hit_arrays(key: str, group: Any, errors: list[str]) -> dict[str, Any] | None:
+    """One tier's index arrays, or None -- having said what it lacks."""
+    required = {
+        "analysis_offsets", "variant_index", "analysis_index", "abs_z",
+        "z", "se", "p_value",
+    }
+    missing = sorted(required.difference(group.keys()))
+    if missing:
+        errors.append(f"top-hit index {key} is missing {', '.join(missing)}")
+        return None
+    return {
+        "rows": group["variant_index"][:].astype(np.int64),
+        "cols": group["analysis_index"][:].astype(np.int64),
+        "z_values": group["z"][:].astype("float32"),
+        "abs_z": group["abs_z"][:].astype("float32"),
+        "offsets": group["analysis_offsets"][:].astype(np.int64),
+        "imputed_values": group["imputed"][:].astype(np.uint8) if "imputed" in group else None,
+        "eaf_values": group["eaf"][:].astype(np.float32) if "eaf" in group else None,
+    }
+
+
+def _top_hit_lengths_ok(a: dict[str, Any], group: Any) -> bool:
+    """Whether every parallel array in the tier is the same length."""
+    n = len(a["rows"])
+    optional = [x for x in (a["imputed_values"], a["eaf_values"]) if x is not None]
+    return all(
+        len(x) == n
+        for x in [a["cols"], a["z_values"], a["abs_z"], group["se"], group["p_value"], *optional]
+    )
+
+
+def _top_hit_offsets_ok(offsets: np.ndarray, n_rows: int, n_analyses: int) -> bool:
+    """Whether the per-analysis offsets partition the tier's rows."""
+    return bool(
+        len(offsets) == n_analyses + 1
+        and offsets[0] == 0
+        and not np.any(offsets[:-1] > offsets[1:])
+        and offsets[-1] == n_rows
+    )
+
+
+def _imputed_missing(imputed_values: np.ndarray | None, imputed_arr: Any) -> bool:
+    """Whether a completed component's tier failed to record completion status."""
+    return imputed_arr is not None and imputed_values is None
+
+
+def _imputed_values_valid(imputed_values: np.ndarray | None) -> bool:
+    """Whether the recorded completion status is a flag and not something else."""
+    if imputed_values is None:
+        return True
+    return bool(np.all((imputed_values == 0) | (imputed_values == 1)))
+
+
+def _top_hit_structural_problem(
+    a: dict[str, Any], group: Any, n_analyses: int, imputed_arr: Any
+) -> str | None:
+    """The first thing wrong with a tier before the matrix is streamed.
+
+    The order is the order the checks were written in: a structural fault is
+    reported ahead of a value fault, because the second is not worth reading
+    while the first makes the arrays untrustworthy.
+    """
+    if _imputed_missing(a["imputed_values"], imputed_arr):
+        return "is missing imputed completion status"
+    if not _top_hit_lengths_ok(a, group):
+        return "has inconsistent array lengths"
+    if not _top_hit_offsets_ok(a["offsets"], len(a["rows"]), n_analyses):
+        return "has invalid analysis offsets"
+    if not _slices_are_ordered(a["cols"], a["rows"], a["offsets"], n_analyses):
+        return "has incorrect or non-genomic analysis slices"
+    if not _imputed_values_valid(a["imputed_values"]):
+        return "has invalid imputed completion status"
+    if len(a["rows"]) and len(np.unique(a["rows"] * n_analyses + a["cols"])) != len(a["rows"]):
+        return "does not match stored z values"
+    return None
+
+
+def _top_hit_group_entry(
+    key: str,
+    group: Any,
+    n_analyses: int,
+    imputed_arr: Any,
+    errors: list[str],
+) -> dict[str, Any] | None:
+    """Every check on one tier that does not need the matrix, then its entry.
+
+    Returns None -- having recorded why -- when the tier is malformed enough
+    that streaming the matrix against it would be meaningless.
+    """
+    arrays = _read_top_hit_arrays(key, group, errors)
+    if arrays is None:
+        return None
+    problem = _top_hit_structural_problem(arrays, group, n_analyses, imputed_arr)
+    if problem is not None:
+        errors.append(f"top-hit index {key} {problem}")
+        return None
+    threshold = float(group.attrs.get("threshold", key.replace("p_", "").replace("_", "-")))
+    return {
+        "z_crit": z_critical(threshold),
+        "rows": arrays["rows"],
+        "cols": arrays["cols"],
+        "z_values": arrays["z_values"],
+        "imputed_values": arrays["imputed_values"],
+        "eaf_values": arrays["eaf_values"],
+        "n": len(arrays["rows"]),
+        "pass_count": 0,
+        "consistent": True,
+        "imputed_consistent": True,
+        "eaf_consistent": True,
+    }
+
+
+def _band_z_consistent(g: dict[str, Any], gathered: np.ndarray, in_band: np.ndarray) -> bool:
+    """Whether the matrix agrees with what the tier recorded for these cells."""
+    return bool(
+        np.all(np.isfinite(gathered))
+        and np.all(np.isclose(gathered, g["z_values"][in_band], rtol=1e-3, atol=1e-3))
+        and np.all(np.abs(gathered) >= g["z_crit"])
+    )
+
+
+def _check_top_hit_band(
+    g: dict[str, Any],
+    r0: int,
+    r1: int,
+    z_band: np.ndarray,
+    abs_band: np.ndarray,
+    imputed_arr: Any,
+    eaf_band: Callable[[], np.ndarray],
+) -> None:
+    """Verify one tier's cells that fall in this row band, and count its passes."""
+    g["pass_count"] += int(np.count_nonzero(abs_band >= g["z_crit"]))
+    in_band = (g["rows"] >= r0) & (g["rows"] < r1)
+    if not np.any(in_band):
+        return
+    br = g["rows"][in_band] - r0
+    bc = g["cols"][in_band]
+    if not _band_z_consistent(g, z_band[br, bc], in_band):
+        g["consistent"] = False
+    if g["imputed_values"] is not None and imputed_arr is not None:
+        gathered = imputed_arr[r0:r1][br, bc].astype(np.uint8)
+        if not np.array_equal(gathered, g["imputed_values"][in_band]):
+            g["imputed_consistent"] = False
+    if g["eaf_values"] is not None:
+        if not np.allclose(eaf_band()[br, bc], g["eaf_values"][in_band], equal_nan=True):
+            g["eaf_consistent"] = False
+
+
+def _report_top_hit_group(key: str, g: dict[str, Any], errors: list[str]) -> None:
+    """The first thing wrong with a tier, once the streamed pass has finished."""
+    if not g["consistent"]:
+        errors.append(f"top-hit index {key} contains z value inconsistent with z array")
+    elif not g["imputed_consistent"]:
+        errors.append(
+            f"top-hit index {key} contains imputed value inconsistent with imputed array"
+        )
+    elif not g["eaf_consistent"]:
+        errors.append(f"top-hit index {key} contains eaf value inconsistent with eaf plane")
+    elif g["n"] != g["pass_count"]:
+        errors.append(f"top-hit index {key} does not match stored z values")
+
+
 def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) -> None:
     if "top_hits" not in root:
         return
@@ -1628,6 +1833,7 @@ def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) ->
     z_plane = DenseZPlane.open(root, encoding)
     z_arr = z_plane.array
     imputed_arr = root["imputed"] if "imputed" in root else None
+    eaf_plane = DenseEafPlane.open(root, encoding)
     n_variants, n_analyses = int(z_arr.shape[0]), int(z_arr.shape[1])
 
     # Load each threshold group's (comparatively small) index arrays and run the
@@ -1635,77 +1841,9 @@ def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) ->
     # ranking, and cell uniqueness. Keep the survivors for the streamed matrix pass.
     groups: dict[str, dict[str, Any]] = {}
     for key in top:
-        group = top[key]
-        threshold = float(group.attrs.get("threshold", key.replace("p_", "").replace("_", "-")))
-        required = {
-            "analysis_offsets", "variant_index", "analysis_index", "abs_z",
-            "z", "se", "p_value",
-        }
-        missing = sorted(required.difference(group.keys()))
-        if missing:
-            errors.append(f"top-hit index {key} is missing {', '.join(missing)}")
-            continue
-        rows = group["variant_index"][:].astype(np.int64)
-        cols = group["analysis_index"][:].astype(np.int64)
-        z_values = group["z"][:].astype("float32")
-        abs_z = group["abs_z"][:].astype("float32")
-        offsets = group["analysis_offsets"][:].astype(np.int64)
-        imputed_values = (
-            group["imputed"][:].astype(np.uint8) if "imputed" in group else None
-        )
-        if imputed_arr is not None and imputed_values is None:
-            errors.append(f"top-hit index {key} is missing imputed completion status")
-            continue
-        if (
-            len(rows) != len(cols)
-            or len(rows) != len(z_values)
-            or len(rows) != len(abs_z)
-            or len(rows) != len(group["se"])
-            or len(rows) != len(group["p_value"])
-            or (imputed_values is not None and len(rows) != len(imputed_values))
-        ):
-            errors.append(f"top-hit index {key} has inconsistent array lengths")
-            continue
-        if (
-            len(offsets) != n_analyses + 1
-            or len(offsets) == 0
-            or offsets[0] != 0
-            or np.any(offsets[:-1] > offsets[1:])
-            or offsets[-1] != len(rows)
-        ):
-            errors.append(f"top-hit index {key} has invalid analysis offsets")
-            continue
-        ordered = True
-        for analysis_index in range(n_analyses):
-            start, stop = int(offsets[analysis_index]), int(offsets[analysis_index + 1])
-            if np.any(cols[start:stop] != analysis_index):
-                ordered = False
-                break
-            if stop - start > 1 and np.any(rows[start : stop - 1] >= rows[start + 1 : stop]):
-                ordered = False
-                break
-        if not ordered:
-            errors.append(f"top-hit index {key} has incorrect or non-genomic analysis slices")
-            continue
-        if imputed_values is not None and not np.all((imputed_values == 0) | (imputed_values == 1)):
-            errors.append(f"top-hit index {key} has invalid imputed completion status")
-            continue
-        if len(rows):
-            flat = rows * n_analyses + cols
-            if len(np.unique(flat)) != len(flat):
-                errors.append(f"top-hit index {key} does not match stored z values")
-                continue
-        groups[key] = {
-            "z_crit": z_critical(threshold),
-            "rows": rows,
-            "cols": cols,
-            "z_values": z_values,
-            "imputed_values": imputed_values,
-            "n": len(rows),
-            "pass_count": 0,
-            "consistent": True,
-            "imputed_consistent": True,
-        }
+        entry = _top_hit_group_entry(key, top[key], n_analyses, imputed_arr, errors)
+        if entry is not None:
+            groups[key] = entry
     if not groups:
         return
 
@@ -1716,36 +1854,20 @@ def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) ->
         r1 = min(r0 + _VALIDATE_BAND_ROWS, n_variants)
         z_band = z_plane.band(r0, r1)
         abs_band = np.abs(z_band)
+        # Decoding the frequency plane is the most expensive read in this pass,
+        # and every tier gathers from the same band: decode it at most once.
+        cached: list[np.ndarray] = []
+
+        def eaf_band(r0: int = r0, r1: int = r1, cached: list[np.ndarray] = cached) -> np.ndarray:
+            if not cached:
+                cached.append(eaf_plane.band(r0, r1))
+            return cached[0]
+
         for g in groups.values():
-            g["pass_count"] += int(np.count_nonzero(abs_band >= g["z_crit"]))
-            in_band = (g["rows"] >= r0) & (g["rows"] < r1)
-            if not np.any(in_band):
-                continue
-            gathered = z_band[g["rows"][in_band] - r0, g["cols"][in_band]]
-            matches = np.isclose(gathered, g["z_values"][in_band], rtol=1e-3, atol=1e-3)
-            if not (
-                np.all(np.isfinite(gathered))
-                and np.all(matches)
-                and np.all(np.abs(gathered) >= g["z_crit"])
-            ):
-                g["consistent"] = False
-            if imputed_arr is not None and g["imputed_values"] is not None:
-                imputed_band = imputed_arr[r0:r1]
-                gathered_imputed = imputed_band[
-                    g["rows"][in_band] - r0, g["cols"][in_band]
-                ].astype(np.uint8)
-                if not np.array_equal(gathered_imputed, g["imputed_values"][in_band]):
-                    g["imputed_consistent"] = False
+            _check_top_hit_band(g, r0, r1, z_band, abs_band, imputed_arr, eaf_band)
 
     for key, g in groups.items():
-        if not g["consistent"]:
-            errors.append(f"top-hit index {key} contains z value inconsistent with z array")
-        elif not g["imputed_consistent"]:
-            errors.append(
-                f"top-hit index {key} contains imputed value inconsistent with imputed array"
-            )
-        elif g["n"] != g["pass_count"]:
-            errors.append(f"top-hit index {key} does not match stored z values")
+        _report_top_hit_group(key, g, errors)
 
 
 _RHO_REQUIRED_ATTRS = (

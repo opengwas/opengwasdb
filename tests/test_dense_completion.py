@@ -498,6 +498,29 @@ class TestQuery:
         assert len(result["association_status"]) == len(result["z"])
         q.close()
 
+    def test_top_hits_uses_indexed_reference_frequency(self, completed_store):
+        q = query_store(completed_store)
+        expected = q.top_hits(threshold=5e-4)["eaf"]
+
+        def fail_eaf_pairs(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("top_hits should read indexed frequencies")
+
+        q._eaf_pairs = fail_eaf_pairs
+        result = q.top_hits(threshold=5e-4)
+        np.testing.assert_array_equal(result["eaf"], expected)
+        q.close()
+
+    def test_top_hits_does_not_open_frequency_plane(self, completed_store, monkeypatch):
+        from opengwasdb.encoding import DenseEafPlane
+
+        def fail_open(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("top_hits must not open the frequency plane")
+
+        monkeypatch.setattr(DenseEafPlane, "open", fail_open)
+        with query_store(completed_store) as q:
+            result = q.top_hits(threshold=5e-4)
+        assert len(result["eaf"]) > 0
+
     def test_range_phewas_reads_imputed_status_as_block(self, completed_store):
         root = open_store(completed_store).arrays(mode="r+")
         imputed = root["imputed"][:]
@@ -531,6 +554,21 @@ class TestQuery:
 
         for name in ("variant_index", "analysis_index", "z", "se", "association_status"):
             np.testing.assert_array_equal(indexed[name], fallback[name])
+
+    def test_top_hits_falls_back_without_indexed_frequency(self, completed_store):
+        from opengwasdb.layouts.dense.top_hits import threshold_key
+
+        q = query_store(completed_store)
+        indexed = q.top_hits(threshold=5e-4)
+        q.close()
+
+        root = open_store(completed_store).arrays(mode="r+")
+        del root[f"top_hits/{threshold_key(5e-4)}"]["eaf"]
+
+        q = query_store(completed_store)
+        fallback = q.top_hits(threshold=5e-4)
+        q.close()
+        np.testing.assert_array_equal(indexed["eaf"], fallback["eaf"])
 
 
 class TestResume:

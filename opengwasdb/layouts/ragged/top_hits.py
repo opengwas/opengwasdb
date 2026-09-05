@@ -10,7 +10,11 @@ from numcodecs import Blosc
 
 from opengwasdb.encoding import StoreEncoding
 from opengwasdb.layouts.dense.constants import TOP_HIT_THRESHOLDS
-from opengwasdb.layouts.dense.top_hits import TOP_HIT_CHUNK_SIZE, threshold_key, z_critical
+from opengwasdb.layouts.dense.top_hits import (
+    TOP_HIT_CHUNK_SIZE,
+    threshold_key,
+    write_threshold_tier,
+)
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 
 
@@ -40,6 +44,10 @@ def build_ragged_top_hit_indexes(
     imputed_all = (
         csr._root["imputed"][:].astype(np.uint8) if "imputed" in csr._root else None
     )
+    eaf_all = (
+        csr.eaf_at(np.arange(len(vi_all), dtype=np.int64))
+        if csr._eaf_plane.can_report_frequencies else None
+    )
 
     # Derive analysis_index for every association via searchsorted on CSR offsets.
     # offsets[i+1] is the exclusive end of analysis i → searchsorted(offsets[1:], pos) gives i.
@@ -51,69 +59,23 @@ def build_ragged_top_hit_indexes(
     top = root.require_group("top_hits")
     compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
 
+    # The same parallel-array contract the dense builder writes, so both layouts
+    # produce one schema and the facade and validator keep one code path.
+    columns: dict[str, np.ndarray] = {
+        "variant_index": vi_all,
+        "analysis_index": analysis_indices,
+        "z": z_all,
+        "se": se_all,
+    }
+    if imputed_all is not None:
+        columns["imputed"] = imputed_all
+    if eaf_all is not None:
+        columns["eaf"] = eaf_all
+
     for threshold in thresholds:
-        keep = abs_z >= z_critical(threshold)
-
-        kept_vi = vi_all[keep]
-        kept_ai = analysis_indices[keep]
-        kept_abs = abs_z[keep]
-        kept_z = z_all[keep]
-        kept_se = se_all[keep]
-        # Compute float64 p-values only for the survivors
-        from scipy.special import erfc  # type: ignore[import-untyped]
-
-        kept_p = erfc(kept_abs.astype("float64") / np.sqrt(2.0))
-        kept_imputed = None if imputed_all is None else imputed_all[keep]
-
-        # CSR is analysis-major; make the genomic ordering contract explicit.
-        order = np.lexsort((kept_vi, kept_ai))
-        kept_vi = kept_vi[order]
-        kept_ai = kept_ai[order]
-        kept_abs = kept_abs[order]
-        kept_z = kept_z[order]
-        kept_se = kept_se[order]
-        kept_p = kept_p[order]
-        kept_imputed = None if kept_imputed is None else kept_imputed[order]
-
-        key = threshold_key(threshold)
-        if key in top:
-            del top[key]
-        group = top.create_group(key)
-        analysis_offsets = np.empty(n_analyses + 1, dtype="uint64")
-        analysis_offsets[0] = 0
-        np.cumsum(
-            np.bincount(kept_ai, minlength=n_analyses),
-            dtype=np.uint64,
-            out=analysis_offsets[1:],
+        n_hits = write_threshold_tier(
+            top, threshold, columns, abs_z, n_analyses, TOP_HIT_CHUNK_SIZE, compressor
         )
-        chunk = max(1, min(len(kept_vi), TOP_HIT_CHUNK_SIZE))
-        group.create_dataset(
-            "analysis_offsets", data=analysis_offsets, chunks=(len(analysis_offsets),),
-            compressor=compressor, dtype="uint64",
-        )
-
-        for name, data, dtype in [
-            ("variant_index", kept_vi, "uint32"),
-            ("analysis_index", kept_ai, "uint32"),
-            ("abs_z", kept_abs, "float32"),
-            ("z", kept_z, "float32"),
-            ("se", kept_se, "float32"),
-            ("p_value", kept_p, "float64"),
-        ]:
-            group.create_dataset(
-                name,
-                data=data.astype(dtype),
-                chunks=(chunk,),
-                compressor=compressor,
-                dtype=dtype,
-            )
-        if kept_imputed is not None:
-            group.create_dataset(
-                "imputed", data=kept_imputed, chunks=(chunk,),
-                compressor=compressor, dtype="uint8",
-            )
-        group.attrs["threshold"] = threshold
-        group.attrs["order"] = "analysis_index,variant_index"
-        print(f"  {key}: {len(kept_vi):,} hits")
+        print(f"  {threshold_key(threshold)}: {n_hits:,} hits")
 
     top.attrs["thresholds"] = list(thresholds)

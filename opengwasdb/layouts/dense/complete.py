@@ -593,7 +593,7 @@ def _run_completion(
         ]
 
         print("Building top-hit indexes...")
-        build_top_hit_indexes(staged.path, encoding=manifest.encoding)
+        build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, dst_analyses))
 
         result = CompletionResult(

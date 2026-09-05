@@ -43,6 +43,11 @@ CLUMP_KB = 1000  # greedy distance-based pruning window (approx. independence)
 # Regional query window: chr19 44.5-45.5 Mb spans the APOE/APOC cluster.
 REGION = ("19", 44_500_000, 45_500_000)
 
+PRE_EAF_TOP_HIT_MS = 1.17
+EAF_REGRESSION_TOP_HIT_MS = 86.6
+PRE_EAF_GLOBAL_TOP_HIT_MS = 488.0
+EAF_REGRESSION_GLOBAL_TOP_HIT_MS = 7_129.0
+
 
 def _median_ms(fn, reps: int) -> tuple[float, float, int]:
     fn()  # warm-up
@@ -79,53 +84,53 @@ def _repack_top_hits(store: Path, chunk_size: int) -> float:
     z_values = group["z"][:]
     se_values = group["se"][:]
     imputed = group["imputed"][:] if "imputed" in group else None
+    eaf = group["eaf"][:] if "eaf" in group else None
     del group, root
     started = time.perf_counter()
     write_top_hit_indexes(
-        store, rows, cols, z_values, se_values, imputed=imputed, chunk_size=chunk_size
+        store, rows, cols, z_values, se_values, imputed=imputed, eaf=eaf,
+        chunk_size=chunk_size
     )
     return time.perf_counter() - started
+
+
+def _top_hit_trial(store: Path, chunk_size: int, reps: int) -> dict:
+    """Repack the index at `chunk_size`, then time and verify one read shape."""
+    rebuild_seconds = _repack_top_hits(store, chunk_size)
+    q = query_store(store)
+    analysis_index = next(
+        index for index, row in q.analyses_table().items() if row["analysis_id"] == EXPOSURE
+    )
+    started = time.perf_counter()
+    first = q.top_hits(analysis_id=EXPOSURE, threshold=5e-8)
+    first_ms = (time.perf_counter() - started) * 1_000
+    median_ms, p95_ms, count = _median_ms(
+        lambda query=q: query.top_hits(analysis_id=EXPOSURE, threshold=5e-8), reps
+    )
+    global_ms, _, _ = _median_ms(lambda query=q: query.top_hits(threshold=5e-8), reps)
+    global_result = q.top_hits(threshold=5e-8)
+    keep = global_result["analysis_index"] == analysis_index
+    correct = all(np.array_equal(first[name], global_result[name][keep]) for name in first)
+    q.close()
+    print(f"top-hits chunk={chunk_size:,}: median={median_ms:.3f} ms global={global_ms:.1f} ms")
+    return {
+        "chunk_size": chunk_size,
+        "first_read_ms": round(first_ms, 3),
+        "median_ms": round(median_ms, 3),
+        "p95_ms": round(p95_ms, 3),
+        "global_median_ms": round(global_ms, 3),
+        "result_count": count,
+        "repack_seconds": round(rebuild_seconds, 3),
+        "index_bytes": _top_hit_index_bytes(store),
+        "matches_global_subset": correct,
+    }
 
 
 def run_top_hit_experiment(store: Path, output: Path, reps: int) -> None:
     """Evaluate narrow-slice chunks and update an existing benchmark result."""
     previous = json.loads(output.read_text())
-    baseline = next(row for row in previous["timings"] if row["query"] == "tophits")
-    trials = []
-    for chunk_size in (1_024, 4_096, 16_384):
-        rebuild_seconds = _repack_top_hits(store, chunk_size)
-        q = query_store(store)
-        analysis_index = next(
-            index for index, row in q.analyses_table().items() if row["analysis_id"] == EXPOSURE
-        )
-        started = time.perf_counter()
-        first = q.top_hits(analysis_id=EXPOSURE, threshold=5e-8)
-        first_ms = (time.perf_counter() - started) * 1_000
-        median_ms, p95_ms, count = _median_ms(
-            lambda query=q: query.top_hits(analysis_id=EXPOSURE, threshold=5e-8), reps
-        )
-        global_ms, _, _ = _median_ms(
-            lambda query=q: query.top_hits(threshold=5e-8), reps
-        )
-        global_result = q.top_hits(threshold=5e-8)
-        keep = global_result["analysis_index"] == analysis_index
-        correct = all(
-            np.array_equal(first[name], global_result[name][keep]) for name in first
-        )
-        q.close()
-        trial = {
-            "chunk_size": chunk_size,
-            "first_read_ms": round(first_ms, 3),
-            "median_ms": round(median_ms, 3),
-            "p95_ms": round(p95_ms, 3),
-            "global_median_ms": round(global_ms, 3),
-            "result_count": count,
-            "repack_seconds": round(rebuild_seconds, 3),
-            "index_bytes": _top_hit_index_bytes(store),
-            "matches_global_subset": correct,
-        }
-        trials.append(trial)
-        print(f"top-hits chunk={chunk_size:,}: median={median_ms:.3f} ms global={global_ms:.1f} ms")
+    benchmark_timing = next(row for row in previous["timings"] if row["query"] == "tophits")
+    trials = [_top_hit_trial(store, chunk_size, reps) for chunk_size in (1_024, 4_096, 16_384)]
 
     fastest = min(trial["median_ms"] for trial in trials)
     # Narrow reads are the priority; among configurations within 10% of the
@@ -137,19 +142,33 @@ def run_top_hit_experiment(store: Path, output: Path, reps: int) -> None:
     if trials[-1]["chunk_size"] != selected_chunk:
         _repack_top_hits(store, selected_chunk)
     selected = selected_trial
+    medians = [trial["median_ms"] for trial in trials]
     previous["top_hit_experiment"] = {
         "analysis_id": EXPOSURE,
         "threshold": 5e-8,
         "repetitions": reps,
-        "baseline_global_filter_median_ms": baseline["median_ms"],
+        "pre_eaf_baseline_ms": PRE_EAF_TOP_HIT_MS,
+        "eaf_regression_ms": EAF_REGRESSION_TOP_HIT_MS,
+        "pre_eaf_global_filter_ms": PRE_EAF_GLOBAL_TOP_HIT_MS,
+        "eaf_regression_global_filter_ms": EAF_REGRESSION_GLOBAL_TOP_HIT_MS,
         "selected_chunk_size": selected_chunk,
         "selected": selected,
-        "speedup": round(baseline["median_ms"] / selected["median_ms"], 2),
+        "speedup_over_global_filter": round(
+            selected["global_median_ms"] / selected["median_ms"], 2
+        ),
+        "chunk_configuration_spread_percent": round(
+            (max(medians) - min(medians)) / min(medians) * 100.0, 1
+        ),
+        "variance_note": (
+            "Identical historical runs varied by 13% for bulk and 27% for top hits; "
+            "changes below about 1.5x are not distinguished from noise at this repetition count."
+        ),
+        "unchanged_by_design": ["phewas", "regional"],
         "target_ms": 10.0,
         "meets_target": selected["median_ms"] < 10.0,
         "trials": trials,
     }
-    baseline.update({
+    benchmark_timing.update({
         "median_ms": selected["median_ms"], "p95_ms": selected["p95_ms"],
         "result_count": selected["result_count"],
     })
@@ -182,12 +201,14 @@ def _build_seconds(log: Path) -> float | None:
     if not log.exists():
         return None
     text = log.read_text()
-    starts = re.findall(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) INFO.*Pass 1:", text, re.M)
-    ends = re.findall(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) INFO.*Build complete", text, re.M)
+    timestamp = r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:[.,]\d+)?)"
+    starts = re.findall(rf"^{timestamp} INFO.*Pass 1:", text, re.M)
+    ends = re.findall(rf"^{timestamp} INFO.*Build complete", text, re.M)
     if not starts or not ends:
         return None
-    fmt = "%Y-%m-%d %H:%M:%S"
-    return (datetime.strptime(ends[-1], fmt) - datetime.strptime(starts[0], fmt)).total_seconds()
+    start = datetime.fromisoformat(starts[0].replace(",", "."))
+    end = datetime.fromisoformat(ends[-1].replace(",", "."))
+    return (end - start).total_seconds()
 
 
 def _clump(instr: list[dict], kb: int) -> list[dict]:
@@ -350,13 +371,19 @@ def regional_imputation_check(q, analyses_by_id: dict[str, int]) -> dict:
     }
 
 
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--store", type=Path, default=STORE)
     ap.add_argument("--output", type=Path, default=OUTPUT)
+    ap.add_argument("--manifest", type=Path, default=MANIFEST)
+    ap.add_argument("--build-log", type=Path, default=BUILD_LOG)
     ap.add_argument("--top-hits-experiment", action="store_true")
-    args = ap.parse_args()
+    return ap.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
 
     if args.top_hits_experiment:
         run_top_hit_experiment(args.store, args.output, args.reps)
@@ -397,8 +424,8 @@ def main() -> None:
         print(f"{name:15s} median={med:9.2f} ms  count={cnt:,}")
 
     store_bytes = _dir_bytes(args.store)
-    raw_bytes, n_files = _raw_vcf_bytes(MANIFEST)
-    build_seconds = _build_seconds(BUILD_LOG)
+    raw_bytes, n_files = _raw_vcf_bytes(args.manifest)
+    build_seconds = _build_seconds(args.build_log)
 
     imputed_only_mr = bool(getattr(q, "_is_completed", False))
     mr = run_mr(q, analyses_by_id, imputed_only=imputed_only_mr)

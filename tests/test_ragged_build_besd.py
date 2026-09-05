@@ -292,6 +292,22 @@ def test_validation_rejects_ragged_top_hit_offsets(tmp_path):
     assert any("invalid analysis offsets" in error for error in result.errors)
 
 
+def test_validation_checks_threshold_for_legacy_index_without_eaf(tmp_path):
+    from opengwasdb.validation import validate_store
+
+    prefix = _make_besd_fixture(tmp_path)
+    out = tmp_path / "store.opengwasdb"
+    build_ragged_from_besd(prefix, out, store_id="s", release_id="r")
+    root = open_store(out).arrays(mode="a")
+    group = root["top_hits/p_5e_04"]
+    assert "eaf" not in group
+    group.attrs["threshold"] = 1e-20
+
+    result = validate_store(out)
+    assert not result.ok
+    assert any("above threshold" in error for error in result.errors)
+
+
 def test_analyses_tsv_has_no_sql_table_and_carries_molecular_columns(tmp_path):
     """Issue #69: analyses.tsv is the sole source of truth for Analytical
     Metadata; the store's index.sqlite carries no `analyses` table, and the

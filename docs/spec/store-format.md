@@ -950,6 +950,16 @@ Dense, Ragged, Ragged Overflow, observed, and imputed associations have equal pr
 
 Both Dense and Ragged components SHOULD provide Top-Hit Indexes using the same thresholds and result contract. The physical index encoding MAY differ by layout.
 
+Each threshold tier stores `analysis_offsets`, `variant_index`,
+`analysis_index`, `abs_z`, `z`, `se`, and `p_value` in
+`(analysis_index, variant_index)` order. When the component can
+report effect allele frequencies, the tier SHOULD also store decoded `eaf` as
+`float32` in that identical order. Readers MUST use it when present and MUST
+fall back to the component frequency plane when reading an older index. An
+index without `eaf` therefore remains compatible; rebuilding the derived index
+adds the fast path without changing the Store's association data or format
+version.
+
 Default thresholds:
 
 ```text

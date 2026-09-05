@@ -718,6 +718,18 @@ class TestValidation:
 
 
 class TestQuery:
+    def test_top_hits_uses_indexed_reference_frequency(self, completed_store):
+        q = query_store(completed_store)
+        expected = q.top_hits(threshold=5e-4)["eaf"]
+
+        def fail_eaf_pairs(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("top_hits should read indexed frequencies")
+
+        q._csr.eaf_pairs = fail_eaf_pairs
+        result = q.top_hits(threshold=5e-4)
+        np.testing.assert_array_equal(result["eaf"], expected)
+        q.close()
+
     def test_selected_top_hits_match_global_and_filter_imputed(self, completed_store):
         q = query_store(completed_store)
         global_result = q.top_hits(threshold=5e-4)

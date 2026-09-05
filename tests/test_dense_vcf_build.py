@@ -722,6 +722,15 @@ class TestParallel:
 
 
 class TestTopHitHarvest:
+    def test_store_without_frequency_builds_compatible_index(self, two_trait_store):
+        root = open_store(two_trait_store).arrays(mode="r")
+        for key in root["top_hits"]:
+            assert "eaf" not in root[f"top_hits/{key}"]
+        with query_store(two_trait_store) as query:
+            result = query.top_hits(threshold=5e-4)
+        assert len(result["eaf"]) > 0
+        assert np.all(np.isnan(result["eaf"]))
+
     def test_harvest_matches_full_scan(self, tmp_path):
         """Top hits harvested during Pass 2 must equal a full-matrix rescan."""
         from opengwasdb.layouts.dense.top_hits import (

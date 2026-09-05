@@ -41,6 +41,7 @@ def _vcf_header(study_type: str = "Continuous") -> str:
         "##FORMAT=<ID=ES,Number=A,Type=Float,Description=\"Effect size\">\n"
         "##FORMAT=<ID=SE,Number=A,Type=Float,Description=\"Standard error\">\n"
         "##FORMAT=<ID=EZ,Number=A,Type=Float,Description=\"Z-score\">\n"
+        "##FORMAT=<ID=AF,Number=A,Type=Float,Description=\"Alternate allele frequency\">\n"
         f"##SAMPLE=<ID=STUDY1,StudyType={study_type}>\n"
         "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSTUDY1\n"
     )
@@ -93,17 +94,17 @@ def hybrid_store(tmp_path, request):
         tmp_path,
         "trait_a",
         [
-            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",  # z -4.0 dense
-            f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",  # z -5.0 OVERFLOW
-            f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n",  # z  3.0 dense
+            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",  # z -4.0 dense
+            f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE:AF\t1.5:0.3:0.3\n",  # z -5.0 OVERFLOW
+            f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",  # z  3.0 dense
         ],
     )
     vcf2 = _make_vcf(
         tmp_path,
         "trait_b",
         [
-            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t6.0:0.5\n",  # z -12.0 dense
-            f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE\t1.2:0.3\n",  # z   4.0 dense
+            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t6.0:0.5:0.25\n",  # z -12.0 dense
+            f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t1.2:0.3:0.45\n",  # z   4.0 dense
         ],
     )
     manifest = _make_manifest(
@@ -341,6 +342,23 @@ def test_top_hits_merges_components(hybrid_store):
     assert list(zip(r["analysis_index"], r["variant_index"], strict=True)) == sorted(
         zip(r["analysis_index"], r["variant_index"], strict=True)
     )
+
+
+def test_top_hits_reads_both_component_frequencies_from_indexes(hybrid_store):
+    q = query_store(hybrid_store)
+    expected = q.top_hits(threshold=5e-4)["eaf"]
+
+    def fail_dense(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Dense top hits should use indexed frequencies")
+
+    def fail_overflow(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Overflow top hits should use indexed frequencies")
+
+    q._dense._eaf_pairs = fail_dense
+    q._csr.eaf_pairs = fail_overflow
+    result = q.top_hits(threshold=5e-4)
+    np.testing.assert_array_equal(result["eaf"], expected)
+    q.close()
 
 
 def test_top_hits_selects_and_merges_one_analysis(hybrid_store):

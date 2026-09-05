@@ -74,7 +74,11 @@ import zarr
 from opengwasdb.encoding import DenseEafPlane, DenseZPlane
 from opengwasdb.index import AnalysesIndex
 from opengwasdb.layouts.dense.rho import DenseRhoReader
-from opengwasdb.layouts.dense.top_hits import DenseTopHitReader, threshold_key
+from opengwasdb.layouts.dense.top_hits import (
+    DenseTopHitReader,
+    threshold_key,
+    z_critical,
+)
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
@@ -166,12 +170,21 @@ class StoreQuery:
         # result site, and the eaf plane gathers the per-variant baseline and
         # the reference frequency for imputed cells with it.
         self._z = DenseZPlane.open(self._root, store.manifest.encoding)
-        self._eaf = DenseEafPlane.open(self._root, store.manifest.encoding)
+        # Open the frequency plane lazily: a current top-hit index carries its
+        # decoded EAF values and must not touch the much larger source plane.
+        self.__eaf: DenseEafPlane | None = None
+        self._encoding = store.manifest.encoding
         self._rho_reader: DenseRhoReader | None = (
             DenseRhoReader(self._root["rho"], self._z.n_analyses)
             if "rho" in self._root
             else None
         )
+
+    @property
+    def _eaf(self) -> DenseEafPlane:
+        if self.__eaf is None:
+            self.__eaf = DenseEafPlane.open(self._root, self._encoding)
+        return self.__eaf
 
     def _imputed_pairs(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
         """Imputed flags for elementwise (row, col) pairs; all-zeros when not a completed store."""
@@ -404,36 +417,38 @@ class StoreQuery:
         variant_indices = reader.read("variant_index", bounds, "int32")
         analysis_indices = reader.read("analysis_index", bounds, "int32")
         z_values = reader.read("z", bounds, "float32")
-        if "se" in group:
-            se_values = reader.read("se", bounds, "float32")
-        else:
-            # Pointwise (coordinate) read: fetch se at exactly the index cells,
-            # not the full analysis width per row (issue 052).
-            se_values = self._root["se"].vindex[
+        se_values = reader.read_or(
+            "se", bounds, "float32", lambda: self._root["se"].vindex[
                 variant_indices.astype("int64"), analysis_indices.astype("int64")
-            ].astype("float32")
-        if "imputed" in group:
-            imp = reader.read("imputed", bounds, "uint8")
-        else:
-            imp = self._imputed_pairs(variant_indices, analysis_indices)
+            ]
+        )
+        imp = reader.read_or(
+            "imputed", bounds, "uint8",
+            lambda: self._imputed_pairs(variant_indices, analysis_indices),
+        )
+        eaf = reader.read_or(
+            "eaf", bounds, "float32",
+            lambda: self._eaf_pairs(variant_indices, analysis_indices),
+        )
         if observed_only:
             keep = imp == 0
-            variant_indices, analysis_indices, z_values, se_values, imp = (
+            variant_indices, analysis_indices, z_values, se_values, eaf, imp = (
                 variant_indices[keep], analysis_indices[keep],
-                z_values[keep], se_values[keep], imp[keep],
+                z_values[keep], se_values[keep], eaf[keep], imp[keep],
             )
         if limit is not None:
             variant_indices = variant_indices[:limit]
             analysis_indices = analysis_indices[:limit]
             z_values = z_values[:limit]
             se_values = se_values[:limit]
+            eaf = eaf[:limit]
             imp = imp[:limit]
         return {
             "variant_index": variant_indices,
             "analysis_index": analysis_indices,
             "z": z_values,
             "se": se_values,
-            "eaf": self._eaf_pairs(variant_indices, analysis_indices),
+            "eaf": eaf,
             "association_status": _status_array(imp, z_values, se_values),
         }
 
@@ -511,6 +526,33 @@ class StoreQuery:
             "rho": rho_mat.astype("float32"),
             "n_null": n_mat.astype("int64"),
         }
+
+
+def _csr_hit_positions(
+    z_f32: np.ndarray,
+    threshold: float,
+    offsets: np.ndarray,
+    n_assoc: int,
+    analysis_index: int | None,
+) -> np.ndarray:
+    """CSR positions clearing `threshold`, already in the index's own order.
+
+    The cutoff is `z_critical`, the one the index is built with, so a scan and
+    an index agree on the boundary rather than each deriving it separately.
+
+    CSR segments are analysis-major and variant_index-ascending within each
+    analysis -- a build-time invariant (build_besd.py, build_ssf.py and
+    complete.py all re-sort each analysis's segment by variant_index) -- so
+    `np.where` already yields "analysis_index,variant_index" order with no
+    re-sort: the same ordering contract the top-hit index is built in.
+    """
+    mask = np.abs(z_f32) >= z_critical(threshold)
+    if analysis_index is not None:
+        start, stop = int(offsets[analysis_index]), int(offsets[analysis_index + 1])
+        segment_mask = np.zeros(n_assoc, dtype=bool)
+        segment_mask[start:stop] = True
+        mask &= segment_mask
+    return np.asarray(np.where(mask)[0])
 
 
 class RaggedStoreQuery:
@@ -796,27 +838,50 @@ class RaggedStoreQuery:
             ai = reader.read("analysis_index", bounds, "int32")
             z = reader.read("z", bounds, "float32")
             se = reader.read("se", bounds, "float32")
-            imp = (
-                reader.read("imputed", bounds, "uint8")
-                if "imputed" in group else np.zeros(len(vi), dtype=np.uint8)
+            imp = reader.read_or(
+                "imputed", bounds, "uint8", lambda: np.zeros(len(vi), dtype=np.uint8)
+            )
+            eaf = reader.read_or(
+                "eaf", bounds, "float32", lambda: self._csr.eaf_pairs(vi, ai)
             )
             if observed_only:
                 keep = imp == 0
-                vi, ai, z, se, imp = vi[keep], ai[keep], z[keep], se[keep], imp[keep]
+                vi, ai, z, se, eaf, imp = (
+                    vi[keep], ai[keep], z[keep], se[keep], eaf[keep], imp[keep]
+                )
             if limit is not None:
                 vi, ai, z, se = vi[:limit], ai[:limit], z[:limit], se[:limit]
                 imp = imp[:limit]
+                eaf = eaf[:limit]
             return {
                 "variant_index": vi, "analysis_index": ai, "z": z, "se": se,
-                "eaf": self._csr.eaf_pairs(vi, ai),
+                "eaf": eaf,
                 "association_status": _status_array(imp, z, se),
             }
 
-        # Fallback: full CSR scan. analysis_id is resolved and applied here
-        # too (the indexed path resolves it via `bounds()`) so a caller
-        # passing analysis_id gets a filtered result on both paths, not an
-        # unfiltered store-wide scan on the fallback.
-        import math
+        return self._top_hits_by_scan(
+            analysis_id=analysis_id,
+            threshold=threshold,
+            limit=limit,
+            observed_only=observed_only,
+        )
+
+    def _top_hits_by_scan(
+        self,
+        *,
+        analysis_id: str | None,
+        threshold: float,
+        limit: int | None,
+        observed_only: bool,
+    ) -> dict[str, np.ndarray]:
+        """Top hits with no index to read: scan the CSR and threshold it.
+
+        Returns the same shape of answer as the indexed path, applying
+        `observed_only` before `limit` exactly as that path does. `analysis_id`
+        is resolved here too -- the indexed path resolves it via `bounds()` --
+        so a caller passing one gets a filtered result on both paths rather
+        than an unfiltered store-wide scan on this one.
+        """
         analysis_index = None
         if analysis_id is not None:
             analysis_index = self._resolve_analysis_id(analysis_id)
@@ -828,30 +893,10 @@ class RaggedStoreQuery:
         z_all = self._csr.z_all()
         se_all = self._csr._se[:]
 
-        sqrt2 = math.sqrt(2.0)
-        lo, hi, mid = 0.0, 40.0, 0.0
-        for _ in range(60):
-            mid = (lo + hi) / 2.0
-            if math.erfc(mid / sqrt2) > threshold:
-                lo = mid
-            else:
-                hi = mid
-        z_thresh = float(mid)
         z_f32 = z_all.astype("float32")
-        mask = np.abs(z_f32) >= z_thresh
-        if analysis_index is not None:
-            start, stop = int(offsets[analysis_index]), int(offsets[analysis_index + 1])
-            segment_mask = np.zeros(len(vi_all), dtype=bool)
-            segment_mask[start:stop] = True
-            mask &= segment_mask
-        # CSR segments are analysis-major and variant_index-ascending within
-        # each analysis -- a build-time invariant (build_besd.py,
-        # build_ssf.py, complete.py all re-sort each analysis's segment by
-        # variant_index) -- so np.where(mask) already yields positions in
-        # "analysis_index,variant_index" order with no re-sort needed: the
-        # same ordering contract the top-hit index itself is built in.
-        hit_positions = np.where(mask)[0]
-
+        hit_positions = _csr_hit_positions(
+            z_f32, threshold, offsets, len(vi_all), analysis_index
+        )
         if len(hit_positions) == 0:
             return _empty_result()
 
@@ -1169,12 +1214,15 @@ class HybridStoreQuery:
         ai = reader.read("analysis_index", bounds, "int32")
         z = reader.read("z", bounds, "float32")
         se = reader.read("se", bounds, "float32")
+        eaf = reader.read_or(
+            "eaf", bounds, "float32", lambda: self._csr.eaf_pairs(vi, ai)
+        )
         return {
             "variant_index": vi,
             "analysis_index": ai,
             "z": z,
             "se": se,
-            "eaf": self._csr.eaf_pairs(vi, ai),
+            "eaf": eaf,
             "association_status": _status_array(np.zeros(len(z), dtype=np.uint8), z, se),
         }
 

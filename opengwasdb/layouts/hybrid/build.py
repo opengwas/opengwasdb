@@ -59,7 +59,7 @@ from opengwasdb.layouts.dense.constants import (
     DEFAULT_COMPRESSOR,
     DEFAULT_DTYPE,
 )
-from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes
+from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.hybrid.layout import (
     DENSE_SUBDIR,
     dense_component_path,
@@ -520,7 +520,8 @@ def build_hybrid_from_vcf_manifest(
                         stored_effect_scale=row.stored_effect_scale,
                     )
                     _spill_hybrid_column(spill_dir, col, dense, overflow)
-                    _log_progress("Pass 2", i + 1, n_analyses, t2, f"last: {row.trait_id}", every=25)
+                    last = f"last: {row.trait_id}"
+                    _log_progress("Pass 2", i + 1, n_analyses, t2, last, every=25)
             else:
                 global _pass2_keys_sorted, _pass2_targets_sorted, _pass2_ispanel_sorted
                 global _pass2_spill_dir
@@ -606,8 +607,7 @@ def build_hybrid_from_vcf_manifest(
                 dense_staged, spill_dir, n_panel, n_analyses, effective_chunks, dtype, t2,
                 encoding,
             )
-            log.info("Writing Dense Component top-hit index (%d candidates)", len(all_rows))
-            write_top_hit_indexes(dense_dir, all_rows, all_cols, all_z, all_se)
+            write_top_hit_indexes_for_store(dense_dir, all_rows, all_cols, all_z, all_se, encoding)
 
             # Overflow CSR assembly (reuses RaggedCSRWriter). Assembled before
             # either analyses.tsv is written: `eaf_scope` is the union of what

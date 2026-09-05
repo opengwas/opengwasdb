@@ -51,6 +51,16 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Added
 
+- **Top-hit indexes carry decoded effect allele frequency** (#131–#134,
+  ADR 0040). Dense, Ragged, and both Hybrid components now answer `top_hits()`
+  from one compact derived structure without reopening or gathering from the
+  source EAF plane. Rebuilding an existing index adds `float32 eaf`; readers
+  retain a plane-backed fallback for older indexes. Dense/Hybrid VCF builds
+  populate it inline with a variant-row-ordered pass. On the rebuilt ukb-b
+  index, per-Analysis top hits recovered from the 86.6 ms regression to
+  1.301 ms (pre-EAF: 1.17 ms), while global top hits recovered from 7,129 ms
+  to 473.945 ms (pre-EAF: 488 ms).
+
 - **`eaf` is stored as a per-variant baseline plus a per-cell `int8` logit
   residual, and `format_version` moves to `2.0`** (#116, ADR 0037 §2/§4).
   ADR 0036 shipped EAF as a `float32` plane parallel to `z`/`se`, which nearly

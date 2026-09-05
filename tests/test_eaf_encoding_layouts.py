@@ -35,9 +35,11 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import complete_dense_store
+from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, threshold_key
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.model.analyses import (
     read_analyses,
     read_analysis_records,
@@ -235,6 +237,53 @@ def test_the_plane_is_int8_with_a_baseline_and_an_exception_table(
     assert EAF_EXCEPTION_VALUE in group
 
 
+@pytest.mark.parametrize("layout", ["dense", "ragged"])
+def test_rebuilt_top_hit_index_carries_decoded_frequency(
+    layout: str, dense_store: Path, ragged_store: Path
+):
+    store = dense_store if layout == "dense" else ragged_store
+    builder = build_top_hit_indexes if layout == "dense" else build_ragged_top_hit_indexes
+    builder(store, thresholds=(1.0,))
+    with query_store(store) as query:
+        expected = query.top_hits(threshold=1.0)["eaf"]
+        if layout == "dense":
+            query._eaf_pairs = lambda *_: (_ for _ in ()).throw(AssertionError())
+        else:
+            query._csr.eaf_pairs = lambda *_: (_ for _ in ()).throw(AssertionError())
+        actual = query.top_hits(threshold=1.0)["eaf"]
+    assert len(actual) > 0
+    np.testing.assert_array_equal(actual, expected)
+    root = zarr.open_group(str(store / "data.zarr"), mode="r")
+    assert root[f"top_hits/{threshold_key(1.0)}"]["eaf"].dtype == np.dtype("float32")
+
+
+def test_vcf_builds_populate_frequency_in_every_top_hit_tier(
+    dense_store: Path, hybrid_store: Path
+):
+    dense_root = zarr.open_group(str(dense_store / "data.zarr"), mode="r")
+    hybrid_dense = zarr.open_group(str(hybrid_store / "dense" / "data.zarr"), mode="r")
+    hybrid_overflow = zarr.open_group(str(hybrid_store / "data.zarr"), mode="r")
+    for root in (dense_root, hybrid_dense, hybrid_overflow):
+        for key in root["top_hits"]:
+            assert "eaf" in root[f"top_hits/{key}"]
+
+
+def test_hybrid_top_hits_mix_new_and_legacy_component_indexes(hybrid_store: Path):
+    with query_store(hybrid_store) as query:
+        expected = query.top_hits(threshold=5e-4)
+    dense_root = zarr.open_group(str(hybrid_store / "dense" / "data.zarr"), mode="a")
+    del dense_root[f"top_hits/{threshold_key(5e-4)}"]["eaf"]
+    with query_store(hybrid_store) as query:
+        dense_legacy = query.top_hits(threshold=5e-4)
+    np.testing.assert_array_equal(dense_legacy["eaf"], expected["eaf"])
+
+    overflow_root = zarr.open_group(str(hybrid_store / "data.zarr"), mode="a")
+    del overflow_root[f"top_hits/{threshold_key(5e-4)}"]["eaf"]
+    with query_store(hybrid_store) as query:
+        both_legacy = query.top_hits(threshold=5e-4)
+    np.testing.assert_array_equal(both_legacy["eaf"], expected["eaf"])
+
+
 # ── The acceptance criteria ─────────────────────────────────────────────────
 
 
@@ -291,7 +340,7 @@ def test_existing_store_can_be_repaired_without_changing_values(
 
 def test_dense_range_phewas_decodes_frequency_as_a_row_band(dense_store: Path):
     with query_store(dense_store) as query:
-        def fail_points(rows, cols):  # noqa: ARG001
+        def fail_points(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("range_phewas must not gather EAF pointwise")
 
         query._eaf.points = fail_points
@@ -536,6 +585,20 @@ def test_imputed_cells_read_the_panel_frequency(completed_store: Path):
     imputed = result["association_status"] == "imputed"
     assert imputed.any(), "the fixture imputed nothing, so this test could not fail"
     np.testing.assert_allclose(result["eaf"][imputed], PANEL_ONLY_EAF, atol=1e-6)
+
+
+def test_top_hit_index_materialises_panel_frequency_for_imputed_cells(
+    completed_store: Path,
+):
+    build_top_hit_indexes(completed_store, thresholds=(1.0,))
+    with query_store(completed_store) as query:
+        result = query.top_hits(threshold=1.0)
+        query._eaf_pairs = lambda *_: (_ for _ in ()).throw(AssertionError())
+        indexed = query.top_hits(threshold=1.0)
+    imputed = indexed["association_status"] == "imputed"
+    assert imputed.any(), "the fixture imputed nothing, so this test could not fail"
+    np.testing.assert_array_equal(indexed["eaf"], result["eaf"])
+    np.testing.assert_allclose(indexed["eaf"][imputed], PANEL_ONLY_EAF, atol=1e-6)
 
 
 def test_observed_cells_never_take_the_panel_frequency(completed_store: Path):
