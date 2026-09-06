@@ -2218,7 +2218,7 @@ vertical-align: -.125em;
 <section id="headline" class="level2">
 <h2 class="anchored" data-anchor-id="headline">Headline</h2>
 <p>The storage upside is real, but the original all-or-none R² gate in #118 is probably the wrong decision rule. Low R² does not make the encoding inaccurate: the residual itself is what is quantised, and exceptions are exact. R² mostly predicts whether the residual plane is still small enough to be worth writing.</p>
-<div id="c0819ef9" class="cell" data-execution_count="2">
+<div id="6e85594f" class="cell" data-execution_count="2">
 <div class="cell-output cell-output-display cell-output-markdown">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
@@ -2289,7 +2289,7 @@ vertical-align: -.125em;
 </div>
 </div>
 <p>At residual range ±2.0, all three stores stay below the 1% relative-error target for non-exception cells and below the 2% exception budget:</p>
-<div id="5ae0d2a2" class="cell" data-execution_count="3">
+<div id="54751129" class="cell" data-execution_count="3">
 <div class="cell-output cell-output-display cell-output-markdown">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
@@ -2345,7 +2345,7 @@ vertical-align: -.125em;
 <section id="actual-sampled-encodedecode-round-trip" class="level2">
 <h2 class="anchored" data-anchor-id="actual-sampled-encodedecode-round-trip">Actual sampled encode/decode round trip</h2>
 <p>This is the R² that matters for the representation: observed <code>log(SE)</code> versus <code>log(SE)</code> reconstructed from the MAF prediction plus the quantised residual. It is deliberately different from the lower MAF-only fit R² below. The side table restores every exception exactly.</p>
-<div id="70854c10" class="cell" data-execution_count="4">
+<div id="f55b6360" class="cell" data-execution_count="4">
 <div class="cell-output cell-output-display cell-output-markdown">
 <table class="caption-top table table-sm table-striped small">
 <thead>
@@ -2380,7 +2380,7 @@ vertical-align: -.125em;
 </table>
 </div>
 </div>
-<div id="c2dad626" class="cell" data-fig-height="4" data-fig-width="12" data-execution_count="5">
+<div id="19b5ff02" class="cell" data-fig-height="4" data-fig-width="12" data-execution_count="5">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -2393,7 +2393,7 @@ vertical-align: -.125em;
 </section>
 <section id="storage-footprint" class="level2">
 <h2 class="anchored" data-anchor-id="storage-footprint">Storage footprint</h2>
-<div id="cf148b2c" class="cell" data-execution_count="6">
+<div id="4f706bad" class="cell" data-execution_count="6">
 <div class="cell-output cell-output-display cell-output-markdown">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
@@ -2539,7 +2539,7 @@ vertical-align: -.125em;
 </section>
 <section id="fit-quality" class="level2">
 <h2 class="anchored" data-anchor-id="fit-quality">Fit quality</h2>
-<div id="5f461214" class="cell" data-execution_count="7">
+<div id="e468575a" class="cell" data-execution_count="7">
 <div class="cell-output cell-output-display cell-output-markdown">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
@@ -2598,13 +2598,14 @@ vertical-align: -.125em;
 </section>
 <section id="query-speed-expectation" class="level2">
 <h2 class="anchored" data-anchor-id="query-speed-expectation">Query-speed expectation</h2>
-<p>Residual-coded SE changes the read path. Today <code>se</code> is independently readable as a <code>float16</code> plane. With #118, a query that wants SE also needs the same cell’s EAF to reconstruct it. That has two consequences:</p>
+<p>Residual-coded SE changes the read path, but <strong>does not add an EAF read to the current query facade</strong>. Every standard <code>QueryFacade</code> method already decodes EAF and includes an <code>eaf</code> array in its raw result dictionary; the default human-readable TSV and the CLI JSON serializer merely suppress it from their output. With #118 the facade must order its reads so that its already-decoded EAF values are also passed to the SE decoder.</p>
 <ol type="1">
-<li><strong>Top-hit queries should be almost unchanged</strong> if the top-hit index continues to carry decoded <code>float32 se</code>; the query never needs to open the SE plane for indexed hits.</li>
-<li><strong>SE-only query paths become coupled to EAF.</strong> PheWAS, range PheWAS, exact lookup and analysis extraction would read the residual-code plane plus EAF, then run <code>exp(a + b x + residual)</code>.</li>
+<li><strong>Top-hit queries should be almost unchanged</strong> if the top-hit index continues to carry decoded <code>float32 se</code>; the query never opens either the SE or EAF plane for indexed hits.</li>
+<li><strong>PheWAS, range PheWAS, exact lookup and analysis extraction already read EAF.</strong> Their incremental work is the small Analysis-coefficient gather, residual decode, and vectorised <code>exp(a + b x + residual)</code>. The smaller residual plane may compensate for that arithmetic; it must be benchmarked.</li>
+<li>A future lean query API that truly avoids EAF output would still have to decode EAF internally when it requests residual-coded SE. That is a format coupling, not a current-query regression.</li>
 </ol>
-<p>The sampled throughput below is for reading the current <code>se</code> plane, reading decoded EAF, and computing the residual model over the same sample. It is not a full query benchmark, but it shows the direction of the cost.</p>
-<div id="c68c8a93" class="cell" data-execution_count="8">
+<p>The sampled throughput below separates the current SE read, the EAF read that the facade already pays, and the residual-model arithmetic. It is not a full query benchmark.</p>
+<div id="49ba94a5" class="cell" data-execution_count="8">
 <div class="cell-output cell-output-display cell-output-markdown">
 <table class="caption-top table table-sm table-striped small">
 <colgroup>
@@ -2656,7 +2657,7 @@ vertical-align: -.125em;
 </table>
 </div>
 </div>
-<p>The query-speed conclusion is therefore cautious: #118 is primarily a storage win. It should not be expected to speed ordinary queries unless the smaller residual plane offsets the added EAF read. On stores where EAF is already being returned, the incremental cost is mostly the vectorised arithmetic. On default query shapes that do not return EAF today, the new coupling may be a measurable slowdown and should be benchmarked before landing.</p>
+<p>The query-speed conclusion is therefore cautious: #118 is primarily a storage win. For the current facade, which already materialises EAF, the incremental cost is coefficients plus vectorised arithmetic rather than another EAF read; the smaller residual plane may offset it. The format still makes SE logically dependent on EAF, so dedicated benchmarks are required before landing.</p>
 </section>
 <section id="recommendation" class="level2">
 <h2 class="anchored" data-anchor-id="recommendation">Recommendation</h2>

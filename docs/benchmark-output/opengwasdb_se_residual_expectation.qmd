@@ -251,12 +251,13 @@ The fitted slopes are close enough to the theoretical −0.5 for FinnGen and UKB
 
 ## Query-speed expectation
 
-Residual-coded SE changes the read path. Today `se` is independently readable as a `float16` plane. With #118, a query that wants SE also needs the same cell's EAF to reconstruct it. That has two consequences:
+Residual-coded SE changes the read path, but **does not add an EAF read to the current query facade**. Every standard `QueryFacade` method already decodes EAF and includes an `eaf` array in its raw result dictionary; the default human-readable TSV and the CLI JSON serializer merely suppress it from their output. With #118 the facade must order its reads so that its already-decoded EAF values are also passed to the SE decoder.
 
-1. **Top-hit queries should be almost unchanged** if the top-hit index continues to carry decoded `float32 se`; the query never needs to open the SE plane for indexed hits.
-2. **SE-only query paths become coupled to EAF.** PheWAS, range PheWAS, exact lookup and analysis extraction would read the residual-code plane plus EAF, then run `exp(a + b x + residual)`.
+1. **Top-hit queries should be almost unchanged** if the top-hit index continues to carry decoded `float32 se`; the query never opens either the SE or EAF plane for indexed hits.
+2. **PheWAS, range PheWAS, exact lookup and analysis extraction already read EAF.** Their incremental work is the small Analysis-coefficient gather, residual decode, and vectorised `exp(a + b x + residual)`. The smaller residual plane may compensate for that arithmetic; it must be benchmarked.
+3. A future lean query API that truly avoids EAF output would still have to decode EAF internally when it requests residual-coded SE. That is a format coupling, not a current-query regression.
 
-The sampled throughput below is for reading the current `se` plane, reading decoded EAF, and computing the residual model over the same sample. It is not a full query benchmark, but it shows the direction of the cost.
+The sampled throughput below separates the current SE read, the EAF read that the facade already pays, and the residual-model arithmetic. It is not a full query benchmark.
 
 ```{python}
 rows = []
@@ -279,7 +280,7 @@ display(Markdown(md_table(rows, [
 ])))
 ```
 
-The query-speed conclusion is therefore cautious: #118 is primarily a storage win. It should not be expected to speed ordinary queries unless the smaller residual plane offsets the added EAF read. On stores where EAF is already being returned, the incremental cost is mostly the vectorised arithmetic. On default query shapes that do not return EAF today, the new coupling may be a measurable slowdown and should be benchmarked before landing.
+The query-speed conclusion is therefore cautious: #118 is primarily a storage win. For the current facade, which already materialises EAF, the incremental cost is coefficients plus vectorised arithmetic rather than another EAF read; the smaller residual plane may offset it. The format still makes SE logically dependent on EAF, so dedicated benchmarks are required before landing.
 
 ## Recommendation
 
