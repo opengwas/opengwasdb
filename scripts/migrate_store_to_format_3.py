@@ -124,6 +124,19 @@ def migrate(store_path: Path) -> int:
     store = open_store(store_path)
     _refuse_unless_migratable(store)
 
+    # What was already wrong before this tool touched anything. Every 2.0 pilot
+    # carries some: the FinnGen rebuild fails on #127's truncated ALID index and
+    # #135's unchunked `eaf_baseline`, neither of which a `se` re-encode can fix
+    # or is answerable for. Judging the result against "no errors at all" would
+    # blame the migration for its input, and would reject every store it exists
+    # to serve.
+    print("Validating before, to tell inherited faults from introduced ones", flush=True)
+    inherited = set(validate_store(store_path).errors)
+    if inherited:
+        print(f"  {len(inherited)} pre-existing error(s), carried through:", flush=True)
+        for error in sorted(inherited):
+            print(f"    - {error}", flush=True)
+
     started = time.perf_counter()
     print(f"Measuring and re-encoding se: {store_path}", flush=True)
     selected, _coefficients = optimise_dense_se_joint(
@@ -139,19 +152,26 @@ def migrate(store_path: Path) -> int:
     _write_manifest(store, selected, elapsed)
     print(f"Re-stamped to {CURRENT_FORMAT_VERSION} in {elapsed:.1f}s", flush=True)
 
-    print("Validating", flush=True)
+    print("Validating after", flush=True)
     result = validate_store(store_path)
-    if not result.ok:
-        for error in result.errors:
+    introduced = [error for error in result.errors if error not in inherited]
+    if introduced:
+        for error in introduced:
             print(f"  ERROR {error}", file=sys.stderr)
         raise SystemExit(
-            f"{store_path}: migrated store does not validate. It has been left as the "
-            "migration produced it so the failure can be inspected; discard it and keep "
-            "the source release."
+            f"{store_path}: the migration introduced {len(introduced)} error(s) the source "
+            "release did not have. It has been left as the migration produced it so the "
+            "failure can be inspected; discard it and keep the source release."
         )
     for warning in result.warnings:
         print(f"  warning: {warning}")
-    print("OK")
+    if inherited:
+        print(
+            f"OK — introduced no new errors. {len(inherited)} pre-existing error(s) remain, "
+            "and are not this tool's to fix: the release needs rebuilding for those."
+        )
+    else:
+        print("OK")
     return 0
 
 
