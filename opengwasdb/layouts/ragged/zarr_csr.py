@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import numpy as np
 import zarr
@@ -159,6 +159,49 @@ class RaggedCSRWriter:
         ai = np.searchsorted(offsets[1:], np.arange(len(se)), side="right")
         return se, decoded, ai
 
+    def _write_se(
+        self,
+        root: Any,
+        codec: StoreCodec,
+        encoding: StoreEncoding,
+        se_arr: np.ndarray,
+        offsets_arr: np.ndarray,
+        se_coefficients: np.ndarray | None,
+    ) -> None:
+        """Encode `se` against the EAF plane just written, not the source's.
+
+        The residual has to predict from the frequencies a reader will get
+        back, so this runs after `write_eaf_csr` and decodes what it wrote.
+        A Hybrid build supplies `se_coefficients` because both components share
+        one fit; a Ragged build has only itself to fit against.
+        """
+        decoded_eaf = RaggedEafPlane.open(root, encoding).slice(0, len(se_arr))
+        ai = np.searchsorted(offsets_arr[1:], np.arange(len(se_arr)), side="right")
+        coefficients = None
+        if encoding.se.is_residual:
+            coefficients = (
+                se_coefficients
+                if se_coefficients is not None
+                else fit_se(
+                    se_arr,
+                    decoded_eaf,
+                    ai,
+                    n_analyses=self.n_analyses,
+                    compressor=_COMPRESSOR,
+                    chunks=_ASSOC_CHUNK,
+                )[0]
+            )
+        write_se_csr(
+            root,
+            codec,
+            se_arr,
+            decoded_eaf,
+            ai,
+            coefficients,
+            compressor=_COMPRESSOR,
+            chunks=(_ASSOC_CHUNK,),
+        )
+
     def flush(
         self,
         store_path: str | Path,
@@ -233,31 +276,7 @@ class RaggedCSRWriter:
                 compressor=_COMPRESSOR,
                 chunks=(_ASSOC_CHUNK,),
             )
-        decoded_eaf = RaggedEafPlane.open(root, encoding).slice(0, len(se_arr))
-        ai = np.searchsorted(offsets_arr[1:], np.arange(len(se_arr)), side="right")
-        if not encoding.se.is_residual:
-            coefficients = None
-        elif se_coefficients is not None:
-            coefficients = se_coefficients
-        else:
-            coefficients = fit_se(
-                se_arr,
-                decoded_eaf,
-                ai,
-                n_analyses=self.n_analyses,
-                compressor=_COMPRESSOR,
-                chunks=_ASSOC_CHUNK,
-            )[0]
-        write_se_csr(
-            root,
-            codec,
-            se_arr,
-            decoded_eaf,
-            ai,
-            coefficients,
-            compressor=_COMPRESSOR,
-            chunks=(_ASSOC_CHUNK,),
-        )
+        self._write_se(root, codec, encoding, se_arr, offsets_arr, se_coefficients)
         root.attrs["layout"] = "ragged"
         root.attrs["completion_state"] = "observed_only"
         root.attrs["n_analyses"] = self.n_analyses

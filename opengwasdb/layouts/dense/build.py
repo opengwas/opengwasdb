@@ -235,11 +235,25 @@ def _collect_variants(records: list[NormalisedAssociation]) -> list[CanonicalVar
     )
 
 
+def _eaf_columns(reports_frequencies: bool) -> tuple[str, str]:
+    """`eaf_scope` and `eaf_orientation` for one Analysis of a general source.
+
+    `unverified`, never `passed`: this builder takes records straight from a
+    source and has no reference panel to check an orientation against, and a
+    frequency column that has never been checked is indistinguishable from one
+    reported against the other allele (spec §9.1, issue #115).
+    """
+    if not reports_frequencies:
+        return EafScope.ABSENT.value, ""
+    return EafScope.ASSOCIATION.value, EafOrientationOutcome.UNVERIFIED.value
+
+
 def _collect_analyses(records: list[NormalisedAssociation]) -> list[Analysis]:
     by_id: dict[str, Analysis] = {}
     with_eaf = {record.analysis_id for record in records if record.eaf is not None}
     for record in records:
         existing = by_id.get(record.analysis_id)
+        eaf_scope, eaf_orientation = _eaf_columns(record.analysis_id in with_eaf)
         current = Analysis(
             analysis_id=record.analysis_id,
             analysis_label=record.analysis_label or "",
@@ -251,14 +265,8 @@ def _collect_analyses(records: list[NormalisedAssociation]) -> list[Analysis]:
             consortium=record.consortium or "",
             first_author=record.first_author or "",
             stored_effect_scale=record.stored_effect_scale.value,
-            eaf_scope=(
-                EafScope.ASSOCIATION.value
-                if record.analysis_id in with_eaf
-                else EafScope.ABSENT.value
-            ),
-            eaf_orientation=(
-                EafOrientationOutcome.UNVERIFIED.value if record.analysis_id in with_eaf else ""
-            ),
+            eaf_scope=eaf_scope,
+            eaf_orientation=eaf_orientation,
         )
         if existing is None:
             by_id[record.analysis_id] = current

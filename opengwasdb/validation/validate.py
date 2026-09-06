@@ -320,6 +320,27 @@ def _validate_completion_metadata(
     return imputed_arr, on_panel
 
 
+def _match_csr_se_exceptions(
+    root: Any, encoding: StoreEncoding, errors: list[str], label: str
+) -> None:
+    """Every `-127` in a CSR `se` plane has a table entry, and the table has no other.
+
+    A residual plane and its side table are one artifact: a code marked as an
+    exception with nothing behind it decodes to whatever the lookup returns,
+    and an entry for a cell that is not marked is never read at all.
+    """
+    if not encoding.se.is_residual:
+        return
+    _overflow_positions_match(
+        label,
+        np.flatnonzero(np.asarray(root["se"][:]) == SE_EXCEPTION).astype(np.int64),
+        SeExceptionTable.read(root),
+        errors,
+        what="se exception",
+        table_name="se exception",
+    )
+
+
 def _decoded_csr_se(root: Any, encoding: StoreEncoding, n_assoc: int, label: str) -> Any:
     """Decoded CSR SE, or the reason it cannot be decoded.
 
@@ -389,15 +410,7 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
         if se_error is not None:
             errors.append(se_error)
             return ValidationResult(errors=errors)
-        if manifest.encoding.se.is_residual:
-            _overflow_positions_match(
-                "data.zarr/ragged/se",
-                np.flatnonzero(np.asarray(root["se"][:]) == SE_EXCEPTION).astype(np.int64),
-                SeExceptionTable.read(root),
-                errors,
-                what="se exception",
-                table_name="se exception",
-            )
+        _match_csr_se_exceptions(root, manifest.encoding, errors, "data.zarr/ragged/se")
         if np.any(np.isfinite(se_vals) & (se_vals < 0)):
             errors.append("se contains negative finite values")
         # `eaf` is optional (ADR 0036); when present it is a fourth parallel
@@ -807,15 +820,7 @@ def _validate_overflow(
     if se_error is not None:
         errors.append(se_error)
         return
-    if encoding.se.is_residual:
-        _overflow_positions_match(
-            "Ragged Overflow se",
-            np.flatnonzero(np.asarray(root["se"][:]) == SE_EXCEPTION).astype(np.int64),
-            SeExceptionTable.read(root),
-            errors,
-            what="se exception",
-            table_name="se exception",
-        )
+    _match_csr_se_exceptions(root, encoding, errors, "Ragged Overflow se")
     if np.any(np.isfinite(se_vals) & (se_vals < 0)):
         errors.append("Ragged Overflow se contains negative finite values")
     if encoding.z.is_fixed_point:
@@ -1735,10 +1740,7 @@ def _validate_dense_arrays(
             errors.append(f"cannot decode se: {exc}")
             return
         if encoding.se.is_residual:
-            se_exception_positions.append(
-                np.flatnonzero(np.asarray(se_arr[r0:r1]) == SE_EXCEPTION).astype(np.int64)
-                + r0 * n_analyses
-            )
+            se_exception_positions.append(_band_exception_positions(se_arr[r0:r1], r0, n_analyses))
         z_missing = codec.missing_mask(z)
         if fixed_point:
             overflow_positions.append(
@@ -1825,17 +1827,28 @@ def _validate_dense_arrays(
         )
         if eaf_undecodable and len(errors) == before:
             errors.append("data.zarr/eaf cannot be decoded under the declared plan")
-    if encoding.se.is_residual:
-        _overflow_positions_match(
-            "data.zarr/se",
-            np.concatenate(se_exception_positions)
-            if se_exception_positions
-            else np.empty(0, dtype=np.int64),
-            SeExceptionTable.read(root),
-            errors,
-            what="se exception",
-            table_name="se exception",
-        )
+    _match_dense_se_exceptions(root, encoding, se_exception_positions, errors)
+
+
+def _band_exception_positions(raw: Any, r0: int, n_analyses: int) -> np.ndarray:
+    """Flat positions of the `-127` cells in one Dense row band."""
+    return np.flatnonzero(np.asarray(raw) == SE_EXCEPTION).astype(np.int64) + r0 * n_analyses
+
+
+def _match_dense_se_exceptions(
+    root: Any, encoding: StoreEncoding, bands: list[np.ndarray], errors: list[str]
+) -> None:
+    """Every `-127` in a Dense `se` plane has a table entry, and no entry is stray."""
+    if not encoding.se.is_residual:
+        return
+    _overflow_positions_match(
+        "data.zarr/se",
+        np.concatenate(bands) if bands else np.empty(0, dtype=np.int64),
+        SeExceptionTable.read(root),
+        errors,
+        what="se exception",
+        table_name="se exception",
+    )
 
 
 def _read_top_hit_arrays(key: str, group: Any, errors: list[str]) -> dict[str, Any] | None:
