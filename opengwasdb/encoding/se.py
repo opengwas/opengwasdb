@@ -54,9 +54,6 @@ class ComponentCost(NamedTuple):
             dict.fromkeys(SE_RANGE_CANDIDATES, 0),
         )
 
-    def total_exceptions(self, candidate: float) -> int:
-        return int(self.exception_counts[candidate].sum())
-
     @property
     def total_finite(self) -> int:
         return int(self.n_finite.sum())
@@ -291,6 +288,42 @@ def _empty_exception_arrays(group: Any, count: int, compressor: Any) -> tuple[An
     )
 
 
+def _count_dense_exceptions(
+    source: Any,
+    eaf_plane: DenseEafPlane,
+    coefficients: np.ndarray,
+    residual_range: float,
+    timer: PhaseTimer,
+) -> int:
+    """Exact exception count for one range, from codes alone (issue #145).
+
+    The rewrite sizes its side table from this pass rather than from the
+    measurement: computing int8 codes costs none of the compression the
+    measurement pays for, so the count survives #146 sampling the measurement
+    while staying exact. It runs `_candidate_codes`, which shares
+    `se_residual_codes` with the codec's `encode_se`, so the count it returns
+    is the count the rewrite's own encode will produce -- and the rewrite's
+    cursor check still fails loudly if the two ever disagree.
+    """
+    n_rows = int(source.shape[0])
+    row_chunk = int(source.chunks[0])
+    n_analyses = int(source.shape[1])
+    analysis_index = np.broadcast_to(np.arange(n_analyses, dtype=np.int64), (row_chunk, n_analyses))
+    count = 0
+    with timer.phase("rewrite.count"):
+        for r0 in range(0, n_rows, row_chunk):
+            r1 = min(r0 + row_chunk, n_rows)
+            _, exceptional = _candidate_codes(
+                np.asarray(source[r0:r1], dtype=np.float32),
+                eaf_plane.band(r0, r1),
+                analysis_index[: r1 - r0],
+                coefficients,
+                residual_range,
+            )
+            count += int(exceptional.sum())
+    return count
+
+
 def _rewrite_dense(
     group: Any,
     encoding: StoreEncoding,
@@ -298,6 +331,15 @@ def _rewrite_dense(
     exception_count: int,
     timer: PhaseTimer,
 ) -> None:
+    """Encode the float32 scratch plane under an already-decided residual plan.
+
+    `exception_count` must come from `_count_dense_exceptions` -- the
+    rewrite's own codes-only pass -- not from a measurement, which #146 will
+    stop making exhaustive (issue #145). The cursor check below is the
+    plane-versus-table guarantee: a rewrite that produces a different number
+    of exceptions than it allocated fails loudly rather than writing a short
+    or padded table.
+    """
     source = group["se"]
     n_rows, n_analyses = map(int, source.shape)
     row_chunk = int(source.chunks[0])
@@ -529,11 +571,17 @@ def optimise_dense_se_joint(
         narrow_dense_se_to_float16(group)
         return selected, None
     assert se_choice.residual_range is not None
+    # The table is sized by the rewrite's own codes-only count, never by the
+    # measurement: #146 samples the measurement, and a sampled count cannot be
+    # trusted to size an exact table (issue #145).
+    exception_count = _count_dense_exceptions(
+        source, eaf_plane, coefficients, se_choice.residual_range, timer
+    )
     _rewrite_dense(
         group,
         selected,
         coefficients,
-        dense.total_exceptions(se_choice.residual_range),
+        exception_count,
         timer,
     )
     return selected, coefficients
@@ -582,8 +630,7 @@ def rewrite_dense_se(
     """Encode a float32 Dense scratch plane under an already-decided plan."""
     timer = timer or PhaseTimer()
     source = group["se"]
-    n_rows, n_analyses = map(int, source.shape)
-    row_chunk = int(source.chunks[0])
+    n_analyses = int(source.shape[1])
     if not encoding.se.is_residual:
         narrow_dense_se_to_float16(group)
         return
@@ -593,18 +640,8 @@ def rewrite_dense_se(
     if stored_coefficients.shape != (n_analyses, 2) or not np.all(np.isfinite(stored_coefficients)):
         raise ValueError(f"se_coefficients must have finite shape ({n_analyses}, 2)")
     eaf_plane = DenseEafPlane.open(group, encoding)
-    analysis_index = np.broadcast_to(np.arange(n_analyses, dtype=np.int64), (row_chunk, n_analyses))
-    exception_count = 0
     assert encoding.se.residual_range is not None
-    with timer.phase("rewrite.count"):
-        for r0 in range(0, n_rows, row_chunk):
-            r1 = min(r0 + row_chunk, n_rows)
-            _, exceptional = _candidate_codes(
-                source[r0:r1],
-                eaf_plane.band(r0, r1),
-                analysis_index[: r1 - r0],
-                stored_coefficients,
-                encoding.se.residual_range,
-            )
-            exception_count += int(exceptional.sum())
+    exception_count = _count_dense_exceptions(
+        source, eaf_plane, stored_coefficients, encoding.se.residual_range, timer
+    )
     _rewrite_dense(group, encoding, stored_coefficients, exception_count, timer)
