@@ -41,6 +41,13 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Changed
 
+- **Ruff no longer lints the vendored `quality/` tree**, and the ruff baseline
+  drops 66 -> 61. `quality/` is the cleat gate tooling, imported whole and
+  written to its own rules; scanning it contributed 1,735 findings against a
+  project total of 61, which made `scripts/check_baselines.py` — the check
+  that a change adds no new findings — unable to see the project at all. mypy
+  was never affected: it only ever checked `opengwasdb/`.
+
 - **`index.sqlite` no longer records `se_dtype`** (#118). It duplicated the
   manifest's `encoding` block, which spec §6a makes authoritative, and two of
   the three builders wrote it *before* the SE encoding was measured — so from

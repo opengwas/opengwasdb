@@ -41,6 +41,16 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# `quality/` is the cleat quality-gate tooling, vendored in whole. It carries
+# its own baselines and is not written to this project's rule selection, so
+# linting it says nothing about this project's code -- it only buried the real
+# count (1,735 findings against a project total of 61, which made
+# `scripts/check_baselines.py` useless). `extend-exclude` rather than
+# `exclude`, which would drop Ruff's own defaults; `force-exclude` so the
+# directory stays excluded when a path inside it is passed explicitly, as
+# pre-commit and editor integrations do.
+extend-exclude = ["quality"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
