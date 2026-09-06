@@ -11,10 +11,18 @@ from numcodecs import Blosc
 
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding import (
+    DenseEafPlane,
+    EafExceptionBuilder,
     EncodingMeasurements,
     StoreCodec,
     StoreEncoding,
     ZOverflowBuilder,
+    eaf_baseline_from_grid,
+    fit_se_grid,
+    measure_eaf_grid,
+    positions_row_band,
+    write_eaf_baseline,
+    write_se_dense,
 )
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
@@ -25,7 +33,13 @@ from opengwasdb.layouts.dense.constants import (
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, read_top_hit_counts
 from opengwasdb.model.analyses import Analysis, analyses_table_from_records, write_analyses
-from opengwasdb.model.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.model.enums import (
+    AssociationCoverage,
+    CompletionState,
+    EafOrientationOutcome,
+    EafScope,
+    PrimaryStorageLayout,
+)
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import (
@@ -110,6 +124,7 @@ def build_dense_observed_store(
         # way to disk -- never pre-rounded into the stored dtype here.
         z = np.full((len(variants), len(analyses)), np.nan, dtype=np.float32)
         se = np.full((len(variants), len(analyses)), np.nan, dtype=dtype)
+        eaf = np.full((len(variants), len(analyses)), np.nan, dtype=np.float32)
 
         seen_cells: set[tuple[int, int]] = set()
         for record in records:
@@ -124,18 +139,69 @@ def build_dense_observed_store(
             seen_cells.add(cell)
             z[row, col] = record.z
             se[row, col] = record.se
+            if record.eaf is not None:
+                eaf[row, col] = record.eaf
 
         # The encoding plan is decided once, here, and read back from the
         # manifest by everything downstream (ADR 0037, issue #119).
-        encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=len(analyses)))
+        eaf_measured = measure_eaf_grid(eaf)
+        preliminary = StoreEncoding.decide(
+            EncodingMeasurements(n_analyses=len(analyses), eaf=eaf_measured)
+        )
+        baseline = eaf_baseline_from_grid(eaf) if preliminary.eaf.is_residual else None
+        temp_codec = StoreCodec(preliminary)
+        exceptions = EafExceptionBuilder()
+        raw_eaf = temp_codec.encode_eaf(
+            eaf,
+            baseline=None
+            if baseline is None
+            else np.repeat(baseline[:, None], len(analyses), axis=1),
+            positions=positions_row_band(0, len(analyses)),
+            exceptions=exceptions,
+        )
+        decoded_eaf = (
+            StoreCodec(preliminary, eaf_exceptions=exceptions.table()).decode_eaf(
+                raw_eaf,
+                baseline=None
+                if baseline is None
+                else np.repeat(baseline[:, None], len(analyses), axis=1),
+                positions=positions_row_band(0, len(analyses)),
+            )
+            if not preliminary.eaf.is_absent
+            else np.full(eaf.shape, np.nan, dtype=np.float32)
+        )
+        se_compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+        se_chunks = (
+            min(chunk_shape[0], se.shape[0]),
+            min(chunk_shape[1], se.shape[1]),
+        )
+        coefficients, se_measured = fit_se_grid(
+            se,
+            decoded_eaf,
+            compressor=se_compressor,
+            chunks=se_chunks,
+        )
+        encoding = StoreEncoding.decide(
+            EncodingMeasurements(
+                n_analyses=len(analyses),
+                eaf=eaf_measured,
+                se=se_measured,
+            )
+        )
         rsid_by_alid = _first_rsids_by_alid(records)
         _write_manifest(
-            staged, store_id, release_id, reference_assembly, records, chunk_shape, dtype,
+            staged,
+            store_id,
+            release_id,
+            reference_assembly,
+            records,
+            chunk_shape,
+            dtype,
             encoding,
         )
         write_variant_axis(staged.path, variants, rsid_by_alid)
         _write_index(staged, variants, analyses, records, chunk_shape, dtype)
-        _write_zarr(staged, z, se, chunk_shape, dtype, encoding)
+        _write_zarr(staged, z, se, eaf, coefficients, chunk_shape, dtype, encoding)
         build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
@@ -156,6 +222,7 @@ def _collect_variants(records: list[NormalisedAssociation]) -> list[CanonicalVar
 
 def _collect_analyses(records: list[NormalisedAssociation]) -> list[Analysis]:
     by_id: dict[str, Analysis] = {}
+    with_eaf = {record.analysis_id for record in records if record.eaf is not None}
     for record in records:
         existing = by_id.get(record.analysis_id)
         current = Analysis(
@@ -169,6 +236,14 @@ def _collect_analyses(records: list[NormalisedAssociation]) -> list[Analysis]:
             consortium=record.consortium or "",
             first_author=record.first_author or "",
             stored_effect_scale=record.stored_effect_scale.value,
+            eaf_scope=(
+                EafScope.ASSOCIATION.value
+                if record.analysis_id in with_eaf
+                else EafScope.ABSENT.value
+            ),
+            eaf_orientation=(
+                EafOrientationOutcome.UNVERIFIED.value if record.analysis_id in with_eaf else ""
+            ),
         )
         if existing is None:
             by_id[record.analysis_id] = current
@@ -201,6 +276,18 @@ def _write_manifest(
         provenance={
             "builder": "opengwasdb.v0.1_dense_observed",
             "source_record_count": len(records),
+            "eaf_orientation": {
+                "analyses": [
+                    {
+                        "analysis_id": analysis_id,
+                        "outcome": EafOrientationOutcome.UNVERIFIED.value,
+                        "note": "general Dense source supplied no orientation reference",
+                    }
+                    for analysis_id in sorted(
+                        {record.analysis_id for record in records if record.eaf is not None}
+                    )
+                ]
+            },
             "dense": {
                 "statistic_arrays": ["z", "se"],
                 "se_dtype": dtype,
@@ -276,6 +363,8 @@ def _write_zarr(
     staged: StagedRelease,
     z: np.ndarray,
     se: np.ndarray,
+    eaf: np.ndarray,
+    se_coefficients: np.ndarray,
     chunk_shape: tuple[int, int],
     dtype: str,
     encoding: StoreEncoding,
@@ -294,7 +383,37 @@ def _write_zarr(
     root.create_dataset(
         "z", data=codes, chunks=effective_chunks, compressor=compressor, dtype=codec.z_dtype
     )
-    root.create_dataset("se", data=se, chunks=effective_chunks, compressor=compressor, dtype=dtype)
+    eaf_baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
+    if not encoding.eaf.is_absent:
+        exceptions = EafExceptionBuilder()
+        raw_eaf = codec.encode_eaf(
+            eaf,
+            baseline=None
+            if eaf_baseline is None
+            else np.repeat(eaf_baseline[:, None], eaf.shape[1], axis=1),
+            positions=positions_row_band(0, eaf.shape[1]),
+            exceptions=exceptions,
+        )
+        root.create_dataset(
+            "eaf",
+            data=raw_eaf,
+            chunks=effective_chunks,
+            compressor=compressor,
+            dtype=codec.eaf_dtype,
+        )
+        if eaf_baseline is not None:
+            write_eaf_baseline(root, eaf_baseline, compressor=compressor)
+            exceptions.table().write(root)
+    physical_eaf = DenseEafPlane.open(root, encoding).band(0, eaf.shape[0])
+    write_se_dense(
+        root,
+        codec,
+        se,
+        physical_eaf,
+        se_coefficients,
+        compressor=compressor,
+        chunks=effective_chunks,
+    )
     overflow.table().write(root)
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"

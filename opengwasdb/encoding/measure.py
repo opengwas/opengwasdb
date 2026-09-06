@@ -17,6 +17,7 @@ from __future__ import annotations
 import numpy as np
 
 from opengwasdb.encoding.codec import (
+    EXACT_TABLE_CHUNK,
     eaf_baseline_from_grid,
     eaf_baseline_from_pairs,
     logit,
@@ -26,8 +27,135 @@ from opengwasdb.encoding.plan import (
     EAF_CODE_MAX,
     EAF_CODE_MIN,
     EAF_RANGE_CANDIDATES,
+    SE_CODE_MAX,
+    SE_CODE_MIN,
+    SE_RANGE_CANDIDATES,
     EafMeasurements,
+    SeMeasurements,
 )
+
+
+def fit_se(
+    se: np.ndarray,
+    eaf: np.ndarray,
+    analysis_index: np.ndarray,
+    *,
+    n_analyses: int,
+    compressor: object | None = None,
+    chunks: tuple[int, ...] | int | None = None,
+) -> tuple[np.ndarray, SeMeasurements]:
+    """Fit per-Analysis log-SE models and measure the complete candidate costs.
+
+    EAF must already have made its encode/decode round trip. The compressed
+    comparison includes codes, coefficients, and exact side-table rows.
+    """
+    se_shape = np.asarray(se).shape
+    s = np.asarray(se, dtype=np.float64).ravel()
+    f = np.asarray(eaf, dtype=np.float64).ravel()
+    ai = np.asarray(analysis_index, dtype=np.int64).ravel()
+    if not (s.shape == f.shape == ai.shape):
+        raise ValueError("se, eaf, and analysis_index must have the same shape")
+    finite = np.isfinite(s)
+    eligible = bool(np.all(np.isfinite(f[finite])))
+    coef = np.full((n_analyses, 2), np.nan, dtype=np.float32)
+    residual = np.full(s.shape, np.nan, dtype=np.float64)
+    if eligible:
+        for col in range(n_analyses):
+            use = finite & (s > 0) & (ai == col) & (f > 0) & (f < 1)
+            if np.count_nonzero(use) < 2:
+                eligible = False
+                break
+            x = np.log(2 * f[use] * (1 - f[use]))
+            design = np.column_stack((np.ones(len(x)), x))
+            fitted = np.linalg.lstsq(design, np.log(s[use]), rcond=None)[0]
+            coef[col] = fitted.astype(np.float32)
+            residual[use] = np.log(s[use]) - design @ fitted
+    fractions: dict[float, float] = {}
+    errors: dict[float, float] = {}
+    sizes: dict[float, int] = {}
+
+    def packed_bytes(data: np.ndarray) -> int:
+        encode = getattr(compressor, "encode", None)
+        return len(encode(np.ascontiguousarray(data))) if encode is not None else data.nbytes
+
+    def packed_chunks(data: np.ndarray, chunk_shape: tuple[int, ...] | int | None) -> int:
+        shaped = np.asarray(data)
+        if chunk_shape is None:
+            return packed_bytes(shaped)
+        if isinstance(chunk_shape, int):
+            chunk_shape = (chunk_shape,)
+        if shaped.ndim != len(chunk_shape):
+            return packed_bytes(shaped)
+        total = 0
+        if shaped.ndim == 1:
+            for start in range(0, len(shaped), chunk_shape[0]):
+                total += packed_bytes(shaped[start : start + chunk_shape[0]])
+            return total
+        if shaped.ndim == 2:
+            for r0 in range(0, shaped.shape[0], chunk_shape[0]):
+                for c0 in range(0, shaped.shape[1], chunk_shape[1]):
+                    total += packed_bytes(
+                        shaped[
+                            r0 : r0 + chunk_shape[0],
+                            c0 : c0 + chunk_shape[1],
+                        ]
+                    )
+            return total
+        return packed_bytes(shaped)
+
+    denominator = max(int(np.count_nonzero(finite)), 1)
+    for candidate in SE_RANGE_CANDIDATES:
+        step = candidate / 127.0
+        codes = np.rint(residual / step)
+        ordinary = (
+            finite
+            & (s > 0)
+            & np.isfinite(residual)
+            & (codes >= SE_CODE_MIN)
+            & (codes <= SE_CODE_MAX)
+        )
+        exceptions = finite & ~ordinary
+        stored = np.full(s.shape, -128, dtype=np.int8)
+        stored[exceptions] = -127
+        stored[ordinary] = codes[ordinary].astype(np.int8)
+        fractions[candidate] = float(np.count_nonzero(exceptions) / denominator)
+        errors[candidate] = float(np.expm1(step / 2.0))
+        positions = np.flatnonzero(exceptions).astype(np.int64)
+        exact = s[exceptions].astype(np.float32)
+        sizes[candidate] = (
+            packed_chunks(stored.reshape(se_shape), chunks)
+            + packed_chunks(coef, (min(max(n_analyses, 1), 1024), 2))
+            + packed_chunks(positions, EXACT_TABLE_CHUNK)
+            + packed_chunks(exact, EXACT_TABLE_CHUNK)
+        )
+    return coef, SeMeasurements(
+        eligible=eligible and bool(np.all(np.isfinite(coef))),
+        exception_fraction=fractions,
+        worst_relative_error=errors,
+        compressed_bytes=sizes,
+        float16_compressed_bytes=packed_chunks(s.astype(np.float16).reshape(se_shape), chunks),
+    )
+
+
+def fit_se_grid(
+    se: np.ndarray,
+    eaf: np.ndarray,
+    *,
+    compressor: object | None = None,
+    chunks: tuple[int, int] | None = None,
+) -> tuple[np.ndarray, SeMeasurements]:
+    block = np.asarray(se)
+    if block.ndim != 2:
+        raise ValueError("dense se must be a 2-D grid")
+    ai = np.broadcast_to(np.arange(block.shape[1]), block.shape)
+    return fit_se(
+        block,
+        eaf,
+        ai,
+        n_analyses=block.shape[1],
+        compressor=compressor,
+        chunks=chunks,
+    )
 
 
 def _exception_fractions(residual: np.ndarray, n_eaf_cells: int) -> dict[float, float]:
@@ -142,8 +270,7 @@ def combine_eaf_measurements(parts: list[EafMeasurements]) -> EafMeasurements:
     if n_eaf_cells:
         for candidate in EAF_RANGE_CANDIDATES:
             weighted = sum(
-                part.exception_fraction.get(candidate, 0.0) * part.n_eaf_cells
-                for part in usable
+                part.exception_fraction.get(candidate, 0.0) * part.n_eaf_cells for part in usable
             )
             fractions[candidate] = float(weighted / n_eaf_cells)
     return EafMeasurements(
@@ -156,7 +283,5 @@ def combine_eaf_measurements(parts: list[EafMeasurements]) -> EafMeasurements:
 
 def _residual(values: np.ndarray, baseline: np.ndarray) -> np.ndarray:
     with np.errstate(divide="ignore", invalid="ignore"):
-        residual = logit(values) - logit(
-            np.asarray(baseline, dtype=np.float32).astype(np.float64)
-        )
+        residual = logit(values) - logit(np.asarray(baseline, dtype=np.float32).astype(np.float64))
     return np.asarray(residual, dtype=np.float64)

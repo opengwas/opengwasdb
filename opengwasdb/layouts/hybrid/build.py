@@ -36,6 +36,7 @@ from opengwasdb.encoding import (
     EncodingMeasurements,
     StoreEncoding,
     combine_eaf_measurements,
+    optimise_dense_se_joint,
 )
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
@@ -93,11 +94,11 @@ __all__ = [
 @dataclass(frozen=True)
 class HybridBuildResult:
     output_path: Path
-    n_variants: int          # shared union table
+    n_variants: int  # shared union table
     n_analyses: int
-    n_panel: int             # Dense Component rows
-    n_off_panel: int         # off-panel observed variants (overflow variant axis)
-    n_overflow: int          # overflow associations
+    n_panel: int  # Dense Component rows
+    n_off_panel: int  # off-panel observed variants (overflow variant axis)
+    n_overflow: int  # overflow associations
 
 
 # ── Reference panel input ────────────────────────────────────────────────────
@@ -144,8 +145,8 @@ def read_reference_panel_alids(panel_path: str | Path) -> set[str]:
 
 # ── Pass 2 fork-inherited routing lookup (see dense.build_vcf for the rationale) ─
 _pass2_keys_sorted: np.ndarray | None = None
-_pass2_targets_sorted: np.ndarray | None = None   # int64: dense row (panel) or shared idx (off)
-_pass2_ispanel_sorted: np.ndarray | None = None   # bool: True = on-panel target
+_pass2_targets_sorted: np.ndarray | None = None  # int64: dense row (panel) or shared idx (off)
+_pass2_ispanel_sorted: np.ndarray | None = None  # bool: True = on-panel target
 _pass2_spill_dir: Path | None = None
 
 
@@ -378,16 +379,14 @@ def _assemble_overflow_csr(
         with np.load(path) as data:
             vi = data["variant_index"].astype(np.int32)
             z = data["z"].astype(np.float32)
-            se = data["se"].astype(np.float16)
+            se = data["se"].astype(np.float32)
             eaf = data["eaf"].astype(np.float32)
         # Sort by variant_index for consistent within-analysis ordering (matches
         # the ragged BESD builder and lets top-hit CSR cross-validation searchsort).
         order = np.argsort(vi, kind="stable")
         has_eaf = bool(np.isfinite(eaf).any())
         column_has_eaf[col] = has_eaf
-        csr.add_analysis(
-            vi[order], z[order], se[order], eaf=eaf[order] if has_eaf else None
-        )
+        csr.add_analysis(vi[order], z[order], se[order], eaf=eaf[order] if has_eaf else None)
         path.unlink()
     return csr, column_has_eaf
 
@@ -466,7 +465,10 @@ def build_hybrid_from_vcf_manifest(
         analysis_index = {row.trait_id: i for i, row in enumerate(manifest_rows)}
         log.info(
             "Partition: %d panel (dense), %d off-panel (overflow), %d shared variants, %d analyses",
-            n_panel, n_off_panel, n_shared, n_analyses,
+            n_panel,
+            n_off_panel,
+            n_shared,
+            n_analyses,
         )
 
         # Provenance: source-build ALID each hg38 row resolved from -- lifted from
@@ -490,9 +492,7 @@ def build_hybrid_from_vcf_manifest(
         _write_index(dense_staged, panel_sorted, analyses, chunk_shape, dtype)
         _write_variant_table(dense_dir, panel_sorted, hg38_to_source, rsid_by_alid)
         # dense row -> shared variant_index (ascending — panel keeps genomic order).
-        dense_to_shared = np.array(
-            [shared_index[alid] for alid in panel_sorted], dtype=np.int32
-        )
+        dense_to_shared = np.array([shared_index[alid] for alid in panel_sorted], dtype=np.int32)
         np.save(dense_to_shared_path(staged.path), dense_to_shared)
 
         # ── Pass 2: route each study once (dense spill + overflow spill) ──────────
@@ -544,8 +544,9 @@ def build_hybrid_from_vcf_manifest(
                         futures = [pool.submit(_pass2_worker, t) for t in tasks]
                         for i, fut in enumerate(as_completed(futures)):
                             col = fut.result()
-                            _log_progress("Pass 2", i + 1, n_analyses, t2,
-                                          f"last: {id_by_col[col]}", every=25)
+                            _log_progress(
+                                "Pass 2", i + 1, n_analyses, t2, f"last: {id_by_col[col]}", every=25
+                            )
                 finally:
                     _pass2_keys_sorted = None
                     _pass2_targets_sorted = None
@@ -561,12 +562,19 @@ def build_hybrid_from_vcf_manifest(
             # As in the dense builder, this runs before anything is written.
             shared_hashes = site_hashes(shared_sorted)
             dense_survey = survey_eaf_spills(
-                spill_dir, id_by_col, shared_sorted, shared_hashes,
+                spill_dir,
+                id_by_col,
+                shared_sorted,
+                shared_hashes,
                 row_map=dense_to_shared,
             )
             overflow_survey = survey_eaf_spills(
-                spill_dir, id_by_col, shared_sorted, shared_hashes,
-                suffix=".ovf", index_key="variant_index",
+                spill_dir,
+                id_by_col,
+                shared_sorted,
+                shared_hashes,
+                suffix=".ovf",
+                index_key="variant_index",
             )
             eaf_observations = dense_survey.observations
             for analysis_id, off_panel in overflow_survey.observations.items():
@@ -587,14 +595,16 @@ def build_hybrid_from_vcf_manifest(
             encoding = StoreEncoding.decide(
                 EncodingMeasurements(
                     n_analyses=n_analyses,
-                    eaf=combine_eaf_measurements([
-                        dense_survey.measurements(
-                            n_cells=n_panel * n_analyses, n_variants=n_panel
-                        ),
-                        overflow_survey.measurements(
-                            n_cells=overflow_survey.n_spill_cells, n_variants=n_shared
-                        ),
-                    ]),
+                    eaf=combine_eaf_measurements(
+                        [
+                            dense_survey.measurements(
+                                n_cells=n_panel * n_analyses, n_variants=n_panel
+                            ),
+                            overflow_survey.measurements(
+                                n_cells=overflow_survey.n_spill_cells, n_variants=n_shared
+                            ),
+                        ]
+                    ),
                 )
             )
             log.info("Encoding plan: %s", encoding.to_manifest())
@@ -604,10 +614,15 @@ def build_hybrid_from_vcf_manifest(
 
             # Dense band-write (reuses the dense builder's band-streamer + top-hit harvest).
             all_rows, all_cols, all_z, all_se, column_has_eaf = _write_dense_bands(
-                dense_staged, spill_dir, n_panel, n_analyses, effective_chunks, dtype, t2,
+                dense_staged,
+                spill_dir,
+                n_panel,
+                n_analyses,
+                effective_chunks,
+                dtype,
+                t2,
                 encoding,
             )
-            write_top_hit_indexes_for_store(dense_dir, all_rows, all_cols, all_z, all_se, encoding)
 
             # Overflow CSR assembly (reuses RaggedCSRWriter). Assembled before
             # either analyses.tsv is written: `eaf_scope` is the union of what
@@ -619,11 +634,33 @@ def build_hybrid_from_vcf_manifest(
                 _apply_eaf_scope(analyses, column_has_eaf | overflow_has_eaf), eaf_report
             )
 
+            # One SE model and one decision across both components. They
+            # partition the same Analyses, so fitting or gating either in
+            # isolation could leave the shared manifest describing only half
+            # of the data it governs.
+            dense_group = dense_staged.arrays(mode="a")
+            encoding, se_coefficients = optimise_dense_se_joint(
+                dense_group,
+                encoding,
+                extra=csr.se_fit_inputs(encoding),
+            )
+
+            # After the SE decision, not before: the index carries the values a
+            # query reads back, and until `optimise_dense_se_joint` has run the
+            # plane those values come from is still undecided.
+            write_top_hit_indexes_for_store(dense_dir, all_rows, all_cols, all_z, all_se, encoding)
+
             # manifest.json before analyses.tsv/overview.html: overview.html
             # reads manifest.json fresh from output_path for its header (ADR 0032).
             eaf_provenance = eaf_report.provenance(allow_unverified=allow_unverified_eaf)
             _write_dense_manifest(
-                dense_staged, store_id, release_id, n_panel, n_analyses, chain_file, dtype,
+                dense_staged,
+                store_id,
+                release_id,
+                n_panel,
+                n_analyses,
+                chain_file,
+                dtype,
                 encoding=encoding,
                 eaf_orientation=eaf_provenance,
             )
@@ -631,7 +668,7 @@ def build_hybrid_from_vcf_manifest(
         finally:
             shutil.rmtree(spill_dir, ignore_errors=True)
 
-        csr.flush(staged.path, encoding)
+        csr.flush(staged.path, encoding, se_coefficients=se_coefficients)
         n_overflow = csr.n_associations
         log.info("Building Ragged Overflow top-hit index")
         build_ragged_top_hit_indexes(staged.path, encoding=encoding)
@@ -639,8 +676,18 @@ def build_hybrid_from_vcf_manifest(
         # manifest.json before analyses.tsv/overview.html, same reasoning as the
         # Dense Component write above.
         _write_hybrid_manifest(
-            staged, store_id, release_id, n_shared, n_analyses, n_panel, n_off_panel,
-            n_overflow, chain_file, chunk_shape, dtype, encoding=encoding,
+            staged,
+            store_id,
+            release_id,
+            n_shared,
+            n_analyses,
+            n_panel,
+            n_off_panel,
+            n_overflow,
+            chain_file,
+            chunk_shape,
+            dtype,
+            encoding=encoding,
             eaf_orientation=eaf_provenance,
         )
 
@@ -657,12 +704,20 @@ def build_hybrid_from_vcf_manifest(
         log.info(
             "Hybrid build complete: %d shared variants (%d panel + %d off-panel), "
             "%d analyses, %d overflow associations",
-            n_shared, n_panel, n_off_panel, n_analyses, n_overflow,
+            n_shared,
+            n_panel,
+            n_off_panel,
+            n_analyses,
+            n_overflow,
         )
 
     return HybridBuildResult(
-        output_path=out, n_variants=n_shared, n_analyses=n_analyses,
-        n_panel=n_panel, n_off_panel=n_off_panel, n_overflow=n_overflow,
+        output_path=out,
+        n_variants=n_shared,
+        n_analyses=n_analyses,
+        n_panel=n_panel,
+        n_off_panel=n_off_panel,
+        n_overflow=n_overflow,
     )
 
 
@@ -679,9 +734,7 @@ def _write_variant_table(
     every row's identifier without either recomputing it (issue #109).
     """
     canonical = [
-        CanonicalVariant(
-            chromosome=chrom, position=int(pos), effect_allele=a1, other_allele=a2
-        )
+        CanonicalVariant(chromosome=chrom, position=int(pos), effect_allele=a1, other_allele=a2)
         for alid in alids
         for chrom, pos, a1, a2 in [alid.split(":")]
     ]

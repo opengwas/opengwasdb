@@ -1,22 +1,25 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `2.0`  
-Also readable: `1.0`, `0.1` — never written again (§21)
+Format version described: `3.0`  
+Also readable: `2.0`, `1.0`, `0.1` — never written again (§21)
 
 This document defines the contract for valid OpenGWASDB Store Releases. It
-describes `format_version` **2.0**, the version this build writes: statistic
+describes `format_version` **3.0**, the version this build writes: statistic
 planes carry a declared encoding (§6a), `z` is `int16` fixed point rather than
-`float16`, and `eaf` is a per-variant baseline plus a per-cell `int8` logit
-residual rather than a `float32` plane.
+`float16`, `eaf` is a per-variant baseline plus a per-cell `int8` logit
+residual rather than a `float32` plane, and `se` is either `float16` or — when
+the build measures the fit and the saving — an `int8` residual from its
+EAF-predicted value.
 
-`1.0` and `0.1` releases remain readable and are not re-stamped. Where the
-versions differ, the difference is stated in place rather than kept in a
+`2.0`, `1.0` and `0.1` releases remain readable and are not re-stamped. Where
+the versions differ, the difference is stated in place rather than kept in a
 separate document — §6a for the encoding each older release is in (`0.1`:
 `float16` throughout, declaring nothing; `1.0`: fixed-point `z` and ADR 0036's
-optional `float32` `eaf`), §15 for what marks a missing cell in each, and §21
-for what a reader owes a release it did not write. An older release cannot be
-*completed* by a build that writes 2.0 (§21.3, ADR 0038 §4); it is rebuilt.
+optional `float32` `eaf`; `2.0`: residual-coded `eaf` and `float16` `se`), §15
+for what marks a missing cell in each, and §21 for what a reader owes a release
+it did not write. An older release cannot be *completed* by a build that
+writes 3.0 (§21.3, ADR 0038 §4); it is rebuilt.
 
 Sections that say "v0.1" below describe vocabularies and column contracts
 settled at that version and unchanged since; they are not statements about
@@ -238,13 +241,14 @@ read from that declaration rather than inferred from a dtype.
 ## 6a. Statistic encodings
 
 A Store Release at `format_version` 1.0 or above MUST declare an `encoding`
-object in `manifest.json`. At 2.0 it MUST also declare `eaf`:
+object in `manifest.json`. At 2.0 it MUST also declare `eaf`; at 3.0 it may
+declare residual-coded `se`:
 
 ```json
 "encoding": {
-  "version": 2,
+  "version": 3,
   "z": {"kind": "int16_fixed", "scale": 1024},
-  "se": {"kind": "float16"},
+  "se": {"kind": "int8_residual", "residual_range": 1.0},
   "eaf": {"kind": "int8_residual", "residual_range": 0.5}
 }
 ```
@@ -301,10 +305,21 @@ A build MUST fail on a non-finite `z` that is not a recorded absence (±inf, or
 a malformed statistic): it is neither a value nor an absence, and no encoding
 of it is honest.
 
-**`se` — `float16`.** `se` spans about 3.2 decades and needs *relative*
-precision, which a float exponent already provides; `z` is bounded and needs
-*uniform* precision, which is why the two planes are encoded differently. This
-is recorded so `se` is not later "fixed" by analogy with `z`.
+**`se` — `float16` or `int8_residual`.** Residual coding predicts
+`log(SE) = intercept + slope × log(2 × EAF × (1 − EAF))` using decoded,
+quantised EAF and two `float32` coefficients per Analysis in
+`se_coefficients[n_analyses, 2]`. Codes `-128` and `-127` mean missing and
+exact exception; `-126…127` carry a residual at `step = residual_range / 127`.
+Exact values are stored in sorted parallel `se_exception_index` (`int64`) and
+`se_exception_value` (`float32`) arrays, present even when empty. Dense keys
+are `row × n_analyses + column`; Ragged keys are CSR ordinals.
+
+Builders try ranges ±0.5, ±1, and ±2 in order, accepting one only when every
+finite SE has decodable EAF, exact exceptions are at most 2%, ordinary-cell
+relative error is at most 1%, and measured compressed bytes decrease after
+codes, coefficients, and side tables are charged. Otherwise the entire plane
+is `float16`. Hybrid components share one decision. Zero SE, non-finite
+predictions, and out-of-range residuals are exact exceptions, never clips.
 
 **`eaf` — one of four kinds** (ADR 0037 §2). EAF's *semantics* are unchanged by
 the encoding: it is still per (variant, Analysis), still oriented to the stored
@@ -1011,7 +1026,7 @@ Validators MUST check at least:
 - Reference-Completed Dense axes match the Reference Variant Set;
 - imputed mask is consistent with Z and SE;
 - Ragged Reference-Completed regions include all Reference Variant Set variants within completed boundaries;
-- top-hit indexes, when present, are consistent with stored Z values;
+- top-hit indexes, when present, are consistent with the **decoded** `z`, `se` and `eaf` planes — decoded, because an index built from raw codes and one built from values a query returns are indistinguishable until they are compared against the plane the query reads;
 - `analyses.tsv` contains exactly one row per Analysis, covering every `analysis_index` referenced by `index.sqlite` (this is the one place SQLite cannot enforce the relationship as a foreign key, since `analyses.tsv` is a separate file);
 - `index.sqlite` does not contain an `analyses` table, nor a `variants` table (§1, issue #128);
 - `variant_alid_bytes.npy` holds one entry per ALID narrow enough to index, and no key in it is shared by two variants — a shared key is what silently truncating an over-wide ALID produced, and it makes one variant answer another's lookup (issue #127);
@@ -1019,6 +1034,7 @@ Validators MUST check at least:
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
+- the `se` plane, its `se_coefficients` and its exception table agree with the plan the manifest declares (§6a): a residual-coded plane has finite `float32` coefficients of shape `(n_analyses, 2)`, a sorted duplicate-free exception table whose positions lie inside the plane and whose entries are exactly the cells marked `-127`, and a complete `eaf` plane beside it; a `float16` plane has none of those arrays, and carrying one is a failure rather than a harmless relic;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;

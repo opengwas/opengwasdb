@@ -39,14 +39,13 @@ def build_ragged_top_hit_indexes(
     offsets = csr._offsets[:]
     vi_all = csr._variant_index[:].astype(np.int32)
     z_all = csr.z_all()
-    se_all = csr._se[:].astype(np.float32)
+    se_all = csr.se_all()
     n_analyses = len(offsets) - 1
-    imputed_all = (
-        csr._root["imputed"][:].astype(np.uint8) if "imputed" in csr._root else None
-    )
+    imputed_all = csr._root["imputed"][:].astype(np.uint8) if "imputed" in csr._root else None
     eaf_all = (
         csr.eaf_at(np.arange(len(vi_all), dtype=np.int64))
-        if csr._eaf_plane.can_report_frequencies else None
+        if csr._eaf_plane.can_report_frequencies
+        else None
     )
 
     # Derive analysis_index for every association via searchsorted on CSR offsets.

@@ -10,17 +10,22 @@ import zarr
 from numcodecs import Blosc
 
 from opengwasdb.encoding import (
+    EafExceptionBuilder,
     EafMeasurements,
     RaggedEafPlane,
+    RaggedSePlane,
+    SeMeasurements,
     StoreCodec,
     StoreEncoding,
     ZOverflowBuilder,
     ZOverflowTable,
     eaf_baseline_from_pairs,
+    fit_se,
     measure_eaf,
     positions_at,
     positions_flat,
     write_eaf_csr,
+    write_se_csr,
 )
 from opengwasdb.model.manifest import StoreManifest
 
@@ -33,9 +38,9 @@ _OFFSET_CHUNK = 10_000
 
 class AnalysisAssociations(NamedTuple):
     variant_index: np.ndarray  # int32
-    z: np.ndarray              # float32, decoded from the plane's own encoding
-    se: np.ndarray             # float16
-    eaf: np.ndarray            # float32, all-NaN when the store carries no EAF
+    z: np.ndarray  # float32, decoded from the plane's own encoding
+    se: np.ndarray  # decoded float32
+    eaf: np.ndarray  # float32, all-NaN when the store carries no EAF
 
 
 class RaggedCSRWriter:
@@ -75,7 +80,7 @@ class RaggedCSRWriter:
         # Held as float32 and quantised once, by the codec, at flush -- never
         # pre-rounded into a stored dtype here.
         self._zscores.append(np.asarray(z, dtype=np.float32))
-        self._ses.append(np.asarray(se, dtype=np.float16))
+        self._ses.append(np.asarray(se, dtype=np.float32))
         if eaf is None:
             self._eafs.append(np.full(n, np.nan, dtype=np.float32))
         else:
@@ -110,12 +115,57 @@ class RaggedCSRWriter:
         variant_index, eaf = self._flat()
         return measure_eaf(variant_index, eaf, n_variants=self._n_variants)
 
+    def se_measurements(self, encoding: StoreEncoding) -> SeMeasurements:
+        """Fit SE against the EAF values this plan will actually decode."""
+        se, decoded, ai = self.se_fit_inputs(encoding)
+        return fit_se(
+            se,
+            decoded,
+            ai,
+            n_analyses=self.n_analyses,
+            compressor=_COMPRESSOR,
+            chunks=_ASSOC_CHUNK,
+        )[1]
+
+    def se_fit_inputs(self, encoding: StoreEncoding) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Physical `(se, decoded_eaf, analysis_index)` for a shared plan."""
+        vi, eaf = self._flat()
+        se = (
+            np.concatenate(self._ses).astype(np.float32)
+            if self.n_associations
+            else np.empty(0, dtype=np.float32)
+        )
+        baseline = (
+            eaf_baseline_from_pairs(vi, eaf, self._n_variants) if encoding.eaf.is_residual else None
+        )
+        codec = StoreCodec(encoding)
+        exceptions = EafExceptionBuilder()
+        raw = codec.encode_eaf(
+            eaf,
+            baseline=None if baseline is None else baseline[vi],
+            positions=positions_flat(0),
+            exceptions=exceptions,
+        )
+        decoded = (
+            StoreCodec(encoding, eaf_exceptions=exceptions.table()).decode_eaf(
+                raw,
+                baseline=None if baseline is None else baseline[vi],
+                positions=positions_flat(0),
+            )
+            if not encoding.eaf.is_absent
+            else np.full(eaf.shape, np.nan, dtype=np.float32)
+        )
+        offsets = np.asarray(self._offsets, dtype=np.int64)
+        ai = np.searchsorted(offsets[1:], np.arange(len(se)), side="right")
+        return se, decoded, ai
+
     def flush(
         self,
         store_path: str | Path,
         encoding: StoreEncoding,
         *,
         eaf_baseline: np.ndarray | None = None,
+        se_coefficients: np.ndarray | None = None,
     ) -> None:
         """Write CSR arrays to data.zarr/ragged/ inside store_path.
 
@@ -133,12 +183,12 @@ class RaggedCSRWriter:
         if self.n_associations > 0:
             vi_arr = np.concatenate(self._variant_indices).astype(np.int32)
             z_values = np.concatenate(self._zscores).astype(np.float32)
-            se_arr = np.concatenate(self._ses).astype(np.float16)
+            se_arr = np.concatenate(self._ses).astype(np.float32)
             eaf_arr = np.concatenate(self._eafs).astype(np.float32)
         else:
             vi_arr = np.empty(0, dtype=np.int32)
             z_values = np.empty(0, dtype=np.float32)
-            se_arr = np.empty(0, dtype=np.float16)
+            se_arr = np.empty(0, dtype=np.float32)
             eaf_arr = np.empty(0, dtype=np.float32)
         # A CSR cell's flat position is its ordinal in the concatenated array,
         # which is what its overflow entry is keyed on.
@@ -152,27 +202,62 @@ class RaggedCSRWriter:
             baseline = eaf_baseline_from_pairs(vi_arr, eaf_arr, self._n_variants)
 
         root.create_dataset(
-            "offsets", data=offsets_arr,
-            chunks=(_OFFSET_CHUNK,), compressor=_COMPRESSOR, dtype=np.int64,
+            "offsets",
+            data=offsets_arr,
+            chunks=(_OFFSET_CHUNK,),
+            compressor=_COMPRESSOR,
+            dtype=np.int64,
         )
         root.create_dataset(
-            "variant_index", data=vi_arr,
-            chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=np.int32,
+            "variant_index",
+            data=vi_arr,
+            chunks=(_ASSOC_CHUNK,),
+            compressor=_COMPRESSOR,
+            dtype=np.int32,
         )
         root.create_dataset(
-            "z", data=z_arr,
-            chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=codec.z_dtype,
+            "z",
+            data=z_arr,
+            chunks=(_ASSOC_CHUNK,),
+            compressor=_COMPRESSOR,
+            dtype=codec.z_dtype,
         )
         overflow.table().write(root)
-        root.create_dataset(
-            "se", data=se_arr,
-            chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=np.float16,
-        )
         if not encoding.eaf.is_absent:
             write_eaf_csr(
-                root, codec, vi_arr, eaf_arr,
-                baseline=baseline, compressor=_COMPRESSOR, chunks=(_ASSOC_CHUNK,),
+                root,
+                codec,
+                vi_arr,
+                eaf_arr,
+                baseline=baseline,
+                compressor=_COMPRESSOR,
+                chunks=(_ASSOC_CHUNK,),
             )
+        decoded_eaf = RaggedEafPlane.open(root, encoding).slice(0, len(se_arr))
+        ai = np.searchsorted(offsets_arr[1:], np.arange(len(se_arr)), side="right")
+        if not encoding.se.is_residual:
+            coefficients = None
+        elif se_coefficients is not None:
+            coefficients = se_coefficients
+        else:
+            coefficients = fit_se(
+                se_arr,
+                decoded_eaf,
+                ai,
+                n_analyses=self.n_analyses,
+                compressor=_COMPRESSOR,
+                chunks=_ASSOC_CHUNK,
+            )[0]
+        write_se_csr(
+            root,
+            codec,
+            se_arr,
+            decoded_eaf,
+            ai,
+            coefficients,
+            compressor=_COMPRESSOR,
+            chunks=(_ASSOC_CHUNK,),
+        )
         root.attrs["layout"] = "ragged"
         root.attrs["completion_state"] = "observed_only"
         root.attrs["n_analyses"] = self.n_analyses
@@ -188,7 +273,7 @@ class RaggedCSRReader:
         self._offsets: zarr.Array = self._root["offsets"]
         self._variant_index: zarr.Array = self._root["variant_index"]
         self._z: zarr.Array = self._root["z"]
-        self._se: zarr.Array = self._root["se"]
+        self._se: zarr.Array = self._root["se"]  # shape metadata only; values use se_* below
         # The plan is read from the release's manifest, never inferred from the
         # array's dtype: a store that disagrees with its own manifest must fail
         # validation, not decode as whatever the bytes happen to look like.
@@ -204,6 +289,7 @@ class RaggedCSRReader:
             encoding,
             imputed=self._root["imputed"] if "imputed" in self._root else None,
         )
+        self._se_plane = RaggedSePlane.open(self._root, encoding, self._eaf_plane)
 
     @property
     def n_analyses(self) -> int:
@@ -215,7 +301,7 @@ class RaggedCSRReader:
 
     def _span(self, analysis_index: int) -> tuple[int, int]:
         """The `[start, end)` slice of the flat arrays one Analysis occupies."""
-        offsets = self._offsets[analysis_index: analysis_index + 2]
+        offsets = self._offsets[analysis_index : analysis_index + 2]
         return int(offsets[0]), int(offsets[1])
 
     def get_analysis(self, analysis_index: int) -> AnalysisAssociations:
@@ -225,13 +311,13 @@ class RaggedCSRReader:
             return AnalysisAssociations(
                 variant_index=np.empty(0, dtype=np.int32),
                 z=np.empty(0, dtype=np.float32),
-                se=np.empty(0, dtype=np.float16),
+                se=np.empty(0, dtype=np.float32),
                 eaf=np.empty(0, dtype=np.float32),
             )
         return AnalysisAssociations(
             variant_index=self._variant_index[start:end],
             z=self.z_slice(start, end),
-            se=self._se[start:end],
+            se=self._se_plane.slice(start, end, analysis_index=analysis_index),
             eaf=self.eaf_slice(start, end),
         )
 
@@ -250,9 +336,7 @@ class RaggedCSRReader:
 
     def z_slice(self, start: int, end: int) -> np.ndarray:
         """Decoded `z[start:end]` -- the only way a caller gets z-scores."""
-        return self._codec.decode_z(
-            self._z[start:end], positions=positions_flat(int(start))
-        )
+        return self._codec.decode_z(self._z[start:end], positions=positions_flat(int(start)))
 
     def z_at(self, positions: np.ndarray) -> np.ndarray:
         """Decoded z at arbitrary flat CSR positions."""
@@ -266,6 +350,20 @@ class RaggedCSRReader:
     def z_all(self) -> np.ndarray:
         """Every decoded z, in flat CSR order."""
         return self.z_slice(0, int(len(self._z)))
+
+    def se_slice(self, start: int, end: int, analysis_index: int | None = None) -> np.ndarray:
+        """Decoded `se[start:end]`; callers may supply a known Analysis."""
+        return self._se_plane.slice(start, end, analysis_index=analysis_index)
+
+    def se_at(self, positions: np.ndarray) -> np.ndarray:
+        """Decoded SE at arbitrary CSR ordinals."""
+        positions = np.asarray(positions, dtype=np.int64)
+        offsets = np.asarray(self._offsets[:], dtype=np.int64)
+        analyses = np.searchsorted(offsets[1:], positions, side="right").astype(np.int64)
+        return self._se_plane.at(positions, analysis_index=analyses)
+
+    def se_all(self) -> np.ndarray:
+        return self.se_slice(0, int(len(self._se)))
 
     @property
     def has_eaf(self) -> bool:

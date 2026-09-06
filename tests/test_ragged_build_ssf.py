@@ -9,11 +9,15 @@ from __future__ import annotations
 import gzip
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
+from opengwasdb.validation import validate_store
 from opengwasdb.variants.axis import VariantAxis
 
 _SSF_HEADER = [
@@ -23,6 +27,7 @@ _SSF_HEADER = [
     "other_allele",
     "beta",
     "standard_error",
+    "effect_allele_frequency",
     "rsid",
     "variant_id",
 ]
@@ -37,9 +42,19 @@ def _write_filtered(path: Path, rows: list[dict]) -> None:
 
 def _write_manifest(path: Path, rows: list[dict]) -> None:
     header = [
-        "analysis_index", "analysis_id", "trait_id",
-        "analysis_label", "trait_ontology_id", "trait_ontology_label",
-        "trait_chr", "trait_bp", "n", "tissue", "context", "mhc", "filtered_file",
+        "analysis_index",
+        "analysis_id",
+        "trait_id",
+        "analysis_label",
+        "trait_ontology_id",
+        "trait_ontology_label",
+        "trait_chr",
+        "trait_bp",
+        "n",
+        "tissue",
+        "context",
+        "mhc",
+        "filtered_file",
     ]
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\t".join(header) + "\n")
@@ -66,38 +81,112 @@ def _make_fixture(tmp_path: Path) -> tuple[Path, Path]:
     filtered_dir = tmp_path / "filtered"
     filtered_dir.mkdir()
 
-    _write_filtered(filtered_dir / "trait_a.tsv.gz", [
-        {"chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
-         "other_allele": "G", "beta": 1.0, "standard_error": 0.5, "rsid": "rs1"},
-        {"chromosome": "1", "base_pair_location": 200_000, "effect_allele": "G",
-         "other_allele": "A", "beta": 1.0, "standard_error": 0.25, "rsid": "rs2"},
-        {"chromosome": "1", "base_pair_location": 300_000, "effect_allele": "C",
-         "other_allele": "T", "beta": 1.0, "standard_error": "NA"},
-        {"chromosome": "1", "base_pair_location": 400_000, "effect_allele": "C",
-         "other_allele": "T", "beta": 1.0, "standard_error": 0.0},
-        {"chromosome": "1", "base_pair_location": 600_000, "effect_allele": "C",
-         "other_allele": "T", "beta": "inf", "standard_error": 0.5},
-    ])
-    _write_filtered(filtered_dir / "trait_b.tsv.gz", [
-        {"chromosome": "2", "base_pair_location": 500_000, "effect_allele": "C",
-         "other_allele": "T", "beta": 2.0, "standard_error": 0.5, "variant_id": "rs5fb"},
-        {"chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
-         "other_allele": "G", "beta": 0.5, "standard_error": 0.25},
-    ])
+    _write_filtered(
+        filtered_dir / "trait_a.tsv.gz",
+        [
+            {
+                "chromosome": "1",
+                "base_pair_location": 100_000,
+                "effect_allele": "A",
+                "other_allele": "G",
+                "beta": 1.0,
+                "standard_error": 0.5,
+                "rsid": "rs1",
+            },
+            {
+                "chromosome": "1",
+                "base_pair_location": 200_000,
+                "effect_allele": "G",
+                "other_allele": "A",
+                "beta": 1.0,
+                "standard_error": 0.25,
+                "rsid": "rs2",
+            },
+            {
+                "chromosome": "1",
+                "base_pair_location": 300_000,
+                "effect_allele": "C",
+                "other_allele": "T",
+                "beta": 1.0,
+                "standard_error": "NA",
+            },
+            {
+                "chromosome": "1",
+                "base_pair_location": 400_000,
+                "effect_allele": "C",
+                "other_allele": "T",
+                "beta": 1.0,
+                "standard_error": 0.0,
+            },
+            {
+                "chromosome": "1",
+                "base_pair_location": 600_000,
+                "effect_allele": "C",
+                "other_allele": "T",
+                "beta": "inf",
+                "standard_error": 0.5,
+            },
+        ],
+    )
+    _write_filtered(
+        filtered_dir / "trait_b.tsv.gz",
+        [
+            {
+                "chromosome": "2",
+                "base_pair_location": 500_000,
+                "effect_allele": "C",
+                "other_allele": "T",
+                "beta": 2.0,
+                "standard_error": 0.5,
+                "variant_id": "rs5fb",
+            },
+            {
+                "chromosome": "1",
+                "base_pair_location": 100_000,
+                "effect_allele": "A",
+                "other_allele": "G",
+                "beta": 0.5,
+                "standard_error": 0.25,
+            },
+        ],
+    )
 
     manifest = tmp_path / "manifest.tsv"
-    _write_manifest(manifest, [
-        {"analysis_index": 0, "analysis_id": "trait_a", "trait_id": "T1",
-         "analysis_label": "GENE1", "trait_ontology_id": "ENSEMBL:ENSG00001",
-         "trait_ontology_label": "Ensembl", "trait_chr": "1",
-         "trait_bp": 150_000, "n": 5000, "tissue": "Liver", "context": "",
-         "mhc": "FALSE", "filtered_file": "trait_a.tsv.gz"},
-        {"analysis_index": 1, "analysis_id": "trait_b", "trait_id": "T2",
-         "analysis_label": "GENE2", "trait_ontology_id": "ENSEMBL:ENSG00002",
-         "trait_ontology_label": "Ensembl", "trait_chr": "2",
-         "trait_bp": 500_000, "n": 6000, "tissue": "Blood", "context": "",
-         "mhc": "FALSE", "filtered_file": "trait_b.tsv.gz"},
-    ])
+    _write_manifest(
+        manifest,
+        [
+            {
+                "analysis_index": 0,
+                "analysis_id": "trait_a",
+                "trait_id": "T1",
+                "analysis_label": "GENE1",
+                "trait_ontology_id": "ENSEMBL:ENSG00001",
+                "trait_ontology_label": "Ensembl",
+                "trait_chr": "1",
+                "trait_bp": 150_000,
+                "n": 5000,
+                "tissue": "Liver",
+                "context": "",
+                "mhc": "FALSE",
+                "filtered_file": "trait_a.tsv.gz",
+            },
+            {
+                "analysis_index": 1,
+                "analysis_id": "trait_b",
+                "trait_id": "T2",
+                "analysis_label": "GENE2",
+                "trait_ontology_id": "ENSEMBL:ENSG00002",
+                "trait_ontology_label": "Ensembl",
+                "trait_chr": "2",
+                "trait_bp": 500_000,
+                "n": 6000,
+                "tissue": "Blood",
+                "context": "",
+                "mhc": "FALSE",
+                "filtered_file": "trait_b.tsv.gz",
+            },
+        ],
+    )
     return manifest, filtered_dir
 
 
@@ -120,6 +209,63 @@ def test_build_creates_store_files(tmp_path):
     assert result.n_variants == 3  # 1:100000, 1:200000, 2:500000
     assert result.n_analyses == 2
     assert result.n_associations == 4  # 2 valid rows per analysis
+
+
+def test_ssf_build_queries_and_validates_residual_se(tmp_path):
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    frequencies = np.linspace(0.05, 0.95, 600, dtype=np.float32)
+    expected = np.exp(
+        -3.0
+        - 0.5 * np.log(2 * frequencies * (1 - frequencies))
+        + 0.1 * np.sin(np.arange(len(frequencies)) * 0.07)
+    ).astype(np.float32)
+    _write_filtered(
+        filtered_dir / "trait.tsv.gz",
+        [
+            {
+                "chromosome": "1",
+                "base_pair_location": row + 1,
+                "effect_allele": "A",
+                "other_allele": "G",
+                "beta": float(expected[row]),
+                "standard_error": float(expected[row]),
+                "effect_allele_frequency": float(frequencies[row]),
+            }
+            for row in range(len(frequencies))
+        ],
+    )
+    manifest = tmp_path / "manifest.tsv"
+    _write_manifest(
+        manifest,
+        [
+            {
+                "analysis_index": 0,
+                "analysis_id": "trait",
+                "trait_id": "T1",
+                "analysis_label": "Trait",
+                "n": 1000,
+                "mhc": "FALSE",
+                "filtered_file": "trait.tsv.gz",
+            }
+        ],
+    )
+    out = tmp_path / "out.opengwasdb"
+
+    build_ragged_from_ssf(
+        manifest,
+        filtered_dir,
+        out,
+        store_id="test",
+        release_id="v1",
+        allow_unverified_eaf=True,
+    )
+
+    assert StoreManifest.load(out).encoding.se.is_residual
+    with query_store(out) as query:
+        result = query.analysis("trait")
+    np.testing.assert_allclose(result["se"], expected, rtol=0.01)
+    assert validate_store(out).ok
 
 
 def test_manifest_fields(tmp_path):
@@ -145,13 +291,18 @@ def test_stored_effect_scale_populated_per_analysis(tmp_path):
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
     build_ragged_from_ssf(
-        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        manifest,
+        filtered_dir,
+        out,
+        store_id="test",
+        release_id="v1",
         stored_effect_scale="log_or",
     )
 
     table = read_analyses(out / "analyses.tsv")
     assert {r["analysis_id"]: r["stored_effect_scale"] for r in table.rows} == {
-        "trait_a": "log_or", "trait_b": "log_or",
+        "trait_a": "log_or",
+        "trait_b": "log_or",
     }
 
 
@@ -262,8 +413,12 @@ def test_invalid_stored_effect_scale_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="stored_effect_scale"):
         build_ragged_from_ssf(
-            manifest, filtered_dir, out,
-            store_id="test", release_id="v1", stored_effect_scale="sd_units",
+            manifest,
+            filtered_dir,
+            out,
+            store_id="test",
+            release_id="v1",
+            stored_effect_scale="sd_units",
         )
     assert not out.exists()  # fails before any I/O
 
@@ -271,18 +426,39 @@ def test_invalid_stored_effect_scale_rejected(tmp_path):
 def test_non_dense_analysis_index_fails_loudly(tmp_path):
     filtered_dir = tmp_path / "filtered"
     filtered_dir.mkdir()
-    _write_filtered(filtered_dir / "trait_a.tsv.gz", [
-        {"chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
-         "other_allele": "G", "beta": 1.0, "standard_error": 0.5, "rsid": "rs1"},
-    ])
+    _write_filtered(
+        filtered_dir / "trait_a.tsv.gz",
+        [
+            {
+                "chromosome": "1",
+                "base_pair_location": 100_000,
+                "effect_allele": "A",
+                "other_allele": "G",
+                "beta": 1.0,
+                "standard_error": 0.5,
+                "rsid": "rs1",
+            },
+        ],
+    )
     manifest = tmp_path / "manifest.tsv"
     # analysis_index jumps 0 -> 2, not dense.
-    _write_manifest(manifest, [
-        {"analysis_index": 0, "analysis_id": "trait_a", "trait_id": "T1",
-         "filtered_file": "trait_a.tsv.gz"},
-        {"analysis_index": 2, "analysis_id": "trait_b", "trait_id": "T2",
-         "filtered_file": "trait_a.tsv.gz"},
-    ])
+    _write_manifest(
+        manifest,
+        [
+            {
+                "analysis_index": 0,
+                "analysis_id": "trait_a",
+                "trait_id": "T1",
+                "filtered_file": "trait_a.tsv.gz",
+            },
+            {
+                "analysis_index": 2,
+                "analysis_id": "trait_b",
+                "trait_id": "T2",
+                "filtered_file": "trait_a.tsv.gz",
+            },
+        ],
+    )
     out = tmp_path / "out.opengwasdb"
 
     with pytest.raises(ValueError, match="analysis_index must be 0..n-1"):
@@ -298,21 +474,42 @@ def test_manifest_without_trait_id_builds(tmp_path):
     must build identically to one with it."""
     filtered_dir = tmp_path / "filtered"
     filtered_dir.mkdir()
-    _write_filtered(filtered_dir / "trait_a.tsv.gz", [
-        {"chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
-         "other_allele": "G", "beta": 1.0, "standard_error": 0.5, "rsid": "rs1"},
-    ])
+    _write_filtered(
+        filtered_dir / "trait_a.tsv.gz",
+        [
+            {
+                "chromosome": "1",
+                "base_pair_location": 100_000,
+                "effect_allele": "A",
+                "other_allele": "G",
+                "beta": 1.0,
+                "standard_error": 0.5,
+                "rsid": "rs1",
+            },
+        ],
+    )
     manifest = tmp_path / "manifest.tsv"
     header = [
-        "analysis_index", "analysis_id",
-        "analysis_label", "trait_ontology_id", "trait_ontology_label",
-        "trait_chr", "trait_bp", "n", "tissue", "context", "mhc", "filtered_file",
+        "analysis_index",
+        "analysis_id",
+        "analysis_label",
+        "trait_ontology_id",
+        "trait_ontology_label",
+        "trait_chr",
+        "trait_bp",
+        "n",
+        "tissue",
+        "context",
+        "mhc",
+        "filtered_file",
     ]
     with open(manifest, "w", encoding="utf-8") as fh:
         fh.write("\t".join(header) + "\n")
         row = {
-            "analysis_index": 0, "analysis_id": "metabolite_a",
-            "analysis_label": "Metabolite A", "filtered_file": "trait_a.tsv.gz",
+            "analysis_index": 0,
+            "analysis_id": "metabolite_a",
+            "analysis_label": "Metabolite A",
+            "filtered_file": "trait_a.tsv.gz",
         }
         fh.write("\t".join(str(row.get(col, "")) for col in header) + "\n")
     out = tmp_path / "out.opengwasdb"
@@ -334,26 +531,71 @@ def test_duplicate_canonical_variant_within_analysis_is_resolved(tmp_path):
     rather than silently keeping an arbitrary one."""
     filtered_dir = tmp_path / "filtered"
     filtered_dir.mkdir()
-    _write_filtered(filtered_dir / "trait_a.tsv.gz", [
-        # 1:100000 A/G appears twice with identical beta/se -> collapses to one.
-        {"chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
-         "other_allele": "G", "beta": 1.0, "standard_error": 0.5, "rsid": "rs1"},
-        {"chromosome": "1", "base_pair_location": 100_000, "effect_allele": "A",
-         "other_allele": "G", "beta": 1.0, "standard_error": 0.5, "rsid": "rs1"},
-        # 1:200000 A/G appears twice with conflicting beta -> dropped entirely.
-        {"chromosome": "1", "base_pair_location": 200_000, "effect_allele": "A",
-         "other_allele": "G", "beta": 0.5, "standard_error": 0.2, "rsid": "rs2"},
-        {"chromosome": "1", "base_pair_location": 200_000, "effect_allele": "A",
-         "other_allele": "G", "beta": -0.5, "standard_error": 0.2, "rsid": "rs2"},
-        # 1:300000 A/G, single row, unaffected control.
-        {"chromosome": "1", "base_pair_location": 300_000, "effect_allele": "A",
-         "other_allele": "G", "beta": 2.0, "standard_error": 1.0, "rsid": "rs3"},
-    ])
+    _write_filtered(
+        filtered_dir / "trait_a.tsv.gz",
+        [
+            # 1:100000 A/G appears twice with identical beta/se -> collapses to one.
+            {
+                "chromosome": "1",
+                "base_pair_location": 100_000,
+                "effect_allele": "A",
+                "other_allele": "G",
+                "beta": 1.0,
+                "standard_error": 0.5,
+                "rsid": "rs1",
+            },
+            {
+                "chromosome": "1",
+                "base_pair_location": 100_000,
+                "effect_allele": "A",
+                "other_allele": "G",
+                "beta": 1.0,
+                "standard_error": 0.5,
+                "rsid": "rs1",
+            },
+            # 1:200000 A/G appears twice with conflicting beta -> dropped entirely.
+            {
+                "chromosome": "1",
+                "base_pair_location": 200_000,
+                "effect_allele": "A",
+                "other_allele": "G",
+                "beta": 0.5,
+                "standard_error": 0.2,
+                "rsid": "rs2",
+            },
+            {
+                "chromosome": "1",
+                "base_pair_location": 200_000,
+                "effect_allele": "A",
+                "other_allele": "G",
+                "beta": -0.5,
+                "standard_error": 0.2,
+                "rsid": "rs2",
+            },
+            # 1:300000 A/G, single row, unaffected control.
+            {
+                "chromosome": "1",
+                "base_pair_location": 300_000,
+                "effect_allele": "A",
+                "other_allele": "G",
+                "beta": 2.0,
+                "standard_error": 1.0,
+                "rsid": "rs3",
+            },
+        ],
+    )
     manifest = tmp_path / "manifest.tsv"
-    _write_manifest(manifest, [
-        {"analysis_index": 0, "analysis_id": "trait_a", "trait_id": "T1",
-         "filtered_file": "trait_a.tsv.gz"},
-    ])
+    _write_manifest(
+        manifest,
+        [
+            {
+                "analysis_index": 0,
+                "analysis_id": "trait_a",
+                "trait_id": "T1",
+                "filtered_file": "trait_a.tsv.gz",
+            },
+        ],
+    )
     out = tmp_path / "out.opengwasdb"
 
     result = build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
@@ -385,8 +627,14 @@ def test_cli_build_ragged_ssf(tmp_path):
     result = runner.invoke(
         app,
         [
-            "build-ragged-ssf", str(manifest), str(filtered_dir), str(out),
-            "--store-id", "cli-test", "--release-id", "v1",
+            "build-ragged-ssf",
+            str(manifest),
+            str(filtered_dir),
+            str(out),
+            "--store-id",
+            "cli-test",
+            "--release-id",
+            "v1",
         ],
     )
     assert result.exit_code == 0, result.output

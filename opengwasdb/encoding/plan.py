@@ -16,8 +16,8 @@ Four properties, each load-bearing:
    meeting an encoding it does not implement rejects the release rather than
    guessing.
 
-Scope note: `z`, `se` and `eaf`. `se` residual coding is still #118's, and
-until it lands `SeEncoding` has one kind.
+Scope note: `z`, `se` and `eaf`. Format 3.0 adds #118's residual SE kind; older
+plans continue to declare the unchanged float16 representation.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ DEFAULT_Z_SCALE = 1024
 #: Version of the plan's own schema, distinct from `format_version`: it
 #: identifies the shape of the `encoding` block, not the store format. Version
 #: 1 declared `z` and `se`; version 2 adds `eaf` (issue #116).
-ENCODING_VERSION = 2
+ENCODING_VERSION = 3
 
 #: First plan-schema version whose encoding block states its `eaf` plan. Below
 #: it, a missing `eaf` key names ADR 0036's optional plane; at or above it, a
@@ -122,30 +122,50 @@ class ZEncoding:
 class SeEncoding:
     """How the `se` plane's stored bytes relate to standard errors.
 
-    `float16` is the *right* encoding here, for the opposite reason it is the
-    wrong one for `z`: `se` spans 3.2 decades and needs relative precision,
-    which a float exponent already provides (ADR 0037). Recorded so it is not
-    later "fixed" by analogy with `z`.
+    `float16` is the universal fallback. `int8_residual` is selected only when
+    the measured MAF-predicted representation satisfies the accuracy,
+    exception-rate, and persisted compressed-size gates (ADR 0037 §3).
     """
 
     kind: str = "float16"
+    residual_range: float | None = None
+
+    @property
+    def is_residual(self) -> bool:
+        return self.kind == "int8_residual"
 
     @property
     def dtype(self) -> str:
-        return "float16"
+        return "int8" if self.is_residual else "float16"
+
+    @property
+    def step(self) -> float:
+        if not self.is_residual or self.residual_range is None:
+            raise ValueError("a float16 se plane has no residual step")
+        return self.residual_range / 127.0
 
     def to_manifest(self) -> dict[str, Any]:
-        return {"kind": self.kind}
+        out: dict[str, Any] = {"kind": self.kind}
+        if self.residual_range is not None:
+            out["residual_range"] = self.residual_range
+        return out
 
     @classmethod
     def from_manifest(cls, data: dict[str, Any]) -> SeEncoding:
         kind = str(data["kind"])
-        if kind != "float16":
-            raise UnsupportedEncoding(
-                f"se encoding kind {kind!r} is not implemented by this build; "
-                "this release cannot be read (spec §21)"
-            )
-        return cls(kind=kind)
+        if kind == "float16":
+            return cls(kind=kind)
+        if kind == "int8_residual":
+            residual_range = float(data["residual_range"])
+            if not math.isfinite(residual_range) or residual_range <= 0:
+                raise UnsupportedEncoding(
+                    f"se encoding int8_residual has invalid residual_range {residual_range}"
+                )
+            return cls(kind=kind, residual_range=residual_range)
+        raise UnsupportedEncoding(
+            f"se encoding kind {kind!r} is not implemented by this build; "
+            "this release cannot be read (spec §21)"
+        )
 
 
 #: `eaf` is absent for this cell -- the Analysis reported no frequency at this
@@ -184,6 +204,14 @@ EAF_EXCEPTION_BUDGET = 0.02
 
 #: Raw bytes an exception-table entry costs (`int64` index + `float32` value).
 EAF_EXCEPTION_BYTES = 12
+
+SE_RANGE_CANDIDATES = (0.5, 1.0, 2.0)
+SE_EXCEPTION_BUDGET = 0.02
+SE_RELATIVE_ERROR_BUDGET = 0.01
+SE_MISSING = -128
+SE_EXCEPTION = -127
+SE_CODE_MIN = -126
+SE_CODE_MAX = 127
 
 
 class EafBaselineError(Exception):
@@ -339,6 +367,18 @@ class EncodingMeasurements:
 
     n_analyses: int
     eaf: EafMeasurements | None = None
+    se: SeMeasurements | None = None
+
+
+@dataclass(frozen=True)
+class SeMeasurements:
+    """Measured residual-SE eligibility and complete compressed byte costs."""
+
+    eligible: bool = False
+    exception_fraction: dict[float, float] = field(default_factory=dict)
+    worst_relative_error: dict[float, float] = field(default_factory=dict)
+    compressed_bytes: dict[float, int] = field(default_factory=dict)
+    float16_compressed_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -357,14 +397,14 @@ class StoreEncoding:
         R1 -- `z` is `int16` fixed point, unconditionally: it is bounded and
         needs uniform precision, and the sparse overflow table means no data
         property can make that choice wrong.
-        R2 -- `se` is `float16`, unconditionally until #118 measures the
-        `se`~MAF fit and earns the residual coding.
+        R2 -- `se` uses the smallest measured residual range that passes every
+        gate, otherwise the entire plane remains `float16`.
         R3..R5 -- `eaf` is decided by `_decide_eaf` below, from measured
         residual spread and measured bytes.
         """
         return cls(
             z=ZEncoding(kind="int16_fixed", scale=DEFAULT_Z_SCALE),
-            se=SeEncoding(kind="float16"),
+            se=_decide_se(measurements.se),
             eaf=_decide_eaf(measurements.eaf),
         )
 
@@ -464,11 +504,7 @@ def _eaf_residual_bytes(measurements: EafMeasurements, residual_range: float) ->
     """Raw bytes the residual coding would occupy at `residual_range`."""
     fraction = measurements.exception_fraction.get(residual_range, 0.0)
     exceptions = math.ceil(fraction * measurements.n_eaf_cells)
-    return (
-        measurements.n_cells
-        + 4 * measurements.n_variants
-        + EAF_EXCEPTION_BYTES * exceptions
-    )
+    return measurements.n_cells + 4 * measurements.n_variants + EAF_EXCEPTION_BYTES * exceptions
 
 
 def _eaf_float32_bytes(measurements: EafMeasurements) -> int:
@@ -510,3 +546,18 @@ def _decide_eaf(measurements: EafMeasurements | None) -> EafEncoding:
     if _eaf_residual_bytes(measurements, chosen) >= _eaf_float32_bytes(measurements):
         return EafEncoding(kind="float32")
     return EafEncoding(kind="int8_residual", residual_range=chosen)
+
+
+def _decide_se(measurements: SeMeasurements | None) -> SeEncoding:
+    if measurements is None or not measurements.eligible:
+        return SeEncoding("float16")
+    for candidate in SE_RANGE_CANDIDATES:
+        if (
+            measurements.exception_fraction.get(candidate, 1.0) <= SE_EXCEPTION_BUDGET
+            and measurements.worst_relative_error.get(candidate, float("inf"))
+            <= SE_RELATIVE_ERROR_BUDGET
+            and measurements.compressed_bytes.get(candidate, math.inf)
+            < measurements.float16_compressed_bytes
+        ):
+            return SeEncoding("int8_residual", candidate)
+    return SeEncoding("float16")

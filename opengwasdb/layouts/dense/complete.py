@@ -15,6 +15,7 @@ Pipeline shape:
     write the final zarr, completion_quality rows, top-hit indexes, and
     manifest.
 """
+
 from __future__ import annotations
 
 import json
@@ -55,12 +56,14 @@ from opengwasdb.completion.schema import completion_quality_rollup, create_compl
 from opengwasdb.encoding import (
     EAF_BASELINE,
     DenseEafPlane,
+    DenseSePlane,
     DenseZPlane,
     EafExceptionBuilder,
     StoreCodec,
     StoreEncoding,
     ZOverflowBuilder,
     positions_row_band,
+    rewrite_dense_se,
     write_eaf_baseline,
     write_eaf_reference,
 )
@@ -134,12 +137,14 @@ def _make_reader(task: _BlockTask):
     and LD panel itself so no payload beyond a lightweight block descriptor
     needs to be pickled into the worker process.
     """
+
     def make_reader(block, canonical_alids: list[str | None]):
         src_axis = VariantAxis(task.source_path)
         try:
             src_store = open_store(task.source_path)
             src_root = src_store.arrays(mode="r")
             src_plane = DenseZPlane.open(src_root, src_store.manifest.encoding)
+            src_se_plane = DenseSePlane.open(src_root, src_store.manifest.encoding)
             n_analyses = src_plane.n_analyses
 
             src_rows: list[int | None] = []
@@ -155,7 +160,7 @@ def _make_reader(task: _BlockTask):
             se_obs = np.full((len(canonical_alids), n_analyses), np.nan, dtype=np.float64)
             if matched_local:
                 z_obs[matched_local, :] = src_plane.rows(np.asarray(matched_src))
-                se_obs[matched_local, :] = src_root["se"].oindex[matched_src, :].astype(np.float64)
+                se_obs[matched_local, :] = src_se_plane.rows(np.asarray(matched_src))
         finally:
             src_axis.close()
 
@@ -213,6 +218,10 @@ def complete_dense_store(
     dst = Path(dest_path)
     checkpoint_dir = checkpoint_dir_for(dst)
     require_fresh_destination(dst, checkpoint_dir, overwrite, "resume_dense_completion")
+    source = open_store(source_path)
+    check_writable_format_version(
+        source.manifest.format_version, source=f"source release {Path(source_path)}"
+    )
     check_panel_has_chromosomes(ld_dir, ancestry)
 
     if impute_analysis_ids is None:
@@ -239,10 +248,16 @@ def complete_dense_store(
     )
 
     result = _run_completion(
-        Path(source_path), dst, Path(ld_dir),
-        ancestry=ancestry, min_cor=min_cor, thresh=thresh,
-        release_id=release_id, ld_panel_id=ld_panel_id,
-        n_workers=n_workers, checkpoint_dir=checkpoint_dir,
+        Path(source_path),
+        dst,
+        Path(ld_dir),
+        ancestry=ancestry,
+        min_cor=min_cor,
+        thresh=thresh,
+        release_id=release_id,
+        ld_panel_id=ld_panel_id,
+        n_workers=n_workers,
+        checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=impute_analysis_ids,
     )
     shutil.rmtree(checkpoint_dir)
@@ -266,10 +281,16 @@ def resume_dense_completion(
 
     impute_ids = params.get("impute_analysis_ids")
     result = _run_completion(
-        Path(params["source_path"]), Path(params["dest_path"]), Path(params["ld_dir"]),
-        ancestry=params["ancestry"], min_cor=params["min_cor"], thresh=params["thresh"],
-        release_id=params["release_id"], ld_panel_id=params["ld_panel_id"],
-        n_workers=n_workers, checkpoint_dir=checkpoint_dir,
+        Path(params["source_path"]),
+        Path(params["dest_path"]),
+        Path(params["ld_dir"]),
+        ancestry=params["ancestry"],
+        min_cor=params["min_cor"],
+        thresh=params["thresh"],
+        release_id=params["release_id"],
+        ld_panel_id=params["ld_panel_id"],
+        n_workers=n_workers,
+        checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=set(impute_ids) if impute_ids is not None else None,
     )
     shutil.rmtree(checkpoint_dir)
@@ -378,7 +399,10 @@ def _run_completion(
         ] + new_canonical
         merged_variants.sort(
             key=lambda v: (
-                chromosome_sort_key(v.chromosome), v.position, v.effect_allele, v.other_allele
+                chromosome_sort_key(v.chromosome),
+                v.position,
+                v.effect_allele,
+                v.other_allele,
             )
         )
         new_alid_to_idx: dict[str, int] = {v.alid: i for i, v in enumerate(merged_variants)}
@@ -418,8 +442,10 @@ def _run_completion(
             # n_missing_off_panel is known (issue 044; issue #22).
 
         # ── Phase 2: parallel LD-block completion ───────────────────────────
-        print(f"Running reference completion across {len(tsv_paths):,} LD blocks "
-              f"(n_workers={n_workers})...")
+        print(
+            f"Running reference completion across {len(tsv_paths):,} LD blocks "
+            f"(n_workers={n_workers})..."
+        )
         blocks_dir = checkpoint_dir / "blocks"
         blocks_dir.mkdir(parents=True, exist_ok=True)
 
@@ -431,10 +457,15 @@ def _run_completion(
             if ckpt_path.exists():
                 n_existing += 1  # fills read from the checkpoint in Phase 3
             else:
-                pending.append(_BlockTask(
-                    tsv_path=tsv_path, source_path=src,
-                    min_cor=min_cor, thresh=thresh, checkpoint_path=ckpt_path,
-                ))
+                pending.append(
+                    _BlockTask(
+                        tsv_path=tsv_path,
+                        source_path=src,
+                        min_cor=min_cor,
+                        thresh=thresh,
+                        checkpoint_path=ckpt_path,
+                    )
+                )
 
         if pending:
             print(f"  {n_existing:,} blocks already checkpointed, {len(pending):,} remaining")
@@ -445,9 +476,7 @@ def _run_completion(
                 if (i + 1) % 200 == 0:
                     print(f"  {i + 1:,} / {len(pending):,} blocks")
         else:
-            with ProcessPoolExecutor(
-                max_workers=n_workers, initializer=init_block_worker
-            ) as pool:
+            with ProcessPoolExecutor(max_workers=n_workers, initializer=init_block_worker) as pool:
                 futures = [pool.submit(_run_block, task) for task in pending]
                 for i, fut in enumerate(as_completed(futures)):
                     fut.result()  # propagate worker errors; result is on disk
@@ -486,12 +515,24 @@ def _run_completion(
         eaf_reference = panel_reference_eaf(ld_dir, ancestry, merged_variants)
         encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
         effective_chunks = _create_completed_zarr(
-            staged, n_variants, n_analyses, on_panel, DEFAULT_CHUNK_SHAPE, DEFAULT_DTYPE,
-            encoding, src_has_eaf=src_has_eaf, eaf_reference=eaf_reference,
+            staged,
+            n_variants,
+            n_analyses,
+            on_panel,
+            DEFAULT_CHUNK_SHAPE,
+            DEFAULT_DTYPE,
+            encoding,
+            src_has_eaf=src_has_eaf,
+            eaf_reference=eaf_reference,
         )
         band_rows = _completion_band_rows(effective_chunks)
         fill_shard_dir, quality_count = _shard_checkpoint_fills_by_band(
-            blocks_dir, staged, union_alids_s, union_rows_s, n_variants, band_rows,
+            blocks_dir,
+            staged,
+            union_alids_s,
+            union_rows_s,
+            n_variants,
+            band_rows,
             impute_mask=impute_mask,
         )
         print(f"Wrote {quality_count:,} completion quality rows")
@@ -499,9 +540,14 @@ def _run_completion(
 
         print("Writing data.zarr (band-streamed)...")
         n_missing_off_panel, n_missing_imputation_failed, total_imputed = _write_completed_bands(
-            staged, src_root, out_to_src, on_panel,
+            staged,
+            src_root,
+            out_to_src,
+            on_panel,
             fill_shard_dir,
-            effective_chunks, n_variants, n_analyses,
+            effective_chunks,
+            n_variants,
+            n_analyses,
             manifest.encoding,
             encoding,
             impute_mask=impute_mask,
@@ -628,9 +674,7 @@ def _iter_fill_records(path: Path) -> Iterator[np.ndarray]:
         return
     with open(path, "rb") as fh:
         while True:
-            records = np.fromfile(
-                fh, dtype=_FILL_RECORD_DTYPE, count=_FILL_RECORD_READ_COUNT
-            )
+            records = np.fromfile(fh, dtype=_FILL_RECORD_DTYPE, count=_FILL_RECORD_READ_COUNT)
             if len(records) == 0:
                 break
             yield records
@@ -715,9 +759,7 @@ def _shard_checkpoint_fills_by_band(
                 if f_alid.dtype.kind == "U":
                     f_alid = f_alid.astype(ALID_DTYPE)
 
-                idx = np.minimum(
-                    np.searchsorted(union_alids_s, f_alid), len(union_alids_s) - 1
-                )
+                idx = np.minimum(np.searchsorted(union_alids_s, f_alid), len(union_alids_s) - 1)
                 matched = union_alids_s[idx] == f_alid
                 if not matched.any():
                     continue
@@ -777,19 +819,32 @@ def _create_completed_zarr(
     root = staged.arrays(mode="w")
     for name, plane_dtype, fill in (
         ("z", codec.z_dtype, codec.z_fill_value),
-        ("se", dtype, float("nan")),
+        # Scratch in float32 so an exact residual exception is not rounded
+        # before the destination's final SE encoding is written below.
+        ("se", "float32", float("nan")),
     ):
         root.create_dataset(
-            name, shape=(n_variants, n_analyses), chunks=effective_chunks,
-            compressor=_COMPRESSOR, dtype=plane_dtype, fill_value=fill,
+            name,
+            shape=(n_variants, n_analyses),
+            chunks=effective_chunks,
+            compressor=_COMPRESSOR,
+            dtype=plane_dtype,
+            fill_value=fill,
         )
     root.create_dataset(
-        "imputed", shape=(n_variants, n_analyses), chunks=effective_chunks,
-        compressor=_COMPRESSOR, dtype="uint8", fill_value=0,
+        "imputed",
+        shape=(n_variants, n_analyses),
+        chunks=effective_chunks,
+        compressor=_COMPRESSOR,
+        dtype="uint8",
+        fill_value=0,
     )
     root.create_dataset(
-        "on_panel", data=on_panel.astype(np.uint8),
-        chunks=(effective_chunks[0],), compressor=_COMPRESSOR, dtype="uint8",
+        "on_panel",
+        data=on_panel.astype(np.uint8),
+        chunks=(effective_chunks[0],),
+        compressor=_COMPRESSOR,
+        dtype="uint8",
     )
     if src_has_eaf:
         # Never float16 -- see `build_vcf._create_eaf_array` for why it cannot
@@ -797,8 +852,12 @@ def _create_completed_zarr(
         # had one: completion adds panel rows, it does not invent frequencies
         # the source never reported.
         root.create_dataset(
-            "eaf", shape=(n_variants, n_analyses), chunks=effective_chunks,
-            compressor=_COMPRESSOR, dtype=codec.eaf_dtype, fill_value=codec.eaf_fill_value,
+            "eaf",
+            shape=(n_variants, n_analyses),
+            chunks=effective_chunks,
+            compressor=_COMPRESSOR,
+            dtype=codec.eaf_dtype,
+            fill_value=codec.eaf_fill_value,
         )
     if eaf_reference is not None:
         write_eaf_reference(root, eaf_reference, compressor=_COMPRESSOR)
@@ -841,7 +900,7 @@ def _write_completed_bands(
     """
     root = staged.arrays(mode="a")
     z_arr, se_arr, imp_arr = root["z"], root["se"], root["imputed"]
-    src_se = src_root["se"]
+    src_se_plane = DenseSePlane.open(src_root, source_encoding)
     # Source z is read decoded and written re-encoded, through the same plan --
     # completion moves values between two planes, it does not reinterpret them.
     src_plane = DenseZPlane.open(src_root, source_encoding)
@@ -914,7 +973,7 @@ def _write_completed_bands(
         valid = np.where(out_to_src[r0:r1] >= 0)[0]
         if len(valid):
             srows = out_to_src[r0:r1][valid]
-            sb[valid, :] = src_se.oindex[srows, :].astype(np.float32)
+            sb[valid, :] = src_se_plane.rows(np.asarray(srows, dtype=np.int64))
 
         shard_path = _fill_shard_path(fill_shard_dir, band_index)
         for records in _iter_fill_records(shard_path):
@@ -978,5 +1037,12 @@ def _write_completed_bands(
         if out_baseline is not None:
             write_eaf_baseline(root, out_baseline, compressor=_COMPRESSOR)
             exceptions.table().write(root)
+
+    source_coefficients = (
+        np.asarray(src_root["se_coefficients"][:], dtype=np.float32)
+        if encoding.se.is_residual
+        else None
+    )
+    rewrite_dense_se(root, encoding, source_coefficients)
 
     return n_missing_off_panel, n_missing_imputation_failed, total_imputed

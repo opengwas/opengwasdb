@@ -13,7 +13,7 @@ import zarr
 from numcodecs import Blosc
 from scipy.special import erfc, erfcinv  # type: ignore[import-untyped]
 
-from opengwasdb.encoding import DenseEafPlane, DenseZPlane, StoreEncoding
+from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
 from opengwasdb.layouts.dense.constants import TOP_HIT_THRESHOLDS
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
 from opengwasdb.model.manifest import StoreManifest
@@ -163,13 +163,19 @@ def write_threshold_tier(
     )
     chunk = max(1, min(len(kept["variant_index"]), chunk_size))
     group.create_dataset(
-        "analysis_offsets", data=offsets, chunks=(len(offsets),),
-        compressor=compressor, dtype="uint64",
+        "analysis_offsets",
+        data=offsets,
+        chunks=(len(offsets),),
+        compressor=compressor,
+        dtype="uint64",
     )
     for name, values in kept.items():
         group.create_dataset(
-            name, data=values, chunks=(chunk,),
-            compressor=compressor, dtype=_TIER_DTYPES[name],
+            name,
+            data=values,
+            chunks=(chunk,),
+            compressor=compressor,
+            dtype=_TIER_DTYPES[name],
         )
     group.attrs["threshold"] = threshold
     group.attrs["order"] = "analysis_index,variant_index"
@@ -217,9 +223,7 @@ def write_top_hit_indexes(
     compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
 
     for threshold in thresholds:
-        write_threshold_tier(
-            top, threshold, columns, abs_z, n_analyses, chunk_size, compressor
-        )
+        write_threshold_tier(top, threshold, columns, abs_z, n_analyses, chunk_size, compressor)
     top.attrs["thresholds"] = list(thresholds)
 
 
@@ -230,7 +234,7 @@ def _concat_or_empty(parts: list[np.ndarray], dtype: type) -> np.ndarray:
 
 def _scan_candidates(
     z_plane: DenseZPlane,
-    se_arr: Any,
+    se_plane: DenseSePlane,
     imputed_arr: Any,
     eaf_plane: DenseEafPlane,
     n_variants: int,
@@ -254,7 +258,7 @@ def _scan_candidates(
         parts["rows"].append(br.astype(np.int64) + r0)
         parts["cols"].append(bc.astype(np.int64))
         parts["z"].append(z_band[br, bc])
-        parts["se"].append(se_arr[r0:r1][br, bc].astype("float32"))
+        parts["se"].append(se_plane.band(r0, r1)[br, bc])
         if imputed_arr is not None:
             parts["imputed"].append(imputed_arr[r0:r1][br, bc].astype("uint8"))
         if eaf_plane.can_report_frequencies:
@@ -287,10 +291,11 @@ def build_top_hit_indexes(
     z_plane = DenseZPlane.open(root, encoding)
     imputed_arr = root["imputed"] if "imputed" in root else None
     eaf_plane = DenseEafPlane.open(root, encoding)
+    se_plane = DenseSePlane.open(root, encoding)
 
     parts = _scan_candidates(
         z_plane,
-        root["se"],
+        se_plane,
         imputed_arr,
         eaf_plane,
         int(z_plane.array.shape[0]),
@@ -304,15 +309,9 @@ def build_top_hit_indexes(
         _concat_or_empty(parts["z"], np.float32),
         _concat_or_empty(parts["se"], np.float32),
         thresholds,
-        imputed=(
-            _concat_or_empty(parts["imputed"], np.uint8)
-            if imputed_arr is not None
-            else None
-        ),
+        imputed=(_concat_or_empty(parts["imputed"], np.uint8) if imputed_arr is not None else None),
         eaf=(
-            _concat_or_empty(parts["eaf"], np.float32)
-            if eaf_plane.can_report_frequencies
-            else None
+            _concat_or_empty(parts["eaf"], np.float32) if eaf_plane.can_report_frequencies else None
         ),
     )
 
@@ -334,6 +333,13 @@ def write_top_hit_indexes_for_store(
     """
     log.info("Collecting top-hit EAF in variant-row order for %d candidate cells", len(rows))
     eaf = collect_top_hit_eaf(store_path, rows, cols, encoding)
+    if encoding.se.is_residual:
+        # The harvested `se` is what the source reported; the plane now holds a
+        # residual of it. ADR 0040 asks the index to carry what a query reads
+        # back, so re-read it through the plane rather than keep the un-encoded
+        # value the band-writer happened to still be holding.
+        log.info("Re-reading top-hit se through the residual plane")
+        se = collect_top_hit_se(store_path, rows, cols, encoding)
     log.info("Writing top-hit index from %d harvested candidate cells", len(rows))
     write_top_hit_indexes(store_path, rows, cols, z, se, eaf=eaf)
 
@@ -349,19 +355,46 @@ def collect_top_hit_eaf(
     plane = DenseEafPlane.open(root, encoding)
     if not plane.can_report_frequencies:
         return None
+    return _gather_in_row_chunks(root, rows, cols, plane.band)
+
+
+def collect_top_hit_se(
+    store_path: str | Path,
+    rows: np.ndarray,
+    cols: np.ndarray,
+    encoding: StoreEncoding,
+) -> np.ndarray:
+    """Collect candidate SE values in row-chunk order, decoded as a query sees them."""
+    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="r")
+    return _gather_in_row_chunks(root, rows, cols, DenseSePlane.open(root, encoding).band)
+
+
+def _gather_in_row_chunks(
+    root: Any,
+    rows: np.ndarray,
+    cols: np.ndarray,
+    band: Callable[[int, int], np.ndarray],
+) -> np.ndarray:
+    """Gather `(rows[i], cols[i])` from a decoded plane, one row chunk at a time.
+
+    Decoding a plane is a band operation; the candidate cells are scattered.
+    Visiting each row chunk once keeps the read sequential and bounds peak
+    memory at one band, which is what makes this affordable inline in a build.
+    """
     rows = np.asarray(rows, dtype=np.int64)
     cols = np.asarray(cols, dtype=np.int64)
     out = np.empty(len(rows), dtype=np.float32)
     if len(rows) == 0:
         return out
     row_chunk = int(root["z"].chunks[0])
+    n_variants = int(root["z"].shape[0])
     order = np.argsort(rows, kind="stable")
     sorted_rows = rows[order]
     for chunk_start in np.unique((sorted_rows // row_chunk) * row_chunk):
-        chunk_stop = min(int(chunk_start) + row_chunk, int(root["z"].shape[0]))
+        chunk_stop = min(int(chunk_start) + row_chunk, n_variants)
         lo = int(np.searchsorted(sorted_rows, chunk_start, side="left"))
         hi = int(np.searchsorted(sorted_rows, chunk_stop, side="left"))
         slots = order[lo:hi]
-        band = plane.band(int(chunk_start), chunk_stop)
-        out[slots] = band[rows[slots] - int(chunk_start), cols[slots]]
+        decoded = band(int(chunk_start), chunk_stop)
+        out[slots] = decoded[rows[slots] - int(chunk_start), cols[slots]]
     return out

@@ -82,11 +82,12 @@ def build_ragged_from_besd(
         if _normalised_source not in ("hg38", "grch38", "b38", "38"):
             print(f"Lifting over {source_build} → hg38 ...")
             lo_input = [
-                (s.chromosome, s.bp, s.a1 or "A", s.a2 or "T")
-                for s in snps if s.a1 and s.a2
+                (s.chromosome, s.bp, s.a1 or "A", s.a2 or "T") for s in snps if s.a1 and s.a2
             ]
             lo_lookup = build_liftover_lookup(
-                lo_input, from_build=source_build, to_build="hg38",
+                lo_input,
+                from_build=source_build,
+                to_build="hg38",
             )
             # Rebuild a map: esi_row_idx → (hg38_chr, hg38_bp)
             _lifted = {}
@@ -110,7 +111,9 @@ def build_ragged_from_besd(
 
         # Collect valid variants, deduplicate by ALID, sort by chr/pos
         alid_to_idx: dict[str, int] = {}
-        candidate: list[tuple[tuple, int, bool, str | None]] = []  # (sort_key, esi_idx, flipped, rsid)
+        candidate: list[
+            tuple[tuple, int, bool, str | None]
+        ] = []  # (sort_key, esi_idx, flipped, rsid)
 
         for snp in snps:
             if snp.a1 is None or snp.a2 is None:
@@ -134,7 +137,7 @@ def build_ragged_from_besd(
         # Sort by genomic position so variant_index is position-ordered
         candidate.sort(key=lambda x: x[0])
 
-        for sort_key, esi_row_idx, variant, flipped, rsid in candidate:
+        for _sort_key, esi_row_idx, variant, flipped, rsid in candidate:
             alid = variant.alid
             if alid in alid_to_idx:
                 # Duplicate ALID — map to the same variant_index
@@ -170,17 +173,19 @@ def build_ragged_from_besd(
                 analysis_id = f"{probe.probe_id}::{tissue}"
 
             is_ensembl = probe.probe_id.startswith("ENSG")
-            analyses.append(molecular_analysis(
-                analysis_id,
-                analysis_label=probe.gene,
-                trait_ontology_id=f"ENSEMBL:{probe.probe_id}" if is_ensembl else None,
-                trait_ontology_label="Ensembl" if is_ensembl else None,
-                tissue=tissue,
-                context=None,
-                trait_chr=probe_chr,
-                trait_bp=probe.probe_bp if probe.probe_bp > 0 else None,
-                n=None,
-            ))
+            analyses.append(
+                molecular_analysis(
+                    analysis_id,
+                    analysis_label=probe.gene,
+                    trait_ontology_id=f"ENSEMBL:{probe.probe_id}" if is_ensembl else None,
+                    trait_ontology_label="Ensembl" if is_ensembl else None,
+                    tissue=tissue,
+                    context=None,
+                    trait_chr=probe_chr,
+                    trait_bp=probe.probe_bp if probe.probe_bp > 0 else None,
+                    n=None,
+                )
+            )
 
         # ── 5. Materialise index.sqlite ──────────────────────────────────────────
         # No `analyses` table (ADR 0034, issue #69): analyses.tsv below is the sole
@@ -213,7 +218,7 @@ def build_ragged_from_besd(
             se_list: list[float] = []
 
             for esi_idx, beta, se in zip(
-                raw_snp_idx.tolist(), betas.tolist(), ses.tolist()
+                raw_snp_idx.tolist(), betas.tolist(), ses.tolist(), strict=True
             ):
                 mapping = esi_to_variant.get(int(esi_idx))
                 if mapping is None:
@@ -234,7 +239,7 @@ def build_ragged_from_besd(
                 csr.add_analysis(
                     np.array(vi_list, dtype=np.int32)[order],
                     np.array(z_list, dtype=np.float32)[order],
-                    np.array(se_list, dtype=np.float16)[order],
+                    np.array(se_list, dtype=np.float32)[order],
                 )
             else:
                 skipped_probes += 1
@@ -251,8 +256,16 @@ def build_ragged_from_besd(
         # (ADR 0037, issue #119). BESD carries no frequencies, so this settles
         # on `eaf: absent` -- stated by the plan rather than left to be
         # inferred from a missing array.
+        eaf_measurements = csr.eaf_measurements()
+        preliminary = StoreEncoding.decide(
+            EncodingMeasurements(n_analyses=len(probes), eaf=eaf_measurements)
+        )
         encoding = StoreEncoding.decide(
-            EncodingMeasurements(n_analyses=len(probes), eaf=csr.eaf_measurements())
+            EncodingMeasurements(
+                n_analyses=len(probes),
+                eaf=eaf_measurements,
+                se=csr.se_measurements(preliminary),
+            )
         )
         print(f"Flushing zarr CSR ({csr.n_associations:,} associations) ...")
         csr.flush(staged.path, encoding)
@@ -266,13 +279,13 @@ def build_ragged_from_besd(
 
         # ── 7b. Write analyses.tsv ────────────────────────────────────────────────
         print("Writing analyses.tsv ...")
-        write_analysis_records(
-            staged.path / "analyses.tsv", add_hit_counts(staged.path, analyses)
-        )
+        write_analysis_records(staged.path / "analyses.tsv", add_hit_counts(staged.path, analyses))
 
         # ── 8. Write manifest.json ───────────────────────────────────────────────
         _write_manifest(
-            staged, store_id, release_id,
+            staged,
+            store_id,
+            release_id,
             n_variants=len(variants),
             n_analyses=len(probes),
             n_associations=csr.n_associations,
@@ -326,7 +339,7 @@ def _write_manifest(
             "n_associations": n_associations,
             "ragged": {
                 "statistic_arrays": ["z", "se"],
-                "se_dtype": "float16",
+                "se_dtype": encoding.se.dtype,
                 "variant_axis": {
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,

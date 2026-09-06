@@ -120,22 +120,24 @@ def _read_manifest(manifest_path: str | Path, filtered_dir: str | Path) -> list[
         for r in csv.DictReader(fh, delimiter="\t"):
             bp = _opt(r.get("trait_bp"))
             n = _opt(r.get("n"))
-            rows.append(AnalyteInput(
-                analysis_index=int(r["analysis_index"]),
-                analysis_id=r["analysis_id"],
-                analysis_label=_opt(r.get("analysis_label")),
-                trait_ontology_id=_opt(r.get("trait_ontology_id")),
-                trait_ontology_label=_opt(r.get("trait_ontology_label")),
-                trait_chr=_opt(r.get("trait_chr")),
-                trait_bp=int(bp) if bp else None,
-                n=int(n) if n else None,
-                tissue=_opt(r.get("tissue")),
-                context=_opt(r.get("context")),
-                mhc=str(r.get("mhc", "")).strip().upper() in {"TRUE", "1", "YES"},
-                filtered_path=Path(filtered_dir) / r["filtered_file"],
-                assigned_ancestry=_opt(r.get("assigned_ancestry")) or "",
-                metadata=PassthroughMetadata.from_manifest_row(r),
-            ))
+            rows.append(
+                AnalyteInput(
+                    analysis_index=int(r["analysis_index"]),
+                    analysis_id=r["analysis_id"],
+                    analysis_label=_opt(r.get("analysis_label")),
+                    trait_ontology_id=_opt(r.get("trait_ontology_id")),
+                    trait_ontology_label=_opt(r.get("trait_ontology_label")),
+                    trait_chr=_opt(r.get("trait_chr")),
+                    trait_bp=int(bp) if bp else None,
+                    n=int(n) if n else None,
+                    tissue=_opt(r.get("tissue")),
+                    context=_opt(r.get("context")),
+                    mhc=str(r.get("mhc", "")).strip().upper() in {"TRUE", "1", "YES"},
+                    filtered_path=Path(filtered_dir) / r["filtered_file"],
+                    assigned_ancestry=_opt(r.get("assigned_ancestry")) or "",
+                    metadata=PassthroughMetadata.from_manifest_row(r),
+                )
+            )
     rows.sort(key=lambda a: a.analysis_index)
     # analysis_index must be a dense 0..n-1 sequence for CSR offset alignment.
     for expected, a in enumerate(rows):
@@ -167,8 +169,10 @@ def _read_filtered(
         for row in reader:
             try:
                 ori = orient_to_canonical(
-                    row["chromosome"], row["base_pair_location"],
-                    row["effect_allele"], row["other_allele"],
+                    row["chromosome"],
+                    row["base_pair_location"],
+                    row["effect_allele"],
+                    row["other_allele"],
                 )
             except (VariantNormalisationError, KeyError):
                 continue
@@ -312,9 +316,7 @@ def build_ragged_from_ssf(
         eaf_report = check_eaf_orientation(
             {
                 a.analysis_id: {
-                    r.alid: r.eaf
-                    for r in recs
-                    if r.eaf is not None and r.alid in wanted_sites
+                    r.alid: r.eaf for r in recs if r.eaf is not None and r.alid in wanted_sites
                 }
                 for a, recs in zip(analytes, per_analysis, strict=True)
             },
@@ -347,11 +349,9 @@ def build_ragged_from_ssf(
                 )
                 eaf_scopes.append(EafScope.ABSENT.value)
                 continue
-            vi = np.fromiter(
-                (alid_to_idx[r.alid] for r in recs), dtype=np.int32, count=len(recs)
-            )
+            vi = np.fromiter((alid_to_idx[r.alid] for r in recs), dtype=np.int32, count=len(recs))
             z_arr = np.fromiter((r.z for r in recs), dtype=np.float32, count=len(recs))
-            se_arr = np.fromiter((r.se for r in recs), dtype=np.float16, count=len(recs))
+            se_arr = np.fromiter((r.se for r in recs), dtype=np.float32, count=len(recs))
             eaf_arr = np.fromiter(
                 (np.nan if r.eaf is None else r.eaf for r in recs),
                 dtype=np.float32,
@@ -359,9 +359,7 @@ def build_ragged_from_ssf(
             )
             order = np.argsort(vi, kind="stable")
             has_eaf = bool(np.isfinite(eaf_arr).any())
-            eaf_scopes.append(
-                EafScope.ASSOCIATION.value if has_eaf else EafScope.ABSENT.value
-            )
+            eaf_scopes.append(EafScope.ASSOCIATION.value if has_eaf else EafScope.ABSENT.value)
             csr.add_analysis(
                 vi[order],
                 z_arr[order],
@@ -370,8 +368,16 @@ def build_ragged_from_ssf(
             )
         # One encoding plan per build, decided here from the frequencies the
         # build actually holds and recorded in the manifest (ADR 0037, #119).
+        eaf_measurements = csr.eaf_measurements()
+        preliminary = StoreEncoding.decide(
+            EncodingMeasurements(n_analyses=len(analytes), eaf=eaf_measurements)
+        )
         encoding = StoreEncoding.decide(
-            EncodingMeasurements(n_analyses=len(analytes), eaf=csr.eaf_measurements())
+            EncodingMeasurements(
+                n_analyses=len(analytes),
+                eaf=eaf_measurements,
+                se=csr.se_measurements(preliminary),
+            )
         )
         csr.flush(staged.path, encoding)
 
@@ -384,8 +390,11 @@ def build_ragged_from_ssf(
                 analysis_label=a.analysis_label,
                 trait_ontology_id=a.trait_ontology_id,
                 trait_ontology_label=a.trait_ontology_label,
-                tissue=a.tissue, context=a.context,
-                trait_chr=a.trait_chr, trait_bp=a.trait_bp, n=a.n,
+                tissue=a.tissue,
+                context=a.context,
+                trait_chr=a.trait_chr,
+                trait_bp=a.trait_bp,
+                n=a.n,
                 stored_effect_scale=stored_effect_scale,
                 assigned_ancestry=a.assigned_ancestry,
                 metadata=a.metadata,
@@ -399,9 +408,13 @@ def build_ragged_from_ssf(
         )
 
         _write_manifest(
-            staged, store_id, release_id,
-            n_variants=len(variants), n_analyses=len(analytes),
-            n_associations=csr.n_associations, manifest_path=str(manifest_path),
+            staged,
+            store_id,
+            release_id,
+            n_variants=len(variants),
+            n_analyses=len(analytes),
+            n_associations=csr.n_associations,
+            manifest_path=str(manifest_path),
             stored_effect_scale=stored_effect_scale,
             mhc_analyses=[a.analysis_id for a in analytes if a.mhc],
             encoding=encoding,
@@ -417,9 +430,16 @@ def build_ragged_from_ssf(
 
 
 def _write_manifest(
-    staged: StagedRelease, store_id: str, release_id: str, *,
-    n_variants: int, n_analyses: int, n_associations: int,
-    manifest_path: str, stored_effect_scale: str, mhc_analyses: list[str],
+    staged: StagedRelease,
+    store_id: str,
+    release_id: str,
+    *,
+    n_variants: int,
+    n_analyses: int,
+    n_associations: int,
+    manifest_path: str,
+    stored_effect_scale: str,
+    mhc_analyses: list[str],
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
@@ -444,7 +464,7 @@ def _write_manifest(
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
             "ragged": {
                 "statistic_arrays": ["z", "se"],
-                "se_dtype": "float16",
+                "se_dtype": encoding.se.dtype,
                 "variant_axis": {
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,

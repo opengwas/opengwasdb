@@ -15,6 +15,16 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Fixed
 
+- **The general Dense builder discarded every effect allele frequency it was
+  given** (#118). `build_dense_observed_store` read `z` and `se` off each
+  `NormalisedAssociation` and dropped `eaf`, writing no plane and stamping no
+  `eaf_scope` — a store built this way reported "this Analysis has no
+  frequencies" for a source that supplied them for every cell. It now writes
+  the plane, its baseline and its exception table, and marks the Analyses that
+  carry frequencies `eaf_scope=association` with orientation `unverified` (this
+  builder has no reference panel to check against). Residual-coded `se` needs
+  that plane, which is how the omission surfaced.
+
 - **A long indel could answer another variant's lookup** (#127). The ALID
   search index is a fixed-width array — that is what makes `np.searchsorted`
   work over it as an mmap — but it was built with
@@ -72,6 +82,12 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   index, per-Analysis top hits recovered from the 86.6 ms regression to
   1.301 ms (pre-EAF: 1.17 ms), while global top hits recovered from 7,129 ms
   to 473.945 ms (pre-EAF: 488 ms).
+
+- **Store format 3.0 adds conditional residual-coded Standard Errors** (#118,
+  #137–#142). Every SE consumer now reads physical `float32` values through a
+  decoded Dense/CSR plane. Eligible builds fit against decoded EAF, select a
+  measured ±0.5/±1/±2 residual range, and persist coefficients plus exact
+  exceptions; ineligible or non-saving planes remain `float16`.
 
 - **`eaf` is stored as a per-variant baseline plus a per-cell `int8` logit
   residual, and `format_version` moves to `2.0`** (#116, ADR 0037 §2/§4).
@@ -518,7 +534,7 @@ it can read.
 | package | writes `format_version` | reads |
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
-| unreleased (`dev`) | 2.0 | 0.x, 1.x, 2.0 |
+| unreleased (`dev`) | 3.0 | 0.x, 1.x, 2.0, 3.0 |
 
 [Unreleased]: https://github.com/opengwas/opengwasdb/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/opengwas/opengwasdb/releases/tag/v0.2.0
