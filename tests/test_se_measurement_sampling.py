@@ -135,5 +135,5 @@ def test_the_record_says_what_the_measurement_saw(tmp_path) -> None:
     assert record.dense.total_chunks == 40
     assert record.to_manifest() == {
         "dense": {"sampled_chunks": 4, "total_chunks": 40},
-        "overflow": "none",
+        "csr": "none",
     }

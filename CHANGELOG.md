@@ -86,6 +86,26 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   than a guess. The same instrumentation is available to any caller of
   `optimise_dense_se_joint`; a caller that passes no timer is unchanged.
 
+- **The SE encoding is chosen from a bounded sample of chunks, and the manifest
+  says so** (#146, #147). The survey that decides the residual range used to
+  compress every cell up to four times — once per candidate range plus the
+  `float16` baseline — so a genome-scale Dense store or an in-place migration
+  paid a full survey for a decision that only needs representative
+  statistics. The Dense measurement and the in-memory measurement behind
+  Ragged stores and a Hybrid's Overflow Component now visit at most 64 whole
+  chunks of each plane, chosen by one deterministic even-spread rule
+  (`sample_chunks`), and scale compressed byte totals up by the cells they
+  saw. The per-Analysis fit, the exact exceptions and the rewrite stay
+  exhaustive: only the range choice is estimated, and the per-Analysis
+  exception shares that gate the plane are measured on sampled cells where
+  the scale cancels, so a badly fitting Analysis that is a small share of the
+  store is still caught (#146 AC6). `manifest.json` provenance now records
+  `se_measurement` — sampled vs total chunks per component — rather than
+  leaving a reader to assume the survey saw everything; the `encoding` block
+  and every reader's decode contract are unchanged. The rewrite sizes its
+  exception table from its own codes-only count, not from the survey, which
+  is what lets the survey be sampled at all (#145).
+
 - **Getting-started documentation now covers the first local Store Release**
   (#110). A fresh checkout can follow `docs/getting-started.md` to install with
   Pixi, build and validate the in-repository tiny Dense fixture, run PheWAS,

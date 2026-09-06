@@ -103,13 +103,11 @@ class SeMeasurementRecord:
     """
 
     dense: ChunkSample | None = None
-    overflow: ChunkSample | None = None
+    csr: ChunkSample | None = None
 
     @classmethod
-    def of(
-        cls, dense: ChunkSample | None, overflow: ChunkSample | None = None
-    ) -> SeMeasurementRecord:
-        return cls(dense=dense, overflow=overflow)
+    def of(cls, dense: ChunkSample | None, csr: ChunkSample | None = None) -> SeMeasurementRecord:
+        return cls(dense=dense, csr=csr)
 
     def to_manifest(self) -> dict[str, dict[str, int] | str]:
         def describe(sample: ChunkSample | None) -> dict[str, int] | str:
@@ -117,7 +115,7 @@ class SeMeasurementRecord:
                 return "none"
             return sample.to_manifest()
 
-        return {"dense": describe(self.dense), "overflow": describe(self.overflow)}
+        return {"dense": describe(self.dense), "csr": describe(self.csr)}
 
 
 def _packed_bytes(compressor: object | None, data: np.ndarray) -> int:
@@ -191,55 +189,43 @@ def solve_log_se(
     return coefficients, bool(np.all(np.isfinite(coefficients)))
 
 
-def _fit_log_se(
-    s: np.ndarray, f: np.ndarray, ai: np.ndarray, n_analyses: int, finite: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, bool]:
-    """Fit every Analysis in one pass, and keep each fitted cell's residual.
+def _solve_from_all_cells(
+    s: np.ndarray, f: np.ndarray, ai: np.ndarray, n_analyses: int
+) -> tuple[np.ndarray, bool]:
+    """One vectorised bincount pass for per-Analysis coefficients.
 
-    One pass of `np.bincount` rather than a mask per Analysis: the Ragged
-    builders hold the whole store in memory already, and a loop over Analyses
-    would make the fit quadratic in a dimension that grows.
+    The coefficients are stored data, so the fit is deliberately exhaustive
+    even though the measurement below samples (issue #146/#147): sampling the
+    fit would change what a store contains, not just how its range was chosen.
     """
-    residual = np.full(s.shape, np.nan, dtype=np.float64)
-    use = finite & (s > 0) & (f > 0) & (f < 1)
+    use = (s > 0) & (f > 0) & (f < 1)
     selected = ai[use]
     x = np.log(2 * f[use] * (1 - f[use]))
     y = np.log(s[use])
-    coefficients, eligible = solve_log_se(
+    return solve_log_se(
         np.bincount(selected, minlength=n_analyses).astype(np.float64),
         np.bincount(selected, weights=x, minlength=n_analyses),
         np.bincount(selected, weights=y, minlength=n_analyses),
         np.bincount(selected, weights=x * x, minlength=n_analyses),
         np.bincount(selected, weights=x * y, minlength=n_analyses),
     )
-    if not eligible:
-        return coefficients, residual, False
-    residual[use] = y - (
-        coefficients[selected, 0].astype(np.float64)
-        + coefficients[selected, 1].astype(np.float64) * x
-    )
-    return coefficients, residual, True
 
 
-def _candidate_bytes(
-    compressor: object | None,
-    stored: np.ndarray,
-    chunks: tuple[int, ...] | int | None,
-    coefficients: np.ndarray,
-    exceptions: np.ndarray,
-    values: np.ndarray,
+def _charge_stored_unit(
+    compressor: object | None, data: np.ndarray, *, columns: int, col_chunk: int
 ) -> int:
-    """Everything one candidate range actually costs on disk.
+    """Compressed bytes of one measured unit in the shape it is stored in.
 
-    Codes, coefficients and both side arrays: comparing only the codes against
-    `float16` would accept a range whose exception table more than gives the
-    saving back.
+    A CSR unit is one flat chunk. A grid unit is a row band cut into its
+    column chunks, mirroring the 2-D partition `_packed_chunks` applies to a
+    whole grid -- so a full sample charges exactly what the whole plane does.
     """
-    return (
-        _packed_chunks(compressor, stored, chunks)
-        + _packed_chunks(compressor, coefficients, (min(max(len(coefficients), 1), 1024), 2))
-        + _packed_chunks(compressor, np.flatnonzero(exceptions).astype(np.int64), EXACT_TABLE_CHUNK)
-        + _packed_chunks(compressor, values[exceptions].astype(np.float32), EXACT_TABLE_CHUNK)
+    if columns == 1:
+        return _packed_bytes(compressor, np.ascontiguousarray(data))
+    shaped = np.ascontiguousarray(data).reshape(-1, columns)
+    return sum(
+        _packed_bytes(compressor, shaped[:, c0 : c0 + col_chunk])
+        for c0 in range(0, columns, col_chunk)
     )
 
 
@@ -251,14 +237,25 @@ def fit_se(
     n_analyses: int,
     compressor: object | None = None,
     chunks: tuple[int, ...] | int | None = None,
+    measure_max_chunks: int = MAX_MEASURED_CHUNKS,
+    record: SeMeasurementRecord | None = None,
 ) -> tuple[np.ndarray, SeMeasurements]:
-    """Fit per-Analysis log-SE models and measure the complete candidate costs.
+    """Fit per-Analysis log-SE models and measure the candidate costs.
 
     EAF must already have made its encode/decode round trip. The compressed
     comparison includes codes, coefficients, and exact side-table rows.
+
+    The measurement runs on a bounded, deterministic sample of the axis's
+    whole chunks and scales byte totals up by the cells it saw (issue #147);
+    the coefficients and the eligibility sweep stay exhaustive. A plane with
+    fewer chunks than the cap is measured in full, byte-identical to the
+    pre-sampling survey.
     """
-    se_shape = np.asarray(se).shape
-    s = np.asarray(se, dtype=np.float64).ravel()
+    original = np.asarray(se)
+    if original.ndim not in (1, 2):
+        raise ValueError(f"se must be 1-D (CSR) or 2-D (grid), got {original.ndim}-D")
+    se_shape = original.shape
+    s = original.astype(np.float64).ravel()
     f = np.asarray(eaf, dtype=np.float64).ravel()
     ai = np.asarray(analysis_index, dtype=np.int64).ravel()
     if not (s.shape == f.shape == ai.shape):
@@ -266,15 +263,133 @@ def fit_se(
     finite = np.isfinite(s)
     eligible = bool(np.all(np.isfinite(f[finite])))
     coef = np.full((n_analyses, 2), np.nan, dtype=np.float32)
-    residual = np.full(s.shape, np.nan, dtype=np.float64)
     if eligible:
-        coef, residual, eligible = _fit_log_se(s, f, ai, n_analyses, finite)
+        coef, solved = _solve_from_all_cells(s, f, ai, n_analyses)
+        eligible = solved
 
-    # Per Analysis, not pooled: issue #118 reverts the plane when *any*
-    # Analysis fits badly, and a pooled share lets one bad Analysis hide
-    # behind its well-fitting neighbours.
-    finite_per_analysis = np.bincount(ai[finite], minlength=n_analyses)
+    # The measurement unit is one whole chunk of the axis the plane is stored
+    # on: for a CSR that is a flat run of associations, for a grid a run of
+    # whole rows (all analyses, cut into column chunks for the byte charge).
+    if original.ndim == 2:
+        columns = int(se_shape[1])
+        row_chunk = (
+            int(chunks[0]) if isinstance(chunks, tuple) and len(chunks) == 2 else int(se_shape[0])
+        )
+        col_chunk = int(chunks[1]) if isinstance(chunks, tuple) and len(chunks) == 2 else columns
+        unit_len = row_chunk * columns
+        sample = sample_chunks(int(se_shape[0]), row_chunk, max_chunks=measure_max_chunks)
+    else:
+        columns = 1
+        col_chunk = 1
+        chunk_len = (
+            int(chunks)
+            if isinstance(chunks, int)
+            else int(chunks[0])
+            if isinstance(chunks, tuple)
+            else int(len(s))
+        )
+        unit_len = chunk_len
+        sample = sample_chunks(int(len(s)), chunk_len, max_chunks=measure_max_chunks)
+    if record is not None:
+        record.csr = sample
+    if sample.is_full:
+        return coef, _measure_full(
+            s, f, ai, coef, compressor, chunks, se_shape, n_analyses, eligible
+        )
+
+    float16_bytes = 0
+    code_bytes = dict.fromkeys(SE_RANGE_CANDIDATES, 0)
+    side_bytes = dict.fromkeys(SE_RANGE_CANDIDATES, 0)
+    finite_per_analysis = np.zeros(n_analyses, dtype=np.int64)
+    exception_counts = {
+        candidate: np.zeros(n_analyses, dtype=np.int64) for candidate in SE_RANGE_CANDIDATES
+    }
+    sampled_cells = 0
+    coefficient_bytes = _packed_chunks(compressor, coef, (min(max(len(coef), 1), 1024), 2))
+    # Each sampled chunk keeps its Analysis indexes: a chunk is a full-width row
+    # band of a grid or a contiguous CSR run, and the per-Analysis exception
+    # share is taken over the sample so the scale cancels (issue #146 AC6).
+    for axis_start in sample.starts:
+        start = axis_start * columns
+        end = min(start + unit_len, len(s))
+        unit_s = s[start:end]
+        unit_f = f[start:end]
+        unit_ai = ai[start:end]
+        sampled_cells += unit_s.size
+        present = np.isfinite(unit_s)
+        finite_per_analysis += np.bincount(unit_ai[present], minlength=n_analyses)
+        float16_bytes += _charge_stored_unit(
+            compressor, unit_s.astype(np.float16), columns=columns, col_chunk=col_chunk
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            prediction = coef[unit_ai, 0] + coef[unit_ai, 1] * np.log(2 * unit_f * (1 - unit_f))
+            residual = np.log(unit_s) - prediction
+        for candidate in SE_RANGE_CANDIDATES:
+            step = candidate / 127.0
+            stored, exceptions = se_residual_codes(unit_s, residual, step)
+            code_bytes[candidate] += _charge_stored_unit(
+                compressor, stored, columns=columns, col_chunk=col_chunk
+            )
+            exception_counts[candidate] += np.bincount(unit_ai[exceptions], minlength=n_analyses)
+            if np.any(exceptions):
+                flat = np.arange(start, end, dtype=np.int64)[exceptions]
+                side_bytes[candidate] += _packed_bytes(compressor, flat) + _packed_bytes(
+                    compressor, unit_s[exceptions].astype(np.float32)
+                )
+    scale = len(s) / max(sampled_cells, 1)
     carrying = finite_per_analysis > 0
+    fractions: dict[float, float] = {}
+    errors: dict[float, float] = {}
+    sizes: dict[float, int] = {}
+    for candidate in SE_RANGE_CANDIDATES:
+        per_analysis = exception_counts[candidate]
+        fractions[candidate] = (
+            float(np.max(per_analysis[carrying] / finite_per_analysis[carrying]))
+            if np.any(carrying)
+            else 0.0
+        )
+        errors[candidate] = float(np.expm1(candidate / 254))
+        sizes[candidate] = (
+            int(round((code_bytes[candidate] + side_bytes[candidate]) * scale)) + coefficient_bytes
+        )
+    return coef, SeMeasurements(
+        eligible=eligible and bool(np.all(np.isfinite(coef))),
+        exception_fraction=fractions,
+        worst_relative_error=errors,
+        compressed_bytes=sizes,
+        float16_compressed_bytes=int(round(float16_bytes * scale)),
+    )
+
+
+def _measure_full(
+    s: np.ndarray,
+    f: np.ndarray,
+    ai: np.ndarray,
+    coef: np.ndarray,
+    compressor: object | None,
+    chunks: tuple[int, ...] | int | None,
+    se_shape: tuple[int, ...],
+    n_analyses: int,
+    eligible: bool,
+) -> SeMeasurements:
+    """The exhaustive survey, kept byte-identical for planes under the cap.
+
+    A plane with fewer chunks than `MAX_MEASURED_CHUNKS` is measured in full;
+    keeping the pre-sampling arithmetic here (rather than running the sampled
+    loop over every chunk) is what lets the small pilots stay byte-for-byte
+    unchanged, which the parity tests and #146 AC3 depend on.
+    """
+    residual = np.full(s.shape, np.nan, dtype=np.float64)
+    use = np.isfinite(s) & (s > 0) & (f > 0) & (f < 1)
+    selected = ai[use]
+    x = np.log(2 * f[use] * (1 - f[use]))
+    y = np.log(s[use])
+    residual[use] = y - (
+        coef[selected, 0].astype(np.float64) + coef[selected, 1].astype(np.float64) * x
+    )
+    finite_per_analysis = np.bincount(ai[np.isfinite(s)], minlength=n_analyses)
+    carrying = finite_per_analysis > 0
+    coefficient_bytes = _packed_chunks(compressor, coef, (min(max(len(coef), 1), 1024), 2))
     fractions: dict[float, float] = {}
     errors: dict[float, float] = {}
     sizes: dict[float, int] = {}
@@ -288,10 +403,15 @@ def fit_se(
             else 0.0
         )
         errors[candidate] = float(np.expm1(step / 2.0))
-        sizes[candidate] = _candidate_bytes(
-            compressor, stored.reshape(se_shape), chunks, coef, exceptions, s
+        sizes[candidate] = (
+            _packed_chunks(compressor, stored.reshape(se_shape), chunks)
+            + coefficient_bytes
+            + _packed_chunks(
+                compressor, np.flatnonzero(exceptions).astype(np.int64), EXACT_TABLE_CHUNK
+            )
+            + _packed_chunks(compressor, s[exceptions].astype(np.float32), EXACT_TABLE_CHUNK)
         )
-    return coef, SeMeasurements(
+    return SeMeasurements(
         eligible=eligible and bool(np.all(np.isfinite(coef))),
         exception_fraction=fractions,
         worst_relative_error=errors,
@@ -308,6 +428,8 @@ def fit_se_grid(
     *,
     compressor: object | None = None,
     chunks: tuple[int, int] | None = None,
+    measure_max_chunks: int = MAX_MEASURED_CHUNKS,
+    record: SeMeasurementRecord | None = None,
 ) -> tuple[np.ndarray, SeMeasurements]:
     block = np.asarray(se)
     if block.ndim != 2:
@@ -320,6 +442,8 @@ def fit_se_grid(
         n_analyses=block.shape[1],
         compressor=compressor,
         chunks=chunks,
+        measure_max_chunks=measure_max_chunks,
+        record=record,
     )
 
 

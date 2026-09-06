@@ -613,7 +613,7 @@ def optimise_dense_se_joint(
         overflow_coefficient_bytes = _packed_coefficients(overflow_compressor, coefficients)
     if record is not None:
         record.dense = dense_sample
-        record.overflow = overflow_sample
+        record.csr = overflow_sample
 
     measured = _shared_measurements(
         dense,
