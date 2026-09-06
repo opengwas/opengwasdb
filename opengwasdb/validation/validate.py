@@ -662,7 +662,8 @@ def _validate_ragged_top_hits(
         )
         if len(sample_positions) == len(sample):
             expected_se = csr.se_at(np.asarray(sample_positions, dtype=np.int64))
-            if not np.allclose(ses[sample], expected_se, rtol=1e-3, atol=1e-3, equal_nan=True):
+            # Same tolerance, same reason, as the Dense band check above.
+            if not np.allclose(ses[sample], expected_se, rtol=1e-6, atol=0.0, equal_nan=True):
                 errors.append(f"top-hit index {key} se value inconsistent with decoded CSR se")
         if eaf is not None and len(sample_positions) == len(sample):
             expected_eaf = csr.eaf_at(np.asarray(sample_positions, dtype=np.int64))
@@ -2007,8 +2008,14 @@ def _check_top_hit_band(
     bc = g["cols"][in_band]
     if not _band_z_consistent(g, z_band[br, bc], in_band):
         g["consistent"] = False
+    # rtol=1e-6, atol=0: the index is *written* from the decoded plane, so the
+    # two are bit-identical in a sound store and anything looser hides the
+    # defect this checks for. A stale index left over from a format migration
+    # differs by the coding's half step -- 0.197% at range 0.5 -- which against
+    # a typical SE of 0.05 is 1e-4, and an atol of 1e-3 waves it straight
+    # through. Measured on the FinnGen R13 pilot, where exactly that happened.
     _mark_band_mismatch(
-        g, "se_consistent", se_band[br, bc], g["se_values"][in_band], rtol=1e-3, atol=1e-3
+        g, "se_consistent", se_band[br, bc], g["se_values"][in_band], rtol=1e-6, atol=0.0
     )
     if g["imputed_values"] is not None and imputed_arr is not None:
         gathered = imputed_arr[r0:r1][br, bc].astype(np.uint8)

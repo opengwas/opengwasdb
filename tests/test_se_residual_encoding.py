@@ -529,3 +529,34 @@ def test_dense_completion_round_trips_imputed_cells_under_a_residual_plan(tmp_pa
         observed = query.analysis("a", observed_only=True)
         assert len(observed["se"]) == len(expected["a"])
         np.testing.assert_allclose(observed["se"], expected["a"], rtol=0.01)
+
+
+def test_validation_catches_a_top_hit_index_left_behind_by_a_migration(tmp_path) -> None:
+    """A stale index differs from its plane by the coding's half step, not more.
+
+    Re-encoding an existing store's `se` without rebuilding its top-hit index
+    leaves the index holding pre-quantisation values. Measured on the FinnGen
+    R13 pilot the gap was 1.970e-03 relative — exactly `expm1(0.5/254)` — and
+    5.0e-04 absolute, which an `atol` of 1e-3 waves through. The check has to
+    be tight enough to see it.
+    """
+    store, expected = _build_residual_dense_store(tmp_path)
+    assert validate_store(store).ok
+
+    top = zarr.open_group(str(store / "data.zarr" / "top_hits"), mode="a")[threshold_key(5e-8)]
+    rows = top["variant_index"][:].astype(np.int64)
+    cols = top["analysis_index"][:].astype(np.int64)
+    stale = np.array(
+        [expected["a" if col == 0 else "b"][row] for row, col in zip(rows, cols, strict=True)],
+        dtype=np.float32,
+    )
+    # The fixture only tests anything if the source and the plane really differ,
+    # and only tests the *tolerance* if the gap is small in absolute terms.
+    decoded = top["se"][:].astype(np.float32)
+    assert not np.array_equal(stale, decoded)
+    assert np.max(np.abs(stale - decoded)) < 1e-3
+
+    top["se"][:] = stale
+    result = validate_store(store)
+    assert not result.ok
+    assert any("se value inconsistent" in error for error in result.errors), result.errors
