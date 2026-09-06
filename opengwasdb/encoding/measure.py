@@ -14,6 +14,8 @@ the exception fraction the build will actually produce.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from opengwasdb.encoding.codec import (
@@ -32,6 +34,90 @@ from opengwasdb.encoding.plan import (
     EafMeasurements,
     SeMeasurements,
 )
+
+#: The largest number of an axis's chunks a measurement will visit. The bound
+#: is deliberately a constant, not a share: it is what keeps the survey cost
+#: from growing with the store (issue #146). A plane with fewer chunks than
+#: this is measured exhaustively; a larger one is measured on an even spread
+#: of whole chunks and the byte totals are scaled up by what was seen.
+MAX_MEASURED_CHUNKS = 64
+
+
+@dataclass(frozen=True)
+class ChunkSample:
+    """A deterministic even-spread of whole chunks over one axis.
+
+    Selection is a pure function of ``(axis_length, step)``: the same plane is
+    always sampled in the same places, so two builds of the same store make the
+    same decision (issue #146 AC2). `starts` are ascending axis offsets of the
+    chunks to visit, in physical order; whole chunks are sampled, never
+    individual cells, because a chunk is the unit zarr compresses and the
+    measurement is estimating compressed size.
+    """
+
+    starts: tuple[int, ...]
+    total_chunks: int
+
+    @property
+    def sampled_chunks(self) -> int:
+        return len(self.starts)
+
+    @property
+    def is_full(self) -> bool:
+        """Whether every chunk was sampled -- the plane was measured in full."""
+        return self.sampled_chunks == self.total_chunks
+
+    def to_manifest(self) -> dict[str, int]:
+        return {
+            "sampled_chunks": self.sampled_chunks,
+            "total_chunks": self.total_chunks,
+        }
+
+
+def sample_chunks(
+    axis_length: int, step: int, *, max_chunks: int = MAX_MEASURED_CHUNKS
+) -> ChunkSample:
+    """Pick at most `max_chunks` whole chunks, spread evenly over the axis.
+
+    Chunk `i` of `total` is visited when ``i * total // max_chunks`` lands on
+    it, so the sample always includes the axis's first chunk and spreads the
+    rest at an even stride. With `total <= max_chunks` every chunk is sampled
+    and the decision is exactly the exhaustive one; a larger plane is sampled
+    and the caller scales byte totals by the cells it saw.
+    """
+    total = max(1, int(np.ceil(axis_length / max(step, 1))))
+    keep = min(total, max(max_chunks, 1))
+    starts = tuple(i * step for i in (int(i * total // keep) for i in range(keep)))
+    return ChunkSample(starts=starts, total_chunks=total)
+
+
+@dataclass
+class SeMeasurementRecord:
+    """What the SE measurement saw, for the manifest's provenance (issue #146).
+
+    A decision this format stores must say how it was reached: a reader that
+    assumes an exhaustive survey when the range was chosen from a sample is
+    assuming work that never happened. The record lives in `manifest.json`
+    provenance -- it is about the build, not about decoding -- so it does not
+    extend the `encoding` block or change what a reader must implement.
+    """
+
+    dense: ChunkSample | None = None
+    overflow: ChunkSample | None = None
+
+    @classmethod
+    def of(
+        cls, dense: ChunkSample | None, overflow: ChunkSample | None = None
+    ) -> SeMeasurementRecord:
+        return cls(dense=dense, overflow=overflow)
+
+    def to_manifest(self) -> dict[str, dict[str, int] | str]:
+        def describe(sample: ChunkSample | None) -> dict[str, int] | str:
+            if sample is None:
+                return "none"
+            return sample.to_manifest()
+
+        return {"dense": describe(self.dense), "overflow": describe(self.overflow)}
 
 
 def _packed_bytes(compressor: object | None, data: np.ndarray) -> int:

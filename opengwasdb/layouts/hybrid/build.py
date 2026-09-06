@@ -38,6 +38,7 @@ from opengwasdb.encoding import (
     combine_eaf_measurements,
     optimise_dense_se_joint,
 )
+from opengwasdb.encoding.measure import SeMeasurementRecord
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     _RESOLVE_BATCH,
@@ -639,10 +640,12 @@ def build_hybrid_from_vcf_manifest(
             # isolation could leave the shared manifest describing only half
             # of the data it governs.
             dense_group = dense_staged.arrays(mode="a")
+            se_record = SeMeasurementRecord()
             encoding, se_coefficients = optimise_dense_se_joint(
                 dense_group,
                 encoding,
                 overflow=csr.se_fit_inputs(encoding),
+                record=se_record,
             )
 
             # After the SE decision, not before: the index carries the values a
@@ -663,6 +666,7 @@ def build_hybrid_from_vcf_manifest(
                 dtype,
                 encoding=encoding,
                 eaf_orientation=eaf_provenance,
+                se_record=se_record,
             )
             write_analyses_tsv(dense_dir, add_hit_counts(dense_dir, analyses))
         finally:
@@ -689,6 +693,7 @@ def build_hybrid_from_vcf_manifest(
             dtype,
             encoding=encoding,
             eaf_orientation=eaf_provenance,
+            se_record=se_record,
         )
 
         # ── Shared union table + shared index ─────────────────────────────────────
@@ -752,6 +757,7 @@ def _write_dense_manifest(
     dtype: str,
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
+    se_record: SeMeasurementRecord | None = None,
 ) -> None:
     manifest = StoreManifest(
         encoding=encoding,
@@ -770,6 +776,7 @@ def _write_dense_manifest(
             "n_analyses": n_analyses,
             "dense": {"statistic_arrays": ["z", "se"], "se_dtype": encoding.se.dtype},
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
+            **({"se_measurement": se_record.to_manifest()} if se_record is not None else {}),
         },
     )
     dense_staged.write_manifest(manifest)
@@ -789,6 +796,7 @@ def _write_hybrid_manifest(
     dtype: str,
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
+    se_record: SeMeasurementRecord | None = None,
 ) -> None:
     manifest = StoreManifest(
         encoding=encoding,
@@ -815,6 +823,7 @@ def _write_hybrid_manifest(
                 "compressor": DEFAULT_COMPRESSOR,
             },
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
+            **({"se_measurement": se_record.to_manifest()} if se_record is not None else {}),
         },
     )
     staged.write_manifest(manifest)

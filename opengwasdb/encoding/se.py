@@ -16,7 +16,13 @@ from opengwasdb.encoding.codec import (
     positions_row_band,
     se_residual_codes,
 )
-from opengwasdb.encoding.measure import solve_log_se
+from opengwasdb.encoding.measure import (
+    MAX_MEASURED_CHUNKS,
+    ChunkSample,
+    SeMeasurementRecord,
+    sample_chunks,
+    solve_log_se,
+)
 from opengwasdb.encoding.plan import (
     SE_MISSING,
     SE_RANGE_CANDIDATES,
@@ -180,9 +186,21 @@ def _measure_dense(
     eaf_plane: DenseEafPlane,
     coefficients: np.ndarray,
     timer: PhaseTimer,
+    sample: ChunkSample | None = None,
 ) -> ComponentCost:
+    """Estimate what the whole plane costs from a bounded sample of row chunks.
+
+    The survey reads only the row chunks `sample` picks and scales the
+    compressed byte totals by the cells it saw (issue #146). Per-Analysis
+    exception counts stay as sampled cells -- they are only ever divided by
+    that Analysis's own sampled finite count, so the scale cancels and the
+    share is an estimate of the whole-plane one. `None` measures every chunk,
+    which is what every caller below the new Dense path used to do.
+    """
     n_rows, n_analyses = map(int, source.shape)
     row_chunk, col_chunk = map(int, source.chunks)
+    if sample is None:
+        sample = sample_chunks(n_rows, row_chunk)
     compressor = source.compressor
     sides = {candidate: _SideTableCost(compressor, n_analyses) for candidate in SE_RANGE_CANDIDATES}
     code_bytes = dict.fromkeys(SE_RANGE_CANDIDATES, 0)
@@ -190,12 +208,14 @@ def _measure_dense(
     finite_per_analysis = np.zeros(n_analyses, dtype=np.int64)
     columns = np.arange(n_analyses, dtype=np.int64)
     analysis_index = np.broadcast_to(columns, (row_chunk, n_analyses))
-    for r0 in range(0, n_rows, row_chunk):
+    sampled_cells = 0
+    for r0 in sample.starts:
         r1 = min(r0 + row_chunk, n_rows)
         with timer.phase("measure.read"):
             values = np.asarray(source[r0:r1], dtype=np.float32)
             frequencies = eaf_plane.band(r0, r1)
             finite_per_analysis += np.isfinite(values).sum(axis=0).astype(np.int64)
+            sampled_cells += values.size
         ai = analysis_index[: r1 - r0]
         with timer.phase("measure.float16"):
             float_bytes += _charge_in_column_chunks(
@@ -214,7 +234,14 @@ def _measure_dense(
                     values[exceptional],
                     ai[exceptional],
                 )
-    return ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
+    scale = (n_rows * n_analyses) / max(sampled_cells, 1)
+    counts, totals = _charged(sides, code_bytes)
+    return ComponentCost(
+        int(round(float_bytes * scale)),
+        finite_per_analysis,
+        counts,
+        {candidate: int(round(total * scale)) for candidate, total in totals.items()},
+    )
 
 
 def _measure_overflow(
@@ -224,20 +251,25 @@ def _measure_overflow(
     chunk: int,
     n_analyses: int,
     timer: PhaseTimer | None = None,
+    sample: ChunkSample | None = None,
 ) -> ComponentCost:
     values, frequencies, analyses = (np.asarray(part).ravel() for part in overflow)
+    if sample is None:
+        sample = sample_chunks(len(values), chunk)
     sides = {candidate: _SideTableCost(compressor, n_analyses) for candidate in SE_RANGE_CANDIDATES}
     code_bytes = dict.fromkeys(SE_RANGE_CANDIDATES, 0)
     float_bytes = 0
     finite_per_analysis = np.zeros(n_analyses, dtype=np.int64)
+    sampled_cells = 0
 
     def run() -> None:
-        nonlocal float_bytes, finite_per_analysis
-        for start in range(0, len(values), chunk):
+        nonlocal float_bytes, finite_per_analysis, sampled_cells
+        for start in sample.starts:
             end = min(start + chunk, len(values))
             se = np.asarray(values[start:end], dtype=np.float32)
             eaf = np.asarray(frequencies[start:end], dtype=np.float32)
             ai = np.asarray(analyses[start:end], dtype=np.int64)
+            sampled_cells += se.size
             finite_per_analysis += np.bincount(ai[np.isfinite(se)], minlength=n_analyses).astype(
                 np.int64
             )
@@ -256,15 +288,22 @@ def _measure_overflow(
     else:
         with timer.phase("measure.overflow"):
             run()
-    return ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
+    scale = len(values) / max(sampled_cells, 1)
+    counts, totals = _charged(sides, code_bytes)
+    return ComponentCost(
+        int(round(float_bytes * scale)),
+        finite_per_analysis,
+        counts,
+        {candidate: int(round(total * scale)) for candidate, total in totals.items()},
+    )
 
 
 def _empty_exception_arrays(group: Any, count: int, compressor: Any) -> tuple[Any, Any]:
     """Allocate the side table the streaming rewrite fills in position order.
 
-    Sized from the measurement pass rather than grown: the rewrite visits row
-    chunks in order, so the exceptions arrive already sorted and can be written
-    straight into their final slots.
+    Sized from `_count_dense_exceptions` rather than grown: the rewrite visits
+    row chunks in order, so the exceptions arrive already sorted and can be
+    written straight into their final slots (issue #145).
     """
     for name in (SE_EXCEPTION_INDEX, SE_EXCEPTION_VALUE):
         if name in group:
@@ -521,6 +560,8 @@ def optimise_dense_se_joint(
     overflow_compressor: Any = None,
     overflow_chunk: int = 200_000,
     timer: PhaseTimer | None = None,
+    measure_max_chunks: int = MAX_MEASURED_CHUNKS,
+    record: SeMeasurementRecord | None = None,
 ) -> tuple[StoreEncoding, np.ndarray | None]:
     """Select and rewrite Dense SE, optionally fitting a shared CSR component.
 
@@ -529,9 +570,14 @@ def optimise_dense_se_joint(
     all selection gates, while each component's actual chunks and side table
     are charged separately.
 
-    A caller that passes a ``PhaseTimer`` gets wall-clock accounting for the
-    fit, measurement and rewrite passes (issue #144); one that does not still
-    pays for them, the timer is just not retained.
+    The measurement visits at most `measure_max_chunks` row chunks of each
+    component and scales byte totals up by the cells it saw (issue #146); the
+    fit and the rewrite stay exhaustive, so stored coefficients and exact
+    exceptions are unchanged -- only the range choice is estimated. A caller
+    that wants the manifest to say how the choice was reached passes a
+    `SeMeasurementRecord`, which is filled and read back as provenance (issue
+    #146 AC4). A caller that passes a ``PhaseTimer`` gets wall-clock
+    accounting for the passes (issue #144).
     """
     timer = timer or PhaseTimer()
     if encoding.eaf.is_absent:
@@ -543,11 +589,18 @@ def optimise_dense_se_joint(
     coefficients, eligible = _fit_shared_coefficients(source, eaf_plane, overflow, timer)
 
     compressor = source.compressor
-    dense = _measure_dense(source, eaf_plane, coefficients, timer)
+    dense_sample = sample_chunks(
+        int(source.shape[0]), int(source.chunks[0]), max_chunks=measure_max_chunks
+    )
+    dense = _measure_dense(source, eaf_plane, coefficients, timer, dense_sample)
     overflow_cost = ComponentCost.empty(n_analyses)
+    overflow_sample: ChunkSample | None = None
     overflow_coefficient_bytes = 0
     if overflow is not None:
         overflow_compressor = overflow_compressor or compressor
+        overflow_sample = sample_chunks(
+            len(overflow[0]), overflow_chunk, max_chunks=measure_max_chunks
+        )
         overflow_cost = _measure_overflow(
             overflow,
             coefficients,
@@ -555,8 +608,12 @@ def optimise_dense_se_joint(
             overflow_chunk,
             n_analyses,
             timer,
+            overflow_sample,
         )
         overflow_coefficient_bytes = _packed_coefficients(overflow_compressor, coefficients)
+    if record is not None:
+        record.dense = dense_sample
+        record.overflow = overflow_sample
 
     measured = _shared_measurements(
         dense,
@@ -616,9 +673,20 @@ def narrow_dense_se_to_float16(group: Any) -> None:
     group.move("se_pending", "se")
 
 
-def optimise_dense_se(group: Any, encoding: StoreEncoding) -> StoreEncoding:
+def optimise_dense_se(
+    group: Any,
+    encoding: StoreEncoding,
+    *,
+    measure_max_chunks: int = MAX_MEASURED_CHUNKS,
+    record: SeMeasurementRecord | None = None,
+) -> StoreEncoding:
     """Measure, select, and rewrite a Dense SE plane by physical chunks."""
-    return optimise_dense_se_joint(group, encoding)[0]
+    return optimise_dense_se_joint(
+        group,
+        encoding,
+        measure_max_chunks=measure_max_chunks,
+        record=record,
+    )[0]
 
 
 def rewrite_dense_se(

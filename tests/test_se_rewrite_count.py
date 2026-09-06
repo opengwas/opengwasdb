@@ -72,8 +72,8 @@ def test_rewrite_ignores_a_measurement_that_saw_no_exceptions(tmp_path, monkeypa
     group, _ = _dense_group_with_exceptions(tmp_path)
     real_measure = se_module._measure_dense
 
-    def blind_measure(source, eaf_plane, coefficients, timer):
-        cost = real_measure(source, eaf_plane, coefficients, timer)
+    def blind_measure(source, eaf_plane, coefficients, timer, sample=None):
+        cost = real_measure(source, eaf_plane, coefficients, timer, sample)
         return cost._replace(
             exception_counts={c: np.zeros_like(v) for c, v in cost.exception_counts.items()}
         )

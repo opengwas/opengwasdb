@@ -46,6 +46,7 @@ from opengwasdb.encoding import (
     positions_row_band,
     write_eaf_baseline,
 )
+from opengwasdb.encoding.measure import SeMeasurementRecord
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import (
     DenseBuildResult,
@@ -804,7 +805,8 @@ def build_dense_from_vcf_manifest(
                 pass2_start,
                 encoding,
             )
-            encoding = optimise_dense_se(staged.arrays(mode="a"), encoding)
+            se_record = SeMeasurementRecord()
+            encoding = optimise_dense_se(staged.arrays(mode="a"), encoding, record=se_record)
         finally:
             shutil.rmtree(spill_dir, ignore_errors=True)
 
@@ -819,6 +821,7 @@ def build_dense_from_vcf_manifest(
             dtype,
             encoding=encoding,
             eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
+            se_record=se_record,
         )
         write_top_hit_indexes_for_store(staged.path, all_rows, all_cols, all_z, all_se, encoding)
         analyses = apply_orientation_evidence(
@@ -1429,6 +1432,7 @@ def _write_manifest(
     dtype: str,
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
+    se_record: SeMeasurementRecord | None = None,
 ) -> None:
     manifest = StoreManifest(
         encoding=encoding,
@@ -1453,6 +1457,7 @@ def _write_manifest(
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
             },
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
+            **({"se_measurement": se_record.to_manifest()} if se_record is not None else {}),
         },
     )
     staged.write_manifest(manifest)
