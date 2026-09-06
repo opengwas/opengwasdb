@@ -120,38 +120,26 @@ def _write_manifest(store, encoding, elapsed: float) -> None:
     )
 
 
-def migrate(store_path: Path) -> int:
-    store = open_store(store_path)
-    _refuse_unless_migratable(store)
+def _inherited_errors(store_path: Path) -> set[str]:
+    """What was already wrong before this tool touched anything.
 
-    # What was already wrong before this tool touched anything. Every 2.0 pilot
-    # carries some: the FinnGen rebuild fails on #127's truncated ALID index and
-    # #135's unchunked `eaf_baseline`, neither of which a `se` re-encode can fix
-    # or is answerable for. Judging the result against "no errors at all" would
-    # blame the migration for its input, and would reject every store it exists
-    # to serve.
+    Every 2.0 pilot carries some: the FinnGen rebuild fails on #127's truncated
+    ALID index and #135's unchunked `eaf_baseline`, neither of which a `se`
+    re-encode can fix or is answerable for. Judging the result against "no
+    errors at all" would blame the migration for its input, and would reject
+    every store it exists to serve.
+    """
     print("Validating before, to tell inherited faults from introduced ones", flush=True)
     inherited = set(validate_store(store_path).errors)
     if inherited:
         print(f"  {len(inherited)} pre-existing error(s), carried through:", flush=True)
         for error in sorted(inherited):
             print(f"    - {error}", flush=True)
+    return inherited
 
-    started = time.perf_counter()
-    print(f"Measuring and re-encoding se: {store_path}", flush=True)
-    selected, _coefficients = optimise_dense_se_joint(
-        store.arrays(mode="a"), store.manifest.encoding
-    )
-    print(f"  se encoding selected: {selected.se.to_manifest()}", flush=True)
 
-    # The index carries decoded SE, so it describes the old plane until rebuilt.
-    print("Rebuilding the top-hit index", flush=True)
-    build_top_hit_indexes(store_path, encoding=selected)
-
-    elapsed = time.perf_counter() - started
-    _write_manifest(store, selected, elapsed)
-    print(f"Re-stamped to {CURRENT_FORMAT_VERSION} in {elapsed:.1f}s", flush=True)
-
+def _report_outcome(store_path: Path, inherited: set[str]) -> None:
+    """Fail on what the migration introduced; report what it merely carried."""
     print("Validating after", flush=True)
     result = validate_store(store_path)
     introduced = [error for error in result.errors if error not in inherited]
@@ -172,6 +160,29 @@ def migrate(store_path: Path) -> int:
         )
     else:
         print("OK")
+
+
+def migrate(store_path: Path) -> int:
+    store = open_store(store_path)
+    _refuse_unless_migratable(store)
+    inherited = _inherited_errors(store_path)
+
+    started = time.perf_counter()
+    print(f"Measuring and re-encoding se: {store_path}", flush=True)
+    selected, _coefficients = optimise_dense_se_joint(
+        store.arrays(mode="a"), store.manifest.encoding
+    )
+    print(f"  se encoding selected: {selected.se.to_manifest()}", flush=True)
+
+    # The index carries decoded SE, so it describes the old plane until rebuilt.
+    print("Rebuilding the top-hit index", flush=True)
+    build_top_hit_indexes(store_path, encoding=selected)
+
+    elapsed = time.perf_counter() - started
+    _write_manifest(store, selected, elapsed)
+    print(f"Re-stamped to {CURRENT_FORMAT_VERSION} in {elapsed:.1f}s", flush=True)
+
+    _report_outcome(store_path, inherited)
     return 0
 
 
