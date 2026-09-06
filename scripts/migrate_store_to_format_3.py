@@ -48,6 +48,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from opengwasdb.encoding import optimise_dense_se_joint
+from opengwasdb.encoding.timing import PhaseTimer
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, open_store
@@ -167,18 +168,22 @@ def migrate(store_path: Path) -> int:
     _refuse_unless_migratable(store)
     inherited = _inherited_errors(store_path)
 
+    timer = PhaseTimer()
     started = time.perf_counter()
     print(f"Measuring and re-encoding se: {store_path}", flush=True)
     selected, _coefficients = optimise_dense_se_joint(
-        store.arrays(mode="a"), store.manifest.encoding
+        store.arrays(mode="a"), store.manifest.encoding, timer=timer
     )
     print(f"  se encoding selected: {selected.se.to_manifest()}", flush=True)
 
     # The index carries decoded SE, so it describes the old plane until rebuilt.
     print("Rebuilding the top-hit index", flush=True)
-    build_top_hit_indexes(store_path, encoding=selected)
+    with timer.phase("top_hits"):
+        build_top_hit_indexes(store_path, encoding=selected)
 
     elapsed = time.perf_counter() - started
+    print("Phase accounting (issue #144):", flush=True)
+    print(timer.format_report(), flush=True)
     _write_manifest(store, selected, elapsed)
     print(f"Re-stamped to {CURRENT_FORMAT_VERSION} in {elapsed:.1f}s", flush=True)
 

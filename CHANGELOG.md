@@ -75,6 +75,17 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Added
 
+- **The format-3.0 SE passes report their own wall time** (#144). Migrating a
+  Dense release to format 3.0 takes four full passes over the `se` plane — the
+  per-Analysis fit, the candidate measurement, the rewrite and the top-hit
+  index rebuild — and the only previously recorded number was their sum
+  (3,863 s for the FinnGen R13 pilot, extrapolating to 62.5 hours for `ukb-b`).
+  `migrate_store_to_format_3.py` now threads a `PhaseTimer` through all four
+  and prints each phase's seconds and share of the accounted total, so the
+  optimisation that follows targets the pass that actually dominates rather
+  than a guess. The same instrumentation is available to any caller of
+  `optimise_dense_se_joint`; a caller that passes no timer is unchanged.
+
 - **Getting-started documentation now covers the first local Store Release**
   (#110). A fresh checkout can follow `docs/getting-started.md` to install with
   Pixi, build and validate the in-repository tiny Dense fixture, run PheWAS,

@@ -25,6 +25,7 @@ from opengwasdb.encoding.plan import (
     StoreEncoding,
 )
 from opengwasdb.encoding.planes import DenseEafPlane, write_se_coefficients
+from opengwasdb.encoding.timing import PhaseTimer
 
 OverflowCells = tuple[np.ndarray, np.ndarray, np.ndarray]
 
@@ -169,10 +170,19 @@ def _charged(
     return counts, total
 
 
+def _charge_in_column_chunks(compressor: Any, band: np.ndarray, col_chunk: int) -> int:
+    """Compressed bytes for one row band, charged as the physical chunks it becomes."""
+    return sum(
+        _packed(compressor, band[:, c0 : c0 + col_chunk])
+        for c0 in range(0, band.shape[1], col_chunk)
+    )
+
+
 def _measure_dense(
     source: Any,
     eaf_plane: DenseEafPlane,
     coefficients: np.ndarray,
+    timer: PhaseTimer,
 ) -> ComponentCost:
     n_rows, n_analyses = map(int, source.shape)
     row_chunk, col_chunk = map(int, source.chunks)
@@ -185,23 +195,28 @@ def _measure_dense(
     analysis_index = np.broadcast_to(columns, (row_chunk, n_analyses))
     for r0 in range(0, n_rows, row_chunk):
         r1 = min(r0 + row_chunk, n_rows)
-        values = np.asarray(source[r0:r1], dtype=np.float32)
-        frequencies = eaf_plane.band(r0, r1)
+        with timer.phase("measure.read"):
+            values = np.asarray(source[r0:r1], dtype=np.float32)
+            frequencies = eaf_plane.band(r0, r1)
+            finite_per_analysis += np.isfinite(values).sum(axis=0).astype(np.int64)
         ai = analysis_index[: r1 - r0]
-        finite_per_analysis += np.isfinite(values).sum(axis=0).astype(np.int64)
-        for c0 in range(0, n_analyses, col_chunk):
-            c1 = min(c0 + col_chunk, n_analyses)
-            float_bytes += _packed(compressor, values[:, c0:c1].astype(np.float16))
-        for candidate in SE_RANGE_CANDIDATES:
-            raw, exceptional = _candidate_codes(values, frequencies, ai, coefficients, candidate)
-            for c0 in range(0, n_analyses, col_chunk):
-                c1 = min(c0 + col_chunk, n_analyses)
-                code_bytes[candidate] += _packed(compressor, raw[:, c0:c1])
-            sides[candidate].add(
-                positions_row_band(r0, n_analyses)(exceptional),
-                values[exceptional],
-                ai[exceptional],
+        with timer.phase("measure.float16"):
+            float_bytes += _charge_in_column_chunks(
+                compressor, values.astype(np.float16), col_chunk
             )
+        for candidate in SE_RANGE_CANDIDATES:
+            with timer.phase("measure.code"):
+                raw, exceptional = _candidate_codes(
+                    values, frequencies, ai, coefficients, candidate
+                )
+            with timer.phase("measure.compress"):
+                code_bytes[candidate] += _charge_in_column_chunks(compressor, raw, col_chunk)
+            with timer.phase("measure.exceptions"):
+                sides[candidate].add(
+                    positions_row_band(r0, n_analyses)(exceptional),
+                    values[exceptional],
+                    ai[exceptional],
+                )
     return ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
 
 
@@ -211,29 +226,39 @@ def _measure_overflow(
     compressor: Any,
     chunk: int,
     n_analyses: int,
+    timer: PhaseTimer | None = None,
 ) -> ComponentCost:
     values, frequencies, analyses = (np.asarray(part).ravel() for part in overflow)
     sides = {candidate: _SideTableCost(compressor, n_analyses) for candidate in SE_RANGE_CANDIDATES}
     code_bytes = dict.fromkeys(SE_RANGE_CANDIDATES, 0)
     float_bytes = 0
     finite_per_analysis = np.zeros(n_analyses, dtype=np.int64)
-    for start in range(0, len(values), chunk):
-        end = min(start + chunk, len(values))
-        se = np.asarray(values[start:end], dtype=np.float32)
-        eaf = np.asarray(frequencies[start:end], dtype=np.float32)
-        ai = np.asarray(analyses[start:end], dtype=np.int64)
-        finite_per_analysis += np.bincount(ai[np.isfinite(se)], minlength=n_analyses).astype(
-            np.int64
-        )
-        float_bytes += _packed(compressor, se.astype(np.float16))
-        for candidate in SE_RANGE_CANDIDATES:
-            raw, exceptional = _candidate_codes(se, eaf, ai, coefficients, candidate)
-            code_bytes[candidate] += _packed(compressor, raw)
-            sides[candidate].add(
-                positions_flat(start)(exceptional),
-                se[exceptional],
-                ai[exceptional],
+
+    def run() -> None:
+        nonlocal float_bytes, finite_per_analysis
+        for start in range(0, len(values), chunk):
+            end = min(start + chunk, len(values))
+            se = np.asarray(values[start:end], dtype=np.float32)
+            eaf = np.asarray(frequencies[start:end], dtype=np.float32)
+            ai = np.asarray(analyses[start:end], dtype=np.int64)
+            finite_per_analysis += np.bincount(ai[np.isfinite(se)], minlength=n_analyses).astype(
+                np.int64
             )
+            float_bytes += _packed(compressor, se.astype(np.float16))
+            for candidate in SE_RANGE_CANDIDATES:
+                raw, exceptional = _candidate_codes(se, eaf, ai, coefficients, candidate)
+                code_bytes[candidate] += _packed(compressor, raw)
+                sides[candidate].add(
+                    positions_flat(start)(exceptional),
+                    se[exceptional],
+                    ai[exceptional],
+                )
+
+    if timer is None:
+        run()
+    else:
+        with timer.phase("measure.overflow"):
+            run()
     return ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
 
 
@@ -271,6 +296,7 @@ def _rewrite_dense(
     encoding: StoreEncoding,
     coefficients: np.ndarray,
     exception_count: int,
+    timer: PhaseTimer,
 ) -> None:
     source = group["se"]
     n_rows, n_analyses = map(int, source.shape)
@@ -292,21 +318,27 @@ def _rewrite_dense(
     analysis_index = np.broadcast_to(columns, (row_chunk, n_analyses))
     for r0 in range(0, n_rows, row_chunk):
         r1 = min(r0 + row_chunk, n_rows)
-        values = np.asarray(source[r0:r1], dtype=np.float32)
+        with timer.phase("rewrite.read"):
+            values = np.asarray(source[r0:r1], dtype=np.float32)
+            frequencies = eaf_plane.band(r0, r1)
         exceptions = SeExceptionBuilder()
-        pending[r0:r1] = codec.encode_se(
-            values,
-            eaf=eaf_plane.band(r0, r1),
-            analysis_index=analysis_index[: r1 - r0],
-            coefficients=coefficients,
-            positions=positions_row_band(r0, n_analyses),
-            exceptions=exceptions,
-        )
-        table = exceptions.table()
-        end = cursor + len(table)
-        exception_index[cursor:end] = table.index
-        exception_value[cursor:end] = table.value
-        cursor = end
+        with timer.phase("rewrite.encode"):
+            raw = codec.encode_se(
+                values,
+                eaf=frequencies,
+                analysis_index=analysis_index[: r1 - r0],
+                coefficients=coefficients,
+                positions=positions_row_band(r0, n_analyses),
+                exceptions=exceptions,
+            )
+        with timer.phase("rewrite.write"):
+            pending[r0:r1] = raw
+        with timer.phase("rewrite.exceptions"):
+            table = exceptions.table()
+            end = cursor + len(table)
+            exception_index[cursor:end] = table.index
+            exception_value[cursor:end] = table.value
+            cursor = end
     if cursor != exception_count:
         raise RuntimeError(
             f"SE measurement counted {exception_count} exceptions but rewrite produced {cursor}"
@@ -320,12 +352,16 @@ def _fit_shared_coefficients(
     source: Any,
     eaf_plane: DenseEafPlane,
     overflow: OverflowCells | None,
+    timer: PhaseTimer,
 ) -> tuple[np.ndarray, bool]:
     """Least squares of `log(se)` on `log(2f(1-f))`, per Analysis, in one pass.
 
     Accumulated as sums rather than held as a design matrix: the Dense plane is
     read one physical row chunk at a time, and `overflow`'s flat CSR cells join the
     same sums so both Hybrid components are fitted by one model.
+
+    The whole pass is one `fit` phase: it is a full read of the plane, and issue
+    #144 wants to know what each full read costs before deciding which to merge.
     """
     n_rows, n_analyses = map(int, source.shape)
     row_chunk = int(source.chunks[0])
@@ -333,20 +369,21 @@ def _fit_shared_coefficients(
     sx, sy, sxx, sxy = (np.zeros(n_analyses) for _ in range(4))
     eligible = True
     analysis_index = np.broadcast_to(np.arange(n_analyses, dtype=np.int64), (row_chunk, n_analyses))
-    for r0 in range(0, n_rows, row_chunk):
-        r1 = min(r0 + row_chunk, n_rows)
-        eligible &= _add_fit_sums(
-            source[r0:r1],
-            eaf_plane.band(r0, r1),
-            analysis_index[: r1 - r0],
-            count,
-            sx,
-            sy,
-            sxx,
-            sxy,
-        )
-    if overflow is not None:
-        eligible &= _add_fit_sums(*overflow, count, sx, sy, sxx, sxy)
+    with timer.phase("fit"):
+        for r0 in range(0, n_rows, row_chunk):
+            r1 = min(r0 + row_chunk, n_rows)
+            eligible &= _add_fit_sums(
+                source[r0:r1],
+                eaf_plane.band(r0, r1),
+                analysis_index[: r1 - r0],
+                count,
+                sx,
+                sy,
+                sxx,
+                sxy,
+            )
+        if overflow is not None:
+            eligible &= _add_fit_sums(*overflow, count, sx, sy, sxx, sxy)
     coefficients, solved = solve_log_se(count.astype(np.float64), sx, sy, sxx, sxy)
     return coefficients, eligible and solved
 
@@ -441,6 +478,7 @@ def optimise_dense_se_joint(
     overflow: OverflowCells | None = None,
     overflow_compressor: Any = None,
     overflow_chunk: int = 200_000,
+    timer: PhaseTimer | None = None,
 ) -> tuple[StoreEncoding, np.ndarray | None]:
     """Select and rewrite Dense SE, optionally fitting a shared CSR component.
 
@@ -448,23 +486,33 @@ def optimise_dense_se_joint(
     is supplied (Hybrid), its flat CSR cells contribute to the same fit and
     all selection gates, while each component's actual chunks and side table
     are charged separately.
+
+    A caller that passes a ``PhaseTimer`` gets wall-clock accounting for the
+    fit, measurement and rewrite passes (issue #144); one that does not still
+    pays for them, the timer is just not retained.
     """
+    timer = timer or PhaseTimer()
     if encoding.eaf.is_absent:
         narrow_dense_se_to_float16(group)
         return encoding, None
     source = group["se"]
     n_analyses = int(source.shape[1])
     eaf_plane = DenseEafPlane.open(group, encoding)
-    coefficients, eligible = _fit_shared_coefficients(source, eaf_plane, overflow)
+    coefficients, eligible = _fit_shared_coefficients(source, eaf_plane, overflow, timer)
 
     compressor = source.compressor
-    dense = _measure_dense(source, eaf_plane, coefficients)
+    dense = _measure_dense(source, eaf_plane, coefficients, timer)
     overflow_cost = ComponentCost.empty(n_analyses)
     overflow_coefficient_bytes = 0
     if overflow is not None:
         overflow_compressor = overflow_compressor or compressor
         overflow_cost = _measure_overflow(
-            overflow, coefficients, overflow_compressor, overflow_chunk, n_analyses
+            overflow,
+            coefficients,
+            overflow_compressor,
+            overflow_chunk,
+            n_analyses,
+            timer,
         )
         overflow_coefficient_bytes = _packed_coefficients(overflow_compressor, coefficients)
 
@@ -481,7 +529,13 @@ def optimise_dense_se_joint(
         narrow_dense_se_to_float16(group)
         return selected, None
     assert se_choice.residual_range is not None
-    _rewrite_dense(group, selected, coefficients, dense.total_exceptions(se_choice.residual_range))
+    _rewrite_dense(
+        group,
+        selected,
+        coefficients,
+        dense.total_exceptions(se_choice.residual_range),
+        timer,
+    )
     return selected, coefficients
 
 
@@ -523,8 +577,10 @@ def rewrite_dense_se(
     group: Any,
     encoding: StoreEncoding,
     coefficients: np.ndarray | None = None,
+    timer: PhaseTimer | None = None,
 ) -> None:
     """Encode a float32 Dense scratch plane under an already-decided plan."""
+    timer = timer or PhaseTimer()
     source = group["se"]
     n_rows, n_analyses = map(int, source.shape)
     row_chunk = int(source.chunks[0])
@@ -540,14 +596,15 @@ def rewrite_dense_se(
     analysis_index = np.broadcast_to(np.arange(n_analyses, dtype=np.int64), (row_chunk, n_analyses))
     exception_count = 0
     assert encoding.se.residual_range is not None
-    for r0 in range(0, n_rows, row_chunk):
-        r1 = min(r0 + row_chunk, n_rows)
-        _, exceptional = _candidate_codes(
-            source[r0:r1],
-            eaf_plane.band(r0, r1),
-            analysis_index[: r1 - r0],
-            stored_coefficients,
-            encoding.se.residual_range,
-        )
-        exception_count += int(exceptional.sum())
-    _rewrite_dense(group, encoding, stored_coefficients, exception_count)
+    with timer.phase("rewrite.count"):
+        for r0 in range(0, n_rows, row_chunk):
+            r1 = min(r0 + row_chunk, n_rows)
+            _, exceptional = _candidate_codes(
+                source[r0:r1],
+                eaf_plane.band(r0, r1),
+                analysis_index[: r1 - r0],
+                stored_coefficients,
+                encoding.se.residual_range,
+            )
+            exception_count += int(exceptional.sum())
+    _rewrite_dense(group, encoding, stored_coefficients, exception_count, timer)
