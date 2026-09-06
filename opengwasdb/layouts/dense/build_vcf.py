@@ -57,6 +57,7 @@ from opengwasdb.layouts.dense.constants import (
     DEFAULT_COMPRESSOR,
     DEFAULT_DTYPE,
     TOP_HIT_THRESHOLDS,
+    dense_index_metadata,
 )
 from opengwasdb.layouts.dense.top_hits import (
     write_top_hit_indexes_for_store,
@@ -645,7 +646,7 @@ def build_dense_from_vcf_manifest(
         # ------------------------------------------------------------------
         # Write SQLite index + analyses.tsv + tabix variant axis
         # ------------------------------------------------------------------
-        _write_index(staged, hg38_alids, analyses, chunk_shape, dtype)
+        _write_index(staged, hg38_alids, analyses, chunk_shape)
         canonical_variants = [
             CanonicalVariant(
                 chromosome=chrom,
@@ -987,22 +988,13 @@ def _write_index(
     hg38_alids: list[str],
     analyses: list[Analysis],
     chunk_shape: tuple[int, int],
-    dtype: str,
 ) -> None:
     with staged.index_connection() as connection:
         initialise_schema(connection)
         set_metadata(connection, "schema_version", 1)
         set_metadata(connection, "n_variants", len(hg38_alids))
         set_metadata(connection, "n_analyses", len(analyses))
-        set_metadata(
-            connection,
-            "dense",
-            {
-                "se_dtype": dtype,
-                "chunk_shape": list(chunk_shape),
-                "compressor": DEFAULT_COMPRESSOR,
-            },
-        )
+        set_metadata(connection, "dense", dense_index_metadata(chunk_shape))
         connection.commit()
 
 
@@ -1176,7 +1168,11 @@ def _create_dense_zarr(
     root = staged.arrays(mode="w")
     for name, plane_dtype, fill in (
         ("z", codec.z_dtype, codec.z_fill_value),
-        ("se", dtype, float("nan")),
+        # Scratch in float32, as dense.complete does: the band-writer fills
+        # this before the SE encoding is decided, and an exact residual
+        # exception must be the source's own value, not one already rounded
+        # to the dtype the plane happened to start in (spec §6a).
+        ("se", "float32", float("nan")),
     ):
         root.create_dataset(
             name,
@@ -1451,7 +1447,7 @@ def _write_manifest(
             "n_analyses": n_analyses,
             "dense": {
                 "statistic_arrays": ["z", "se"],
-                "se_dtype": dtype,
+                "se_dtype": encoding.se.dtype,
                 "chunk_shape": list(chunk_shape),
                 "compressor": DEFAULT_COMPRESSOR,
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],

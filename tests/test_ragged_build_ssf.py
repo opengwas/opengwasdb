@@ -40,22 +40,44 @@ def _write_filtered(path: Path, rows: list[dict]) -> None:
             fh.write("\t".join(str(row.get(col, "")) for col in _SSF_HEADER) + "\n")
 
 
+#: Every column the Ragged SSF builder's manifest may carry, in written order.
+_MANIFEST_HEADER = [
+    "analysis_index",
+    "analysis_id",
+    "trait_id",
+    "analysis_label",
+    "trait_ontology_id",
+    "trait_ontology_label",
+    "trait_chr",
+    "trait_bp",
+    "n",
+    "tissue",
+    "context",
+    "mhc",
+    "filtered_file",
+]
+
+
+def _write_one_association(filtered_dir: Path, name: str = "trait_a.tsv.gz") -> None:
+    """One unambiguous association, for tests about the manifest rather than the rows."""
+    _write_filtered(
+        filtered_dir / name,
+        [
+            {
+                "chromosome": "1",
+                "base_pair_location": 100_000,
+                "effect_allele": "A",
+                "other_allele": "G",
+                "beta": 1.0,
+                "standard_error": 0.5,
+                "rsid": "rs1",
+            },
+        ],
+    )
+
+
 def _write_manifest(path: Path, rows: list[dict]) -> None:
-    header = [
-        "analysis_index",
-        "analysis_id",
-        "trait_id",
-        "analysis_label",
-        "trait_ontology_id",
-        "trait_ontology_label",
-        "trait_chr",
-        "trait_bp",
-        "n",
-        "tissue",
-        "context",
-        "mhc",
-        "filtered_file",
-    ]
+    header = _MANIFEST_HEADER
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\t".join(header) + "\n")
         for row in rows:
@@ -426,20 +448,7 @@ def test_invalid_stored_effect_scale_rejected(tmp_path):
 def test_non_dense_analysis_index_fails_loudly(tmp_path):
     filtered_dir = tmp_path / "filtered"
     filtered_dir.mkdir()
-    _write_filtered(
-        filtered_dir / "trait_a.tsv.gz",
-        [
-            {
-                "chromosome": "1",
-                "base_pair_location": 100_000,
-                "effect_allele": "A",
-                "other_allele": "G",
-                "beta": 1.0,
-                "standard_error": 0.5,
-                "rsid": "rs1",
-            },
-        ],
-    )
+    _write_one_association(filtered_dir)
     manifest = tmp_path / "manifest.tsv"
     # analysis_index jumps 0 -> 2, not dense.
     _write_manifest(
@@ -474,35 +483,11 @@ def test_manifest_without_trait_id_builds(tmp_path):
     must build identically to one with it."""
     filtered_dir = tmp_path / "filtered"
     filtered_dir.mkdir()
-    _write_filtered(
-        filtered_dir / "trait_a.tsv.gz",
-        [
-            {
-                "chromosome": "1",
-                "base_pair_location": 100_000,
-                "effect_allele": "A",
-                "other_allele": "G",
-                "beta": 1.0,
-                "standard_error": 0.5,
-                "rsid": "rs1",
-            },
-        ],
-    )
+    _write_one_association(filtered_dir)
     manifest = tmp_path / "manifest.tsv"
-    header = [
-        "analysis_index",
-        "analysis_id",
-        "analysis_label",
-        "trait_ontology_id",
-        "trait_ontology_label",
-        "trait_chr",
-        "trait_bp",
-        "n",
-        "tissue",
-        "context",
-        "mhc",
-        "filtered_file",
-    ]
+    # The same manifest as every other test's, with `trait_id` absent rather
+    # than blank — which is the distinction this test exists to make.
+    header = [column for column in _MANIFEST_HEADER if column != "trait_id"]
     with open(manifest, "w", encoding="utf-8") as fh:
         fh.write("\t".join(header) + "\n")
         row = {

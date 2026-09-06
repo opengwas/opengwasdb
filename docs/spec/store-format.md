@@ -315,11 +315,14 @@ Exact values are stored in sorted parallel `se_exception_index` (`int64`) and
 are `row × n_analyses + column`; Ragged keys are CSR ordinals.
 
 Builders try ranges ±0.5, ±1, and ±2 in order, accepting one only when every
-finite SE has decodable EAF, exact exceptions are at most 2%, ordinary-cell
-relative error is at most 1%, and measured compressed bytes decrease after
-codes, coefficients, and side tables are charged. Otherwise the entire plane
-is `float16`. Hybrid components share one decision. Zero SE, non-finite
-predictions, and out-of-range residuals are exact exceptions, never clips.
+finite SE has decodable EAF, exact exceptions are at most 2% **in every
+Analysis** — not pooled over the plane — ordinary-cell relative error is at
+most 1%, and measured compressed bytes decrease after codes, coefficients, and
+side tables are charged. Otherwise the entire plane is `float16`. Hybrid
+components share one decision, and each must save bytes on its own. Zero SE,
+non-finite predictions, and out-of-range residuals are exact exceptions, never
+clips; an exact exception carries its own value and so needs no EAF, which is
+what lets a cell with an unknown frequency be stored at all.
 
 **`eaf` — one of four kinds** (ADR 0037 §2). EAF's *semantics* are unchanged by
 the encoding: it is still per (variant, Analysis), still oriented to the stored

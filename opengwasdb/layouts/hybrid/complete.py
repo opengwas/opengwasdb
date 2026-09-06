@@ -51,7 +51,7 @@ from opengwasdb.encoding import (
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import _alid_sort_key, _write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
-from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR, DEFAULT_DTYPE
+from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import _write_variant_table
 from opengwasdb.layouts.hybrid.layout import (
@@ -241,7 +241,7 @@ def complete_hybrid_store(
         # re-reading it here and writing it back at the shared root is the one
         # place Analysis metadata is written, not a second provenance carry.
         analyses = _read_analyses(dense_component_path(staged.path))
-        _write_index(staged, union, analyses, _chunk_shape(src_manifest), DEFAULT_DTYPE)
+        _write_index(staged, union, analyses, _chunk_shape(src_manifest))
         source_by_alid = {a: source_alid_by_alid.get(a) for a in union}
         _write_variant_table(staged.path, union, source_by_alid, rsid_by_alid)
 

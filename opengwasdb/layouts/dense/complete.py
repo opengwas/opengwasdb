@@ -817,12 +817,8 @@ def _create_completed_zarr(
     effective_chunks = (min(chunk_shape[0], n_variants), min(chunk_shape[1], n_analyses))
     codec = StoreCodec(encoding)
     root = staged.arrays(mode="w")
-    for name, plane_dtype, fill in (
-        ("z", codec.z_dtype, codec.z_fill_value),
-        # Scratch in float32 so an exact residual exception is not rounded
-        # before the destination's final SE encoding is written below.
-        ("se", "float32", float("nan")),
-    ):
+
+    def plane(name: str, plane_dtype: Any, fill: Any) -> None:
         root.create_dataset(
             name,
             shape=(n_variants, n_analyses),
@@ -831,14 +827,18 @@ def _create_completed_zarr(
             dtype=plane_dtype,
             fill_value=fill,
         )
-    root.create_dataset(
-        "imputed",
-        shape=(n_variants, n_analyses),
-        chunks=effective_chunks,
-        compressor=_COMPRESSOR,
-        dtype="uint8",
-        fill_value=0,
-    )
+
+    plane("z", codec.z_dtype, codec.z_fill_value)
+    # Scratch in float32 so an exact residual exception is not rounded before
+    # the destination's final SE encoding is written below.
+    plane("se", "float32", float("nan"))
+    plane("imputed", "uint8", 0)
+    if src_has_eaf:
+        # Never float16 -- see `build_vcf._create_eaf_array` for why it cannot
+        # hold an EAF near 1 (ADR 0036). Created only when the observed store
+        # had one: completion adds panel rows, it does not invent frequencies
+        # the source never reported.
+        plane("eaf", codec.eaf_dtype, codec.eaf_fill_value)
     root.create_dataset(
         "on_panel",
         data=on_panel.astype(np.uint8),
@@ -846,19 +846,6 @@ def _create_completed_zarr(
         compressor=_COMPRESSOR,
         dtype="uint8",
     )
-    if src_has_eaf:
-        # Never float16 -- see `build_vcf._create_eaf_array` for why it cannot
-        # hold an EAF near 1 (ADR 0036). Created only when the observed store
-        # had one: completion adds panel rows, it does not invent frequencies
-        # the source never reported.
-        root.create_dataset(
-            "eaf",
-            shape=(n_variants, n_analyses),
-            chunks=effective_chunks,
-            compressor=_COMPRESSOR,
-            dtype=codec.eaf_dtype,
-            fill_value=codec.eaf_fill_value,
-        )
     if eaf_reference is not None:
         write_eaf_reference(root, eaf_reference, compressor=_COMPRESSOR)
     root.attrs["layout"] = "dense"

@@ -308,7 +308,7 @@ class DenseSePlane:
         added = builder.table()
         merged.add(added.index, added.value)
         table = merged.table()
-        table.write(self._group)
+        table.write(self._group, compressor=self._array.compressor)
         self._codec = StoreCodec(self._codec.encoding, se_exceptions=table)
 
 

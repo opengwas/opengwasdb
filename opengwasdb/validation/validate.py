@@ -18,6 +18,7 @@ from opengwasdb.encoding import (
     EAF_EXCEPTION_INDEX,
     EAF_EXCEPTION_VALUE,
     EAF_REFERENCE,
+    SE_EXCEPTION,
     Z_OVERFLOW,
     Z_OVERFLOW_INDEX,
     Z_OVERFLOW_VALUE,
@@ -319,6 +320,20 @@ def _validate_completion_metadata(
     return imputed_arr, on_panel
 
 
+def _decoded_csr_se(root: Any, encoding: StoreEncoding, n_assoc: int, label: str) -> Any:
+    """Decoded CSR SE, or the reason it cannot be decoded.
+
+    A residual plane needs its coefficients, its side table and a decodable EAF
+    for every predicted cell. When one of those is wrong the codec raises, and
+    validation must report that as a finding about the release rather than
+    letting it escape as a traceback from `validate_store`.
+    """
+    try:
+        return RaggedSePlane.open(root, encoding).slice(0, n_assoc), None
+    except ValueError as exc:
+        return None, f"{label} cannot be decoded under the declared plan: {exc}"
+
+
 def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> ValidationResult:
     store_path = store.path
     manifest = store.manifest
@@ -370,12 +385,14 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
                 ZOverflowTable.read(root),
                 errors,
             )
-        se_plane = RaggedSePlane.open(root, manifest.encoding)
-        se_vals = se_plane.slice(0, n_assoc)
+        se_vals, se_error = _decoded_csr_se(root, manifest.encoding, n_assoc, "data.zarr/ragged/se")
+        if se_error is not None:
+            errors.append(se_error)
+            return ValidationResult(errors=errors)
         if manifest.encoding.se.is_residual:
             _overflow_positions_match(
                 "data.zarr/ragged/se",
-                np.flatnonzero(np.asarray(root["se"][:]) == -127).astype(np.int64),
+                np.flatnonzero(np.asarray(root["se"][:]) == SE_EXCEPTION).astype(np.int64),
                 SeExceptionTable.read(root),
                 errors,
                 what="se exception",
@@ -446,7 +463,12 @@ def _validate_ragged_completion(
     # of a float: an integer plane holds no NaN to test for.
     codec = StoreCodec(store.manifest.encoding)
     z_missing = codec.missing_mask(root["z"][:])
-    se_vals = RaggedSePlane.open(root, store.manifest.encoding).slice(0, n_assoc)
+    se_vals, se_error = _decoded_csr_se(
+        root, store.manifest.encoding, n_assoc, "data.zarr/ragged/se"
+    )
+    if se_error is not None:
+        errors.append(se_error)
+        return
     imp_mask = imp == 1
     if imp_mask.any():
         if np.any(z_missing[imp_mask]):
@@ -536,6 +558,20 @@ def _sample_csr_positions(
     return positions
 
 
+#: Every tier of a top-hit index carries these, whatever the layout wrote it.
+TOP_HIT_TIER_ARRAYS = frozenset(
+    {"analysis_offsets", "variant_index", "analysis_index", "abs_z", "z", "se", "p_value"}
+)
+
+
+def _missing_top_hit_arrays(key: str, group: Any, errors: list[str]) -> bool:
+    """Record what a tier lacks; True when it lacks anything."""
+    missing = sorted(TOP_HIT_TIER_ARRAYS.difference(group.keys()))
+    if missing:
+        errors.append(f"top-hit index {key} is missing {', '.join(missing)}")
+    return bool(missing)
+
+
 def _validate_ragged_top_hits(
     store_path: Path,
     data_root: Any,
@@ -555,18 +591,7 @@ def _validate_ragged_top_hits(
 
     for key in top:
         group = top[key]
-        required = {
-            "analysis_offsets",
-            "variant_index",
-            "analysis_index",
-            "abs_z",
-            "z",
-            "se",
-            "p_value",
-        }
-        missing = sorted(required.difference(group.keys()))
-        if missing:
-            errors.append(f"top-hit index {key} is missing {', '.join(missing)}")
+        if _missing_top_hit_arrays(key, group, errors):
             continue
         threshold = float(group.attrs.get("threshold", 0))
         vis = group["variant_index"][:].astype(np.int32)
@@ -778,11 +803,14 @@ def _validate_overflow(
         errors.append(
             f"Ragged Overflow variant_index falls outside the shared variant table [0, {n_shared})"
         )
-    se_vals = RaggedSePlane.open(root, encoding).slice(0, n_assoc)
+    se_vals, se_error = _decoded_csr_se(root, encoding, n_assoc, "Ragged Overflow se")
+    if se_error is not None:
+        errors.append(se_error)
+        return
     if encoding.se.is_residual:
         _overflow_positions_match(
             "Ragged Overflow se",
-            np.flatnonzero(np.asarray(root["se"][:]) == -127).astype(np.int64),
+            np.flatnonzero(np.asarray(root["se"][:]) == SE_EXCEPTION).astype(np.int64),
             SeExceptionTable.read(root),
             errors,
             what="se exception",
@@ -1397,6 +1425,89 @@ def _validate_per_variant_chunking(group: Any, errors: list[str], *, label: str)
             )
 
 
+SE_TABLE_NAMES = ("se_exception_index", "se_exception_value", "se_coefficients")
+
+
+def _se_coefficients_errors(group: Any, label: str) -> list[str]:
+    """`se_coefficients` is `float32`, `(n_analyses, 2)`, and wholly finite."""
+    coefficients = group["se_coefficients"]
+    n_analyses = (
+        int(group["se"].shape[1]) if group["se"].ndim == 2 else int(len(group["offsets"]) - 1)
+    )
+    if str(coefficients.dtype) != "float32" or tuple(coefficients.shape) != (n_analyses, 2):
+        return [f"{label}/se_coefficients must have float32 shape ({n_analyses}, 2)"]
+    if not np.all(np.isfinite(coefficients[:])):
+        return [f"{label}/se_coefficients contains non-finite values"]
+    return []
+
+
+def _se_table_shape_errors(index: Any, value: Any, label: str) -> list[str]:
+    """The two side arrays are parallel, one-dimensional and correctly typed."""
+    if index.ndim != 1 or value.ndim != 1 or len(index) != len(value):
+        return [f"{label} se exception arrays must be parallel one-dimensional arrays"]
+    if str(index.dtype) != "int64" or str(value.dtype) != "float32":
+        return [f"{label} se exception arrays must use int64 positions and float32 values"]
+    return []
+
+
+def _se_table_content_errors(
+    positions: np.ndarray, values: np.ndarray, plane_size: int, label: str
+) -> list[str]:
+    """The keys are sorted, unique and inside the plane; the values are finite."""
+    found = []
+    if len(positions) > 1 and np.any(positions[1:] <= positions[:-1]):
+        found.append(f"{label} se exception positions are unsorted or contain duplicates")
+    elif len(positions) and (int(positions[0]) < 0 or int(positions[-1]) >= plane_size):
+        found.append(f"{label} se exception position is outside the se plane")
+    if not np.all(np.isfinite(values)):
+        found.append(f"{label} se exception values contain non-finite values")
+    return found
+
+
+def _se_exception_table_errors(group: Any, label: str) -> list[str]:
+    """The side table is parallel, typed, sorted, unique, in range and finite."""
+    index = group["se_exception_index"]
+    value = group["se_exception_value"]
+    shape_errors = _se_table_shape_errors(index, value, label)
+    if shape_errors:
+        return shape_errors
+    return _se_table_content_errors(
+        np.asarray(index[:], dtype=np.int64),
+        np.asarray(value[:], dtype=np.float32),
+        int(group["se"].size),
+        label,
+    )
+
+
+def _se_side_array_errors(group: Any, encoding: StoreEncoding, label: str) -> list[str]:
+    """What a residual plane needs beside it before its contents can be judged."""
+    if missing := [name for name in SE_TABLE_NAMES if name not in group]:
+        return [f"{label} residual se is missing required arrays: {missing}"]
+    if encoding.eaf.is_absent or "eaf" not in group:
+        return [f"{label} residual se requires a complete eaf plane beside it"]
+    return []
+
+
+def _validate_se_plan(
+    group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
+) -> None:
+    """store-format spec §20: the `se` plane and its side arrays agree with the plan.
+
+    A residual plane is unreadable without its coefficients, its exception
+    table *and* a complete `eaf` plane; a `float16` plane must carry none of
+    them, so a leftover side array is a failure rather than a harmless relic.
+    """
+    if not encoding.se.is_residual:
+        if any(name in group for name in SE_TABLE_NAMES):
+            errors.append(f"{label} carries residual se side arrays but declares float16 se")
+        return
+    if present := _se_side_array_errors(group, encoding, label):
+        errors.extend(present)
+        return
+    errors.extend(_se_coefficients_errors(group, label))
+    errors.extend(_se_exception_table_errors(group, label))
+
+
 def _validate_encoding_plan(
     group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
 ) -> None:
@@ -1420,52 +1531,7 @@ def _validate_encoding_plan(
             )
     _validate_per_variant_chunking(group, errors, label=label)
     _validate_eaf_plan(group, encoding, errors, label=label)
-    se_table_names = ("se_exception_index", "se_exception_value", "se_coefficients")
-    if encoding.se.is_residual:
-        missing = [name for name in se_table_names if name not in group]
-        if missing:
-            errors.append(f"{label} residual se is missing required arrays: {missing}")
-        elif encoding.eaf.is_absent or "eaf" not in group:
-            errors.append(f"{label} residual se requires a complete eaf plane beside it")
-        else:
-            coefficients = group["se_coefficients"]
-            n_analyses = (
-                int(group["se"].shape[1])
-                if group["se"].ndim == 2
-                else int(len(group["offsets"]) - 1)
-            )
-            if str(coefficients.dtype) != "float32" or tuple(coefficients.shape) != (
-                n_analyses,
-                2,
-            ):
-                errors.append(f"{label}/se_coefficients must have float32 shape ({n_analyses}, 2)")
-            elif not np.all(np.isfinite(coefficients[:])):
-                errors.append(f"{label}/se_coefficients contains non-finite values")
-            index = group["se_exception_index"]
-            value = group["se_exception_value"]
-            if index.ndim != 1 or value.ndim != 1 or len(index) != len(value):
-                errors.append(
-                    f"{label} se exception arrays must be parallel one-dimensional arrays"
-                )
-            elif str(index.dtype) != "int64" or str(value.dtype) != "float32":
-                errors.append(
-                    f"{label} se exception arrays must use int64 positions and float32 values"
-                )
-            else:
-                positions = np.asarray(index[:], dtype=np.int64)
-                values = np.asarray(value[:], dtype=np.float32)
-                if len(positions) > 1 and np.any(positions[1:] <= positions[:-1]):
-                    errors.append(
-                        f"{label} se exception positions are unsorted or contain duplicates"
-                    )
-                elif len(positions) and (
-                    int(positions[0]) < 0 or int(positions[-1]) >= int(group["se"].size)
-                ):
-                    errors.append(f"{label} se exception position is outside the se plane")
-                if not np.all(np.isfinite(values)):
-                    errors.append(f"{label} se exception values contain non-finite values")
-    elif any(name in group for name in se_table_names):
-        errors.append(f"{label} carries residual se side arrays but declares float16 se")
+    _validate_se_plan(group, encoding, errors, label=label)
     if errors or "z" not in group:
         return
     declared = encoding.z
@@ -1670,7 +1736,8 @@ def _validate_dense_arrays(
             return
         if encoding.se.is_residual:
             se_exception_positions.append(
-                np.flatnonzero(np.asarray(se_arr[r0:r1]) == -127).astype(np.int64) + r0 * n_analyses
+                np.flatnonzero(np.asarray(se_arr[r0:r1]) == SE_EXCEPTION).astype(np.int64)
+                + r0 * n_analyses
             )
         z_missing = codec.missing_mask(z)
         if fixed_point:
@@ -1773,18 +1840,7 @@ def _validate_dense_arrays(
 
 def _read_top_hit_arrays(key: str, group: Any, errors: list[str]) -> dict[str, Any] | None:
     """One tier's index arrays, or None -- having said what it lacks."""
-    required = {
-        "analysis_offsets",
-        "variant_index",
-        "analysis_index",
-        "abs_z",
-        "z",
-        "se",
-        "p_value",
-    }
-    missing = sorted(required.difference(group.keys()))
-    if missing:
-        errors.append(f"top-hit index {key} is missing {', '.join(missing)}")
+    if _missing_top_hit_arrays(key, group, errors):
         return None
     return {
         "rows": group["variant_index"][:].astype(np.int64),
@@ -1900,6 +1956,25 @@ def _band_z_consistent(g: dict[str, Any], gathered: np.ndarray, in_band: np.ndar
     )
 
 
+def _mark_band_mismatch(
+    g: dict[str, Any],
+    flag: str,
+    gathered: np.ndarray,
+    indexed: np.ndarray,
+    *,
+    rtol: float = 1e-5,
+    atol: float = 1e-8,
+) -> None:
+    """Clear `flag` when the index disagrees with the plane it was built from.
+
+    The tolerances are numpy's defaults unless a caller widens them: `eaf` is
+    written from the decoded plane and must match it, while `se` is compared
+    across a residual round trip and is allowed its quantisation step.
+    """
+    if not np.allclose(gathered, indexed, rtol=rtol, atol=atol, equal_nan=True):
+        g[flag] = False
+
+
 def _check_top_hit_band(
     g: dict[str, Any],
     r0: int,
@@ -1919,17 +1994,15 @@ def _check_top_hit_band(
     bc = g["cols"][in_band]
     if not _band_z_consistent(g, z_band[br, bc], in_band):
         g["consistent"] = False
-    if not np.allclose(
-        se_band[br, bc], g["se_values"][in_band], rtol=1e-3, atol=1e-3, equal_nan=True
-    ):
-        g["se_consistent"] = False
+    _mark_band_mismatch(
+        g, "se_consistent", se_band[br, bc], g["se_values"][in_band], rtol=1e-3, atol=1e-3
+    )
     if g["imputed_values"] is not None and imputed_arr is not None:
         gathered = imputed_arr[r0:r1][br, bc].astype(np.uint8)
         if not np.array_equal(gathered, g["imputed_values"][in_band]):
             g["imputed_consistent"] = False
     if g["eaf_values"] is not None:
-        if not np.allclose(eaf_band()[br, bc], g["eaf_values"][in_band], equal_nan=True):
-            g["eaf_consistent"] = False
+        _mark_band_mismatch(g, "eaf_consistent", eaf_band()[br, bc], g["eaf_values"][in_band])
 
 
 def _report_top_hit_group(key: str, g: dict[str, Any], errors: list[str]) -> None:

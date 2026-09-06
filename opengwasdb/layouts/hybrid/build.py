@@ -489,7 +489,7 @@ def build_hybrid_from_vcf_manifest(
         analyses: list[Analysis] = [_manifest_row_to_analysis(row) for row in manifest_rows]
 
         # ── Write the Dense Component skeleton (a valid dense store) ──────────────
-        _write_index(dense_staged, panel_sorted, analyses, chunk_shape, dtype)
+        _write_index(dense_staged, panel_sorted, analyses, chunk_shape)
         _write_variant_table(dense_dir, panel_sorted, hg38_to_source, rsid_by_alid)
         # dense row -> shared variant_index (ascending — panel keeps genomic order).
         dense_to_shared = np.array([shared_index[alid] for alid in panel_sorted], dtype=np.int32)
@@ -642,7 +642,7 @@ def build_hybrid_from_vcf_manifest(
             encoding, se_coefficients = optimise_dense_se_joint(
                 dense_group,
                 encoding,
-                extra=csr.se_fit_inputs(encoding),
+                overflow=csr.se_fit_inputs(encoding),
             )
 
             # After the SE decision, not before: the index carries the values a
@@ -697,7 +697,7 @@ def build_hybrid_from_vcf_manifest(
         # associations disjointly, so neither alone is the whole picture.
         dense_counted = add_hit_counts(dense_dir, analyses)
         shared_analyses = add_hit_counts(staged.path, dense_counted)
-        _write_index(staged, shared_sorted, analyses, chunk_shape, dtype)
+        _write_index(staged, shared_sorted, analyses, chunk_shape)
         write_analyses_tsv(staged.path, shared_analyses)
         _write_variant_table(staged.path, shared_sorted, hg38_to_source, rsid_by_alid)
 
@@ -768,7 +768,7 @@ def _write_dense_manifest(
             "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
             "n_variants": n_variants,
             "n_analyses": n_analyses,
-            "dense": {"statistic_arrays": ["z", "se"], "se_dtype": dtype},
+            "dense": {"statistic_arrays": ["z", "se"], "se_dtype": encoding.se.dtype},
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
         },
     )
@@ -810,7 +810,7 @@ def _write_hybrid_manifest(
                 "n_panel": n_panel,
                 "n_off_panel": n_off_panel,
                 "n_overflow_associations": n_overflow,
-                "se_dtype": dtype,
+                "se_dtype": encoding.se.dtype,
                 "chunk_shape": list(chunk_shape),
                 "compressor": DEFAULT_COMPRESSOR,
             },

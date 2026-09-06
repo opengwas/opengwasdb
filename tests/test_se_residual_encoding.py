@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import gzip
+import io
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -8,13 +11,16 @@ import zarr
 
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding.codec import SeExceptionBuilder, SeExceptionTable, StoreCodec
+from opengwasdb.encoding.measure import fit_se_grid
 from opengwasdb.encoding.plan import (
+    SE_EXCEPTION_BUDGET,
     EafEncoding,
     EncodingMeasurements,
     SeEncoding,
     SeMeasurements,
     StoreEncoding,
     ZEncoding,
+    _decide_se,
 )
 from opengwasdb.encoding.planes import (
     DenseSePlane,
@@ -24,6 +30,7 @@ from opengwasdb.encoding.planes import (
 )
 from opengwasdb.encoding.se import optimise_dense_se_joint
 from opengwasdb.layouts.dense.build import build_dense_observed_store
+from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import (
     threshold_key,
     write_top_hit_indexes_for_store,
@@ -84,6 +91,42 @@ def test_se_residual_round_trip_missing_and_exact_exceptions() -> None:
     assert decoded[2] == se[2]
     assert decoded[3] == se[3]
     np.testing.assert_allclose(decoded[:2], se[:2], rtol=0.01)
+
+
+def test_exact_exception_cell_needs_no_eaf_to_decode() -> None:
+    """A cell with no EAF cannot be predicted, so it is stored exactly.
+
+    Reference Completion against an LD panel with no frequency column produces
+    exactly this: a finite imputed SE beside a NaN EAF. Refusing to decode it
+    would make a store the builder just wrote unreadable.
+    """
+    se = np.array([0.05, 0.04], dtype=np.float32)
+    eaf = np.array([0.3, np.nan], dtype=np.float32)
+    coefficients = np.array([[-3.0, -0.5]], dtype=np.float32)
+    analysis_index = np.zeros(2, dtype=np.int64)
+    positions = np.arange(2, dtype=np.int64)
+    builder = SeExceptionBuilder()
+    raw = StoreCodec(_plan(1.0)).encode_se(
+        se,
+        eaf=eaf,
+        analysis_index=analysis_index,
+        coefficients=coefficients,
+        positions=positions,
+        exceptions=builder,
+    )
+    # The fixture is only meaningful if the EAF-less cell really became an
+    # exception rather than an ordinary code.
+    assert raw[1] == -127
+
+    decoded = StoreCodec(_plan(1.0), se_exceptions=builder.table()).decode_se(
+        raw,
+        eaf=eaf,
+        analysis_index=analysis_index,
+        coefficients=coefficients,
+        positions=positions,
+    )
+    assert decoded[1] == se[1]
+    np.testing.assert_allclose(decoded[0], se[0], rtol=0.01)
 
 
 def test_se_residual_requires_eaf_and_valid_coefficients() -> None:
@@ -274,8 +317,8 @@ def test_hybrid_joint_selection_streams_dense_and_uses_one_fit(tmp_path) -> None
     selected, shared_coefficients = optimise_dense_se_joint(
         group,
         preliminary,
-        extra=(extra_se, extra_eaf, extra_ai),
-        extra_chunk=200,
+        overflow=(extra_se, extra_eaf, extra_ai),
+        overflow_chunk=200,
     )
 
     assert selected.se.is_residual
@@ -317,7 +360,7 @@ def test_hybrid_extra_component_can_force_shared_float16_fallback(
     selected, shared_coefficients = optimise_dense_se_joint(
         group,
         preliminary,
-        extra=(extra_se, extra_eaf, np.zeros(len(extra_se), dtype=np.int64)),
+        overflow=(extra_se, extra_eaf, np.zeros(len(extra_se), dtype=np.int64)),
     )
 
     assert selected.se == SeEncoding("float16")
@@ -351,3 +394,138 @@ def test_inline_top_hit_index_carries_plane_decoded_se(tmp_path) -> None:
     )
     top = zarr.open_group(str(store / "data.zarr" / "top_hits"), mode="r")[threshold_key(5e-8)]
     np.testing.assert_array_equal(top["se"][:].astype(np.float32), plane_se)
+
+
+def test_one_badly_fitting_analysis_reverts_the_whole_plane() -> None:
+    """#118: the plane reverts when *any* Analysis fits worse than the threshold.
+
+    A pooled exception share lets one GCST007320-shaped Analysis hide behind
+    its well-fitting neighbours — which is the case the issue was raised about.
+    Nineteen clean Analyses against one whose SE is unrelated to its frequency.
+    """
+    n_variants, n_clean = 400, 19
+    frequencies = np.linspace(0.05, 0.95, n_variants, dtype=np.float64)
+    predictor = np.log(2 * frequencies * (1 - frequencies))
+    clean = np.exp(-3.0 - 0.5 * predictor)[:, None].repeat(n_clean, axis=1)
+    rng = np.random.default_rng(0)
+    ragged = np.exp(rng.normal(-3.0, 2.0, n_variants))[:, None]
+    se = np.concatenate([clean, ragged], axis=1).astype(np.float32)
+    eaf = np.broadcast_to(frequencies[:, None].astype(np.float32), se.shape)
+
+    _, measured = fit_se_grid(se, eaf)
+
+    # The fixture is only meaningful if the clean Analyses really do fit: were
+    # every column ragged, any gate at all would reject it.
+    clean_only = fit_se_grid(se[:, :n_clean], eaf[:, :n_clean])[1]
+    assert max(clean_only.exception_fraction.values()) == 0.0
+
+    assert measured.exception_fraction[0.5] > SE_EXCEPTION_BUDGET
+    assert _decide_se(measured) == SeEncoding("float16")
+
+
+def _write_ld_block(block_dir: Path, name: str, snps: list[tuple[str, float, int]]) -> None:
+    """One flat-layout LD block: a SNP table and a gzipped correlation matrix."""
+    block_dir.mkdir(parents=True, exist_ok=True)
+    lines = ["CHR\tSNP\tOA\tEA\tEAF\tBP"]
+    for alid, eaf, bp in snps:
+        chrom, _, effect, other = alid.split(":")
+        lines.append(f"{chrom}\t{alid}\t{other}\t{effect}\t{eaf}\t{bp}")
+    (block_dir / f"{name}.tsv").write_text("\n".join(lines) + "\n")
+
+    rng = np.random.default_rng(0)
+    a = rng.standard_normal((len(snps), len(snps)))
+    ld = a @ a.T + np.eye(len(snps)) * len(snps) * 0.1
+    buffer = io.BytesIO()
+    with gzip.GzipFile(fileobj=buffer, mode="wb") as gz:
+        for row in ld:
+            gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
+    (block_dir / f"{name}.unphased.vcor1.gz").write_bytes(buffer.getvalue())
+
+
+def _residual_source_and_panel(tmp_path: Path) -> tuple[Path, Path, dict[str, np.ndarray]]:
+    """A residual-SE Dense source, and an LD panel adding four imputation targets."""
+    n = 200
+    frequencies = np.linspace(0.05, 0.95, n, dtype=np.float32)
+    records: list[NormalisedAssociation] = []
+    expected: dict[str, np.ndarray] = {}
+    for col, analysis_id in enumerate(("a", "b")):
+        values = np.exp(
+            (-3.0 + col * 0.2)
+            - 0.5 * np.log(2 * frequencies * (1 - frequencies))
+            + 0.12 * np.sin(np.arange(n) * (0.07 + col * 0.01))
+        ).astype(np.float32)
+        expected[analysis_id] = values
+        records.extend(
+            NormalisedAssociation(
+                analysis_id=analysis_id,
+                variant=CanonicalVariant("1", (row + 1) * 1000, "A", "G"),
+                z=8.0 if row % 50 == 0 else 1.0,
+                se=float(values[row]),
+                eaf=float(frequencies[row]),
+            )
+            # `b` leaves the last four variants unobserved, so completion has
+            # somewhere to impute into a store that already has every row.
+            for row in range(n if analysis_id == "a" else n - 4)
+        )
+    source = tmp_path / "obs.opengwasdb"
+    build_dense_observed_store(
+        records,
+        source,
+        store_id="s",
+        release_id="obs",
+        reference_assembly="GRCh38",
+        chunk_shape=(100, 2),
+    )
+
+    panel = tmp_path / "ld_panel"
+    _write_ld_block(
+        panel / "EUR" / "1",
+        "1000-200000",
+        [
+            (f"1:{(row + 1) * 1000}:A:G", float(frequencies[row]), (row + 1) * 1000)
+            for row in range(n)
+        ],
+    )
+    return source, panel, expected
+
+
+def test_dense_completion_round_trips_imputed_cells_under_a_residual_plan(tmp_path) -> None:
+    """#118: imputed cells round-trip on the same terms as observed ones.
+
+    Completion patches the source's plane in place, so it must reuse the
+    source's coefficients: a refit would re-point every carried-over code at a
+    new model (ADR 0037 §3).
+    """
+    source, panel, expected = _residual_source_and_panel(tmp_path)
+    assert StoreManifest.load(source).encoding.se.is_residual
+
+    completed = tmp_path / "comp.opengwasdb"
+    complete_dense_store(
+        source, completed, panel, ancestry="EUR", min_cor=0.0, release_id="comp"
+    )
+
+    manifest = StoreManifest.load(completed)
+    assert manifest.encoding.se == StoreManifest.load(source).encoding.se
+    source_root = zarr.open_group(str(source / "data.zarr"), mode="r")
+    completed_root = zarr.open_group(str(completed / "data.zarr"), mode="r")
+    np.testing.assert_array_equal(
+        completed_root["se_coefficients"][:], source_root["se_coefficients"][:]
+    )
+
+    result = validate_store(completed)
+    assert result.ok, result.errors
+
+    imputed = completed_root["imputed"][:]
+    # The fixture only tests imputation if completion actually imputed something.
+    assert imputed.sum() > 0
+
+    decoded = DenseSePlane.open(completed_root, manifest.encoding).band(
+        0, int(completed_root["se"].shape[0])
+    )
+    assert np.all(np.isfinite(decoded[imputed == 1]))
+    assert np.all(decoded[imputed == 1] > 0)
+
+    with query_store(completed) as query:
+        observed = query.analysis("a", observed_only=True)
+        assert len(observed["se"]) == len(expected["a"])
+        np.testing.assert_allclose(observed["se"], expected["a"], rtol=0.01)

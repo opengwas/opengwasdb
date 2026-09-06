@@ -348,9 +348,26 @@ Five details were settled during implementation:
   fit taken over only one of them would leave the shared manifest describing
   data it had not measured; and a component that would not save bytes on its
   own sends *both* back to `float16` rather than paying for the coding in one.
-- **Reference Completion reuses its source's coefficients** and never refits.
-  Completion writes into its source's encoding (ADR 0038 §4), and a refit
-  would silently re-point every existing code in the plane at a new model.
+- **A plane's codes and its coefficients are always written together.** That
+  is the invariant; who may refit follows from it. Dense and Hybrid completion
+  *patch* the source's plane, carrying its existing codes forward, so they read
+  `se_coefficients` off the source and must never refit — a refit would
+  silently re-point every carried-over code at a new model. Ragged completion
+  rewrites the whole CSR plane from decoded values, so it refits, and its
+  imputed cells are then modelled by the fit rather than excluded from it.
+  Completion preserves the source's *kind and range* either way (ADR 0038 §4);
+  the coefficients are decode parameters of the array actually written, not
+  part of the encoding the release declares.
+
+The gate is per Analysis, not pooled over the plane: an exception share taken
+across every cell lets one badly fitting Analysis hide behind its well-fitting
+neighbours, which is the GCST007320 case the issue was raised about.
+
+**This is not a check on EAF correctness.** `f(1−f)` is symmetric about 0.5, so
+a source reporting its frequencies against the wrong allele fits exactly as
+well as a correct one — GCST003566, the study §6 catches, fits at R² = 0.9976
+here. A plane that accepts residual coding has said nothing about whether its
+`eaf` is oriented right.
 
 Measured on the rebuilt FinnGen R13 pilot-20 Dense release (21,230,615
 variants × 20 Analyses), the builder selected ±0.5 and persisted SE storage

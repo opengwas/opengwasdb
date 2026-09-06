@@ -249,6 +249,51 @@ class StoreQuery:
             self._analyses, self._variant_axis, result, include_variant_info=include_variant_info
         )
 
+    def _cell_result(
+        self,
+        rows: np.ndarray,
+        cols: np.ndarray,
+        z_vals: np.ndarray,
+        se_vals: np.ndarray,
+        *,
+        observed_only: bool,
+        eaf_vals: np.ndarray | None = None,
+        imputed: np.ndarray | None = None,
+    ) -> dict[str, np.ndarray]:
+        """The six parallel arrays every index-keyed result carries.
+
+        Assembling them in one place is what keeps the shapes of `analysis`,
+        `phewas`, `range_phewas` and `lookup` identical: a caller cannot tell
+        which one produced a result, and `observed_only` cannot filter five of
+        the six arrays in one method and six in another.
+
+        `eaf_vals` and `imputed` let a caller that already read those cells in
+        bulk hand them over rather than gather the same cells a second time.
+        """
+        if imputed is None:
+            imputed = self._imputed_pairs(rows, cols)
+        if observed_only:
+            keep = imputed == 0
+            rows, cols, z_vals, se_vals, imputed = (
+                rows[keep],
+                cols[keep],
+                z_vals[keep],
+                se_vals[keep],
+                imputed[keep],
+            )
+            if eaf_vals is not None:
+                eaf_vals = eaf_vals[keep]
+        if eaf_vals is None:
+            eaf_vals = self._eaf_pairs(rows, cols)
+        return {
+            "variant_index": rows,
+            "analysis_index": cols,
+            "z": z_vals,
+            "se": se_vals,
+            "eaf": eaf_vals,
+            "association_status": _status_array(imputed, z_vals, se_vals),
+        }
+
     def analysis(self, analysis_id: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
         """Return all finite associations for one analysis."""
         analysis = self._analyses.by_id(analysis_id)
@@ -262,24 +307,7 @@ class StoreQuery:
         cols = np.full(len(rows), col, dtype="int32")
         z_vals = z_col[mask]
         se_vals = se_col[mask]
-        imp = self._imputed_pairs(rows, cols)
-        if observed_only:
-            keep = imp == 0
-            rows, cols, z_vals, se_vals, imp = (
-                rows[keep],
-                cols[keep],
-                z_vals[keep],
-                se_vals[keep],
-                imp[keep],
-            )
-        return {
-            "variant_index": rows,
-            "analysis_index": cols,
-            "z": z_vals,
-            "se": se_vals,
-            "eaf": self._eaf_pairs(rows, cols),
-            "association_status": _status_array(imp, z_vals, se_vals),
-        }
+        return self._cell_result(rows, cols, z_vals, se_vals, observed_only=observed_only)
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
         """Return one variant across all analyses."""
@@ -294,24 +322,7 @@ class StoreQuery:
         rows = np.full(len(cols), row, dtype="int32")
         z_vals = z_row[mask]
         se_vals = se_row[mask]
-        imp = self._imputed_pairs(rows, cols)
-        if observed_only:
-            keep = imp == 0
-            rows, cols, z_vals, se_vals, imp = (
-                rows[keep],
-                cols[keep],
-                z_vals[keep],
-                se_vals[keep],
-                imp[keep],
-            )
-        return {
-            "variant_index": rows,
-            "analysis_index": cols,
-            "z": z_vals,
-            "se": se_vals,
-            "eaf": self._eaf_pairs(rows, cols),
-            "association_status": _status_array(imp, z_vals, se_vals),
-        }
+        return self._cell_result(rows, cols, z_vals, se_vals, observed_only=observed_only)
 
     def range_phewas(
         self, chromosome: str, start: int, end: int, *, observed_only: bool = False
@@ -338,24 +349,15 @@ class StoreQuery:
         else:
             imp_block = self._read_row_block(self._imputed, row_indices, np.uint8)
             imp = imp_block[mask]
-        if observed_only:
-            keep = imp == 0
-            rows, cols, z_vals, se_vals, eaf_vals, imp = (
-                rows[keep],
-                cols[keep],
-                z_vals[keep],
-                se_vals[keep],
-                eaf_vals[keep],
-                imp[keep],
-            )
-        return {
-            "variant_index": rows,
-            "analysis_index": cols,
-            "z": z_vals,
-            "se": se_vals,
-            "eaf": eaf_vals,
-            "association_status": _status_array(imp, z_vals, se_vals),
-        }
+        return self._cell_result(
+            rows,
+            cols,
+            z_vals,
+            se_vals,
+            observed_only=observed_only,
+            eaf_vals=eaf_vals,
+            imputed=imp,
+        )
 
     def lookup(
         self,
@@ -383,24 +385,7 @@ class StoreQuery:
         cols = np.array([col_indices[c] for c in cols_rel], dtype="int32")
         z_vals = z_block[mask]
         se_vals = se_block[mask]
-        imp = self._imputed_pairs(rows, cols)
-        if observed_only:
-            keep = imp == 0
-            rows, cols, z_vals, se_vals, imp = (
-                rows[keep],
-                cols[keep],
-                z_vals[keep],
-                se_vals[keep],
-                imp[keep],
-            )
-        return {
-            "variant_index": rows,
-            "analysis_index": cols,
-            "z": z_vals,
-            "se": se_vals,
-            "eaf": self._eaf_pairs(rows, cols),
-            "association_status": _status_array(imp, z_vals, se_vals),
-        }
+        return self._cell_result(rows, cols, z_vals, se_vals, observed_only=observed_only)
 
     def top_hits(
         self,

@@ -98,6 +98,38 @@ def _positions_for(mask: np.ndarray, positions: PositionSource, *, what: str) ->
     return np.asarray(resolved[mask], dtype=np.int64)
 
 
+def se_residual_codes(
+    values: np.ndarray, residual: np.ndarray, step: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Quantise `log(se)` residuals into the int8 plane. The only site that does.
+
+    `residual` is `log(se) - prediction`; a non-finite one means the model
+    could not predict that cell, which makes it an exception rather than a
+    clip. Encoding, the candidate-range measurement and the Ragged fitter all
+    come through here, so a store cannot be *measured* under one rounding rule
+    and *written* under another.
+
+    Returns the raw codes and the mask of cells whose exact value must go in
+    the side table.
+    """
+    v = np.asarray(values, dtype=np.float64)
+    present = np.isfinite(v)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        codes = np.rint(np.asarray(residual, dtype=np.float64) / step)
+    ordinary = (
+        present
+        & (v > 0)
+        & np.isfinite(codes)
+        & (codes >= SE_CODE_MIN)
+        & (codes <= SE_CODE_MAX)
+    )
+    exceptional = present & ~ordinary
+    raw = np.full(v.shape, SE_MISSING, dtype=np.int8)
+    raw[exceptional] = SE_EXCEPTION
+    raw[ordinary] = codes[ordinary].astype(np.int8)
+    return raw, exceptional
+
+
 @dataclass(frozen=True)
 class SparseExactTable:
     """Exact `float32` values for the cells an integer plane cannot hold.
@@ -447,23 +479,24 @@ class StoreCodec:
             raise ValueError("cannot store negative or non-finite standard errors")
         with np.errstate(divide="ignore", invalid="ignore"):
             residual = np.log(v) - prediction
-            codes = np.rint(residual / self.encoding.se.step)
-        codable = (
-            ~missing
-            & (v > 0)
-            & np.isfinite(prediction)
-            & np.isfinite(codes)
-            & (codes >= SE_CODE_MIN)
-            & (codes <= SE_CODE_MAX)
-        )
-        out = np.where(codable, codes, SE_EXCEPTION)
-        out[missing] = SE_MISSING
-        exceptional = ~missing & ~codable
+        out, exceptional = se_residual_codes(v, residual, self.encoding.se.step)
         if np.any(exceptional):
             if exceptions is None:
                 raise ValueError("se exceptions need a SeExceptionBuilder")
             exceptions.add(_positions_for(exceptional, positions, what="encode_se"), v[exceptional])
-        return out.astype(np.int8)
+        return out
+
+    @staticmethod
+    def _checked_se_inputs(codes: np.ndarray, eaf: np.ndarray) -> np.ndarray:
+        """The frequency plane a residual decode needs, or why it cannot be used."""
+        if codes.dtype != np.int8:
+            raise ValueError(
+                f"se plane has dtype {codes.dtype}, but manifest declares int8_residual"
+            )
+        f = np.asarray(eaf, dtype=np.float32)
+        if f.shape != codes.shape:
+            raise ValueError(f"EAF shape {f.shape} does not match se shape {codes.shape}")
+        return f
 
     def decode_se(
         self,
@@ -479,17 +512,16 @@ class StoreCodec:
             if codes.dtype.kind in "iu":
                 raise ValueError(f"se plane has dtype {codes.dtype}, but manifest declares float16")
             return codes.astype(np.float32)
-        if codes.dtype != np.int8:
+        f = self._checked_se_inputs(codes, eaf)
+        exceptional = codes == SE_EXCEPTION
+        # An exact exception carries its own value in the side table and is
+        # never predicted, so it needs no EAF -- which is the whole reason a
+        # cell whose frequency is unknown becomes one. Only the cells this
+        # method actually predicts owe a finite frequency.
+        predicted = (codes != SE_MISSING) & ~exceptional
+        if np.any(predicted & ~np.isfinite(f)):
             raise ValueError(
-                f"se plane has dtype {codes.dtype}, but manifest declares int8_residual"
-            )
-        f = np.asarray(eaf, dtype=np.float32)
-        if f.shape != codes.shape:
-            raise ValueError(f"EAF shape {f.shape} does not match se shape {codes.shape}")
-        finite_se = codes != SE_MISSING
-        if np.any(finite_se & ~np.isfinite(f)):
-            raise ValueError(
-                "residual SE cannot be decoded without a finite EAF for every finite cell"
+                "residual SE cannot be decoded without a finite EAF for every predicted cell"
             )
         prediction = self._se_prediction(f, analysis_index, coefficients)
         with np.errstate(over="ignore", invalid="ignore"):
@@ -497,14 +529,13 @@ class StoreCodec:
                 np.float32
             )
         out[codes == SE_MISSING] = np.nan
-        exceptional = codes == SE_EXCEPTION
         if np.any(exceptional):
             if self.se_exceptions is None:
                 raise ValueError("se plane has exception cells but no exception table")
             out[exceptional] = self.se_exceptions.lookup(
                 _positions_for(exceptional, positions, what="decode_se")
             )
-        if np.any((~exceptional & finite_se) & ~np.isfinite(out)):
+        if np.any(predicted & ~np.isfinite(out)):
             raise ValueError("se residual prediction is non-finite")
         return out
 

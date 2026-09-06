@@ -41,6 +41,13 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Changed
 
+- **`index.sqlite` no longer records `se_dtype`** (#118). It duplicated the
+  manifest's `encoding` block, which spec §6a makes authoritative, and two of
+  the three builders wrote it *before* the SE encoding was measured — so from
+  format 3.0 it would have claimed `float16` for an `int8` plane. The same
+  reasoning as #128's `variants` table: a duplicate that cannot be right is
+  worse than no duplicate. Nothing read it.
+
 - **The Store Variant Axis no longer keeps a relational copy of itself**
   (#128). `index.sqlite`'s `variants` table duplicated every column of
   `variants.tsv.gz` — which carries `source_alid` besides — was written by one
@@ -88,6 +95,14 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   decoded Dense/CSR plane. Eligible builds fit against decoded EAF, select a
   measured ±0.5/±1/±2 residual range, and persist coefficients plus exact
   exceptions; ineligible or non-saving planes remain `float16`.
+  - **The exception gate is per Analysis, not pooled.** A share taken over
+    every cell in the plane lets one badly fitting Analysis hide behind its
+    well-fitting neighbours — the GCST007320 case the issue was raised about.
+  - **Dense builders keep their scratch SE plane in `float32`**, as Dense
+    completion already did, so an exact exception is the source's own value
+    and not one already rounded to the dtype the plane started in.
+  - The coding is **blind to allele flips** and provides no incidental check on
+    EAF orientation (#115): `f(1−f)` is symmetric about 0.5.
 
 - **`eaf` is stored as a per-variant baseline plus a per-cell `int8` logit
   residual, and `format_version` moves to `2.0`** (#116, ADR 0037 §2/§4).

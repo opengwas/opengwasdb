@@ -21,18 +21,140 @@ from opengwasdb.encoding.codec import (
     eaf_baseline_from_grid,
     eaf_baseline_from_pairs,
     logit,
+    se_residual_codes,
 )
 from opengwasdb.encoding.plan import (
     EAF_CODE_HALF,
     EAF_CODE_MAX,
     EAF_CODE_MIN,
     EAF_RANGE_CANDIDATES,
-    SE_CODE_MAX,
-    SE_CODE_MIN,
     SE_RANGE_CANDIDATES,
     EafMeasurements,
     SeMeasurements,
 )
+
+
+def _packed_bytes(compressor: object | None, data: np.ndarray) -> int:
+    """Compressed size of one array, or its raw size when nothing compresses it."""
+    encode = getattr(compressor, "encode", None)
+    return len(encode(np.ascontiguousarray(data))) if encode is not None else data.nbytes
+
+
+def _chunk_starts(length: int, step: int) -> range:
+    return range(0, length, max(step, 1))
+
+
+def _packed_1d(compressor: object | None, data: np.ndarray, chunk: int) -> int:
+    return sum(
+        _packed_bytes(compressor, data[start : start + chunk])
+        for start in _chunk_starts(len(data), chunk)
+    )
+
+
+def _packed_2d(compressor: object | None, data: np.ndarray, chunk: tuple[int, int]) -> int:
+    return sum(
+        _packed_bytes(compressor, data[r0 : r0 + chunk[0], c0 : c0 + chunk[1]])
+        for r0 in _chunk_starts(data.shape[0], chunk[0])
+        for c0 in _chunk_starts(data.shape[1], chunk[1])
+    )
+
+
+def _packed_chunks(
+    compressor: object | None, data: np.ndarray, chunk_shape: tuple[int, ...] | int | None
+) -> int:
+    """Compressed size the way zarr will actually store it: chunk by chunk.
+
+    Compressing an array whole flatters it against the same array cut into
+    chunks, so the size the decision compares must be measured in the shape it
+    will be written in. An array whose chunking is not stated, or does not
+    match its own rank, is charged whole.
+    """
+    shaped = np.asarray(data)
+    shape = (chunk_shape,) if isinstance(chunk_shape, int) else chunk_shape
+    if shape is None or shaped.ndim != len(shape):
+        return _packed_bytes(compressor, shaped)
+    if shaped.ndim == 1:
+        return _packed_1d(compressor, shaped, shape[0])
+    if shaped.ndim == 2:
+        return _packed_2d(compressor, shaped, (shape[0], shape[1]))
+    return _packed_bytes(compressor, shaped)
+
+
+def solve_log_se(
+    count: np.ndarray, sx: np.ndarray, sy: np.ndarray, sxx: np.ndarray, sxy: np.ndarray
+) -> tuple[np.ndarray, bool]:
+    """Per-Analysis OLS of `log(se)` on `log(2f(1-f))`, from accumulated sums.
+
+    The single site that turns sums into coefficients. The Dense path
+    accumulates them one row chunk at a time and the Ragged path in one pass,
+    but a store must not be able to get one answer from one and a different
+    answer from the other.
+
+    Returns the coefficients and whether every Analysis could be fitted: fewer
+    than two usable cells, or a degenerate spread of frequencies, is not a bad
+    fit but no fit, and sends the whole plane back to `float16`.
+    """
+    n_analyses = len(count)
+    coefficients = np.full((n_analyses, 2), np.nan, dtype=np.float32)
+    denominator = count * sxx - sx * sx
+    if not (bool(np.all(count >= 2)) and bool(np.all(np.abs(denominator) > 0))):
+        return coefficients, False
+    slope = (count * sxy - sx * sy) / denominator
+    coefficients[:, 1] = slope.astype(np.float32)
+    coefficients[:, 0] = ((sy - slope * sx) / count).astype(np.float32)
+    return coefficients, bool(np.all(np.isfinite(coefficients)))
+
+
+def _fit_log_se(
+    s: np.ndarray, f: np.ndarray, ai: np.ndarray, n_analyses: int, finite: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    """Fit every Analysis in one pass, and keep each fitted cell's residual.
+
+    One pass of `np.bincount` rather than a mask per Analysis: the Ragged
+    builders hold the whole store in memory already, and a loop over Analyses
+    would make the fit quadratic in a dimension that grows.
+    """
+    residual = np.full(s.shape, np.nan, dtype=np.float64)
+    use = finite & (s > 0) & (f > 0) & (f < 1)
+    selected = ai[use]
+    x = np.log(2 * f[use] * (1 - f[use]))
+    y = np.log(s[use])
+    coefficients, eligible = solve_log_se(
+        np.bincount(selected, minlength=n_analyses).astype(np.float64),
+        np.bincount(selected, weights=x, minlength=n_analyses),
+        np.bincount(selected, weights=y, minlength=n_analyses),
+        np.bincount(selected, weights=x * x, minlength=n_analyses),
+        np.bincount(selected, weights=x * y, minlength=n_analyses),
+    )
+    if not eligible:
+        return coefficients, residual, False
+    residual[use] = y - (
+        coefficients[selected, 0].astype(np.float64)
+        + coefficients[selected, 1].astype(np.float64) * x
+    )
+    return coefficients, residual, True
+
+
+def _candidate_bytes(
+    compressor: object | None,
+    stored: np.ndarray,
+    chunks: tuple[int, ...] | int | None,
+    coefficients: np.ndarray,
+    exceptions: np.ndarray,
+    values: np.ndarray,
+) -> int:
+    """Everything one candidate range actually costs on disk.
+
+    Codes, coefficients and both side arrays: comparing only the codes against
+    `float16` would accept a range whose exception table more than gives the
+    saving back.
+    """
+    return (
+        _packed_chunks(compressor, stored, chunks)
+        + _packed_chunks(compressor, coefficients, (min(max(len(coefficients), 1), 1024), 2))
+        + _packed_chunks(compressor, np.flatnonzero(exceptions).astype(np.int64), EXACT_TABLE_CHUNK)
+        + _packed_chunks(compressor, values[exceptions].astype(np.float32), EXACT_TABLE_CHUNK)
+    )
 
 
 def fit_se(
@@ -60,80 +182,37 @@ def fit_se(
     coef = np.full((n_analyses, 2), np.nan, dtype=np.float32)
     residual = np.full(s.shape, np.nan, dtype=np.float64)
     if eligible:
-        for col in range(n_analyses):
-            use = finite & (s > 0) & (ai == col) & (f > 0) & (f < 1)
-            if np.count_nonzero(use) < 2:
-                eligible = False
-                break
-            x = np.log(2 * f[use] * (1 - f[use]))
-            design = np.column_stack((np.ones(len(x)), x))
-            fitted = np.linalg.lstsq(design, np.log(s[use]), rcond=None)[0]
-            coef[col] = fitted.astype(np.float32)
-            residual[use] = np.log(s[use]) - design @ fitted
+        coef, residual, eligible = _fit_log_se(s, f, ai, n_analyses, finite)
+
+    # Per Analysis, not pooled: issue #118 reverts the plane when *any*
+    # Analysis fits badly, and a pooled share lets one bad Analysis hide
+    # behind its well-fitting neighbours.
+    finite_per_analysis = np.bincount(ai[finite], minlength=n_analyses)
+    carrying = finite_per_analysis > 0
     fractions: dict[float, float] = {}
     errors: dict[float, float] = {}
     sizes: dict[float, int] = {}
-
-    def packed_bytes(data: np.ndarray) -> int:
-        encode = getattr(compressor, "encode", None)
-        return len(encode(np.ascontiguousarray(data))) if encode is not None else data.nbytes
-
-    def packed_chunks(data: np.ndarray, chunk_shape: tuple[int, ...] | int | None) -> int:
-        shaped = np.asarray(data)
-        if chunk_shape is None:
-            return packed_bytes(shaped)
-        if isinstance(chunk_shape, int):
-            chunk_shape = (chunk_shape,)
-        if shaped.ndim != len(chunk_shape):
-            return packed_bytes(shaped)
-        total = 0
-        if shaped.ndim == 1:
-            for start in range(0, len(shaped), chunk_shape[0]):
-                total += packed_bytes(shaped[start : start + chunk_shape[0]])
-            return total
-        if shaped.ndim == 2:
-            for r0 in range(0, shaped.shape[0], chunk_shape[0]):
-                for c0 in range(0, shaped.shape[1], chunk_shape[1]):
-                    total += packed_bytes(
-                        shaped[
-                            r0 : r0 + chunk_shape[0],
-                            c0 : c0 + chunk_shape[1],
-                        ]
-                    )
-            return total
-        return packed_bytes(shaped)
-
-    denominator = max(int(np.count_nonzero(finite)), 1)
     for candidate in SE_RANGE_CANDIDATES:
         step = candidate / 127.0
-        codes = np.rint(residual / step)
-        ordinary = (
-            finite
-            & (s > 0)
-            & np.isfinite(residual)
-            & (codes >= SE_CODE_MIN)
-            & (codes <= SE_CODE_MAX)
+        stored, exceptions = se_residual_codes(s, residual, step)
+        per_analysis = np.bincount(ai[exceptions], minlength=n_analyses)
+        fractions[candidate] = (
+            float(np.max(per_analysis[carrying] / finite_per_analysis[carrying]))
+            if np.any(carrying)
+            else 0.0
         )
-        exceptions = finite & ~ordinary
-        stored = np.full(s.shape, -128, dtype=np.int8)
-        stored[exceptions] = -127
-        stored[ordinary] = codes[ordinary].astype(np.int8)
-        fractions[candidate] = float(np.count_nonzero(exceptions) / denominator)
         errors[candidate] = float(np.expm1(step / 2.0))
-        positions = np.flatnonzero(exceptions).astype(np.int64)
-        exact = s[exceptions].astype(np.float32)
-        sizes[candidate] = (
-            packed_chunks(stored.reshape(se_shape), chunks)
-            + packed_chunks(coef, (min(max(n_analyses, 1), 1024), 2))
-            + packed_chunks(positions, EXACT_TABLE_CHUNK)
-            + packed_chunks(exact, EXACT_TABLE_CHUNK)
+        sizes[candidate] = _candidate_bytes(
+            compressor, stored.reshape(se_shape), chunks, coef, exceptions, s
         )
     return coef, SeMeasurements(
         eligible=eligible and bool(np.all(np.isfinite(coef))),
         exception_fraction=fractions,
         worst_relative_error=errors,
         compressed_bytes=sizes,
-        float16_compressed_bytes=packed_chunks(s.astype(np.float16).reshape(se_shape), chunks),
+        float16_compressed_bytes=_packed_chunks(
+            compressor, s.astype(np.float16).reshape(se_shape), chunks
+        ),
     )
 
 
