@@ -257,6 +257,15 @@ declare residual-coded `se`:
   validation checks that the arrays agree with it (§20).
 - A reader meeting a `kind` it does not implement MUST reject the release
   (§21), not guess and not fall back.
+- **A release may declare only kinds its own `format_version` admits** (issue
+  #157). The block records what the bytes mean to the version that wrote them:
+  `int8_residual` `se` requires `format_version` 3.0, `int8_residual` `eaf`
+  requires 2.0 — a conforming reader of 2.0 is entitled to read `se` as
+  `float16`, and a 2.0 manifest declaring the format-3 residual plane hands it
+  `int8` codes to decode as `float16`, the exact plausible-wrong-answer this
+  block exists to prevent. A release below `format_version` 1.0 declares no
+  block at all: `float16` throughout *is* the absence of a declaration, so a
+  0.x manifest carrying one is refused rather than read.
 - A release declaring no `encoding` — every release up to `format_version` 0.1
   — is `float16` for `z` and `se`, with NaN as the missing marker, and
   `float32_optional` for `eaf`.
@@ -1101,7 +1110,7 @@ A build writes exactly one `format_version` and reads every major it implements.
 Store Releases are immutable. Reference Completion, re-indexing and migration all produce a **new release**, with one narrow exception: a **Provenance Amendment** may fold additional facts into an existing release's `provenance` dict in place, including a format migration recording what it did to that release. Anything that changes association data or Analytical Metadata is outside the exception.
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
-2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/migrate_store_to_analyses_tsv.py` is the only such tool at present, and it predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/migrate_store_to_format_3.py` (issue #118) derives a new Dense release at an explicit `--into` path, building it in a staging directory and publishing it by rename only when the migrated copy validates (issue #156) — the pattern this section describes; its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
 3. **Rejected** — a store whose major version this build does not implement cannot be read, and no amount of validation makes it readable.
 
 There is no support window for older minors: a known major reads every minor within it.

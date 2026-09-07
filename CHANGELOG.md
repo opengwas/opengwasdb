@@ -43,6 +43,29 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   derived from the panel frequency, so a cell without one gets no standard error
   either, and a test now pins that.
 
+- **A pre-3.0 manifest could declare residual `se` and no reader would object**
+  (#157). `StoreManifest` parsed a declared `encoding` block without checking
+  it against `format_version`, so a release stamped 1.0 or 2.0 could declare
+  the format-3 `int8_residual` representation and this package would decode it
+  — while a conforming reader of that version, entitled to read `se` as
+  `float16`, would read the `int8` codes as `float16` and return plausible,
+  wrong standard errors. The version is now parsed first, and a declared kind
+  must have existed by the release's own major version: residual `se` below
+  3.0 and residual `eaf` below 2.0 are refused with a message naming the
+  version and the kind, and any `encoding` block below 1.0 — a release that
+  never declared one — is refused too. The gate is a per-kind table (spec
+  §6a), so the next version-gated encoding adds a row rather than a branch.
+
+- **The format-3 migration rewrote the release it was given** (#156).
+  `scripts/migrate_store_to_format_3.py` treated its `--into` as optional and
+  re-encoded the `se` plane in place by default — a Store Release is immutable
+  (spec §21.4), and a failed validation would leave the source damaged, exactly
+  the interrupted-in-place-migration failure ADR 0038 §5 records. `--into` is
+  now required and names a new release; the migration opens the source
+  read-only, builds the destination in a staging directory and publishes it by
+  rename only when the migrated copy validates, so neither the source nor the
+  destination is ever a half-migrated store.
+
 - **The `ukb-b` benchmark published a compression ratio of 0.0** (#148). Its
   source-size figure came from `data/ukb-b/manifest.tsv`, which points at
   `/local-scratch` paths that no longer exist, and it skipped a source it could

@@ -139,7 +139,17 @@ def test_completion_refuses_a_source_it_cannot_write_before_doing_any_work(
     its own encoding -- so it fails instead, and fails *before* the imputation
     rather than at manifest-write time an hour later.
     """
+    # A genuine 0.1 store declares no encoding block -- float16 throughout is
+    # what the absence of a block means (spec §6a) -- and a 0.1 release that
+    # kept one would now be refused at open as self-contradictory (issue #157).
+    # Deleting it is what makes this fixture a readable 0.1 store; nothing
+    # decodes arrays before the version check fires, so their dtype is not
+    # part of what this test exercises.
     _set_version(dense_store_path, "0.1")
+    manifest_path = dense_store_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["encoding"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     out = tmp_path / "completed.opengwasdb"
 
     with pytest.raises(UnsupportedFormatVersion, match="rebuild it from source"):

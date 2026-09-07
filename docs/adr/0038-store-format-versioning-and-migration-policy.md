@@ -198,7 +198,11 @@ unchanged in substance.
   such.** An in-place rewrite that is interrupted leaves a store that is neither
   version, which is the failure class the Staged Release machinery exists to
   prevent everywhere else. It is tolerated here only because the stores it
-  targets should be rebuilt rather than migrated.
+  targets should be rebuilt rather than migrated. The format-3 migration that
+  #118 adds (`scripts/migrate_store_to_format_3.py`) is the first to follow
+  decision 4: it derives a new release in a staging directory and publishes it
+  by rename only when the migrated copy validates, so its source is never a
+  half-migrated store (issue #156).
 - **ADR 0034's missing bump is not retroactively applied.** Stores predating it
   are already unreadable in the ways that matter (retired columns, which
   validation rejects by name), and inventing a version they never carried would
