@@ -15,6 +15,22 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Fixed
 
+- **`ukb-b` at format 3.0, measured** (#148). A full Observed-Only Dense build
+  of `ukb-b` (9,847,701 × 2,511 = 24,727,577,211 cells) under format 3.0 takes
+  **13h30m** against 11h35m at format 2.0 (+16.5%), and its `se` plane falls
+  from 21,183,939,687 to 3,961,274,232 bytes — **−81.3%**, well beyond ADR 0037
+  §3's −58.1% estimate and the FinnGen pilot's −59.0%, because only 0.0068% of
+  its cells fall outside ±0.5. The whole store drops 28.9%, to 41.66 GB, and
+  compresses 9.98× against its 424.84 GB of source GWAS-VCF.
+
+  Query latency moves both ways, and the direction depends on what dominates.
+  Decoding residual `se` costs 0.0700 µs/cell against `float16`'s 0.0050 —
+  **14×**, since each cell needs `eaf` decoded and an `exp`. A cached regional
+  scan of 5,224,822 cells is therefore 114% slower, while an IO-bound
+  whole-Analysis scan of 8,419,893 cells is **11.7% faster**, because the plane
+  it reads is 5.3× smaller. See
+  `docs/benchmark-output/opengwasdb_ukbb_dense_issue148_benchmark.md`.
+
 - **The `ukb-b` benchmark published a compression ratio of 0.0** (#148). Its
   source-size figure came from `data/ukb-b/manifest.tsv`, which points at
   `/local-scratch` paths that no longer exist, and it skipped a source it could
