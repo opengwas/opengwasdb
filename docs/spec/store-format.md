@@ -318,11 +318,24 @@ Builders try ranges ±0.5, ±1, and ±2 in order, accepting one only when every
 finite SE has decodable EAF, exact exceptions are at most 2% **in every
 Analysis** — not pooled over the plane — ordinary-cell relative error is at
 most 1%, and measured compressed bytes decrease after codes, coefficients, and
-side tables are charged. Otherwise the entire plane is `float16`. Hybrid
-components share one decision, and each must save bytes on its own. Zero SE,
+side tables are charged. Otherwise the entire plane is `float16`. Zero SE,
 non-finite predictions, and out-of-range residuals are exact exceptions, never
-clips; an exact exception carries its own value and so needs no EAF, which is
-what lets a cell with an unknown frequency be stored at all.
+clips.
+
+**Every cell carrying a standard error owes a finite EAF, exact exceptions
+included.** A residual plane is defined over a store whose frequencies are
+complete where its standard errors are, and encoding refuses a finite `SE`
+whose cell has no frequency rather than absorbing it as an exception — a store
+only this package could read is worse than one it declines to write. Nothing
+upstream produces such a cell: an imputed standard error is derived from the
+panel frequency, so a cell without one gets no standard error either.
+
+The 2% budget is **per Analysis and pooled across a Hybrid store's two
+components**, not met by each component separately. What it bounds is storage:
+an exact exception stores the source value exactly, so a high exception rate
+costs side-table bytes and no accuracy. The quantity that bounds those bytes
+for an Analysis is its share over all of its cells, wherever they live. Hybrid
+components share one decision, and each must save bytes on its own.
 
 **`eaf` — one of four kinds** (ADR 0037 §2). EAF's *semantics* are unchanged by
 the encoding: it is still per (variant, Analysis), still oriented to the stored

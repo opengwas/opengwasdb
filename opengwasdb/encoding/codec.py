@@ -477,6 +477,17 @@ class StoreCodec:
         invalid = ~missing & (~np.isfinite(v) | (v < 0))
         if np.any(invalid):
             raise ValueError("cannot store negative or non-finite standard errors")
+        # A residual plane is defined over a complete-EAF store (#118,
+        # #138-#140). A finite `se` whose cell has no frequency used to become
+        # an exact exception, which stored the value but put the plane outside
+        # that contract -- and a decode-time refusal would then reject data this
+        # method had just written. It fails here instead, where the caller still
+        # has the source value and can fall back to `float16` (issue #159).
+        if np.any(~missing & ~np.isfinite(np.asarray(eaf, dtype=np.float64))):
+            raise ValueError(
+                "residual SE needs a finite EAF for every cell carrying a standard error; "
+                "a store with frequencies missing where `se` is present must use float16"
+            )
         with np.errstate(divide="ignore", invalid="ignore"):
             residual = np.log(v) - prediction
         out, exceptional = se_residual_codes(v, residual, self.encoding.se.step)
@@ -514,15 +525,17 @@ class StoreCodec:
             return codes.astype(np.float32)
         f = self._checked_se_inputs(codes, eaf)
         exceptional = codes == SE_EXCEPTION
-        # An exact exception carries its own value in the side table and is
-        # never predicted, so it needs no EAF -- which is the whole reason a
-        # cell whose frequency is unknown becomes one. Only the cells this
-        # method actually predicts owe a finite frequency.
-        predicted = (codes != SE_MISSING) & ~exceptional
-        if np.any(predicted & ~np.isfinite(f)):
+        # Every cell carrying a standard error owes a finite frequency, exact
+        # exceptions included. `encode_se` refuses to create one without a
+        # frequency, so a plane that has one did not come from this encoder and
+        # guessing what it meant is worse than refusing it (issue #159).
+        present = codes != SE_MISSING
+        if np.any(present & ~np.isfinite(f)):
             raise ValueError(
-                "residual SE cannot be decoded without a finite EAF for every predicted cell"
+                "residual SE cannot be decoded without a finite EAF for every cell carrying "
+                "a standard error"
             )
+        predicted = present & ~exceptional
         prediction = self._se_prediction(f, analysis_index, coefficients)
         with np.errstate(over="ignore", invalid="ignore"):
             out = np.exp(prediction + codes.astype(np.float64) * self.encoding.se.step).astype(

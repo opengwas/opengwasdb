@@ -363,6 +363,24 @@ The gate is per Analysis, not pooled over the plane: an exception share taken
 across every cell lets one badly fitting Analysis hide behind its well-fitting
 neighbours, which is the GCST007320 case the issue was raised about.
 
+It *is* pooled across a Hybrid store's two components, and that asymmetry is
+deliberate. What the 2% bounds is storage, not accuracy: an exact exception
+stores the source's own value, so exceeding the budget costs side-table bytes
+and loses nothing. The quantity that bounds those bytes for one Analysis is its
+exception share over all of that Analysis's cells, wherever they live — so a
+Hybrid Analysis is charged once over the pair, while two different Analyses are
+never charged together. Requiring each component to pass separately would
+instead reject a store whose overall side table is small because a minority of
+one Analysis's cells sit in the Overflow Component.
+
+**A cell carrying a standard error always owes a finite EAF**, exact exceptions
+included. Encoding refuses one that does not, rather than storing it as an
+exception: that would leave a residual plane holding a cell no conforming
+reader could reconstruct, and force a decoder to accept data outside the
+contract this ADR describes. Nothing upstream produces such a cell, because an
+imputed standard error is derived from the panel frequency and a cell without
+one gets no standard error either.
+
 **This is not a check on EAF correctness.** `f(1−f)` is symmetric about 0.5, so
 a source reporting its frequencies against the wrong allele fits exactly as
 well as a correct one — GCST003566, the study §6 catches, fits at R² = 0.9976

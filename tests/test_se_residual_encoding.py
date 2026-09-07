@@ -13,6 +13,7 @@ from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding.codec import SeExceptionBuilder, SeExceptionTable, StoreCodec
 from opengwasdb.encoding.measure import fit_se_grid
 from opengwasdb.encoding.plan import (
+    SE_EXCEPTION,
     SE_EXCEPTION_BUDGET,
     EafEncoding,
     EncodingMeasurements,
@@ -23,6 +24,7 @@ from opengwasdb.encoding.plan import (
     _decide_se,
 )
 from opengwasdb.encoding.planes import (
+    DenseEafPlane,
     DenseSePlane,
     RaggedSePlane,
     write_se_csr,
@@ -91,42 +93,6 @@ def test_se_residual_round_trip_missing_and_exact_exceptions() -> None:
     assert decoded[2] == se[2]
     assert decoded[3] == se[3]
     np.testing.assert_allclose(decoded[:2], se[:2], rtol=0.01)
-
-
-def test_exact_exception_cell_needs_no_eaf_to_decode() -> None:
-    """A cell with no EAF cannot be predicted, so it is stored exactly.
-
-    Reference Completion against an LD panel with no frequency column produces
-    exactly this: a finite imputed SE beside a NaN EAF. Refusing to decode it
-    would make a store the builder just wrote unreadable.
-    """
-    se = np.array([0.05, 0.04], dtype=np.float32)
-    eaf = np.array([0.3, np.nan], dtype=np.float32)
-    coefficients = np.array([[-3.0, -0.5]], dtype=np.float32)
-    analysis_index = np.zeros(2, dtype=np.int64)
-    positions = np.arange(2, dtype=np.int64)
-    builder = SeExceptionBuilder()
-    raw = StoreCodec(_plan(1.0)).encode_se(
-        se,
-        eaf=eaf,
-        analysis_index=analysis_index,
-        coefficients=coefficients,
-        positions=positions,
-        exceptions=builder,
-    )
-    # The fixture is only meaningful if the EAF-less cell really became an
-    # exception rather than an ordinary code.
-    assert raw[1] == -127
-
-    decoded = StoreCodec(_plan(1.0), se_exceptions=builder.table()).decode_se(
-        raw,
-        eaf=eaf,
-        analysis_index=analysis_index,
-        coefficients=coefficients,
-        positions=positions,
-    )
-    assert decoded[1] == se[1]
-    np.testing.assert_allclose(decoded[0], se[0], rtol=0.01)
 
 
 def test_se_residual_requires_eaf_and_valid_coefficients() -> None:
@@ -423,13 +389,22 @@ def test_one_badly_fitting_analysis_reverts_the_whole_plane() -> None:
     assert _decide_se(measured) == SeEncoding("float16")
 
 
-def _write_ld_block(block_dir: Path, name: str, snps: list[tuple[str, float, int]]) -> None:
-    """One flat-layout LD block: a SNP table and a gzipped correlation matrix."""
+def _write_ld_block(
+    block_dir: Path, name: str, snps: list[tuple[str, float, int]], *, with_eaf: bool = True
+) -> None:
+    """One flat-layout LD block: a SNP table and a gzipped correlation matrix.
+
+    `with_eaf=False` drops the frequency column, which is a panel this pipeline
+    is required to complete against (issue #113) but cannot supply frequencies
+    from.
+    """
     block_dir.mkdir(parents=True, exist_ok=True)
-    lines = ["CHR\tSNP\tOA\tEA\tEAF\tBP"]
+    header = "CHR\tSNP\tOA\tEA\tEAF\tBP" if with_eaf else "CHR\tSNP\tOA\tEA\tBP"
+    lines = [header]
     for alid, eaf, bp in snps:
         chrom, _, effect, other = alid.split(":")
-        lines.append(f"{chrom}\t{alid}\t{other}\t{effect}\t{eaf}\t{bp}")
+        frequency = f"{eaf}\t" if with_eaf else ""
+        lines.append(f"{chrom}\t{alid}\t{other}\t{effect}\t{frequency}{bp}")
     (block_dir / f"{name}.tsv").write_text("\n".join(lines) + "\n")
 
     rng = np.random.default_rng(0)
@@ -442,7 +417,9 @@ def _write_ld_block(block_dir: Path, name: str, snps: list[tuple[str, float, int
     (block_dir / f"{name}.unphased.vcor1.gz").write_bytes(buffer.getvalue())
 
 
-def _residual_source_and_panel(tmp_path: Path) -> tuple[Path, Path, dict[str, np.ndarray]]:
+def _residual_source_and_panel(
+    tmp_path: Path, *, panel_has_eaf: bool = True
+) -> tuple[Path, Path, dict[str, np.ndarray]]:
     """A residual-SE Dense source, and an LD panel adding four imputation targets."""
     n = 200
     frequencies = np.linspace(0.05, 0.95, n, dtype=np.float32)
@@ -485,6 +462,7 @@ def _residual_source_and_panel(tmp_path: Path) -> tuple[Path, Path, dict[str, np
             (f"1:{(row + 1) * 1000}:A:G", float(frequencies[row]), (row + 1) * 1000)
             for row in range(n)
         ],
+        with_eaf=panel_has_eaf,
     )
     return source, panel, expected
 
@@ -500,9 +478,7 @@ def test_dense_completion_round_trips_imputed_cells_under_a_residual_plan(tmp_pa
     assert StoreManifest.load(source).encoding.se.is_residual
 
     completed = tmp_path / "comp.opengwasdb"
-    complete_dense_store(
-        source, completed, panel, ancestry="EUR", min_cor=0.0, release_id="comp"
-    )
+    complete_dense_store(source, completed, panel, ancestry="EUR", min_cor=0.0, release_id="comp")
 
     manifest = StoreManifest.load(completed)
     assert manifest.encoding.se == StoreManifest.load(source).encoding.se
@@ -560,3 +536,88 @@ def test_validation_catches_a_top_hit_index_left_behind_by_a_migration(tmp_path)
     result = validate_store(store)
     assert not result.ok
     assert any("se value inconsistent" in error for error in result.errors), result.errors
+
+
+def test_encoding_a_finite_se_without_eaf_is_refused_at_the_source() -> None:
+    """A residual plane must not hold a finite `se` at a cell with no EAF (#159).
+
+    The codec used to turn such a cell into an exact exception, which stored the
+    value but left the plane outside the contract #118 and #138-#140 describe --
+    a residual plane over a complete-EAF store. Encoding is where that has to
+    fail: a decode-time refusal rejects data the encoder itself just wrote, and
+    a store that only this package can read is the failure this project exists
+    to avoid.
+    """
+    eaf = np.array([0.2, np.nan], dtype=np.float32)
+    se = np.array([0.05, 0.04], dtype=np.float32)
+    coefficients = np.array([[np.log(0.03), -0.5]], dtype=np.float32)
+    codec = StoreCodec(_plan())
+    with pytest.raises(ValueError, match="finite EAF"):
+        codec.encode_se(
+            se,
+            eaf=eaf,
+            analysis_index=np.zeros(2, dtype=np.int64),
+            coefficients=coefficients,
+            positions=np.arange(2, dtype=np.int64),
+            exceptions=SeExceptionBuilder(),
+        )
+
+
+def test_decoding_refuses_any_non_missing_cell_without_eaf() -> None:
+    """The decode-side half of the same rule (#159).
+
+    An exception code is no longer exempt. It cannot arise from a missing
+    frequency any more, so a plane that has one there did not come from this
+    encoder, and guessing what it meant is worse than refusing it.
+    """
+    codec = StoreCodec(_plan())
+    codec.se_exceptions = SeExceptionTable(
+        np.array([1], dtype=np.int64), np.array([0.04], dtype=np.float32)
+    )
+    raw = np.array([0, SE_EXCEPTION], dtype=np.int8)
+    with pytest.raises(ValueError, match="finite EAF"):
+        codec.decode_se(
+            raw,
+            eaf=np.array([0.2, np.nan], dtype=np.float32),
+            analysis_index=np.zeros(2, dtype=np.int64),
+            coefficients=np.array([[np.log(0.03), -0.5]], dtype=np.float32),
+            positions=np.arange(2, dtype=np.int64),
+        )
+
+
+def test_residual_completion_never_writes_se_without_eaf(tmp_path) -> None:
+    """Completion cannot produce the cell #159 forbids, and this pins why.
+
+    The concern was that a frequency-less LD panel would leave completion
+    writing a finite imputed `se` beside a NaN frequency -- a cell a residual
+    plane may not hold, and which completion could not drop to `float16` to
+    accommodate, because it writes into the source's own arrays and therefore
+    its encoding (ADR 0038 §4).
+
+    It cannot happen, and not by luck: an imputed standard error is *derived
+    from* the panel frequency (`se_scale / sqrt(2f(1-f))`, `impute.py`), so a
+    cell with no frequency gets no standard error either. Completion therefore
+    needs no refusal of its own. This test exists so that stays true -- an
+    imputation that ever learned to produce `se` without `eaf` would fail here
+    rather than at some later store's decode.
+    """
+    source, panel, _ = _residual_source_and_panel(tmp_path, panel_has_eaf=False)
+    assert StoreManifest.load(source).encoding.se.is_residual
+
+    completed = tmp_path / "no-freq.opengwasdb"
+    complete_dense_store(
+        source, completed, panel, ancestry="EUR", min_cor=0.0, release_id="no-freq"
+    )
+
+    manifest = StoreManifest.load(completed)
+    assert manifest.encoding.se.is_residual
+    root = zarr.open_group(str(completed / "data.zarr"), mode="r")
+    n_rows = int(root["se"].shape[0])
+    se = DenseSePlane.open(root, manifest.encoding).band(0, n_rows)
+    eaf = DenseEafPlane.open(root, manifest.encoding).band(0, n_rows)
+
+    # The fixture is only meaningful if the panel really supplied no frequency:
+    # otherwise every cell has one and the assertion below is vacuous.
+    assert not np.any(np.isfinite(eaf[~np.isfinite(se)])) or np.any(~np.isfinite(eaf))
+    assert np.all(np.isfinite(eaf[np.isfinite(se)])), "a residual se cell has no eaf"
+    assert validate_store(completed).ok

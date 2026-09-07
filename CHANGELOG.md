@@ -31,6 +31,18 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   it reads is 5.3× smaller. See
   `docs/benchmark-output/opengwasdb_ukbb_dense_issue148_benchmark.md`.
 
+- **A residual `se` cell could be written with no EAF, and only this package
+  could read it** (#159). `encode_se` turned a finite standard error whose cell
+  had no frequency into an exact exception, and `decode_se` was then relaxed to
+  exempt exceptions from the finite-EAF check — so the codec accepted a plane
+  outside the contract #118 and #138–#140 describe, and a conforming reader
+  handed one had no way to reconstruct the cell. Encoding now refuses it, where
+  the caller still holds the source value and can choose `float16`, and decoding
+  requires a finite EAF for every cell carrying a standard error. Nothing
+  upstream produced such a cell in the first place: an imputed standard error is
+  derived from the panel frequency, so a cell without one gets no standard error
+  either, and a test now pins that.
+
 - **The `ukb-b` benchmark published a compression ratio of 0.0** (#148). Its
   source-size figure came from `data/ukb-b/manifest.tsv`, which points at
   `/local-scratch` paths that no longer exist, and it skipped a source it could
