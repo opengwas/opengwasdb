@@ -48,7 +48,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from opengwasdb.encoding import optimise_dense_se_joint
-from opengwasdb.encoding.measure import SeMeasurementRecord
 from opengwasdb.encoding.timing import PhaseTimer
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.enums import PrimaryStorageLayout
@@ -91,26 +90,18 @@ def _reflink_copy(source: Path, destination: Path) -> None:
     )
 
 
-def _write_manifest(
-    store, encoding, elapsed: float, se_record: SeMeasurementRecord, timer: PhaseTimer
-) -> None:
+def _write_manifest(store, encoding, elapsed: float, timer: PhaseTimer) -> None:
     """Re-stamp version and encoding, and say what did it.
 
     Written through the manifest's own `to_dict` so the migrated release is
     described by exactly the code that describes a built one -- a hand-edited
     key is how a manifest and its arrays drift apart.
-
-    The SE range was chosen from a bounded sample of row chunks (issue #146),
-    and the manifest says so: a decision this format stores must record how it
-    was reached. It goes in provenance, not the `encoding` block, because it
-    describes the build rather than how to decode.
     """
     data = json.loads(store.manifest_path.read_text(encoding="utf-8"))
     data["format_version"] = CURRENT_FORMAT_VERSION
     data["encoding"] = encoding.to_manifest()
     data["provenance"] = {
         **data.get("provenance", {}),
-        "se_measurement": se_record.to_manifest(),
         "format_migration": {
             "from": MIGRATABLE_FROM,
             "to": CURRENT_FORMAT_VERSION,
@@ -182,11 +173,10 @@ def migrate(store_path: Path) -> int:
     inherited = _inherited_errors(store_path)
 
     timer = PhaseTimer()
-    se_record = SeMeasurementRecord()
     started = time.perf_counter()
     print(f"Measuring and re-encoding se: {store_path}", flush=True)
     selected, _coefficients = optimise_dense_se_joint(
-        store.arrays(mode="a"), store.manifest.encoding, timer=timer, record=se_record
+        store.arrays(mode="a"), store.manifest.encoding, timer=timer
     )
     print(f"  se encoding selected: {selected.se.to_manifest()}", flush=True)
 
@@ -197,7 +187,7 @@ def migrate(store_path: Path) -> int:
     elapsed = time.perf_counter() - started
     print("Phase accounting (issue #144):", flush=True)
     print(timer.format_report(), flush=True)
-    _write_manifest(store, selected, elapsed, se_record, timer)
+    _write_manifest(store, selected, elapsed, timer)
     print(f"Re-stamped to {CURRENT_FORMAT_VERSION} in {elapsed:.1f}s", flush=True)
 
     _report_outcome(store_path, inherited)

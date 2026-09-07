@@ -33,7 +33,6 @@ from opengwasdb.build.eaf_orientation import (
     select_sites,
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
-from opengwasdb.encoding.measure import SeMeasurementRecord
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -370,7 +369,6 @@ def build_ragged_from_ssf(
         # One encoding plan per build, decided here from the frequencies the
         # build actually holds and recorded in the manifest (ADR 0037, #119).
         eaf_measurements = csr.eaf_measurements()
-        se_record = SeMeasurementRecord()
         preliminary = StoreEncoding.decide(
             EncodingMeasurements(n_analyses=len(analytes), eaf=eaf_measurements)
         )
@@ -378,7 +376,7 @@ def build_ragged_from_ssf(
             EncodingMeasurements(
                 n_analyses=len(analytes),
                 eaf=eaf_measurements,
-                se=csr.se_measurements(preliminary, record=se_record),
+                se=csr.se_measurements(preliminary),
             )
         )
         csr.flush(staged.path, encoding)
@@ -421,7 +419,6 @@ def build_ragged_from_ssf(
             mhc_analyses=[a.analysis_id for a in analytes if a.mhc],
             encoding=encoding,
             eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
-            se_record=se_record,
         )
 
         result = RaggedBuildResult(out, len(variants), len(analytes), csr.n_associations)
@@ -445,7 +442,6 @@ def _write_manifest(
     mhc_analyses: list[str],
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
-    se_record: SeMeasurementRecord | None = None,
 ) -> None:
     manifest = StoreManifest(
         encoding=encoding,
@@ -466,7 +462,6 @@ def _write_manifest(
             "n_analyses": n_analyses,
             "n_associations": n_associations,
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
-            **({"se_measurement": se_record.to_manifest()} if se_record is not None else {}),
             "ragged": {
                 "statistic_arrays": ["z", "se"],
                 "se_dtype": encoding.se.dtype,

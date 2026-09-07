@@ -27,7 +27,6 @@ from opengwasdb.encoding import (
     write_eaf_csr,
     write_se_csr,
 )
-from opengwasdb.encoding.measure import SeMeasurementRecord
 from opengwasdb.model.manifest import StoreManifest
 
 RAGGED_ZARR_PATH = "data.zarr/ragged"
@@ -116,15 +115,8 @@ class RaggedCSRWriter:
         variant_index, eaf = self._flat()
         return measure_eaf(variant_index, eaf, n_variants=self._n_variants)
 
-    def se_measurements(
-        self, encoding: StoreEncoding, record: SeMeasurementRecord | None = None
-    ) -> SeMeasurements:
-        """Fit SE against the EAF values this plan will actually decode.
-
-        `record`, when supplied, is filled with what the measurement saw so the
-        build's manifest can say the range was chosen from a bounded sample of
-        association chunks (issue #147).
-        """
+    def se_measurements(self, encoding: StoreEncoding) -> SeMeasurements:
+        """Fit SE against the EAF values this plan will actually decode."""
         se, decoded, ai = self.se_fit_inputs(encoding)
         return fit_se(
             se,
@@ -133,7 +125,6 @@ class RaggedCSRWriter:
             n_analyses=self.n_analyses,
             compressor=_COMPRESSOR,
             chunks=_ASSOC_CHUNK,
-            record=record,
         )[1]
 
     def se_fit_inputs(self, encoding: StoreEncoding) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
