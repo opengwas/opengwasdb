@@ -555,6 +555,20 @@ def _measure_overflow_component(
     )
 
 
+def _fall_back_to_float16(
+    group: Any, encoding: StoreEncoding
+) -> tuple[StoreEncoding, np.ndarray | None]:
+    """Narrow the scratch plane and report no coefficients.
+
+    Both exits from the decision reach here: a store with no EAF cannot fit a
+    model at all, and one whose fit does not earn its bytes declines it. Either
+    way the plane must end up in the `float16` its manifest declares, and a
+    caller must not be handed coefficients no array was coded against.
+    """
+    narrow_dense_se_to_float16(group)
+    return encoding, None
+
+
 def optimise_dense_se_joint(
     group: Any,
     encoding: StoreEncoding,
@@ -577,8 +591,7 @@ def optimise_dense_se_joint(
     """
     timer = timer or PhaseTimer()
     if encoding.eaf.is_absent:
-        narrow_dense_se_to_float16(group)
-        return encoding, None
+        return _fall_back_to_float16(group, encoding)
     source = group["se"]
     n_analyses = int(source.shape[1])
     eaf_plane = DenseEafPlane.open(group, encoding)
@@ -600,21 +613,14 @@ def optimise_dense_se_joint(
     se_choice = StoreEncoding.decide(EncodingMeasurements(n_analyses, se=measured)).se
     selected = StoreEncoding(z=encoding.z, se=se_choice, eaf=encoding.eaf)
     if not se_choice.is_residual:
-        narrow_dense_se_to_float16(group)
-        return selected, None
+        return _fall_back_to_float16(group, selected)
     assert se_choice.residual_range is not None
     # The table is sized by the rewrite's own codes-only count rather than by
     # the measurement, so the two can never disagree about it (issue #145).
     exception_count = _count_dense_exceptions(
         source, eaf_plane, coefficients, se_choice.residual_range, timer
     )
-    _rewrite_dense(
-        group,
-        selected,
-        coefficients,
-        exception_count,
-        timer,
-    )
+    _rewrite_dense(group, selected, coefficients, exception_count, timer)
     return selected, coefficients
 
 
