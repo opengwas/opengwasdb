@@ -186,8 +186,7 @@ def migrate(store_path: Path) -> int:
 
     # The index carries decoded SE, so it describes the old plane until rebuilt.
     print("Rebuilding the top-hit index", flush=True)
-    with timer.phase("top_hits"):
-        build_top_hit_indexes(store_path, encoding=selected)
+    build_top_hit_indexes(store_path, encoding=selected, timer=timer)
 
     elapsed = time.perf_counter() - started
     print("Phase accounting (issue #144):", flush=True)

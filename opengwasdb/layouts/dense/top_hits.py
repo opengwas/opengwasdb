@@ -14,6 +14,7 @@ from numcodecs import Blosc
 from scipy.special import erfc, erfcinv  # type: ignore[import-untyped]
 
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
+from opengwasdb.encoding.timing import PhaseTimer
 from opengwasdb.layouts.dense.constants import TOP_HIT_THRESHOLDS
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
 from opengwasdb.model.manifest import StoreManifest
@@ -270,6 +271,7 @@ def build_top_hit_indexes(
     store_path: str | Path,
     thresholds: tuple[float, ...] = TOP_HIT_THRESHOLDS,
     encoding: StoreEncoding | None = None,
+    timer: PhaseTimer | None = None,
 ) -> None:
     """(Re)build ranked top-hit arrays by scanning the stored dense matrix.
 
@@ -282,8 +284,14 @@ def build_top_hit_indexes(
 
     ``encoding`` is the store's declared plan; when omitted it is read from the
     release's manifest, never re-derived from the arrays.
+
+    A caller that passes a ``PhaseTimer`` gets the scan and the write charged
+    separately. This rebuild is one of the four passes a format-3.0 migration
+    makes, and it is the only one that is not a pass over the `se` plane, so
+    issue #144 cannot say which pass to make cheaper without it.
     """
 
+    timer = timer or PhaseTimer()
     store_path = Path(store_path)
     if encoding is None:
         encoding = StoreManifest.load(store_path).encoding
@@ -293,27 +301,33 @@ def build_top_hit_indexes(
     eaf_plane = DenseEafPlane.open(root, encoding)
     se_plane = DenseSePlane.open(root, encoding)
 
-    parts = _scan_candidates(
-        z_plane,
-        se_plane,
-        imputed_arr,
-        eaf_plane,
-        int(z_plane.array.shape[0]),
-        max(int(z_plane.array.chunks[0]), 250_000),
-        z_critical(max(thresholds)),
-    )
-    write_top_hit_indexes(
-        store_path,
-        _concat_or_empty(parts["rows"], np.int64),
-        _concat_or_empty(parts["cols"], np.int64),
-        _concat_or_empty(parts["z"], np.float32),
-        _concat_or_empty(parts["se"], np.float32),
-        thresholds,
-        imputed=(_concat_or_empty(parts["imputed"], np.uint8) if imputed_arr is not None else None),
-        eaf=(
-            _concat_or_empty(parts["eaf"], np.float32) if eaf_plane.can_report_frequencies else None
-        ),
-    )
+    with timer.phase("top_hits.scan"):
+        parts = _scan_candidates(
+            z_plane,
+            se_plane,
+            imputed_arr,
+            eaf_plane,
+            int(z_plane.array.shape[0]),
+            max(int(z_plane.array.chunks[0]), 250_000),
+            z_critical(max(thresholds)),
+        )
+    with timer.phase("top_hits.write"):
+        write_top_hit_indexes(
+            store_path,
+            _concat_or_empty(parts["rows"], np.int64),
+            _concat_or_empty(parts["cols"], np.int64),
+            _concat_or_empty(parts["z"], np.float32),
+            _concat_or_empty(parts["se"], np.float32),
+            thresholds,
+            imputed=(
+                _concat_or_empty(parts["imputed"], np.uint8) if imputed_arr is not None else None
+            ),
+            eaf=(
+                _concat_or_empty(parts["eaf"], np.float32)
+                if eaf_plane.can_report_frequencies
+                else None
+            ),
+        )
 
 
 def write_top_hit_indexes_for_store(

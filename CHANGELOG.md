@@ -83,8 +83,13 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   `migrate_store_to_format_3.py` now threads a `PhaseTimer` through all four
   and prints each phase's seconds and share of the accounted total, so the
   optimisation that follows targets the pass that actually dominates rather
-  than a guess. The same instrumentation is available to any caller of
-  `optimise_dense_se_joint`; a caller that passes no timer is unchanged.
+  than a guess. `build_top_hit_indexes` charges its own scan and write, so the
+  rebuild is measured through the function that performs it rather than by a
+  benchmark reimplementing its body — measured at 63.5 s on the migrated
+  FinnGen R13 pilot, 1.6% of that 3,863 s, against an inference that had put it
+  at 75-89%. The same instrumentation is available to any caller of
+  `optimise_dense_se_joint` or `build_top_hit_indexes`; a caller that passes no
+  timer is unchanged.
 
 - **The SE encoding is chosen from a bounded sample of chunks, and the manifest
   says so** (#146, #147). The survey that decides the residual range used to

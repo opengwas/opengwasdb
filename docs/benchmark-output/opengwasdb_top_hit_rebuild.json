@@ -1,0 +1,39 @@
+{
+  "issue": "144",
+  "store": "/data/opengwasdb/wip/rebuild-118/finngen-r13__r13-pilot-20-migrated",
+  "measured_on_copy": "/data/opengwasdb/wip/rebuild-118/finngen-tophit-timing",
+  "store_format": "3.0",
+  "encoding": {
+    "version": 3,
+    "z": {
+      "kind": "int16_fixed",
+      "scale": 1024
+    },
+    "se": {
+      "kind": "int8_residual",
+      "residual_range": 0.5
+    },
+    "eaf": {
+      "kind": "int8_residual",
+      "residual_range": 0.5
+    }
+  },
+  "commit": "f5c39e0",
+  "measured_at": "2026-09-07T12:32:57.487373+00:00",
+  "rows": 21230615,
+  "analyses": 20,
+  "cells": 424612300,
+  "wall_seconds": 63.549,
+  "phases": [
+    {
+      "phase": "top_hits.scan",
+      "seconds": 61.298,
+      "share": 0.96619
+    },
+    {
+      "phase": "top_hits.write",
+      "seconds": 2.145,
+      "share": 0.03381
+    }
+  ]
+}
