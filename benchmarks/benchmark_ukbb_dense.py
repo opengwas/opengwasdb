@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import subprocess
@@ -24,14 +25,14 @@ import numpy as np
 import zarr
 
 from opengwasdb.layouts.dense.top_hits import threshold_key, write_top_hit_indexes
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 
 STORE = Path("/local-scratch/data/opengwas/opengwasdb/ukb-b.opengwasdb")
 MANIFEST = Path("/home/gh13047/repo/opengwasdb/data/ukb-b/manifest.tsv")
 BUILD_LOG = Path("/home/gh13047/repo/opengwasdb/data/ukb-b/build.log")
 OUTPUT = Path(
-    "/home/gh13047/repo/opengwasdb/docs/benchmark-output/"
-    "opengwasdb_ukbb_dense_benchmark.json"
+    "/home/gh13047/repo/opengwasdb/docs/benchmark-output/opengwasdb_ukbb_dense_benchmark.json"
 )
 
 # MR: exposure = self-reported high cholesterol (LDL-raising proxy),
@@ -88,8 +89,7 @@ def _repack_top_hits(store: Path, chunk_size: int) -> float:
     del group, root
     started = time.perf_counter()
     write_top_hit_indexes(
-        store, rows, cols, z_values, se_values, imputed=imputed, eaf=eaf,
-        chunk_size=chunk_size
+        store, rows, cols, z_values, se_values, imputed=imputed, eaf=eaf, chunk_size=chunk_size
     )
     return time.perf_counter() - started
 
@@ -168,10 +168,13 @@ def run_top_hit_experiment(store: Path, output: Path, reps: int) -> None:
         "meets_target": selected["median_ms"] < 10.0,
         "trials": trials,
     }
-    benchmark_timing.update({
-        "median_ms": selected["median_ms"], "p95_ms": selected["p95_ms"],
-        "result_count": selected["result_count"],
-    })
+    benchmark_timing.update(
+        {
+            "median_ms": selected["median_ms"],
+            "p95_ms": selected["p95_ms"],
+            "result_count": selected["result_count"],
+        }
+    )
     output.write_text(json.dumps(previous, indent=2) + "\n")
 
 
@@ -180,21 +183,47 @@ def _dir_bytes(path: Path) -> int:
     return int(out.stdout.split()[0])
 
 
-def _raw_vcf_bytes(manifest: Path) -> tuple[int, int]:
-    paths = []
-    with open(manifest) as fh:
-        next(fh)  # header
-        for line in fh:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) >= 2:
-                paths.append(parts[1])
-    total = 0
-    for p in paths:
-        try:
-            total += Path(p).stat().st_size
-        except OSError:
-            pass
-    return total, len(paths)
+def _source_rows(path: Path) -> list[tuple[str, Path]]:
+    """`(analysis_id, source path)` from a build manifest or a release's analyses.tsv.
+
+    Two spellings because the sources moved: the old `data/ukb-b/manifest.tsv`
+    pairs `trait_id` with `file_path`, and a release config in
+    `opengwasdb-stores` pairs `analysis_id` with `source_file`.
+    """
+    with open(path, newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        columns = reader.fieldnames or []
+        for id_column, path_column in (("analysis_id", "source_file"), ("trait_id", "file_path")):
+            if id_column in columns and path_column in columns:
+                return [(row[id_column], Path(row[path_column])) for row in reader]
+    raise SystemExit(
+        f"{path}: needs (analysis_id, source_file) or (trait_id, file_path) columns; "
+        f"found {columns}"
+    )
+
+
+def _raw_vcf_bytes(path: Path, analysis_ids: set[str] | None = None) -> tuple[int, int]:
+    """Total size of the sources the store was built from, or nothing at all.
+
+    Fails on a missing source rather than skipping it. This figure divides into
+    the store's own size to give a published compression ratio, and a silently
+    partial total reports a ratio that looks like a measurement and is not --
+    `data/ukb-b/manifest.tsv` now points at `/local-scratch` paths that no
+    longer exist, so every one of its 2,514 entries was being skipped and the
+    ratio came out 0.0.
+    """
+    rows = _source_rows(path)
+    if analysis_ids is not None:
+        rows = [row for row in rows if row[0] in analysis_ids]
+    if not rows:
+        raise SystemExit(f"{path}: none of its analyses are in the store")
+    missing = [str(source) for _, source in rows if not source.exists()]
+    if missing:
+        raise SystemExit(
+            f"{path}: {len(missing)} of {len(rows)} source file(s) are missing, so there is "
+            f"no honest compression ratio to report. First missing: {missing[0]}"
+        )
+    return sum(source.stat().st_size for _, source in rows), len(rows)
 
 
 def _build_seconds(log: Path) -> float | None:
@@ -219,8 +248,7 @@ def _clump(instr: list[dict], kb: int) -> list[dict]:
     kept: list[dict] = []
     for cand in remaining:
         if all(
-            not (k["chrom"] == cand["chrom"] and abs(k["pos"] - cand["pos"]) < window)
-            for k in kept
+            not (k["chrom"] == cand["chrom"] and abs(k["pos"] - cand["pos"]) < window) for k in kept
         ):
             kept.append(cand)
     return kept
@@ -245,8 +273,14 @@ def run_mr(q, analyses_by_id: dict[str, int], *, imputed_only: bool = False) -> 
         if rec is None:
             continue
         raw.append(
-            {"alid": rec.alid, "chrom": rec.chromosome, "pos": int(rec.position),
-             "z_exp": float(ze), "se_exp": float(see), "status_exp": str(status)}
+            {
+                "alid": rec.alid,
+                "chrom": rec.chromosome,
+                "pos": int(rec.position),
+                "z_exp": float(ze),
+                "se_exp": float(see),
+                "status_exp": str(status),
+            }
         )
     clumped = _clump(raw, CLUMP_KB)
 
@@ -280,9 +314,7 @@ def run_mr(q, analyses_by_id: dict[str, int], *, imputed_only: bool = False) -> 
     for vi, d in per_vi.items():
         if not {"z_exp", "z_out"} <= d.keys():
             continue
-        if imputed_only and (
-            d.get("status_exp") != "imputed" or d.get("status_out") != "imputed"
-        ):
+        if imputed_only and (d.get("status_exp") != "imputed" or d.get("status_out") != "imputed"):
             continue
         rec = axis.by_index(vi)
         instruments.append(
@@ -290,8 +322,10 @@ def run_mr(q, analyses_by_id: dict[str, int], *, imputed_only: bool = False) -> 
                 "alid": rec.alid if rec else str(vi),
                 "chrom": rec.chromosome if rec else "",
                 "pos": int(rec.position) if rec else 0,
-                "beta_exp": d["z_exp"] * d["se_exp"], "se_exp": d["se_exp"],
-                "beta_out": d["z_out"] * d["se_out"], "se_out": d["se_out"],
+                "beta_exp": d["z_exp"] * d["se_exp"],
+                "se_exp": d["se_exp"],
+                "beta_out": d["z_out"] * d["se_out"],
+                "se_out": d["se_out"],
                 "status_exp": d.get("status_exp", "observed"),
                 "status_out": d.get("status_out", "observed"),
             }
@@ -390,6 +424,10 @@ def main() -> None:
         return
 
     q = query_store(args.store)
+    # The artifact says which encoding it measured: format 2.0 and 3.0 stores of
+    # the same data differ only in `se`, and a timing that does not name its
+    # format cannot be compared with one that does (issue #148).
+    store_manifest = StoreManifest.load(args.store)
     an = q.analyses_table()
     analyses_by_id = {v["analysis_id"]: k for k, v in an.items()}
     n_analyses = len(an)
@@ -419,34 +457,54 @@ def main() -> None:
     timings = []
     for name, fn in patterns.items():
         med, p95, cnt = _median_ms(fn, args.reps)
-        timings.append({"query": name, "median_ms": round(med, 3),
-                        "p95_ms": round(p95, 3), "result_count": cnt})
+        timings.append(
+            {
+                "query": name,
+                "median_ms": round(med, 3),
+                "p95_ms": round(p95, 3),
+                "result_count": cnt,
+            }
+        )
         print(f"{name:15s} median={med:9.2f} ms  count={cnt:,}")
 
     store_bytes = _dir_bytes(args.store)
-    raw_bytes, n_files = _raw_vcf_bytes(args.manifest)
+    raw_bytes, n_files = _raw_vcf_bytes(args.manifest, {row["analysis_id"] for row in an.values()})
     build_seconds = _build_seconds(args.build_log)
 
     imputed_only_mr = bool(getattr(q, "_is_completed", False))
     mr = run_mr(q, analyses_by_id, imputed_only=imputed_only_mr)
-    print(f"MR IVW: beta={mr['ivw_beta']:.4f} se={mr['ivw_se']:.4f} "
-          f"p={mr['ivw_pval']:.2e}  n_instruments={mr['n_instruments']}")
+    print(
+        f"MR IVW: beta={mr['ivw_beta']:.4f} se={mr['ivw_se']:.4f} "
+        f"p={mr['ivw_pval']:.2e}  n_instruments={mr['n_instruments']}"
+    )
 
     result = {
-        "dataset": {"n_variants": n_variants, "n_analyses": n_analyses,
-                    "reference_assembly": "GRCh38", "store": str(args.store)},
+        "dataset": {
+            "n_variants": n_variants,
+            "n_analyses": n_analyses,
+            "reference_assembly": "GRCh38",
+            "store": str(args.store),
+            "format_version": store_manifest.format_version,
+            "encoding": store_manifest.encoding.to_manifest(),
+        },
         "storage": {
-            "store_bytes": store_bytes, "store_gb": round(store_bytes / 1e9, 2),
-            "raw_vcf_bytes": raw_bytes, "raw_vcf_gb": round(raw_bytes / 1e9, 2),
+            "store_bytes": store_bytes,
+            "store_gb": round(store_bytes / 1e9, 2),
+            "raw_vcf_bytes": raw_bytes,
+            "raw_vcf_gb": round(raw_bytes / 1e9, 2),
             "n_source_files": n_files,
             "compression_ratio": round(raw_bytes / store_bytes, 2) if store_bytes else None,
         },
-        "build": {"build_seconds": build_seconds,
-                  "build_hours": round(build_seconds / 3600, 2) if build_seconds else None},
+        "build": {
+            "build_seconds": build_seconds,
+            "build_hours": round(build_seconds / 3600, 2) if build_seconds else None,
+        },
         "selection": {
-            "bulk_analysis_id": EXPOSURE, "phewas_alid": phewas_alid,
+            "bulk_analysis_id": EXPOSURE,
+            "phewas_alid": phewas_alid,
             "region": {"chrom": REGION[0], "start": REGION[1], "end": REGION[2]},
-            "n_random_variants": len(rand_alids), "n_random_analyses": len(rand_analyses),
+            "n_random_variants": len(rand_alids),
+            "n_random_analyses": len(rand_analyses),
         },
         "timings": timings,
         "mr": mr,

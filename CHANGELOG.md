@@ -15,6 +15,17 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Fixed
 
+- **The `ukb-b` benchmark published a compression ratio of 0.0** (#148). Its
+  source-size figure came from `data/ukb-b/manifest.tsv`, which points at
+  `/local-scratch` paths that no longer exist, and it skipped a source it could
+  not stat. All 2,514 entries were being skipped, so the raw total was zero and
+  the ratio that divides into it was zero — a published number that looked like
+  a measurement. It now reads either that manifest or a release config's
+  `analyses.tsv`, restricts to the analyses actually in the store, and refuses
+  to report a ratio at all if a source is missing. The artifact also records the
+  store's `format_version` and `encoding`, so a format-2.0 timing cannot be
+  mistaken for a format-3.0 one.
+
 - **The general Dense builder discarded every effect allele frequency it was
   given** (#118). `build_dense_observed_store` read `z` and `se` off each
   `NormalisedAssociation` and dropped `eaf`, writing no plane and stamping no
