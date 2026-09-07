@@ -91,7 +91,9 @@ def _reflink_copy(source: Path, destination: Path) -> None:
     )
 
 
-def _write_manifest(store, encoding, elapsed: float, se_record: SeMeasurementRecord) -> None:
+def _write_manifest(
+    store, encoding, elapsed: float, se_record: SeMeasurementRecord, timer: PhaseTimer
+) -> None:
     """Re-stamp version and encoding, and say what did it.
 
     Written through the manifest's own `to_dict` so the migrated release is
@@ -116,6 +118,10 @@ def _write_manifest(store, encoding, elapsed: float, se_record: SeMeasurementRec
             "at": datetime.now(UTC).isoformat(),
             "se_encoding": encoding.se.to_manifest(),
             "seconds": round(elapsed, 1),
+            # Per-phase, not just the total: the same migration takes 2,913 s on
+            # a release carrying issue #135's unchunked `eaf_baseline` and 244 s
+            # on a repaired one, and only the breakdown says which you have.
+            "phase_seconds": {name: round(seconds, 1) for name, seconds, _ in timer.report()},
             "note": (
                 "se re-encoded in place and the top-hit index rebuilt; the variant axis, "
                 "z, eaf and analyses.tsv were not touched. Outside the Provenance "
@@ -191,7 +197,7 @@ def migrate(store_path: Path) -> int:
     elapsed = time.perf_counter() - started
     print("Phase accounting (issue #144):", flush=True)
     print(timer.format_report(), flush=True)
-    _write_manifest(store, selected, elapsed, se_record)
+    _write_manifest(store, selected, elapsed, se_record, timer)
     print(f"Re-stamped to {CURRENT_FORMAT_VERSION} in {elapsed:.1f}s", flush=True)
 
     _report_outcome(store_path, inherited)

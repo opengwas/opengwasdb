@@ -89,7 +89,19 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   FinnGen R13 pilot, 1.6% of that 3,863 s, against an inference that had put it
   at 75-89%. The same instrumentation is available to any caller of
   `optimise_dense_se_joint` or `build_top_hit_indexes`; a caller that passes no
-  timer is unchanged.
+  timer is unchanged, and a migration records its own breakdown under
+  `provenance.format_migration.phase_seconds`.
+
+  What the breakdown showed, on the FinnGen R13 pilot (424,612,300 cells):
+  **the migration's cost was almost entirely issue #135's unchunked
+  `eaf_baseline`, not the format-3 encoding.** The same source data migrates in
+  2,913 s from a release carrying that defect and in **244.5 s** from a
+  repaired one. Reading `se` plus decoded `eaf` costs 2.35 us/cell on the
+  defective store against 0.036 us/cell on the sound one -- every 1,000-row
+  band decompresses the whole 21.2M-element baseline, 21,231 times per pass --
+  so the three full plane passes fall from 2,680 s to 61 s. The 62.5-hour
+  `ukb-b` extrapolation that motivated this work was taken from the defective
+  store.
 
 - **The SE encoding is chosen from a bounded sample of chunks, and the manifest
   says so** (#146, #147). The survey that decides the residual range used to
