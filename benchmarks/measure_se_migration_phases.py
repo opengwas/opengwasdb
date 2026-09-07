@@ -26,13 +26,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
+import shutil
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import zarr
+from _artifact import commit, write_artifact
 
 from opengwasdb.encoding.measure import SeMeasurementRecord
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
@@ -119,6 +120,52 @@ def _run(group: zarr.Group, preliminary: StoreEncoding, cap: int, tmp: Path) -> 
     }
 
 
+def _run_both_caps(
+    store_root: zarr.Group, store_encoding, n_analyses: int, scratch: Path
+) -> dict[str, dict]:
+    """The same slice measured twice: the pre-#146 exhaustive survey, then #146's.
+
+    Each run gets its own scratch group, so the second is not measuring a plane
+    the first already warmed or rewrote.
+    """
+    results: dict[str, dict] = {}
+    for cap, name in ((0, "exhaustive"), (64, "sampled")):
+        tmp = scratch / name
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        tmp.mkdir(parents=True)
+        group = _scratch_group(store_root, n_analyses, tmp)
+        started = time.perf_counter()
+        _fill(group, store_root, store_encoding, n_analyses)
+        fill_seconds = time.perf_counter() - started
+        results[name] = _run(group, _preliminary(), cap if cap else 10**9, tmp)
+        results[name]["column_slice_fill_seconds"] = round(fill_seconds, 3)
+    return results
+
+
+def _payload(
+    args, manifest, results: dict[str, dict], n_rows: int, n_total: int, n_analyses: int
+) -> dict:
+    return {
+        "issue": "144/146",
+        "store": str(args.store),
+        "store_format": manifest.format_version,
+        "commit": commit(),
+        "measured_at": datetime.now(UTC).isoformat(),
+        "rows": int(n_rows),
+        "analyses_total": int(n_total),
+        "analyses_sliced": int(n_analyses),
+        "cells_sliced": int(n_rows * n_analyses),
+        "top_hits_phase": (
+            "measured separately by benchmarks/measure_top_hit_rebuild.py, which charges the "
+            "store-level rebuild through build_top_hit_indexes itself (issue #144)"
+        ),
+        "exhaustive": results["exhaustive"],
+        "sampled": results["sampled"],
+        "same_encoding": results["exhaustive"]["se"] == results["sampled"]["se"],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("store", type=Path)
@@ -136,50 +183,15 @@ def main() -> int:
     n_rows, n_total = store_root["se"].shape
     n_analyses = min(args.analyses, int(n_total))
 
-    commit = subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True
-    ).stdout.strip()
     cells = n_rows * n_analyses
     print(
         f"Slicing {n_rows:,} rows x {n_analyses} of {n_total} analyses ({cells:,} cells)",
         flush=True,
     )
 
-    results = {}
-    store_encoding = manifest.encoding
-    for cap, name in ((0, "exhaustive"), (64, "sampled")):
-        tmp = args.scratch / name
-        if tmp.exists():
-            import shutil
-
-            shutil.rmtree(tmp)
-        tmp.mkdir(parents=True)
-        group = _scratch_group(store_root, n_analyses, tmp)
-        started = time.perf_counter()
-        _fill(group, store_root, store_encoding, n_analyses)
-        fill_seconds = time.perf_counter() - started
-        results[name] = _run(group, _preliminary(), cap if cap else 10**9, tmp)
-        results[name]["column_slice_fill_seconds"] = round(fill_seconds, 3)
-
-    payload = {
-        "issue": "144/146",
-        "store": str(args.store),
-        "store_format": manifest.format_version,
-        "commit": commit,
-        "measured_at": datetime.now(UTC).isoformat(),
-        "rows": int(n_rows),
-        "analyses_total": int(n_total),
-        "analyses_sliced": int(n_analyses),
-        "cells_sliced": int(cells),
-        "top_hits_phase": (
-            "not measured here; a store-level pass run by migrate_store_to_format_3.py"
-        ),
-        "exhaustive": results["exhaustive"],
-        "sampled": results["sampled"],
-        "same_encoding": results["exhaustive"]["se"] == results["sampled"]["se"],
-    }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    results = _run_both_caps(store_root, manifest.encoding, n_analyses, args.scratch)
+    payload = _payload(args, manifest, results, n_rows, n_total, n_analyses)
+    write_artifact(args.output, payload)
     print(json.dumps(payload, indent=2))
     return 0
 

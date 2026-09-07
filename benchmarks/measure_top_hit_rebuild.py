@@ -32,35 +32,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
-import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import zarr
+from _artifact import commit, reflink_copy, write_artifact
 
 from opengwasdb.encoding.timing import PhaseTimer
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.manifest import StoreManifest
 
 DEFAULT_OUTPUT = Path("docs/benchmark-output/opengwasdb_top_hit_rebuild.json")
-
-
-def _commit() -> str:
-    return subprocess.run(
-        ["git", "rev-parse", "--short", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip()
-
-
-def _reflink_copy(source: Path, destination: Path) -> None:
-    """Share extents where the filesystem can, so the copy is near-free."""
-    if destination.exists():
-        raise SystemExit(f"{destination}: already exists; refusing to overwrite")
-    subprocess.run(["cp", "-a", "--reflink=auto", str(source), str(destination)], check=True)
 
 
 def main() -> int:
@@ -71,7 +54,7 @@ def main() -> int:
     args = parser.parse_args()
 
     print(f"Copying {args.store} -> {args.into}", flush=True)
-    _reflink_copy(args.store, args.into)
+    reflink_copy(args.store, args.into)
 
     manifest = StoreManifest.load(args.into)
     root = zarr.open_group(str(args.into / "data.zarr"), mode="r")
@@ -91,7 +74,7 @@ def main() -> int:
         "measured_on_copy": str(args.into),
         "store_format": manifest.format_version,
         "encoding": manifest.encoding.to_manifest(),
-        "commit": _commit(),
+        "commit": commit(),
         "measured_at": datetime.now(UTC).isoformat(),
         "rows": rows,
         "analyses": analyses,
@@ -102,9 +85,7 @@ def main() -> int:
             for name, seconds, share in timer.report()
         ],
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    print(f"Wrote {args.output}", flush=True)
+    write_artifact(args.output, result)
     return 0
 
 
