@@ -23,7 +23,6 @@ import logging
 import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +47,10 @@ from opengwasdb.completion.ld_panel import (
     list_all_blocks,
     list_chromosomes,
 )
-from opengwasdb.completion.manifest import build_completion_provenance
+from opengwasdb.completion.manifest import (
+    build_completion_provenance,
+    completed_release_manifest,
+)
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
@@ -730,32 +732,22 @@ def _write_completed_manifest(
     release keeps its source's `format_version` and encoding -- completion
     writes into the source's arrays and therefore its encoding (ADR 0038 §4),
     the one addition being `eaf_reference` (ADR 0037 §4)."""
-    new_release_id = release_id or f"{manifest.release_id}-completed"
-    completed_manifest = StoreManifest(
+    completed_manifest = completed_release_manifest(
+        manifest,
         encoding=arrays.encoding,
-        store_id=manifest.store_id,
-        release_id=new_release_id,
-        format_version=source_format_version,
-        primary_layout=manifest.primary_layout,
-        association_coverage=manifest.association_coverage,
-        completion_state=CompletionState.REFERENCE_COMPLETED,
-        reference_assembly=manifest.reference_assembly,
-        created_at=datetime.now(UTC).isoformat(),
-        provenance={
-            **manifest.provenance,
-            "source_release_id": manifest.release_id,
-            "completion": build_completion_provenance(
-                ld_panel_id=ld_panel_id,
-                ancestry=ancestry,
-                min_cor=min_cor,
-                thresh=thresh,
-                n_variants_total=axis.n_variants,
-                n_variants_new=axis.n_variants_new,
-                n_imputed=arrays.total_imputed,
-                n_missing_off_panel=arrays.n_missing_off_panel_total,
-                n_missing_imputation_failed=arrays.n_missing_imputation_failed,
-            ),
-        },
+        release_id=release_id,
+        source_format_version=source_format_version,
+        completion_provenance=build_completion_provenance(
+            ld_panel_id=ld_panel_id,
+            ancestry=ancestry,
+            min_cor=min_cor,
+            thresh=thresh,
+            n_variants_total=axis.n_variants,
+            n_variants_new=axis.n_variants_new,
+            n_imputed=arrays.total_imputed,
+            n_missing_off_panel=arrays.n_missing_off_panel_total,
+            n_missing_imputation_failed=arrays.n_missing_imputation_failed,
+        ),
     )
     staged.write_manifest(completed_manifest)
 
