@@ -19,6 +19,7 @@ import zarr
 from opengwasdb.layouts.dense.top_hits import read_top_hit_counts, threshold_key
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -62,7 +63,7 @@ def _write_ld_block(block_dir, block_name, snps, seed=0):
     (block_dir / f"{block_name}.unphased.vcor1.gz").write_bytes(buf.getvalue())
 
 
-def _make_ld_panel(tmp_path):
+def _make_ld_panel(tmp_path: Path) -> Path:
     root = tmp_path / "ld_panel"
     _write_ld_block(
         root / "EUR" / "1", "100000-1600000",
@@ -77,7 +78,7 @@ def _make_ld_panel(tmp_path):
     return root
 
 
-def _build_source(tmp_path):
+def _build_source(tmp_path: Path) -> Path:
     trait_a = _vcf(
         tmp_path, "trait_a",
         [
@@ -239,7 +240,7 @@ def test_completed_status_only_on_dense(tmp_path):
         assert "imputed" in statuses
 
 
-def _make_ld_panel_with_crossover(tmp_path):
+def _make_ld_panel_with_crossover(tmp_path: Path) -> Path:
     """Like `_make_ld_panel`, plus a second block covering OFF_PANEL_ALID --
     an LD panel wider than the build panel, extending the Dense Component to
     include a variant that already carries a real observed overflow
@@ -401,6 +402,16 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(tmp_pa
     assert validate_store(dst).ok
     assert result.n_imputed > 0  # trait_b's four unobserved panel variants
 
+    # The reported imputed count must be the real one: what the completed
+    # Dense Component's imputed plane holds after the fold reclaimed the
+    # crossed-over cells, and what the manifest records -- a completion that
+    # mis-tallies it would ship a manifest that silently disagrees with its
+    # own arrays (issue #130).
+    manifest = StoreManifest.load(dst)
+    dense_arrays = open_store(dst).dense_component().arrays(mode="r")
+    assert result.n_imputed == int(dense_arrays["imputed"][:].sum())
+    assert result.n_imputed == manifest.provenance["completion"]["n_imputed_dense"]
+
     shared_axis = VariantAxis(dst)
     alid_by_index = {r.variant_index: r.alid for r in shared_axis.all()}
     shared_axis.close()
@@ -497,6 +508,64 @@ def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation
     # never counted as imputed to begin with in this fixture (see the
     # correlated-block test below for the case where it was).
     assert result.n_imputed >= 0
+
+
+def test_result_counts_agree_with_manifest_and_arrays(tmp_path: Path) -> None:
+    """The counts a completed Hybrid release reports -- result object, manifest
+    provenance and the arrays the phases wrote -- must agree (issue #130): a
+    phase split that mis-tallied one would ship a silently wrong manifest."""
+    src = _build_source(tmp_path)
+    ld = _make_ld_panel_with_crossover(tmp_path)
+    dst = tmp_path / "dst.opengwasdb"
+
+    result = complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+
+    validation = validate_store(dst)
+    assert validation.ok, validation.errors
+
+    manifest = StoreManifest.load(dst)
+    prov = manifest.provenance
+    hybrid = prov["hybrid"]
+
+    shared_axis = VariantAxis(dst)
+    shared_records = shared_axis.all()
+    shared_axis.close()
+    shared_by_alid = {r.alid: r.variant_index for r in shared_records}
+    dense_axis = VariantAxis(dst / "dense")
+    dense_records = dense_axis.all()
+    dense_axis.close()
+
+    assert result.n_variants == len(shared_records) == prov["n_variants"]
+    assert result.n_panel == len(dense_records) == hybrid["n_panel"]
+    assert result.n_off_panel == result.n_variants - result.n_panel == hybrid["n_off_panel"]
+    assert (
+        result.n_analyses
+        == len(read_analyses(dst / "analyses.tsv").rows)
+        == prov["n_analyses"]
+    )
+
+    # The rebuilt overflow resolves on the shared axis, counts n_overflow and
+    # names no completed-panel variant: the fold dropped the crossover.
+    ragged = RaggedCSRReader(dst)
+    assert result.n_overflow == ragged.n_associations == hybrid["n_overflow_associations"]
+    overflow_alids = {shared_records[int(v)].alid for v in np.unique(ragged._variant_index[:])}
+    dense_alids = {r.alid for r in dense_records}
+    assert OFF_PANEL_ALID not in overflow_alids
+    assert not (overflow_alids & dense_alids)
+
+    # dense_to_shared maps every completed Dense row, in its own order, to the
+    # shared index of the same variant.
+    dense_to_shared = np.load(dst / "dense" / "dense_to_shared.npy")
+    assert np.array_equal(
+        dense_to_shared,
+        np.array([shared_by_alid[r.alid] for r in dense_records], dtype=np.int32),
+    )
+
+    # n_imputed is the count the completed Dense Component actually marks
+    # imputed after the fold reclaimed crossed-over cells.
+    dense_arrays = open_store(dst).dense_component().arrays(mode="r")
+    assert result.n_imputed == int(dense_arrays["imputed"][:].sum())
+    assert result.n_imputed == prov["completion"]["n_imputed_dense"]
 
 
 def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
