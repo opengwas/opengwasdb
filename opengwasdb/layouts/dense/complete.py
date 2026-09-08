@@ -1084,6 +1084,289 @@ def _create_completed_zarr(
     return effective_chunks
 
 
+# ── completed-band writer phases ─────────────────────────────────────────
+#
+# `_write_completed_bands` splits the write into cohesive phases so each stays
+# small enough to hold in the head at once: a z pass (seed + fills + missingness
+# counters + overflow/imputed side tables), an se pass that fills exactly the
+# same cells (source z/se missingness is consistent -- a validated store
+# invariant), an eaf pass that carries observed frequencies across the row
+# remap, and the residual-SE rewrite that finalises the scratch se plane.
+# Every pass streams through its own float32 band buffer, so peak memory is ~one
+# band rather than z + se + imputed held together (issue 044).
+
+
+def _band_source_rows(
+    out_to_src: np.ndarray, r0: int, r1: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Rows of band ``[r0:r1)`` that carry a source cell, and the source rows
+    they map to."""
+    valid = np.where(out_to_src[r0:r1] >= 0)[0]
+    return valid, out_to_src[r0:r1][valid]
+
+
+def _count_band_off_panel_missing(
+    n_missing_off_panel: np.ndarray,
+    band: np.ndarray,
+    on_panel: np.ndarray,
+    r0: int,
+    r1: int,
+) -> None:
+    """Add this band's still-missing off-panel cells to the per-Analysis count.
+
+    Off-panel rows are never fill targets, so counting their NaN cells before
+    the fills are applied and after would give the same answer; counting them
+    here keeps the fills and the two missingness accounts in the same pass.
+    """
+    off_local = np.where(on_panel[r0:r1] == 0)[0]
+    if len(off_local):
+        n_missing_off_panel += np.isnan(band[off_local, :]).sum(axis=0).astype(np.int64)
+
+
+def _count_band_imputation_failed(
+    band: np.ndarray, on_panel: np.ndarray, r0: int, r1: int
+) -> int:
+    """On-panel cells still missing once this band's fills were applied."""
+    on_local = np.where(on_panel[r0:r1] == 1)[0]
+    if len(on_local):
+        return int(np.isnan(band[on_local, :]).sum())
+    return 0
+
+
+def _apply_fill_shard_records(
+    band: np.ndarray,
+    imputed_band: np.ndarray | None,
+    shard_path: Path,
+    r0: int,
+    value_field: str,
+    *,
+    impute_mask: np.ndarray | None = None,
+    validate_mask: bool = False,
+) -> int:
+    """Stream one band's fill-shard records into a NaN-seeded band buffer.
+
+    A record lands only in a cell the band still holds missing -- it never
+    overwrites an observed value -- and marks the cell imputed when
+    ``imputed_band`` is given (the z pass); the count of cells actually filled
+    is returned. The se pass passes the same shard with ``imputed_band=None``,
+    and deliberately no mask check: pass 1 read the same shards and would have
+    raised, so a second filter is a second chance for the two passes to fill
+    different cells (the missingness-consistency invariant).
+
+    ``validate_mask=True`` (the z pass) enforces the ancestry-match filter: a
+    nonmatching Analysis reaching the write means the filter applied at
+    checkpoint resolution and the one applied here disagree -- the
+    disagreement that let ``completion_quality`` count cells the release did
+    not hold -- so it is said, not silently re-filtered.
+    """
+    filled = 0
+    for records in _iter_fill_records(shard_path):
+        lr = records["row"] - r0
+        ai = records["ai"]
+        if (
+            validate_mask
+            and impute_mask is not None
+            and len(ai)
+            and not impute_mask[ai].all()
+        ):
+            raise ValueError(
+                "fill shard contains analyses excluded by the ancestry-match filter "
+                f"(first {int(ai[~impute_mask[ai]][0])}); the filter applied at "
+                "checkpoint resolution and the one applied here disagree"
+            )
+        fillable = ~np.isfinite(band[lr, ai])
+        if fillable.any():
+            lrm, aim = lr[fillable], ai[fillable]
+            band[lrm, aim] = records[value_field][fillable]
+            if imputed_band is not None:
+                imputed_band[lrm, aim] = 1
+            filled += int(fillable.sum())
+    return filled
+
+
+def _write_completed_z_bands(
+    root: Any,
+    src_plane: DenseZPlane,
+    out_to_src: np.ndarray,
+    on_panel: np.ndarray,
+    fill_shard_dir: Path,
+    codec: StoreCodec,
+    overflow: ZOverflowBuilder,
+    n_variants: int,
+    n_analyses: int,
+    band_rows: int,
+    n_missing_off_panel: np.ndarray,
+    impute_mask: np.ndarray | None,
+) -> tuple[int, int]:
+    """Seed z from the source, apply the fills, and write the z + imputed
+    bands, one row-band at a time. Missingness is accounted here, in the pass
+    that sees the fills land: per-Analysis off-panel missing accumulates into
+    ``n_missing_off_panel`` (in place), and on-panel cells still NaN after the
+    fills are the imputation failures. Out-of-range z cells go into the
+    ``overflow`` builder's side table, which the caller writes once, after the
+    whole pass, so the table is built by one codec plan.
+
+    Returns ``(total_imputed, n_missing_imputation_failed)``.
+    """
+    z_arr, imp_arr = root["z"], root["imputed"]
+    band = np.empty((band_rows, n_analyses), dtype=np.float32)
+    total_imputed = 0
+    n_missing_imputation_failed = 0
+    for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
+        r1 = min(r0 + band_rows, n_variants)
+        zb = band[: r1 - r0]
+        zb[:] = np.nan
+        imp_band = np.zeros((r1 - r0, n_analyses), dtype=np.uint8)
+
+        valid, srows = _band_source_rows(out_to_src, r0, r1)
+        if len(valid):
+            zb[valid, :] = src_plane.rows(srows)
+
+        _count_band_off_panel_missing(n_missing_off_panel, zb, on_panel, r0, r1)
+
+        total_imputed += _apply_fill_shard_records(
+            zb,
+            imp_band,
+            _fill_shard_path(fill_shard_dir, band_index),
+            r0,
+            "z",
+            impute_mask=impute_mask,
+            validate_mask=True,
+        )
+
+        n_missing_imputation_failed += _count_band_imputation_failed(zb, on_panel, r0, r1)
+
+        z_arr[r0:r1] = codec.encode_z(
+            zb, positions=positions_row_band(r0, n_analyses), overflow=overflow
+        )
+        imp_arr[r0:r1] = imp_band
+    return total_imputed, n_missing_imputation_failed
+
+
+def _write_completed_se_bands(
+    root: Any,
+    src_se_plane: DenseSePlane,
+    out_to_src: np.ndarray,
+    fill_shard_dir: Path,
+    n_variants: int,
+    n_analyses: int,
+    band_rows: int,
+) -> None:
+    """Seed se from the source and apply the same fills pass 1 applied to z.
+
+    No mask check and no counts here: pass 1 read the same shards (raising on
+    a disagreement) and accounted the outcomes, and this pass must fill exactly
+    the cells pass 1 filled for z and se to describe the same completed store.
+    The scratch float32 se band is written as-is; the residual-SE rewrite
+    finalises it afterwards.
+    """
+    se_arr = root["se"]
+    band = np.empty((band_rows, n_analyses), dtype=np.float32)
+    for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
+        r1 = min(r0 + band_rows, n_variants)
+        sb = band[: r1 - r0]
+        sb[:] = np.nan
+
+        valid, srows = _band_source_rows(out_to_src, r0, r1)
+        if len(valid):
+            sb[valid, :] = src_se_plane.rows(np.asarray(srows, dtype=np.int64))
+
+        _apply_fill_shard_records(
+            sb, None, _fill_shard_path(fill_shard_dir, band_index), r0, "se"
+        )
+
+        se_arr[r0:r1] = sb
+
+
+def _carried_eaf_baseline(
+    src_root: Any, out_to_src: np.ndarray, n_variants: int
+) -> np.ndarray | None:
+    """The per-variant EAF baseline, carried from the source rows across the
+    row remap; ``None`` when the source release carries none (ADR 0036).
+
+    Carried with the values rather than recomputed, so a cell decoded from the
+    source and re-encoded here lands on the same code -- completion moves
+    values between two planes, it does not requantise them. Panel-only rows
+    keep NaN: an imputed cell's frequency is the panel's, stored once per
+    variant in ``eaf_reference`` and applied on read (ADR 0037 §4).
+    """
+    if EAF_BASELINE not in src_root:
+        return None
+    src_baseline = np.asarray(src_root[EAF_BASELINE][:], dtype=np.float32)
+    out_baseline = np.full(n_variants, np.nan, dtype=np.float32)
+    carried = out_to_src >= 0
+    out_baseline[carried] = src_baseline[out_to_src[carried]]
+    return out_baseline
+
+
+def _write_completed_eaf_bands(
+    root: Any,
+    src_root: Any,
+    out_to_src: np.ndarray,
+    source_encoding: StoreEncoding,
+    encoding: StoreEncoding,
+    n_variants: int,
+    n_analyses: int,
+    band_rows: int,
+) -> None:
+    """Carry observed frequencies across the row remap, one row-band at a time.
+
+    Observed cells keep their source value and nothing else: an imputed cell's
+    frequency is the panel's (stored once per variant and applied on read), and
+    an observed cell whose source reported none stays absent. The exception
+    side table is written only when the release carries a baseline -- a
+    baseline-less eaf plane has no residual codes to make exceptions for.
+    """
+    src_eaf_plane = DenseEafPlane.open(src_root, source_encoding)
+    eaf_codec = StoreCodec(encoding)
+    exceptions = EafExceptionBuilder()
+    out_baseline = _carried_eaf_baseline(src_root, out_to_src, n_variants)
+    eaf_arr = root["eaf"]
+    eaf_band = np.empty((band_rows, n_analyses), dtype=np.float32)
+    for r0 in range(0, n_variants, band_rows):
+        r1 = min(r0 + band_rows, n_variants)
+        eb = eaf_band[: r1 - r0]
+        eb[:] = np.nan
+        valid = np.where(out_to_src[r0:r1] >= 0)[0]
+        if len(valid):
+            eb[valid, :] = src_eaf_plane.points(
+                np.repeat(out_to_src[r0:r1][valid], n_analyses),
+                np.tile(np.arange(n_analyses, dtype=np.int64), len(valid)),
+            ).reshape(len(valid), n_analyses)
+        band_baseline = (
+            None
+            if out_baseline is None
+            else np.repeat(out_baseline[r0:r1, None], n_analyses, axis=1)
+        )
+        eaf_arr[r0:r1] = eaf_codec.encode_eaf(
+            eb,
+            baseline=band_baseline,
+            positions=positions_row_band(r0, n_analyses),
+            exceptions=exceptions,
+        )
+    if out_baseline is not None:
+        write_eaf_baseline(root, out_baseline, compressor=_COMPRESSOR)
+        exceptions.table().write(root)
+
+
+def _rewrite_completed_residual_se(
+    root: Any, src_root: Any, encoding: StoreEncoding
+) -> None:
+    """Finalise the scratch float32 se plane under the destination's plan.
+
+    A residual plan needs the source release's per-Analysis coefficients (the
+    prediction each cell's stored int8 residual is measured against); a
+    non-residual plan is narrowed to float16. Either way the source
+    coefficients are read only when the plan is residual.
+    """
+    source_coefficients = (
+        np.asarray(src_root["se_coefficients"][:], dtype=np.float32)
+        if encoding.se.is_residual
+        else None
+    )
+    rewrite_dense_se(root, encoding, source_coefficients)
+
+
 def _write_completed_bands(
     staged: StagedRelease,
     src_root: Any,
@@ -1097,168 +1380,71 @@ def _write_completed_bands(
     encoding: StoreEncoding,
     impute_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, int, int]:
-    """Seed z/se from the source, apply the imputed fills, and write z/se/imputed
-    one row-band at a time. ``z`` and ``se`` are written in two passes over a
-    **single reused** float32 band buffer (plus a uint8 imputed band in the z-pass),
-    so peak memory is ~one band rather than z + se + imputed held together. Both
-    passes fill the same cells because source z/se missingness is consistent (a
-    validated store invariant) — each pass reads only its own source array once.
-    Returns ``(n_missing_off_panel[n_analyses], n_missing_imputation_failed,
-    total_imputed)``. Fill records are read from per-band shard files in bounded
-    chunks.
+    """Seed z/se from the source, apply the imputed fills, and write
+    z/se/imputed one row-band at a time, in cohesive phases: the z pass seeds
+    from the source and applies the fills while accounting missingness and
+    validating the fill shards against the ancestry-match filter; the se pass
+    fills exactly the same cells (source z/se missingness is consistent -- a
+    validated store invariant); the eaf pass carries observed frequencies
+    across the row remap; and the residual-SE rewrite finalises the scratch
+    float32 se plane. Each phase streams through its own float32 band buffer,
+    so peak memory is ~one band rather than z + se + imputed held together,
+    and each reads only its own source array once. Returns
+    ``(n_missing_off_panel[n_analyses], n_missing_imputation_failed,
+    total_imputed)``. Fill records are read from per-band shard files in
+    bounded chunks.
 
-    ``impute_mask`` (bool per analysis; ``None`` = impute all) is the per-Analysis
-    ancestry-match filter (ADR 0028): a masked-out analysis stays observed-only
-    (NaN, ``imputed=0``) — never imputed against a non-matching-ancestry panel.
-    It is applied at checkpoint resolution, not here, so that
-    ``completion_quality`` and the arrays are filtered by the same act; this
-    function only checks that the shards it reads honour it.
+    ``impute_mask`` (bool per analysis; ``None`` = impute all) is the
+    per-Analysis ancestry-match filter (ADR 0028): a masked-out analysis stays
+    observed-only (NaN, ``imputed=0``) -- never imputed against a
+    non-matching-ancestry panel. It is applied at checkpoint resolution, not
+    here, so that ``completion_quality`` and the arrays are filtered by the
+    same act; this function only checks that the shards it reads honour it.
     """
     root = staged.arrays(mode="a")
-    z_arr, se_arr, imp_arr = root["z"], root["se"], root["imputed"]
-    src_se_plane = DenseSePlane.open(src_root, source_encoding)
-    # Source z is read decoded and written re-encoded, through the same plan --
-    # completion moves values between two planes, it does not reinterpret them.
-    src_plane = DenseZPlane.open(src_root, source_encoding)
     codec = StoreCodec(encoding)
     overflow = ZOverflowBuilder()
     band_rows = _completion_band_rows(effective_chunks)
 
     n_missing_off_panel = np.zeros(n_analyses, dtype=np.int64)
-    n_missing_imputation_failed = 0
-    total_imputed = 0
-    band = np.empty((band_rows, n_analyses), dtype=np.float32)  # reused for z then se
 
-    # Pass 1 — z + imputed mask + missingness counts.
-    for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
-        r1 = min(r0 + band_rows, n_variants)
-        br = r1 - r0
-        zb = band[:br]
-        zb[:] = np.nan
-        imp_band = np.zeros((br, n_analyses), dtype=np.uint8)
+    src_se_plane = DenseSePlane.open(src_root, source_encoding)
+    # Source z is read decoded and written re-encoded, through the same plan --
+    # completion moves values between two planes, it does not reinterpret them.
+    src_plane = DenseZPlane.open(src_root, source_encoding)
 
-        valid = np.where(out_to_src[r0:r1] >= 0)[0]
-        if len(valid):
-            srows = out_to_src[r0:r1][valid]
-            zb[valid, :] = src_plane.rows(srows)
-
-        off_local = np.where(on_panel[r0:r1] == 0)[0]
-        if len(off_local):
-            n_missing_off_panel += np.isnan(zb[off_local, :]).sum(axis=0).astype(np.int64)
-
-        shard_path = _fill_shard_path(fill_shard_dir, band_index)
-        for records in _iter_fill_records(shard_path):
-            lr = records["row"] - r0
-            ai = records["ai"]
-            if impute_mask is not None and len(ai) and not impute_mask[ai].all():
-                # The shards are filtered at resolution, so a nonmatching
-                # Analysis reaching here means the filter and the write
-                # disagree about which analyses were completed -- the
-                # disagreement that let `completion_quality` count cells the
-                # release did not hold. Said, not silently re-filtered.
-                raise ValueError(
-                    "fill shard contains analyses excluded by the ancestry-match filter "
-                    f"(first {int(ai[~impute_mask[ai]][0])}); the filter applied at "
-                    "checkpoint resolution and the one applied here disagree"
-                )
-            fillable = ~np.isfinite(zb[lr, ai])
-            if fillable.any():
-                lrm, aim = lr[fillable], ai[fillable]
-                zb[lrm, aim] = records["z"][fillable]
-                imp_band[lrm, aim] = 1
-                total_imputed += int(fillable.sum())
-
-        on_local = np.where(on_panel[r0:r1] == 1)[0]
-        if len(on_local):
-            n_missing_imputation_failed += int(np.isnan(zb[on_local, :]).sum())
-
-        z_arr[r0:r1] = codec.encode_z(
-            zb, positions=positions_row_band(r0, n_analyses), overflow=overflow
-        )
-        imp_arr[r0:r1] = imp_band
-
+    total_imputed, n_missing_imputation_failed = _write_completed_z_bands(
+        root,
+        src_plane,
+        out_to_src,
+        on_panel,
+        fill_shard_dir,
+        codec,
+        overflow,
+        n_variants,
+        n_analyses,
+        band_rows,
+        n_missing_off_panel,
+        impute_mask,
+    )
     overflow.table().write(root)
 
-    # Pass 2 — se (same cells filled, by the missingness-consistency invariant).
-    for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
-        r1 = min(r0 + band_rows, n_variants)
-        br = r1 - r0
-        sb = band[:br]
-        sb[:] = np.nan
-
-        valid = np.where(out_to_src[r0:r1] >= 0)[0]
-        if len(valid):
-            srows = out_to_src[r0:r1][valid]
-            sb[valid, :] = src_se_plane.rows(np.asarray(srows, dtype=np.int64))
-
-        shard_path = _fill_shard_path(fill_shard_dir, band_index)
-        for records in _iter_fill_records(shard_path):
-            lr = records["row"] - r0
-            ai = records["ai"]
-            # No mask check here: pass 1 read the same shards and would have
-            # raised. Both passes must fill the same cells (the
-            # missingness-consistency invariant), so a second filter is a
-            # second chance for the two to differ.
-            fillable = ~np.isfinite(sb[lr, ai])
-            if fillable.any():
-                sb[lr[fillable], ai[fillable]] = records["se"][fillable]
-
-        se_arr[r0:r1] = sb
-
-    # Pass 3 -- eaf. Observed frequencies are carried across the row remap and
-    # nothing else: an imputed cell's frequency is the panel's, stored once per
-    # variant in `eaf_reference` and applied on read (ADR 0037 §4), and an
-    # observed cell whose source reported none stays absent. The per-variant
-    # baseline travels with the values rather than being recomputed, so a cell
-    # decoded from the source and re-encoded here lands on the same code --
-    # completion moves values between two planes, it does not requantise them.
-    if "eaf" in root and "eaf" in src_root:
-        src_eaf_plane = DenseEafPlane.open(src_root, source_encoding)
-        eaf_codec = StoreCodec(encoding)
-        exceptions = EafExceptionBuilder()
-        src_baseline = (
-            np.asarray(src_root[EAF_BASELINE][:], dtype=np.float32)
-            if EAF_BASELINE in src_root
-            else None
-        )
-        out_baseline = (
-            np.full(n_variants, np.nan, dtype=np.float32) if src_baseline is not None else None
-        )
-        if out_baseline is not None and src_baseline is not None:
-            carried = out_to_src >= 0
-            out_baseline[carried] = src_baseline[out_to_src[carried]]
-        eaf_arr = root["eaf"]
-        eaf_band = np.empty((band_rows, n_analyses), dtype=np.float32)
-        for r0 in range(0, n_variants, band_rows):
-            r1 = min(r0 + band_rows, n_variants)
-            eb = eaf_band[: r1 - r0]
-            eb[:] = np.nan
-            valid = np.where(out_to_src[r0:r1] >= 0)[0]
-            if len(valid):
-                eb[valid, :] = src_eaf_plane.points(
-                    np.repeat(out_to_src[r0:r1][valid], n_analyses),
-                    np.tile(np.arange(n_analyses, dtype=np.int64), len(valid)),
-                ).reshape(len(valid), n_analyses)
-            band_baseline = (
-                None
-                if out_baseline is None
-                else np.repeat(out_baseline[r0:r1, None], n_analyses, axis=1)
-            )
-            eaf_arr[r0:r1] = eaf_codec.encode_eaf(
-                eb,
-                baseline=band_baseline,
-                positions=positions_row_band(r0, n_analyses),
-                exceptions=exceptions,
-            )
-        if out_baseline is not None:
-            write_eaf_baseline(root, out_baseline, compressor=_COMPRESSOR)
-            exceptions.table().write(root)
-
-    source_coefficients = (
-        np.asarray(src_root["se_coefficients"][:], dtype=np.float32)
-        if encoding.se.is_residual
-        else None
+    _write_completed_se_bands(
+        root, src_se_plane, out_to_src, fill_shard_dir, n_variants, n_analyses, band_rows
     )
-    rewrite_dense_se(root, encoding, source_coefficients)
+
+    if "eaf" in root and "eaf" in src_root:
+        _write_completed_eaf_bands(
+            root,
+            src_root,
+            out_to_src,
+            source_encoding,
+            encoding,
+            n_variants,
+            n_analyses,
+            band_rows,
+        )
+
+    _rewrite_completed_residual_se(root, src_root, encoding)
 
     return n_missing_off_panel, n_missing_imputation_failed, total_imputed
