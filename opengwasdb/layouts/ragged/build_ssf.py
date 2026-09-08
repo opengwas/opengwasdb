@@ -26,6 +26,7 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from opengwasdb.build.eaf_orientation import (
+    EafOrientationReport,
     apply_orientation_evidence,
     check_eaf_orientation,
     enforce_eaf_orientation,
@@ -169,10 +170,8 @@ def _read_filtered(
         for row in reader:
             try:
                 ori = orient_to_canonical(
-                    row["chromosome"],
-                    row["base_pair_location"],
-                    row["effect_allele"],
-                    row["other_allele"],
+                    row["chromosome"], row["base_pair_location"],
+                    row["effect_allele"], row["other_allele"],
                 )
             except (VariantNormalisationError, KeyError):
                 continue
@@ -257,156 +256,36 @@ def build_ragged_from_ssf(
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs.
 
-    ``eaf_reference``/``eaf_reference_ancestry``/``allow_unverified_eaf`` drive
-    the EAF orientation check (issue #115): each Analysis's A1-oriented EAF is
-    correlated against the reference, or -- with no reference and three or more
-    Analyses -- against the consensus of the others, before any array is
-    written. A Ragged store is where the metabolome and eQTL pilots live, and
-    those manifests routinely carry a single Analysis, so `unverified` is a
-    normal outcome here; it is recorded per Analysis rather than passed over.
+    A thin orchestrator over six private phases (issue #130); the EAF
+    check (issue #115) runs before anything is written, and `unverified`
+    is a normal Ragged outcome, recorded per Analysis, never passed over.
     """
-    try:
-        StoredEffectScale(stored_effect_scale)
-    except ValueError as exc:
-        allowed = [member.value for member in StoredEffectScale]
-        raise ValueError(
-            f"invalid stored_effect_scale {stored_effect_scale!r}; expected one of {allowed}"
-        ) from exc
-
+    _validate_stored_effect_scale(stored_effect_scale)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         analytes = _read_manifest(manifest_path, filtered_dir)
         print(f"Manifest: {len(analytes)} analyses")
-
-        # ── Pass 1: read every filtered file; collect per-analysis associations
-        #            and the global set of canonical variants ────────────────────
-        per_analysis: list[list[_Assoc]] = []
-        alid_variant: dict[str, CanonicalVariant] = {}
-        rsid_by_alid: dict[str, str] = {}
-        for a in analytes:
-            recs: list[_Assoc] = []
-            for variant, z, se, rsid, eaf in _read_filtered(a.filtered_path):
-                alid = variant.alid
-                recs.append(_Assoc(alid, z, se, eaf))
-                if alid not in alid_variant:
-                    alid_variant[alid] = variant
-                    if rsid and rsid.startswith("rs"):
-                        rsid_by_alid[alid] = rsid
-            recs, n_consistent, n_conflicting = _dedupe_per_analysis(recs)
-            per_analysis.append(recs)
-            msg = f"  {a.analysis_label or a.analysis_id}: {len(recs):,} associations"
-            if n_consistent or n_conflicting:
-                msg += (
-                    f" ({n_consistent} duplicate variant(s) collapsed, "
-                    f"{n_conflicting} conflicting duplicate(s) dropped)"
-                )
-            print(msg)
-
-        # ── EAF orientation (issue #115, ADR 0037 §6) ───────────────────────────
-        # Before the variant axis, the CSR, or anything else is written: a
-        # source reporting `effect_allele_frequency` against the other allele
-        # must not produce a store at all.
-        eaf_sites = select_sites(alid_variant.keys())
-        wanted_sites = set(eaf_sites)
-        eaf_reference_loaded = (
-            None
-            if eaf_reference is None
-            else load_eaf_reference(eaf_reference, eaf_sites, ancestry=eaf_reference_ancestry)
+        per_analysis, alid_variant, rsid_by_alid = _ingest_ssf_sources(analytes)
+        # Phase 2 — EAF orientation (issue #115), before anything is written.
+        eaf_report = _verify_eaf_orientation(
+            analytes, per_analysis, alid_variant,
+            eaf_reference=eaf_reference,
+            eaf_reference_ancestry=eaf_reference_ancestry,
+            allow_unverified_eaf=allow_unverified_eaf,
         )
-        eaf_report = check_eaf_orientation(
-            {
-                a.analysis_id: {
-                    r.alid: r.eaf for r in recs if r.eaf is not None and r.alid in wanted_sites
-                }
-                for a, recs in zip(analytes, per_analysis, strict=True)
-            },
-            reference=eaf_reference_loaded,
-            n_sites=len(eaf_sites),
+        variants, alid_to_idx = _build_variant_axis(staged, alid_variant, rsid_by_alid)
+        csr, encoding, eaf_scopes = _encode_ssf_csr(
+            per_analysis, alid_to_idx, len(analytes),
+            len(variants), staged.path,
         )
-        enforce_eaf_orientation(eaf_report, allow_unverified=allow_unverified_eaf)
-
-        # ── Variant axis: sort unique variants by (chr,pos), assign variant_index ─
-        variants = sorted(
-            alid_variant.values(),
-            key=lambda v: (chromosome_sort_key(v.chromosome), v.position),
+        _write_indexes_and_metadata(
+            staged,
+            analytes,
+            eaf_scopes,
+            encoding=encoding,
+            eaf_report=eaf_report,
+            stored_effect_scale=stored_effect_scale,
         )
-        alid_to_idx = {v.alid: i for i, v in enumerate(variants)}
-        print(f"Canonical variants: {len(variants):,}")
-        write_variant_axis(staged.path, variants, rsid_by_alid)
-
-        # No `analyses` table (ADR 0034, issue #69): analyses.tsv below is the sole
-        # source of truth for Analytical Metadata. The file is still created here,
-        # empty, so Reference Completion has somewhere to add completion_quality.
-        staged.index_connection().close()
-
-        # ── Stream per-analysis associations into the CSR store ──────────────────
-        csr = RaggedCSRWriter(len(variants))
-        eaf_scopes: list[str] = []
-        for recs in per_analysis:
-            if not recs:
-                csr.add_analysis(
-                    np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float16)
-                )
-                eaf_scopes.append(EafScope.ABSENT.value)
-                continue
-            vi = np.fromiter((alid_to_idx[r.alid] for r in recs), dtype=np.int32, count=len(recs))
-            z_arr = np.fromiter((r.z for r in recs), dtype=np.float32, count=len(recs))
-            se_arr = np.fromiter((r.se for r in recs), dtype=np.float32, count=len(recs))
-            eaf_arr = np.fromiter(
-                (np.nan if r.eaf is None else r.eaf for r in recs),
-                dtype=np.float32,
-                count=len(recs),
-            )
-            order = np.argsort(vi, kind="stable")
-            has_eaf = bool(np.isfinite(eaf_arr).any())
-            eaf_scopes.append(EafScope.ASSOCIATION.value if has_eaf else EafScope.ABSENT.value)
-            csr.add_analysis(
-                vi[order],
-                z_arr[order],
-                se_arr[order],
-                eaf=eaf_arr[order] if has_eaf else None,
-            )
-        # One encoding plan per build, decided here from the frequencies the
-        # build actually holds and recorded in the manifest (ADR 0037, #119).
-        eaf_measurements = csr.eaf_measurements()
-        preliminary = StoreEncoding.decide(
-            EncodingMeasurements(n_analyses=len(analytes), eaf=eaf_measurements)
-        )
-        encoding = StoreEncoding.decide(
-            EncodingMeasurements(
-                n_analyses=len(analytes),
-                eaf=eaf_measurements,
-                se=csr.se_measurements(preliminary),
-            )
-        )
-        csr.flush(staged.path, encoding)
-
-        build_ragged_top_hit_indexes(staged.path, encoding=encoding)
-
-        print("Writing analyses.tsv...")
-        analyses = [
-            molecular_analysis(
-                a.analysis_id,
-                analysis_label=a.analysis_label,
-                trait_ontology_id=a.trait_ontology_id,
-                trait_ontology_label=a.trait_ontology_label,
-                tissue=a.tissue,
-                context=a.context,
-                trait_chr=a.trait_chr,
-                trait_bp=a.trait_bp,
-                n=a.n,
-                stored_effect_scale=stored_effect_scale,
-                assigned_ancestry=a.assigned_ancestry,
-                metadata=a.metadata,
-                eaf_scope=eaf_scope,
-            )
-            for a, eaf_scope in zip(analytes, eaf_scopes, strict=True)
-        ]
-        write_analysis_records(
-            staged.path / "analyses.tsv",
-            add_hit_counts(staged.path, apply_orientation_evidence(analyses, eaf_report)),
-        )
-
         _write_manifest(
             staged,
             store_id,
@@ -420,13 +299,251 @@ def build_ragged_from_ssf(
             encoding=encoding,
             eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
         )
+        return _finalise_result(out, len(variants), len(analytes), csr.n_associations)
 
-        result = RaggedBuildResult(out, len(variants), len(analytes), csr.n_associations)
-        print(
-            f"Build complete: {result.n_variants:,} variants, "
-            f"{result.n_analyses:,} analyses, {result.n_associations:,} associations"
-        )
+
+def _finalise_result(
+    out: Path, n_variants: int, n_analyses: int, n_associations: int
+) -> RaggedBuildResult:
+    """Build the result record and print the completion summary it carries."""
+    result = RaggedBuildResult(out, n_variants, n_analyses, n_associations)
+    print(
+        f"Build complete: {result.n_variants:,} variants, "
+        f"{result.n_analyses:,} analyses, {result.n_associations:,} associations"
+    )
     return result
+
+
+def _validate_stored_effect_scale(stored_effect_scale: str) -> None:
+    """Reject an unsupported stored_effect_scale before any I/O happens."""
+    try:
+        StoredEffectScale(stored_effect_scale)
+    except ValueError as exc:
+        allowed = [member.value for member in StoredEffectScale]
+        raise ValueError(
+            f"invalid stored_effect_scale {stored_effect_scale!r}; expected one of {allowed}"
+        ) from exc
+
+
+def _ingest_ssf_sources(
+    analytes: list[AnalyteInput],
+) -> tuple[list[list[_Assoc]], dict[str, CanonicalVariant], dict[str, str]]:
+    """Read every filtered source and resolve each analysis's associations.
+
+    One pass per analysis: canonicalise each usable source row, deduplicate
+    rows that canonicalise to the same variant (issue #101), and collect the
+    global canonical-variant set plus each variant's first-seen rsid. The
+    printed per-analysis count is the fail-loud record of what survived: a
+    row with unusable statistics never reaches this point, and a conflicting
+    duplicate pair is dropped for that cell entirely rather than one of them
+    silently kept.
+    """
+    per_analysis: list[list[_Assoc]] = []
+    alid_variant: dict[str, CanonicalVariant] = {}
+    rsid_by_alid: dict[str, str] = {}
+    for a in analytes:
+        recs: list[_Assoc] = []
+        for variant, z, se, rsid, eaf in _read_filtered(a.filtered_path):
+            alid = variant.alid
+            recs.append(_Assoc(alid, z, se, eaf))
+            if alid not in alid_variant:
+                alid_variant[alid] = variant
+                if rsid and rsid.startswith("rs"):
+                    rsid_by_alid[alid] = rsid
+        recs, n_consistent, n_conflicting = _dedupe_per_analysis(recs)
+        per_analysis.append(recs)
+        _print_ingest_summary(a, recs, n_consistent, n_conflicting)
+    return per_analysis, alid_variant, rsid_by_alid
+
+
+def _print_ingest_summary(
+    a: AnalyteInput, recs: list[_Assoc], n_consistent: int, n_conflicting: int
+) -> None:
+    """Print one analysis's per-file ingest count, collapsed or dropped rows loud."""
+    msg = f"  {a.analysis_label or a.analysis_id}: {len(recs):,} associations"
+    if n_consistent or n_conflicting:
+        msg += (
+            f" ({n_consistent} duplicate variant(s) collapsed, "
+            f"{n_conflicting} conflicting duplicate(s) dropped)"
+        )
+    print(msg)
+
+
+def _verify_eaf_orientation(
+    analytes: list[AnalyteInput],
+    per_analysis: list[list[_Assoc]],
+    alid_variant: dict[str, CanonicalVariant],
+    *,
+    eaf_reference: str | Path | None,
+    eaf_reference_ancestry: str | None,
+    allow_unverified_eaf: bool,
+) -> EafOrientationReport:
+    """Check every analysis's A1-oriented EAF before anything is written.
+
+    Each Analysis's stored-frequency observations are correlated against the
+    reference, or -- with no reference and three or more Analyses -- against
+    the consensus of the others, and a build whose frequencies are
+    anti-correlated is refused (issue #115). `select_sites` samples each
+    Analysis over its own variants and the observations only ever carry the
+    sampled `wanted_sites`, so the check compares what the store will read
+    back, over the sites the report records.
+    """
+    eaf_sites = select_sites(alid_variant.keys())
+    wanted_sites = set(eaf_sites)
+    reference = (
+        None
+        if eaf_reference is None
+        else load_eaf_reference(eaf_reference, eaf_sites, ancestry=eaf_reference_ancestry)
+    )
+    report = check_eaf_orientation(
+        {
+            a.analysis_id: {
+                r.alid: r.eaf for r in recs if r.eaf is not None and r.alid in wanted_sites
+            }
+            for a, recs in zip(analytes, per_analysis, strict=True)
+        },
+        reference=reference,
+        n_sites=len(eaf_sites),
+    )
+    enforce_eaf_orientation(report, allow_unverified=allow_unverified_eaf)
+    return report
+
+
+def _build_variant_axis(
+    staged: StagedRelease,
+    alid_variant: dict[str, CanonicalVariant],
+    rsid_by_alid: dict[str, str],
+) -> tuple[list[CanonicalVariant], dict[str, int]]:
+    """Sort the unique canonical variants into the axis and index the store.
+
+    No `analyses` table (ADR 0034, issue #69): analyses.tsv is the sole
+    source of truth for Analytical Metadata. The empty index file is still
+    created here, so Reference Completion has somewhere to add
+    completion_quality, and its connection is closed before the CSR phase.
+    """
+    variants = sorted(
+        alid_variant.values(),
+        key=lambda v: (chromosome_sort_key(v.chromosome), v.position),
+    )
+    alid_to_idx = {v.alid: i for i, v in enumerate(variants)}
+    print(f"Canonical variants: {len(variants):,}")
+    write_variant_axis(staged.path, variants, rsid_by_alid)
+    staged.index_connection().close()
+    return variants, alid_to_idx
+
+
+def _encode_ssf_csr(
+    per_analysis: list[list[_Assoc]],
+    alid_to_idx: dict[str, int],
+    n_analyses: int,
+    n_variants: int,
+    output: Path,
+) -> tuple[RaggedCSRWriter, StoreEncoding, list[str]]:
+    """Stream every analysis's associations into the CSR and flush.
+
+    An analysis that ends up empty -- a source whose every row was unusable,
+    or whose rows all resolved to conflicting duplicates (issue #101) --
+    still occupies its CSR slot and declares `eaf_scope=absent`; skipping it
+    would shift every later analysis's associations onto the wrong analysis.
+    Returns the writer (for the association count), the one encoding plan the
+    build flushed under, and each analysis's EAF scope for analyses.tsv.
+    """
+    csr = RaggedCSRWriter(n_variants)
+    eaf_scopes: list[str] = []
+    for recs in per_analysis:
+        if not recs:
+            _add_empty_analysis(csr)
+            eaf_scopes.append(EafScope.ABSENT.value)
+            continue
+        eaf_scopes.append(_add_ssf_associations(csr, recs, alid_to_idx))
+    eaf_measurements = csr.eaf_measurements()
+    preliminary = StoreEncoding.decide(
+        EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measurements)
+    )
+    encoding = StoreEncoding.decide(
+        EncodingMeasurements(
+            n_analyses=n_analyses,
+            eaf=eaf_measurements,
+            se=csr.se_measurements(preliminary),
+        )
+    )
+    csr.flush(output, encoding)
+    return csr, encoding, eaf_scopes
+
+
+def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
+    """An analysis with no associations still occupies its CSR slot."""
+    csr.add_analysis(
+        np.empty(0, np.int32), np.empty(0, np.float32), np.empty(0, np.float16)
+    )
+
+
+def _add_ssf_associations(
+    csr: RaggedCSRWriter, recs: list[_Assoc], alid_to_idx: dict[str, int]
+) -> str:
+    """Append one non-empty analysis, sorted by variant_index.
+
+    Returns the EAF scope the analysis's own rows earned: association when
+    any row carries a frequency (rows without one contribute NaN, ADR 0036),
+    absent when none do.
+    """
+    vi = np.fromiter((alid_to_idx[r.alid] for r in recs), dtype=np.int32, count=len(recs))
+    z_arr = np.fromiter((r.z for r in recs), dtype=np.float32, count=len(recs))
+    se_arr = np.fromiter((r.se for r in recs), dtype=np.float32, count=len(recs))
+    eaf_arr = np.fromiter(
+        (np.nan if r.eaf is None else r.eaf for r in recs), dtype=np.float32, count=len(recs)
+    )
+    order = np.argsort(vi, kind="stable")
+    has_eaf = bool(np.isfinite(eaf_arr).any())
+    if has_eaf:
+        csr.add_analysis(vi[order], z_arr[order], se_arr[order], eaf=eaf_arr[order])
+        return EafScope.ASSOCIATION.value
+    csr.add_analysis(vi[order], z_arr[order], se_arr[order])
+    return EafScope.ABSENT.value
+
+
+def _write_indexes_and_metadata(
+    staged: StagedRelease,
+    analytes: list[AnalyteInput],
+    eaf_scopes: list[str],
+    *,
+    encoding: StoreEncoding,
+    eaf_report: EafOrientationReport,
+    stored_effect_scale: str,
+) -> None:
+    """Build the top-hit index and write analyses.tsv from the manifest.
+
+    The shared-core metadata columns arrive as one PassthroughMetadata per
+    analysis and are copied verbatim (issue #83); the orientation evidence
+    each analysis earned in Phase 2 is stamped onto its row, and the hit
+    counts are added from the just-built index.
+    """
+    build_ragged_top_hit_indexes(staged.path, encoding=encoding)
+
+    print("Writing analyses.tsv...")
+    analyses = [
+        molecular_analysis(
+            a.analysis_id,
+            analysis_label=a.analysis_label,
+            trait_ontology_id=a.trait_ontology_id,
+            trait_ontology_label=a.trait_ontology_label,
+            tissue=a.tissue,
+            context=a.context,
+            trait_chr=a.trait_chr,
+            trait_bp=a.trait_bp,
+            n=a.n,
+            stored_effect_scale=stored_effect_scale,
+            assigned_ancestry=a.assigned_ancestry,
+            metadata=a.metadata,
+            eaf_scope=eaf_scope,
+        )
+        for a, eaf_scope in zip(analytes, eaf_scopes, strict=True)
+    ]
+    write_analysis_records(
+        staged.path / "analyses.tsv",
+        add_hit_counts(staged.path, apply_orientation_evidence(analyses, eaf_report)),
+    )
+
 
 
 def _write_manifest(
