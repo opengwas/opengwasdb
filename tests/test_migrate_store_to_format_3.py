@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from residual_fixtures import residual_eligible_records
 
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding.planes import DenseSePlane
@@ -32,7 +33,6 @@ from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.validation import ValidationResult, validate_store
-from opengwasdb.variants import CanonicalVariant
 
 _SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "migrate_store_to_format_3.py"
 _spec = importlib.util.spec_from_file_location("migrate_store_to_format_3", _SCRIPT_PATH)
@@ -42,27 +42,11 @@ _spec.loader.exec_module(migrate_module)
 
 
 def _residual_eligible_source() -> list[NormalisedAssociation]:
-    """SE that tracks the MAF-predicted value closely: data a format-3 build
-    residual-codes, and therefore data a format-2.0-era build would have had to
-    store as `float16` without being able to express it as a residual."""
-    frequencies = np.linspace(0.05, 0.95, 600, dtype=np.float32)
-    records: list[NormalisedAssociation] = []
-    for col, analysis_id in enumerate(("a", "b")):
-        values = np.exp(
-            (-3.0 + col * 0.2)
-            - 0.5 * np.log(2 * frequencies * (1 - frequencies))
-            + 0.12 * np.sin(np.arange(len(frequencies)) * (0.07 + col * 0.01))
-        ).astype(np.float32)
-        records.extend(
-            NormalisedAssociation(
-                analysis_id=analysis_id,
-                variant=CanonicalVariant("1", row + 1, "A", "G"),
-                z=8.0 if row % 100 == 0 else 1.0,
-                se=float(values[row]),
-                eaf=float(frequencies[row]),
-            )
-            for row in range(len(frequencies))
-        )
+    """Data a format-3 build residual-codes, and therefore data a
+    format-2.0-era build would have had to store as `float16` without being
+    able to express it as a residual. Shared with the encoding suite, which
+    needs the same eligible source (`conftest.residual_eligible_records`)."""
+    records, _ = residual_eligible_records()
     return records
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from residual_fixtures import residual_eligible_records
 
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding.codec import SeExceptionBuilder, SeExceptionTable, StoreCodec
@@ -175,26 +176,7 @@ def test_ragged_plane_uses_csr_ordinals_for_exact_exceptions(tmp_path) -> None:
 
 
 def _build_residual_dense_store(tmp_path):
-    records: list[NormalisedAssociation] = []
-    expected: dict[str, np.ndarray] = {}
-    frequencies = np.linspace(0.05, 0.95, 600, dtype=np.float32)
-    for col, analysis_id in enumerate(("a", "b")):
-        values = np.exp(
-            (-3.0 + col * 0.2)
-            - 0.5 * np.log(2 * frequencies * (1 - frequencies))
-            + 0.12 * np.sin(np.arange(len(frequencies)) * (0.07 + col * 0.01))
-        ).astype(np.float32)
-        expected[analysis_id] = values
-        records.extend(
-            NormalisedAssociation(
-                analysis_id=analysis_id,
-                variant=CanonicalVariant("1", row + 1, "A", "G"),
-                z=8.0 if row % 100 == 0 else 1.0,
-                se=float(values[row]),
-                eaf=float(frequencies[row]),
-            )
-            for row in range(len(frequencies))
-        )
+    records, expected = residual_eligible_records()
     store = tmp_path / "dense.opengwasdb"
     build_dense_observed_store(
         records,
