@@ -416,6 +416,30 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
     return col_idx
 
 
+def _pass2_worker_tasks(
+    manifest_rows: Sequence[_ManifestRow],
+    analysis_index: Mapping[str, int],
+) -> list[tuple[int, str, float, str, str]]:
+    """One fork-pool task per manifest row, in manifest order: the column
+    index from ``analysis_index`` followed by the four source fields
+    ``_pass2_worker`` needs to resolve the row's file.
+
+    The Dense and Hybrid builders submit identical task tuples to their own
+    ``_pass2_worker``s, so the list is built here once rather than at each
+    call site.
+    """
+    return [
+        (
+            analysis_index[row.trait_id],
+            row.file_path,
+            row.se_divisor,
+            row.source_reader_capability,
+            row.stored_effect_scale,
+        )
+        for row in manifest_rows
+    ]
+
+
 def _log_progress(
     label: str, completed: int, total: int, start_time: float, extra: str, every: int
 ) -> None:
@@ -841,16 +865,7 @@ def _spill_columns_parallel(
     try:
         with _fork_pool(n_workers) as pool:
             id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
-            tasks = [
-                (
-                    analysis_index[row.trait_id],
-                    row.file_path,
-                    row.se_divisor,
-                    row.source_reader_capability,
-                    row.stored_effect_scale,
-                )
-                for row in manifest_rows
-            ]
+            tasks = _pass2_worker_tasks(manifest_rows, analysis_index)
             futures = [pool.submit(_pass2_worker, t) for t in tasks]
             for i, fut in enumerate(as_completed(futures)):
                 col_idx = fut.result()
