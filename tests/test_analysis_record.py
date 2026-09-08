@@ -19,6 +19,7 @@ from opengwasdb.model.analyses import (
     analyses_table_from_records,
     read_analyses,
     read_analysis_records,
+    reset_top_hit_counts,
     write_analysis_records,
 )
 
@@ -254,3 +255,35 @@ def test_writer_ignores_a_caller_supplied_analysis_index():
     table = analyses_table_from_records([stale])
 
     assert table.rows[0]["analysis_index"] == "0"
+
+
+def test_reset_top_hit_counts_blanks_only_the_three_count_fields():
+    """The shared completion reset must clear exactly the ADR 0032 Top-Hit
+    Count columns -- a ``replace()`` that also touched any other field would
+    silently drop layout-specific Analysis updates applied around it."""
+    cleared = reset_top_hit_counts([_FULL_ANALYSIS])
+
+    assert len(cleared) == 1
+    assert cleared[0] is not _FULL_ANALYSIS
+    assert (cleared[0].n_hits_5e8, cleared[0].n_hits_5e6, cleared[0].n_hits_5e4) == (
+        "",
+        "",
+        "",
+    )
+    # Everything else survives the reset untouched: completion keeps the
+    # source's Analytical Metadata and refreshes only what imputation changed.
+    restored = dataclasses.replace(
+        cleared[0], n_hits_5e8="42", n_hits_5e6="120", n_hits_5e4="900"
+    )
+    assert restored == _FULL_ANALYSIS
+
+
+def test_reset_top_hit_counts_preserves_list_order_and_identity():
+    cleared = reset_top_hit_counts([_FULL_ANALYSIS, _MINIMAL_ANALYSIS])
+
+    assert [a.analysis_id for a in cleared] == [
+        _FULL_ANALYSIS.analysis_id,
+        _MINIMAL_ANALYSIS.analysis_id,
+    ]
+    # A blank-count Analysis (the fresh-build default) is unchanged in value.
+    assert cleared[1] == _MINIMAL_ANALYSIS

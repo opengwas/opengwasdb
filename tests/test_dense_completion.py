@@ -265,6 +265,43 @@ class TestCompletionFiles:
         for column, values in expected.items():
             assert [int(r[column]) for r in rows] == values
 
+    def test_completion_overwrites_stale_pre_completion_counts(
+        self, tmp_path, observed_store, ld_panel
+    ):
+        """A source analyses.tsv carrying obviously stale pre-completion
+        counts must not survive into the completed store, and must not be
+        added onto -- completion recomputes each Top-Hit Count from the
+        completed store's own top-hit index (ADR 0032), which is the mirror
+        of the Ragged overwrite test for the same seam."""
+        from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
+
+        analyses_path = observed_store / "analyses.tsv"
+        table = read_analyses(analyses_path)
+        stale_rows = [
+            {**row, "n_hits_5e8": "999", "n_hits_5e6": "999", "n_hits_5e4": "999"}
+            for row in table.rows
+        ]
+        write_analyses(
+            analyses_path, type(table)(fieldnames=table.fieldnames, rows=tuple(stale_rows))
+        )
+
+        dst = tmp_path / "comp_stale.opengwasdb"
+        complete_dense_store(
+            observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0,
+            release_id="comp-stale",
+        )
+
+        dst_rows = sorted(
+            read_analyses(dst / "analyses.tsv").rows,
+            key=lambda r: int(r["analysis_index"]),
+        )
+        expected = read_top_hit_counts(dst, len(dst_rows))
+        # 999 is absent (not retained) AND the values equal a fresh
+        # recomputation (not 999 + fresh, which retention would produce).
+        for column in ("n_hits_5e8", "n_hits_5e6", "n_hits_5e4"):
+            assert [r[column] for r in dst_rows] != ["999"] * len(dst_rows)
+            assert [int(r[column]) for r in dst_rows] == expected[column]
+
     def test_overwrite_raises_without_flag(
         self, tmp_path, observed_store, ld_panel, completed_store
     ):

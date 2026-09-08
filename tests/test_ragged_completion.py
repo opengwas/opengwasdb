@@ -167,15 +167,21 @@ class TestTopHitCountsRefreshedByCompletion:
     def test_completion_overwrites_stale_pre_completion_counts(
         self, tmp_path, observed_store, ld_panel
     ):
-        """A source analyses.tsv carrying an obviously wrong (stale)
-        pre-completion count must not survive into the completed store --
-        add_hit_counts recomputes it from the completed store's own
-        top-hit index rather than adding onto whatever the source said."""
+        """A source analyses.tsv carrying obviously wrong (stale)
+        pre-completion counts must not survive into the completed store --
+        add_hit_counts recomputes them from the completed store's own
+        top-hit index rather than adding onto whatever the source said, so
+        the completed values equal a fresh recomputation for every threshold
+        column and the stale marker is neither retained nor double-counted."""
+        from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
         from opengwasdb.model.analyses import read_analyses, write_analyses
 
         analyses_path = observed_store / "analyses.tsv"
         table = read_analyses(analyses_path)
-        rows = [{**row, "n_hits_5e4": "999"} for row in table.rows]
+        rows = [
+            {**row, "n_hits_5e8": "999", "n_hits_5e6": "999", "n_hits_5e4": "999"}
+            for row in table.rows
+        ]
         write_analyses(analyses_path, type(table)(fieldnames=table.fieldnames, rows=tuple(rows)))
 
         dst = tmp_path / "comp_stale.opengwasdb"
@@ -183,8 +189,14 @@ class TestTopHitCountsRefreshedByCompletion:
             observed_store, dst, ld_panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
         )
 
-        dst_rows = read_analyses(dst / "analyses.tsv").rows
-        assert all(int(r["n_hits_5e4"]) != 999 for r in dst_rows)
+        dst_rows = sorted(
+            read_analyses(dst / "analyses.tsv").rows,
+            key=lambda r: int(r["analysis_index"]),
+        )
+        expected = read_top_hit_counts(dst, len(dst_rows))
+        for column in ("n_hits_5e8", "n_hits_5e6", "n_hits_5e4"):
+            assert all(r[column] != "999" for r in dst_rows)
+            assert [int(r[column]) for r in dst_rows] == expected[column]
 
 
 class TestCompletionRollupColumns:

@@ -74,7 +74,11 @@ from opengwasdb.layouts.dense.constants import (
     DEFAULT_DTYPE,
 )
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
-from opengwasdb.model.analyses import read_analyses, read_analysis_records
+from opengwasdb.model.analyses import (
+    read_analyses,
+    read_analysis_records,
+    reset_top_hit_counts,
+)
 from opengwasdb.model.enums import (
     AssociationCoverage,
     CompletionState,
@@ -593,31 +597,25 @@ def _run_completion(
         print("Writing analyses.tsv...")
         with staged.index_connection() as dst_db:
             quality_rollup = completion_quality_rollup(dst_db, n_analyses)
-        dst_analyses = [
-            replace(
-                a,
-                completed_against=ancestry if impute_mask is None or impute_mask[i] else "",
-                # An Analysis that gained imputed cells in a release carrying
-                # reference EAF now stores a frequency for them, whatever its
-                # source reported (ADR 0037 §4). `eaf_scope` is derived from
-                # what the release actually holds, not copied forward -- the
-                # declaration disagreeing with the arrays is the defect that
-                # got through review on #106.
-                eaf_scope=completed_eaf_scope(a, quality_rollup[i], eaf_reference is not None),
-                completion_median_pearson_r=quality_rollup[i].median_pearson_r,
-                completion_n_imputed_total=quality_rollup[i].n_imputed_total,
-                completion_n_missing_total=str(int(n_missing_off_panel[i])),
-                # Completion changes z/se via imputation, so the source's
-                # pre-completion Top-Hit Counts (carried forward from `a`) do
-                # not apply here -- zero them so add_hit_counts below sets
-                # fresh post-completion counts rather than adding onto stale
-                # ones.
-                n_hits_5e8="",
-                n_hits_5e6="",
-                n_hits_5e4="",
-            )
-            for i, a in enumerate(src_analyses)
-        ]
+        dst_analyses = reset_top_hit_counts(
+            [
+                replace(
+                    a,
+                    completed_against=ancestry if impute_mask is None or impute_mask[i] else "",
+                    # An Analysis that gained imputed cells in a release carrying
+                    # reference EAF now stores a frequency for them, whatever its
+                    # source reported (ADR 0037 §4). `eaf_scope` is derived from
+                    # what the release actually holds, not copied forward -- the
+                    # declaration disagreeing with the arrays is the defect that
+                    # got through review on #106.
+                    eaf_scope=completed_eaf_scope(a, quality_rollup[i], eaf_reference is not None),
+                    completion_median_pearson_r=quality_rollup[i].median_pearson_r,
+                    completion_n_imputed_total=quality_rollup[i].n_imputed_total,
+                    completion_n_missing_total=str(int(n_missing_off_panel[i])),
+                )
+                for i, a in enumerate(src_analyses)
+            ]
+        )
 
         print("Building top-hit indexes...")
         build_top_hit_indexes(staged.path, encoding=encoding)

@@ -656,3 +656,18 @@ def read_analysis_records(path: str | Path) -> list[Analysis]:
     """Read `analyses.tsv` at `path` back into `Analysis` records, in file order."""
     table = read_analyses(path)
     return [_analysis_from_row(row, table.fieldnames) for row in table.rows]
+
+
+def reset_top_hit_counts(analyses: list[Analysis]) -> list[Analysis]:
+    """Blank each Analysis's carried-forward Top-Hit Counts (ADR 0032).
+
+    Reference Completion changes z/se via imputation, so a source release's
+    pre-completion Top-Hit Counts describe a different association list from
+    the completed one and must not be carried forward or added onto. A blank
+    `n_hits_*` field reads as zero to `add_hit_counts()`, so clearing the
+    three fields here makes that recomputation *set* fresh post-completion
+    counts instead of accumulating stale ones. Shared by the Dense and Ragged
+    completion drivers, which differ only in the layout-specific Analysis
+    updates they apply around this reset.
+    """
+    return [replace(a, n_hits_5e8="", n_hits_5e6="", n_hits_5e4="") for a in analyses]
