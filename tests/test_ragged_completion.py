@@ -736,6 +736,51 @@ class TestValidation:
         )
 
 
+_RESULT_KEYS = (
+    "variant_index",
+    "analysis_index",
+    "z",
+    "se",
+    "eaf",
+    "association_status",
+)
+
+
+def _assert_results_identical(
+    left: dict[str, np.ndarray], right: dict[str, np.ndarray]
+) -> None:
+    """Row-for-row equality of two phewas-shaped results.
+
+    Integer keys compare exactly; float keys NaN-aware and exactly (both sides
+    come through the same decode, so a difference is a decode bug, not
+    rounding); statuses compare exactly.
+    """
+    assert tuple(left) == _RESULT_KEYS
+    assert tuple(right) == _RESULT_KEYS
+    for name in ("variant_index", "analysis_index"):
+        np.testing.assert_array_equal(left[name], right[name])
+    for name in ("z", "se", "eaf"):
+        np.testing.assert_allclose(left[name], right[name], rtol=0, atol=0, equal_nan=True)
+    np.testing.assert_array_equal(left["association_status"], right["association_status"])
+
+
+def _force_imputed_row(store_path: Path, analysis_index: int, variant_vi: int) -> None:
+    """Write imputed=1 onto an Analysis's observed (finite) row for a variant,
+    so `observed_only` has a row to drop."""
+    root = open_store(store_path).arrays(mode="r+")
+    ragged = root["ragged"]
+    offsets = ragged["offsets"][:]
+    start, end = int(offsets[analysis_index]), int(offsets[analysis_index + 1])
+    z_segment = RaggedCSRReader(store_path).z_slice(start, end)
+    vi_segment = ragged["variant_index"][start:end]
+    matches = np.where((vi_segment == variant_vi) & np.isfinite(z_segment))[0]
+    assert len(matches) == 1, "fixture must give exactly one finite observed row to force"
+    pos = start + int(matches[0])
+    imputed = ragged["imputed"][:]
+    imputed[pos] = 1
+    ragged["imputed"][:] = imputed
+
+
 class TestQuery:
     def test_top_hits_uses_indexed_reference_frequency(self, completed_store):
         q = query_store(completed_store)
@@ -896,6 +941,149 @@ class TestQuery:
         result = q.range_by_analysis("1", 900_000, 1_300_000, observed_only=True)
         statuses = set(result["association_status"].tolist())
         assert "imputed" not in statuses
+        q.close()
+
+    def test_phewas_and_range_phewas_decode_known_rows(self, observed_store):
+        """Both hit paths decode the observed-only fixture's rows to the same
+        hand-derivable answers: analysis 0 (ENSG00000000001::Blood) holds
+        rs1001 and rs1002, analysis 1 (ENSG00000000002::Blood) holds rs1002
+        and rs1003, and a range over all three variants returns all four rows
+        analysis-major (CSR flat order) with analysis_index 0,0,1,1. The
+        exact analysis_indexes come from the fixture, not from the methods
+        under test, so a shared decode bug (say an off-by-one in the CSR
+        offset decode) cannot hide behind the two methods agreeing."""
+        q = query_store(observed_store)
+        analyses = q.analyses_table()
+        by_id = {row["analysis_id"]: index for index, row in analyses.items()}
+        assert by_id == {
+            "ENSG00000000001::Blood": 0,
+            "ENSG00000000002::Blood": 1,
+        }, "fixture must have exactly these two analyses in this order"
+
+        p1001 = q.phewas("rs1001")
+        assert len(p1001["z"]) == 1, "rs1001 is only in analysis 0"
+        np.testing.assert_array_equal(p1001["variant_index"], [0])
+        np.testing.assert_array_equal(p1001["analysis_index"], [0])
+        np.testing.assert_allclose(p1001["z"], [0.1 / 0.02])
+        np.testing.assert_allclose(p1001["se"], [0.02], rtol=1e-3)
+        assert p1001["association_status"].tolist() == ["observed"]
+
+        p1002 = q.phewas("rs1002")
+        assert len(p1002["z"]) == 2, "rs1002 is in both analyses"
+        np.testing.assert_array_equal(p1002["variant_index"], [1, 1])
+        np.testing.assert_array_equal(p1002["analysis_index"], [0, 1])
+        np.testing.assert_allclose(p1002["z"], [-0.2 / 0.03, 0.5 / 0.05], rtol=1e-3)
+        np.testing.assert_allclose(p1002["se"], [0.03, 0.05], rtol=1e-3)
+        assert p1002["association_status"].tolist() == ["observed", "observed"]
+
+        p1003 = q.phewas("rs1003")
+        assert len(p1003["z"]) == 1, "rs1003 is only in analysis 1"
+        np.testing.assert_array_equal(p1003["variant_index"], [2])
+        np.testing.assert_array_equal(p1003["analysis_index"], [1])
+        np.testing.assert_allclose(p1003["z"], [-0.15 / 0.025], rtol=1e-3)
+
+        regional = q.range_phewas("1", 1_000_000, 1_200_000)
+        np.testing.assert_array_equal(regional["variant_index"], [0, 1, 1, 2])
+        np.testing.assert_array_equal(regional["analysis_index"], [0, 0, 1, 1])
+        assert regional["association_status"].tolist() == ["observed"] * 4
+        # Observed-only source carries no EAF array (ADR 0036): all-NaN, not zeros.
+        assert np.all(np.isnan(regional["eaf"]))
+        q.close()
+
+    def test_phewas_and_range_phewas_agree_per_variant(self, observed_store, completed_store):
+        """For every variant the store holds, the phewas result is identical
+        row-for-row to the regional result restricted to that variant's own
+        position -- on both an observed-only store (no imputed array at all)
+        and a reference-completed one (missing cells decoding to status
+        'missing'), with and without observed_only. `range_phewas` and
+        `phewas` share one CSR hit decode; if one method drifted, the other
+        would not follow."""
+        for path in (observed_store, completed_store):
+            q = query_store(path)
+            variants = q.variants_table()
+            assert len(variants) >= 3, "fixture must hold >=3 variants for this to mean anything"
+            regional = q.range_phewas("1", 900_000, 1_300_000)
+            assert len(regional["z"]) > 0, "fixture must hold >=1 row for this to mean anything"
+            if path == completed_store:
+                assert "observed" in set(regional["association_status"].tolist())
+                assert "missing" in set(regional["association_status"].tolist())
+            for variant in variants.values():
+                for observed_only in (False, True):
+                    p = q.phewas(variant["alid"], observed_only=observed_only)
+                    r = q.range_phewas(
+                        variant["chromosome"],
+                        int(variant["position"]),
+                        int(variant["position"]),
+                        observed_only=observed_only,
+                    )
+                    assert len(p["z"]) > 0, f"{variant['alid']} must have hits in the fixture"
+                    _assert_results_identical(p, r)
+            q.close()
+
+    def test_phewas_and_range_phewas_observed_only_and_eaf(self, completed_store):
+        """Forcing one observed row to read as imputed makes observed_only drop
+        it from both hit paths, and that row's EAF resolves to the LD panel's
+        frequency (reference EAF on an imputed cell of a source that reported
+        no frequencies; ADR 0036). The shared decode must apply the filter and
+        the status/EAF decode identically in both methods."""
+        q = query_store(completed_store)
+        analyses = q.analyses_table()
+        by_id = {row["analysis_id"]: index for index, row in analyses.items()}
+        ai = by_id["ENSG00000000001::Blood"]
+        rs1001_index, rs1001 = next(
+            (index, v) for index, v in q.variants_table().items() if v["rsid"] == "rs1001"
+        )
+        before = q.phewas(rs1001["alid"])
+        assert len(before["z"]) == 2, "rs1001 must hit both analyses in the completed fixture"
+        assert set(before["association_status"].tolist()) == {"observed", "missing"}
+        assert sum(np.isfinite(before["z"])) == 1, "fixture must leave one observed row to force"
+        q.close()
+
+        _force_imputed_row(completed_store, ai, rs1001_index)
+        q = query_store(completed_store)
+        statuses = q.phewas(rs1001["alid"])["association_status"].tolist()
+        assert statuses.count("imputed") == 1, "forced row must read imputed on the shared decode"
+        assert statuses.count("missing") == 1
+        for observed_only in (False, True):
+            p = q.phewas(rs1001["alid"], observed_only=observed_only)
+            r = q.range_phewas(
+                rs1001["chromosome"],
+                int(rs1001["position"]),
+                int(rs1001["position"]),
+                observed_only=observed_only,
+            )
+            _assert_results_identical(p, r)
+
+        forced = q.phewas(rs1001["alid"])
+        imp_row = int(np.where(np.asarray(forced["association_status"]) == "imputed")[0][0])
+        np.testing.assert_allclose(forced["eaf"][imp_row], [0.3], rtol=1e-6)
+        others = np.delete(forced["eaf"], imp_row)
+        assert np.all(np.isnan(others)), "observed/missing rows must stay all-NaN on this store"
+
+        filtered = q.phewas(rs1001["alid"], observed_only=True)
+        assert len(filtered["z"]) == 1
+        assert filtered["association_status"].tolist() == ["missing"]
+        q.close()
+
+    def test_phewas_and_range_phewas_empty_hits(self, observed_store):
+        """Absence and zero are different (CONTRIBUTING): a variant no store
+        holds, a chromosome with no variants, and a gap between real variants
+        all come back as the same six empty parallel arrays -- never a
+        defaulted row, never fewer keys."""
+        q = query_store(observed_store)
+        empties = [
+            q.phewas("rs-does-not-exist"),
+            q.range_phewas("2", 1, 5_000_000),
+            q.range_phewas("1", 1_030_000, 1_070_000),
+        ]
+        for result in empties:
+            assert tuple(result) == _RESULT_KEYS
+            assert len(result["variant_index"]) == 0
+            assert result["variant_index"].dtype == np.dtype("int32")
+            assert result["analysis_index"].dtype == np.dtype("int32")
+            for name in ("z", "se", "eaf"):
+                assert result[name].dtype == np.dtype("float32")
+            assert result["association_status"].dtype == np.dtype(object)
         q.close()
 
 
