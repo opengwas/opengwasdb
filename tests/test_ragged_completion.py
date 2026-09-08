@@ -9,12 +9,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import zarr
 
 from opengwasdb.completion.ld_panel import LdPanelNotFoundError
 from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation.validate import validate_store
@@ -113,6 +114,30 @@ def _make_ld_panel(tmp_path: Path, chrom: str, start: int, end: int) -> Path:
     (panel_dir / f"{block_name}.unphased.vcor1.gz").write_bytes(buf.getvalue())
 
     return tmp_path / "ld_panel"
+
+
+def _assert_completed_stores_equal(dst_a, dst_b) -> None:
+    """Assert two completed ragged stores hold identical per-Analysis rows.
+
+    Count equality is not enough for the resume and n_workers parity seams the
+    CSR-assembly phase must preserve: the assembly could reorder cells between
+    Analyses, or reclassify them between observed/imputed/missing, and the
+    totals would still match. Compare the decoded per-Analysis rows
+    (variant order, z/se/eaf) and the imputed mask instead."""
+    reader_a = RaggedCSRReader(dst_a)
+    reader_b = RaggedCSRReader(dst_b)
+    assert reader_a.n_analyses == reader_b.n_analyses
+    assert reader_a.n_associations == reader_b.n_associations
+    for ai in range(reader_a.n_analyses):
+        a = reader_a.get_analysis(ai)
+        b = reader_b.get_analysis(ai)
+        assert np.array_equal(a.variant_index, b.variant_index), f"analysis {ai} variants differ"
+        assert np.array_equal(a.z, b.z, equal_nan=True), f"analysis {ai} z differs"
+        assert np.array_equal(a.se, b.se, equal_nan=True), f"analysis {ai} se differs"
+        assert np.array_equal(a.eaf, b.eaf, equal_nan=True), f"analysis {ai} eaf differs"
+    imp_a = zarr.open_group(str(dst_a / RAGGED_ZARR_PATH), mode="r")["imputed"][:]
+    imp_b = zarr.open_group(str(dst_b / RAGGED_ZARR_PATH), mode="r")["imputed"][:]
+    assert np.array_equal(imp_a, imp_b), "imputed masks differ"
 
 
 # ── Tests ───────────────────────────────────────────────────────────────────
@@ -856,6 +881,8 @@ class TestParallelAndResume:
         assert parallel.n_imputed == serial.n_imputed
         assert parallel.n_missing == serial.n_missing
         assert parallel.n_associations == serial.n_associations
+        assert serial.n_associations > 0, "fixture must complete some rows to mean anything"
+        _assert_completed_stores_equal(serial_dst, parallel_dst)
 
     def test_resume_matches_fresh_run(self, tmp_path, observed_store, ld_panel):
         import json
@@ -893,6 +920,7 @@ class TestParallelAndResume:
         assert resumed.n_associations == fresh.n_associations
         assert not checkpoint_dir.exists()
         assert validate_store(resumable_dst).ok
+        _assert_completed_stores_equal(resumable_dst, fresh_dst)
 
 
 class TestValidation:
