@@ -31,14 +31,29 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   compressed. The compressed-bytes gate therefore compared each residual
   candidate against costs measured small, most on exactly the small or
   awkwardly-shaped planes where the margin is narrowest, biasing the decision
-  toward the coding. Every measured array (the codes plane, its `float16`
-  alternative, the coefficients and both side tables) is now charged at its
-  padded size, using the fill value the array's own writer declares. On the
-  rebuilt `eqtlgen-cis` Ragged plane the final 58,034-row chunk of a 200,000
-  chunk stores 70,799 bytes against the 50,812 the old measurement charged —
-  39% more than measured on that chunk alone. A plane whose extent divides its
-  measured exactly as before, and tests now pin each measurement against the
-  bytes a real zarr array of the same extent, chunk and fill occupies.
+  toward the coding.
+
+  The same undercharge survived the first fix in the streamed Dense, Hybrid
+  and format-migration optimiser (`encoding/se.py`), which measured its planes
+  with a second cost implementation; it is now closed there too. Every
+  measured array — the codes plane (charged at the `SE_MISSING` fill the
+  Dense rewrite declares), its `float16` alternative (NaN after a scratch
+  narrow, or a migration source's own declared fill), the Overflow's flat
+  planes (whole-written, numeric default fill), the coefficients and both
+  side tables — is charged at its padded size with the fill its own writer
+  declares, and both the whole-grid fits and the streamed optimiser share one
+  chunk-accounting function (`measure.packed_chunk_bytes`), so one path
+  cannot drift from the other again. A tiny, well-fitted Overflow no longer
+  vetoes the coding the way the undercounted measurement made it seem to.
+
+  On the rebuilt `eqtlgen-cis` Ragged plane the final 58,034-row chunk of a
+  200,000 chunk stores 70,799 bytes against the 50,812 the old measurement
+  charged — 39% more than measured on that chunk alone. A plane whose extent
+  divides its chunk evenly is measured exactly as before, and tests now pin
+  each measurement — 1-D and 2-D, partial in both dimensions, coefficients,
+  Overflow and both side tables, on the streamed path as well as the
+  whole-grid one — against the bytes a real zarr array of the same extent,
+  chunk and fill occupies.
 
 - **`ukb-b` at format 3.0, measured** (#148). A full Observed-Only Dense build
   of `ukb-b` (9,847,701 × 2,511 = 24,727,577,211 cells) under format 3.0 takes

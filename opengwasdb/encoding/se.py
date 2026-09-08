@@ -18,7 +18,7 @@ from opengwasdb.encoding.codec import (
     positions_row_band,
     se_residual_codes,
 )
-from opengwasdb.encoding.measure import solve_log_se
+from opengwasdb.encoding.measure import packed_chunk_bytes, solve_log_se
 from opengwasdb.encoding.plan import (
     SE_MISSING,
     SE_RANGE_CANDIDATES,
@@ -121,20 +121,39 @@ def _packed(compressor: Any, value: np.ndarray) -> int:
 
 
 def _packed_coefficients(compressor: Any, coefficients: np.ndarray) -> int:
+    """Coefficient-array bytes as `write_se_coefficients` will store them.
+
+    The writer declares a (min(n_analyses, 1024), 2) chunk with the numeric
+    default fill, so a row count that is not a multiple of 1024 leaves an edge
+    chunk zarr pads to a full 1024 rows before compressing it. Each grid row
+    is charged through the shared `packed_chunk_bytes`, which pads that edge
+    chunk to its declared shape (issue #158).
+    """
+    chunk_rows = max(1, min(len(coefficients), 1024))
     return sum(
-        _packed(compressor, coefficients[start : start + 1024])
-        for start in range(0, len(coefficients), 1024)
+        packed_chunk_bytes(compressor, coefficients[r0 : r0 + chunk_rows], (chunk_rows, 2), 0)
+        for r0 in range(0, len(coefficients), chunk_rows)
     )
 
 
 class _SideTableCost:
-    """Compressed bytes for one sorted side table, bounded to one chunk."""
+    """Compressed bytes for one sorted side table, bounded to one chunk.
+
+    The rewrite's arrays are pre-sized with a chunk of
+    ``max(1, min(count, EXACT_TABLE_CHUNK))`` and written slot by slot, so a
+    table that fits one chunk is stored whole and a longer one has a final
+    edge chunk zarr pads to a full ``EXACT_TABLE_CHUNK`` with its fill. The
+    in-extent rows are held in two fixed buffers and flushed as they fill; the
+    final partial flush is charged through the shared `packed_chunk_bytes` so
+    that edge chunk is not measured short (issue #158).
+    """
 
     def __init__(self, compressor: Any, n_analyses: int) -> None:
         self._compressor = compressor
         self._index = np.empty(EXACT_TABLE_CHUNK, dtype=np.int64)
         self._value = np.empty(EXACT_TABLE_CHUNK, dtype=np.float32)
         self._used = 0
+        self._flushed_rows = 0
         self.count = np.zeros(n_analyses, dtype=np.int64)
         self.compressed_bytes = 0
 
@@ -156,11 +175,24 @@ class _SideTableCost:
     def _flush(self) -> None:
         self.compressed_bytes += _packed(self._compressor, self._index[: self._used])
         self.compressed_bytes += _packed(self._compressor, self._value[: self._used])
+        self._flushed_rows += self._used
         self._used = 0
 
     def finish(self) -> tuple[np.ndarray, int]:
         if self._used:
-            self._flush()
+            # A flush has happened only when the table outgrew one chunk, and
+            # then the final chunk is stored at a full EXACT_TABLE_CHUNK with
+            # its fill (0 for both the int64 index and the float32 value). A
+            # table that fits one chunk is stored at its own length and must
+            # not be padded up to a chunk it will never occupy.
+            chunk = EXACT_TABLE_CHUNK if self._flushed_rows else self._used
+            self.compressed_bytes += packed_chunk_bytes(
+                self._compressor, self._index[: self._used], (chunk,), 0
+            )
+            self.compressed_bytes += packed_chunk_bytes(
+                self._compressor, self._value[: self._used], (chunk,), 0
+            )
+            self._used = 0
         return self.count, self.compressed_bytes
 
 
@@ -223,10 +255,22 @@ def _charged(
     return counts, total
 
 
-def _charge_in_column_chunks(compressor: Any, band: np.ndarray, col_chunk: int) -> int:
-    """Compressed bytes for one row band, charged as the physical chunks it becomes."""
+def _band_chunk_bytes(
+    compressor: Any, band: np.ndarray, row_chunk: int, col_chunk: int, fill_value: Any
+) -> int:
+    """Compressed bytes of one row band stored as the plane's physical chunks.
+
+    A band is one physical row-chunk cell of the plane; its final band is
+    short when the plane's row extent does not divide the chunk. Each of the
+    band's column cells is charged through the shared `packed_chunk_bytes`,
+    which pads a cell running past the plane's extent out to the full declared
+    chunk with the array's fill value before compressing it, exactly as zarr
+    stores it (issue #158).
+    """
     return sum(
-        _packed(compressor, band[:, c0 : c0 + col_chunk])
+        packed_chunk_bytes(
+            compressor, band[:, c0 : c0 + col_chunk], (row_chunk, col_chunk), fill_value
+        )
         for c0 in range(0, band.shape[1], col_chunk)
     )
 
@@ -240,6 +284,15 @@ def _measure_dense(
     n_rows, n_analyses = map(int, source.shape)
     row_chunk, col_chunk = map(int, source.chunks)
     compressor = source.compressor
+    # The planes this decision writes declare their own fills: the int8 codes
+    # plane `_rewrite_dense` produces is created with `SE_MISSING` as its fill,
+    # and a float32 scratch plane is narrowed to `float16` with NaN. A source
+    # already stored as `float16` (a migration input) is left untouched and
+    # keeps the fill its own writer declared. Each measured plane is charged
+    # at its padded size with the fill its own writer declares (issue #158).
+    float16_fill: Any = (
+        source.fill_value if source.dtype == np.dtype("float16") else float("nan")
+    )
     sides = {candidate: _SideTableCost(compressor, n_analyses) for candidate in SE_RANGE_CANDIDATES}
     code_bytes = dict.fromkeys(SE_RANGE_CANDIDATES, 0)
     float_bytes = 0
@@ -254,8 +307,8 @@ def _measure_dense(
             finite_per_analysis += np.isfinite(values).sum(axis=0).astype(np.int64)
         ai = analysis_index[: r1 - r0]
         with timer.phase("measure.float16"):
-            float_bytes += _charge_in_column_chunks(
-                compressor, values.astype(np.float16), col_chunk
+            float_bytes += _band_chunk_bytes(
+                compressor, values.astype(np.float16), row_chunk, col_chunk, float16_fill
             )
         for candidate in SE_RANGE_CANDIDATES:
             with timer.phase("measure.code"):
@@ -263,7 +316,9 @@ def _measure_dense(
                     values, frequencies, ai, coefficients, candidate
                 )
             with timer.phase("measure.compress"):
-                code_bytes[candidate] += _charge_in_column_chunks(compressor, raw, col_chunk)
+                code_bytes[candidate] += _band_chunk_bytes(
+                    compressor, raw, row_chunk, col_chunk, SE_MISSING
+                )
             with timer.phase("measure.exceptions"):
                 sides[candidate].add(
                     positions_row_band(r0, n_analyses)(exceptional),
@@ -281,6 +336,14 @@ def _measure_overflow(
     n_analyses: int,
     timer: PhaseTimer | None = None,
 ) -> _ComponentCost:
+    """A Hybrid Overflow Component's per-candidate costs, in its own chunks.
+
+    The Overflow Component's flat planes are written whole (`data=`, numeric
+    default fill) in `chunk`-sized chunks, so a cell count that does not
+    divide the chunk leaves an edge chunk zarr pads with 0 before compressing
+    it; both the `float16` alternative and every candidate's codes are charged
+    at that padded size (issue #158).
+    """
     values = np.asarray(overflow.se_values).ravel()
     frequencies = np.asarray(overflow.eaf_values).ravel()
     analyses = np.asarray(overflow.analysis_indices).ravel()
@@ -299,10 +362,15 @@ def _measure_overflow(
             finite_per_analysis += np.bincount(ai[np.isfinite(se)], minlength=n_analyses).astype(
                 np.int64
             )
-            float_bytes += _packed(compressor, se.astype(np.float16))
+            # The Ragged Overflow store writes both planes whole (`data=`,
+            # numeric default fill), so every edge chunk -- the final one of a
+            # length that does not divide the chunk -- is padded with 0 before
+            # it is compressed. Charged through the shared `packed_chunk_bytes`
+            # like every other measured array (issue #158).
+            float_bytes += packed_chunk_bytes(compressor, se.astype(np.float16), (chunk,), 0)
             for candidate in SE_RANGE_CANDIDATES:
                 raw, exceptional = _candidate_codes(se, eaf, ai, coefficients, candidate)
-                code_bytes[candidate] += _packed(compressor, raw)
+                code_bytes[candidate] += packed_chunk_bytes(compressor, raw, (chunk,), 0)
                 sides[candidate].add(
                     positions_flat(start)(exceptional),
                     se[exceptional],
