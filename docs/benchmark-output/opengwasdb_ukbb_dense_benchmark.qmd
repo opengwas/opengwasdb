@@ -1,7 +1,7 @@
 ---
-title: "OpenGWASDB ukb-b Dense Store — Performance & Validation"
-subtitle: "Genome-wide · 2,514 UK Biobank analyses · observed-only and reference-completed"
-date: today
+title: "OpenGWASDB ukb-b Dense Store — format 3.0 performance"
+subtitle: "Residual-coded standard errors · 24.7 billion cells"
+date: "2026-09-08"
 format:
   html:
     toc: true
@@ -11,405 +11,280 @@ format:
 jupyter: python3
 ---
 
-::: {.callout-important}
-## Measured at `format_version` 0.1, not re-run for the `z` or `eaf` encodings
-
-Every figure below was measured against stores whose `z` plane is `float16`
-and which carry no `eaf` at all. Two changes have landed since, both of which
-move stored size and add a decode step to every read: issue #114 (ADR 0037 §1)
-made `z` `int16` fixed point with an exact overflow table, and issue #116
-(ADR 0037 §2, §4) made `eaf` a per-variant baseline plus an `int8` logit
-residual and moved `format_version` to 2.0. The sizes and timings here describe
-neither. They are re-measured against rebuilt stores in #117, before the version
-that ships the encodings is cut (`CONTRIBUTING.md`, "Benchmarks are
-measurements, not prose").
-:::
-
 ```{python}
 #| echo: false
 import json
 from pathlib import Path
 
 HERE = Path(".")
-data = json.loads((HERE / "opengwasdb_ukbb_dense_benchmark.json").read_text())
-completed = json.loads((HERE / "opengwasdb_ukbb_dense_completed_benchmark.json").read_text())
+se2 = json.loads((HERE / "opengwasdb_ukbb_dense_issue148_se2_benchmark.json").read_text())
+se3 = json.loads((HERE / "opengwasdb_ukbb_dense_issue148_se3_benchmark.json").read_text())
+
 
 def md_table(headers, rows):
-    sep = "|" + "|".join(["---"] * len(headers)) + "|"
-    head = "| " + " | ".join(headers) + " |"
-    body = "\n".join("| " + " | ".join(str(c) for c in r) + " |" for r in rows)
-    return f"{head}\n{sep}\n{body}"
+    separator = "|" + "|".join(["---"] * len(headers)) + "|"
+    heading = "| " + " | ".join(headers) + " |"
+    body = "\n".join("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
+    return f"{heading}\n{separator}\n{body}"
 
-def fmt_ms(v):
-    return f"{v:,.1f} ms" if v < 1000 else f"{v/1000:,.2f} s"
 
-def by_query(d):
-    return {row["query"]: row for row in d["timings"]}
+def fmt_ms(value):
+    return f"{value:,.2f} ms" if value < 1_000 else f"{value / 1_000:,.2f} s"
+
+
+def by_query(result):
+    return {row["query"]: row for row in result["timings"]}
+
+
+def percent_change(before, after):
+    return (after / before - 1) * 100
 ```
 
-## Overview
+::: {.callout-note}
+## Final performance summary
 
-Two **Dense** stores over the **2,514 genome-wide UK Biobank GWAS** in the
-OpenGWAS `ukb-b` batch:
+Format 3.0 reduces the complete Store Release from **59.50 GB to 42.56 GB
+(−28.5%)** and its `se` representation from **21.18 GB to 3.96 GB (−81.3%)**.
+The cost is a **16.5% longer build** and a mixed query-latency result:
+whole-Analysis reads improve by **12.1%**, while the cached all-Analysis regional
+scan takes **2.25× as long** because residual `se` reconstruction is
+compute-bound. Crucially, the same region restricted to one Analysis changes
+only **+4.8%** (22.75 → 23.85 ms). The two requested random-lookup shapes also
+remain close to their baselines at **−3.1%** and **+7.8%**.
 
-- an **Observed-Only** store built from the source GWAS-VCFs with inline
-  hg19→hg38 liftover;
-- a **Reference-Completed** store whose variant axis is the observed source
-  variants plus EUR LD-panel variants.
+The performance case supports the format change provided that the all-Analysis
+regional trade-off is accepted: it exchanges one known decode-bound regression
+for a large storage reduction and faster IO-bound scans. Narrow regional and
+random lookup shapes remain stable. Correctness checks passed: all compared
+query result counts match, and the MR IVW result agrees to three decimal places.
+:::
 
-This report benchmarks query latency across all access patterns, storage and
-build cost versus the raw VCFs, and an MR IVW analysis as an end-to-end
-scientific validation.
+## Benchmark scope
+
+Query timings re-measured on 2026-09-08 against two **Observed-Only Dense** `ukb-b` Store
+Releases built from the same 2,511 GWAS-VCF sources by the same generator.
+Each contains 9,847,701 variants × 2,511 Analyses = 24,727,577,211 cells.
+Query figures are medians of five warmed repetitions on an otherwise idle
+machine.
+
+The releases hold `z` and `eaf` encoding constant and change `se` only:
 
 ```{python}
 #| echo: false
 #| output: asis
-d = data["dataset"]
-dc = completed["dataset"]
 rows = [
-    ("Analyses (GWAS)", f"{d['n_analyses']:,}", f"{dc['n_analyses']:,}"),
-    ("Variants (hg38)", f"{d['n_variants']:,}", f"{dc['n_variants']:,}"),
-    ("Additional panel variants", "—", f"{dc['n_variants'] - d['n_variants']:,}"),
+    ("Store format", se2["dataset"]["format_version"], se3["dataset"]["format_version"]),
+    ("`z`", "`int16_fixed`, scale 1024", "`int16_fixed`, scale 1024"),
+    ("`se`", "**`float16`**", "**`int8_residual` ±0.5**"),
+    ("`eaf`", "`int8_residual` ±0.5", "`int8_residual` ±0.5"),
+    ("Variants", f"{se2['dataset']['n_variants']:,}", f"{se3['dataset']['n_variants']:,}"),
+    ("Analyses", f"{se2['dataset']['n_analyses']:,}", f"{se3['dataset']['n_analyses']:,}"),
+]
+print(md_table(["Property", "Format 2.0", "Format 3.0"], rows))
+```
+
+## Storage
+
+```{python}
+#| echo: false
+#| output: asis
+s2 = se2["storage"]
+s3 = se3["storage"]
+store_change = percent_change(s2["store_bytes"], s3["store_bytes"])
+rows = [
     (
-        "Associations (dense cells)",
-        f"{d['n_variants'] * d['n_analyses'] / 1e9:.1f} billion",
-        f"{dc['n_variants'] * dc['n_analyses'] / 1e9:.1f} billion",
+        "Complete Store Release",
+        f"{s2['store_gb']:.2f} GB",
+        f"{s3['store_gb']:.2f} GB",
+        f"**{store_change:.1f}%**",
     ),
-    ("Reference assembly", d["reference_assembly"], dc["reference_assembly"]),
+    (
+        "`data.zarr` payload",
+        "58.60 GB",
+        "41.66 GB",
+        "−28.9%",
+    ),
+    (
+        "`se` codes + side tables + coefficients",
+        "21.18 GB",
+        "3.96 GB",
+        "**−81.3%**",
+    ),
+    (
+        "Bytes per cell for `se`",
+        "0.857",
+        "0.160",
+        "−81.3%",
+    ),
+    (
+        "Compression against source GWAS-VCFs",
+        f"{s2['compression_ratio']:.2f}×",
+        f"{s3['compression_ratio']:.2f}×",
+        "",
+    ),
 ]
-print(md_table(["Property", "Observed-Only", "Reference-Completed"], rows))
+print(md_table(["Measure", "Format 2.0", "Format 3.0", "Change"], rows))
 ```
 
----
+The residual representation has 3,957,471,004 bytes of codes, 3,786,980
+bytes of exception side tables, and 16,248 bytes of coefficients. Only
+1,677,442 of 24,727,577,211 cells (0.0068%) fall outside ±0.5, against the 2%
+exception budget. The shared study design therefore makes the residuals highly
+compressible: the `se` saving exceeds both ADR 0037 §3's predicted 58.1% and
+the 59.0% measured on the FinnGen R13 pilot.
 
-## Storage vs. raw VCF
+The complete Store Release figures above include the indexes and metadata
+outside `data.zarr`. This distinction matters: the format-3 top-hit index is
+larger, so the 81.3% reduction in `se` becomes a 28.5% reduction in the whole
+release. At format 3.0, `z` is the dominant array (31.53 GB).
+
+## Build performance
 
 ```{python}
 #| echo: false
 #| output: asis
-s = data["storage"]
-sc = completed["storage"]
+b2 = se2["build"]
+b3 = se3["build"]
+build_change = percent_change(b2["build_seconds"], b3["build_seconds"])
 rows = [
-    ("Raw source VCFs (.vcf.gz)", f"{s['n_source_files']:,} files", f"{s['raw_vcf_gb']:,.1f} GB"),
-    ("OpenGWASDB Dense Observed-Only", "single store", f"**{s['store_gb']:,.1f} GB**"),
-    ("OpenGWASDB Dense Reference-Completed", "single store", f"**{sc['store_gb']:,.1f} GB**"),
+    ("Build time", f"{b2['build_hours']:.2f} h", f"{b3['build_hours']:.2f} h", f"**+{build_change:.1f}%**"),
+    ("Wall time", f"{b2['build_seconds']:,.0f} s", f"{b3['build_seconds']:,.0f} s", ""),
 ]
-print(md_table(["Form", "Files", "Size"], rows))
-print()
-print(f"**{s['compression_ratio']:.1f}× smaller** than the source VCFs "
-      f"({s['store_gb']:.1f} GB vs {s['raw_vcf_gb']:.0f} GB) — one queryable store "
-      f"replacing {s['n_source_files']:,} files. The store keeps float16 `z` + `se`, a "
-      f"tabix variant axis, an mmap'd ALID index, and a top-hit index.")
-print()
-print(f"The reference-completed store is **{sc['store_gb'] - s['store_gb']:.1f} GB larger** "
-      f"than observed-only after adding {completed['dataset']['n_variants'] - data['dataset']['n_variants']:,} "
-      "panel variants, imputed flags, and completion metadata.")
+print(md_table(["Measure", "Format 2.0", "Format 3.0", "Change"], rows))
 ```
 
----
-
-## Build
-
-```{python}
-#| echo: false
-#| output: asis
-b = data["build"]
-if b.get("build_hours"):
-    rows = [
-        ("Build time", f"{b['build_hours']:.1f} h ({b['build_seconds']:,.0f} s)"),
-        ("Peak memory", "≈43 GB (band-streamed; see issue 043)"),
-        ("Pipeline", "serial union+liftover → parallel fill (spill) → band-write zarr"),
-    ]
-    print(md_table(["Property", "Value"], rows))
-else:
-    print("_Build timing not available from the build log._")
-```
-
----
+The additional 1 h 55 min pays for the per-Analysis fit, candidate
+measurement, exact codes-only exception count, and rewrite passes used by the
+format-3 Dense builder.
 
 ## Query performance
 
-Median of repeated calls after one warm-up, on the full genome-wide stores.
-
 ```{python}
 #| echo: false
 #| output: asis
-DESC = {
-    "bulk": "One analysis, all variants (`analysis`)",
-    "phewas": "One variant × all 2,514 analyses (`phewas`)",
-    "regional": "All associations in a 1 Mb window (`range_phewas`)",
-    "tophits": "Significant hits for `ukb-b-10912` (addressed index slice, p<5e-8)",
-    "random_lookup": "100 variants × 10 analyses (`lookup`)",
+query_labels = {
+    "bulk": "Whole Analysis",
+    "regional": "Regional (1 Mb × all Analyses)",
+    "regional_one_analysis": "Regional (1 Mb × one Analysis)",
+    "phewas": "PheWAS",
+    "random_lookup_10_variants_100_analyses": "Random lookup (10 variants × 100 Analyses)",
+    "random_lookup_100_variants_10_analyses": "Random lookup (100 variants × 10 Analyses)",
 }
+t2 = by_query(se2)
+t3 = by_query(se3)
 rows = []
-obs_t = by_query(data)
-comp_t = by_query(completed)
-for name in obs_t:
-    t = obs_t[name]
-    tc = comp_t[name]
+for name in (
+    "bulk",
+    "regional",
+    "regional_one_analysis",
+    "phewas",
+    "random_lookup_10_variants_100_analyses",
+    "random_lookup_100_variants_10_analyses",
+):
+    before = t2[name]
+    after = t3[name]
+    change = percent_change(before["median_ms"], after["median_ms"])
     rows.append((
-        name,
-        fmt_ms(t["median_ms"]),
-        fmt_ms(tc["median_ms"]),
-        f"{tc['median_ms'] / t['median_ms']:.2f}×",
-        f"{t['result_count']:,} → {tc['result_count']:,}",
-        DESC.get(name, ""),
+        query_labels[name],
+        f"{after['result_count']:,}",
+        fmt_ms(before["median_ms"]),
+        fmt_ms(after["median_ms"]),
+        f"**{change:+.1f}%**" if name in ("bulk", "regional") else f"{change:+.1f}%",
     ))
-print(md_table([
-    "Pattern", "Observed median", "Completed median", "Completed / observed",
-    "Result cells", "What it reads",
-], rows))
+print(md_table(["Query", "Result cells", "Format 2.0", "Format 3.0", "Change"], rows))
 ```
 
-`phewas` and the analysis-addressed `top_hits` call are low-millisecond point
-queries. `bulk` and `regional` scale with the number of cells returned. Top-hit
-tiers are packed by analysis index and canonical genomic position, with an
-offset table mapping each analysis directly to one contiguous slice. The
-reference-completed index stores the `imputed` flag alongside `z`/`se`, avoiding
-random reads into `data.zarr/imputed`.
+Latency moves in both directions because physical chunks touched, cache
+locality, and result width determine whether decode or IO dominates:
 
-### `random_lookup` across request sizes
+- A direct 52,253,910-cell band read through `DenseSePlane` measured **0.0050
+  µs/cell** for `float16` and **0.0700 µs/cell** for `int8_residual` — a **14×
+  decode cost**. Residual reconstruction decodes `eaf` and evaluates an
+  exponential for each cell. This dominates the warmed all-Analysis regional
+  scan and explains its 787 ms → 1.77 s regression.
+- Restricting the same region to `ukb-b-10912` through the public `lookup`
+  operation reads only one Analysis. It returns 3,197 cells in **22.75 ms at
+  format 2.0 and 23.85 ms at format 3.0 (+4.8%)**. The residual decode is no
+  longer multiplied across all 2,511 Analyses. `range_phewas` has no
+  Analysis-filter argument, so the benchmark resolves the region's ALIDs once
+  and times `lookup(alids, [analysis_id])`, including its normal identifier
+  resolution and chunk reads.
+- The whole-Analysis query is IO-bound. Its 5.3× smaller `se` representation
+  more than offsets reconstruction, improving 29.06 s → 25.54 s.
+- PheWAS remains a low-millisecond point query at 6.56 → 5.92 ms. Random lookup
+  changes from 79.42 → 85.65 ms for 10 variants × 100 Analyses (+7.8%) and
+  675.59 → 654.35 ms for 100 variants × 10 Analyses (−3.1%). These small,
+  opposite movements show that scattered row-chunk access matters more than
+  requested cell count and are not distinguished confidently from host
+  variance by five repetitions.
 
-The table above reports one fixed `random_lookup` shape (100 variants × 10
-analyses). The table below re-measures `lookup` on the observed-only store
-across four request shapes, with no competing background job on the host, to
-separate the row-axis cost (scattered variants, each its own row-chunk) from
-the column-axis cost (requested analyses).
+### Top hits are not an encoding comparison
+
+Per-Analysis top hits measured 78.97 ms in the format-2 release and 1.36 ms in
+the format-3 release, with 7,390 results in both. That apparent 58× improvement
+is **not attributed to residual `se`**: the format-2 release predates issues
+#131–#134 and its top-hit tier lacks indexed `eaf`, so it takes the known
+pre-fix path. The benchmark's independent pre-EAF baseline is 1.17 ms. Top-hit
+latency is therefore excluded from the comparison table and acceptance
+summary.
+
+## Scientific and result validation
 
 ```{python}
 #| echo: false
 #| output: asis
-matrix = json.loads((HERE / "opengwasdb_ukbb_dense_random_lookup_matrix.json").read_text())
+m2 = se2["mr"]
+m3 = se3["mr"]
+counts_match = all(t2[name]["result_count"] == t3[name]["result_count"] for name in t2)
 rows = [
-    (
-        f"{s['n_variants']:,}",
-        f"{s['n_analyses']:,}",
-        f"{s['n_variants'] * s['n_analyses']:,}",
-        fmt_ms(s["median_ms"]),
-        fmt_ms(s["p95_ms"]),
-        f"{s['result_count']:,}",
-    )
-    for s in matrix["scenarios"]
+    ("Compared query result counts", "all match" if counts_match else "**MISMATCH**"),
+    ("MR instruments", f"{m2['n_instruments']} → {m3['n_instruments']}"),
+    ("MR IVW beta", f"{m2['ivw_beta']:.6f} → {m3['ivw_beta']:.6f}"),
+    ("MR IVW standard error", f"{m2['ivw_se']:.6f} → {m3['ivw_se']:.6f}"),
+    ("MR IVW p-value", f"{m2['ivw_pval']:.2e} → {m3['ivw_pval']:.2e}"),
 ]
-print(md_table(
-    ["Variants", "Analyses", "Cells requested", "Median", "p95", "Result cells"],
-    rows,
-))
-print()
-print(f"{matrix['repetitions']} repetitions per shape after one warm-up, "
-      f"store: `{matrix['store']}`.")
+print(md_table(["Check", "Result"], rows))
 ```
 
-Latency tracks the number of **scattered row-chunks touched**, not the number
-of requested cells: 100 variants × 10 analyses (777.9 ms) and 100 variants ×
-500 analyses (898.0 ms) cost almost the same despite a 50× difference in
-requested cells, because both scatter 100 variants across 100 separate
-row-chunks. 10 variants × 100 analyses (100.1 ms) is far cheaper with the
-*same* 1,000 requested cells, because it only touches 10 row-chunks. The
-single-cell lookup (2.3 ms) is close to the store's point-query floor. This is
-the read pattern issue opengwasdb#52 targets: `lookup` currently reads full
-analysis-width column-chunks per selected row rather than only the
-column-chunks intersecting the requested analyses.
+The IVW estimate agrees to three decimal places (`0.115`), providing an
+end-to-end smoke test that the encoding change preserves the scientific result
+for this analysis. This is a query-layer validation, not a definitive
+Mendelian-randomization result.
 
-### Analysis-major top-hit experiment
+## Acceptance assessment
 
-The previous implementation materialised the complete 5.5–6.4 million-entry
-tier and filtered it in Python. The experiment below holds the analysis,
-threshold, result ordering, and result count constant while varying only the
-one-dimensional Zarr chunk length. Each figure is based on 10 timed warm-cache
-repetitions after a warm-up. “First read” is reported separately as the first
-call after reopening the store; it is not claimed to be a controlled cold-cache
-measurement.
+The measurements show a clear, quantified trade-off rather than a uniform
+speedup:
 
-```{python}
-#| echo: false
-#| output: asis
-for label, result in (("Observed-Only", data), ("Reference-Completed", completed)):
-    experiment = result["top_hit_experiment"]
-    rows = [
-        (
-            f"{trial['chunk_size']:,}",
-            fmt_ms(trial["first_read_ms"]),
-            fmt_ms(trial["median_ms"]),
-            fmt_ms(trial["p95_ms"]),
-            fmt_ms(trial["global_median_ms"]),
-            f"{trial['index_bytes'] / 1e6:,.1f} MB",
-            f"{trial['repack_seconds']:,.1f} s",
-        )
-        for trial in experiment["trials"]
-    ]
-    print(f"#### {label}")
-    print()
-    print(md_table(
-        ["Chunk", "First read", "Selected median", "Selected p95",
-         "Global median", "Index size", "Repack"],
-        rows,
-    ))
-    print()
-```
+1. **Storage goal achieved:** `se` is 81.3% smaller and the complete Store
+   Release is 28.5% smaller.
+2. **Large IO-bound access improved:** a whole Analysis is 12.1% faster.
+3. **Narrow access remains stable:** one-Analysis regional lookup is 23.85 ms
+   (+4.8%); PheWAS is 5.92 ms; and the two random lookup shapes move by −3.1%
+   and +7.8% in opposite directions.
+4. **Known cost is specific to wide reads:** cached all-Analysis regional access
+   takes 2.25× as long due to the measured residual decode cost, not unexplained
+   IO or a result mismatch.
+5. **Correctness signal:** compared result counts match and the MR IVW estimate
+   is stable.
 
-The selected **16,384-entry chunk** keeps the completed selected-analysis read
-within 10% of its absolute fastest trial while materially improving global-read
-latency; it is also the fastest configuration for the observed store. Observed
-latency fell from **304.4 ms to 1.17 ms** (**261×**), and completed latency from
-**397.9 ms to 1.77 ms** (**225×**). Both comfortably meet the under-10-ms target,
-and every measured selected result exactly matched its corresponding global
-subset. The indexes grew to 692.7 MB and 803.1 MB respectively; this experiment
-deliberately prioritised latency over space.
+On performance evidence alone, the PR is reasonable to accept if the project
+accepts the all-Analysis regional-query regression in exchange for the storage
+and whole-Analysis gains. The newly requested one-Analysis regional query does
+not share that regression. If wide regional scans are latency-critical, the
+1.77 s median is the remaining optimization target; it should not be hidden by
+the large storage win.
 
----
+## Provenance and limitations
 
-## MR validation: imputed high cholesterol → heart attack
-
-An end-to-end **inverse-variance weighted (IVW) Mendelian randomization** run
-straight off the store, as a scientific smoke test. For the reference-completed
-store this deliberately uses **only imputed instruments**: the exposure
-top-hit association must be imputed, and the exposure/outcome lookup used in the
-scatter plot is also restricted to instruments where both cells are imputed.
-
-```{python}
-#| echo: false
-#| output: asis
-mr = data["mr"]
-mrc = completed["mr"]
-lab = data["labels"]
-print(f"- **Exposure** (`{mr['exposure_id']}`): {lab[mr['exposure_id']]}")
-print(f"- **Outcome** (`{mr['outcome_id']}`): {lab[mr['outcome_id']]}")
-print(f"- **Observed-only reference**: genome-wide significant (p<5e-8) exposure "
-      f"variants, distance-pruned at {mr['clump_kb']} kb → "
-      f"**{mr['n_instruments']}** instruments from {mr['n_instruments_raw']:,} raw hits.")
-print(f"- **Reference-completed sanity check**: imputed-only genome-wide significant "
-      f"exposure variants, distance-pruned at {mrc['clump_kb']} kb → "
-      f"**{mrc['n_instruments']}** instruments from {mrc['n_instruments_raw']:,} "
-      f"imputed raw hits "
-      f"({mrc.get('n_instruments_raw_all', mrc['n_instruments_raw']):,} total exposure hits before filtering).")
-print()
-print("Effects are already on the same allele (the store orients every analysis to "
-      "the canonical ALID), so no harmonisation step is needed. Both traits are "
-      "binary, so effects are log odds ratios.")
-```
-
-```{python}
-#| echo: false
-#| output: asis
-mro = data["mr"]
-mrc = completed["mr"]
-rows = [
-    (
-        "IVW estimate (log OR / log-OR exposure)",
-        f"{mro['ivw_beta']:.3f}",
-        f"{mrc['ivw_beta']:.3f}",
-    ),
-    ("Standard error", f"{mro['ivw_se']:.3f}", f"{mrc['ivw_se']:.3f}"),
-    ("Z", f"{mro['ivw_z']:.2f}", f"{mrc['ivw_z']:.2f}"),
-    ("P-value", f"{mro['ivw_pval']:.2e}", f"{mrc['ivw_pval']:.2e}"),
-]
-print(md_table(["Quantity", "Observed-Only", "Completed: imputed-only"], rows))
-print()
-direction = "positive" if mrc["ivw_beta"] > 0 else "negative"
-print(f"The imputed-only estimate is **{direction}** — genetically higher cholesterol "
-      f"liability is associated with higher heart-attack risk, the expected direction "
-      f"for this positive-control sanity check.")
-```
-
-```{python}
-#| echo: false
-#| fig-cap: "Imputed-only per-instrument effects from the completed store: exposure (x) vs outcome (y), with 95% CIs and the IVW slope."
-import numpy as np
-import matplotlib.pyplot as plt
-
-mr = completed["mr"]
-inst = mr["instruments"]
-be = np.array([i["beta_exp"] for i in inst])
-bo = np.array([i["beta_out"] for i in inst])
-see = np.array([i["se_exp"] for i in inst])
-seo = np.array([i["se_out"] for i in inst])
-
-fig, ax = plt.subplots(figsize=(6.4, 5.2))
-ax.errorbar(be, bo, xerr=1.96 * see, yerr=1.96 * seo, fmt="o", ms=4,
-            color="#c43c39", ecolor="#efbbb8", elinewidth=0.8, capsize=0, alpha=0.9,
-            label="imputed instruments (95% CI)")
-xs = np.array([be.min() * 1.1, be.max() * 1.1])
-ax.plot(xs, mr["ivw_beta"] * xs, "-", color="#1f2933", lw=2,
-        label=f"IVW slope = {mr['ivw_beta']:.2f}")
-ax.axhline(0, color="#c3c2b7", lw=0.8); ax.axvline(0, color="#c3c2b7", lw=0.8)
-ax.set_xlabel("SNP effect on high cholesterol (log OR)")
-ax.set_ylabel("SNP effect on heart attack (log OR)")
-ax.set_title("Imputed-only MR IVW: high cholesterol → heart attack")
-ax.legend(frameon=False, fontsize=9)
-fig.tight_layout()
-plt.show()
-```
-
----
-
-## Regional imputation sanity check
-
-The 1 Mb regional check is centred on the strongest imputed high-cholesterol
-top hit in the completed store. The plot shows all high-cholesterol associations
-returned for that window, with imputed associations highlighted.
-
-```{python}
-#| echo: false
-#| output: asis
-reg = completed["regional_imputation_check"]
-points = reg["points"]
-n_imp = sum(p["association_status"] == "imputed" for p in points)
-n_obs = sum(p["association_status"] == "observed" for p in points)
-print(f"- **Analysis**: `{reg['analysis_id']}` ({completed['labels'][reg['analysis_id']]})")
-print(f"- **Region**: chr{reg['chrom']}:{reg['start']:,}-{reg['end']:,} "
-      f"centred on `{reg['center_alid']}` (z={reg['center_z']:.2f})")
-print(f"- **Associations plotted**: {len(points):,} total; "
-      f"{n_obs:,} observed and {n_imp:,} imputed.")
-```
-
-```{python}
-#| echo: false
-#| fig-cap: "One megabase around the strongest imputed high-cholesterol top hit. Imputed associations are highlighted in red."
-import numpy as np
-import matplotlib.pyplot as plt
-
-reg = completed["regional_imputation_check"]
-points = reg["points"]
-pos = np.array([p["pos"] for p in points], dtype=float) / 1e6
-z = np.array([p["z"] for p in points], dtype=float)
-status = np.array([p["association_status"] for p in points])
-is_center = np.array([p["is_center"] for p in points], dtype=bool)
-
-fig, ax = plt.subplots(figsize=(8.2, 4.8))
-obs = status == "observed"
-imp = status == "imputed"
-ax.scatter(pos[obs], z[obs], s=12, color="#52616b", alpha=0.45,
-           linewidths=0, label=f"observed ({obs.sum():,})")
-ax.scatter(pos[imp], z[imp], s=18, color="#c43c39", alpha=0.85,
-           linewidths=0, label=f"imputed ({imp.sum():,})")
-ax.scatter(pos[is_center], z[is_center], s=90, facecolors="none",
-           edgecolors="#111827", linewidths=1.5, label="centre top hit")
-ax.axhline(0, color="#c3c2b7", lw=0.8)
-ax.axvline(reg["center_pos"] / 1e6, color="#111827", lw=0.8, ls="--", alpha=0.7)
-ax.set_xlabel(f"chr{reg['chrom']} position (Mb, hg38)")
-ax.set_ylabel("High-cholesterol z-score")
-ax.set_title(f"Regional check around {reg['center_alid']}")
-ax.legend(frameon=False, fontsize=9, ncols=3)
-fig.tight_layout()
-plt.show()
-```
-
----
-
-## Provenance
-
-```{python}
-#| echo: false
-#| output: asis
-print("- Data: `opengwasdb_ukbb_dense_benchmark.json` and "
-      "`opengwasdb_ukbb_dense_completed_benchmark.json` "
-      "(from `benchmarks/benchmark_ukbb_dense.py`)")
-print(f"- Store: `/local-scratch/data/opengwas/opengwasdb/ukb-b.opengwasdb` "
-      f"({data['dataset']['n_variants']:,} × {data['dataset']['n_analyses']:,})")
-print(f"- Completed store: `{completed['dataset']['store']}` "
-      f"({completed['dataset']['n_variants']:,} × {completed['dataset']['n_analyses']:,})")
-print("- MR is a demonstration/validation of the query layer, not a definitive "
-      "epidemiological estimate (self-reported binary exposure, distance-based "
-      "pruning in place of LD clumping).")
-```
+- Raw benchmark outputs:
+  `opengwasdb_ukbb_dense_issue148_se2_benchmark.json` and
+  `opengwasdb_ukbb_dense_issue148_se3_benchmark.json`.
+- Benchmark driver: `benchmarks/benchmark_ukbb_dense.py`.
+- Source release generator:
+  `opengwasdb-stores/families/ukb-b/releases/dense-observed-vcf-c128-rebuild117`.
+- Five warmed repetitions characterize steady-state latency, not cold-cache
+  latency or host-to-host variability.
+- ADR 0037 §3's old query timings came from a stale top-hit index and its
+  storage estimate is contradicted by this full-scale measurement; those
+  figures should be re-run before being used independently.

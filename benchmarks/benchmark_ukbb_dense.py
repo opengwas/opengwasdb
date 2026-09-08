@@ -18,8 +18,10 @@ import json
 import re
 import subprocess
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import zarr
@@ -44,6 +46,8 @@ CLUMP_KB = 1000  # greedy distance-based pruning window (approx. independence)
 
 # Regional query window: chr19 44.5-45.5 Mb spans the APOE/APOC cluster.
 REGION = ("19", 44_500_000, 45_500_000)
+RANDOM_AXIS_SIZE = 100
+LOOKUP_NARROW_AXIS_SIZE = 10
 
 PRE_EAF_TOP_HIT_MS = 1.17
 EAF_REGRESSION_TOP_HIT_MS = 86.6
@@ -409,6 +413,49 @@ def _parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
+def _query_patterns(
+    q: Any,
+    analyses: dict[int, dict[str, Any]],
+    n_variants: int,
+    n_analyses: int,
+    phewas_alid: str,
+) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
+    """The repeatable query shapes timed for both encoding plans."""
+    regional_rows = q._variant_axis.range_indices(*REGION)
+    regional_alids = [
+        record.alid
+        for record in (q._variant_axis.by_index(int(row)) for row in regional_rows)
+        if record is not None
+    ]
+
+    rng = np.random.default_rng(0)
+    random_variants = rng.choice(n_variants, size=RANDOM_AXIS_SIZE, replace=False)
+    random_alids = [
+        record.alid
+        for record in (q._variant_axis.by_index(int(variant)) for variant in random_variants)
+        if record is not None
+    ]
+    random_analysis_indices = rng.choice(
+        n_analyses, size=RANDOM_AXIS_SIZE, replace=False
+    )
+    random_analyses = [
+        analyses[int(analysis)]["analysis_id"] for analysis in random_analysis_indices
+    ]
+    return {
+        "bulk": lambda: q.analysis(EXPOSURE),
+        "phewas": lambda: q.phewas(phewas_alid),
+        "regional": lambda: q.range_phewas(*REGION),
+        "regional_one_analysis": lambda: q.lookup(regional_alids, [EXPOSURE]),
+        "tophits": lambda: q.top_hits(analysis_id=EXPOSURE, threshold=5e-8),
+        "random_lookup_10_variants_100_analyses": lambda: q.lookup(
+            random_alids[:LOOKUP_NARROW_AXIS_SIZE], random_analyses
+        ),
+        "random_lookup_100_variants_10_analyses": lambda: q.lookup(
+            random_alids, random_analyses[:LOOKUP_NARROW_AXIS_SIZE]
+        ),
+    }
+
+
 def main() -> None:
     args = _parse_args()
 
@@ -429,21 +476,7 @@ def main() -> None:
     strong_vi = int(th["variant_index"][m][np.argmax(np.abs(th["z"][m]))])
     phewas_alid = q._variant_axis.by_index(strong_vi).alid
 
-    rng = np.random.default_rng(0)
-    rand_vi = rng.choice(n_variants, size=100, replace=False)
-    rand_alids = [
-        r.alid for r in (q._variant_axis.by_index(int(v)) for v in rand_vi) if r is not None
-    ]
-    rand_a = rng.choice(n_analyses, size=10, replace=False)
-    rand_analyses = [an[int(a)]["analysis_id"] for a in rand_a]
-
-    patterns = {
-        "bulk": lambda: q.analysis(EXPOSURE),
-        "phewas": lambda: q.phewas(phewas_alid),
-        "regional": lambda: q.range_phewas(*REGION),
-        "tophits": lambda: q.top_hits(analysis_id=EXPOSURE, threshold=5e-8),
-        "random_lookup": lambda: q.lookup(rand_alids, rand_analyses),
-    }
+    patterns = _query_patterns(q, an, n_variants, n_analyses, phewas_alid)
     timings = []
     for name, fn in patterns.items():
         med, p95, cnt = _median_ms(fn, args.reps)
@@ -476,7 +509,11 @@ def main() -> None:
         "selection": {
             "bulk_analysis_id": EXPOSURE, "phewas_alid": phewas_alid,
             "region": {"chrom": REGION[0], "start": REGION[1], "end": REGION[2]},
-            "n_random_variants": len(rand_alids), "n_random_analyses": len(rand_analyses),
+            "regional_analysis_id": EXPOSURE,
+            "random_lookup_shapes": [
+                {"n_variants": LOOKUP_NARROW_AXIS_SIZE, "n_analyses": RANDOM_AXIS_SIZE},
+                {"n_variants": RANDOM_AXIS_SIZE, "n_analyses": LOOKUP_NARROW_AXIS_SIZE},
+            ],
         },
         "timings": timings,
         "mr": mr,

@@ -83,15 +83,18 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   **13h30m** against 11h35m at format 2.0 (+16.5%), and its `se` plane falls
   from 21,183,939,687 to 3,961,274,232 bytes — **−81.3%**, well beyond ADR 0037
   §3's −58.1% estimate and the FinnGen pilot's −59.0%, because only 0.0068% of
-  its cells fall outside ±0.5. The whole store drops 28.9%, to 41.66 GB, and
-  compresses 9.98× against its 424.84 GB of source GWAS-VCF.
+  its cells fall outside ±0.5. The complete Store Release drops 28.5%, to
+  42.56 GB, and compresses 9.98× against its 424.84 GB of source GWAS-VCF.
 
   Query latency moves both ways, and the direction depends on what dominates.
   Decoding residual `se` costs 0.0700 µs/cell against `float16`'s 0.0050 —
-  **14×**, since each cell needs `eaf` decoded and an `exp`. A cached regional
-  scan of 5,224,822 cells is therefore 114% slower, while an IO-bound
-  whole-Analysis scan of 8,419,893 cells is **11.7% faster**, because the plane
-  it reads is 5.3× smaller. See
+  **14×**, since each cell needs `eaf` decoded and an `exp`. A cached
+  all-Analysis regional scan of 5,224,822 cells therefore takes 2.25× as long,
+  while restricting the same region to one Analysis changes only 4.8%
+  (22.75→23.85 ms). An IO-bound whole-Analysis scan of 8,419,893 cells is
+  **12.1% faster**, because the plane it reads is 5.3× smaller. Random lookups
+  of 10 variants × 100 Analyses and 100 variants × 10 Analyses move by +7.8%
+  and −3.1% respectively. See
   `docs/benchmark-output/opengwasdb_ukbb_dense_issue148_benchmark.md`.
 
 - **A residual `se` cell could be written with no EAF, and only this package

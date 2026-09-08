@@ -41,39 +41,60 @@
       "start": 44500000,
       "end": 45500000
     },
-    "n_random_variants": 100,
-    "n_random_analyses": 10
+    "regional_analysis_id": "ukb-b-10912",
+    "random_lookup_shapes": [
+      {
+        "n_variants": 10,
+        "n_analyses": 100
+      },
+      {
+        "n_variants": 100,
+        "n_analyses": 10
+      }
+    ]
   },
   "timings": [
     {
       "query": "bulk",
-      "median_ms": 25965.237,
-      "p95_ms": 28012.479,
+      "median_ms": 25535.45,
+      "p95_ms": 28622.06,
       "result_count": 8419893
     },
     {
       "query": "phewas",
-      "median_ms": 5.391,
-      "p95_ms": 7.706,
+      "median_ms": 5.923,
+      "p95_ms": 8.299,
       "result_count": 1341
     },
     {
       "query": "regional",
-      "median_ms": 1739.439,
-      "p95_ms": 1749.859,
+      "median_ms": 1773.148,
+      "p95_ms": 1781.756,
       "result_count": 5224822
     },
     {
+      "query": "regional_one_analysis",
+      "median_ms": 23.85,
+      "p95_ms": 50.378,
+      "result_count": 3197
+    },
+    {
       "query": "tophits",
-      "median_ms": 1.458,
-      "p95_ms": 1.502,
+      "median_ms": 1.361,
+      "p95_ms": 1.39,
       "result_count": 7390
     },
     {
-      "query": "random_lookup",
-      "median_ms": 656.067,
-      "p95_ms": 695.025,
-      "result_count": 447
+      "query": "random_lookup_10_variants_100_analyses",
+      "median_ms": 85.646,
+      "p95_ms": 90.623,
+      "result_count": 637
+    },
+    {
+      "query": "random_lookup_100_variants_10_analyses",
+      "median_ms": 654.354,
+      "p95_ms": 665.791,
+      "result_count": 517
     }
   ],
   "mr": {
