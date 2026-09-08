@@ -535,6 +535,189 @@ def _write_ssf_manifest(path: Path, rows: list[dict]) -> None:
             fh.write("\t".join(str(row.get(col, "")) for col in header) + "\n")
 
 
+def _write_ssf_filtered_with_eaf(path: Path, rows: list[tuple[int, float, float, float]]) -> None:
+    """A filtered file whose rows carry a frequency (unlike `_SSF_HEADER`)."""
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        fh.write(
+            "chromosome\tbase_pair_location\teffect_allele\tother_allele"
+            "\tbeta\tstandard_error\teffect_allele_frequency\n"
+        )
+        for bp, z, se, eaf in rows:
+            fh.write(f"1\t{bp}\tA\tG\t{z * se:.6f}\t{se}\t{eaf}\n")
+
+
+# The Analysis observes every one of these block positions (z/se/eaf pairwise
+# distinct per row, so a swap cannot be mistaken for the right answer) plus one
+# position (`400_000`) that lies outside the block's base-pair extent and so can
+# only reach the completed Analysis through Phase 3's off-window carry from the
+# fold. `1:1050000:C:T` is on the block but never observed: it proves the block
+# was enumerated and both of the fold's consumers actually ran.
+_OBSERVED_ON_BLOCK = [
+    # (bp, z, se, eaf)
+    (800_000, 1.5, 0.15, 0.10),
+    (850_000, -2.0, 0.15, 0.20),
+    (900_000, 2.5, 0.15, 0.30),
+    (950_000, -3.0, 0.15, 0.40),
+    (1_000_000, 3.5, 0.15, 0.60),
+    (1_100_000, -4.0, 0.15, 0.80),
+    (1_150_000, 4.5, 0.15, 0.90),
+]
+_OBSERVED_OFF_BLOCK = [(400_000, 5.0, 0.15, 0.50)]
+_PANEL_ONLY_BP = 1_050_000
+
+
+class TestObservedAlidMapsRecord:
+    """Issue #130: the fold from an Analysis's observed CSR rows onto per-ALID
+    maps must expose z/se/eaf as named record fields, not as a positional
+    tuple. A bundle travelling by position lets a consumer read a statistic
+    from the wrong slot -- or lose a map entirely -- without raising; an
+    observed SE placed where EAF is read back is still a *valid* frequency, so
+    the completed store encodes it, validates clean, and reads it confidently
+    wrong. Values are dyadic (float32-exact) and pairwise-distinct per row, so
+    the field assertions cannot pass on a swapped or missing map."""
+
+    def test_each_field_is_its_own_statistics_alid_keyed_map(self):
+        from opengwasdb.layouts.ragged.complete import _observed_alid_maps, _ObservedAlidMaps
+        from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
+
+        src_alids = ["1:100:A:G", "1:200:C:T", "1:300:A:C"]
+        obs = AnalysisAssociations(
+            # Shuffled on purpose: the fold must bind each value to the ALID of
+            # the row that carried it, not to a positional twin.
+            variant_index=np.array([2, 0, 1], dtype=np.int32),
+            z=np.array([1.25, -2.5, 3.75], dtype=np.float32),
+            se=np.array([0.25, 0.0625, 0.125], dtype=np.float32),
+            eaf=np.array([0.75, 0.25, 0.5], dtype=np.float32),
+        )
+
+        maps = _observed_alid_maps(obs, src_alids)
+
+        assert isinstance(maps, _ObservedAlidMaps), (
+            "the fold must return the named record, not a positional tuple"
+        )
+        assert not isinstance(maps, tuple), "positional unpacking must not be possible"
+        assert maps.z_by_alid == {"1:100:A:G": -2.5, "1:200:C:T": 3.75, "1:300:A:C": 1.25}
+        assert maps.se_by_alid == {"1:100:A:G": 0.0625, "1:200:C:T": 0.125, "1:300:A:C": 0.25}
+        assert maps.eaf_by_alid == {"1:100:A:G": 0.25, "1:200:C:T": 0.5, "1:300:A:C": 0.75}
+
+    def test_an_empty_analysis_yields_all_three_maps(self):
+        from opengwasdb.layouts.ragged.complete import _observed_alid_maps
+        from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
+
+        obs = AnalysisAssociations(
+            variant_index=np.empty(0, dtype=np.int32),
+            z=np.empty(0, dtype=np.float32),
+            se=np.empty(0, dtype=np.float32),
+            eaf=np.empty(0, dtype=np.float32),
+        )
+
+        maps = _observed_alid_maps(obs, [])
+
+        assert maps.z_by_alid == {}
+        assert maps.se_by_alid == {}
+        assert maps.eaf_by_alid == {}
+
+
+class TestCompletedStoreKeepsObservedStatistics:
+    """Completion rewrites each Analysis's CSR, so every statistic an observed
+    row carries must survive the rewrite per ALID -- z and se as much as the
+    EAF ADR 0036 explicitly carries. The rows meet the rewrite through the
+    observed fold, and a statistic reaching the wrong field of that fold is a
+    silent wrong answer (an observed SE in the EAF slot is a *valid*
+    frequency), so this asserts every observed row's z, se and eaf in the
+    completed store equal the source's, exactly, for rows that reach the
+    completed Analysis through each of the fold's two consumers: on an
+    enumerated LD block (the block reader and Phase 3's reference-row
+    assembly) and off every block (Phase 3's off-window carry)."""
+
+    @staticmethod
+    def _write_panel(panel_dir: Path) -> None:
+        panel_dir.mkdir(parents=True)
+        lines = ["CHR\tSNP\tOA\tEA\tEAF\tBP"]
+        for bp, _z, _se, eaf in _OBSERVED_ON_BLOCK:
+            lines.append(f"1\t1:{bp}_A_G\tG\tA\t{eaf}\t{bp}")
+        lines.append(f"1\t1:{_PANEL_ONLY_BP}_C_T\tT\tC\t0.4\t{_PANEL_ONLY_BP}")
+        (panel_dir / "block1.tsv").write_text("\n".join(lines) + "\n")
+
+        n = len(lines) - 1
+        rng = np.random.default_rng(0)
+        matrix = rng.standard_normal((n, n))
+        ld = matrix @ matrix.T + np.eye(n) * n * 0.1
+        buf = io.BytesIO()
+        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+            for row in ld:
+                gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
+        (panel_dir / "block1.unphased.vcor1.gz").write_bytes(buf.getvalue())
+
+    def test_observed_z_se_and_eaf_survive_completion(self, tmp_path):
+        from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+        from opengwasdb.layouts.ragged.complete import complete_ragged_store
+        from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+        from opengwasdb.variants.axis import VariantAxis
+
+        filtered_dir = tmp_path / "filtered"
+        filtered_dir.mkdir()
+        _write_ssf_filtered_with_eaf(
+            filtered_dir / "analysis_a.tsv.gz", _OBSERVED_ON_BLOCK + _OBSERVED_OFF_BLOCK
+        )
+        manifest = tmp_path / "manifest.tsv"
+        _write_ssf_manifest(manifest, [
+            {"analysis_index": 0, "analysis_id": "analysis_a", "trait_id": "T1",
+             "trait_chr": "1", "trait_bp": 975_000, "n": 5000, "mhc": "FALSE",
+             "filtered_file": "analysis_a.tsv.gz", "assigned_ancestry": "EUR"},
+        ])
+
+        observed = tmp_path / "obs.opengwasdb"
+        build_ragged_from_ssf(manifest, filtered_dir, observed, store_id="test", release_id="obs")
+
+        src = RaggedCSRReader(observed).get_analysis(0)
+        obs_axis = VariantAxis(observed)
+        try:
+            expected = {
+                obs_axis.by_index(int(vi)).alid: (float(z), float(se), float(eaf))
+                for vi, z, se, eaf in zip(
+                    src.variant_index.tolist(), src.z, src.se, src.eaf, strict=True
+                )
+            }
+        finally:
+            obs_axis.close()
+        assert len(expected) == len(_OBSERVED_ON_BLOCK) + len(_OBSERVED_OFF_BLOCK), (
+            "fixture must observe every declared row for this to mean anything"
+        )
+        assert all(len({z, se, eaf}) == 3 for z, se, eaf in expected.values()), (
+            "z/se/eaf must be pairwise distinct per row or a swap could pass unnoticed"
+        )
+        panel_only = f"1:{_PANEL_ONLY_BP}:C:T"
+        assert panel_only not in expected
+
+        self._write_panel(tmp_path / "panel" / "EUR" / "1")
+        completed = tmp_path / "comp.opengwasdb"
+        complete_ragged_store(
+            observed, completed, tmp_path / "panel", ancestry="EUR",
+            cis_window_bp=500_000, min_cor=0.0, release_id="comp",
+        )
+
+        comp = RaggedCSRReader(completed).get_analysis(0)
+        comp_axis = VariantAxis(completed)
+        try:
+            comp_by_alid = {
+                comp_axis.by_index(int(vi)).alid: (float(z), float(se), float(eaf))
+                for vi, z, se, eaf in zip(
+                    comp.variant_index.tolist(), comp.z, comp.se, comp.eaf, strict=True
+                )
+            }
+        finally:
+            comp_axis.close()
+        assert panel_only in comp_by_alid, (
+            "no LD block was enumerated, so the fold's consumers never ran "
+            "and this test cannot fail"
+        )
+        for alid, stats in expected.items():
+            assert comp_by_alid.get(alid) == stats, (
+                f"observed row {alid} lost or rewrote a statistic on completion"
+            )
+
+
 class TestAncestryMatchedRaggedCompletion:
     """Before the fix, complete_ragged_store had no impute_analysis_ids
     parameter at all, and even once added, the derivation was inert against

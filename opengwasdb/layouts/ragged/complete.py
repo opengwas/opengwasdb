@@ -127,9 +127,24 @@ class _BlockTask:
     checkpoint_path: Path
 
 
-def _observed_alid_maps(
-    obs: Any, src_alids: list[str]
-) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+@dataclass(frozen=True)
+class _ObservedAlidMaps:
+    """One Analysis's observed z/se/eaf, each keyed by canonical ALID.
+
+    A named record rather than a positional three-dict tuple because the fold
+    feeds both the block reader and Phase 3's assembly (issue #130): a
+    statistic placed in the wrong slot travels to both without raising -- an
+    observed SE in the EAF slot is still a *valid* frequency -- and would
+    re-encode a silent wrong answer into the completed store. Field access
+    makes the statistic a caller reads explicit.
+    """
+
+    z_by_alid: dict[str, float]
+    se_by_alid: dict[str, float]
+    eaf_by_alid: dict[str, float]
+
+
+def _observed_alid_maps(obs: Any, src_alids: list[str]) -> _ObservedAlidMaps:
     """Map one Analysis's observed CSR rows onto ``{alid: z/se/eaf}``. Observed
     EAF is carried across the rebuild (ADR 0036): Reference Completion adds
     panel rows to an Analysis; it does not change what the source reported for
@@ -149,7 +164,11 @@ def _observed_alid_maps(
         obs_alid_to_z[alid] = float(z_val)
         obs_alid_to_se[alid] = float(se_val)
         obs_alid_to_eaf[alid] = float(eaf_val)
-    return obs_alid_to_z, obs_alid_to_se, obs_alid_to_eaf
+    return _ObservedAlidMaps(
+        z_by_alid=obs_alid_to_z,
+        se_by_alid=obs_alid_to_se,
+        eaf_by_alid=obs_alid_to_eaf,
+    )
 
 
 def _make_reader(task: _BlockTask):
@@ -169,18 +188,18 @@ def _make_reader(task: _BlockTask):
 
         def read(ai: int) -> tuple[np.ndarray, np.ndarray]:
             obs = src_csr.get_analysis(ai)
-            obs_alid_to_z, obs_alid_to_se, obs_alid_to_eaf = _observed_alid_maps(obs, src_alids)
+            observed = _observed_alid_maps(obs, src_alids)
 
             z_dense = np.array(
                 [
-                    obs_alid_to_z.get(a, float("nan")) if a is not None else float("nan")
+                    observed.z_by_alid.get(a, float("nan")) if a is not None else float("nan")
                     for a in canonical_alids
                 ],
                 dtype=np.float64,
             )
             se_dense = np.array(
                 [
-                    obs_alid_to_se.get(a, float("nan")) if a is not None else float("nan")
+                    observed.se_by_alid.get(a, float("nan")) if a is not None else float("nan")
                     for a in canonical_alids
                 ],
                 dtype=np.float64,
@@ -603,7 +622,7 @@ def _run_completion(
                 offsets.append(offsets[-1] + len(obs_vi_new))
                 continue
 
-            obs_alid_to_z, obs_alid_to_se, obs_alid_to_eaf = _observed_alid_maps(obs, src_alids)
+            observed = _observed_alid_maps(obs, src_alids)
 
             unique_ref_alids: list[str] = []
             seen_block_alids: set[str] = set()
@@ -626,11 +645,11 @@ def _run_completion(
                 if vi is None:
                     continue
                 seen_alids.add(alid)
-                if alid in obs_alid_to_z:
+                if alid in observed.z_by_alid:
                     ref_vi.append(vi)
-                    ref_z.append(obs_alid_to_z[alid])
-                    ref_se.append(obs_alid_to_se[alid])
-                    ref_eaf.append(obs_alid_to_eaf[alid])
+                    ref_z.append(observed.z_by_alid[alid])
+                    ref_se.append(observed.se_by_alid[alid])
+                    ref_eaf.append(observed.eaf_by_alid[alid])
                     ref_imp.append(0)
                 elif alid in fills_here:
                     z_v, se_v = fills_here[alid]
@@ -653,12 +672,12 @@ def _run_completion(
 
             # Observed rows the block scan never produced (off-window variants
             # the source already holds) are carried through from the maps above.
-            for alid, z_val in obs_alid_to_z.items():
+            for alid, z_val in observed.z_by_alid.items():
                 if alid not in seen_alids:
                     ref_vi.append(new_alid_to_idx[alid])
                     ref_z.append(z_val)
-                    ref_se.append(obs_alid_to_se[alid])
-                    ref_eaf.append(obs_alid_to_eaf[alid])
+                    ref_se.append(observed.se_by_alid[alid])
+                    ref_eaf.append(observed.eaf_by_alid[alid])
                     ref_imp.append(0)
 
             order = np.argsort(ref_vi)
