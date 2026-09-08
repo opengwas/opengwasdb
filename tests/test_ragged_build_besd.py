@@ -428,3 +428,80 @@ def test_overwrite_flag(tmp_path):
     # With overwrite=True should succeed
     build_ragged_from_besd(prefix, out, store_id="test", release_id="v1", overwrite=True)
     assert out.exists()
+
+
+def test_hg19_source_build_lifts_variant_coordinates(tmp_path):
+    """The hg19 → hg38 liftover phase of build_ragged_from_besd runs before
+    the variant axis is written: a variant stored under an hg19 source_build
+    sits at its hg38 position, and its probe's associations still land.
+
+    Positions are the known-good pair test_liftover.py locks (hg19
+    1:100000 → hg38 1:100000 identity; hg19 1:1000000 → hg38 1:1064620), so
+    the second ESI row proves a real translation happened — a build that
+    silently skipped the lift would store it at 1:1000000 and fail here."""
+    from opengwasdb.variants.axis import iter_variant_records
+
+    fixture = tmp_path / "fixture_hg19"
+    fixture.mkdir()
+    snps = [
+        {"chr": "1", "snp_id": "rs1001", "bp": 100_000, "a1": "A", "a2": "G"},
+        {"chr": "1", "snp_id": "rs1002", "bp": 1_000_000, "a1": "C", "a2": "T"},
+    ]
+    probes = [
+        {"chr": "1", "probe_id": "ENSG00000000001", "bp": 500_000, "gene": "GENE1"}
+    ]
+    # Both ESI rows lift to distinct hg38 positions (100000 vs 1064620); the
+    # fixture must span a real translation or the assertion proves nothing.
+    assert snps[1]["bp"] != 1_064_620
+    _write_esi(fixture / "test.esi", snps)
+    _write_epi(fixture / "test.epi", probes)
+    _write_besd_sparse_3f(fixture / "test.besd", len(probes), [[(0, 0.1, 0.02), (1, -0.2, 0.03)]])
+
+    result = build_ragged_from_besd(
+        fixture / "test",
+        tmp_path / "out.opengwasdb",
+        store_id="test",
+        release_id="v1",
+        source_build="hg19",
+    )
+
+    assert result.n_variants == 2
+    assert result.n_analyses == 1
+    assert result.n_associations == 2
+    stored = {
+        r.alid: r
+        for r in iter_variant_records(tmp_path / "out.opengwasdb" / "variants.tsv.gz")
+    }
+    assert set(stored) == {"1:100000:A:G", "1:1064620:C:T"}
+    assert stored["1:1064620:C:T"].position == 1_064_620
+
+
+def test_hg19_source_build_fails_loudly_when_liftover_loses_a_variant(tmp_path):
+    """A hg19 source set whose ESI rows mostly fail to lift stops the build:
+    build_liftover_lookup's failure threshold (1% by default) is fail-loud by
+    design, and build_ragged_from_besd must not paper over it by storing the
+    unlifted rows at their hg19 coordinates (a silent wrong-answer store)."""
+    from opengwasdb.build.liftover import LiftoverFailureError
+
+    fixture = tmp_path / "fixture_hg19_gap"
+    fixture.mkdir()
+    # hg19 1:200000 sits in an unsequenced gap and never lifts (test_liftover).
+    snps = [
+        {"chr": "1", "snp_id": "rs1001", "bp": 100_000, "a1": "A", "a2": "G"},
+        {"chr": "1", "snp_id": "rs1002", "bp": 200_000, "a1": "C", "a2": "T"},
+    ]
+    probes = [
+        {"chr": "1", "probe_id": "ENSG00000000001", "bp": 150_000, "gene": "GENE1"}
+    ]
+    _write_esi(fixture / "test.esi", snps)
+    _write_epi(fixture / "test.epi", probes)
+    _write_besd_sparse_3f(fixture / "test.besd", len(probes), [[(0, 0.1, 0.02), (1, -0.2, 0.03)]])
+
+    with pytest.raises(LiftoverFailureError):
+        build_ragged_from_besd(
+            fixture / "test",
+            tmp_path / "out.opengwasdb",
+            store_id="test",
+            release_id="v1",
+            source_build="hg19",
+        )
