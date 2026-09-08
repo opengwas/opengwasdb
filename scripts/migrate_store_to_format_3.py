@@ -8,11 +8,16 @@ and rewriting `se` is association data, not provenance. A migration of
 `ukb-b` would have the same standing as `migrate_store_to_analyses_tsv.py`'s
 in-place rewrite if it mutated the release it was given; it does not. The
 destination is built in a `.name.tmp` staging directory beside the target and
-published by rename only when the migrated copy validates, so a failure at any
-point leaves the source untouched and nothing where the destination was meant
-to appear (issue #156). The source release is opened read-only for the
-before-migration validation that distinguishes inherited faults from
-introduced ones.
+published by rename only when the staged copy validates with **no errors**, so
+a failure at any point leaves the source untouched and nothing where the
+destination was meant to appear (issues #156, #164). The published release is
+a genuinely new one -- a fresh UUID4 `release_id` and a current-UTC
+`created_at`, never the source's -- and an error the source release already
+carried is no excuse: the gate is the store contract, not a comparison against
+the source, because an error string identical to an inherited one is exactly
+how a defect the migration introduced would hide. Validation failures and
+every other error raised inside the staging block are `Exception`s, which the
+Staged Release contract answers by discarding the staging directory.
 
 It exists for the one store where a rebuild is not a remedy. `ukb-b` is
 9,847,701 × 2,511 and takes 11h35m to build from 396 GiB of source VCF, so
@@ -35,17 +40,18 @@ What it does, in order:
    `float16` when the fit does not earn its bytes (ADR 0037 §3).
 3. Rebuilds the top-hit index. It carries *decoded* SE (ADR 0040), so a
    residual re-encode leaves it describing values the plane no longer holds.
-4. Re-stamps `format_version` and `encoding`, and records what touched the
-   release.
-5. Validates the staged copy, and refuses to publish one it has made invalid.
+4. Mints a fresh `release_id` (UUID4) and `created_at`, re-stamps
+   `format_version` and `encoding`, and records what touched the release.
+5. Validates the staged copy, and refuses to publish one with any validation
+   error -- inherited or introduced, since the two are not told apart (#164).
 
 Usage:
 
     migrate_store_to_format_3.py STORE --into DEST
 
 `--into` is required: the source release is immutable and is never written.
-The new release appears at `DEST` only when the migrated copy validates; it
-must not already exist.
+The new release appears at `DEST` only when the migrated copy validates with
+no errors; it must not already exist.
 """
 
 from __future__ import annotations
@@ -55,6 +61,7 @@ import json
 import subprocess
 import sys
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -104,13 +111,22 @@ def _reflink_copy(source: Path, destination: Path) -> None:
 
 
 def _write_manifest(store, encoding, elapsed: float, timer: PhaseTimer) -> None:
-    """Re-stamp version and encoding, and say what did it.
+    """Mint the new release's identity, re-stamp version and encoding, and say
+    what did it.
 
-    Written through the manifest's own `to_dict` so the migrated release is
+    A derived release is a genuinely new one (issue #164): the source's
+    `release_id` and `created_at` describe the release the copy came from, not
+    this one, so both are replaced -- a fresh UUID4 release identity and the
+    current UTC time. The encoding and version are written through the
+    objects that describe a built release, so the migrated release is
     described by exactly the code that describes a built one -- a hand-edited
     key is how a manifest and its arrays drift apart.
     """
+    now = datetime.now(UTC)
     data = json.loads(store.manifest_path.read_text(encoding="utf-8"))
+    source_release_id = data["release_id"]
+    data["release_id"] = str(uuid.uuid4())
+    data["created_at"] = now.isoformat()
     data["format_version"] = CURRENT_FORMAT_VERSION
     data["encoding"] = encoding.to_manifest()
     data["provenance"] = {
@@ -118,8 +134,9 @@ def _write_manifest(store, encoding, elapsed: float, timer: PhaseTimer) -> None:
         "format_migration": {
             "from": MIGRATABLE_FROM,
             "to": CURRENT_FORMAT_VERSION,
+            "source_release_id": source_release_id,
             "tool": "scripts/migrate_store_to_format_3.py",
-            "at": datetime.now(UTC).isoformat(),
+            "at": now.isoformat(),
             "se_encoding": encoding.se.to_manifest(),
             "seconds": round(elapsed, 1),
             # Per-phase, not just the total: the same migration takes 2,913 s on
@@ -127,9 +144,10 @@ def _write_manifest(store, encoding, elapsed: float, timer: PhaseTimer) -> None:
             # on a repaired one, and only the breakdown says which you have.
             "phase_seconds": {name: round(seconds, 1) for name, seconds, _ in timer.report()},
             "note": (
-                "se re-encoded and the top-hit index rebuilt in a new release; the source "
-                "release was not modified. The variant axis, z, eaf and analyses.tsv were "
-                "not touched. Outside the Provenance Amendment exception (spec §21.4)."
+                "se re-encoded, the top-hit index rebuilt, and a fresh release identity "
+                "and creation time minted in a new release; the source release was not "
+                "modified. The variant axis, z, eaf and analyses.tsv were not touched. "
+                "Outside the Provenance Amendment exception (spec §21.4)."
             ),
         },
     }
@@ -138,64 +156,52 @@ def _write_manifest(store, encoding, elapsed: float, timer: PhaseTimer) -> None:
     )
 
 
-def _inherited_errors(store_path: Path) -> set[str]:
-    """What was already wrong before this tool touched anything.
+class MigrationValidationError(Exception):
+    """A staged copy that does not validate was refused publication.
 
-    Every 2.0 pilot carries some: the FinnGen rebuild fails on #127's truncated
-    ALID index and #135's unchunked `eaf_baseline`, neither of which a `se`
-    re-encode can fix or is answerable for. Judging the result against "no
-    errors at all" would blame the migration for its input, and would reject
-    every store it exists to serve. Measured against the *source*, which the
-    staged copy is a byte-for-byte copy of.
+    An `Exception` subclass on purpose: the refusal is raised inside
+    `OpenGWASDBStore.staging`, which discards the staging directory on any
+    `Exception` (issue #164). A `SystemExit` would escape that cleanup -- it
+    is a `BaseException`, not an `Exception` -- and leave the failed copy
+    behind.
     """
-    print("Validating before, to tell inherited faults from introduced ones", flush=True)
-    inherited = set(validate_store(store_path).errors)
-    if inherited:
-        print(f"  {len(inherited)} pre-existing error(s), carried through:", flush=True)
-        for error in sorted(inherited):
-            print(f"    - {error}", flush=True)
-    return inherited
 
 
-def _report_outcome(staged_path: Path, destination: Path, inherited: set[str]) -> None:
-    """Fail on what the migration introduced; report what it merely carried.
+def _require_valid_staged_release(staged_path: Path, destination: Path) -> None:
+    """Publish only a staged copy that validates with no errors (issue #164).
 
-    Runs inside the staging context: an introduced error raises `SystemExit`,
-    which the staging context manager does not treat as its cleanup trigger
-    (it only cleans up on `Exception`), so the failed release stays at
-    `staged_path` for inspection while the source and the destination are both
-    untouched.
+    Runs inside the staging context: the refusal is an `Exception` (not a
+    `SystemExit`), so the context manager discards the staging directory and
+    the destination is never created. There is no subtraction of errors the
+    source release also carried: the gate is the store contract, not a
+    comparison against the source, because an error string identical to an
+    inherited one is exactly how a defect this migration introduced would
+    hide.
     """
-    print("Validating after", flush=True)
+    print("Validating the staged release", flush=True)
     result = validate_store(staged_path)
-    introduced = [error for error in result.errors if error not in inherited]
-    if introduced:
-        for error in introduced:
-            print(f"  ERROR {error}", file=sys.stderr)
-        raise SystemExit(
-            f"the migration introduced {len(introduced)} error(s) the source release did "
-            f"not have. The failed release is at {staged_path} so it can be inspected; the "
-            f"source release was not modified and nothing was published to {destination}. "
-            "Discard the staging directory and keep the source release."
-        )
+    for error in result.errors:
+        print(f"  ERROR {error}", file=sys.stderr)
     for warning in result.warnings:
         print(f"  warning: {warning}")
-    if inherited:
-        print(
-            f"OK — introduced no new errors. {len(inherited)} pre-existing error(s) remain, "
-            "and are not this tool's to fix: the release needs rebuilding for those."
+    if not result.ok:
+        raise MigrationValidationError(
+            f"the migrated release has {len(result.errors)} validation error(s); a "
+            "release that does not validate is never published. The staging directory "
+            f"was removed, the source release is unchanged, and nothing was published "
+            f"to {destination}."
         )
-    else:
-        print("OK")
+    print("OK")
 
 
 def migrate(source: Path, destination: Path) -> int:
     """Derive a format-3.0 release at ``destination`` from ``source``.
 
     The source release is opened read-only and never written (spec §21.4,
-    issue #156). The destination is built in a staging directory and published
-    by rename only when the migrated copy validates; the destination must not
-    already exist.
+    issue #156). The destination is built in a staging directory from a copy
+    of the source, given a freshly minted `release_id` and `created_at`
+    (issue #164), and published by rename only when the staged copy validates
+    with no errors; the destination must not already exist.
     """
     source = Path(source).resolve()
     destination = Path(destination).resolve()
@@ -211,7 +217,6 @@ def migrate(source: Path, destination: Path) -> int:
         )
     store = open_store(source)
     _refuse_unless_migratable(store)
-    inherited = _inherited_errors(source)
 
     timer = PhaseTimer()
     with OpenGWASDBStore.staging(destination) as staged:
@@ -240,7 +245,7 @@ def migrate(source: Path, destination: Path) -> int:
         _write_manifest(staged_store, selected, elapsed, timer)
         print(f"Re-stamped to {CURRENT_FORMAT_VERSION} in {elapsed:.1f}s", flush=True)
 
-        _report_outcome(staged.path, destination, inherited)
+        _require_valid_staged_release(staged.path, destination)
     print(f"Published {destination}", flush=True)
     return 0
 

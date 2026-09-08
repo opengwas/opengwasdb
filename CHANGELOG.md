@@ -15,6 +15,22 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Fixed
 
+- **The format-3 migration republished the source release's identity, and
+  could publish a release that did not validate** (#164). `migrate_store_to_format_3.py`
+  copied the manifest wholesale and re-stamped only version, encoding and
+  provenance, so the "new" release carried the source's `release_id` and
+  `created_at` — two releases of the same store that cannot be told apart. It
+  also published a staged copy whose validation errors were merely a subset of
+  the source's: an error string identical to one the source already carried
+  was subtracted, and an identical string is exactly how a defect the
+  migration itself introduced would hide. The migration now mints a fresh
+  UUID4 `release_id` and a current-UTC `created_at` (recording the source
+  `release_id` in its provenance), and publication is gated on the staged
+  copy validating with **no** errors — inherited or introduced, since the two
+  are no longer told apart. A refused validation is an `Exception`, so the
+  Staged Release cleanup contract discards the staging directory rather than
+  leaving a failed copy behind, and the destination is never created.
+
 - **Hybrid Reference Completion rebuilt the Dense Top-Hit Index under the
   source encoding after folding in a panel crossover** (#163). The rebuild
   now uses the completed Dense Component's own encoding, which carries the

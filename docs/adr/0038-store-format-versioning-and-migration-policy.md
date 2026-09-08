@@ -100,7 +100,11 @@ already exists in that format.
 ### 4. Transformations produce a new immutable release; completion preserves what it did not write
 
 A Store Release is immutable. Reference Completion, re-indexing and migration
-all produce a **new release**, never a mutation of an existing one.
+all produce a **new release**, never a mutation of an existing one. A derived
+release is also a new *identity*: it carries a freshly minted `release_id` and
+`created_at`, never the source's (issue #164), so two releases of one store
+can always be told apart — the migration also records which source `release_id`
+it derived from, in its provenance.
 
 Reference Completion is the case that bites, because it writes *into* the
 source's arrays' encoding: a completed release is the same format as its
@@ -201,8 +205,11 @@ unchanged in substance.
   targets should be rebuilt rather than migrated. The format-3 migration that
   #118 adds (`scripts/migrate_store_to_format_3.py`) is the first to follow
   decision 4: it derives a new release in a staging directory and publishes it
-  by rename only when the migrated copy validates, so its source is never a
-  half-migrated store (issue #156).
+  by rename only when the migrated copy validates with **no** errors — an
+  error string identical to one the source already carried is never subtracted
+  (issue #164). Its source is never a half-migrated store (issue #156), and a
+  staged copy that fails validation is discarded by the Staged Release cleanup
+  rather than left in place for inspection.
 - **ADR 0034's missing bump is not retroactively applied.** Stores predating it
   are already unreadable in the ways that matter (retired columns, which
   validation rejects by name), and inventing a version they never carried would
