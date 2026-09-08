@@ -372,26 +372,31 @@ def test_one_badly_fitting_analysis_reverts_the_whole_plane() -> None:
 
 
 def _write_ld_block(
-    block_dir: Path, name: str, snps: list[tuple[str, float, int]], *, with_eaf: bool = True
+    block_dir: Path,
+    name: str,
+    variants: list[tuple[str, float, int]],
+    *,
+    with_eaf: bool = True,
 ) -> None:
-    """One flat-layout LD block: a SNP table and a gzipped correlation matrix.
+    """One flat-layout LD block: a Variant table and a gzipped correlation matrix.
 
     `with_eaf=False` drops the frequency column, which is a panel this pipeline
     is required to complete against (issue #113) but cannot supply frequencies
-    from.
+    from. The table's `SNP` column name is the LD panel format's own header, not
+    this project's domain vocabulary (see `opengwasdb.completion.ld_panel`).
     """
     block_dir.mkdir(parents=True, exist_ok=True)
     header = "CHR\tSNP\tOA\tEA\tEAF\tBP" if with_eaf else "CHR\tSNP\tOA\tEA\tBP"
     lines = [header]
-    for alid, eaf, bp in snps:
+    for alid, eaf, bp in variants:
         chrom, _, effect, other = alid.split(":")
         frequency = f"{eaf}\t" if with_eaf else ""
         lines.append(f"{chrom}\t{alid}\t{other}\t{effect}\t{frequency}{bp}")
     (block_dir / f"{name}.tsv").write_text("\n".join(lines) + "\n")
 
     rng = np.random.default_rng(0)
-    a = rng.standard_normal((len(snps), len(snps)))
-    ld = a @ a.T + np.eye(len(snps)) * len(snps) * 0.1
+    a = rng.standard_normal((len(variants), len(variants)))
+    ld = a @ a.T + np.eye(len(variants)) * len(variants) * 0.1
     buffer = io.BytesIO()
     with gzip.GzipFile(fileobj=buffer, mode="wb") as gz:
         for row in ld:

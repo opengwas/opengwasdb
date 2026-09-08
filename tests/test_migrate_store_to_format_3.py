@@ -45,7 +45,7 @@ def _residual_eligible_source() -> list[NormalisedAssociation]:
     """Data a format-3 build residual-codes, and therefore data a
     format-2.0-era build would have had to store as `float16` without being
     able to express it as a residual. Shared with the encoding suite, which
-    needs the same eligible source (`conftest.residual_eligible_records`)."""
+    needs the same eligible source (`residual_fixtures.residual_eligible_records`)."""
     records, _ = residual_eligible_records()
     return records
 

@@ -142,9 +142,9 @@ compare against the baseline rather than aiming for a clean run:
 
 | | enforced (`.baselines.json`) | on `dev` |
 |---|---|---|
-| `pixi run -e dev lint` | 66 errors | 66 |
+| `pixi run -e dev lint` | 61 errors | 61 |
 | `pixi run -e dev typecheck` | 40 errors | 40 |
-| `pixi run -e dev test` | — | 744 passed, 1 skipped |
+| `pixi run -e dev test` | — | re-measured after the format-3 follow-up fixes land |
 
 `.baselines.json` carries the enforced numbers and is the only place they are
 stated; this table repeats them so the two can be seen to agree. Both columns
