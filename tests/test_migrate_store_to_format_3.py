@@ -153,6 +153,21 @@ def test_migrate_derives_a_3_0_release_and_leaves_the_source_untouched(tmp_path:
     assert manifest.created_at != source_manifest.created_at
     assert created > source_created
 
+    # The release's own page must agree with its manifest: overview.html's
+    # header embeds `store_id · release <release_id> · …` read fresh from
+    # manifest.json (ADR 0032), and the reflink copy still carries the page
+    # that advertised the source release. The migration regenerates it, so the
+    # destination advertises the new identity -- and not the source's -- in
+    # that metadata line. The negative is scoped to the metadata line, not the
+    # whole file: the source id legitimately survives in the destination's
+    # provenance, and a whole-file negative would be a loose assertion.
+    overview_html = (destination / "overview.html").read_text(encoding="utf-8")
+    meta_line = next(
+        line for line in overview_html.splitlines() if 'class="meta"' in line
+    )
+    assert f"release {manifest.release_id}" in meta_line
+    assert f"release {source_manifest.release_id}" not in meta_line
+
 
 def test_a_migration_needs_a_destination(tmp_path: Path, capsys) -> None:
     """No in-place mode: with no `--into`, the tool refuses rather than
@@ -221,17 +236,20 @@ def test_an_error_identical_to_the_sources_is_not_subtracted(
     """Validation at the publication boundary is absolute: an error in the
     staged copy is not excused because the source carries the identical
     string (#164). The source -- and therefore the staged copy, which the
-    migration starts from byte-for-byte -- is missing `analyses.tsv`, an
+    migration starts from byte-for-byte -- is missing `index.sqlite`, an
     error the migration cannot fix. The migration must refuse to publish
     rather than subtract the inherited string and ship a release that does
     not validate.
     """
     source = _revert_to_format_2(_build_format_3_store(tmp_path / "two.opengwasdb"))
-    (source / "analyses.tsv").unlink()
+    (source / "index.sqlite").unlink()
     inherited = validate_store(source).errors
     # The fixture is meaningful: the source really fails validation with
-    # exactly the text the staged copy will repeat back.
-    assert inherited == ["missing analyses.tsv"], inherited
+    # exactly the text the staged copy will repeat back. (`index.sqlite` is
+    # removed rather than `analyses.tsv` so the migration's own passes -- which
+    # regenerate `overview.html` from `analyses.tsv` after re-stamping the
+    # manifest -- still reach the publication gate.)
+    assert inherited == ["missing index.sqlite"], inherited
     before = _directory_fingerprint(source)
     destination = tmp_path / "three.opengwasdb"
 
@@ -242,7 +260,7 @@ def test_an_error_identical_to_the_sources_is_not_subtracted(
     assert not destination.exists()
     assert not (tmp_path / ".three.opengwasdb.tmp").exists()
     # The identical error text reached the publication gate and stopped it.
-    assert "missing analyses.tsv" in capsys.readouterr().err
+    assert "missing index.sqlite" in capsys.readouterr().err
 
 
 def test_a_non_migratable_source_is_refused_before_any_copy(tmp_path: Path) -> None:

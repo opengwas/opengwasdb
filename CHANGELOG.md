@@ -29,7 +29,14 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   copy validating with **no** errors — inherited or introduced, since the two
   are no longer told apart. A refused validation is an `Exception`, so the
   Staged Release cleanup contract discards the staging directory rather than
-  leaving a failed copy behind, and the destination is never created.
+  leaving a failed copy behind, and the destination is never created. The new
+  release's own `overview.html` is regenerated from the staged manifest, so
+  the page humans browse advertises the fresh `release_id` rather than the
+  copied source page's. And because the gate is absolute, a 2.0 source that
+  does not itself validate — e.g. one carrying #127's truncated-ALID or #135's
+  unchunked-`eaf_baseline` defects — can no longer be migrated at all: the
+  phases run, the gate refuses, and the staging directory is discarded. Such
+  a store must be rebuilt before a format-3.0 release can be derived from it.
 
 - **Hybrid Reference Completion rebuilt the Dense Top-Hit Index under the
   source encoding after folding in a panel crossover** (#163). The rebuild
@@ -215,6 +222,17 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   so the three full plane passes fall from 2,680 s to 61 s. The 62.5-hour
   `ukb-b` extrapolation that motivated this work was taken from the defective
   store.
+
+  The 2,913 s figure is **pre-#164** historical evidence (issue #164): the run
+  that measured it published the format-3.0 release still carrying the
+  source's three validation errors, a publication the migration no longer
+  permits (see that issue's entry above). A 2.0 source holding #127- or
+  #135-class defects cannot be migrated today — the phase work above would
+  still run and then be refused at the publication gate and discarded, which
+  is exactly why such a store must be rebuilt rather than migrated. The
+  figure is preserved as measured and has not been re-measured against the
+  current tool; the phase-cost conclusion it supports (the defect, not the
+  format-3 encoding, dominates) is unchanged.
 
 - **Getting-started documentation now covers the first local Store Release**
   (#110). A fresh checkout can follow `docs/getting-started.md` to install with

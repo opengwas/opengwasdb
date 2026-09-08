@@ -12,12 +12,14 @@ published by rename only when the staged copy validates with **no errors**, so
 a failure at any point leaves the source untouched and nothing where the
 destination was meant to appear (issues #156, #164). The published release is
 a genuinely new one -- a fresh UUID4 `release_id` and a current-UTC
-`created_at`, never the source's -- and an error the source release already
-carried is no excuse: the gate is the store contract, not a comparison against
-the source, because an error string identical to an inherited one is exactly
-how a defect the migration introduced would hide. Validation failures and
-every other error raised inside the staging block are `Exception`s, which the
-Staged Release contract answers by discarding the staging directory.
+`created_at`, never the source's -- and its own `overview.html` is regenerated
+from the staged manifest so the page humans browse names the new identity
+rather than the copied source page (ADR 0032). An error the source release
+already carried is no excuse: the gate is the store contract, not a comparison
+against the source, because an error string identical to an inherited one is
+exactly how a defect the migration introduced would hide. Validation failures
+and every other error raised inside the staging block are `Exception`s, which
+the Staged Release contract answers by discarding the staging directory.
 
 It exists for the one store where a rebuild is not a remedy. `ukb-b` is
 9,847,701 × 2,511 and takes 11h35m to build from 396 GiB of source VCF, so
@@ -41,7 +43,9 @@ What it does, in order:
 3. Rebuilds the top-hit index. It carries *decoded* SE (ADR 0040), so a
    residual re-encode leaves it describing values the plane no longer holds.
 4. Mints a fresh `release_id` (UUID4) and `created_at`, re-stamps
-   `format_version` and `encoding`, and records what touched the release.
+   `format_version` and `encoding`, regenerates `overview.html` so the new
+   release's own page advertises the new identity, and records what touched
+   the release.
 5. Validates the staged copy, and refuses to publish one with any validation
    error -- inherited or introduced, since the two are not told apart (#164).
 
@@ -67,7 +71,9 @@ from pathlib import Path
 
 from opengwasdb.encoding import optimise_dense_se_joint
 from opengwasdb.encoding.timing import PhaseTimer
+from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
+from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, open_store
 from opengwasdb.validation import validate_store
@@ -141,11 +147,14 @@ def _write_manifest(store, encoding, elapsed: float, timer: PhaseTimer) -> None:
             "seconds": round(elapsed, 1),
             # Per-phase, not just the total: the same migration takes 2,913 s on
             # a release carrying issue #135's unchunked `eaf_baseline` and 244 s
-            # on a repaired one, and only the breakdown says which you have.
+            # on a repaired one, and only the breakdown says which you have. (The
+            # 2,913 s figure is pre-#164: such a source now refuses at the
+            # publication gate, and the breakdown is why it must be rebuilt.)
             "phase_seconds": {name: round(seconds, 1) for name, seconds, _ in timer.report()},
             "note": (
                 "se re-encoded, the top-hit index rebuilt, and a fresh release identity "
-                "and creation time minted in a new release; the source release was not "
+                "and creation time minted in a new release, whose overview.html was "
+                "regenerated to carry the new identity; the source release was not "
                 "modified. The variant axis, z, eaf and analyses.tsv were not touched. "
                 "Outside the Provenance Amendment exception (spec §21.4)."
             ),
@@ -154,6 +163,21 @@ def _write_manifest(store, encoding, elapsed: float, timer: PhaseTimer) -> None:
     store.manifest_path.write_text(
         json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+
+
+def _refresh_overview(store_path: Path) -> None:
+    """Regenerate ``overview.html`` so the release's own page names itself.
+
+    The reflink copy brought the source's page along, and the page's header
+    embeds ``store_id · release <release_id> · …`` read fresh from
+    ``manifest.json`` (ADR 0032) -- the same reason completion writes its
+    manifest before its overview. ``_write_manifest`` has just minted the new
+    identity, so the page is rebuilt from the staged manifest and the staged
+    ``analyses.tsv`` (which the migration does not change), leaving the copied
+    page with the source release's name behind (issue #164).
+    """
+    print("Regenerating overview.html for the new release identity", flush=True)
+    write_overview_html(store_path, read_analyses(store_path / "analyses.tsv"))
 
 
 class MigrationValidationError(Exception):
@@ -244,6 +268,8 @@ def migrate(source: Path, destination: Path) -> int:
         print(timer.format_report(), flush=True)
         _write_manifest(staged_store, selected, elapsed, timer)
         print(f"Re-stamped to {CURRENT_FORMAT_VERSION} in {elapsed:.1f}s", flush=True)
+
+        _refresh_overview(staged.path)
 
         _require_valid_staged_release(staged.path, destination)
     print(f"Published {destination}", flush=True)
