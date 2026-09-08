@@ -29,7 +29,6 @@ import logging
 import shutil
 import sqlite3
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +53,10 @@ from opengwasdb.completion.ld_panel import (
     check_panel_has_chromosomes,
     find_blocks,
 )
-from opengwasdb.completion.manifest import build_completion_provenance
+from opengwasdb.completion.manifest import (
+    build_completion_provenance,
+    completed_release_manifest,
+)
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
@@ -79,7 +81,6 @@ from opengwasdb.model.analyses import (
     reset_top_hit_counts,
     write_analysis_records,
 )
-from opengwasdb.model.enums import CompletionState
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.open import (
     OpenGWASDBStore,
@@ -1258,37 +1259,22 @@ def _completed_manifest(
 ) -> StoreManifest:
     """Phase 6 finalization: the completed release's manifest, with its
     provenance recording what completion added to its source."""
-    new_release_id = release_id or f"{manifest.release_id}-completed"
-    return StoreManifest(
-        # Preserved with the format version below: a completed release is
-        # written into its source's arrays, so it is in its source's
-        # encoding -- plus `eaf_reference`, which says this release carries
-        # panel frequencies for the cells it imputed (ADR 0037 §4).
+    return completed_release_manifest(
+        manifest,
         encoding=encode_plan.encoding,
-        store_id=manifest.store_id,
-        release_id=new_release_id,
-        # Preserved, not re-stamped -- see ADR 0038 §4 and the dense path.
-        format_version=source_format_version,
-        primary_layout=manifest.primary_layout,
-        association_coverage=manifest.association_coverage,
-        completion_state=CompletionState.REFERENCE_COMPLETED,
-        reference_assembly=manifest.reference_assembly,
-        created_at=datetime.now(UTC).isoformat(),
-        provenance={
-            **manifest.provenance,
-            "source_release_id": manifest.release_id,
-            "completion": build_completion_provenance(
-                ld_panel_id=ld_panel_id,
-                ancestry=ancestry,
-                min_cor=min_cor,
-                thresh=thresh,
-                n_variants_total=len(axis.variants),
-                n_variants_new=len(axis.new_variants),
-                cis_window_bp=cis_window_bp,
-                n_imputed=csr.total_imputed,
-                n_missing=csr.total_missing,
-            ),
-        },
+        release_id=release_id,
+        source_format_version=source_format_version,
+        completion_provenance=build_completion_provenance(
+            ld_panel_id=ld_panel_id,
+            ancestry=ancestry,
+            min_cor=min_cor,
+            thresh=thresh,
+            n_variants_total=len(axis.variants),
+            n_variants_new=len(axis.new_variants),
+            cis_window_bp=cis_window_bp,
+            n_imputed=csr.total_imputed,
+            n_missing=csr.total_missing,
+        ),
     )
 
 
