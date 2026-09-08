@@ -60,6 +60,7 @@ from opengwasdb.layouts.dense.build_vcf import (
     _log_progress,
     _manifest_row_to_analysis,
     _ManifestRow,
+    _pass2_worker_tasks,
     _read_manifest,
     _write_dense_bands,
     _write_index,
@@ -740,16 +741,7 @@ def _route_parallel(
     _pass2_spill_dir = prepared.spill_dir
     try:
         with _fork_pool(options.n_workers) as pool:
-            tasks = [
-                (
-                    analysis_index[row.trait_id],
-                    row.file_path,
-                    row.se_divisor,
-                    row.source_reader_capability,
-                    row.stored_effect_scale,
-                )
-                for row in prepared.manifest_rows
-            ]
+            tasks = _pass2_worker_tasks(prepared.manifest_rows, analysis_index)
             futures = [pool.submit(_pass2_worker, task) for task in tasks]
             for i, future in enumerate(as_completed(futures)):
                 col = future.result()
