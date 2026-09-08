@@ -2433,6 +2433,11 @@ _FIDELITY_SCAN_PER_FILE = 100_000
 # loose enough for that rounding but far tighter than any sign/scale/column bug.
 _FIDELITY_RTOL = 1e-2
 _FIDELITY_ATOL = 1e-2
+# One source association in canonical form as the build readers yield it:
+# (analysis_id, chrom, pos, a1, a2, z, se) -- and one sampled-and-matched store
+# cell carrying its source z/se plus the source ALID for diagnostics.
+_FidelitySample = tuple[str, str, int, str, str, float, float]
+_FidelityCell = tuple[int, int, float, float, str]
 
 
 def _normalise_assembly(name: str) -> str:
@@ -2565,76 +2570,106 @@ def _resolve_via_origin(store_path: Path, wanted: set[str]) -> dict[str, int] | 
     return out
 
 
-def _validate_source_fidelity(
-    store: OpenGWASDBStore,
+def _draw_fidelity_samples(
     source: str | Path | Sequence[str | Path],
     errors: list[str],
     *,
     n_samples: int,
     seed: int,
-    source_assembly: str | None,
-    chain_file: str | Path | None,
-) -> None:
-    store_path = store.path
-    manifest = store.manifest
+) -> list[_FidelitySample] | None:
+    """Sampling phase: deterministically reservoir-sample source associations.
+
+    ``source`` is resolved into per-file units, then up to ``n_samples``
+    associations are drawn with a generator seeded by ``seed``, so repeated
+    validation of the same store reproduces the same sample. Returns None --
+    having already recorded why in ``errors`` -- when the source is unusable
+    (missing path) or no associations could be read from it.
+    """
     units = _source_units(source, errors)
     if errors or not units:
-        return
-    rng = np.random.default_rng(seed)
-    samples = _sample_sources(units, n_samples, rng)
+        return None
+    samples = _sample_sources(units, n_samples, np.random.default_rng(seed))
     if not samples:
         errors.append("source-fidelity: no associations could be read from the source")
-        return
+        return None
+    return samples
 
-    store_asm = _normalise_assembly(manifest.reference_assembly)
-    src_asm = _normalise_assembly(source_assembly) if source_assembly else store_asm
 
-    # Resolve each sampled source variant to a store row.
-    src_alids = {f"{c}:{p}:{a1}:{a2}" for (_a, c, p, a1, a2, _z, _s) in samples}
+def _lookup_variant_rows(store_path: Path, alid_to_identifier: dict[str, str]) -> dict[str, int]:
+    """Resolve source ALIDs → variant_index through the Variant Index.
+
+    ``alid_to_identifier`` maps each source ALID to the identifier to look up --
+    its own canonical ALID for a same-assembly join, the lifted HG38 ALID for a
+    cross-assembly one.
+    """
     row_by_alid: dict[str, int] = {}
+    va = VariantAxis(store_path)
+    try:
+        for src_alid, identifier in alid_to_identifier.items():
+            rec = va.by_identifier(identifier)
+            if rec is not None:
+                row_by_alid[src_alid] = rec.variant_index
+    finally:
+        va.close()
+    return row_by_alid
+
+
+def _resolve_fidelity_rows(
+    store_path: Path,
+    samples: list[_FidelitySample],
+    *,
+    src_asm: str,
+    store_asm: str,
+    chain_file: str | Path | None,
+) -> dict[str, int]:
+    """Row-resolution phase: map each sampled source variant to a store row.
+
+    Assembly-dependent: same-assembly samples join through the canonical ALID;
+    cross-assembly samples first use the stored source-ALID provenance column,
+    and fall back to liftover only when the store predates that column.
+    """
+    src_alids = {f"{c}:{p}:{a1}:{a2}" for (_a, c, p, a1, a2, _z, _s) in samples}
     if src_asm == store_asm:
-        va = VariantAxis(store_path)
-        try:
-            for alid in src_alids:
-                rec = va.by_identifier(alid)
-                if rec is not None:
-                    row_by_alid[alid] = rec.variant_index
-        finally:
-            va.close()
-    else:
-        origin_map = _resolve_via_origin(store_path, src_alids)
-        if origin_map is not None:
-            row_by_alid = origin_map  # store carries provenance → no liftover needed
-        else:
-            from opengwasdb.build.liftover import build_liftover_lookup
+        return _lookup_variant_rows(store_path, {a: a for a in src_alids})
+    origin_map = _resolve_via_origin(store_path, src_alids)
+    if origin_map is not None:
+        return origin_map  # store carries provenance → no liftover needed
+    from opengwasdb.build.liftover import build_liftover_lookup
 
-            tuples = {(c, p, a1, a2) for (_a, c, p, a1, a2, _z, _s) in samples}
-            lut = build_liftover_lookup(
-                tuples,
-                from_build=src_asm,
-                to_build=store_asm,
-                failure_threshold=1.0,
-                chain_file=chain_file,
-            )
-            va = VariantAxis(store_path)
-            try:
-                for c, p, a1, a2 in tuples:
-                    hg38 = lut.get((c, p, a1, a2))
-                    if hg38 is None:
-                        continue
-                    rec = va.by_identifier(hg38)
-                    if rec is not None:
-                        row_by_alid[f"{c}:{p}:{a1}:{a2}"] = rec.variant_index
-            finally:
-                va.close()
+    tuples = {(c, p, a1, a2) for (_a, c, p, a1, a2, _z, _s) in samples}
+    lut = build_liftover_lookup(
+        tuples,
+        from_build=src_asm,
+        to_build=store_asm,
+        failure_threshold=1.0,
+        chain_file=chain_file,
+    )
+    wanted = {
+        f"{c}:{p}:{a1}:{a2}": hg38
+        for c, p, a1, a2 in tuples
+        if (hg38 := lut.get((c, p, a1, a2))) is not None
+    }
+    return _lookup_variant_rows(store_path, wanted)
 
-    # Resolve analysis ids to columns.
+
+def _match_fidelity_pairs(
+    store_path: Path,
+    samples: list[_FidelitySample],
+    row_by_alid: dict[str, int],
+    errors: list[str],
+) -> list[_FidelityCell] | None:
+    """Analysis-matching phase: join each sample onto a (row, column) cell.
+
+    A sample whose Analysis the store does not hold, or whose variant row it
+    does not carry, is counted rather than silently dropped; when nothing
+    matches, one diagnostic names both counts so a wrong source and a wrong
+    assembly stay distinguishable. Returns None after recording that error.
+    """
     col_by_aid = {
         row["analysis_id"]: int(row["analysis_index"])
         for row in read_analyses(store_path / "analyses.tsv").rows
     }
-
-    pairs: list[tuple[int, int, float, float, str]] = []
+    pairs: list[_FidelityCell] = []
     n_unmatched_variant = 0
     n_unmatched_analysis = 0
     for aid, c, p, a1, a2, z, se in samples:
@@ -2647,33 +2682,57 @@ def _validate_source_fidelity(
             n_unmatched_variant += 1
             continue
         pairs.append((row, col, z, se, f"{c}:{p}:{a1}:{a2}"))
-
     if not pairs:
         errors.append(
             f"source-fidelity: none of {len(samples)} sampled source associations could be "
             f"matched to a store cell ({n_unmatched_variant} variants, {n_unmatched_analysis} "
             f"analyses unmatched) — check source_assembly / that this is the right source"
         )
-        return
+        return None
+    return pairs
 
-    # Gather store z/se for the matched cells and compare (bounded block).
+
+def _fidelity_blocks(
+    store: OpenGWASDBStore, pairs: list[_FidelityCell]
+) -> tuple[np.ndarray, np.ndarray, dict[int, int], dict[int, int]]:
+    """Read the matched cells' z/se as one bounded block plus index maps.
+
+    Returns ``(z_block, se_block, row_index, col_index)`` where the index maps
+    take each pair's variant/analysis index to its position in the block.
+    """
     root = store.arrays(mode="r")
     urows = sorted({pr[0] for pr in pairs})
     ucols = sorted({pr[1] for pr in pairs})
     ri = {r: i for i, r in enumerate(urows)}
     ci = {c: i for i, c in enumerate(ucols)}
+    encoding = store.manifest.encoding
+    return (
+        DenseZPlane.open(root, encoding).block(urows, ucols),
+        DenseSePlane.open(root, encoding).block(urows, ucols),
+        ri,
+        ci,
+    )
+
+
+def _compare_fidelity_cells(
+    store: OpenGWASDBStore, pairs: list[_FidelityCell]
+) -> tuple[int, list[str]]:
+    """Comparison phase: compare each matched cell against its source value.
+
+    The store's own codec quantises the source value before comparison, and a
+    cell whose store value is missing is skipped, not compared: a store holding
+    *no* finite value at any matched cell is a different failure (dropped
+    associations), reported by the caller.
+    """
+    z_blk, se_blk, ri, ci = _fidelity_blocks(store, pairs)
     codec = StoreCodec(store.manifest.encoding)
-    z_blk = DenseZPlane.open(root, store.manifest.encoding).block(urows, ucols)
-    se_blk = DenseSePlane.open(root, store.manifest.encoding).block(urows, ucols)
 
     n_compared = 0
-    n_missing_in_store = 0
     mismatches: list[str] = []
     for row, col, z_src, se_src, alid in pairs:
         sz = z_blk[ri[row], ci[col]]
         sse = se_blk[ri[row], ci[col]]
         if not (np.isfinite(sz) and np.isfinite(sse)):
-            n_missing_in_store += 1
             continue
         n_compared += 1
         z_ref = float(codec.quantise_z(np.array([z_src]))[0])
@@ -2686,7 +2745,17 @@ def _validate_source_fidelity(
                 mismatches.append(
                     f"{alid}: store z={sz:.4f} se={sse:.4f} vs source z={z_src:.4f} se={se_src:.4f}"
                 )
+    return n_compared, mismatches
 
+
+def _report_fidelity_disagreements(
+    errors: list[str], pairs: list[_FidelityCell], n_compared: int, mismatches: list[str]
+) -> None:
+    """Reporting phase: turn the comparison outcome into a hard error.
+
+    Disagreements name the store/source pair; matched cells where the store
+    holds no finite value at all are reported as possible dropped associations.
+    """
     if mismatches:
         errors.append(
             f"source-fidelity: {len(mismatches)}{'+' if len(mismatches) == 5 else ''} of "
@@ -2698,6 +2767,36 @@ def _validate_source_fidelity(
             f"finite value at any of those cells (possible dropped associations)"
         )
 
+
+def _validate_source_fidelity(
+    store: OpenGWASDBStore,
+    source: str | Path | Sequence[str | Path],
+    errors: list[str],
+    *,
+    n_samples: int,
+    seed: int,
+    source_assembly: str | None,
+    chain_file: str | Path | None,
+) -> None:
+    """Cross-check the source's z/se against the store (issue #130).
+
+    A thin orchestrator over five phases -- deterministic sampling, row
+    resolution (assembly-dependent), Analysis matching, block comparison, and
+    mismatch reporting -- each of which guards the read in front of it.
+    """
+    samples = _draw_fidelity_samples(source, errors, n_samples=n_samples, seed=seed)
+    if samples is None:
+        return
+    store_asm = _normalise_assembly(store.manifest.reference_assembly)
+    src_asm = _normalise_assembly(source_assembly) if source_assembly else store_asm
+    row_by_alid = _resolve_fidelity_rows(
+        store.path, samples, src_asm=src_asm, store_asm=store_asm, chain_file=chain_file
+    )
+    pairs = _match_fidelity_pairs(store.path, samples, row_by_alid, errors)
+    if pairs is None:
+        return
+    n_compared, mismatches = _compare_fidelity_cells(store, pairs)
+    _report_fidelity_disagreements(errors, pairs, n_compared, mismatches)
 
 def default_top_hit_key(threshold: float = 5e-8) -> str:
     return threshold_key(threshold)
