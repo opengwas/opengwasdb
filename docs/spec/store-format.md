@@ -232,7 +232,12 @@ Requirements:
 - `se` is on the same Stored Effect Scale as beta.
 - beta is queryable but derived from `z * se`.
 - p-value is queryable but derived from Z.
-- EAF, INFO, and sample size MUST NOT be required to reconstruct beta, SE, Z, or p-value.
+- INFO and sample size MUST NOT be required to reconstruct beta, SE, Z, or
+  p-value. EAF is not required to reconstruct beta, Z, or p-value, and is
+  not required to reconstruct a legacy or floating-point `se`. A
+  residual-coded `se` (§6a) **is** unreadable without the EAF its cells were
+  coded against — the observed EAF for observed cells, the Reference EAF for
+  imputed cells.
 
 Statistic planes are not required to be floating point, and `z` is not. Their
 physical encoding is declared per release, in `manifest.json` (§6a), and is
