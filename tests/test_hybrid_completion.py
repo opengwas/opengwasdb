@@ -435,6 +435,16 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(tmp_pa
     assert crossover_alid in hit_alids
     assert hit_alids[crossover_alid] == pytest.approx(expected_crossover_se, rel=0.01)
 
+    # The public top-hit query facade must return the crossed-over association
+    # through the rebuilt index, with the same decoded SE.
+    hits = q.top_hits(analysis_id="trait_a", threshold=5e-8)
+    facade_by_alid = {
+        alid_by_index[int(vi)]: float(hit_se)
+        for vi, hit_se in zip(hits["variant_index"], hits["se"], strict=True)
+    }
+    assert crossover_alid in facade_by_alid
+    assert facade_by_alid[crossover_alid] == pytest.approx(expected_crossover_se, rel=0.01)
+
 
 def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation(tmp_path):
     """issue #99: when the LD panel extends the Dense Component to cover a
