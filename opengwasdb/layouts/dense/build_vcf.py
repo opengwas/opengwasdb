@@ -27,6 +27,7 @@ from numcodecs import Blosc
 
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
+    EafOrientationReport,
     apply_orientation_evidence,
     sample_column_rows,
     site_hashes,
@@ -559,54 +560,14 @@ def build_dense_from_vcf_manifest(
 ) -> DenseBuildResult:
     """Build a Dense Observed-Only Store from a manifest of GWAS-VCF files.
 
-    Each row's source file is assumed to be in GRCh37/hg19 coordinates unless
-    its manifest row declares ``source_assembly=hg38`` (issue #85, e.g. a
-    harmonised GWAS-SSF source) -- see `_read_manifest`. hg19 rows are lifted
-    to GRCh38/hg38 inline; hg38 rows pass through unchanged. The output store
-    always uses hg38 coordinates.
-
-    Two-pass streaming: Pass 1 collects the union variant set and runs liftover
-    once.  Pass 2 fills zarr columns one analysis at a time.  The full
-    association list is never materialised in memory.
-
-    Both passes process one file per analysis and are independent across
-    files, so n_workers > 1 parallelises with a fork-based process pool —
-    each analysis column is disjoint, so results merge back with no
-    coordination beyond the final array assignment.
-
-    Parameters
-    ----------
-    manifest_path:
-        TSV with columns ``trait_id``, ``file_path``, ``trait_name``, ``n``
-        (also the Analysis Catalogue's ``BUILD_COLUMNS`` --
-        `opengwasdb.ancestry.catalogue` -- so a Catalogue-annotated file
-        remains readable here), plus a required ``stored_effect_scale``
-        (issue #17): Analytical Metadata the manifest supplies, never
-        inferred from the VCF header. A missing column or out-of-vocabulary
-        value fails the build before any I/O.
-    output_path:
-        Destination directory for the store.
-    chain_file:
-        Optional path to a pyliftover chain file.  When None, pyliftover
-        downloads the hg19→hg38 chain automatically.
-    store_id / release_id:
-        Identifiers written to ``manifest.json``.
-    liftover_failure_threshold:
-        Maximum fraction of variants allowed to fail liftover (default 0.01).
-        Raises ``LiftoverFailureError`` if exceeded.
-    n_workers:
-        Process pool size for Pass 1 and Pass 2. 1 (default) runs both passes
-        as a plain sequential loop. Requires the fork start method (Linux).
-    eaf_reference / eaf_reference_ancestry:
-        Reference frequencies each Analysis's stored EAF is correlated against
-        before any statistic array is written (issue #115, ADR 0037 §6): a
-        panel directory plus the population to read from it, or a single table
-        with an ``eaf`` column. Without one, a build of three or more Analyses
-        falls back to their consensus; a smaller build records `unverified`.
-    allow_unverified_eaf:
-        Accept Analyses a supplied reference could not verify -- too little
-        overlap, too little frequency spread -- instead of failing. Recorded in
-        the store's provenance, so the override is visible rather than implied.
+    A thin orchestrator over the private phases below (issue #130): the build
+    is staged atomically at ``output_path``, its two streaming passes never
+    materialise the full association matrix (issue 043), and every phase runs
+    before the store is committed. Keyword semantics live with the phase that
+    consumes each -- the manifest columns with `_read_manifest`; ``chain_file``
+    and ``liftover_failure_threshold`` with the hg19→hg38 lift (issue #85);
+    ``eaf_reference``/``eaf_reference_ancestry``/``allow_unverified_eaf``
+    with EAF orientation verification (issue #115, ADR 0037 §6).
     """
     manifest_rows = _read_manifest(manifest_path)
     if not manifest_rows:
@@ -614,220 +575,478 @@ def build_dense_from_vcf_manifest(
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        # ------------------------------------------------------------------
-        # Pass 1: collect union variant set across all files + liftover
-        # ------------------------------------------------------------------
-        # Pass 1 is intentionally serial. It streams each file's variants into one
-        # growing union set; parallelising it would force each worker to ship its
-        # whole variant set back over IPC, and since same-cohort files share nearly
-        # identical variant lists the union converges almost immediately — so the
-        # parallel version pays a large IPC cost for no real speedup (and deadlocked
-        # at genome-wide scale). The expensive, parallelised work is Pass 2.
-        source_lookup, rsid_by_alid = _lift_manifest_variants(
-            manifest_rows,
-            chain_file=chain_file,
-            liftover_failure_threshold=liftover_failure_threshold,
+        prepared = _prepare_axis(
+            staged, out, manifest_rows, chain_file,
+            liftover_failure_threshold, chunk_shape,
         )
-
-        # Sort hg38 ALIDs by (chromosome, position, a1, a2)
-        hg38_alids = sorted(set(source_lookup.values()), key=_alid_sort_key)
-        n_variants = len(hg38_alids)
-        n_analyses = len(manifest_rows)
-        variant_index: dict[str, int] = {alid: i for i, alid in enumerate(hg38_alids)}
-        analysis_index: dict[str, int] = {row.trait_id: i for i, row in enumerate(manifest_rows)}
-
-        # ------------------------------------------------------------------
-        # Analytical Metadata: stored_effect_scale comes from the manifest, not
-        # the VCF header (issue #17 -- the ieu-a-7 fix: the source header is not
-        # authoritative for effect scale).
-        # ------------------------------------------------------------------
-        analyses: list[Analysis] = [_manifest_row_to_analysis(row) for row in manifest_rows]
-
-        # ------------------------------------------------------------------
-        # Write SQLite index + analyses.tsv + tabix variant axis
-        # ------------------------------------------------------------------
-        _write_index(staged, hg38_alids, analyses, chunk_shape)
-        canonical_variants = [
-            CanonicalVariant(
-                chromosome=chrom,
-                position=int(pos_str),
-                effect_allele=a1,
-                other_allele=a2,
-            )
-            for alid in hg38_alids
-            for chrom, pos_str, a1, a2 in [alid.split(":")]
-        ]
-        # Provenance: record the source-build canonical ALID each row resolved
-        # from (lifted from hg19, or passed through unchanged from hg38). A single
-        # hg38 ALID can be the target of several source variants (a collision);
-        # those rows are ambiguous, so leave them blank.
-        hg38_to_source: dict[str, str | None] = {}
-        for (chrom, pos, ref, alt), hg38_alid in source_lookup.items():
-            a1, a2 = sorted((ref, alt))
-            origin = f"{chrom}:{pos}:{a1}:{a2}"
-            if hg38_alid in hg38_to_source:
-                if hg38_to_source[hg38_alid] != origin:
-                    hg38_to_source[hg38_alid] = None  # collision → ambiguous
-            else:
-                hg38_to_source[hg38_alid] = origin
-        source_alids = [hg38_to_source.get(alid) for alid in hg38_alids]
-        write_variant_axis(staged.path, canonical_variants, rsid_by_alid, source_alids)
-
-        # ------------------------------------------------------------------
-        # Fork-safe Pass 2 lookup: compose the two dicts into sorted numpy arrays so
-        # workers binary-search them instead of chaining Python dicts — no per-worker
-        # refcount-COW of ~n_variants dict pages (issue 043 item 2).
-        # ------------------------------------------------------------------
-        keys_sorted, rows_sorted = _build_variant_key_index(source_lookup, variant_index)
-        max_key_len = keys_sorted.dtype.itemsize if len(keys_sorted) else 0
+        # Phases 5-7 run inside one spill-dir lifetime: every spill is removed
+        # even when a phase fails, keeping the staged release atomic.
+        eaf_report, encoded = _spill_verify_and_encode(
+            staged, out, manifest_rows, prepared,
+            n_workers, chunk_shape, dtype,
+            eaf_reference, eaf_reference_ancestry, allow_unverified_eaf,
+        )
+        # Phase 8: top-hit indexes, manifest and analyses.tsv metadata.
+        _finalize_store(
+            staged, prepared, encoded, eaf_report,
+            store_id, release_id, chain_file, chunk_shape, dtype,
+            allow_unverified_eaf,
+        )
         log.info(
-            "Pass 2 lookup: %d variant keys, max key length %d bytes",
-            len(keys_sorted),
-            max_key_len,
+            "Build complete: %d variants × %d analyses",
+            len(prepared.axis.alids), len(prepared.axis.analyses),
         )
-        del source_lookup, variant_index  # free the parent-side dicts before Pass 2
 
-        # ------------------------------------------------------------------
-        # Create the empty z/se zarr datasets (NaN fill). Pass 2 streams each analysis
-        # column to disk; the band-write phase then fills chunk-column bands without
-        # ever holding the full (n_variants × n_analyses) matrix in memory (issue 043).
-        # ------------------------------------------------------------------
-        # ------------------------------------------------------------------
-        # Pass 2 fill: resolve each analysis column and spill it to disk. No matrix is
-        # resident here — the parent only waits for completion.
-        # ------------------------------------------------------------------
-        log.info(
-            "Pass 2: resolving %d analyses × %d variants (n_workers=%d)",
-            n_analyses,
-            n_variants,
-            n_workers,
+    return DenseBuildResult(
+        output_path=out,
+        n_variants=len(prepared.axis.alids),
+        n_analyses=len(prepared.axis.analyses),
+    )
+
+
+@dataclass(frozen=True)
+class _AxisMetadata:
+    """The store's axis: sorted hg38 ALIDs, the row maps, and Analysis records.
+
+    ``analyses`` are the manifest's Analytical Metadata (issue #17, #86) --
+    derived from each row, never from a VCF header.
+    """
+
+    alids: list[str]
+    analysis_index: dict[str, int]
+    analyses: list[Analysis]
+
+
+@dataclass(frozen=True)
+class _HitCandidates:
+    """The cells the band-write's z pass harvested above the loosest threshold.
+
+    Harvested from the *stored* values so the top-hit index matches exactly
+    what a query reads back from the ``z`` array (issue 046)."""
+
+    rows: np.ndarray
+    cols: np.ndarray
+    z: np.ndarray
+    se: np.ndarray
+
+
+@dataclass(frozen=True)
+class _EncodedBands:
+    """Phase-7 outcome the index and metadata phases consume."""
+
+    encoding: StoreEncoding
+    hits: _HitCandidates
+    column_has_eaf: np.ndarray
+
+
+@dataclass(frozen=True)
+class _PreparedBuild:
+    """What the preparation phase hands the spill phases: the store's axis and
+    the fork-safe Pass 2 lookup arrays resolved against it.
+
+    The parent-side ``source_lookup``/``variant_index`` dicts are dropped when
+    the preparation phase returns, before any worker forks (issue 043).
+    """
+
+    axis: _AxisMetadata
+    keys_sorted: np.ndarray
+    rows_sorted: np.ndarray
+
+
+def _axis_metadata(
+    source_lookup: Mapping[tuple[str, int, str, str], str],
+    manifest_rows: Sequence[_ManifestRow],
+) -> tuple[_AxisMetadata, dict[str, int]]:
+    """Resolve the store's axis metadata.
+
+    Sorting hg38 ALIDs by (chromosome, position, a1, a2) gives the variant
+    axis a stable, position-ordered row index; the manifest's own row order
+    fixes the analysis column order. The variant index is returned alongside
+    the axis so the caller can free it (it is the one ~n_variants-sized dict)
+    once the Pass 2 lookup arrays are built.
+    """
+    hg38_alids = sorted(set(source_lookup.values()), key=_alid_sort_key)
+    variant_index: dict[str, int] = {alid: i for i, alid in enumerate(hg38_alids)}
+    analysis_index: dict[str, int] = {row.trait_id: i for i, row in enumerate(manifest_rows)}
+    analyses: list[Analysis] = [_manifest_row_to_analysis(row) for row in manifest_rows]
+    return (
+        _AxisMetadata(
+            alids=hg38_alids,
+            analysis_index=analysis_index,
+            analyses=analyses,
+        ),
+        variant_index,
+    )
+
+
+def _source_alids_by_alid(
+    source_lookup: Mapping[tuple[str, int, str, str], str],
+    hg38_alids: Sequence[str],
+) -> list[str | None]:
+    """The source-build canonical ALID each stored row was resolved from.
+
+    Provenance (the variant axis's ``source_alid`` column): the hg19 tuple's
+    own canonical ALID, or the passed-through hg38 tuple's, so a reader sees
+    which build coordinate a row's associations came from. A single hg38 ALID
+    can be the target of several source variants (a liftover collapse); when
+    they disagree on the origin the row is ambiguous, so it is left blank --
+    never guessed (a guess would silently misattribute provenance).
+    """
+    hg38_to_source: dict[str, str | None] = {}
+    for (chrom, pos, ref, alt), hg38_alid in source_lookup.items():
+        a1, a2 = sorted((ref, alt))
+        origin = f"{chrom}:{pos}:{a1}:{a2}"
+        if hg38_alid in hg38_to_source:
+            if hg38_to_source[hg38_alid] != origin:
+                hg38_to_source[hg38_alid] = None  # collision → ambiguous
+        else:
+            hg38_to_source[hg38_alid] = origin
+    return [hg38_to_source.get(alid) for alid in hg38_alids]
+
+
+def _write_axis_and_index(
+    staged: StagedRelease,
+    source_lookup: Mapping[tuple[str, int, str, str], str],
+    axis: _AxisMetadata,
+    rsid_by_alid: Mapping[str, str],
+    chunk_shape: tuple[int, int],
+) -> None:
+    """Write the SQLite index and the tabix variant axis.
+
+    The variant axis carries one canonical variant per stored row with its
+    rsid (first named wins) and the source-build provenance each row resolved
+    from (``_source_alids_by_alid`` -- collisions stay blank, never guessed).
+    """
+    _write_index(staged, axis.alids, axis.analyses, chunk_shape)
+    canonical_variants = [
+        CanonicalVariant(
+            chromosome=chrom,
+            position=int(pos_str),
+            effect_allele=a1,
+            other_allele=a2,
         )
-        pass2_start = time.monotonic()
-        id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
-        spill_dir = Path(
-            tempfile.mkdtemp(prefix=f".{out.name}.pass2spill.", dir=staged.path.parent)
+        for alid in axis.alids
+        for chrom, pos_str, a1, a2 in [alid.split(":")]
+    ]
+    source_alids = _source_alids_by_alid(source_lookup, axis.alids)
+    write_variant_axis(staged.path, canonical_variants, rsid_by_alid, source_alids)
+
+
+def _build_pass2_lookup(
+    source_lookup: dict[tuple[str, int, str, str], str],
+    variant_index: dict[str, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compose the Pass 2 dicts into the sorted numpy lookup workers search.
+
+    Fork-safe by construction: the returned arrays are a contiguous C buffer
+    and an int32 row array, so a worker reading them via searchsorted never
+    touches per-element refcounts (issue 043 item 2). The caller frees the
+    dicts before the pool is created.
+    """
+    keys_sorted, rows_sorted = _build_variant_key_index(source_lookup, variant_index)
+    max_key_len = keys_sorted.dtype.itemsize if len(keys_sorted) else 0
+    log.info(
+        "Pass 2 lookup: %d variant keys, max key length %d bytes",
+        len(keys_sorted),
+        max_key_len,
+    )
+    return keys_sorted, rows_sorted
+
+
+def _prepare_axis(
+    staged: StagedRelease,
+    out: Path,
+    manifest_rows: list[_ManifestRow],
+    chain_file: str | Path | None,
+    liftover_failure_threshold: float,
+    chunk_shape: tuple[int, int],
+) -> _PreparedBuild:
+    """Phases 1-4: union/liftover, axis metadata, index + axis, Pass 2 lookup.
+
+    hg19-declared rows are lifted to GRCh38 once (issue #85), the axis
+    metadata and provenance-carrying variant axis are written, and the Pass 2
+    lookup arrays are composed -- the parent ``source_lookup``/``variant_index``
+    dicts then drop out of scope before any worker forks (issue 043).
+    """
+    source_lookup, rsid_by_alid = _lift_manifest_variants(
+        manifest_rows,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
+    )
+    axis, variant_index = _axis_metadata(source_lookup, manifest_rows)
+    _write_axis_and_index(staged, source_lookup, axis, rsid_by_alid, chunk_shape)
+    keys_sorted, rows_sorted = _build_pass2_lookup(source_lookup, variant_index)
+    return _PreparedBuild(axis=axis, keys_sorted=keys_sorted, rows_sorted=rows_sorted)
+
+
+def _spill_columns_serial(
+    manifest_rows: Sequence[_ManifestRow],
+    analysis_index: Mapping[str, int],
+    spill_dir: Path,
+    keys_sorted: np.ndarray,
+    rows_sorted: np.ndarray,
+    axis: _AxisMetadata,
+    pass2_start: float,
+) -> None:
+    """Pass 2 for ``n_workers <= 1``: resolve and spill each column in this
+    process, one Analysis at a time, so peak memory is one resolved column."""
+    log.info(
+        "Pass 2: resolving %d analyses × %d variants (n_workers=1)",
+        len(axis.analyses),
+        len(axis.alids),
+    )
+    for i, row in enumerate(manifest_rows):
+        col_idx = analysis_index[row.trait_id]
+        rows, z, se, eaf = _resolve_column(
+            row.file_path,
+            keys_sorted,
+            rows_sorted,
+            row.se_divisor,
+            capability=row.source_reader_capability,
+            stored_effect_scale=row.stored_effect_scale,
         )
-        try:
-            if n_workers <= 1:
-                for i, row in enumerate(manifest_rows):
-                    col_idx = analysis_index[row.trait_id]
-                    rows, z, se, eaf = _resolve_column(
-                        row.file_path,
-                        keys_sorted,
-                        rows_sorted,
-                        row.se_divisor,
-                        capability=row.source_reader_capability,
-                        stored_effect_scale=row.stored_effect_scale,
-                    )
-                    _spill_column(spill_dir, col_idx, rows, z, se, eaf)
-                    _log_progress(
-                        "Pass 2", i + 1, n_analyses, pass2_start, f"last: {row.trait_id}", every=25
-                    )
-            else:
-                global _pass2_keys_sorted, _pass2_rows_sorted, _pass2_spill_dir
-                _pass2_keys_sorted = keys_sorted
-                _pass2_rows_sorted = rows_sorted
-                _pass2_spill_dir = spill_dir
-                try:
-                    with _fork_pool(n_workers) as pool:
-                        tasks = [
-                            (
-                                analysis_index[row.trait_id],
-                                row.file_path,
-                                row.se_divisor,
-                                row.source_reader_capability,
-                                row.stored_effect_scale,
-                            )
-                            for row in manifest_rows
-                        ]
-                        futures = [pool.submit(_pass2_worker, t) for t in tasks]
-                        for i, fut in enumerate(as_completed(futures)):
-                            col_idx = fut.result()
-                            _log_progress(
-                                "Pass 2",
-                                i + 1,
-                                n_analyses,
-                                pass2_start,
-                                f"last: {id_by_col[col_idx]}",
-                                every=25,
-                            )
-                finally:
-                    _pass2_keys_sorted = None
-                    _pass2_rows_sorted = None
-                    _pass2_spill_dir = None
+        _spill_column(spill_dir, col_idx, rows, z, se, eaf)
+        _log_progress(
+            "Pass 2", i + 1, len(axis.analyses), pass2_start, f"last: {row.trait_id}", every=25
+        )
 
-            # --------------------------------------------------------------
-            # EAF orientation (issue #115): correlate each Analysis's stored
-            # frequencies against the reference before anything is written. A
-            # build that is going to fail should fail here, not after an hour
-            # of band-writing -- and a store must never come into existence
-            # holding a frequency column reported against the other allele.
-            # --------------------------------------------------------------
-            eaf_survey = survey_eaf_spills(
-                spill_dir, id_by_col, hg38_alids, site_hashes(hg38_alids)
-            )
-            eaf_report = verify_eaf_orientation(
-                eaf_survey.observations,
-                eaf_reference=eaf_reference,
-                eaf_reference_ancestry=eaf_reference_ancestry,
-                allow_unverified=allow_unverified_eaf,
-            )
 
-            # One encoding plan per build, decided here -- after Pass 2, because
-            # the `eaf` rules read the frequencies the sources actually carried
-            # -- and recorded in manifest.json (ADR 0037, issue #119).
-            encoding = StoreEncoding.decide(
-                EncodingMeasurements(
-                    n_analyses=n_analyses,
-                    eaf=eaf_survey.measurements(
-                        n_cells=n_variants * n_analyses, n_variants=n_variants
-                    ),
+def _spill_columns_parallel(
+    manifest_rows: Sequence[_ManifestRow],
+    analysis_index: Mapping[str, int],
+    spill_dir: Path,
+    keys_sorted: np.ndarray,
+    rows_sorted: np.ndarray,
+    axis: _AxisMetadata,
+    n_workers: int,
+    pass2_start: float,
+) -> None:
+    """Pass 2 for ``n_workers > 1``: resolve each column in a fork pool.
+
+    Workers inherit the numpy lookup arrays at fork (see the module note on
+    ``_pass2_keys_sorted``) and write only their own ``.npz``, so nothing large
+    crosses the pipe; the parent waits on completion. The globals are reset
+    whether or not every task succeeded.
+    """
+    log.info(
+        "Pass 2: resolving %d analyses × %d variants (n_workers=%d)",
+        len(axis.analyses),
+        len(axis.alids),
+        n_workers,
+    )
+    global _pass2_keys_sorted, _pass2_rows_sorted, _pass2_spill_dir
+    _pass2_keys_sorted = keys_sorted
+    _pass2_rows_sorted = rows_sorted
+    _pass2_spill_dir = spill_dir
+    try:
+        with _fork_pool(n_workers) as pool:
+            id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
+            tasks = [
+                (
+                    analysis_index[row.trait_id],
+                    row.file_path,
+                    row.se_divisor,
+                    row.source_reader_capability,
+                    row.stored_effect_scale,
                 )
-            )
-            log.info("Encoding plan: %s", encoding.to_manifest())
-            effective_chunks = _create_dense_zarr(
-                staged, n_variants, n_analyses, chunk_shape, dtype, encoding
-            )
+                for row in manifest_rows
+            ]
+            futures = [pool.submit(_pass2_worker, t) for t in tasks]
+            for i, fut in enumerate(as_completed(futures)):
+                col_idx = fut.result()
+                _log_progress(
+                    "Pass 2",
+                    i + 1,
+                    len(axis.analyses),
+                    pass2_start,
+                    f"last: {id_by_col[col_idx]}",
+                    every=25,
+                )
+    finally:
+        _pass2_keys_sorted = None
+        _pass2_rows_sorted = None
+        _pass2_spill_dir = None
 
-            # --------------------------------------------------------------
-            # Band-write phase: stream the retained column spills into the zarr in
-            # chunk-column bands, harvesting top-hit candidates as we go. Peak memory
-            # is one band (n_variants × chunk-analysis-width), not the full matrix.
-            # --------------------------------------------------------------
-            all_rows, all_cols, all_z, all_se, column_has_eaf = _write_dense_bands(
-                staged,
-                spill_dir,
-                n_variants,
-                n_analyses,
-                effective_chunks,
-                dtype,
-                pass2_start,
-                encoding,
-            )
-            encoding = optimise_dense_se(staged.arrays(mode="a"), encoding)
-        finally:
-            shutil.rmtree(spill_dir, ignore_errors=True)
 
-        _write_manifest(
+def _survey_and_verify_eaf(
+    spill_dir: Path,
+    manifest_rows: Sequence[_ManifestRow],
+    axis: _AxisMetadata,
+    *,
+    eaf_reference: str | Path | None,
+    eaf_reference_ancestry: str | None,
+    allow_unverified_eaf: bool,
+) -> tuple[EafSpillSurvey, EafOrientationReport]:
+    """Sample each Analysis's stored frequencies and verify their orientation.
+
+    The check (issue #115, ADR 0037 §6) runs off the Pass 2 spills -- the exact
+    values about to be stored -- and before any statistic array is written, so
+    a build that would store a frequency column against the wrong allele fails
+    here rather than after an hour of band-writing. The survey also measures
+    the frequency spread the encoding plan reads, so both answer in one pass.
+    ``allow_unverified_eaf`` records Analyses the supplied reference could not
+    verify in the store's provenance instead of rejecting them.
+    """
+    id_by_col = {axis.analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
+    eaf_survey = survey_eaf_spills(spill_dir, id_by_col, axis.alids, site_hashes(axis.alids))
+    eaf_report = verify_eaf_orientation(
+        eaf_survey.observations,
+        eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified=allow_unverified_eaf,
+    )
+    return eaf_survey, eaf_report
+
+
+def _write_encoded_bands(
+    staged: StagedRelease,
+    spill_dir: Path,
+    eaf_survey: EafSpillSurvey,
+    axis: _AxisMetadata,
+    chunk_shape: tuple[int, int],
+    dtype: str,
+    pass2_start: float,
+) -> _EncodedBands:
+    """Create the statistic arrays and fill them from the spills.
+
+    One encoding plan per build is decided here -- after Pass 2 and the EAF
+    survey, because the ``eaf`` rules read the frequencies the sources
+    actually carried -- and recorded in manifest.json (ADR 0037, issue #119).
+    The z/se planes are then filled in chunk-column bands so peak memory is
+    one band (issue 043), the eaf plane is written under the plan, and
+    ``optimise_dense_se`` rewrites ``se`` under the plan's codec. The
+    top-hit candidates are harvested in the same pass (issue 046).
+    """
+    n_variants, n_analyses = len(axis.alids), len(axis.analyses)
+    encoding = StoreEncoding.decide(
+        EncodingMeasurements(
+            n_analyses=n_analyses,
+            eaf=eaf_survey.measurements(
+                n_cells=n_variants * n_analyses, n_variants=n_variants
+            ),
+        )
+    )
+    log.info("Encoding plan: %s", encoding.to_manifest())
+    effective_chunks = _create_dense_zarr(
+        staged, n_variants, n_analyses, chunk_shape, dtype, encoding
+    )
+    rows, cols, z, se, column_has_eaf = _write_dense_bands(
+        staged,
+        spill_dir,
+        n_variants,
+        n_analyses,
+        effective_chunks,
+        dtype,
+        pass2_start,
+        encoding,
+    )
+    encoding = optimise_dense_se(staged.arrays(mode="a"), encoding)
+    return _EncodedBands(
+        encoding=encoding,
+        hits=_HitCandidates(rows=rows, cols=cols, z=z, se=se),
+        column_has_eaf=column_has_eaf,
+    )
+
+
+def _spill_verify_and_encode(
+    staged: StagedRelease,
+    out: Path,
+    manifest_rows: Sequence[_ManifestRow],
+    prepared: _PreparedBuild,
+    n_workers: int,
+    chunk_shape: tuple[int, int],
+    dtype: str,
+    eaf_reference: str | Path | None,
+    eaf_reference_ancestry: str | None,
+    allow_unverified_eaf: bool,
+) -> tuple[EafOrientationReport, _EncodedBands]:
+    """Phases 5-7: spill each column, verify EAF, and write the encoded planes.
+
+    Runs inside the spill dir's lifecycle: every spill is removed when this
+    returns or raises, so a phase failure leaves nothing behind and the staged
+    release stays atomic. ``n_workers`` > 1 resolves through the fork pool;
+    EAF orientation is verified against ``eaf_reference`` before any array is
+    written (issue #115, ADR 0037 §6).
+    """
+    spill_dir = Path(
+        tempfile.mkdtemp(prefix=f".{out.name}.pass2spill.", dir=staged.path.parent)
+    )
+    try:
+        pass2_start = time.monotonic()
+        if n_workers <= 1:
+            _spill_columns_serial(
+                manifest_rows, prepared.axis.analysis_index, spill_dir,
+                prepared.keys_sorted, prepared.rows_sorted, prepared.axis, pass2_start,
+            )
+        else:
+            _spill_columns_parallel(
+                manifest_rows, prepared.axis.analysis_index, spill_dir,
+                prepared.keys_sorted, prepared.rows_sorted,
+                prepared.axis, n_workers, pass2_start,
+            )
+        eaf_survey, eaf_report = _survey_and_verify_eaf(
+            spill_dir,
+            manifest_rows,
+            prepared.axis,
+            eaf_reference=eaf_reference,
+            eaf_reference_ancestry=eaf_reference_ancestry,
+            allow_unverified_eaf=allow_unverified_eaf,
+        )
+        encoded = _write_encoded_bands(
             staged,
-            store_id,
-            release_id,
-            n_variants,
-            n_analyses,
-            chain_file,
+            spill_dir,
+            eaf_survey,
+            prepared.axis,
             chunk_shape,
             dtype,
-            encoding=encoding,
-            eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
+            pass2_start,
         )
-        write_top_hit_indexes_for_store(staged.path, all_rows, all_cols, all_z, all_se, encoding)
-        analyses = apply_orientation_evidence(
-            _apply_eaf_scope(analyses, column_has_eaf), eaf_report
-        )
-        write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
-        log.info("Build complete: %d variants × %d analyses", n_variants, n_analyses)
+    finally:
+        shutil.rmtree(spill_dir, ignore_errors=True)
+    return eaf_report, encoded
 
-    return DenseBuildResult(output_path=out, n_variants=n_variants, n_analyses=n_analyses)
+
+def _finalize_store(
+    staged: StagedRelease,
+    prepared: _PreparedBuild,
+    encoded: _EncodedBands,
+    eaf_report: EafOrientationReport,
+    store_id: str,
+    release_id: str,
+    chain_file: str | Path | None,
+    chunk_shape: tuple[int, int],
+    dtype: str,
+    allow_unverified_eaf: bool,
+) -> None:
+    """Phase 8: write the store's final metadata.
+
+    The manifest names the encoding and the EAF-orientation evidence; the
+    top-hit indexes are written from the band-write's stored-value harvest
+    (issue 046); analyses.tsv is written last, with each Analysis's
+    ``eaf_scope`` stamped from what was actually stored (ADR 0036) and the
+    orientation evidence applied (issue #115).
+    """
+    axis = prepared.axis
+    _write_manifest(
+        staged,
+        store_id,
+        release_id,
+        len(axis.alids),
+        len(axis.analyses),
+        chain_file,
+        chunk_shape,
+        dtype,
+        encoding=encoded.encoding,
+        eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
+    )
+    write_top_hit_indexes_for_store(
+        staged.path, encoded.hits.rows, encoded.hits.cols, encoded.hits.z, encoded.hits.se,
+        encoded.encoding,
+    )
+    analyses = apply_orientation_evidence(
+        _apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
+    )
+    write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
 
 
 def _fmt_duration(seconds: float) -> str:

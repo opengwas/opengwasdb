@@ -1102,3 +1102,60 @@ def test_finngen_r13_hg38_capability_builds_and_queries_dense_store(tmp_path):
     np.testing.assert_allclose(
         np.sort(result["z"]), np.array([-0.7, 0.2, 0.4, 1.4]), atol=0.05
     )
+
+
+def test_axis_source_alids_record_the_prelift_hg19_coordinate(tmp_path):
+    """The variant axis carries each row's source-build ALID as provenance: a
+    row stored at hg38 1:1064620 because its source file sat at hg19
+    1:1000000 must say so, not claim the hg38 coordinate it was stored under.
+
+    HG19_POS_1 is an identity lift (hg38 1:100000), so its source ALID equals
+    the stored ALID; HG19_POS_2 genuinely moves. The fixture must contain a
+    row that really moved or the assertion proves nothing -- both ALIDs are
+    asserted so the set itself proves the lift happened.
+    """
+    from opengwasdb.variants.axis import iter_variant_records
+
+    vcf = _make_vcf(
+        tmp_path,
+        "provenance_trait",
+        [
+            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+            f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
+        ],
+    )
+    manifest = _make_manifest(tmp_path, [("provenance_trait", vcf, "Provenance Trait")])
+    store_path = tmp_path / "store.opengwasdb"
+    build_dense_from_vcf_manifest(manifest, store_path, store_id="s", release_id="r")
+
+    records = {r.alid: r for r in iter_variant_records(store_path / "variants.tsv.gz")}
+    assert set(records) == {HG38_ALID_1, HG38_ALID_2}
+    # identity lift: the source and stored ALIDs coincide.
+    assert records[HG38_ALID_1].source_alid == HG38_ALID_1
+    # genuine translation: the source ALID is the hg19 coordinate, not hg38's.
+    assert records[HG38_ALID_2].source_alid == f"1:{HG19_POS_2}:C:T"
+
+
+def test_source_alids_blank_an_ambiguous_liftover_collision():
+    """A stored row that several source variants resolved to is ambiguous, so
+    its source_alid provenance is blank rather than guessed -- unless the
+    source variants are one physical locus (same position, ref/alt reported
+    either way round), whose identical canonical origin is safe to record.
+    """
+    from opengwasdb.layouts.dense.build_vcf import _source_alids_by_alid
+
+    # Two distinct source positions lift onto one stored row -> ambiguous.
+    # Single-source rows are recorded verbatim; a second file reporting the
+    # same position with ref/alt swapped records the same origin, not None.
+    source_lookup = {
+        ("1", 100, "A", "G"): "1:100:A:G",  # row 0
+        ("1", 200, "A", "G"): "1:100:A:G",  # distinct origin -> ambiguous
+        ("1", 300, "C", "T"): "1:300:C:T",  # row 1, single origin
+        ("1", 400, "A", "G"): "1:400:A:G",  # row 2
+        ("1", 400, "G", "A"): "1:400:A:G",  # same locus, flipped report
+    }
+    assert _source_alids_by_alid(source_lookup, ["1:100:A:G", "1:300:C:T", "1:400:A:G"]) == [
+        None,
+        "1:300:C:T",
+        "1:400:A:G",
+    ]
