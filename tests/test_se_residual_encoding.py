@@ -284,20 +284,12 @@ def test_hybrid_joint_selection_streams_dense_and_uses_one_fit(tmp_path) -> None
     )
 
 
-@pytest.mark.parametrize(
-    ("extra_se", "extra_eaf"),
-    [
-        (np.array([0.1, 0.2], dtype=np.float32), np.array([0.2, 0.3], dtype=np.float32)),
-        (
-            np.full(600, 0.1, dtype=np.float32),
-            np.full(600, np.nan, dtype=np.float32),
-        ),
-    ],
-    ids=["overflow-size-gate", "overflow-missing-eaf"],
-)
-def test_hybrid_extra_component_can_force_shared_float16_fallback(
-    tmp_path, extra_se, extra_eaf
-) -> None:
+def _single_analysis_dense_group(tmp_path):
+    """A 600-row, one-Analysis Dense plane that fits the MAF model cleanly.
+
+    The shared scaffold of the joint-selection fixtures: a `float16` plane the
+    coding can beat, plus the EAF and `z` planes it needs around it.
+    """
     group = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w")
     eaf = np.linspace(0.05, 0.95, 600, dtype=np.float32)[:, None]
     dense_se = np.exp(-3.0 - 0.5 * np.log(2 * eaf * (1 - eaf))).astype(np.float32)
@@ -309,6 +301,22 @@ def test_hybrid_extra_component_can_force_shared_float16_fallback(
         se=SeEncoding("float16"),
         eaf=EafEncoding("float32"),
     )
+    return group, dense_se, preliminary
+
+
+def test_hybrid_extra_component_can_force_shared_float16_fallback(tmp_path) -> None:
+    """An Overflow Component with no usable EAF leaves the shared plan float16.
+
+    A codeable Overflow cannot veto the residual coding on its own -- zarr
+    stores its flat plane in full 200,000-cell chunks, so the padded edge chunk
+    dominates both candidates and the coding still saves on it (#158). A cell
+    carrying a standard error with no EAF at all is different: it makes the
+    shared fit ineligible and the whole pair falls back, whatever the bytes
+    say.
+    """
+    extra_se = np.full(600, 0.1, dtype=np.float32)
+    extra_eaf = np.full(600, np.nan, dtype=np.float32)
+    group, _, preliminary = _single_analysis_dense_group(tmp_path)
 
     selected, shared_coefficients = optimise_dense_se_joint(
         group,
@@ -324,6 +332,43 @@ def test_hybrid_extra_component_can_force_shared_float16_fallback(
     assert selected.se == SeEncoding("float16")
     assert shared_coefficients is None
     assert group["se"].dtype == np.dtype("float16")
+
+
+def test_a_tiny_codeable_overflow_does_not_force_float16(tmp_path) -> None:
+    """Two well-fitted Overflow cells no longer veto the coding (#158).
+
+    The pre-#158 measurement compressed the Overflow's flat plane slices at
+    their own (tiny) size, so two cells cost almost nothing as `float16` and
+    the Overflow's side arrays and coefficients could never earn their keep --
+    the size gate that used to send this pair to `float16`. zarr stores that
+    plane in 200,000-cell chunks whether it holds two cells or two hundred
+    thousand, so the padded edge chunk dominates both candidates, the coding
+    saves on the Overflow too, and the honest byte gate keeps the residual
+    plane the Dense component would choose on its own.
+    """
+    group, dense_se, preliminary = _single_analysis_dense_group(tmp_path)
+
+    selected, shared_coefficients = optimise_dense_se_joint(
+        group,
+        preliminary,
+        overflow=OverflowCells(
+            se_values=np.array([0.1, 0.2], dtype=np.float32),
+            eaf_values=np.array([0.2, 0.3], dtype=np.float32),
+            analysis_indices=np.zeros(2, dtype=np.int64),
+            n_analyses=1,
+        ),
+    )
+
+    # Under the unpadded measurement this pair fell back to float16; the
+    # padded one shows the coding saving on the Overflow as well, so this
+    # regression fails on the pre-#158 accounting.
+    assert selected.se.is_residual
+    assert shared_coefficients is not None
+    assert group["se"].dtype == np.dtype("int8")
+    decoded = DenseSePlane.open(group, selected).band(0, len(dense_se))
+    np.testing.assert_allclose(
+        decoded, dense_se.astype(np.float16).astype(np.float32), rtol=0.01
+    )
 
 
 def test_inline_top_hit_index_carries_plane_decoded_se(tmp_path) -> None:
@@ -722,17 +767,7 @@ def test_overflow_cells_rejects_non_integer_analysis_count(n_analyses) -> None:
 
 def test_optimise_dense_se_joint_rejects_wrong_overflow_analysis_count(tmp_path) -> None:
     """The Dense component's width is authoritative; a mismatched overflow says so."""
-    group = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w")
-    eaf = np.linspace(0.05, 0.95, 600, dtype=np.float32)[:, None]
-    dense_se = np.exp(-3.0 - 0.5 * np.log(2 * eaf * (1 - eaf))).astype(np.float32)
-    group.create_dataset("eaf", data=eaf, chunks=(100, 1), dtype="float32")
-    group.create_dataset("se", data=dense_se, chunks=(100, 1), dtype="float16")
-    group.create_dataset("z", data=np.ones_like(eaf), chunks=(100, 1), dtype="float16")
-    preliminary = StoreEncoding(
-        z=ZEncoding("float16"),
-        se=SeEncoding("float16"),
-        eaf=EafEncoding("float32"),
-    )
+    group, _, preliminary = _single_analysis_dense_group(tmp_path)
     overflow = OverflowCells(
         se_values=np.array([0.1], dtype=np.float32),
         eaf_values=np.array([0.2], dtype=np.float32),

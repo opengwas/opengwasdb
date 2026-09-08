@@ -63,11 +63,30 @@ def _full_chunk(piece: np.ndarray, chunk_shape: tuple[int, ...], fill_value: Any
     return np.pad(piece, pads, mode="constant", constant_values=fill_value)
 
 
+def packed_chunk_bytes(
+    compressor: object | None, piece: np.ndarray, chunk_shape: tuple[int, ...], fill_value: Any
+) -> int:
+    """Compressed bytes of the one zarr chunk `piece` is stored as.
+
+    zarr never stores a partial chunk: a chunk whose span runs past an array's
+    extent is padded out to the declared chunk shape with the array's fill
+    value *before* it is compressed, so the bytes `piece` will occupy on disk
+    are the bytes of `piece` padded to `chunk_shape`. This is the single
+    chunk-accounting implementation: the whole-grid fits below call it through
+    `_packed_1d`/`_packed_2d`, and the streamed Dense/Hybrid/migration
+    optimiser in `encoding/se.py` charges its row bands through the same
+    function, so no measurement path can leave an edge chunk short of zarr's
+    padded size (issue #158). An interior chunk -- one whose shape already
+    matches `chunk_shape` -- is compressed exactly as it is.
+    """
+    return _packed_bytes(compressor, _full_chunk(np.asarray(piece), tuple(chunk_shape), fill_value))
+
+
 def _packed_1d(
     compressor: object | None, data: np.ndarray, chunk: int, fill_value: Any
 ) -> int:
     return sum(
-        _packed_bytes(compressor, _full_chunk(data[start : start + chunk], (chunk,), fill_value))
+        packed_chunk_bytes(compressor, data[start : start + chunk], (chunk,), fill_value)
         for start in _chunk_starts(len(data), chunk)
     )
 
@@ -76,8 +95,8 @@ def _packed_2d(
     compressor: object | None, data: np.ndarray, chunk: tuple[int, int], fill_value: Any
 ) -> int:
     return sum(
-        _packed_bytes(
-            compressor, _full_chunk(data[r0 : r0 + chunk[0], c0 : c0 + chunk[1]], chunk, fill_value)
+        packed_chunk_bytes(
+            compressor, data[r0 : r0 + chunk[0], c0 : c0 + chunk[1]], chunk, fill_value
         )
         for r0 in _chunk_starts(data.shape[0], chunk[0])
         for c0 in _chunk_starts(data.shape[1], chunk[1])
@@ -96,8 +115,9 @@ def _packed_chunks(
     chunks, so the size the decision compares must be measured in the shape it
     will be written in. zarr pads an edge chunk out to the declared chunk shape
     with the array's fill value before compressing it, so a measured slice is
-    padded the same way first (issue #158). An array whose chunking is not
-    stated, or does not match its own rank, is charged whole.
+    padded the same way first, chunk by chunk through `packed_chunk_bytes`
+    (issue #158). An array whose chunking is not stated, or does not match its
+    own rank, is charged whole.
     """
     shaped = np.asarray(data)
     shape = (chunk_shape,) if isinstance(chunk_shape, int) else chunk_shape
