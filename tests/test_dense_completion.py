@@ -402,6 +402,77 @@ class TestValidation:
         root["imputed"][:] = imputed
         result = validate_store(completed_store)
         assert not result.ok
+        assert any(
+            "off-panel (on_panel=0) rows have imputed=1 cells" in e for e in result.errors
+        ), result.errors
+
+    def test_corrupt_imputed_binary_value_fails(self, completed_store):
+        # The 0/1 imputed mask is a flag, not a bitmap: a 2 in it means the
+        # store cannot tell observed from imputed and must be refused even
+        # though the cell it sits in is otherwise well-formed.
+        root = open_store(completed_store).arrays(mode="r+")
+        on_panel = root["on_panel"][:]
+        on_panel_rows = np.where(on_panel == 1)[0]
+        assert len(on_panel_rows) > 0
+        r = int(on_panel_rows[0])
+        imputed = root["imputed"][:]
+        zero_cols = np.where(imputed[r] == 0)[0]
+        assert len(zero_cols) > 0  # the fixture must have a cell to corrupt
+        imputed[r, int(zero_cols[0])] = 2
+        root["imputed"][:] = imputed
+
+        result = validate_store(completed_store)
+
+        assert not result.ok
+        assert any(
+            "imputed contains values other than 0 and 1" in e for e in result.errors
+        ), result.errors
+
+    def test_corrupt_imputed_nan_se_fails(self, completed_store):
+        # An imputed=1 cell whose se is NaN must be caught by the streamed
+        # finite-check band pass (issue 045): imputed cells are complete, and a
+        # NaN standard error there is a plausible-looking hole. On-panel so the
+        # finite check is isolated from the off-panel-never-imputed check.
+        root = open_store(completed_store).arrays(mode="r+")
+        on_panel = root["on_panel"][:]
+        on_panel_rows = np.where(on_panel == 1)[0]
+        assert len(on_panel_rows) > 0
+        r, c = int(on_panel_rows[0]), 0
+        imputed = root["imputed"][:]
+        imputed[r, c] = 1
+        root["imputed"][:] = imputed
+        se = root["se"][:]
+        se[r, c] = float("nan")
+        root["se"][:] = se
+
+        result = validate_store(completed_store)
+
+        assert not result.ok
+        assert any(
+            "imputed=1 cells have NaN se values" in e for e in result.errors
+        ), result.errors
+
+    def test_corrupt_eaf_reference_length_fails(self, completed_store):
+        # issue #113's shape for a Reference-Completed release with no plane:
+        # every imputed cell reads eaf_reference, so a short one hands some
+        # cells a neighbouring variant's panel frequency. Rewrite the array
+        # (not just resize it, which would leave an over-wide chunk and trip
+        # the chunking rule first).
+        root = open_store(completed_store).arrays(mode="a")
+        n = len(root["eaf_reference"])
+        assert n > 1  # the fixture really has a per-variant reference to shrink
+        values = root["eaf_reference"][: n - 1]
+        dtype = root["eaf_reference"].dtype
+        del root["eaf_reference"]
+        root.create_dataset("eaf_reference", data=values, chunks=(1,), dtype=dtype)
+
+        result = validate_store(completed_store)
+
+        assert not result.ok
+        assert any(
+            "eaf_reference has" in e and "entries but the variant axis" in e
+            for e in result.errors
+        ), result.errors
 
     def test_corrupt_imputed_nan_z_fails(self, completed_store):
         # An imputed=1 cell whose z is NaN must be caught by the streamed
