@@ -22,7 +22,6 @@ import json
 import logging
 import shutil
 from collections.abc import Iterator
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,7 +49,7 @@ from opengwasdb.completion.ld_panel import (
     list_chromosomes,
 )
 from opengwasdb.completion.manifest import build_completion_provenance
-from opengwasdb.completion.parallel import init_block_worker
+from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
@@ -470,18 +469,7 @@ def _run_completion(
         if pending:
             print(f"  {n_existing:,} blocks already checkpointed, {len(pending):,} remaining")
         # Each block writes its own checkpoint; the parent keeps nothing per block.
-        if n_workers <= 1:
-            for i, task in enumerate(pending):
-                _run_block(task)
-                if (i + 1) % 200 == 0:
-                    print(f"  {i + 1:,} / {len(pending):,} blocks")
-        else:
-            with ProcessPoolExecutor(max_workers=n_workers, initializer=init_block_worker) as pool:
-                futures = [pool.submit(_run_block, task) for task in pending]
-                for i, fut in enumerate(as_completed(futures)):
-                    fut.result()  # propagate worker errors; result is on disk
-                    if (i + 1) % 200 == 0:
-                        print(f"  {i + 1:,} / {len(pending):,} blocks")
+        run_block_tasks(pending, n_workers, _run_block)
 
         # ── Phase 3: stream fills from checkpoints, band-write, finalise ────
         # Resolve checkpoint fill ALIDs to union rows and shard the fill records

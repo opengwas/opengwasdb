@@ -27,7 +27,6 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,7 +54,7 @@ from opengwasdb.completion.ld_panel import (
     find_blocks,
 )
 from opengwasdb.completion.manifest import build_completion_provenance
-from opengwasdb.completion.parallel import init_block_worker
+from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
@@ -124,6 +123,31 @@ class _BlockTask:
     checkpoint_path: Path
 
 
+def _observed_alid_maps(
+    obs: Any, src_alids: list[str]
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """Map one Analysis's observed CSR rows onto ``{alid: z/se/eaf}``. Observed
+    EAF is carried across the rebuild (ADR 0036): Reference Completion adds
+    panel rows to an Analysis; it does not change what the source reported for
+    the rows it already had. Both the block reader and Phase 3's assembly fold
+    the same observed rows this way."""
+    obs_alid_to_z: dict[str, float] = {}
+    obs_alid_to_se: dict[str, float] = {}
+    obs_alid_to_eaf: dict[str, float] = {}
+    for vi_old, z_val, se_val, eaf_val in zip(
+        obs.variant_index.tolist(),
+        obs.z.tolist(),
+        obs.se.tolist(),
+        obs.eaf.tolist(),
+        strict=True,
+    ):
+        alid = src_alids[vi_old]
+        obs_alid_to_z[alid] = float(z_val)
+        obs_alid_to_se[alid] = float(se_val)
+        obs_alid_to_eaf[alid] = float(eaf_val)
+    return obs_alid_to_z, obs_alid_to_se, obs_alid_to_eaf
+
+
 def _make_reader(task: _BlockTask):
     """ragged's half of the ``run_block`` seam: read one Analysis's observed
     z/se at a time from its CSR row, since (unlike dense's Full Coverage
@@ -141,23 +165,7 @@ def _make_reader(task: _BlockTask):
 
         def read(ai: int) -> tuple[np.ndarray, np.ndarray]:
             obs = src_csr.get_analysis(ai)
-            obs_alid_to_z: dict[str, float] = {}
-            obs_alid_to_se: dict[str, float] = {}
-            # Observed EAF carried across the rebuild (ADR 0036). Reference
-            # Completion adds panel rows to an Analysis; it does not change
-            # what the source reported for the rows it already had.
-            obs_alid_to_eaf: dict[str, float] = {}
-            for vi_old, z_val, se_val, eaf_val in zip(
-                obs.variant_index.tolist(),
-                obs.z.tolist(),
-                obs.se.tolist(),
-                obs.eaf.tolist(),
-                strict=True,
-            ):
-                alid = src_alids[vi_old]
-                obs_alid_to_z[alid] = float(z_val)
-                obs_alid_to_se[alid] = float(se_val)
-                obs_alid_to_eaf[alid] = float(eaf_val)
+            obs_alid_to_z, obs_alid_to_se, obs_alid_to_eaf = _observed_alid_maps(obs, src_alids)
 
             z_dense = np.array(
                 [
@@ -530,18 +538,7 @@ def _run_completion(
         if pending:
             print(f"  {n_existing:,} blocks already checkpointed, {len(pending):,} remaining")
 
-        if n_workers <= 1:
-            for i, task in enumerate(pending):
-                _run_block(task)
-                if (i + 1) % 200 == 0:
-                    print(f"  {i + 1:,} / {len(pending):,} blocks")
-        else:
-            with ProcessPoolExecutor(max_workers=n_workers, initializer=init_block_worker) as pool:
-                futures = [pool.submit(_run_block, task) for task in pending]
-                for i, fut in enumerate(as_completed(futures)):
-                    fut.result()  # propagate worker errors; result is on disk
-                    if (i + 1) % 200 == 0:
-                        print(f"  {i + 1:,} / {len(pending):,} blocks")
+        run_block_tasks(pending, n_workers, _run_block)
 
         # ── Phase 3: merge checkpoints, assemble CSR, finalise ──────────────
         print("Merging block results from checkpoints...")
@@ -602,23 +599,7 @@ def _run_completion(
                 offsets.append(offsets[-1] + len(obs_vi_new))
                 continue
 
-            obs_alid_to_z: dict[str, float] = {}
-            obs_alid_to_se: dict[str, float] = {}
-            # Observed EAF carried across the rebuild (ADR 0036). Reference
-            # Completion adds panel rows to an Analysis; it does not change
-            # what the source reported for the rows it already had.
-            obs_alid_to_eaf: dict[str, float] = {}
-            for vi_old, z_val, se_val, eaf_val in zip(
-                obs.variant_index.tolist(),
-                obs.z.tolist(),
-                obs.se.tolist(),
-                obs.eaf.tolist(),
-                strict=True,
-            ):
-                alid = src_alids[vi_old]
-                obs_alid_to_z[alid] = float(z_val)
-                obs_alid_to_se[alid] = float(se_val)
-                obs_alid_to_eaf[alid] = float(eaf_val)
+            obs_alid_to_z, obs_alid_to_se, obs_alid_to_eaf = _observed_alid_maps(obs, src_alids)
 
             unique_ref_alids: list[str] = []
             seen_block_alids: set[str] = set()
@@ -666,19 +647,14 @@ def _run_completion(
                     ref_imp.append(0)
                     total_missing += 1
 
-            for vi_old, z_val, se_val, eaf_val in zip(
-                obs.variant_index.tolist(),
-                obs.z.tolist(),
-                obs.se.tolist(),
-                obs.eaf.tolist(),
-                strict=True,
-            ):
-                alid = src_alids[vi_old]
+            # Observed rows the block scan never produced (off-window variants
+            # the source already holds) are carried through from the maps above.
+            for alid, z_val in obs_alid_to_z.items():
                 if alid not in seen_alids:
                     ref_vi.append(new_alid_to_idx[alid])
-                    ref_z.append(float(z_val))
-                    ref_se.append(float(se_val))
-                    ref_eaf.append(float(eaf_val))
+                    ref_z.append(z_val)
+                    ref_se.append(obs_alid_to_se[alid])
+                    ref_eaf.append(obs_alid_to_eaf[alid])
                     ref_imp.append(0)
 
             order = np.argsort(ref_vi)

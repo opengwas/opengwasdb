@@ -1,0 +1,15 @@
+{
+  "escapes": {
+    "roots": ["."],
+    "languages": ["python", "shell"],
+    "skip_dirs": ["quality", ".claude", ".pixi"],
+    "baseline": "quality/escapes-baseline.json"
+  },
+  "duplication": {
+    "roots": ["."],
+    "languages": ["python", "shell"],
+    "skip_dirs": ["quality", ".claude", ".pixi"],
+    "min_lines": 6,
+    "baseline": "quality/duplication-baseline.json"
+  }
+}
