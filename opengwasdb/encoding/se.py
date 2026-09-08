@@ -388,9 +388,9 @@ def _measure_overflow(
 def _empty_exception_arrays(group: Any, count: int, compressor: Any) -> tuple[Any, Any]:
     """Allocate the side table the streaming rewrite fills in position order.
 
-    Sized from the measurement pass rather than grown: the rewrite visits row
-    chunks in order, so the exceptions arrive already sorted and can be written
-    straight into their final slots.
+    Sized from the rewrite's codes-only count pass rather than grown: the
+    rewrite visits row chunks in order, so the exceptions arrive already sorted
+    and can be written straight into their final slots.
     """
     for name in (SE_EXCEPTION_INDEX, SE_EXCEPTION_VALUE):
         if name in group:
@@ -533,7 +533,7 @@ def _rewrite_dense(
             cursor = end
     if cursor != exception_count:
         raise RuntimeError(
-            f"SE measurement counted {exception_count} exceptions but rewrite produced {cursor}"
+            f"SE codes-only pass counted {exception_count} exceptions but rewrite produced {cursor}"
         )
     del group["se"]
     group.move("se_pending", "se")
@@ -699,7 +699,7 @@ def _fall_back_to_float16(
     way the plane must end up in the `float16` its manifest declares, and a
     caller must not be handed coefficients no array was coded against.
     """
-    narrow_dense_se_to_float16(group)
+    _narrow_dense_se_to_float16(group)
     return encoding, None
 
 
@@ -763,7 +763,7 @@ def optimise_dense_se_joint(
     return selected, coefficients
 
 
-def narrow_dense_se_to_float16(group: Any) -> None:
+def _narrow_dense_se_to_float16(group: Any) -> None:
     """Bring a `float32` scratch plane down to the declared `float16`.
 
     Builders keep the scratch in `float32` so an exact exception is the
@@ -808,7 +808,7 @@ def rewrite_dense_se(
     source = group["se"]
     n_analyses = int(source.shape[1])
     if not encoding.se.is_residual:
-        narrow_dense_se_to_float16(group)
+        _narrow_dense_se_to_float16(group)
         return
     if coefficients is None:
         raise ValueError("residual SE needs se_coefficients")
