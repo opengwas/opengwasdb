@@ -663,16 +663,37 @@ class RaggedStoreQuery:
         if not variant_set:
             return _empty_result()
 
-        offsets = self._csr._offsets[:]
         vi_all = self._csr._variant_index[:]
-        z_all = self._csr.z_all()
-        se_all = self._csr.se_all()
+        hit_positions = np.where(np.isin(vi_all, np.array(sorted(variant_set), dtype=np.int32)))[0]
+        return self._hit_rows_result(
+            hit_positions,
+            vi_all[hit_positions].astype("int32"),
+            observed_only=observed_only,
+        )
 
-        mask = np.isin(vi_all, np.array(sorted(variant_set), dtype=np.int32))
-        hit_positions = np.where(mask)[0]
+    def _hit_rows_result(
+        self,
+        hit_positions: np.ndarray,
+        variant_indexes: np.ndarray,
+        *,
+        observed_only: bool,
+    ) -> dict[str, np.ndarray]:
+        """Decode flat CSR hit positions into the six-array result shape.
+
+        The decode `range_phewas` and `phewas` share (issue #130): each
+        resolves a set of flat CSR positions and a parallel `variant_indexes`
+        array its own way -- range reads every hit's own variant from the CSR
+        column, phewas fills the single target variant, and the two are
+        deliberately not unified -- but a flat position then decodes the same
+        in both: to its Analysis through the CSR offsets, to its imputed flag,
+        through the `observed_only` filter, then to z/se/eaf and status. A
+        hand-maintained copy of this block previously lived in both methods;
+        a divergence between them would be silent, so the decode lives here
+        once and the parity tests pin both methods to it.
+        """
         if len(hit_positions) == 0:
             return _empty_result()
-
+        offsets = self._csr._offsets[:]
         analysis_indices = np.searchsorted(offsets[1:], hit_positions, side="right").astype("int32")
         imp = (
             self._imputed[hit_positions].astype(np.uint8)
@@ -683,12 +704,13 @@ class RaggedStoreQuery:
             keep = imp == 0
             hit_positions = hit_positions[keep]
             analysis_indices = analysis_indices[keep]
+            variant_indexes = variant_indexes[keep]
             imp = imp[keep]
 
-        z_out = z_all[hit_positions].astype("float32")
-        se_out = se_all[hit_positions].astype("float32")
+        z_out = self._csr.z_all()[hit_positions].astype("float32")
+        se_out = self._csr.se_all()[hit_positions].astype("float32")
         return {
-            "variant_index": vi_all[hit_positions].astype("int32"),
+            "variant_index": variant_indexes,
             "analysis_index": analysis_indices,
             "z": z_out,
             "se": se_out,
@@ -773,37 +795,13 @@ class RaggedStoreQuery:
             return _empty_result()
         target_vi = np.int32(variant.variant_index)
 
-        offsets = self._csr._offsets[:]
         vi_all = self._csr._variant_index[:]
-        z_all = self._csr.z_all()
-        se_all = self._csr.se_all()
-
         hit_positions = np.where(vi_all == target_vi)[0]
-        if len(hit_positions) == 0:
-            return _empty_result()
-
-        analysis_indices = np.searchsorted(offsets[1:], hit_positions, side="right").astype("int32")
-        imp = (
-            self._imputed[hit_positions].astype(np.uint8)
-            if self._imputed is not None
-            else np.zeros(len(hit_positions), dtype=np.uint8)
+        return self._hit_rows_result(
+            hit_positions,
+            np.full(len(hit_positions), target_vi, dtype="int32"),
+            observed_only=observed_only,
         )
-        if observed_only:
-            keep = imp == 0
-            hit_positions = hit_positions[keep]
-            analysis_indices = analysis_indices[keep]
-            imp = imp[keep]
-
-        z_out = z_all[hit_positions].astype("float32")
-        se_out = se_all[hit_positions].astype("float32")
-        return {
-            "variant_index": np.full(len(hit_positions), target_vi, dtype="int32"),
-            "analysis_index": analysis_indices,
-            "z": z_out,
-            "se": se_out,
-            "eaf": self._csr.eaf_at(hit_positions),
-            "association_status": _status_array(imp, z_out, se_out),
-        }
 
     def top_hits(
         self,
