@@ -18,6 +18,7 @@ from opengwasdb.completion.ld_panel import (
     load_ld_eigenvectors,
     snp_position,
 )
+from opengwasdb.encoding import StoreCodec
 from opengwasdb.layouts.dense import complete as complete_module
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -27,6 +28,7 @@ from opengwasdb.model.analyses import read_analyses, write_analyses
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation.validate import validate_store
+from opengwasdb.variants import VariantAxis
 
 
 def _assert_stores_identical(dst_a: Path, dst_b: Path) -> None:
@@ -430,6 +432,108 @@ class TestSourceFidelity:
         result = validate_store(observed_store, source=source_path)
         assert not result.ok
         assert any("source-fidelity" in e for e in result.errors), result.errors
+
+    def test_fidelity_reports_unmatched_analysis_and_variant(
+        self, observed_store, source_path, tmp_path
+    ):
+        # A wrong source must fail loudly, naming both unmatched kinds: an Analysis
+        # the store does not hold and a variant row it does not carry. A check that
+        # quietly matched nothing would look exactly like "no association".
+        assert validate_store(observed_store, source=source_path).ok, validate_store(
+            observed_store, source=source_path
+        ).errors
+        wrong = tmp_path / "wrong-source.tsv"
+        wrong.write_text(
+            SOURCE_HEADER
+            + "\n"
+            + "a1\tp1\tHeight\tHeight primary\t1\t999999\tA\tG\t1.0\t0.15\trsX\tsd\n"
+            + "a3\tp3\tOther\tOther primary\t1\t1000000\tA\tG\t1.0\t0.15\trsY\tsd\n",
+            encoding="utf-8",
+        )
+
+        result = validate_store(observed_store, source=wrong)
+
+        assert not result.ok
+        assert any(
+            "none of 2 sampled source associations could be matched to a store cell" in e
+            for e in result.errors
+        ), result.errors
+        assert any("(1 variants, 1 analyses unmatched)" in e for e in result.errors)
+        assert any(
+            "check source_assembly / that this is the right source" in e for e in result.errors
+        )
+
+    def test_fidelity_reports_source_with_no_readable_associations(self, observed_store, tmp_path):
+        # A header-only source yields no associations; the check must say so rather
+        # than treating an unreadable source as a store that agrees with nothing.
+        empty = tmp_path / "empty-source.tsv"
+        empty.write_text(SOURCE_HEADER + "\n", encoding="utf-8")
+
+        result = validate_store(observed_store, source=empty)
+
+        assert not result.ok
+        assert any(
+            "source-fidelity: no associations could be read from the source" in e
+            for e in result.errors
+        ), result.errors
+
+    def test_fidelity_reports_associations_the_store_dropped(self, observed_store, tmp_path):
+        # The five a1 cells are all below every top-hit cutoff, so nulling them
+        # leaves internal validation green and the fidelity check reachable --
+        # the silent "dropped associations" failure only the check can see.
+        cells = [
+            ("1:900000:A:G", 1.0, 0.15), ("1:950000:A:C", 1.8, 0.15),
+            ("1:1000000:A:G", 2.0, 0.15), ("1:1100000:A:C", 3.0, 0.20),
+            ("1:1200000:A:G", 1.5, 0.30),
+        ]
+        src = tmp_path / "a1-observed.tsv"
+        lines = []
+        for alid, z_src, se_src in cells:
+            chrom, pos, a1, a2 = alid.split(":")
+            lines.append(
+                f"a1\tp1\tHeight\tHeight primary\t{chrom}\t{pos}\t{a1}\t{a2}"
+                f"\t{z_src}\t{se_src}\trsX\tsd"
+            )
+        src.write_text(SOURCE_HEADER + "\n" + "\n".join(lines) + "\n", encoding="utf-8")
+        assert validate_store(observed_store, source=src).ok  # matches before the drop
+
+        va = VariantAxis(observed_store)
+        row_by_alid = {}
+        try:
+            for alid, _z_src, _se_src in cells:
+                rec = va.by_identifier(alid)
+                assert rec is not None, f"fixture must hold {alid}"
+                row_by_alid[alid] = rec.variant_index
+        finally:
+            va.close()
+        a1_col = next(
+            int(row["analysis_index"])
+            for row in read_analyses(observed_store / "analyses.tsv").rows
+            if row["analysis_id"] == "a1"
+        )
+        assert len(row_by_alid) == 5  # fixture sanity
+
+        codec = StoreCodec(open_store(observed_store).manifest.encoding)
+        root = open_store(observed_store).arrays(mode="a")
+        z = root["z"][:]
+        se = root["se"][:]
+        assert se.dtype.kind == "f"  # fixture sanity: NaN marks missing on float planes
+        missing_z = int(codec.encode_z(np.array([np.nan]))[0])
+        for _alid, row in row_by_alid.items():
+            assert z[row, a1_col] != missing_z  # fixture sanity: cell is present
+            z[row, a1_col] = missing_z
+            se[row, a1_col] = np.nan
+        root["z"][:] = z
+        root["se"][:] = se
+
+        assert validate_store(observed_store).ok
+        result = validate_store(observed_store, source=src)
+        assert not result.ok
+        assert any(
+            "source-fidelity: matched 5 source associations but the store held no "
+            "finite value at any of those cells (possible dropped associations)" in e
+            for e in result.errors
+        ), result.errors
 
 
 class TestQuery:
