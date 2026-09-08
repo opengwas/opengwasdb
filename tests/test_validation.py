@@ -88,6 +88,23 @@ def test_validator_rejects_missing_required_array(dense_store_path):
     assert "missing data.zarr/se" in result.errors
 
 
+def test_validator_rejects_misshaped_z_plane(dense_store_path):
+    # The z/se/eaf planes are parallel (n_variants, n_analyses) matrices; a
+    # release whose z plane does not span the variant axis cannot be read
+    # against that axis, and the guard must say so before any band is decoded.
+    root = open_store(dense_store_path).arrays(mode="a")
+    n_variants, n_analyses = root["z"].shape
+    root["z"].resize(n_variants - 1, n_analyses)
+
+    result = validate_store(dense_store_path)
+
+    assert not result.ok
+    assert any(
+        f"z shape ({n_variants - 1}, {n_analyses}) does not match" in e
+        for e in result.errors
+    ), result.errors
+
+
 def test_validator_rejects_negative_se(dense_store_path):
     root = open_store(dense_store_path).arrays(mode="a")
     root["se"][0, 0] = -0.1

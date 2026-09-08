@@ -1666,39 +1666,12 @@ def _validate_dense_arrays(
     the cost of one ``int64`` per analysis, since the loop already reads
     ``imputed``.
     """
-    for name in ("z", "se"):
-        if name not in root:
-            errors.append(f"missing data.zarr/{name}")
-    if errors:
+    planes = _dense_required_planes(root, errors)
+    if planes is None:
         return
-    z_arr = root["z"]
-    se_arr = root["se"]
-    expected_shape = (n_variants, n_analyses)
-    if tuple(z_arr.shape) != expected_shape:
-        errors.append(f"z shape {tuple(z_arr.shape)} does not match {expected_shape}")
-    if tuple(se_arr.shape) != expected_shape:
-        errors.append(f"se shape {tuple(se_arr.shape)} does not match {expected_shape}")
-    # `eaf` is optional (ADR 0036) -- absent on every store built before it, and
-    # on any build whose sources report no frequency -- but when present it is a
-    # third parallel plane and must have the same shape as z/se.
-    eaf_arr = root["eaf"] if "eaf" in root else None
-    if eaf_arr is not None and tuple(eaf_arr.shape) != expected_shape:
-        errors.append(f"eaf shape {tuple(eaf_arr.shape)} does not match {expected_shape}")
-        eaf_arr = None
-    if EAF_BASELINE in root and len(root[EAF_BASELINE]) != n_variants:
-        errors.append(
-            f"{EAF_BASELINE} has {len(root[EAF_BASELINE])} entries but the variant axis "
-            f"has {n_variants}"
-        )
-    # Checked whether or not there is an `eaf` plane: a completed release whose
-    # Analyses reported no frequency carries `eaf_reference` and nothing else,
-    # and a mis-sized one there would hand every imputed cell the frequency of
-    # some other variant (issue #113).
-    if EAF_REFERENCE in root and len(root[EAF_REFERENCE]) != n_variants:
-        errors.append(
-            f"{EAF_REFERENCE} has {len(root[EAF_REFERENCE])} entries but the variant axis "
-            f"has {n_variants}"
-        )
+    z_arr, se_arr = planes
+    eaf_arr = _dense_plane_shape_errors(root, z_arr, se_arr, n_variants, n_analyses, errors)
+    _dense_eaf_side_lengths(root, n_variants, errors)
     if errors:
         return
     # Opened when there is a plane to decode *or* a panel frequency to
@@ -1719,121 +1692,343 @@ def _validate_dense_arrays(
     # sentinel for an integer one -- so nothing here decodes a value it does
     # not need, and no band is upcast.
     codec = StoreCodec(encoding)
-    fixed_point = encoding.z.is_fixed_point
-    overflow_positions: list[np.ndarray] = []
-    eaf_exception_positions: list[np.ndarray] = []
-    se_exception_positions: list[np.ndarray] = []
-    eaf_undecodable = False
-    neg_se = False
-    missingness = False
-    imp_not_binary = False
-    imp_nan_z = False
-    imp_nan_se = False
-    off_panel_imputed = False
-    imputed_per_analysis = np.zeros(n_analyses, dtype=np.int64)
-    eaf_out_of_range = False
+    findings = _DenseBandState(n_analyses)
     for r0 in range(0, n_variants, _VALIDATE_BAND_ROWS):
-        r1 = min(r0 + _VALIDATE_BAND_ROWS, n_variants)
-        z = z_arr[r0:r1]
-        try:
-            se = se_plane.band(r0, r1)
-        except ValueError as exc:
-            errors.append(f"cannot decode se: {exc}")
+        if not _validate_dense_band(
+            z_arr,
+            se_arr,
+            eaf_arr,
+            se_plane,
+            codec,
+            encoding,
+            eaf_plane,
+            imputed_arr,
+            on_panel,
+            findings,
+            n_analyses,
+            r0,
+            min(r0 + _VALIDATE_BAND_ROWS, n_variants),
+            errors,
+        ):
             return
-        if encoding.se.is_residual:
-            se_exception_positions.append(_band_exception_positions(se_arr[r0:r1], r0, n_analyses))
-        z_missing = codec.missing_mask(z)
-        if fixed_point:
-            overflow_positions.append(
-                np.flatnonzero(np.asarray(z) == Z_OVERFLOW).astype(np.int64) + r0 * n_analyses
-            )
-        if not neg_se and np.any(np.isfinite(se) & (se < 0)):
-            neg_se = True
-        if eaf_plane is not None:
-            # Decoded, not raw: an `int8` residual plane's bytes are codes, and
-            # checking those for "in [0, 1]" would pass every store while
-            # saying nothing about the frequencies a query returns. A decode
-            # that cannot resolve an exception cell is not reported from here:
-            # the position check below says exactly which cell and why.
-            if not eaf_out_of_range and not eaf_undecodable:
-                try:
-                    eaf = eaf_plane.band(r0, r1)
-                except ValueError:
-                    eaf_undecodable = True
-                else:
-                    finite = np.isfinite(eaf)
-                    if np.any(finite & ((eaf < 0.0) | (eaf > 1.0))):
-                        eaf_out_of_range = True
-            if encoding.eaf.is_residual and eaf_arr is not None:
-                eaf_exception_positions.append(
-                    np.flatnonzero(np.asarray(eaf_arr[r0:r1]) == EAF_EXCEPTION).astype(np.int64)
-                    + r0 * n_analyses
-                )
-        if not missingness and np.any(z_missing != np.isnan(se)):
-            missingness = True
-        if imputed_arr is not None:
-            imp = imputed_arr[r0:r1]
-            if not imp_not_binary and not np.all((imp == 0) | (imp == 1)):
-                imp_not_binary = True
-            imp_mask = imp == 1
-            imputed_per_analysis += imp_mask.sum(axis=0, dtype=np.int64)
-            if imp_mask.any():
-                if not imp_nan_z and np.any(z_missing[imp_mask]):
-                    imp_nan_z = True
-                if not imp_nan_se and not np.all(np.isfinite(se[imp_mask])):
-                    imp_nan_se = True
-                # Off-panel rows can never be imputed (no LD structure).
-                if not off_panel_imputed:
-                    off_band = on_panel[r0:r1] == 0
-                    if off_band.any() and np.any(imp[off_band] == 1):
-                        off_panel_imputed = True
-    if neg_se:
+    _report_dense_band_flags(errors, findings)
+    if imputed_arr is not None and analyses_path is not None:
+        _imputed_declaration_matches_arrays(analyses_path, findings.imputed_per_analysis, errors)
+    _report_dense_eaf_range(errors, findings)
+    _report_dense_z_overflow(root, encoding, findings, errors)
+    _report_dense_eaf_exceptions(root, encoding, eaf_plane, findings, errors)
+    _match_dense_se_exceptions(root, encoding, findings.se_exception_positions, errors)
+
+
+def _dense_required_planes(root: Any, errors: list[str]) -> tuple[Any, Any] | None:
+    """The `z` and `se` planes exist, or every missing one is named and the pass stops.
+
+    The first fail-safe guard: no check downstream means anything for a release
+    that has no plane to check, and naming *both* missing planes rather than the
+    first saves a repair-and-revalidate round trip.
+    """
+    for name in ("z", "se"):
+        if name not in root:
+            errors.append(f"missing data.zarr/{name}")
+    if errors:
+        return None
+    return root["z"], root["se"]
+
+
+def _dense_plane_shape_errors(
+    root: Any,
+    z_arr: Any,
+    se_arr: Any,
+    n_variants: int,
+    n_analyses: int,
+    errors: list[str],
+) -> Any | None:
+    """`z`/`se`/`eaf` all span exactly the (n_variants, n_analyses) matrix.
+
+    `eaf` is optional (ADR 0036) -- absent on every store built before it, and
+    on any build whose sources report no frequency -- but when present it is a
+    third parallel plane and must have the same shape as z/se. A mis-shaped one
+    is dropped here so no later seam decodes a plane that does not line up with
+    the variant/analysis axes it would be read against; its shape error is
+    already on the list, and the caller stops.
+    """
+    expected_shape = (n_variants, n_analyses)
+    if tuple(z_arr.shape) != expected_shape:
+        errors.append(f"z shape {tuple(z_arr.shape)} does not match {expected_shape}")
+    if tuple(se_arr.shape) != expected_shape:
+        errors.append(f"se shape {tuple(se_arr.shape)} does not match {expected_shape}")
+    eaf_arr = root["eaf"] if "eaf" in root else None
+    if eaf_arr is not None and tuple(eaf_arr.shape) != expected_shape:
+        errors.append(f"eaf shape {tuple(eaf_arr.shape)} does not match {expected_shape}")
+        eaf_arr = None
+    return eaf_arr
+
+
+def _dense_eaf_side_lengths(root: Any, n_variants: int, errors: list[str]) -> None:
+    """The per-variant eaf side arrays are the length of the variant axis.
+
+    Checked whether or not there is an `eaf` plane: a completed release whose
+    Analyses reported no frequency carries `eaf_reference` and nothing else,
+    and a mis-sized one there would hand every imputed cell the frequency of
+    some other variant (issue #113).
+    """
+    if EAF_BASELINE in root and len(root[EAF_BASELINE]) != n_variants:
+        errors.append(
+            f"{EAF_BASELINE} has {len(root[EAF_BASELINE])} entries but the variant axis "
+            f"has {n_variants}"
+        )
+    if EAF_REFERENCE in root and len(root[EAF_REFERENCE]) != n_variants:
+        errors.append(
+            f"{EAF_REFERENCE} has {len(root[EAF_REFERENCE])} entries but the variant axis "
+            f"has {n_variants}"
+        )
+
+
+@dataclass
+class _DenseBandState:
+    """What one streamed band pass has found so far (issue 045).
+
+    The state seam the row-band loop feeds: one field per independent flag, and
+    one list per side-table whose positions the report seams reconcile. Each
+    ``_latch_*`` helper below owns exactly one flag or one list, so no check
+    sets another check's flag as a side effect.
+    """
+
+    n_analyses: int
+    imputed_per_analysis: np.ndarray = field(init=False)
+    overflow_positions: list[np.ndarray] = field(default_factory=list)
+    eaf_exception_positions: list[np.ndarray] = field(default_factory=list)
+    se_exception_positions: list[np.ndarray] = field(default_factory=list)
+    eaf_undecodable: bool = False
+    neg_se: bool = False
+    missingness: bool = False
+    imp_not_binary: bool = False
+    imp_nan_z: bool = False
+    imp_nan_se: bool = False
+    off_panel_imputed: bool = False
+    eaf_out_of_range: bool = False
+
+    def __post_init__(self) -> None:
+        self.imputed_per_analysis = np.zeros(self.n_analyses, dtype=np.int64)
+
+
+def _validate_dense_band(
+    z_arr: Any,
+    se_arr: Any,
+    eaf_arr: Any | None,
+    se_plane: DenseSePlane,
+    codec: StoreCodec,
+    encoding: StoreEncoding,
+    eaf_plane: DenseEafPlane | None,
+    imputed_arr: Any | None,
+    on_panel: np.ndarray | None,
+    findings: _DenseBandState,
+    n_analyses: int,
+    r0: int,
+    r1: int,
+    errors: list[str],
+) -> bool:
+    """One row-band of the streamed pass; False after reporting a decode failure.
+
+    Each band is sliced once per plane and handed to the flag and side-table
+    seams below. A band whose `se` cannot be decoded is a hard stop -- the
+    caller skips every report seam -- because a plane that cannot be decoded is
+    not a release to keep reading.
+    """
+    try:
+        se_band = se_plane.band(r0, r1)
+    except ValueError as exc:
+        errors.append(f"cannot decode se: {exc}")
+        return False
+    z_band = z_arr[r0:r1]
+    z_missing = codec.missing_mask(z_band)
+    if encoding.z.is_fixed_point:
+        findings.overflow_positions.append(
+            _band_marked_positions(z_band, Z_OVERFLOW, r0, n_analyses)
+        )
+    if encoding.se.is_residual:
+        findings.se_exception_positions.append(
+            _band_marked_positions(se_arr[r0:r1], SE_EXCEPTION, r0, n_analyses)
+        )
+    _latch_negative_se(findings, se_band)
+    if eaf_arr is not None and encoding.eaf.is_residual:
+        findings.eaf_exception_positions.append(
+            _band_marked_positions(eaf_arr[r0:r1], EAF_EXCEPTION, r0, n_analyses)
+        )
+    _latch_dense_eaf_range(findings, eaf_plane, r0, r1)
+    _latch_dense_missingness(findings, z_missing, se_band)
+    imp_mask = _latch_dense_imputed_content(findings, imputed_arr, r0, r1)
+    _latch_dense_imputed_missingness(findings, z_missing, se_band, imp_mask)
+    _latch_dense_off_panel_imputed(findings, on_panel, imp_mask, r0, r1)
+    return True
+
+
+def _band_marked_positions(raw: Any, marker: int, r0: int, n_analyses: int) -> np.ndarray:
+    """Flat positions of the cells equal to ``marker`` in one Dense row band."""
+    return np.flatnonzero(np.asarray(raw) == marker).astype(np.int64) + r0 * n_analyses
+
+
+def _flatten_band_positions(bands: list[np.ndarray]) -> np.ndarray:
+    """Band position lists concatenated in band order, or an empty int64 array."""
+    return np.concatenate(bands) if bands else np.empty(0, dtype=np.int64)
+
+
+def _latch_negative_se(findings: _DenseBandState, se_band: np.ndarray) -> None:
+    """Any band with a finite negative se raises the flag once; later bands skip it."""
+    if findings.neg_se:
+        return
+    findings.neg_se = bool(np.any(np.isfinite(se_band) & (se_band < 0)))
+
+
+def _latch_dense_missingness(
+    findings: _DenseBandState, z_missing: np.ndarray, se_band: np.ndarray
+) -> None:
+    """z and se must be missing in exactly the same cells (spec §15)."""
+    if findings.missingness:
+        return
+    findings.missingness = bool(np.any(z_missing != np.isnan(se_band)))
+
+
+def _latch_dense_eaf_range(
+    findings: _DenseBandState, eaf_plane: DenseEafPlane | None, r0: int, r1: int
+) -> None:
+    """One band can mark the decoded eaf plane out of range, or undecodable.
+
+    Decoded, not raw: an `int8` residual plane's bytes are codes, and checking
+    those for "in [0, 1]" would pass every store while saying nothing about
+    the frequencies a query returns. A decode that cannot resolve an exception
+    cell is not reported from here: the position check says exactly which cell
+    and why, so a band that fails to decode only sets the flag that stops
+    further decode attempts.
+    """
+    if eaf_plane is None or findings.eaf_out_of_range or findings.eaf_undecodable:
+        return
+    try:
+        eaf = eaf_plane.band(r0, r1)
+    except ValueError:
+        findings.eaf_undecodable = True
+    else:
+        finite = np.isfinite(eaf)
+        if np.any(finite & ((eaf < 0.0) | (eaf > 1.0))):
+            findings.eaf_out_of_range = True
+
+
+def _latch_dense_imputed_content(
+    findings: _DenseBandState, imputed_arr: Any | None, r0: int, r1: int
+) -> np.ndarray | None:
+    """Per band: the 0/1 flag, the imputed mask, and the per-Analysis counts.
+
+    The counts keep accumulating even once the 0/1 flag has latched: they feed
+    ``_imputed_declaration_matches_arrays``, and every imputed cell has to be
+    counted no matter what else the band held.
+    """
+    if imputed_arr is None:
+        return None
+    imp = np.asarray(imputed_arr[r0:r1])
+    if not findings.imp_not_binary:
+        findings.imp_not_binary = not bool(np.all((imp == 0) | (imp == 1)))
+    imp_mask: np.ndarray = imp == 1
+    findings.imputed_per_analysis += imp_mask.sum(axis=0, dtype=np.int64)
+    return imp_mask
+
+
+def _latch_dense_imputed_missingness(
+    findings: _DenseBandState,
+    z_missing: np.ndarray,
+    se_band: np.ndarray,
+    imp_mask: np.ndarray | None,
+) -> None:
+    """Imputed cells are complete: their z is present and their se is finite."""
+    if imp_mask is None or not bool(imp_mask.any()):
+        return
+    if not findings.imp_nan_z and np.any(z_missing[imp_mask]):
+        findings.imp_nan_z = True
+    if not findings.imp_nan_se and not np.all(np.isfinite(se_band[imp_mask])):
+        findings.imp_nan_se = True
+
+
+def _latch_dense_off_panel_imputed(
+    findings: _DenseBandState,
+    on_panel: np.ndarray | None,
+    imp_mask: np.ndarray | None,
+    r0: int,
+    r1: int,
+) -> None:
+    """Off-panel rows can never be imputed (no LD structure)."""
+    if imp_mask is None or findings.off_panel_imputed:
+        return
+    if on_panel is None:
+        raise ValueError("imputed validation requires the on_panel array")
+    off_band = on_panel[r0:r1] == 0
+    if off_band.any() and np.any(imp_mask[off_band]):
+        findings.off_panel_imputed = True
+
+
+def _report_dense_band_flags(errors: list[str], findings: _DenseBandState) -> None:
+    """The independent value flags the band latches set, in a fixed order."""
+    if findings.neg_se:
         errors.append("se contains negative finite values")
-    if missingness:
+    if findings.missingness:
         errors.append("z and se missingness is inconsistent")
-    if imp_not_binary:
+    if findings.imp_not_binary:
         errors.append("data.zarr/imputed contains values other than 0 and 1")
-    if imp_nan_z:
+    if findings.imp_nan_z:
         errors.append("imputed=1 cells have missing z-scores")
-    if imp_nan_se:
+    if findings.imp_nan_se:
         errors.append("imputed=1 cells have NaN se values")
-    if off_panel_imputed:
+    if findings.off_panel_imputed:
         errors.append(
             "off-panel (on_panel=0) rows have imputed=1 cells — off-panel is never imputable"
         )
-    if imputed_arr is not None and analyses_path is not None:
-        _imputed_declaration_matches_arrays(analyses_path, imputed_per_analysis, errors)
-    if eaf_out_of_range:
+
+
+def _report_dense_eaf_range(errors: list[str], findings: _DenseBandState) -> None:
+    """Decoded frequencies are frequencies: none may fall outside [0, 1]."""
+    if findings.eaf_out_of_range:
         errors.append("data.zarr/eaf contains finite values outside [0, 1]")
-    if fixed_point:
-        _overflow_positions_match(
-            "data.zarr/z",
-            np.concatenate(overflow_positions)
-            if overflow_positions
-            else np.empty(0, dtype=np.int64),
-            ZOverflowTable.read(root),
-            errors,
-        )
-    if eaf_plane is not None and encoding.eaf.is_residual:
-        before = len(errors)
-        _overflow_positions_match(
-            "data.zarr/eaf",
-            np.concatenate(eaf_exception_positions)
-            if eaf_exception_positions
-            else np.empty(0, dtype=np.int64),
-            EafExceptionTable.read(root),
-            errors,
-            what="eaf exception",
-            table_name="eaf exception",
-        )
-        if eaf_undecodable and len(errors) == before:
-            errors.append("data.zarr/eaf cannot be decoded under the declared plan")
-    _match_dense_se_exceptions(root, encoding, se_exception_positions, errors)
 
 
-def _band_exception_positions(raw: Any, r0: int, n_analyses: int) -> np.ndarray:
-    """Flat positions of the `-127` cells in one Dense row band."""
-    return np.flatnonzero(np.asarray(raw) == SE_EXCEPTION).astype(np.int64) + r0 * n_analyses
+def _report_dense_z_overflow(
+    root: Any, encoding: StoreEncoding, findings: _DenseBandState, errors: list[str]
+) -> None:
+    """The z overflow table describes exactly the Z_OVERFLOW cells (issue #114)."""
+    if not encoding.z.is_fixed_point:
+        return
+    _overflow_positions_match(
+        "data.zarr/z",
+        _flatten_band_positions(findings.overflow_positions),
+        ZOverflowTable.read(root),
+        errors,
+    )
+
+
+def _report_dense_eaf_exceptions(
+    root: Any,
+    encoding: StoreEncoding,
+    eaf_plane: DenseEafPlane | None,
+    findings: _DenseBandState,
+    errors: list[str],
+) -> None:
+    """Every eaf exception cell has an exact table entry, and no entry is stray.
+
+    An undecodable band is only reported once the positions have been
+    reconciled: a table that disagrees with the plane is the *reason* the plane
+    cannot be decoded, and saying "cannot decode" before naming that reason
+    would hide it.
+    """
+    if eaf_plane is None or not encoding.eaf.is_residual:
+        return
+    before = len(errors)
+    _overflow_positions_match(
+        "data.zarr/eaf",
+        _flatten_band_positions(findings.eaf_exception_positions),
+        EafExceptionTable.read(root),
+        errors,
+        what="eaf exception",
+        table_name="eaf exception",
+    )
+    if findings.eaf_undecodable and len(errors) == before:
+        errors.append("data.zarr/eaf cannot be decoded under the declared plan")
 
 
 def _match_dense_se_exceptions(
@@ -1844,7 +2039,7 @@ def _match_dense_se_exceptions(
         return
     _overflow_positions_match(
         "data.zarr/se",
-        np.concatenate(bands) if bands else np.empty(0, dtype=np.int64),
+        _flatten_band_positions(bands),
         SeExceptionTable.read(root),
         errors,
         what="se exception",
