@@ -142,9 +142,9 @@ compare against the baseline rather than aiming for a clean run:
 
 | | enforced (`.baselines.json`) | on `dev` |
 |---|---|---|
-| `pixi run -e dev lint` | 66 errors | 66 |
+| `pixi run -e dev lint` | 61 errors | 61 |
 | `pixi run -e dev typecheck` | 40 errors | 40 |
-| `pixi run -e dev test` | — | 744 passed, 1 skipped |
+| `pixi run -e dev test` | — | 837 passed, 1 skipped |
 
 `.baselines.json` carries the enforced numbers and is the only place they are
 stated; this table repeats them so the two can be seen to agree. Both columns
@@ -240,6 +240,37 @@ quantity; an undated one is not.
 Changes that invalidate every timing (the statistic encodings in #119, chunk
 shape, the query facade) should re-run benchmarks **before** the merge that cuts
 the version, so the released numbers describe the released code.
+
+### The pilot stores are defined in the other repository
+
+**No store this project verifies against is defined here.** Every Store Family,
+release bundle and build recipe lives in `opengwasdb-stores`; this repository
+holds the builders they call, and nothing more. The built stores themselves sit
+outside both, under `/data/opengwasdb/` on the IEU compute nodes.
+
+| in `opengwasdb-stores` | is |
+|---|---|
+| `families/<family>/releases/<release>/release.yaml` | which Analyses a release contains, and where its source came from |
+| `families/<family>/releases/<release>/build.yaml` | the release shape and the OpenGWASDB builder entry point it calls |
+| `families/<family>/generators/config-*.yaml` | the selection that produced the release |
+| `resources/generators/<generator>/build-store.py` | the command that actually builds it |
+
+A release is built in stages, source acquisition first and the store last, so
+rebuilding an existing pilot after a format change is only the final stage:
+
+```sh
+# in opengwasdb-stores
+pixi run python resources/generators/gwas-ssf-ragged/build-store.py \
+  --release-dir=families/pqtl-interval-2018/releases/2018-sun-pilot-100 \
+  --store-dir=/data/opengwasdb/wip/<run>/<store>
+```
+
+**That repository pins this one by git revision** (`pixi.toml`:
+`opengwasdb = { git = ..., rev = ... }`). A pilot therefore builds against the
+pinned commit, not your working tree, and a format or builder change is not
+reachable from a pilot build until it has merged *and* the pin has been bumped.
+Plan that sequencing into any issue that ends in "rebuild the pilots": the
+rebuild is downstream of the merge, not part of it.
 
 ### The walkthrough lives in the other repository
 

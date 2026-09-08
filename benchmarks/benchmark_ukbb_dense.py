@@ -13,17 +13,21 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import subprocess
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import zarr
 
 from opengwasdb.layouts.dense.top_hits import threshold_key, write_top_hit_indexes
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 
 STORE = Path("/local-scratch/data/opengwas/opengwasdb/ukb-b.opengwasdb")
@@ -42,6 +46,8 @@ CLUMP_KB = 1000  # greedy distance-based pruning window (approx. independence)
 
 # Regional query window: chr19 44.5-45.5 Mb spans the APOE/APOC cluster.
 REGION = ("19", 44_500_000, 45_500_000)
+RANDOM_AXIS_SIZE = 100
+LOOKUP_NARROW_AXIS_SIZE = 10
 
 PRE_EAF_TOP_HIT_MS = 1.17
 EAF_REGRESSION_TOP_HIT_MS = 86.6
@@ -180,21 +186,46 @@ def _dir_bytes(path: Path) -> int:
     return int(out.stdout.split()[0])
 
 
-def _raw_vcf_bytes(manifest: Path) -> tuple[int, int]:
-    paths = []
-    with open(manifest) as fh:
-        next(fh)  # header
-        for line in fh:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) >= 2:
-                paths.append(parts[1])
-    total = 0
-    for p in paths:
-        try:
-            total += Path(p).stat().st_size
-        except OSError:
-            pass
-    return total, len(paths)
+def _source_rows(path: Path) -> list[tuple[str, Path]]:
+    """`(analysis_id, source path)` from a build manifest or a release's analyses.tsv.
+
+    Two spellings because the sources moved: `data/ukb-b/manifest.tsv` pairs
+    `trait_id` with `file_path`, and a release config in `opengwasdb-stores`
+    pairs `analysis_id` with `source_file`.
+    """
+    with open(path, newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        columns = reader.fieldnames or []
+        for id_column, path_column in (("analysis_id", "source_file"), ("trait_id", "file_path")):
+            if id_column in columns and path_column in columns:
+                return [(row[id_column], Path(row[path_column])) for row in reader]
+    raise SystemExit(f"{path}: needs analysis_id/source_file or trait_id/file_path; got {columns}")
+
+
+def _require_sources_present(path: Path, rows: list[tuple[str, Path]]) -> None:
+    """Refuse a partial total: it divides into a published compression ratio."""
+    missing = [str(source) for _, source in rows if not source.exists()]
+    if missing:
+        raise SystemExit(
+            f"{path}: {len(missing)} of {len(rows)} source file(s) are missing, so there is "
+            f"no honest compression ratio to report. First missing: {missing[0]}"
+        )
+
+
+def _raw_vcf_bytes(path: Path, analysis_ids: set[str] | None = None) -> tuple[int, int]:
+    """Total size of the sources the store was built from, or nothing at all.
+
+    The old manifest points at `/local-scratch` paths that no longer exist, and
+    this used to skip a source it could not stat -- so all 2,514 entries were
+    skipped, the raw total came out 0, and the compression ratio came out 0.0.
+    """
+    rows = _source_rows(path)
+    if analysis_ids is not None:
+        rows = [row for row in rows if row[0] in analysis_ids]
+    if not rows:
+        raise SystemExit(f"{path}: none of its analyses are in the store")
+    _require_sources_present(path, rows)
+    return sum(source.stat().st_size for _, source in rows), len(rows)
 
 
 def _build_seconds(log: Path) -> float | None:
@@ -382,6 +413,49 @@ def _parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
+def _query_patterns(
+    q: Any,
+    analyses: dict[int, dict[str, Any]],
+    n_variants: int,
+    n_analyses: int,
+    phewas_alid: str,
+) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
+    """The repeatable query shapes timed for both encoding plans."""
+    regional_rows = q._variant_axis.range_indices(*REGION)
+    regional_alids = [
+        record.alid
+        for record in (q._variant_axis.by_index(int(row)) for row in regional_rows)
+        if record is not None
+    ]
+
+    rng = np.random.default_rng(0)
+    random_variants = rng.choice(n_variants, size=RANDOM_AXIS_SIZE, replace=False)
+    random_alids = [
+        record.alid
+        for record in (q._variant_axis.by_index(int(variant)) for variant in random_variants)
+        if record is not None
+    ]
+    random_analysis_indices = rng.choice(
+        n_analyses, size=RANDOM_AXIS_SIZE, replace=False
+    )
+    random_analyses = [
+        analyses[int(analysis)]["analysis_id"] for analysis in random_analysis_indices
+    ]
+    return {
+        "bulk": lambda: q.analysis(EXPOSURE),
+        "phewas": lambda: q.phewas(phewas_alid),
+        "regional": lambda: q.range_phewas(*REGION),
+        "regional_one_analysis": lambda: q.lookup(regional_alids, [EXPOSURE]),
+        "tophits": lambda: q.top_hits(analysis_id=EXPOSURE, threshold=5e-8),
+        "random_lookup_10_variants_100_analyses": lambda: q.lookup(
+            random_alids[:LOOKUP_NARROW_AXIS_SIZE], random_analyses
+        ),
+        "random_lookup_100_variants_10_analyses": lambda: q.lookup(
+            random_alids, random_analyses[:LOOKUP_NARROW_AXIS_SIZE]
+        ),
+    }
+
+
 def main() -> None:
     args = _parse_args()
 
@@ -390,6 +464,7 @@ def main() -> None:
         return
 
     q = query_store(args.store)
+    plan = StoreManifest.load(args.store)  # the artifact must name the format it timed
     an = q.analyses_table()
     analyses_by_id = {v["analysis_id"]: k for k, v in an.items()}
     n_analyses = len(an)
@@ -401,21 +476,7 @@ def main() -> None:
     strong_vi = int(th["variant_index"][m][np.argmax(np.abs(th["z"][m]))])
     phewas_alid = q._variant_axis.by_index(strong_vi).alid
 
-    rng = np.random.default_rng(0)
-    rand_vi = rng.choice(n_variants, size=100, replace=False)
-    rand_alids = [
-        r.alid for r in (q._variant_axis.by_index(int(v)) for v in rand_vi) if r is not None
-    ]
-    rand_a = rng.choice(n_analyses, size=10, replace=False)
-    rand_analyses = [an[int(a)]["analysis_id"] for a in rand_a]
-
-    patterns = {
-        "bulk": lambda: q.analysis(EXPOSURE),
-        "phewas": lambda: q.phewas(phewas_alid),
-        "regional": lambda: q.range_phewas(*REGION),
-        "tophits": lambda: q.top_hits(analysis_id=EXPOSURE, threshold=5e-8),
-        "random_lookup": lambda: q.lookup(rand_alids, rand_analyses),
-    }
+    patterns = _query_patterns(q, an, n_variants, n_analyses, phewas_alid)
     timings = []
     for name, fn in patterns.items():
         med, p95, cnt = _median_ms(fn, args.reps)
@@ -424,7 +485,7 @@ def main() -> None:
         print(f"{name:15s} median={med:9.2f} ms  count={cnt:,}")
 
     store_bytes = _dir_bytes(args.store)
-    raw_bytes, n_files = _raw_vcf_bytes(args.manifest)
+    raw_bytes, n_files = _raw_vcf_bytes(args.manifest, set(analyses_by_id))
     build_seconds = _build_seconds(args.build_log)
 
     imputed_only_mr = bool(getattr(q, "_is_completed", False))
@@ -434,7 +495,9 @@ def main() -> None:
 
     result = {
         "dataset": {"n_variants": n_variants, "n_analyses": n_analyses,
-                    "reference_assembly": "GRCh38", "store": str(args.store)},
+                    "reference_assembly": "GRCh38", "store": str(args.store),
+                    "format_version": plan.format_version,
+                    "encoding": plan.encoding.to_manifest()},
         "storage": {
             "store_bytes": store_bytes, "store_gb": round(store_bytes / 1e9, 2),
             "raw_vcf_bytes": raw_bytes, "raw_vcf_gb": round(raw_bytes / 1e9, 2),
@@ -446,7 +509,11 @@ def main() -> None:
         "selection": {
             "bulk_analysis_id": EXPOSURE, "phewas_alid": phewas_alid,
             "region": {"chrom": REGION[0], "start": REGION[1], "end": REGION[2]},
-            "n_random_variants": len(rand_alids), "n_random_analyses": len(rand_analyses),
+            "regional_analysis_id": EXPOSURE,
+            "random_lookup_shapes": [
+                {"n_variants": LOOKUP_NARROW_AXIS_SIZE, "n_analyses": RANDOM_AXIS_SIZE},
+                {"n_variants": RANDOM_AXIS_SIZE, "n_analyses": LOOKUP_NARROW_AXIS_SIZE},
+            ],
         },
         "timings": timings,
         "mr": mr,

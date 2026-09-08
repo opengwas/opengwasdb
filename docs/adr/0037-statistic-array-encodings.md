@@ -154,8 +154,8 @@ worst-case p error of 1.6% at the range edge and 0.24% at z = 5, against
 legitimate strong association.** The earlier draft of this ADR proposed failing
 at |z| > 64; the `ukb-b` survey shows that would reject real pigmentation hits.
 
-`se` stays `float16`. Both choices follow from the shape of the quantity, not
-from a general preference for integers.
+`se` remained `float16` through format 2.0. Format 3.0 implements §3's
+conditional residual coding with a whole-plane float16 fallback.
 
 **As implemented** (issue #114, store-format spec §6a, §15, §20). Four details
 were settled during implementation and are recorded here rather than left to
@@ -171,11 +171,11 @@ the code:
 - **The arrays are written even when empty**, so "this plane is fixed point"
   and "this plane has a table" are the same statement, and validation needs no
   special case for the store that overflows nothing.
-- **`decode_se(raw_se)` is deliberately absent** while `decode_z()` is public.
-  `z` is independently meaningful — Rho and the top-hit harvest need nothing
-  else to interpret it — but once #118 codes `se` as a residual it cannot be
-  decoded without EAF, and a function that looked decodable without it would
-  invite exactly the half-done read that returns silent nonsense.
+- **There is no raw-only `decode_se(raw_se)` convenience.** Format 3.0's
+  decoder requires decoded EAF, Analysis indices, coefficients, and flat
+  positions. That signature prevents a caller from treating residual codes as
+  physical Standard Errors; decoded plane views carry those dependencies for
+  query, completion, Top-Hit, Rho, and validation paths.
 - **The plan carries `z` and `se` only.** `eaf`'s physical encoding is
   unchanged by this issue — it is still ADR 0036's `float32` plane, present or
   absent per source — so it joins `StoreEncoding` with #116, the change that
@@ -325,6 +325,77 @@ It requires EAF **in the same cell**, and a zarr array has one dtype, so a
 single EAF-less Analysis forces the whole array back to `float16`. This is why
 the Hybrid case differs from Dense/Ragged.
 
+**As implemented** (issue #118, `format_version` 3.0, store-format spec §6a).
+Five details were settled during implementation:
+
+- **The coefficients live in a `se_coefficients[n_analyses, 2]` `float32`
+  array beside the plane, not in `analyses.tsv`.** The issue asked for this to
+  be decided rather than defaulted. `analyses.tsv` is the sole source of truth
+  for *Analytical Metadata* (ADR 0030) — facts about the study a person reads.
+  These are decode parameters for a binary array: meaningless without the
+  plane, invalid the moment it is rewritten, and never interesting on their
+  own. Putting them in the TSV would invite an editor to change one.
+- **The range is chosen per store from ±0.5, ±1, ±2**, the smallest whose
+  measured exception share is ≤ 2%, whose worst ordinary-cell relative error
+  is ≤ 1%, and whose *measured compressed* bytes — codes, coefficients and
+  both exception arrays — beat the same store's `float16`. Nothing is
+  hard-coded from the survey; a store that does not save bytes keeps `float16`.
+- **Codes `-128` and `-127` are reserved** for missing and exact exception, as
+  §1 and §2 reserve theirs. Zero SE, non-finite predictions and out-of-range
+  residuals all become exact exceptions; nothing is clipped.
+- **Hybrid's two components share one fit and one decision, gated
+  independently as well as jointly.** They partition the same Analyses, so a
+  fit taken over only one of them would leave the shared manifest describing
+  data it had not measured; and a component that would not save bytes on its
+  own sends *both* back to `float16` rather than paying for the coding in one.
+- **A plane's codes and its coefficients are always written together.** That
+  is the invariant; who may refit follows from it. Dense and Hybrid completion
+  *patch* the source's plane, carrying its existing codes forward, so they read
+  `se_coefficients` off the source and must never refit — a refit would
+  silently re-point every carried-over code at a new model. Ragged completion
+  rewrites the whole CSR plane from decoded values, so it refits, and its
+  imputed cells are then modelled by the fit rather than excluded from it.
+  Completion preserves the source's *kind and range* either way (ADR 0038 §4);
+  the coefficients are decode parameters of the array actually written, not
+  part of the encoding the release declares.
+
+The gate is per Analysis, not pooled over the plane: an exception share taken
+across every cell lets one badly fitting Analysis hide behind its well-fitting
+neighbours, which is the GCST007320 case the issue was raised about.
+
+It *is* pooled across a Hybrid store's two components, and that asymmetry is
+deliberate. What the 2% bounds is storage, not accuracy: an exact exception
+stores the source's own value, so exceeding the budget costs side-table bytes
+and loses nothing. The quantity that bounds those bytes for one Analysis is its
+exception share over all of that Analysis's cells, wherever they live — so a
+Hybrid Analysis is charged once over the pair, while two different Analyses are
+never charged together. Requiring each component to pass separately would
+instead reject a store whose overall side table is small because a minority of
+one Analysis's cells sit in the Overflow Component.
+
+**A cell carrying a standard error always owes a finite EAF**, exact exceptions
+included. Encoding refuses one that does not, rather than storing it as an
+exception: that would leave a residual plane holding a cell no conforming
+reader could reconstruct, and force a decoder to accept data outside the
+contract this ADR describes. Nothing upstream produces such a cell, because an
+imputed standard error is derived from the panel frequency and a cell without
+one gets no standard error either.
+
+**This is not a check on EAF correctness.** `f(1−f)` is symmetric about 0.5, so
+a source reporting its frequencies against the wrong allele fits exactly as
+well as a correct one — GCST003566, the study §6 catches, fits at R² = 0.9976
+here. A plane that accepts residual coding has said nothing about whether its
+`eaf` is oriented right.
+
+Measured on the rebuilt FinnGen R13 pilot-20 Dense release (21,230,615
+variants × 20 Analyses), the builder selected ±0.5 and persisted SE storage
+fell from 580,465,385 to 243,415,048 bytes — **1.367 to 0.573 B/cell, −58.1%**
+— 12.7% above the estimate this ADR was written from, inside the ±20% the
+issue asked for. Reads pay for the EAF dependency: a full Analysis scan of
+21.2M rows went from 7,631 ms to 11,312 ms, while Top-Hit queries were
+unchanged at 173/179 ms because the index stores decoded `float32` SE
+(`docs/benchmark-output/opengwasdb_se_residual_implementation.md`).
+
 ### 4. Reference-panel EAF is stored once per variant, for imputed cells only
 
 An imputed cell's EAF *is* the panel's, identical for every Analysis imputed
@@ -456,7 +527,8 @@ standalone validation cannot depend on a panel that may no longer be available.
 - **This is a breaking format change**, unlike ADR 0036. It needs a
   `format_version` bump and therefore depends on #112 settling the
   compatibility and migration policy first. Landed as `format_version` 1.0
-  (#114, fixed-point `z`) and 2.0 (#116, residual-coded `eaf`). `0.1` and `1.0`
+  (#114, fixed-point `z`), 2.0 (#116, residual-coded `eaf`), and 3.0 (#118,
+  residual-coded `se`). `0.1`, `1.0`, and `2.0`
   stay readable and are never written again; neither can be *completed*, since
   completion writes into its source's encoding (ADR 0038 §4).
 - **Existing stores must be rebuilt** to gain any of it. All four pilots need

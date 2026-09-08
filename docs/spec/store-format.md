@@ -1,22 +1,25 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `2.0`  
-Also readable: `1.0`, `0.1` — never written again (§21)
+Format version described: `3.0`  
+Also readable: `2.0`, `1.0`, `0.1` — never written again (§21)
 
 This document defines the contract for valid OpenGWASDB Store Releases. It
-describes `format_version` **2.0**, the version this build writes: statistic
+describes `format_version` **3.0**, the version this build writes: statistic
 planes carry a declared encoding (§6a), `z` is `int16` fixed point rather than
-`float16`, and `eaf` is a per-variant baseline plus a per-cell `int8` logit
-residual rather than a `float32` plane.
+`float16`, `eaf` is a per-variant baseline plus a per-cell `int8` logit
+residual rather than a `float32` plane, and `se` is either `float16` or — when
+the build measures the fit and the saving — an `int8` residual from its
+EAF-predicted value.
 
-`1.0` and `0.1` releases remain readable and are not re-stamped. Where the
-versions differ, the difference is stated in place rather than kept in a
+`2.0`, `1.0` and `0.1` releases remain readable and are not re-stamped. Where
+the versions differ, the difference is stated in place rather than kept in a
 separate document — §6a for the encoding each older release is in (`0.1`:
 `float16` throughout, declaring nothing; `1.0`: fixed-point `z` and ADR 0036's
-optional `float32` `eaf`), §15 for what marks a missing cell in each, and §21
-for what a reader owes a release it did not write. An older release cannot be
-*completed* by a build that writes 2.0 (§21.3, ADR 0038 §4); it is rebuilt.
+optional `float32` `eaf`; `2.0`: residual-coded `eaf` and `float16` `se`), §15
+for what marks a missing cell in each, and §21 for what a reader owes a release
+it did not write. An older release cannot be *completed* by a build that
+writes 3.0 (§21.3, ADR 0038 §4); it is rebuilt.
 
 Sections that say "v0.1" below describe vocabularies and column contracts
 settled at that version and unchanged since; they are not statements about
@@ -121,6 +124,8 @@ Reference-Completed releases MUST additionally declare:
 | `reference_completion_method` | Algorithm, software, version, and parameters used for imputation |
 
 Observed-Only and Reference-Completed releases for the same source collection SHOULD share `store_id` and use different `release_id` values.
+
+A release derived from another one — by migration or reference completion — is a new immutable release with its own identity: it MUST NOT reuse the source's `release_id`, and MUST record a fresh `created_at`. The format-3 migration additionally records the source `release_id` in its provenance (§21.4).
 
 Published releases are immutable. Enhancing an Observed-Only release to Reference-Completed produces a new release.
 
@@ -229,7 +234,12 @@ Requirements:
 - `se` is on the same Stored Effect Scale as beta.
 - beta is queryable but derived from `z * se`.
 - p-value is queryable but derived from Z.
-- EAF, INFO, and sample size MUST NOT be required to reconstruct beta, SE, Z, or p-value.
+- INFO and sample size MUST NOT be required to reconstruct beta, SE, Z, or
+  p-value. EAF is not required to reconstruct beta, Z, or p-value, and is
+  not required to reconstruct a legacy or floating-point `se`. A
+  residual-coded `se` (§6a) **is** unreadable without the EAF its cells were
+  coded against — the observed EAF for observed cells, the Reference EAF for
+  imputed cells.
 
 Statistic planes are not required to be floating point, and `z` is not. Their
 physical encoding is declared per release, in `manifest.json` (§6a), and is
@@ -238,13 +248,14 @@ read from that declaration rather than inferred from a dtype.
 ## 6a. Statistic encodings
 
 A Store Release at `format_version` 1.0 or above MUST declare an `encoding`
-object in `manifest.json`. At 2.0 it MUST also declare `eaf`:
+object in `manifest.json`. At 2.0 it MUST also declare `eaf`; at 3.0 it may
+declare residual-coded `se`:
 
 ```json
 "encoding": {
-  "version": 2,
+  "version": 3,
   "z": {"kind": "int16_fixed", "scale": 1024},
-  "se": {"kind": "float16"},
+  "se": {"kind": "int8_residual", "residual_range": 1.0},
   "eaf": {"kind": "int8_residual", "residual_range": 0.5}
 }
 ```
@@ -253,6 +264,15 @@ object in `manifest.json`. At 2.0 it MUST also declare `eaf`:
   validation checks that the arrays agree with it (§20).
 - A reader meeting a `kind` it does not implement MUST reject the release
   (§21), not guess and not fall back.
+- **A release may declare only kinds its own `format_version` admits** (issue
+  #157). The block records what the bytes mean to the version that wrote them:
+  `int8_residual` `se` requires `format_version` 3.0, `int8_residual` `eaf`
+  requires 2.0 — a conforming reader of 2.0 is entitled to read `se` as
+  `float16`, and a 2.0 manifest declaring the format-3 residual plane hands it
+  `int8` codes to decode as `float16`, the exact plausible-wrong-answer this
+  block exists to prevent. A release below `format_version` 1.0 declares no
+  block at all: `float16` throughout *is* the absence of a declaration, so a
+  0.x manifest carrying one is refused rather than read.
 - A release declaring no `encoding` — every release up to `format_version` 0.1
   — is `float16` for `z` and `se`, with NaN as the missing marker, and
   `float32_optional` for `eaf`.
@@ -301,10 +321,37 @@ A build MUST fail on a non-finite `z` that is not a recorded absence (±inf, or
 a malformed statistic): it is neither a value nor an absence, and no encoding
 of it is honest.
 
-**`se` — `float16`.** `se` spans about 3.2 decades and needs *relative*
-precision, which a float exponent already provides; `z` is bounded and needs
-*uniform* precision, which is why the two planes are encoded differently. This
-is recorded so `se` is not later "fixed" by analogy with `z`.
+**`se` — `float16` or `int8_residual`.** Residual coding predicts
+`log(SE) = intercept + slope × log(2 × EAF × (1 − EAF))` using decoded,
+quantised EAF and two `float32` coefficients per Analysis in
+`se_coefficients[n_analyses, 2]`. Codes `-128` and `-127` mean missing and
+exact exception; `-126…127` carry a residual at `step = residual_range / 127`.
+Exact values are stored in sorted parallel `se_exception_index` (`int64`) and
+`se_exception_value` (`float32`) arrays, present even when empty. Dense keys
+are `row × n_analyses + column`; Ragged keys are CSR ordinals.
+
+Builders try ranges ±0.5, ±1, and ±2 in order, accepting one only when every
+finite SE has decodable EAF, exact exceptions are at most 2% **in every
+Analysis** — not pooled over the plane — ordinary-cell relative error is at
+most 1%, and measured compressed bytes decrease after codes, coefficients, and
+side tables are charged. Otherwise the entire plane is `float16`. Zero SE,
+non-finite predictions, and out-of-range residuals are exact exceptions, never
+clips.
+
+**Every cell carrying a standard error owes a finite EAF, exact exceptions
+included.** A residual plane is defined over a store whose frequencies are
+complete where its standard errors are, and encoding refuses a finite `SE`
+whose cell has no frequency rather than absorbing it as an exception — a store
+only this package could read is worse than one it declines to write. Nothing
+upstream produces such a cell: an imputed standard error is derived from the
+panel frequency, so a cell without one gets no standard error either.
+
+The 2% budget is **per Analysis and pooled across a Hybrid store's two
+components**, not met by each component separately. What it bounds is storage:
+an exact exception stores the source value exactly, so a high exception rate
+costs side-table bytes and no accuracy. The quantity that bounds those bytes
+for an Analysis is its share over all of its cells, wherever they live. Hybrid
+components share one decision, and each must save bytes on its own.
 
 **`eaf` — one of four kinds** (ADR 0037 §2). EAF's *semantics* are unchanged by
 the encoding: it is still per (variant, Analysis), still oriented to the stored
@@ -596,7 +643,12 @@ variant
 association
 ```
 
-EAF and INFO are optional. They are not required for statistical reconstruction.
+EAF and INFO are optional metadata, and neither is needed to reconstruct beta,
+Z, or p-value, nor a legacy or floating-point `se` (§6). The exception is a
+residual-coded `se` (§6a), which decodes against the EAF planes its cells were
+coded against — the observed EAF for observed cells, the Reference EAF for
+imputed cells — so a release carrying one is not reconstruction-independent of
+EAF, and validation requires a complete `eaf` plane beside it (§20).
 
 Variant-scoped EAF or INFO is valid only when the builder can establish that one value is genuinely shared. Builders MUST NOT average differing association values into variant-scoped values.
 
@@ -1011,7 +1063,7 @@ Validators MUST check at least:
 - Reference-Completed Dense axes match the Reference Variant Set;
 - imputed mask is consistent with Z and SE;
 - Ragged Reference-Completed regions include all Reference Variant Set variants within completed boundaries;
-- top-hit indexes, when present, are consistent with stored Z values;
+- top-hit indexes, when present, are consistent with the **decoded** `z`, `se` and `eaf` planes — decoded, because an index built from raw codes and one built from values a query returns are indistinguishable until they are compared against the plane the query reads;
 - `analyses.tsv` contains exactly one row per Analysis, covering every `analysis_index` referenced by `index.sqlite` (this is the one place SQLite cannot enforce the relationship as a foreign key, since `analyses.tsv` is a separate file);
 - `index.sqlite` does not contain an `analyses` table, nor a `variants` table (§1, issue #128);
 - `variant_alid_bytes.npy` holds one entry per ALID narrow enough to index, and no key in it is shared by two variants — a shared key is what silently truncating an over-wide ALID produced, and it makes one variant answer another's lookup (issue #127);
@@ -1019,6 +1071,7 @@ Validators MUST check at least:
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
+- the `se` plane, its `se_coefficients` and its exception table agree with the plan the manifest declares (§6a): a residual-coded plane has finite `float32` coefficients of shape `(n_analyses, 2)`, a sorted duplicate-free exception table whose positions lie inside the plane and whose entries are exactly the cells marked `-127`, and a complete `eaf` plane beside it; a `float16` plane has none of those arrays, and carrying one is a failure rather than a harmless relic;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
@@ -1069,7 +1122,7 @@ A build writes exactly one `format_version` and reads every major it implements.
 Store Releases are immutable. Reference Completion, re-indexing and migration all produce a **new release**, with one narrow exception: a **Provenance Amendment** may fold additional facts into an existing release's `provenance` dict in place, including a format migration recording what it did to that release. Anything that changes association data or Analytical Metadata is outside the exception.
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
-2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/migrate_store_to_analyses_tsv.py` is the only such tool at present, and it predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/migrate_store_to_format_3.py` (issue #118) derives a new Dense release at an explicit `--into` path, minting a fresh `release_id` and `created_at` rather than inheriting the source's and regenerating `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), building the destination in a staging directory and publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
 3. **Rejected** — a store whose major version this build does not implement cannot be read, and no amount of validation makes it readable.
 
 There is no support window for older minors: a known major reads every minor within it.

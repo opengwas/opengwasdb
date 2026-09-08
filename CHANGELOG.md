@@ -15,6 +15,144 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Fixed
 
+- **The format-3 migration republished the source release's identity, and
+  could publish a release that did not validate** (#164). `migrate_store_to_format_3.py`
+  copied the manifest wholesale and re-stamped only version, encoding and
+  provenance, so the "new" release carried the source's `release_id` and
+  `created_at` — two releases of the same store that cannot be told apart. It
+  also published a staged copy whose validation errors were merely a subset of
+  the source's: an error string identical to one the source already carried
+  was subtracted, and an identical string is exactly how a defect the
+  migration itself introduced would hide. The migration now mints a fresh
+  UUID4 `release_id` and a current-UTC `created_at` (recording the source
+  `release_id` in its provenance), and publication is gated on the staged
+  copy validating with **no** errors — inherited or introduced, since the two
+  are no longer told apart. A refused validation is an `Exception`, so the
+  Staged Release cleanup contract discards the staging directory rather than
+  leaving a failed copy behind, and the destination is never created. The new
+  release's own `overview.html` is regenerated from the staged manifest, so
+  the page humans browse advertises the fresh `release_id` rather than the
+  copied source page's. And because the gate is absolute, a 2.0 source that
+  does not itself validate — e.g. one carrying #127's truncated-ALID or #135's
+  unchunked-`eaf_baseline` defects — can no longer be migrated at all: the
+  phases run, the gate refuses, and the staging directory is discarded. Such
+  a store must be rebuilt before a format-3.0 release can be derived from it.
+
+- **Hybrid Reference Completion rebuilt the Dense Top-Hit Index under the
+  source encoding after folding in a panel crossover** (#163). The rebuild
+  now uses the completed Dense Component's own encoding, which carries the
+  Reference EAF completion added, so a residual-`se` Hybrid store whose LD
+  panel extends the axis no longer aborts with a missing-EAF decode failure
+  when the index is rebuilt; the crossed-over association is queried back
+  with its real, correctly decoded standard error.
+
+- **The SE size measurement undercharged zarr's padded edge chunks** (#158).
+  `_packed_1d` and `_packed_2d` compressed each measured slice at the size it
+  happened to be, but zarr stores every chunk at its declared shape: a plane's
+  final edge chunks — shorter than the chunk whenever the extent does not
+  divide it — are padded out with the array's fill value *before* they are
+  compressed. The compressed-bytes gate therefore compared each residual
+  candidate against costs measured small, most on exactly the small or
+  awkwardly-shaped planes where the margin is narrowest, biasing the decision
+  toward the coding.
+
+  The same undercharge survived the first fix in the streamed Dense, Hybrid
+  and format-migration optimiser (`encoding/se.py`), which measured its planes
+  with a second cost implementation; it is now closed there too. Every
+  measured array — the codes plane (charged at the `SE_MISSING` fill the
+  Dense rewrite declares), its `float16` alternative (NaN after a scratch
+  narrow, or a migration source's own declared fill), the Overflow's flat
+  planes (whole-written, numeric default fill), the coefficients and both
+  side tables — is charged at its padded size with the fill its own writer
+  declares, and both the whole-grid fits and the streamed optimiser share one
+  chunk-accounting function (`measure.packed_chunk_bytes`), so one path
+  cannot drift from the other again. A tiny, well-fitted Overflow no longer
+  vetoes the coding the way the undercounted measurement made it seem to.
+
+  On the rebuilt `eqtlgen-cis` Ragged plane the final 58,034-row chunk of a
+  200,000 chunk stores 70,799 bytes against the 50,812 the old measurement
+  charged — 39% more than measured on that chunk alone. A plane whose extent
+  divides its chunk evenly is measured exactly as before, and tests now pin
+  each measurement — 1-D and 2-D, partial in both dimensions, coefficients,
+  Overflow and both side tables, on the streamed path as well as the
+  whole-grid one — against the bytes a real zarr array of the same extent,
+  chunk and fill occupies.
+
+- **`ukb-b` at format 3.0, measured** (#148). A full Observed-Only Dense build
+  of `ukb-b` (9,847,701 × 2,511 = 24,727,577,211 cells) under format 3.0 takes
+  **13h30m** against 11h35m at format 2.0 (+16.5%), and its `se` plane falls
+  from 21,183,939,687 to 3,961,274,232 bytes — **−81.3%**, well beyond ADR 0037
+  §3's −58.1% estimate and the FinnGen pilot's −59.0%, because only 0.0068% of
+  its cells fall outside ±0.5. The complete Store Release drops 28.5%, to
+  42.56 GB, and compresses 9.98× against its 424.84 GB of source GWAS-VCF.
+
+  Query latency moves both ways, and the direction depends on what dominates.
+  Decoding residual `se` costs 0.0700 µs/cell against `float16`'s 0.0050 —
+  **14×**, since each cell needs `eaf` decoded and an `exp`. A cached
+  all-Analysis regional scan of 5,224,822 cells therefore takes 2.25× as long,
+  while restricting the same region to one Analysis changes only 4.8%
+  (22.75→23.85 ms). An IO-bound whole-Analysis scan of 8,419,893 cells is
+  **12.1% faster**, because the plane it reads is 5.3× smaller. Random lookups
+  of 10 variants × 100 Analyses and 100 variants × 10 Analyses move by +7.8%
+  and −3.1% respectively. See
+  `docs/benchmark-output/opengwasdb_ukbb_dense_issue148_benchmark.md`.
+
+- **A residual `se` cell could be written with no EAF, and only this package
+  could read it** (#159). `encode_se` turned a finite standard error whose cell
+  had no frequency into an exact exception, and `decode_se` was then relaxed to
+  exempt exceptions from the finite-EAF check — so the codec accepted a plane
+  outside the contract #118 and #138–#140 describe, and a conforming reader
+  handed one had no way to reconstruct the cell. Encoding now refuses it, where
+  the caller still holds the source value and can choose `float16`, and decoding
+  requires a finite EAF for every cell carrying a standard error. Nothing
+  upstream produced such a cell in the first place: an imputed standard error is
+  derived from the panel frequency, so a cell without one gets no standard error
+  either, and a test now pins that.
+
+- **A pre-3.0 manifest could declare residual `se` and no reader would object**
+  (#157). `StoreManifest` parsed a declared `encoding` block without checking
+  it against `format_version`, so a release stamped 1.0 or 2.0 could declare
+  the format-3 `int8_residual` representation and this package would decode it
+  — while a conforming reader of that version, entitled to read `se` as
+  `float16`, would read the `int8` codes as `float16` and return plausible,
+  wrong standard errors. The version is now parsed first, and a declared kind
+  must have existed by the release's own major version: residual `se` below
+  3.0 and residual `eaf` below 2.0 are refused with a message naming the
+  version and the kind, and any `encoding` block below 1.0 — a release that
+  never declared one — is refused too. The gate is a per-kind table (spec
+  §6a), so the next version-gated encoding adds a row rather than a branch.
+
+- **The format-3 migration rewrote the release it was given** (#156).
+  `scripts/migrate_store_to_format_3.py` treated its `--into` as optional and
+  re-encoded the `se` plane in place by default — a Store Release is immutable
+  (spec §21.4), and a failed validation would leave the source damaged, exactly
+  the interrupted-in-place-migration failure ADR 0038 §5 records. `--into` is
+  now required and names a new release; the migration opens the source
+  read-only, builds the destination in a staging directory and publishes it by
+  rename only when the migrated copy validates, so neither the source nor the
+  destination is ever a half-migrated store.
+
+- **The `ukb-b` benchmark published a compression ratio of 0.0** (#148). Its
+  source-size figure came from `data/ukb-b/manifest.tsv`, which points at
+  `/local-scratch` paths that no longer exist, and it skipped a source it could
+  not stat. All 2,514 entries were being skipped, so the raw total was zero and
+  the ratio that divides into it was zero — a published number that looked like
+  a measurement. It now reads either that manifest or a release config's
+  `analyses.tsv`, restricts to the analyses actually in the store, and refuses
+  to report a ratio at all if a source is missing. The artifact also records the
+  store's `format_version` and `encoding`, so a format-2.0 timing cannot be
+  mistaken for a format-3.0 one.
+
+- **The general Dense builder discarded every effect allele frequency it was
+  given** (#118). `build_dense_observed_store` read `z` and `se` off each
+  `NormalisedAssociation` and dropped `eaf`, writing no plane and stamping no
+  `eaf_scope` — a store built this way reported "this Analysis has no
+  frequencies" for a source that supplied them for every cell. It now writes
+  the plane, its baseline and its exception table, and marks the Analyses that
+  carry frequencies `eaf_scope=association` with orientation `unverified` (this
+  builder has no reference panel to check against). Residual-coded `se` needs
+  that plane, which is how the omission surfaced.
+
 - **A long indel could answer another variant's lookup** (#127). The ALID
   search index is a fixed-width array — that is what makes `np.searchsorted`
   work over it as an mmap — but it was built with
@@ -30,6 +168,30 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   holding a key shared by two variants, so an affected store says so.
 
 ### Changed
+
+- **Hybrid residual-SE Overflow cells get a named, validated contract** (#162).
+  The Overflow Component's `(se, eaf, analysis_index)` inputs were a
+  positional tuple whose three arrays were shape-valid if swapped or mis-shaped,
+  so a wrong order could survive all the way into the shared fit. `OverflowCells`
+  now carries `se_values`, `eaf_values` and `analysis_indices` by name and
+  rejects mismatched lengths, non-1-D arrays, non-integer Analysis indices and
+  out-of-range indices at construction, before any fit or measurement reads
+  them. `RaggedCSRWriter.se_fit_inputs` returns the named type, and the
+  optimiser's module-only `ComponentCost` is now `_ComponentCost`.
+
+- **Ruff no longer lints the vendored `quality/` tree**, and the ruff baseline
+  drops 66 -> 61. `quality/` is the cleat gate tooling, imported whole and
+  written to its own rules; scanning it contributed 1,735 findings against a
+  project total of 61, which made `scripts/check_baselines.py` — the check
+  that a change adds no new findings — unable to see the project at all. mypy
+  was never affected: it only ever checked `opengwasdb/`.
+
+- **`index.sqlite` no longer records `se_dtype`** (#118). It duplicated the
+  manifest's `encoding` block, which spec §6a makes authoritative, and two of
+  the three builders wrote it *before* the SE encoding was measured — so from
+  format 3.0 it would have claimed `float16` for an `int8` plane. The same
+  reasoning as #128's `variants` table: a duplicate that cannot be right is
+  worse than no duplicate. Nothing read it.
 
 - **The Store Variant Axis no longer keeps a relational copy of itself**
   (#128). `index.sqlite`'s `variants` table duplicated every column of
@@ -50,6 +212,45 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   exact scan instead of binary search.
 
 ### Added
+
+- **The format-3.0 SE passes report their own wall time** (#144). Migrating a
+  Dense release to format 3.0 takes four full passes over the `se` plane — the
+  per-Analysis fit, the candidate measurement, the rewrite and the top-hit
+  index rebuild — and the only previously recorded number was their sum
+  (3,863 s for the FinnGen R13 pilot, extrapolating to 62.5 hours for `ukb-b`).
+  `migrate_store_to_format_3.py` now threads a `PhaseTimer` through all four
+  and prints each phase's seconds and share of the accounted total, so the
+  optimisation that follows targets the pass that actually dominates rather
+  than a guess. `build_top_hit_indexes` charges its own scan and write, so the
+  rebuild is measured through the function that performs it rather than by a
+  benchmark reimplementing its body — measured at 63.5 s on the migrated
+  FinnGen R13 pilot, 1.6% of that 3,863 s, against an inference that had put it
+  at 75-89%. The same instrumentation is available to any caller of
+  `optimise_dense_se_joint` or `build_top_hit_indexes`; a caller that passes no
+  timer is unchanged, and a migration records its own breakdown under
+  `provenance.format_migration.phase_seconds`.
+
+  What the breakdown showed, on the FinnGen R13 pilot (424,612,300 cells):
+  **the migration's cost was almost entirely issue #135's unchunked
+  `eaf_baseline`, not the format-3 encoding.** The same source data migrates in
+  2,913 s from a release carrying that defect and in **244.5 s** from a
+  repaired one. Reading `se` plus decoded `eaf` costs 2.35 us/cell on the
+  defective store against 0.036 us/cell on the sound one -- every 1,000-row
+  band decompresses the whole 21.2M-element baseline, 21,231 times per pass --
+  so the three full plane passes fall from 2,680 s to 61 s. The 62.5-hour
+  `ukb-b` extrapolation that motivated this work was taken from the defective
+  store.
+
+  The 2,913 s figure is **pre-#164** historical evidence (issue #164): the run
+  that measured it published the format-3.0 release still carrying the
+  source's three validation errors, a publication the migration no longer
+  permits (see that issue's entry above). A 2.0 source holding #127- or
+  #135-class defects cannot be migrated today — the phase work above would
+  still run and then be refused at the publication gate and discarded, which
+  is exactly why such a store must be rebuilt rather than migrated. The
+  figure is preserved as measured and has not been re-measured against the
+  current tool; the phase-cost conclusion it supports (the defect, not the
+  format-3 encoding, dominates) is unchanged.
 
 - **Getting-started documentation now covers the first local Store Release**
   (#110). A fresh checkout can follow `docs/getting-started.md` to install with
@@ -72,6 +273,20 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   index, per-Analysis top hits recovered from the 86.6 ms regression to
   1.301 ms (pre-EAF: 1.17 ms), while global top hits recovered from 7,129 ms
   to 473.945 ms (pre-EAF: 488 ms).
+
+- **Store format 3.0 adds conditional residual-coded Standard Errors** (#118,
+  #137–#142). Every SE consumer now reads physical `float32` values through a
+  decoded Dense/CSR plane. Eligible builds fit against decoded EAF, select a
+  measured ±0.5/±1/±2 residual range, and persist coefficients plus exact
+  exceptions; ineligible or non-saving planes remain `float16`.
+  - **The exception gate is per Analysis, not pooled.** A share taken over
+    every cell in the plane lets one badly fitting Analysis hide behind its
+    well-fitting neighbours — the GCST007320 case the issue was raised about.
+  - **Dense builders keep their scratch SE plane in `float32`**, as Dense
+    completion already did, so an exact exception is the source's own value
+    and not one already rounded to the dtype the plane started in.
+  - The coding is **blind to allele flips** and provides no incidental check on
+    EAF orientation (#115): `f(1−f)` is symmetric about 0.5.
 
 - **`eaf` is stored as a per-variant baseline plus a per-cell `int8` logit
   residual, and `format_version` moves to `2.0`** (#116, ADR 0037 §2/§4).
@@ -518,7 +733,7 @@ it can read.
 | package | writes `format_version` | reads |
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
-| unreleased (`dev`) | 2.0 | 0.x, 1.x, 2.0 |
+| unreleased (`dev`) | 3.0 | 0.x, 1.x, 2.0, 3.0 |
 
 [Unreleased]: https://github.com/opengwas/opengwasdb/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/opengwas/opengwasdb/releases/tag/v0.2.0

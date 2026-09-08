@@ -71,7 +71,7 @@ from pathlib import Path
 import numpy as np
 import zarr
 
-from opengwasdb.encoding import DenseEafPlane, DenseZPlane
+from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.index import AnalysesIndex
 from opengwasdb.layouts.dense.rho import DenseRhoReader
 from opengwasdb.layouts.dense.top_hits import (
@@ -159,9 +159,7 @@ class StoreQuery:
         self._analyses = AnalysesIndex(store.path)
         self._root = store.arrays(mode="r")
         self._variant_axis = VariantAxis(store.path, self._connection)
-        self._is_completed = (
-            store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
-        )
+        self._is_completed = store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
         self._imputed: zarr.Array | None = (
             self._root["imputed"] if self._is_completed and "imputed" in self._root else None
         )
@@ -174,10 +172,9 @@ class StoreQuery:
         # decoded EAF values and must not touch the much larger source plane.
         self.__eaf: DenseEafPlane | None = None
         self._encoding = store.manifest.encoding
+        self._se = DenseSePlane.open(self._root, self._encoding)
         self._rho_reader: DenseRhoReader | None = (
-            DenseRhoReader(self._root["rho"], self._z.n_analyses)
-            if "rho" in self._root
-            else None
+            DenseRhoReader(self._root["rho"], self._z.n_analyses) if "rho" in self._root else None
         )
 
     @property
@@ -252,6 +249,51 @@ class StoreQuery:
             self._analyses, self._variant_axis, result, include_variant_info=include_variant_info
         )
 
+    def _cell_result(
+        self,
+        rows: np.ndarray,
+        cols: np.ndarray,
+        z_vals: np.ndarray,
+        se_vals: np.ndarray,
+        *,
+        observed_only: bool,
+        eaf_vals: np.ndarray | None = None,
+        imputed: np.ndarray | None = None,
+    ) -> dict[str, np.ndarray]:
+        """The six parallel arrays every index-keyed result carries.
+
+        Assembling them in one place is what keeps the shapes of `analysis`,
+        `phewas`, `range_phewas` and `lookup` identical: a caller cannot tell
+        which one produced a result, and `observed_only` cannot filter five of
+        the six arrays in one method and six in another.
+
+        `eaf_vals` and `imputed` let a caller that already read those cells in
+        bulk hand them over rather than gather the same cells a second time.
+        """
+        if imputed is None:
+            imputed = self._imputed_pairs(rows, cols)
+        if observed_only:
+            keep = imputed == 0
+            rows, cols, z_vals, se_vals, imputed = (
+                rows[keep],
+                cols[keep],
+                z_vals[keep],
+                se_vals[keep],
+                imputed[keep],
+            )
+            if eaf_vals is not None:
+                eaf_vals = eaf_vals[keep]
+        if eaf_vals is None:
+            eaf_vals = self._eaf_pairs(rows, cols)
+        return {
+            "variant_index": rows,
+            "analysis_index": cols,
+            "z": z_vals,
+            "se": se_vals,
+            "eaf": eaf_vals,
+            "association_status": _status_array(imputed, z_vals, se_vals),
+        }
+
     def analysis(self, analysis_id: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
         """Return all finite associations for one analysis."""
         analysis = self._analyses.by_id(analysis_id)
@@ -259,26 +301,13 @@ class StoreQuery:
             return _empty_result()
         col = int(analysis["analysis_index"])
         z_col = self._z.column(col)
-        se_col = self._root["se"][:, col].astype("float32")
+        se_col = self._se.column(col)
         mask = np.isfinite(z_col) & np.isfinite(se_col)
         rows = np.where(mask)[0].astype("int32")
         cols = np.full(len(rows), col, dtype="int32")
         z_vals = z_col[mask]
         se_vals = se_col[mask]
-        imp = self._imputed_pairs(rows, cols)
-        if observed_only:
-            keep = imp == 0
-            rows, cols, z_vals, se_vals, imp = (
-                rows[keep], cols[keep], z_vals[keep], se_vals[keep], imp[keep]
-            )
-        return {
-            "variant_index": rows,
-            "analysis_index": cols,
-            "z": z_vals,
-            "se": se_vals,
-            "eaf": self._eaf_pairs(rows, cols),
-            "association_status": _status_array(imp, z_vals, se_vals),
-        }
+        return self._cell_result(rows, cols, z_vals, se_vals, observed_only=observed_only)
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
         """Return one variant across all analyses."""
@@ -287,26 +316,13 @@ class StoreQuery:
             return _empty_result()
         row = variant.variant_index
         z_row = self._z.row(row)
-        se_row = self._root["se"][row, :].astype("float32")
+        se_row = self._se.row(row)
         mask = np.isfinite(z_row) & np.isfinite(se_row)
         cols = np.where(mask)[0].astype("int32")
         rows = np.full(len(cols), row, dtype="int32")
         z_vals = z_row[mask]
         se_vals = se_row[mask]
-        imp = self._imputed_pairs(rows, cols)
-        if observed_only:
-            keep = imp == 0
-            rows, cols, z_vals, se_vals, imp = (
-                rows[keep], cols[keep], z_vals[keep], se_vals[keep], imp[keep]
-            )
-        return {
-            "variant_index": rows,
-            "analysis_index": cols,
-            "z": z_vals,
-            "se": se_vals,
-            "eaf": self._eaf_pairs(rows, cols),
-            "association_status": _status_array(imp, z_vals, se_vals),
-        }
+        return self._cell_result(rows, cols, z_vals, se_vals, observed_only=observed_only)
 
     def range_phewas(
         self, chromosome: str, start: int, end: int, *, observed_only: bool = False
@@ -316,7 +332,7 @@ class StoreQuery:
         if len(row_indices) == 0:
             return _empty_result()
         z_block = self._z.rows(row_indices)
-        se_block = self._read_row_block(self._root["se"], row_indices, "float32")
+        se_block = self._se.rows(row_indices)
         mask = np.isfinite(z_block) & np.isfinite(se_block)
         rows_rel, cols = np.where(mask)
         rows = row_indices[rows_rel].astype("int32")
@@ -333,19 +349,15 @@ class StoreQuery:
         else:
             imp_block = self._read_row_block(self._imputed, row_indices, np.uint8)
             imp = imp_block[mask]
-        if observed_only:
-            keep = imp == 0
-            rows, cols, z_vals, se_vals, eaf_vals, imp = (
-                rows[keep], cols[keep], z_vals[keep], se_vals[keep], eaf_vals[keep], imp[keep]
-            )
-        return {
-            "variant_index": rows,
-            "analysis_index": cols,
-            "z": z_vals,
-            "se": se_vals,
-            "eaf": eaf_vals,
-            "association_status": _status_array(imp, z_vals, se_vals),
-        }
+        return self._cell_result(
+            rows,
+            cols,
+            z_vals,
+            se_vals,
+            observed_only=observed_only,
+            eaf_vals=eaf_vals,
+            imputed=imp,
+        )
 
     def lookup(
         self,
@@ -358,11 +370,7 @@ class StoreQuery:
         # Row-index resolution only -- no VariantRecord materialisation, no
         # per-identifier variants.tsv.gz open (issue #3).
         row_indices = self._variant_axis.indices_by_identifiers(identifiers).tolist()
-        analyses = [
-            a
-            for aid in analysis_ids
-            if (a := self._analyses.by_id(aid)) is not None
-        ]
+        analyses = [a for aid in analysis_ids if (a := self._analyses.by_id(aid)) is not None]
         if not row_indices or not analyses:
             return _empty_result()
         col_indices = [int(a["analysis_index"]) for a in analyses]
@@ -370,27 +378,14 @@ class StoreQuery:
         # requested rows × cols, not the full analysis width per row. Under a
         # narrow analysis chunk this reads far fewer chunks (issue 052).
         z_block = self._z.block(row_indices, col_indices)
-        se_block = self._root["se"].oindex[row_indices, col_indices].astype("float32")
+        se_block = self._se.block(row_indices, col_indices)
         mask = np.isfinite(z_block) & np.isfinite(se_block)
         rows_rel, cols_rel = np.where(mask)
         rows = np.array([row_indices[r] for r in rows_rel], dtype="int32")
         cols = np.array([col_indices[c] for c in cols_rel], dtype="int32")
         z_vals = z_block[mask]
         se_vals = se_block[mask]
-        imp = self._imputed_pairs(rows, cols)
-        if observed_only:
-            keep = imp == 0
-            rows, cols, z_vals, se_vals, imp = (
-                rows[keep], cols[keep], z_vals[keep], se_vals[keep], imp[keep]
-            )
-        return {
-            "variant_index": rows,
-            "analysis_index": cols,
-            "z": z_vals,
-            "se": se_vals,
-            "eaf": self._eaf_pairs(rows, cols),
-            "association_status": _status_array(imp, z_vals, se_vals),
-        }
+        return self._cell_result(rows, cols, z_vals, se_vals, observed_only=observed_only)
 
     def top_hits(
         self,
@@ -418,23 +413,34 @@ class StoreQuery:
         analysis_indices = reader.read("analysis_index", bounds, "int32")
         z_values = reader.read("z", bounds, "float32")
         se_values = reader.read_or(
-            "se", bounds, "float32", lambda: self._root["se"].vindex[
+            "se",
+            bounds,
+            "float32",
+            lambda: self._se.points(
                 variant_indices.astype("int64"), analysis_indices.astype("int64")
-            ]
+            ),
         )
         imp = reader.read_or(
-            "imputed", bounds, "uint8",
+            "imputed",
+            bounds,
+            "uint8",
             lambda: self._imputed_pairs(variant_indices, analysis_indices),
         )
         eaf = reader.read_or(
-            "eaf", bounds, "float32",
+            "eaf",
+            bounds,
+            "float32",
             lambda: self._eaf_pairs(variant_indices, analysis_indices),
         )
         if observed_only:
             keep = imp == 0
             variant_indices, analysis_indices, z_values, se_values, eaf, imp = (
-                variant_indices[keep], analysis_indices[keep],
-                z_values[keep], se_values[keep], eaf[keep], imp[keep],
+                variant_indices[keep],
+                analysis_indices[keep],
+                z_values[keep],
+                se_values[keep],
+                eaf[keep],
+                imp[keep],
             )
         if limit is not None:
             variant_indices = variant_indices[:limit]
@@ -563,9 +569,7 @@ class RaggedStoreQuery:
         self._csr = RaggedCSRReader(store.path)
         self._variant_axis = VariantAxis(store.path)
         self._analyses = AnalysesIndex(store.path)
-        self._is_completed = (
-            store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
-        )
+        self._is_completed = store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
         # Load imputed mask when present (reference-completed stores).
         ragged_path = store.data_path / "ragged"
         self._imputed: zarr.Array | None = None
@@ -624,13 +628,13 @@ class RaggedStoreQuery:
         idx = self._resolve_analysis_id(analysis_id)
         if idx is None:
             return _empty_result()
-        offsets = self._csr._offsets[idx: idx + 2]
+        offsets = self._csr._offsets[idx : idx + 2]
         start, end = int(offsets[0]), int(offsets[1])
         if start == end:
             return _empty_result()
         vi = self._csr._variant_index[start:end].astype("int32")
         z = self._csr.z_slice(start, end)
-        se = self._csr._se[start:end].astype("float32")
+        se = self._csr.se_slice(start, end, idx)
         eaf = self._csr.eaf_slice(start, end)
         imp = self._get_imputed_slice(start, end)
         if observed_only:
@@ -655,16 +659,14 @@ class RaggedStoreQuery:
         observed_only: bool = False,
     ) -> dict[str, np.ndarray]:
         """All associations where the variant falls in [start, end] (regional PheWAS)."""
-        variant_set = set(
-            self._variant_axis.range_indices(chromosome, start, end).tolist()
-        )
+        variant_set = set(self._variant_axis.range_indices(chromosome, start, end).tolist())
         if not variant_set:
             return _empty_result()
 
         offsets = self._csr._offsets[:]
         vi_all = self._csr._variant_index[:]
         z_all = self._csr.z_all()
-        se_all = self._csr._se[:]
+        se_all = self._csr.se_all()
 
         mask = np.isin(vi_all, np.array(sorted(variant_set), dtype=np.int32))
         hit_positions = np.where(mask)[0]
@@ -728,13 +730,13 @@ class RaggedStoreQuery:
         all_status: list[np.ndarray] = []
 
         for ai in analysis_indices:
-            offsets = self._csr._offsets[ai: ai + 2]
+            offsets = self._csr._offsets[ai : ai + 2]
             s, e = int(offsets[0]), int(offsets[1])
             if s == e:
                 continue
             vi = self._csr._variant_index[s:e].astype("int32")
             z = self._csr.z_slice(s, e)
-            se = self._csr._se[s:e].astype("float32")
+            se = self._csr.se_slice(s, e, ai)
             eaf = self._csr.eaf_slice(s, e)
             imp = self._get_imputed_slice(s, e)
             if observed_only:
@@ -774,7 +776,7 @@ class RaggedStoreQuery:
         offsets = self._csr._offsets[:]
         vi_all = self._csr._variant_index[:]
         z_all = self._csr.z_all()
-        se_all = self._csr._se[:]
+        se_all = self._csr.se_all()
 
         hit_positions = np.where(vi_all == target_vi)[0]
         if len(hit_positions) == 0:
@@ -841,20 +843,26 @@ class RaggedStoreQuery:
             imp = reader.read_or(
                 "imputed", bounds, "uint8", lambda: np.zeros(len(vi), dtype=np.uint8)
             )
-            eaf = reader.read_or(
-                "eaf", bounds, "float32", lambda: self._csr.eaf_pairs(vi, ai)
-            )
+            eaf = reader.read_or("eaf", bounds, "float32", lambda: self._csr.eaf_pairs(vi, ai))
             if observed_only:
                 keep = imp == 0
                 vi, ai, z, se, eaf, imp = (
-                    vi[keep], ai[keep], z[keep], se[keep], eaf[keep], imp[keep]
+                    vi[keep],
+                    ai[keep],
+                    z[keep],
+                    se[keep],
+                    eaf[keep],
+                    imp[keep],
                 )
             if limit is not None:
                 vi, ai, z, se = vi[:limit], ai[:limit], z[:limit], se[:limit]
                 imp = imp[:limit]
                 eaf = eaf[:limit]
             return {
-                "variant_index": vi, "analysis_index": ai, "z": z, "se": se,
+                "variant_index": vi,
+                "analysis_index": ai,
+                "z": z,
+                "se": se,
                 "eaf": eaf,
                 "association_status": _status_array(imp, z, se),
             }
@@ -891,18 +899,17 @@ class RaggedStoreQuery:
         offsets = self._csr._offsets[:]
         vi_all = self._csr._variant_index[:]
         z_all = self._csr.z_all()
-        se_all = self._csr._se[:]
+        se_all = self._csr.se_all()
 
         z_f32 = z_all.astype("float32")
-        hit_positions = _csr_hit_positions(
-            z_f32, threshold, offsets, len(vi_all), analysis_index
-        )
+        hit_positions = _csr_hit_positions(z_f32, threshold, offsets, len(vi_all), analysis_index)
         if len(hit_positions) == 0:
             return _empty_result()
 
         analysis_indices = np.searchsorted(offsets[1:], hit_positions, side="right").astype("int32")
         imp_all = (
-            self._imputed[:].astype(np.uint8) if self._imputed is not None
+            self._imputed[:].astype(np.uint8)
+            if self._imputed is not None
             else np.zeros(len(vi_all), dtype=np.uint8)
         )
         imp_hits = imp_all[hit_positions]
@@ -936,9 +943,7 @@ class RaggedStoreQuery:
     ) -> dict[str, np.ndarray]:
         """Associations for a specific variant × analysis set."""
         variants = [
-            v
-            for id_ in identifiers
-            if (v := self._variant_axis.by_identifier(id_)) is not None
+            v for id_ in identifiers if (v := self._variant_axis.by_identifier(id_)) is not None
         ]
         if not variants:
             return _empty_result()
@@ -950,20 +955,24 @@ class RaggedStoreQuery:
             idx = self._resolve_analysis_id(aid)
             if idx is None:
                 continue
-            offsets_pair = self._csr._offsets[idx: idx + 2]
+            offsets_pair = self._csr._offsets[idx : idx + 2]
             s, e = int(offsets_pair[0]), int(offsets_pair[1])
             if s == e:
                 continue
             vi = self._csr._variant_index[s:e].astype("int32")
             z = self._csr.z_slice(s, e)
-            se = self._csr._se[s:e].astype("float32")
+            se = self._csr.se_slice(s, e, idx)
             eaf = self._csr.eaf_slice(s, e)
             imp = self._get_imputed_slice(s, e)
             sub_mask = np.isin(vi, np.array(sorted(target_vi), dtype=np.int32))
             if not sub_mask.any():
                 continue
             vi, z, se, eaf, imp = (
-                vi[sub_mask], z[sub_mask], se[sub_mask], eaf[sub_mask], imp[sub_mask]
+                vi[sub_mask],
+                z[sub_mask],
+                se[sub_mask],
+                eaf[sub_mask],
+                imp[sub_mask],
             )
             if observed_only:
                 keep = imp == 0
@@ -1094,13 +1103,13 @@ class HybridStoreQuery:
         return pos < len(self._dense_to_shared) and int(self._dense_to_shared[pos]) == shared_idx
 
     def _overflow_for_analysis(self, col: int) -> dict[str, np.ndarray]:
-        offsets = self._csr._offsets[col: col + 2]
+        offsets = self._csr._offsets[col : col + 2]
         s, e = int(offsets[0]), int(offsets[1])
         if s == e:
             return _empty_result()
         vi = self._csr._variant_index[s:e].astype("int32")
         z = self._csr.z_slice(s, e)
-        se = self._csr._se[s:e].astype("float32")
+        se = self._csr.se_slice(s, e, col)
         return {
             "variant_index": vi,
             "analysis_index": np.full(len(z), col, dtype="int32"),
@@ -1123,7 +1132,7 @@ class HybridStoreQuery:
             return _empty_result()
         analysis_indices = np.searchsorted(offsets[1:], hits, side="right").astype("int32")
         z = self._csr.z_at(hits)
-        se = self._csr._se[:][hits].astype("float32")
+        se = self._csr.se_at(hits)
         eaf = self._csr.eaf_at(hits)
         return {
             "variant_index": vi_all[hits].astype("int32"),
@@ -1140,7 +1149,8 @@ class HybridStoreQuery:
         analysis = self._analyses.by_id(analysis_id)
         overflow = (
             self._overflow_for_analysis(int(analysis["analysis_index"]))
-            if analysis is not None else _empty_result()
+            if analysis is not None
+            else _empty_result()
         )
         return _concat_results([dense, overflow])
 
@@ -1149,9 +1159,7 @@ class HybridStoreQuery:
         if variant is None:
             return _empty_result()
         if self._shared_is_on_panel(variant.variant_index):
-            return self._remap_dense(
-                self._dense.phewas(variant.alid, observed_only=observed_only)
-            )
+            return self._remap_dense(self._dense.phewas(variant.alid, observed_only=observed_only))
         return self._overflow_by_variants({int(variant.variant_index)})
 
     def range_phewas(
@@ -1161,9 +1169,7 @@ class HybridStoreQuery:
             self._dense.range_phewas(chromosome, start, end, observed_only=observed_only)
         )
         shared_idx = self._variant_axis.range_indices(chromosome, start, end)
-        off_panel = {
-            int(i) for i in shared_idx.tolist() if not self._shared_is_on_panel(int(i))
-        }
+        off_panel = {int(i) for i in shared_idx.tolist() if not self._shared_is_on_panel(int(i))}
         overflow = self._overflow_by_variants(off_panel)
         return _concat_results([dense, overflow])
 
@@ -1190,8 +1196,10 @@ class HybridStoreQuery:
         }
         overflow = self._overflow_by_variants(off_shared)
         if len(overflow["z"]) and wanted_cols:
-            keep = np.isin(overflow["analysis_index"], np.fromiter(
-                wanted_cols, dtype="int32", count=len(wanted_cols)))
+            keep = np.isin(
+                overflow["analysis_index"],
+                np.fromiter(wanted_cols, dtype="int32", count=len(wanted_cols)),
+            )
             overflow = {k: v[keep] for k, v in overflow.items()}
         elif not wanted_cols:
             overflow = _empty_result()
@@ -1214,9 +1222,7 @@ class HybridStoreQuery:
         ai = reader.read("analysis_index", bounds, "int32")
         z = reader.read("z", bounds, "float32")
         se = reader.read("se", bounds, "float32")
-        eaf = reader.read_or(
-            "eaf", bounds, "float32", lambda: self._csr.eaf_pairs(vi, ai)
-        )
+        eaf = reader.read_or("eaf", bounds, "float32", lambda: self._csr.eaf_pairs(vi, ai))
         return {
             "variant_index": vi,
             "analysis_index": ai,
@@ -1240,12 +1246,12 @@ class HybridStoreQuery:
             if analysis is None:
                 return _empty_result()
             analysis_index = int(analysis["analysis_index"])
-        dense = self._remap_dense(self._dense.top_hits(
-            analysis_id=analysis_id, threshold=threshold, observed_only=observed_only
-        ))
-        overflow = self._overflow_top_hits(
-            threshold, analysis_index
-        )  # overflow is always observed
+        dense = self._remap_dense(
+            self._dense.top_hits(
+                analysis_id=analysis_id, threshold=threshold, observed_only=observed_only
+            )
+        )
+        overflow = self._overflow_top_hits(threshold, analysis_index)  # overflow is always observed
         merged = _concat_results([dense, overflow])
         if len(merged["z"]):
             order = np.lexsort((merged["variant_index"], merged["analysis_index"]))

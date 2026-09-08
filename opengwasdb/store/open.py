@@ -36,15 +36,17 @@ if TYPE_CHECKING:
 #: ``0.1`` (major 0) stays readable and is never written again: its planes are
 #: ``float16`` throughout and decode under `StoreEncoding.legacy()`. Major 1 is
 #: ADR 0037's fixed-point ``z`` (#114); major 2 adds its residual-coded ``eaf``
-#: (#116). Both older majors stay readable -- an `eaf` plane at major 1 is
-#: ADR 0036's `float32`, which the plan names rather than infers.
-SUPPORTED_FORMAT_VERSIONS: Mapping[int, int] = MappingProxyType({0: 1, 1: 0, 2: 0})
+#: (#116); major 3 adds its conditionally residual-coded ``se`` (#118). Every
+#: older major stays readable -- an `eaf` plane at major 1 is ADR 0036's
+#: `float32`, and `se` below major 3 is `float16`, which the plan names rather
+#: than infers.
+SUPPORTED_FORMAT_VERSIONS: Mapping[int, int] = MappingProxyType({0: 1, 1: 0, 2: 0, 3: 0})
 
 #: format_version stamped on releases written by this build. A build writes
 #: exactly one version and reads several (ADR 0038 §3): supporting the *writing*
 #: of historical formats would mean keeping every retired encoder alive and
 #: tested, for a use case nobody has.
-CURRENT_FORMAT_VERSION = "2.0"
+CURRENT_FORMAT_VERSION = "3.0"
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +97,12 @@ def check_format_version(version: str, *, source: str = "release") -> None:
             "%s declares format_version=%s, a newer minor than this build knows (%d.%d). "
             "Reading it as %d.%d: anything added after that is not visible here, and if "
             "any of it changes how existing arrays decode it was misclassified as minor.",
-            source, version, major, known_minor, major, known_minor,
+            source,
+            version,
+            major,
+            known_minor,
+            major,
+            known_minor,
         )
 
 
@@ -140,22 +147,24 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
 # `data.zarr/` and a `completion_quality` table inside `index.sqlite` -- so
 # one set per layout covers both Observed-Only and Reference-Completed
 # releases.
-_BASE_ENVELOPE: frozenset[str] = frozenset({
-    "manifest.json",
-    "index.sqlite",
-    "analyses.tsv",
-    "data.zarr",
-    "variants.tsv.gz",
-    "variants.tsv.gz.tbi",
-    "variant_offsets.npy",
-    "variant_alid_bytes.npy",
-    "variant_alid_rows.npy",
-    # rsid search index (issue #109). Every layout writes it, empty when the
-    # source names no variants, so it belongs in the base envelope rather than
-    # being optional per layout.
-    "variant_rsid_bytes.npy",
-    "variant_rsid_rows.npy",
-})
+_BASE_ENVELOPE: frozenset[str] = frozenset(
+    {
+        "manifest.json",
+        "index.sqlite",
+        "analyses.tsv",
+        "data.zarr",
+        "variants.tsv.gz",
+        "variants.tsv.gz.tbi",
+        "variant_offsets.npy",
+        "variant_alid_bytes.npy",
+        "variant_alid_rows.npy",
+        # rsid search index (issue #109). Every layout writes it, empty when the
+        # source names no variants, so it belongs in the base envelope rather than
+        # being optional per layout.
+        "variant_rsid_bytes.npy",
+        "variant_rsid_rows.npy",
+    }
+)
 
 #: Dense Observed-Only/Reference-Completed (§10, §16).
 DENSE_ENVELOPE: frozenset[str] = _BASE_ENVELOPE | {"overview.html"}

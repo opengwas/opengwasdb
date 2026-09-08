@@ -26,6 +26,8 @@ from opengwasdb.encoding.codec import (
     EAF_REFERENCE,
     EafExceptionBuilder,
     EafExceptionTable,
+    SeExceptionBuilder,
+    SeExceptionTable,
     StoreCodec,
     ZOverflowBuilder,
     ZOverflowTable,
@@ -36,6 +38,8 @@ from opengwasdb.encoding.codec import (
     positions_rows_cols,
 )
 from opengwasdb.encoding.plan import EafBaselineError, StoreEncoding
+
+SE_COEFFICIENTS = "se_coefficients"
 
 # Per-variant side arrays must follow the variant-axis chunking of the planes
 # they serve.  This fallback is used only when a group has no suitable sibling
@@ -48,9 +52,7 @@ def per_variant_chunk_size(group: Any, length: int) -> int:
     """Return the component-local chunk size for a per-variant side array."""
     for sibling in ("eaf", "z", "imputed", "variant_index"):
         if sibling in group and group[sibling].ndim:
-            return min(
-                int(group[sibling].chunks[0]), DEFAULT_PER_VARIANT_CHUNK, max(length, 1)
-            )
+            return min(int(group[sibling].chunks[0]), DEFAULT_PER_VARIANT_CHUNK, max(length, 1))
     return min(DEFAULT_PER_VARIANT_CHUNK, max(length, 1))
 
 
@@ -119,9 +121,7 @@ class DenseZPlane:
             return self.band(start, stop)
         return self._codec.decode_z(
             self._array.oindex[row_indices, :],
-            positions=positions_rows_cols(
-                row_indices, np.arange(self.n_analyses), self.n_analyses
-            ),
+            positions=positions_rows_cols(row_indices, np.arange(self.n_analyses), self.n_analyses),
         )
 
     def block(
@@ -180,6 +180,136 @@ class DenseZPlane:
         table = merged.table()
         table.write(self._group)
         self._codec = StoreCodec(self._codec.encoding, z_overflow=table)
+
+
+class DenseSePlane:
+    """Dense Standard Errors decoded against the corresponding physical EAF."""
+
+    def __init__(
+        self,
+        array: Any,
+        codec: StoreCodec,
+        eaf: DenseEafPlane | None,
+        coefficients: Any,
+        group: Any,
+    ):
+        self._array, self._codec, self._eaf, self._coefficients = array, codec, eaf, coefficients
+        self._group = group
+
+    @classmethod
+    def open(cls, group: Any, encoding: StoreEncoding) -> DenseSePlane:
+        residual = encoding.se.is_residual
+        required = ("se_exception_index", "se_exception_value", SE_COEFFICIENTS)
+        if residual and any(name not in group for name in required):
+            missing = [name for name in required if name not in group]
+            raise ValueError(f"int8_residual se plane is missing required arrays: {missing}")
+        return cls(
+            group["se"],
+            StoreCodec(encoding, se_exceptions=SeExceptionTable.read(group)),
+            DenseEafPlane.open(group, encoding) if residual else None,
+            group[SE_COEFFICIENTS] if residual else None,
+            group,
+        )
+
+    @property
+    def n_analyses(self) -> int:
+        return int(self._array.shape[1])
+
+    def _decode(
+        self, raw: np.ndarray, eaf: np.ndarray, analyses: np.ndarray, positions: Any
+    ) -> np.ndarray:
+        if not self._codec.encoding.se.is_residual:
+            return self._codec.decode_se(
+                raw,
+                eaf=eaf,
+                analysis_index=analyses,
+                coefficients=np.empty((0, 2)),
+                positions=positions,
+            )
+        return self._codec.decode_se(
+            raw,
+            eaf=eaf,
+            analysis_index=analyses,
+            coefficients=np.asarray(self._coefficients[:], dtype=np.float32),
+            positions=positions,
+        )
+
+    def band(self, r0: int, r1: int) -> np.ndarray:
+        raw = np.asarray(self._array[r0:r1])
+        ai = np.broadcast_to(np.arange(self.n_analyses), raw.shape)
+        eaf = self._eaf.band(r0, r1) if self._eaf is not None else np.empty(raw.shape)
+        return self._decode(raw, eaf, ai, positions_row_band(r0, self.n_analyses))
+
+    def column(self, col: int) -> np.ndarray:
+        raw = np.asarray(self._array[:, col])
+        rows = np.arange(len(raw), dtype=np.int64)
+        eaf = (
+            self._eaf.points(rows, np.full(len(raw), col))
+            if self._eaf is not None
+            else np.empty(raw.shape)
+        )
+        return self._decode(
+            raw,
+            eaf,
+            np.full(len(raw), col),
+            positions_pairs(rows, np.full(len(raw), col), self.n_analyses),
+        )
+
+    def row(self, row: int) -> np.ndarray:
+        return np.asarray(self.band(row, row + 1)[0], dtype=np.float32)
+
+    def rows(self, rows: np.ndarray) -> np.ndarray:
+        rows = np.asarray(rows, dtype=np.int64)
+        if len(rows) == 0:
+            return np.empty((0, self.n_analyses), dtype=np.float32)
+        return self.block(rows, np.arange(self.n_analyses))
+
+    def block(
+        self, rows: Sequence[int] | np.ndarray, cols: Sequence[int] | np.ndarray
+    ) -> np.ndarray:
+        r, c = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
+        raw = np.asarray(self._array.oindex[r, c])
+        ai = np.broadcast_to(c, raw.shape)
+        er, ec = np.meshgrid(r, c, indexing="ij")
+        eaf = (
+            self._eaf.points(er.ravel(), ec.ravel()).reshape(raw.shape)
+            if self._eaf is not None
+            else np.empty(raw.shape)
+        )
+        return self._decode(raw, eaf, ai, positions_rows_cols(r, c, self.n_analyses))
+
+    def points(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+        rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
+        raw = np.asarray(self._array.vindex[rows, cols])
+        eaf = self._eaf.points(rows, cols) if self._eaf is not None else np.empty(raw.shape)
+        return self._decode(raw, eaf, cols, positions_pairs(rows, cols, self.n_analyses))
+
+    def patch(self, rows: np.ndarray, cols: np.ndarray, values: np.ndarray) -> None:
+        """Patch physical SE cells and keep their exact-exception table aligned."""
+        rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
+        if not self._codec.encoding.se.is_residual:
+            self._array.vindex[rows, cols] = np.asarray(values, dtype=np.float16)
+            return
+        assert self._eaf is not None and self._coefficients is not None
+        positions = positions_pairs(rows, cols, self.n_analyses)
+        builder = SeExceptionBuilder()
+        self._array.vindex[rows, cols] = self._codec.encode_se(
+            values,
+            eaf=self._eaf.points(rows, cols),
+            analysis_index=cols,
+            coefficients=np.asarray(self._coefficients[:], dtype=np.float32),
+            positions=positions,
+            exceptions=builder,
+        )
+        previous = self._codec.se_exceptions or SeExceptionTable.empty()
+        merged = SeExceptionBuilder()
+        keep = ~np.isin(previous.index, positions)
+        merged.add(previous.index[keep], previous.value[keep])
+        added = builder.table()
+        merged.add(added.index, added.value)
+        table = merged.table()
+        table.write(self._group, compressor=self._array.compressor)
+        self._codec = StoreCodec(self._codec.encoding, se_exceptions=table)
 
 
 class _EafPlaneBase:
@@ -333,9 +463,7 @@ class DenseEafPlane(_EafPlaneBase):
         cols = np.asarray(cols, dtype=np.int64)
         if len(rows) == 0:
             return self._missing(0)
-        imputed = (
-            self._imputed.vindex[rows, cols].astype(bool) if self.carries_reference else None
-        )
+        imputed = self._imputed.vindex[rows, cols].astype(bool) if self.carries_reference else None
         reference = self._gather(self._reference, rows)
         if self._array is None:
             return self._no_plane(len(rows), imputed=imputed, reference=reference)
@@ -380,9 +508,7 @@ class DenseEafPlane(_EafPlaneBase):
         every cell already coded against it.
         """
         if self._group is None:
-            raise EafBaselineError(
-                "this plane was opened without its group and cannot be written"
-            )
+            raise EafBaselineError("this plane was opened without its group and cannot be written")
         rows = np.asarray(rows, dtype=np.int64)
         cols = np.asarray(cols, dtype=np.int64)
         if self._array is None or len(rows) == 0:
@@ -413,6 +539,7 @@ class DenseEafPlane(_EafPlaneBase):
             return None
         return per_row[:, None].repeat(n_analyses, axis=1)
 
+
 class RaggedEafPlane(_EafPlaneBase):
     """The flat CSR frequency sequence, decoded on read.
 
@@ -438,9 +565,7 @@ class RaggedEafPlane(_EafPlaneBase):
         self._variant_index = variant_index
 
     @classmethod
-    def open(
-        cls, group: Any, encoding: StoreEncoding, *, imputed: Any = None
-    ) -> RaggedEafPlane:
+    def open(cls, group: Any, encoding: StoreEncoding, *, imputed: Any = None) -> RaggedEafPlane:
         return cls(
             group["eaf"] if "eaf" in group else None,
             StoreCodec(encoding, eaf_exceptions=EafExceptionTable.read(group)),
@@ -458,9 +583,7 @@ class RaggedEafPlane(_EafPlaneBase):
             return self._missing(0)
         rows = np.asarray(self._variant_index[start:end], dtype=np.int64)
         imputed = (
-            np.asarray(self._imputed[start:end], dtype=bool)
-            if self.carries_reference
-            else None
+            np.asarray(self._imputed[start:end], dtype=bool) if self.carries_reference else None
         )
         reference = self._gather(self._reference, rows)
         if self._array is None:
@@ -497,6 +620,75 @@ class RaggedEafPlane(_EafPlaneBase):
         return np.asarray(self._imputed.oindex[positions], dtype=bool)
 
 
+class RaggedSePlane:
+    """CSR Standard Errors decoded using CSR ordinals as exception keys."""
+
+    def __init__(self, group: Any, encoding: StoreEncoding, eaf: RaggedEafPlane):
+        self._array = group["se"]
+        self._encoding = encoding
+        self._eaf = eaf
+        self._variant_index = group["variant_index"]
+        self._offsets = group["offsets"]
+        residual = encoding.se.is_residual
+        required = ("se_exception_index", "se_exception_value", SE_COEFFICIENTS)
+        if residual and any(name not in group for name in required):
+            missing = [name for name in required if name not in group]
+            raise ValueError(f"int8_residual se plane is missing required arrays: {missing}")
+        self._coefficients = group[SE_COEFFICIENTS] if residual else None
+        self._codec = StoreCodec(encoding, se_exceptions=SeExceptionTable.read(group))
+
+    @classmethod
+    def open(
+        cls, group: Any, encoding: StoreEncoding, eaf: RaggedEafPlane | None = None
+    ) -> RaggedSePlane:
+        return cls(
+            group,
+            encoding,
+            eaf
+            or RaggedEafPlane.open(
+                group, encoding, imputed=group["imputed"] if "imputed" in group else None
+            ),
+        )
+
+    def _analysis_indices(self, positions: np.ndarray) -> np.ndarray:
+        offsets = np.asarray(self._offsets[:], dtype=np.int64)
+        return np.searchsorted(offsets[1:], positions, side="right").astype(np.int64)
+
+    def slice(self, start: int, end: int, *, analysis_index: int | None = None) -> np.ndarray:
+        raw = np.asarray(self._array[start:end])
+        ai = (
+            np.full(len(raw), analysis_index, dtype=np.int64)
+            if analysis_index is not None
+            else self._analysis_indices(np.arange(start, end))
+        )
+        coef = (
+            np.asarray(self._coefficients[:], dtype=np.float32)
+            if self._coefficients is not None
+            else np.empty((0, 2))
+        )
+        return self._codec.decode_se(
+            raw,
+            eaf=self._eaf.slice(start, end),
+            analysis_index=ai,
+            coefficients=coef,
+            positions=positions_flat(start),
+        )
+
+    def at(self, positions: np.ndarray, *, analysis_index: np.ndarray) -> np.ndarray:
+        positions = np.asarray(positions, dtype=np.int64)
+        coef = (
+            np.asarray(self._coefficients[:], dtype=np.float32)
+            if self._coefficients is not None
+            else np.empty((0, 2))
+        )
+        return self._codec.decode_se(
+            np.asarray(self._array.oindex[positions]),
+            eaf=self._eaf.at(positions),
+            analysis_index=analysis_index,
+            coefficients=coef,
+            positions=positions_at(positions),
+        )
+
 
 # ── Writing an `eaf` plane ──────────────────────────────────────────────────
 #
@@ -532,9 +724,7 @@ def write_eaf_baseline(
     group: Any, baseline: np.ndarray, *, compressor: Any = None, chunk: int | None = None
 ) -> None:
     """Write the per-variant `eaf_baseline` the residual coding decodes against."""
-    _write_per_variant_array(
-        group, EAF_BASELINE, baseline, compressor=compressor, chunk=chunk
-    )
+    _write_per_variant_array(group, EAF_BASELINE, baseline, compressor=compressor, chunk=chunk)
 
 
 def write_eaf_reference(
@@ -546,8 +736,138 @@ def write_eaf_reference(
     the panel's, identical for every Analysis imputed at that variant, so it is
     a per-variant constant rather than per-cell data.
     """
-    _write_per_variant_array(
-        group, EAF_REFERENCE, reference, compressor=compressor, chunk=chunk
+    _write_per_variant_array(group, EAF_REFERENCE, reference, compressor=compressor, chunk=chunk)
+
+
+def write_se_coefficients(group: Any, coefficients: np.ndarray, *, compressor: Any = None) -> None:
+    """Write (or replace) the two `float32` decode parameters per Analysis."""
+    data = np.asarray(coefficients, dtype=np.float32)
+    if SE_COEFFICIENTS in group:
+        del group[SE_COEFFICIENTS]
+    group.create_dataset(
+        SE_COEFFICIENTS,
+        data=data,
+        chunks=(max(1, min(len(data), 1024)), 2),
+        compressor=compressor,
+        dtype="float32",
+    )
+
+
+def _write_se_arrays(
+    group: Any,
+    codec: StoreCodec,
+    codes: np.ndarray,
+    coefficients: np.ndarray | None,
+    exceptions: SeExceptionBuilder | None,
+    *,
+    compressor: Any,
+    chunks: tuple[int, ...] | None,
+) -> None:
+    """Replace the plane and, for a residual plan, both of its side arrays.
+
+    The plane, its coefficients and its exception table are one artifact in
+    three arrays, exactly as the `eaf` writers above treat theirs: writing them
+    from one place is what stops a builder producing two of the three.
+    """
+    if "se" in group:
+        del group["se"]
+    group.create_dataset(
+        "se", data=codes, chunks=chunks, compressor=compressor, dtype=codec.encoding.se.dtype
+    )
+    if not codec.encoding.se.is_residual:
+        return
+    assert coefficients is not None and exceptions is not None
+    write_se_coefficients(group, coefficients, compressor=compressor)
+    exceptions.table().write(group, compressor=compressor)
+
+
+def _write_se_plane(
+    group: Any,
+    codec: StoreCodec,
+    values: np.ndarray,
+    eaf: np.ndarray,
+    analysis_index: np.ndarray,
+    coefficients: np.ndarray | None,
+    positions: Any,
+    compressor: Any,
+    chunks: tuple[int, ...] | None,
+) -> None:
+    """Encode a plane and write it with both of its side arrays, or as float16.
+
+    Dense and CSR differ only in how a cell's Analysis and flat position are
+    derived; everything downstream of that is one path, so a plane cannot be
+    written by one route and its exception table by another.
+    """
+    data = np.asarray(values, dtype=np.float32)
+    if not codec.encoding.se.is_residual:
+        _write_se_arrays(
+            group, codec, data.astype(np.float16), None, None, compressor=compressor, chunks=chunks
+        )
+        return
+    if coefficients is None:
+        raise ValueError("residual SE needs se_coefficients")
+    exceptions = SeExceptionBuilder()
+    codes = codec.encode_se(
+        data,
+        eaf=eaf,
+        analysis_index=analysis_index,
+        coefficients=coefficients,
+        positions=positions,
+        exceptions=exceptions,
+    )
+    _write_se_arrays(
+        group, codec, codes, coefficients, exceptions, compressor=compressor, chunks=chunks
+    )
+
+
+def write_se_dense(
+    group: Any,
+    codec: StoreCodec,
+    values: np.ndarray,
+    eaf: np.ndarray,
+    coefficients: np.ndarray | None,
+    *,
+    compressor: Any = None,
+    chunks: tuple[int, ...] | None = None,
+) -> None:
+    """Write a Dense SE plane and all residual decode parameters atomically."""
+    data = np.asarray(values, dtype=np.float32)
+    n_analyses = data.shape[1]
+    _write_se_plane(
+        group,
+        codec,
+        data,
+        eaf,
+        np.broadcast_to(np.arange(n_analyses), data.shape),
+        coefficients,
+        positions_row_band(0, n_analyses),
+        compressor,
+        chunks,
+    )
+
+
+def write_se_csr(
+    group: Any,
+    codec: StoreCodec,
+    values: np.ndarray,
+    eaf: np.ndarray,
+    analysis_index: np.ndarray,
+    coefficients: np.ndarray | None,
+    *,
+    compressor: Any = None,
+    chunks: tuple[int, ...] | None = None,
+) -> None:
+    """Write a Ragged SE plane with ordinal-keyed exact exceptions."""
+    _write_se_plane(
+        group,
+        codec,
+        values,
+        eaf,
+        analysis_index,
+        coefficients,
+        positions_flat(0),
+        compressor,
+        chunks,
     )
 
 
@@ -578,9 +898,7 @@ def write_eaf_csr(
     per_cell = (
         None
         if baseline is None
-        else np.asarray(baseline, dtype=np.float32)[
-            np.asarray(variant_index, dtype=np.int64)
-        ]
+        else np.asarray(baseline, dtype=np.float32)[np.asarray(variant_index, dtype=np.int64)]
     )
     codes = codec.encode_eaf(
         values, baseline=per_cell, positions=positions_flat(0), exceptions=exceptions

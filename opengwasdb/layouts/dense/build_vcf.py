@@ -42,6 +42,7 @@ from opengwasdb.encoding import (
     ZOverflowBuilder,
     eaf_baseline_from_grid,
     measure_eaf_sample,
+    optimise_dense_se,
     positions_row_band,
     write_eaf_baseline,
 )
@@ -56,6 +57,7 @@ from opengwasdb.layouts.dense.constants import (
     DEFAULT_COMPRESSOR,
     DEFAULT_DTYPE,
     TOP_HIT_THRESHOLDS,
+    dense_index_metadata,
 )
 from opengwasdb.layouts.dense.top_hits import (
     write_top_hit_indexes_for_store,
@@ -183,9 +185,7 @@ def _fork_pool(n_workers: int) -> ProcessPoolExecutor:
     return ProcessPoolExecutor(max_workers=n_workers, mp_context=fork_ctx)
 
 
-def _encode_variant_keys(
-    chrom: object, pos: object, ref: object, alt: object
-) -> np.ndarray:
+def _encode_variant_keys(chrom: object, pos: object, ref: object, alt: object) -> np.ndarray:
     """Encode variant fields as ``chrom:pos:ref:alt`` byte-string keys, vectorised.
 
     Used identically for the parent's sorted key table and each worker's query
@@ -424,7 +424,12 @@ def _log_progress(
     eta = (elapsed / completed) * (total - completed) if completed else 0.0
     log.info(
         "%s: %d/%d done (%s) — elapsed %s, ETA %s",
-        label, completed, total, extra, _fmt_duration(elapsed), _fmt_duration(eta),
+        label,
+        completed,
+        total,
+        extra,
+        _fmt_duration(elapsed),
+        _fmt_duration(eta),
     )
 
 
@@ -501,8 +506,11 @@ def _lift_manifest_variants(
     if hg19_tuples:
         log.info("Running liftover hg19 → hg38 (%d variants)", len(hg19_tuples))
         lifted_lookup = build_liftover_lookup(
-            hg19_tuples, from_build="hg19", to_build="hg38",
-            failure_threshold=liftover_failure_threshold, chain_file=chain_file,
+            hg19_tuples,
+            from_build="hg19",
+            to_build="hg38",
+            failure_threshold=liftover_failure_threshold,
+            chain_file=chain_file,
         )
         log.info("Liftover complete: %d variants mapped", len(lifted_lookup))
 
@@ -638,7 +646,7 @@ def build_dense_from_vcf_manifest(
         # ------------------------------------------------------------------
         # Write SQLite index + analyses.tsv + tabix variant axis
         # ------------------------------------------------------------------
-        _write_index(staged, hg38_alids, analyses, chunk_shape, dtype)
+        _write_index(staged, hg38_alids, analyses, chunk_shape)
         canonical_variants = [
             CanonicalVariant(
                 chromosome=chrom,
@@ -674,7 +682,8 @@ def build_dense_from_vcf_manifest(
         max_key_len = keys_sorted.dtype.itemsize if len(keys_sorted) else 0
         log.info(
             "Pass 2 lookup: %d variant keys, max key length %d bytes",
-            len(keys_sorted), max_key_len,
+            len(keys_sorted),
+            max_key_len,
         )
         del source_lookup, variant_index  # free the parent-side dicts before Pass 2
 
@@ -689,7 +698,9 @@ def build_dense_from_vcf_manifest(
         # ------------------------------------------------------------------
         log.info(
             "Pass 2: resolving %d analyses × %d variants (n_workers=%d)",
-            n_analyses, n_variants, n_workers,
+            n_analyses,
+            n_variants,
+            n_workers,
         )
         pass2_start = time.monotonic()
         id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
@@ -733,8 +744,12 @@ def build_dense_from_vcf_manifest(
                         for i, fut in enumerate(as_completed(futures)):
                             col_idx = fut.result()
                             _log_progress(
-                                "Pass 2", i + 1, n_analyses, pass2_start,
-                                f"last: {id_by_col[col_idx]}", every=25,
+                                "Pass 2",
+                                i + 1,
+                                n_analyses,
+                                pass2_start,
+                                f"last: {id_by_col[col_idx]}",
+                                every=25,
                             )
                 finally:
                     _pass2_keys_sorted = None
@@ -780,14 +795,28 @@ def build_dense_from_vcf_manifest(
             # is one band (n_variants × chunk-analysis-width), not the full matrix.
             # --------------------------------------------------------------
             all_rows, all_cols, all_z, all_se, column_has_eaf = _write_dense_bands(
-                staged, spill_dir, n_variants, n_analyses, effective_chunks, dtype,
-                pass2_start, encoding,
+                staged,
+                spill_dir,
+                n_variants,
+                n_analyses,
+                effective_chunks,
+                dtype,
+                pass2_start,
+                encoding,
             )
+            encoding = optimise_dense_se(staged.arrays(mode="a"), encoding)
         finally:
             shutil.rmtree(spill_dir, ignore_errors=True)
 
         _write_manifest(
-            staged, store_id, release_id, n_variants, n_analyses, chain_file, chunk_shape, dtype,
+            staged,
+            store_id,
+            release_id,
+            n_variants,
+            n_analyses,
+            chain_file,
+            chunk_shape,
+            dtype,
             encoding=encoding,
             eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
         )
@@ -959,22 +988,13 @@ def _write_index(
     hg38_alids: list[str],
     analyses: list[Analysis],
     chunk_shape: tuple[int, int],
-    dtype: str,
 ) -> None:
     with staged.index_connection() as connection:
         initialise_schema(connection)
         set_metadata(connection, "schema_version", 1)
         set_metadata(connection, "n_variants", len(hg38_alids))
         set_metadata(connection, "n_analyses", len(analyses))
-        set_metadata(
-            connection,
-            "dense",
-            {
-                "se_dtype": dtype,
-                "chunk_shape": list(chunk_shape),
-                "compressor": DEFAULT_COMPRESSOR,
-            },
-        )
+        set_metadata(connection, "dense", dense_index_metadata(chunk_shape))
         connection.commit()
 
 
@@ -991,9 +1011,7 @@ def _apply_eaf_scope(analyses: list[Analysis], column_has_eaf: np.ndarray) -> li
         replace(
             analysis,
             eaf_scope=(
-                EafScope.ASSOCIATION.value
-                if bool(column_has_eaf[index])
-                else EafScope.ABSENT.value
+                EafScope.ASSOCIATION.value if bool(column_has_eaf[index]) else EafScope.ABSENT.value
             ),
         )
         for index, analysis in enumerate(analyses)
@@ -1054,8 +1072,12 @@ def _write_dense_eaf(
         return
 
     encoded = _create_eaf_array(
-        staged, n_variants, n_analyses, effective_chunks,
-        dtype=codec.eaf_dtype, fill_value=codec.eaf_fill_value,
+        staged,
+        n_variants,
+        n_analyses,
+        effective_chunks,
+        dtype=codec.eaf_dtype,
+        fill_value=codec.eaf_fill_value,
     )
     baseline = np.full(n_variants, np.nan, dtype=np.float32)
     exceptions = EafExceptionBuilder()
@@ -1071,14 +1093,13 @@ def _write_dense_eaf(
             positions=positions_row_band(r0, n_analyses),
             exceptions=exceptions,
         )
-        _log_progress(
-            "Encode eaf", r1, n_variants, pass2_start, f"rows {r0}:{r1}", every=band_rows
-        )
+        _log_progress("Encode eaf", r1, n_variants, pass2_start, f"rows {r0}:{r1}", every=band_rows)
     write_eaf_baseline(root, baseline, compressor=_DENSE_COMPRESSOR)
     exceptions.table().write(root)
     log.info(
         "eaf: int8 residual at +/-%.1f, %d exception cell(s)",
-        codec.encoding.eaf.residual_range, len(exceptions),
+        codec.encoding.eaf.residual_range,
+        len(exceptions),
     )
     del root[_EAF_STAGING]
 
@@ -1147,7 +1168,11 @@ def _create_dense_zarr(
     root = staged.arrays(mode="w")
     for name, plane_dtype, fill in (
         ("z", codec.z_dtype, codec.z_fill_value),
-        ("se", dtype, float("nan")),
+        # Scratch in float32, as dense.complete does: the band-writer fills
+        # this before the SE encoding is decided, and an exact residual
+        # exception must be the source's own value, not one already rounded
+        # to the dtype the plane happened to start in (spec §6a).
+        ("se", "float32", float("nan")),
     ):
         root.create_dataset(
             name,
@@ -1255,9 +1280,7 @@ def survey_eaf_spills(
         observations=observations,
         n_spill_cells=n_spill_cells,
         n_eaf_cells=n_eaf_cells,
-        sample_rows=(
-            np.concatenate(sample_rows) if sample_rows else np.empty(0, dtype=np.int64)
-        ),
+        sample_rows=(np.concatenate(sample_rows) if sample_rows else np.empty(0, dtype=np.int64)),
         sample_values=(
             np.concatenate(sample_values) if sample_values else np.empty(0, dtype=np.float64)
         ),
@@ -1366,8 +1389,14 @@ def _write_dense_bands(
         # would otherwise declare a plane it does not have. An all-absent
         # `int8` plane costs essentially nothing compressed.
         _write_dense_eaf(
-            staged, spill_dir, n_variants, n_analyses, effective_chunks, band_cols,
-            codec, pass2_start,
+            staged,
+            spill_dir,
+            n_variants,
+            n_analyses,
+            effective_chunks,
+            band_cols,
+            codec,
+            pass2_start,
         )
     for c in range(n_analyses):
         (spill_dir / f"{c}.npz").unlink(missing_ok=True)
@@ -1418,7 +1447,7 @@ def _write_manifest(
             "n_analyses": n_analyses,
             "dense": {
                 "statistic_arrays": ["z", "se"],
-                "se_dtype": dtype,
+                "se_dtype": encoding.se.dtype,
                 "chunk_shape": list(chunk_shape),
                 "compressor": DEFAULT_COMPRESSOR,
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],

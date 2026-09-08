@@ -21,6 +21,7 @@ of them:
     completed association list (CSR), write completion_quality, top-hit
     indexes, and manifest.
 """
+
 from __future__ import annotations
 
 import json
@@ -59,11 +60,14 @@ from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_refer
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
     EAF_BASELINE,
+    RaggedEafPlane,
     StoreCodec,
     ZOverflowBuilder,
+    fit_se,
     positions_flat,
     write_eaf_csr,
     write_eaf_reference,
+    write_se_csr,
 )
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -126,6 +130,7 @@ def _make_reader(task: _BlockTask):
     matrix) only the Analyses this task was assigned even have a cis window
     touching this block.
     """
+
     def make_reader(block, canonical_alids: list[str | None]):
         src_csr = RaggedCSRReader(task.source_path)
         src_variant_axis = VariantAxis(task.source_path)
@@ -155,13 +160,17 @@ def _make_reader(task: _BlockTask):
                 obs_alid_to_eaf[alid] = float(eaf_val)
 
             z_dense = np.array(
-                [obs_alid_to_z.get(a, float("nan")) if a is not None else float("nan")
-                 for a in canonical_alids],
+                [
+                    obs_alid_to_z.get(a, float("nan")) if a is not None else float("nan")
+                    for a in canonical_alids
+                ],
                 dtype=np.float64,
             )
             se_dense = np.array(
-                [obs_alid_to_se.get(a, float("nan")) if a is not None else float("nan")
-                 for a in canonical_alids],
+                [
+                    obs_alid_to_se.get(a, float("nan")) if a is not None else float("nan")
+                    for a in canonical_alids
+                ],
                 dtype=np.float64,
             )
             return z_dense, se_dense
@@ -246,11 +255,19 @@ def complete_ragged_store(
     )
 
     result = _run_completion(
-        Path(source_path), dst, Path(ld_dir),
-        ancestry=ancestry, cis_window_bp=cis_window_bp, min_cor=min_cor, thresh=thresh,
-        release_id=release_id, ld_panel_id=ld_panel_id,
-        n_workers=n_workers, checkpoint_dir=checkpoint_dir,
-        impute_analysis_ids=impute_analysis_ids, region_cap_bp=region_cap_bp,
+        Path(source_path),
+        dst,
+        Path(ld_dir),
+        ancestry=ancestry,
+        cis_window_bp=cis_window_bp,
+        min_cor=min_cor,
+        thresh=thresh,
+        release_id=release_id,
+        ld_panel_id=ld_panel_id,
+        n_workers=n_workers,
+        checkpoint_dir=checkpoint_dir,
+        impute_analysis_ids=impute_analysis_ids,
+        region_cap_bp=region_cap_bp,
     )
     shutil.rmtree(checkpoint_dir)
     return result
@@ -276,11 +293,17 @@ def resume_ragged_completion(
 
     impute_ids = params.get("impute_analysis_ids")
     result = _run_completion(
-        Path(params["source_path"]), Path(params["dest_path"]), Path(params["ld_dir"]),
-        ancestry=params["ancestry"], cis_window_bp=params["cis_window_bp"],
-        min_cor=params["min_cor"], thresh=params["thresh"],
-        release_id=params["release_id"], ld_panel_id=params["ld_panel_id"],
-        n_workers=n_workers, checkpoint_dir=checkpoint_dir,
+        Path(params["source_path"]),
+        Path(params["dest_path"]),
+        Path(params["ld_dir"]),
+        ancestry=params["ancestry"],
+        cis_window_bp=params["cis_window_bp"],
+        min_cor=params["min_cor"],
+        thresh=params["thresh"],
+        release_id=params["release_id"],
+        ld_panel_id=params["ld_panel_id"],
+        n_workers=n_workers,
+        checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=set(impute_ids) if impute_ids is not None else None,
         region_cap_bp=params.get("region_cap_bp"),
     )
@@ -364,7 +387,8 @@ def _run_completion(
         # ALID, so the panel is read once rather than once per Analysis.
         src_csr = RaggedCSRReader(src)
         gene_target_less = [
-            i for i, a in enumerate(src_analyses)
+            i
+            for i, a in enumerate(src_analyses)
             if not (a.trait_chr and a.trait_bp) and (impute_mask is None or impute_mask[i])
         ]
         own_variant_blocks: dict[int, list[LDBlock]] = {}
@@ -383,8 +407,10 @@ def _run_completion(
                 ld_dir, ancestry, analyses_by_alid, sorted(chromosomes)
             )
 
-        print("Scanning for LD blocks + new panel variants (cis windows where a "
-              "Trait position exists, the Analysis's own variants otherwise)...")
+        print(
+            "Scanning for LD blocks + new panel variants (cis windows where a "
+            "Trait position exists, the Analysis's own variants otherwise)..."
+        )
         new_alids: set[str] = set()
         block_to_tsv: dict[str, Path] = {}
         block_to_analyses: dict[str, list[int]] = {}
@@ -419,9 +445,11 @@ def _run_completion(
                         new_alids.add(alid)
 
             if (i + 1) % 1000 == 0:
-                print(f"  Scanned {i + 1:,} / {n_analyses:,} analyses, "
-                      f"{len(new_alids):,} new LD panel variants, "
-                      f"{len(block_to_tsv):,} blocks touched")
+                print(
+                    f"  Scanned {i + 1:,} / {n_analyses:,} analyses, "
+                    f"{len(new_alids):,} new LD panel variants, "
+                    f"{len(block_to_tsv):,} blocks touched"
+                )
 
         print(f"New LD panel variants: {len(new_alids):,}")
         print(f"LD blocks touched: {len(block_to_tsv):,}")
@@ -473,8 +501,10 @@ def _run_completion(
         dst_db.commit()
 
         # ── Phase 2: parallel LD-block completion ───────────────────────────
-        print(f"Running reference completion across {len(block_to_tsv):,} LD blocks "
-              f"(n_workers={n_workers})...")
+        print(
+            f"Running reference completion across {len(block_to_tsv):,} LD blocks "
+            f"(n_workers={n_workers})..."
+        )
         blocks_dir = checkpoint_dir / "blocks"
         blocks_dir.mkdir(parents=True, exist_ok=True)
 
@@ -485,12 +515,17 @@ def _run_completion(
             if ckpt_path.exists():
                 n_existing += 1
             else:
-                pending.append(_BlockTask(
-                    tsv_path=tsv_path, source_path=src,
-                    analysis_indices=block_to_analyses[block_id],
-                    min_cor=min_cor, thresh=thresh, region_cap_bp=region_cap_bp,
-                    checkpoint_path=ckpt_path,
-                ))
+                pending.append(
+                    _BlockTask(
+                        tsv_path=tsv_path,
+                        source_path=src,
+                        analysis_indices=block_to_analyses[block_id],
+                        min_cor=min_cor,
+                        thresh=thresh,
+                        region_cap_bp=region_cap_bp,
+                        checkpoint_path=ckpt_path,
+                    )
+                )
 
         if pending:
             print(f"  {n_existing:,} blocks already checkpointed, {len(pending):,} remaining")
@@ -501,9 +536,7 @@ def _run_completion(
                 if (i + 1) % 200 == 0:
                     print(f"  {i + 1:,} / {len(pending):,} blocks")
         else:
-            with ProcessPoolExecutor(
-                max_workers=n_workers, initializer=init_block_worker
-            ) as pool:
+            with ProcessPoolExecutor(max_workers=n_workers, initializer=init_block_worker) as pool:
                 futures = [pool.submit(_run_block, task) for task in pending]
                 for i, fut in enumerate(as_completed(futures)):
                     fut.result()  # propagate worker errors; result is on disk
@@ -651,7 +684,7 @@ def _run_completion(
             order = np.argsort(ref_vi)
             vi_arr = np.array(ref_vi, dtype=np.int32)[order]
             z_arr = np.array(ref_z, dtype=np.float32)[order]
-            se_arr = np.array(ref_se, dtype=np.float16)[order]
+            se_arr = np.array(ref_se, dtype=np.float32)[order]
             eaf_arr = np.array(ref_eaf, dtype=np.float32)[order]
             imp_arr = np.array(ref_imp, dtype=np.uint8)[order]
 
@@ -663,8 +696,10 @@ def _run_completion(
             offsets.append(offsets[-1] + len(vi_arr))
 
             if (ai + 1) % 500 == 0:
-                print(f"  {ai + 1:,} / {n_analyses:,} analyses | "
-                      f"imputed {total_imputed:,} | missing {total_missing:,}")
+                print(
+                    f"  {ai + 1:,} / {n_analyses:,} analyses | "
+                    f"imputed {total_imputed:,} | missing {total_missing:,}"
+                )
 
         dst_db.commit()
         dst_db.close()
@@ -677,7 +712,7 @@ def _run_completion(
         offsets_arr = np.array(offsets, dtype=np.int64)
         vi_all = np.concatenate(all_vi) if all_vi else np.empty(0, dtype=np.int32)
         z_all = np.concatenate(all_z) if all_z else np.empty(0, dtype=np.float32)
-        se_all = np.concatenate(all_se) if all_se else np.empty(0, dtype=np.float16)
+        se_all = np.concatenate(all_se) if all_se else np.empty(0, dtype=np.float32)
         eaf_all = np.concatenate(all_eaf) if all_eaf else np.empty(0, dtype=np.float32)
         imp_all = np.concatenate(all_imp) if all_imp else np.empty(0, dtype=np.uint8)
 
@@ -685,12 +720,18 @@ def _run_completion(
         ragged_path.mkdir(parents=True, exist_ok=True)
         root = zarr.open_group(str(ragged_path), mode="w")
         root.create_dataset(
-            "offsets", data=offsets_arr, chunks=(_OFFSET_CHUNK,),
-            compressor=_COMPRESSOR, dtype=np.int64,
+            "offsets",
+            data=offsets_arr,
+            chunks=(_OFFSET_CHUNK,),
+            compressor=_COMPRESSOR,
+            dtype=np.int64,
         )
         root.create_dataset(
-            "variant_index", data=vi_all, chunks=(_ASSOC_CHUNK,),
-            compressor=_COMPRESSOR, dtype=np.int32,
+            "variant_index",
+            data=vi_all,
+            chunks=(_ASSOC_CHUNK,),
+            compressor=_COMPRESSOR,
+            dtype=np.int32,
         )
         # Completion writes into the source's arrays, so it encodes with the
         # source's plan (ADR 0038 §4) -- the overflow table travels with the
@@ -714,15 +755,17 @@ def _run_completion(
         root.create_dataset(
             "z",
             data=codec.encode_z(z_all, positions=positions_flat(0), overflow=z_overflow),
-            chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=codec.z_dtype,
+            chunks=(_ASSOC_CHUNK,),
+            compressor=_COMPRESSOR,
+            dtype=codec.z_dtype,
         )
         z_overflow.table().write(root)
         root.create_dataset(
-            "se", data=se_all, chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=np.float16
-        )
-        root.create_dataset(
-            "imputed", data=imp_all, chunks=(_ASSOC_CHUNK,),
-            compressor=_COMPRESSOR, dtype=np.uint8,
+            "imputed",
+            data=imp_all,
+            chunks=(_ASSOC_CHUNK,),
+            compressor=_COMPRESSOR,
+            dtype=np.uint8,
         )
         # Observed frequencies only. An imputed cell's frequency is the
         # panel's, stored once per variant in `eaf_reference` and applied on
@@ -732,11 +775,42 @@ def _run_completion(
         # decoded from the source re-encodes to the same code.
         if not encoding.eaf.is_absent:
             write_eaf_csr(
-                root, codec, vi_all, eaf_all,
-                baseline=out_baseline, compressor=_COMPRESSOR, chunks=(_ASSOC_CHUNK,),
+                root,
+                codec,
+                vi_all,
+                eaf_all,
+                baseline=out_baseline,
+                compressor=_COMPRESSOR,
+                chunks=(_ASSOC_CHUNK,),
             )
         if eaf_reference is not None:
             write_eaf_reference(root, eaf_reference, compressor=_COMPRESSOR)
+        decoded_eaf = RaggedEafPlane.open(root, encoding, imputed=root["imputed"]).slice(
+            0, len(se_all)
+        )
+        analysis_index = np.searchsorted(offsets_arr[1:], np.arange(len(se_all)), side="right")
+        se_coefficients = (
+            fit_se(
+                se_all,
+                decoded_eaf,
+                analysis_index,
+                n_analyses=n_analyses,
+                compressor=_COMPRESSOR,
+                chunks=_ASSOC_CHUNK,
+            )[0]
+            if encoding.se.is_residual
+            else None
+        )
+        write_se_csr(
+            root,
+            codec,
+            se_all,
+            decoded_eaf,
+            analysis_index,
+            se_coefficients,
+            compressor=_COMPRESSOR,
+            chunks=(_ASSOC_CHUNK,),
+        )
         root.attrs["layout"] = "ragged"
         root.attrs["completion_state"] = "reference_completed"
         root.attrs["n_analyses"] = n_analyses
@@ -760,9 +834,7 @@ def _run_completion(
                 # reference EAF now stores a frequency for them, whatever its
                 # source reported (ADR 0037 §4), so `eaf_scope` follows what
                 # the release holds rather than being copied forward.
-                eaf_scope=completed_eaf_scope(
-                    a, quality_rollup[i], eaf_reference is not None
-                ),
+                eaf_scope=completed_eaf_scope(a, quality_rollup[i], eaf_reference is not None),
                 completion_median_pearson_r=quality_rollup[i].median_pearson_r,
                 completion_n_imputed_total=quality_rollup[i].n_imputed_total,
                 completion_n_missing_total=quality_rollup[i].n_missing_total,

@@ -44,13 +44,14 @@ import zarr
 from opengwasdb.encoding import (
     EAF_BASELINE,
     DenseEafPlane,
+    DenseSePlane,
     DenseZPlane,
     StoreEncoding,
 )
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import _alid_sort_key, _write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
-from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR, DEFAULT_DTYPE
+from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import _write_variant_table
 from opengwasdb.layouts.hybrid.layout import (
@@ -119,9 +120,7 @@ def complete_hybrid_store(
     source = open_store(src)
     src_manifest = source.manifest
     # See the dense path: refused before the work, not after it (ADR 0038 §4).
-    check_writable_format_version(
-        src_manifest.format_version, source=f"source release {src}"
-    )
+    check_writable_format_version(src_manifest.format_version, source=f"source release {src}")
     if src_manifest.primary_layout is not PrimaryStorageLayout.HYBRID:
         raise ValueError(
             f"source store is not Hybrid (primary_layout={src_manifest.primary_layout})"
@@ -163,7 +162,7 @@ def complete_hybrid_store(
         n_analyses = len(offsets) - 1
         src_vi = src_csr._variant_index[:]
         src_z = src_csr.z_all()
-        src_se = src_csr._se[:]
+        src_se = src_csr.se_all()
         src_eaf = src_csr.eaf_slice(0, len(src_vi))
 
         src_shared_axis = VariantAxis(src)
@@ -176,25 +175,35 @@ def complete_hybrid_store(
         # source already named. Completed-only rows get no rsid.
         rsid_by_alid = {r.alid: r.rsid for r in src_shared_all if r.rsid}
 
-        overflow_alids = np.array(
-            [vi_to_record[int(v)].alid for v in src_vi], dtype=object
-        ) if len(src_vi) else np.empty(0, dtype=object)
+        overflow_alids = (
+            np.array([vi_to_record[int(v)].alid for v in src_vi], dtype=object)
+            if len(src_vi)
+            else np.empty(0, dtype=object)
+        )
 
         # A variant off-panel in the source but newly on-panel after dense
         # completion (LD panel extension) "crosses over": fold its real
         # observation into the completed Dense Component and drop it from the
         # rebuilt overflow below, rather than let the same variant appear in
         # both components -- see the module docstring (issue #99).
-        is_crossover = np.array(
-            [alid in dense_alid_to_row for alid in overflow_alids], dtype=bool
-        ) if len(overflow_alids) else np.empty(0, dtype=bool)
+        is_crossover = (
+            np.array([alid in dense_alid_to_row for alid in overflow_alids], dtype=bool)
+            if len(overflow_alids)
+            else np.empty(0, dtype=bool)
+        )
         # The Dense Component's own plan, read from the manifest
         # `complete_dense_store` just wrote: identical to the source's for
         # `z`/`se`, plus the `eaf_reference` that completion gave it.
         dense_encoding = open_store(dense_component_path(staged.path)).manifest.encoding
         n_reclaimed_imputed = _fold_panel_crossovers(
-            dense_component_path(staged.path), dense_alid_to_row,
-            offsets, src_z, src_se, src_eaf, overflow_alids, is_crossover,
+            dense_component_path(staged.path),
+            dense_alid_to_row,
+            offsets,
+            src_z,
+            src_se,
+            src_eaf,
+            overflow_alids,
+            is_crossover,
             encoding=src_manifest.encoding,
             dense_encoding=dense_encoding,
         )
@@ -204,7 +213,8 @@ def complete_hybrid_store(
                 "%d off-panel association(s) crossed onto the newly-extended dense "
                 "panel; folded in as real observations (%d had been imputed there, "
                 "now corrected to the real value)",
-                int(is_crossover.sum()), n_reclaimed_imputed,
+                int(is_crossover.sum()),
+                n_reclaimed_imputed,
             )
             # Rebuild the Dense Component's top-hit index from the patched z
             # values -- complete_dense_store already built one from its own
@@ -216,7 +226,7 @@ def complete_hybrid_store(
             # imprecision limited to summary statistics for the crossed-over
             # cells, not a correctness invariant like top-hit presence.
             build_dense_top_hit_indexes(
-                dense_component_path(staged.path), encoding=src_manifest.encoding
+                dense_component_path(staged.path), encoding=dense_encoding
             )
 
         union = sorted(set(dense_alids) | set(overflow_alids.tolist()), key=_alid_sort_key)
@@ -231,7 +241,7 @@ def complete_hybrid_store(
         # re-reading it here and writing it back at the shared root is the one
         # place Analysis metadata is written, not a second provenance carry.
         analyses = _read_analyses(dense_component_path(staged.path))
-        _write_index(staged, union, analyses, _chunk_shape(src_manifest), DEFAULT_DTYPE)
+        _write_index(staged, union, analyses, _chunk_shape(src_manifest))
         source_by_alid = {a: source_alid_by_alid.get(a) for a in union}
         _write_variant_table(staged.path, union, source_by_alid, rsid_by_alid)
 
@@ -269,7 +279,7 @@ def complete_hybrid_store(
                 dtype=np.int32,
             )
             z = src_z[s:e][keep].astype(np.float32)
-            se = src_se[s:e][keep].astype(np.float16)
+            se = src_se[s:e][keep].astype(np.float32)
             # Observed EAF survives the remap (ADR 0036), like rsids above:
             # Reference Completion adds rows, it does not change what the
             # source reported for the ones it already had.
@@ -285,15 +295,35 @@ def complete_hybrid_store(
         # the Dense Component alone -- so it declares no `eaf_reference`, where
         # the nested Dense Component's own manifest does. Each component's plan
         # describes that component (ADR 0037 §4).
-        csr.flush(staged.path, src_manifest.encoding, eaf_baseline=overflow_baseline)
+        completed_dense_root = zarr.open_group(
+            str(dense_component_path(staged.path) / "data.zarr"), mode="r"
+        )
+        shared_se_coefficients = (
+            np.asarray(completed_dense_root["se_coefficients"][:], dtype=np.float32)
+            if src_manifest.encoding.se.is_residual
+            else None
+        )
+        csr.flush(
+            staged.path,
+            src_manifest.encoding,
+            eaf_baseline=overflow_baseline,
+            se_coefficients=shared_se_coefficients,
+        )
 
         # ── 6. Hybrid manifest (reference-completed) ──────────────────────────
         # Written before analyses.tsv/overview.html below: overview.html
         # reads manifest.json fresh from output_path for its header (ADR 0032).
         new_release = release_id or f"{src_manifest.release_id}-completed"
         _write_completed_manifest(
-            staged, src_manifest, new_release, n_shared, n_analyses, n_panel, n_off_panel,
-            csr.n_associations, n_imputed,
+            staged,
+            src_manifest,
+            new_release,
+            n_shared,
+            n_analyses,
+            n_panel,
+            n_off_panel,
+            csr.n_associations,
+            n_imputed,
             # Read back from the component that did the imputation rather than
             # re-stamped from this function's arguments, so the two manifests
             # cannot name different panels (issue #116: one panel per completed
@@ -311,12 +341,20 @@ def complete_hybrid_store(
         log.info(
             "Hybrid completion complete: %d shared variants (%d panel + %d off-panel), "
             "%d imputed dense cells, %d overflow associations (observed-only)",
-            n_shared, n_panel, n_off_panel, n_imputed, csr.n_associations,
+            n_shared,
+            n_panel,
+            n_off_panel,
+            n_imputed,
+            csr.n_associations,
         )
 
     return HybridCompletionResult(
-        output_path=dst, n_variants=n_shared, n_analyses=n_analyses,
-        n_panel=n_panel, n_off_panel=n_off_panel, n_overflow=csr.n_associations,
+        output_path=dst,
+        n_variants=n_shared,
+        n_analyses=n_analyses,
+        n_panel=n_panel,
+        n_off_panel=n_off_panel,
+        n_overflow=csr.n_associations,
         n_imputed=n_imputed,
     )
 
@@ -353,11 +391,12 @@ def _fold_panel_crossovers(
 
     row_idx = np.fromiter(
         (dense_alid_to_row[overflow_alids[k]] for k in crossover_idx),
-        dtype=np.int64, count=len(crossover_idx),
+        dtype=np.int64,
+        count=len(crossover_idx),
     )
     col_idx = assoc_ai[crossover_idx].astype(np.int64)
     z_vals = src_z[crossover_idx].astype(np.float32)
-    se_vals = src_se[crossover_idx].astype(np.float16)
+    se_vals = src_se[crossover_idx].astype(np.float32)
     eaf_vals = src_eaf[crossover_idx].astype(np.float32)
 
     root = zarr.open_group(str(dense_dir / "data.zarr"), mode="a")
@@ -366,7 +405,6 @@ def _fold_panel_crossovers(
     # Through the plane, so the Dense Component's overflow table moves with the
     # cells being overwritten rather than being left describing their old values.
     DenseZPlane.open(root, encoding).patch(row_idx, col_idx, z_vals)
-    root["se"].vindex[row_idx, col_idx] = se_vals
     root["imputed"].vindex[row_idx, col_idx] = 0
     # The crossed-over cell's EAF moves with its z/se (ADR 0036) -- the whole
     # point of the fold is that this is one real observation, not two. Through
@@ -377,6 +415,7 @@ def _fold_panel_crossovers(
     # standing in for the observation now being written.
     if "eaf" in root:
         DenseEafPlane.open(root, dense_encoding).patch(row_idx, col_idx, eaf_vals)
+    DenseSePlane.open(root, dense_encoding).patch(row_idx, col_idx, se_vals)
     return n_reclaimed
 
 

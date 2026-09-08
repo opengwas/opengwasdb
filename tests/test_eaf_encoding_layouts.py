@@ -219,7 +219,7 @@ def test_a_build_with_frequencies_declares_the_residual_coding(
     manifest = json.loads((store / "manifest.json").read_text())
     assert manifest["encoding"]["eaf"]["kind"] == "int8_residual"
     assert manifest["encoding"]["eaf"]["residual_range"] in (0.5, 1.0, 2.0)
-    assert manifest["format_version"] == "2.0"
+    assert manifest["format_version"] == "3.0"
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged"])

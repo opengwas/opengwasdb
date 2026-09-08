@@ -11,21 +11,36 @@ from numcodecs import Blosc
 
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding import (
+    DenseEafPlane,
+    EafExceptionBuilder,
     EncodingMeasurements,
     StoreCodec,
     StoreEncoding,
     ZOverflowBuilder,
+    eaf_baseline_from_grid,
+    fit_se_grid,
+    measure_eaf_grid,
+    positions_row_band,
+    write_eaf_baseline,
+    write_se_dense,
 )
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_COMPRESSOR,
     DEFAULT_DTYPE,
+    dense_index_metadata,
 )
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, read_top_hit_counts
 from opengwasdb.model.analyses import Analysis, analyses_table_from_records, write_analyses
-from opengwasdb.model.enums import AssociationCoverage, CompletionState, PrimaryStorageLayout
+from opengwasdb.model.enums import (
+    AssociationCoverage,
+    CompletionState,
+    EafOrientationOutcome,
+    EafScope,
+    PrimaryStorageLayout,
+)
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import (
@@ -103,42 +118,108 @@ def build_dense_observed_store(
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         variants = _collect_variants(records)
         analyses = _collect_analyses(records)
-        variant_index = {variant.alid: i for i, variant in enumerate(variants)}
-        analysis_index = {analysis.analysis_id: i for i, analysis in enumerate(analyses)}
-
-        # z is accumulated in float32 and quantised once, by the codec, on the
-        # way to disk -- never pre-rounded into the stored dtype here.
-        z = np.full((len(variants), len(analyses)), np.nan, dtype=np.float32)
-        se = np.full((len(variants), len(analyses)), np.nan, dtype=dtype)
-
-        seen_cells: set[tuple[int, int]] = set()
-        for record in records:
-            row = variant_index[record.variant.alid]
-            col = analysis_index[record.analysis_id]
-            cell = (row, col)
-            if cell in seen_cells:
-                raise ValueError(
-                    f"duplicate association for variant {record.variant.alid} "
-                    f"and analysis {record.analysis_id}"
-                )
-            seen_cells.add(cell)
-            z[row, col] = record.z
-            se[row, col] = record.se
+        z, se, eaf = _scatter_records(records, variants, analyses)
 
         # The encoding plan is decided once, here, and read back from the
         # manifest by everything downstream (ADR 0037, issue #119).
-        encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=len(analyses)))
+        encoding, coefficients = _decide_encoding(eaf, se, chunk_shape)
         rsid_by_alid = _first_rsids_by_alid(records)
         _write_manifest(
-            staged, store_id, release_id, reference_assembly, records, chunk_shape, dtype,
+            staged,
+            store_id,
+            release_id,
+            reference_assembly,
+            records,
+            chunk_shape,
+            dtype,
             encoding,
         )
         write_variant_axis(staged.path, variants, rsid_by_alid)
-        _write_index(staged, variants, analyses, records, chunk_shape, dtype)
-        _write_zarr(staged, z, se, chunk_shape, dtype, encoding)
+        _write_index(staged, variants, analyses, records, chunk_shape)
+        _write_zarr(staged, z, se, eaf, coefficients, chunk_shape, dtype, encoding)
         build_top_hit_indexes(staged.path, encoding=encoding)
         write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
         return DenseBuildResult(output_path=out, n_variants=len(variants), n_analyses=len(analyses))
+
+
+def _scatter_records(
+    records: list[NormalisedAssociation],
+    variants: list[CanonicalVariant],
+    analyses: list[Analysis],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Lay the records out as three parallel `float32` grids.
+
+    `z`, `se` and `eaf` are all accumulated at full precision and quantised
+    once, by the codec, on the way to disk — never pre-rounded into a stored
+    dtype here, which would make an "exact" exception a rounded one.
+    """
+    variant_index = {variant.alid: i for i, variant in enumerate(variants)}
+    analysis_index = {analysis.analysis_id: i for i, analysis in enumerate(analyses)}
+    shape = (len(variants), len(analyses))
+    z, se, eaf = (np.full(shape, np.nan, dtype=np.float32) for _ in range(3))
+    seen_cells: set[tuple[int, int]] = set()
+    for record in records:
+        row = variant_index[record.variant.alid]
+        col = analysis_index[record.analysis_id]
+        if (row, col) in seen_cells:
+            raise ValueError(
+                f"duplicate association for variant {record.variant.alid} "
+                f"and analysis {record.analysis_id}"
+            )
+        seen_cells.add((row, col))
+        z[row, col] = record.z
+        se[row, col] = record.se
+        if record.eaf is not None:
+            eaf[row, col] = record.eaf
+    return z, se, eaf
+
+
+def _decide_encoding(
+    eaf: np.ndarray, se: np.ndarray, chunk_shape: tuple[int, int]
+) -> tuple[StoreEncoding, np.ndarray]:
+    """Measure both planes and settle the store's plan, in the required order.
+
+    `se` is fitted against *decoded* EAF, not the source's: the residual coding
+    has to predict from the frequencies a reader will actually get back, so the
+    EAF plan is decided and round-tripped first (ADR 0037 §3).
+    """
+    n_analyses = eaf.shape[1]
+    eaf_measured = measure_eaf_grid(eaf)
+    preliminary = StoreEncoding.decide(
+        EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measured)
+    )
+    decoded_eaf = _round_trip_eaf(eaf, preliminary)
+    coefficients, se_measured = fit_se_grid(
+        se,
+        decoded_eaf,
+        compressor=Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE),
+        chunks=(min(chunk_shape[0], se.shape[0]), min(chunk_shape[1], se.shape[1])),
+    )
+    return (
+        StoreEncoding.decide(
+            EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measured, se=se_measured)
+        ),
+        coefficients,
+    )
+
+
+def _round_trip_eaf(eaf: np.ndarray, encoding: StoreEncoding) -> np.ndarray:
+    """The frequencies a reader gets back from this plan, cell for cell."""
+    if encoding.eaf.is_absent:
+        return np.full(eaf.shape, np.nan, dtype=np.float32)
+    n_analyses = eaf.shape[1]
+    baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
+    per_cell = None if baseline is None else np.repeat(baseline[:, None], n_analyses, axis=1)
+    exceptions = EafExceptionBuilder()
+    raw = StoreCodec(encoding).encode_eaf(
+        eaf,
+        baseline=per_cell,
+        positions=positions_row_band(0, n_analyses),
+        exceptions=exceptions,
+    )
+    return StoreCodec(encoding, eaf_exceptions=exceptions.table()).decode_eaf(
+        raw, baseline=per_cell, positions=positions_row_band(0, n_analyses)
+    )
 
 
 def _collect_variants(records: list[NormalisedAssociation]) -> list[CanonicalVariant]:
@@ -154,10 +235,25 @@ def _collect_variants(records: list[NormalisedAssociation]) -> list[CanonicalVar
     )
 
 
+def _eaf_columns(reports_frequencies: bool) -> tuple[str, str]:
+    """`eaf_scope` and `eaf_orientation` for one Analysis of a general source.
+
+    `unverified`, never `passed`: this builder takes records straight from a
+    source and has no reference panel to check an orientation against, and a
+    frequency column that has never been checked is indistinguishable from one
+    reported against the other allele (spec §9.1, issue #115).
+    """
+    if not reports_frequencies:
+        return EafScope.ABSENT.value, ""
+    return EafScope.ASSOCIATION.value, EafOrientationOutcome.UNVERIFIED.value
+
+
 def _collect_analyses(records: list[NormalisedAssociation]) -> list[Analysis]:
     by_id: dict[str, Analysis] = {}
+    with_eaf = {record.analysis_id for record in records if record.eaf is not None}
     for record in records:
         existing = by_id.get(record.analysis_id)
+        eaf_scope, eaf_orientation = _eaf_columns(record.analysis_id in with_eaf)
         current = Analysis(
             analysis_id=record.analysis_id,
             analysis_label=record.analysis_label or "",
@@ -169,6 +265,8 @@ def _collect_analyses(records: list[NormalisedAssociation]) -> list[Analysis]:
             consortium=record.consortium or "",
             first_author=record.first_author or "",
             stored_effect_scale=record.stored_effect_scale.value,
+            eaf_scope=eaf_scope,
+            eaf_orientation=eaf_orientation,
         )
         if existing is None:
             by_id[record.analysis_id] = current
@@ -201,9 +299,21 @@ def _write_manifest(
         provenance={
             "builder": "opengwasdb.v0.1_dense_observed",
             "source_record_count": len(records),
+            "eaf_orientation": {
+                "analyses": [
+                    {
+                        "analysis_id": analysis_id,
+                        "outcome": EafOrientationOutcome.UNVERIFIED.value,
+                        "note": "general Dense source supplied no orientation reference",
+                    }
+                    for analysis_id in sorted(
+                        {record.analysis_id for record in records if record.eaf is not None}
+                    )
+                ]
+            },
             "dense": {
                 "statistic_arrays": ["z", "se"],
-                "se_dtype": dtype,
+                "se_dtype": encoding.se.dtype,
                 "chunk_shape": list(chunk_shape),
                 "compressor": DEFAULT_COMPRESSOR,
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
@@ -225,7 +335,6 @@ def _write_index(
     analyses: list[Analysis],
     records: list[NormalisedAssociation],
     chunk_shape: tuple[int, int],
-    dtype: str,
 ) -> None:
     with staged.index_connection() as connection:
         initialise_schema(connection)
@@ -235,17 +344,15 @@ def _write_index(
         set_metadata(
             connection,
             "dense",
-            {
-                "se_dtype": dtype,
-                "chunk_shape": list(chunk_shape),
-                "compressor": DEFAULT_COMPRESSOR,
-                "variant_axis": {
+            dense_index_metadata(
+                chunk_shape,
+                variant_axis={
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,
                     "tabix_index": VARIANT_TABIX_FILENAME,
                     "row_offsets": VARIANT_OFFSETS_FILENAME,
                 },
-            },
+            ),
         )
         # `variant_aliases` is no longer the rsid lookup path -- `write_variant_axis`
         # writes an rsid search index every layout shares (issue #109), and
@@ -276,6 +383,8 @@ def _write_zarr(
     staged: StagedRelease,
     z: np.ndarray,
     se: np.ndarray,
+    eaf: np.ndarray,
+    se_coefficients: np.ndarray,
     chunk_shape: tuple[int, int],
     dtype: str,
     encoding: StoreEncoding,
@@ -294,7 +403,37 @@ def _write_zarr(
     root.create_dataset(
         "z", data=codes, chunks=effective_chunks, compressor=compressor, dtype=codec.z_dtype
     )
-    root.create_dataset("se", data=se, chunks=effective_chunks, compressor=compressor, dtype=dtype)
+    eaf_baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
+    if not encoding.eaf.is_absent:
+        exceptions = EafExceptionBuilder()
+        raw_eaf = codec.encode_eaf(
+            eaf,
+            baseline=None
+            if eaf_baseline is None
+            else np.repeat(eaf_baseline[:, None], eaf.shape[1], axis=1),
+            positions=positions_row_band(0, eaf.shape[1]),
+            exceptions=exceptions,
+        )
+        root.create_dataset(
+            "eaf",
+            data=raw_eaf,
+            chunks=effective_chunks,
+            compressor=compressor,
+            dtype=codec.eaf_dtype,
+        )
+        if eaf_baseline is not None:
+            write_eaf_baseline(root, eaf_baseline, compressor=compressor)
+            exceptions.table().write(root)
+    physical_eaf = DenseEafPlane.open(root, encoding).band(0, eaf.shape[0])
+    write_se_dense(
+        root,
+        codec,
+        se,
+        physical_eaf,
+        se_coefficients,
+        compressor=compressor,
+        chunks=effective_chunks,
+    )
     overflow.table().write(root)
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"

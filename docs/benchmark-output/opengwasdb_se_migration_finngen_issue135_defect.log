@@ -1,0 +1,43 @@
+# Historical run log (pre-#164) -- output of
+# scripts/migrate_store_to_format_3.py as it behaved before issue #164,
+# recorded 2026-09-07 (commit a219209).
+#
+# This run's outcome is a behaviour issue #164 removed: the tool validated the
+# source "before", subtracted its three pre-existing errors ("carried
+# through"), and published the format-3.0 release with them still present
+# ("OK — introduced no new errors. 3 pre-existing error(s) remain", EXIT=0).
+# The migration now refuses to publish any release that does not validate
+# with zero errors, so this exact source -- a 2.0 release carrying #135's
+# unchunked `eaf_baseline` and #127's truncated ALID index -- cannot be
+# migrated: the phase work below would run and then be refused at the
+# publication gate and discarded. It must be rebuilt instead. The numbers are
+# preserved as measured and have not been re-run against the current tool.
+
+Copying /data/opengwasdb/wip/rebuild-117/finngen-r13__r13-pilot-20 -> /data/opengwasdb/wip/rebuild-118/finngen-migrate-timing
+Validating before, to tell inherited faults from introduced ones
+  3 pre-existing error(s), carried through:
+    - data.zarr/eaf_baseline has chunk shape (21230615,); its per-variant chunk must be no larger than 1000, matching this component's variant/read axis rather than spanning the whole array
+    - variant_alid_bytes.npy has 21230615 entries but variants.tsv.gz has 21186844 ALID(s) narrow enough to index (of 21230615 rows)
+    - variant_alid_bytes.npy holds 342 key(s) shared by more than one variant: a lookup by one variant's ALID returns another's row. This is what silently truncating an over-wide ALID produced before issue #127 — rebuild the store
+Measuring and re-encoding se: /data/opengwasdb/wip/rebuild-118/finngen-migrate-timing
+  se encoding selected: {'kind': 'int8_residual', 'residual_range': 1.0}
+Rebuilding the top-hit index
+Phase accounting (issue #144):
+  rewrite.count                930.6s  32.0%
+  rewrite.read                 905.1s  31.1%
+  fit                          844.3s  29.0%
+  rewrite.exceptions           113.1s   3.9%
+  top_hits.scan                 56.2s   1.9%
+  rewrite.encode                32.0s   1.1%
+  rewrite.write                 25.8s   0.9%
+  measure.read                   2.6s   0.1%
+  top_hits.write                 1.2s   0.0%
+  measure.code                   0.1s   0.0%
+  measure.float16                0.1s   0.0%
+  measure.compress               0.1s   0.0%
+  measure.exceptions             0.0s   0.0%
+  total accounted             2911.3s
+Re-stamped to 3.0 in 2913.1s
+Validating after
+OK — introduced no new errors. 3 pre-existing error(s) remain, and are not this tool's to fix: the release needs rebuilding for those.
+EXIT=0
