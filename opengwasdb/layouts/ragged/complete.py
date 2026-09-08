@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import sqlite3
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -61,6 +62,7 @@ from opengwasdb.encoding import (
     EAF_BASELINE,
     RaggedEafPlane,
     StoreCodec,
+    StoreEncoding,
     ZOverflowBuilder,
     fit_se,
     positions_flat,
@@ -71,16 +73,22 @@ from opengwasdb.encoding import (
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
-from opengwasdb.model.analyses import read_analysis_records, write_analysis_records
+from opengwasdb.model.analyses import (
+    Analysis,
+    read_analysis_records,
+    write_analysis_records,
+)
 from opengwasdb.model.enums import CompletionState
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.open import (
     OpenGWASDBStore,
+    StagedRelease,
     check_writable_format_version,
     open_store,
 )
 from opengwasdb.variants.axis import (
     VariantAxis,
+    VariantRecord,
     write_variant_axis,
 )
 from opengwasdb.variants.normalise import (
@@ -328,6 +336,966 @@ def _read_analyses_rows(store_path: Path) -> list[dict]:
 
 # ── Shared pipeline core ────────────────────────────────────────────────────
 
+# The completion pipeline is one sequence of phases, each a module-level
+# function that takes in what the phase before produced and hands on only what
+# the phase after needs. `_run_completion` sequences the phases inside the
+# staging context; a phase never reaches past its seam -- block discovery
+# knows nothing of encodings, the CSR assembly nothing of checkpoint files it
+# did not itself merge -- so the resume, counting, EAF and fail-loud rules
+# stay next to the code that owns them rather than in one ~550-line core.
+
+
+@dataclass
+class _SourceState:
+    """Everything read out of the observed-only source before any stage write:
+    the variant axis, Analytical Metadata (ADR 0034) and the per-Analysis
+    ancestry-match impute mask (ADR 0028)."""
+
+    src: Path
+    src_variants: list[VariantRecord]
+    src_alids: list[str]
+    src_analyses: list[Analysis]
+    n_analyses: int
+    impute_mask: np.ndarray | None
+
+
+@dataclass
+class _BlockPlan:
+    """Phase 1's LD-block discovery (ADR 0023, issue #102): every block each
+    Analysis is completed against, its tsv path and canonical panel ALIDs, and
+    the panel ALIDs the source never held. Fills stay on disk in checkpoints;
+    this is everything Phase 2 runs and Phase 3 resolves them against."""
+
+    src_csr: RaggedCSRReader
+    state: _SourceState
+    analysis_to_blocks: dict[int, list[str]]
+    block_to_tsv: dict[str, Path]
+    block_to_analyses: dict[str, list[int]]
+    block_canonical_alids: dict[str, list[str | None]]
+    new_alids: set[str]
+
+
+@dataclass
+class _MergedAxis:
+    """The union variant axis in canonical order, plus the maps that translate
+    source variant indices and new panel ALIDs into it."""
+
+    variants: list[CanonicalVariant]
+    new_variants: list[CanonicalVariant]
+    new_alid_to_idx: dict[str, int]
+    src_idx_remap: list[int]
+
+
+@dataclass
+class _CsrCell:
+    """One cell of an Analysis's completed CSR: index into the merged axis,
+    its z/se/eaf values and the imputed flag. eaf is NaN on an imputed cell
+    (deferred to `eaf_reference`, ADR 0037 §4) and on a missing one."""
+
+    vi: int
+    z: float
+    se: float
+    eaf: float
+    imp: int
+
+
+@dataclass
+class _AnalysisCompleted:
+    """One Analysis's rows in the completed CSR, in variant-index order."""
+
+    vi: np.ndarray
+    z: np.ndarray
+    se: np.ndarray
+    eaf: np.ndarray
+    imp: np.ndarray
+    n_imputed: int
+    n_missing: int
+
+
+@dataclass
+class _CompletedCsr:
+    """Phase 3's assembly output: per-Analysis arrays with the flat offsets,
+    and the imputed/missing totals the later phases report and store."""
+
+    offsets: list[int]
+    vi: list[np.ndarray]
+    z: list[np.ndarray]
+    se: list[np.ndarray]
+    eaf: list[np.ndarray]
+    imp: list[np.ndarray]
+    total_imputed: int
+    total_missing: int
+
+
+@dataclass
+class _EncodePlan:
+    """The completed release's encoding (ADR 0038 §4) and the per-variant EAF
+    data it adds: the panel reference for imputed cells and the carried
+    baseline for observed ones (ADR 0037 §2/§4)."""
+
+    encoding: StoreEncoding
+    codec: StoreCodec
+    eaf_reference: np.ndarray | None
+    out_baseline: np.ndarray | None
+
+
+@dataclass
+class _FlatCsr:
+    """The assembled CSR concatenated into the flat arrays zarr stores."""
+
+    offsets: np.ndarray
+    vi: np.ndarray
+    z: np.ndarray
+    se: np.ndarray
+    eaf: np.ndarray
+    imp: np.ndarray
+
+
+def _open_source(src: Path) -> tuple[StoreManifest, str]:
+    """Open the observed-only source and refuse a format this build cannot
+    write, before any of the work (ADR 0038 §4)."""
+    source = open_store(src)
+    manifest = source.manifest
+    # See the dense path: refused before the work, not after it (ADR 0038 §4).
+    source_format_version = check_writable_format_version(
+        manifest.format_version, source=f"source release {src}"
+    )
+    print(f"Source store: {manifest.store_id} / {manifest.release_id}")
+    print(f"  completion_state: {manifest.completion_state}")
+    return manifest, source_format_version
+
+
+def _read_source_state(
+    src: Path, impute_analysis_ids: set[str] | None
+) -> _SourceState:
+    """Phase 1 read: the source's variant axis and Analytical Metadata (ADR
+    0034), and the per-Analysis ancestry-match impute mask derived from it."""
+    src_variant_axis = VariantAxis(src)
+    src_variants = src_variant_axis.all()
+    src_variant_axis.close()
+    src_alids = [v.alid for v in src_variants]
+
+    # analyses.tsv is the sole source of truth for Analytical Metadata
+    # (ADR 0034, issue #69) -- including each Analysis's Trait genomic
+    # position, so cis-window/LD-block scanning below reads it directly
+    # rather than through a second, independently-shaped position file.
+    src_analyses = sorted(
+        read_analysis_records(src / "analyses.tsv"), key=lambda a: int(a.analysis_index)
+    )
+    n_analyses = len(src_analyses)
+    print(f"Source: {len(src_alids):,} variants, {n_analyses:,} analyses")
+
+    if impute_analysis_ids is None:
+        impute_mask = None
+    else:
+        impute_mask = np.array(
+            [a.analysis_id in impute_analysis_ids for a in src_analyses], dtype=bool
+        )
+        n_match = int(impute_mask.sum())
+        print(f"Ancestry-match filter: imputing {n_match:,}/{n_analyses:,} analyses")
+
+    return _SourceState(
+        src=src,
+        src_variants=src_variants,
+        src_alids=src_alids,
+        src_analyses=src_analyses,
+        n_analyses=n_analyses,
+        impute_mask=impute_mask,
+    )
+
+
+def _has_trait_position(a: Analysis) -> bool:
+    return bool(a.trait_chr) and bool(a.trait_bp)
+
+
+def _imputable_analyses(state: _SourceState) -> list[tuple[int, Analysis]]:
+    """Every Analysis, or -- under the ancestry-match filter (ADR 0028) --
+    only those the filter admits. The others are left observed-only: Phase 3's
+    pass-through path carries them through unchanged, so they never enter the
+    block maps at all."""
+    if state.impute_mask is None:
+        return list(enumerate(state.src_analyses))
+    return [
+        (i, a) for i, a in enumerate(state.src_analyses) if bool(state.impute_mask[i])
+    ]
+
+
+def _gene_target_less_blocks(
+    state: _SourceState, src_csr: RaggedCSRReader, ld_dir: Path, ancestry: str
+) -> dict[int, list[LDBlock]]:
+    """LD blocks for Analyses with no Trait position (issue #102): every block
+    holding an association they already have, resolved in one ALID-keyed pass
+    so the panel is read once rather than once per Analysis."""
+    gene_target_less = [
+        (i, a)
+        for i, a in _imputable_analyses(state)
+        if not _has_trait_position(a)
+    ]
+    if not gene_target_less:
+        return {}
+    analyses_by_alid: dict[str, list[int]] = {}
+    chromosomes: set[str] = set()
+    for i, _a in gene_target_less:
+        for vi in src_csr.variant_indices(i).tolist():
+            analyses_by_alid.setdefault(state.src_alids[vi], []).append(i)
+            chromosomes.add(state.src_variants[vi].chromosome)
+    print(
+        f"  {len(gene_target_less):,} analyses have no Trait position; scanning "
+        f"{len(chromosomes)} chromosome(s) of panel blocks for regions they hold"
+    )
+    return blocks_over_variants(ld_dir, ancestry, analyses_by_alid, sorted(chromosomes))
+
+
+def _cis_window_blocks(
+    a: Analysis, ld_dir: Path, ancestry: str, cis_window_bp: int
+) -> list[LDBlock]:
+    """The LD blocks touching one Analysis's cis window around its Trait
+    position."""
+    start = max(1, int(a.trait_bp) - cis_window_bp)
+    end = int(a.trait_bp) + cis_window_bp
+    return find_blocks(ld_dir, ancestry, a.trait_chr, start, end)
+
+
+def _blocks_for_analysis(
+    i: int,
+    a: Analysis,
+    own_variant_blocks: dict[int, list[LDBlock]],
+    ld_dir: Path,
+    ancestry: str,
+    cis_window_bp: int,
+) -> list[LDBlock]:
+    """An Analysis's completable blocks: its cis window where it has a Trait
+    position, the blocks it already holds enough observations in otherwise
+    (issue #102)."""
+    if _has_trait_position(a):
+        return _cis_window_blocks(a, ld_dir, ancestry, cis_window_bp)
+    return own_variant_blocks.get(i, [])
+
+
+def _canonical_alids(block: LDBlock) -> list[str | None]:
+    return [canonical_panel_alid(s) for s in block.snp_ids]
+
+
+def _new_panel_alids(alids: list[str | None], source_alids: set[str]) -> set[str]:
+    """The panel ALIDs among `alids` the source release never held."""
+    return {a for a in alids if a is not None and a not in source_alids}
+
+
+def _scan_block_maps(
+    state: _SourceState,
+    src_csr: RaggedCSRReader,
+    own_variant_blocks: dict[int, list[LDBlock]],
+    ld_dir: Path,
+    ancestry: str,
+    cis_window_bp: int,
+) -> _BlockPlan:
+    """Enumerate every imputable Analysis's touching LD blocks and build the
+    `_BlockPlan` Phase 2 runs and Phase 3 resolves: the block -> Analysis
+    map, each block's tsv path and canonical panel ALIDs, and the union of
+    panel ALIDs the source never held."""
+    source_alids = set(state.src_alids)
+    new_alids: set[str] = set()
+    block_to_tsv: dict[str, Path] = {}
+    block_to_analyses: dict[str, list[int]] = {}
+    block_canonical_alids: dict[str, list[str | None]] = {}
+    analysis_to_blocks: dict[int, list[str]] = {}
+
+    for i, a in _imputable_analyses(state):
+        blocks = _blocks_for_analysis(i, a, own_variant_blocks, ld_dir, ancestry, cis_window_bp)
+        analysis_to_blocks[i] = [b.block_id for b in blocks]
+        for block in blocks:
+            block_to_analyses.setdefault(block.block_id, []).append(i)
+            if block.block_id in block_to_tsv:
+                continue
+            block_to_tsv[block.block_id] = block.tsv_path
+            block_canonical_alids[block.block_id] = _canonical_alids(block)
+            new_alids.update(_new_panel_alids(block_canonical_alids[block.block_id], source_alids))
+        if (i + 1) % 1000 == 0:
+            print(
+                f"  Scanned {i + 1:,} / {state.n_analyses:,} analyses, "
+                f"{len(new_alids):,} new LD panel variants, "
+                f"{len(block_to_tsv):,} blocks touched"
+            )
+
+    return _BlockPlan(
+        src_csr=src_csr,
+        state=state,
+        analysis_to_blocks=analysis_to_blocks,
+        block_to_tsv=block_to_tsv,
+        block_to_analyses=block_to_analyses,
+        block_canonical_alids=block_canonical_alids,
+        new_alids=new_alids,
+    )
+
+
+def _plan_blocks(
+    state: _SourceState, ld_dir: Path, ancestry: str, cis_window_bp: int
+) -> _BlockPlan:
+    """Phase 1: scan every imputable Analysis's cis window (its own variants
+    when it has no Trait position, issue #102) for touching LD blocks and
+    return the plan Phase 2 runs and Phase 3 resolves."""
+    src_csr = RaggedCSRReader(state.src)
+    own_variant_blocks = _gene_target_less_blocks(state, src_csr, ld_dir, ancestry)
+    print(
+        "Scanning for LD blocks + new panel variants (cis windows where a "
+        "Trait position exists, the Analysis's own variants otherwise)..."
+    )
+    plan = _scan_block_maps(state, src_csr, own_variant_blocks, ld_dir, ancestry, cis_window_bp)
+    print(f"New LD panel variants: {len(plan.new_alids):,}")
+    print(f"LD blocks touched: {len(plan.block_to_tsv):,}")
+    return plan
+
+
+def _sort_key(v: CanonicalVariant) -> tuple[Any, int, str, str]:
+    return (chromosome_sort_key(v.chromosome), v.position, v.effect_allele, v.other_allele)
+
+
+def _as_canonical(v: VariantRecord) -> CanonicalVariant:
+    """A source axis row as a CanonicalVariant: the four fields the merged
+    table is sorted and written by (a store axis is already canonical)."""
+    return CanonicalVariant(
+        chromosome=v.chromosome,
+        position=v.position,
+        effect_allele=v.effect_allele,
+        other_allele=v.other_allele,
+    )
+
+
+def _merged_axis(state: _SourceState, new_alids: set[str]) -> _MergedAxis:
+    """Merge the new panel ALIDs into the source axis: canonicalise, drop any
+    that collide with source variants, sort under the store's key, and build
+    the maps that translate source variant indices and panel ALIDs into the
+    union."""
+    source_alids = set(state.src_alids)
+    new_variants: list[CanonicalVariant] = []
+    for alid in new_alids:
+        try:
+            parts = alid.split(":")
+            if len(parts) != 4:
+                continue
+            chrom, pos_str, a1, a2 = parts
+            cv_result = orient_to_canonical(chrom, int(pos_str), a1, a2)
+            if cv_result.variant.alid not in source_alids:
+                new_variants.append(cv_result.variant)
+        except (VariantNormalisationError, ValueError):
+            continue
+    new_variants.sort(key=_sort_key)
+    variants = sorted(
+        [_as_canonical(v) for v in state.src_variants] + new_variants, key=_sort_key
+    )
+    print(f"Merged variant table: {len(variants):,} variants")
+
+    new_alid_to_idx = {v.alid: i for i, v in enumerate(variants)}
+    src_idx_remap = [0] * len(state.src_alids)
+    for v in state.src_variants:
+        src_idx_remap[v.variant_index] = new_alid_to_idx[v.alid]
+    return _MergedAxis(
+        variants=variants,
+        new_variants=new_variants,
+        new_alid_to_idx=new_alid_to_idx,
+        src_idx_remap=src_idx_remap,
+    )
+
+
+def _write_variant_axis(store_path: Path, state: _SourceState, axis: _MergedAxis) -> None:
+    """Write variants.tsv.gz for the merged axis, carrying the observed
+    release's rsids across (issue #109)."""
+    print("Writing variants.tsv.gz...")
+    # Carry the observed store's rsids across (issue #109). Passing {} here
+    # silently blanked the rsid column of every Reference-Completed Ragged
+    # store: the eqtlgen-cis pilot had 49,967 rsids in 50,000 observed rows
+    # and none at all in its completed sibling. Reference-Completed rows get
+    # no rsid -- they are positions the reference panel supplies, which the
+    # source never named.
+    rsid_by_alid = {v.alid: v.rsid for v in state.src_variants if v.rsid}
+    write_variant_axis(store_path, axis.variants, rsid_by_alid)
+
+
+def _run_pending_blocks(
+    plan: _BlockPlan,
+    *,
+    checkpoint_dir: Path,
+    n_workers: int,
+    min_cor: float,
+    thresh: float,
+    region_cap_bp: int | None,
+) -> None:
+    """Phase 2: complete the LD blocks whose checkpoints do not yet exist,
+    across the process pool. Each block writes its own checkpoint; the parent
+    keeps nothing per block, so an interrupted run resumes from disk (ADR
+    0023, issue 044)."""
+    print(
+        f"Running reference completion across {len(plan.block_to_tsv):,} LD blocks "
+        f"(n_workers={n_workers})..."
+    )
+    blocks_dir = checkpoint_dir / "blocks"
+    blocks_dir.mkdir(parents=True, exist_ok=True)
+
+    pending: list[_BlockTask] = []
+    n_existing = 0
+    for block_id, tsv_path in plan.block_to_tsv.items():
+        ckpt_path = blocks_dir / f"{sanitize_block_id(block_id)}.npz"
+        if ckpt_path.exists():
+            n_existing += 1
+        else:
+            pending.append(
+                _BlockTask(
+                    tsv_path=tsv_path,
+                    source_path=plan.state.src,
+                    analysis_indices=plan.block_to_analyses[block_id],
+                    min_cor=min_cor,
+                    thresh=thresh,
+                    region_cap_bp=region_cap_bp,
+                    checkpoint_path=ckpt_path,
+                )
+            )
+
+    if pending:
+        print(f"  {n_existing:,} blocks already checkpointed, {len(pending):,} remaining")
+
+    run_block_tasks(pending, n_workers, _run_block)
+
+
+def _merge_checkpoint_rows(
+    blocks_dir: Path, dst_db: sqlite3.Connection
+) -> tuple[dict[int, dict[str, tuple[float, float]]], int]:
+    """Phase 3 merge: read every block checkpoint -- written this run or
+    resumed from disk -- into `completion_quality` rows (batched) and the
+    per-Analysis fill maps the CSR assembly layers onto the observed rows."""
+    print("Merging block results from checkpoints...")
+    fills_by_analysis: dict[int, dict[str, tuple[float, float]]] = {}
+    quality_batch: list[tuple[int, str, float | None, int, int]] = []
+    quality_batch_size = 100_000
+    quality_count = 0
+
+    def _flush_quality() -> None:
+        nonlocal quality_count
+        if quality_batch:
+            dst_db.executemany(
+                "INSERT INTO completion_quality "
+                "(analysis_index, block_id, pearson_r, n_imputed, n_missing) "
+                "VALUES (?, ?, ?, ?, ?)",
+                quality_batch,
+            )
+            dst_db.commit()
+            quality_count += len(quality_batch)
+            quality_batch.clear()
+
+    for ckpt in sorted(blocks_dir.glob("*.npz")):
+        block_result = read_block_checkpoint(ckpt)
+        for ai, pearson_r, n_imp, n_miss in block_result.quality_rows:
+            quality_batch.append((ai, block_result.block_id, pearson_r, n_imp, n_miss))
+            if len(quality_batch) >= quality_batch_size:
+                _flush_quality()
+        for alid, ai, z, se in block_result.fills:
+            fills_by_analysis.setdefault(ai, {})[alid] = (z, se)
+    _flush_quality()
+    print(f"Wrote {quality_count:,} completion quality rows")
+    return fills_by_analysis, quality_count
+
+
+def _checkpoint_and_assemble(
+    staged: StagedRelease,
+    plan: _BlockPlan,
+    axis: _MergedAxis,
+    *,
+    checkpoint_dir: Path,
+    n_workers: int,
+    min_cor: float,
+    thresh: float,
+    region_cap_bp: int | None,
+) -> _CompletedCsr:
+    """Phases 2-3 together: run the pending LD blocks, merge their checkpoints
+    into `completion_quality` and assemble the completed CSR. Owns the
+    index.sqlite connection for the whole stretch -- ADR 0030 keeps the
+    fine-grained completion_quality table SQLite-only, so it is created here
+    and committed when the CSR assembly that reads it is done."""
+    print("Writing index.sqlite...")
+    dst_db = staged.index_connection()
+    create_completion_quality_table(dst_db)
+    dst_db.commit()
+
+    _run_pending_blocks(
+        plan,
+        checkpoint_dir=checkpoint_dir,
+        n_workers=n_workers,
+        min_cor=min_cor,
+        thresh=thresh,
+        region_cap_bp=region_cap_bp,
+    )
+    fills_by_analysis, _ = _merge_checkpoint_rows(checkpoint_dir / "blocks", dst_db)
+    csr = _assemble_completed_csr(plan, axis, fills_by_analysis)
+    dst_db.commit()
+    dst_db.close()
+    print(f"Completion done: {csr.total_imputed:,} imputed, {csr.total_missing:,} missing")
+    return csr
+
+
+def _reference_alids(
+    block_ids: list[str], block_canonical_alids: dict[str, list[str | None]]
+) -> list[str]:
+    """The block positions one Analysis is completed against, deduplicated in
+    block order -- the rows the assembly classifies as observed, imputed or
+    missing."""
+    unique_ref_alids: list[str] = []
+    seen_block_alids: set[str] = set()
+    for block_id in block_ids:
+        for alid in block_canonical_alids[block_id]:
+            if alid is not None and alid not in seen_block_alids:
+                seen_block_alids.add(alid)
+                unique_ref_alids.append(alid)
+    return unique_ref_alids
+
+
+def _passthrough_analysis(obs: Any, src_idx_remap: list[int]) -> _AnalysisCompleted:
+    """An Analysis no completable block touches: its source association list
+    remapped onto the merged axis, every row marked observed."""
+    vi = np.array([src_idx_remap[v] for v in obs.variant_index.tolist()], dtype=np.int32)
+    return _AnalysisCompleted(
+        vi=vi,
+        z=obs.z.astype(np.float32),
+        se=obs.se.astype(np.float32),
+        eaf=np.asarray(obs.eaf, dtype=np.float32),
+        imp=np.zeros(len(vi), dtype=np.uint8),
+        n_imputed=0,
+        n_missing=0,
+    )
+
+
+def _block_cells(
+    block_ids: list[str],
+    block_canonical_alids: dict[str, list[str | None]],
+    new_alid_to_idx: dict[str, int],
+    obs_alid_to_z: dict[str, float],
+    obs_alid_to_se: dict[str, float],
+    obs_alid_to_eaf: dict[str, float],
+    fills: dict[str, tuple[float, float]],
+) -> tuple[list[_CsrCell], set[str], int, int]:
+    """One Analysis's block-position rows: observed cells carried across
+    untouched (ADR 0036), fills as imputed cells whose frequency is deferred
+    to `eaf_reference` (ADR 0037 §4), and block positions neither produced as
+    missing (NaN) rows. Returns the rows, the ALIDs they consumed (so
+    off-window observed rows are not appended twice), and the imputed/missing
+    counts."""
+    cells: list[_CsrCell] = []
+    seen_alids: set[str] = set()
+    n_imputed = 0
+    n_missing = 0
+    for alid in _reference_alids(block_ids, block_canonical_alids):
+        vi = new_alid_to_idx.get(alid)
+        if vi is None:
+            continue
+        seen_alids.add(alid)
+        if alid in obs_alid_to_z:
+            cells.append(
+                _CsrCell(vi, obs_alid_to_z[alid], obs_alid_to_se[alid], obs_alid_to_eaf[alid], 0)
+            )
+        elif alid in fills:
+            z_v, se_v = fills[alid]
+            # Imputed cells carry no EAF yet -- the panel's own EAF is
+            # available here but is not written until the completion
+            # checkpoint format carries it (ADR 0036, deferred half).
+            cells.append(_CsrCell(vi, z_v, se_v, float("nan"), 1))
+            n_imputed += 1
+        else:
+            cells.append(_CsrCell(vi, float("nan"), float("nan"), float("nan"), 0))
+            n_missing += 1
+    return cells, seen_alids, n_imputed, n_missing
+
+
+def _carried_cells(
+    obs_alid_to_z: dict[str, float],
+    obs_alid_to_se: dict[str, float],
+    obs_alid_to_eaf: dict[str, float],
+    seen_alids: set[str],
+    new_alid_to_idx: dict[str, int],
+) -> list[_CsrCell]:
+    """Observed rows the block scan never produced (off-window variants the
+    source already holds), carried through from the maps above."""
+    cells: list[_CsrCell] = []
+    for alid, z_val in obs_alid_to_z.items():
+        if alid not in seen_alids:
+            cells.append(
+                _CsrCell(
+                    new_alid_to_idx[alid], z_val, obs_alid_to_se[alid], obs_alid_to_eaf[alid], 0
+                )
+            )
+    return cells
+
+
+def _sort_cells(cells: list[_CsrCell], n_imputed: int, n_missing: int) -> _AnalysisCompleted:
+    """Rows to arrays, ordered by variant index (a variant appears once per
+    Analysis, so the sort is a permutation)."""
+    rows = np.array(
+        [(c.vi, c.z, c.se, c.eaf, c.imp) for c in cells],
+        dtype=[("vi", "i4"), ("z", "f4"), ("se", "f4"), ("eaf", "f4"), ("imp", "u1")],
+    )
+    rows.sort(order="vi")
+    return _AnalysisCompleted(
+        vi=rows["vi"],
+        z=rows["z"],
+        se=rows["se"],
+        eaf=rows["eaf"],
+        imp=rows["imp"],
+        n_imputed=n_imputed,
+        n_missing=n_missing,
+    )
+
+
+def _completed_analysis(
+    ai: int,
+    *,
+    src_csr: RaggedCSRReader,
+    src_alids: list[str],
+    src_idx_remap: list[int],
+    new_alid_to_idx: dict[str, int],
+    block_ids: list[str],
+    block_canonical_alids: dict[str, list[str | None]],
+    fills: dict[str, tuple[float, float]],
+) -> _AnalysisCompleted:
+    """One Analysis's completed rows: observed cells carried across (ADR
+    0036), block fills as imputed, block positions neither produced as
+    missing -- or, when no completable block touches the Analysis, its source
+    association list untouched."""
+    obs = src_csr.get_analysis(ai)
+    if not block_ids:
+        return _passthrough_analysis(obs, src_idx_remap)
+    obs_alid_to_z, obs_alid_to_se, obs_alid_to_eaf = _observed_alid_maps(obs, src_alids)
+    cells, seen_alids, n_imputed, n_missing = _block_cells(
+        block_ids,
+        block_canonical_alids,
+        new_alid_to_idx,
+        obs_alid_to_z,
+        obs_alid_to_se,
+        obs_alid_to_eaf,
+        fills,
+    )
+    cells += _carried_cells(
+        obs_alid_to_z, obs_alid_to_se, obs_alid_to_eaf, seen_alids, new_alid_to_idx
+    )
+    return _sort_cells(cells, n_imputed, n_missing)
+
+
+def _assemble_completed_csr(
+    plan: _BlockPlan,
+    axis: _MergedAxis,
+    fills_by_analysis: dict[int, dict[str, tuple[float, float]]],
+) -> _CompletedCsr:
+    """Phase 3 assembly: one completed row block per Analysis -- remapped
+    observed rows plus fills, sorted by variant index -- and the flat offsets
+    and totals the later phases report."""
+    print("Assembling completed CSR per analysis...")
+    all_vi: list[np.ndarray] = []
+    all_z: list[np.ndarray] = []
+    all_se: list[np.ndarray] = []
+    all_eaf: list[np.ndarray] = []
+    all_imp: list[np.ndarray] = []
+    offsets: list[int] = [0]
+    total_imputed = 0
+    total_missing = 0
+
+    for ai in range(plan.state.n_analyses):
+        completed = _completed_analysis(
+            ai,
+            src_csr=plan.src_csr,
+            src_alids=plan.state.src_alids,
+            src_idx_remap=axis.src_idx_remap,
+            new_alid_to_idx=axis.new_alid_to_idx,
+            block_ids=plan.analysis_to_blocks.get(ai, []),
+            block_canonical_alids=plan.block_canonical_alids,
+            fills=fills_by_analysis.get(ai, {}),
+        )
+        all_vi.append(completed.vi)
+        all_z.append(completed.z)
+        all_se.append(completed.se)
+        all_eaf.append(completed.eaf)
+        all_imp.append(completed.imp)
+        offsets.append(offsets[-1] + len(completed.vi))
+        total_imputed += completed.n_imputed
+        total_missing += completed.n_missing
+
+        if (ai + 1) % 500 == 0:
+            print(
+                f"  {ai + 1:,} / {plan.state.n_analyses:,} analyses | "
+                f"imputed {total_imputed:,} | missing {total_missing:,}"
+            )
+
+    return _CompletedCsr(
+        offsets=offsets,
+        vi=all_vi,
+        z=all_z,
+        se=all_se,
+        eaf=all_eaf,
+        imp=all_imp,
+        total_imputed=total_imputed,
+        total_missing=total_missing,
+    )
+
+
+def _encode_plan(
+    src: Path,
+    ld_dir: Path,
+    ancestry: str,
+    manifest: StoreManifest,
+    axis: _MergedAxis,
+) -> _EncodePlan:
+    """The completed release's encoding: its source's plan, since completion
+    writes into the source's arrays (ADR 0038 §4) -- with `eaf_reference`
+    added when the panel has frequencies (ADR 0037 §4, issue #113) and the
+    source's EAF baseline carried across the variant remap (ADR 0037 §2)."""
+    # Asked for whatever the source declares, `absent` included: a release
+    # whose Analyses reported no frequency still gains imputed cells, and
+    # those cells have the panel's frequency (issue #113). It gets an
+    # `eaf_reference` array and no `eaf` plane -- NaN on every observed
+    # cell, the panel's value on every imputed one.
+    eaf_reference = panel_reference_eaf(ld_dir, ancestry, axis.variants)
+    encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
+    codec = StoreCodec(encoding)
+    src_baseline = _source_eaf_baseline(src)
+    out_baseline = None
+    if src_baseline is not None:
+        out_baseline = np.full(len(axis.variants), np.nan, dtype=np.float32)
+        out_baseline[np.asarray(axis.src_idx_remap, dtype=np.int64)] = src_baseline
+    return _EncodePlan(
+        encoding=encoding, codec=codec, eaf_reference=eaf_reference, out_baseline=out_baseline
+    )
+
+
+def _flatten_csr(csr: _CompletedCsr) -> _FlatCsr:
+    """The flat arrays the zarr group stores, from the per-Analysis lists."""
+    return _FlatCsr(
+        offsets=np.array(csr.offsets, dtype=np.int64),
+        vi=np.concatenate(csr.vi) if csr.vi else np.empty(0, dtype=np.int32),
+        z=np.concatenate(csr.z) if csr.z else np.empty(0, dtype=np.float32),
+        se=np.concatenate(csr.se) if csr.se else np.empty(0, dtype=np.float32),
+        eaf=np.concatenate(csr.eaf) if csr.eaf else np.empty(0, dtype=np.float32),
+        imp=np.concatenate(csr.imp) if csr.imp else np.empty(0, dtype=np.uint8),
+    )
+
+
+def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
+    """The CSR's index planes plus z: offsets, variant_index, the fixed-point
+    z plane with its overflow table (ADR 0037 §1), and the imputed mask."""
+    root.create_dataset(
+        "offsets",
+        data=flat.offsets,
+        chunks=(_OFFSET_CHUNK,),
+        compressor=_COMPRESSOR,
+        dtype=np.int64,
+    )
+    root.create_dataset(
+        "variant_index",
+        data=flat.vi,
+        chunks=(_ASSOC_CHUNK,),
+        compressor=_COMPRESSOR,
+        dtype=np.int32,
+    )
+    # Completion writes into the source's arrays, so it encodes with the
+    # source's plan (ADR 0038 §4) -- the overflow table travels with the
+    # plane it belongs to. The one addition is `eaf_reference`, which
+    # records a physical fact about this release rather than reinterpreting
+    # its source's bytes.
+    z_overflow = ZOverflowBuilder()
+    root.create_dataset(
+        "z",
+        data=codec.encode_z(flat.z, positions=positions_flat(0), overflow=z_overflow),
+        chunks=(_ASSOC_CHUNK,),
+        compressor=_COMPRESSOR,
+        dtype=codec.z_dtype,
+    )
+    z_overflow.table().write(root)
+    root.create_dataset(
+        "imputed",
+        data=flat.imp,
+        chunks=(_ASSOC_CHUNK,),
+        compressor=_COMPRESSOR,
+        dtype=np.uint8,
+    )
+
+
+def _write_eaf_and_se_arrays(
+    root: Any, encode_plan: _EncodePlan, flat: _FlatCsr, n_analyses: int
+) -> None:
+    """The EAF and SE planes plus the release attrs. Observed frequencies
+    only: an imputed cell's frequency is the panel's, stored once per variant
+    in `eaf_reference` and applied on read (ADR 0037 §4); an observed cell
+    whose source reported none stays absent. The per-variant baseline travels
+    with the values across the variant remap rather than being recomputed from
+    them, so a value decoded from the source re-encodes to the same code."""
+    if not encode_plan.encoding.eaf.is_absent:
+        write_eaf_csr(
+            root,
+            encode_plan.codec,
+            flat.vi,
+            flat.eaf,
+            baseline=encode_plan.out_baseline,
+            compressor=_COMPRESSOR,
+            chunks=(_ASSOC_CHUNK,),
+        )
+    if encode_plan.eaf_reference is not None:
+        write_eaf_reference(root, encode_plan.eaf_reference, compressor=_COMPRESSOR)
+    decoded_eaf = RaggedEafPlane.open(root, encode_plan.encoding, imputed=root["imputed"]).slice(
+        0, len(flat.se)
+    )
+    analysis_index = np.searchsorted(flat.offsets[1:], np.arange(len(flat.se)), side="right")
+    se_coefficients = (
+        fit_se(
+            flat.se,
+            decoded_eaf,
+            analysis_index,
+            n_analyses=n_analyses,
+            compressor=_COMPRESSOR,
+            chunks=_ASSOC_CHUNK,
+        )[0]
+        if encode_plan.encoding.se.is_residual
+        else None
+    )
+    write_se_csr(
+        root,
+        encode_plan.codec,
+        flat.se,
+        decoded_eaf,
+        analysis_index,
+        se_coefficients,
+        compressor=_COMPRESSOR,
+        chunks=(_ASSOC_CHUNK,),
+    )
+    root.attrs["layout"] = "ragged"
+    root.attrs["completion_state"] = "reference_completed"
+    root.attrs["n_analyses"] = n_analyses
+    root.attrs["n_associations"] = len(flat.se)
+
+
+def _write_completed_zarr(
+    staged: StagedRelease, encode_plan: _EncodePlan, csr: _CompletedCsr, n_analyses: int
+) -> None:
+    """Phase 4: write the completed CSR as the store's ragged zarr group."""
+    print("Writing zarr CSR...")
+    ragged_path = staged.path / RAGGED_ZARR_PATH
+    ragged_path.mkdir(parents=True, exist_ok=True)
+    root = zarr.open_group(str(ragged_path), mode="w")
+    flat = _flatten_csr(csr)
+    _write_csr_id_arrays(root, flat, encode_plan.codec)
+    _write_eaf_and_se_arrays(root, encode_plan, flat, n_analyses)
+
+
+def _write_top_hits_and_analyses(
+    staged: StagedRelease,
+    state: _SourceState,
+    encode_plan: _EncodePlan,
+    *,
+    ancestry: str,
+) -> None:
+    """Phase 5 metadata: top-hit indexes built with the completed encoding,
+    and analyses.tsv -- rollup from index.sqlite (ADR 0030), `eaf_scope` from
+    what the release holds, completion columns refreshed, and the source's
+    pre-completion hit counts zeroed so add_hit_counts recomputes them."""
+    print("Building top-hit indexes...")
+    build_ragged_top_hit_indexes(staged.path, encoding=encode_plan.encoding)
+
+    print("Writing analyses.tsv...")
+    with staged.index_connection() as quality_db:
+        quality_rollup = completion_quality_rollup(quality_db, state.n_analyses)
+    dst_analyses = [
+        replace(
+            a,
+            completed_against=(
+                ancestry if state.impute_mask is None or bool(state.impute_mask[i]) else ""
+            ),
+            # An Analysis that gained imputed cells in a release carrying
+            # reference EAF now stores a frequency for them, whatever its
+            # source reported (ADR 0037 §4), so `eaf_scope` follows what
+            # the release holds rather than being copied forward.
+            eaf_scope=completed_eaf_scope(
+                a, quality_rollup[i], encode_plan.eaf_reference is not None
+            ),
+            completion_median_pearson_r=quality_rollup[i].median_pearson_r,
+            completion_n_imputed_total=quality_rollup[i].n_imputed_total,
+            completion_n_missing_total=quality_rollup[i].n_missing_total,
+            # Completion changes z/se via imputation, so the source's
+            # pre-completion Top-Hit Counts (carried forward from `a`) do
+            # not apply here -- zero them so add_hit_counts below sets
+            # fresh post-completion counts rather than adding onto stale
+            # ones.
+            n_hits_5e8="",
+            n_hits_5e6="",
+            n_hits_5e4="",
+        )
+        for i, a in enumerate(state.src_analyses)
+    ]
+    write_analysis_records(
+        staged.path / "analyses.tsv", add_hit_counts(staged.path, dst_analyses)
+    )
+
+
+def _completed_manifest(
+    manifest: StoreManifest,
+    *,
+    source_format_version: str,
+    release_id: str | None,
+    ld_panel_id: str,
+    ancestry: str,
+    min_cor: float,
+    thresh: float,
+    cis_window_bp: int,
+    axis: _MergedAxis,
+    csr: _CompletedCsr,
+    encode_plan: _EncodePlan,
+) -> StoreManifest:
+    """Phase 6 finalization: the completed release's manifest, with its
+    provenance recording what completion added to its source."""
+    new_release_id = release_id or f"{manifest.release_id}-completed"
+    return StoreManifest(
+        # Preserved with the format version below: a completed release is
+        # written into its source's arrays, so it is in its source's
+        # encoding -- plus `eaf_reference`, which says this release carries
+        # panel frequencies for the cells it imputed (ADR 0037 §4).
+        encoding=encode_plan.encoding,
+        store_id=manifest.store_id,
+        release_id=new_release_id,
+        # Preserved, not re-stamped -- see ADR 0038 §4 and the dense path.
+        format_version=source_format_version,
+        primary_layout=manifest.primary_layout,
+        association_coverage=manifest.association_coverage,
+        completion_state=CompletionState.REFERENCE_COMPLETED,
+        reference_assembly=manifest.reference_assembly,
+        created_at=datetime.now(UTC).isoformat(),
+        provenance={
+            **manifest.provenance,
+            "source_release_id": manifest.release_id,
+            "completion": build_completion_provenance(
+                ld_panel_id=ld_panel_id,
+                ancestry=ancestry,
+                min_cor=min_cor,
+                thresh=thresh,
+                n_variants_total=len(axis.variants),
+                n_variants_new=len(axis.new_variants),
+                cis_window_bp=cis_window_bp,
+                n_imputed=csr.total_imputed,
+                n_missing=csr.total_missing,
+            ),
+        },
+    )
+
+
+def _completion_result(
+    dst: Path, state: _SourceState, axis: _MergedAxis, csr: _CompletedCsr
+) -> CompletionResult:
+    result = CompletionResult(
+        output_path=dst,
+        n_variants=len(axis.variants),
+        n_analyses=state.n_analyses,
+        n_associations=csr.offsets[-1],
+        n_imputed=csr.total_imputed,
+        n_missing=csr.total_missing,
+    )
+    print(
+        f"Reference completion complete: {result.n_variants:,} variants, "
+        f"{result.n_analyses:,} analyses, {result.n_associations:,} associations "
+        f"({result.n_imputed:,} imputed, {result.n_missing:,} missing)"
+    )
+    return result
+
 
 def _run_completion(
     source_path: Path,
@@ -345,537 +1313,47 @@ def _run_completion(
     impute_analysis_ids: set[str] | None,
     region_cap_bp: int | None,
 ) -> CompletionResult:
+    """The shared core: block discovery, checkpointed LD-block completion and
+    CSR assembly, encoding, metadata and manifest, sequenced inside the
+    staging context that makes a completed release atomic."""
     src = Path(source_path)
     dst = Path(dest_path)
-
-    source = open_store(src)
-    manifest = source.manifest
-    # See the dense path: refused before the work, not after it (ADR 0038 §4).
-    source_format_version = check_writable_format_version(
-        manifest.format_version, source=f"source release {src}"
-    )
-    print(f"Source store: {manifest.store_id} / {manifest.release_id}")
-    print(f"  completion_state: {manifest.completion_state}")
+    manifest, source_format_version = _open_source(src)
 
     with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
-        # ── Phase 1: union variant axis + block/Analysis mapping ───────────
-        src_variant_axis = VariantAxis(src)
-        src_variants = src_variant_axis.all()
-        src_variant_axis.close()
-        src_alids: list[str] = [v.alid for v in src_variants]
-        alid_to_src_idx: dict[str, int] = {v.alid: v.variant_index for v in src_variants}
-
-        # analyses.tsv is the sole source of truth for Analytical Metadata
-        # (ADR 0034, issue #69) -- including each Analysis's Trait genomic
-        # position, so cis-window/LD-block scanning below reads it directly
-        # rather than through a second, independently-shaped position file.
-        src_analyses = sorted(
-            read_analysis_records(src / "analyses.tsv"), key=lambda a: int(a.analysis_index)
+        state = _read_source_state(src, impute_analysis_ids)
+        plan = _plan_blocks(state, ld_dir, ancestry, cis_window_bp)
+        axis = _merged_axis(state, plan.new_alids)
+        _write_variant_axis(staged.path, state, axis)
+        csr = _checkpoint_and_assemble(
+            staged,
+            plan,
+            axis,
+            checkpoint_dir=checkpoint_dir,
+            n_workers=n_workers,
+            min_cor=min_cor,
+            thresh=thresh,
+            region_cap_bp=region_cap_bp,
         )
-        n_analyses = len(src_analyses)
-
-        print(f"Source: {len(src_alids):,} variants, {n_analyses:,} analyses")
-
-        if impute_analysis_ids is None:
-            impute_mask = None
-        else:
-            impute_mask = np.array(
-                [a.analysis_id in impute_analysis_ids for a in src_analyses], dtype=bool
+        encode_plan = _encode_plan(src, ld_dir, ancestry, manifest, axis)
+        _write_completed_zarr(staged, encode_plan, csr, state.n_analyses)
+        _write_top_hits_and_analyses(staged, state, encode_plan, ancestry=ancestry)
+        staged.write_manifest(
+            _completed_manifest(
+                manifest,
+                source_format_version=source_format_version,
+                release_id=release_id,
+                ld_panel_id=ld_panel_id,
+                ancestry=ancestry,
+                min_cor=min_cor,
+                thresh=thresh,
+                cis_window_bp=cis_window_bp,
+                axis=axis,
+                csr=csr,
+                encode_plan=encode_plan,
             )
-            n_match = int(impute_mask.sum())
-            print(f"Ancestry-match filter: imputing {n_match:,}/{n_analyses:,} analyses")
-
-        # A Store Family with no single encoding gene per Analysis carries no
-        # trait position at all (issue #102), so there is no cis window to scan
-        # from. Those Analyses are enumerated from their own retained variants
-        # instead -- every block holding an association they already have.
-        # An Analysis with no Trait position has no cis window to scan from, so
-        # its blocks are the ones it already holds enough observations in
-        # (issue #102). Resolved for all such Analyses in one pass, keyed by
-        # ALID, so the panel is read once rather than once per Analysis.
-        src_csr = RaggedCSRReader(src)
-        gene_target_less = [
-            i
-            for i, a in enumerate(src_analyses)
-            if not (a.trait_chr and a.trait_bp) and (impute_mask is None or impute_mask[i])
-        ]
-        own_variant_blocks: dict[int, list[LDBlock]] = {}
-        if gene_target_less:
-            analyses_by_alid: dict[str, list[int]] = {}
-            chromosomes: set[str] = set()
-            for i in gene_target_less:
-                for vi in src_csr.variant_indices(i).tolist():
-                    analyses_by_alid.setdefault(src_alids[vi], []).append(i)
-                    chromosomes.add(src_variants[vi].chromosome)
-            print(
-                f"  {len(gene_target_less):,} analyses have no Trait position; scanning "
-                f"{len(chromosomes)} chromosome(s) of panel blocks for regions they hold"
-            )
-            own_variant_blocks = blocks_over_variants(
-                ld_dir, ancestry, analyses_by_alid, sorted(chromosomes)
-            )
-
-        print(
-            "Scanning for LD blocks + new panel variants (cis windows where a "
-            "Trait position exists, the Analysis's own variants otherwise)..."
         )
-        new_alids: set[str] = set()
-        block_to_tsv: dict[str, Path] = {}
-        block_to_analyses: dict[str, list[int]] = {}
-        block_canonical_alids: dict[str, list[str | None]] = {}
-        analysis_to_blocks: dict[int, list[str]] = {}
-
-        for i, a in enumerate(src_analyses):
-            # Ancestry-mismatched Analyses are left observed-only (ADR 0028):
-            # not assigned to any block, not touched by Phase 2, no
-            # completion_quality rows -- Phase 3's pass-through path below
-            # (the same one "no trait position" already uses) carries their
-            # original associations through completely unchanged.
-            if impute_mask is not None and not impute_mask[i]:
-                analysis_to_blocks[i] = []
-                continue
-            if a.trait_chr and a.trait_bp:
-                start = max(1, int(a.trait_bp) - cis_window_bp)
-                end = int(a.trait_bp) + cis_window_bp
-                blocks = find_blocks(ld_dir, ancestry, a.trait_chr, start, end)
-            else:
-                blocks = own_variant_blocks.get(i, [])
-            analysis_to_blocks[i] = [b.block_id for b in blocks]
-            for block in blocks:
-                block_to_analyses.setdefault(block.block_id, []).append(i)
-                if block.block_id in block_to_tsv:
-                    continue
-                block_to_tsv[block.block_id] = block.tsv_path
-                canonical_alids = [canonical_panel_alid(s) for s in block.snp_ids]
-                block_canonical_alids[block.block_id] = canonical_alids
-                for alid in canonical_alids:
-                    if alid is not None and alid not in alid_to_src_idx:
-                        new_alids.add(alid)
-
-            if (i + 1) % 1000 == 0:
-                print(
-                    f"  Scanned {i + 1:,} / {n_analyses:,} analyses, "
-                    f"{len(new_alids):,} new LD panel variants, "
-                    f"{len(block_to_tsv):,} blocks touched"
-                )
-
-        print(f"New LD panel variants: {len(new_alids):,}")
-        print(f"LD blocks touched: {len(block_to_tsv):,}")
-
-        # ── Build merged variant table ──────────────────────────────────────
-        new_canonical: list[CanonicalVariant] = []
-        for alid in new_alids:
-            try:
-                parts = alid.split(":")
-                if len(parts) != 4:
-                    continue
-                chrom, pos_str, a1, a2 = parts
-                cv_result = orient_to_canonical(chrom, int(pos_str), a1, a2)
-                if cv_result.variant.alid not in alid_to_src_idx:
-                    new_canonical.append(cv_result.variant)
-            except (VariantNormalisationError, ValueError):
-                continue
-
-        def _sort_key(v: CanonicalVariant) -> tuple[Any, int, str, str]:
-            return (chromosome_sort_key(v.chromosome), v.position, v.effect_allele, v.other_allele)
-
-        new_canonical.sort(key=_sort_key)
-        all_src = [(*_sort_key(v), v) for v in src_variants]
-        all_new = [(*_sort_key(v), v) for v in new_canonical]
-        all_variants_sorted = sorted(all_src + all_new, key=lambda x: x[:4])
-
-        merged_variants: list[CanonicalVariant] = [x[4] for x in all_variants_sorted]
-        new_alid_to_idx: dict[str, int] = {v.alid: i for i, v in enumerate(merged_variants)}
-
-        src_idx_remap: list[int] = [0] * len(src_alids)
-        for v in src_variants:
-            src_idx_remap[v.variant_index] = new_alid_to_idx[v.alid]
-
-        print(f"Merged variant table: {len(merged_variants):,} variants")
-
-        print("Writing variants.tsv.gz...")
-        # Carry the observed store's rsids across (issue #109). Passing {} here
-        # silently blanked the rsid column of every Reference-Completed Ragged
-        # store: the eqtlgen-cis pilot had 49,967 rsids in 50,000 observed rows
-        # and none at all in its completed sibling. Reference-Completed rows get
-        # no rsid -- they are positions the reference panel supplies, which the
-        # source never named.
-        rsid_by_alid = {v.alid: v.rsid for v in src_variants if v.rsid}
-        write_variant_axis(staged.path, merged_variants, rsid_by_alid)
-
-        print("Writing index.sqlite...")
-        dst_db = staged.index_connection()
-        create_completion_quality_table(dst_db)
-        dst_db.commit()
-
-        # ── Phase 2: parallel LD-block completion ───────────────────────────
-        print(
-            f"Running reference completion across {len(block_to_tsv):,} LD blocks "
-            f"(n_workers={n_workers})..."
-        )
-        blocks_dir = checkpoint_dir / "blocks"
-        blocks_dir.mkdir(parents=True, exist_ok=True)
-
-        pending: list[_BlockTask] = []
-        n_existing = 0
-        for block_id, tsv_path in block_to_tsv.items():
-            ckpt_path = blocks_dir / f"{sanitize_block_id(block_id)}.npz"
-            if ckpt_path.exists():
-                n_existing += 1
-            else:
-                pending.append(
-                    _BlockTask(
-                        tsv_path=tsv_path,
-                        source_path=src,
-                        analysis_indices=block_to_analyses[block_id],
-                        min_cor=min_cor,
-                        thresh=thresh,
-                        region_cap_bp=region_cap_bp,
-                        checkpoint_path=ckpt_path,
-                    )
-                )
-
-        if pending:
-            print(f"  {n_existing:,} blocks already checkpointed, {len(pending):,} remaining")
-
-        run_block_tasks(pending, n_workers, _run_block)
-
-        # ── Phase 3: merge checkpoints, assemble CSR, finalise ──────────────
-        print("Merging block results from checkpoints...")
-        fills_by_analysis: dict[int, dict[str, tuple[float, float]]] = {}
-        quality_batch: list[tuple[int, str, float | None, int, int]] = []
-        quality_batch_size = 100_000
-        quality_count = 0
-
-        def _flush_quality() -> None:
-            nonlocal quality_count
-            if quality_batch:
-                dst_db.executemany(
-                    "INSERT INTO completion_quality "
-                    "(analysis_index, block_id, pearson_r, n_imputed, n_missing) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    quality_batch,
-                )
-                dst_db.commit()
-                quality_count += len(quality_batch)
-                quality_batch.clear()
-
-        for ckpt in sorted(blocks_dir.glob("*.npz")):
-            block_result = read_block_checkpoint(ckpt)
-            for ai, pearson_r, n_imp, n_miss in block_result.quality_rows:
-                quality_batch.append((ai, block_result.block_id, pearson_r, n_imp, n_miss))
-                if len(quality_batch) >= quality_batch_size:
-                    _flush_quality()
-            for alid, ai, z, se in block_result.fills:
-                fills_by_analysis.setdefault(ai, {})[alid] = (z, se)
-        _flush_quality()
-        print(f"Wrote {quality_count:,} completion quality rows")
-
-        print("Assembling completed CSR per analysis...")
-        all_vi: list[np.ndarray] = []
-        all_z: list[np.ndarray] = []
-        all_se: list[np.ndarray] = []
-        all_eaf: list[np.ndarray] = []
-        all_imp: list[np.ndarray] = []
-        offsets: list[int] = [0]
-        total_imputed = 0
-        total_missing = 0
-
-        for ai in range(n_analyses):
-            obs = src_csr.get_analysis(ai)
-            obs_vi_new = np.array(
-                [src_idx_remap[vi] for vi in obs.variant_index.tolist()], dtype=np.int32
-            )
-            obs_z = obs.z.astype(np.float32)
-            obs_se = obs.se.astype(np.float32)
-
-            block_ids_here = analysis_to_blocks.get(ai, [])
-            if not block_ids_here:
-                all_vi.append(obs_vi_new)
-                all_z.append(obs_z)
-                all_se.append(obs_se)
-                all_eaf.append(np.asarray(obs.eaf, dtype=np.float32))
-                all_imp.append(np.zeros(len(obs_vi_new), dtype=np.uint8))
-                offsets.append(offsets[-1] + len(obs_vi_new))
-                continue
-
-            obs_alid_to_z, obs_alid_to_se, obs_alid_to_eaf = _observed_alid_maps(obs, src_alids)
-
-            unique_ref_alids: list[str] = []
-            seen_block_alids: set[str] = set()
-            for block_id in block_ids_here:
-                for alid in block_canonical_alids[block_id]:
-                    if alid is not None and alid not in seen_block_alids:
-                        seen_block_alids.add(alid)
-                        unique_ref_alids.append(alid)
-
-            fills_here = fills_by_analysis.get(ai, {})
-
-            ref_vi: list[int] = []
-            ref_z: list[float] = []
-            ref_se: list[float] = []
-            ref_eaf: list[float] = []
-            ref_imp: list[int] = []
-            seen_alids: set[str] = set()
-            for alid in unique_ref_alids:
-                vi = new_alid_to_idx.get(alid)
-                if vi is None:
-                    continue
-                seen_alids.add(alid)
-                if alid in obs_alid_to_z:
-                    ref_vi.append(vi)
-                    ref_z.append(obs_alid_to_z[alid])
-                    ref_se.append(obs_alid_to_se[alid])
-                    ref_eaf.append(obs_alid_to_eaf[alid])
-                    ref_imp.append(0)
-                elif alid in fills_here:
-                    z_v, se_v = fills_here[alid]
-                    ref_vi.append(vi)
-                    ref_z.append(z_v)
-                    ref_se.append(se_v)
-                    # Imputed cells carry no EAF yet -- the panel's own EAF is
-                    # available here but is not written until the completion
-                    # checkpoint format carries it (ADR 0036, deferred half).
-                    ref_eaf.append(float("nan"))
-                    ref_imp.append(1)
-                    total_imputed += 1
-                else:
-                    ref_vi.append(vi)
-                    ref_z.append(float("nan"))
-                    ref_se.append(float("nan"))
-                    ref_eaf.append(float("nan"))
-                    ref_imp.append(0)
-                    total_missing += 1
-
-            # Observed rows the block scan never produced (off-window variants
-            # the source already holds) are carried through from the maps above.
-            for alid, z_val in obs_alid_to_z.items():
-                if alid not in seen_alids:
-                    ref_vi.append(new_alid_to_idx[alid])
-                    ref_z.append(z_val)
-                    ref_se.append(obs_alid_to_se[alid])
-                    ref_eaf.append(obs_alid_to_eaf[alid])
-                    ref_imp.append(0)
-
-            order = np.argsort(ref_vi)
-            vi_arr = np.array(ref_vi, dtype=np.int32)[order]
-            z_arr = np.array(ref_z, dtype=np.float32)[order]
-            se_arr = np.array(ref_se, dtype=np.float32)[order]
-            eaf_arr = np.array(ref_eaf, dtype=np.float32)[order]
-            imp_arr = np.array(ref_imp, dtype=np.uint8)[order]
-
-            all_vi.append(vi_arr)
-            all_z.append(z_arr)
-            all_se.append(se_arr)
-            all_eaf.append(eaf_arr)
-            all_imp.append(imp_arr)
-            offsets.append(offsets[-1] + len(vi_arr))
-
-            if (ai + 1) % 500 == 0:
-                print(
-                    f"  {ai + 1:,} / {n_analyses:,} analyses | "
-                    f"imputed {total_imputed:,} | missing {total_missing:,}"
-                )
-
-        dst_db.commit()
-        dst_db.close()
-
-        print(f"Completion done: {total_imputed:,} imputed, {total_missing:,} missing")
-
-        # ── Write zarr CSR with imputed mask ───────────────────────────────
-        print("Writing zarr CSR...")
-        n_total = offsets[-1]
-        offsets_arr = np.array(offsets, dtype=np.int64)
-        vi_all = np.concatenate(all_vi) if all_vi else np.empty(0, dtype=np.int32)
-        z_all = np.concatenate(all_z) if all_z else np.empty(0, dtype=np.float32)
-        se_all = np.concatenate(all_se) if all_se else np.empty(0, dtype=np.float32)
-        eaf_all = np.concatenate(all_eaf) if all_eaf else np.empty(0, dtype=np.float32)
-        imp_all = np.concatenate(all_imp) if all_imp else np.empty(0, dtype=np.uint8)
-
-        ragged_path = staged.path / RAGGED_ZARR_PATH
-        ragged_path.mkdir(parents=True, exist_ok=True)
-        root = zarr.open_group(str(ragged_path), mode="w")
-        root.create_dataset(
-            "offsets",
-            data=offsets_arr,
-            chunks=(_OFFSET_CHUNK,),
-            compressor=_COMPRESSOR,
-            dtype=np.int64,
-        )
-        root.create_dataset(
-            "variant_index",
-            data=vi_all,
-            chunks=(_ASSOC_CHUNK,),
-            compressor=_COMPRESSOR,
-            dtype=np.int32,
-        )
-        # Completion writes into the source's arrays, so it encodes with the
-        # source's plan (ADR 0038 §4) -- the overflow table travels with the
-        # plane it belongs to. The one addition is `eaf_reference`, which
-        # records a physical fact about this release rather than reinterpreting
-        # its source's bytes.
-        # Asked for whatever the source declares, `absent` included: a release
-        # whose Analyses reported no frequency still gains imputed cells, and
-        # those cells have the panel's frequency (issue #113). It gets an
-        # `eaf_reference` array and no `eaf` plane -- NaN on every observed
-        # cell, the panel's value on every imputed one.
-        eaf_reference = panel_reference_eaf(ld_dir, ancestry, merged_variants)
-        encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
-        codec = StoreCodec(encoding)
-        src_baseline = _source_eaf_baseline(src)
-        out_baseline = None
-        if src_baseline is not None:
-            out_baseline = np.full(len(merged_variants), np.nan, dtype=np.float32)
-            out_baseline[np.asarray(src_idx_remap, dtype=np.int64)] = src_baseline
-        z_overflow = ZOverflowBuilder()
-        root.create_dataset(
-            "z",
-            data=codec.encode_z(z_all, positions=positions_flat(0), overflow=z_overflow),
-            chunks=(_ASSOC_CHUNK,),
-            compressor=_COMPRESSOR,
-            dtype=codec.z_dtype,
-        )
-        z_overflow.table().write(root)
-        root.create_dataset(
-            "imputed",
-            data=imp_all,
-            chunks=(_ASSOC_CHUNK,),
-            compressor=_COMPRESSOR,
-            dtype=np.uint8,
-        )
-        # Observed frequencies only. An imputed cell's frequency is the
-        # panel's, stored once per variant in `eaf_reference` and applied on
-        # read (ADR 0037 §4); an observed cell whose source reported none stays
-        # absent. The per-variant baseline travels with the values across the
-        # variant remap rather than being recomputed from them, so a value
-        # decoded from the source re-encodes to the same code.
-        if not encoding.eaf.is_absent:
-            write_eaf_csr(
-                root,
-                codec,
-                vi_all,
-                eaf_all,
-                baseline=out_baseline,
-                compressor=_COMPRESSOR,
-                chunks=(_ASSOC_CHUNK,),
-            )
-        if eaf_reference is not None:
-            write_eaf_reference(root, eaf_reference, compressor=_COMPRESSOR)
-        decoded_eaf = RaggedEafPlane.open(root, encoding, imputed=root["imputed"]).slice(
-            0, len(se_all)
-        )
-        analysis_index = np.searchsorted(offsets_arr[1:], np.arange(len(se_all)), side="right")
-        se_coefficients = (
-            fit_se(
-                se_all,
-                decoded_eaf,
-                analysis_index,
-                n_analyses=n_analyses,
-                compressor=_COMPRESSOR,
-                chunks=_ASSOC_CHUNK,
-            )[0]
-            if encoding.se.is_residual
-            else None
-        )
-        write_se_csr(
-            root,
-            codec,
-            se_all,
-            decoded_eaf,
-            analysis_index,
-            se_coefficients,
-            compressor=_COMPRESSOR,
-            chunks=(_ASSOC_CHUNK,),
-        )
-        root.attrs["layout"] = "ragged"
-        root.attrs["completion_state"] = "reference_completed"
-        root.attrs["n_analyses"] = n_analyses
-        root.attrs["n_associations"] = n_total
-
-        print("Building top-hit indexes...")
-        build_ragged_top_hit_indexes(staged.path, encoding=encoding)
-
-        print("Writing analyses.tsv...")
-        with staged.index_connection() as quality_db:
-            quality_rollup = completion_quality_rollup(quality_db, n_analyses)
-        dst_analyses = [
-            replace(
-                a,
-                completed_against=(
-                    ancestry
-                    if impute_analysis_ids is None or a.analysis_id in impute_analysis_ids
-                    else ""
-                ),
-                # An Analysis that gained imputed cells in a release carrying
-                # reference EAF now stores a frequency for them, whatever its
-                # source reported (ADR 0037 §4), so `eaf_scope` follows what
-                # the release holds rather than being copied forward.
-                eaf_scope=completed_eaf_scope(a, quality_rollup[i], eaf_reference is not None),
-                completion_median_pearson_r=quality_rollup[i].median_pearson_r,
-                completion_n_imputed_total=quality_rollup[i].n_imputed_total,
-                completion_n_missing_total=quality_rollup[i].n_missing_total,
-                # Completion changes z/se via imputation, so the source's
-                # pre-completion Top-Hit Counts (carried forward from `a`) do
-                # not apply here -- zero them so add_hit_counts below sets
-                # fresh post-completion counts rather than adding onto stale
-                # ones.
-                n_hits_5e8="",
-                n_hits_5e6="",
-                n_hits_5e4="",
-            )
-            for i, a in enumerate(src_analyses)
-        ]
-        write_analysis_records(
-            staged.path / "analyses.tsv", add_hit_counts(staged.path, dst_analyses)
-        )
-
-        new_release_id = release_id or f"{manifest.release_id}-completed"
-        completed_manifest = StoreManifest(
-            # Preserved with the format version below: a completed release is
-            # written into its source's arrays, so it is in its source's
-            # encoding -- plus `eaf_reference`, which says this release carries
-            # panel frequencies for the cells it imputed (ADR 0037 §4).
-            encoding=encoding,
-            store_id=manifest.store_id,
-            release_id=new_release_id,
-            # Preserved, not re-stamped -- see ADR 0038 §4 and the dense path.
-            format_version=source_format_version,
-            primary_layout=manifest.primary_layout,
-            association_coverage=manifest.association_coverage,
-            completion_state=CompletionState.REFERENCE_COMPLETED,
-            reference_assembly=manifest.reference_assembly,
-            created_at=datetime.now(UTC).isoformat(),
-            provenance={
-                **manifest.provenance,
-                "source_release_id": manifest.release_id,
-                "completion": build_completion_provenance(
-                    ld_panel_id=ld_panel_id,
-                    ancestry=ancestry,
-                    min_cor=min_cor,
-                    thresh=thresh,
-                    n_variants_total=len(merged_variants),
-                    n_variants_new=len(new_canonical),
-                    cis_window_bp=cis_window_bp,
-                    n_imputed=total_imputed,
-                    n_missing=total_missing,
-                ),
-            },
-        )
-        staged.write_manifest(completed_manifest)
-
-        result = CompletionResult(
-            output_path=dst,
-            n_variants=len(merged_variants),
-            n_analyses=n_analyses,
-            n_associations=n_total,
-            n_imputed=total_imputed,
-            n_missing=total_missing,
-        )
-        print(
-            f"Reference completion complete: {result.n_variants:,} variants, "
-            f"{result.n_analyses:,} analyses, {result.n_associations:,} associations "
-            f"({result.n_imputed:,} imputed, {result.n_missing:,} missing)"
-        )
+        result = _completion_result(dst, state, axis, csr)
     return result
 
 
