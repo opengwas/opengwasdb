@@ -30,7 +30,7 @@ from opengwasdb.encoding.planes import DenseEafPlane, write_se_coefficients
 from opengwasdb.encoding.timing import PhaseTimer
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True, eq=False, kw_only=True)
 class OverflowCells:
     """A named, validated Hybrid Overflow Component cell bundle.
 
@@ -69,7 +69,12 @@ class OverflowCells:
             ):
                 raise ValueError("OverflowCells analysis_indices must be integers")
         indices = ai.astype(np.int64, copy=False)
-        n_analyses = int(self.n_analyses)
+        n_analyses = self.n_analyses
+        if isinstance(n_analyses, bool) or not isinstance(n_analyses, (int, np.integer)):
+            raise ValueError("OverflowCells n_analyses must be a non-negative integer")
+        n_analyses = int(n_analyses)
+        if n_analyses < 0:
+            raise ValueError("OverflowCells n_analyses must be a non-negative integer")
         if np.any(indices < 0) or np.any(indices >= n_analyses):
             raise ValueError(
                 f"OverflowCells analysis_indices must lie within [0, {n_analyses})"
@@ -655,6 +660,11 @@ def optimise_dense_se_joint(
         return _fall_back_to_float16(group, encoding)
     source = group["se"]
     n_analyses = int(source.shape[1])
+    if overflow is not None and overflow.n_analyses != n_analyses:
+        raise ValueError(
+            f"overflow declares {overflow.n_analyses} analyses but the Dense "
+            f"component has {n_analyses}"
+        )
     eaf_plane = DenseEafPlane.open(group, encoding)
     coefficients, eligible = _fit_shared_coefficients(source, eaf_plane, overflow, timer)
 

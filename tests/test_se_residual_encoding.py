@@ -686,3 +686,56 @@ def test_overflow_cells_rejects_invalid_bundles(se, eaf, ai, n_analyses, match) 
     """#162: swapped arrays or invalid shapes fail loudly before fit/measurement."""
     with pytest.raises(ValueError, match=match):
         OverflowCells(se_values=se, eaf_values=eaf, analysis_indices=ai, n_analyses=n_analyses)
+
+
+def test_overflow_cells_are_keyword_only() -> None:
+    """#162: positional construction is refused so fields cannot be silently swapped."""
+    with pytest.raises(TypeError):
+        OverflowCells(
+            np.array([0.1, 0.2], dtype=np.float32),
+            np.array([0.2, 0.3], dtype=np.float32),
+            np.array([0, 1], dtype=np.int64),
+            2,
+        )
+
+
+@pytest.mark.parametrize(
+    "n_analyses",
+    [2.5, True, "2"],
+    ids=["float", "bool", "str"],
+)
+def test_overflow_cells_rejects_non_integer_analysis_count(n_analyses) -> None:
+    """`n_analyses` is a count, never silently truncated from a non-integer."""
+    with pytest.raises(ValueError, match="n_analyses must be a non-negative integer"):
+        OverflowCells(
+            se_values=np.array([0.1, 0.2], dtype=np.float32),
+            eaf_values=np.array([0.2, 0.3], dtype=np.float32),
+            analysis_indices=np.array([0, 1], dtype=np.int64),
+            n_analyses=n_analyses,
+        )
+
+
+def test_optimise_dense_se_joint_rejects_wrong_overflow_analysis_count(tmp_path) -> None:
+    """The Dense component's width is authoritative; a mismatched overflow says so."""
+    group = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w")
+    eaf = np.linspace(0.05, 0.95, 600, dtype=np.float32)[:, None]
+    dense_se = np.exp(-3.0 - 0.5 * np.log(2 * eaf * (1 - eaf))).astype(np.float32)
+    group.create_dataset("eaf", data=eaf, chunks=(100, 1), dtype="float32")
+    group.create_dataset("se", data=dense_se, chunks=(100, 1), dtype="float16")
+    group.create_dataset("z", data=np.ones_like(eaf), chunks=(100, 1), dtype="float16")
+    preliminary = StoreEncoding(
+        z=ZEncoding("float16"),
+        se=SeEncoding("float16"),
+        eaf=EafEncoding("float32"),
+    )
+    overflow = OverflowCells(
+        se_values=np.array([0.1], dtype=np.float32),
+        eaf_values=np.array([0.2], dtype=np.float32),
+        analysis_indices=np.array([0], dtype=np.int64),
+        n_analyses=3,  # dense component has exactly one Analysis
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"overflow declares 3 analyses but the Dense component has 1",
+    ):
+        optimise_dense_se_joint(group, preliminary, overflow=overflow)
