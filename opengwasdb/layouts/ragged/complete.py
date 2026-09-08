@@ -75,6 +75,7 @@ from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.model.analyses import (
     Analysis,
+    ancestry_impute_mask,
     read_analysis_records,
     reset_top_hit_counts,
     write_analysis_records,
@@ -505,12 +506,8 @@ def _read_source_state(
     n_analyses = len(src_analyses)
     print(f"Source: {len(src_alids):,} variants, {n_analyses:,} analyses")
 
-    if impute_analysis_ids is None:
-        impute_mask = None
-    else:
-        impute_mask = np.array(
-            [a.analysis_id in impute_analysis_ids for a in src_analyses], dtype=bool
-        )
+    impute_mask = ancestry_impute_mask(src_analyses, impute_analysis_ids)
+    if impute_mask is not None:
         n_match = int(impute_mask.sum())
         print(f"Ancestry-match filter: imputing {n_match:,}/{n_analyses:,} analyses")
 
