@@ -643,7 +643,12 @@ variant
 association
 ```
 
-EAF and INFO are optional. They are not required for statistical reconstruction.
+EAF and INFO are optional metadata, and neither is needed to reconstruct beta,
+Z, or p-value, nor a legacy or floating-point `se` (§6). The exception is a
+residual-coded `se` (§6a), which decodes against the EAF planes its cells were
+coded against — the observed EAF for observed cells, the Reference EAF for
+imputed cells — so a release carrying one is not reconstruction-independent of
+EAF, and validation requires a complete `eaf` plane beside it (§20).
 
 Variant-scoped EAF or INFO is valid only when the builder can establish that one value is genuinely shared. Builders MUST NOT average differing association values into variant-scoped values.
 
