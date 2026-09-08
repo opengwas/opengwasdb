@@ -499,6 +499,31 @@ def test_a_residual_plane_with_no_baseline_is_rejected(dense_store: Path):
     assert any(EAF_BASELINE in error for error in result.errors), result.errors
 
 
+def test_a_missized_eaf_baseline_is_rejected(dense_store: Path):
+    """A per-variant baseline shorter than the variant axis hands a residual
+    cell its neighbour's frequency; the dense-array guard must say so before
+    the plane is decoded (issue #113's shape, one plane further up).
+
+    The array is rewritten rather than resized so its chunk stays per-variant
+    and the chunking rule does not fire first.
+    """
+    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a")
+    n = len(root[EAF_BASELINE])
+    assert n > 1
+    values = root[EAF_BASELINE][: n - 1]
+    dtype = root[EAF_BASELINE].dtype
+    del root[EAF_BASELINE]
+    root.create_dataset(EAF_BASELINE, data=values, chunks=(1,), dtype=dtype)
+
+    result = validate_store(dense_store)
+
+    assert not result.ok
+    assert any(
+        f"{EAF_BASELINE} has {n - 1} entries but the variant axis has {n}" in e
+        for e in result.errors
+    ), result.errors
+
+
 def test_an_exception_table_that_lost_a_cell_is_rejected(dense_store: Path):
     """The lost value is the frequency furthest from its baseline -- the rare
     variant a user is filtering on."""

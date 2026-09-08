@@ -31,6 +31,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from opengwasdb.model.enums import (
     AncestryAssignmentMethod,
     EafOrientationOutcome,
@@ -656,3 +658,37 @@ def read_analysis_records(path: str | Path) -> list[Analysis]:
     """Read `analyses.tsv` at `path` back into `Analysis` records, in file order."""
     table = read_analyses(path)
     return [_analysis_from_row(row, table.fieldnames) for row in table.rows]
+
+
+def reset_top_hit_counts(analyses: list[Analysis]) -> list[Analysis]:
+    """Blank each Analysis's carried-forward Top-Hit Counts (ADR 0032).
+
+    Reference Completion changes z/se via imputation, so a source release's
+    pre-completion Top-Hit Counts describe a different association list from
+    the completed one and must not be carried forward or added onto. A blank
+    `n_hits_*` field reads as zero to `add_hit_counts()`, so clearing the
+    three fields here makes that recomputation *set* fresh post-completion
+    counts instead of accumulating stale ones. Shared by the Dense and Ragged
+    completion drivers, which differ only in the layout-specific Analysis
+    updates they apply around this reset.
+    """
+    return [replace(a, n_hits_5e8="", n_hits_5e6="", n_hits_5e4="") for a in analyses]
+
+
+def ancestry_impute_mask(
+    analyses: list[Analysis], impute_analysis_ids: set[str] | None
+) -> np.ndarray | None:
+    """The per-Analysis ancestry-match impute filter (ADR 0028), as a boolean
+    mask over `analyses` in list order, or ``None`` when no filter applies.
+
+    ``None`` (impute every Analysis) is what a source with no ancestry
+    information gets; a set keeps exactly the Analyses whose ``analysis_id``
+    it holds imputed and carries the rest through observed-only. Mask position
+    mirrors list order -- an Analysis's position in the list is its
+    ``analysis_index`` -- so callers index it by list position. Shared by the
+    Dense and Ragged completion drivers, whose ``_read_source_*`` phases
+    differ only in the progress line each prints around this derivation.
+    """
+    if impute_analysis_ids is None:
+        return None
+    return np.array([a.analysis_id in impute_analysis_ids for a in analyses], dtype=bool)

@@ -19,7 +19,9 @@
       "shell"
     ],
     "skip_dirs": [
-      "quality"
+      "quality",
+      ".claude",
+      ".pixi"
     ],
     "baseline": "quality/escapes-baseline.json"
   },
@@ -32,9 +34,12 @@
       "shell"
     ],
     "skip_dirs": [
-      "quality"
+      "quality",
+      ".claude",
+      ".pixi"
     ],
     "min_lines": 6,
+    "base_ref": "origin/dev",
     "baseline": "quality/duplication-baseline.json"
   },
   "hygiene": {

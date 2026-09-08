@@ -169,6 +169,38 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Changed
 
+- **The escapes and duplication gates no longer scan the worktree copies under
+  `.claude/` or the pixi environment under `.pixi/`**, and the duplication
+  baseline drops 92.51% -> 7.10% (#130). Both gates walked the tree from its
+  root, and the tree contains `.claude/worktrees/` — a complete managed
+  checkout of the repository per agent worktree — and `.pixi/`, tooling
+  environment with vendored conda code included. Every real file was read
+  beside copies of itself: the duplication gate failed clone pairs that
+  paired a project file with its twin in a managed worktree — a file cannot
+  be refactored to differ from a copy of itself — and measured a 92.51%
+  share (8,271,343 duplicated of 8,941,213 "significant" lines, against
+  37,906 in the project alone), while the escapes baseline had accepted
+  19,121 sites, 14,573 of them under `.pixi/` and 4,508 under `.claude/`.
+  Both gates now skip `.claude` and `.pixi`, and the duplication gate's
+  changed-lines judgment is made against `origin/dev` — the branch feature
+  work actually merges to — rather than the default-branch guess. With the
+  scope honest, the escapes baseline falls to 39 sites and the duplication
+  share to 7.10% (2,692 of 37,906 lines): a new escape or copied block on a
+  branch now fails loudly instead of vanishing into the environment's and
+  the worktrees' own totals.
+
+  What the honest measurement then found in the project's own code is real
+  duplication, now extracted into shared helpers. Dense and Ragged Reference
+  Completion drove their block pools with two copies of the same checkpointed
+  loop and now share one `run_block_tasks` (`completion/parallel.py`); Ragged
+  Completion rebuilt each Analysis's observed `{alid: z/se/eaf}` maps three
+  times and now folds them through one `_observed_alid_maps`;
+  `assign_ancestry` returned the identical overlap-zero refusal at two sites
+  and now returns `_overlap_rejected()`; and `index.sqlite`'s private
+  `_parse_canonical_alid` — a second implementation of the canonical-ALID
+  parse the Variant Index already owns, unread since the relational variant
+  table was dropped (#128) — is deleted.
+
 - **Hybrid residual-SE Overflow cells get a named, validated contract** (#162).
   The Overflow Component's `(se, eaf, analysis_index)` inputs were a
   positional tuple whose three arrays were shape-valid if swapped or mis-shaped,

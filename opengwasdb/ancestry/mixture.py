@@ -86,6 +86,21 @@ class AncestryAssignment:
     fine_composition: dict[str, float] = field(default_factory=dict)
 
 
+def _overlap_rejected() -> AncestryAssignment:
+    """The Assignment for an Analysis sharing no variant with the reference
+    panel -- rejected outright, whichever of the two overlap==0 moments in
+    ``assign_ancestry`` reached it (before or after reference NaNs dropped)."""
+    return AncestryAssignment(
+        assigned_ancestry=None,
+        dominant_superpop=None,
+        dominant_proportion=0.0,
+        runner_up_margin=0.0,
+        af_overlap=0,
+        residual=float("nan"),
+        gate_reason="overlap",
+    )
+
+
 def assign_ancestry(
     study_af: dict[str, float],
     reference: AncestryReference,
@@ -97,15 +112,7 @@ def assign_ancestry(
     rows = [reference.index[a] for a in study_af if a in reference.index]
     overlap = len(rows)
     if overlap == 0:
-        return AncestryAssignment(
-            assigned_ancestry=None,
-            dominant_superpop=None,
-            dominant_proportion=0.0,
-            runner_up_margin=0.0,
-            af_overlap=0,
-            residual=float("nan"),
-            gate_reason="overlap",
-        )
+        return _overlap_rejected()
 
     row_idx = np.asarray(rows, dtype=np.int64)
     ref_alids = reference.alids[row_idx]
@@ -117,15 +124,7 @@ def assign_ancestry(
     A, b = A[valid], b[valid]
     overlap = int(A.shape[0])
     if overlap == 0:
-        return AncestryAssignment(
-            assigned_ancestry=None,
-            dominant_superpop=None,
-            dominant_proportion=0.0,
-            runner_up_margin=0.0,
-            af_overlap=0,
-            residual=float("nan"),
-            gate_reason="overlap",
-        )
+        return _overlap_rejected()
 
     # EAF orientation (issue #115), against the unweighted mean of the fine
     # groups. Direction is what is being read, and direction is the one thing a

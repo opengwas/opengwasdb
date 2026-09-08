@@ -22,9 +22,7 @@ import json
 import logging
 import shutil
 from collections.abc import Iterator
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -49,8 +47,11 @@ from opengwasdb.completion.ld_panel import (
     list_all_blocks,
     list_chromosomes,
 )
-from opengwasdb.completion.manifest import build_completion_provenance
-from opengwasdb.completion.parallel import init_block_worker
+from opengwasdb.completion.manifest import (
+    build_completion_provenance,
+    completed_release_manifest,
+)
+from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
@@ -75,7 +76,13 @@ from opengwasdb.layouts.dense.constants import (
     DEFAULT_DTYPE,
 )
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
-from opengwasdb.model.analyses import read_analyses, read_analysis_records
+from opengwasdb.model.analyses import (
+    Analysis,
+    ancestry_impute_mask,
+    read_analyses,
+    read_analysis_records,
+    reset_top_hit_counts,
+)
 from opengwasdb.model.enums import (
     AssociationCoverage,
     CompletionState,
@@ -92,6 +99,7 @@ from opengwasdb.variants import (
     CanonicalVariant,
     VariantAxis,
     VariantNormalisationError,
+    VariantRecord,
     chromosome_sort_key,
     orient_to_canonical,
     parse_canonical_alid,
@@ -300,6 +308,512 @@ def resume_dense_completion(
 # ── Shared pipeline core ────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class _SourceAxis:
+    """What Phase 1 reads from the Observed-Only source: its variant axis, its
+    Analysis records, and the per-Analysis ancestry-match impute filter (ADR
+    0028) derived from them. Read once and carried whole, so the filter can
+    never come from a different read of the axis than the one it was built
+    against."""
+
+    src_variants: list[VariantRecord]
+    src_analyses: list[Analysis]
+    src_alid_to_idx: dict[str, int]
+    n_analyses: int
+    impute_mask: np.ndarray | None
+
+
+@dataclass(frozen=True)
+class _UnionAxis:
+    """Phase 1's product: the merged variant axis (source ∪ panel, ADR 0022)
+    and every map later phases read it through. One object, so a phase cannot
+    pick up a mask or remap that was built against a different axis than the
+    one it is writing."""
+
+    merged_variants: list[CanonicalVariant]
+    n_variants: int
+    n_variants_new: int
+    src_analyses: list[Analysis]
+    n_analyses: int
+    impute_mask: np.ndarray | None
+    new_alid_to_idx: dict[str, int]
+    on_panel: np.ndarray
+    out_to_src: np.ndarray
+    tsv_paths: list[Path]
+
+
+@dataclass(frozen=True)
+class _CompletedArrays:
+    """Phase 3's product: the encoding the completed arrays were written in,
+    and the counts the metadata phases must state. ``n_missing_off_panel``
+    stays per-Analysis so ``analyses.tsv`` can hold each row's own count."""
+
+    encoding: StoreEncoding
+    eaf_reference_present: bool
+    n_missing_off_panel: np.ndarray
+    n_missing_off_panel_total: int
+    n_missing_imputation_failed: int
+    total_imputed: int
+
+
+def _read_source_axis(src: Path, impute_analysis_ids: set[str] | None) -> _SourceAxis:
+    """Read the source's variant axis and Analysis records (ADR 0034) and
+    derive the impute filter: ``None`` (no filter) imputes every Analysis,
+    which is what a source with no ``assigned_ancestry`` column gets; a set
+    keeps only the matching Analyses imputed and carries the rest through
+    observed-only (ADR 0028)."""
+    src_variant_axis = VariantAxis(src)
+    src_variants = src_variant_axis.all()
+    src_variant_axis.close()
+    src_alid_to_idx = {v.alid: v.variant_index for v in src_variants}
+
+    src_analyses = sorted(
+        read_analysis_records(src / "analyses.tsv"), key=lambda a: int(a.analysis_index)
+    )
+    n_analyses = len(src_analyses)
+    print(f"Source: {len(src_variants):,} variants, {n_analyses:,} analyses")
+
+    impute_mask = ancestry_impute_mask(src_analyses, impute_analysis_ids)
+    if impute_mask is not None:
+        n_match = int(impute_mask.sum())
+        print(f"Ancestry-match filter: imputing {n_match:,}/{n_analyses:,} analyses")
+    return _SourceAxis(src_variants, src_analyses, src_alid_to_idx, n_analyses, impute_mask)
+
+
+def _enumerate_panel(ld_dir: Path, ancestry: str) -> tuple[list[Path], set[str]]:
+    """Walk every LD block's TSV in chromosome order, collecting the block
+    paths Phase 2 schedules and the canonical panel ALIDs the union axis must
+    hold (ADR 0022)."""
+    print("Enumerating genome-wide LD blocks...")
+    tsv_paths: list[Path] = []
+    panel_alids: set[str] = set()
+    for chrom in list_chromosomes(ld_dir, ancestry):
+        for block in list_all_blocks(ld_dir, ancestry, chrom):
+            tsv_paths.append(block.tsv_path)
+            for snp_id in block.snp_ids:
+                ca = _canonical_panel_alid(snp_id)
+                if ca is not None:
+                    panel_alids.add(ca)
+    print(f"LD panel: {len(tsv_paths):,} blocks, {len(panel_alids):,} panel variants")
+    return tsv_paths, panel_alids
+
+
+def _orient_panel_alid(alid: str) -> CanonicalVariant | None:
+    """The store-canonical variant one panel ALID names, or ``None`` when the
+    panel's identifier cannot be parsed or oriented. An ALID the panel cannot
+    say what it is must never become a variant the store claims to cover."""
+    parts = alid.split(":")
+    if len(parts) != 4:
+        return None
+    chrom, pos_str, a1, a2 = parts
+    try:
+        cv_result = orient_to_canonical(chrom, int(pos_str), a1, a2)
+    except (VariantNormalisationError, ValueError):
+        return None
+    return cv_result.variant
+
+
+def _union_variant_table(
+    src_variants: list[VariantRecord],
+    src_alid_to_idx: dict[str, int],
+    panel_alids: set[str],
+) -> tuple[list[CanonicalVariant], list[CanonicalVariant], dict[str, int]]:
+    """Append the panel variants the source does not already hold (deduplicated
+    through canonical orientation) and sort the union into the store's
+    canonical order."""
+    present = set(src_alid_to_idx)
+    new_canonical: list[CanonicalVariant] = []
+    for alid in panel_alids:
+        if alid in present:
+            continue
+        variant = _orient_panel_alid(alid)
+        if variant is None:
+            continue
+        if variant.alid in present:
+            continue
+        present.add(variant.alid)
+        new_canonical.append(variant)
+
+    merged_variants: list[CanonicalVariant] = [
+        CanonicalVariant(v.chromosome, v.position, v.effect_allele, v.other_allele)
+        for v in src_variants
+    ] + new_canonical
+    merged_variants.sort(
+        key=lambda v: (
+            chromosome_sort_key(v.chromosome),
+            v.position,
+            v.effect_allele,
+            v.other_allele,
+        )
+    )
+    new_alid_to_idx: dict[str, int] = {v.alid: i for i, v in enumerate(merged_variants)}
+    print(
+        f"Union variant axis: {len(merged_variants):,} variants "
+        f"({len(new_canonical):,} new panel variants)"
+    )
+    return merged_variants, new_canonical, new_alid_to_idx
+
+
+def _write_union_axis_tables(
+    staged: StagedRelease,
+    *,
+    source_variants: list[VariantRecord],
+    merged_variants: list[CanonicalVariant],
+    new_alid_to_idx: dict[str, int],
+    panel_alids: set[str],
+    n_variants: int,
+    n_analyses: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Persist the union axis: ``variants.tsv.gz`` with the source's rsids
+    carried across (issue #109), the ``on_panel`` mask, the inverse
+    output-row → source-row remap (z/se are seeded band-by-band during the
+    write, issue 044), and an ``index.sqlite`` holding the completion-quality
+    table."""
+    on_panel = np.zeros(n_variants, dtype=bool)
+    for alid in panel_alids:
+        idx = new_alid_to_idx.get(alid)
+        if idx is not None:
+            on_panel[idx] = True
+
+    rsid_by_alid = {v.alid: v.rsid for v in source_variants if v.rsid}
+    print("Writing variants.tsv.gz...")
+    write_variant_axis(staged.path, merged_variants, rsid_by_alid)
+
+    out_to_src = np.full(n_variants, -1, dtype=np.int64)
+    for v in source_variants:
+        out_to_src[new_alid_to_idx[v.alid]] = v.variant_index
+
+    print("Writing index.sqlite...")
+    with staged.index_connection() as dst_db:
+        initialise_schema(dst_db)
+        create_completion_quality_table(dst_db)
+        set_metadata(dst_db, "schema_version", 2)
+        set_metadata(dst_db, "n_variants", n_variants)
+        set_metadata(dst_db, "n_analyses", n_analyses)
+        dst_db.commit()
+        # analyses.tsv is written after the band write, once
+        # n_missing_off_panel is known (issue 044; issue #22).
+    return on_panel, out_to_src
+
+
+def _build_union_axis(
+    src: Path,
+    staged: StagedRelease,
+    ld_dir: Path,
+    ancestry: str,
+    impute_analysis_ids: set[str] | None,
+) -> _UnionAxis:
+    """Phase 1 — axis union (ADR 0022): read the source, append the panel
+    variants it lacks, and seed the staged store's variant tables from the
+    merged axis."""
+    source_axis = _read_source_axis(src, impute_analysis_ids)
+    panel_paths, panel_alids = _enumerate_panel(ld_dir, ancestry)
+    merged_variants, new_canonical, new_alid_to_idx = _union_variant_table(
+        source_axis.src_variants, source_axis.src_alid_to_idx, panel_alids
+    )
+    on_panel, out_to_src = _write_union_axis_tables(
+        staged,
+        source_variants=source_axis.src_variants,
+        merged_variants=merged_variants,
+        new_alid_to_idx=new_alid_to_idx,
+        panel_alids=panel_alids,
+        n_variants=len(merged_variants),
+        n_analyses=source_axis.n_analyses,
+    )
+    return _UnionAxis(
+        merged_variants=merged_variants,
+        n_variants=len(merged_variants),
+        n_variants_new=len(new_canonical),
+        src_analyses=source_axis.src_analyses,
+        n_analyses=source_axis.n_analyses,
+        impute_mask=source_axis.impute_mask,
+        new_alid_to_idx=new_alid_to_idx,
+        on_panel=on_panel,
+        out_to_src=out_to_src,
+        tsv_paths=panel_paths,
+    )
+
+
+def _complete_pending_blocks(
+    axis: _UnionAxis,
+    src: Path,
+    checkpoint_dir: Path,
+    *,
+    min_cor: float,
+    thresh: float,
+    n_workers: int,
+) -> Path:
+    """Phase 2 — schedule and run the LD-block completions over the process
+    pool (ADR 0023). A block whose checkpoint already exists is skipped; each
+    remaining block writes its own checkpoint, so nothing per block is held in
+    the parent (issue 044)."""
+    print(
+        f"Running reference completion across {len(axis.tsv_paths):,} LD blocks "
+        f"(n_workers={n_workers})..."
+    )
+    blocks_dir = checkpoint_dir / "blocks"
+    blocks_dir.mkdir(parents=True, exist_ok=True)
+
+    pending: list[_BlockTask] = []
+    n_existing = 0
+    for tsv_path in axis.tsv_paths:
+        block_id = f"{tsv_path.parent.name}/{tsv_path.stem}"
+        ckpt_path = blocks_dir / f"{sanitize_block_id(block_id)}.npz"
+        if ckpt_path.exists():
+            n_existing += 1  # fills read from the checkpoint in Phase 3
+        else:
+            pending.append(
+                _BlockTask(
+                    tsv_path=tsv_path,
+                    source_path=src,
+                    min_cor=min_cor,
+                    thresh=thresh,
+                    checkpoint_path=ckpt_path,
+                )
+            )
+
+    if pending:
+        print(f"  {n_existing:,} blocks already checkpointed, {len(pending):,} remaining")
+    run_block_tasks(pending, n_workers, _run_block)
+    return blocks_dir
+
+
+def _sorted_union_map(new_alid_to_idx: dict[str, int]) -> tuple[np.ndarray, np.ndarray]:
+    """The union ALID → row lookup, sorted by ALID, so checkpoint fills (which
+    record ALIDs, not rows) resolve to union rows by binary search."""
+    union_alids = np.fromiter(
+        (alid.encode("ascii") for alid in new_alid_to_idx),
+        dtype=ALID_DTYPE,
+        count=len(new_alid_to_idx),
+    )
+    union_rows = np.fromiter(new_alid_to_idx.values(), dtype=np.int32, count=len(new_alid_to_idx))
+    o = np.argsort(union_alids)
+    return union_alids[o], union_rows[o]
+
+
+def _merge_checkpoint_fills(
+    staged: StagedRelease,
+    axis: _UnionAxis,
+    blocks_dir: Path,
+    ld_dir: Path,
+    ancestry: str,
+    source_encoding: StoreEncoding,
+) -> tuple[StoreEncoding, bool, tuple[int, int], Path]:
+    """Resolve every block checkpoint's fills to union rows and shard them by
+    output row-band on disk, creating the empty completed planes alongside.
+    The final zarr writer then reads only the shard for the band it is
+    writing, so Phase 3 never needs a whole-genome fill array in RAM (issue
+    044). ``impute_mask`` is applied here, where a worker's candidate fills
+    become the release's (ADR 0028): dropping fills only, later, at the write
+    left ``completion_quality`` -- and through it ``analyses.tsv`` -- counting
+    cells the release does not hold."""
+    print("Merging block results from checkpoints...")
+    union_alids_s, union_rows_s = _sorted_union_map(axis.new_alid_to_idx)
+
+    # Reference EAF for imputed cells (ADR 0037 §4): an imputed cell's
+    # frequency *is* the panel's -- one `float32` per variant, never a fallback
+    # for observed cells. Asked for whatever the source declares, `absent`
+    # included: a release whose Analyses reported no frequency still gains
+    # imputed cells with the panel's frequency (issue #113).
+    src_has_eaf = not source_encoding.eaf.is_absent
+    eaf_reference = panel_reference_eaf(ld_dir, ancestry, axis.merged_variants)
+    encoding = source_encoding.with_eaf_reference(eaf_reference is not None)
+    effective_chunks = _create_completed_zarr(
+        staged,
+        axis.n_variants,
+        axis.n_analyses,
+        axis.on_panel,
+        DEFAULT_CHUNK_SHAPE,
+        DEFAULT_DTYPE,
+        encoding,
+        src_has_eaf=src_has_eaf,
+        eaf_reference=eaf_reference,
+    )
+    band_rows = _completion_band_rows(effective_chunks)
+    fill_shard_dir, quality_count = _shard_checkpoint_fills_by_band(
+        blocks_dir,
+        staged,
+        union_alids_s,
+        union_rows_s,
+        axis.n_variants,
+        band_rows,
+        impute_mask=axis.impute_mask,
+    )
+    print(f"Wrote {quality_count:,} completion quality rows")
+    return encoding, eaf_reference is not None, effective_chunks, fill_shard_dir
+
+
+def _stream_completed_arrays(
+    staged: StagedRelease,
+    src_root: Any,
+    axis: _UnionAxis,
+    blocks_dir: Path,
+    ld_dir: Path,
+    ancestry: str,
+    source_encoding: StoreEncoding,
+) -> _CompletedArrays:
+    """Phase 3 — stream the completed z/se/imputed matrix out of the sharded
+    checkpoints into row-band writes (issue 044), returning the counts the
+    metadata phases must state."""
+    encoding, eaf_reference_present, effective_chunks, fill_shard_dir = _merge_checkpoint_fills(
+        staged, axis, blocks_dir, ld_dir, ancestry, source_encoding
+    )
+    print("Writing data.zarr (band-streamed)...")
+    n_missing_off_panel, n_missing_imputation_failed, total_imputed = _write_completed_bands(
+        staged,
+        src_root,
+        axis.out_to_src,
+        axis.on_panel,
+        fill_shard_dir,
+        effective_chunks,
+        axis.n_variants,
+        axis.n_analyses,
+        source_encoding,
+        encoding,
+        impute_mask=axis.impute_mask,
+    )
+    shutil.rmtree(fill_shard_dir, ignore_errors=True)
+    n_missing_off_panel_total = int(n_missing_off_panel.sum())
+    print(
+        f"Completion done: {total_imputed:,} imputed, "
+        f"{n_missing_imputation_failed:,} imputation-failed, "
+        f"{n_missing_off_panel_total:,} off-panel missing"
+    )
+    return _CompletedArrays(
+        encoding=encoding,
+        eaf_reference_present=eaf_reference_present,
+        n_missing_off_panel=n_missing_off_panel,
+        n_missing_off_panel_total=n_missing_off_panel_total,
+        n_missing_imputation_failed=n_missing_imputation_failed,
+        total_imputed=total_imputed,
+    )
+
+
+def _checked_dense_source(manifest: StoreManifest, src: Path) -> str:
+    """The source preconditions, checked with the other source preconditions
+    rather than at manifest-write time: a completion that cannot honour its
+    source's format should fail before it spends an hour imputing (ADR 0038
+    §4), and Dense reference completion is only defined over a Dense,
+    Observed-Only, Full Coverage source."""
+    source_format_version = check_writable_format_version(
+        manifest.format_version, source=f"source release {src}"
+    )
+    if manifest.primary_layout is not PrimaryStorageLayout.DENSE:
+        raise ValueError(f"source store is not Dense (primary_layout={manifest.primary_layout})")
+    if manifest.completion_state is not CompletionState.OBSERVED_ONLY:
+        raise ValueError(
+            f"source store is not Observed-Only (completion_state={manifest.completion_state})"
+        )
+    if manifest.association_coverage is not AssociationCoverage.FULL:
+        raise ValueError(
+            "Dense reference completion only supports Full Coverage sources "
+            f"(association_coverage={manifest.association_coverage})"
+        )
+    return source_format_version
+
+
+def _write_completed_manifest(
+    staged: StagedRelease,
+    manifest: StoreManifest,
+    source_format_version: str,
+    axis: _UnionAxis,
+    arrays: _CompletedArrays,
+    *,
+    release_id: str | None,
+    ld_panel_id: str,
+    ancestry: str,
+    min_cor: float,
+    thresh: float,
+) -> None:
+    """Phase 4a — the completed release's manifest and provenance. Written
+    before analyses.tsv/overview.html below, because overview.html reads
+    manifest.json fresh from output_path for its header (ADR 0032), so it must
+    already reflect the completed release, not the source's. The completed
+    release keeps its source's `format_version` and encoding -- completion
+    writes into the source's arrays and therefore its encoding (ADR 0038 §4),
+    the one addition being `eaf_reference` (ADR 0037 §4)."""
+    completed_manifest = completed_release_manifest(
+        manifest,
+        encoding=arrays.encoding,
+        release_id=release_id,
+        source_format_version=source_format_version,
+        completion_provenance=build_completion_provenance(
+            ld_panel_id=ld_panel_id,
+            ancestry=ancestry,
+            min_cor=min_cor,
+            thresh=thresh,
+            n_variants_total=axis.n_variants,
+            n_variants_new=axis.n_variants_new,
+            n_imputed=arrays.total_imputed,
+            n_missing_off_panel=arrays.n_missing_off_panel_total,
+            n_missing_imputation_failed=arrays.n_missing_imputation_failed,
+        ),
+    )
+    staged.write_manifest(completed_manifest)
+
+
+def _completed_analysis_rows(
+    staged: StagedRelease,
+    axis: _UnionAxis,
+    arrays: _CompletedArrays,
+    *,
+    ancestry: str,
+) -> list[Analysis]:
+    """Phase 4b — the completed ``analyses.tsv`` rows: the source's rows with
+    the completion rollup columns refreshed and the pre-completion Top-Hit
+    Counts zeroed so ``add_hit_counts`` sets fresh post-completion counts
+    rather than adding onto stale ones."""
+    print("Writing analyses.tsv...")
+    with staged.index_connection() as dst_db:
+        quality_rollup = completion_quality_rollup(dst_db, axis.n_analyses)
+    return reset_top_hit_counts(
+        [
+            replace(
+                a,
+                completed_against=ancestry if axis.impute_mask is None or axis.impute_mask[i] else "",
+                # `eaf_scope` is derived from what the release actually holds, not
+                # copied forward -- the declaration disagreeing with the arrays is
+                # the defect that got through review on #106 (ADR 0037 §4).
+                eaf_scope=completed_eaf_scope(a, quality_rollup[i], arrays.eaf_reference_present),
+                completion_median_pearson_r=quality_rollup[i].median_pearson_r,
+                completion_n_imputed_total=quality_rollup[i].n_imputed_total,
+                completion_n_missing_total=str(int(arrays.n_missing_off_panel[i])),
+            )
+            for i, a in enumerate(axis.src_analyses)
+        ]
+    )
+
+
+def _finalise_release(
+    staged: StagedRelease,
+    dst: Path,
+    axis: _UnionAxis,
+    arrays: _CompletedArrays,
+    dst_analyses: list[Analysis],
+) -> CompletionResult:
+    """Phase 5 — top-hit indexes and the final summary. The indexes read the
+    completed arrays, and ``analyses.tsv``'s Top-Hit Counts read the indexes
+    (ADR 0032), so both are written once, here, after Phase 3 and 4."""
+    print("Building top-hit indexes...")
+    build_top_hit_indexes(staged.path, encoding=arrays.encoding)
+    write_analyses_tsv(staged.path, add_hit_counts(staged.path, dst_analyses))
+    result = CompletionResult(
+        output_path=dst,
+        n_variants=axis.n_variants,
+        n_analyses=axis.n_analyses,
+        n_imputed=arrays.total_imputed,
+        n_missing_off_panel=arrays.n_missing_off_panel_total,
+        n_missing_imputation_failed=arrays.n_missing_imputation_failed,
+    )
+    print(
+        f"Reference completion complete: {result.n_variants:,} variants, "
+        f"{result.n_analyses:,} analyses ({result.n_imputed:,} imputed, "
+        f"{result.n_missing_off_panel:,} off-panel missing, "
+        f"{result.n_missing_imputation_failed:,} imputation-failed)"
+    )
+    return result
+
+
 def _run_completion(
     source_path: Path,
     dest_path: Path,
@@ -314,341 +828,45 @@ def _run_completion(
     checkpoint_dir: Path,
     impute_analysis_ids: set[str] | None = None,
 ) -> CompletionResult:
+    """The Dense Reference Completion pipeline (ADR 0022, ADR 0023): a thin
+    orchestrator over the five phases above, all inside one staged release so
+    a failure leaves no half-written store behind (resume reads the per-block
+    checkpoints Phase 2 left)."""
     src = Path(source_path)
     dst = Path(dest_path)
     with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
         source = open_store(src)
         manifest = source.manifest
-        # Checked here, with the other source preconditions, rather than at
-        # manifest-write time: a completion that cannot honour its source's
-        # format should fail before it spends an hour imputing (ADR 0038 §4).
-        source_format_version = check_writable_format_version(
-            manifest.format_version, source=f"source release {src}"
-        )
-        if manifest.primary_layout is not PrimaryStorageLayout.DENSE:
-            raise ValueError(
-                f"source store is not Dense (primary_layout={manifest.primary_layout})"
-            )
-        if manifest.completion_state is not CompletionState.OBSERVED_ONLY:
-            raise ValueError(
-                f"source store is not Observed-Only (completion_state={manifest.completion_state})"
-            )
-        if manifest.association_coverage is not AssociationCoverage.FULL:
-            raise ValueError(
-                "Dense reference completion only supports Full Coverage sources "
-                f"(association_coverage={manifest.association_coverage})"
-            )
+        source_format_version = _checked_dense_source(manifest, src)
         print(f"Source store: {manifest.store_id} / {manifest.release_id}")
 
-        # ── Phase 1: union variant axis + seeded z/se ───────────────────────
-        src_variant_axis = VariantAxis(src)
-        src_variants = src_variant_axis.all()
-        src_variant_axis.close()
-        src_alid_to_idx = {v.alid: v.variant_index for v in src_variants}
-
-        src_analyses = sorted(
-            read_analysis_records(src / "analyses.tsv"), key=lambda a: int(a.analysis_index)
-        )
-        n_analyses = len(src_analyses)
-        print(f"Source: {len(src_variants):,} variants, {n_analyses:,} analyses")
-
-        # Per-Analysis ancestry-match filter (ADR 0028): only imputable analyses
-        # get fills; the rest are carried through observed-only. None = impute all.
-        if impute_analysis_ids is None:
-            impute_mask = None
-        else:
-            impute_mask = np.array(
-                [a.analysis_id in impute_analysis_ids for a in src_analyses], dtype=bool
-            )
-            n_match = int(impute_mask.sum())
-            print(f"Ancestry-match filter: imputing {n_match:,}/{n_analyses:,} analyses")
-
-        print("Enumerating genome-wide LD blocks...")
-        tsv_paths: list[Path] = []
-        panel_alids: set[str] = set()
-        for chrom in list_chromosomes(ld_dir, ancestry):
-            for block in list_all_blocks(ld_dir, ancestry, chrom):
-                tsv_paths.append(block.tsv_path)
-                for snp_id in block.snp_ids:
-                    ca = _canonical_panel_alid(snp_id)
-                    if ca is not None:
-                        panel_alids.add(ca)
-        print(f"LD panel: {len(tsv_paths):,} blocks, {len(panel_alids):,} panel variants")
-
-        new_canonical: list[CanonicalVariant] = []
-        seen_new: set[str] = set()
-        for alid in panel_alids:
-            if alid in src_alid_to_idx:
-                continue
-            parts = alid.split(":")
-            if len(parts) != 4:
-                continue
-            chrom, pos_str, a1, a2 = parts
-            try:
-                cv_result = orient_to_canonical(chrom, int(pos_str), a1, a2)
-            except (VariantNormalisationError, ValueError):
-                continue
-            if cv_result.variant.alid in src_alid_to_idx or cv_result.variant.alid in seen_new:
-                continue
-            seen_new.add(cv_result.variant.alid)
-            new_canonical.append(cv_result.variant)
-
-        merged_variants: list[CanonicalVariant] = [
-            CanonicalVariant(v.chromosome, v.position, v.effect_allele, v.other_allele)
-            for v in src_variants
-        ] + new_canonical
-        merged_variants.sort(
-            key=lambda v: (
-                chromosome_sort_key(v.chromosome),
-                v.position,
-                v.effect_allele,
-                v.other_allele,
-            )
-        )
-        new_alid_to_idx: dict[str, int] = {v.alid: i for i, v in enumerate(merged_variants)}
-        n_variants = len(merged_variants)
-        print(
-            f"Union variant axis: {n_variants:,} variants "
-            f"({len(new_canonical):,} new panel variants)"
-        )
-
-        on_panel = np.zeros(n_variants, dtype=bool)
-        for alid in panel_alids:
-            idx = new_alid_to_idx.get(alid)
-            if idx is not None:
-                on_panel[idx] = True
-
-        rsid_by_alid = {v.alid: v.rsid for v in src_variants if v.rsid}
-        print("Writing variants.tsv.gz...")
-        write_variant_axis(staged.path, merged_variants, rsid_by_alid)
-
-        # Inverse map output_row -> source variant_index (-1 for panel-only rows).
-        # z/se are seeded from the source band-by-band during the write (issue 044),
-        # so the full source matrix is never loaded.
+        axis = _build_union_axis(src, staged, ld_dir, ancestry, impute_analysis_ids)
         src_root = source.arrays(mode="r")
-        out_to_src = np.full(n_variants, -1, dtype=np.int64)
-        for v in src_variants:
-            out_to_src[new_alid_to_idx[v.alid]] = v.variant_index
-
-        print("Writing index.sqlite...")
-        with staged.index_connection() as dst_db:
-            initialise_schema(dst_db)
-            create_completion_quality_table(dst_db)
-            set_metadata(dst_db, "schema_version", 2)
-            set_metadata(dst_db, "n_variants", n_variants)
-            set_metadata(dst_db, "n_analyses", n_analyses)
-            dst_db.commit()
-            # analyses.tsv is written after the band write, once
-            # n_missing_off_panel is known (issue 044; issue #22).
-
-        # ── Phase 2: parallel LD-block completion ───────────────────────────
-        print(
-            f"Running reference completion across {len(tsv_paths):,} LD blocks "
-            f"(n_workers={n_workers})..."
+        blocks_dir = _complete_pending_blocks(
+            axis,
+            src,
+            checkpoint_dir,
+            min_cor=min_cor,
+            thresh=thresh,
+            n_workers=n_workers,
         )
-        blocks_dir = checkpoint_dir / "blocks"
-        blocks_dir.mkdir(parents=True, exist_ok=True)
-
-        pending: list[_BlockTask] = []
-        n_existing = 0
-        for tsv_path in tsv_paths:
-            block_id = f"{tsv_path.parent.name}/{tsv_path.stem}"
-            ckpt_path = blocks_dir / f"{sanitize_block_id(block_id)}.npz"
-            if ckpt_path.exists():
-                n_existing += 1  # fills read from the checkpoint in Phase 3
-            else:
-                pending.append(
-                    _BlockTask(
-                        tsv_path=tsv_path,
-                        source_path=src,
-                        min_cor=min_cor,
-                        thresh=thresh,
-                        checkpoint_path=ckpt_path,
-                    )
-                )
-
-        if pending:
-            print(f"  {n_existing:,} blocks already checkpointed, {len(pending):,} remaining")
-        # Each block writes its own checkpoint; the parent keeps nothing per block.
-        if n_workers <= 1:
-            for i, task in enumerate(pending):
-                _run_block(task)
-                if (i + 1) % 200 == 0:
-                    print(f"  {i + 1:,} / {len(pending):,} blocks")
-        else:
-            with ProcessPoolExecutor(max_workers=n_workers, initializer=init_block_worker) as pool:
-                futures = [pool.submit(_run_block, task) for task in pending]
-                for i, fut in enumerate(as_completed(futures)):
-                    fut.result()  # propagate worker errors; result is on disk
-                    if (i + 1) % 200 == 0:
-                        print(f"  {i + 1:,} / {len(pending):,} blocks")
-
-        # ── Phase 3: stream fills from checkpoints, band-write, finalise ────
-        # Resolve checkpoint fill ALIDs to union rows and shard the fill records
-        # by output row-band on disk. The final zarr writer then reads only the
-        # shard for the band it is currently writing, so Phase 3 never needs a
-        # whole-genome fill array in RAM.
-        print("Merging block results from checkpoints...")
-        union_alids = np.fromiter(
-            (alid.encode("ascii") for alid in new_alid_to_idx),
-            dtype=ALID_DTYPE,
-            count=len(new_alid_to_idx),
+        arrays = _stream_completed_arrays(
+            staged, src_root, axis, blocks_dir, ld_dir, ancestry, manifest.encoding
         )
-        union_rows = np.fromiter(
-            new_alid_to_idx.values(), dtype=np.int32, count=len(new_alid_to_idx)
-        )
-        o = np.argsort(union_alids)
-        union_alids_s = union_alids[o]
-        union_rows_s = union_rows[o]
-
-        # Reference EAF for imputed cells (ADR 0037 §4). An imputed cell's
-        # frequency *is* the panel's -- identical for every Analysis imputed at
-        # that variant -- so it is one `float32` per variant rather than
-        # per-cell data. Observed cells never fall back to it: FinnGen's
-        # frequencies differ from the EUR panel by up to 3000x.
-        src_has_eaf = not manifest.encoding.eaf.is_absent
-        # Asked for whatever the source declares, `absent` included: a release
-        # whose Analyses reported no frequency still gains imputed cells, and
-        # those cells have the panel's frequency (issue #113). It gets an
-        # `eaf_reference` array and no `eaf` plane -- NaN on every observed
-        # cell, the panel's value on every imputed one.
-        eaf_reference = panel_reference_eaf(ld_dir, ancestry, merged_variants)
-        encoding = manifest.encoding.with_eaf_reference(eaf_reference is not None)
-        effective_chunks = _create_completed_zarr(
+        _write_completed_manifest(
             staged,
-            n_variants,
-            n_analyses,
-            on_panel,
-            DEFAULT_CHUNK_SHAPE,
-            DEFAULT_DTYPE,
-            encoding,
-            src_has_eaf=src_has_eaf,
-            eaf_reference=eaf_reference,
+            manifest,
+            source_format_version,
+            axis,
+            arrays,
+            release_id=release_id,
+            ld_panel_id=ld_panel_id,
+            ancestry=ancestry,
+            min_cor=min_cor,
+            thresh=thresh,
         )
-        band_rows = _completion_band_rows(effective_chunks)
-        fill_shard_dir, quality_count = _shard_checkpoint_fills_by_band(
-            blocks_dir,
-            staged,
-            union_alids_s,
-            union_rows_s,
-            n_variants,
-            band_rows,
-            impute_mask=impute_mask,
-        )
-        print(f"Wrote {quality_count:,} completion quality rows")
-        del union_alids, union_rows, union_alids_s, union_rows_s, o
-
-        print("Writing data.zarr (band-streamed)...")
-        n_missing_off_panel, n_missing_imputation_failed, total_imputed = _write_completed_bands(
-            staged,
-            src_root,
-            out_to_src,
-            on_panel,
-            fill_shard_dir,
-            effective_chunks,
-            n_variants,
-            n_analyses,
-            manifest.encoding,
-            encoding,
-            impute_mask=impute_mask,
-        )
-        shutil.rmtree(fill_shard_dir, ignore_errors=True)
-        n_missing_off_panel_total = int(n_missing_off_panel.sum())
-        print(
-            f"Completion done: {total_imputed:,} imputed, "
-            f"{n_missing_imputation_failed:,} imputation-failed, "
-            f"{n_missing_off_panel_total:,} off-panel missing"
-        )
-
-        # Write the completed manifest.json before analyses.tsv/overview.html
-        # below (rather than after, as this used to) -- overview.html reads
-        # manifest.json fresh from output_path for its header (ADR 0032), so
-        # it must already reflect the completed release, not the source's.
-        new_release_id = release_id or f"{manifest.release_id}-completed"
-        completed_manifest = StoreManifest(
-            # Same reasoning as `format_version` below: the completed release
-            # is in its source's encoding, because it is written into its
-            # source's arrays. The one addition is `eaf_reference`, which
-            # records a physical fact about *this* release: it carries panel
-            # frequencies for the cells it just imputed (ADR 0037 §4).
-            encoding=encoding,
-            store_id=manifest.store_id,
-            release_id=new_release_id,
-            # Preserved, not re-stamped: completion writes into the source's
-            # arrays and therefore its encoding, so the completed release is the
-            # same format as its source (ADR 0038 §4), and was checked writable
-            # at the top of this function.
-            format_version=source_format_version,
-            primary_layout=manifest.primary_layout,
-            association_coverage=manifest.association_coverage,
-            completion_state=CompletionState.REFERENCE_COMPLETED,
-            reference_assembly=manifest.reference_assembly,
-            created_at=datetime.now(UTC).isoformat(),
-            provenance={
-                **manifest.provenance,
-                "source_release_id": manifest.release_id,
-                "completion": build_completion_provenance(
-                    ld_panel_id=ld_panel_id,
-                    ancestry=ancestry,
-                    min_cor=min_cor,
-                    thresh=thresh,
-                    n_variants_total=n_variants,
-                    n_variants_new=len(new_canonical),
-                    n_imputed=total_imputed,
-                    n_missing_off_panel=n_missing_off_panel_total,
-                    n_missing_imputation_failed=n_missing_imputation_failed,
-                ),
-            },
-        )
-        staged.write_manifest(completed_manifest)
-
-        print("Writing analyses.tsv...")
-        with staged.index_connection() as dst_db:
-            quality_rollup = completion_quality_rollup(dst_db, n_analyses)
-        dst_analyses = [
-            replace(
-                a,
-                completed_against=ancestry if impute_mask is None or impute_mask[i] else "",
-                # An Analysis that gained imputed cells in a release carrying
-                # reference EAF now stores a frequency for them, whatever its
-                # source reported (ADR 0037 §4). `eaf_scope` is derived from
-                # what the release actually holds, not copied forward -- the
-                # declaration disagreeing with the arrays is the defect that
-                # got through review on #106.
-                eaf_scope=completed_eaf_scope(a, quality_rollup[i], eaf_reference is not None),
-                completion_median_pearson_r=quality_rollup[i].median_pearson_r,
-                completion_n_imputed_total=quality_rollup[i].n_imputed_total,
-                completion_n_missing_total=str(int(n_missing_off_panel[i])),
-                # Completion changes z/se via imputation, so the source's
-                # pre-completion Top-Hit Counts (carried forward from `a`) do
-                # not apply here -- zero them so add_hit_counts below sets
-                # fresh post-completion counts rather than adding onto stale
-                # ones.
-                n_hits_5e8="",
-                n_hits_5e6="",
-                n_hits_5e4="",
-            )
-            for i, a in enumerate(src_analyses)
-        ]
-
-        print("Building top-hit indexes...")
-        build_top_hit_indexes(staged.path, encoding=encoding)
-        write_analyses_tsv(staged.path, add_hit_counts(staged.path, dst_analyses))
-
-        result = CompletionResult(
-            output_path=dst,
-            n_variants=n_variants,
-            n_analyses=n_analyses,
-            n_imputed=total_imputed,
-            n_missing_off_panel=n_missing_off_panel_total,
-            n_missing_imputation_failed=n_missing_imputation_failed,
-        )
-        print(
-            f"Reference completion complete: {result.n_variants:,} variants, "
-            f"{result.n_analyses:,} analyses ({result.n_imputed:,} imputed, "
-            f"{result.n_missing_off_panel:,} off-panel missing, "
-            f"{result.n_missing_imputation_failed:,} imputation-failed)"
-        )
+        dst_analyses = _completed_analysis_rows(staged, axis, arrays, ancestry=ancestry)
+        result = _finalise_release(staged, dst, axis, arrays, dst_analyses)
     return result
 
 
@@ -855,6 +1073,289 @@ def _create_completed_zarr(
     return effective_chunks
 
 
+# ── completed-band writer phases ─────────────────────────────────────────
+#
+# `_write_completed_bands` splits the write into cohesive phases so each stays
+# small enough to hold in the head at once: a z pass (seed + fills + missingness
+# counters + overflow/imputed side tables), an se pass that fills exactly the
+# same cells (source z/se missingness is consistent -- a validated store
+# invariant), an eaf pass that carries observed frequencies across the row
+# remap, and the residual-SE rewrite that finalises the scratch se plane.
+# Every pass streams through its own float32 band buffer, so peak memory is ~one
+# band rather than z + se + imputed held together (issue 044).
+
+
+def _band_source_rows(
+    out_to_src: np.ndarray, r0: int, r1: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Rows of band ``[r0:r1)`` that carry a source cell, and the source rows
+    they map to."""
+    valid = np.where(out_to_src[r0:r1] >= 0)[0]
+    return valid, out_to_src[r0:r1][valid]
+
+
+def _count_band_off_panel_missing(
+    n_missing_off_panel: np.ndarray,
+    band: np.ndarray,
+    on_panel: np.ndarray,
+    r0: int,
+    r1: int,
+) -> None:
+    """Add this band's still-missing off-panel cells to the per-Analysis count.
+
+    Off-panel rows are never fill targets, so counting their NaN cells before
+    the fills are applied and after would give the same answer; counting them
+    here keeps the fills and the two missingness accounts in the same pass.
+    """
+    off_local = np.where(on_panel[r0:r1] == 0)[0]
+    if len(off_local):
+        n_missing_off_panel += np.isnan(band[off_local, :]).sum(axis=0).astype(np.int64)
+
+
+def _count_band_imputation_failed(
+    band: np.ndarray, on_panel: np.ndarray, r0: int, r1: int
+) -> int:
+    """On-panel cells still missing once this band's fills were applied."""
+    on_local = np.where(on_panel[r0:r1] == 1)[0]
+    if len(on_local):
+        return int(np.isnan(band[on_local, :]).sum())
+    return 0
+
+
+def _apply_fill_shard_records(
+    band: np.ndarray,
+    imputed_band: np.ndarray | None,
+    shard_path: Path,
+    r0: int,
+    value_field: str,
+    *,
+    impute_mask: np.ndarray | None = None,
+    validate_mask: bool = False,
+) -> int:
+    """Stream one band's fill-shard records into a NaN-seeded band buffer.
+
+    A record lands only in a cell the band still holds missing -- it never
+    overwrites an observed value -- and marks the cell imputed when
+    ``imputed_band`` is given (the z pass); the count of cells actually filled
+    is returned. The se pass passes the same shard with ``imputed_band=None``,
+    and deliberately no mask check: pass 1 read the same shards and would have
+    raised, so a second filter is a second chance for the two passes to fill
+    different cells (the missingness-consistency invariant).
+
+    ``validate_mask=True`` (the z pass) enforces the ancestry-match filter: a
+    nonmatching Analysis reaching the write means the filter applied at
+    checkpoint resolution and the one applied here disagree -- the
+    disagreement that let ``completion_quality`` count cells the release did
+    not hold -- so it is said, not silently re-filtered.
+    """
+    filled = 0
+    for records in _iter_fill_records(shard_path):
+        lr = records["row"] - r0
+        ai = records["ai"]
+        if (
+            validate_mask
+            and impute_mask is not None
+            and len(ai)
+            and not impute_mask[ai].all()
+        ):
+            raise ValueError(
+                "fill shard contains analyses excluded by the ancestry-match filter "
+                f"(first {int(ai[~impute_mask[ai]][0])}); the filter applied at "
+                "checkpoint resolution and the one applied here disagree"
+            )
+        fillable = ~np.isfinite(band[lr, ai])
+        if fillable.any():
+            lrm, aim = lr[fillable], ai[fillable]
+            band[lrm, aim] = records[value_field][fillable]
+            if imputed_band is not None:
+                imputed_band[lrm, aim] = 1
+            filled += int(fillable.sum())
+    return filled
+
+
+def _write_completed_z_bands(
+    root: Any,
+    src_plane: DenseZPlane,
+    out_to_src: np.ndarray,
+    on_panel: np.ndarray,
+    fill_shard_dir: Path,
+    codec: StoreCodec,
+    overflow: ZOverflowBuilder,
+    n_variants: int,
+    n_analyses: int,
+    band_rows: int,
+    n_missing_off_panel: np.ndarray,
+    impute_mask: np.ndarray | None,
+) -> tuple[int, int]:
+    """Seed z from the source, apply the fills, and write the z + imputed
+    bands, one row-band at a time. Missingness is accounted here, in the pass
+    that sees the fills land: per-Analysis off-panel missing accumulates into
+    ``n_missing_off_panel`` (in place), and on-panel cells still NaN after the
+    fills are the imputation failures. Out-of-range z cells go into the
+    ``overflow`` builder's side table, which the caller writes once, after the
+    whole pass, so the table is built by one codec plan.
+
+    Returns ``(total_imputed, n_missing_imputation_failed)``.
+    """
+    z_arr, imp_arr = root["z"], root["imputed"]
+    band = np.empty((band_rows, n_analyses), dtype=np.float32)
+    total_imputed = 0
+    n_missing_imputation_failed = 0
+    for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
+        r1 = min(r0 + band_rows, n_variants)
+        zb = band[: r1 - r0]
+        zb[:] = np.nan
+        imp_band = np.zeros((r1 - r0, n_analyses), dtype=np.uint8)
+
+        valid, srows = _band_source_rows(out_to_src, r0, r1)
+        if len(valid):
+            zb[valid, :] = src_plane.rows(srows)
+
+        _count_band_off_panel_missing(n_missing_off_panel, zb, on_panel, r0, r1)
+
+        total_imputed += _apply_fill_shard_records(
+            zb,
+            imp_band,
+            _fill_shard_path(fill_shard_dir, band_index),
+            r0,
+            "z",
+            impute_mask=impute_mask,
+            validate_mask=True,
+        )
+
+        n_missing_imputation_failed += _count_band_imputation_failed(zb, on_panel, r0, r1)
+
+        z_arr[r0:r1] = codec.encode_z(
+            zb, positions=positions_row_band(r0, n_analyses), overflow=overflow
+        )
+        imp_arr[r0:r1] = imp_band
+    return total_imputed, n_missing_imputation_failed
+
+
+def _write_completed_se_bands(
+    root: Any,
+    src_se_plane: DenseSePlane,
+    out_to_src: np.ndarray,
+    fill_shard_dir: Path,
+    n_variants: int,
+    n_analyses: int,
+    band_rows: int,
+) -> None:
+    """Seed se from the source and apply the same fills pass 1 applied to z.
+
+    No mask check and no counts here: pass 1 read the same shards (raising on
+    a disagreement) and accounted the outcomes, and this pass must fill exactly
+    the cells pass 1 filled for z and se to describe the same completed store.
+    The scratch float32 se band is written as-is; the residual-SE rewrite
+    finalises it afterwards.
+    """
+    se_arr = root["se"]
+    band = np.empty((band_rows, n_analyses), dtype=np.float32)
+    for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
+        r1 = min(r0 + band_rows, n_variants)
+        sb = band[: r1 - r0]
+        sb[:] = np.nan
+
+        valid, srows = _band_source_rows(out_to_src, r0, r1)
+        if len(valid):
+            sb[valid, :] = src_se_plane.rows(np.asarray(srows, dtype=np.int64))
+
+        _apply_fill_shard_records(
+            sb, None, _fill_shard_path(fill_shard_dir, band_index), r0, "se"
+        )
+
+        se_arr[r0:r1] = sb
+
+
+def _carried_eaf_baseline(
+    src_root: Any, out_to_src: np.ndarray, n_variants: int
+) -> np.ndarray | None:
+    """The per-variant EAF baseline, carried from the source rows across the
+    row remap; ``None`` when the source release carries none (ADR 0036).
+
+    Carried with the values rather than recomputed, so a cell decoded from the
+    source and re-encoded here lands on the same code -- completion moves
+    values between two planes, it does not requantise them. Panel-only rows
+    keep NaN: an imputed cell's frequency is the panel's, stored once per
+    variant in ``eaf_reference`` and applied on read (ADR 0037 §4).
+    """
+    if EAF_BASELINE not in src_root:
+        return None
+    src_baseline = np.asarray(src_root[EAF_BASELINE][:], dtype=np.float32)
+    out_baseline = np.full(n_variants, np.nan, dtype=np.float32)
+    carried = out_to_src >= 0
+    out_baseline[carried] = src_baseline[out_to_src[carried]]
+    return out_baseline
+
+
+def _write_completed_eaf_bands(
+    root: Any,
+    src_root: Any,
+    out_to_src: np.ndarray,
+    source_encoding: StoreEncoding,
+    encoding: StoreEncoding,
+    n_variants: int,
+    n_analyses: int,
+    band_rows: int,
+) -> None:
+    """Carry observed frequencies across the row remap, one row-band at a time.
+
+    Observed cells keep their source value and nothing else: an imputed cell's
+    frequency is the panel's (stored once per variant and applied on read), and
+    an observed cell whose source reported none stays absent. The exception
+    side table is written only when the release carries a baseline -- a
+    baseline-less eaf plane has no residual codes to make exceptions for.
+    """
+    src_eaf_plane = DenseEafPlane.open(src_root, source_encoding)
+    eaf_codec = StoreCodec(encoding)
+    exceptions = EafExceptionBuilder()
+    out_baseline = _carried_eaf_baseline(src_root, out_to_src, n_variants)
+    eaf_arr = root["eaf"]
+    eaf_band = np.empty((band_rows, n_analyses), dtype=np.float32)
+    for r0 in range(0, n_variants, band_rows):
+        r1 = min(r0 + band_rows, n_variants)
+        eb = eaf_band[: r1 - r0]
+        eb[:] = np.nan
+        valid = np.where(out_to_src[r0:r1] >= 0)[0]
+        if len(valid):
+            eb[valid, :] = src_eaf_plane.points(
+                np.repeat(out_to_src[r0:r1][valid], n_analyses),
+                np.tile(np.arange(n_analyses, dtype=np.int64), len(valid)),
+            ).reshape(len(valid), n_analyses)
+        band_baseline = (
+            None
+            if out_baseline is None
+            else np.repeat(out_baseline[r0:r1, None], n_analyses, axis=1)
+        )
+        eaf_arr[r0:r1] = eaf_codec.encode_eaf(
+            eb,
+            baseline=band_baseline,
+            positions=positions_row_band(r0, n_analyses),
+            exceptions=exceptions,
+        )
+    if out_baseline is not None:
+        write_eaf_baseline(root, out_baseline, compressor=_COMPRESSOR)
+        exceptions.table().write(root)
+
+
+def _rewrite_completed_residual_se(
+    root: Any, src_root: Any, encoding: StoreEncoding
+) -> None:
+    """Finalise the scratch float32 se plane under the destination's plan.
+
+    A residual plan needs the source release's per-Analysis coefficients (the
+    prediction each cell's stored int8 residual is measured against); a
+    non-residual plan is narrowed to float16. Either way the source
+    coefficients are read only when the plan is residual.
+    """
+    source_coefficients = (
+        np.asarray(src_root["se_coefficients"][:], dtype=np.float32)
+        if encoding.se.is_residual
+        else None
+    )
+    rewrite_dense_se(root, encoding, source_coefficients)
+
+
 def _write_completed_bands(
     staged: StagedRelease,
     src_root: Any,
@@ -868,168 +1369,71 @@ def _write_completed_bands(
     encoding: StoreEncoding,
     impute_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, int, int]:
-    """Seed z/se from the source, apply the imputed fills, and write z/se/imputed
-    one row-band at a time. ``z`` and ``se`` are written in two passes over a
-    **single reused** float32 band buffer (plus a uint8 imputed band in the z-pass),
-    so peak memory is ~one band rather than z + se + imputed held together. Both
-    passes fill the same cells because source z/se missingness is consistent (a
-    validated store invariant) — each pass reads only its own source array once.
-    Returns ``(n_missing_off_panel[n_analyses], n_missing_imputation_failed,
-    total_imputed)``. Fill records are read from per-band shard files in bounded
-    chunks.
+    """Seed z/se from the source, apply the imputed fills, and write
+    z/se/imputed one row-band at a time, in cohesive phases: the z pass seeds
+    from the source and applies the fills while accounting missingness and
+    validating the fill shards against the ancestry-match filter; the se pass
+    fills exactly the same cells (source z/se missingness is consistent -- a
+    validated store invariant); the eaf pass carries observed frequencies
+    across the row remap; and the residual-SE rewrite finalises the scratch
+    float32 se plane. Each phase streams through its own float32 band buffer,
+    so peak memory is ~one band rather than z + se + imputed held together,
+    and each reads only its own source array once. Returns
+    ``(n_missing_off_panel[n_analyses], n_missing_imputation_failed,
+    total_imputed)``. Fill records are read from per-band shard files in
+    bounded chunks.
 
-    ``impute_mask`` (bool per analysis; ``None`` = impute all) is the per-Analysis
-    ancestry-match filter (ADR 0028): a masked-out analysis stays observed-only
-    (NaN, ``imputed=0``) — never imputed against a non-matching-ancestry panel.
-    It is applied at checkpoint resolution, not here, so that
-    ``completion_quality`` and the arrays are filtered by the same act; this
-    function only checks that the shards it reads honour it.
+    ``impute_mask`` (bool per analysis; ``None`` = impute all) is the
+    per-Analysis ancestry-match filter (ADR 0028): a masked-out analysis stays
+    observed-only (NaN, ``imputed=0``) -- never imputed against a
+    non-matching-ancestry panel. It is applied at checkpoint resolution, not
+    here, so that ``completion_quality`` and the arrays are filtered by the
+    same act; this function only checks that the shards it reads honour it.
     """
     root = staged.arrays(mode="a")
-    z_arr, se_arr, imp_arr = root["z"], root["se"], root["imputed"]
-    src_se_plane = DenseSePlane.open(src_root, source_encoding)
-    # Source z is read decoded and written re-encoded, through the same plan --
-    # completion moves values between two planes, it does not reinterpret them.
-    src_plane = DenseZPlane.open(src_root, source_encoding)
     codec = StoreCodec(encoding)
     overflow = ZOverflowBuilder()
     band_rows = _completion_band_rows(effective_chunks)
 
     n_missing_off_panel = np.zeros(n_analyses, dtype=np.int64)
-    n_missing_imputation_failed = 0
-    total_imputed = 0
-    band = np.empty((band_rows, n_analyses), dtype=np.float32)  # reused for z then se
 
-    # Pass 1 — z + imputed mask + missingness counts.
-    for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
-        r1 = min(r0 + band_rows, n_variants)
-        br = r1 - r0
-        zb = band[:br]
-        zb[:] = np.nan
-        imp_band = np.zeros((br, n_analyses), dtype=np.uint8)
+    src_se_plane = DenseSePlane.open(src_root, source_encoding)
+    # Source z is read decoded and written re-encoded, through the same plan --
+    # completion moves values between two planes, it does not reinterpret them.
+    src_plane = DenseZPlane.open(src_root, source_encoding)
 
-        valid = np.where(out_to_src[r0:r1] >= 0)[0]
-        if len(valid):
-            srows = out_to_src[r0:r1][valid]
-            zb[valid, :] = src_plane.rows(srows)
-
-        off_local = np.where(on_panel[r0:r1] == 0)[0]
-        if len(off_local):
-            n_missing_off_panel += np.isnan(zb[off_local, :]).sum(axis=0).astype(np.int64)
-
-        shard_path = _fill_shard_path(fill_shard_dir, band_index)
-        for records in _iter_fill_records(shard_path):
-            lr = records["row"] - r0
-            ai = records["ai"]
-            if impute_mask is not None and len(ai) and not impute_mask[ai].all():
-                # The shards are filtered at resolution, so a nonmatching
-                # Analysis reaching here means the filter and the write
-                # disagree about which analyses were completed -- the
-                # disagreement that let `completion_quality` count cells the
-                # release did not hold. Said, not silently re-filtered.
-                raise ValueError(
-                    "fill shard contains analyses excluded by the ancestry-match filter "
-                    f"(first {int(ai[~impute_mask[ai]][0])}); the filter applied at "
-                    "checkpoint resolution and the one applied here disagree"
-                )
-            fillable = ~np.isfinite(zb[lr, ai])
-            if fillable.any():
-                lrm, aim = lr[fillable], ai[fillable]
-                zb[lrm, aim] = records["z"][fillable]
-                imp_band[lrm, aim] = 1
-                total_imputed += int(fillable.sum())
-
-        on_local = np.where(on_panel[r0:r1] == 1)[0]
-        if len(on_local):
-            n_missing_imputation_failed += int(np.isnan(zb[on_local, :]).sum())
-
-        z_arr[r0:r1] = codec.encode_z(
-            zb, positions=positions_row_band(r0, n_analyses), overflow=overflow
-        )
-        imp_arr[r0:r1] = imp_band
-
+    total_imputed, n_missing_imputation_failed = _write_completed_z_bands(
+        root,
+        src_plane,
+        out_to_src,
+        on_panel,
+        fill_shard_dir,
+        codec,
+        overflow,
+        n_variants,
+        n_analyses,
+        band_rows,
+        n_missing_off_panel,
+        impute_mask,
+    )
     overflow.table().write(root)
 
-    # Pass 2 — se (same cells filled, by the missingness-consistency invariant).
-    for band_index, r0 in enumerate(range(0, n_variants, band_rows)):
-        r1 = min(r0 + band_rows, n_variants)
-        br = r1 - r0
-        sb = band[:br]
-        sb[:] = np.nan
-
-        valid = np.where(out_to_src[r0:r1] >= 0)[0]
-        if len(valid):
-            srows = out_to_src[r0:r1][valid]
-            sb[valid, :] = src_se_plane.rows(np.asarray(srows, dtype=np.int64))
-
-        shard_path = _fill_shard_path(fill_shard_dir, band_index)
-        for records in _iter_fill_records(shard_path):
-            lr = records["row"] - r0
-            ai = records["ai"]
-            # No mask check here: pass 1 read the same shards and would have
-            # raised. Both passes must fill the same cells (the
-            # missingness-consistency invariant), so a second filter is a
-            # second chance for the two to differ.
-            fillable = ~np.isfinite(sb[lr, ai])
-            if fillable.any():
-                sb[lr[fillable], ai[fillable]] = records["se"][fillable]
-
-        se_arr[r0:r1] = sb
-
-    # Pass 3 -- eaf. Observed frequencies are carried across the row remap and
-    # nothing else: an imputed cell's frequency is the panel's, stored once per
-    # variant in `eaf_reference` and applied on read (ADR 0037 §4), and an
-    # observed cell whose source reported none stays absent. The per-variant
-    # baseline travels with the values rather than being recomputed, so a cell
-    # decoded from the source and re-encoded here lands on the same code --
-    # completion moves values between two planes, it does not requantise them.
-    if "eaf" in root and "eaf" in src_root:
-        src_eaf_plane = DenseEafPlane.open(src_root, source_encoding)
-        eaf_codec = StoreCodec(encoding)
-        exceptions = EafExceptionBuilder()
-        src_baseline = (
-            np.asarray(src_root[EAF_BASELINE][:], dtype=np.float32)
-            if EAF_BASELINE in src_root
-            else None
-        )
-        out_baseline = (
-            np.full(n_variants, np.nan, dtype=np.float32) if src_baseline is not None else None
-        )
-        if out_baseline is not None and src_baseline is not None:
-            carried = out_to_src >= 0
-            out_baseline[carried] = src_baseline[out_to_src[carried]]
-        eaf_arr = root["eaf"]
-        eaf_band = np.empty((band_rows, n_analyses), dtype=np.float32)
-        for r0 in range(0, n_variants, band_rows):
-            r1 = min(r0 + band_rows, n_variants)
-            eb = eaf_band[: r1 - r0]
-            eb[:] = np.nan
-            valid = np.where(out_to_src[r0:r1] >= 0)[0]
-            if len(valid):
-                eb[valid, :] = src_eaf_plane.points(
-                    np.repeat(out_to_src[r0:r1][valid], n_analyses),
-                    np.tile(np.arange(n_analyses, dtype=np.int64), len(valid)),
-                ).reshape(len(valid), n_analyses)
-            band_baseline = (
-                None
-                if out_baseline is None
-                else np.repeat(out_baseline[r0:r1, None], n_analyses, axis=1)
-            )
-            eaf_arr[r0:r1] = eaf_codec.encode_eaf(
-                eb,
-                baseline=band_baseline,
-                positions=positions_row_band(r0, n_analyses),
-                exceptions=exceptions,
-            )
-        if out_baseline is not None:
-            write_eaf_baseline(root, out_baseline, compressor=_COMPRESSOR)
-            exceptions.table().write(root)
-
-    source_coefficients = (
-        np.asarray(src_root["se_coefficients"][:], dtype=np.float32)
-        if encoding.se.is_residual
-        else None
+    _write_completed_se_bands(
+        root, src_se_plane, out_to_src, fill_shard_dir, n_variants, n_analyses, band_rows
     )
-    rewrite_dense_se(root, encoding, source_coefficients)
+
+    if "eaf" in root and "eaf" in src_root:
+        _write_completed_eaf_bands(
+            root,
+            src_root,
+            out_to_src,
+            source_encoding,
+            encoding,
+            n_variants,
+            n_analyses,
+            band_rows,
+        )
+
+    _rewrite_completed_residual_se(root, src_root, encoding)
 
     return n_missing_off_panel, n_missing_imputation_failed, total_imputed

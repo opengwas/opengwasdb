@@ -9,12 +9,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import zarr
 
 from opengwasdb.completion.ld_panel import LdPanelNotFoundError
 from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
-from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation.validate import validate_store
@@ -115,6 +116,30 @@ def _make_ld_panel(tmp_path: Path, chrom: str, start: int, end: int) -> Path:
     return tmp_path / "ld_panel"
 
 
+def _assert_completed_stores_equal(dst_a, dst_b) -> None:
+    """Assert two completed ragged stores hold identical per-Analysis rows.
+
+    Count equality is not enough for the resume and n_workers parity seams the
+    CSR-assembly phase must preserve: the assembly could reorder cells between
+    Analyses, or reclassify them between observed/imputed/missing, and the
+    totals would still match. Compare the decoded per-Analysis rows
+    (variant order, z/se/eaf) and the imputed mask instead."""
+    reader_a = RaggedCSRReader(dst_a)
+    reader_b = RaggedCSRReader(dst_b)
+    assert reader_a.n_analyses == reader_b.n_analyses
+    assert reader_a.n_associations == reader_b.n_associations
+    for ai in range(reader_a.n_analyses):
+        a = reader_a.get_analysis(ai)
+        b = reader_b.get_analysis(ai)
+        assert np.array_equal(a.variant_index, b.variant_index), f"analysis {ai} variants differ"
+        assert np.array_equal(a.z, b.z, equal_nan=True), f"analysis {ai} z differs"
+        assert np.array_equal(a.se, b.se, equal_nan=True), f"analysis {ai} se differs"
+        assert np.array_equal(a.eaf, b.eaf, equal_nan=True), f"analysis {ai} eaf differs"
+    imp_a = zarr.open_group(str(dst_a / RAGGED_ZARR_PATH), mode="r")["imputed"][:]
+    imp_b = zarr.open_group(str(dst_b / RAGGED_ZARR_PATH), mode="r")["imputed"][:]
+    assert np.array_equal(imp_a, imp_b), "imputed masks differ"
+
+
 # ── Tests ───────────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -167,15 +192,21 @@ class TestTopHitCountsRefreshedByCompletion:
     def test_completion_overwrites_stale_pre_completion_counts(
         self, tmp_path, observed_store, ld_panel
     ):
-        """A source analyses.tsv carrying an obviously wrong (stale)
-        pre-completion count must not survive into the completed store --
-        add_hit_counts recomputes it from the completed store's own
-        top-hit index rather than adding onto whatever the source said."""
+        """A source analyses.tsv carrying obviously wrong (stale)
+        pre-completion counts must not survive into the completed store --
+        add_hit_counts recomputes them from the completed store's own
+        top-hit index rather than adding onto whatever the source said, so
+        the completed values equal a fresh recomputation for every threshold
+        column and the stale marker is neither retained nor double-counted."""
+        from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
         from opengwasdb.model.analyses import read_analyses, write_analyses
 
         analyses_path = observed_store / "analyses.tsv"
         table = read_analyses(analyses_path)
-        rows = [{**row, "n_hits_5e4": "999"} for row in table.rows]
+        rows = [
+            {**row, "n_hits_5e8": "999", "n_hits_5e6": "999", "n_hits_5e4": "999"}
+            for row in table.rows
+        ]
         write_analyses(analyses_path, type(table)(fieldnames=table.fieldnames, rows=tuple(rows)))
 
         dst = tmp_path / "comp_stale.opengwasdb"
@@ -183,8 +214,14 @@ class TestTopHitCountsRefreshedByCompletion:
             observed_store, dst, ld_panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
         )
 
-        dst_rows = read_analyses(dst / "analyses.tsv").rows
-        assert all(int(r["n_hits_5e4"]) != 999 for r in dst_rows)
+        dst_rows = sorted(
+            read_analyses(dst / "analyses.tsv").rows,
+            key=lambda r: int(r["analysis_index"]),
+        )
+        expected = read_top_hit_counts(dst, len(dst_rows))
+        for column in ("n_hits_5e8", "n_hits_5e6", "n_hits_5e4"):
+            assert all(r[column] != "999" for r in dst_rows)
+            assert [int(r[column]) for r in dst_rows] == expected[column]
 
 
 class TestCompletionRollupColumns:
@@ -523,6 +560,189 @@ def _write_ssf_manifest(path: Path, rows: list[dict]) -> None:
             fh.write("\t".join(str(row.get(col, "")) for col in header) + "\n")
 
 
+def _write_ssf_filtered_with_eaf(path: Path, rows: list[tuple[int, float, float, float]]) -> None:
+    """A filtered file whose rows carry a frequency (unlike `_SSF_HEADER`)."""
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        fh.write(
+            "chromosome\tbase_pair_location\teffect_allele\tother_allele"
+            "\tbeta\tstandard_error\teffect_allele_frequency\n"
+        )
+        for bp, z, se, eaf in rows:
+            fh.write(f"1\t{bp}\tA\tG\t{z * se:.6f}\t{se}\t{eaf}\n")
+
+
+# The Analysis observes every one of these block positions (z/se/eaf pairwise
+# distinct per row, so a swap cannot be mistaken for the right answer) plus one
+# position (`400_000`) that lies outside the block's base-pair extent and so can
+# only reach the completed Analysis through Phase 3's off-window carry from the
+# fold. `1:1050000:C:T` is on the block but never observed: it proves the block
+# was enumerated and both of the fold's consumers actually ran.
+_OBSERVED_ON_BLOCK = [
+    # (bp, z, se, eaf)
+    (800_000, 1.5, 0.15, 0.10),
+    (850_000, -2.0, 0.15, 0.20),
+    (900_000, 2.5, 0.15, 0.30),
+    (950_000, -3.0, 0.15, 0.40),
+    (1_000_000, 3.5, 0.15, 0.60),
+    (1_100_000, -4.0, 0.15, 0.80),
+    (1_150_000, 4.5, 0.15, 0.90),
+]
+_OBSERVED_OFF_BLOCK = [(400_000, 5.0, 0.15, 0.50)]
+_PANEL_ONLY_BP = 1_050_000
+
+
+class TestObservedAlidMapsRecord:
+    """Issue #130: the fold from an Analysis's observed CSR rows onto per-ALID
+    maps must expose z/se/eaf as named record fields, not as a positional
+    tuple. A bundle travelling by position lets a consumer read a statistic
+    from the wrong slot -- or lose a map entirely -- without raising; an
+    observed SE placed where EAF is read back is still a *valid* frequency, so
+    the completed store encodes it, validates clean, and reads it confidently
+    wrong. Values are dyadic (float32-exact) and pairwise-distinct per row, so
+    the field assertions cannot pass on a swapped or missing map."""
+
+    def test_each_field_is_its_own_statistics_alid_keyed_map(self):
+        from opengwasdb.layouts.ragged.complete import _observed_alid_maps, _ObservedAlidMaps
+        from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
+
+        src_alids = ["1:100:A:G", "1:200:C:T", "1:300:A:C"]
+        obs = AnalysisAssociations(
+            # Shuffled on purpose: the fold must bind each value to the ALID of
+            # the row that carried it, not to a positional twin.
+            variant_index=np.array([2, 0, 1], dtype=np.int32),
+            z=np.array([1.25, -2.5, 3.75], dtype=np.float32),
+            se=np.array([0.25, 0.0625, 0.125], dtype=np.float32),
+            eaf=np.array([0.75, 0.25, 0.5], dtype=np.float32),
+        )
+
+        maps = _observed_alid_maps(obs, src_alids)
+
+        assert isinstance(maps, _ObservedAlidMaps), (
+            "the fold must return the named record, not a positional tuple"
+        )
+        assert not isinstance(maps, tuple), "positional unpacking must not be possible"
+        assert maps.z_by_alid == {"1:100:A:G": -2.5, "1:200:C:T": 3.75, "1:300:A:C": 1.25}
+        assert maps.se_by_alid == {"1:100:A:G": 0.0625, "1:200:C:T": 0.125, "1:300:A:C": 0.25}
+        assert maps.eaf_by_alid == {"1:100:A:G": 0.25, "1:200:C:T": 0.5, "1:300:A:C": 0.75}
+
+    def test_an_empty_analysis_yields_all_three_maps(self):
+        from opengwasdb.layouts.ragged.complete import _observed_alid_maps
+        from opengwasdb.layouts.ragged.zarr_csr import AnalysisAssociations
+
+        obs = AnalysisAssociations(
+            variant_index=np.empty(0, dtype=np.int32),
+            z=np.empty(0, dtype=np.float32),
+            se=np.empty(0, dtype=np.float32),
+            eaf=np.empty(0, dtype=np.float32),
+        )
+
+        maps = _observed_alid_maps(obs, [])
+
+        assert maps.z_by_alid == {}
+        assert maps.se_by_alid == {}
+        assert maps.eaf_by_alid == {}
+
+
+class TestCompletedStoreKeepsObservedStatistics:
+    """Completion rewrites each Analysis's CSR, so every statistic an observed
+    row carries must survive the rewrite per ALID -- z and se as much as the
+    EAF ADR 0036 explicitly carries. The rows meet the rewrite through the
+    observed fold, and a statistic reaching the wrong field of that fold is a
+    silent wrong answer (an observed SE in the EAF slot is a *valid*
+    frequency), so this asserts every observed row's z, se and eaf in the
+    completed store equal the source's, exactly, for rows that reach the
+    completed Analysis through each of the fold's two consumers: on an
+    enumerated LD block (the block reader and Phase 3's reference-row
+    assembly) and off every block (Phase 3's off-window carry)."""
+
+    @staticmethod
+    def _write_panel(panel_dir: Path) -> None:
+        panel_dir.mkdir(parents=True)
+        lines = ["CHR\tSNP\tOA\tEA\tEAF\tBP"]
+        for bp, _z, _se, eaf in _OBSERVED_ON_BLOCK:
+            lines.append(f"1\t1:{bp}_A_G\tG\tA\t{eaf}\t{bp}")
+        lines.append(f"1\t1:{_PANEL_ONLY_BP}_C_T\tT\tC\t0.4\t{_PANEL_ONLY_BP}")
+        (panel_dir / "block1.tsv").write_text("\n".join(lines) + "\n")
+
+        n = len(lines) - 1
+        rng = np.random.default_rng(0)
+        matrix = rng.standard_normal((n, n))
+        ld = matrix @ matrix.T + np.eye(n) * n * 0.1
+        buf = io.BytesIO()
+        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+            for row in ld:
+                gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
+        (panel_dir / "block1.unphased.vcor1.gz").write_bytes(buf.getvalue())
+
+    def test_observed_z_se_and_eaf_survive_completion(self, tmp_path):
+        from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+        from opengwasdb.layouts.ragged.complete import complete_ragged_store
+        from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+        from opengwasdb.variants.axis import VariantAxis
+
+        filtered_dir = tmp_path / "filtered"
+        filtered_dir.mkdir()
+        _write_ssf_filtered_with_eaf(
+            filtered_dir / "analysis_a.tsv.gz", _OBSERVED_ON_BLOCK + _OBSERVED_OFF_BLOCK
+        )
+        manifest = tmp_path / "manifest.tsv"
+        _write_ssf_manifest(manifest, [
+            {"analysis_index": 0, "analysis_id": "analysis_a", "trait_id": "T1",
+             "trait_chr": "1", "trait_bp": 975_000, "n": 5000, "mhc": "FALSE",
+             "filtered_file": "analysis_a.tsv.gz", "assigned_ancestry": "EUR"},
+        ])
+
+        observed = tmp_path / "obs.opengwasdb"
+        build_ragged_from_ssf(manifest, filtered_dir, observed, store_id="test", release_id="obs")
+
+        src = RaggedCSRReader(observed).get_analysis(0)
+        obs_axis = VariantAxis(observed)
+        try:
+            expected = {
+                obs_axis.by_index(int(vi)).alid: (float(z), float(se), float(eaf))
+                for vi, z, se, eaf in zip(
+                    src.variant_index.tolist(), src.z, src.se, src.eaf, strict=True
+                )
+            }
+        finally:
+            obs_axis.close()
+        assert len(expected) == len(_OBSERVED_ON_BLOCK) + len(_OBSERVED_OFF_BLOCK), (
+            "fixture must observe every declared row for this to mean anything"
+        )
+        assert all(len({z, se, eaf}) == 3 for z, se, eaf in expected.values()), (
+            "z/se/eaf must be pairwise distinct per row or a swap could pass unnoticed"
+        )
+        panel_only = f"1:{_PANEL_ONLY_BP}:C:T"
+        assert panel_only not in expected
+
+        self._write_panel(tmp_path / "panel" / "EUR" / "1")
+        completed = tmp_path / "comp.opengwasdb"
+        complete_ragged_store(
+            observed, completed, tmp_path / "panel", ancestry="EUR",
+            cis_window_bp=500_000, min_cor=0.0, release_id="comp",
+        )
+
+        comp = RaggedCSRReader(completed).get_analysis(0)
+        comp_axis = VariantAxis(completed)
+        try:
+            comp_by_alid = {
+                comp_axis.by_index(int(vi)).alid: (float(z), float(se), float(eaf))
+                for vi, z, se, eaf in zip(
+                    comp.variant_index.tolist(), comp.z, comp.se, comp.eaf, strict=True
+                )
+            }
+        finally:
+            comp_axis.close()
+        assert panel_only in comp_by_alid, (
+            "no LD block was enumerated, so the fold's consumers never ran "
+            "and this test cannot fail"
+        )
+        for alid, stats in expected.items():
+            assert comp_by_alid.get(alid) == stats, (
+                f"observed row {alid} lost or rewrote a statistic on completion"
+            )
+
+
 class TestAncestryMatchedRaggedCompletion:
     """Before the fix, complete_ragged_store had no impute_analysis_ids
     parameter at all, and even once added, the derivation was inert against
@@ -661,6 +881,8 @@ class TestParallelAndResume:
         assert parallel.n_imputed == serial.n_imputed
         assert parallel.n_missing == serial.n_missing
         assert parallel.n_associations == serial.n_associations
+        assert serial.n_associations > 0, "fixture must complete some rows to mean anything"
+        _assert_completed_stores_equal(serial_dst, parallel_dst)
 
     def test_resume_matches_fresh_run(self, tmp_path, observed_store, ld_panel):
         import json
@@ -698,6 +920,7 @@ class TestParallelAndResume:
         assert resumed.n_associations == fresh.n_associations
         assert not checkpoint_dir.exists()
         assert validate_store(resumable_dst).ok
+        _assert_completed_stores_equal(resumable_dst, fresh_dst)
 
 
 class TestValidation:
@@ -734,6 +957,51 @@ class TestValidation:
             "unexpected store entry" in error and "traits.tsv.gz" in error
             for error in result.errors
         )
+
+
+_RESULT_KEYS = (
+    "variant_index",
+    "analysis_index",
+    "z",
+    "se",
+    "eaf",
+    "association_status",
+)
+
+
+def _assert_results_identical(
+    left: dict[str, np.ndarray], right: dict[str, np.ndarray]
+) -> None:
+    """Row-for-row equality of two phewas-shaped results.
+
+    Integer keys compare exactly; float keys NaN-aware and exactly (both sides
+    come through the same decode, so a difference is a decode bug, not
+    rounding); statuses compare exactly.
+    """
+    assert tuple(left) == _RESULT_KEYS
+    assert tuple(right) == _RESULT_KEYS
+    for name in ("variant_index", "analysis_index"):
+        np.testing.assert_array_equal(left[name], right[name])
+    for name in ("z", "se", "eaf"):
+        np.testing.assert_allclose(left[name], right[name], rtol=0, atol=0, equal_nan=True)
+    np.testing.assert_array_equal(left["association_status"], right["association_status"])
+
+
+def _force_imputed_row(store_path: Path, analysis_index: int, variant_vi: int) -> None:
+    """Write imputed=1 onto an Analysis's observed (finite) row for a variant,
+    so `observed_only` has a row to drop."""
+    root = open_store(store_path).arrays(mode="r+")
+    ragged = root["ragged"]
+    offsets = ragged["offsets"][:]
+    start, end = int(offsets[analysis_index]), int(offsets[analysis_index + 1])
+    z_segment = RaggedCSRReader(store_path).z_slice(start, end)
+    vi_segment = ragged["variant_index"][start:end]
+    matches = np.where((vi_segment == variant_vi) & np.isfinite(z_segment))[0]
+    assert len(matches) == 1, "fixture must give exactly one finite observed row to force"
+    pos = start + int(matches[0])
+    imputed = ragged["imputed"][:]
+    imputed[pos] = 1
+    ragged["imputed"][:] = imputed
 
 
 class TestQuery:
@@ -896,6 +1164,149 @@ class TestQuery:
         result = q.range_by_analysis("1", 900_000, 1_300_000, observed_only=True)
         statuses = set(result["association_status"].tolist())
         assert "imputed" not in statuses
+        q.close()
+
+    def test_phewas_and_range_phewas_decode_known_rows(self, observed_store):
+        """Both hit paths decode the observed-only fixture's rows to the same
+        hand-derivable answers: analysis 0 (ENSG00000000001::Blood) holds
+        rs1001 and rs1002, analysis 1 (ENSG00000000002::Blood) holds rs1002
+        and rs1003, and a range over all three variants returns all four rows
+        analysis-major (CSR flat order) with analysis_index 0,0,1,1. The
+        exact analysis_indexes come from the fixture, not from the methods
+        under test, so a shared decode bug (say an off-by-one in the CSR
+        offset decode) cannot hide behind the two methods agreeing."""
+        q = query_store(observed_store)
+        analyses = q.analyses_table()
+        by_id = {row["analysis_id"]: index for index, row in analyses.items()}
+        assert by_id == {
+            "ENSG00000000001::Blood": 0,
+            "ENSG00000000002::Blood": 1,
+        }, "fixture must have exactly these two analyses in this order"
+
+        p1001 = q.phewas("rs1001")
+        assert len(p1001["z"]) == 1, "rs1001 is only in analysis 0"
+        np.testing.assert_array_equal(p1001["variant_index"], [0])
+        np.testing.assert_array_equal(p1001["analysis_index"], [0])
+        np.testing.assert_allclose(p1001["z"], [0.1 / 0.02])
+        np.testing.assert_allclose(p1001["se"], [0.02], rtol=1e-3)
+        assert p1001["association_status"].tolist() == ["observed"]
+
+        p1002 = q.phewas("rs1002")
+        assert len(p1002["z"]) == 2, "rs1002 is in both analyses"
+        np.testing.assert_array_equal(p1002["variant_index"], [1, 1])
+        np.testing.assert_array_equal(p1002["analysis_index"], [0, 1])
+        np.testing.assert_allclose(p1002["z"], [-0.2 / 0.03, 0.5 / 0.05], rtol=1e-3)
+        np.testing.assert_allclose(p1002["se"], [0.03, 0.05], rtol=1e-3)
+        assert p1002["association_status"].tolist() == ["observed", "observed"]
+
+        p1003 = q.phewas("rs1003")
+        assert len(p1003["z"]) == 1, "rs1003 is only in analysis 1"
+        np.testing.assert_array_equal(p1003["variant_index"], [2])
+        np.testing.assert_array_equal(p1003["analysis_index"], [1])
+        np.testing.assert_allclose(p1003["z"], [-0.15 / 0.025], rtol=1e-3)
+
+        regional = q.range_phewas("1", 1_000_000, 1_200_000)
+        np.testing.assert_array_equal(regional["variant_index"], [0, 1, 1, 2])
+        np.testing.assert_array_equal(regional["analysis_index"], [0, 0, 1, 1])
+        assert regional["association_status"].tolist() == ["observed"] * 4
+        # Observed-only source carries no EAF array (ADR 0036): all-NaN, not zeros.
+        assert np.all(np.isnan(regional["eaf"]))
+        q.close()
+
+    def test_phewas_and_range_phewas_agree_per_variant(self, observed_store, completed_store):
+        """For every variant the store holds, the phewas result is identical
+        row-for-row to the regional result restricted to that variant's own
+        position -- on both an observed-only store (no imputed array at all)
+        and a reference-completed one (missing cells decoding to status
+        'missing'), with and without observed_only. `range_phewas` and
+        `phewas` share one CSR hit decode; if one method drifted, the other
+        would not follow."""
+        for path in (observed_store, completed_store):
+            q = query_store(path)
+            variants = q.variants_table()
+            assert len(variants) >= 3, "fixture must hold >=3 variants for this to mean anything"
+            regional = q.range_phewas("1", 900_000, 1_300_000)
+            assert len(regional["z"]) > 0, "fixture must hold >=1 row for this to mean anything"
+            if path == completed_store:
+                assert "observed" in set(regional["association_status"].tolist())
+                assert "missing" in set(regional["association_status"].tolist())
+            for variant in variants.values():
+                for observed_only in (False, True):
+                    p = q.phewas(variant["alid"], observed_only=observed_only)
+                    r = q.range_phewas(
+                        variant["chromosome"],
+                        int(variant["position"]),
+                        int(variant["position"]),
+                        observed_only=observed_only,
+                    )
+                    assert len(p["z"]) > 0, f"{variant['alid']} must have hits in the fixture"
+                    _assert_results_identical(p, r)
+            q.close()
+
+    def test_phewas_and_range_phewas_observed_only_and_eaf(self, completed_store):
+        """Forcing one observed row to read as imputed makes observed_only drop
+        it from both hit paths, and that row's EAF resolves to the LD panel's
+        frequency (reference EAF on an imputed cell of a source that reported
+        no frequencies; ADR 0036). The shared decode must apply the filter and
+        the status/EAF decode identically in both methods."""
+        q = query_store(completed_store)
+        analyses = q.analyses_table()
+        by_id = {row["analysis_id"]: index for index, row in analyses.items()}
+        ai = by_id["ENSG00000000001::Blood"]
+        rs1001_index, rs1001 = next(
+            (index, v) for index, v in q.variants_table().items() if v["rsid"] == "rs1001"
+        )
+        before = q.phewas(rs1001["alid"])
+        assert len(before["z"]) == 2, "rs1001 must hit both analyses in the completed fixture"
+        assert set(before["association_status"].tolist()) == {"observed", "missing"}
+        assert sum(np.isfinite(before["z"])) == 1, "fixture must leave one observed row to force"
+        q.close()
+
+        _force_imputed_row(completed_store, ai, rs1001_index)
+        q = query_store(completed_store)
+        statuses = q.phewas(rs1001["alid"])["association_status"].tolist()
+        assert statuses.count("imputed") == 1, "forced row must read imputed on the shared decode"
+        assert statuses.count("missing") == 1
+        for observed_only in (False, True):
+            p = q.phewas(rs1001["alid"], observed_only=observed_only)
+            r = q.range_phewas(
+                rs1001["chromosome"],
+                int(rs1001["position"]),
+                int(rs1001["position"]),
+                observed_only=observed_only,
+            )
+            _assert_results_identical(p, r)
+
+        forced = q.phewas(rs1001["alid"])
+        imp_row = int(np.where(np.asarray(forced["association_status"]) == "imputed")[0][0])
+        np.testing.assert_allclose(forced["eaf"][imp_row], [0.3], rtol=1e-6)
+        others = np.delete(forced["eaf"], imp_row)
+        assert np.all(np.isnan(others)), "observed/missing rows must stay all-NaN on this store"
+
+        filtered = q.phewas(rs1001["alid"], observed_only=True)
+        assert len(filtered["z"]) == 1
+        assert filtered["association_status"].tolist() == ["missing"]
+        q.close()
+
+    def test_phewas_and_range_phewas_empty_hits(self, observed_store):
+        """Absence and zero are different (CONTRIBUTING): a variant no store
+        holds, a chromosome with no variants, and a gap between real variants
+        all come back as the same six empty parallel arrays -- never a
+        defaulted row, never fewer keys."""
+        q = query_store(observed_store)
+        empties = [
+            q.phewas("rs-does-not-exist"),
+            q.range_phewas("2", 1, 5_000_000),
+            q.range_phewas("1", 1_030_000, 1_070_000),
+        ]
+        for result in empties:
+            assert tuple(result) == _RESULT_KEYS
+            assert len(result["variant_index"]) == 0
+            assert result["variant_index"].dtype == np.dtype("int32")
+            assert result["analysis_index"].dtype == np.dtype("int32")
+            for name in ("z", "se", "eaf"):
+                assert result[name].dtype == np.dtype("float32")
+            assert result["association_status"].dtype == np.dtype(object)
         q.close()
 
 

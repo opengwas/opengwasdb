@@ -631,3 +631,65 @@ def test_cli_build_ragged_ssf(tmp_path):
 
     validate = runner.invoke(app, ["validate", str(out)])
     assert validate.exit_code == 0, validate.output
+
+
+def test_emptied_analysis_keeps_its_slot_and_scope(tmp_path):
+    """issue #101's dedupe can empty an entire analysis: when an analysis's
+    rows all resolve to conflicting duplicates, none survives -- but it must
+    still occupy its CSR slot and analyses.tsv row. Skipping it would shift
+    every later analysis's associations onto the wrong analysis, silently."""
+    from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.validation import validate_store
+
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    _write_filtered(
+        filtered_dir / "conflict.tsv.gz",
+        [
+            {
+                "chromosome": "1", "base_pair_location": 100_000,
+                "effect_allele": "A", "other_allele": "G",
+                "beta": 1.0, "standard_error": 0.5,
+            },
+            {
+                "chromosome": "1", "base_pair_location": 100_000,
+                "effect_allele": "A", "other_allele": "G",
+                "beta": -1.0, "standard_error": 0.5,
+            },
+        ],
+    )
+    _write_filtered(
+        filtered_dir / "healthy.tsv.gz",
+        [
+            {
+                "chromosome": "2", "base_pair_location": 500_000,
+                "effect_allele": "C", "other_allele": "T",
+                "beta": 2.0, "standard_error": 0.5,
+                "effect_allele_frequency": 0.25,
+            },
+        ],
+    )
+    manifest = tmp_path / "manifest.tsv"
+    _write_manifest(
+        manifest,
+        [
+            {"analysis_index": 0, "analysis_id": "conflict_trait",
+             "filtered_file": "conflict.tsv.gz"},
+            {"analysis_index": 1, "analysis_id": "healthy_trait",
+             "filtered_file": "healthy.tsv.gz"},
+        ],
+    )
+    out = tmp_path / "out.opengwasdb"
+    result = build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    assert result.n_analyses == 2
+    assert result.n_associations == 1  # only the healthy analysis survives
+    csr = RaggedCSRReader(out)
+    assert csr.n_analyses == 2
+    assert len(csr.get_analysis(0).variant_index) == 0
+    a1 = csr.get_analysis(1)  # its rows must not have shifted onto slot 0
+    assert len(a1.variant_index) == 1
+    assert a1.z[0] == pytest.approx(4.0, rel=5e-3)
+    assert a1.eaf[0] == pytest.approx(0.25, rel=5e-3)
+    scopes = {r["analysis_id"]: r["eaf_scope"] for r in read_analyses(out / "analyses.tsv").rows}
+    assert scopes == {"conflict_trait": "absent", "healthy_trait": "association"}
+    assert validate_store(out).ok

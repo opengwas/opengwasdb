@@ -7,9 +7,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from opengwasdb.variants import VariantNormalisationError
-from opengwasdb.variants.normalise import normalise_allele, normalise_chromosome
-
 
 def connect(path: str | Path) -> sqlite3.Connection:
     connection = sqlite3.connect(path)
@@ -54,22 +51,3 @@ def get_metadata(connection: sqlite3.Connection, key: str, default: Any = None) 
 def count_rows(connection: sqlite3.Connection, table: str) -> int:
     row = connection.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
     return int(row["n"])
-
-
-def _parse_canonical_alid(identifier: str) -> tuple[str, int, str, str] | None:
-    parts = identifier.split(":")
-    if len(parts) != 4:
-        return None
-    chromosome, position_text, effect_allele, other_allele = parts
-    try:
-        position = int(position_text)
-        if position <= 0:
-            return None
-        return (
-            normalise_chromosome(chromosome),
-            position,
-            normalise_allele(effect_allele),
-            normalise_allele(other_allele),
-        )
-    except (TypeError, ValueError, VariantNormalisationError):
-        return None

@@ -18,6 +18,12 @@ from opengwasdb.completion.ld_panel import (
     load_ld_eigenvectors,
     snp_position,
 )
+from opengwasdb.encoding import (
+    DenseSePlane,
+    DenseZPlane,
+    StoreCodec,
+    StoreEncoding,
+)
 from opengwasdb.layouts.dense import complete as complete_module
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -25,8 +31,9 @@ from opengwasdb.layouts.dense.complete import (
 )
 from opengwasdb.model.analyses import read_analyses, write_analyses
 from opengwasdb.query import query_store
-from opengwasdb.store.open import open_store
+from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.validation.validate import validate_store
+from opengwasdb.variants import VariantAxis
 
 
 def _assert_stores_identical(dst_a: Path, dst_b: Path) -> None:
@@ -265,6 +272,43 @@ class TestCompletionFiles:
         for column, values in expected.items():
             assert [int(r[column]) for r in rows] == values
 
+    def test_completion_overwrites_stale_pre_completion_counts(
+        self, tmp_path, observed_store, ld_panel
+    ):
+        """A source analyses.tsv carrying obviously stale pre-completion
+        counts must not survive into the completed store, and must not be
+        added onto -- completion recomputes each Top-Hit Count from the
+        completed store's own top-hit index (ADR 0032), which is the mirror
+        of the Ragged overwrite test for the same seam."""
+        from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
+
+        analyses_path = observed_store / "analyses.tsv"
+        table = read_analyses(analyses_path)
+        stale_rows = [
+            {**row, "n_hits_5e8": "999", "n_hits_5e6": "999", "n_hits_5e4": "999"}
+            for row in table.rows
+        ]
+        write_analyses(
+            analyses_path, type(table)(fieldnames=table.fieldnames, rows=tuple(stale_rows))
+        )
+
+        dst = tmp_path / "comp_stale.opengwasdb"
+        complete_dense_store(
+            observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0,
+            release_id="comp-stale",
+        )
+
+        dst_rows = sorted(
+            read_analyses(dst / "analyses.tsv").rows,
+            key=lambda r: int(r["analysis_index"]),
+        )
+        expected = read_top_hit_counts(dst, len(dst_rows))
+        # 999 is absent (not retained) AND the values equal a fresh
+        # recomputation (not 999 + fresh, which retention would produce).
+        for column in ("n_hits_5e8", "n_hits_5e6", "n_hits_5e4"):
+            assert [r[column] for r in dst_rows] != ["999"] * len(dst_rows)
+            assert [int(r[column]) for r in dst_rows] == expected[column]
+
     def test_overwrite_raises_without_flag(
         self, tmp_path, observed_store, ld_panel, completed_store
     ):
@@ -359,6 +403,77 @@ class TestValidation:
         root["imputed"][:] = imputed
         result = validate_store(completed_store)
         assert not result.ok
+        assert any(
+            "off-panel (on_panel=0) rows have imputed=1 cells" in e for e in result.errors
+        ), result.errors
+
+    def test_corrupt_imputed_binary_value_fails(self, completed_store):
+        # The 0/1 imputed mask is a flag, not a bitmap: a 2 in it means the
+        # store cannot tell observed from imputed and must be refused even
+        # though the cell it sits in is otherwise well-formed.
+        root = open_store(completed_store).arrays(mode="r+")
+        on_panel = root["on_panel"][:]
+        on_panel_rows = np.where(on_panel == 1)[0]
+        assert len(on_panel_rows) > 0
+        r = int(on_panel_rows[0])
+        imputed = root["imputed"][:]
+        zero_cols = np.where(imputed[r] == 0)[0]
+        assert len(zero_cols) > 0  # the fixture must have a cell to corrupt
+        imputed[r, int(zero_cols[0])] = 2
+        root["imputed"][:] = imputed
+
+        result = validate_store(completed_store)
+
+        assert not result.ok
+        assert any(
+            "imputed contains values other than 0 and 1" in e for e in result.errors
+        ), result.errors
+
+    def test_corrupt_imputed_nan_se_fails(self, completed_store):
+        # An imputed=1 cell whose se is NaN must be caught by the streamed
+        # finite-check band pass (issue 045): imputed cells are complete, and a
+        # NaN standard error there is a plausible-looking hole. On-panel so the
+        # finite check is isolated from the off-panel-never-imputed check.
+        root = open_store(completed_store).arrays(mode="r+")
+        on_panel = root["on_panel"][:]
+        on_panel_rows = np.where(on_panel == 1)[0]
+        assert len(on_panel_rows) > 0
+        r, c = int(on_panel_rows[0]), 0
+        imputed = root["imputed"][:]
+        imputed[r, c] = 1
+        root["imputed"][:] = imputed
+        se = root["se"][:]
+        se[r, c] = float("nan")
+        root["se"][:] = se
+
+        result = validate_store(completed_store)
+
+        assert not result.ok
+        assert any(
+            "imputed=1 cells have NaN se values" in e for e in result.errors
+        ), result.errors
+
+    def test_corrupt_eaf_reference_length_fails(self, completed_store):
+        # issue #113's shape for a Reference-Completed release with no plane:
+        # every imputed cell reads eaf_reference, so a short one hands some
+        # cells a neighbouring variant's panel frequency. Rewrite the array
+        # (not just resize it, which would leave an over-wide chunk and trip
+        # the chunking rule first).
+        root = open_store(completed_store).arrays(mode="a")
+        n = len(root["eaf_reference"])
+        assert n > 1  # the fixture really has a per-variant reference to shrink
+        values = root["eaf_reference"][: n - 1]
+        dtype = root["eaf_reference"].dtype
+        del root["eaf_reference"]
+        root.create_dataset("eaf_reference", data=values, chunks=(1,), dtype=dtype)
+
+        result = validate_store(completed_store)
+
+        assert not result.ok
+        assert any(
+            "eaf_reference has" in e and "entries but the variant axis" in e
+            for e in result.errors
+        ), result.errors
 
     def test_corrupt_imputed_nan_z_fails(self, completed_store):
         # An imputed=1 cell whose z is NaN must be caught by the streamed
@@ -430,6 +545,108 @@ class TestSourceFidelity:
         result = validate_store(observed_store, source=source_path)
         assert not result.ok
         assert any("source-fidelity" in e for e in result.errors), result.errors
+
+    def test_fidelity_reports_unmatched_analysis_and_variant(
+        self, observed_store, source_path, tmp_path
+    ):
+        # A wrong source must fail loudly, naming both unmatched kinds: an Analysis
+        # the store does not hold and a variant row it does not carry. A check that
+        # quietly matched nothing would look exactly like "no association".
+        assert validate_store(observed_store, source=source_path).ok, validate_store(
+            observed_store, source=source_path
+        ).errors
+        wrong = tmp_path / "wrong-source.tsv"
+        wrong.write_text(
+            SOURCE_HEADER
+            + "\n"
+            + "a1\tp1\tHeight\tHeight primary\t1\t999999\tA\tG\t1.0\t0.15\trsX\tsd\n"
+            + "a3\tp3\tOther\tOther primary\t1\t1000000\tA\tG\t1.0\t0.15\trsY\tsd\n",
+            encoding="utf-8",
+        )
+
+        result = validate_store(observed_store, source=wrong)
+
+        assert not result.ok
+        assert any(
+            "none of 2 sampled source associations could be matched to a store cell" in e
+            for e in result.errors
+        ), result.errors
+        assert any("(1 variants, 1 analyses unmatched)" in e for e in result.errors)
+        assert any(
+            "check source_assembly / that this is the right source" in e for e in result.errors
+        )
+
+    def test_fidelity_reports_source_with_no_readable_associations(self, observed_store, tmp_path):
+        # A header-only source yields no associations; the check must say so rather
+        # than treating an unreadable source as a store that agrees with nothing.
+        empty = tmp_path / "empty-source.tsv"
+        empty.write_text(SOURCE_HEADER + "\n", encoding="utf-8")
+
+        result = validate_store(observed_store, source=empty)
+
+        assert not result.ok
+        assert any(
+            "source-fidelity: no associations could be read from the source" in e
+            for e in result.errors
+        ), result.errors
+
+    def test_fidelity_reports_associations_the_store_dropped(self, observed_store, tmp_path):
+        # The five a1 cells are all below every top-hit cutoff, so nulling them
+        # leaves internal validation green and the fidelity check reachable --
+        # the silent "dropped associations" failure only the check can see.
+        cells = [
+            ("1:900000:A:G", 1.0, 0.15), ("1:950000:A:C", 1.8, 0.15),
+            ("1:1000000:A:G", 2.0, 0.15), ("1:1100000:A:C", 3.0, 0.20),
+            ("1:1200000:A:G", 1.5, 0.30),
+        ]
+        src = tmp_path / "a1-observed.tsv"
+        lines = []
+        for alid, z_src, se_src in cells:
+            chrom, pos, a1, a2 = alid.split(":")
+            lines.append(
+                f"a1\tp1\tHeight\tHeight primary\t{chrom}\t{pos}\t{a1}\t{a2}"
+                f"\t{z_src}\t{se_src}\trsX\tsd"
+            )
+        src.write_text(SOURCE_HEADER + "\n" + "\n".join(lines) + "\n", encoding="utf-8")
+        assert validate_store(observed_store, source=src).ok  # matches before the drop
+
+        va = VariantAxis(observed_store)
+        row_by_alid = {}
+        try:
+            for alid, _z_src, _se_src in cells:
+                rec = va.by_identifier(alid)
+                assert rec is not None, f"fixture must hold {alid}"
+                row_by_alid[alid] = rec.variant_index
+        finally:
+            va.close()
+        a1_col = next(
+            int(row["analysis_index"])
+            for row in read_analyses(observed_store / "analyses.tsv").rows
+            if row["analysis_id"] == "a1"
+        )
+        assert len(row_by_alid) == 5  # fixture sanity
+
+        codec = StoreCodec(open_store(observed_store).manifest.encoding)
+        root = open_store(observed_store).arrays(mode="a")
+        z = root["z"][:]
+        se = root["se"][:]
+        assert se.dtype.kind == "f"  # fixture sanity: NaN marks missing on float planes
+        missing_z = int(codec.encode_z(np.array([np.nan]))[0])
+        for _alid, row in row_by_alid.items():
+            assert z[row, a1_col] != missing_z  # fixture sanity: cell is present
+            z[row, a1_col] = missing_z
+            se[row, a1_col] = np.nan
+        root["z"][:] = z
+        root["se"][:] = se
+
+        assert validate_store(observed_store).ok
+        result = validate_store(observed_store, source=src)
+        assert not result.ok
+        assert any(
+            "source-fidelity: matched 5 source associations but the store held no "
+            "finite value at any of those cells (possible dropped associations)" in e
+            for e in result.errors
+        ), result.errors
 
 
 class TestQuery:
@@ -618,6 +835,46 @@ class TestResume:
 
         assert validate_store(dst).ok
 
+    def test_resume_with_no_checkpointed_block_matches_fresh_run(
+        self, tmp_path, observed_store, ld_panel, monkeypatch
+    ):
+        """Crash before the first block finishes: nothing is checkpointed, so a
+        resumed run must schedule every block afresh rather than assume a
+        checkpoint the crash never wrote."""
+        fresh_dst = tmp_path / "fresh_first.opengwasdb"
+        fresh = complete_dense_store(
+            observed_store, fresh_dst, ld_panel, ancestry="EUR", min_cor=0.0
+        )
+
+        dst = tmp_path / "crashed_first.opengwasdb"
+        calls = {"n": 0}
+        real_run_block = complete_module._run_block
+
+        def crash_first_run_block(task):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("simulated crash before any checkpoint")
+            return real_run_block(task)
+
+        monkeypatch.setattr(complete_module, "_run_block", crash_first_run_block)
+        with pytest.raises(RuntimeError, match="simulated crash before any checkpoint"):
+            complete_dense_store(observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0)
+        monkeypatch.undo()
+
+        checkpoint_dir = checkpoint_dir_for(dst)
+        assert checkpoint_dir.exists()
+        assert not dst.exists()
+        assert list((checkpoint_dir / "blocks").glob("*.npz")) == [], (
+            "crash before any block finished must leave no checkpoint to resume from"
+        )
+
+        resumed = resume_dense_completion(checkpoint_dir)
+        assert resumed.n_variants == fresh.n_variants
+        assert resumed.n_imputed == fresh.n_imputed
+        assert resumed.n_missing_off_panel == fresh.n_missing_off_panel
+        assert resumed.n_missing_imputation_failed == fresh.n_missing_imputation_failed
+        _assert_stores_identical(dst, fresh_dst)
+
     def test_resume_matches_fresh_run(self, tmp_path, observed_store, ld_panel):
         fresh_dst = tmp_path / "fresh.opengwasdb"
         fresh = complete_dense_store(
@@ -664,6 +921,186 @@ class TestParallel:
         assert parallel.n_missing_imputation_failed == serial.n_missing_imputation_failed
         _assert_stores_identical(parallel_dst, serial_dst)
         assert validate_store(parallel_dst).ok
+
+
+# ── the completed-band writer seam ─────────────────────────────────────────
+#
+# `_write_completed_bands` reports cells in three buckets -- imputed,
+# still-missing off-panel, still-missing on-panel (imputation failed) -- and
+# raises rather than re-filter when a fill shard disagrees with the
+# ancestry-match filter. The pipeline can never produce that disagreement (the
+# shards are filtered with the same mask that reaches the writer), so the two
+# guarantees are driven here with a hand-built destination: the completed-zarr
+# skeleton, a crafted out_to_src/on_panel map, and fill shards written
+# directly in the writer's record format.
+
+
+class TestCompletedBandWriter:
+    """Exact counters and error semantics of the dense band writer."""
+
+    def _write_fill_shard(self, shard_dir: Path, records: np.ndarray) -> None:
+        with open(complete_module._fill_shard_path(shard_dir, 0), "wb") as fh:
+            records.tofile(fh)
+
+    def _call_writer(
+        self,
+        tmp_path: Path,
+        src: Path,
+        n_variants: int,
+        on_panel: np.ndarray,
+        out_to_src: np.ndarray,
+        records: np.ndarray,
+        impute_mask: np.ndarray | None,
+    ) -> tuple[Path, StoreEncoding, int, tuple[np.ndarray, int, int]]:
+        """Build a staged completed-zarr target, write one fill shard for the
+        single band every small store maps to, run the writer, and return
+        ``(dst, encoding, n_analyses, counters)`` where counters are the
+        writer's ``(n_missing_off_panel, n_missing_imputation_failed,
+        total_imputed)``. The destination is left staged (committed by the
+        context manager), so the returned ``dst`` holds ``data.zarr`` ready
+        to open.
+        """
+        source = open_store(src)
+        encoding = source.manifest.encoding
+        src_root = source.arrays(mode="r")
+        n_analyses = int(src_root["z"].shape[1])
+        dst = tmp_path / "band_writer_target.opengwasdb"
+        with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
+            effective = complete_module._create_completed_zarr(
+                staged,
+                n_variants,
+                n_analyses,
+                on_panel,
+                complete_module.DEFAULT_CHUNK_SHAPE,
+                complete_module.DEFAULT_DTYPE,
+                encoding,
+                src_has_eaf=False,
+                eaf_reference=None,
+            )
+            shard_dir = tmp_path / "fill_shards"
+            shard_dir.mkdir(exist_ok=True)
+            self._write_fill_shard(shard_dir, records)
+            counters = complete_module._write_completed_bands(
+                staged,
+                src_root,
+                out_to_src,
+                on_panel,
+                shard_dir,
+                effective,
+                n_variants,
+                n_analyses,
+                encoding,
+                encoding,
+                impute_mask=impute_mask,
+            )
+        return dst, encoding, n_analyses, counters
+
+    def test_exact_counters_and_cell_accounting(self, tmp_path, signal_observed_store):
+        """The writer fills only cells the source left missing, never overwrites
+        an observed cell, and counts every outcome exactly once.
+
+        The signal fixture observes 11 of the 12 union positions (position 6,
+        700000, is observed by nobody), so the destination carries 12 real
+        rows plus two crafted ones: row 12 is a dst-only off-panel variant
+        (never imputable), row 13 a dst-only on-panel variant. Fills target
+        rows 6 and 13; a third fill aimed at already-observed row 0 must be
+        ignored.
+        """
+        import zarr
+
+        n_variants = 14
+        out_to_src = np.full(n_variants, -1, dtype=np.int64)
+        for i in range(12):
+            if i == _SIGNAL_MISSING_IDX:
+                continue
+            out_to_src[i] = i if i < _SIGNAL_MISSING_IDX else i - 1
+        on_panel = np.ones(n_variants, dtype=bool)
+        on_panel[12] = False
+
+        records = np.zeros(3, dtype=complete_module._FILL_RECORD_DTYPE)
+        records["row"] = [6, 13, 0]
+        records["ai"] = [0, 0, 0]
+        records["z"] = [7.5, -2.5, 0.25]
+        records["se"] = [0.11, 0.22, 0.30]
+
+        dst, encoding, n_analyses, (miss_off, miss_failed, n_imputed) = self._call_writer(
+            tmp_path, signal_observed_store, n_variants, on_panel, out_to_src,
+            records, impute_mask=None,
+        )
+
+        # The counts the writer returns partition the unobserved cells.
+        assert miss_off.tolist() == [1]  # row 12, off-panel
+        assert miss_failed == 0
+        assert n_imputed == 2  # rows 6 and 13; row 0 already observed
+
+        root = zarr.open_group(str(dst / "data.zarr"), mode="r")
+        z = DenseZPlane.open(root, encoding).band(0, n_variants)
+        se = DenseSePlane.open(root, encoding).band(0, n_variants)
+        np.testing.assert_allclose(z[6, 0], 7.5)
+        np.testing.assert_allclose(z[13, 0], -2.5)
+        assert np.isnan(z[12, 0])
+        # The row-0 fill record landed on an already-observed cell: ignored.
+        assert not np.isnan(z[0, 0])
+        np.testing.assert_allclose(z[0, 0], _SIGNAL_Z_TRUE[0], atol=1e-3)
+        np.testing.assert_allclose(se[6, 0], 0.11, rtol=1e-2)
+        np.testing.assert_allclose(se[13, 0], 0.22, rtol=1e-2)
+        imputed = root["imputed"][:]
+        assert int(imputed.sum()) == 2
+        assert imputed[6, 0] == 1 and imputed[13, 0] == 1
+        assert imputed[12, 0] == 0  # off-panel cells are never imputed
+
+    def test_fill_shard_with_a_masked_out_analysis_raises(
+        self, tmp_path, observed_store
+    ):
+        """A shard record for an analysis the ancestry-match filter excluded
+        raises rather than being silently re-filtered at the write.
+        """
+        n_variants = 3
+        on_panel = np.ones(n_variants, dtype=bool)
+        out_to_src = np.arange(n_variants, dtype=np.int64)
+        records = np.zeros(1, dtype=complete_module._FILL_RECORD_DTYPE)
+        records["row"] = [0]
+        records["ai"] = [1]  # analysis 1 is masked out below
+        records["z"] = [5.0]
+        records["se"] = [0.10]
+
+        with pytest.raises(ValueError, match="ancestry-match filter"):
+            self._call_writer(
+                tmp_path, observed_store, n_variants, on_panel, out_to_src,
+                records, impute_mask=np.array([True, False]),
+            )
+
+
+class TestCompletedStoreCounters:
+    """The counters `complete_dense_store` reports and the arrays it wrote are
+    one account of the same cells: every cell the source never observed is
+    imputed, or still missing -- off-panel (per Analysis) or on-panel
+    (imputation failed). The completed store fixture imputes nothing, so the
+    interesting buckets here are the missing ones."""
+
+    def test_arrays_reconcile_analyses_tsv_and_provenance(self, completed_store):
+        import json
+
+        manifest = json.loads((completed_store / "manifest.json").read_text())
+        completion = manifest["provenance"]["completion"]
+        encoding = open_store(completed_store).manifest.encoding
+        root = open_store(completed_store).arrays(mode="r")
+        missing = StoreCodec(encoding).missing_mask(root["z"][:])
+        on_panel = root["on_panel"][:].astype(bool)
+        n_analyses = int(missing.shape[1])
+
+        table = read_analyses(completed_store / "analyses.tsv")
+        by_index = {int(r["analysis_index"]): r for r in table.rows}
+        off_panel_missing = missing[~on_panel, :].sum(axis=0)
+        for col in range(n_analyses):
+            declared = int(by_index[col]["completion_n_missing_total"])
+            assert int(off_panel_missing[col]) == declared, f"analysis column {col}"
+        assert int(off_panel_missing.sum()) == int(completion["n_missing_off_panel"])
+        assert int(missing[on_panel, :].sum()) == int(completion["n_missing_imputation_failed"])
+        assert int(root["imputed"][:].sum()) == int(completion["n_imputed"])
+        # The off-panel rows of this fixture are real (chr1:1200000 observed
+        # by a1 only), so the check above is not vacuous: a2 must owe one.
+        assert int(off_panel_missing.sum()) >= 1
 
 
 class TestPanelArtifacts:
@@ -987,3 +1424,66 @@ def test_validator_rejects_a_completion_count_without_a_completion(
     _rewrite_analyses(imputing_completed_store, completed_against="")
 
     assert _matching(imputing_completed_store, "completed_against is blank")
+
+
+class TestUnionAxisPhase:
+    """The axis-union phase (`_build_union_axis`, ADR 0022) is one call that
+    produces the merged variant axis and the maps every later phase reads it
+    through. These tests exercise the seam directly so a regression in the
+    union cannot hide behind a full completion run."""
+
+    def test_union_axis_adds_only_new_panel_variants(
+        self, tmp_path, observed_store, ld_panel
+    ):
+        import sqlite3
+
+        from opengwasdb.store.open import OpenGWASDBStore
+
+        dst = tmp_path / "axis_only.opengwasdb"
+        with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
+            axis = complete_module._build_union_axis(
+                Path(observed_store), staged, ld_panel, "EUR", None,
+            )
+
+            # The fixture's ground truth: 5 observed variants on chr1, the
+            # panel adds chr1:1050000 and two chr2 variants (ADR 0022's union).
+            assert axis.n_analyses == 2
+            assert axis.n_variants == 8, "fixture must add exactly 3 panel variants"
+            assert axis.n_variants_new == 3
+            assert [v.alid for v in axis.merged_variants] == [
+                "1:900000:A:G", "1:950000:A:C", "1:1000000:A:G", "1:1050000:C:T",
+                "1:1100000:A:C", "1:1200000:A:G", "2:100000:A:G", "2:200000:C:G",
+            ]
+
+            # on_panel marks the seven panel ALIDs; chr1:1200000 is observed
+            # but off-panel, and must be the only unmarked row.
+            off_panel = [
+                v.alid
+                for v, flag in zip(axis.merged_variants, axis.on_panel, strict=True)
+                if not flag
+            ]
+            assert off_panel == ["1:1200000:A:G"]
+            assert int(axis.on_panel.sum()) == 7
+
+            # out_to_src: the five observed rows keep their source indices;
+            # the three panel-only rows are the -1 sentinel.
+            assert sorted(axis.out_to_src[axis.out_to_src >= 0].tolist()) == [0, 1, 2, 3, 4]
+            assert int((axis.out_to_src < 0).sum()) == 3
+            assert len(axis.tsv_paths) == 2  # one chr1 block + one chr2 block
+
+            # The phase has already persisted the axis: variants.tsv.gz and an
+            # index.sqlite seeded with the completion-quality table.
+            assert (staged.path / "variants.tsv.gz").exists()
+            conn = sqlite3.connect(str(staged.path / "index.sqlite"))
+            tables = {
+                r[0]
+                for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            metadata = {
+                row[0]: row[1]
+                for row in conn.execute("SELECT key, value FROM metadata")
+            }
+            conn.close()
+            assert "completion_quality" in tables
+            assert metadata["n_variants"] == "8"
+            assert metadata["n_analyses"] == "2"
