@@ -15,6 +15,23 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Fixed
 
+- **The SE size measurement undercharged zarr's padded edge chunks** (#158).
+  `_packed_1d` and `_packed_2d` compressed each measured slice at the size it
+  happened to be, but zarr stores every chunk at its declared shape: a plane's
+  final edge chunks — shorter than the chunk whenever the extent does not
+  divide it — are padded out with the array's fill value *before* they are
+  compressed. The compressed-bytes gate therefore compared each residual
+  candidate against costs measured small, most on exactly the small or
+  awkwardly-shaped planes where the margin is narrowest, biasing the decision
+  toward the coding. Every measured array (the codes plane, its `float16`
+  alternative, the coefficients and both side tables) is now charged at its
+  padded size, using the fill value the array's own writer declares. On the
+  rebuilt `eqtlgen-cis` Ragged plane the final 58,034-row chunk of a 200,000
+  chunk stores 70,799 bytes against the 50,812 the old measurement charged —
+  39% more than measured on that chunk alone. A plane whose extent divides its
+  measured exactly as before, and tests now pin each measurement against the
+  bytes a real zarr array of the same extent, chunk and fill occupies.
+
 - **`ukb-b` at format 3.0, measured** (#148). A full Observed-Only Dense build
   of `ukb-b` (9,847,701 × 2,511 = 24,727,577,211 cells) under format 3.0 takes
   **13h30m** against 11h35m at format 2.0 (+16.5%), and its `se` plane falls

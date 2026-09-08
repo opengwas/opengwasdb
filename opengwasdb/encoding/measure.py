@@ -14,6 +14,8 @@ the exception fraction the build will actually produce.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from opengwasdb.encoding.codec import (
@@ -44,39 +46,67 @@ def _chunk_starts(length: int, step: int) -> range:
     return range(0, length, max(step, 1))
 
 
-def _packed_1d(compressor: object | None, data: np.ndarray, chunk: int) -> int:
+def _full_chunk(piece: np.ndarray, chunk_shape: tuple[int, ...], fill_value: Any) -> np.ndarray:
+    """`piece` as the chunk zarr will actually store: exactly `chunk_shape`.
+
+    zarr never stores a partial chunk: a chunk whose span runs past the array's
+    extent is padded out to the declared chunk shape with the array's fill
+    value *before* it is compressed. Measuring the slice at the size it happens
+    to be undercharges the final chunk of every plane whose extent is not a
+    multiple of its chunk -- and does it most on exactly the small or
+    awkwardly-shaped planes where the compressed-bytes margin is narrowest
+    (issue #158). An interior chunk is returned unchanged.
+    """
+    if tuple(piece.shape) == tuple(chunk_shape):
+        return piece
+    pads = tuple((0, want - have) for have, want in zip(piece.shape, chunk_shape, strict=True))
+    return np.pad(piece, pads, mode="constant", constant_values=fill_value)
+
+
+def _packed_1d(
+    compressor: object | None, data: np.ndarray, chunk: int, fill_value: Any
+) -> int:
     return sum(
-        _packed_bytes(compressor, data[start : start + chunk])
+        _packed_bytes(compressor, _full_chunk(data[start : start + chunk], (chunk,), fill_value))
         for start in _chunk_starts(len(data), chunk)
     )
 
 
-def _packed_2d(compressor: object | None, data: np.ndarray, chunk: tuple[int, int]) -> int:
+def _packed_2d(
+    compressor: object | None, data: np.ndarray, chunk: tuple[int, int], fill_value: Any
+) -> int:
     return sum(
-        _packed_bytes(compressor, data[r0 : r0 + chunk[0], c0 : c0 + chunk[1]])
+        _packed_bytes(
+            compressor, _full_chunk(data[r0 : r0 + chunk[0], c0 : c0 + chunk[1]], chunk, fill_value)
+        )
         for r0 in _chunk_starts(data.shape[0], chunk[0])
         for c0 in _chunk_starts(data.shape[1], chunk[1])
     )
 
 
 def _packed_chunks(
-    compressor: object | None, data: np.ndarray, chunk_shape: tuple[int, ...] | int | None
+    compressor: object | None,
+    data: np.ndarray,
+    chunk_shape: tuple[int, ...] | int | None,
+    fill_value: Any,
 ) -> int:
     """Compressed size the way zarr will actually store it: chunk by chunk.
 
     Compressing an array whole flatters it against the same array cut into
     chunks, so the size the decision compares must be measured in the shape it
-    will be written in. An array whose chunking is not stated, or does not
-    match its own rank, is charged whole.
+    will be written in. zarr pads an edge chunk out to the declared chunk shape
+    with the array's fill value before compressing it, so a measured slice is
+    padded the same way first (issue #158). An array whose chunking is not
+    stated, or does not match its own rank, is charged whole.
     """
     shaped = np.asarray(data)
     shape = (chunk_shape,) if isinstance(chunk_shape, int) else chunk_shape
     if shape is None or shaped.ndim != len(shape):
         return _packed_bytes(compressor, shaped)
     if shaped.ndim == 1:
-        return _packed_1d(compressor, shaped, shape[0])
+        return _packed_1d(compressor, shaped, shape[0], fill_value)
     if shaped.ndim == 2:
-        return _packed_2d(compressor, shaped, (shape[0], shape[1]))
+        return _packed_2d(compressor, shaped, (shape[0], shape[1]), fill_value)
     return _packed_bytes(compressor, shaped)
 
 
@@ -135,6 +165,16 @@ def _fit_log_se(
     return coefficients, residual, True
 
 
+#: zarr pads an edge chunk's out-of-extent cells with the array's declared
+#: fill value before compressing it (issue #158). The arrays `fit_se` measures
+#: are created by the layouts' writers from whole arrays (`data=` with no
+#: explicit fill), so the value zarr declares -- and pads with -- is its
+#: numeric default, 0. The fill is passed per measured array rather than
+#: assumed, so a writer that declares a semantic fill (its plane's missing
+#: marker) is charged for the padding it will actually write.
+_ZARR_DEFAULT_FILL: Any = 0
+
+
 def _candidate_bytes(
     compressor: object | None,
     stored: np.ndarray,
@@ -147,13 +187,32 @@ def _candidate_bytes(
 
     Codes, coefficients and both side arrays: comparing only the codes against
     `float16` would accept a range whose exception table more than gives the
-    saving back.
+    saving back. Each array is charged in the chunks -- and padded with the
+    fill value -- its eventual writer declares, so an edge chunk that zarr will
+    store full-size is not measured short (issue #158).
     """
+    n_exceptions = int(np.count_nonzero(exceptions))
+    # The writers size a side table's chunks to its own row count when that is
+    # smaller than EXACT_TABLE_CHUNK, so a table that fits one chunk is charged
+    # at its own length and nothing beyond it is invented.
+    exception_chunk = (max(1, min(n_exceptions, EXACT_TABLE_CHUNK)),)
     return (
-        _packed_chunks(compressor, stored, chunks)
-        + _packed_chunks(compressor, coefficients, (min(max(len(coefficients), 1), 1024), 2))
-        + _packed_chunks(compressor, np.flatnonzero(exceptions).astype(np.int64), EXACT_TABLE_CHUNK)
-        + _packed_chunks(compressor, values[exceptions].astype(np.float32), EXACT_TABLE_CHUNK)
+        _packed_chunks(compressor, stored, chunks, _ZARR_DEFAULT_FILL)
+        + _packed_chunks(
+            compressor,
+            coefficients,
+            (min(max(len(coefficients), 1), 1024), 2),
+            _ZARR_DEFAULT_FILL,
+        )
+        + _packed_chunks(
+            compressor,
+            np.flatnonzero(exceptions).astype(np.int64),
+            exception_chunk,
+            _ZARR_DEFAULT_FILL,
+        )
+        + _packed_chunks(
+            compressor, values[exceptions].astype(np.float32), exception_chunk, _ZARR_DEFAULT_FILL
+        )
     )
 
 
@@ -211,7 +270,7 @@ def fit_se(
         worst_relative_error=errors,
         compressed_bytes=sizes,
         float16_compressed_bytes=_packed_chunks(
-            compressor, s.astype(np.float16).reshape(se_shape), chunks
+            compressor, s.astype(np.float16).reshape(se_shape), chunks, _ZARR_DEFAULT_FILL
         ),
     )
 
