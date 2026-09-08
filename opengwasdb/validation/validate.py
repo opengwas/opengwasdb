@@ -355,94 +355,163 @@ def _decoded_csr_se(root: Any, encoding: StoreEncoding, n_assoc: int, label: str
         return None, f"{label} cannot be decoded under the declared plan: {exc}"
 
 
-def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> ValidationResult:
-    store_path = store.path
-    manifest = store.manifest
-    index_path = store.index_path
-    data_path = store.data_path
-    ragged_path = data_path / "ragged"
-    analyses_path = store.analyses_path
+def _validate_ragged_envelope(store: OpenGWASDBStore, errors: list[str]) -> bool:
+    """Seam: the release's required entries are present, and nothing else is.
 
+    The one *closure* check in this validator (store-format spec §1, issue
+    #80): a Ragged Store Release carries no side-file beyond its documented
+    envelope, and every later seam assumes the paths this one names exist.
+    Returns False when an entry is missing or unexpected, which stops the
+    pipeline before it tries to open arrays a malformed release may not have.
+    """
+    before = len(errors)
+    store_path = store.path
     for label, p in [
-        ("index.sqlite", index_path),
-        ("data.zarr", data_path),
-        ("data.zarr/ragged", ragged_path),
+        ("index.sqlite", store.index_path),
+        ("data.zarr", store.data_path),
+        ("data.zarr/ragged", store.data_path / "ragged"),
         ("variants.tsv.gz", variant_table_path(store_path)),
         ("variants.tsv.gz.tbi", variant_tabix_path(store_path)),
         ("variant_alid_bytes.npy", variant_alid_bytes_path(store_path)),
         ("variant_alid_rows.npy", variant_alid_rows_path(store_path)),
-        ("analyses.tsv", analyses_path),
+        ("analyses.tsv", store.analyses_path),
     ]:
         if not p.exists():
             errors.append(f"missing {label}")
     _validate_closed_envelope(store_path, RAGGED_ENVELOPE, errors)
+    return len(errors) == before
+
+
+def _validate_ragged_csr_structure(
+    root: Any, encoding: StoreEncoding, errors: list[str]
+) -> tuple[int, int] | None:
+    """Seam: the CSR exists as one decodable, shape-consistent artifact.
+
+    Returns ``(n_assoc, n_analyses)`` when the parallel arrays are present
+    and the manifest's plan governs them; ``None`` when a guard failed, which
+    stops the pipeline. A length disagreement against ``offsets`` records an
+    error but does not stop it -- the value seam reports what the arrays
+    decode to either way.
+    """
+    for name in ("offsets", "variant_index", "z", "se"):
+        if name not in root:
+            errors.append(f"missing data.zarr/ragged/{name}")
     if errors:
-        return ValidationResult(errors=errors)
-
-    try:
-        root = zarr.open_group(str(ragged_path), mode="r")
-        for name in ("offsets", "variant_index", "z", "se"):
-            if name not in root:
-                errors.append(f"missing data.zarr/ragged/{name}")
-        if errors:
-            return ValidationResult(errors=errors)
-
-        _validate_encoding_plan(root, manifest.encoding, errors, label="data.zarr/ragged")
-        if errors:
-            return ValidationResult(errors=errors)
-        offsets = root["offsets"][:]
-        n_assoc = int(offsets[-1])
-        for name in ("variant_index", "z", "se"):
-            if len(root[name]) != n_assoc:
-                errors.append(
-                    f"data.zarr/ragged/{name} has {len(root[name])} entries "
-                    f"but offsets imply {n_assoc}"
-                )
-        if manifest.encoding.z.is_fixed_point:
-            raw_z = np.asarray(root["z"][:])
-            _overflow_positions_match(
-                "data.zarr/ragged/z",
-                np.flatnonzero(raw_z == Z_OVERFLOW).astype(np.int64),
-                ZOverflowTable.read(root),
-                errors,
-            )
-        se_vals, se_error = _decoded_csr_se(root, manifest.encoding, n_assoc, "data.zarr/ragged/se")
-        if se_error is not None:
-            errors.append(se_error)
-            return ValidationResult(errors=errors)
-        _match_csr_se_exceptions(root, manifest.encoding, errors, "data.zarr/ragged/se")
-        if np.any(np.isfinite(se_vals) & (se_vals < 0)):
-            errors.append("se contains negative finite values")
-        # `eaf` is optional (ADR 0036); when present it is a fourth parallel
-        # CSR array and must line up with the other three.
-        if "eaf" in root:
-            if len(root["eaf"]) != n_assoc:
-                errors.append(
-                    f"data.zarr/ragged/eaf has {len(root['eaf'])} entries "
-                    f"but offsets imply {n_assoc}"
-                )
-            else:
-                _validate_ragged_eaf_values(root, manifest.encoding, n_assoc, errors)
-
-        n_analyses_csr = len(offsets) - 1
-        n_analyses_tsv = _validate_analyses_tsv(analyses_path, errors)
-        if n_analyses_tsv != n_analyses_csr:
+        return None
+    _validate_encoding_plan(root, encoding, errors, label="data.zarr/ragged")
+    if errors:
+        return None
+    offsets = root["offsets"][:]
+    n_assoc = int(offsets[-1])
+    for name in ("variant_index", "z", "se"):
+        if len(root[name]) != n_assoc:
             errors.append(
-                f"analyses.tsv has {n_analyses_tsv} rows but "
-                f"zarr CSR offsets imply {n_analyses_csr} analyses"
+                f"data.zarr/ragged/{name} has {len(root[name])} entries "
+                f"but offsets imply {n_assoc}"
             )
+    return n_assoc, len(offsets) - 1
 
-        with store.index_connection() as conn:
-            _reject_stray_analyses_table(conn, errors)
 
-        data_root = store.arrays(mode="r")
+def _validate_ragged_csr_values(
+    root: Any, encoding: StoreEncoding, n_assoc: int, errors: list[str]
+) -> bool:
+    """Seam: every value the CSR holds decodes to what its plane claims.
 
-        # Reference-completed stores: validate imputed array and quality table.
-        if manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
-            _validate_ragged_completion(ragged_path, store, n_assoc, errors)
+    Decoded, not raw: a fixed-point plane's bytes are codes, not values, and
+    a residual `se` plane can only be checked against its side tables and
+    coefficients once it decodes (issue #118). Returns False when `se` cannot
+    be decoded -- the completion and Top-Hit seams read decoded se, so a
+    store that fails here is not taken further.
+    """
+    if encoding.z.is_fixed_point:
+        raw_z = np.asarray(root["z"][:])
+        _overflow_positions_match(
+            "data.zarr/ragged/z",
+            np.flatnonzero(raw_z == Z_OVERFLOW).astype(np.int64),
+            ZOverflowTable.read(root),
+            errors,
+        )
+    se_vals, se_error = _decoded_csr_se(root, encoding, n_assoc, "data.zarr/ragged/se")
+    if se_error is not None:
+        errors.append(se_error)
+        return False
+    _match_csr_se_exceptions(root, encoding, errors, "data.zarr/ragged/se")
+    if np.any(np.isfinite(se_vals) & (se_vals < 0)):
+        errors.append("se contains negative finite values")
+    # `eaf` is optional (ADR 0036); when present it is a fourth parallel
+    # CSR array and must line up with the other three.
+    if "eaf" in root:
+        if len(root["eaf"]) != n_assoc:
+            errors.append(
+                f"data.zarr/ragged/eaf has {len(root['eaf'])} entries "
+                f"but offsets imply {n_assoc}"
+            )
+        else:
+            _validate_ragged_eaf_values(root, encoding, n_assoc, errors)
+    return True
 
-        if not errors and "top_hits" in data_root:
-            _validate_ragged_top_hits(store_path, data_root, errors)
+
+def _validate_ragged_analyses(
+    store: OpenGWASDBStore, n_analyses_csr: int, errors: list[str]
+) -> None:
+    """Seam: analyses.tsv and index.sqlite describe the Analyses the CSR does.
+
+    `analyses.tsv` is the sole source of truth for Analytical Metadata (ADR
+    0030, ADR 0034), so its row count must equal the number of Analyses the
+    CSR's offsets bound, and a leftover SQLite `analyses` table is a failure
+    rather than a harmless relic (ADR 0034, issue #72).
+    """
+    n_analyses_tsv = _validate_analyses_tsv(store.analyses_path, errors)
+    if n_analyses_tsv != n_analyses_csr:
+        errors.append(
+            f"analyses.tsv has {n_analyses_tsv} rows but "
+            f"zarr CSR offsets imply {n_analyses_csr} analyses"
+        )
+    with store.index_connection() as conn:
+        _reject_stray_analyses_table(conn, errors)
+
+
+def _validate_ragged_downstream_seams(
+    store: OpenGWASDBStore, ragged_path: Path, n_assoc: int, errors: list[str]
+) -> None:
+    """Seam: Reference-Completion state, then the Top-Hit Indexes.
+
+    Completion is validated whenever the release declares it, for its own
+    sake. The Top-Hit Indexes are only cross-checked against the CSR once
+    every earlier seam passed -- ``_validate_ragged_top_hits`` reads the CSR
+    and would otherwise "confirm" a store the structural and value seams
+    already found broken.
+    """
+    data_root = store.arrays(mode="r")
+    if store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
+        _validate_ragged_completion(ragged_path, store, n_assoc, errors)
+    if not errors and "top_hits" in data_root:
+        _validate_ragged_top_hits(store.path, data_root, errors)
+
+
+def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> ValidationResult:
+    """Validate a Ragged Store Release (spec §11, §15, §17) in fail-safe seams.
+
+    ``_validate_ragged_store`` is a thin orchestrator over five seams -- the
+    envelope, the CSR structure, the encoded values, the Analysis/SQLite
+    metadata, then completion and the Top-Hit Indexes (issue #130). Each seam
+    stops the pipeline when a later seam would read what it guards, so a
+    malformed release is reported where it first goes wrong rather than as a
+    crash in a later read.
+    """
+    if not _validate_ragged_envelope(store, errors):
+        return ValidationResult(errors=errors)
+    try:
+        ragged_path = store.data_path / "ragged"
+        root = zarr.open_group(str(ragged_path), mode="r")
+        csr = _validate_ragged_csr_structure(root, store.manifest.encoding, errors)
+        if csr is None:
+            return ValidationResult(errors=errors)
+        n_assoc, n_analyses_csr = csr
+        if not _validate_ragged_csr_values(root, store.manifest.encoding, n_assoc, errors):
+            return ValidationResult(errors=errors)
+        _validate_ragged_analyses(store, n_analyses_csr, errors)
+        _validate_ragged_downstream_seams(store, ragged_path, n_assoc, errors)
     except Exception as exc:  # noqa: BLE001
         errors.append(f"validation failed: {exc}")
     return ValidationResult(errors=errors)
