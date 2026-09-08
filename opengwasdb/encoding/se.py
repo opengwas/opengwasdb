@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -28,10 +29,59 @@ from opengwasdb.encoding.plan import (
 from opengwasdb.encoding.planes import DenseEafPlane, write_se_coefficients
 from opengwasdb.encoding.timing import PhaseTimer
 
-OverflowCells = tuple[np.ndarray, np.ndarray, np.ndarray]
+
+@dataclass(frozen=True, eq=False)
+class OverflowCells:
+    """A named, validated Hybrid Overflow Component cell bundle.
+
+    SE values, EAF values and Analysis indices travel together everywhere the
+    Hybrid residual-SE optimiser fits or measures a shared plan. Naming them
+    (and validating them here) turns the old ``(se, eaf, analysis_index)``
+    positional tuple into something a swapped array, a wrong rank, or an
+    out-of-range Analysis index cannot pass silently (issue #162).
+    """
+
+    se_values: np.ndarray
+    eaf_values: np.ndarray
+    analysis_indices: np.ndarray
+    n_analyses: int
+
+    def __post_init__(self) -> None:
+        se = np.asarray(self.se_values)
+        eaf = np.asarray(self.eaf_values)
+        if se.ndim != 1 or eaf.ndim != 1:
+            raise ValueError("OverflowCells se_values and eaf_values must be one-dimensional")
+        if len(se) != len(eaf):
+            raise ValueError("OverflowCells se_values and eaf_values must have equal lengths")
+
+        ai = np.asarray(self.analysis_indices)
+        if ai.ndim != 1:
+            raise ValueError("OverflowCells analysis_indices must be one-dimensional")
+        if len(ai) != len(se):
+            raise ValueError(
+                "OverflowCells analysis_indices length must match se_values/eaf_values"
+            )
+        if ai.dtype.kind not in ("i", "u"):
+            if (
+                ai.dtype.kind != "f"
+                or not np.all(np.isfinite(ai))
+                or not np.all(np.mod(ai, 1.0) == 0.0)
+            ):
+                raise ValueError("OverflowCells analysis_indices must be integers")
+        indices = ai.astype(np.int64, copy=False)
+        n_analyses = int(self.n_analyses)
+        if np.any(indices < 0) or np.any(indices >= n_analyses):
+            raise ValueError(
+                f"OverflowCells analysis_indices must lie within [0, {n_analyses})"
+            )
+
+        object.__setattr__(self, "se_values", se)
+        object.__setattr__(self, "eaf_values", eaf)
+        object.__setattr__(self, "analysis_indices", indices)
+        object.__setattr__(self, "n_analyses", n_analyses)
 
 
-class ComponentCost(NamedTuple):
+class _ComponentCost(NamedTuple):
     """What one component's cells cost, per candidate residual range.
 
     `n_finite` and `exception_counts` are per Analysis, not pooled: issue #118
@@ -46,7 +96,7 @@ class ComponentCost(NamedTuple):
     candidate_bytes: dict[float, int]
 
     @classmethod
-    def empty(cls, n_analyses: int = 0) -> ComponentCost:
+    def empty(cls, n_analyses: int = 0) -> _ComponentCost:
         zeros = np.zeros(n_analyses, dtype=np.int64)
         return cls(
             0,
@@ -181,7 +231,7 @@ def _measure_dense(
     eaf_plane: DenseEafPlane,
     coefficients: np.ndarray,
     timer: PhaseTimer,
-) -> ComponentCost:
+) -> _ComponentCost:
     n_rows, n_analyses = map(int, source.shape)
     row_chunk, col_chunk = map(int, source.chunks)
     compressor = source.compressor
@@ -215,7 +265,7 @@ def _measure_dense(
                     values[exceptional],
                     ai[exceptional],
                 )
-    return ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
+    return _ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
 
 
 def _measure_overflow(
@@ -225,8 +275,10 @@ def _measure_overflow(
     chunk: int,
     n_analyses: int,
     timer: PhaseTimer | None = None,
-) -> ComponentCost:
-    values, frequencies, analyses = (np.asarray(part).ravel() for part in overflow)
+) -> _ComponentCost:
+    values = np.asarray(overflow.se_values).ravel()
+    frequencies = np.asarray(overflow.eaf_values).ravel()
+    analyses = np.asarray(overflow.analysis_indices).ravel()
     sides = {candidate: _SideTableCost(compressor, n_analyses) for candidate in SE_RANGE_CANDIDATES}
     code_bytes = dict.fromkeys(SE_RANGE_CANDIDATES, 0)
     float_bytes = 0
@@ -257,7 +309,7 @@ def _measure_overflow(
     else:
         with timer.phase("measure.overflow"):
             run()
-    return ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
+    return _ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
 
 
 def _empty_exception_arrays(group: Any, count: int, compressor: Any) -> tuple[Any, Any]:
@@ -450,7 +502,16 @@ def _fit_shared_coefficients(
                 sxy,
             )
         if overflow is not None:
-            eligible &= _add_fit_sums(*overflow, count, sx, sy, sxx, sxy)
+            eligible &= _add_fit_sums(
+                overflow.se_values,
+                overflow.eaf_values,
+                overflow.analysis_indices,
+                count,
+                sx,
+                sy,
+                sxx,
+                sxy,
+            )
     coefficients, solved = solve_log_se(count.astype(np.float64), sx, sy, sxx, sxy)
     return coefficients, eligible and solved
 
@@ -490,8 +551,8 @@ def _charged_jointly(
 
 
 def _shared_measurements(
-    dense: ComponentCost,
-    overflow: ComponentCost,
+    dense: _ComponentCost,
+    overflow: _ComponentCost,
     *,
     eligible: bool,
     dense_coefficient_bytes: int,
@@ -545,10 +606,10 @@ def _measure_overflow_component(
     chunk: int,
     n_analyses: int,
     timer: PhaseTimer,
-) -> tuple[ComponentCost, int]:
+) -> tuple[_ComponentCost, int]:
     """A Hybrid Overflow Component's cost, or an empty one when there is none."""
     if overflow is None:
-        return ComponentCost.empty(n_analyses), 0
+        return _ComponentCost.empty(n_analyses), 0
     return (
         _measure_overflow(overflow, coefficients, compressor, chunk, n_analyses, timer),
         _packed_coefficients(compressor, coefficients),

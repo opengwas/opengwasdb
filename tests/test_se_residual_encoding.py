@@ -31,7 +31,7 @@ from opengwasdb.encoding.planes import (
     write_se_csr,
     write_se_dense,
 )
-from opengwasdb.encoding.se import optimise_dense_se_joint
+from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
 from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import (
@@ -265,7 +265,12 @@ def test_hybrid_joint_selection_streams_dense_and_uses_one_fit(tmp_path) -> None
     selected, shared_coefficients = optimise_dense_se_joint(
         group,
         preliminary,
-        overflow=(extra_se, extra_eaf, extra_ai),
+        overflow=OverflowCells(
+            se_values=extra_se,
+            eaf_values=extra_eaf,
+            analysis_indices=extra_ai,
+            n_analyses=2,
+        ),
         overflow_chunk=200,
     )
 
@@ -308,7 +313,12 @@ def test_hybrid_extra_component_can_force_shared_float16_fallback(
     selected, shared_coefficients = optimise_dense_se_joint(
         group,
         preliminary,
-        overflow=(extra_se, extra_eaf, np.zeros(len(extra_se), dtype=np.int64)),
+        overflow=OverflowCells(
+            se_values=extra_se,
+            eaf_values=extra_eaf,
+            analysis_indices=np.zeros(len(extra_se), dtype=np.int64),
+            n_analyses=1,
+        ),
     )
 
     assert selected.se == SeEncoding("float16")
@@ -603,3 +613,76 @@ def test_residual_completion_never_writes_se_without_eaf(tmp_path) -> None:
     assert not np.any(np.isfinite(eaf[~np.isfinite(se)])) or np.any(~np.isfinite(eaf))
     assert np.all(np.isfinite(eaf[np.isfinite(se)])), "a residual se cell has no eaf"
     assert validate_store(completed).ok
+
+
+def test_overflow_cells_accepts_a_valid_bundle_and_named_fields() -> None:
+    """#162: the Overflow bundle is named, validated, and normalised to int64."""
+    cells = OverflowCells(
+        se_values=np.array([0.1, 0.2], dtype=np.float32),
+        eaf_values=np.array([0.2, 0.3], dtype=np.float32),
+        analysis_indices=np.array([0.0, 1.0], dtype=np.float64),
+        n_analyses=2,
+    )
+    assert cells.se_values.shape == (2,)
+    assert cells.eaf_values.shape == (2,)
+    assert cells.analysis_indices.dtype == np.dtype(np.int64)
+    np.testing.assert_array_equal(cells.analysis_indices, np.array([0, 1], dtype=np.int64))
+
+
+def test_overflow_cells_accepts_an_empty_bundle() -> None:
+    """An Analysis with no overflow associations still contributes a valid bundle."""
+    cells = OverflowCells(
+        se_values=np.empty(0, dtype=np.float32),
+        eaf_values=np.empty(0, dtype=np.float32),
+        analysis_indices=np.empty(0, dtype=np.int64),
+        n_analyses=2,
+    )
+    assert cells.se_values.shape == (0,)
+    assert cells.eaf_values.shape == (0,)
+    assert cells.analysis_indices.shape == (0,)
+
+
+@pytest.mark.parametrize(
+    ("se", "eaf", "ai", "n_analyses", "match"),
+    [
+        (
+            np.array([0.1, 0.2], dtype=np.float32),
+            np.array([0.2], dtype=np.float32),
+            np.array([0, 0], dtype=np.int64),
+            2,
+            "equal lengths",
+        ),
+        (
+            np.zeros((2, 1), dtype=np.float32),
+            np.zeros((2, 1), dtype=np.float32),
+            np.array([0, 1], dtype=np.int64),
+            2,
+            "one-dimensional",
+        ),
+        (
+            np.array([0.1, 0.2], dtype=np.float32),
+            np.array([0.2, 0.3], dtype=np.float32),
+            np.array([0.0, 1.5], dtype=np.float64),
+            2,
+            "must be integers",
+        ),
+        (
+            np.array([0.1, 0.2], dtype=np.float32),
+            np.array([0.2, 0.3], dtype=np.float32),
+            np.array([True, False]),
+            2,
+            "must be integers",
+        ),
+        (
+            np.array([0.1, 0.2], dtype=np.float32),
+            np.array([0.2, 0.3], dtype=np.float32),
+            np.array([0, 2], dtype=np.int64),
+            2,
+            r"within \[0, 2\)",
+        ),
+    ],
+)
+def test_overflow_cells_rejects_invalid_bundles(se, eaf, ai, n_analyses, match) -> None:
+    """#162: swapped arrays or invalid shapes fail loudly before fit/measurement."""
+    with pytest.raises(ValueError, match=match):
+        OverflowCells(se_values=se, eaf_values=eaf, analysis_indices=ai, n_analyses=n_analyses)

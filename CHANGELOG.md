@@ -120,6 +120,16 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Changed
 
+- **Hybrid residual-SE Overflow cells get a named, validated contract** (#162).
+  The Overflow Component's `(se, eaf, analysis_index)` inputs were a
+  positional tuple whose three arrays were shape-valid if swapped or mis-shaped,
+  so a wrong order could survive all the way into the shared fit. `OverflowCells`
+  now carries `se_values`, `eaf_values` and `analysis_indices` by name and
+  rejects mismatched lengths, non-1-D arrays, non-integer Analysis indices and
+  out-of-range indices at construction, before any fit or measurement reads
+  them. `RaggedCSRWriter.se_fit_inputs` returns the named type, and the
+  optimiser's module-only `ComponentCost` is now `_ComponentCost`.
+
 - **Ruff no longer lints the vendored `quality/` tree**, and the ruff baseline
   drops 66 -> 61. `quality/` is the cleat gate tooling, imported whole and
   written to its own rules; scanning it contributed 1,735 findings against a

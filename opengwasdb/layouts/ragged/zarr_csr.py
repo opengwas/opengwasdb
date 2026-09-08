@@ -12,6 +12,7 @@ from numcodecs import Blosc
 from opengwasdb.encoding import (
     EafExceptionBuilder,
     EafMeasurements,
+    OverflowCells,
     RaggedEafPlane,
     RaggedSePlane,
     SeMeasurements,
@@ -117,18 +118,18 @@ class RaggedCSRWriter:
 
     def se_measurements(self, encoding: StoreEncoding) -> SeMeasurements:
         """Fit SE against the EAF values this plan will actually decode."""
-        se, decoded, ai = self.se_fit_inputs(encoding)
+        cells = self.se_fit_inputs(encoding)
         return fit_se(
-            se,
-            decoded,
-            ai,
+            cells.se_values,
+            cells.eaf_values,
+            cells.analysis_indices,
             n_analyses=self.n_analyses,
             compressor=_COMPRESSOR,
             chunks=_ASSOC_CHUNK,
         )[1]
 
-    def se_fit_inputs(self, encoding: StoreEncoding) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Physical `(se, decoded_eaf, analysis_index)` for a shared plan."""
+    def se_fit_inputs(self, encoding: StoreEncoding) -> OverflowCells:
+        """Named `(se, decoded_eaf, analysis_index)` for a shared plan."""
         vi, eaf = self._flat()
         se = (
             np.concatenate(self._ses).astype(np.float32)
@@ -157,7 +158,12 @@ class RaggedCSRWriter:
         )
         offsets = np.asarray(self._offsets, dtype=np.int64)
         ai = np.searchsorted(offsets[1:], np.arange(len(se)), side="right")
-        return se, decoded, ai
+        return OverflowCells(
+            se_values=se,
+            eaf_values=decoded,
+            analysis_indices=ai,
+            n_analyses=self.n_analyses,
+        )
 
     def _write_se(
         self,
