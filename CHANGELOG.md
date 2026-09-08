@@ -15,6 +15,14 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Fixed
 
+- **Hybrid Reference Completion rebuilt the Dense Top-Hit Index under the
+  source encoding after folding in a panel crossover** (#163). The rebuild
+  now uses the completed Dense Component's own encoding, which carries the
+  Reference EAF completion added, so a residual-`se` Hybrid store whose LD
+  panel extends the axis no longer aborts with a missing-EAF decode failure
+  when the index is rebuilt; the crossed-over association is queried back
+  with its real, correctly decoded standard error.
+
 - **The SE size measurement undercharged zarr's padded edge chunks** (#158).
   `_packed_1d` and `_packed_2d` compressed each measured slice at the size it
   happened to be, but zarr stores every chunk at its declared shape: a plane's
