@@ -10,6 +10,13 @@ routing in the single Pass 2 read that both components share.
 Like the dense builder, association streaming and the union-variant pass go
 through a ``SourceReader`` resolved from each row's ``source_reader_capability``
 (issue #20) rather than importing ``opengwasdb.build.vcf_source`` directly.
+
+``build_hybrid_from_vcf_manifest`` is a thin orchestrator over the deep phase
+helpers below (issue #130) - lifting (the shared Pass 1), partition/routing,
+EAF verification, joint encoding, component writes and shared metadata -
+so no single function carries the whole build's branching. Each phase
+preserves the contracts its own code enforces (atomicity of the staging
+context, collision/provenance rules, the disjoint-partition layout).
 """
 
 from __future__ import annotations
@@ -27,6 +34,7 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.build.eaf_orientation import (
+    EafOrientationReport,
     apply_orientation_evidence,
     site_hashes,
     verify_eaf_orientation,
@@ -41,6 +49,7 @@ from opengwasdb.encoding import (
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     _RESOLVE_BATCH,
+    EafSpillSurvey,
     _alid_sort_key,
     _apply_eaf_scope,
     _apply_se_divisor,
@@ -50,6 +59,7 @@ from opengwasdb.layouts.dense.build_vcf import (
     _lift_manifest_variants,
     _log_progress,
     _manifest_row_to_analysis,
+    _ManifestRow,
     _read_manifest,
     _write_dense_bands,
     _write_index,
@@ -391,6 +401,760 @@ def _assemble_overflow_csr(
     return csr, column_has_eaf
 
 
+# ── Deep-phase helpers for the build entry point (issue #130) ────────────────
+
+
+@dataclass(frozen=True)
+class _BuildOptions:
+    """The public build's scalar configuration, bundled so the seams below
+    take one argument rather than a dozen."""
+
+    out: Path
+    reference_panel: str | Path
+    store_id: str
+    release_id: str
+    chain_file: str | Path | None
+    liftover_failure_threshold: float
+    chunk_shape: tuple[int, int]
+    dtype: str
+    n_workers: int
+    eaf_reference: str | Path | None
+    eaf_reference_ancestry: str | None
+    allow_unverified_eaf: bool
+
+
+@dataclass(frozen=True)
+class _VariantPartition:
+    """One Hybrid build's partition of its union variant set.
+
+    The Dense Component axis is exactly the reference panel's ALIDs in genomic
+    order; the Ragged Overflow holds the observed ALIDs outside it.
+    ``shared_sorted`` is the union of the two -- the store's root variant axis
+    -- and ``dense_row``/``shared_index`` map an ALID to the index each
+    component stores it under. The layout contract both components share is
+    that dense row ``i`` is the ``i``-th panel ALID of ``shared_sorted``, so
+    ``dense_to_shared.npy`` is a strictly ascending map.
+    """
+
+    panel_sorted: list[str]
+    off_panel_alids: list[str]
+    shared_sorted: list[str]
+    dense_row: dict[str, int]
+    shared_index: dict[str, int]
+    n_panel: int
+    n_off_panel: int
+    n_shared: int
+
+
+@dataclass(frozen=True)
+class _SourceAxis:
+    """The lifted union axis: every phase between Pass 1 and the Dense
+    skeleton consumes this and nothing else."""
+
+    dense_dir: Path
+    dense_staged: StagedRelease
+    partition: _VariantPartition
+    analyses: list[Analysis]
+    hg38_to_source: dict[str, str | None]
+    rsid_by_alid: dict[str, str]
+    keys_sorted: np.ndarray
+    targets_sorted: np.ndarray
+    ispanel_sorted: np.ndarray
+
+
+@dataclass(frozen=True)
+class _PreparedBuild:
+    """Everything the build knows before Pass 2 spills exist: the staged
+    paths, the partition/provenance maps, the Dense skeleton's
+    ``dense_to_shared`` sidecar, the routing arrays and the spill directory
+    Pass 2 writes through."""
+
+    staged: StagedRelease
+    dense_dir: Path
+    dense_staged: StagedRelease
+    partition: _VariantPartition
+    manifest_rows: list[_ManifestRow]
+    analyses: list[Analysis]
+    hg38_to_source: dict[str, str | None]
+    rsid_by_alid: dict[str, str]
+    dense_to_shared: np.ndarray
+    spill_dir: Path
+    keys_sorted: np.ndarray
+    targets_sorted: np.ndarray
+    ispanel_sorted: np.ndarray
+    n_analyses: int
+
+
+@dataclass(frozen=True)
+class _RoutedSpills:
+    """What Pass 2 leaves for the EAF survey."""
+
+    id_by_col: dict[int, str]
+    pass2_start: float
+
+
+@dataclass(frozen=True)
+class _EafEvidence:
+    """The per-component frequency surveys and the orientation report."""
+
+    dense_survey: EafSpillSurvey
+    overflow_survey: EafSpillSurvey
+    report: EafOrientationReport
+
+
+@dataclass(frozen=True)
+class _EncodingPlan:
+    """The one encoding both components share (ADR 0037) plus the effective
+    chunk shape it created the Dense zarr under."""
+
+    encoding: StoreEncoding
+    effective_chunks: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class _DenseWritten:
+    """The concatenated top-hit candidates the Dense band writer harvested."""
+
+    all_rows: np.ndarray
+    all_cols: np.ndarray
+    all_z: np.ndarray
+    all_se: np.ndarray
+    column_has_eaf: np.ndarray
+
+
+@dataclass(frozen=True)
+class _OverflowAssembled:
+    """The assembled overflow CSR and its per-Analysis EAF presence."""
+
+    csr: RaggedCSRWriter
+    overflow_has_eaf: np.ndarray
+
+
+@dataclass(frozen=True)
+class _ComponentResult:
+    """What the spill-lifetime seam hands to finalisation."""
+
+    csr: RaggedCSRWriter
+    encoding: StoreEncoding
+    se_coefficients: np.ndarray | None
+    eaf_provenance: dict[str, Any]
+    analyses: list[Analysis]
+
+
+def _stage_dense_component(
+    staged: StagedRelease,
+    reference_panel: str | Path,
+) -> tuple[Path, StagedRelease, set[str]]:
+    """Open the nested Dense Component's staging directory inside the outer
+    store's, and read the reference panel that defines its axis. A panel with
+    no ALIDs fails the build loudly rather than building a Dense axis that
+    stores nothing."""
+    dense_dir = dense_component_path(staged.path)
+    dense_dir.mkdir()
+    dense_staged = StagedRelease(dense_dir)
+    panel_alids = read_reference_panel_alids(reference_panel)
+    if not panel_alids:
+        raise ValueError(f"reference panel {reference_panel} contained no ALIDs")
+    log.info("Reference panel: %d variants", len(panel_alids))
+    return dense_dir, dense_staged, panel_alids
+
+
+def _partition_variants(
+    source_lookup: dict[tuple[str, int, str, str], str],
+    panel_alids: set[str],
+    n_analyses: int,
+) -> _VariantPartition:
+    """Partition the observed hg38 ALIDs (every source row's lifted or
+    passthrough position, Pass 1's union) into the on-panel set the Dense
+    Component stores and the off-panel set the Ragged Overflow stores (ADR
+    0026). Nothing observed is dropped, so an off-panel variant is always on
+    the shared root axis."""
+    observed_alids = set(source_lookup.values())
+    off_panel_alids = sorted(observed_alids - panel_alids, key=_alid_sort_key)
+    panel_sorted = sorted(panel_alids, key=_alid_sort_key)
+    shared_sorted = sorted(panel_alids | set(off_panel_alids), key=_alid_sort_key)
+    dense_row = {alid: i for i, alid in enumerate(panel_sorted)}
+    shared_index = {alid: i for i, alid in enumerate(shared_sorted)}
+    log.info(
+        "Partition: %d panel (dense), %d off-panel (overflow), %d shared variants, %d analyses",
+        len(panel_sorted),
+        len(off_panel_alids),
+        len(shared_sorted),
+        n_analyses,
+    )
+    return _VariantPartition(
+        panel_sorted=panel_sorted,
+        off_panel_alids=off_panel_alids,
+        shared_sorted=shared_sorted,
+        dense_row=dense_row,
+        shared_index=shared_index,
+        n_panel=len(panel_sorted),
+        n_off_panel=len(off_panel_alids),
+        n_shared=len(shared_sorted),
+    )
+
+
+def _source_origin_map(
+    source_lookup: dict[tuple[str, int, str, str], str],
+) -> dict[str, str | None]:
+    """Map each hg38 ALID to the source-build ALID its row was resolved from
+    -- the Store Variant Table's ``source_alid`` provenance column. Several
+    source sites can resolve onto one hg38 ALID (two manifest rows landing on
+    one variant from different assemblies, say); when their origins differ
+    the provenance is genuinely ambiguous and the map records ``None`` rather
+    than guessing which source owns the stored row (issue #85) -- a store
+    must not misattribute one row's association to another's variant.
+    """
+    hg38_to_source: dict[str, str | None] = {}
+    for (chrom, pos, ref, alt), hg38_alid in source_lookup.items():
+        a1, a2 = sorted((ref, alt))
+        origin = f"{chrom}:{pos}:{a1}:{a2}"
+        if hg38_alid not in hg38_to_source:
+            hg38_to_source[hg38_alid] = origin
+        elif hg38_to_source[hg38_alid] != origin:
+            hg38_to_source[hg38_alid] = None
+    return hg38_to_source
+
+
+def _load_manifest(manifest_path: str | Path) -> list[_ManifestRow]:
+    """Read the build manifest, failing loudly on an empty one rather than
+    building a store with no Analyses (a plausible empty answer)."""
+    manifest_rows = _read_manifest(manifest_path)
+    if not manifest_rows:
+        raise ValueError(f"manifest {manifest_path} contains no rows")
+    return manifest_rows
+
+
+def _lift_and_partition(
+    staged: StagedRelease,
+    manifest_rows: list[_ManifestRow],
+    options: _BuildOptions,
+) -> _SourceAxis:
+    """Phase - lifting and partition/routing: open the Dense staging dir,
+    read the panel, run Pass 1 (the union of every source row's variants and
+    the hg19 -> hg38 lift for the rows that need one), partition the union
+    into on-panel/off-panel, derive the provenance map (collision handling)
+    and the Analyses, and compose the fork-safe routing index."""
+    dense_dir, dense_staged, panel_alids = _stage_dense_component(
+        staged,
+        options.reference_panel,
+    )
+    source_lookup, rsid_by_alid = _lift_manifest_variants(
+        manifest_rows,
+        chain_file=options.chain_file,
+        liftover_failure_threshold=options.liftover_failure_threshold,
+    )
+    partition = _partition_variants(
+        source_lookup,
+        panel_alids,
+        len(manifest_rows),
+    )
+    analyses: list[Analysis] = [_manifest_row_to_analysis(row) for row in manifest_rows]
+    hg38_to_source = _source_origin_map(source_lookup)
+    keys_sorted, targets_sorted, ispanel_sorted = _build_routing_index(
+        source_lookup,
+        partition.dense_row,
+        partition.shared_index,
+    )
+    # The routing index is built: the source union is freed before Pass 2.
+    del source_lookup
+    return _SourceAxis(
+        dense_dir=dense_dir,
+        dense_staged=dense_staged,
+        partition=partition,
+        analyses=analyses,
+        hg38_to_source=hg38_to_source,
+        rsid_by_alid=rsid_by_alid,
+        keys_sorted=keys_sorted,
+        targets_sorted=targets_sorted,
+        ispanel_sorted=ispanel_sorted,
+    )
+
+
+def _write_dense_component_skeleton(
+    staged: StagedRelease,
+    axis: _SourceAxis,
+    chunk_shape: tuple[int, int],
+) -> np.ndarray:
+    """Write the Dense Component's valid-store skeleton: index, Store Variant
+    Table and the dense row -> shared variant_index sidecar. ``dense_to_shared``
+    is returned because the EAF survey samples both components on the shared
+    axis through it and the query facade reads it back."""
+    _write_index(axis.dense_staged, axis.partition.panel_sorted, axis.analyses, chunk_shape)
+    _write_variant_table(
+        axis.dense_dir,
+        axis.partition.panel_sorted,
+        axis.hg38_to_source,
+        axis.rsid_by_alid,
+    )
+    # Ascending: the panel keeps genomic order, so dense row i is shared row
+    # dense_to_shared[i] -- the mapping validation checks against.
+    dense_to_shared = np.array(
+        [axis.partition.shared_index[alid] for alid in axis.partition.panel_sorted],
+        dtype=np.int32,
+    )
+    np.save(dense_to_shared_path(staged.path), dense_to_shared)
+    return dense_to_shared
+
+
+def _route_serial(
+    prepared: _PreparedBuild,
+    analysis_index: dict[str, int],
+    n_analyses: int,
+    pass2_start: float,
+) -> None:
+    """Route each study once, in this process, spilling the dense rows and the
+    overflow associations it resolves (last-wins dedup per target index)."""
+    for i, row in enumerate(prepared.manifest_rows):
+        dense, overflow = _resolve_column_hybrid(
+            row.file_path,
+            prepared.keys_sorted,
+            prepared.targets_sorted,
+            prepared.ispanel_sorted,
+            row.se_divisor,
+            capability=row.source_reader_capability,
+            stored_effect_scale=row.stored_effect_scale,
+        )
+        _spill_hybrid_column(prepared.spill_dir, analysis_index[row.trait_id], dense, overflow)
+        _log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {row.trait_id}", every=25)
+
+
+def _route_parallel(
+    prepared: _PreparedBuild,
+    analysis_index: dict[str, int],
+    id_by_col: dict[int, str],
+    n_analyses: int,
+    options: _BuildOptions,
+    pass2_start: float,
+) -> None:
+    """Route each study through the fork pool. Workers read the routing arrays
+    through the module-level globals below rather than as arguments: they are
+    inherited by fork, which is what keeps a genome-scale lookup out of the
+    per-column pickling the pool would otherwise do (dense.build_vcf's
+    rationale)."""
+    global _pass2_keys_sorted, _pass2_targets_sorted, _pass2_ispanel_sorted
+    global _pass2_spill_dir
+    _pass2_keys_sorted = prepared.keys_sorted
+    _pass2_targets_sorted = prepared.targets_sorted
+    _pass2_ispanel_sorted = prepared.ispanel_sorted
+    _pass2_spill_dir = prepared.spill_dir
+    try:
+        with _fork_pool(options.n_workers) as pool:
+            tasks = [
+                (
+                    analysis_index[row.trait_id],
+                    row.file_path,
+                    row.se_divisor,
+                    row.source_reader_capability,
+                    row.stored_effect_scale,
+                )
+                for row in prepared.manifest_rows
+            ]
+            futures = [pool.submit(_pass2_worker, task) for task in tasks]
+            for i, future in enumerate(as_completed(futures)):
+                col = future.result()
+                _log_progress(
+                    "Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25
+                )
+    finally:
+        _pass2_keys_sorted = None
+        _pass2_targets_sorted = None
+        _pass2_ispanel_sorted = None
+        _pass2_spill_dir = None
+
+
+def _route_studies(
+    prepared: _PreparedBuild,
+    options: _BuildOptions,
+) -> _RoutedSpills:
+    """Phase - Pass 2: read each study once and route every association into
+    the dense spill or the overflow spill (fork pool when n_workers > 1).
+    Returns the {column: analysis_id} map the EAF survey keys and the pass
+    start time the band writer's progress reports from."""
+    rows = prepared.manifest_rows
+    analysis_index = {row.trait_id: i for i, row in enumerate(rows)}
+    id_by_col = {i: row.trait_id for i, row in enumerate(rows)}
+    n_analyses = len(rows)
+    log.info("Pass 2: routing %d analyses (n_workers=%d)", n_analyses, options.n_workers)
+    pass2_start = time.monotonic()
+    if options.n_workers <= 1:
+        _route_serial(
+            prepared,
+            analysis_index,
+            n_analyses,
+            pass2_start,
+        )
+    else:
+        _route_parallel(
+            prepared,
+            analysis_index,
+            id_by_col,
+            n_analyses,
+            options,
+            pass2_start,
+        )
+    return _RoutedSpills(id_by_col=id_by_col, pass2_start=pass2_start)
+
+
+def _verify_eaf_orientation(
+    prepared: _PreparedBuild,
+    routed: _RoutedSpills,
+    options: _BuildOptions,
+) -> _EafEvidence:
+    """Phase - EAF orientation (issue #115): check both components at once,
+    sampled on the shared axis so an Analysis whose frequencies live mostly in
+    the overflow is checked on the same footing as one sitting on the panel.
+    The components are sampled separately and merged, so an Analysis present
+    in both contributes up to twice the per-Analysis budget -- more evidence
+    than asked for, never less."""
+    shared_hashes = site_hashes(prepared.partition.shared_sorted)
+    dense_survey = survey_eaf_spills(
+        prepared.spill_dir,
+        routed.id_by_col,
+        prepared.partition.shared_sorted,
+        shared_hashes,
+        row_map=prepared.dense_to_shared,
+    )
+    overflow_survey = survey_eaf_spills(
+        prepared.spill_dir,
+        routed.id_by_col,
+        prepared.partition.shared_sorted,
+        shared_hashes,
+        suffix=".ovf",
+        index_key="variant_index",
+    )
+    observations = dense_survey.observations
+    for analysis_id, off_panel in overflow_survey.observations.items():
+        observations[analysis_id].update(off_panel)
+    report = verify_eaf_orientation(
+        observations,
+        eaf_reference=options.eaf_reference,
+        eaf_reference_ancestry=options.eaf_reference_ancestry,
+        allow_unverified=options.allow_unverified_eaf,
+    )
+    return _EafEvidence(
+        dense_survey=dense_survey,
+        overflow_survey=overflow_survey,
+        report=report,
+    )
+
+
+def _plan_joint_encoding(
+    prepared: _PreparedBuild,
+    evidence: _EafEvidence,
+    options: _BuildOptions,
+) -> _EncodingPlan:
+    """Phase - one encoding plan for both components (issue #119, ADR 0037).
+    The Dense Component and the Ragged Overflow partition one Analysis's
+    associations, so a shared result contract needs a shared encoding: their
+    measurements are combined rather than either one taken alone. Materialises
+    the Dense zarr skeleton under the plan and returns the effective chunks."""
+    encoding = StoreEncoding.decide(
+        EncodingMeasurements(
+            n_analyses=prepared.n_analyses,
+            eaf=combine_eaf_measurements(
+                [
+                    evidence.dense_survey.measurements(
+                        n_cells=prepared.partition.n_panel * prepared.n_analyses,
+                        n_variants=prepared.partition.n_panel,
+                    ),
+                    evidence.overflow_survey.measurements(
+                        n_cells=evidence.overflow_survey.n_spill_cells,
+                        n_variants=prepared.partition.n_shared,
+                    ),
+                ]
+            ),
+        )
+    )
+    log.info("Encoding plan: %s", encoding.to_manifest())
+    effective_chunks = _create_dense_zarr(
+        prepared.dense_staged,
+        prepared.partition.n_panel,
+        prepared.n_analyses,
+        options.chunk_shape,
+        options.dtype,
+        encoding,
+    )
+    return _EncodingPlan(encoding=encoding, effective_chunks=effective_chunks)
+
+
+def _write_dense_component_bands(
+    prepared: _PreparedBuild,
+    plan: _EncodingPlan,
+    pass2_start: float,
+    options: _BuildOptions,
+) -> _DenseWritten:
+    """Phase - the Dense band write, reusing the dense builder's band-streamer
+    and top-hit harvest."""
+    all_rows, all_cols, all_z, all_se, column_has_eaf = _write_dense_bands(
+        prepared.dense_staged,
+        prepared.spill_dir,
+        prepared.partition.n_panel,
+        prepared.n_analyses,
+        plan.effective_chunks,
+        options.dtype,
+        pass2_start,
+        plan.encoding,
+    )
+    return _DenseWritten(
+        all_rows=all_rows,
+        all_cols=all_cols,
+        all_z=all_z,
+        all_se=all_se,
+        column_has_eaf=column_has_eaf,
+    )
+
+
+def _assemble_overflow(
+    prepared: _PreparedBuild,
+) -> _OverflowAssembled:
+    """Phase - assemble the Ragged Overflow CSR from the per-column overflow
+    spills, in analysis order so CSR offsets align with analysis_index."""
+    log.info("Assembling Ragged Overflow CSR from %d columns", prepared.n_analyses)
+    csr, overflow_has_eaf = _assemble_overflow_csr(
+        prepared.spill_dir,
+        prepared.n_analyses,
+        prepared.partition.n_shared,
+    )
+    return _OverflowAssembled(csr=csr, overflow_has_eaf=overflow_has_eaf)
+
+
+def _stamp_analyses(
+    prepared: _PreparedBuild,
+    dense: _DenseWritten,
+    overflow: _OverflowAssembled,
+    evidence: _EafEvidence,
+) -> list[Analysis]:
+    """Stamp each Analysis's eaf_scope (ADR 0036) and orientation columns.
+    eaf_scope is the union of what the two components stored, so neither
+    analyses.tsv may be written until both have been read."""
+    return apply_orientation_evidence(
+        _apply_eaf_scope(prepared.analyses, dense.column_has_eaf | overflow.overflow_has_eaf),
+        evidence.report,
+    )
+
+
+def _fit_joint_se(
+    prepared: _PreparedBuild,
+    plan: _EncodingPlan,
+    overflow: _OverflowAssembled,
+) -> tuple[StoreEncoding, np.ndarray | None]:
+    """Phase - one SE model and one decision across both components. They
+    partition the same Analyses, so fitting or gating either in isolation
+    could leave the shared manifest describing only half of the data it
+    governs."""
+    dense_group = prepared.dense_staged.arrays(mode="a")
+    return optimise_dense_se_joint(
+        dense_group,
+        plan.encoding,
+        overflow=overflow.csr.se_fit_inputs(plan.encoding),
+    )
+
+
+def _finish_dense_component(
+    prepared: _PreparedBuild,
+    dense: _DenseWritten,
+    analyses: list[Analysis],
+    encoding: StoreEncoding,
+    evidence: _EafEvidence,
+    options: _BuildOptions,
+) -> dict[str, Any]:
+    """Phase - finish the Dense Component as a valid dense store: top-hit
+    index (after the SE decision -- the index carries the values a query reads
+    back), manifest.json, and its own analyses.tsv counting only on-panel hits
+    (the shared root counts both; issue #107)."""
+    write_top_hit_indexes_for_store(
+        prepared.dense_dir,
+        dense.all_rows,
+        dense.all_cols,
+        dense.all_z,
+        dense.all_se,
+        encoding,
+    )
+    eaf_provenance = evidence.report.provenance(allow_unverified=options.allow_unverified_eaf)
+    _write_dense_manifest(
+        prepared.dense_staged,
+        options.store_id,
+        options.release_id,
+        prepared.partition.n_panel,
+        prepared.n_analyses,
+        options.chain_file,
+        options.dtype,
+        encoding=encoding,
+        eaf_orientation=eaf_provenance,
+    )
+    write_analyses_tsv(prepared.dense_dir, add_hit_counts(prepared.dense_dir, analyses))
+    return eaf_provenance
+
+
+def _flush_overflow_component(
+    staged: StagedRelease,
+    csr: RaggedCSRWriter,
+    encoding: StoreEncoding,
+    se_coefficients: np.ndarray | None,
+) -> int:
+    """Flush the assembled overflow CSR into the store's root zarr and build
+    its top-hit index. Returns the overflow association count the shared
+    manifest's provenance records."""
+    csr.flush(staged.path, encoding, se_coefficients=se_coefficients)
+    n_overflow = csr.n_associations
+    log.info("Building Ragged Overflow top-hit index")
+    build_ragged_top_hit_indexes(staged.path, encoding=encoding)
+    return n_overflow
+
+
+def _write_shared_metadata(
+    prepared: _PreparedBuild,
+    components: _ComponentResult,
+    options: _BuildOptions,
+    n_overflow: int,
+) -> None:
+    """Phase - the shared union table and shared metadata: the Hybrid
+    manifest (again before analyses.tsv), then the root variant axis, index
+    and analyses.tsv whose Top-Hit Counts are the Dense Component's and Ragged
+    Overflow's counts summed (ADR 0032) -- the two partition an Analysis's
+    associations disjointly, so neither alone is the whole picture."""
+    _write_hybrid_manifest(
+        prepared.staged,
+        options.store_id,
+        options.release_id,
+        n_variants=prepared.partition.n_shared,
+        n_analyses=prepared.n_analyses,
+        n_panel=prepared.partition.n_panel,
+        n_off_panel=prepared.partition.n_off_panel,
+        n_overflow=n_overflow,
+        chain_file=options.chain_file,
+        chunk_shape=options.chunk_shape,
+        dtype=options.dtype,
+        encoding=components.encoding,
+        eaf_orientation=components.eaf_provenance,
+    )
+    dense_counted = add_hit_counts(prepared.dense_dir, components.analyses)
+    shared_analyses = add_hit_counts(prepared.staged.path, dense_counted)
+    _write_index(
+        prepared.staged,
+        prepared.partition.shared_sorted,
+        components.analyses,
+        options.chunk_shape,
+    )
+    write_analyses_tsv(prepared.staged.path, shared_analyses)
+    _write_variant_table(
+        prepared.staged.path,
+        prepared.partition.shared_sorted,
+        prepared.hg38_to_source,
+        prepared.rsid_by_alid,
+    )
+
+
+def _prepare_build(
+    staged: StagedRelease,
+    manifest_rows: list[_ManifestRow],
+    options: _BuildOptions,
+) -> _PreparedBuild:
+    """Seam - preparation: lifting, partition/routing and the Dense skeleton,
+    then the routing index and spill directory. Nothing here reads a spill;
+    the returned record is the whole handoff to the spill-lifetime seam."""
+    axis = _lift_and_partition(staged, manifest_rows, options)
+    dense_to_shared = _write_dense_component_skeleton(
+        staged,
+        axis,
+        options.chunk_shape,
+    )
+    spill_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f".{options.out.name}.hybridspill.",
+            dir=staged.path.parent,
+        )
+    )
+    return _PreparedBuild(
+        staged=staged,
+        dense_dir=axis.dense_dir,
+        dense_staged=axis.dense_staged,
+        partition=axis.partition,
+        manifest_rows=manifest_rows,
+        analyses=axis.analyses,
+        hg38_to_source=axis.hg38_to_source,
+        rsid_by_alid=axis.rsid_by_alid,
+        dense_to_shared=dense_to_shared,
+        spill_dir=spill_dir,
+        keys_sorted=axis.keys_sorted,
+        targets_sorted=axis.targets_sorted,
+        ispanel_sorted=axis.ispanel_sorted,
+        n_analyses=len(manifest_rows),
+    )
+
+
+def _build_components(
+    prepared: _PreparedBuild,
+    options: _BuildOptions,
+) -> _ComponentResult:
+    """Seam - the spill-lifetime build: Pass 2 routing, EAF verification,
+    joint encoding, the component writes (Dense bands, Overflow CSR, shared SE
+    fit, Dense top hits/manifest/analyses.tsv). The spill directory is removed
+    in a finally whichever phase fails, and the store's files are only touched
+    while the spills exist."""
+    spill_dir = prepared.spill_dir
+    try:
+        routed = _route_studies(prepared, options)
+        evidence = _verify_eaf_orientation(prepared, routed, options)
+        plan = _plan_joint_encoding(prepared, evidence, options)
+        dense = _write_dense_component_bands(prepared, plan, routed.pass2_start, options)
+        overflow = _assemble_overflow(prepared)
+        analyses = _stamp_analyses(prepared, dense, overflow, evidence)
+        encoding, se_coefficients = _fit_joint_se(prepared, plan, overflow)
+        eaf_provenance = _finish_dense_component(
+            prepared,
+            dense,
+            analyses,
+            encoding,
+            evidence,
+            options,
+        )
+    finally:
+        shutil.rmtree(spill_dir, ignore_errors=True)
+    return _ComponentResult(
+        csr=overflow.csr,
+        encoding=encoding,
+        se_coefficients=se_coefficients,
+        eaf_provenance=eaf_provenance,
+        analyses=analyses,
+    )
+
+
+def _finalise_store(
+    prepared: _PreparedBuild,
+    components: _ComponentResult,
+    options: _BuildOptions,
+) -> HybridBuildResult:
+    """Seam - finalisation: flush the Overflow CSR and build its top-hit
+    index, then write the Hybrid manifest and the shared union table/metadata
+    that make the store complete, and construct the result."""
+    n_overflow = _flush_overflow_component(
+        prepared.staged,
+        components.csr,
+        components.encoding,
+        components.se_coefficients,
+    )
+    _write_shared_metadata(prepared, components, options, n_overflow)
+    log.info(
+        "Hybrid build complete: %d shared variants (%d panel + %d off-panel), "
+        "%d analyses, %d overflow associations",
+        prepared.partition.n_shared,
+        prepared.partition.n_panel,
+        prepared.partition.n_off_panel,
+        prepared.n_analyses,
+        n_overflow,
+    )
+    return HybridBuildResult(
+        output_path=options.out,
+        n_variants=prepared.partition.n_shared,
+        n_analyses=prepared.n_analyses,
+        n_panel=prepared.partition.n_panel,
+        n_off_panel=prepared.partition.n_off_panel,
+        n_overflow=n_overflow,
+    )
+
+
 # ── Public build entry point ─────────────────────────────────────────────────
 
 
@@ -411,314 +1175,45 @@ def build_hybrid_from_vcf_manifest(
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
 ) -> HybridBuildResult:
-    """Build a Hybrid store from a manifest of GWAS-VCF files and a reference panel.
+    """Build a Hybrid store from a manifest of GWAS-VCF files and a reference
+    panel. A thin orchestrator over three deep seams (issue #130):
+    ``_prepare_build`` (lifting, partition/routing, Dense skeleton), the
+    spill-lifetime ``_build_components`` (Pass 2 routing, EAF verification,
+    joint encoding, component writes) and ``_finalise_store`` (overflow flush,
+    shared metadata, result). Each seam and phase helper preserves the
+    contracts its docstring names: the staging context's atomicity, the
+    collision/provenance rules, the disjoint-partition layout and the one
+    encoding both components share (ADR 0037).
 
     The Dense Component axis is exactly ``reference_panel`` (hg38 ALIDs). Each
-    study is read **once**: on-panel associations fill the nested Dense Component,
-    off-panel associations go to the Ragged Overflow. Each row's source file is
-    assumed hg19 and lifted to hg38 inline, unless its manifest row declares
-    ``source_assembly=hg38`` (issue #85, e.g. a harmonised GWAS-SSF source),
-    in which case it passes through unchanged -- see `_read_manifest`.
-
-    ``eaf_reference``/``eaf_reference_ancestry``/``allow_unverified_eaf`` drive
-    the EAF orientation check (issue #115), exactly as for the dense builder --
-    over both components, since an Analysis's off-panel frequencies are as
-    capable of being reported against the wrong allele as its on-panel ones.
-    Note that ``reference_panel`` is a *variant set* (it defines the Dense
-    Component axis) and carries no frequencies, so it cannot serve as the
-    reference here; the two are separate inputs.
+    study is read **once**: on-panel associations fill the nested Dense
+    Component, off-panel associations go to the Ragged Overflow. Rows are
+    assumed hg19 and lifted inline unless the manifest declares
+    ``source_assembly=hg38`` (issue #85). ``eaf_reference`` drives the
+    orientation check (issue #115) over both components; ``reference_panel``
+    is a variant set and carries no frequencies, so it cannot serve as that
+    reference - the two inputs are separate.
     """
-    manifest_rows = _read_manifest(manifest_path)
-    if not manifest_rows:
-        raise ValueError(f"manifest {manifest_path} contains no rows")
-
-    out = Path(output_path)
-    with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        dense_dir = dense_component_path(staged.path)
-        dense_dir.mkdir()
-        dense_staged = StagedRelease(dense_dir)
-
-        panel_alids = read_reference_panel_alids(reference_panel)
-        if not panel_alids:
-            raise ValueError(f"reference panel {reference_panel} contained no ALIDs")
-        log.info("Reference panel: %d variants", len(panel_alids))
-
-        # ── Pass 1: union of source variants + liftover ──────────────────────────
-        source_lookup, rsid_by_alid = _lift_manifest_variants(
-            manifest_rows,
+    manifest_rows = _load_manifest(manifest_path)
+    with OpenGWASDBStore.staging(Path(output_path), overwrite=overwrite) as staged:
+        options = _BuildOptions(
+            out=Path(output_path),
+            reference_panel=reference_panel,
+            store_id=store_id,
+            release_id=release_id,
             chain_file=chain_file,
             liftover_failure_threshold=liftover_failure_threshold,
+            chunk_shape=chunk_shape,
+            dtype=dtype,
+            n_workers=n_workers,
+            eaf_reference=eaf_reference,
+            eaf_reference_ancestry=eaf_reference_ancestry,
+            allow_unverified_eaf=allow_unverified_eaf,
         )
-
-        # Partition observed hg38 ALIDs into on-panel and off-panel.
-        observed_alids = set(source_lookup.values())
-        off_panel_alids = sorted(observed_alids - panel_alids, key=_alid_sort_key)
-        panel_sorted = sorted(panel_alids, key=_alid_sort_key)
-        shared_sorted = sorted(panel_alids | set(off_panel_alids), key=_alid_sort_key)
-
-        dense_row = {alid: i for i, alid in enumerate(panel_sorted)}
-        shared_index = {alid: i for i, alid in enumerate(shared_sorted)}
-        n_panel = len(panel_sorted)
-        n_off_panel = len(off_panel_alids)
-        n_shared = len(shared_sorted)
-        n_analyses = len(manifest_rows)
-        analysis_index = {row.trait_id: i for i, row in enumerate(manifest_rows)}
-        log.info(
-            "Partition: %d panel (dense), %d off-panel (overflow), %d shared variants, %d analyses",
-            n_panel,
-            n_off_panel,
-            n_shared,
-            n_analyses,
-        )
-
-        # Provenance: source-build ALID each hg38 row resolved from -- lifted from
-        # hg19, or passed through unchanged from hg38 (None on collision).
-        hg38_to_source: dict[str, str | None] = {}
-        for (chrom, pos, ref, alt), hg38_alid in source_lookup.items():
-            a1, a2 = sorted((ref, alt))
-            origin = f"{chrom}:{pos}:{a1}:{a2}"
-            if hg38_alid in hg38_to_source:
-                if hg38_to_source[hg38_alid] != origin:
-                    hg38_to_source[hg38_alid] = None
-            else:
-                hg38_to_source[hg38_alid] = origin
-
-        # stored_effect_scale comes from the manifest, not the VCF header (issue
-        # #17 -- the ieu-a-7 fix: the source header is not authoritative for
-        # effect scale).
-        analyses: list[Analysis] = [_manifest_row_to_analysis(row) for row in manifest_rows]
-
-        # ── Write the Dense Component skeleton (a valid dense store) ──────────────
-        _write_index(dense_staged, panel_sorted, analyses, chunk_shape)
-        _write_variant_table(dense_dir, panel_sorted, hg38_to_source, rsid_by_alid)
-        # dense row -> shared variant_index (ascending — panel keeps genomic order).
-        dense_to_shared = np.array([shared_index[alid] for alid in panel_sorted], dtype=np.int32)
-        np.save(dense_to_shared_path(staged.path), dense_to_shared)
-
-        # ── Pass 2: route each study once (dense spill + overflow spill) ──────────
-        log.info("Pass 2: routing %d analyses (n_workers=%d)", n_analyses, n_workers)
-        keys_sorted, targets_sorted, ispanel_sorted = _build_routing_index(
-            source_lookup, dense_row, shared_index
-        )
-        del source_lookup
-        t2 = time.monotonic()
-        spill_dir = Path(
-            tempfile.mkdtemp(prefix=f".{out.name}.hybridspill.", dir=staged.path.parent)
-        )
-        try:
-            id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
-            if n_workers <= 1:
-                for i, row in enumerate(manifest_rows):
-                    col = analysis_index[row.trait_id]
-                    dense, overflow = _resolve_column_hybrid(
-                        row.file_path,
-                        keys_sorted,
-                        targets_sorted,
-                        ispanel_sorted,
-                        row.se_divisor,
-                        capability=row.source_reader_capability,
-                        stored_effect_scale=row.stored_effect_scale,
-                    )
-                    _spill_hybrid_column(spill_dir, col, dense, overflow)
-                    last = f"last: {row.trait_id}"
-                    _log_progress("Pass 2", i + 1, n_analyses, t2, last, every=25)
-            else:
-                global _pass2_keys_sorted, _pass2_targets_sorted, _pass2_ispanel_sorted
-                global _pass2_spill_dir
-                _pass2_keys_sorted = keys_sorted
-                _pass2_targets_sorted = targets_sorted
-                _pass2_ispanel_sorted = ispanel_sorted
-                _pass2_spill_dir = spill_dir
-                try:
-                    with _fork_pool(n_workers) as pool:
-                        tasks = [
-                            (
-                                analysis_index[row.trait_id],
-                                row.file_path,
-                                row.se_divisor,
-                                row.source_reader_capability,
-                                row.stored_effect_scale,
-                            )
-                            for row in manifest_rows
-                        ]
-                        futures = [pool.submit(_pass2_worker, t) for t in tasks]
-                        for i, fut in enumerate(as_completed(futures)):
-                            col = fut.result()
-                            _log_progress(
-                                "Pass 2", i + 1, n_analyses, t2, f"last: {id_by_col[col]}", every=25
-                            )
-                finally:
-                    _pass2_keys_sorted = None
-                    _pass2_targets_sorted = None
-                    _pass2_ispanel_sorted = None
-                    _pass2_spill_dir = None
-
-            # EAF orientation (issue #115): both components at once, sampled
-            # on the shared axis so an Analysis whose frequencies live mostly
-            # in the overflow is checked on the same footing as one sitting on
-            # the panel. The two components are sampled separately and merged,
-            # so an Analysis present in both contributes up to twice the
-            # per-Analysis budget -- more evidence than asked for, never less.
-            # As in the dense builder, this runs before anything is written.
-            shared_hashes = site_hashes(shared_sorted)
-            dense_survey = survey_eaf_spills(
-                spill_dir,
-                id_by_col,
-                shared_sorted,
-                shared_hashes,
-                row_map=dense_to_shared,
-            )
-            overflow_survey = survey_eaf_spills(
-                spill_dir,
-                id_by_col,
-                shared_sorted,
-                shared_hashes,
-                suffix=".ovf",
-                index_key="variant_index",
-            )
-            eaf_observations = dense_survey.observations
-            for analysis_id, off_panel in overflow_survey.observations.items():
-                eaf_observations[analysis_id].update(off_panel)
-            eaf_report = verify_eaf_orientation(
-                eaf_observations,
-                eaf_reference=eaf_reference,
-                eaf_reference_ancestry=eaf_reference_ancestry,
-                allow_unverified=allow_unverified_eaf,
-            )
-
-            # One plan for both components (issue #119): the Dense Component
-            # and the Ragged Overflow partition one Analysis's associations, so
-            # a shared result contract needs a shared encoding. Their
-            # measurements are combined rather than either one taken alone --
-            # each writes its own baseline array against its own variant axis,
-            # which is why `n_variants` is the sum (ADR 0037 §2).
-            encoding = StoreEncoding.decide(
-                EncodingMeasurements(
-                    n_analyses=n_analyses,
-                    eaf=combine_eaf_measurements(
-                        [
-                            dense_survey.measurements(
-                                n_cells=n_panel * n_analyses, n_variants=n_panel
-                            ),
-                            overflow_survey.measurements(
-                                n_cells=overflow_survey.n_spill_cells, n_variants=n_shared
-                            ),
-                        ]
-                    ),
-                )
-            )
-            log.info("Encoding plan: %s", encoding.to_manifest())
-            effective_chunks = _create_dense_zarr(
-                dense_staged, n_panel, n_analyses, chunk_shape, dtype, encoding
-            )
-
-            # Dense band-write (reuses the dense builder's band-streamer + top-hit harvest).
-            all_rows, all_cols, all_z, all_se, column_has_eaf = _write_dense_bands(
-                dense_staged,
-                spill_dir,
-                n_panel,
-                n_analyses,
-                effective_chunks,
-                dtype,
-                t2,
-                encoding,
-            )
-
-            # Overflow CSR assembly (reuses RaggedCSRWriter). Assembled before
-            # either analyses.tsv is written: `eaf_scope` is the union of what
-            # the two components stored, so neither can be stamped until both
-            # have been read (ADR 0036).
-            log.info("Assembling Ragged Overflow CSR from %d columns", n_analyses)
-            csr, overflow_has_eaf = _assemble_overflow_csr(spill_dir, n_analyses, n_shared)
-            analyses = apply_orientation_evidence(
-                _apply_eaf_scope(analyses, column_has_eaf | overflow_has_eaf), eaf_report
-            )
-
-            # One SE model and one decision across both components. They
-            # partition the same Analyses, so fitting or gating either in
-            # isolation could leave the shared manifest describing only half
-            # of the data it governs.
-            dense_group = dense_staged.arrays(mode="a")
-            encoding, se_coefficients = optimise_dense_se_joint(
-                dense_group,
-                encoding,
-                overflow=csr.se_fit_inputs(encoding),
-            )
-
-            # After the SE decision, not before: the index carries the values a
-            # query reads back, and until `optimise_dense_se_joint` has run the
-            # plane those values come from is still undecided.
-            write_top_hit_indexes_for_store(dense_dir, all_rows, all_cols, all_z, all_se, encoding)
-
-            # manifest.json before analyses.tsv/overview.html: overview.html
-            # reads manifest.json fresh from output_path for its header (ADR 0032).
-            eaf_provenance = eaf_report.provenance(allow_unverified=allow_unverified_eaf)
-            _write_dense_manifest(
-                dense_staged,
-                store_id,
-                release_id,
-                n_panel,
-                n_analyses,
-                chain_file,
-                dtype,
-                encoding=encoding,
-                eaf_orientation=eaf_provenance,
-            )
-            write_analyses_tsv(dense_dir, add_hit_counts(dense_dir, analyses))
-        finally:
-            shutil.rmtree(spill_dir, ignore_errors=True)
-
-        csr.flush(staged.path, encoding, se_coefficients=se_coefficients)
-        n_overflow = csr.n_associations
-        log.info("Building Ragged Overflow top-hit index")
-        build_ragged_top_hit_indexes(staged.path, encoding=encoding)
-
-        # manifest.json before analyses.tsv/overview.html, same reasoning as the
-        # Dense Component write above.
-        _write_hybrid_manifest(
-            staged,
-            store_id,
-            release_id,
-            n_shared,
-            n_analyses,
-            n_panel,
-            n_off_panel,
-            n_overflow,
-            chain_file,
-            chunk_shape,
-            dtype,
-            encoding=encoding,
-            eaf_orientation=eaf_provenance,
-        )
-
-        # ── Shared union table + shared index ─────────────────────────────────────
-        # Top-Hit Counts here are the Dense Component's and Ragged Overflow
-        # Component's counts summed (ADR 0032): the two partition an Analysis's
-        # associations disjointly, so neither alone is the whole picture.
-        dense_counted = add_hit_counts(dense_dir, analyses)
-        shared_analyses = add_hit_counts(staged.path, dense_counted)
-        _write_index(staged, shared_sorted, analyses, chunk_shape)
-        write_analyses_tsv(staged.path, shared_analyses)
-        _write_variant_table(staged.path, shared_sorted, hg38_to_source, rsid_by_alid)
-
-        log.info(
-            "Hybrid build complete: %d shared variants (%d panel + %d off-panel), "
-            "%d analyses, %d overflow associations",
-            n_shared,
-            n_panel,
-            n_off_panel,
-            n_analyses,
-            n_overflow,
-        )
-
-    return HybridBuildResult(
-        output_path=out,
-        n_variants=n_shared,
-        n_analyses=n_analyses,
-        n_panel=n_panel,
-        n_off_panel=n_off_panel,
-        n_overflow=n_overflow,
-    )
+        prepared = _prepare_build(staged, manifest_rows, options)
+        components = _build_components(prepared, options)
+        result = _finalise_store(prepared, components, options)
+    return result
 
 
 def _write_variant_table(

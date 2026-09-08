@@ -680,3 +680,142 @@ def test_analyses_table_reports_shared_not_dense_only_hit_counts(hybrid_store):
                 f"panel-local count) rather than the shared table's "
                 f"{shared_row[column]!r}"
             )
+
+
+# --- Phase-split seam locks (issue #130) --------------------------------------
+
+
+def test_two_assemblies_colliding_on_one_hg38_alid_record_no_source_origin(tmp_path):
+    """One hg38 variant reached by two manifest rows from *different* raw
+    tuples -- an hg19 row that lifts onto it and an already-hg38 row that
+    names it directly -- is one stored variant whose provenance is genuinely
+    ambiguous (issue #85): recording either origin would misattribute the
+    other's row, so the variant table must write no source_alid, while the
+    rows that did not collide keep theirs. This is the hybrid partition +
+    provenance seam the phase split must not move: the variant is stored
+    once, both Analyses' associations route to it, and the two component
+    variant tables agree.
+    """
+    from opengwasdb.variants.axis import iter_variant_records
+
+    # trait_vcf (hg19): 1:1000000 lifts onto 1:1064620 (HG38_ALID_2).
+    # trait_ssf (hg38): a literal 1:1064620 row, no lift. The raw tuples
+    # differ (1000000 vs 1064620), so this is a post-liftover provenance
+    # collision -- NOT the cross-assembly ambiguous-tuple case _lift_manifest_
+    # variants drops outright, which is tested in the dense suite.
+    assert HG19_POS_2 != 1_064_620
+    vcf_hg19 = _make_vcf(
+        tmp_path, "trait_vcf",
+        [f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+    )
+    vcf_hg38 = _make_vcf(
+        tmp_path, "trait_ssf",
+        ["1\t1064620\t.\tC\tT\t.\tPASS\t.\tES:SE\t2.0:0.4\n"],
+    )
+    # trait_clean (hg19) lifts to a *different* ALID (HG38_ALID_3), so the
+    # build also records a positive provenance row to compare the None against.
+    vcf_clean = _make_vcf(
+        tmp_path, "trait_clean",
+        [f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n"],
+    )
+    manifest = _manifest_with_source_assembly(
+        tmp_path,
+        [
+            ("trait_vcf", vcf_hg19, "Trait VCF", ""),
+            ("trait_ssf", vcf_hg38, "Trait SSF", "hg38"),
+            ("trait_clean", vcf_clean, "Trait Clean", ""),
+        ],
+    )
+    panel = tmp_path / "panel.txt"
+    panel.write_text(f"{HG38_ALID_3}\n", encoding="utf-8")
+    store_path = tmp_path / "store.opengwasdb"
+
+    result = build_hybrid_from_vcf_manifest(
+        manifest, store_path, reference_panel=panel,
+        store_id="s", release_id="r",
+    )
+    # The fixture must span both components and a real collision for the
+    # provenance assertions below to mean anything.
+    assert result.n_panel == 1
+    assert result.n_off_panel == 1
+    assert result.n_variants == 2
+
+    validation = validate_store(store_path)
+    assert validation.ok, validation.errors
+
+    shared_rows = {r.alid: r for r in iter_variant_records(store_path / "variants.tsv.gz")}
+    assert set(shared_rows) == {HG38_ALID_2, HG38_ALID_3}
+    # Collided origin -> no source_alid (ambiguous, never guessed).
+    assert shared_rows[HG38_ALID_2].source_alid is None
+    # Unambiguous origin survives the build.
+    assert shared_rows[HG38_ALID_3].source_alid == "1:1500000:A:G"
+
+    dense_rows = {r.alid: r for r in iter_variant_records(store_path / "dense" / "variants.tsv.gz")}
+    assert set(dense_rows) == {HG38_ALID_3}
+    assert dense_rows[HG38_ALID_3].source_alid == "1:1500000:A:G"
+
+    q = query_store(store_path)
+    try:
+        vcf_result = q.analysis("trait_vcf")
+        ssf_result = q.analysis("trait_ssf")
+        clean_result = q.analysis("trait_clean")
+        vt = q.variants_table()
+    finally:
+        q.close()
+
+    assert len(vcf_result["z"]) == 1
+    assert len(ssf_result["z"]) == 1
+    assert len(clean_result["z"]) == 1
+    # Both Analyses observed the same physical variant -> one stored row.
+    assert vcf_result["variant_index"][0] == ssf_result["variant_index"][0]
+    assert vt[int(vcf_result["variant_index"][0])]["alid"] == HG38_ALID_2
+    assert vt[int(clean_result["variant_index"][0])]["alid"] == HG38_ALID_3
+
+
+def test_analysis_with_frequencies_only_in_overflow_is_stamped_association(tmp_path):
+    """ADR 0036 eaf_scope is a union over what the two components stored, so
+    an Analysis whose frequencies all sit in the Ragged Overflow and none on
+    the Dense Component must still be stamped ``association`` on *both*
+    analyses.tsv files, and its overflow EAF must reach query. The union is
+    only knowable after both components have been read, so a phase split that
+    stamped either component's files from its own answer alone would silently
+    downgrade this Analysis to ``absent``.
+    """
+    vcf = _make_vcf(
+        tmp_path, "trait_a",
+        [
+            # On-panel (dense) association, source reports no frequency.
+            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+            # Off-panel (overflow) association, source reports a frequency.
+            f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE:AF\t1.5:0.3:0.2\n",
+        ],
+    )
+    manifest = _make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
+    store_path = tmp_path / "store.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, store_path, reference_panel=_panel(tmp_path),
+        store_id="s", release_id="r",
+    )
+
+    q = query_store(store_path)
+    try:
+        on_panel = q.lookup([HG38_ALID_1], ["trait_a"])
+        off_panel = q.lookup([HG38_ALID_2], ["trait_a"])
+    finally:
+        q.close()
+
+    # The fixture must genuinely span both components and carry the frequency
+    # on the overflow side only, or the scope assertion proves nothing.
+    assert len(on_panel["z"]) == 1
+    assert len(off_panel["z"]) == 1
+    assert np.isnan(on_panel["eaf"][0])
+    # Source reports 0.2 for the ALT allele (T), which sorts after the stored
+    # effect allele C: the store answers the frequency of C, i.e. 1 - 0.2.
+    assert off_panel["eaf"][0] == pytest.approx(0.8, rel=5e-3)
+
+    for path in (store_path / "analyses.tsv", store_path / "dense" / "analyses.tsv"):
+        row = read_analyses(path).rows[0]
+        assert row["analysis_id"] == "trait_a"
+        assert row["eaf_scope"] == "association", (
+            f"{path}: the overflow-only frequency did not reach eaf_scope"
+        )
