@@ -306,6 +306,61 @@ Do not edit `quality.json`, files under `quality/`, hooks, or baselines to make
 a gate pass. Do not run `--write-baseline` unless the baseline change is the
 explicit purpose of a reviewed commit.
 
+#### The escapes and duplication scopes
+
+The escapes and duplication checks share the `skip_dirs` in `quality.json`, and
+the duplication changed-lines judgment reads its `base_ref`. The generic
+mechanics live in `quality/README.md` and the checks' docstrings; this is the
+reasoning specific to this repository, which is why it sits here rather than in
+the imported guide:
+
+- **`.claude/` and `.pixi/` are skipped because neither is source a review can
+  change.** In this repository's agent-driven workflow both trees sit inside
+  the checkout: `.claude/worktrees/…/` holds one git worktree per session,
+  each with its own pixi environment, and `.pixi/` is never committed — pixi
+  reconstructs it from `pyproject.toml`'s `[tool.pixi.*]` tables and
+  `pixi.lock`. A scan whose roots are
+  the whole repository reads them anyway. The first scans, before the two
+  trees were excluded, recorded 19,121 escape sites and a duplication share
+  of 92.51% (8,271,343 of 8,941,213 significant lines) — almost all of it the
+  pixi environments and repository copies inside `.claude/worktrees/…/`; once
+  excluded, the project's own source measures 39 escape sites and 7.1%
+  (2,692 of 37,906 lines). The baselines are committed ratchets, so they may
+  only measure content that exists on every machine and that a reviewed
+  change can affect:
+  a pixi environment differs by machine and by day, so scanning one would
+  fail the gate wherever an environment exists and make each re-baselining
+  record machine state rather than project debt. The checks' built-in
+  defaults already skip the same class of tree (`.venv`, `vendor`,
+  `node_modules`, build output); `.claude` and `.pixi` are this repository's
+  instances of it.
+- **Changed lines are compared against `origin/dev`, the branch a change
+  merges into.** The changed-lines judgment asks which clones this change
+  introduced or touched, and in `feature → dev → main` the answer is the
+  delta a feature branch adds to dev — `main` only ever receives a version
+  cut of dev. Without a configured base the check diffs against the last
+  release (the merge-base with `origin/main`), which counts every line dev
+  has merged since the cut as "changed": a branch touching only clean lines
+  would fail on clones that were already reviewed and merged. CI on a pull
+  request to dev reaches the right base by itself (`GITHUB_BASE_REF=dev`);
+  the `base_ref` in `quality.json` makes a local run reproduce CI, the same
+  reason `scripts/check_changelog.py` is run with `--base-ref origin/dev`.
+- **A clone overlapping a changed line can never be accepted by the density
+  baseline.** The density is one repository-wide share (duplicated significant
+  lines over all significant lines) held by a baseline that only lowers. It
+  records no file, no line and no clone pair — pairs are not baselined
+  because a pair's identity shifts as either side is edited — so there is no
+  entry that could accept a specific twin. Nor can the share vouch for a
+  change: it is a ratio over totals that move with the change, so a branch
+  that introduces a fresh copy while removing older copies elsewhere can end
+  below the baseline even though it added a twin — density records only that
+  the repository got less duplicated on net. A share "within the density
+  baseline" is therefore compatible with a changed line being cloned, which
+  is why the changed-lines judgment exists at all and has no baseline: a
+  clone touching a changed line fails the gate unconditionally. Raising the
+  density baseline is a reviewed policy decision that accepts repository-wide
+  debt; it does not and cannot let the change under review keep its twin.
+
 ### Enforced by CI
 
 `.github/workflows/ci.yml` runs on every pull request and every push to `dev`
