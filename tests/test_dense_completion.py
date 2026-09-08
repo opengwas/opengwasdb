@@ -18,6 +18,12 @@ from opengwasdb.completion.ld_panel import (
     load_ld_eigenvectors,
     snp_position,
 )
+from opengwasdb.encoding import (
+    DenseSePlane,
+    DenseZPlane,
+    StoreCodec,
+    StoreEncoding,
+)
 from opengwasdb.layouts.dense import complete as complete_module
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -25,7 +31,7 @@ from opengwasdb.layouts.dense.complete import (
 )
 from opengwasdb.model.analyses import read_analyses, write_analyses
 from opengwasdb.query import query_store
-from opengwasdb.store.open import open_store
+from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.validation.validate import validate_store
 
 
@@ -664,6 +670,186 @@ class TestParallel:
         assert parallel.n_missing_imputation_failed == serial.n_missing_imputation_failed
         _assert_stores_identical(parallel_dst, serial_dst)
         assert validate_store(parallel_dst).ok
+
+
+# ── the completed-band writer seam ─────────────────────────────────────────
+#
+# `_write_completed_bands` reports cells in three buckets -- imputed,
+# still-missing off-panel, still-missing on-panel (imputation failed) -- and
+# raises rather than re-filter when a fill shard disagrees with the
+# ancestry-match filter. The pipeline can never produce that disagreement (the
+# shards are filtered with the same mask that reaches the writer), so the two
+# guarantees are driven here with a hand-built destination: the completed-zarr
+# skeleton, a crafted out_to_src/on_panel map, and fill shards written
+# directly in the writer's record format.
+
+
+class TestCompletedBandWriter:
+    """Exact counters and error semantics of the dense band writer."""
+
+    def _write_fill_shard(self, shard_dir: Path, records: np.ndarray) -> None:
+        with open(complete_module._fill_shard_path(shard_dir, 0), "wb") as fh:
+            records.tofile(fh)
+
+    def _call_writer(
+        self,
+        tmp_path: Path,
+        src: Path,
+        n_variants: int,
+        on_panel: np.ndarray,
+        out_to_src: np.ndarray,
+        records: np.ndarray,
+        impute_mask: np.ndarray | None,
+    ) -> tuple[Path, StoreEncoding, int, tuple[np.ndarray, int, int]]:
+        """Build a staged completed-zarr target, write one fill shard for the
+        single band every small store maps to, run the writer, and return
+        ``(dst, encoding, n_analyses, counters)`` where counters are the
+        writer's ``(n_missing_off_panel, n_missing_imputation_failed,
+        total_imputed)``. The destination is left staged (committed by the
+        context manager), so the returned ``dst`` holds ``data.zarr`` ready
+        to open.
+        """
+        source = open_store(src)
+        encoding = source.manifest.encoding
+        src_root = source.arrays(mode="r")
+        n_analyses = int(src_root["z"].shape[1])
+        dst = tmp_path / "band_writer_target.opengwasdb"
+        with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
+            effective = complete_module._create_completed_zarr(
+                staged,
+                n_variants,
+                n_analyses,
+                on_panel,
+                complete_module.DEFAULT_CHUNK_SHAPE,
+                complete_module.DEFAULT_DTYPE,
+                encoding,
+                src_has_eaf=False,
+                eaf_reference=None,
+            )
+            shard_dir = tmp_path / "fill_shards"
+            shard_dir.mkdir(exist_ok=True)
+            self._write_fill_shard(shard_dir, records)
+            counters = complete_module._write_completed_bands(
+                staged,
+                src_root,
+                out_to_src,
+                on_panel,
+                shard_dir,
+                effective,
+                n_variants,
+                n_analyses,
+                encoding,
+                encoding,
+                impute_mask=impute_mask,
+            )
+        return dst, encoding, n_analyses, counters
+
+    def test_exact_counters_and_cell_accounting(self, tmp_path, signal_observed_store):
+        """The writer fills only cells the source left missing, never overwrites
+        an observed cell, and counts every outcome exactly once.
+
+        The signal fixture observes 11 of the 12 union positions (position 6,
+        700000, is observed by nobody), so the destination carries 12 real
+        rows plus two crafted ones: row 12 is a dst-only off-panel variant
+        (never imputable), row 13 a dst-only on-panel variant. Fills target
+        rows 6 and 13; a third fill aimed at already-observed row 0 must be
+        ignored.
+        """
+        import zarr
+
+        n_variants = 14
+        out_to_src = np.full(n_variants, -1, dtype=np.int64)
+        for i in range(12):
+            if i == _SIGNAL_MISSING_IDX:
+                continue
+            out_to_src[i] = i if i < _SIGNAL_MISSING_IDX else i - 1
+        on_panel = np.ones(n_variants, dtype=bool)
+        on_panel[12] = False
+
+        records = np.zeros(3, dtype=complete_module._FILL_RECORD_DTYPE)
+        records["row"] = [6, 13, 0]
+        records["ai"] = [0, 0, 0]
+        records["z"] = [7.5, -2.5, 0.25]
+        records["se"] = [0.11, 0.22, 0.30]
+
+        dst, encoding, n_analyses, (miss_off, miss_failed, n_imputed) = self._call_writer(
+            tmp_path, signal_observed_store, n_variants, on_panel, out_to_src,
+            records, impute_mask=None,
+        )
+
+        # The counts the writer returns partition the unobserved cells.
+        assert miss_off.tolist() == [1]  # row 12, off-panel
+        assert miss_failed == 0
+        assert n_imputed == 2  # rows 6 and 13; row 0 already observed
+
+        root = zarr.open_group(str(dst / "data.zarr"), mode="r")
+        z = DenseZPlane.open(root, encoding).band(0, n_variants)
+        se = DenseSePlane.open(root, encoding).band(0, n_variants)
+        np.testing.assert_allclose(z[6, 0], 7.5)
+        np.testing.assert_allclose(z[13, 0], -2.5)
+        assert np.isnan(z[12, 0])
+        # The row-0 fill record landed on an already-observed cell: ignored.
+        assert not np.isnan(z[0, 0])
+        np.testing.assert_allclose(z[0, 0], _SIGNAL_Z_TRUE[0], atol=1e-3)
+        np.testing.assert_allclose(se[6, 0], 0.11, rtol=1e-2)
+        np.testing.assert_allclose(se[13, 0], 0.22, rtol=1e-2)
+        imputed = root["imputed"][:]
+        assert int(imputed.sum()) == 2
+        assert imputed[6, 0] == 1 and imputed[13, 0] == 1
+        assert imputed[12, 0] == 0  # off-panel cells are never imputed
+
+    def test_fill_shard_with_a_masked_out_analysis_raises(
+        self, tmp_path, observed_store
+    ):
+        """A shard record for an analysis the ancestry-match filter excluded
+        raises rather than being silently re-filtered at the write.
+        """
+        n_variants = 3
+        on_panel = np.ones(n_variants, dtype=bool)
+        out_to_src = np.arange(n_variants, dtype=np.int64)
+        records = np.zeros(1, dtype=complete_module._FILL_RECORD_DTYPE)
+        records["row"] = [0]
+        records["ai"] = [1]  # analysis 1 is masked out below
+        records["z"] = [5.0]
+        records["se"] = [0.10]
+
+        with pytest.raises(ValueError, match="ancestry-match filter"):
+            self._call_writer(
+                tmp_path, observed_store, n_variants, on_panel, out_to_src,
+                records, impute_mask=np.array([True, False]),
+            )
+
+
+class TestCompletedStoreCounters:
+    """The counters `complete_dense_store` reports and the arrays it wrote are
+    one account of the same cells: every cell the source never observed is
+    imputed, or still missing -- off-panel (per Analysis) or on-panel
+    (imputation failed). The completed store fixture imputes nothing, so the
+    interesting buckets here are the missing ones."""
+
+    def test_arrays_reconcile_analyses_tsv_and_provenance(self, completed_store):
+        import json
+
+        manifest = json.loads((completed_store / "manifest.json").read_text())
+        completion = manifest["provenance"]["completion"]
+        encoding = open_store(completed_store).manifest.encoding
+        root = open_store(completed_store).arrays(mode="r")
+        missing = StoreCodec(encoding).missing_mask(root["z"][:])
+        on_panel = root["on_panel"][:].astype(bool)
+        n_analyses = int(missing.shape[1])
+
+        table = read_analyses(completed_store / "analyses.tsv")
+        by_index = {int(r["analysis_index"]): r for r in table.rows}
+        off_panel_missing = missing[~on_panel, :].sum(axis=0)
+        for col in range(n_analyses):
+            declared = int(by_index[col]["completion_n_missing_total"])
+            assert int(off_panel_missing[col]) == declared, f"analysis column {col}"
+        assert int(off_panel_missing.sum()) == int(completion["n_missing_off_panel"])
+        assert int(missing[on_panel, :].sum()) == int(completion["n_missing_imputation_failed"])
+        assert int(root["imputed"][:].sum()) == int(completion["n_imputed"])
+        # The off-panel rows of this fixture are real (chr1:1200000 observed
+        # by a1 only), so the check above is not vacuous: a2 must owe one.
+        assert int(off_panel_missing.sum()) >= 1
 
 
 class TestPanelArtifacts:
