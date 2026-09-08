@@ -618,6 +618,46 @@ class TestResume:
 
         assert validate_store(dst).ok
 
+    def test_resume_with_no_checkpointed_block_matches_fresh_run(
+        self, tmp_path, observed_store, ld_panel, monkeypatch
+    ):
+        """Crash before the first block finishes: nothing is checkpointed, so a
+        resumed run must schedule every block afresh rather than assume a
+        checkpoint the crash never wrote."""
+        fresh_dst = tmp_path / "fresh_first.opengwasdb"
+        fresh = complete_dense_store(
+            observed_store, fresh_dst, ld_panel, ancestry="EUR", min_cor=0.0
+        )
+
+        dst = tmp_path / "crashed_first.opengwasdb"
+        calls = {"n": 0}
+        real_run_block = complete_module._run_block
+
+        def crash_first_run_block(task):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("simulated crash before any checkpoint")
+            return real_run_block(task)
+
+        monkeypatch.setattr(complete_module, "_run_block", crash_first_run_block)
+        with pytest.raises(RuntimeError, match="simulated crash before any checkpoint"):
+            complete_dense_store(observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0)
+        monkeypatch.undo()
+
+        checkpoint_dir = checkpoint_dir_for(dst)
+        assert checkpoint_dir.exists()
+        assert not dst.exists()
+        assert list((checkpoint_dir / "blocks").glob("*.npz")) == [], (
+            "crash before any block finished must leave no checkpoint to resume from"
+        )
+
+        resumed = resume_dense_completion(checkpoint_dir)
+        assert resumed.n_variants == fresh.n_variants
+        assert resumed.n_imputed == fresh.n_imputed
+        assert resumed.n_missing_off_panel == fresh.n_missing_off_panel
+        assert resumed.n_missing_imputation_failed == fresh.n_missing_imputation_failed
+        _assert_stores_identical(dst, fresh_dst)
+
     def test_resume_matches_fresh_run(self, tmp_path, observed_store, ld_panel):
         fresh_dst = tmp_path / "fresh.opengwasdb"
         fresh = complete_dense_store(
@@ -987,3 +1027,66 @@ def test_validator_rejects_a_completion_count_without_a_completion(
     _rewrite_analyses(imputing_completed_store, completed_against="")
 
     assert _matching(imputing_completed_store, "completed_against is blank")
+
+
+class TestUnionAxisPhase:
+    """The axis-union phase (`_build_union_axis`, ADR 0022) is one call that
+    produces the merged variant axis and the maps every later phase reads it
+    through. These tests exercise the seam directly so a regression in the
+    union cannot hide behind a full completion run."""
+
+    def test_union_axis_adds_only_new_panel_variants(
+        self, tmp_path, observed_store, ld_panel
+    ):
+        import sqlite3
+
+        from opengwasdb.store.open import OpenGWASDBStore
+
+        dst = tmp_path / "axis_only.opengwasdb"
+        with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
+            axis = complete_module._build_union_axis(
+                Path(observed_store), staged, ld_panel, "EUR", None,
+            )
+
+            # The fixture's ground truth: 5 observed variants on chr1, the
+            # panel adds chr1:1050000 and two chr2 variants (ADR 0022's union).
+            assert axis.n_analyses == 2
+            assert axis.n_variants == 8, "fixture must add exactly 3 panel variants"
+            assert axis.n_variants_new == 3
+            assert [v.alid for v in axis.merged_variants] == [
+                "1:900000:A:G", "1:950000:A:C", "1:1000000:A:G", "1:1050000:C:T",
+                "1:1100000:A:C", "1:1200000:A:G", "2:100000:A:G", "2:200000:C:G",
+            ]
+
+            # on_panel marks the seven panel ALIDs; chr1:1200000 is observed
+            # but off-panel, and must be the only unmarked row.
+            off_panel = [
+                v.alid
+                for v, flag in zip(axis.merged_variants, axis.on_panel, strict=True)
+                if not flag
+            ]
+            assert off_panel == ["1:1200000:A:G"]
+            assert int(axis.on_panel.sum()) == 7
+
+            # out_to_src: the five observed rows keep their source indices;
+            # the three panel-only rows are the -1 sentinel.
+            assert sorted(axis.out_to_src[axis.out_to_src >= 0].tolist()) == [0, 1, 2, 3, 4]
+            assert int((axis.out_to_src < 0).sum()) == 3
+            assert len(axis.tsv_paths) == 2  # one chr1 block + one chr2 block
+
+            # The phase has already persisted the axis: variants.tsv.gz and an
+            # index.sqlite seeded with the completion-quality table.
+            assert (staged.path / "variants.tsv.gz").exists()
+            conn = sqlite3.connect(str(staged.path / "index.sqlite"))
+            tables = {
+                r[0]
+                for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            metadata = {
+                row[0]: row[1]
+                for row in conn.execute("SELECT key, value FROM metadata")
+            }
+            conn.close()
+            assert "completion_quality" in tables
+            assert metadata["n_variants"] == "8"
+            assert metadata["n_analyses"] == "2"
