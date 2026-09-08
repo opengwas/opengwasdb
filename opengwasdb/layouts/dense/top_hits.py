@@ -346,19 +346,19 @@ def write_top_hit_indexes_for_store(
     together is what stops a build writing tiers with no `eaf` array.
     """
     log.info("Collecting top-hit EAF in variant-row order for %d candidate cells", len(rows))
-    eaf = collect_top_hit_eaf(store_path, rows, cols, encoding)
+    eaf = _collect_top_hit_eaf(store_path, rows, cols, encoding)
     if encoding.se.is_residual:
         # The harvested `se` is what the source reported; the plane now holds a
         # residual of it. ADR 0040 asks the index to carry what a query reads
         # back, so re-read it through the plane rather than keep the un-encoded
         # value the band-writer happened to still be holding.
         log.info("Re-reading top-hit se through the residual plane")
-        se = collect_top_hit_se(store_path, rows, cols, encoding)
+        se = _collect_top_hit_se(store_path, rows, cols, encoding)
     log.info("Writing top-hit index from %d harvested candidate cells", len(rows))
     write_top_hit_indexes(store_path, rows, cols, z, se, eaf=eaf)
 
 
-def collect_top_hit_eaf(
+def _collect_top_hit_eaf(
     store_path: str | Path,
     rows: np.ndarray,
     cols: np.ndarray,
@@ -372,7 +372,7 @@ def collect_top_hit_eaf(
     return _gather_in_row_chunks(root, rows, cols, plane.band)
 
 
-def collect_top_hit_se(
+def _collect_top_hit_se(
     store_path: str | Path,
     rows: np.ndarray,
     cols: np.ndarray,

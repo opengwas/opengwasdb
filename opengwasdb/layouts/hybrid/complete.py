@@ -226,7 +226,7 @@ def complete_hybrid_store(
             # imprecision limited to summary statistics for the crossed-over
             # cells, not a correctness invariant like top-hit presence.
             build_dense_top_hit_indexes(
-                dense_component_path(staged.path), encoding=src_manifest.encoding
+                dense_component_path(staged.path), encoding=dense_encoding
             )
 
         union = sorted(set(dense_alids) | set(overflow_alids.tolist()), key=_alid_sort_key)

@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import gzip
 import io
+from pathlib import Path
 
 import numpy as np
 import pytest
 import zarr
 
-from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
+from opengwasdb.layouts.dense.top_hits import read_top_hit_counts, threshold_key
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.model.analyses import read_analyses
@@ -250,6 +251,189 @@ def _make_ld_panel_with_crossover(tmp_path):
         seed=1,
     )
     return root
+
+
+def _vcf_with_eaf(tmp_path: Path, name: str, rows: list[str]) -> Path:
+    header = (
+        "##fileformat=VCFv4.2\n"
+        "##FORMAT=<ID=ES,Number=A,Type=Float,Description=\"Effect size\">\n"
+        "##FORMAT=<ID=SE,Number=A,Type=Float,Description=\"Standard error\">\n"
+        "##FORMAT=<ID=EZ,Number=A,Type=Float,Description=\"Z-score\">\n"
+        "##FORMAT=<ID=AF,Number=A,Type=Float,Description=\"Alternate allele frequency\">\n"
+        "##SAMPLE=<ID=S,StudyType=Continuous>\n"
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS\n"
+    )
+    path = tmp_path / f"{name}.vcf"
+    path.write_text(header + "".join(rows), encoding="utf-8")
+    return path
+
+
+def _residual_hybrid_crossover_source(tmp_path: Path) -> tuple[Path, str, float, float]:
+    """A residual-SE Hybrid source with an off-panel crossover variant.
+
+    SE tracks ``log(2*f*(1-f))`` per Analysis so the shared decision
+    residual-codes both components (issue #118). The overflow carries enough
+    off-panel variants that its coefficient side table is amortised and the
+    residual plan actually saves bytes there, which is the only way a Hybrid
+    store selects the residual encoding at all.
+
+    Exactly one off-panel variant is chosen as the crossover target: it stays
+    off the build panel (so it routes to the Ragged Overflow), then crosses
+    onto the Dense Component when the completion panel extends the axis
+    (issue #163). ``trait_b`` leaves the last four panel variants unobserved,
+    so dense completion imputes something -- without an imputed cell in the
+    scanned band, rebuilding the index under the wrong encoding would not
+    raise and the regression test would prove nothing.
+    """
+    n_panel = 200
+    n_off_panel = 200
+    crossover_i = 50
+    frequencies = np.linspace(0.05, 0.95, n_panel, dtype=np.float64)
+    off_frequencies = np.linspace(0.10, 0.90, n_off_panel, dtype=np.float64)
+    crossover_eaf = float(off_frequencies[crossover_i])
+
+    def se_value(col: int, freq: float, phase: int) -> float:
+        return float(
+            np.exp(
+                (-3.0 + col * 0.2)
+                - 0.5 * np.log(2.0 * freq * (1.0 - freq))
+                + 0.12 * np.sin(phase * (0.07 + col * 0.01))
+            )
+        )
+
+    def panel_rows(col: int, n_observed: int) -> list[str]:
+        out: list[str] = []
+        for i in range(n_observed):
+            freq = frequencies[i]
+            se = se_value(col, freq, i)
+            z = 8.0 if i % 50 == 0 else 1.0
+            out.append(
+                f"1\t{(i + 1) * 1000}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF"
+                f"\t{z * se:.6f}:{se:.6f}:{freq:.6f}\n"
+            )
+        return out
+
+    def off_panel_rows(col: int) -> list[str]:
+        out: list[str] = []
+        for i in range(n_off_panel):
+            pos = 300_000 + i * 1000
+            freq = off_frequencies[i]
+            se = se_value(col, freq, i)
+            z = 8.0 if i % 50 == 0 else 1.0
+            out.append(
+                f"1\t{pos}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF"
+                f"\t{z * se:.6f}:{se:.6f}:{freq:.6f}\n"
+            )
+        return out
+
+    crossover_alid = f"1:{300_000 + crossover_i * 1000}:A:G"
+    vcf_a = _vcf_with_eaf(
+        tmp_path, "trait_a", panel_rows(0, n_panel) + off_panel_rows(0)
+    )
+    vcf_b = _vcf_with_eaf(tmp_path, "trait_b", panel_rows(1, n_panel - 4))
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
+        "\toriginal_sd_method\tsource_assembly\n"
+        f"trait_a\t{vcf_a}\tTrait A\t1000\tsd\tdeclared_standardised\thg38\n"
+        f"trait_b\t{vcf_b}\tTrait B\t1000\tsd\tdeclared_standardised\thg38\n",
+        encoding="utf-8",
+    )
+    panel = tmp_path / "panel.txt"
+    panel.write_text(
+        "\n".join(f"1:{(i + 1) * 1000}:A:G" for i in range(n_panel)) + "\n",
+        encoding="utf-8",
+    )
+
+    src = tmp_path / "src.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, src, reference_panel=panel, store_id="hyb", release_id="v1"
+    )
+    expected_crossover_se = se_value(0, crossover_eaf, crossover_i)
+    return src, crossover_alid, expected_crossover_se, crossover_eaf
+
+
+def _residual_ld_panel_with_crossover(
+    tmp_path: Path, crossover_alid: str, crossover_eaf: float
+) -> Path:
+    """An LD panel over the residual source's hg38 axis, with a second block
+    that extends it over the off-panel crossover variant."""
+    root = tmp_path / "ld_panel"
+    n_panel = 200
+    frequencies = np.linspace(0.05, 0.95, n_panel, dtype=np.float64)
+    _write_ld_block(
+        root / "EUR" / "1",
+        "1000-200000",
+        [
+            (f"1:{(i + 1) * 1000}:A:G", float(frequencies[i]), (i + 1) * 1000)
+            for i in range(n_panel)
+        ],
+        seed=0,
+    )
+    _crossover_pos = int(crossover_alid.split(":")[1])
+    _write_ld_block(
+        root / "EUR" / "1",
+        f"{_crossover_pos}-{_crossover_pos}",
+        [(crossover_alid, crossover_eaf, _crossover_pos)],
+        seed=1,
+    )
+    return root
+
+
+def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(tmp_path) -> None:
+    """issue #163: panel crossover must rebuild the Dense Top-Hit Index with
+    the completed component's own encoding, not the source's.
+
+    The source encoding has no Reference EAF, so scanning a band that holds an
+    imputed cell under it decodes that cell's frequency as missing and fails
+    the residual-SE read. The completed Dense Component's own plan carries the
+    ``eaf_reference`` completion added, which is the plan the rebuild must use.
+    """
+    src, crossover_alid, expected_crossover_se, crossover_eaf = _residual_hybrid_crossover_source(
+        tmp_path
+    )
+    assert StoreManifest.load(src).encoding.se.is_residual
+
+    ld = _residual_ld_panel_with_crossover(tmp_path, crossover_alid, crossover_eaf)
+    dst = tmp_path / "dst.opengwasdb"
+    result = complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+
+    assert validate_store(dst).ok
+    assert result.n_imputed > 0  # trait_b's four unobserved panel variants
+
+    shared_axis = VariantAxis(dst)
+    alid_by_index = {r.variant_index: r.alid for r in shared_axis.all()}
+    shared_axis.close()
+
+    q = query_store(dst)
+    r = q.analysis("trait_a", observed_only=False)
+    by_alid = {
+        alid_by_index[int(vi)]: (z, se, status)
+        for vi, z, se, status in zip(
+            r["variant_index"], r["z"], r["se"], r["association_status"], strict=True
+        )
+    }
+    z, se, status = by_alid[crossover_alid]
+    assert status == "observed"
+    assert se == pytest.approx(expected_crossover_se, rel=0.01)
+    assert abs(z) == pytest.approx(8.0, rel=0.05)
+
+    # The rebuilt Dense top-hit index must carry the crossed-over association,
+    # decoded through the completed component's own encoding.
+    dense_top = zarr.open_group(
+        str(dst / "dense" / "data.zarr" / "top_hits" / threshold_key(5e-8)), mode="r"
+    )
+    dense_axis = VariantAxis(dst / "dense")
+    dense_alid_by_index = {r.variant_index: r.alid for r in dense_axis.all()}
+    dense_axis.close()
+    hit_alids = {
+        dense_alid_by_index[int(vi)]: float(hit_se)
+        for vi, hit_se in zip(
+            dense_top["variant_index"][:], dense_top["se"][:].astype(np.float32), strict=True
+        )
+    }
+    assert crossover_alid in hit_alids
+    assert hit_alids[crossover_alid] == pytest.approx(expected_crossover_se, rel=0.01)
 
 
 def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation(tmp_path):
