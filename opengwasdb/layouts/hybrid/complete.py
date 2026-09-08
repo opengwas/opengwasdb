@@ -78,7 +78,7 @@ from opengwasdb.store.open import (
     check_writable_format_version,
     open_store,
 )
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants import VariantAxis, VariantRecord
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +101,80 @@ class HybridCompletionResult:
     n_imputed: int
 
 
+@dataclass(frozen=True)
+class _CompletedDense:
+    """What phase 1 hands on: the completed Dense Component's own axis (row
+    order), the plan ``complete_dense_store`` wrote for it (issue #116), and
+    the imputed count it reported before any panel crossover is folded in."""
+
+    dir: Path
+    alids: list[str]
+    alid_to_row: dict[str, int]
+    encoding: StoreEncoding
+    n_imputed: int
+
+
+@dataclass(frozen=True)
+class _SourceOverflow:
+    """The observed source's Ragged Overflow Component and shared axis, read
+    once and shared by the crossover fold and the overflow rebuild.
+
+    ``offsets`` partitions the flat association arrays (``variant_index``,
+    ``z``, ``se``, ``eaf``) by Analysis; ``vi_to_record`` maps each overflow
+    association's source shared-axis index to its record.
+    """
+
+    offsets: np.ndarray
+    variant_index: np.ndarray
+    z: np.ndarray
+    se: np.ndarray
+    eaf: np.ndarray
+    n_analyses: int
+    vi_to_record: dict[int, VariantRecord]
+    source_alid_by_alid: dict[str, str | None]
+    rsid_by_alid: dict[str, str]
+
+
+@dataclass(frozen=True)
+class _SharedAxis:
+    """The completed store's shared union axis and the counts describing it.
+
+    ``alids`` are in shared-index order: every completed Dense row plus every
+    overflow variant that did not cross onto the extended panel. ``is_crossover``
+    masks the flat source-overflow associations the fold wrote into the Dense
+    Component, which the overflow rebuild must not rewrite. ``n_imputed`` is
+    the corrected count after the fold reclaimed crossed-over imputed cells.
+    """
+
+    alids: list[str]
+    index: dict[str, int]
+    dense_alids: list[str]
+    is_crossover: np.ndarray
+    n_shared: int
+    n_panel: int
+    n_off_panel: int
+    n_imputed: int
+
+
+def _open_observed_hybrid_source(source_path: Path) -> StoreManifest:
+    """Open the source release and refuse anything but an Observed-Only
+    Hybrid in a writable format -- before any work begins (ADR 0038 §4)."""
+    src_manifest = open_store(source_path).manifest
+    check_writable_format_version(
+        src_manifest.format_version, source=f"source release {source_path}"
+    )
+    if src_manifest.primary_layout is not PrimaryStorageLayout.HYBRID:
+        raise ValueError(
+            f"source store is not Hybrid (primary_layout={src_manifest.primary_layout})"
+        )
+    if src_manifest.completion_state is not CompletionState.OBSERVED_ONLY:
+        raise ValueError(
+            "source hybrid store is not Observed-Only "
+            f"(completion_state={src_manifest.completion_state})"
+        )
+    return src_manifest
+
+
 def complete_hybrid_store(
     source_path: str | Path,
     dest_path: str | Path,
@@ -113,249 +187,352 @@ def complete_hybrid_store(
     n_workers: int = 1,
     overwrite: bool = False,
 ) -> HybridCompletionResult:
-    """Produce a Reference-Completed Hybrid store from an Observed-Only Hybrid source."""
+    """Produce a Reference-Completed Hybrid store from an Observed-Only
+    Hybrid source (ADR 0026, issue #058)."""
     src = Path(source_path)
     dst = Path(dest_path)
+    ld = Path(ld_dir)
+    src_manifest = _open_observed_hybrid_source(src)
 
-    source = open_store(src)
-    src_manifest = source.manifest
-    # See the dense path: refused before the work, not after it (ADR 0038 §4).
-    check_writable_format_version(src_manifest.format_version, source=f"source release {src}")
-    if src_manifest.primary_layout is not PrimaryStorageLayout.HYBRID:
-        raise ValueError(
-            f"source store is not Hybrid (primary_layout={src_manifest.primary_layout})"
-        )
-    if src_manifest.completion_state is not CompletionState.OBSERVED_ONLY:
-        raise ValueError(
-            "source hybrid store is not Observed-Only "
-            f"(completion_state={src_manifest.completion_state})"
-        )
-
+    # The four phases below run inside the staging context, so a failure in
+    # any of them leaves no partial release at `dst` (atomic staging).
     with OpenGWASDBStore.staging(dst, overwrite=overwrite) as staged:
-        # ── 1. Complete the Dense Component (dense pipeline, unchanged) ────────
-        # complete_dense_store derives the per-Analysis ancestry-match filter
-        # (ADR 0028) itself from the Dense Component's own analyses.tsv when
-        # impute_analysis_ids is not given -- the same filter hybrid used to
-        # compute here inline, now applied uniformly regardless of entry point.
-        log.info("Completing Dense Component via the dense reference-completion pipeline")
-        dense_result = complete_dense_store(
-            dense_component_path(src),
-            dense_component_path(staged.path),
-            ld_dir,
+        # Phase 1: complete the Dense Component via the dense pipeline.
+        dense = _complete_dense_component(
+            src,
+            staged.path,
+            ld,
             ancestry=ancestry,
             min_cor=min_cor,
             thresh=thresh,
             release_id=release_id,
             n_workers=n_workers,
-            overwrite=True,
         )
-
-        # ── 2. Rebuild the shared union table from the completed dense axis ────
-        dense_axis = VariantAxis(dense_component_path(staged.path))
-        dense_records = dense_axis.all()
-        dense_axis.close()
-        dense_alids = [r.alid for r in dense_records]  # dense row order
-        dense_alid_to_row = {alid: i for i, alid in enumerate(dense_alids)}
-
-        src_csr = RaggedCSRReader(src)
-        offsets = src_csr._offsets[:]
-        n_analyses = len(offsets) - 1
-        src_vi = src_csr._variant_index[:]
-        src_z = src_csr.z_all()
-        src_se = src_csr.se_all()
-        src_eaf = src_csr.eaf_slice(0, len(src_vi))
-
-        src_shared_axis = VariantAxis(src)
-        vi_to_record = src_shared_axis.by_indices(np.unique(src_vi).tolist())
-        src_shared_all = src_shared_axis.all()
-        src_shared_axis.close()
-        source_alid_by_alid = {r.alid: r.source_alid for r in src_shared_all}
-        # Carry the observed store's rsids into the completed one (issue #109):
-        # Reference Completion adds panel rows, it does not rename the rows the
-        # source already named. Completed-only rows get no rsid.
-        rsid_by_alid = {r.alid: r.rsid for r in src_shared_all if r.rsid}
-
-        overflow_alids = (
-            np.array([vi_to_record[int(v)].alid for v in src_vi], dtype=object)
-            if len(src_vi)
-            else np.empty(0, dtype=object)
+        # Phase 2: read the source overflow once, fold panel crossovers into
+        # the completed component, and rebuild the shared union axis.
+        overflow = _read_source_overflow(src)
+        axis = _remap_shared_axis(dense, overflow, src_manifest.encoding)
+        # Phase 3: shared index/variant table/dense_to_shared map, then the
+        # overflow CSR rebuilt on the remapped indices.
+        analyses = _read_analyses(dense.dir)
+        n_overflow = _write_shared_tables_and_overflow(
+            staged, src, src_manifest, dense, axis, overflow, analyses
         )
-
-        # A variant off-panel in the source but newly on-panel after dense
-        # completion (LD panel extension) "crosses over": fold its real
-        # observation into the completed Dense Component and drop it from the
-        # rebuilt overflow below, rather than let the same variant appear in
-        # both components -- see the module docstring (issue #99).
-        is_crossover = (
-            np.array([alid in dense_alid_to_row for alid in overflow_alids], dtype=bool)
-            if len(overflow_alids)
-            else np.empty(0, dtype=bool)
-        )
-        # The Dense Component's own plan, read from the manifest
-        # `complete_dense_store` just wrote: identical to the source's for
-        # `z`/`se`, plus the `eaf_reference` that completion gave it.
-        dense_encoding = open_store(dense_component_path(staged.path)).manifest.encoding
-        n_reclaimed_imputed = _fold_panel_crossovers(
-            dense_component_path(staged.path),
-            dense_alid_to_row,
-            offsets,
-            src_z,
-            src_se,
-            src_eaf,
-            overflow_alids,
-            is_crossover,
-            encoding=src_manifest.encoding,
-            dense_encoding=dense_encoding,
-        )
-        n_imputed = dense_result.n_imputed - n_reclaimed_imputed
-        if is_crossover.any():
-            log.info(
-                "%d off-panel association(s) crossed onto the newly-extended dense "
-                "panel; folded in as real observations (%d had been imputed there, "
-                "now corrected to the real value)",
-                int(is_crossover.sum()),
-                n_reclaimed_imputed,
-            )
-            # Rebuild the Dense Component's top-hit index from the patched z
-            # values -- complete_dense_store already built one from its own
-            # pre-patch data, which the fold above can invalidate for the
-            # (small) fraction of cells it just overwrote. The completed
-            # analyses.tsv's completion-quality rollup columns (median
-            # pearson_r etc.), written by complete_dense_store before the
-            # fold, are not similarly recomputed -- an accepted, narrow
-            # imprecision limited to summary statistics for the crossed-over
-            # cells, not a correctness invariant like top-hit presence.
-            build_dense_top_hit_indexes(
-                dense_component_path(staged.path), encoding=dense_encoding
-            )
-
-        union = sorted(set(dense_alids) | set(overflow_alids.tolist()), key=_alid_sort_key)
-        new_shared_index = {alid: i for i, alid in enumerate(union)}
-        n_shared = len(union)
-        n_panel = len(dense_alids)
-        n_off_panel = n_shared - n_panel
-
-        # ── 3. Write shared table + index at the destination ──────────────────
-        # The completed Dense Component's analyses.tsv already carries
-        # completed_against (written by complete_dense_store, issue #22) --
-        # re-reading it here and writing it back at the shared root is the one
-        # place Analysis metadata is written, not a second provenance carry.
-        analyses = _read_analyses(dense_component_path(staged.path))
-        _write_index(staged, union, analyses, _chunk_shape(src_manifest))
-        source_by_alid = {a: source_alid_by_alid.get(a) for a in union}
-        _write_variant_table(staged.path, union, source_by_alid, rsid_by_alid)
-
-        # ── 4. dense_to_shared map for the completed axis ─────────────────────
-        dense_to_shared = np.array([new_shared_index[a] for a in dense_alids], dtype=np.int32)
-        np.save(dense_to_shared_path(staged.path), dense_to_shared)
-
-        # ── 5. Rebuild the overflow CSR with remapped shared indices, excluding
-        #        any association folded into the Dense Component in step 2 ──────
-        # Completion writes into the source's arrays, so it writes in the
-        # source's encoding -- never re-encoding data an operator asked only to
-        # complete (ADR 0038 §4). `check_writable_format_version` above is what
-        # makes that honest.
-        csr = RaggedCSRWriter(n_shared)
-        # The Ragged Overflow's per-variant baselines travel with its values
-        # across the shared-axis remap. Recomputing them from the decoded
-        # frequencies would move every baseline by up to half a step and
-        # re-quantise every cell against it, so a completed release would be
-        # less accurate than the source it was completed from (ADR 0037 §2).
-        overflow_baseline = _remapped_overflow_baseline(
-            src, vi_to_record, new_shared_index, n_shared
-        )
-        for ai in range(n_analyses):
-            s, e = int(offsets[ai]), int(offsets[ai + 1])
-            keep = ~is_crossover[s:e] if e > s else np.empty(0, dtype=bool)
-            if s == e or not keep.any():
-                csr.add_analysis(
-                    np.empty(0, dtype=np.int32),
-                    np.empty(0, dtype=np.float32),
-                    np.empty(0, dtype=np.float16),
-                )
-                continue
-            new_vi = np.array(
-                [new_shared_index[vi_to_record[int(v)].alid] for v in src_vi[s:e][keep]],
-                dtype=np.int32,
-            )
-            z = src_z[s:e][keep].astype(np.float32)
-            se = src_se[s:e][keep].astype(np.float32)
-            # Observed EAF survives the remap (ADR 0036), like rsids above:
-            # Reference Completion adds rows, it does not change what the
-            # source reported for the ones it already had.
-            eaf = src_eaf[s:e][keep].astype(np.float32)
-            order = np.argsort(new_vi, kind="stable")
-            csr.add_analysis(
-                new_vi[order],
-                z[order],
-                se[order],
-                eaf=eaf[order] if np.isfinite(eaf).any() else None,
-            )
-        # The Ragged Overflow has no imputed cells -- completion imputes into
-        # the Dense Component alone -- so it declares no `eaf_reference`, where
-        # the nested Dense Component's own manifest does. Each component's plan
-        # describes that component (ADR 0037 §4).
-        completed_dense_root = zarr.open_group(
-            str(dense_component_path(staged.path) / "data.zarr"), mode="r"
-        )
-        shared_se_coefficients = (
-            np.asarray(completed_dense_root["se_coefficients"][:], dtype=np.float32)
-            if src_manifest.encoding.se.is_residual
-            else None
-        )
-        csr.flush(
-            staged.path,
-            src_manifest.encoding,
-            eaf_baseline=overflow_baseline,
-            se_coefficients=shared_se_coefficients,
-        )
-
-        # ── 6. Hybrid manifest (reference-completed) ──────────────────────────
-        # Written before analyses.tsv/overview.html below: overview.html
-        # reads manifest.json fresh from output_path for its header (ADR 0032).
-        new_release = release_id or f"{src_manifest.release_id}-completed"
-        _write_completed_manifest(
-            staged,
-            src_manifest,
-            new_release,
-            n_shared,
-            n_analyses,
-            n_panel,
-            n_off_panel,
-            csr.n_associations,
-            n_imputed,
-            # Read back from the component that did the imputation rather than
-            # re-stamped from this function's arguments, so the two manifests
-            # cannot name different panels (issue #116: one panel per completed
-            # store, recorded in `manifest.json`).
-            dense_completion=_dense_completion_provenance(staged.path),
-        )
-
-        build_ragged_top_hit_indexes(staged.path, encoding=src_manifest.encoding)
-        # Dense Component counts already live on `analyses` (read back from
-        # complete_dense_store's already-completed output); add the Ragged
-        # Overflow Component's counts on top -- the two partition an
-        # Analysis's associations disjointly (ADR 0032).
-        write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
-
-        log.info(
-            "Hybrid completion complete: %d shared variants (%d panel + %d off-panel), "
-            "%d imputed dense cells, %d overflow associations (observed-only)",
-            n_shared,
-            n_panel,
-            n_off_panel,
-            n_imputed,
-            csr.n_associations,
+        # Phase 4: manifest, overflow top hits and the shared rollups.
+        _finalize_completed_hybrid(
+            staged, src_manifest, release_id, analyses, axis, overflow, n_overflow
         )
 
     return HybridCompletionResult(
         output_path=dst,
-        n_variants=n_shared,
-        n_analyses=n_analyses,
-        n_panel=n_panel,
-        n_off_panel=n_off_panel,
-        n_overflow=csr.n_associations,
+        n_variants=axis.n_shared,
+        n_analyses=overflow.n_analyses,
+        n_panel=axis.n_panel,
+        n_off_panel=axis.n_off_panel,
+        n_overflow=n_overflow,
+        n_imputed=axis.n_imputed,
+    )
+
+
+# ── Phase 1: Dense completion ───────────────────────────────────────────────
+
+
+def _complete_dense_component(
+    src: Path,
+    staged_path: Path,
+    ld_dir: Path,
+    *,
+    ancestry: str,
+    min_cor: float,
+    thresh: float,
+    release_id: str | None,
+    n_workers: int,
+) -> _CompletedDense:
+    """Run the dense reference-completion pipeline unchanged on the Dense
+    Component, then read back the completed axis and plan it recorded.
+
+    ``complete_dense_store`` derives the per-Analysis ancestry-match filter
+    (ADR 0028) itself from the component's own analyses.tsv, so the filter is
+    applied uniformly regardless of which pipeline entry point is used.
+    """
+    log.info("Completing Dense Component via the dense reference-completion pipeline")
+    dense_dir = dense_component_path(staged_path)
+    dense_result = complete_dense_store(
+        dense_component_path(src),
+        dense_dir,
+        ld_dir,
+        ancestry=ancestry,
+        min_cor=min_cor,
+        thresh=thresh,
+        release_id=release_id,
+        n_workers=n_workers,
+        overwrite=True,
+    )
+    dense_axis = VariantAxis(dense_dir)
+    try:
+        dense_alids = [r.alid for r in dense_axis.all()]
+    finally:
+        dense_axis.close()
+    return _CompletedDense(
+        dir=dense_dir,
+        alids=dense_alids,
+        # Dense row order, as the completed component's own axis names it.
+        alid_to_row={alid: i for i, alid in enumerate(dense_alids)},
+        # The plan `complete_dense_store` just wrote: the source's z/se plus
+        # the `eaf_reference` completion added.
+        encoding=open_store(dense_dir).manifest.encoding,
+        n_imputed=dense_result.n_imputed,
+    )
+
+
+# ── Phase 2: crossover fold + shared-axis rebuild ───────────────────────────
+
+
+def _read_source_overflow(src: Path) -> _SourceOverflow:
+    """Read the observed source's Ragged Overflow Component and shared axis
+    once: the crossover fold and the overflow rebuild share these arrays."""
+    src_csr = RaggedCSRReader(src)
+    offsets = src_csr._offsets[:]
+    variant_index = src_csr._variant_index[:]
+    z = src_csr.z_all()
+    se = src_csr.se_all()
+    eaf = src_csr.eaf_slice(0, len(variant_index))
+
+    src_shared_axis = VariantAxis(src)
+    try:
+        vi_to_record = src_shared_axis.by_indices(np.unique(variant_index).tolist())
+        shared_all = src_shared_axis.all()
+    finally:
+        src_shared_axis.close()
+    # Carry the observed store's rsids into the completed one (issue #109):
+    # Reference Completion adds panel rows, it does not rename the rows the
+    # source already named; completed-only rows get no rsid.
+    return _SourceOverflow(
+        offsets=offsets,
+        variant_index=variant_index,
+        z=z,
+        se=se,
+        eaf=eaf,
+        n_analyses=len(offsets) - 1,
+        vi_to_record=vi_to_record,
+        source_alid_by_alid={r.alid: r.source_alid for r in shared_all},
+        rsid_by_alid={r.alid: r.rsid for r in shared_all if r.rsid},
+    )
+
+
+def _remap_shared_axis(
+    dense: _CompletedDense,
+    overflow: _SourceOverflow,
+    source_encoding: StoreEncoding,
+) -> _SharedAxis:
+    """Fold panel crossovers into the completed Dense Component and rebuild
+    the shared union axis (issue #99): an off-panel variant that became
+    on-panel after completion has its real observed value folded in (marked
+    ``imputed=0``) and is excluded from the rebuilt overflow."""
+    overflow_alids = (
+        np.array(
+            [overflow.vi_to_record[int(v)].alid for v in overflow.variant_index],
+            dtype=object,
+        )
+        if len(overflow.variant_index)
+        else np.empty(0, dtype=object)
+    )
+    is_crossover = (
+        np.array([alid in dense.alid_to_row for alid in overflow_alids], dtype=bool)
+        if len(overflow_alids)
+        else np.empty(0, dtype=bool)
+    )
+    n_reclaimed_imputed = _fold_panel_crossovers(
+        dense.dir,
+        dense.alid_to_row,
+        overflow.offsets,
+        overflow.z,
+        overflow.se,
+        overflow.eaf,
+        overflow_alids,
+        is_crossover,
+        encoding=source_encoding,
+        dense_encoding=dense.encoding,
+    )
+    n_imputed = dense.n_imputed - n_reclaimed_imputed
+    if is_crossover.any():
+        log.info(
+            "%d off-panel association(s) crossed onto the newly-extended dense "
+            "panel; folded in as real observations (%d had been imputed there, "
+            "now corrected to the real value)",
+            int(is_crossover.sum()),
+            n_reclaimed_imputed,
+        )
+        # Rebuild the top-hit index complete_dense_store built from its
+        # pre-patch z; analyses.tsv rollups are not recomputed (accepted,
+        # narrow imprecision for the crossed-over cells' summary statistics).
+        build_dense_top_hit_indexes(dense.dir, encoding=dense.encoding)
+
+    union = sorted(set(dense.alids) | set(overflow_alids.tolist()), key=_alid_sort_key)
+    return _SharedAxis(
+        alids=union,
+        index={alid: i for i, alid in enumerate(union)},
+        dense_alids=dense.alids,
+        is_crossover=is_crossover,
+        n_shared=len(union),
+        n_panel=len(dense.alids),
+        n_off_panel=len(union) - len(dense.alids),
         n_imputed=n_imputed,
+    )
+
+
+# ── Phase 3: shared tables + overflow rebuild ───────────────────────────────
+
+
+def _write_shared_tables_and_overflow(
+    staged: StagedRelease,
+    src: Path,
+    src_manifest: StoreManifest,
+    dense: _CompletedDense,
+    axis: _SharedAxis,
+    overflow: _SourceOverflow,
+    analyses: list[Analysis],
+) -> int:
+    """Write the shared index, variant table and dense_to_shared map on the
+    completed axis, then rebuild the overflow CSR on its remapped shared
+    indices minus the folded crossovers. Returns the overflow association
+    count.
+
+    Completion writes into the source's arrays in the source's encoding --
+    never re-encoding data an operator asked only to complete (ADR 0038 §4).
+    The completed Dense Component's analyses.tsv already carries
+    completed_against; writing it back at the shared root is the one place
+    Analysis metadata is written, not a second provenance carry.
+    """
+    _write_index(staged, axis.alids, analyses, _chunk_shape(src_manifest))
+    source_by_alid = {a: overflow.source_alid_by_alid.get(a) for a in axis.alids}
+    _write_variant_table(staged.path, axis.alids, source_by_alid, overflow.rsid_by_alid)
+    dense_to_shared = np.array([axis.index[a] for a in axis.dense_alids], dtype=np.int32)
+    np.save(dense_to_shared_path(staged.path), dense_to_shared)
+
+    csr = RaggedCSRWriter(axis.n_shared)
+    # The Ragged Overflow's per-variant baselines travel with its values
+    # across the shared-axis remap (ADR 0037 §2): recomputing them from the
+    # decoded frequencies would re-quantise every cell against a moved baseline.
+    overflow_baseline = _remapped_overflow_baseline(
+        src, overflow.vi_to_record, axis.index, axis.n_shared
+    )
+    for ai in range(overflow.n_analyses):
+        new_vi, z, se, eaf = _remapped_analysis_arrays(ai, overflow, axis)
+        csr.add_analysis(new_vi, z, se, eaf=eaf)
+    csr.flush(
+        staged.path,
+        src_manifest.encoding,
+        eaf_baseline=overflow_baseline,
+        se_coefficients=_shared_se_coefficients(dense.dir, src_manifest.encoding),
+    )
+    return csr.n_associations
+
+
+def _remapped_analysis_arrays(
+    analysis_index: int,
+    overflow: _SourceOverflow,
+    axis: _SharedAxis,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+    """The rebuilt overflow arrays for one Analysis: its source associations
+    remapped onto the completed shared axis with folded crossovers dropped,
+    sorted ascending by shared index.
+
+    ``eaf`` is None when the Analysis's slice carries no usable frequency, so
+    the flat EAF array stays aligned with z/se whatever mix an Analysis has
+    (ADR 0036); observed EAF itself survives the remap untouched.
+    """
+    s, e = int(overflow.offsets[analysis_index]), int(overflow.offsets[analysis_index + 1])
+    empty: tuple[np.ndarray, np.ndarray, np.ndarray, None] = (
+        np.empty(0, dtype=np.int32),
+        np.empty(0, dtype=np.float32),
+        np.empty(0, dtype=np.float16),
+        None,
+    )
+    if e == s:
+        return empty
+    keep = ~axis.is_crossover[s:e]
+    if not keep.any():
+        return empty
+    new_vi = np.array(
+        [axis.index[overflow.vi_to_record[int(v)].alid] for v in overflow.variant_index[s:e][keep]],
+        dtype=np.int32,
+    )
+    order = np.argsort(new_vi, kind="stable")
+    z = overflow.z[s:e][keep].astype(np.float32)[order]
+    se = overflow.se[s:e][keep].astype(np.float32)[order]
+    eaf = overflow.eaf[s:e][keep].astype(np.float32)
+    return (
+        new_vi[order],
+        z,
+        se,
+        eaf[order] if np.isfinite(eaf).any() else None,
+    )
+
+
+def _shared_se_coefficients(dense_dir: Path, source_encoding: StoreEncoding) -> np.ndarray | None:
+    """The shared residual-SE coefficients, read from the completed Dense
+    Component.
+
+    The Ragged Overflow has no imputed cells and declares no ``eaf_reference``
+    -- each component's plan describes that component (ADR 0037 §4) -- but the
+    residual fit itself is shared, so the overflow is coded against the Dense
+    Component's coefficients.
+    """
+    if not source_encoding.se.is_residual:
+        return None
+    root = zarr.open_group(str(dense_dir / "data.zarr"), mode="r")
+    return np.asarray(root["se_coefficients"][:], dtype=np.float32)
+
+
+# ── Phase 4: manifest + finalization ────────────────────────────────────────
+
+
+def _finalize_completed_hybrid(
+    staged: StagedRelease,
+    src_manifest: StoreManifest,
+    release_id: str | None,
+    analyses: list[Analysis],
+    axis: _SharedAxis,
+    overflow: _SourceOverflow,
+    n_overflow: int,
+) -> None:
+    """Write the reference-completed Hybrid manifest, the overflow top-hit
+    index, and the shared analyses.tsv rollup over both components."""
+    # The manifest precedes analyses.tsv: overview.html reads manifest.json
+    # fresh from output_path for its header (ADR 0032).
+    new_release = release_id or f"{src_manifest.release_id}-completed"
+    _write_completed_manifest(
+        staged,
+        src_manifest,
+        new_release,
+        axis.n_shared,
+        overflow.n_analyses,
+        axis.n_panel,
+        axis.n_off_panel,
+        n_overflow,
+        axis.n_imputed,
+        # Read back from the component that did the imputation rather than
+        # re-stamped from this function's arguments (issue #116: one panel
+        # per completed store, recorded in `manifest.json`).
+        dense_completion=_dense_completion_provenance(staged.path),
+    )
+
+    build_ragged_top_hit_indexes(staged.path, encoding=src_manifest.encoding)
+    # Dense Component counts already live on `analyses` (read back from
+    # complete_dense_store's already-completed output); add the Ragged
+    # Overflow Component's counts on top -- the two partition an Analysis's
+    # associations disjointly (ADR 0032).
+    write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
+
+    log.info(
+        "Hybrid completion complete: %d shared variants (%d panel + %d off-panel), "
+        "%d imputed dense cells, %d overflow associations (observed-only)",
+        axis.n_shared,
+        axis.n_panel,
+        axis.n_off_panel,
+        axis.n_imputed,
+        n_overflow,
     )
 
 
@@ -538,7 +715,7 @@ def _write_completed_manifest(
 
 def _remapped_overflow_baseline(
     source_path: Path,
-    vi_to_record: Mapping[int, Any],
+    vi_to_record: Mapping[int, VariantRecord],
     new_shared_index: Mapping[str, int],
     n_shared: int,
 ) -> np.ndarray | None:
