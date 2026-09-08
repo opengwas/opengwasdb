@@ -17,6 +17,7 @@ from opengwasdb.model.analyses import (
     RETIRED_ANALYSIS_COLUMNS,
     Analysis,
     analyses_table_from_records,
+    ancestry_impute_mask,
     read_analyses,
     read_analysis_records,
     reset_top_hit_counts,
@@ -287,3 +288,47 @@ def test_reset_top_hit_counts_preserves_list_order_and_identity():
     ]
     # A blank-count Analysis (the fresh-build default) is unchanged in value.
     assert cleared[1] == _MINIMAL_ANALYSIS
+
+
+def test_ancestry_impute_mask_none_means_impute_every_analysis():
+    # ``None`` is "no ancestry information anywhere, impute every Analysis"
+    # (ADR 0028) -- the mask itself is absent, never an all-True array, so a
+    # caller can tell "no filter ran" from "the filter admitted everything".
+    assert ancestry_impute_mask([_FULL_ANALYSIS, _MINIMAL_ANALYSIS], None) is None
+
+
+def test_ancestry_impute_mask_admitting_every_analysis_is_all_true():
+    mask = ancestry_impute_mask(
+        [_FULL_ANALYSIS, _MINIMAL_ANALYSIS],
+        {_FULL_ANALYSIS.analysis_id, _MINIMAL_ANALYSIS.analysis_id},
+    )
+
+    assert mask is not None
+    assert mask.tolist() == [True, True]
+
+
+def test_ancestry_impute_mask_keeps_only_matching_analyses_in_list_order():
+    # Mask position mirrors list order, which is also the ``analysis_index``
+    # column; a shift here would silently filter the wrong Analysis.
+    mask = ancestry_impute_mask(
+        [_FULL_ANALYSIS, _MINIMAL_ANALYSIS], {_FULL_ANALYSIS.analysis_id}
+    )
+
+    assert mask is not None
+    assert mask.tolist() == [True, False]
+
+    reversed_mask = ancestry_impute_mask(
+        [_FULL_ANALYSIS, _MINIMAL_ANALYSIS], {_MINIMAL_ANALYSIS.analysis_id}
+    )
+    assert reversed_mask is not None
+    assert reversed_mask.tolist() == [False, True]
+
+
+def test_ancestry_impute_mask_empty_id_set_matches_nothing_but_is_a_mask():
+    # An empty set is distinguishable from ``None`` (ADR 0028: an empty
+    # selection completes nothing, ``None`` completes everything -- the two
+    # must never collapse into one silent answer).
+    mask = ancestry_impute_mask([_FULL_ANALYSIS, _MINIMAL_ANALYSIS], set())
+
+    assert mask is not None
+    assert mask.tolist() == [False, False]

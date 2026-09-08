@@ -31,6 +31,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from opengwasdb.model.enums import (
     AncestryAssignmentMethod,
     EafOrientationOutcome,
@@ -671,3 +673,22 @@ def reset_top_hit_counts(analyses: list[Analysis]) -> list[Analysis]:
     updates they apply around this reset.
     """
     return [replace(a, n_hits_5e8="", n_hits_5e6="", n_hits_5e4="") for a in analyses]
+
+
+def ancestry_impute_mask(
+    analyses: list[Analysis], impute_analysis_ids: set[str] | None
+) -> np.ndarray | None:
+    """The per-Analysis ancestry-match impute filter (ADR 0028), as a boolean
+    mask over `analyses` in list order, or ``None`` when no filter applies.
+
+    ``None`` (impute every Analysis) is what a source with no ancestry
+    information gets; a set keeps exactly the Analyses whose ``analysis_id``
+    it holds imputed and carries the rest through observed-only. Mask position
+    mirrors list order -- an Analysis's position in the list is its
+    ``analysis_index`` -- so callers index it by list position. Shared by the
+    Dense and Ragged completion drivers, whose ``_read_source_*`` phases
+    differ only in the progress line each prints around this derivation.
+    """
+    if impute_analysis_ids is None:
+        return None
+    return np.array([a.analysis_id in impute_analysis_ids for a in analyses], dtype=bool)
