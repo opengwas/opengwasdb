@@ -1,4 +1,4 @@
-"""Tests for scripts/migrate_store_to_format_3.py (issue #156).
+"""Tests for scripts/migrate_store_to_format_3.py (issues #156, #164).
 
 The migration derives a **new release**: the format-3 re-encode rewrites the
 `se` plane, the top-hit index and the manifest, which is association data and
@@ -8,6 +8,16 @@ given. These tests pin the copy-on-write contract the interim review of
 issue-118 asked for: `--into` is required, the destination is published from a
 staging directory only when the migrated copy validates, and a failure at any
 point leaves the source exactly as it was and nothing at the destination.
+
+Issue #164 tightens the contract in two directions. The published release is
+a genuinely new one — a fresh UUID4 `release_id` and a fresh `created_at`,
+never the source's — and validation at the publication boundary is absolute:
+a staged copy carrying any error is refused, even when an identical error
+string was already present in the source, because an identical string is
+exactly how a defect the migration itself introduced would hide. The refusal
+is an `Exception` rather than a `SystemExit`, so the Staged Release cleanup
+contract removes the staging directory on failure instead of leaving a failed
+copy behind for inspection.
 
 There is no format-2.0 builder left in the codebase, so the fixture builds a
 Dense release the current way — with data a format-3 build residual-codes —
@@ -20,6 +30,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -128,6 +140,34 @@ def test_migrate_derives_a_3_0_release_and_leaves_the_source_untouched(tmp_path:
     assert manifest.encoding.se.is_residual
     assert validate_store(destination).ok
 
+    # The destination is a genuinely new release, not the source under a new
+    # version number (#164): a fresh UUID4 identity and a fresh creation time,
+    # both distinct from the source's.
+    source_manifest = StoreManifest.load(source)
+    assert uuid.UUID(manifest.release_id).version == 4
+    assert manifest.release_id != source_manifest.release_id
+    assert source_manifest.created_at is not None
+    created = datetime.fromisoformat(manifest.created_at)
+    source_created = datetime.fromisoformat(source_manifest.created_at)
+    assert created.utcoffset() is not None  # current UTC, not a local time
+    assert manifest.created_at != source_manifest.created_at
+    assert created > source_created
+
+    # The release's own page must agree with its manifest: overview.html's
+    # header embeds `store_id · release <release_id> · …` read fresh from
+    # manifest.json (ADR 0032), and the reflink copy still carries the page
+    # that advertised the source release. The migration regenerates it, so the
+    # destination advertises the new identity -- and not the source's -- in
+    # that metadata line. The negative is scoped to the metadata line, not the
+    # whole file: the source id legitimately survives in the destination's
+    # provenance, and a whole-file negative would be a loose assertion.
+    overview_html = (destination / "overview.html").read_text(encoding="utf-8")
+    meta_line = next(
+        line for line in overview_html.splitlines() if 'class="meta"' in line
+    )
+    assert f"release {manifest.release_id}" in meta_line
+    assert f"release {source_manifest.release_id}" not in meta_line
+
 
 def test_a_migration_needs_a_destination(tmp_path: Path, capsys) -> None:
     """No in-place mode: with no `--into`, the tool refuses rather than
@@ -165,31 +205,62 @@ def test_a_failed_migration_publishes_nothing_and_leaves_the_source_intact(
 def test_a_migrated_store_that_fails_validation_is_not_published(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The staging directory is published only when the migrated copy
-    validates. A copy the migration made invalid is refused -- `SystemExit`,
-    which the staging context manager leaves in place for inspection -- so
-    neither the source nor the destination is ever a half-migrated store.
+    """A staged copy carrying a validation error the source never had is
+    refused. The refusal is an `Exception` (not a `SystemExit`), so the
+    Staged Release cleanup contract removes the staging directory: neither
+    the source nor the destination is ever a half-migrated store (#164).
     """
     source = _revert_to_format_2(_build_format_3_store(tmp_path / "two.opengwasdb"))
     before = _directory_fingerprint(source)
     destination = tmp_path / "three.opengwasdb"
-    real_validate = migrate_module.validate_store
 
     def validate_staged_only(path):
-        # The before-migration check runs against the source and passes; the
-        # after-migration check runs against the staged copy and fails, as it
-        # would if the re-encode had produced an invalid store.
+        # The source (when checked) is sound; the staged copy fails, as it
+        # would if the re-encode had introduced a defect.
         if Path(path).resolve() == source.resolve():
-            return real_validate(path)
+            return validate_store(path)
         return ValidationResult(errors=["the migration broke something"])
 
     monkeypatch.setattr(migrate_module, "validate_store", validate_staged_only)
-    with pytest.raises(SystemExit, match="introduced 1 error"):
+    with pytest.raises(migrate_module.MigrationValidationError):
         migrate_module.migrate(source, destination)
 
     assert _directory_fingerprint(source) == before
     assert not destination.exists()
-    assert (tmp_path / ".three.opengwasdb.tmp").exists()  # left for inspection
+    assert not (tmp_path / ".three.opengwasdb.tmp").exists()  # cleanup ran
+
+
+def test_an_error_identical_to_the_sources_is_not_subtracted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Validation at the publication boundary is absolute: an error in the
+    staged copy is not excused because the source carries the identical
+    string (#164). The source -- and therefore the staged copy, which the
+    migration starts from byte-for-byte -- is missing `index.sqlite`, an
+    error the migration cannot fix. The migration must refuse to publish
+    rather than subtract the inherited string and ship a release that does
+    not validate.
+    """
+    source = _revert_to_format_2(_build_format_3_store(tmp_path / "two.opengwasdb"))
+    (source / "index.sqlite").unlink()
+    inherited = validate_store(source).errors
+    # The fixture is meaningful: the source really fails validation with
+    # exactly the text the staged copy will repeat back. (`index.sqlite` is
+    # removed rather than `analyses.tsv` so the migration's own passes -- which
+    # regenerate `overview.html` from `analyses.tsv` after re-stamping the
+    # manifest -- still reach the publication gate.)
+    assert inherited == ["missing index.sqlite"], inherited
+    before = _directory_fingerprint(source)
+    destination = tmp_path / "three.opengwasdb"
+
+    with pytest.raises(migrate_module.MigrationValidationError):
+        migrate_module.migrate(source, destination)
+
+    assert _directory_fingerprint(source) == before
+    assert not destination.exists()
+    assert not (tmp_path / ".three.opengwasdb.tmp").exists()
+    # The identical error text reached the publication gate and stopped it.
+    assert "missing index.sqlite" in capsys.readouterr().err
 
 
 def test_a_non_migratable_source_is_refused_before_any_copy(tmp_path: Path) -> None:

@@ -1,3 +1,18 @@
+# Historical run log (pre-#164) -- output of
+# scripts/migrate_store_to_format_3.py as it behaved before issue #164,
+# recorded 2026-09-07 (commit a219209).
+#
+# This run's outcome is a behaviour issue #164 removed: the tool validated the
+# source "before", subtracted its three pre-existing errors ("carried
+# through"), and published the format-3.0 release with them still present
+# ("OK — introduced no new errors. 3 pre-existing error(s) remain", EXIT=0).
+# The migration now refuses to publish any release that does not validate
+# with zero errors, so this exact source -- a 2.0 release carrying #135's
+# unchunked `eaf_baseline` and #127's truncated ALID index -- cannot be
+# migrated: the phase work below would run and then be refused at the
+# publication gate and discarded. It must be rebuilt instead. The numbers are
+# preserved as measured and have not been re-run against the current tool.
+
 Copying /data/opengwasdb/wip/rebuild-117/finngen-r13__r13-pilot-20 -> /data/opengwasdb/wip/rebuild-118/finngen-migrate-timing
 Validating before, to tell inherited faults from introduced ones
   3 pre-existing error(s), carried through:
