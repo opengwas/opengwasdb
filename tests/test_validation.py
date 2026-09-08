@@ -206,6 +206,97 @@ def test_validator_rejects_leftover_sqlite_analyses_table_ragged(ragged_store_pa
     assert any("still contains an analyses table" in error for error in result.errors)
 
 
+def test_validator_rejects_missing_ragged_csr_array(ragged_store_path):
+    # The Ragged validator's CSR-structure seam must not turn a missing
+    # parallel array into a decode crash in a later seam.
+    result = validate_store(ragged_store_path)
+    assert result.ok, result.errors
+    ragged = open_store(ragged_store_path).arrays(mode="a")["ragged"]
+    assert "se" in ragged and len(ragged["se"]) == int(ragged["offsets"][-1])  # fixture sanity
+    del ragged["se"]
+
+    result = validate_store(ragged_store_path)
+
+    assert not result.ok
+    assert "missing data.zarr/ragged/se" in result.errors
+
+
+def test_validator_rejects_ragged_csr_array_length_mismatch(ragged_store_path):
+    # A parallel array shorter than `offsets` implies is a structural error
+    # that must be reported, not read as the store silently losing rows.
+    ragged = open_store(ragged_store_path).arrays(mode="r")["ragged"]
+    n_assoc = int(ragged["offsets"][-1])
+    assert n_assoc > 1  # fixture sanity: the truncation must actually shorten z
+    assert len(ragged["z"]) == n_assoc
+    ragged = open_store(ragged_store_path).arrays(mode="a")["ragged"]
+    z = ragged["z"][:]
+    del ragged["z"]
+    ragged.create_dataset("z", data=z[:-1])
+
+    result = validate_store(ragged_store_path)
+
+    assert not result.ok
+    assert any(
+        "data.zarr/ragged/z has" in error and "entries but offsets imply" in error
+        for error in result.errors
+    )
+
+
+def test_validator_rejects_ragged_csr_array_outside_declared_plan(ragged_store_path):
+    # The manifest's encoding is the contract (issue #119): an array whose
+    # dtype disagrees with it must be reported as such, and later seams must
+    # not try to decode values under a plan the structure already contradicted.
+    ragged = open_store(ragged_store_path).arrays(mode="r")["ragged"]
+    assert str(ragged["z"].dtype) == "int16"  # fixture sanity
+    ragged = open_store(ragged_store_path).arrays(mode="a")["ragged"]
+    z = ragged["z"][:]
+    del ragged["z"]
+    ragged.create_dataset("z", data=z.astype(np.float32))
+
+    result = validate_store(ragged_store_path)
+
+    assert not result.ok
+    assert any(
+        "data.zarr/ragged/z has dtype float32 but the manifest declares int16_fixed"
+        in error
+        for error in result.errors
+    )
+
+
+def test_validator_rejects_negative_ragged_se(ragged_store_path):
+    # Same rule as the Dense band pass: a decoded negative finite se is a
+    # wrong answer a query would serve unchanged, so it is a hard error.
+    ragged = open_store(ragged_store_path).arrays(mode="r")["ragged"]
+    assert np.all(np.asarray(ragged["se"][:]) > 0)  # fixture sanity
+    ragged = open_store(ragged_store_path).arrays(mode="a")["ragged"]
+    ragged["se"][0] = np.float16(-0.1)
+
+    result = validate_store(ragged_store_path)
+
+    assert not result.ok
+    assert "se contains negative finite values" in result.errors
+
+
+def test_validator_rejects_ragged_analyses_row_count_mismatch(ragged_store_path):
+    # analyses.tsv is the sole source of truth for Analytical Metadata, so a
+    # row count that disagrees with the CSR offsets is a store whose metadata
+    # no longer describes its arrays (ADR 0030, spec §11/§20).
+    result = validate_store(ragged_store_path)
+    assert result.ok, result.errors
+    analyses_path = ragged_store_path / "analyses.tsv"
+    table = read_analyses(analyses_path)
+    assert len(table.rows) == 1  # fixture sanity: dropping it must change the count
+    write_analyses(analyses_path, type(table)(fieldnames=table.fieldnames, rows=()))
+
+    result = validate_store(ragged_store_path)
+
+    assert not result.ok
+    assert any(
+        "analyses.tsv has 0 rows but" in error and "offsets imply 1" in error
+        for error in result.errors
+    )
+
+
 def test_validator_accepts_migrated_ragged_store(ragged_store_path):
     result = validate_store(ragged_store_path)
 
