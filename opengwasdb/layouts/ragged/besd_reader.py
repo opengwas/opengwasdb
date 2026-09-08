@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import struct
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -28,52 +30,142 @@ class ProbeRecord(NamedTuple):
     orientation: str | None
 
 
-def read_esi(esi_path: str | Path) -> list[SnpRecord]:
-    snps: list[SnpRecord] = []
-    with open(esi_path, "r") as fh:
-        for line in fh:
-            line = line.strip()
+class BESDMetadataError(ValueError):
+    """An .esi/.epi metadata row could not be parsed (issue #130).
+
+    The message names the source file and the 1-based physical line so the
+    offending row can be located without re-scanning. These rows used to be
+    skipped silently, and because row_idx is assigned by enumeration, every
+    later row silently shifted against the `.besd` association file —
+    orphaned associations with no error raised anywhere.
+    """
+
+
+_ESI_COLUMNS = "chr, snp_id, genetic distance, bp, a1, a2"
+_EPI_COLUMNS = "chr, probe_id, genetic distance, probe_bp, gene, orientation"
+
+
+def _iter_index_rows(
+    path: str | Path,
+    *,
+    kind: str,
+    expected_columns: str,
+    min_fields: int,
+    max_fields: int,
+) -> Iterator[tuple[int, list[str]]]:
+    """Shared ESI/EPI data-row seam (issue #130).
+
+    Yields ``(line_no, fields)`` for every non-comment, non-blank line of a
+    metadata index file. Comment and blank lines are still skippable; any
+    other line that does not carry the field count the format defines raises
+    :class:`BESDMetadataError` with file and line context instead of being
+    dropped, which is what used to desynchronise row indices from the
+    `.besd` association stream.
+    """
+    file_path = Path(path)
+    with file_path.open() as fh:
+        for line_no, raw_line in enumerate(fh, start=1):
+            line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
-            parts = line.split()
-            if len(parts) < 4:
-                continue
+            fields = line.split()
+            if not min_fields <= len(fields) <= max_fields:
+                raise BESDMetadataError(
+                    f"{file_path}:{line_no}: {kind} data row has "
+                    f"{len(fields)} columns; expected {expected_columns}"
+                )
+            yield line_no, fields
+
+
+def read_esi(esi_path: str | Path) -> list[SnpRecord]:
+    """Read an .esi SNP index file into SnpRecord rows.
+
+    A data row must carry 6 columns (chr, snp_id, genetic distance, bp, a1,
+    a2) or 7 with a trailing frequency. Comment and blank lines are
+    ignored. A missing frequency column and a literal ``NA`` frequency both
+    mean the frequency is unknown and parse to ``None`` (issue #130:
+    absence is not a number). Any other malformed data row raises
+    :class:`BESDMetadataError` naming the file and line — a silently
+    skipped row would shift every later row index against the `.besd`
+    association file.
+    """
+    snps: list[SnpRecord] = []
+    for line_no, fields in _iter_index_rows(
+        esi_path,
+        kind="ESI",
+        expected_columns=f"6 or 7 ({_ESI_COLUMNS}[, frequency])",
+        min_fields=6,
+        max_fields=7,
+    ):
+        try:
+            bp = int(fields[3])
+        except ValueError:
+            raise BESDMetadataError(
+                f"{esi_path}:{line_no}: ESI bp column {fields[3]!r} is not an "
+                f"integer; expected {_ESI_COLUMNS}[, frequency]"
+            ) from None
+        freq: float | None = None
+        if len(fields) > 6 and fields[6] != "NA":
             try:
-                snps.append(SnpRecord(
-                    row_idx=len(snps),
-                    chromosome=parts[0],
-                    snp_id=parts[1],
-                    bp=int(parts[3]),
-                    a1=parts[4] if len(parts) > 4 else None,
-                    a2=parts[5] if len(parts) > 5 else None,
-                    freq=float(parts[6]) if len(parts) > 6 and parts[6] != "NA" else None,
-                ))
-            except (ValueError, IndexError):
-                continue
+                freq = float(fields[6])
+            except ValueError:
+                raise BESDMetadataError(
+                    f"{esi_path}:{line_no}: ESI frequency column {fields[6]!r} "
+                    f"is neither a number nor 'NA'"
+                ) from None
+            if not math.isfinite(freq):
+                raise BESDMetadataError(
+                    f"{esi_path}:{line_no}: ESI frequency column {fields[6]!r} "
+                    f"is not a finite number"
+                )
+        snps.append(
+            SnpRecord(
+                row_idx=len(snps),
+                chromosome=fields[0],
+                snp_id=fields[1],
+                bp=bp,
+                a1=fields[4],
+                a2=fields[5],
+                freq=freq,
+            )
+        )
     return snps
 
 
 def read_epi(epi_path: str | Path) -> list[ProbeRecord]:
+    """Read an .epi probe index file into ProbeRecord rows.
+
+    A data row must carry 6 columns: chr, probe_id, genetic distance,
+    probe_bp, gene, orientation. Comment and blank lines are ignored. Any
+    other malformed data row raises :class:`BESDMetadataError` naming the
+    file and line rather than silently dropping the probe and shifting every
+    later row index against the `.besd` association file (issue #130).
+    """
     probes: list[ProbeRecord] = []
-    with open(epi_path, "r") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            try:
-                probes.append(ProbeRecord(
-                    row_idx=len(probes),
-                    chromosome=parts[0],
-                    probe_id=parts[1],
-                    probe_bp=int(parts[3]),
-                    gene=parts[4] if len(parts) > 4 else None,
-                    orientation=parts[5] if len(parts) > 5 else None,
-                ))
-            except (ValueError, IndexError):
-                continue
+    for line_no, fields in _iter_index_rows(
+        epi_path,
+        kind="EPI",
+        expected_columns=f"exactly 6 ({_EPI_COLUMNS})",
+        min_fields=6,
+        max_fields=6,
+    ):
+        try:
+            probe_bp = int(fields[3])
+        except ValueError:
+            raise BESDMetadataError(
+                f"{epi_path}:{line_no}: EPI probe_bp column {fields[3]!r} is "
+                f"not an integer; expected {_EPI_COLUMNS}"
+            ) from None
+        probes.append(
+            ProbeRecord(
+                row_idx=len(probes),
+                chromosome=fields[0],
+                probe_id=fields[1],
+                probe_bp=probe_bp,
+                gene=fields[4],
+                orientation=fields[5],
+            )
+        )
     return probes
 
 
