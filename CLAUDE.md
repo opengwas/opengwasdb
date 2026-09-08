@@ -38,7 +38,7 @@ Every commit on `main` is a tagged version, cut by merging `dev`.
 - [ ] `CHANGELOG.md` `Unreleased` updated — CI fails a PR that changes
       `opengwasdb/` without it (`no-changelog` label to exempt).
 - [ ] No new ruff or mypy findings. Baselines are in `.baselines.json`
-      (65 / 40 at v0.2.0); `pixi run -e dev python scripts/check_baselines.py`.
+      (61 / 40); `pixi run -e dev python scripts/check_baselines.py`.
 - [ ] New tests **observed to fail** against the unfixed code. A test that
       cannot fail is worse than no test — one written this year passed with the
       bug present because its fixture never reached the broken path.
