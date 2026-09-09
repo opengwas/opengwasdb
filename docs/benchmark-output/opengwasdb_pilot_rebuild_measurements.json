@@ -1,0 +1,1039 @@
+{
+  "artifact": "rebuilt-pilot-releases",
+  "generator": "benchmarks/measure_pilot_releases.py",
+  "commit": "aff6020",
+  "measured_at": "2026-09-09T20:51:26.023164+00:00",
+  "stores": [
+    {
+      "path": "/data/opengwasdb/wip/rebuild-117/finngen-r13__r13-pilot-20",
+      "store_id": "finngen-r13",
+      "release_id": "r13-pilot-20",
+      "format_version": "2.0",
+      "primary_layout": "dense",
+      "association_coverage": "full",
+      "completion_state": "observed_only",
+      "reference_assembly": "GRCh38",
+      "created_at": "2026-08-31T13:24:05.575393+00:00",
+      "encoding": {
+        "version": 2,
+        "z": {
+          "kind": "int16_fixed",
+          "scale": 1024
+        },
+        "se": {
+          "kind": "float16"
+        },
+        "eaf": {
+          "kind": "int8_residual",
+          "residual_range": 0.5
+        }
+      },
+      "store_bytes": 4864197097,
+      "cells": {
+        "n_cells": 424612300
+      },
+      "components": [
+        {
+          "kind": "dense_grid",
+          "path": "data.zarr",
+          "encoding": {
+            "version": 2,
+            "z": {
+              "kind": "int16_fixed",
+              "scale": 1024
+            },
+            "se": {
+              "kind": "float16"
+            },
+            "eaf": {
+              "kind": "int8_residual",
+              "residual_range": 0.5
+            }
+          },
+          "cells": {
+            "n_variants": 21230615,
+            "n_analyses": 20,
+            "n_cells": 424612300
+          },
+          "data_bytes": 1509164729,
+          "group_bytes": {
+            "top_hits": 56144565
+          },
+          "arrays": {
+            "eaf": {
+              "bytes": 117814111,
+              "n_cells": 424612300,
+              "bytes_per_cell": 0.277463
+            },
+            "eaf_baseline": {
+              "bytes": 71806418,
+              "n_cells": 21230615,
+              "bytes_per_cell": 3.382211
+            },
+            "eaf_exception_index": {
+              "bytes": 8952,
+              "n_cells": 3151,
+              "bytes_per_cell": 2.841003
+            },
+            "eaf_exception_value": {
+              "bytes": 11519,
+              "n_cells": 3151,
+              "bytes_per_cell": 3.655665
+            },
+            "se": {
+              "bytes": 580465385,
+              "n_cells": 424612300,
+              "bytes_per_cell": 1.367048
+            },
+            "z": {
+              "bytes": 682901699,
+              "n_cells": 424612300,
+              "bytes_per_cell": 1.608295
+            },
+            "z_overflow_index": {
+              "bytes": 3009,
+              "n_cells": 1272,
+              "bytes_per_cell": 2.365566
+            },
+            "z_overflow_value": {
+              "bytes": 4689,
+              "n_cells": 1272,
+              "bytes_per_cell": 3.686321
+            }
+          }
+        }
+      ],
+      "validation": {
+        "ok": false,
+        "n_errors": 3,
+        "errors": [
+          "variant_alid_bytes.npy has 21230615 entries but variants.tsv.gz has 21186844 ALID(s) narrow enough to index (of 21230615 rows)",
+          "variant_alid_bytes.npy holds 342 key(s) shared by more than one variant: a lookup by one variant's ALID returns another's row. This is what silently truncating an over-wide ALID produced before issue #127 \u2014 rebuild the store",
+          "data.zarr/eaf_baseline has chunk shape (21230615,); its per-variant chunk must be no larger than 1000, matching this component's variant/read axis rather than spanning the whole array"
+        ],
+        "n_warnings": 0,
+        "warnings": [],
+        "warnings_truncated": false
+      },
+      "identity": {
+        "manifest_sha256": "5028cd0c6681bd3be2a35ccf1598ac458094d3395761800b4a99a9699fc13e1d",
+        "analyses_tsv_sha256": "4b68d0eb40e93cbf020c96bca5646e06abf64c1458ffc38478dfa97e7fe27a48",
+        "sources": {
+          "builder": "opengwasdb.v0.1_dense_vcf_two_pass",
+          "chain_file": "pyliftover_builtin_hg19_hg38",
+          "eaf_orientation.method": "consensus",
+          "eaf_orientation.reference_id": "consensus:20-analyses",
+          "eaf_orientation.reference_checksum": "",
+          "eaf_orientation.n_sites": "20012"
+        }
+      }
+    },
+    {
+      "path": "/data/opengwasdb/wip/rebuild-117/eqtlgen-cis-pilot__pilot-10",
+      "store_id": "eqtlgen-cis-pilot",
+      "release_id": "pilot-10",
+      "format_version": "2.0",
+      "primary_layout": "ragged",
+      "association_coverage": "cis_and_signals",
+      "completion_state": "observed_only",
+      "reference_assembly": "GRCh38",
+      "created_at": "2026-08-31T10:54:59.792737+00:00",
+      "encoding": {
+        "version": 2,
+        "z": {
+          "kind": "int16_fixed",
+          "scale": 1024
+        },
+        "se": {
+          "kind": "float16"
+        },
+        "eaf": {
+          "kind": "absent"
+        }
+      },
+      "store_bytes": 11099428,
+      "cells": {
+        "n_cells": 86373
+      },
+      "components": [
+        {
+          "kind": "ragged_csr",
+          "path": "data.zarr/ragged",
+          "encoding": {
+            "version": 2,
+            "z": {
+              "kind": "int16_fixed",
+              "scale": 1024
+            },
+            "se": {
+              "kind": "float16"
+            },
+            "eaf": {
+              "kind": "absent"
+            }
+          },
+          "cells": {
+            "n_analyses": 10,
+            "n_cells": 86373
+          },
+          "data_bytes": 290158,
+          "group_bytes": {},
+          "arrays": {
+            "offsets": {
+              "bytes": 493,
+              "n_cells": 11,
+              "bytes_per_cell": 44.818182
+            },
+            "se": {
+              "bytes": 131710,
+              "n_cells": 86373,
+              "bytes_per_cell": 1.524898
+            },
+            "variant_index": {
+              "bytes": 2265,
+              "n_cells": 86373,
+              "bytes_per_cell": 0.026223
+            },
+            "z": {
+              "bytes": 147354,
+              "n_cells": 86373,
+              "bytes_per_cell": 1.706019
+            },
+            "z_overflow_index": {
+              "bytes": 2128,
+              "n_cells": 1514,
+              "bytes_per_cell": 1.405548
+            },
+            "z_overflow_value": {
+              "bytes": 5891,
+              "n_cells": 1514,
+              "bytes_per_cell": 3.891017
+            }
+          }
+        }
+      ],
+      "validation": {
+        "ok": true,
+        "n_errors": 0,
+        "errors": [],
+        "n_warnings": 0,
+        "warnings": [],
+        "warnings_truncated": false
+      },
+      "identity": {
+        "manifest_sha256": "fd8bdb9a837ce688a4d059cab9af9bf58256c43aadba4a86d2ee53dcac36046a",
+        "analyses_tsv_sha256": "5faca1566b65d16b38a7f94a783d7ef9a42f7f730b3f162a76a684bd0a687649",
+        "sources": {
+          "builder": "opengwasdb.v0.1_ragged_observed_besd",
+          "source_besd_prefix": "/data/opengwasdb/eqtlgen-cis-pilot/releases/pilot-10/source/pilot-10",
+          "source_build": "hg19"
+        }
+      }
+    },
+    {
+      "path": "/data/opengwasdb/wip/rebuild-117/eqtlgen-cis-pilot__pilot-10-completed",
+      "store_id": "eqtlgen-cis-pilot",
+      "release_id": "pilot-10-completed",
+      "format_version": "2.0",
+      "primary_layout": "ragged",
+      "association_coverage": "cis_and_signals",
+      "completion_state": "reference_completed",
+      "reference_assembly": "GRCh38",
+      "created_at": "2026-08-31T10:57:13.562107+00:00",
+      "encoding": {
+        "version": 2,
+        "z": {
+          "kind": "int16_fixed",
+          "scale": 1024
+        },
+        "se": {
+          "kind": "float16"
+        },
+        "eaf": {
+          "kind": "absent",
+          "reference": true
+        }
+      },
+      "store_bytes": 22843554,
+      "cells": {
+        "n_cells": 207761
+      },
+      "components": [
+        {
+          "kind": "ragged_csr",
+          "path": "data.zarr/ragged",
+          "encoding": {
+            "version": 2,
+            "z": {
+              "kind": "int16_fixed",
+              "scale": 1024
+            },
+            "se": {
+              "kind": "float16"
+            },
+            "eaf": {
+              "kind": "absent",
+              "reference": true
+            }
+          },
+          "cells": {
+            "n_analyses": 10,
+            "n_cells": 207761
+          },
+          "data_bytes": 1286185,
+          "group_bytes": {},
+          "arrays": {
+            "eaf_reference": {
+              "bytes": 666174,
+              "n_cells": 207764,
+              "bytes_per_cell": 3.206398
+            },
+            "imputed": {
+              "bytes": 12002,
+              "n_cells": 207761,
+              "bytes_per_cell": 0.057768
+            },
+            "offsets": {
+              "bytes": 498,
+              "n_cells": 11,
+              "bytes_per_cell": 45.272727
+            },
+            "se": {
+              "bytes": 278070,
+              "n_cells": 207761,
+              "bytes_per_cell": 1.338413
+            },
+            "variant_index": {
+              "bytes": 3365,
+              "n_cells": 207761,
+              "bytes_per_cell": 0.016196
+            },
+            "z": {
+              "bytes": 311454,
+              "n_cells": 207761,
+              "bytes_per_cell": 1.499098
+            },
+            "z_overflow_index": {
+              "bytes": 2665,
+              "n_cells": 1997,
+              "bytes_per_cell": 1.334502
+            },
+            "z_overflow_value": {
+              "bytes": 7712,
+              "n_cells": 1997,
+              "bytes_per_cell": 3.861793
+            }
+          }
+        }
+      ],
+      "validation": {
+        "ok": false,
+        "n_errors": 1,
+        "errors": [
+          "data.zarr/ragged/eaf_reference has chunk shape (207764,); its per-variant chunk must be no larger than 200000, matching this component's variant/read axis rather than spanning the whole array"
+        ],
+        "n_warnings": 0,
+        "warnings": [],
+        "warnings_truncated": false
+      },
+      "identity": {
+        "manifest_sha256": "1017b41e2921f8ed7d04ac4c74b587fa0edd8013a782428de2b3425e2e82728a",
+        "analyses_tsv_sha256": "fa0e00d9120c057365bea3be26436176de3a14279d29e10a7756cf3816d45e34",
+        "sources": {
+          "builder": "opengwasdb.v0.1_ragged_observed_besd",
+          "source_release_id": "pilot-10",
+          "source_besd_prefix": "/data/opengwasdb/eqtlgen-cis-pilot/releases/pilot-10/source/pilot-10",
+          "source_build": "hg19",
+          "completion.ancestry": "EUR",
+          "completion.ld_panel_id": "hgdp1kgp-hg38-eur-ld",
+          "completion.method": "elastic_net_eigenvectors_v2_regioncap"
+        }
+      }
+    },
+    {
+      "path": "/data/opengwasdb/wip/rebuild-117/gwas-catalog-eur-hybrid__eur-hybrid-pilot-10",
+      "store_id": "gwas-catalog-eur-hybrid",
+      "release_id": "eur-hybrid-pilot-10",
+      "format_version": "2.0",
+      "primary_layout": "hybrid",
+      "association_coverage": "full",
+      "completion_state": "observed_only",
+      "reference_assembly": "GRCh38",
+      "created_at": "2026-08-31T12:56:39.237717+00:00",
+      "encoding": {
+        "version": 2,
+        "z": {
+          "kind": "int16_fixed",
+          "scale": 1024
+        },
+        "se": {
+          "kind": "float16"
+        },
+        "eaf": {
+          "kind": "int8_residual",
+          "residual_range": 1.0
+        }
+      },
+      "store_bytes": 5398386218,
+      "cells": {
+        "n_cells": 116000237
+      },
+      "components": [
+        {
+          "kind": "dense_grid",
+          "path": "dense/data.zarr",
+          "encoding": {
+            "version": 2,
+            "z": {
+              "kind": "int16_fixed",
+              "scale": 1024
+            },
+            "se": {
+              "kind": "float16"
+            },
+            "eaf": {
+              "kind": "int8_residual",
+              "residual_range": 1.0
+            }
+          },
+          "cells": {
+            "n_variants": 9847807,
+            "n_analyses": 9,
+            "n_cells": 88630263
+          },
+          "data_bytes": 401104788,
+          "group_bytes": {
+            "top_hits": 1690642
+          },
+          "arrays": {
+            "eaf": {
+              "bytes": 70314261,
+              "n_cells": 88630263,
+              "bytes_per_cell": 0.793344
+            },
+            "eaf_baseline": {
+              "bytes": 32836279,
+              "n_cells": 9847807,
+              "bytes_per_cell": 3.334375
+            },
+            "eaf_exception_index": {
+              "bytes": 797066,
+              "n_cells": 428249,
+              "bytes_per_cell": 1.861221
+            },
+            "eaf_exception_value": {
+              "bytes": 1528487,
+              "n_cells": 428249,
+              "bytes_per_cell": 3.569155
+            },
+            "se": {
+              "bytes": 148290088,
+              "n_cells": 88630263,
+              "bytes_per_cell": 1.673132
+            },
+            "z": {
+              "bytes": 145642614,
+              "n_cells": 88630263,
+              "bytes_per_cell": 1.643261
+            },
+            "z_overflow_index": {
+              "bytes": 467,
+              "n_cells": 33,
+              "bytes_per_cell": 14.151515
+            },
+            "z_overflow_value": {
+              "bytes": 503,
+              "n_cells": 33,
+              "bytes_per_cell": 15.242424
+            }
+          }
+        },
+        {
+          "kind": "ragged_csr",
+          "path": "data.zarr/ragged",
+          "encoding": {
+            "version": 2,
+            "z": {
+              "kind": "int16_fixed",
+              "scale": 1024
+            },
+            "se": {
+              "kind": "float16"
+            },
+            "eaf": {
+              "kind": "int8_residual",
+              "residual_range": 1.0
+            }
+          },
+          "cells": {
+            "n_analyses": 9,
+            "n_cells": 27369974
+          },
+          "data_bytes": 194255573,
+          "group_bytes": {},
+          "arrays": {
+            "eaf": {
+              "bytes": 17017281,
+              "n_cells": 27369974,
+              "bytes_per_cell": 0.62175
+            },
+            "eaf_baseline": {
+              "bytes": 62009230,
+              "n_cells": 20373380,
+              "bytes_per_cell": 3.04364
+            },
+            "eaf_exception_index": {
+              "bytes": 1250398,
+              "n_cells": 1051500,
+              "bytes_per_cell": 1.189156
+            },
+            "eaf_exception_value": {
+              "bytes": 3774624,
+              "n_cells": 1051500,
+              "bytes_per_cell": 3.589752
+            },
+            "offsets": {
+              "bytes": 526,
+              "n_cells": 10,
+              "bytes_per_cell": 52.6
+            },
+            "se": {
+              "bytes": 44107672,
+              "n_cells": 27369974,
+              "bytes_per_cell": 1.611535
+            },
+            "variant_index": {
+              "bytes": 23770726,
+              "n_cells": 27369974,
+              "bytes_per_cell": 0.868496
+            },
+            "z": {
+              "bytes": 42320198,
+              "n_cells": 27369974,
+              "bytes_per_cell": 1.546227
+            },
+            "z_overflow_index": {
+              "bytes": 338,
+              "n_cells": 0,
+              "bytes_per_cell": null
+            },
+            "z_overflow_value": {
+              "bytes": 340,
+              "n_cells": 0,
+              "bytes_per_cell": null
+            }
+          }
+        }
+      ],
+      "validation": {
+        "ok": false,
+        "n_errors": 2,
+        "errors": [
+          "variant_alid_bytes.npy has 9847807 entries but variants.tsv.gz has 9843824 ALID(s) narrow enough to index (of 9847807 rows)",
+          "data.zarr/eaf_baseline has chunk shape (9847807,); its per-variant chunk must be no larger than 1000, matching this component's variant/read axis rather than spanning the whole array"
+        ],
+        "n_warnings": 0,
+        "warnings": [],
+        "warnings_truncated": false
+      },
+      "identity": {
+        "manifest_sha256": "c9a67af49a3092a2c28f48a8efbcd0dc08cfbea1089adac05c6884d0fa518b77",
+        "analyses_tsv_sha256": "453c2a31350d02ddb44c01c0df7d1e0de22d85684a075db3ee19f7640a24547f",
+        "sources": {
+          "builder": "opengwasdb.v0.1_hybrid_vcf",
+          "chain_file": "pyliftover_builtin_hg19_hg38",
+          "eaf_orientation.method": "consensus",
+          "eaf_orientation.reference_id": "consensus:9-analyses",
+          "eaf_orientation.reference_checksum": "",
+          "eaf_orientation.n_sites": "115859"
+        }
+      }
+    },
+    {
+      "path": "/data/opengwasdb/wip/rebuild-117/gwas-catalog-eur-hybrid__eur-hybrid-quant-pilot-10",
+      "store_id": "gwas-catalog-eur-hybrid",
+      "release_id": "eur-hybrid-quant-pilot-10",
+      "format_version": "2.0",
+      "primary_layout": "hybrid",
+      "association_coverage": "full",
+      "completion_state": "observed_only",
+      "reference_assembly": "GRCh38",
+      "created_at": "2026-08-31T12:37:52.009223+00:00",
+      "encoding": {
+        "version": 2,
+        "z": {
+          "kind": "int16_fixed",
+          "scale": 1024
+        },
+        "se": {
+          "kind": "float16"
+        },
+        "eaf": {
+          "kind": "int8_residual",
+          "residual_range": 0.5
+        }
+      },
+      "store_bytes": 4386593474,
+      "cells": {
+        "n_cells": 105040293
+      },
+      "components": [
+        {
+          "kind": "dense_grid",
+          "path": "dense/data.zarr",
+          "encoding": {
+            "version": 2,
+            "z": {
+              "kind": "int16_fixed",
+              "scale": 1024
+            },
+            "se": {
+              "kind": "float16"
+            },
+            "eaf": {
+              "kind": "int8_residual",
+              "residual_range": 0.5
+            }
+          },
+          "cells": {
+            "n_variants": 9847807,
+            "n_analyses": 10,
+            "n_cells": 98478070
+          },
+          "data_bytes": 423105462,
+          "group_bytes": {
+            "top_hits": 63494976
+          },
+          "arrays": {
+            "eaf": {
+              "bytes": 55209891,
+              "n_cells": 98478070,
+              "bytes_per_cell": 0.560631
+            },
+            "eaf_baseline": {
+              "bytes": 32948596,
+              "n_cells": 9847807,
+              "bytes_per_cell": 3.34578
+            },
+            "eaf_exception_index": {
+              "bytes": 1117173,
+              "n_cells": 657113,
+              "bytes_per_cell": 1.700123
+            },
+            "eaf_exception_value": {
+              "bytes": 2221424,
+              "n_cells": 657113,
+              "bytes_per_cell": 3.380581
+            },
+            "se": {
+              "bytes": 134409729,
+              "n_cells": 98478070,
+              "bytes_per_cell": 1.36487
+            },
+            "z": {
+              "bytes": 122503948,
+              "n_cells": 98478070,
+              "bytes_per_cell": 1.243972
+            },
+            "z_overflow_index": {
+              "bytes": 3269321,
+              "n_cells": 2269055,
+              "bytes_per_cell": 1.440829
+            },
+            "z_overflow_value": {
+              "bytes": 7926022,
+              "n_cells": 2269055,
+              "bytes_per_cell": 3.493094
+            }
+          }
+        },
+        {
+          "kind": "ragged_csr",
+          "path": "data.zarr/ragged",
+          "encoding": {
+            "version": 2,
+            "z": {
+              "kind": "int16_fixed",
+              "scale": 1024
+            },
+            "se": {
+              "kind": "float16"
+            },
+            "eaf": {
+              "kind": "int8_residual",
+              "residual_range": 0.5
+            }
+          },
+          "cells": {
+            "n_analyses": 10,
+            "n_cells": 6562223
+          },
+          "data_bytes": 65396774,
+          "group_bytes": {},
+          "arrays": {
+            "eaf": {
+              "bytes": 1802956,
+              "n_cells": 6562223,
+              "bytes_per_cell": 0.274748
+            },
+            "eaf_baseline": {
+              "bytes": 35497035,
+              "n_cells": 14763864,
+              "bytes_per_cell": 2.404319
+            },
+            "eaf_exception_index": {
+              "bytes": 235645,
+              "n_cells": 171113,
+              "bytes_per_cell": 1.377131
+            },
+            "eaf_exception_value": {
+              "bytes": 591197,
+              "n_cells": 171113,
+              "bytes_per_cell": 3.455009
+            },
+            "offsets": {
+              "bytes": 525,
+              "n_cells": 11,
+              "bytes_per_cell": 47.727273
+            },
+            "se": {
+              "bytes": 10118067,
+              "n_cells": 6562223,
+              "bytes_per_cell": 1.541866
+            },
+            "variant_index": {
+              "bytes": 6811475,
+              "n_cells": 6562223,
+              "bytes_per_cell": 1.037983
+            },
+            "z": {
+              "bytes": 10280068,
+              "n_cells": 6562223,
+              "bytes_per_cell": 1.566553
+            },
+            "z_overflow_index": {
+              "bytes": 4598,
+              "n_cells": 14081,
+              "bytes_per_cell": 0.326539
+            },
+            "z_overflow_value": {
+              "bytes": 50968,
+              "n_cells": 14081,
+              "bytes_per_cell": 3.619629
+            }
+          }
+        }
+      ],
+      "validation": {
+        "ok": false,
+        "n_errors": 2,
+        "errors": [
+          "variant_alid_bytes.npy has 9847807 entries but variants.tsv.gz has 9843824 ALID(s) narrow enough to index (of 9847807 rows)",
+          "data.zarr/eaf_baseline has chunk shape (9847807,); its per-variant chunk must be no larger than 1000, matching this component's variant/read axis rather than spanning the whole array"
+        ],
+        "n_warnings": 1,
+        "warnings": [
+          "analysis 'GCST003898' stores EAF whose orientation is unverified: only 120 variants overlap the reference, fewer than 500"
+        ],
+        "warnings_truncated": false
+      },
+      "identity": {
+        "manifest_sha256": "b6f5715e40e9e56b7cf9954da654f2af9a1a730badf2b482a3d6c0c981111c01",
+        "analyses_tsv_sha256": "2aefc436bd5af634a500a81feccb76e7f75ce5b4f08c02ce8a11cf0ed7888a66",
+        "sources": {
+          "builder": "opengwasdb.v0.1_hybrid_vcf",
+          "chain_file": "pyliftover_builtin_hg19_hg38",
+          "eaf_orientation.method": "consensus",
+          "eaf_orientation.reference_id": "consensus:8-analyses",
+          "eaf_orientation.reference_checksum": "",
+          "eaf_orientation.n_sites": "141807"
+        }
+      }
+    },
+    {
+      "path": "/data/opengwasdb/wip/rebuild-117/metabolome-plasma-2023__2023-chen-full-european",
+      "store_id": "ragged__pmid-36635386__European",
+      "release_id": "2023-chen-full-european",
+      "format_version": "2.0",
+      "primary_layout": "ragged",
+      "association_coverage": "cis_and_signals",
+      "completion_state": "observed_only",
+      "reference_assembly": "GRCh38",
+      "created_at": "2026-08-31T12:22:53.361773+00:00",
+      "encoding": {
+        "version": 2,
+        "z": {
+          "kind": "int16_fixed",
+          "scale": 1024
+        },
+        "se": {
+          "kind": "float16"
+        },
+        "eaf": {
+          "kind": "int8_residual",
+          "residual_range": 0.5
+        }
+      },
+      "store_bytes": 1745775741,
+      "cells": {
+        "n_cells": 58053989
+      },
+      "components": [
+        {
+          "kind": "ragged_csr",
+          "path": "data.zarr/ragged",
+          "encoding": {
+            "version": 2,
+            "z": {
+              "kind": "int16_fixed",
+              "scale": 1024
+            },
+            "se": {
+              "kind": "float16"
+            },
+            "eaf": {
+              "kind": "int8_residual",
+              "residual_range": 0.5
+            }
+          },
+          "cells": {
+            "n_analyses": 1400,
+            "n_cells": 58053989
+          },
+          "data_bytes": 279440047,
+          "group_bytes": {},
+          "arrays": {
+            "eaf": {
+              "bytes": 28596515,
+              "n_cells": 58053989,
+              "bytes_per_cell": 0.492585
+            },
+            "eaf_baseline": {
+              "bytes": 40713898,
+              "n_cells": 12086426,
+              "bytes_per_cell": 3.368564
+            },
+            "eaf_exception_index": {
+              "bytes": 46627,
+              "n_cells": 26250,
+              "bytes_per_cell": 1.776267
+            },
+            "eaf_exception_value": {
+              "bytes": 91762,
+              "n_cells": 26250,
+              "bytes_per_cell": 3.495695
+            },
+            "offsets": {
+              "bytes": 4207,
+              "n_cells": 1401,
+              "bytes_per_cell": 3.002855
+            },
+            "se": {
+              "bytes": 92047376,
+              "n_cells": 58053989,
+              "bytes_per_cell": 1.585548
+            },
+            "variant_index": {
+              "bytes": 25218123,
+              "n_cells": 58053989,
+              "bytes_per_cell": 0.434391
+            },
+            "z": {
+              "bytes": 92673099,
+              "n_cells": 58053989,
+              "bytes_per_cell": 1.596326
+            },
+            "z_overflow_index": {
+              "bytes": 11450,
+              "n_cells": 9182,
+              "bytes_per_cell": 1.247005
+            },
+            "z_overflow_value": {
+              "bytes": 32747,
+              "n_cells": 9182,
+              "bytes_per_cell": 3.566434
+            }
+          }
+        }
+      ],
+      "validation": {
+        "ok": false,
+        "n_errors": 1,
+        "errors": [
+          "data.zarr/ragged/eaf_baseline has chunk shape (12086426,); its per-variant chunk must be no larger than 200000, matching this component's variant/read axis rather than spanning the whole array"
+        ],
+        "n_warnings": 1397,
+        "warnings": [
+          "analysis 'GCST90199621' stores EAF whose orientation is unverified: only 114 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199622' stores EAF whose orientation is unverified: only 46 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199623' stores EAF whose orientation is unverified: only 32 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199624' stores EAF whose orientation is unverified: only 19 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199625' stores EAF whose orientation is unverified: only 19 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199626' stores EAF whose orientation is unverified: only 110 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199627' stores EAF whose orientation is unverified: only 41 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199628' stores EAF whose orientation is unverified: only 19 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199629' stores EAF whose orientation is unverified: only 31 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199630' stores EAF whose orientation is unverified: only 35 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199631' stores EAF whose orientation is unverified: only 31 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199632' stores EAF whose orientation is unverified: only 43 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199633' stores EAF whose orientation is unverified: only 19 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199634' stores EAF whose orientation is unverified: only 84 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199635' stores EAF whose orientation is unverified: only 27 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199636' stores EAF whose orientation is unverified: only 105 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199637' stores EAF whose orientation is unverified: only 87 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199638' stores EAF whose orientation is unverified: only 41 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199639' stores EAF whose orientation is unverified: only 153 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199640' stores EAF whose orientation is unverified: only 54 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199641' stores EAF whose orientation is unverified: only 75 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199642' stores EAF whose orientation is unverified: only 63 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199643' stores EAF whose orientation is unverified: only 19 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199644' stores EAF whose orientation is unverified: only 44 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199645' stores EAF whose orientation is unverified: only 39 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199646' stores EAF whose orientation is unverified: only 35 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199647' stores EAF whose orientation is unverified: only 82 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199648' stores EAF whose orientation is unverified: only 169 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199649' stores EAF whose orientation is unverified: only 174 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199650' stores EAF whose orientation is unverified: only 56 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199651' stores EAF whose orientation is unverified: only 32 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199652' stores EAF whose orientation is unverified: only 36 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199653' stores EAF whose orientation is unverified: only 19 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199654' stores EAF whose orientation is unverified: only 101 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199655' stores EAF whose orientation is unverified: only 31 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199656' stores EAF whose orientation is unverified: only 19 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199657' stores EAF whose orientation is unverified: only 74 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199658' stores EAF whose orientation is unverified: only 38 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199659' stores EAF whose orientation is unverified: only 19 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199660' stores EAF whose orientation is unverified: only 124 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199661' stores EAF whose orientation is unverified: only 19 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199662' stores EAF whose orientation is unverified: only 40 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199663' stores EAF whose orientation is unverified: only 29 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199664' stores EAF whose orientation is unverified: only 63 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199665' stores EAF whose orientation is unverified: only 29 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199666' stores EAF whose orientation is unverified: only 73 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199667' stores EAF whose orientation is unverified: only 115 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199668' stores EAF whose orientation is unverified: only 114 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199669' stores EAF whose orientation is unverified: only 91 variants overlap the reference, fewer than 500",
+          "analysis 'GCST90199670' stores EAF whose orientation is unverified: only 19 variants overlap the reference, fewer than 500"
+        ],
+        "warnings_truncated": true
+      },
+      "identity": {
+        "manifest_sha256": "a784ec37ac2ea81f10263ace0059f125d87a9dea288ade12cea67ba477ecc9ce",
+        "analyses_tsv_sha256": "d7cd3216075f03d022becd7751d84aa0fb9fca784d5ea5c915cefd0490231a71",
+        "sources": {
+          "builder": "opengwasdb.v0.1_ragged_observed_ssf",
+          "source_manifest": "/home/gh13047/repo/opengwasdb-stores/families/metabolome-plasma-2023/releases/2023-chen-full-european/analyses.tsv",
+          "eaf_orientation.method": "consensus",
+          "eaf_orientation.reference_id": "consensus:1400-analyses",
+          "eaf_orientation.reference_checksum": "",
+          "eaf_orientation.n_sites": "20000"
+        }
+      }
+    },
+    {
+      "path": "/data/opengwasdb/wip/rebuild-117/pqtl-interval-2018__2018-sun-pilot-10",
+      "store_id": "ragged__pmid-29875488__European__pilot10",
+      "release_id": "2018-sun-pilot-10",
+      "format_version": "2.0",
+      "primary_layout": "ragged",
+      "association_coverage": "cis_and_signals",
+      "completion_state": "observed_only",
+      "reference_assembly": "GRCh38",
+      "created_at": "2026-08-31T12:09:28.400298+00:00",
+      "encoding": {
+        "version": 2,
+        "z": {
+          "kind": "int16_fixed",
+          "scale": 1024
+        },
+        "se": {
+          "kind": "float16"
+        },
+        "eaf": {
+          "kind": "absent"
+        }
+      },
+      "store_bytes": 21098711,
+      "cells": {
+        "n_cells": 202803
+      },
+      "components": [
+        {
+          "kind": "ragged_csr",
+          "path": "data.zarr/ragged",
+          "encoding": {
+            "version": 2,
+            "z": {
+              "kind": "int16_fixed",
+              "scale": 1024
+            },
+            "se": {
+              "kind": "float16"
+            },
+            "eaf": {
+              "kind": "absent"
+            }
+          },
+          "cells": {
+            "n_analyses": 10,
+            "n_cells": 202803
+          },
+          "data_bytes": 644027,
+          "group_bytes": {},
+          "arrays": {
+            "offsets": {
+              "bytes": 501,
+              "n_cells": 11,
+              "bytes_per_cell": 45.545455
+            },
+            "se": {
+              "bytes": 314525,
+              "n_cells": 202803,
+              "bytes_per_cell": 1.550889
+            },
+            "variant_index": {
+              "bytes": 6064,
+              "n_cells": 202803,
+              "bytes_per_cell": 0.029901
+            },
+            "z": {
+              "bytes": 321941,
+              "n_cells": 202803,
+              "bytes_per_cell": 1.587457
+            },
+            "z_overflow_index": {
+              "bytes": 338,
+              "n_cells": 0,
+              "bytes_per_cell": null
+            },
+            "z_overflow_value": {
+              "bytes": 340,
+              "n_cells": 0,
+              "bytes_per_cell": null
+            }
+          }
+        }
+      ],
+      "validation": {
+        "ok": true,
+        "n_errors": 0,
+        "errors": [],
+        "n_warnings": 0,
+        "warnings": [],
+        "warnings_truncated": false
+      },
+      "identity": {
+        "manifest_sha256": "ac2d48982784e660e2ba06af92f391c9e265db2f5dc001005ac87db673f0f181",
+        "analyses_tsv_sha256": "b3d39068c1d22bae2f60a7e8b6cc1de632b8919628b642ca8ee82f4be2ad41ef",
+        "sources": {
+          "builder": "opengwasdb.v0.1_ragged_observed_ssf",
+          "source_manifest": "/home/gh13047/repo/opengwasdb-stores/families/pqtl-interval-2018/releases/2018-sun-pilot-10/analyses.tsv",
+          "eaf_orientation.method": "none",
+          "eaf_orientation.reference_id": "",
+          "eaf_orientation.reference_checksum": "",
+          "eaf_orientation.n_sites": "20000"
+        }
+      }
+    }
+  ]
+}
