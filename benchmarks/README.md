@@ -124,6 +124,127 @@ pixi run -e report quarto render opengwasdb_eqtlgen_ragged_benchmark.qmd
 
 ---
 
+### `benchmark_ukbb_dense.py`
+
+Benchmarks the genome-wide `ukb-b` Dense Store Release: query timings for the
+bulk/phewas/regional/top-hits/random-lookup shapes, storage vs its source
+VCF, build time from `data/ukb-b/build.log`, and an MR IVW validation
+(self-reported high cholesterol -> heart attack). Requires the `ukb-b` store
+tree, its build manifest and its source VCFs — on the IEU compute node at
+the defaults below, or pass `--store`, `--manifest` and `--build-log` to
+point at a copy. The artifact records the store's `format_version` and
+`encoding`, so a format-2.0 timing cannot be mistaken for a format-3.0 one
+(issue #148).
+
+**Output files written to `docs/benchmark-output/`:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_ukbb_dense_benchmark.json` | Query timings + storage + MR result |
+| `opengwasdb_ukbb_dense_benchmark.qmd` / `.html` | Rendered report |
+
+**Usage** (run from the repo root, in the Pixi `dev` environment):
+
+```bash
+pixi run -e dev python benchmarks/benchmark_ukbb_dense.py --reps 5
+```
+
+Optional arguments mirror the defaults in the script header:
+
+```bash
+pixi run -e dev python benchmarks/benchmark_ukbb_dense.py \
+    --reps 5 \
+    --store /local-scratch/data/opengwas/opengwasdb/ukb-b.opengwasdb \
+    --output docs/benchmark-output/opengwasdb_ukbb_dense_benchmark.json
+```
+
+The `--top-hits-experiment` mode re-measures top-hit index chunk sizes
+against the same store and updates the existing JSON:
+
+```bash
+pixi run -e dev python benchmarks/benchmark_ukbb_dense.py --top-hits-experiment
+```
+
+Render the report with the `report` environment:
+
+```bash
+pixi run -e report quarto render docs/benchmark-output/opengwasdb_ukbb_dense_benchmark.qmd
+```
+
+---
+
+### `benchmark_se_residual_queries.py`
+
+Compares physical-SE query latency between the format-2.0 `float16` release
+and its format-3.0 residual-`se` twin (ADR 0037 section 3, #118). Takes the
+**before** store path and the **after** store path as positional arguments;
+both must be real Store Releases with top-hit indexes, because the script
+picks its Analysis, variant and region from the first store's own top hits.
+The regeneration command for the current FinnGen R13 pilot evidence is
+recorded in `docs/benchmark-output/opengwasdb_se_residual_implementation.md`
+and reproduces:
+
+```bash
+pixi run -e dev python benchmarks/benchmark_se_residual_queries.py \
+  /data/opengwasdb/wip/rebuild-117/finngen-r13__r13-pilot-20 \
+  /data/opengwasdb/wip/rebuild-117/finngen-r13__r13-pilot-20-se3-benchmark \
+  --repetitions 5 \
+  --output docs/benchmark-output/opengwasdb_se_residual_implementation.json
+```
+
+The float16/after pair must be **copies of the same release** at the two
+formats: the comparison is meaningless across different stores. Each store
+record carries that store's `format_version` and `encoding`, so the JSON
+cannot be mistaken about which format a latency column describes.
+
+---
+
+### `measure_pilot_releases.py`
+
+Records, for each Store Release named on the command line, what the #117
+pilot-rebuild evidence in ADR 0037 and the CHANGELOG was measured against:
+per-store and per-component cell counts, the encoding plan each release
+declares, compressed bytes for the whole release, each component and each
+statistic plane, the standalone validation outcome, the source identity and
+checksums the release itself records, and the measured commit and timestamp.
+It is the repository-side harness the ADR's B/cell tables needed: a `du` of
+the `eaf` plane divided by that plane's recorded `n_cells` reproduces the
+"rebuilt-pilot plane B/cell" column, and a per-variant array such as
+`eaf_reference` divided by its `n_cells` reproduces ADR 0037 section 4's
+figures, without re-reading the stores.
+
+**Output file written to `docs/benchmark-output/`:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_pilot_rebuild_measurements.json` | One record per measured store |
+
+**Usage** — regenerate the committed artifact from the rebuilt pilot stores
+(must be run where the stores live, e.g. the IEU compute node's
+`/data/opengwasdb/wip/rebuild-117/`):
+
+```bash
+pixi run -e dev python benchmarks/measure_pilot_releases.py \
+  /data/opengwasdb/wip/rebuild-117/finngen-r13__r13-pilot-20 \
+  /data/opengwasdb/wip/rebuild-117/eqtlgen-cis-pilot__pilot-10 \
+  /data/opengwasdb/wip/rebuild-117/eqtlgen-cis-pilot__pilot-10-completed \
+  /data/opengwasdb/wip/rebuild-117/gwas-catalog-eur-hybrid__eur-hybrid-pilot-10 \
+  /data/opengwasdb/wip/rebuild-117/gwas-catalog-eur-hybrid__eur-hybrid-quant-pilot-10 \
+  /data/opengwasdb/wip/rebuild-117/metabolome-plasma-2023__2023-chen-full-european \
+  /data/opengwasdb/wip/rebuild-117/pqtl-interval-2018__2018-sun-pilot-10 \
+  --output docs/benchmark-output/opengwasdb_pilot_rebuild_measurements.json
+```
+
+A missing store, unreadable manifest or component without a plane to count
+stops the run with a message naming the store, and nothing is written — the
+driver refuses to publish a partial artifact. Validation failures are
+recorded, not fatal: the format-2.0 #117 rebuilds predate later validator
+rules (#127 truncated ALIDs, #135 unchunked per-variant planes), so an
+artifact that silently dropped a store failing those rules would
+misrepresent what was measured.
+
+---
+
 ## Comparison document
 
 After all JSONs are present in `docs/benchmark-output/`, render the comparison report:
@@ -137,6 +258,13 @@ The rendered HTML is written to the same directory.
 ---
 
 ## JSON schema
+
+Every artifact written through `benchmarks/_artifact.py` —
+`measure_pilot_releases.py`, `measure_top_hit_rebuild.py`,
+`benchmark_se_residual_queries.py` and `benchmark_ukbb_dense.py` — records
+its own provenance at the top level: `commit` (the short SHA the measurement
+was taken at) and `measured_at` (UTC ISO-8601). An artifact without them, or
+whose `commit` is older than the numbers beside it, is stale evidence.
 
 All opengwasdb benchmark JSONs share a common top-level structure:
 

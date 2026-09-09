@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,12 @@ def commit() -> str:
         text=True,
         check=False,
     ).stdout.strip()
+
+
+def provenance() -> dict[str, str]:
+    """The measured commit and wall-clock time an artifact records, so an older
+    JSON cannot be mistaken for a current measurement."""
+    return {"commit": commit(), "measured_at": datetime.now(UTC).isoformat()}
 
 
 def reflink_copy(source: Path, destination: Path) -> None:

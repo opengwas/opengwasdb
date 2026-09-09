@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Compare physical-SE query latency before and after format-3 residual coding."""
+"""Compare physical-SE query latency before and after format-3 residual coding.
+
+Usage:
+  pixi run -e dev python benchmarks/benchmark_se_residual_queries.py \
+      BEFORE STORE AFTER STORE [--repetitions N] [--output PATH]
+"""
 
 from __future__ import annotations
 
 import argparse
-import json
 import statistics
 import subprocess
 import time
@@ -13,6 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
+from benchmarks._artifact import provenance, write_artifact
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 
 
@@ -58,6 +64,7 @@ def main() -> None:
 
     stores = []
     for label, path in (("float16", args.before), ("int8_residual", args.after)):
+        manifest = StoreManifest.load(path)
         with query_store(path) as query:
             calls = {
                 "analysis": lambda q=query: q.analysis(analysis_id),
@@ -72,6 +79,8 @@ def main() -> None:
                 {
                     "label": label,
                     "path": str(path),
+                    "format_version": manifest.format_version,
+                    "encoding": manifest.to_dict().get("encoding"),
                     "se_bytes": sum(
                         _bytes(path / "data.zarr" / name)
                         for name in (
@@ -91,9 +100,9 @@ def main() -> None:
         "repetitions": args.repetitions,
         "selection": {"analysis_id": analysis_id, "alid": alid, "region": region},
         "stores": stores,
+        **provenance(),
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    write_artifact(args.output, payload)
 
 
 if __name__ == "__main__":
