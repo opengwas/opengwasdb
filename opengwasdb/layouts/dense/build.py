@@ -248,26 +248,42 @@ def _eaf_columns(reports_frequencies: bool) -> tuple[str, str]:
     return EafScope.ASSOCIATION.value, EafOrientationOutcome.UNVERIFIED.value
 
 
+def _blank_or(value: str | None) -> str:
+    """Attribution Metadata blanks stay blank: ``None`` becomes ``""``."""
+    return value or ""
+
+
+def _analysis_from_record(
+    record: NormalisedAssociation, eaf_scope: str, eaf_orientation: str
+) -> Analysis:
+    """The Analytical Metadata one record defines, blanked per the contract.
+
+    Optional attribution columns are written as ``""`` when the source left
+    them empty -- never replaced with a fabricated value.
+    """
+    return Analysis(
+        analysis_id=record.analysis_id,
+        analysis_label=_blank_or(record.analysis_label),
+        trait_ontology_id=_blank_or(record.trait_ontology_id),
+        trait_ontology_label=_blank_or(record.trait_ontology_label),
+        license=_blank_or(record.license),
+        publication_doi=_blank_or(record.publication_doi),
+        publication_pmid=_blank_or(record.publication_pmid),
+        consortium=_blank_or(record.consortium),
+        first_author=_blank_or(record.first_author),
+        stored_effect_scale=record.stored_effect_scale.value,
+        eaf_scope=eaf_scope,
+        eaf_orientation=eaf_orientation,
+    )
+
+
 def _collect_analyses(records: list[NormalisedAssociation]) -> list[Analysis]:
     by_id: dict[str, Analysis] = {}
     with_eaf = {record.analysis_id for record in records if record.eaf is not None}
     for record in records:
-        existing = by_id.get(record.analysis_id)
         eaf_scope, eaf_orientation = _eaf_columns(record.analysis_id in with_eaf)
-        current = Analysis(
-            analysis_id=record.analysis_id,
-            analysis_label=record.analysis_label or "",
-            trait_ontology_id=record.trait_ontology_id or "",
-            trait_ontology_label=record.trait_ontology_label or "",
-            license=record.license or "",
-            publication_doi=record.publication_doi or "",
-            publication_pmid=record.publication_pmid or "",
-            consortium=record.consortium or "",
-            first_author=record.first_author or "",
-            stored_effect_scale=record.stored_effect_scale.value,
-            eaf_scope=eaf_scope,
-            eaf_orientation=eaf_orientation,
-        )
+        current = _analysis_from_record(record, eaf_scope, eaf_orientation)
+        existing = by_id.get(record.analysis_id)
         if existing is None:
             by_id[record.analysis_id] = current
             continue

@@ -176,6 +176,36 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 
 ### Changed
 
+- **The complexity ratchet's scope and baseline were reconciled** (baseline
+  reconciliation). Test code and benchmark drivers were being ratcheted as if
+  they shipped in the package; `quality.json` now excludes `*/tests/*` and
+  `*/benchmarks/*` from the lizard scan, with production sources unchanged.
+  Against that honest scope the over-ceiling production functions found by
+  review were split along reviewed, behaviour-preserving seams —
+  `OverflowCells` field normalisation, the Dense envelope and
+  completion-metadata/quality-table seams and Ragged imputed seams in
+  `validate.py`, the Overflow structure/value seams, a dedicated z-plan
+  validator, Dense completion's source-row matcher, per-record Analysis
+  construction, a shared Dense/Ragged top-hit finalizer, Ragged `lookup`, and
+  the z/se/EAF band passes of the VCF builder. The regenerated
+  `quality/complexity-baseline.json` holds the 60 production functions still
+  over the gate at their exact current measurements (stale entries dropped,
+  improved entries recorded at their current values). Among the entries this
+  reconciliation touched, only the three reviewed current-debt functions
+  (`complete_dense_store`, `RaggedCSRWriter.flush`, `HybridStoreQuery.lookup`)
+  were retained at newly accepted values rather than split.
+
+- **Ragged Reference-Completed validation now enforces the
+  `completion_quality.analysis_index` range rule** (validator tightening).
+  Dense validation has rejected `completion_quality` rows whose
+  `analysis_index` lies outside `analyses.tsv`'s range [0, n_analyses); Ragged
+  validation previously checked only the table's presence and columns, so a
+  Ragged store whose quality rows described a nonexistent Analysis validated
+  cleanly. Ragged Reference-Completed stores now run the same shared
+  `_validate_completion_quality_table` check against the CSR Analysis count,
+  so such a malformed release fails loudly instead of reporting quality for an
+  Analysis the store does not have.
+
 - **The escapes and duplication gates no longer scan the worktree copies under
   `.claude/` or the pixi environment under `.pixi/`**, and the duplication
   baseline drops 92.51% -> 7.10% (#130). Both gates walked the tree from its

@@ -160,58 +160,77 @@ def _validate_closed_envelope(store_path: Path, allowed: frozenset[str], errors:
         )
 
 
+def _missing_entry_errors(store: OpenGWASDBStore, entries: list[tuple[str, Path]]) -> list[str]:
+    """Which required release entries are absent, in the order named.
+
+    The Dense, Ragged and Hybrid envelope seams each name their own required
+    entries; the presence check is one shape, so the loop that turns a
+    (label, path) pair into a missing-entry error lives here once.
+    """
+    return [f"missing {label}" for label, p in entries if not p.exists()]
+
+
+def _validate_dense_envelope(
+    store: OpenGWASDBStore, envelope: frozenset[str], errors: list[str]
+) -> bool:
+    """Dense's half of the envelope seam: required entries present, nothing else.
+
+    Every later Dense seam assumes the paths this one names exist. Returns
+    False when an entry is missing or unexpected, which stops the pipeline
+    before it opens arrays a malformed release may not have.
+    """
+    before = len(errors)
+    store_path = store.path
+    errors.extend(
+        _missing_entry_errors(
+            store,
+            [
+                ("index.sqlite", store.index_path),
+                ("data.zarr", store.data_path),
+                ("analyses.tsv", store.analyses_path),
+                ("variants.tsv.gz", variant_table_path(store_path)),
+                ("variants.tsv.gz.tbi", variant_tabix_path(store_path)),
+                ("variant_offsets.npy", variant_offsets_path(store_path)),
+            ],
+        )
+    )
+    # The ALID search index has no reader fallback, so its absence names the
+    # rebuild rather than reading as an internal inconsistency.
+    for name in ("variant_alid_bytes.npy", "variant_alid_rows.npy"):
+        if not (store_path / name).exists():
+            errors.append(
+                f"missing {name} — rebuild the store to generate the ALID search index"
+            )
+    _validate_closed_envelope(store_path, envelope, errors)
+    return len(errors) == before
+
+
 def _validate_dense_store(
     store: OpenGWASDBStore, errors: list[str], *, envelope: frozenset[str] = DENSE_ENVELOPE
 ) -> ValidationResult:
-    store_path = store.path
-    manifest = store.manifest
-    index_path = store.index_path
-    data_path = store.data_path
-    analyses_path = store.analyses_path
-    variants_path = variant_table_path(store_path)
-    tabix_path = variant_tabix_path(store_path)
-    offsets_path = variant_offsets_path(store_path)
-    if not index_path.exists():
-        errors.append("missing index.sqlite")
-    if not data_path.exists():
-        errors.append("missing data.zarr")
-    if not analyses_path.exists():
-        errors.append("missing analyses.tsv")
-    if not variants_path.exists():
-        errors.append("missing variants.tsv.gz")
-    if not tabix_path.exists():
-        errors.append("missing variants.tsv.gz.tbi")
-    if not offsets_path.exists():
-        errors.append("missing variant_offsets.npy")
-    alid_bytes_path = variant_alid_bytes_path(store_path)
-    alid_rows_path = variant_alid_rows_path(store_path)
-    if not alid_bytes_path.exists():
-        errors.append(
-            "missing variant_alid_bytes.npy — rebuild the store to generate the ALID search index"
-        )
-    if not alid_rows_path.exists():
-        errors.append(
-            "missing variant_alid_rows.npy — rebuild the store to generate the ALID search index"
-        )
-    _validate_closed_envelope(store_path, envelope, errors)
-    if errors:
-        return ValidationResult(errors=errors)
+    """Validate a Dense Store Release (spec §3) in fail-safe seams.
 
+    ``_validate_dense_store`` is a thin orchestrator: the envelope first, then
+    the guarded metadata/array seams once its guarded reads are safe to run.
+    """
+    if not _validate_dense_envelope(store, envelope, errors):
+        return ValidationResult(errors=errors)
+    manifest = store.manifest
     try:
         with store.index_connection() as connection:
-            variant_axis = VariantAxis(store_path, connection)
+            variant_axis = VariantAxis(store.path, connection)
             try:
                 n_variants = _validate_variant_axis(variant_axis, errors)
                 _validate_sqlite(connection, n_variants, errors)
             finally:
                 variant_axis.close()
-            n_analyses = _validate_analyses_tsv(analyses_path, errors)
+            n_analyses = _validate_analyses_tsv(store.analyses_path, errors)
             root = store.arrays(mode="r")
             imputed_arr = None
             on_panel_arr = None
             if manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
                 imputed_arr, on_panel_arr = _validate_completion_metadata(
-                    root, connection, analyses_path, n_variants, n_analyses, errors
+                    root, connection, store.analyses_path, n_variants, n_analyses, errors
                 )
             _validate_encoding_plan(root, manifest.encoding, errors, label="data.zarr")
             if not errors:
@@ -223,7 +242,7 @@ def _validate_dense_store(
                     manifest.encoding,
                     imputed_arr,
                     on_panel_arr,
-                    analyses_path,
+                    store.analyses_path,
                 )
             if not errors:
                 _validate_top_hits(root, errors, manifest.encoding)
@@ -254,6 +273,33 @@ def _validate_completion_metadata(
     for that loop. Returns ``(None, None)`` if the arrays are missing/malformed,
     which the caller treats as a hard error and skips the band pass.
     """
+    imputed_arr, on_panel = _dense_completion_arrays(root, n_variants, n_analyses, errors)
+    if errors:
+        return None, None
+    _validate_completion_quality_table(connection, n_analyses, errors)
+    analyses_cols = set(read_analyses(analyses_path).fieldnames)
+    if "completion_n_missing_total" not in analyses_cols:
+        errors.append(
+            "analyses.tsv is missing completion_n_missing_total for a reference-completed store"
+        )
+
+    # Only hand the arrays to the band pass if they are well-formed; a shape
+    # mismatch above already recorded a hard error, so the caller skips the pass.
+    if errors:
+        return None, None
+    return imputed_arr, on_panel
+
+
+def _dense_completion_arrays(
+    root: Any, n_variants: int, n_analyses: int, errors: list[str]
+) -> tuple[Any, np.ndarray | None]:
+    """Seam: the lazy ``imputed`` array and fully-loaded ``on_panel`` vector.
+
+    ``imputed`` stays lazy and ``on_panel`` stays a 1-D array of ~n_variants
+    bytes so the band pass that consumes them never holds the full matrices
+    resident (issue 045). Missing or malformed arrays record their own errors;
+    the caller returns ``(None, None)`` for them.
+    """
     for name in ("imputed", "on_panel"):
         if name not in root:
             errors.append(f"reference-completed store is missing data.zarr/{name}")
@@ -272,7 +318,20 @@ def _validate_completion_metadata(
         errors.append(f"data.zarr/on_panel has {len(on_panel)} entries but expected {n_variants}")
     if not np.all((on_panel == 0) | (on_panel == 1)):
         errors.append("data.zarr/on_panel contains values other than 0 and 1")
+    return imputed_arr, on_panel
 
+
+def _validate_completion_quality_table(
+    connection: sqlite3.Connection, n_analyses: int, errors: list[str]
+) -> None:
+    """Seam: the completion_quality table exists, is complete, and is in range.
+
+    ``completion_quality.analysis_index`` is a positional reference into
+    analyses.tsv, not a SQL foreign key (ADR 0030 consequences) -- this is the
+    validator rule that decision says must stand in for the database engine's
+    constraint, and it is shared by Dense and Ragged Reference-Completed
+    stores so a quality row can never describe an Analysis that does not exist.
+    """
     tables = {
         r[0]
         for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
@@ -281,43 +340,27 @@ def _validate_completion_metadata(
         errors.append(
             "index.sqlite is missing the completion_quality table for a reference-completed store"
         )
-    else:
-        cols = {
-            r[1] for r in connection.execute("PRAGMA table_info(completion_quality)").fetchall()
-        }
-        required = COMPLETION_QUALITY_COLUMNS
-        missing_cols = required - cols
-        if missing_cols:
-            errors.append(
-                f"completion_quality table is missing columns: {', '.join(sorted(missing_cols))}"
-            )
-        else:
-            # completion_quality.analysis_index is a positional reference into
-            # analyses.tsv, not a SQL foreign key (ADR 0030 consequences) --
-            # this is the validator rule that decision says must stand in for
-            # the database engine's constraint.
-            out_of_range = connection.execute(
-                "SELECT COUNT(*) FROM completion_quality "
-                "WHERE analysis_index < 0 OR analysis_index >= ?",
-                (n_analyses,),
-            ).fetchone()[0]
-            if out_of_range:
-                errors.append(
-                    f"completion_quality has {out_of_range} row(s) with analysis_index "
-                    f"outside analyses.tsv's range [0, {n_analyses})"
-                )
-
-    analyses_cols = set(read_analyses(analyses_path).fieldnames)
-    if "completion_n_missing_total" not in analyses_cols:
+        return
+    cols = {
+        r[1] for r in connection.execute("PRAGMA table_info(completion_quality)").fetchall()
+    }
+    required = COMPLETION_QUALITY_COLUMNS
+    missing_cols = required - cols
+    if missing_cols:
         errors.append(
-            "analyses.tsv is missing completion_n_missing_total for a reference-completed store"
+            f"completion_quality table is missing columns: {', '.join(sorted(missing_cols))}"
         )
-
-    # Only hand the arrays to the band pass if they are well-formed; a shape
-    # mismatch above already recorded a hard error, so the caller skips the pass.
-    if errors:
-        return None, None
-    return imputed_arr, on_panel
+        return
+    out_of_range = connection.execute(
+        "SELECT COUNT(*) FROM completion_quality "
+        "WHERE analysis_index < 0 OR analysis_index >= ?",
+        (n_analyses,),
+    ).fetchone()[0]
+    if out_of_range:
+        errors.append(
+            f"completion_quality has {out_of_range} row(s) with analysis_index "
+            f"outside analyses.tsv's range [0, {n_analyses})"
+        )
 
 
 def _match_csr_se_exceptions(
@@ -382,6 +425,30 @@ def _validate_ragged_envelope(store: OpenGWASDBStore, errors: list[str]) -> bool
     return len(errors) == before
 
 
+def _missing_csr_arrays(root: Any, errors: list[str]) -> bool:
+    """Whether a CSR group lacks one of its four required parallel arrays.
+
+    ``offsets``, ``variant_index``, ``z`` and ``se`` travel together in every
+    Ragged store -- the Ragged Overflow's own CSR and the shared Ragged
+    structure seam name the same four, so their absence is recorded the same
+    way.
+    """
+    missing = [name for name in ("offsets", "variant_index", "z", "se") if name not in root]
+    for name in missing:
+        errors.append(f"missing data.zarr/ragged/{name}")
+    return bool(missing)
+
+
+def _csr_parallel_length_errors(root: Any, n_assoc: int, errors: list[str]) -> None:
+    """Record each parallel CSR array whose length disagrees with ``offsets``."""
+    for name in ("variant_index", "z", "se"):
+        if len(root[name]) != n_assoc:
+            errors.append(
+                f"data.zarr/ragged/{name} has {len(root[name])} entries "
+                f"but offsets imply {n_assoc}"
+            )
+
+
 def _validate_ragged_csr_structure(
     root: Any, encoding: StoreEncoding, errors: list[str]
 ) -> tuple[int, int] | None:
@@ -393,22 +460,14 @@ def _validate_ragged_csr_structure(
     error but does not stop it -- the value seam reports what the arrays
     decode to either way.
     """
-    for name in ("offsets", "variant_index", "z", "se"):
-        if name not in root:
-            errors.append(f"missing data.zarr/ragged/{name}")
-    if errors:
+    if _missing_csr_arrays(root, errors):
         return None
     _validate_encoding_plan(root, encoding, errors, label="data.zarr/ragged")
     if errors:
         return None
     offsets = root["offsets"][:]
     n_assoc = int(offsets[-1])
-    for name in ("variant_index", "z", "se"):
-        if len(root[name]) != n_assoc:
-            errors.append(
-                f"data.zarr/ragged/{name} has {len(root[name])} entries "
-                f"but offsets imply {n_assoc}"
-            )
+    _csr_parallel_length_errors(root, n_assoc, errors)
     return n_assoc, len(offsets) - 1
 
 
@@ -472,7 +531,11 @@ def _validate_ragged_analyses(
 
 
 def _validate_ragged_downstream_seams(
-    store: OpenGWASDBStore, ragged_path: Path, n_assoc: int, errors: list[str]
+    store: OpenGWASDBStore,
+    ragged_path: Path,
+    n_assoc: int,
+    n_analyses_csr: int,
+    errors: list[str],
 ) -> None:
     """Seam: Reference-Completion state, then the Top-Hit Indexes.
 
@@ -484,7 +547,7 @@ def _validate_ragged_downstream_seams(
     """
     data_root = store.arrays(mode="r")
     if store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
-        _validate_ragged_completion(ragged_path, store, n_assoc, errors)
+        _validate_ragged_completion(ragged_path, store, n_assoc, n_analyses_csr, errors)
     if not errors and "top_hits" in data_root:
         _validate_ragged_top_hits(store.path, data_root, errors)
 
@@ -511,43 +574,49 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
         if not _validate_ragged_csr_values(root, store.manifest.encoding, n_assoc, errors):
             return ValidationResult(errors=errors)
         _validate_ragged_analyses(store, n_analyses_csr, errors)
-        _validate_ragged_downstream_seams(store, ragged_path, n_assoc, errors)
+        _validate_ragged_downstream_seams(store, ragged_path, n_assoc, n_analyses_csr, errors)
     except Exception as exc:  # noqa: BLE001
         errors.append(f"validation failed: {exc}")
     return ValidationResult(errors=errors)
 
 
-def _validate_ragged_completion(
-    ragged_path: Path,
-    store: OpenGWASDBStore,
-    n_assoc: int,
-    errors: list[str],
-) -> None:
-    """Validate the imputed mask and completion_quality table in a Reference-Completed store."""
-    root = zarr.open_group(str(ragged_path), mode="r")
+def _validate_ragged_imputed_mask(
+    root: Any, n_assoc: int, errors: list[str]
+) -> np.ndarray | None:
+    """Seam: the loaded Ragged imputed mask, or ``None`` when it cannot be used.
+
+    A missing array or a length that disagrees with the CSR offsets stops the
+    completion seam; a mask holding values other than 0/1 records its error but
+    still comes back so the missingness cross-checks can report what the mask
+    declares.
+    """
     if "imputed" not in root:
         errors.append("reference-completed store is missing data.zarr/ragged/imputed")
-        return
-
-    imp = root["imputed"][:]
+        return None
+    imp: np.ndarray = root["imputed"][:]
     if len(imp) != n_assoc:
         errors.append(
             f"data.zarr/ragged/imputed has {len(imp)} entries but offsets imply {n_assoc}"
         )
-        return
-
-    # imputed values must be 0 or 1
+        return None
     if not np.all((imp == 0) | (imp == 1)):
         errors.append("data.zarr/ragged/imputed contains values other than 0 and 1")
+    return imp
 
-    # Where imputed=1: z and se must both be present. "Present" is the
-    # complement of the plane's own missing marker (spec §15), not `isfinite`
-    # of a float: an integer plane holds no NaN to test for.
-    codec = StoreCodec(store.manifest.encoding)
+
+def _validate_ragged_imputed_missingness(
+    root: Any, encoding: StoreEncoding, imp: np.ndarray, n_assoc: int, errors: list[str]
+) -> None:
+    """Seam: what an imputed=1 row declares about the row's z and se.
+
+    Imputed rows carry both z and se; rows whose z is missing are never
+    imputed and never carry a finite se. "Present" is the complement of the
+    plane's own missing marker (spec §15), not ``isfinite`` of a float: an
+    integer plane holds no NaN to test for.
+    """
+    codec = StoreCodec(encoding)
     z_missing = codec.missing_mask(root["z"][:])
-    se_vals, se_error = _decoded_csr_se(
-        root, store.manifest.encoding, n_assoc, "data.zarr/ragged/se"
-    )
+    se_vals, se_error = _decoded_csr_se(root, encoding, n_assoc, "data.zarr/ragged/se")
     if se_error is not None:
         errors.append(se_error)
         return
@@ -565,25 +634,34 @@ def _validate_ragged_completion(
         if np.any(imp[z_missing] == 1):
             errors.append("missing z rows have imputed=1 (inconsistent)")
 
+
+def _validate_ragged_imputed(
+    root: Any, encoding: StoreEncoding, n_assoc: int, errors: list[str]
+) -> bool:
+    """Seam: the Ragged imputed mask and the missingness it declares.
+
+    Returns False when the mask cannot be used, stopping the pipeline.
+    """
+    imp = _validate_ragged_imputed_mask(root, n_assoc, errors)
+    if imp is None:
+        return False
+    _validate_ragged_imputed_missingness(root, encoding, imp, n_assoc, errors)
+    return True
+
+
+def _validate_ragged_completion(
+    ragged_path: Path,
+    store: OpenGWASDBStore,
+    n_assoc: int,
+    n_analyses_csr: int,
+    errors: list[str],
+) -> None:
+    """Validate the imputed mask and completion_quality table in a Reference-Completed store."""
+    root = zarr.open_group(str(ragged_path), mode="r")
+    if not _validate_ragged_imputed(root, store.manifest.encoding, n_assoc, errors):
+        return
     with store.index_connection() as conn:
-        tables = {
-            r[0]
-            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        }
-        if "completion_quality" not in tables:
-            errors.append(
-                "index.sqlite is missing the completion_quality table "
-                "for a reference-completed store"
-            )
-        else:
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(completion_quality)").fetchall()}
-            required = COMPLETION_QUALITY_COLUMNS
-            missing_cols = required - cols
-            if missing_cols:
-                errors.append(
-                    "completion_quality table is missing columns: "
-                    f"{', '.join(sorted(missing_cols))}"
-                )
+        _validate_completion_quality_table(conn, n_analyses_csr, errors)
 
 
 _TOP_HIT_SAMPLE_SIZE = 1000  # cross-validate this many sampled entries against the CSR
@@ -842,50 +920,51 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
     return ValidationResult(errors=errors)
 
 
-def _validate_overflow(
-    store_path: Path,
-    ragged_path: Path,
-    n_shared: int,
-    errors: list[str],
-    encoding: StoreEncoding,
-) -> None:
-    """Validate the Ragged Overflow CSR: array lengths, se sign, shared-index
-    bounds, and that it is observed-only (never imputed, even after completion)."""
-    try:
-        root = zarr.open_group(str(ragged_path), mode="r")
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"cannot open Ragged Overflow CSR: {exc}")
-        return
-    for name in ("offsets", "variant_index", "z", "se"):
-        if name not in root:
-            errors.append(f"missing data.zarr/ragged/{name}")
-    if errors:
-        return
+def _validate_overflow_structure(
+    root: Any, encoding: StoreEncoding, n_shared: int, errors: list[str]
+) -> int | None:
+    """Seam: the Overflow CSR's shape, shared-index bounds, and observed-only status.
+
+    Returns the association count when the structural guards pass; ``None``
+    stops the pipeline. ``variant_index`` bounds are checked against the
+    shared variant table the Overflow's indices address.
+    """
+    if _missing_csr_arrays(root, errors):
+        return None
     # Both Hybrid components are written under one plan (issue #119): the
     # Dense Component and the Ragged Overflow partition one Analysis's
     # associations, so a shared result contract needs a shared encoding.
     _validate_encoding_plan(root, encoding, errors, label="data.zarr/ragged")
     if errors:
-        return
-    offsets = root["offsets"][:]
-    n_assoc = int(offsets[-1])
-    for name in ("variant_index", "z", "se"):
-        if len(root[name]) != n_assoc:
-            errors.append(
-                f"data.zarr/ragged/{name} has {len(root[name])} entries but offsets imply {n_assoc}"
-            )
+        return None
+    n_assoc = int(root["offsets"][:][-1])
+    _csr_parallel_length_errors(root, n_assoc, errors)
     if "imputed" in root:
         errors.append(
             "Ragged Overflow has an imputed array — the overflow is off-panel and "
             "must never be imputed (always observed)"
         )
     if errors:
-        return
+        return None
     vi = root["variant_index"][:]
     if n_assoc and (int(vi.min()) < 0 or int(vi.max()) >= n_shared):
         errors.append(
             f"Ragged Overflow variant_index falls outside the shared variant table [0, {n_shared})"
         )
+    return n_assoc
+
+
+def _validate_overflow_values(
+    root: Any, encoding: StoreEncoding, n_assoc: int, errors: list[str]
+) -> None:
+    """Seam: what the Overflow's encoded values decode to.
+
+    Decoded, not raw: a fixed-point `z`'s bytes are codes, and a residual `se`
+    plane can only be checked against its side tables and coefficients once
+    it decodes (issue #118). Runs even when the shared-index bounds check
+    above failed, so every defect reports rather than the first one masking
+    the rest.
+    """
     se_vals, se_error = _decoded_csr_se(root, encoding, n_assoc, "Ragged Overflow se")
     if se_error is not None:
         errors.append(se_error)
@@ -901,6 +980,26 @@ def _validate_overflow(
             ZOverflowTable.read(root),
             errors,
         )
+
+
+def _validate_overflow(
+    store_path: Path,
+    ragged_path: Path,
+    n_shared: int,
+    errors: list[str],
+    encoding: StoreEncoding,
+) -> None:
+    """Validate the Ragged Overflow CSR: array lengths, se sign, shared-index
+    bounds, and that it is observed-only (never imputed, even after completion)."""
+    try:
+        root = zarr.open_group(str(ragged_path), mode="r")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"cannot open Ragged Overflow CSR: {exc}")
+        return
+    n_assoc = _validate_overflow_structure(root, encoding, n_shared, errors)
+    if n_assoc is None:
+        return
+    _validate_overflow_values(root, encoding, n_assoc, errors)
 
 
 def _validate_hybrid_invariants(
@@ -1583,6 +1682,57 @@ def _validate_se_plan(
     errors.extend(_se_exception_table_errors(group, label))
 
 
+def _validate_z_plan(
+    group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
+) -> None:
+    """Seam: the fixed-point `z` side table agrees with the declared plan.
+
+    The overflow side table is only read under the fixed-point encoding the
+    manifest declares, so a stray table under float z is a failure rather than
+    a harmless relic, and a declared fixed-point z without its exact-value
+    side table cannot be decoded faithfully at all (issue #119, issue #106).
+    """
+    declared = encoding.z
+    has_table = Z_OVERFLOW_INDEX in group or Z_OVERFLOW_VALUE in group
+    if not declared.is_fixed_point:
+        if has_table:
+            errors.append(
+                f"{label} carries a z overflow table but declares no fixed-point z encoding"
+            )
+        return
+    missing = [name for name in (Z_OVERFLOW_INDEX, Z_OVERFLOW_VALUE) if name not in group]
+    if missing:
+        errors.append(
+            f"{label} declares fixed-point z but is missing "
+            f"{Z_OVERFLOW_INDEX}/{Z_OVERFLOW_VALUE}, which hold the exact values of "
+            "any cell outside the representable range"
+        )
+        return
+    _validate_z_overflow_table(ZOverflowTable.read(group), errors, label=label)
+
+
+def _validate_z_overflow_table(
+    table: ZOverflowTable, errors: list[str], *, label: str
+) -> None:
+    """Seam: a present fixed-point `z` side table is self-consistent.
+
+    Positions must pair one-to-one with values, be sorted and unrepeated, and
+    every stored exact value must be finite -- the table is the authoritative
+    decode for cells the fixed-point plane cannot represent.
+    """
+    if len(table.index) != len(table.value):
+        errors.append(
+            f"{label} z overflow table has {len(table.index)} positions but "
+            f"{len(table.value)} values"
+        )
+        return
+    if len(table.index) > 1 and np.any(table.index[1:] <= table.index[:-1]):
+        errors.append(f"{label} z overflow table is not sorted by position, or repeats one")
+        return
+    if len(table.index) and not np.all(np.isfinite(table.value)):
+        errors.append(f"{label} z overflow table contains non-finite values")
+
+
 def _validate_encoding_plan(
     group: Any, encoding: StoreEncoding, errors: list[str], *, label: str
 ) -> None:
@@ -1609,31 +1759,7 @@ def _validate_encoding_plan(
     _validate_se_plan(group, encoding, errors, label=label)
     if errors or "z" not in group:
         return
-    declared = encoding.z
-    has_table = Z_OVERFLOW_INDEX in group or Z_OVERFLOW_VALUE in group
-    if not declared.is_fixed_point:
-        if has_table:
-            errors.append(
-                f"{label} carries a z overflow table but declares no fixed-point z encoding"
-            )
-        return
-    if Z_OVERFLOW_INDEX not in group or Z_OVERFLOW_VALUE not in group:
-        errors.append(
-            f"{label} declares fixed-point z but is missing "
-            f"{Z_OVERFLOW_INDEX}/{Z_OVERFLOW_VALUE}, which hold the exact values of "
-            "any cell outside the representable range"
-        )
-        return
-    table = ZOverflowTable.read(group)
-    if len(table.index) != len(table.value):
-        errors.append(
-            f"{label} z overflow table has {len(table.index)} positions but "
-            f"{len(table.value)} values"
-        )
-    elif len(table.index) > 1 and np.any(table.index[1:] <= table.index[:-1]):
-        errors.append(f"{label} z overflow table is not sorted by position, or repeats one")
-    elif len(table.index) and not np.all(np.isfinite(table.value)):
-        errors.append(f"{label} z overflow table contains non-finite values")
+    _validate_z_plan(group, encoding, errors, label=label)
 
 
 def _overflow_positions_match(

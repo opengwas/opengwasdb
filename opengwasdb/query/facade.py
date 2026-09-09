@@ -106,6 +106,50 @@ def _status_array(imputed_flags: np.ndarray, z_vals: np.ndarray, se_vals: np.nda
     return out
 
 
+def _top_hits_result(
+    variant_index: np.ndarray,
+    analysis_index: np.ndarray,
+    z: np.ndarray,
+    se: np.ndarray,
+    eaf: np.ndarray,
+    imputed: np.ndarray,
+    *,
+    observed_only: bool,
+    limit: int | None,
+) -> dict[str, np.ndarray]:
+    """Shared indexed top-hit finalizer: filter, then cap, then assemble.
+
+    The Dense and Ragged indexed paths resolve their parallel arrays their own
+    way, then both finish identically (ADR 0033): `observed_only` runs before
+    `limit` so an imputed leading hit can never crowd an observed one out of
+    the cap, and the six parallel arrays are filtered and sliced together so a
+    misaligned array can never slip into the returned result.
+    """
+    if observed_only:
+        keep = imputed == 0
+        variant_index = variant_index[keep]
+        analysis_index = analysis_index[keep]
+        z = z[keep]
+        se = se[keep]
+        eaf = eaf[keep]
+        imputed = imputed[keep]
+    if limit is not None:
+        variant_index = variant_index[:limit]
+        analysis_index = analysis_index[:limit]
+        z = z[:limit]
+        se = se[:limit]
+        eaf = eaf[:limit]
+        imputed = imputed[:limit]
+    return {
+        "variant_index": variant_index,
+        "analysis_index": analysis_index,
+        "z": z,
+        "se": se,
+        "eaf": eaf,
+        "association_status": _status_array(imputed, z, se),
+    }
+
+
 def _empty_rho_result() -> dict[str, np.ndarray]:
     return {
         "analysis_id_a": np.empty(0, dtype=object),
@@ -432,31 +476,16 @@ class StoreQuery:
             "float32",
             lambda: self._eaf_pairs(variant_indices, analysis_indices),
         )
-        if observed_only:
-            keep = imp == 0
-            variant_indices, analysis_indices, z_values, se_values, eaf, imp = (
-                variant_indices[keep],
-                analysis_indices[keep],
-                z_values[keep],
-                se_values[keep],
-                eaf[keep],
-                imp[keep],
-            )
-        if limit is not None:
-            variant_indices = variant_indices[:limit]
-            analysis_indices = analysis_indices[:limit]
-            z_values = z_values[:limit]
-            se_values = se_values[:limit]
-            eaf = eaf[:limit]
-            imp = imp[:limit]
-        return {
-            "variant_index": variant_indices,
-            "analysis_index": analysis_indices,
-            "z": z_values,
-            "se": se_values,
-            "eaf": eaf,
-            "association_status": _status_array(imp, z_values, se_values),
-        }
+        return _top_hits_result(
+            variant_indices,
+            analysis_indices,
+            z_values,
+            se_values,
+            eaf,
+            imp,
+            observed_only=observed_only,
+            limit=limit,
+        )
 
     def rho(self, *ids: str) -> dict[str, np.ndarray]:
         """Long-format pairwise Rho for a set of Analysis IDs (positional, or a
@@ -842,28 +871,9 @@ class RaggedStoreQuery:
                 "imputed", bounds, "uint8", lambda: np.zeros(len(vi), dtype=np.uint8)
             )
             eaf = reader.read_or("eaf", bounds, "float32", lambda: self._csr.eaf_pairs(vi, ai))
-            if observed_only:
-                keep = imp == 0
-                vi, ai, z, se, eaf, imp = (
-                    vi[keep],
-                    ai[keep],
-                    z[keep],
-                    se[keep],
-                    eaf[keep],
-                    imp[keep],
-                )
-            if limit is not None:
-                vi, ai, z, se = vi[:limit], ai[:limit], z[:limit], se[:limit]
-                imp = imp[:limit]
-                eaf = eaf[:limit]
-            return {
-                "variant_index": vi,
-                "analysis_index": ai,
-                "z": z,
-                "se": se,
-                "eaf": eaf,
-                "association_status": _status_array(imp, z, se),
-            }
+            return _top_hits_result(
+                vi, ai, z, se, eaf, imp, observed_only=observed_only, limit=limit
+            )
 
         return self._top_hits_by_scan(
             analysis_id=analysis_id,
@@ -939,61 +949,41 @@ class RaggedStoreQuery:
         *,
         observed_only: bool = False,
     ) -> dict[str, np.ndarray]:
-        """Associations for a specific variant × analysis set."""
+        """Associations for a specific variant × analysis set.
+
+        Resolves the wanted Variant Index set once, then selects each
+        requested Analysis's rows from the same per-Analysis projection
+        ``analysis`` serves, so the decode, missing-row and status semantics
+        are shared rather than hand-rolled per segment. Requested Analysis
+        order and duplicates carry through; a request that resolves nothing
+        yields the empty result.
+        """
         variants = [
             v for id_ in identifiers if (v := self._variant_axis.by_identifier(id_)) is not None
         ]
         if not variants:
             return _empty_result()
 
-        target_vi = {v.variant_index for v in variants}
-        all_vi, all_ai, all_z, all_se, all_eaf, all_status = [], [], [], [], [], []
-
+        wanted = np.array(sorted({v.variant_index for v in variants}), dtype=np.int32)
+        parts = []
         for aid in analysis_ids:
-            idx = self._resolve_analysis_id(aid)
-            if idx is None:
+            part = self.analysis(aid, observed_only=observed_only)
+            if len(part["z"]) == 0:
                 continue
-            offsets_pair = self._csr._offsets[idx : idx + 2]
-            s, e = int(offsets_pair[0]), int(offsets_pair[1])
-            if s == e:
+            keep = np.isin(part["variant_index"], wanted)
+            if not keep.any():
                 continue
-            vi = self._csr._variant_index[s:e].astype("int32")
-            z = self._csr.z_slice(s, e)
-            se = self._csr.se_slice(s, e, idx)
-            eaf = self._csr.eaf_slice(s, e)
-            imp = self._get_imputed_slice(s, e)
-            sub_mask = np.isin(vi, np.array(sorted(target_vi), dtype=np.int32))
-            if not sub_mask.any():
-                continue
-            vi, z, se, eaf, imp = (
-                vi[sub_mask],
-                z[sub_mask],
-                se[sub_mask],
-                eaf[sub_mask],
-                imp[sub_mask],
+            parts.append(
+                {
+                    "variant_index": part["variant_index"][keep],
+                    "analysis_index": part["analysis_index"][keep],
+                    "z": part["z"][keep],
+                    "se": part["se"][keep],
+                    "eaf": part["eaf"][keep],
+                    "association_status": part["association_status"][keep],
+                }
             )
-            if observed_only:
-                keep = imp == 0
-                vi, z, se, eaf, imp = vi[keep], z[keep], se[keep], eaf[keep], imp[keep]
-            if len(z) == 0:
-                continue
-            all_vi.append(vi)
-            all_ai.append(np.full(len(z), idx, dtype="int32"))
-            all_z.append(z)
-            all_se.append(se)
-            all_eaf.append(eaf)
-            all_status.append(_status_array(imp, z, se))
-
-        if not all_vi:
-            return _empty_result()
-        return {
-            "variant_index": np.concatenate(all_vi),
-            "analysis_index": np.concatenate(all_ai),
-            "z": np.concatenate(all_z),
-            "se": np.concatenate(all_se),
-            "eaf": np.concatenate(all_eaf),
-            "association_status": np.concatenate(all_status),
-        }
+        return _concat_results(parts)
 
 
 def _concat_results(parts: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:

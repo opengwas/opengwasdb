@@ -142,9 +142,9 @@ compare against the baseline rather than aiming for a clean run:
 
 | | enforced (`.baselines.json`) | on `dev` |
 |---|---|---|
-| `pixi run -e dev lint` | 61 errors | 61 |
-| `pixi run -e dev typecheck` | 40 errors | 40 |
-| `pixi run -e dev test` | — | 837 passed, 1 skipped |
+| `pixi run -e dev lint` | 61 errors | 60 |
+| `pixi run -e dev typecheck` | 40 errors | 33 |
+| `pixi run -e dev test` | — | 923 passed, 1 skipped |
 
 `.baselines.json` carries the enforced numbers and is the only place they are
 stated; this table repeats them so the two can be seen to agree. Both columns
@@ -390,6 +390,7 @@ or `main`:
 | check | script | fails when |
 |---|---|---|
 | tooling baselines | `scripts/check_baselines.py` | ruff or mypy findings exceed `.baselines.json` |
+| cleat quality gates | `quality/bin/gate.py` | any configured non-strict repository gate fails |
 | tests | `pixi run -e dev test` | any test fails |
 | changelog | `scripts/check_changelog.py` | a PR changes `opengwasdb/` without touching the `Unreleased` section |
 
@@ -398,16 +399,17 @@ after, so editing an older entry does not satisfy it. Apply the
 **`no-changelog`** label to a pull request whose change genuinely has no
 user-visible effect.
 
-Both scripts run locally:
+The same checks run locally:
 
 ```bash
 pixi run -e dev python scripts/check_baselines.py
+pixi run -e dev python quality/bin/gate.py
 pixi run -e dev python scripts/check_changelog.py --base-ref origin/dev
 ```
 
-CI checks counts, not diffs — it catches a regression but not a change that
-fixes one finding while adding another. The diff recipe above remains the
-right local check.
+The tooling-baseline script checks counts, not diffs — it catches a regression
+but not a change that fixes one finding while adding another. The diff recipe
+above remains the right local check.
 
 ### Before merging `dev` to `main`
 

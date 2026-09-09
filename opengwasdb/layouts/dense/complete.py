@@ -139,6 +139,32 @@ class _BlockTask:
     checkpoint_path: Path
 
 
+def _source_row_for(src_axis: VariantAxis, alid: str | None) -> int | None:
+    """The source row an ALID maps to, or ``None`` for an absent/absent-looking one."""
+    parsed = parse_canonical_alid(alid) if alid is not None else None
+    rec = src_axis.by_alid(parsed) if parsed is not None else None
+    return rec.variant_index if rec is not None else None
+
+
+def _match_source_rows(
+    source_path: str | Path, canonical_alids: list[str | None]
+) -> tuple[list[int], list[int]]:
+    """Map each canonical ALID to its source row, keeping absence as absence.
+
+    ``None``, an unparsable ALID, and an ALID the source does not carry must all
+    stay unmatched: the rows they own keep their NaN fill below, and a source
+    position is never fabricated from row 0 or another sentinel.
+    """
+    src_axis = VariantAxis(source_path)
+    try:
+        src_rows = [_source_row_for(src_axis, alid) for alid in canonical_alids]
+        matched_local = [i for i, r in enumerate(src_rows) if r is not None]
+        matched_src = [row for row in src_rows if row is not None]
+        return matched_local, matched_src
+    finally:
+        src_axis.close()
+
+
 def _make_reader(task: _BlockTask):
     """dense's half of the ``run_block`` seam: read every Analysis's observed
     z/se at a block's positions as one matrix slice, opening the source store
@@ -147,30 +173,19 @@ def _make_reader(task: _BlockTask):
     """
 
     def make_reader(block, canonical_alids: list[str | None]):
-        src_axis = VariantAxis(task.source_path)
-        try:
-            src_store = open_store(task.source_path)
-            src_root = src_store.arrays(mode="r")
-            src_plane = DenseZPlane.open(src_root, src_store.manifest.encoding)
-            src_se_plane = DenseSePlane.open(src_root, src_store.manifest.encoding)
-            n_analyses = src_plane.n_analyses
+        src_store = open_store(task.source_path)
+        src_root = src_store.arrays(mode="r")
+        src_plane = DenseZPlane.open(src_root, src_store.manifest.encoding)
+        src_se_plane = DenseSePlane.open(src_root, src_store.manifest.encoding)
+        n_analyses = src_plane.n_analyses
 
-            src_rows: list[int | None] = []
-            for alid in canonical_alids:
-                parsed = parse_canonical_alid(alid) if alid is not None else None
-                rec = src_axis.by_alid(parsed) if parsed is not None else None
-                src_rows.append(rec.variant_index if rec is not None else None)
+        matched_local, matched_src = _match_source_rows(task.source_path, canonical_alids)
 
-            matched_local = [i for i, r in enumerate(src_rows) if r is not None]
-            matched_src = [src_rows[i] for i in matched_local]
-
-            z_obs = np.full((len(canonical_alids), n_analyses), np.nan, dtype=np.float64)
-            se_obs = np.full((len(canonical_alids), n_analyses), np.nan, dtype=np.float64)
-            if matched_local:
-                z_obs[matched_local, :] = src_plane.rows(np.asarray(matched_src))
-                se_obs[matched_local, :] = src_se_plane.rows(np.asarray(matched_src))
-        finally:
-            src_axis.close()
+        z_obs = np.full((len(canonical_alids), n_analyses), np.nan, dtype=np.float64)
+        se_obs = np.full((len(canonical_alids), n_analyses), np.nan, dtype=np.float64)
+        if matched_local:
+            z_obs[matched_local, :] = src_plane.rows(np.asarray(matched_src))
+            se_obs[matched_local, :] = src_se_plane.rows(np.asarray(matched_src))
 
         def read(ai: int) -> tuple[np.ndarray, np.ndarray]:
             return z_obs[:, ai], se_obs[:, ai]

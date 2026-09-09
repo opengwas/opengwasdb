@@ -958,6 +958,51 @@ class TestValidation:
             for error in result.errors
         )
 
+    def test_out_of_range_completion_quality_analysis_index_fails(self, completed_store):
+        """A quality row naming an Analysis the CSR does not have fails loudly.
+
+        Dense validation always enforced this positional-reference rule (ADR
+        0030 consequences); Ragged validation used to check only the table's
+        presence and columns, so a Ragged store whose quality rows described a
+        nonexistent Analysis validated cleanly. The CSR's own Analysis count
+        is the bound the shared rule now checks.
+        """
+        import sqlite3
+
+        assert validate_store(completed_store).ok
+        root = open_store(completed_store).arrays(mode="r")
+        offsets = root["ragged"]["offsets"][:]
+        n_analyses = len(offsets) - 1
+        assert n_analyses >= 1
+        # mutation is meaningful: the fixture's quality rows are all in range
+        conn = sqlite3.connect(str(completed_store / "index.sqlite"))
+        try:
+            existing = conn.execute(
+                "SELECT analysis_index, block_id, pearson_r, n_imputed, n_missing "
+                "FROM completion_quality LIMIT 1"
+            ).fetchone()
+            assert existing is not None, "fixture must write completion_quality rows"
+            assert 0 <= existing[0] < n_analyses
+            conn.execute(
+                "INSERT INTO completion_quality "
+                "(analysis_index, block_id, pearson_r, n_imputed, n_missing) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (n_analyses, existing[1], existing[2], existing[3], existing[4]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = validate_store(completed_store)
+
+        assert not result.ok
+        assert any(
+            error
+            == f"completion_quality has 1 row(s) with analysis_index "
+            f"outside analyses.tsv's range [0, {n_analyses})"
+            for error in result.errors
+        )
+
 
 _RESULT_KEYS = (
     "variant_index",
@@ -1535,3 +1580,80 @@ class TestGeneTargetLessAnalyses:
 
         assert result.n_imputed == 0
         assert self._alids(dst) == self._alids(rich_observed_store)
+
+
+class TestRaggedLookupSeam:
+    """`RaggedStoreQuery.lookup` must agree row-for-row with the per-Analysis
+    projection (`analysis`) restricted to the wanted variants — same decode,
+    same order, same statuses — for identifiers, Analyses, imputed/missing
+    rows, and duplicate requested Analysis IDs."""
+
+    def _wanted(self, q, identifiers: list[str]) -> np.ndarray:
+        """The store-local variant indices the identifiers resolve to."""
+        return np.unique(
+            np.concatenate([q.phewas(identifier)["variant_index"] for identifier in identifiers])
+        ).astype("int32")
+
+    def test_lookup_matches_filtered_analysis_results(self, completed_store):
+        q = query_store(completed_store)
+        identifiers = ["rs1001", "rs1002"]
+        analysis_ids = ["ENSG00000000001::Blood", "ENSG00000000002::Blood"]
+        wanted = self._wanted(q, identifiers)
+        result = q.lookup(identifiers, analysis_ids)
+
+        parts = []
+        for aid in analysis_ids:
+            part = q.analysis(aid)
+            keep = np.isin(part["variant_index"], wanted)
+            parts.append({name: part[name][keep] for name in part})
+        expected = {name: np.concatenate([p[name] for p in parts]) for name in _RESULT_KEYS}
+        for name in _RESULT_KEYS:
+            np.testing.assert_array_equal(result[name], expected[name])
+        q.close()
+
+    def test_lookup_unknown_identifiers_and_analysis_ids(self, completed_store):
+        q = query_store(completed_store)
+        assert len(q.lookup(["rs999999"], ["ENSG00000000001::Blood"])["z"]) == 0
+        assert len(q.lookup(["rs1001"], ["ENSG00000000099::Blood"])["z"]) == 0
+        assert len(q.lookup(["rs1001", "rs1002"], ["ENSG00000000099::Blood"])["z"]) == 0
+        empty = q.lookup([], ["ENSG00000000001::Blood"])
+        assert tuple(empty) == _RESULT_KEYS
+        assert len(empty["z"]) == 0
+        q.close()
+
+    def test_lookup_observed_only_and_duplicate_analysis_ids(self, completed_store):
+        q = query_store(completed_store)
+        duplicated = q.lookup(
+            ["rs1001", "rs1002"], ["ENSG00000000001::Blood", "ENSG00000000001::Blood"]
+        )
+        single = q.lookup(["rs1001", "rs1002"], ["ENSG00000000001::Blood"])
+        assert len(duplicated["z"]) == 2 * len(single["z"])
+        np.testing.assert_array_equal(
+            duplicated["analysis_index"], np.concatenate([single["analysis_index"]] * 2)
+        )
+
+        obs = q.lookup(
+            ["rs1001", "rs1002"], ["ENSG00000000001::Blood"], observed_only=True
+        )
+        assert set(obs["association_status"].tolist()) <= {"observed", "missing"}
+        # observed_only must equal analysis(observed_only) restricted
+        restricted = q.analysis("ENSG00000000001::Blood", observed_only=True)
+        keep = np.isin(restricted["variant_index"], self._wanted(q, ["rs1001", "rs1002"]))
+        for name in ("variant_index", "analysis_index", "z", "se", "eaf", "association_status"):
+            np.testing.assert_array_equal(obs[name], restricted[name][keep])
+        q.close()
+
+    def test_lookup_row_order_and_key_shape(self, observed_store):
+        q = query_store(observed_store)
+        result = q.lookup(
+            ["rs1001", "rs1002"], ["ENSG00000000001::Blood", "ENSG00000000002::Blood"]
+        )
+        assert tuple(result) == _RESULT_KEYS
+        # analysis 0 holds rs1001+rs1002, analysis 1 holds rs1002: analysis-major order
+        np.testing.assert_array_equal(result["variant_index"], [0, 1, 1])
+        np.testing.assert_array_equal(result["analysis_index"], [0, 0, 1])
+        for name in ("variant_index", "analysis_index"):
+            assert result[name].dtype.kind == "i"
+        for name in ("z", "se", "eaf"):
+            assert result[name].dtype.kind == "f"
+        q.close()

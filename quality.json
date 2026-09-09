@@ -82,6 +82,7 @@
       "*/DerivedData/*",
       "*/Pods/*",
       "*/__pycache__/*",
+      "*/benchmarks/*",
       "*/build/*",
       "*/coverage/*",
       "*/dist/*",
@@ -90,6 +91,7 @@
       "*/out/*",
       "*/quality/*",
       "*/target/*",
+      "*/tests/*",
       "*/vendor/*",
       "*/venv/*"
     ],

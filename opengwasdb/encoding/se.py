@@ -47,34 +47,16 @@ class OverflowCells:
     n_analyses: int
 
     def __post_init__(self) -> None:
-        se = np.asarray(self.se_values)
-        eaf = np.asarray(self.eaf_values)
-        if se.ndim != 1 or eaf.ndim != 1:
-            raise ValueError("OverflowCells se_values and eaf_values must be one-dimensional")
+        se = _normalise_overflow_values(
+            self.se_values, "OverflowCells se_values and eaf_values must be one-dimensional"
+        )
+        eaf = _normalise_overflow_values(
+            self.eaf_values, "OverflowCells se_values and eaf_values must be one-dimensional"
+        )
         if len(se) != len(eaf):
             raise ValueError("OverflowCells se_values and eaf_values must have equal lengths")
-
-        ai = np.asarray(self.analysis_indices)
-        if ai.ndim != 1:
-            raise ValueError("OverflowCells analysis_indices must be one-dimensional")
-        if len(ai) != len(se):
-            raise ValueError(
-                "OverflowCells analysis_indices length must match se_values/eaf_values"
-            )
-        if ai.dtype.kind not in ("i", "u"):
-            if (
-                ai.dtype.kind != "f"
-                or not np.all(np.isfinite(ai))
-                or not np.all(np.mod(ai, 1.0) == 0.0)
-            ):
-                raise ValueError("OverflowCells analysis_indices must be integers")
-        indices = ai.astype(np.int64, copy=False)
-        n_analyses = self.n_analyses
-        if isinstance(n_analyses, bool) or not isinstance(n_analyses, (int, np.integer)):
-            raise ValueError("OverflowCells n_analyses must be a non-negative integer")
-        n_analyses = int(n_analyses)
-        if n_analyses < 0:
-            raise ValueError("OverflowCells n_analyses must be a non-negative integer")
+        indices = _normalise_analysis_indices(self.analysis_indices, len(se))
+        n_analyses = _normalise_analysis_count(self.n_analyses)
         if np.any(indices < 0) or np.any(indices >= n_analyses):
             raise ValueError(
                 f"OverflowCells analysis_indices must lie within [0, {n_analyses})"
@@ -84,6 +66,47 @@ class OverflowCells:
         object.__setattr__(self, "eaf_values", eaf)
         object.__setattr__(self, "analysis_indices", indices)
         object.__setattr__(self, "n_analyses", n_analyses)
+
+
+def _normalise_overflow_values(values: Any, message: str) -> np.ndarray:
+    """One OverflowCells parallel vector as a one-dimensional array, or `message`."""
+    out = np.asarray(values)
+    if out.ndim != 1:
+        raise ValueError(message)
+    return out
+
+
+def _normalise_analysis_indices(values: Any, n: int) -> np.ndarray:
+    """The OverflowCells Analysis-index vector as canonical ``int64``.
+
+    Validates rank, the required length and integral values, keeping the
+    vector otherwise untouched so callers see exactly what they stored.
+    """
+    ai = np.asarray(values)
+    if ai.ndim != 1:
+        raise ValueError("OverflowCells analysis_indices must be one-dimensional")
+    if len(ai) != n:
+        raise ValueError(
+            "OverflowCells analysis_indices length must match se_values/eaf_values"
+        )
+    if ai.dtype.kind not in ("i", "u"):
+        if (
+            ai.dtype.kind != "f"
+            or not np.all(np.isfinite(ai))
+            or not np.all(np.mod(ai, 1.0) == 0.0)
+        ):
+            raise ValueError("OverflowCells analysis_indices must be integers")
+    return ai.astype(np.int64, copy=False)
+
+
+def _normalise_analysis_count(value: Any) -> int:
+    """The non-negative Analysis count OverflowCells requires, as an ``int``."""
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise ValueError("OverflowCells n_analyses must be a non-negative integer")
+    n_analyses: int = int(value)
+    if n_analyses < 0:
+        raise ValueError("OverflowCells n_analyses must be a non-negative integer")
+    return n_analyses
 
 
 class _ComponentCost(NamedTuple):
