@@ -1,5 +1,19 @@
 # Store format versioning, reader obligations, and migration expectations
 
+> **Superseded in part by [ADR 0041](0041-reset-format-version-and-drop-pre-release-formats.md)**
+> (issue #143), which resets `format_version` to `0.1.0` and makes it semantic
+> versioning, `MAJOR.MINOR.PATCH`. Two components are no longer a valid shape,
+> and the versions this ADR's tables describe as readable — `0.1`, and the
+> `1.0`/`2.0`/`3.0` that followed it — are refused rather than decoded.
+>
+> What this ADR decided that still holds: **what** makes a change incompatible
+> (§1), the accept/reject/warn structure of the reader contract (§2), that a
+> build writes one version and reads several (§3), that transformations produce
+> a new immutable release and completion preserves a format it did not write
+> (§4), and the rebuild/migrate/reject triage and Staged Release publication
+> contract (§5). ADR 0041 changes which digits carry a breaking change, and
+> which versions are readable at all. Read that one first.
+
 Implements store-format spec §21 ("Compatibility"), which has stated a rule
 since v0.1 without answering the operational questions around it, and which
 `opengwasdb.store.open` has never been able to implement as written. Issue

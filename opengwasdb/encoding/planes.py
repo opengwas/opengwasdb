@@ -338,7 +338,7 @@ class _EafPlaneBase:
         self._imputed = imputed
         self._group = group
         encoding = codec.encoding.eaf
-        if array is None and not (encoding.is_absent or encoding.is_optional_plane):
+        if array is None and not encoding.is_absent:
             raise EafBaselineError(
                 f"this release declares an eaf encoding of {encoding.kind!r} but carries "
                 "no eaf array; the store and its manifest disagree"
@@ -444,9 +444,9 @@ class DenseEafPlane(_EafPlaneBase):
         """The grid's width -- read from a sibling plane when `eaf` is absent.
 
         A component can legitimately have no `eaf` array while the rest of the
-        release is a full grid: a `format_version` 1.0 release with no
-        frequencies, or a completed one that carries only the panel's (issue
-        #113). The width is a property of the release, not of this plane.
+        release is a full grid: a completed release carrying only the panel's
+        frequencies (issue #113) declares `absent` and holds no plane. The
+        width is a property of the release, not of this plane.
         """
         for candidate in (self._array, self._imputed):
             if candidate is not None:
@@ -888,11 +888,6 @@ def write_eaf_csr(
     """
     encoding = codec.encoding.eaf
     if encoding.is_absent:
-        return
-    if encoding.is_optional_plane and not np.any(np.isfinite(values)):
-        # ADR 0036's contract, which only a `format_version` 1.0 release is in:
-        # the plane's *presence* is what says the release has frequencies, so a
-        # component with none must not acquire an all-NaN one.
         return
     exceptions = EafExceptionBuilder()
     per_cell = (

@@ -2,6 +2,7 @@
 
 from opengwasdb.store.open import (
     CURRENT_FORMAT_VERSION,
+    PRE_RESET_FORMAT_VERSIONS,
     SUPPORTED_FORMAT_VERSIONS,
     MalformedFormatVersion,
     OpenGWASDBStore,
@@ -11,10 +12,12 @@ from opengwasdb.store.open import (
     check_writable_format_version,
     open_store,
     parse_format_version,
+    split_format_version,
 )
 
 __all__ = [
     "CURRENT_FORMAT_VERSION",
+    "PRE_RESET_FORMAT_VERSIONS",
     "SUPPORTED_FORMAT_VERSIONS",
     "MalformedFormatVersion",
     "OpenGWASDBStore",
@@ -24,4 +27,5 @@ __all__ = [
     "check_writable_format_version",
     "open_store",
     "parse_format_version",
+    "split_format_version",
 ]
