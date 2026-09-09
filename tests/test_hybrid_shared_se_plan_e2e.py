@@ -39,6 +39,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import residual_fixtures as fixtures
 
 from opengwasdb.encoding.plan import SE_EXCEPTION, SE_MISSING, SeEncoding
 from opengwasdb.encoding.planes import DenseSePlane, DenseZPlane
@@ -56,16 +57,6 @@ from opengwasdb.variants import VariantAxis
 OFF_BASE = 500_000
 N_PANEL = 400
 N_OFF_PANEL = 400
-
-_VCF_HEADER = (
-    "##fileformat=VCFv4.2\n"
-    "##FORMAT=<ID=ES,Number=A,Type=Float,Description=\"Effect size\">\n"
-    "##FORMAT=<ID=SE,Number=A,Type=Float,Description=\"Standard error\">\n"
-    "##FORMAT=<ID=EZ,Number=A,Type=Float,Description=\"Z-score\">\n"
-    "##FORMAT=<ID=AF,Number=A,Type=Float,Description=\"Alternate allele frequency\">\n"
-    "##SAMPLE=<ID=S,StudyType=Continuous>\n"
-    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS\n"
-)
 
 
 def panel_alid(row: int) -> str:
@@ -157,8 +148,9 @@ def _build_hybrid(tmp_path: Path, label: str, analyses: list[dict]) -> Path:
     """
     manifest_rows: list[str] = []
     for column, config in enumerate(analyses):
-        vcf = tmp_path / f"{label}_trait_{column}.vcf"
-        vcf.write_text(_VCF_HEADER + "".join(_analysis_rows(column, **config)), encoding="utf-8")
+        vcf = fixtures.write_gwas_vcf_with_eaf(
+            tmp_path / f"{label}_trait_{column}.vcf", _analysis_rows(column, **config)
+        )
         manifest_rows.append(
             f"trait_{column}\t{vcf}\tTrait {column}\t1000\tsd\tdeclared_standardised\thg38"
         )
