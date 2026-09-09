@@ -8,16 +8,20 @@ import pytest
 from typer.testing import CliRunner
 
 from opengwasdb.build.observed import build_dense_observed_from_sources
+from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.cli.main import app
 from opengwasdb.encoding import DenseZPlane
+from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.rho import (
     build_dense_rho,
     estimate_rho_cml,
     select_thinned_variants,
 )
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
+from opengwasdb.variants import CanonicalVariant
 
 RHO_SOURCE_HEADER = "\t".join(
     [
@@ -340,3 +344,99 @@ def test_cli_build_dense_rho_defaults(rho_store_path):
     rho_group = root["rho"]
     assert rho_group.attrs["z_thresh"] == 1.0
     assert rho_group.attrs["min_nulls"] == 500
+
+
+def _residual_rho_store(tmp_path):
+    """A residual-SE Dense store with correlated Z and rows spaced for thinning.
+
+    SE is the residual-eligible per-MAF model (so the build genuinely selects
+    ``int8_residual``), Z is drawn correlated between the two Analyses (so a
+    Rho estimate is finite at a modest ``min_nulls``), and variants sit 1,000bp
+    apart -- one per 1,000bp thinning window, so Rho uses every row.
+    """
+    rng = np.random.default_rng(0)
+    n = 600
+    frequencies = np.linspace(0.05, 0.95, n, dtype=np.float32)
+    base = rng.standard_normal(n)
+    second = TRUE_RHO_01 * base + math.sqrt(1 - TRUE_RHO_01**2) * rng.standard_normal(n)
+    records: list[NormalisedAssociation] = []
+    for col, (analysis_id, z_values) in enumerate((("a0", base), ("a1", second))):
+        values = np.exp(
+            (-3.0 + col * 0.2)
+            - 0.5 * np.log(2 * frequencies * (1 - frequencies))
+            + 0.12 * np.sin(np.arange(n) * (0.07 + col * 0.01))
+        ).astype(np.float32)
+        records.extend(
+            NormalisedAssociation(
+                analysis_id=analysis_id,
+                variant=CanonicalVariant("1", (row + 1) * 1000, "A", "G"),
+                z=float(z_values[row]),
+                se=float(values[row]),
+                eaf=float(frequencies[row]),
+            )
+            for row in range(n)
+        )
+    store_path = tmp_path / "residual-rho.opengwasdb"
+    build_dense_observed_store(
+        records,
+        store_path,
+        store_id="residual-rho",
+        release_id="observed-v1",
+        reference_assembly="GRCh38",
+        chunk_shape=(100, 2),
+    )
+    return store_path
+
+
+def test_build_dense_rho_on_a_residual_store_reads_decoded_z(tmp_path):
+    """Issue #142 AC3: Rho over a residual Store Release is a decoded-Z artifact.
+
+    Rho is the Dense pair correlation over null Z-scores (ADR 0025), so it can
+    only be built from the *decoded* Z plane -- on this fixture z is stored as
+    int16 fixed-point codes, and a build that read raw codes would see values
+    ~1,000x too large, find no nulls, and store NaN everywhere. The build must
+    also leave the residual SE plane and its validation untouched, and the
+    artifact must contain no SE bytes at all: the documented Rho artifact is
+    ``rho``/``n_null``/``variant_index`` plus provenance attributes, exposed to
+    the facade as float32 (never raw residual or fixed-point codes).
+    """
+    store_path = _residual_rho_store(tmp_path)
+    encoding = StoreManifest.load(store_path).encoding
+    assert encoding.se.is_residual, "fixture must residual-code its se plane to be meaningful"
+    root = open_store(store_path).arrays(mode="r")
+    assert root["z"].dtype == np.dtype("int16"), "fixture z must be coded for decode to matter"
+
+    build_dense_rho(store_path, window_bp=1000, z_thresh=1.0, min_nulls=100, n_workers=1)
+
+    result = validate_store(store_path)
+    assert result.ok, result.errors
+
+    root = open_store(store_path).arrays(mode="r")
+    rho_group = root["rho"]
+    assert set(rho_group.keys()) == {"n_null", "rho", "variant_index"}, (
+        "the Rho artifact is decoded correlations plus support -- never SE bytes"
+    )
+    thinned = np.asarray(rho_group["variant_index"][:])
+    # Variants sit exactly at 1,000bp multiples, so each lands at the start of
+    # its own 1,000bp window and thinning keeps every row.
+    assert len(thinned) == 600
+
+    # The stored estimate is what the decoded Z plane gives a direct estimator.
+    decoded = DenseZPlane.open(root, encoding).band(0, root["z"].shape[0])
+    z0 = np.asarray(decoded[thinned, 0], dtype=np.float64)
+    z1 = np.asarray(decoded[thinned, 1], dtype=np.float64)
+    direct = estimate_rho_cml(z0, z1, z_thresh=1.0, min_nulls=100)
+    nulls = np.isfinite(z0) & np.isfinite(z1) & (np.abs(z0) < 1.0) & (np.abs(z1) < 1.0)
+
+    query = query_store(store_path)
+    pair = query.rho("a0", "a1")
+    assert pair["rho"].dtype == np.dtype("float32"), "the facade returns a decoded float32 artifact"
+    assert len(pair["rho"]) == 1
+    assert not math.isnan(float(pair["rho"][0]))
+    assert float(pair["rho"][0]) == pytest.approx(direct, abs=1e-2)
+    assert int(pair["n_null"][0]) == int(nulls.sum())
+    assert int(pair["n_null"][0]) >= 100
+
+    # The add-in-place Rho group leaves the residual se plane queryable and
+    # still residual-coded -- nothing about building Rho rewrites se.
+    assert StoreManifest.load(store_path).encoding.se.is_residual

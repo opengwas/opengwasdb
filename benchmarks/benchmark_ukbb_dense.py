@@ -7,7 +7,8 @@ Writes docs/benchmark-output/opengwasdb_ukbb_dense_benchmark.json, which the
 companion QMD renders.
 
 Usage:
-  uv run python benchmarks/benchmark_ukbb_dense.py [--reps N] [--store PATH] [--output PATH]
+  pixi run -e dev python benchmarks/benchmark_ukbb_dense.py \
+      [--reps N] [--store PATH] [--output PATH]
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from typing import Any
 import numpy as np
 import zarr
 
+from benchmarks._artifact import provenance, write_artifact
 from opengwasdb.layouts.dense.top_hits import threshold_key, write_top_hit_indexes
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -178,7 +180,8 @@ def run_top_hit_experiment(store: Path, output: Path, reps: int) -> None:
         "median_ms": selected["median_ms"], "p95_ms": selected["p95_ms"],
         "result_count": selected["result_count"],
     })
-    output.write_text(json.dumps(previous, indent=2) + "\n")
+    previous.update(provenance())
+    write_artifact(output, previous)
 
 
 def _dir_bytes(path: Path) -> int:
@@ -522,8 +525,9 @@ def main() -> None:
             EXPOSURE: an[analyses_by_id[EXPOSURE]]["analysis_label"],
             OUTCOME: an[analyses_by_id[OUTCOME]]["analysis_label"],
         },
+        **provenance(),
     }
-    args.output.write_text(json.dumps(result, indent=2))
+    write_artifact(args.output, result)
     print(f"wrote {args.output}")
 
 

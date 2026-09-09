@@ -27,6 +27,7 @@ from opengwasdb.encoding.plan import (
 from opengwasdb.encoding.planes import (
     DenseEafPlane,
     DenseSePlane,
+    DenseZPlane,
     RaggedSePlane,
     write_se_csr,
     write_se_dense,
@@ -823,3 +824,76 @@ def test_optimise_dense_se_joint_rejects_wrong_overflow_analysis_count(tmp_path)
         match=r"overflow declares 3 analyses but the Dense component has 1",
     ):
         optimise_dense_se_joint(group, preliminary, overflow=overflow)
+
+
+def test_residual_dense_phewas_lookup_and_range_return_physical_values(tmp_path) -> None:
+    """Issue #142 AC3: PheWAS, lookup and range-PheWAS on a residual Dense release.
+
+    ``analysis`` and ``top_hits`` already have end-to-end assertions against
+    this residual store (``test_dense_source_to_query_uses_residual_se_end_to_end``);
+    PheWAS, ``lookup`` and ``range_phewas`` read the same decoded
+    ``DenseSePlane`` but through other facade paths, and a path that surfaced
+    the plane's raw int8 codes -- or its coded int16 z / coded int8 eaf
+    neighbours -- would slip past those tests. Every returned cell is therefore
+    compared twice: with the freshly decoded planes (a mis-wired read fails
+    here) and, for ``se``/``eaf``/``z``, with the physical values the source
+    rows carried (a decode bypass fails here, because raw codes are not the
+    physical values the source put in).
+    """
+    store, expected = _build_residual_dense_store(tmp_path)
+    encoding = StoreManifest.load(store).encoding
+    assert encoding.se.is_residual, "fixture must residual-code se to be meaningful"
+    assert encoding.eaf.is_residual
+    assert encoding.z.is_fixed_point
+
+    root = zarr.open_group(str(store / "data.zarr"), mode="r")
+    assert root["se"].dtype == np.dtype("int8")
+    n_rows = int(root["se"].shape[0])
+    decoded_se = DenseSePlane.open(root, encoding).band(0, n_rows)
+    decoded_eaf = DenseEafPlane.open(root, encoding).band(0, n_rows)
+    decoded_z = DenseZPlane.open(root, encoding).band(0, n_rows)
+    frequencies = np.linspace(0.05, 0.95, n_rows, dtype=np.float32)
+
+    def physical_z(row: int) -> float:
+        return 8.0 if row % 100 == 0 else 1.0
+
+    def assert_cells(result: dict[str, np.ndarray]) -> None:
+        """Every returned row is a decoded physical float32 cell, never a code."""
+        assert result["se"].dtype == np.dtype("float32")
+        assert result["eaf"].dtype == np.dtype("float32")
+        assert result["z"].dtype == np.dtype("float32")
+        np.testing.assert_array_equal(
+            result["association_status"], np.full(len(result["se"]), "observed", dtype=object)
+        )
+        for vi, ai, se, eaf, z in zip(
+            result["variant_index"],
+            result["analysis_index"],
+            result["se"],
+            result["eaf"],
+            result["z"],
+            strict=True,
+        ):
+            row, col = int(vi), int(ai)
+            # The same decode a query answers from -- catches a read wired to
+            # the wrong column, band or side table.
+            assert se == pytest.approx(decoded_se[row, col], rel=1e-6)
+            assert eaf == pytest.approx(decoded_eaf[row, col], rel=1e-6)
+            assert z == pytest.approx(decoded_z[row, col], rel=1e-6)
+            # The physical values the source rows carried -- catches a query
+            # (or the plane itself) that stops decoding and returns codes.
+            assert np.isfinite(se) and np.isfinite(eaf) and np.isfinite(z)
+            assert se == pytest.approx(expected["a" if col == 0 else "b"][row], rel=0.01)
+            assert eaf == pytest.approx(frequencies[row], rel=0.01)
+            assert z == pytest.approx(physical_z(row), rel=1e-3)
+
+    with query_store(store) as query:
+        for row in (0, 49, 599):
+            assert_cells(query.phewas(f"1:{row + 1}:A:G"))
+        assert_cells(
+            query.lookup(["1:1:A:G", "1:300:A:G", "1:600:A:G"], ["a", "b"])
+        )
+        assert_cells(query.range_phewas("1", 50, 60))
+        whole = query.range_phewas("1", 1, 600)
+        assert len(whole["z"]) == n_rows * 2
+        assert_cells(whole)
+    assert validate_store(store).ok

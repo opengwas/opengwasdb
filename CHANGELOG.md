@@ -323,6 +323,28 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   current tool; the phase-cost conclusion it supports (the defect, not the
   format-3 encoding, dominates) is unchanged.
 
+- **The #117 pilot-rebuild measurements are reproducible from the repository**
+  (ADR 0037 evidence). `benchmarks/measure_pilot_releases.py` records, per
+  Store Release named on the command line, the per-store and per-component
+  cell counts, the declared encoding plans, compressed bytes for the whole
+  release, each component and each statistic plane, the standalone validation
+  outcome, the source identity and checksums the release records, and the
+  measured commit and timestamp, into
+  `docs/benchmark-output/opengwasdb_pilot_rebuild_measurements.json`. The
+  ADR's B/cell figures are derivable from the artifact's per-plane
+  `bytes / n_cells` without re-reading the stores; a missing store, manifest
+  or component aborts the run rather than publishing a partial artifact. The
+  format-2.0 #117 rebuilds predate later validator rules, so their recorded
+  validation errors (#127 truncated-ALID index, #135 unchunked per-variant
+  planes) are evidence recorded in the artifact, not run failures. The SE and
+  UKB benchmark scripts (`benchmark_se_residual_queries.py`,
+  `benchmark_ukbb_dense.py`) now write through the shared
+  `benchmarks/_artifact.py` plumbing and record `commit` and `measured_at`
+  (and each measured store's `format_version`/`encoding`), and the stale `uv`
+  invocation in the UKB script's usage is replaced with the Pixi command;
+  `benchmarks/README.md` now documents both scripts and the pilot driver with
+  their exact regeneration commands.
+
 - **Getting-started documentation now covers the first local Store Release**
   (#110). A fresh checkout can follow `docs/getting-started.md` to install with
   Pixi, build and validate the in-repository tiny Dense fixture, run PheWAS,

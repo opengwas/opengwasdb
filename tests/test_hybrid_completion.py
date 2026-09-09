@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from residual_fixtures import write_gwas_vcf_with_eaf
 
 from opengwasdb.layouts.dense.top_hits import read_top_hit_counts, threshold_key
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
@@ -255,18 +256,7 @@ def _make_ld_panel_with_crossover(tmp_path: Path) -> Path:
 
 
 def _vcf_with_eaf(tmp_path: Path, name: str, rows: list[str]) -> Path:
-    header = (
-        "##fileformat=VCFv4.2\n"
-        "##FORMAT=<ID=ES,Number=A,Type=Float,Description=\"Effect size\">\n"
-        "##FORMAT=<ID=SE,Number=A,Type=Float,Description=\"Standard error\">\n"
-        "##FORMAT=<ID=EZ,Number=A,Type=Float,Description=\"Z-score\">\n"
-        "##FORMAT=<ID=AF,Number=A,Type=Float,Description=\"Alternate allele frequency\">\n"
-        "##SAMPLE=<ID=S,StudyType=Continuous>\n"
-        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS\n"
-    )
-    path = tmp_path / f"{name}.vcf"
-    path.write_text(header + "".join(rows), encoding="utf-8")
-    return path
+    return write_gwas_vcf_with_eaf(tmp_path / f"{name}.vcf", rows)
 
 
 def _residual_hybrid_crossover_source(tmp_path: Path) -> tuple[Path, str, float, float]:

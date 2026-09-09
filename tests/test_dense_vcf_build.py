@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from residual_fixtures import write_gwas_vcf_with_eaf
 
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.model.analyses import read_analyses
@@ -1159,3 +1160,123 @@ def test_source_alids_blank_an_ambiguous_liftover_collision():
         "1:300:C:T",
         "1:400:A:G",
     ]
+
+
+def test_standalone_gwas_vcf_build_codes_residual_se_and_falls_back_without_eaf(tmp_path):
+    from opengwasdb.model.manifest import StoreManifest
+
+    """Issue #139/#142: a standalone Dense VCF build can select residual SE.
+
+    Residual Dense-from-VCF evidence has been a review probe: the Hybrid
+    builder shares ``build_vcf.py``'s helpers, but no committed test asserts
+    ``is_residual`` on a release ``build_dense_from_vcf_manifest`` built on
+    its own. Two EAF-carrying VCFs whose SE tracks the per-MAF model select
+    ``int8_residual`` end to end -- queries return physical float32 values and
+    validation passes -- while the same rows without an AF column must fall
+    back to ``float16`` (and an absent EAF plane) yet still build, query and
+    validate.
+    """
+    n_variants = 600
+    frequencies = np.linspace(0.05, 0.95, n_variants, dtype=np.float64)
+
+    def model_se(col: int, freq: float, phase: int) -> float:
+        return float(
+            np.exp(
+                (-3.0 + col * 0.2)
+                - 0.5 * np.log(2 * freq * (1 - freq))
+                + 0.12 * np.sin(phase * (0.07 + col * 0.01))
+            )
+        )
+
+    def rows_with_af(col: int) -> list[str]:
+        lines: list[str] = []
+        for i in range(n_variants):
+            freq = frequencies[i]
+            se = model_se(col, freq, i)
+            z = 8.0 if i % 50 == 0 else 1.0
+            effect = f"{z * se:.6f}:{se:.6f}"
+            lines.append(
+                f"1\t{(i + 1) * 1000}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF"
+                f"\t{effect}:{freq:.6f}\n"
+            )
+        return lines
+
+    def rows_without_af(col: int) -> list[str]:
+        lines: list[str] = []
+        for i in range(n_variants):
+            freq = frequencies[i]
+            se = model_se(col, freq, i)
+            z = 8.0 if i % 50 == 0 else 1.0
+            lines.append(
+                f"1\t{(i + 1) * 1000}\t.\tA\tG\t.\tPASS\t.\tES:SE"
+                f"\t{z * se:.6f}:{se:.6f}\n"
+            )
+        return lines
+
+    def manifest(vcfs: dict[str, Path], name: str) -> Path:
+        path = tmp_path / f"{name}.manifest.tsv"
+        path.write_text(
+            "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
+            "\toriginal_sd_method\tsource_assembly\n"
+            + "\n".join(
+                f"{tid}\t{vcf}\tTrait {tid}\t1000\tsd\tdeclared_standardised\thg38"
+                for tid, vcf in vcfs.items()
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def expected_for(col: int) -> np.ndarray:
+        return np.array(
+            [model_se(col, frequencies[i], i) for i in range(n_variants)], dtype=np.float32
+        )
+
+    vcfs_with_af = {
+        tid: write_gwas_vcf_with_eaf(tmp_path / f"{tid}.vcf", rows_with_af(col))
+        for col, tid in enumerate(("t0", "t1"))
+    }
+    residual = tmp_path / "residual.opengwasdb"
+    build_dense_from_vcf_manifest(
+        manifest(vcfs_with_af, "residual"),
+        residual,
+        store_id="s",
+        release_id="r",
+        chunk_shape=(100, 2),
+    )
+    encoding = StoreManifest.load(residual).encoding
+    assert encoding.se.is_residual, "the AF-bearing twin must residual-code its se plane"
+    root = open_store(residual).arrays(mode="r")
+    assert root["se"].dtype == np.dtype("int8")
+    with query_store(residual) as query:
+        for tid, col in (("t0", 0), ("t1", 1)):
+            result = query.analysis(tid)
+            assert result["se"].dtype == np.dtype("float32")
+            np.testing.assert_allclose(result["se"], expected_for(col), rtol=0.01)
+            assert np.isfinite(result["se"]).all()
+        hits = query.top_hits(threshold=5e-8)
+        assert len(hits["z"]) == 24  # every 50th of 600 variants x 2 Analyses carries |z|=8
+        assert hits["se"].dtype == np.dtype("float32")
+        assert np.isfinite(hits["se"]).all()
+    assert validate_store(residual).ok, validate_store(residual).errors
+
+    no_af = {tid: write_gwas_vcf_with_eaf(tmp_path / f"{tid}.noaf.vcf", rows_without_af(col))
+             for col, tid in enumerate(("t0", "t1"))}
+    fallback = tmp_path / "fallback.opengwasdb"
+    build_dense_from_vcf_manifest(
+        manifest(no_af, "fallback"),
+        fallback,
+        store_id="s",
+        release_id="r",
+        chunk_shape=(100, 2),
+    )
+    fallback_encoding = StoreManifest.load(fallback).encoding
+    assert not fallback_encoding.se.is_residual
+    assert fallback_encoding.se.kind == "float16"
+    with query_store(fallback) as query:
+        for tid, col in (("t0", 0), ("t1", 1)):
+            result = query.analysis(tid)
+            assert result["se"].dtype == np.dtype("float32")
+            assert np.isfinite(result["se"]).all()
+            np.testing.assert_allclose(result["se"], expected_for(col), rtol=0.01)
+    assert validate_store(fallback).ok, validate_store(fallback).errors
