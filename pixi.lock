@@ -161,6 +161,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/fasteners-0.20-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/iniconfig-2.3.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/joblib-1.5.3-pyhd8ed1ab_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/lizard-1.24.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/markdown-it-py-4.2.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/mdurl-0.1.2-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/mypy_extensions-1.1.0-pyha770c72_0.conda
@@ -3448,6 +3449,20 @@ packages:
   run_exports: {}
   size: 65503
   timestamp: 1760643864586
+- conda: https://conda.anaconda.org/conda-forge/noarch/lizard-1.24.0-pyhd8ed1ab_0.conda
+  sha256: 18d45faf7c4a38d238691b09af90943804a2eb9b334cb0587eedc0dae12c3e21
+  md5: a73e4a10bd41a9a3fdb2be39bb7855c2
+  depends:
+  - pathspec
+  - pygments
+  - python >=3.10
+  license: MIT
+  license_family: MIT
+  purls:
+  - pkg:pypi/lizard?source=hash-mapping
+  run_exports: {}
+  size: 85969
+  timestamp: 1787103913561
 - conda: https://conda.anaconda.org/conda-forge/noarch/markdown-it-py-4.2.0-pyhd8ed1ab_0.conda
   sha256: 0c4c35376fe920714390d46e4b8d31c876d65f18e1655899e0763ec25f2a902f
   md5: 6d03368f2b2b0a5fb6839df53b2eb5e0
@@ -3552,7 +3567,7 @@ packages:
   license: BSD-3-Clause
   license_family: BSD
   purls:
-  - pkg:pypi/nbformat?source=compressed-mapping
+  - pkg:pypi/nbformat?source=hash-mapping
   run_exports: {}
   size: 107583
   timestamp: 1786372859684
@@ -3987,6 +4002,7 @@ packages:
   - pytest>=8 ; extra == 'dev'
   - ruff>=0.6 ; extra == 'dev'
   - mypy>=1.10 ; extra == 'dev'
+  - lizard>=1.17 ; extra == 'dev'
   requires_python: '>=3.11'
 - pypi: https://files.pythonhosted.org/packages/13/6d/2e2a80cda66b152ec143ceb1784e56d8abc6abeeeb65f8ef6aa52c731038/pysam-0.24.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
   name: pysam

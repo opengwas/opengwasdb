@@ -20,7 +20,9 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   than silently falling back to the last release, and explicit `--only` files
   are filtered by configured sources, language extensions and exclusions
   before lizard runs. Generated benchmark HTML and cleat's own excluded source
-  therefore no longer appear as production complexity findings.
+  therefore no longer appear as production complexity findings. The development
+  environment now declares lizard explicitly, so the same complexity gate runs
+  on a clean CI worker rather than depending on an untracked system install.
 
 - **The format-3 migration republished the source release's identity, and
   could publish a release that did not validate** (#164). `migrate_store_to_format_3.py`
