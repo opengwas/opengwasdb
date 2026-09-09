@@ -306,11 +306,32 @@ Do not edit `quality.json`, files under `quality/`, hooks, or baselines to make
 a gate pass. Do not run `--write-baseline` unless the baseline change is the
 explicit purpose of a reviewed commit.
 
-#### The escapes and duplication scopes
+#### During development, run the changed-file gate
+
+Use the fast, branch-scoped gate after meaningful edits and before handing work
+off for review:
+
+```bash
+python3 quality/bin/gate.py --changed
+```
+
+This is the normal development loop and the agent Stop hook runs the same
+command. It judges untracked files and the diff from the top-level `base_ref`
+(`origin/dev` here), applying the configured source, language and exclusion
+scope before each check. It therefore reports what the current branch adds to
+`dev`, rather than resurfacing accepted repository-wide debt or changes already
+merged since the last release.
+
+`--changed` is deliberately not a whole-repository certification. Run
+`python3 quality/bin/gate.py` when reconciling the repository baseline, and
+`python3 quality/bin/gate.py --strict` for an integration gate after that
+baseline is known to match `dev`.
+
+#### The changed-file and duplication scopes
 
 The escapes and duplication checks share the `skip_dirs` in `quality.json`, and
-the duplication changed-lines judgment reads its `base_ref`. The generic
-mechanics live in `quality/README.md` and the checks' docstrings; this is the
+the `--changed` gates share its top-level `base_ref`. The generic mechanics
+live in `quality/README.md` and the checks' docstrings; this is the
 reasoning specific to this repository, which is why it sits here rather than in
 the imported guide:
 

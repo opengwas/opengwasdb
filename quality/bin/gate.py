@@ -180,7 +180,10 @@ def run(gate, config_path, strict, changed=None):
             base = json.load(handle)
         path = os.path.join(root, ".cleat-gate-%s.json" % re.sub(r"[^\w.-]", "_", gate.name))
         with open(path, "w") as handle:
-            json.dump({"project": base.get("project", ""), gate.section: gate.spec}, handle)
+            temporary = {"project": base.get("project", ""), gate.section: gate.spec}
+            if "base_ref" in base:
+                temporary["base_ref"] = base["base_ref"]
+            json.dump(temporary, handle)
     try:
         proc = subprocess.run(gate.command(path, strict, changed), capture_output=True, text=True, cwd=root)
     finally:
@@ -260,11 +263,13 @@ def _status(code):
     return "ok  " if code == 0 else ("FAIL" if code == 1 else "ERR ")
 
 
-def changed_files(root):
-    """The repo-relative files changed against the base — what --changed scopes the heavy
-    gates to. Untracked files count; a tree that is not a repository changes nothing."""
+def changed_files(config):
+    """The repo-relative files changed against the configured base — what --changed
+    scopes the heavy gates to. Untracked files count; a tree that is not a repository
+    changes nothing."""
     try:
-        return sorted(changed.changed_lines(root, changed.base_ref(root)))
+        base = changed.base_ref(config.root, config.data.get("base_ref"))
+        return sorted(changed.changed_lines(config.root, base))
     except changed.ChangedError:
         return []
 
@@ -426,7 +431,7 @@ def main():
         return 0
     if not gates:
         return fail("%s configures no gate — see quality/README.md" % config.file)
-    scope = changed_files(config.root) if args.changed else None
+    scope = changed_files(config) if args.changed else None
     with runlock.held(os.path.dirname(HERE), "gate.py"):
         failures = run_all(gates, config.file, args.strict, args.skip_missing_tools, config, scope)
     return finish(failures, args.hook, config.root)

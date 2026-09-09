@@ -256,8 +256,27 @@ try:
         code, out = run(ee_config)
         check("a file matched by exclude and named in exclude_except is judged", "keep-test-tool.py" in out, out)
         check("a file matched by exclude alone is still not judged", "other-test-thing.py" not in out, out)
+        # --only names files directly, so check-complexity must enforce the same scope
+        # that lizard applies while walking a configured source directory.
+        included = os.path.join(tmp, "apps", "cli", "src", "included.py")
+        generated = os.path.join(tmp, "apps", "docs", "generated.html")
+        excluded = os.path.join(tmp, "apps", "quality", "own.py")
+        outside = os.path.join(tmp, "other", "outside.py")
+        write(included, "def included(a):\n" + branchy_body)
+        write(generated, "function tangled(a) { if(a){} if(a){} if(a){} if(a){} if(a){} if(a){} if(a){} if(a){} }\n")
+        write(excluded, "def own(a):\n" + branchy_body)
+        write(outside, "def outside(a):\n" + branchy_body)
+        only_config = os.path.join(tmp, "only-quality.json")
+        write(only_config, json.dumps({"complexity": {
+            "sources": ["apps"], "languages": ["python"], "exclude": ["*/quality/*"],
+            "ceilings": {"cc": 8, "lines": 60}, "baseline": "only-baseline.json"}}))
+        code, out = run(only_config, "--only", "apps/cli/src/included.py", "apps/docs/generated.html",
+                        "apps/quality/own.py", "other/outside.py")
+        check("--only keeps only configured-language files below a configured source",
+              code == 1 and "included.py" in out and "generated.html" not in out and
+              "quality/own.py" not in out and "other/outside.py" not in out, out)
     else:
-        check("lizard is not installed, so exclude_except is not exercised against a real run", True)
+        check("lizard is not installed, so exclude_except and --only scope are not exercised against a real run", True)
 
     # --- Against this checkout, when it configures the section and lizard is installed.
     repo = os.path.dirname(os.path.dirname(HERE))

@@ -138,11 +138,16 @@ def parse_args():
     return parser.parse_args()
 
 
+def configured_base(args, section, config):
+    """The CLI override, legacy section base, or shared gate base, in that order."""
+    return changed.base_ref(config.root, args.base or section.get("base_ref") or config.data.get("base_ref"))
+
+
 def judge_all(args, section, config, baseline_path, finding, clones, measured):
     """The changed-lines judgment, then the density ratchet; the exit code."""
     touching, changed_count = [], 0
     if not args.repo_only:
-        base = changed.base_ref(config.root, args.base or section.get("base_ref"))
+        base = configured_base(args, section, config)
         touching, changed_count = judge_changed(clones, config, base)
     if touching:
         print_touching(touching, changed_count)
@@ -164,7 +169,7 @@ def main():
         print("FAIL: %s" % (problem.args[0] if problem.args else problem), file=sys.stderr)
         return 2
     if args.changed_only:
-        touching, changed_count = judge_changed(clones, config, changed.base_ref(config.root, args.base or section.get("base_ref")))
+        touching, changed_count = judge_changed(clones, config, configured_base(args, section, config))
         if touching:
             print_touching(touching, changed_count)
             return 1
