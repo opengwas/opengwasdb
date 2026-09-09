@@ -515,3 +515,81 @@ def test_completed_store_follows_the_ragged_layout_contract(scenario) -> None:
     assert len(root["offsets"]) == root.attrs["n_analyses"] + 1
     imp = root["imputed"][:]
     assert np.all((imp == 0) | (imp == 1))
+
+
+def test_phewas_lookup_and_range_by_analysis_read_decoded_csr(scenario) -> None:
+    """Issue #142 AC3: Ragged residual PheWAS/lookup/range-by-Analysis sweeps.
+
+    ``analysis`` and ``top_hits`` are asserted against the decoded CSR and the
+    source's physical values elsewhere in this module; PheWAS, ``lookup`` and
+    ``range_by_analysis`` reach the same decoded plane through other facade
+    paths, and a path that surfaced the raw int8 codes for any of them would
+    pass those tests. Every returned row is checked against the completed
+    release's own decoded CSR ordinals and -- observed cells -- against the
+    physical SE the source carried; imputed cells must decode to a finite
+    positive SE and the EAF-less panel position must stay NaN under every
+    shape rather than surface a reserved code as if it were a value.
+    """
+    reader = RaggedCSRReader(scenario.completed)
+    expected = scenario.expected_observed()
+    axis = VariantAxis(scenario.completed)
+    alid_by_index = {v.variant_index: v.alid for v in axis.all()}
+    axis.close()
+
+    def check(result: dict[str, np.ndarray]) -> None:
+        assert result["se"].dtype == np.dtype("float32")
+        assert result["eaf"].dtype == np.dtype("float32")
+        assert result["z"].dtype == np.dtype("float32")
+        positions = _result_positions(result, reader)
+        np.testing.assert_array_equal(reader.se_at(positions), result["se"])
+        np.testing.assert_array_equal(reader.eaf_at(positions), result["eaf"])
+        np.testing.assert_array_equal(reader.z_at(positions), result["z"])
+        for vi, ai, se, status in zip(
+            result["variant_index"],
+            result["analysis_index"],
+            result["se"],
+            result["association_status"],
+            strict=True,
+        ):
+            analysis_id = "a" if int(ai) == 0 else "b"
+            alid = alid_by_index[int(vi)]
+            if status == "missing":
+                assert np.isnan(se), f"{alid}: missing cell must stay NaN, not a raw code"
+                continue
+            assert np.isfinite(se) and se > 0, f"{alid}: non-missing cell must be finite positive"
+            if status != "observed":
+                continue  # imputed physical values are checked against the decoded CSR above
+            exp_se, exp_eaf = expected[analysis_id][alid]
+            if alid == f"1:{_source_bp(_EXACT_EXCEPTION[analysis_id])}:A:G":
+                assert float(se) == exp_se, f"{alid}: exact-exception cell must stay exact"
+            else:
+                rel = abs(float(se) - exp_se) / exp_se
+                assert rel <= 0.01, f"{alid}: observed se off by {rel:.4f}"
+
+    observed_alid = f"1:{_source_bp(5)}:A:G"
+    # Analysis `b` leaves the k=36 position unobserved; the panel imputes it.
+    imputed_alid = f"1:{_source_bp(36)}:A:G"
+    missing_alid = f"1:{_EAF_LESS_BP}:A:G"
+
+    with query_store(scenario.completed) as query:
+        both = query.phewas(observed_alid)
+        assert len(both["z"]) == 2 and set(both["association_status"].tolist()) == {"observed"}
+        check(both)
+
+        imputed = query.phewas(imputed_alid)
+        assert set(imputed["association_status"].tolist()) == {"observed", "imputed"}
+        check(imputed)
+
+        missing = query.phewas(missing_alid)
+        assert len(missing["z"]) == 2
+        assert set(missing["association_status"].tolist()) == {"missing"}
+        check(missing)
+
+        check(query.lookup([observed_alid, imputed_alid, missing_alid], ["a", "b"]))
+
+        # Both Analyses' trait position sits at 1:1020000, so a one-base-pair
+        # range selects every association in the completed store.
+        by_analysis = query.range_by_analysis("1", _TRAIT_BP, _TRAIT_BP)
+        expected_n = sum(len(query.analysis(aid)["z"]) for aid in ("a", "b"))
+        assert len(by_analysis["z"]) == expected_n
+        check(by_analysis)

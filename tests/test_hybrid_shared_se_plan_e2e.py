@@ -419,3 +419,86 @@ def test_residual_hybrid_missing_cells_stay_missing(tmp_path: Path) -> None:
         # No top hit can carry a missing cell's fabricated SE.
         hits = query.top_hits(threshold=5e-8)
         assert np.isfinite(hits["se"]).all()
+
+
+def test_residual_hybrid_query_shapes_cover_both_components(tmp_path: Path) -> None:
+    """Issue #142 AC3: Analysis/PheWAS/lookup/range/top-hits over one residual Hybrid.
+
+    The Hybrid facade unions its Dense Component with its Ragged Overflow, so
+    a raw-code leak on either side would be invisible to a fixture that only
+    ever answered from one. This store makes both halves codeable and fully
+    observed, the shared residual plan is asserted end to end, and every shape
+    is run over the whole release with per-cell checks against the physical SE
+    the fixture put in -- a query that returned an int8 code for any cell, on
+    either component, fails the value comparison.
+    """
+    store = _build_hybrid(tmp_path, "matrix142", [dict(), dict()])
+    encoding = StoreManifest.load(store)
+    assert encoding.encoding.se.is_residual
+    assert encoding.encoding.se == StoreManifest.load(store / "dense").encoding.se
+    assert validate_store(store).ok
+    _assert_spans_both_components(store, encoding)
+
+    frequencies = np.linspace(0.05, 0.95, N_PANEL, dtype=np.float64)
+    off_frequencies = np.linspace(0.10, 0.90, N_OFF_PANEL, dtype=np.float64)
+
+    def expected_se(column: int, shared_index: int) -> float:
+        if shared_index < N_PANEL:
+            return _se_value(column, float(frequencies[shared_index]), shared_index)
+        return _se_value(column, float(off_frequencies[shared_index - N_PANEL]),
+                         shared_index - N_PANEL)
+
+    def check(result: dict[str, np.ndarray], column_by_aid: dict[int, int]) -> None:
+        """Physical float32, finite, and within the residual contract per cell."""
+        assert result["se"].dtype == np.dtype("float32")
+        assert result["eaf"].dtype == np.dtype("float32")
+        assert result["z"].dtype == np.dtype("float32")
+        np.testing.assert_array_equal(
+            result["association_status"], np.full(len(result["se"]), "observed", dtype=object)
+        )
+        for vi, ai, se, eaf in zip(
+            result["variant_index"],
+            result["analysis_index"],
+            result["se"],
+            result["eaf"],
+            strict=True,
+        ):
+            assert np.isfinite(se) and np.isfinite(eaf) and se > 0
+            assert se == pytest.approx(expected_se(column_by_aid[int(ai)], int(vi)), rel=0.01)
+
+    with query_store(store) as query:
+        variants = query.variants_table()
+
+        for aid, col in (("trait_0", 0), ("trait_1", 1)):
+            result = query.analysis(aid)
+            assert len(result["z"]) == N_PANEL + N_OFF_PANEL
+            on_panel = sum(
+                1 for vi in result["variant_index"] if int(variants[int(vi)]["position"]) < OFF_BASE
+            )
+            assert on_panel == N_PANEL, "the Analysis must answer from the Dense Component"
+            assert len(result["z"]) - on_panel == N_OFF_PANEL, "and from the Ragged Overflow"
+            check(result, {col: col})
+
+        check(query.phewas(panel_alid(50)), {0: 0, 1: 1})
+        check(query.phewas(overflow_alid(50)), {0: 0, 1: 1})
+        check(
+            query.lookup(
+                [panel_alid(50), overflow_alid(50), panel_alid(150)], ["trait_0", "trait_1"]
+            ),
+            {0: 0, 1: 1},
+        )
+        check(query.range_phewas("1", 1, OFF_BASE - 1), {0: 0, 1: 1})
+        check(
+            query.range_phewas("1", OFF_BASE, OFF_BASE + (N_OFF_PANEL - 1) * 1000),
+            {0: 0, 1: 1},
+        )
+        whole = query.range_phewas("1", 1, OFF_BASE + (N_OFF_PANEL - 1) * 1000)
+        assert len(whole["z"]) == 2 * (N_PANEL + N_OFF_PANEL)
+        check(whole, {0: 0, 1: 1})
+
+        top = query.top_hits(threshold=5e-8)
+        assert len(top["z"]) > 0
+        by_position = {int(variants[int(vi)]["position"]) for vi in top["variant_index"]}
+        assert any(p < OFF_BASE for p in by_position), "Dense Component must contribute top hits"
+        assert any(p >= OFF_BASE for p in by_position), "Ragged Overflow must contribute top hits"
+        check(top, {0: 0, 1: 1})
