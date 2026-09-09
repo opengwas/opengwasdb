@@ -170,6 +170,19 @@ def test_validator_rejects_missing_variant_axis_file(dense_store_path):
     assert "missing variants.tsv.gz" in result.errors
 
 
+@pytest.mark.parametrize("name", ["variant_alid_bytes.npy", "variant_alid_rows.npy"])
+def test_validator_rejects_missing_alid_index_file_for_dense(dense_store_path, name):
+    (dense_store_path / name).unlink()
+
+    result = validate_store(dense_store_path)
+
+    assert not result.ok
+    assert any(
+        error == f"missing {name} — rebuild the store to generate the ALID search index"
+        for error in result.errors
+    )
+
+
 def test_validator_rejects_bad_variant_offset(dense_store_path):
     offsets_path = dense_store_path / "variant_offsets.npy"
     offsets = np.load(offsets_path)

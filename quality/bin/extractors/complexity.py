@@ -39,6 +39,48 @@ from . import patterns
 
 LIZARD_TIMEOUT_SECONDS = int(os.environ.get("LIZARD_TIMEOUT_SECONDS", "600"))
 
+# lizard's language names and aliases map to these filename suffixes. Its -l
+# option selects parsers but does not filter an explicitly named file, so a
+# caller using --only must enforce this scope before invoking it (issue #166).
+_LIZARD_LANGUAGE_SUFFIXES = {
+    "cpp": (".c", ".cpp", ".cc", ".cxx", ".h", ".hpp"),
+    "c": (".c", ".cpp", ".cc", ".cxx", ".h", ".hpp"),
+    "java": (".java",),
+    "csharp": (".cs",),
+    "javascript": (".js", ".cjs", ".mjs"),
+    "js": (".js", ".cjs", ".mjs"),
+    "python": (".py",),
+    "objectivec": (".m", ".mm"),
+    "objective-c": (".m", ".mm"),
+    "objc": (".m", ".mm"),
+    "ttcn": (".ttcn", ".ttcnpp"),
+    "ttcn3": (".ttcn", ".ttcnpp"),
+    "ruby": (".rb",),
+    "php": (".php",),
+    "swift": (".swift",),
+    "scala": (".scala",),
+    "gdscript": (".gd",),
+    "go": (".go",),
+    "lua": (".lua",),
+    "rust": (".rs",),
+    "typescript": (".ts",),
+    "ts": (".ts",),
+    "fortran": (".f70", ".f90", ".f95", ".f03", ".f08", ".f", ".for", ".ftn", ".fpp"),
+    "kotlin": (".kt", ".kts"),
+    "solidity": (".sol",),
+    "erlang": (".erl", ".hrl", ".es", ".escript"),
+    "zig": (".zig",),
+    "tsx": (".tsx", ".jsx"),
+    "jsx": (".tsx", ".jsx"),
+    "vue": (".vue",),
+    "vuejs": (".vue",),
+    "perl": (".pl", ".pm"),
+    "st": (".st",),
+    "r": (".r",),
+    "plsql": (".sql", ".pks", ".pkb", ".pls", ".plb", ".pck"),
+    "pl/sql": (".sql", ".pks", ".pkb", ".pls", ".plb", ".pck"),
+}
+
 
 class ToolError(Exception):
     """A tool is missing or refused to run; printed as FAIL, exit 2."""
@@ -105,6 +147,38 @@ def _lizard(paths, languages, excludes):
     if proc.returncode not in (0, 1):  # 1 is lizard's own "over its thresholds" — not ours to act on
         raise ToolError("lizard exited %d: %s" % (proc.returncode, proc.stderr.strip()[:300]))
     return proc.stdout
+
+
+def _within(path, roots):
+    """Whether `path` is one of the configured source roots or below one."""
+    for root in roots:
+        if path == root or (os.path.isdir(root) and os.path.commonpath((path, root)) == root):
+            return True
+    return False
+
+
+def scoped_files(spec, candidates, sources, exclude_except=()):
+    """Explicit candidate files inside the same language, source and exclusion scope
+    that a directory-based complexity run applies."""
+    candidates = [os.path.realpath(path) for path in candidates if os.path.isfile(path)]
+    sources = [os.path.realpath(path) for path in sources]
+    exceptions = {os.path.realpath(path) for path in exclude_except}
+    tool = tool_of(spec)
+    if tool == "swiftlint":
+        suffixes = (".swift",)
+    else:
+        languages = spec.get("languages", [])
+        if not languages:
+            raise ToolError('a lizard complexity gate needs "languages" to scope --only safely')
+        try:
+            suffixes = tuple({suffix for name in languages
+                              for suffix in _LIZARD_LANGUAGE_SUFFIXES[name.lower()]})
+        except KeyError as problem:
+            raise ToolError("unknown lizard language %r — cannot scope --only safely" % problem.args[0])
+    excludes = spec.get("exclude", [])
+    return [path for path in candidates
+            if _within(path, sources) and path.lower().endswith(suffixes)
+            and (path in exceptions or not patterns.excluded(path, excludes))]
 
 
 def run_lizard(sources, languages, excludes, exclude_except=None):

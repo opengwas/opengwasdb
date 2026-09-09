@@ -28,6 +28,9 @@ jobs:
       - name: Tooling baselines
         run: pixi run -e dev python scripts/check_baselines.py
 
+      - name: Cleat quality gates
+        run: pixi run -e dev python quality/bin/gate.py
+
       - name: Tests
         run: pixi run -e dev test
 

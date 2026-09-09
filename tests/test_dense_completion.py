@@ -1487,3 +1487,57 @@ class TestUnionAxisPhase:
             assert "completion_quality" in tables
             assert metadata["n_variants"] == "8"
             assert metadata["n_analyses"] == "2"
+
+
+class TestReaderSeam:
+    """The run_block reader seam (`_make_reader`) resolves each canonical ALID
+    to its observed-source row. Regression tests that directly exercise the
+    seam so an index-mapping slip cannot hide behind a full completion run."""
+
+    def test_make_reader_keeps_absent_rows_nan_never_sentinels(
+        self, observed_store
+    ):
+        """None, an unparsable ALID, and an ALID the source lacks must stay
+        unmatched (NaN in every analysis); a present ALID must resolve to its
+        own row. A sentinel row 0 for absence would decode real values here."""
+        axis = VariantAxis(observed_store)
+        try:
+            assert axis.n_variants >= 2, "fixture must hold enough variants"
+            present = axis.by_index(axis.n_variants - 1)
+            assert present is not None
+        finally:
+            axis.close()
+
+        alids = [present.alid, None, "9:99999999:C:T"]  # last: absent from source
+
+        task = complete_module._BlockTask(
+            tsv_path=observed_store / "unused.tsv",
+            source_path=observed_store,
+            min_cor=0.0,
+            thresh=1e-5,
+            checkpoint_path=observed_store / "unused-checkpoint",
+        )
+        analysis_range, read = complete_module._make_reader(task)(None, alids)
+        n_analyses = len(analysis_range)
+        assert n_analyses >= 1
+
+        store = open_store(observed_store)
+        root = store.arrays(mode="r")
+        encoding = store.manifest.encoding
+        src_z = DenseZPlane.open(root, encoding).rows(
+            np.asarray([present.variant_index])
+        )[0]
+        src_se = DenseSePlane.open(root, encoding).rows(
+            np.asarray([present.variant_index])
+        )[0]
+        for ai in range(n_analyses):
+            z_col, se_col = read(ai)
+            assert z_col.shape == (3,) and se_col.shape == (3,)
+            # matched row carries the source's own decoded value…
+            np.testing.assert_array_equal(z_col[0], src_z[ai])
+            np.testing.assert_array_equal(se_col[0], src_se[ai])
+            # …while the None and source-absent rows stay NaN, not row 0.
+            assert not np.isfinite(z_col[1]).any()
+            assert not np.isfinite(se_col[1]).any()
+            assert not np.isfinite(z_col[2]).any()
+            assert not np.isfinite(se_col[2]).any()

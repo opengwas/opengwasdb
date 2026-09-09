@@ -750,6 +750,50 @@ def test_overflow_cells_are_keyword_only() -> None:
 
 
 @pytest.mark.parametrize(
+    "ai",
+    [
+        np.array([0.0, np.nan], dtype=np.float64),
+        np.array([0.0, np.inf], dtype=np.float64),
+        np.array([0.0, -np.inf], dtype=np.float64),
+    ],
+    ids=["nan", "+inf", "-inf"],
+)
+def test_overflow_cells_rejects_non_finite_float_indices(ai) -> None:
+    """#162: a NaN/infinite float Analysis index is never coerced to int64."""
+    with pytest.raises(ValueError, match="must be integers"):
+        OverflowCells(
+            se_values=np.array([0.1, 0.2], dtype=np.float32),
+            eaf_values=np.array([0.2, 0.3], dtype=np.float32),
+            analysis_indices=ai,
+            n_analyses=2,
+        )
+
+
+def test_overflow_cells_rejects_negative_analysis_count() -> None:
+    """`n_analyses` is a count; a negative one is refused, not truncated."""
+    with pytest.raises(ValueError, match="n_analyses must be a non-negative integer"):
+        OverflowCells(
+            se_values=np.array([0.1, 0.2], dtype=np.float32),
+            eaf_values=np.array([0.2, 0.3], dtype=np.float32),
+            analysis_indices=np.array([0, 1], dtype=np.int64),
+            n_analyses=-1,
+        )
+
+
+def test_overflow_cells_preserves_int64_indices_untouched() -> None:
+    """#162: canonical int64 indices are kept as-is, not copied or re-cast."""
+    indices = np.array([0, 1], dtype=np.int64)
+    cells = OverflowCells(
+        se_values=np.array([0.1, 0.2], dtype=np.float32),
+        eaf_values=np.array([0.2, 0.3], dtype=np.float32),
+        analysis_indices=indices,
+        n_analyses=2,
+    )
+    assert cells.analysis_indices is indices
+    assert cells.analysis_indices.dtype == np.dtype(np.int64)
+
+
+@pytest.mark.parametrize(
     "n_analyses",
     [2.5, True, "2"],
     ids=["float", "bool", "str"],

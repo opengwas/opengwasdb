@@ -458,6 +458,37 @@ def _log_progress(
     )
 
 
+def _collect_manifest_variant_sites(
+    manifest_rows: list[_ManifestRow],
+) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
+    """Pass 1: one serial read of every manifest source for its variant sites.
+
+    Returns the ``tuples_by_assembly`` union and ``rsid_by_site`` (first named
+    rsid wins, issue #109) so the serial source scan happens exactly once and
+    the rsids it saw ride along on that same read rather than a second,
+    genome-scale re-read. Streaming order is preserved within each file;
+    progress is reported every 250 files.
+    """
+    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
+    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
+    log.info("Pass 1: collecting source variants from %d files (serial)", len(manifest_rows))
+    t0 = time.monotonic()
+    for i, row in enumerate(manifest_rows):
+        reader = resolve_reader(
+            row.source_reader_capability, row.file_path, StoredEffectScale(row.stored_effect_scale)
+        )
+        sites = tuples_by_assembly.setdefault(row.source_assembly, set())
+        for variant in reader.stream_variants():
+            sites.add(variant.site)
+            if variant.rsid:
+                rsid_by_site.setdefault(variant.site, variant.rsid)
+        n_total = sum(len(t) for t in tuples_by_assembly.values())
+        _log_progress(
+            "Pass 1", i + 1, len(manifest_rows), t0, f"{n_total} unique variants so far", every=250
+        )
+    return tuples_by_assembly, rsid_by_site
+
+
 def _lift_manifest_variants(
     manifest_rows: list[_ManifestRow],
     *,
@@ -500,23 +531,7 @@ def _lift_manifest_variants(
     kind of silent corruption this fix exists to remove -- so any such tuple
     is dropped from both groups (never guessed) before returning.
     """
-    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
-    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
-    log.info("Pass 1: collecting source variants from %d files (serial)", len(manifest_rows))
-    t0 = time.monotonic()
-    for i, row in enumerate(manifest_rows):
-        reader = resolve_reader(
-            row.source_reader_capability, row.file_path, StoredEffectScale(row.stored_effect_scale)
-        )
-        sites = tuples_by_assembly.setdefault(row.source_assembly, set())
-        for variant in reader.stream_variants():
-            sites.add(variant.site)
-            if variant.rsid:
-                rsid_by_site.setdefault(variant.site, variant.rsid)
-        n_total = sum(len(t) for t in tuples_by_assembly.values())
-        _log_progress(
-            "Pass 1", i + 1, len(manifest_rows), t0, f"{n_total} unique variants so far", every=250
-        )
+    tuples_by_assembly, rsid_by_site = _collect_manifest_variant_sites(manifest_rows)
 
     passthrough_lookup: dict[tuple[str, int, str, str], str] = {}
     passthrough = tuples_by_assembly.pop("hg38", set())
@@ -1304,7 +1319,28 @@ def _write_dense_eaf(
     del eaf_band
     if not residual:
         return
+    _encode_residual_dense_eaf(
+        staged, n_variants, n_analyses, effective_chunks, codec, pass2_start
+    )
 
+
+def _encode_residual_dense_eaf(
+    staged: StagedRelease,
+    n_variants: int,
+    n_analyses: int,
+    effective_chunks: tuple[int, int],
+    codec: StoreCodec,
+    pass2_start: float,
+) -> None:
+    """Residual re-encode: transpose the staged float32 grid, then delete it.
+
+    The staging array is only deleted once the baseline and exception tables it
+    produced are both written -- a failed encode leaves the staging plane in
+    place so a resume can tell the pass never finished. Full-float staging and
+    exact exception values are preserved; nothing is encoded by column or
+    clipped.
+    """
+    root = staged.arrays(mode="a")
     encoded = _create_eaf_array(
         staged,
         n_variants,
@@ -1318,7 +1354,7 @@ def _write_dense_eaf(
     band_rows = _eaf_row_band(effective_chunks, n_analyses)
     for r0 in range(0, n_variants, band_rows):
         r1 = min(r0 + band_rows, n_variants)
-        block = np.asarray(eaf_zarr[r0:r1], dtype=np.float32)
+        block = np.asarray(root[_EAF_STAGING][r0:r1], dtype=np.float32)
         rows_baseline = eaf_baseline_from_grid(block)
         baseline[r0:r1] = rows_baseline
         encoded[r0:r1] = codec.encode_eaf(
@@ -1521,45 +1557,35 @@ def survey_eaf_spills(
     )
 
 
-def _write_dense_bands(
-    staged: StagedRelease,
+def _write_dense_z_bands(
+    root: Any,
     spill_dir: Path,
     n_variants: int,
     n_analyses: int,
-    effective_chunks: tuple[int, int],
+    band_cols: int,
+    codec: StoreCodec,
     dtype: str,
     pass2_start: float,
-    encoding: StoreEncoding,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Stream the retained per-column spills into the zarr in chunk-column bands.
+) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray], np.ndarray]:
+    """z pass: encode, write, and harvest stored-value top hits.
 
-    ``z`` and ``se`` are written in two separate passes over one
-    ``(n_variants × band_cols)`` buffer at a time, so only one band is ever
-    resident — halving the band-write peak versus holding z and se together.
-    The two planes no longer share a dtype (ADR 0037), so the z buffer is
-    released before the se buffer is allocated rather than being reused. The
-    top-hit harvest runs in the z-pass, thresholding on the **stored** z and
-    reading each hit's ``se`` straight from the spill (rounded to the stored
-    dtype), so the se-band is never needed for it. Spills are retained until
-    the se-pass consumes them. Returns the concatenated top-hit candidate
-    arrays ``(rows, cols, z, se)`` for the index build.
+    One ``(n_variants × band_cols)`` buffer is resident at a time. The top-hit
+    harvest thresholds on the **quantised/decoded stored** z -- what a query
+    reads back -- not the source z, and reads each hit's se straight from the
+    spill rounded to the stored dtype. The overflow table is part of the z
+    plane, not an addendum: it is written in the same pass that finished
+    writing z. Returns the per-band hit parts and the per-\Analysis
+    ``column_has_eaf`` survey for the coordinator.
     """
-    root = staged.arrays(mode="a")
     z_arr = root["z"]
-    se_arr = root["se"]
-    band_cols = effective_chunks[1]
-    codec = StoreCodec(encoding)
-    overflow = ZOverflowBuilder()
     band = np.empty((n_variants, band_cols), dtype=codec.z_dtype)
-
+    overflow = ZOverflowBuilder()
     hit_rows_parts: list[np.ndarray] = []
     hit_cols_parts: list[np.ndarray] = []
     hit_z_parts: list[np.ndarray] = []
     hit_se_parts: list[np.ndarray] = []
     column_has_eaf = np.zeros(n_analyses, dtype=bool)
 
-    # Pass 1 — z. Fill, write z, and harvest top hits (se pulled from the spill,
-    # rounded to the stored dtype so the index matches what queries read from z).
     log.info("Band-write z: %d analyses in bands of %d", n_analyses, band_cols)
     for c0 in range(0, n_analyses, band_cols):
         c1 = min(c0 + band_cols, n_analyses)
@@ -1586,14 +1612,26 @@ def _write_dense_bands(
         _log_progress(
             "Band-write z", c1, n_analyses, pass2_start, f"cols {c0}:{c1}", every=band_cols
         )
-
-    # The overflow table is part of the z plane, not an addendum to it: write it
-    # in the same pass that finished writing z.
     overflow.table().write(root)
-    del band
-    band = np.empty((n_variants, band_cols), dtype=dtype)
+    return hit_rows_parts, hit_cols_parts, hit_z_parts, hit_se_parts, column_has_eaf
 
-    # Pass 2 — se. Fill, write se, and delete each spill.
+
+def _write_dense_se_bands(
+    root: Any,
+    spill_dir: Path,
+    n_variants: int,
+    n_analyses: int,
+    band_cols: int,
+    dtype: str,
+    pass2_start: float,
+) -> None:
+    """se pass: the independent float-scratch write over one band at a time.
+
+    ``z`` and ``se`` no longer share a dtype (ADR 0037), so this pass owns a
+    fresh buffer of its own rather than reusing the z pass's.
+    """
+    se_arr = root["se"]
+    band = np.empty((n_variants, band_cols), dtype=dtype)
     for c0 in range(0, n_analyses, band_cols):
         c1 = min(c0 + band_cols, n_analyses)
         w = c1 - c0
@@ -1606,6 +1644,38 @@ def _write_dense_bands(
         _log_progress(
             "Band-write se", c1, n_analyses, pass2_start, f"cols {c0}:{c1}", every=band_cols
         )
+
+
+def _write_dense_bands(
+    staged: StagedRelease,
+    spill_dir: Path,
+    n_variants: int,
+    n_analyses: int,
+    effective_chunks: tuple[int, int],
+    dtype: str,
+    pass2_start: float,
+    encoding: StoreEncoding,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Stream the retained per-column spills into the zarr in chunk-column bands.
+
+    ``z`` and ``se`` are written in two separate passes so only one band is
+    ever resident, and the top-hit harvest runs in the z-pass on the stored z.
+    Spills are retained through the se pass and the EAF write, and are only
+    unlinked once both consumed them. Returns the concatenated top-hit
+    candidate arrays ``(rows, cols, z, se)`` plus the per-\Analysis
+    ``column_has_eaf`` survey for the index build and EAF decision.
+    """
+    root = staged.arrays(mode="a")
+    band_cols = effective_chunks[1]
+    codec = StoreCodec(encoding)
+    hit_rows_parts, hit_cols_parts, hit_z_parts, hit_se_parts, column_has_eaf = (
+        _write_dense_z_bands(
+            root, spill_dir, n_variants, n_analyses, band_cols, codec, dtype, pass2_start
+        )
+    )
+    _write_dense_se_bands(
+        root, spill_dir, n_variants, n_analyses, band_cols, dtype, pass2_start
+    )
 
     # Pass 3 -- eaf. Its own float32 buffer, since eaf cannot share z/se's
     # float16 (see `_create_eaf_array`). What is written is decided by the

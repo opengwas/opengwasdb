@@ -1,5 +1,6 @@
 {
   "project": "cleat",
+  "base_ref": "origin/main",
   "complexity": {
     "tool": "lizard",
     "sources": [

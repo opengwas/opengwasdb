@@ -94,12 +94,17 @@ def read_functions(args, name, section, config):
     if args.lint:
         with open(args.lint) as handle:
             return complexity.functions_from_swiftlint(json.load(handle)), 0, "swiftlint", None
-    roots = config.paths(config.get(name, "sources"))
+    sources = config.paths(config.get(name, "sources"))
+    exceptions = config.paths(section.get("exclude_except", []))
+    roots, measured_exceptions = sources, exceptions
     if args.only is not None:
-        roots = [config.path(f) for f in args.only if os.path.isfile(config.path(f))]
+        candidates = [config.path(path) for path in args.only]
+        roots = complexity.scoped_files(section, candidates, sources, exceptions)
         if not roots:
             return [], 0, complexity.tool_of(section), None
-    return complexity.measure(section, roots, config.paths(section.get("exclude_except", [])))
+        exception_paths = {os.path.realpath(path) for path in exceptions}
+        measured_exceptions = [path for path in roots if os.path.realpath(path) in exception_paths]
+    return complexity.measure(section, roots, measured_exceptions)
 
 
 

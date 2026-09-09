@@ -30,6 +30,7 @@ dev = [
   "pytest>=8",
   "ruff>=0.6",
   "mypy>=1.10",
+  "lizard>=1.17",
 ]
 
 [project.scripts]
@@ -97,6 +98,7 @@ bcftools = "*"
 pytest = ">=8"
 ruff = ">=0.6"
 mypy = ">=1.10"
+lizard = ">=1.17"
 
 # Separate from dev: rendering docs/benchmark-output/*.qmd needs Quarto's
 # Jupyter engine (pyyaml, a Jupyter kernel) and matplotlib for the plotting
