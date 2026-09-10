@@ -57,19 +57,6 @@ def test_reader_rejects_an_encoding_kind_it_does_not_implement():
         StoreEncoding.from_manifest(payload)
 
 
-def test_legacy_plan_is_float16_for_stores_that_declare_none():
-    assert StoreEncoding.legacy().z.kind == "float16"
-
-
-def test_legacy_codec_decodes_a_float16_plane_unchanged():
-    raw = np.array([2.5, np.nan, -6.0], dtype=np.float16)
-    decoded = StoreCodec(StoreEncoding.legacy()).decode_z(raw)
-    assert decoded.dtype == np.float32
-    assert decoded[0] == pytest.approx(2.5)
-    assert np.isnan(decoded[1])
-    assert decoded[2] == pytest.approx(-6.0)
-
-
 # ── Round trip ──────────────────────────────────────────────────────────────
 
 

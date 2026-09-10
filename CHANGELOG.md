@@ -13,6 +13,69 @@ the end of this file.
 Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 `main`, at which point it is cut into a version.
 
+### Changed
+
+- **`format_version` is reset to `0.1.0`, and the pre-release formats are no
+  longer readable** (#143, ADR 0041). The format reached `3.0` before the
+  project published anything: `0.1`, then `1.0` (fixed-point `z`, #114), `2.0`
+  (residual-coded `eaf`, #116) and `3.0` (residual-coded `se`, #118), three
+  majors inside one pre-release cycle. To a new reader `3.0` claimed a third
+  stable generation with two supported predecessors; what it recorded was that
+  we changed our minds three times before the first release.
+
+  **The three-component shape is the safety mechanism, not decoration.**
+  Resetting to `0.1` was the one thing that could not happen — pre-reset stores
+  carry that exact string, and two formats under one name is a store that reads
+  as plausible and is wrong. ADR 0038 already required a reader to reject a
+  `format_version` that is not `MAJOR.MINOR`, so every reader that exists —
+  including any already in the wild — rejects `0.1.0` loudly rather than
+  parsing it as `0.1` and decoding `int8` planes as `float16`.
+
+  `format_version` is now semantic versioning, `MAJOR.MINOR.PATCH`, with the
+  **leftmost non-zero component** carrying an incompatible change: below
+  `1.0.0` that is `MINOR`, from `1.0.0` it is `MAJOR`. A release meeting `0.1`,
+  `1.0`, `2.0` or `3.0` is refused by name, with a message that says *rebuild*
+  rather than a shape complaint or a decode attempt.
+
+  **The pre-release compatibility paths are deleted, not deprecated.** Gone:
+  `StoreEncoding.legacy()` and `is_legacy`; the `float32_optional` `eaf` kind
+  and ADR 0036's plane-presence contract it named; the "no `encoding` block"
+  and "no `encoding.version`" inference paths; and #157's per-kind version
+  gate, which is vacuous once one format admits every kind its parser
+  implements. Every readable release now declares an `encoding` block, stating
+  version 3 and a plan for each of `z`, `se` and `eaf` — one format, one
+  decoder, one contract to test, in the surface where a defect is a plausible
+  number rather than an error. `StoreManifest.encoding` has no default: a plan
+  nobody stated is a plan nobody can be held to.
+
+  `ENCODING_VERSION` is deliberately **not** reset with the format. Blocks
+  stamped 1 and 2 were real shapes this project wrote, and reusing one of those
+  numbers for a third would recreate, one level down, the collision the reset
+  exists to avoid.
+
+  **Every store on disk is unreadable until rebuilt or restamped**, including
+  the published `eur-hybrid-quant-pilot-10`. The cost is paid once and paid
+  loudly. `scripts/restamp_store_to_0_1_0.py` replaces
+  `migrate_store_to_format_3.py` and derives a `0.1.0` release from a `3.0` one
+  without reading a single array: the reset renumbered the format and deleted
+  decoders, and did not change the bytes a build writes, so a `3.0` release
+  already holds exactly what `0.1.0` describes. That is `ukb-b`'s path — 13h30m
+  to rebuild (#148), minutes to restamp — and the pilots are **rebuilt**
+  instead, because a rebuild is the only thing that proves the builders still
+  produce what the format says. `0.1`, `1.0` and `2.0` are refused by the tool:
+  their planes are genuinely different encodings, and no stamp makes their
+  bytes mean what `0.1.0` says. Like every derived release it mints a fresh
+  `release_id` and `created_at`, regenerates `overview.html`, stages the copy
+  and publishes by rename only when it validates with **no** errors — as a
+  `0.1.0` release, by the build that reads only `0.1.0`, which is what makes
+  the restamp sound rather than asserted.
+
+  ADR 0038 is superseded rather than contradicted: what makes a change
+  incompatible, the accept/reject/warn structure, one-version-written, and the
+  completion and Staged Release rules all stand. `opengwasdb-stores` names
+  format versions in its release manifests, store catalogue and query
+  walkthrough, and changes in the same cut.
+
 ### Fixed
 
 - **The complexity gate's changed-file mode widened its configured scope**
@@ -826,7 +889,13 @@ it can read.
 | package | writes `format_version` | reads |
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
-| unreleased (`dev`) | 3.0 | 0.x, 1.x, 2.0, 3.0 |
+| unreleased (`dev`) | 0.1.0 | 0.1.0 only |
+
+The two `format_version` values in that table are different formats despite
+reading alike: `0.1` is the pre-release format 0.2.0 wrote, and `0.1.0` is the
+reset (#143, ADR 0041). Nothing on `dev` reads `0.1`, and the shapes cannot be
+confused by a reader — only by a person reading this table, which is why it
+says so here.
 
 [Unreleased]: https://github.com/opengwas/opengwasdb/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/opengwas/opengwasdb/releases/tag/v0.2.0

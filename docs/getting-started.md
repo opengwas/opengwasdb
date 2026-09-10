@@ -63,7 +63,7 @@ Inspect the release envelope and declared encodings:
 pixi run -e dev opengwasdb info /tmp/opengwasdb-tiny.opengwasdb
 ```
 
-You should see `format_version: 2.0`, `primary_layout: dense`, and `completion_state: observed_only`.
+You should see `format_version: 0.1.0`, `primary_layout: dense`, and `completion_state: observed_only`.
 
 ## Query by variant
 

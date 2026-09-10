@@ -27,16 +27,23 @@ from opengwasdb.encoding import (
     Z_OVERFLOW_INDEX,
     Z_OVERFLOW_VALUE,
     DenseZPlane,
+    EafEncoding,
+    SeEncoding,
     StoreCodec,
     StoreEncoding,
     UnsupportedEncoding,
+    ZEncoding,
 )
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.query import query_store
 from opengwasdb.stats import log10_p_two_sided
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, open_store
+from opengwasdb.store.open import (
+    CURRENT_FORMAT_VERSION,
+    UnsupportedFormatVersion,
+    open_store,
+)
 from opengwasdb.validation import validate_store
 
 # The FADS1/FADS2 pilot hit, the largest |z| in `ukb-b`, one just inside the
@@ -205,8 +212,13 @@ def test_reading_a_fixed_point_plane_under_a_float16_plan_raises(dense_store):
     manifest: the codec refuses rather than scaling by 1024."""
     opened = open_store(dense_store)
     raw = opened.arrays(mode="r")["z"][:]
+    float16_plan = StoreEncoding(
+        z=ZEncoding(kind="float16"),
+        se=SeEncoding(kind="float16"),
+        eaf=EafEncoding(kind="absent"),
+    )
     with pytest.raises(ValueError, match="manifest disagree"):
-        StoreCodec(StoreEncoding.legacy()).decode_z(raw)
+        StoreCodec(float16_plan).decode_z(raw)
 
 
 def test_a_reader_meeting_an_unknown_encoding_kind_rejects_the_release(dense_store):
@@ -220,11 +232,12 @@ def test_a_reader_meeting_an_unknown_encoding_kind_rejects_the_release(dense_sto
     assert any("int12_fixed" in error for error in result.errors), result.errors
 
 
-def test_a_legacy_float16_store_still_reads_correctly(dense_store, tmp_path):
-    """`0.1` stays readable and is never written again (ADR 0038 §2). A release
-    that declares no encoding is in the legacy plan -- `float16` throughout --
-    and the read path must decode it as such rather than as the plan this build
-    happens to write."""
+def test_a_pre_reset_store_is_refused_rather_than_decoded(dense_store, tmp_path):
+    """What replaced reading a legacy store (issue #143). A `0.1` release holds
+    `float16` planes, so decoding one under this build's fixed-point plan would
+    return z-scores a thousand times too small -- plausible numbers, and the
+    worst possible outcome. There is no longer a plan under which to read it,
+    and the refusal happens at open, before any array is touched."""
     opened = open_store(dense_store)
     root = opened.arrays(mode="r")
     decoded = DenseZPlane.open(root, opened.manifest.encoding).band(0, root["z"].shape[0])
@@ -245,20 +258,8 @@ def test_a_legacy_float16_store_still_reads_correctly(dense_store, tmp_path):
     manifest["format_version"] = "0.1"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    query = query_store(legacy)
-    try:
-        result = query.analysis("a1")
-        variants = query.variants_table()
-    finally:
-        query.close()
-    z_by_position = {
-        variants[int(vi)]["position"]: float(z)
-        for vi, z in zip(result["variant_index"], result["z"], strict=True)
-    }
-    # float16 tolerance, not fixed-point tolerance: this is the accuracy #114
-    # exists to fix, and it is what a legacy store genuinely holds.
-    assert z_by_position[100] == pytest.approx(ORDINARY_Z, abs=0.01)
-    assert z_by_position[300] == pytest.approx(-FADS_Z, abs=0.05)
+    with pytest.raises(UnsupportedFormatVersion, match="Rebuild the release from source"):
+        query_store(legacy)
 
 
 # ── Ragged ──────────────────────────────────────────────────────────────────

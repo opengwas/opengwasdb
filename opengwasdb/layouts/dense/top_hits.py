@@ -286,9 +286,9 @@ def build_top_hit_indexes(
     release's manifest, never re-derived from the arrays.
 
     A caller that passes a ``PhaseTimer`` gets the scan and the write charged
-    separately. This rebuild is one of the four passes a format-3.0 migration
-    makes, and it is the only one that is not a pass over the `se` plane, so
-    issue #144 cannot say which pass to make cheaper without it.
+    separately, which is how the re-encoding passes of a store-wide rewrite are
+    told apart from this one (issue #144): 63.5 s on the migrated FinnGen R13
+    pilot, against an inference that had put it at 75-89% of the whole.
     """
 
     timer = timer or PhaseTimer()

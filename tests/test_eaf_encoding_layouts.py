@@ -219,7 +219,7 @@ def test_a_build_with_frequencies_declares_the_residual_coding(
     manifest = json.loads((store / "manifest.json").read_text())
     assert manifest["encoding"]["eaf"]["kind"] == "int8_residual"
     assert manifest["encoding"]["eaf"]["residual_range"] in (0.5, 1.0, 2.0)
-    assert manifest["format_version"] == "3.0"
+    assert manifest["format_version"] == "0.1.0"
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged"])
@@ -1192,19 +1192,14 @@ def test_a_hybrid_refuses_to_write_a_manifest_that_names_no_panel(
         _dense_completion_provenance(out)
 
 
-def test_a_1_0_release_that_stores_no_frequencies_still_validates(dense_store: Path):
-    """`1.0` releases stay readable (spec §21). Their `eaf` kind is
-    `float32_optional`, whose whole point is that the plane may or may not be
-    there -- so the plan-versus-`eaf_scope` cross-check must not read it as a
+def test_a_release_that_stores_no_frequencies_still_validates(dense_store: Path):
+    """A release may legitimately hold no frequencies at all, and says so in
+    its plan rather than by the plane's absence: the `absent` kind is the
+    statement, so the plan-versus-`eaf_scope` cross-check must not read it as a
     promise that some Analysis declares `association`."""
     manifest_path = dense_store / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
-    manifest["format_version"] = "1.0"
-    manifest["encoding"] = {
-        "version": 1,
-        "z": manifest["encoding"]["z"],
-        "se": manifest["encoding"]["se"],
-    }
+    manifest["encoding"]["eaf"] = {"kind": "absent"}
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     root = zarr.open_group(str(dense_store / "data.zarr"), mode="a")
     for name in ("eaf", EAF_BASELINE, "eaf_exception_index", "eaf_exception_value"):

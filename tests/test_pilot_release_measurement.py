@@ -96,20 +96,20 @@ def test_csr_cells_count_stored_associations_not_grid_cells(tmp_path):
 def _ragged_manifest():
     from opengwasdb.model.manifest import StoreManifest
 
-    # A minimal format-2.0 Ragged manifest: the driver reads only the encoding
-    # block for a CSR component's record, so the rest of the metadata is not
-    # exercised here.
+    # A minimal Ragged manifest: the driver reads only the encoding block for
+    # a CSR component's record, so the rest of the metadata is not exercised
+    # here.
     return StoreManifest.from_dict(
         {
             "store_id": "test",
             "release_id": "test-1",
-            "format_version": "2.0",
+            "format_version": "0.1.0",
             "primary_layout": "ragged",
             "association_coverage": "cis_and_signals",
             "completion_state": "observed_only",
             "reference_assembly": "GRCh38",
             "encoding": {
-                "version": 2,
+                "version": 3,
                 "z": {"kind": "int16_fixed", "scale": 1024},
                 "se": {"kind": "float16"},
                 "eaf": {"kind": "absent"},

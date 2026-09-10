@@ -124,16 +124,6 @@ def test_the_eaf_plan_round_trips_through_the_manifest():
     }
 
 
-def test_a_format_version_1_release_declares_adr_0036s_optional_plane():
-    """No `eaf` key means the release predates this encoding -- which is a real
-    encoding with a name, not an absence each read site guesses at."""
-    plan = StoreEncoding.from_manifest(
-        {"version": 1, "z": {"kind": "int16_fixed", "scale": 1024}, "se": {"kind": "float16"}}
-    )
-    assert plan.eaf.kind == "float32_optional"
-    assert plan.eaf.is_optional_plane
-
-
 def test_reader_rejects_an_eaf_encoding_kind_it_does_not_implement():
     payload = StoreEncoding.decide(_measurements()).to_manifest()
     payload["eaf"]["kind"] = "int16_log_maf"
@@ -170,13 +160,31 @@ def test_an_encoding_block_of_this_version_must_declare_its_eaf_plan():
         StoreEncoding.from_manifest(payload)
 
 
-def test_an_encoding_block_with_no_version_at_all_is_read_as_the_older_schema():
-    """`version` was added with the plan itself, so a block without one is
-    older than the `eaf` key rather than a current block that lost it."""
-    plan = StoreEncoding.from_manifest(
-        {"z": {"kind": "int16_fixed", "scale": 1024}, "se": {"kind": "float16"}}
-    )
-    assert plan.eaf.is_optional_plane
+def test_an_encoding_block_with_no_version_at_all_is_refused():
+    """A block without one predates the format reset, and this build reads no
+    format that wrote such a block (issue #143). Reading it as the older schema
+    -- which is what the code did until the reset -- would hand a `0.1.0`
+    release the `eaf` contract of a format that no longer exists."""
+    with pytest.raises(UnsupportedEncoding, match="declares no version"):
+        StoreEncoding.from_manifest(
+            {"z": {"kind": "int16_fixed", "scale": 1024}, "se": {"kind": "float16"}}
+        )
+
+
+def test_an_encoding_block_from_a_pre_reset_schema_is_refused():
+    """Version 1 declared `z` and `se`; version 2 added `eaf`. Both belong to
+    formats whose readers were deleted, so a block claiming to be one is not
+    decoded under this build's contract."""
+    for version in (1, 2):
+        with pytest.raises(UnsupportedEncoding, match="not the one this build"):
+            StoreEncoding.from_manifest(
+                {
+                    "version": version,
+                    "z": {"kind": "int16_fixed", "scale": 1024},
+                    "se": {"kind": "float16"},
+                    "eaf": {"kind": "absent"},
+                }
+            )
 
 
 # ── The baseline ────────────────────────────────────────────────────────────

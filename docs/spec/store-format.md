@@ -1,29 +1,30 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `3.0`  
-Also readable: `2.0`, `1.0`, `0.1` — never written again (§21)
+Format version described: `0.1.0`  
+Also readable: nothing else (§21)
 
 This document defines the contract for valid OpenGWASDB Store Releases. It
-describes `format_version` **3.0**, the version this build writes: statistic
-planes carry a declared encoding (§6a), `z` is `int16` fixed point rather than
-`float16`, `eaf` is a per-variant baseline plus a per-cell `int8` logit
-residual rather than a `float32` plane, and `se` is either `float16` or — when
-the build measures the fit and the saving — an `int8` residual from its
-EAF-predicted value.
+describes `format_version` **0.1.0**, the only version this build reads or
+writes: statistic planes carry a declared encoding (§6a), `z` is `int16` fixed
+point rather than `float16`, `eaf` is a per-variant baseline plus a per-cell
+`int8` logit residual rather than a `float32` plane, and `se` is either
+`float16` or — when the build measures the fit and the saving — an `int8`
+residual from its EAF-predicted value.
 
-`2.0`, `1.0` and `0.1` releases remain readable and are not re-stamped. Where
-the versions differ, the difference is stated in place rather than kept in a
-separate document — §6a for the encoding each older release is in (`0.1`:
-`float16` throughout, declaring nothing; `1.0`: fixed-point `z` and ADR 0036's
-optional `float32` `eaf`; `2.0`: residual-coded `eaf` and `float16` `se`), §15
-for what marks a missing cell in each, and §21 for what a reader owes a release
-it did not write. An older release cannot be *completed* by a build that
-writes 3.0 (§21.3, ADR 0038 §4); it is rebuilt.
+**`0.1.0` is a reset, not a fifth version** (ADR 0041, issue #143). The format
+carried `0.1`, then `1.0`, `2.0` and `3.0` through a single pre-release cycle,
+and no store in any of them was published outside the core team. All four are
+now refused rather than decoded, with a message that says rebuild; the shape
+change from `MAJOR.MINOR` to `MAJOR.MINOR.PATCH` is what makes that refusal
+reliable, since no reader — including one written before the reset — can read
+`0.1.0` as `0.1`. The bytes are unchanged from `3.0`, which is why a `3.0`
+release may be restamped rather than rebuilt (§21.4); every earlier version is a
+different encoding and is rebuilt.
 
 Sections that say "v0.1" below describe vocabularies and column contracts
-settled at that version and unchanged since; they are not statements about
-`format_version` 0.1 as against 1.0.
+settled early and unchanged since; they are not statements about
+`format_version` `0.1`, which is a pre-reset format this build does not read.
 
 Normative language:
 
@@ -247,9 +248,8 @@ read from that declaration rather than inferred from a dtype.
 
 ## 6a. Statistic encodings
 
-A Store Release at `format_version` 1.0 or above MUST declare an `encoding`
-object in `manifest.json`. At 2.0 it MUST also declare `eaf`; at 3.0 it may
-declare residual-coded `se`:
+Every Store Release MUST declare an `encoding` object in `manifest.json`,
+stating `version` 3 and a plan for each of `z`, `se` and `eaf`:
 
 ```json
 "encoding": {
@@ -264,30 +264,20 @@ declare residual-coded `se`:
   validation checks that the arrays agree with it (§20).
 - A reader meeting a `kind` it does not implement MUST reject the release
   (§21), not guess and not fall back.
-- **A release may declare only kinds its own `format_version` admits** (issue
-  #157). The block records what the bytes mean to the version that wrote them:
-  `int8_residual` `se` requires `format_version` 3.0, `int8_residual` `eaf`
-  requires 2.0 — a conforming reader of 2.0 is entitled to read `se` as
-  `float16`, and a 2.0 manifest declaring the format-3 residual plane hands it
-  `int8` codes to decode as `float16`, the exact plausible-wrong-answer this
-  block exists to prevent. A release below `format_version` 1.0 declares no
-  block at all: `float16` throughout *is* the absence of a declaration, so a
-  0.x manifest carrying one is refused rather than read.
-- A release declaring no `encoding` — every release up to `format_version` 0.1
-  — is `float16` for `z` and `se`, with NaN as the missing marker, and
-  `float32_optional` for `eaf`.
-- A release whose `encoding` declares no `eaf` **and whose `encoding.version`
-  is below 2** — a `format_version` 1.0 release — is `float32_optional` for
-  `eaf`: ADR 0036's plane, present when any Analysis reports a frequency and
-  absent otherwise. That weaker contract has a name so that every other `kind`
-  can mean exactly what it says, and so validation can hold the newer ones to
-  plan-versus-arrays agreement without exempting the older ones by accident.
-  An `encoding` block with no `version` at all is read as version 1: `version`
-  was added with the plan, so its absence dates the block rather than
-  describing this one.
-- An `encoding` block of version 2 or above MUST declare its `eaf` plan, and a
-  reader MUST reject one that does not. Reading it as the older contract would
-  be the inference-from-absence this section exists to remove.
+- **The block is required, and there is no reading of its absence.** A release
+  that declares no `encoding`, or a block that declares no `version` or no
+  `eaf` plan, MUST be rejected. Every such absence used to date a release to a
+  pre-reset format — "no block" meant `float16` throughout, "no `eaf`" meant
+  ADR 0036's optional plane — and those formats are no longer read (ADR 0041),
+  so the inference has nothing left to infer and would only let a malformed
+  release of *this* format be decoded as something it is not.
+- **`version` MUST be 3.** It identifies the shape of the block, not the store
+  format, and is not reset alongside `format_version`: blocks stamped 1 and 2
+  were real shapes, and reusing one of those numbers for a third shape would
+  recreate the collision the format reset exists to avoid (ADR 0041 §3).
+- Issue #157's rule that a release may declare only kinds its own
+  `format_version` admits is retired with the versions it gated: one readable
+  format admits every kind its parser implements.
 
 **`z` — `int16` fixed point plus an exact overflow table** (ADR 0037 §1). The
 stored code is `round(z × scale)`, `scale` = 1024 by default, with two
@@ -362,7 +352,11 @@ effect allele (§5, §9.1), still declared per Analysis by `eaf_scope` (§9).
 | `absent` | nothing — the release has no `eaf` array | yes |
 | `float32` | ADR 0036's exact plane | yes |
 | `int8_residual` | a quantised logit residual against a per-variant baseline | yes |
-| `float32_optional` | ADR 0036's plane, present-or-absent | no — read only |
+
+There is no present-or-absent kind. ADR 0036's `float32_optional` — where the
+plane's *presence* rather than the plan said whether a release had frequencies
+— named the contract of a format this build no longer reads, and was deleted
+with it (ADR 0041). A release with no frequencies declares `absent`.
 
 **The residual coding.** Three arrays beside the plane, all in the same group:
 
@@ -915,7 +909,7 @@ That prior art uses LD block TSV files alongside `.unphased.vcor1.gz` LD matrice
 
 Reference-Completed Stores encode Association Status using a per-plane **missing marker** plus an imputed mask.
 
-Each statistic plane's missing marker is defined by that plane's declared encoding, not by its dtype: a floating-point plane marks a missing cell with NaN, and an integer plane with the reserved sentinel its codec declares. Where a store declares no encoding, its planes are `float16` and the marker is NaN — the case every release up to `format_version` 0.1 is in. Stating it in terms of the codec rather than of NaN is what lets an integer `z` plane, which cannot hold NaN, express the same contract (ADR 0037, ADR 0038 §6).
+Each statistic plane's missing marker is defined by that plane's declared encoding, not by its dtype: a floating-point plane marks a missing cell with NaN, and an integer plane with the reserved sentinel its codec declares. Every release declares an encoding (§6a), so there is no plane whose marker has to be inferred. Stating it in terms of the codec rather than of NaN is what lets an integer `z` plane, which cannot hold NaN, express the same contract (ADR 0037, ADR 0038 §6).
 
 State derivation:
 
@@ -1081,33 +1075,38 @@ Validators MUST check at least:
 
 `format_version` describes compatibility of the store representation. It does not describe biological data release version or source publication version. The **package version and `format_version` are independent**: a package release may change neither, one, or both. Which package reads and writes which format is recorded in the package's `CHANGELOG.md` compatibility table.
 
-`format_version` is `MAJOR.MINOR`, both non-negative integers. A release whose `format_version` is not of that shape MUST be rejected (ADR 0038).
+`format_version` is semantic versioning — `MAJOR.MINOR.PATCH`, three non-negative integers. A release whose `format_version` is not of that shape MUST be rejected (ADR 0041). That includes every pre-reset version (`0.1`, `1.0`, `2.0`, `3.0`), which a reader MUST refuse with an instruction to rebuild rather than any attempt to decode.
 
-### 21.1 What bumps major, what bumps minor
+**The leftmost non-zero component carries an incompatible change.** Below `1.0.0` a format declares itself unsettled, so it is `MINOR` that breaks compatibility and `PATCH` that does not; from `1.0.0` it is `MAJOR`, and `MINOR` joins the compatible remainder. The components left of and including the breaking one are a release's **series**.
+
+### 21.1 What breaks compatibility, and what does not
 
 The distinction is defined by **what a reader that does not know about the change would do**, not by the size of the change:
 
-- **MAJOR** — a reader that does not know about the change would *misinterpret* the store: the encoding of an existing array changes; a required entry is removed, renamed, or restructured; the meaning of an existing field changes while its name and type do not.
-- **MINOR** — a reader that does not know about the change still reads correctly everything it already knew, and the new thing is discoverable through the manifest: a new optional array, index, or sidecar; a new `analyses.tsv` column; a new `provenance` block.
+- **Incompatible** (moves the series) — a reader that does not know about the change would *misinterpret* the store: the encoding of an existing array changes; a required entry is removed, renamed, or restructured; the meaning of an existing field changes while its name and type do not.
+- **Compatible** (moves the remainder) — a reader that does not know about the change still reads correctly everything it already knew, and the new thing is discoverable through the manifest: a new optional array, index, or sidecar; a new `analyses.tsv` column; a new `provenance` block.
 
-| change | bump |
+| change | bump (at `0.x.y`) |
 |---|---|
-| a new optional array (e.g. `eaf`, ADR 0036) | minor |
-| a new `analyses.tsv` column | minor |
-| a required column removed or renamed (ADR 0034) | **major** |
-| the encoding of `z`, `se` or `eaf` changes (ADR 0037) | **major** |
+| a new optional array (e.g. `eaf`, ADR 0036) | patch |
+| a new `analyses.tsv` column | patch |
+| a required column removed or renamed (ADR 0034) | **minor** |
+| the encoding of `z`, `se` or `eaf` changes (ADR 0037) | **minor** |
 
 ### 21.2 Reader obligations
 
-For a release at `M.m`, a reader that fully understands major `M` up to minor `k`:
+For a release at `M.m.p`, a reader that fully understands that release series up to remainder `k`:
 
 | condition | behaviour |
 |---|---|
-| `M` unknown | MUST reject |
-| `M` known, `m <= k` | MUST accept |
-| `M` known, `m > k` | MUST accept, and SHOULD warn |
+| series unknown | MUST reject |
+| series known, remainder `<= k` | MUST accept |
+| series known, remainder `> k` | MUST accept, and SHOULD warn |
+| not `MAJOR.MINOR.PATCH` | MUST reject |
 
-Accepting a newer minor follows from the definition of minor: if an older reader could not read it correctly, the change was major and was classified wrong. The warning is what makes such a misclassification visible instead of silently returning partial data.
+Accepting a newer remainder follows from the definition of a compatible change: if an older reader could not read it correctly, the change was incompatible and was classified wrong. The warning is what makes such a misclassification visible instead of silently returning partial data.
+
+This build reads exactly one series, `0.1` — one format, one decoder, one contract to test (ADR 0041).
 
 A reader meeting a feature it does not implement — an encoding kind, an index type — MUST reject the release rather than guess or fall back.
 
@@ -1115,16 +1114,16 @@ Future format versions may add fields, arrays, or indexes, but MUST preserve exp
 
 ### 21.3 Writing
 
-A build writes exactly one `format_version` and reads every major it implements. There is no facility for writing an older format: a store that needs to be in an older format already exists in that format.
+A build writes exactly one `format_version` and reads every series it implements. There is no facility for writing an older format: a store that needs to be in an older format already exists in that format.
 
 ### 21.4 I have an old store — now what?
 
 Store Releases are immutable. Reference Completion, re-indexing and migration all produce a **new release**, with one narrow exception: a **Provenance Amendment** may fold additional facts into an existing release's `provenance` dict in place, including a format migration recording what it did to that release. Anything that changes association data or Analytical Metadata is outside the exception.
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
-2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/migrate_store_to_format_3.py` (issue #118) derives a new Dense release at an explicit `--into` path, minting a fresh `release_id` and `created_at` rather than inheriting the source's and regenerating `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), building the destination in a staging directory and publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
-3. **Rejected** — a store whose major version this build does not implement cannot be read, and no amount of validation makes it readable.
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+3. **Rejected** — a store whose series this build does not implement cannot be read, and no amount of validation makes it readable. Every pre-reset release is in this category, and says so by name.
 
-There is no support window for older minors: a known major reads every minor within it.
+There is no support window for older remainders: a known series reads every remainder within it.
 
 **Reference Completion preserves its source's `format_version`**, because it writes into the source's arrays and therefore its encoding — a completed release is the same format as its source. A build that can read a source but cannot write that format MUST refuse to complete it, rather than stamp a version onto arrays it did not encode that way.

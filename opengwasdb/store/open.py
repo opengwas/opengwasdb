@@ -28,25 +28,41 @@ from opengwasdb.model.manifest import StoreManifest
 if TYPE_CHECKING:
     from opengwasdb.query.facade import StoreQuery
 
-#: The highest ``MINOR`` this build fully understands, per readable ``MAJOR``
-#: (ADR 0038, spec §21). A major absent from this mapping is rejected; a minor
-#: above the one recorded here is read with a warning, because "minor" is
-#: defined as a change an older reader still reads correctly.
+#: The highest compatible remainder this build fully understands, per readable
+#: **release series** (ADR 0041, spec §21). A series absent from this mapping is
+#: rejected; a remainder above the one recorded here is read with a warning,
+#: because the compatible axis is defined as one an older reader still reads
+#: correctly.
 #:
-#: ``0.1`` (major 0) stays readable and is never written again: its planes are
-#: ``float16`` throughout and decode under `StoreEncoding.legacy()`. Major 1 is
-#: ADR 0037's fixed-point ``z`` (#114); major 2 adds its residual-coded ``eaf``
-#: (#116); major 3 adds its conditionally residual-coded ``se`` (#118). Every
-#: older major stays readable -- an `eaf` plane at major 1 is ADR 0036's
-#: `float32`, and `se` below major 3 is `float16`, which the plan names rather
-#: than infers.
-SUPPORTED_FORMAT_VERSIONS: Mapping[int, int] = MappingProxyType({0: 1, 1: 0, 2: 0, 3: 0})
+#: One entry, and that is the point of the reset (issue #143): there is one
+#: format, one decoder, and one contract to test. The four pre-reset versions
+#: are not in it and are not readable -- see `PRE_RESET_FORMAT_VERSIONS`.
+SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingProxyType(
+    {(0, 1): (0,)}
+)
 
 #: format_version stamped on releases written by this build. A build writes
-#: exactly one version and reads several (ADR 0038 §3): supporting the *writing*
-#: of historical formats would mean keeping every retired encoder alive and
-#: tested, for a use case nobody has.
-CURRENT_FORMAT_VERSION = "3.0"
+#: exactly one version and reads every one in `SUPPORTED_FORMAT_VERSIONS`
+#: (ADR 0041 §3): supporting the *writing* of historical formats would mean
+#: keeping every retired encoder alive and tested, for a use case nobody has.
+CURRENT_FORMAT_VERSION = "0.1.0"
+
+#: The versions the format carried before the reset, and what each one was.
+#: Every one is two-component, so the parser rejects it on shape alone; naming
+#: them here is what turns that rejection into an instruction rather than a
+#: complaint about punctuation (issue #143). No store in any of them was ever
+#: published outside the core team, and this build decodes none of them: the
+#: bytes of a `3.0` release are the bytes of a `0.1.0` one, but `0.1`, `1.0`
+#: and `2.0` are genuinely different encodings and reading them was deleted
+#: rather than deprecated.
+PRE_RESET_FORMAT_VERSIONS: Mapping[str, str] = MappingProxyType(
+    {
+        "0.1": "the first pre-release format, float16 throughout",
+        "1.0": "fixed-point z (issue #114)",
+        "2.0": "residual-coded eaf (issue #116)",
+        "3.0": "residual-coded se (issue #118)",
+    }
+)
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +72,7 @@ class UnsupportedFormatVersion(Exception):
 
 
 class MalformedFormatVersion(UnsupportedFormatVersion):
-    """A release's format_version is not ``MAJOR.MINOR``.
+    """A release's format_version is not ``MAJOR.MINOR.PATCH``.
 
     A subclass rather than a `ValueError`: to a caller deciding whether it can
     read a release, "the version is nonsense" and "the version is from the
@@ -64,46 +80,90 @@ class MalformedFormatVersion(UnsupportedFormatVersion):
     """
 
 
-def parse_format_version(version: str) -> tuple[int, int]:
-    """``"1.2"`` -> ``(1, 2)``. Raises `MalformedFormatVersion` otherwise."""
-    major, _, minor = str(version).partition(".")
-    if not major.isdigit() or not minor.isdigit():
-        raise MalformedFormatVersion(
-            f"format_version {version!r} is not MAJOR.MINOR (ADR 0038, spec §21)"
+def parse_format_version(version: str) -> tuple[int, int, int]:
+    """``"0.1.0"`` -> ``(0, 1, 0)``. Raises `MalformedFormatVersion` otherwise.
+
+    Three components, not two, and that shape change is the safety mechanism of
+    the reset rather than a cosmetic choice (issue #143, ADR 0041). Pre-reset
+    releases are stamped ``0.1``, and a reset that reused that string would
+    give two different formats one name -- a store that reads as plausible and
+    is wrong. A two-component value has no reading here at all, so every such
+    release is refused loudly instead.
+    """
+    text = str(version)
+    was = PRE_RESET_FORMAT_VERSIONS.get(text)
+    if was is not None:
+        raise UnsupportedFormatVersion(
+            f"format_version {text!r} is a pre-release format ({was}), which this "
+            "build no longer reads: the format was reset to "
+            f"{CURRENT_FORMAT_VERSION} and the decoders for every earlier version "
+            "were deleted (ADR 0041, issue #143). Rebuild the release from source "
+            "-- a store in one of those formats cannot be validated, completed or "
+            "queried by this build"
         )
-    return int(major), int(minor)
+    parts = text.split(".")
+    if len(parts) != 3 or not all(part.isdigit() for part in parts):
+        raise MalformedFormatVersion(
+            f"format_version {text!r} is not MAJOR.MINOR.PATCH (ADR 0041, spec §21)"
+        )
+    major, minor, patch = (int(part) for part in parts)
+    return major, minor, patch
+
+
+def split_format_version(version: str) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """``"0.1.0"`` -> ``((0, 1), (0,))``: a version's series and its remainder.
+
+    The **series** is the part a compatible change may not move, and the
+    **remainder** is the part it may. Which is which follows semantic
+    versioning's own rule, that the *leftmost non-zero component is the
+    breaking one*: below ``1.0.0`` a format is declaring itself unsettled, so
+    ``MINOR`` carries an incompatible change and ``PATCH`` does not; from
+    ``1.0.0`` it is ``MAJOR``, and ``MINOR`` joins the remainder.
+
+    Both halves come from one function because they are one rule. A caller that
+    took the series here and worked out the remainder for itself would be
+    stating that rule a second time, and the two would eventually disagree --
+    `check_format_version` compares what this returns and knows nothing about
+    which component is which.
+    """
+    major, minor, patch = parse_format_version(version)
+    if major == 0:
+        return (0, minor), (patch,)
+    return (major,), (minor, patch)
 
 
 def check_format_version(version: str, *, source: str = "release") -> None:
-    """Reject a `format_version` this build cannot interpret (ADR 0038 §2).
+    """Reject a `format_version` this build cannot interpret (ADR 0041 §2).
 
-    Rejection is on the **major** alone: a build carries the majors it
-    implements, not a list of every version it has ever seen. A *newer minor*
-    within a known major is accepted and warned about -- accepting it is the
-    definition of minor, and the warning is how a mis-classified change (one
-    that should have been major) becomes visible instead of silently returning
-    partial data.
+    Rejection is on the **release series** alone: a build carries the series it
+    implements, not a list of every version it has ever seen. A *newer
+    remainder* within a known series is accepted and warned about -- accepting
+    it is the definition of a compatible change, and the warning is how a
+    mis-classified one (a change that should have moved the series) becomes
+    visible instead of silently returning partial data.
     """
-    major, minor = parse_format_version(version)
-    known_minor = SUPPORTED_FORMAT_VERSIONS.get(major)
-    if known_minor is None:
+    series, remainder = split_format_version(version)
+    known = SUPPORTED_FORMAT_VERSIONS.get(series)
+    if known is None:
+        readable = [_series_text(known_series) for known_series in SUPPORTED_FORMAT_VERSIONS]
         raise UnsupportedFormatVersion(
-            f"{source} declares format_version={version!r}, whose major version {major} "
-            f"this build does not implement; readable majors: "
-            f"{sorted(SUPPORTED_FORMAT_VERSIONS)}"
+            f"{source} declares format_version={version!r}, a release series this "
+            f"build does not implement; readable series: {sorted(readable)}"
         )
-    if minor > known_minor:
+    if remainder > known:
         log.warning(
-            "%s declares format_version=%s, a newer minor than this build knows (%d.%d). "
-            "Reading it as %d.%d: anything added after that is not visible here, and if "
-            "any of it changes how existing arrays decode it was misclassified as minor.",
+            "%s declares format_version=%s, a newer compatible version than this build "
+            "knows (%s). Reading it as that: anything added after it is not visible "
+            "here, and if any of it changes how existing arrays decode it was "
+            "misclassified as compatible.",
             source,
             version,
-            major,
-            known_minor,
-            major,
-            known_minor,
+            _series_text(series) + "." + ".".join(str(part) for part in known),
         )
+
+
+def _series_text(series: tuple[int, ...]) -> str:
+    return ".".join(str(part) for part in series)
 
 
 def check_writable_format_version(version: str, *, source: str = "release") -> str:
@@ -118,10 +178,12 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
     lies about its own encoding, which is the failure class this project exists
     to avoid.
 
-    Reachable since #114: a ``0.1`` release is readable (its ``float16`` planes
-    decode under the legacy plan) but not writable, so completing one is
-    refused and the operator rebuilds instead. Since #116 the same is true of
-    ``1.0``, whose `eaf` plane is ADR 0036's `float32`.
+    Unreachable while this build reads exactly one format (issue #143): every
+    readable version is the one it writes. It is kept because the invariant is
+    about the *next* format rather than this one -- the moment a second
+    readable version exists, completion writing into arrays it cannot encode is
+    live again, and that is not a check to be remembering to add at the time
+    (issue #112).
     """
     check_format_version(version, source=source)
     if version != CURRENT_FORMAT_VERSION:

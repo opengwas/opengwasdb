@@ -46,14 +46,12 @@ Z_CODE_MAX = 32767
 DEFAULT_Z_SCALE = 1024
 
 #: Version of the plan's own schema, distinct from `format_version`: it
-#: identifies the shape of the `encoding` block, not the store format. Version
-#: 1 declared `z` and `se`; version 2 adds `eaf` (issue #116).
+#: identifies the shape of the `encoding` block, not the store format. It is
+#: not reset alongside the format (issue #143) and does not restart at 1: a
+#: block stamped 1 or 2 was a real shape this project wrote, and giving one of
+#: those numbers to a third shape is the collision the format reset exists to
+#: avoid. Every block this build reads or writes declares 3.
 ENCODING_VERSION = 3
-
-#: First plan-schema version whose encoding block states its `eaf` plan. Below
-#: it, a missing `eaf` key names ADR 0036's optional plane; at or above it, a
-#: missing key is a malformed release.
-_EAF_PLAN_VERSION = 2
 
 
 class UnsupportedEncoding(Exception):
@@ -234,13 +232,6 @@ class EafEncoding:
       per-variant baseline than the `int8` cell saves).
     - `int8_residual` -- ADR 0037 §2. A per-variant `float32` baseline plus a
       per-cell quantised **logit** residual.
-    - `float32_optional` -- what a `format_version` 1.0 release is in, and the
-      only kind this build reads but never writes. ADR 0036 made the plane's
-      *presence* the statement that a release had frequencies, so a reader of
-      such a release still has to look. Naming that weaker contract is what
-      lets every other kind mean exactly what it says, and lets validation
-      hold the newer ones to plan-vs-arrays agreement without exempting the
-      older ones by accident.
 
     The transform is the logit, `log(f / (1 - f))`, and not the log of the
     frequency. Both leave residuals of the same width on real data (measured:
@@ -268,12 +259,6 @@ class EafEncoding:
     @property
     def is_residual(self) -> bool:
         return self.kind == "int8_residual"
-
-    @property
-    def is_optional_plane(self) -> bool:
-        """Whether the plane's presence, rather than the plan, says if this
-        release has frequencies. True only for `format_version` 1.0 releases."""
-        return self.kind == "float32_optional"
 
     @property
     def dtype(self) -> str:
@@ -314,7 +299,7 @@ class EafEncoding:
     def from_manifest(cls, data: dict[str, Any]) -> EafEncoding:
         kind = str(data["kind"])
         reference = bool(data.get("reference", False))
-        if kind in ("absent", "float32", "float32_optional"):
+        if kind in ("absent", "float32"):
             return cls(kind=kind, reference=reference)
         if kind == "int8_residual":
             residual_range = float(data["residual_range"])
@@ -408,25 +393,6 @@ class StoreEncoding:
             eaf=_decide_eaf(measurements.eaf),
         )
 
-    @classmethod
-    def legacy(cls) -> StoreEncoding:
-        """The plan a release that declares none is in: `float16` throughout.
-
-        Every store up to `format_version` 0.1. Derived here rather than
-        guessed at each read site, so "no declaration" is one plan rather than
-        an absence every caller handles differently.
-        """
-        return cls(
-            z=ZEncoding(kind="float16"),
-            se=SeEncoding(kind="float16"),
-            eaf=EafEncoding(kind="float32_optional"),
-            version=0,
-        )
-
-    @property
-    def is_legacy(self) -> bool:
-        return self.version == 0
-
     def with_eaf_reference(self, present: bool) -> StoreEncoding:
         """This plan, with the component's `eaf_reference` presence set.
 
@@ -464,29 +430,28 @@ class StoreEncoding:
     @classmethod
     def from_manifest(cls, data: dict[str, Any]) -> StoreEncoding:
         """Read a declared plan. Never re-derives it, and never falls back."""
-        # A block with no `version` was written before the plan's schema
-        # carried one, which is version 1 -- not whatever this build happens to
-        # be. Defaulting to the current version would let a malformed release
-        # of *this* format be read as an older one, which is the inference from
-        # absence the persisted plan exists to stop (issue #119).
-        version = int(data.get("version", 1))
-        if version > ENCODING_VERSION:
+        # A block with no `version` predates the plan's schema carrying one,
+        # which makes it a pre-reset release this build does not read (issue
+        # #143). Inferring a version from its absence is the inference the
+        # persisted plan exists to stop (issue #119), and the earlier reading
+        # of a missing key -- "this is version 1" -- would now hand a `0.1.0`
+        # release the eaf contract of a format that no longer exists.
+        if "version" not in data:
             raise UnsupportedEncoding(
-                f"encoding block version {version} is newer than this build "
-                f"implements ({ENCODING_VERSION}); this release cannot be read"
+                "encoding block declares no version; every block this build reads "
+                f"declares {ENCODING_VERSION} (spec §6a). A block without one was "
+                "written before the format reset and cannot be read -- rebuild the "
+                "release from source (ADR 0041)"
             )
-        # A `format_version` 1.0 release declares `z` and `se` but not `eaf`:
-        # its frequencies are ADR 0036's `float32` plane, present or absent on
-        # disk. That is a real encoding, and naming it here is what keeps the
-        # "never infer from array presence" rule true for those releases too.
-        # Only for those releases, though: an encoding block of this version
-        # states its `eaf` plan, and one that does not is malformed rather than
-        # old (issue #119).
-        if "eaf" in data:
-            eaf = EafEncoding.from_manifest(data["eaf"])
-        elif version < _EAF_PLAN_VERSION:
-            eaf = EafEncoding(kind="float32_optional")
-        else:
+        version = int(data["version"])
+        if version != ENCODING_VERSION:
+            raise UnsupportedEncoding(
+                f"encoding block version {version} is not the one this build "
+                f"implements ({ENCODING_VERSION}); this release cannot be read. "
+                "Versions below it are pre-reset block shapes whose readers were "
+                "deleted (ADR 0041); above it is a release from the future"
+            )
+        if "eaf" not in data:
             raise UnsupportedEncoding(
                 f"encoding block version {version} must declare an eaf plan and does "
                 "not; this release cannot be read without inferring one, which is what "
@@ -495,7 +460,7 @@ class StoreEncoding:
         return cls(
             z=ZEncoding.from_manifest(data["z"]),
             se=SeEncoding.from_manifest(data["se"]),
-            eaf=eaf,
+            eaf=EafEncoding.from_manifest(data["eaf"]),
             version=version,
         )
 
