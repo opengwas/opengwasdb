@@ -115,7 +115,7 @@ Required fields:
 | `reference_assembly` | One genome assembly for all coordinates in the release |
 | `created_at` | Release creation timestamp |
 | `provenance` | Source and build provenance object |
-| `encoding` | How the statistic planes are encoded (§6a). Absent on `format_version` 0.x, which is `float16` throughout |
+| `encoding` | How the statistic planes are encoded (§6a). Required in every readable release; the pre-reset formats that omitted it are refused (ADR 0041) |
 
 Reference-Completed releases MUST additionally declare:
 
@@ -126,7 +126,7 @@ Reference-Completed releases MUST additionally declare:
 
 Observed-Only and Reference-Completed releases for the same source collection SHOULD share `store_id` and use different `release_id` values.
 
-A release derived from another one — by migration or reference completion — is a new immutable release with its own identity: it MUST NOT reuse the source's `release_id`, and MUST record a fresh `created_at`. The format-3 migration additionally records the source `release_id` in its provenance (§21.4).
+A release derived from another one — by migration or reference completion — is a new immutable release with its own identity: it MUST NOT reuse the source's `release_id`, and MUST record a fresh `created_at`. The restamp migration additionally records the source `release_id` in its provenance (§21.4).
 
 Published releases are immutable. Enhancing an Observed-Only release to Reference-Completed produces a new release.
 
@@ -343,7 +343,7 @@ costs side-table bytes and no accuracy. The quantity that bounds those bytes
 for an Analysis is its share over all of its cells, wherever they live. Hybrid
 components share one decision, and each must save bytes on its own.
 
-**`eaf` — one of four kinds** (ADR 0037 §2). EAF's *semantics* are unchanged by
+**`eaf` — one of three kinds** (ADR 0037 §2). EAF's *semantics* are unchanged by
 the encoding: it is still per (variant, Analysis), still oriented to the stored
 effect allele (§5, §9.1), still declared per Analysis by `eaf_scope` (§9).
 

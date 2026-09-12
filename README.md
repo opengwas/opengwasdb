@@ -11,7 +11,7 @@ The project is starting from a clean store contract:
 - Dense and Ragged primary layouts;
 - optional reference completion using LD reference panels.
 
-The first implementation slice is intentionally narrow: **Dense Observed-Only** stores with `z` and `se` arrays, metadata, validation, and layout-independent queries. Ragged layout, reference completion, and service/catalogue deployment are recorded in the ADRs but are not part of v0.1.
+OpenGWASDB implements **Dense**, **Ragged**, and **Hybrid** layouts, with observed-only and reference completion, under `format_version` **0.1.0**. Service and catalogue deployment are not part of this package.
 
 For the broader OpenGWAS platform direction, see [docs/opengwas-roadmap.md](./docs/opengwas-roadmap.md).
 

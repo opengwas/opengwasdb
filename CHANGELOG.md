@@ -10,6 +10,8 @@ the end of this file.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-12
+
 Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 `main`, at which point it is cut into a version.
 
@@ -75,6 +77,28 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   completion and Staged Release rules all stand. `opengwasdb-stores` names
   format versions in its release manifests, store catalogue and query
   walkthrough, and changes in the same cut.
+
+- **The default human-readable TSV query output now includes `eaf`** (#136).
+  Every facade query already decoded and returned effect allele frequency, but
+  `query-phewas`, `query-range-phewas`, `query-analysis`, `query-lookup` and
+  `query-top-hits` hid it from TSV output unless `--variant-info` was passed —
+  a flag whose real cost is `rsid`'s `variants.tsv.gz` lookup. `eaf` is now a
+  default column before `association_status`; `--variant-info` still adds
+  `rsid` and no longer changes whether EAF is returned. A store with no EAF, or
+  a cell with none, prints `.` rather than a substituted default.
+
+- **Dense and Hybrid VCF-manifest builders accept canonical `analyses.tsv`
+  column names directly** (#170): `analysis_id`, `source_file`,
+  `analysis_label` and `sample_size`. The pre-ADR-0034 names (`trait_id`,
+  `file_path`, `trait_name`, `n`) stay readable for a deprecation window, so
+  Catalogue `BUILD_COLUMNS` manifests remain valid; the canonical spelling wins
+  when a manifest carries both. The ancestry source-manifest reader follows the
+  same rule, so a Store Release bundle can be handed to a builder with no
+  registry-side rename.
+
+- **`assign-ancestry` accepts `--n-workers`** as its process-pool flag, matching
+  every other build command. `--workers` remains accepted as an alias so
+  existing callers keep working.
 
 ### Fixed
 
@@ -886,10 +910,10 @@ The package version and the store `format_version` are independent. A store
 records the `format_version` it was written against; the package records which
 it can read.
 
-| package | writes `format_version` | reads |
+| package | writes format_version | reads |
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
-| unreleased (`dev`) | 0.1.0 | 0.1.0 only |
+| 0.3.0 | 0.1.0 | 0.1.0 only |
 
 The two `format_version` values in that table are different formats despite
 reading alike: `0.1` is the pre-release format 0.2.0 wrote, and `0.1.0` is the
@@ -897,5 +921,6 @@ reset (#143, ADR 0041). Nothing on `dev` reads `0.1`, and the shapes cannot be
 confused by a reader — only by a person reading this table, which is why it
 says so here.
 
-[Unreleased]: https://github.com/opengwas/opengwasdb/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/opengwas/opengwasdb/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/opengwas/opengwasdb/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/opengwas/opengwasdb/releases/tag/v0.2.0

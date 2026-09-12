@@ -16,12 +16,11 @@ random-access resolution or, once the request touches a large-enough share
 of the Store Variant Table, one sequential scan instead (see that method's
 docstring) -- and only when `include_variant_info=True`, since that's the
 one part of this join that can cost anywhere from milliseconds to tens of
-seconds on a large dense query. Named for what it gates rather than for
-rsid specifically: `eaf` joins it too (ADR 0036), though for a different
-reason -- eaf rides along in the query result the facade already returned,
-so it costs nothing to resolve. It is gated because it *describes the
-variant*, which is what the flag means, and because #104 had just made the
-default column set a promise worth keeping stable. The
+seconds on a large dense query. `eaf` always rides the row: it is already
+materialised in the query result the facade returned, so resolving it costs
+no extra I/O and hiding it saved nothing (issue #136). It rides `result`
+rather than the variant table, so a store that carries none yields `.` per
+cell rather than paying for a lookup. The
 analysis side comes from `analyses.all()`, already fully loaded at
 store-open (ADR 0030, no extra I/O). Rows are yielded lazily, so the CLI's
 CSV writer streams rather than materialising the whole resolved table.
@@ -48,14 +47,14 @@ def resolve_rows(
     """Yield one human-readable row per association in `result`.
 
     Each row carries analysis_id/analysis_label, variant identity
-    (chromosome/position/alid/alleles, plus rsid and eaf when
-    `include_variant_info=True` -- "." when the store has neither for that
-    association, matching the Store Variant Table's own missing marker), z,
-    se, log10_p, and association_status. `rsid`/`eaf` are omitted from the
-    row entirely when `include_variant_info=False` (the default) rather than
-    filled with a placeholder: for rsid because resolving it is the expensive
-    part of this join at scale, and for eaf because a store that carries none
-    would otherwise add a column of "." to every default query (ADR 0036).
+    (chromosome/position/alid/alleles, plus rsid when
+    `include_variant_info=True` -- "." when the store has none for that
+    association, matching the Store Variant Table's own missing marker), eaf,
+    z, se, log10_p, and association_status. `rsid` is omitted from the row
+    entirely when `include_variant_info=False` (the default) rather than
+    filled with a placeholder: resolving it is the expensive part of this
+    join at scale. `eaf` is always present -- it is already in `result`, so
+    resolving it costs nothing and a missing cell is the same "." (#136).
     """
     analysis_rows = analyses.all()
     variant_index = result["variant_index"]
@@ -97,13 +96,13 @@ def resolve_rows(
             "z": float(result["z"][i]),
             "se": float(result["se"][i]),
             "log10_p": float(log10_p[i]),
+            "eaf": _eaf_or_missing(result, i),
             "association_status": str(result["association_status"][i]),
         }
         if include_variant_info:
             assert variant_rows is not None
             rsid_record = variant_rows.get(vi)
             row["rsid"] = (rsid_record.rsid or ".") if rsid_record is not None else "."
-            row["eaf"] = _eaf_or_missing(result, i)
         yield row
 
 

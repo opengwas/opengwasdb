@@ -431,7 +431,7 @@ def assign_ancestry_command(
             "Analysis's EAF is reported as mis-oriented rather than as a residual failure"
         ),
     ),
-    workers: int = typer.Option(1, help="Fork-based process pool size"),
+    n_workers: int = typer.Option(1, "--n-workers", "--workers", help="Fork process-pool size"),
     catalogue_version: str = typer.Option("v1", help="Recorded in the Catalogue"),
     reference_version: str = typer.Option(
         "", help="Reference version stamp (default: reference filename)"
@@ -475,7 +475,7 @@ def assign_ancestry_command(
         catalogue_path,
         catalogue_version=catalogue_version,
         ancestry_reference_version=reference_version or ancestry_reference.name,
-        n_workers=workers,
+        n_workers=n_workers,
     )
     n_assigned = sum(1 for r in rows if r.assignment.assigned_ancestry is not None)
     typer.echo(
@@ -887,11 +887,11 @@ _VARIANT_INFO_OPTION = typer.Option(
     False,
     "--variant-info",
     help=(
-        "Include extra per-variant columns (rsid, eaf) in tsv output. Off by "
-        "default: unlike chromosome/position/alleles (derived for free from the "
-        "alid), rsid isn't derivable in-store and costs an extra variants.tsv.gz "
-        "lookup that can dominate query time on a large result; eaf is free to "
-        "resolve but is '.' throughout for a store that carries none."
+        "Include the per-variant rsid column in tsv output. Off by default: "
+        "unlike chromosome/position/alleles (derived for free from the alid) "
+        "and eaf (already materialised in the query result), rsid isn't "
+        "derivable in-store and costs an extra variants.tsv.gz lookup that can "
+        "dominate query time on a large result."
     ),
 )
 
@@ -1015,22 +1015,15 @@ _TSV_COLUMNS = (
     "z",
     "se",
     "p",
-    "association_status",
-)
-_TSV_COLUMNS_WITH_VARIANT_INFO = (
-    "analysis_id",
-    "analysis_label",
-    "rsid",
-    "chromosome",
-    "position",
-    "alid",
-    "effect_allele",
-    "other_allele",
-    "z",
-    "se",
-    "p",
     "eaf",
     "association_status",
+)
+# The variant-info header is the default columns with rsid inserted after
+# analysis_label, so the two can never drift apart.
+_TSV_COLUMNS_WITH_VARIANT_INFO = (
+    *_TSV_COLUMNS[:2],
+    "rsid",
+    *_TSV_COLUMNS[2:],
 )
 
 
@@ -1046,6 +1039,22 @@ def _format_p(log10_p: float) -> str:
     return f"{10.0 ** log10_p:.3g}"
 
 
+def _format_eaf(eaf: object) -> str:
+    """Display one resolved eaf, or ``.`` when the store has none.
+
+    `resolve_rows` already turns an absent array and a NaN cell into the same
+    ``.`` (ADR 0036); this handles that string and a missing key (a caller
+    that resolved without eaf) identically, and formats a real value ``.6g``
+    like z/se -- so the column never prints a bare ``nan``.
+    """
+    if eaf is None or isinstance(eaf, str):
+        return eaf if eaf is not None else "."
+    if not isinstance(eaf, (int, float)):
+        return "."
+    value = float(eaf)
+    return "." if not math.isfinite(value) else f"{value:.6g}"
+
+
 def _emit_tsv(
     query: QueryFacade, result: dict[str, np.ndarray], include_variant_info: bool
 ) -> None:
@@ -1054,13 +1063,13 @@ def _emit_tsv(
     # up front. rsid is the one identity field not derivable from the alid
     # (VariantAxis.identity_by_indices()), so it's the only part of this
     # join that still needs a variants.tsv.gz lookup -- resolve() only pays
-    # for it when include_variant_info is set (issue #104 follow-up). eaf
-    # rides the same flag (ADR 0036) but costs nothing: it came back in the
-    # query result itself.
+    # for it when include_variant_info is set (issue #104 follow-up). eaf,
+    # by contrast, came back in the query result itself, so it is always a
+    # column now (issue #136) and never costs a new read.
     writer = csv.writer(sys.stdout, delimiter="\t", lineterminator="\n")
     writer.writerow(_TSV_COLUMNS_WITH_VARIANT_INFO if include_variant_info else _TSV_COLUMNS)
     for row in query.resolve(result, include_variant_info=include_variant_info):
-        fields = [
+        fields: list[object] = [
             row["analysis_id"],
             row["analysis_label"],
             row["chromosome"],
@@ -1071,11 +1080,10 @@ def _emit_tsv(
             f"{row['z']:.6g}",
             f"{row['se']:.6g}",
             _format_p(cast(float, row["log10_p"])),
-            row["association_status"],
         ]
         if include_variant_info:
             fields.insert(2, row["rsid"])
-            eaf = row["eaf"]
-            # Before association_status, which stays the last column.
-            fields.insert(-1, eaf if isinstance(eaf, str) else f"{eaf:.6g}")
+        # eaf always sits before association_status, which stays the last column.
+        fields.append(_format_eaf(row.get("eaf")))
+        fields.append(row["association_status"])
         writer.writerow(fields)
