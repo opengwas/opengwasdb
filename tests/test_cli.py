@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import math
 
+import pytest
+from residual_fixtures import write_gwas_vcf_with_eaf
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import _format_p, app
@@ -86,10 +88,12 @@ def test_cli_query_defaults_to_resolved_tsv(tmp_path, source_path):
     # rsid is opt-in (--variant-info), not part of the default columns
     # (issue #104 follow-up): it's the one identity field that still needs
     # a variants.tsv.gz lookup, so it's the one thing a caller pays for
-    # only when they ask for it.
+    # only when they ask for it. eaf is different -- it is already
+    # materialised in the query result, so it is a default column (issue
+    # #136).
     assert header == [
         "analysis_id", "analysis_label", "chromosome", "position", "alid",
-        "effect_allele", "other_allele", "z", "se", "p", "association_status",
+        "effect_allele", "other_allele", "z", "se", "p", "eaf", "association_status",
     ]
     assert len(rows) == 2
     by_analysis = {row[0]: row for row in rows}
@@ -99,8 +103,11 @@ def test_cli_query_defaults_to_resolved_tsv(tmp_path, source_path):
     assert a1_row[2] == "1"  # chromosome
     assert a1_row[3] == "100"  # position
     assert a1_row[7] == "2"  # z
-    assert a1_row[10] == "observed"  # association_status
+    assert a1_row[11] == "observed"  # association_status
     assert float(a1_row[9]) < 0.05  # p, parseable and plausible
+    # This fixture's source carries no allele frequency, so eaf is the store's
+    # own missing marker (ADR 0036), shown as "." rather than fabricated.
+    assert a1_row[10] == "."
 
     # An explicit --format tsv is equivalent to the default.
     explicit = runner.invoke(app, ["query-phewas", str(store_path), "rs1", "--format", "tsv"])
@@ -109,10 +116,46 @@ def test_cli_query_defaults_to_resolved_tsv(tmp_path, source_path):
     range_query = runner.invoke(app, ["query-range-phewas", str(store_path), "1", "1", "500"])
     assert range_query.exit_code == 0, range_query.output
     range_lines = range_query.output.strip("\n").split("\n")
-    assert all(len(line.split("\t")) == 11 for line in range_lines)
+    assert all(len(line.split("\t")) == 12 for line in range_lines)
 
 
-def test_cli_query_variant_info_flag_adds_rsid_and_eaf_columns(tmp_path, source_path):
+def test_cli_default_tsv_shows_materialised_eaf(tmp_path):
+    """Issue #136: eaf is already in the query result, so the default TSV
+    prints it -- without --variant-info and without a new EAF read."""
+    vcf = write_gwas_vcf_with_eaf(
+        tmp_path / "trait.vcf",
+        ["1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t0.6:0.3:0.25\n"],
+    )
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
+        "\toriginal_sd_method\tsource_assembly\n"
+        f"trait_a\t{vcf}\tTrait A\t1000\tsd\tdeclared_standardised\thg38\n",
+        encoding="utf-8",
+    )
+    store_path = tmp_path / "eaf-store.opengwasdb"
+    runner = CliRunner()
+    build = runner.invoke(
+        app,
+        [
+            "build-dense-vcf", str(manifest), str(store_path),
+            "--store-id", "eaf-cli", "--release-id", "v1",
+        ],
+    )
+    assert build.exit_code == 0, build.output
+
+    result = runner.invoke(app, ["query-phewas", str(store_path), "1:100000:A:G"])
+    assert result.exit_code == 0, result.output
+    header, *rows = [line.split("\t") for line in result.output.strip("\n").split("\n")]
+    assert "eaf" in header and "rsid" not in header
+    assert header.index("eaf") == header.index("association_status") - 1
+    # The source reported effect allele G at 0.25. A is the stored effect
+    # allele (lexicographic ALID order), so the stored -- and therefore
+    # default-printed -- frequency is 1 - 0.25 = 0.75 (ADR 0036).
+    assert float(rows[0][header.index("eaf")]) == pytest.approx(0.75, abs=1e-6)
+
+
+def test_cli_query_variant_info_adds_only_rsid(tmp_path, source_path):
     runner = CliRunner()
     store_path = tmp_path / "cli-store.opengwasdb"
     build = runner.invoke(
@@ -126,7 +169,9 @@ def test_cli_query_variant_info_flag_adds_rsid_and_eaf_columns(tmp_path, source_
 
     without_it = runner.invoke(app, ["query-phewas", str(store_path), "rs1"])
     assert without_it.exit_code == 0, without_it.output
-    assert "rsid" not in without_it.output.splitlines()[0].split("\t")
+    default_header = without_it.output.splitlines()[0].split("\t")
+    assert "eaf" in default_header
+    assert "rsid" not in default_header
 
     with_it = runner.invoke(app, ["query-phewas", str(store_path), "rs1", "--variant-info"])
     assert with_it.exit_code == 0, with_it.output
@@ -137,8 +182,14 @@ def test_cli_query_variant_info_flag_adds_rsid_and_eaf_columns(tmp_path, source_
     ]
     assert all(row[2] == "rs1" for row in rows)
     # This fixture's source has no allele frequency, so eaf is the store's own
-    # missing marker rather than a fabricated value (ADR 0036).
+    # missing marker rather than a fabricated value (ADR 0036). --variant-info
+    # adds rsid; it does not change whether eaf is returned (issue #136).
     assert all(row[11] == "." for row in rows)
+    default_rows = [
+        line.split("\t") for line in without_it.output.strip("\n").split("\n")[1:]
+    ]
+    for default_row, variant_row in zip(default_rows, rows, strict=True):
+        assert variant_row[:2] + variant_row[3:] == default_row
 
 
 def test_cli_regenerate_overview_rewrites_from_persisted_data_only(tmp_path, source_path):

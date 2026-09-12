@@ -25,6 +25,60 @@ from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, write_regions_file
 
 log = logging.getLogger(__name__)
 
+#: Canonical ``analyses.tsv`` names -> pre-ADR-0034 source-manifest aliases
+#: (issue #170). The canonical name wins when a manifest carries both.
+_SOURCE_MANIFEST_COLUMN_ALIASES: dict[str, str] = {
+    "analysis_id": "trait_id",
+    "source_file": "file_path",
+    "analysis_label": "trait_name",
+    "sample_size": "n",
+}
+
+
+def _source_manifest_column(fieldnames: set[str], canonical: str) -> str | None:
+    """Resolve `canonical`'s column name, or None when neither spelling is
+    present: the canonical ``analyses.tsv`` name when the manifest carries it,
+    otherwise its legacy source-manifest name (issue #170)."""
+    if canonical in fieldnames:
+        return canonical
+    legacy = _SOURCE_MANIFEST_COLUMN_ALIASES[canonical]
+    return legacy if legacy in fieldnames else None
+
+
+def _required_source_manifest_column(
+    fieldnames: set[str], canonical: str, path: str | Path
+) -> str:
+    """`_source_manifest_column`, but raise when neither spelling is present."""
+    column = _source_manifest_column(fieldnames, canonical)
+    if column is None:
+        legacy = _SOURCE_MANIFEST_COLUMN_ALIASES[canonical]
+        raise ValueError(
+            f"source manifest {path} is missing required column: "
+            f"{canonical!r} (legacy name {legacy!r})"
+        )
+    return column
+
+
+def _source_row(
+    row: dict[str, str],
+    analysis_id_col: str,
+    source_file_col: str,
+    label_col: str | None,
+    sample_size_col: str | None,
+) -> SourceRow:
+    """Build one `SourceRow`, applying the alias defaults (issue #170)."""
+    trait_id = row[analysis_id_col]
+    return SourceRow(
+        trait_id=trait_id,
+        file_path=row[source_file_col],
+        trait_name=(row.get(label_col) or trait_id) if label_col else trait_id,
+        n=int((row.get(sample_size_col) or 0) if sample_size_col else 0),
+        reported_population=row.get("reported_population", "").strip(),
+        source_reader_capability=(
+            row.get("source_reader_capability") or GWAS_VCF_CAPABILITY
+        ),
+    )
+
 
 @dataclass(frozen=True)
 class SourceRow:
@@ -41,27 +95,27 @@ class SourceRow:
 def read_source_manifest(path: str | Path) -> list[SourceRow]:
     """Read the raw source manifest TSV.
 
-    Requires ``trait_id`` and ``file_path``; ``trait_name`` defaults to the
-    trait id, ``n`` to 0, ``reported_population`` to empty, and
+    Requires ``analysis_id`` and ``source_file`` (issue #170; the pre-ADR-0034
+    ``trait_id``/``file_path`` names remain readable as aliases);
+    ``analysis_label`` (legacy ``trait_name``) defaults to the analysis id,
+    ``sample_size`` (legacy ``n``) to 0, ``reported_population`` to empty, and
     ``source_reader_capability`` to GWAS-VCF when absent -- the only format
     ancestry assignment could read before issue #115, so a manifest written
-    without the column keeps its meaning.
+    without the column keeps its meaning. The canonical ``analyses.tsv`` name
+    wins when a manifest carries both spellings.
     """
     with open(path, newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
-        rows = [
-            SourceRow(
-                trait_id=row["trait_id"],
-                file_path=row["file_path"],
-                trait_name=row.get("trait_name") or row["trait_id"],
-                n=int(row.get("n") or 0),
-                reported_population=(row.get("reported_population") or "").strip(),
-                source_reader_capability=(
-                    row.get("source_reader_capability") or GWAS_VCF_CAPABILITY
-                ),
-            )
-            for row in reader
-        ]
+        fieldnames = set(reader.fieldnames or ())
+        raw_rows = list(reader)
+    analysis_id_col = _required_source_manifest_column(fieldnames, "analysis_id", path)
+    source_file_col = _required_source_manifest_column(fieldnames, "source_file", path)
+    label_col = _source_manifest_column(fieldnames, "analysis_label")
+    sample_size_col = _source_manifest_column(fieldnames, "sample_size")
+    rows = [
+        _source_row(row, analysis_id_col, source_file_col, label_col, sample_size_col)
+        for row in raw_rows
+    ]
     if not rows:
         raise ValueError(f"empty source manifest: {path}")
     return rows

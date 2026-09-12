@@ -1090,12 +1090,93 @@ def _fmt_duration(seconds: float) -> str:
     return f"{s}s"
 
 
+#: Canonical ``analyses.tsv`` (ADR 0034) names -> the pre-ADR-0034 builder
+#: vocabulary, which stays readable for a deprecation window (issue #170). A
+#: manifest may use either; when both are present the canonical name wins.
+_MANIFEST_COLUMN_ALIASES: dict[str, str] = {
+    "analysis_id": "trait_id",
+    "source_file": "file_path",
+    "analysis_label": "trait_name",
+    "sample_size": "n",
+}
+
+
+def _manifest_column(fieldnames: Sequence[str], canonical: str) -> str | None:
+    """Resolve `canonical`'s column name, or None when neither spelling is
+    present: the canonical ``analyses.tsv`` name when the manifest carries it,
+    otherwise its legacy builder-manifest name (issue #170)."""
+    if canonical in fieldnames:
+        return canonical
+    legacy = _MANIFEST_COLUMN_ALIASES[canonical]
+    return legacy if legacy in fieldnames else None
+
+
+def _required_manifest_column(
+    fieldnames: Sequence[str], canonical: str, manifest_path: str | Path
+) -> str:
+    """`_manifest_column`, but raise when neither spelling is present."""
+    column = _manifest_column(fieldnames, canonical)
+    if column is None:
+        legacy = _MANIFEST_COLUMN_ALIASES[canonical]
+        raise ValueError(
+            f"manifest {manifest_path} is missing required column: "
+            f"{canonical!r} (legacy name {legacy!r})"
+        )
+    return column
+
+
+def _require_columns(
+    fieldnames: Sequence[str], manifest_path: str | Path, *columns: str
+) -> None:
+    """Raise when any of `columns` is absent from the manifest header."""
+    for column in columns:
+        if column not in fieldnames:
+            raise ValueError(f"manifest {manifest_path} is missing required column: {column!r}")
+
+
+def _manifest_trait_name(
+    row: Mapping[str, str], label_col: str | None, trait_id: str
+) -> str:
+    """The row's analysis_label, or its analysis_id when the manifest names no
+    label column (``_read_manifest``'s legacy ``trait_name`` default)."""
+    return row.get(label_col, trait_id) if label_col is not None else trait_id
+
+
+def _manifest_n(row: Mapping[str, str], sample_size_col: str | None) -> int:
+    """The row's sample_size, or 0 when the manifest names no sample-size
+    column (``_read_manifest``'s legacy ``n`` default)."""
+    return int((row.get(sample_size_col) or 0) if sample_size_col is not None else 0)
+
+
+@dataclass(frozen=True)
+class _ManifestColumns:
+    """The four alias-bearing manifest columns, resolved to real names."""
+
+    analysis_id: str
+    source_file: str
+    analysis_label: str | None
+    sample_size: str | None
+
+
+def _manifest_columns(
+    fieldnames: Sequence[str], manifest_path: str | Path
+) -> _ManifestColumns:
+    """Resolve the alias-bearing columns, raising when a required one is absent."""
+    return _ManifestColumns(
+        analysis_id=_required_manifest_column(fieldnames, "analysis_id", manifest_path),
+        source_file=_required_manifest_column(fieldnames, "source_file", manifest_path),
+        analysis_label=_manifest_column(fieldnames, "analysis_label"),
+        sample_size=_manifest_column(fieldnames, "sample_size"),
+    )
+
+
 def _read_manifest(manifest_path: str | Path) -> list[_ManifestRow]:
-    """Read the build manifest: the existing ``trait_id``/``file_path``/
-    ``trait_name``/``n`` columns -- also the Analysis Catalogue's
-    ``BUILD_COLUMNS`` (`opengwasdb.ancestry.catalogue`), so a
-    Catalogue-annotated file remains readable here for those four columns --
-    plus required ``stored_effect_scale`` (issue #17) and ``original_sd_method``
+    """Read the build manifest: the canonical ``analyses.tsv`` names
+    ``analysis_id``/``source_file``/``analysis_label``/``sample_size`` (ADR
+    0034, issue #170) or their pre-ADR-0034 aliases ``trait_id``/``file_path``/
+    ``trait_name``/``n`` -- also the Analysis Catalogue's ``BUILD_COLUMNS``,
+    with the canonical spelling winning when both are present. Alongside them:
+    required ``stored_effect_scale`` (issue #17) and ``original_sd_method``
     (issue #18) columns, and an ``original_sd`` column required only for the
     ``original_sd_method`` tiers that carry an actual SD magnitude.
 
@@ -1147,12 +1228,11 @@ def _read_manifest(manifest_path: str | Path) -> list[_ManifestRow]:
         reader = csv.DictReader(fh, delimiter="\t")
         fieldnames = list(reader.fieldnames or [])
         rows = list(reader)
-    for column in ("stored_effect_scale", "original_sd_method"):
-        if column not in fieldnames:
-            raise ValueError(f"manifest {manifest_path} is missing required column: {column!r}")
+    _require_columns(fieldnames, manifest_path, "stored_effect_scale", "original_sd_method")
+    cols = _manifest_columns(fieldnames, manifest_path)
     result = []
     for row in rows:
-        trait_id = row["trait_id"]
+        trait_id = row[cols.analysis_id]
         scale = row["stored_effect_scale"]
         try:
             StoredEffectScale(scale)
@@ -1208,9 +1288,9 @@ def _read_manifest(manifest_path: str | Path) -> list[_ManifestRow]:
         result.append(
             _ManifestRow(
                 trait_id=trait_id,
-                file_path=row["file_path"],
-                trait_name=row.get("trait_name", trait_id),
-                n=int(row.get("n", 0) or 0),
+                file_path=row[cols.source_file],
+                trait_name=_manifest_trait_name(row, cols.analysis_label, trait_id),
+                n=_manifest_n(row, cols.sample_size),
                 stored_effect_scale=scale,
                 se_divisor=se_divisor,
                 source_reader_capability=row.get("source_reader_capability") or GWAS_VCF_CAPABILITY,

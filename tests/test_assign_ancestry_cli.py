@@ -144,33 +144,41 @@ def test_catalogue_independent_of_worker_count(scenario):
     assert serial.read_text() == parallel.read_text()
 
 
+def _assign_ancestry_args(
+    manifest: Path, catalogue: Path, freqs_path: Path, groups_path: Path, *extra: str
+) -> list[str]:
+    """The scenario's CLI arguments, plus any per-test *extra* flags."""
+    return [
+        "assign-ancestry",
+        str(manifest),
+        str(catalogue),
+        "--ancestry-reference",
+        str(freqs_path),
+        "--ancestry-groups",
+        str(groups_path),
+        "--maf-floor",
+        "0.0",
+        "--tau",
+        "0.90",
+        "--delta",
+        "0.20",
+        "--n-min",
+        "10",
+        "--residual-max",
+        "0.05",
+        *extra,
+    ]
+
+
 def test_assign_ancestry_cli(scenario):
     tmp_path, _reference, manifest, freqs_path, groups_path = scenario
     catalogue = tmp_path / "catalogue.tsv"
     runner = CliRunner()
     result = runner.invoke(
         app,
-        [
-            "assign-ancestry",
-            str(manifest),
-            str(catalogue),
-            "--ancestry-reference",
-            str(freqs_path),
-            "--ancestry-groups",
-            str(groups_path),
-            "--maf-floor",
-            "0.0",
-            "--tau",
-            "0.90",
-            "--delta",
-            "0.20",
-            "--n-min",
-            "10",
-            "--residual-max",
-            "0.05",
-            "--catalogue-version",
-            "cat-v1",
-        ],
+        _assign_ancestry_args(
+            manifest, catalogue, freqs_path, groups_path, "--catalogue-version", "cat-v1"
+        ),
     )
     assert result.exit_code == 0, result.output
     import json
@@ -193,3 +201,37 @@ def test_assign_ancestry_cli(scenario):
 
     rows = catalogue.read_text().splitlines()[1:]
     assert [r.split("\t")[0] for r in rows] == ["eur1", "afr1", "mix1"]
+
+
+def test_read_source_manifest_accepts_canonical_analyses_tsv_columns(tmp_path):
+    """Issue #170: the ancestry manifest reader takes the canonical
+    ``analyses.tsv`` names (with the legacy spellings still readable)."""
+    canonical = tmp_path / "canonical_manifest.tsv"
+    canonical.write_text(
+        "analysis_id\tsource_file\tanalysis_label\tsample_size\treported_population\n"
+        "eur1\t/build/eur.vcf.gz\tEUR study\t1000\tEuropean\n",
+        encoding="utf-8",
+    )
+
+    rows = read_source_manifest(canonical)
+
+    assert len(rows) == 1
+    assert rows[0].trait_id == "eur1"
+    assert rows[0].file_path == "/build/eur.vcf.gz"
+    assert rows[0].trait_name == "EUR study"
+    assert rows[0].n == 1000
+    assert rows[0].reported_population == "European"
+
+
+@pytest.mark.parametrize("worker_flag", ["--n-workers", "--workers"])
+def test_assign_ancestry_cli_accepts_worker_flag_spellings(scenario, worker_flag):
+    """``--n-workers`` is the primary spelling; ``--workers`` stays accepted
+    as an alias so existing callers keep working (issue #170 closeout)."""
+    tmp_path, _reference, manifest, freqs_path, groups_path = scenario
+    catalogue = tmp_path / f"catalogue-{worker_flag.lstrip('-')}.tsv"
+    result = CliRunner().invoke(
+        app,
+        _assign_ancestry_args(manifest, catalogue, freqs_path, groups_path, worker_flag, "2"),
+    )
+    assert result.exit_code == 0, result.output
+    assert catalogue.exists()

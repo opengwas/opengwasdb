@@ -165,13 +165,16 @@ def test_cli_variant_info_shows_the_stored_frequency(tmp_path: Path, layout: str
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged", "hybrid"])
-def test_eaf_is_absent_from_the_default_resolved_row(tmp_path: Path, layout: str):
-    """#104 made the default column set a promise; eaf rides --variant-info."""
+def test_eaf_is_in_the_default_resolved_row(tmp_path: Path, layout: str):
+    """Issue #136 reversed #104's gating: eaf is already materialised in the
+    result, so the default row carries it; rsid stays behind --variant-info."""
     store = _build(tmp_path, layout)
     with query_store(store) as query:
         rows = list(query.resolve(query.phewas(_ALID)))
 
-    assert rows and "eaf" not in rows[0]
+    assert rows
+    assert "rsid" not in rows[0]
+    assert float(rows[0]["eaf"]) == pytest.approx(_STORED_EAF, abs=1e-6)
 
 
 # ── Reference Completion ──────────────────────────────────────────────────────

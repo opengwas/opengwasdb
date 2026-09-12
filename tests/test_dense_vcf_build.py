@@ -479,6 +479,42 @@ def test_read_manifest_rejects_invalid_source_assembly(tmp_path):
         _read_manifest(manifest)
 
 
+def test_canonical_analyses_tsv_columns_build_cleanly(tmp_path):
+    """Issue #170: the registry's canonical ``analyses.tsv`` column names are
+    accepted directly -- no ``analysis_id``->``trait_id`` rename needed."""
+    from opengwasdb.layouts.dense.build_vcf import _read_manifest
+
+    vcf = _make_vcf(
+        tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
+    )
+    manifest = tmp_path / "canonical_manifest.tsv"
+    manifest.write_text(
+        "analysis_id\tsource_file\tanalysis_label\tsample_size"
+        "\tstored_effect_scale\toriginal_sd_method\n"
+        f"trait_a\t{vcf}\tTrait A\t1234\tsd\tdeclared_standardised\n",
+        encoding="utf-8",
+    )
+
+    # The reader maps every canonical name onto the builder's own row fields.
+    rows = _read_manifest(manifest)
+    assert len(rows) == 1
+    assert rows[0].trait_id == "trait_a"
+    assert rows[0].file_path == str(vcf)
+    assert rows[0].trait_name == "Trait A"
+    assert rows[0].n == 1234
+
+    # ...and the whole build runs to completion from that manifest.
+    store_path = tmp_path / "canonical-store.opengwasdb"
+    result = build_dense_from_vcf_manifest(
+        manifest, store_path, store_id="canonical", release_id="v1"
+    )
+    assert result.n_analyses == 1
+    analyses = read_analyses(store_path / "analyses.tsv")
+    assert analyses.rows[0]["analysis_id"] == "trait_a"
+    assert analyses.rows[0]["analysis_label"] == "Trait A"
+    assert analyses.rows[0]["sample_size"] == "1234"
+
+
 def _manifest_with_source_assembly(
     tmp_path: Path, entries: list[tuple[str, Path, str, str]]
 ) -> Path:

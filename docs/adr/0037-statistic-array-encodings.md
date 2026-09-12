@@ -1,5 +1,13 @@
 # Statistic array encodings: fixed-point z, residual-coded EAF, reference EAF for imputed cells
 
+> **Partly superseded by [ADR 0041](0041-reset-format-version-and-drop-pre-release-formats.md)**
+> (issue #143). The encoding decisions below still stand — they describe what
+> `0.1.0` writes. What no longer holds is the version numbering: the pre-release
+> formats this ADR introduced or discussed — `0.1`, `1.0`, `2.0`, `3.0` — were
+> reset to `0.1.0`, and all four are refused rather than decoded. Read every
+> version reference below as a historical name for what is now the one readable
+> format.
+
 Supersedes ADR 0036's Decision 3 (`float32` for `eaf`) and refines its Decision 5
 (Reference Completion). Leaves ADR 0036's semantics intact: EAF is still per
 (variant, Analysis), still oriented to the stored effect allele, still declared

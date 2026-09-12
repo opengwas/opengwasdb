@@ -1,6 +1,6 @@
 {
   "_comment": "Pre-existing ruff/mypy findings. CONTRIBUTING.md: a change adds none. Lowering these is welcome as a change of its own; raising one needs a reason in the commit message. Scope is this project's own code: ruff excludes the vendored quality/ tree (pyproject.toml), and mypy only ever checked opengwasdb/.",
-  "measured_at": "dev, after #118 (format 3.0)",
+  "measured_at": "dev, v0.3.0 cut",
   "ruff": 61,
   "mypy": 40
 }
