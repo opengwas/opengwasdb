@@ -223,6 +223,20 @@ def test_read_source_manifest_accepts_canonical_analyses_tsv_columns(tmp_path):
     assert rows[0].reported_population == "European"
 
 
+def test_read_source_manifest_falls_back_to_analysis_id_when_label_blank(tmp_path):
+    """Ancestry manifests fall back to analysis_id when analysis_label is present but blank."""
+    manifest = tmp_path / "blank_label.tsv"
+    manifest.write_text(
+        "analysis_id\tsource_file\tanalysis_label\tsample_size\n"
+        "eur1\t/build/eur.vcf.gz\t\t1000\n",
+        encoding="utf-8",
+    )
+
+    rows = read_source_manifest(manifest)
+    assert len(rows) == 1
+    assert rows[0].trait_name == "eur1"
+
+
 @pytest.mark.parametrize("worker_flag", ["--n-workers", "--workers"])
 def test_assign_ancestry_cli_accepts_worker_flag_spellings(scenario, worker_flag):
     """``--n-workers`` is the primary spelling; ``--workers`` stays accepted

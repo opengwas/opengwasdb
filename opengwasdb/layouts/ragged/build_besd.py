@@ -10,6 +10,8 @@ fail-loud rules each phase applies live beside the code that applies them.
 
 from __future__ import annotations
 
+import csv
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,13 +31,14 @@ from opengwasdb.layouts.ragged.besd_reader import (
 )
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
-from opengwasdb.model.analyses import Analysis, write_analysis_records
+from opengwasdb.model.analyses import Analysis, PassthroughMetadata, write_analysis_records
 from opengwasdb.model.enums import (
     AssociationCoverage,
     CompletionState,
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.model.manifest_columns import manifest_column
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants.axis import (
     VARIANT_AXIS_FORMAT,
@@ -70,6 +73,7 @@ def build_ragged_from_besd(
     *,
     store_id: str,
     release_id: str,
+    analyses_path: str | Path | None = None,
     tissue: str | None = None,
     source_build: str = "hg38",
     overwrite: bool = False,
@@ -79,6 +83,8 @@ def build_ragged_from_besd(
     besd_prefix: path without extension (.esi, .epi, .besd are appended).
     source_build: genome assembly of the input BESD ("hg38" or "hg19").
     When source_build is "hg19", SNP coordinates are lifted over to hg38 inline.
+    When analyses_path is supplied, Analytical and Attribution Metadata are overlaid
+    onto the EPI-derived analyses while keeping BESD coordinates authoritative (issue #173).
     """
     prefix = Path(besd_prefix)
     out = Path(output_path)
@@ -92,11 +98,8 @@ def build_ragged_from_besd(
         print(f"Canonical variants: {len(variants)} (from {len(snps)} ESI entries)")
         write_variant_axis(staged.path, variants, rsid_by_alid)
 
-        # Phase 3 — Analysis metadata from the EPI records. No `analyses` table
-        # (ADR 0034, issue #69): analyses.tsv below is the sole source of
-        # truth; the empty index file lets Reference Completion add
-        # completion_quality.
-        analyses = _analysis_records(probes, tissue)
+        # Phase 3 — Analysis metadata from the EPI records (with optional manifest overlay).
+        analyses = _analysis_records(probes, tissue, analyses_path)
         staged.index_connection().close()
         # Phase 4 — CSR ingestion and the encoding plan it decides.
         csr, encoding = _ingest_besd(prefix, probes, esi_to_variant, len(variants), staged.path)
@@ -240,41 +243,213 @@ def _canonical_variants(
     return variants, rsid_by_alid, esi_to_variant
 
 
-def _analysis_records(
-    probes: list[ProbeRecord], tissue: str | None
-) -> list[Analysis]:
-    """One Analysis per EPI probe (issue #69's shared schema).
+def _opt(value: str | None) -> str | None:
+    if value is None or value.strip() in ("", "NA", "NaN", "null", "None", "."):
+        return None
+    return value.strip()
 
-    assigned_ancestry (ADR 0028): BESD/ESI/EPI bulk-QTL sources carry no
-    per-analysis ancestry assignment, unlike build_ssf's manifest-driven
-    sources, so it stays at molecular_analysis's blank default here.
-    """
-    analyses: list[Analysis] = []
-    for probe in probes:
-        try:
-            probe_chr = normalise_chromosome(probe.chromosome)
-        except VariantNormalisationError:
-            probe_chr = None
 
-        analysis_id = probe.probe_id
-        if tissue:
-            analysis_id = f"{probe.probe_id}::{tissue}"
-
-        is_ensembl = probe.probe_id.startswith("ENSG")
-        analyses.append(
-            molecular_analysis(
-                analysis_id,
-                analysis_label=probe.gene,
-                trait_ontology_id=f"ENSEMBL:{probe.probe_id}" if is_ensembl else None,
-                trait_ontology_label="Ensembl" if is_ensembl else None,
-                tissue=tissue,
-                context=None,
-                trait_chr=probe_chr,
-                trait_bp=probe.probe_bp if probe.probe_bp > 0 else None,
-                n=None,
-            )
+def _validate_id_overlap(
+    manifest_ids: set[str],
+    epi_ids: set[str],
+    analyses_path: str | Path,
+) -> None:
+    """Validate exact ID match between manifest and BESD EPI probes."""
+    missing_in_epi = manifest_ids - epi_ids
+    missing_in_manifest = epi_ids - manifest_ids
+    if missing_in_epi and missing_in_manifest:
+        raise ValueError(
+            f"analyses manifest {analyses_path} does not match BESD EPI analyses: "
+            f"manifest has IDs not in BESD ({', '.join(sorted(missing_in_epi))}); "
+            f"BESD has IDs not in manifest ({', '.join(sorted(missing_in_manifest))})"
         )
-    return analyses
+    if missing_in_epi:
+        raise ValueError(
+            f"analyses manifest {analyses_path} has IDs not present in BESD EPI: "
+            f"{', '.join(sorted(missing_in_epi))}"
+        )
+    if missing_in_manifest:
+        raise ValueError(
+            f"analyses manifest {analyses_path} is missing rows for BESD EPI analyses: "
+            f"{', '.join(sorted(missing_in_manifest))}"
+        )
+
+
+def _load_analyses_overlay(
+    analyses_path: str | Path,
+    expected_ids: list[str],
+) -> dict[str, dict[str, str]]:
+    """Read analyses.tsv manifest and validate exact ID match against BESD EPI probes."""
+    rows_by_id: dict[str, dict[str, str]] = {}
+    with open(analyses_path, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        fieldnames = list(reader.fieldnames or [])
+        id_col = manifest_column(fieldnames, "analysis_id")
+        if id_col is None:
+            raise ValueError(
+                f"analyses manifest {analyses_path} is missing required column: 'analysis_id'"
+            )
+        for r in reader:
+            aid = r[id_col].strip()
+            if aid in rows_by_id:
+                raise ValueError(
+                    f"analyses manifest {analyses_path} contains duplicate analysis_id: {aid!r}"
+                )
+            rows_by_id[aid] = r
+
+    _validate_id_overlap(set(rows_by_id.keys()), set(expected_ids), analyses_path)
+    return rows_by_id
+
+
+def _overlay_label(r: dict[str, str], probe_gene: str | None) -> str:
+    """Resolve analysis_label from manifest row, falling back to probe gene."""
+    for col in ("analysis_label", "trait_name"):
+        val = _opt(r.get(col))
+        if val is not None:
+            return val
+    return probe_gene or ""
+
+
+def _overlay_ontology(
+    r: dict[str, str], default_id: str | None, default_label: str | None
+) -> tuple[str | None, str | None]:
+    """Resolve ontology CURIE and label from manifest row."""
+    ont_id = _opt(r.get("trait_ontology_id")) or default_id
+    ont_label = (
+        _opt(r.get("trait_ontology_label"))
+        or _opt(r.get("trait_ontology_name"))
+        or default_label
+    )
+    return ont_id, ont_label
+
+
+def _overlay_n(
+    r: dict[str, str], analysis_id: str, manifest_path: str | Path | None = None
+) -> int | None:
+    """Resolve sample size from manifest row, failing loudly on malformed numbers."""
+    for col in ("sample_size", "n"):
+        val = _opt(r.get(col))
+        if val is not None:
+            try:
+                return int(val)
+            except ValueError as exc:
+                loc = f"analyses manifest {manifest_path}: " if manifest_path else ""
+                raise ValueError(
+                    f"{loc}analysis {analysis_id!r} has invalid sample_size {val!r}"
+                ) from exc
+    return None
+
+
+def _overlay_sd(
+    r: dict[str, str], analysis_id: str, manifest_path: str | Path | None = None
+) -> tuple[str, str]:
+    """Validate and resolve original_sd_method and original_sd from manifest row."""
+    sd_method = _opt(r.get("original_sd_method"))
+    sd_val = _opt(r.get("original_sd"))
+    if not sd_val:
+        return sd_method or "", ""
+    try:
+        val_float = float(sd_val)
+        if val_float <= 0 or not math.isfinite(val_float):
+            raise ValueError
+    except ValueError:
+        loc = f"analyses manifest {manifest_path}: " if manifest_path else ""
+        raise ValueError(
+            f"{loc}analysis {analysis_id!r} has invalid original_sd {sd_val!r}"
+        ) from None
+    return sd_method or "", sd_val
+
+
+def _overlay_probe_analysis(
+    probe: ProbeRecord,
+    tissue: str | None,
+    probe_chr: str | None,
+    manifest_row: dict[str, str],
+    analyses_path: str | Path | None = None,
+) -> Analysis:
+    """Overlay manifest metadata onto a probe record while keeping coordinates authoritative."""
+    analysis_id = f"{probe.probe_id}::{tissue}" if tissue else probe.probe_id
+    is_ensembl = probe.probe_id.startswith("ENSG")
+    def_id = f"ENSEMBL:{probe.probe_id}" if is_ensembl else None
+    def_label = "Ensembl" if is_ensembl else None
+
+    r = manifest_row
+    label = _overlay_label(r, probe.gene)
+    ont_id, ont_label = _overlay_ontology(r, def_id, def_label)
+    m_tissue = _opt(r.get("tissue"))
+    tissue_val = m_tissue if m_tissue is not None else tissue
+    n = _overlay_n(r, analysis_id, analyses_path)
+    _sd_method, original_sd = _overlay_sd(r, analysis_id, analyses_path)
+
+    return molecular_analysis(
+        analysis_id,
+        analysis_label=label,
+        trait_ontology_id=ont_id,
+        trait_ontology_label=ont_label,
+        tissue=tissue_val,
+        context=_opt(r.get("context")),
+        trait_chr=probe_chr,
+        trait_bp=probe.probe_bp if probe.probe_bp > 0 else None,
+        n=n,
+        stored_effect_scale=_opt(r.get("stored_effect_scale")) or "",
+        assigned_ancestry=_opt(r.get("assigned_ancestry")) or "",
+        original_sd=original_sd,
+        metadata=PassthroughMetadata.from_manifest_row(r),
+    )
+
+
+def _analysis_record_for_probe(
+    probe: ProbeRecord,
+    tissue: str | None,
+    manifest_row: dict[str, str] | None,
+    analyses_path: str | Path | None = None,
+) -> Analysis:
+    """Build one Analysis record for a probe, optionally overlaying manifest metadata."""
+    try:
+        probe_chr = normalise_chromosome(probe.chromosome)
+    except VariantNormalisationError:
+        probe_chr = None
+
+    if manifest_row is not None:
+        return _overlay_probe_analysis(probe, tissue, probe_chr, manifest_row, analyses_path)
+
+    analysis_id = f"{probe.probe_id}::{tissue}" if tissue else probe.probe_id
+    is_ensembl = probe.probe_id.startswith("ENSG")
+    return molecular_analysis(
+        analysis_id,
+        analysis_label=probe.gene,
+        trait_ontology_id=f"ENSEMBL:{probe.probe_id}" if is_ensembl else None,
+        trait_ontology_label="Ensembl" if is_ensembl else None,
+        tissue=tissue,
+        context=None,
+        trait_chr=probe_chr,
+        trait_bp=probe.probe_bp if probe.probe_bp > 0 else None,
+        n=None,
+    )
+
+
+def _analysis_records(
+    probes: list[ProbeRecord],
+    tissue: str | None,
+    analyses_path: str | Path | None = None,
+) -> list[Analysis]:
+    """One Analysis per EPI probe, optionally overlaid with manifest metadata (issue #173)."""
+    if analyses_path is None:
+        return [_analysis_record_for_probe(probe, tissue, None) for probe in probes]
+
+    expected_ids = [
+        f"{probe.probe_id}::{tissue}" if tissue else probe.probe_id for probe in probes
+    ]
+    overlay_by_id = _load_analyses_overlay(analyses_path, expected_ids)
+    return [
+        _analysis_record_for_probe(
+            probe,
+            tissue,
+            overlay_by_id[f"{probe.probe_id}::{tissue}" if tissue else probe.probe_id],
+            analyses_path,
+        )
+        for probe in probes
+    ]
 
 
 def _add_empty_analysis(csr: RaggedCSRWriter) -> None:

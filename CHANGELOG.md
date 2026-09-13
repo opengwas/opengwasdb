@@ -10,6 +10,49 @@ the end of this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`opengwasdb.model.manifest_columns`**: extracted shared manifest column alias
+  resolution supporting multiple legacy aliases per canonical name (`analysis_id`,
+  `source_file`, `analysis_label`, `sample_size`), used across Dense, Ancestry,
+  and Ragged builders (#172, #177).
+- **`opengwasdb.readers.known_capabilities()`**: shared accessor returning all
+  registered source reader capabilities in sorted order (#177).
+- **`--source-reader-capability` and `--source-assembly` on `build-dense-vcf` and
+  `build-hybrid`**: allow supplying per-release defaults for manifest rows that
+  omit these columns (#174, #177, ADR 0042). Precedence is per-row manifest
+  column > CLI option > hardcoded default. Invalid CLI values fail at argument
+  parse time.
+- **`--analyses <analyses.tsv>` on `build-ragged-besd`**: allows overlaying
+  registry Analytical and Attribution Metadata (including `PassthroughMetadata`
+  fields, `assigned_ancestry`, `sample_size`, and attribution columns) onto
+  BESD-derived analyses joined by `analysis_id`, while keeping BESD `.epi`
+  coordinates authoritative and failing loudly on ID mismatch in either direction
+  (#173, #177, ADR 0042). When omitted, output is byte-identical to prior builds.
+- **`--format json` on `validate` and `info`**: provides machine-readable output
+  for validation evidence (`{"ok": bool, "errors": [...], "warnings": [...]}`)
+  and manifest inspection (with decomposed structured `encoding`), while default
+  human text output remains byte-for-byte unchanged (#175, #177, ADR 0042). On
+  invalid stores, `validate --format json` emits the JSON object on stdout and
+  exits non-zero.
+- **`estimate-phenotype-sd`**: estimates a per-Analysis phenotype SD directly
+  from a canonical `analyses.tsv`, resolving a `SourceReader` per row rather than
+  requiring caller-pre-extracted `se`/`af`/`beta` arrays (#176, #177, ADR 0029,
+  ADR 0042). `--af-source source|reference` selects the estimator's frequency
+  source; the output TSV uses the shared-core `analyses.tsv` spellings
+  (`analysis_id`, `original_sd`, `original_sd_method`, `original_sd_dispersion`,
+  `notes`), reports `unavailable` rather than fabricating a value for a missing
+  or unusable sample size, and is order-preserving and independent of
+  `--n-workers`.
+
+### Changed
+
+- **`build-ragged-ssf` accepts canonical `analyses.tsv` column names**
+  (`sample_size`, `source_file`) alongside legacy names (`n`, `filtered_file`,
+  `file_path`), with canonical spellings winning when both are present (#172, #177).
+  When a resolved `source_file` path is absolute, it is used directly; relative
+  paths are joined against `--filtered-dir`.
+
 ## [0.3.0] — 2026-09-12
 
 Work lands on `dev` and appears here under *Unreleased* until `dev` merges to

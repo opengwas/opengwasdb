@@ -25,6 +25,11 @@ _READERS: dict[str, Callable[[str | Path, StoredEffectScale], SourceReader]] = {
 }
 
 
+def known_capabilities() -> tuple[str, ...]:
+    """Return all registered source reader capabilities in sorted order."""
+    return tuple(sorted(_READERS))
+
+
 def resolve_reader(
     capability: str, path: str | Path, stored_effect_scale: StoredEffectScale
 ) -> SourceReader:
@@ -41,7 +46,7 @@ def resolve_reader(
     try:
         reader_factory = _READERS[capability]
     except KeyError:
-        known = ", ".join(sorted(_READERS)) or "(none registered)"
+        known = ", ".join(known_capabilities()) or "(none registered)"
         raise ValueError(
             f"unknown source reader capability {capability!r}; known: {known}"
         ) from None

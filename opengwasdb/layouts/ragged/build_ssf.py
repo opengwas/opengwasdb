@@ -47,6 +47,11 @@ from opengwasdb.model.enums import (
     StoredEffectScale,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.model.manifest_columns import (
+    ManifestColumns,
+    require_columns,
+    resolve_manifest_columns,
+)
 from opengwasdb.stats import parse_af
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants.axis import (
@@ -100,6 +105,36 @@ def _opt(value: str | None) -> str | None:
     return value.strip()
 
 
+def _analyte_from_row(
+    r: dict[str, str],
+    cols: ManifestColumns,
+    filtered_dir: str | Path,
+) -> AnalyteInput:
+    """Parse one AnalyteInput from a manifest row."""
+    bp = _opt(r.get("trait_bp"))
+    n_raw = _opt(r.get(cols.sample_size)) if cols.sample_size else None
+    n = int(n_raw) if n_raw else None
+    raw_path = Path(r[cols.source_file])
+    filtered_path = raw_path if raw_path.is_absolute() else Path(filtered_dir) / raw_path
+    label = _opt(r.get(cols.analysis_label)) if cols.analysis_label else None
+    return AnalyteInput(
+        analysis_index=int(r["analysis_index"]),
+        analysis_id=r[cols.analysis_id],
+        analysis_label=label,
+        trait_ontology_id=_opt(r.get("trait_ontology_id")),
+        trait_ontology_label=_opt(r.get("trait_ontology_label")),
+        trait_chr=_opt(r.get("trait_chr")),
+        trait_bp=int(bp) if bp else None,
+        n=n,
+        tissue=_opt(r.get("tissue")),
+        context=_opt(r.get("context")),
+        mhc=str(r.get("mhc", "")).strip().upper() in {"TRUE", "1", "YES"},
+        filtered_path=filtered_path,
+        assigned_ancestry=_opt(r.get("assigned_ancestry")) or "",
+        metadata=PassthroughMetadata.from_manifest_row(r),
+    )
+
+
 def _read_manifest(manifest_path: str | Path, filtered_dir: str | Path) -> list[AnalyteInput]:
     """Read the build manifest into one `AnalyteInput` per analysis.
 
@@ -115,30 +150,21 @@ def _read_manifest(manifest_path: str | Path, filtered_dir: str | Path) -> list[
     of these before issue #83, silently: the manifest had the values, the
     built store did not. They stay blank when the manifest omits them, never
     inferred -- only the manifest producer knows them.
+
+    Accepts canonical ``analyses.tsv`` column names (``sample_size``,
+    ``source_file``) as well as legacy spellings (``n``, ``filtered_file``,
+    ``file_path``) with canonical names winning (issue #172). When
+    ``source_file``/``filtered_file`` is an absolute path, it is used as-is;
+    relative paths are joined to ``filtered_dir``.
     """
     rows: list[AnalyteInput] = []
     with open(manifest_path, newline="", encoding="utf-8") as fh:
-        for r in csv.DictReader(fh, delimiter="\t"):
-            bp = _opt(r.get("trait_bp"))
-            n = _opt(r.get("n"))
-            rows.append(
-                AnalyteInput(
-                    analysis_index=int(r["analysis_index"]),
-                    analysis_id=r["analysis_id"],
-                    analysis_label=_opt(r.get("analysis_label")),
-                    trait_ontology_id=_opt(r.get("trait_ontology_id")),
-                    trait_ontology_label=_opt(r.get("trait_ontology_label")),
-                    trait_chr=_opt(r.get("trait_chr")),
-                    trait_bp=int(bp) if bp else None,
-                    n=int(n) if n else None,
-                    tissue=_opt(r.get("tissue")),
-                    context=_opt(r.get("context")),
-                    mhc=str(r.get("mhc", "")).strip().upper() in {"TRUE", "1", "YES"},
-                    filtered_path=Path(filtered_dir) / r["filtered_file"],
-                    assigned_ancestry=_opt(r.get("assigned_ancestry")) or "",
-                    metadata=PassthroughMetadata.from_manifest_row(r),
-                )
-            )
+        reader = csv.DictReader(fh, delimiter="\t")
+        fieldnames = list(reader.fieldnames or [])
+        require_columns(fieldnames, manifest_path, "analysis_index")
+        cols = resolve_manifest_columns(fieldnames, manifest_path)
+        for r in reader:
+            rows.append(_analyte_from_row(r, cols, filtered_dir))
     rows.sort(key=lambda a: a.analysis_index)
     # analysis_index must be a dense 0..n-1 sequence for CSR offset alignment.
     for expected, a in enumerate(rows):

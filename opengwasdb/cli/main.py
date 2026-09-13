@@ -7,7 +7,7 @@ import math
 import sys
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import typer
@@ -16,7 +16,15 @@ from opengwasdb.ancestry.mixture import Gates
 from opengwasdb.ancestry.pipeline import annotate_catalogue, read_source_manifest
 from opengwasdb.ancestry.reference import load_reference
 from opengwasdb.build.eaf_orientation import DEFAULT_SAMPLE_SITES
+from opengwasdb.build.liftover import normalise_build
 from opengwasdb.build.observed import build_dense_observed_from_sources
+from opengwasdb.build.phenotype_sd_pipeline import (
+    AfSource,
+    estimate_manifest_phenotype_sd,
+    load_af_reference,
+    read_sd_manifest,
+    write_sd_estimates,
+)
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -40,6 +48,7 @@ from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
 from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
+from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
@@ -75,13 +84,101 @@ _ALLOW_UNVERIFIED_HELP = (
     "overlap or frequency spread) instead of failing. Recorded in the store's provenance."
 )
 
+_SOURCE_READER_CAPABILITY_HELP = (
+    "Default Source Reader Capability for manifest rows that omit source_reader_capability "
+    "(default: opengwasdb.gwas-vcf)"
+)
+_SOURCE_ASSEMBLY_HELP = (
+    "Default source genome build for manifest rows that omit source_assembly "
+    "(hg19/GRCh37 or hg38/GRCh38, default: hg19)"
+)
+
+
+def _validate_source_reader_capability(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if value not in known_capabilities():
+        known = ", ".join(known_capabilities()) or "(none registered)"
+        raise typer.BadParameter(
+            f"unknown source reader capability {value!r}; known: {known}"
+        )
+    return value
+
+
+def _validate_source_assembly(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return normalise_build(value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+class ReportFormat(StrEnum):
+    """Output format for info and validate commands (issue #175)."""
+
+    text = "text"
+    json = "json"
+
+
+_REPORT_FORMAT_OPTION = typer.Option(
+    ReportFormat.text,
+    "--format",
+    help="Output format: text (human readable) or json (machine readable)",
+)
+
+# Module-level option singletons rather than inline `typer.Option(...)` defaults:
+# the call in a default value is what ruff's B008 flags, and these are shared by
+# the one command that needs them.
+_AF_SOURCE_OPTION = typer.Option(
+    AfSource.source,
+    "--af-source",
+    help="Where the estimator's allele frequency comes from: source or reference",
+)
+_AF_REFERENCE_OPTION = typer.Option(
+    None,
+    "--af-reference",
+    help=(
+        "Reference frequency table (an 'eaf' column) or LD panel directory, "
+        "required with --af-source reference"
+    ),
+)
+_AF_REFERENCE_ANCESTRY_OPTION = typer.Option(
+    None,
+    help="Population to read from an --af-reference panel directory, e.g. EUR",
+)
+_N_WORKERS_OPTION = typer.Option(
+    1, "--n-workers", "--workers", help="Fork process-pool size"
+)
+
+
+def _echo_summary(payload: dict[str, Any]) -> None:
+    typer.echo(json.dumps(payload, sort_keys=True))
+
 
 @app.command()
-def info(store_path: Path) -> None:
+def info(
+    store_path: Path,
+    output_format: ReportFormat = _REPORT_FORMAT_OPTION,
+) -> None:
     """Print basic manifest information for a local Store Release."""
 
     store = open_store(store_path)
     manifest = store.manifest
+    if output_format is ReportFormat.json:
+        payload = {
+            "store_id": manifest.store_id,
+            "release_id": manifest.release_id,
+            "format_version": manifest.format_version,
+            "primary_layout": manifest.primary_layout.value,
+            "association_coverage": manifest.association_coverage.value,
+            "completion_state": manifest.completion_state.value,
+            "reference_assembly": manifest.reference_assembly,
+            "encoding": manifest.encoding.to_manifest(),
+        }
+        typer.echo(json.dumps(payload, sort_keys=True))
+        return
+
     typer.echo(f"store_id: {manifest.store_id}")
     typer.echo(f"release_id: {manifest.release_id}")
     typer.echo(f"format_version: {manifest.format_version}")
@@ -105,10 +202,24 @@ def info(store_path: Path) -> None:
 
 
 @app.command("validate")
-def validate_command(store_path: Path) -> None:
+def validate_command(
+    store_path: Path,
+    output_format: ReportFormat = _REPORT_FORMAT_OPTION,
+) -> None:
     """Validate a local Store Release."""
 
     result = validate_store(store_path)
+    if output_format is ReportFormat.json:
+        payload = {
+            "ok": result.ok,
+            "errors": result.errors,
+            "warnings": result.warnings,
+        }
+        typer.echo(json.dumps(payload, sort_keys=True))
+        if not result.ok:
+            raise typer.Exit(1)
+        return
+
     for warning in result.warnings:
         typer.echo(f"warning: {warning}", err=True)
     if result.ok:
@@ -226,108 +337,85 @@ def build_dense_vcf_command(
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
     n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 1 and Pass 2"),
-    chunk_variants: int = typer.Option(
-        DEFAULT_CHUNK_SHAPE[0], help="Zarr chunk size along the variant axis"
-    ),
-    chunk_analyses: int = typer.Option(
-        DEFAULT_CHUNK_SHAPE[1], help="Zarr chunk size along the analysis (trait) axis"
-    ),
+    chunk_variants: int = typer.Option(DEFAULT_CHUNK_SHAPE[0], help="Variant chunk size"),
+    chunk_analyses: int = typer.Option(DEFAULT_CHUNK_SHAPE[1], help="Analysis chunk size"),
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    source_reader_capability: str | None = typer.Option(
+        None, callback=_validate_source_reader_capability, help=_SOURCE_READER_CAPABILITY_HELP
+    ),
+    source_assembly: str | None = typer.Option(
+        None, callback=_validate_source_assembly, help=_SOURCE_ASSEMBLY_HELP
+    ),
 ) -> None:
     """Build a Dense Observed-Only store from a manifest of GWAS-VCF files.
 
     MANIFEST_PATH is a TSV with columns: trait_id, file_path, trait_name, n,
-    stored_effect_scale (issue #17 -- never inferred from the VCF header),
-    original_sd_method, and original_sd (issue #18 -- required for the
-    original_sd_method tiers that carry an SD magnitude; continuous-trait
-    statistics are rescaled by it, stored_se = original_se / original_sd).
-    VCF files must be in GRCh37/hg19 coordinates; liftover to hg38 is applied inline.
-
-    The zarr chunk shape (default 1000x1000) can be tuned with --chunk-variants /
-    --chunk-analyses; a narrower analysis chunk speeds up per-analysis (bulk) reads
-    at the cost of larger per-variant (phewas) reads.
+    stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
+    VCF files are hg19 by default; liftover to hg38 is applied inline.
+    --source-reader-capability and --source-assembly supply per-release defaults (#174).
     """
-
     result = build_dense_from_vcf_manifest(
-        manifest_path,
-        output_path,
-        store_id=store_id,
-        release_id=release_id,
-        overwrite=overwrite,
-        n_workers=n_workers,
-        chunk_shape=(chunk_variants, chunk_analyses),
-        eaf_reference=eaf_reference,
-        eaf_reference_ancestry=eaf_reference_ancestry,
+        manifest_path, output_path, store_id=store_id, release_id=release_id,
+        overwrite=overwrite, n_workers=n_workers, chunk_shape=(chunk_variants, chunk_analyses),
+        eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        source_reader_capability=source_reader_capability, source_assembly=source_assembly,
     )
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-            },
-            sort_keys=True,
-        )
-    )
+    _echo_summary({
+        "output_path": str(result.output_path),
+        "n_variants": result.n_variants,
+        "n_analyses": result.n_analyses,
+    })
 
 
 @app.command("build-hybrid")
 def build_hybrid_command(
     manifest_path: Path,
     output_path: Path,
-    reference_panel: Path = typer.Option(
-        ..., help="Dense Component axis: reference-panel ALIDs (text or variants.tsv.gz)"
-    ),
+    reference_panel: Path = typer.Option(..., help="Dense Component axis: reference-panel ALIDs"),
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
-    n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 2"),
-    chunk_variants: int = typer.Option(
-        DEFAULT_CHUNK_SHAPE[0], help="Zarr chunk size along the variant axis"
-    ),
-    chunk_analyses: int = typer.Option(
-        DEFAULT_CHUNK_SHAPE[1], help="Zarr chunk size along the analysis (trait) axis"
-    ),
+    n_workers: int = typer.Option(1, help="Process pool size for Pass 2"),
+    chunk_variants: int = typer.Option(DEFAULT_CHUNK_SHAPE[0], help="Zarr variant chunk size"),
+    chunk_analyses: int = typer.Option(DEFAULT_CHUNK_SHAPE[1], help="Zarr analysis chunk size"),
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    capability: str | None = typer.Option(
+        None, "--source-reader-capability", callback=_validate_source_reader_capability,
+        help=_SOURCE_READER_CAPABILITY_HELP,
+    ),
+    assembly: str | None = typer.Option(
+        None, "--source-assembly", callback=_validate_source_assembly,
+        help=_SOURCE_ASSEMBLY_HELP,
+    ),
 ) -> None:
     """Build a Hybrid store (Dense Component + Ragged Overflow) from a VCF manifest.
 
     MANIFEST_PATH is a TSV with columns: trait_id, file_path, trait_name, n,
-    stored_effect_scale (issue #17 -- never inferred from the VCF header),
-    original_sd_method, and original_sd (issue #18 -- see build-dense-vcf).
-    On-panel variants (in --reference-panel) fill the nested Dense Component;
-    off-panel variants go to the Ragged Overflow. VCFs are hg19; liftover to
-    hg38 is applied inline.
+    stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
+    On-panel variants in --reference-panel fill Dense Component; off-panel variants
+    go to Ragged Overflow. --source-reader-capability and --source-assembly supply
+    per-release defaults (#174).
     """
-    result = build_hybrid_from_vcf_manifest(
-        manifest_path,
-        output_path,
-        reference_panel=reference_panel,
-        store_id=store_id,
-        release_id=release_id,
-        overwrite=overwrite,
-        n_workers=n_workers,
-        chunk_shape=(chunk_variants, chunk_analyses),
-        eaf_reference=eaf_reference,
-        eaf_reference_ancestry=eaf_reference_ancestry,
-        allow_unverified_eaf=allow_unverified_eaf,
+    res = build_hybrid_from_vcf_manifest(
+        manifest_path, output_path, reference_panel=reference_panel,
+        store_id=store_id, release_id=release_id, overwrite=overwrite, n_workers=n_workers,
+        chunk_shape=(chunk_variants, chunk_analyses), eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
+        source_reader_capability=capability, source_assembly=assembly,
     )
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-                "n_panel": result.n_panel,
-                "n_off_panel": result.n_off_panel,
-                "n_overflow": result.n_overflow,
-            },
-            sort_keys=True,
+    _echo_summary(
+        dict(
+            output_path=str(res.output_path),
+            n_variants=res.n_variants,
+            n_analyses=res.n_analyses,
+            n_panel=res.n_panel,
+            n_off_panel=res.n_off_panel,
+            n_overflow=res.n_overflow,
         )
     )
 
@@ -492,6 +580,57 @@ def assign_ancestry_command(
     )
 
 
+@app.command("estimate-phenotype-sd")
+def estimate_phenotype_sd_command(
+    manifest_path: Path,
+    out_path: Path,
+    af_source: AfSource = _AF_SOURCE_OPTION,
+    af_reference: Path | None = _AF_REFERENCE_OPTION,
+    af_reference_ancestry: str | None = _AF_REFERENCE_ANCESTRY_OPTION,
+    n_workers: int = _N_WORKERS_OPTION,
+) -> None:
+    """Estimate a phenotype SD per Analysis from a canonical analyses.tsv.
+
+    MANIFEST_PATH is the registry's canonical `analyses.tsv` (ADR 0034), read
+    through the same column-alias resolver `assign-ancestry` uses. Each row's
+    `source_file`/`source_reader_capability` resolves a `SourceReader`, which
+    is read once for the se/af/beta evidence its caller-chosen
+    `original_sd_method` needs -- no arrays on the command line.
+
+    Output is a TSV keyed by analysis_id with the shared-core `analyses.tsv`
+    spellings (analysis_id, original_sd, original_sd_method,
+    original_sd_dispersion, notes), so a caller merges a column rather than
+    translating a table. A missing or unusable `sample_size` reports
+    `unavailable` rather than a fabricated estimate. This command computes the
+    number; the tier, the tolerance, and whether a disagreement blocks a
+    release stay registry decisions (ADR 0029).
+    """
+    if af_source is AfSource.reference and af_reference is None:
+        raise typer.BadParameter("--af-source reference requires --af-reference")
+    reference = (
+        load_af_reference(af_reference, ancestry=af_reference_ancestry)
+        if af_source is AfSource.reference and af_reference is not None
+        else None
+    )
+    rows = read_sd_manifest(manifest_path)
+    estimates = estimate_manifest_phenotype_sd(
+        rows,
+        af_source=af_source,
+        af_reference=reference,
+        n_workers=n_workers,
+    )
+    write_sd_estimates(out_path, estimates)
+    _echo_summary(
+        {
+            "out_path": str(out_path),
+            "n_analyses": len(estimates),
+            "n_estimated": sum(
+                1 for e in estimates if e.original_sd_method != "unavailable"
+            ),
+        }
+    )
+
+
 @app.command("route-catalogue")
 def route_catalogue_command(
     catalogue_path: Path,
@@ -637,7 +776,10 @@ def build_ragged_besd_command(
     output_path: Path,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
-    tissue: str = typer.Option(None),
+    analyses: Path | None = typer.Option(
+        None, "--analyses", help="Optional analyses.tsv manifest with metadata"
+    ),
+    tissue: str | None = typer.Option(None),
     source_build: str = typer.Option("hg38"),
     overwrite: bool = typer.Option(False),
 ) -> None:
@@ -645,26 +787,25 @@ def build_ragged_besd_command(
 
     BESD_PREFIX is the path without extension (.esi, .epi, .besd are appended).
     Use --source-build hg19 to liftover coordinates to hg38 inline.
+    Optionally, --analyses overlays Analytical and Attribution Metadata from a manifest.
     """
     result = build_ragged_from_besd(
         besd_prefix,
         output_path,
         store_id=store_id,
         release_id=release_id,
+        analyses_path=analyses,
         tissue=tissue or None,
         source_build=source_build,
         overwrite=overwrite,
     )
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-                "n_associations": result.n_associations,
-            },
-            sort_keys=True,
-        )
+    _echo_summary(
+        {
+            "output_path": str(result.output_path),
+            "n_variants": result.n_variants,
+            "n_analyses": result.n_analyses,
+            "n_associations": result.n_associations,
+        }
     )
 
 
@@ -683,12 +824,15 @@ def build_ragged_ssf_command(
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
-    MANIFEST_PATH is a TSV with columns: analysis_index, analysis_id, trait_id,
-    analysis_label, trait_ontology_id, trait_ontology_label, trait_chr,
-    trait_bp, n, tissue, context, mhc, filtered_file. FILTERED_DIR holds one
-    filtered GWAS-SSF ``.tsv.gz`` per analysis (as produced by the
-    opengwasdb-stores download+filter step), named by each row's
-    filtered_file column.
+    MANIFEST_PATH is a TSV with columns: analysis_index, analysis_id (or
+    legacy trait_id), analysis_label (or legacy trait_name), trait_ontology_id,
+    trait_ontology_label, trait_chr, trait_bp, sample_size (or legacy n),
+    tissue, context, mhc, source_file (or legacy filtered_file).
+
+    FILTERED_DIR holds one filtered GWAS-SSF ``.tsv.gz`` per analysis (as
+    produced by the opengwasdb-stores download+filter step). Relative
+    source_file paths are joined to FILTERED_DIR; absolute paths are used
+    directly.
     """
     result = build_ragged_from_ssf(
         manifest_path,

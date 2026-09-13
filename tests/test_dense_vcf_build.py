@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from cli_output import normalize_cli_output
 from residual_fixtures import write_gwas_vcf_with_eaf
 
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
@@ -513,6 +514,30 @@ def test_canonical_analyses_tsv_columns_build_cleanly(tmp_path):
     assert analyses.rows[0]["analysis_id"] == "trait_a"
     assert analyses.rows[0]["analysis_label"] == "Trait A"
     assert analyses.rows[0]["sample_size"] == "1234"
+
+
+def test_blank_analysis_label_is_preserved_in_dense_build(tmp_path):
+    """ADR 0034: a manifest that includes analysis_label column with a blank value
+    preserves the blank in analyses.tsv rather than falling back to analysis_id."""
+    vcf = _make_vcf(
+        tmp_path, "trait_blank", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
+    )
+    manifest = tmp_path / "blank_label_manifest.tsv"
+    manifest.write_text(
+        "analysis_id\tsource_file\tanalysis_label\tsample_size"
+        "\tstored_effect_scale\toriginal_sd_method\n"
+        f"trait_blank\t{vcf}\t\t1234\tsd\tdeclared_standardised\n",
+        encoding="utf-8",
+    )
+
+    store_path = tmp_path / "blank-label-store.opengwasdb"
+    result = build_dense_from_vcf_manifest(
+        manifest, store_path, store_id="blank_label", release_id="v1"
+    )
+    assert result.n_analyses == 1
+    analyses = read_analyses(store_path / "analyses.tsv")
+    assert analyses.rows[0]["analysis_id"] == "trait_blank"
+    assert analyses.rows[0]["analysis_label"] == ""
 
 
 def _manifest_with_source_assembly(
@@ -1316,3 +1341,136 @@ def test_standalone_gwas_vcf_build_codes_residual_se_and_falls_back_without_eaf(
             assert np.isfinite(result["se"]).all()
             np.testing.assert_allclose(result["se"], expected_for(col), rtol=0.01)
     assert validate_store(fallback).ok, validate_store(fallback).errors
+
+
+def test_cli_default_source_assembly_applies_to_dense_build(tmp_path):
+    """Issue #174: source_assembly CLI default applies to rows that omit the column."""
+    vcf = _make_vcf(
+        tmp_path, "trait_cli_ass",
+        [f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+    )
+    manifest = tmp_path / "manifest_no_assembly.tsv"
+    manifest.write_text(
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method\n"
+        f"trait_cli_ass\t{vcf}\tTrait CLI Ass\t1000\tsd\tdeclared_standardised\n",
+        encoding="utf-8",
+    )
+    store_path = tmp_path / "store.opengwasdb"
+    build_dense_from_vcf_manifest(
+        manifest, store_path, store_id="s", release_id="r", source_assembly="hg38"
+    )
+
+    query = query_store(store_path)
+    result = query.analysis("trait_cli_ass")
+    vt = query.variants_table()
+    query.close()
+    assert len(result["z"]) == 1
+    # hg38 default means no liftover -> stays HG19_POS_2 (1,000,000)
+    assert vt[int(result["variant_index"][0])]["position"] == HG19_POS_2
+
+
+def test_cli_default_source_assembly_per_row_override_dense(tmp_path):
+    """Issue #174: per-row source_assembly overrides CLI default option."""
+    vcf_hg38 = _make_vcf(
+        tmp_path, "trait_row_hg38",
+        [f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+    )
+    vcf_hg19 = _make_vcf(
+        tmp_path, "trait_row_hg19",
+        [f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n"],
+    )
+    manifest = _manifest_with_source_assembly(
+        tmp_path,
+        [
+            ("trait_row_hg38", vcf_hg38, "Row hg38", "hg38"),
+            ("trait_row_hg19", vcf_hg19, "Row hg19", "hg19"),
+        ],
+    )
+    store_path = tmp_path / "store.opengwasdb"
+    # CLI default is hg19, but trait_row_hg38 declares hg38 in manifest row
+    build_dense_from_vcf_manifest(
+        manifest, store_path, store_id="s", release_id="r", source_assembly="hg19"
+    )
+    query = query_store(store_path)
+    r38 = query.analysis("trait_row_hg38")
+    r19 = query.analysis("trait_row_hg19")
+    vt = query.variants_table()
+    query.close()
+    assert vt[int(r38["variant_index"][0])]["position"] == HG19_POS_2  # not lifted
+    assert vt[int(r19["variant_index"][0])]["position"] == 1564620     # lifted from 1500000
+
+
+def test_cli_default_source_reader_capability_applies_to_dense_build(tmp_path):
+    """Issue #174: source_reader_capability CLI default applies to rows that omit the column."""
+    from opengwasdb.readers import FINNGEN_R13_CAPABILITY
+
+    source = Path(__file__).parent / "fixtures" / "finngen_r13.tsv"
+    manifest = tmp_path / "manifest_no_cap.tsv"
+    manifest.write_text(
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method\n"
+        f"finngen_cli_test\t{source}\tFinnGen CLI\t500000\tlog_or\tbinary_trait\n",
+        encoding="utf-8",
+    )
+    store_path = tmp_path / "finngen_cli.opengwasdb"
+    build_dense_from_vcf_manifest(
+        manifest,
+        store_path,
+        store_id="finngen-cli",
+        release_id="r13",
+        source_reader_capability=FINNGEN_R13_CAPABILITY,
+        source_assembly="GRCh38",
+    )
+    assert validate_store(store_path).ok
+
+
+def test_cli_invalid_options_fail_at_parse_time_dense(tmp_path):
+    """Issue #174: invalid CLI options fail at parse time."""
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    runner = CliRunner()
+    args_base = [
+        "build-dense-vcf",
+        str(tmp_path / "manifest.tsv"),
+        str(tmp_path / "out.opengwasdb"),
+        "--store-id", "s",
+        "--release-id", "r",
+    ]
+
+    res_cap = runner.invoke(app, [*args_base, "--source-reader-capability", "unknown_capability"])
+    assert res_cap.exit_code != 0
+    clean_cap_output = normalize_cli_output(res_cap.output)
+    assert "unknown source reader capability 'unknown_capability'" in clean_cap_output
+    assert "known: opengwasdb.finngen-r13" in clean_cap_output
+
+    res_ass = runner.invoke(app, [*args_base, "--source-assembly", "unknown_build"])
+    assert res_ass.exit_code != 0
+    clean_ass_output = normalize_cli_output(res_ass.output)
+    assert "unknown genome build 'unknown_build'" in clean_ass_output.lower()
+    assert "use hg19/hg38 or aliases grch37/grch38" in clean_ass_output.lower()
+
+
+def test_direct_api_empty_source_assembly_fails_loudly(tmp_path):
+    """Passing source_assembly='' fails loudly rather than silently defaulting to hg19."""
+    vcf = _make_vcf(
+        tmp_path, "trait_empty_ass",
+        [f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+    )
+    manifest = tmp_path / "manifest_empty_ass.tsv"
+    manifest.write_text(
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method\n"
+        f"trait_empty_ass\t{vcf}\tTrait Empty Ass\t1000\tsd\tdeclared_standardised\n",
+        encoding="utf-8",
+    )
+    store_path = tmp_path / "store.opengwasdb"
+    with pytest.raises(ValueError, match=r"[Uu]nknown genome build ''"):
+        build_dense_from_vcf_manifest(
+            manifest, store_path, store_id="s", release_id="r", source_assembly=""
+        )
+
+    with pytest.raises(ValueError, match=r"unknown source reader capability ''"):
+        build_dense_from_vcf_manifest(
+            manifest, store_path, store_id="s", release_id="r", source_reader_capability=""
+        )
+

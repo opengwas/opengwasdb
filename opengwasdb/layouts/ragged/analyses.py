@@ -12,8 +12,8 @@ per-Trait-kind vocabularies, so an Ensembl gene ID (e.g.
 
 Analytical + Attribution Metadata the source manifest merely carries (licence,
 publication, sample-size interpretation, ...) is not enumerated here: it
-arrives as one `PassthroughMetadata` and is layered on top (issue #83). Only
-the SSF path has a manifest to read it from; the BESD path passes None.
+arrives as one `PassthroughMetadata` and is layered on top (issue #83, #173).
+Both SSF and BESD (via ``--analyses``) builders support this overlay.
 """
 from __future__ import annotations
 
@@ -21,19 +21,13 @@ from opengwasdb.model.analyses import Analysis, PassthroughMetadata
 
 
 def molecular_analysis(
-    analysis_id: str,
-    *,
-    analysis_label: str | None = None,
-    trait_ontology_id: str | None = None,
-    trait_ontology_label: str | None = None,
-    tissue: str | None,
-    context: str | None,
-    trait_chr: str | None,
-    trait_bp: int | None,
-    n: int | None,
-    stored_effect_scale: str = "",
-    assigned_ancestry: str = "",
-    metadata: PassthroughMetadata | None = None,
+    analysis_id: str, *,
+    analysis_label: str | None = None, trait_ontology_id: str | None = None,
+    trait_ontology_label: str | None = None, tissue: str | None = None,
+    context: str | None = None, trait_chr: str | None = None,
+    trait_bp: int | None = None, n: int | None = None,
+    stored_effect_scale: str = "", assigned_ancestry: str = "",
+    original_sd: str = "", metadata: PassthroughMetadata | None = None,
     eaf_scope: str = "",
 ) -> Analysis:
     analysis = Analysis(
@@ -48,6 +42,7 @@ def molecular_analysis(
         sample_size=str(n) if n is not None else "",
         stored_effect_scale=stored_effect_scale,
         assigned_ancestry=assigned_ancestry,
+        original_sd=original_sd,
         eaf_scope=eaf_scope,
     )
     return metadata.applied_to(analysis) if metadata is not None else analysis

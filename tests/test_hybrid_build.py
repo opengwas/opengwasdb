@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from cli_output import normalize_cli_output
 
 from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
@@ -819,3 +820,90 @@ def test_analysis_with_frequencies_only_in_overflow_is_stamped_association(tmp_p
         assert row["eaf_scope"] == "association", (
             f"{path}: the overflow-only frequency did not reach eaf_scope"
         )
+
+
+def test_cli_default_source_assembly_applies_to_hybrid_build(tmp_path):
+    """Issue #174: source_assembly CLI default applies to rows that omit the column."""
+    vcf = _make_vcf(
+        tmp_path, "trait_hybrid_ass",
+        [f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+    )
+    manifest = tmp_path / "manifest_no_assembly.tsv"
+    manifest.write_text(
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method\n"
+        f"trait_hybrid_ass\t{vcf}\tTrait Hybrid Ass\t1000\tsd\tdeclared_standardised\n",
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "hybrid_default_ass.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, out_path, reference_panel=_panel(tmp_path),
+        store_id="def_ass", release_id="v1", source_assembly="hg38",
+    )
+    with query_store(out_path) as q:
+        looked_up = q.lookup(["1:1000000:C:T"], ["trait_hybrid_ass"])
+        assert len(looked_up["z"]) == 1
+        # beta=1.5 / se=0.3 -> z=5.0 (flipped -> -5.0)
+        assert looked_up["z"][0] == pytest.approx(-5.0, rel=5e-3)
+
+
+def test_cli_default_source_assembly_per_row_override_hybrid(tmp_path):
+    """Issue #174: per-row source_assembly overrides CLI default option in Hybrid builds."""
+    vcf_hg38 = _make_vcf(
+        tmp_path, "hybrid_row_38",
+        [f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+    )
+    vcf_hg19 = _make_vcf(
+        tmp_path, "hybrid_row_19",
+        [f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n"],
+    )
+    manifest = _manifest_with_source_assembly(
+        tmp_path,
+        [
+            ("hybrid_row_38", vcf_hg38, "Row 38", "hg38"),
+            ("hybrid_row_19", vcf_hg19, "Row 19", "hg19"),
+        ],
+    )
+    out_override = tmp_path / "hybrid_override_ass.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, out_override, reference_panel=_panel(tmp_path),
+        store_id="over_ass", release_id="v1", source_assembly="hg19",
+    )
+    with query_store(out_override) as q:
+        looked = q.lookup(["1:1000000:C:T", "1:1564620:A:G"], ["hybrid_row_38", "hybrid_row_19"])
+        # hybrid_row_38 kept 1,000,000 unlifted; hybrid_row_19 lifted 1,500,000 -> 1,564,620
+        assert len(looked["z"]) == 2
+        assert looked["association_status"].tolist() == ["observed", "observed"]
+
+
+def test_cli_invalid_options_fail_at_parse_time_hybrid(tmp_path):
+    """Issue #174: invalid CLI options fail at parse time in build-hybrid."""
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    runner = CliRunner()
+    panel = str(_panel(tmp_path))
+    args = [
+        "build-hybrid",
+        str(tmp_path / "manifest.tsv"),
+        str(tmp_path / "out.opengwasdb"),
+        "--reference-panel",
+        panel,
+        "--store-id",
+        "s",
+        "--release-id",
+        "r",
+    ]
+
+    res_cap = runner.invoke(app, [*args, "--source-reader-capability", "unknown_capability"])
+    assert res_cap.exit_code != 0
+    clean_cap_output = normalize_cli_output(res_cap.output)
+    assert "unknown source reader capability 'unknown_capability'" in clean_cap_output
+    assert "known: opengwasdb.finngen-r13" in clean_cap_output
+
+    res_ass = runner.invoke(app, [*args, "--source-assembly", "unknown_build"])
+    assert res_ass.exit_code != 0
+    clean_ass_output = normalize_cli_output(res_ass.output)
+    assert "unknown genome build 'unknown_build'" in clean_ass_output.lower()
+    assert "use hg19/hg38 or aliases grch37/grch38" in clean_ass_output.lower()
+

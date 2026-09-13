@@ -85,6 +85,7 @@ __all__ = [
     "check_eaf_orientation",
     "correlate_frequencies",
     "enforce_eaf_orientation",
+    "iter_eaf_reference",
     "load_eaf_reference",
     "sample_column",
     "select_rows",
@@ -495,6 +496,32 @@ def _parse_frequency(value: str | None) -> float | None:
     return parsed
 
 
+def iter_eaf_reference(
+    path: str | Path, *, ancestry: str | None = None
+) -> Iterator[tuple[str, float]]:
+    """Every A1-oriented `(alid, eaf)` in a reference frequency source.
+
+    `path` is either an LD reference panel directory (`ancestry` required, e.g.
+    `/data/opengwasdb/reference/ukb-hg38` with `EUR`) or a single table with an
+    `eaf` column. This is the one implementation of "where does a reference
+    frequency come from and how is it oriented", shared by the build's EAF
+    orientation check (`load_eaf_reference` below) and phenotype-SD estimation
+    from reference MAF (issue #176), so neither grows its own drifting copy.
+    """
+    reference_path = Path(path)
+    if reference_path.is_dir():
+        if not ancestry:
+            raise EafReferenceError(
+                f"EAF reference {reference_path} is a panel directory, which needs an ancestry "
+                "to select a population from (e.g. EUR)"
+            )
+        yield from _iter_panel_directory(reference_path, ancestry)
+    else:
+        if not reference_path.exists():
+            raise EafReferenceError(f"EAF reference {reference_path} does not exist")
+        yield from _iter_panel_table(reference_path)
+
+
 def load_eaf_reference(
     path: str | Path,
     sites: Iterable[str],
@@ -520,19 +547,10 @@ def load_eaf_reference(
     """
     reference_path = Path(path)
     wanted = set(sites)
-    if reference_path.is_dir():
-        if not ancestry:
-            raise EafReferenceError(
-                f"EAF reference {reference_path} is a panel directory, which needs an ancestry "
-                "to select a population from (e.g. EUR)"
-            )
-        rows = _iter_panel_directory(reference_path, ancestry)
-        reference_id = f"{reference_path}#{ancestry}"
-    else:
-        if not reference_path.exists():
-            raise EafReferenceError(f"EAF reference {reference_path} does not exist")
-        rows = _iter_panel_table(reference_path)
-        reference_id = str(reference_path)
+    rows = iter_eaf_reference(reference_path, ancestry=ancestry)
+    reference_id = (
+        f"{reference_path}#{ancestry}" if reference_path.is_dir() else str(reference_path)
+    )
 
     digest = hashlib.sha256()
     kept: dict[str, float] = {}

@@ -1071,6 +1071,63 @@ Validators MUST check at least:
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
 
+### 20.1 Validation and inspection CLI interface
+
+Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide both human-readable text output (default) and machine-readable JSON output via `--format json` (issue #175, ADR 0042):
+
+- `ogdb validate <store> --format json` outputs a single JSON object on `stdout`:
+  ```json
+  {"ok": true, "errors": [], "warnings": []}
+  ```
+  On failure (`ok=false`), it outputs the JSON object containing the recorded error strings on `stdout` and exits with a non-zero exit code. On success, `stderr` is empty.
+- `ogdb info <store> --format json` outputs a single JSON object on `stdout` representing the store release manifest with decomposed structured encoding:
+  ```json
+  {
+    "store_id": "...",
+    "release_id": "...",
+    "format_version": "0.1.0",
+    "primary_layout": "dense",
+    "association_coverage": "full",
+    "completion_state": "observed_only",
+    "reference_assembly": "GRCh38",
+    "encoding": {
+      "version": 3,
+      "z": {"kind": "int16_fixed", "scale": 1024},
+      "se": {"kind": "float16"},
+      "eaf": {"kind": "absent"}
+    }
+  }
+  ```
+
+### 20.2 Phenotype-SD estimation CLI interface
+
+`ogdb estimate-phenotype-sd <manifest.tsv> <out.tsv>` estimates the per-Analysis
+phenotype SD used to standardise continuous-trait effects (§7, §7a; ADR 0029)
+from a canonical `analyses.tsv` (ADR 0034), needing no caller-pre-extracted
+arrays (issue #176):
+
+- `MANIFEST_PATH` is read through the same column-alias resolver as every other
+  manifest. It supplies `analysis_id`, `source_file`,
+  `source_reader_capability`, `sample_size`, and the caller-chosen
+  `original_sd_method`. Each row's capability resolves a `SourceReader` through
+  the registry; an unknown capability is rejected naming the registered set.
+- `--af-source source` estimates from the source's own `se`/`eaf`;
+  `--af-source reference` (with `--af-reference`, a frequency table or LD panel
+  directory, and `--af-reference-ancestry` for the latter) estimates from the
+  source's `se` and the reference's A1-oriented frequency at each variant.
+- The output TSV is keyed by `analysis_id`, in input order, and carries the
+  shared-core `analyses.tsv` spellings so a caller merges rather than
+  translates: `analysis_id`, `original_sd`, `original_sd_method`,
+  `original_sd_dispersion`, `notes`. A missing or unusable `sample_size` writes
+  `original_sd_method=unavailable` with a blank `original_sd` — an explicit
+  unresolved outcome, never a fabricated value.
+- Results are order-preserving and independent of `--n-workers`.
+
+The command **computes** the number; it does not choose the method tier, the
+tolerance, or whether a disagreement blocks a release. Those remain registry
+acceptance policy per ADR 0029, and the manifest column is read, never inferred
+from whichever arrays happen to be present.
+
 ## 21. Compatibility
 
 `format_version` describes compatibility of the store representation. It does not describe biological data release version or source publication version. The **package version and `format_version` are independent**: a package release may change neither, one, or both. Which package reads and writes which format is recorded in the package's `CHANGELOG.md` compatibility table.

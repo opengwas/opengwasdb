@@ -287,3 +287,99 @@ def test_cli_build_hybrid_validate_and_query(tmp_path):
     )
     assert lookup.exit_code == 0, lookup.output
     assert len(json.loads(lookup.output.strip().splitlines()[-1])) == 1
+
+
+def test_cli_info_and_validate_format_json(tmp_path, source_path):
+    """Issue #175: info and validate support machine-readable --format json."""
+    import gzip
+    import shutil
+
+    runner = CliRunner()
+    store_path = tmp_path / "cli-store.opengwasdb"
+    build = runner.invoke(
+        app,
+        [
+            "build-dense", str(source_path), str(store_path),
+            "--store-id", "cf", "--release-id", "ov1",
+        ],
+    )
+    assert build.exit_code == 0, build.output
+
+    # 1. info default text output vs --format json
+    info_text = runner.invoke(app, ["info", str(store_path)])
+    assert info_text.exit_code == 0, info_text.output
+    assert "store_id: cf" in info_text.output
+    assert "encoding: z=" in info_text.output
+
+    info_json = runner.invoke(app, ["info", str(store_path), "--format", "json"])
+    assert info_json.exit_code == 0, info_json.output
+    info_data = json.loads(info_json.output)
+    assert set(info_data) == {
+        "store_id", "release_id", "format_version", "primary_layout",
+        "association_coverage", "completion_state", "reference_assembly", "encoding",
+    }
+    assert info_data["store_id"] == "cf"
+    assert info_data["release_id"] == "ov1"
+    assert info_data["format_version"] == "0.1.0"
+    assert info_data["primary_layout"] == "dense"
+    assert info_data["association_coverage"] == "full"
+    assert info_data["completion_state"] == "observed_only"
+    assert info_data["reference_assembly"] == "GRCh37"
+    assert isinstance(info_data["encoding"], dict)
+    assert info_data["encoding"]["version"] == 3
+    assert info_data["encoding"]["z"] == {"kind": "int16_fixed", "scale": 1024}
+    assert info_data["encoding"]["se"] == {"kind": "float16"}
+    assert info_data["encoding"]["eaf"] == {"kind": "absent"}
+
+    # 2. validate --format json on valid store
+    val_json = runner.invoke(app, ["validate", str(store_path), "--format", "json"])
+    assert val_json.exit_code == 0, val_json.output
+    assert val_json.stderr == ""
+    val_data = json.loads(val_json.output)
+    assert val_data == {"ok": True, "errors": [], "warnings": []}
+
+    # 3. validate --format json on store with warnings
+    warn_filtered_dir = tmp_path / "warn_filtered"
+    warn_filtered_dir.mkdir()
+    from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+
+    with gzip.open(warn_filtered_dir / "trait_warn.tsv.gz", "wt", encoding="utf-8") as fh:
+        fh.write("chromosome\tbase_pair_location\teffect_allele\tother_allele\tbeta\tstandard_error\teffect_allele_frequency\n")
+        fh.write("2\t500000\tC\tT\t2.5\t0.25\t0.35\n")
+
+    warn_manifest = tmp_path / "warn_manifest.tsv"
+    warn_manifest.write_text(
+        "analysis_index\tanalysis_id\tsample_size\tsource_file\n"
+        "0\ttrait_warn\t1000\ttrait_warn.tsv.gz\n",
+        encoding="utf-8",
+    )
+    warn_store_path = tmp_path / "warn-store.opengwasdb"
+    build_ragged_from_ssf(
+        warn_manifest,
+        warn_filtered_dir,
+        warn_store_path,
+        store_id="warn_store",
+        release_id="v1",
+        allow_unverified_eaf=True,
+    )
+
+    val_warn = runner.invoke(app, ["validate", str(warn_store_path), "--format", "json"])
+    assert val_warn.exit_code == 0, val_warn.output
+    assert val_warn.stderr == ""
+    warn_data = json.loads(val_warn.output)
+    assert warn_data["ok"] is True
+    assert warn_data["errors"] == []
+    assert len(warn_data["warnings"]) == 1
+    assert "unverified" in warn_data["warnings"][0]
+
+    # 4. validate --format json on invalid store (exits non-zero but emits JSON on stdout)
+    shutil.rmtree(store_path / "data.zarr" / "z", ignore_errors=True)
+
+    val_bad = runner.invoke(app, ["validate", str(store_path), "--format", "json"])
+    assert val_bad.exit_code != 0
+    bad_data = json.loads(val_bad.output)
+    assert bad_data["ok"] is False
+    assert len(bad_data["errors"]) > 0
+    assert isinstance(bad_data["warnings"], list)
+
+
