@@ -1,9 +1,10 @@
-# Registry-orchestration seam, canonical manifest column aliases, per-release option precedence, and machine-readable evidence
+# Registry-orchestration seam, canonical manifest column aliases, per-release option precedence, machine-readable evidence, and phenotype-SD computation
 
 Records the boundary between `opengwasdb` and the `opengwasdb-stores` registry
 (epic #177), establishing shared canonical column alias resolution (#172),
 BESD metadata overlay (#173), per-release builder option precedence (#174),
-and machine-readable validation evidence (#175).
+machine-readable validation evidence (#175), and phenotype-SD estimation from a
+canonical manifest (#176).
 
 ## Context
 
@@ -28,6 +29,12 @@ registry into manifest synthesis, column projection, and redundant parsing:
 4. **Evidence scraping from prose (#175)**: `validate` and `info` emitted only
    human-readable text, forcing downstream tools to parse English prose off
    stdout/stderr to populate registry `validation.yaml` records.
+5. **Re-implemented source reading for phenotype SD (#176)**: the registry's
+   `phenotype_sd_estimate.py` shim took JSON `se`/`af`/`beta` arrays on the
+   command line, so every caller had to open the source file and align alleles
+   itself -- re-implementing what `SourceReader.extract_at_sites` already does,
+   once per Store Family, alongside a second allele-harmonisation
+   implementation in R.
 
 ## Decision
 
@@ -91,6 +98,34 @@ $$\text{per-row manifest column} > \text{CLI option} > \text{hardcoded default}$
   manifest metadata and a decomposed, structured `encoding` dictionary
   (`z`, `se`, `eaf`), avoiding composed human strings.
 
+### 5. Phenotype-SD estimation (`estimate-phenotype-sd`) and the computation/acceptance split
+
+`estimate-phenotype-sd <analyses.tsv> <out.tsv>` is the one seam that joins
+`opengwasdb.build.phenotype_sd.estimate_phenotype_sd`'s pure computation
+(ADR 0029) to real sources:
+
+- It reads the canonical `analyses.tsv` through the shared alias resolver,
+  resolves a `SourceReader` per row through `opengwasdb.readers.registry`
+  (every registered capability; an unknown one fails naming the known set),
+  and reads each source once for the `se`/`af`/`beta` evidence the row's
+  caller-chosen `original_sd_method` needs -- no arrays on the command line and
+  no caller-side allele alignment.
+- `--af-source source` uses the reader's own A1-oriented frequency;
+  `--af-source reference` substitutes an A1-oriented reference frequency
+  (through the same `iter_eaf_reference` machinery the build-time orientation
+  check uses).
+- The output TSV carries the shared-core `analyses.tsv` spellings
+  (`analysis_id`, `original_sd`, `original_sd_method`, `original_sd_dispersion`,
+  `notes`) so the caller merges a column rather than translating a table. A
+  missing or unusable sample size writes `original_sd_method=unavailable` with
+  a blank `original_sd`, never a fabricated value. Results are order-preserving
+  and independent of `--n-workers`.
+- **The computation/acceptance split**: the command computes the number. It does
+  not choose the method tier, the tolerance, or whether a disagreement blocks a
+  release. The manifest's `original_sd_method` is read, never inferred, and a
+  tier this command does not compute fails loudly rather than being guessed at;
+  those remain registry acceptance policy.
+
 ## Consequences
 
 - The registry no longer needs post-build patching to attach Analytical and
@@ -100,5 +135,8 @@ $$\text{per-row manifest column} > \text{CLI option} > \text{hardcoded default}$
 - All builders consume canonical `analyses.tsv` files directly.
 - Registry `validation.yaml` can be populated directly from machine-readable JSON
   output without prose scraping.
+- Effect-scale estimation is reachable from a canonical `analyses.tsv` with no
+  caller-side source reading or allele alignment, and its output drops into the
+  same shared-core columns the builders write.
 - Existing human-readable text output remains byte-for-byte identical.
 

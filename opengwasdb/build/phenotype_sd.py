@@ -45,6 +45,12 @@ _ESTIMATION_METHODS = frozenset(
     }
 )
 
+#: Public name for the tiers this module computes, so callers that must
+#: distinguish "a computable tier" from "a caller decision" (the
+#: `estimate-phenotype-sd` CLI, issue #176) read one definition rather than
+#: re-listing the tiers.
+ESTIMATION_METHODS = _ESTIMATION_METHODS
+
 
 @dataclass(frozen=True)
 class PhenotypeSdEstimate:

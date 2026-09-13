@@ -35,6 +35,15 @@ the end of this file.
   human text output remains byte-for-byte unchanged (#175, #177, ADR 0042). On
   invalid stores, `validate --format json` emits the JSON object on stdout and
   exits non-zero.
+- **`estimate-phenotype-sd`**: estimates a per-Analysis phenotype SD directly
+  from a canonical `analyses.tsv`, resolving a `SourceReader` per row rather than
+  requiring caller-pre-extracted `se`/`af`/`beta` arrays (#176, #177, ADR 0029,
+  ADR 0042). `--af-source source|reference` selects the estimator's frequency
+  source; the output TSV uses the shared-core `analyses.tsv` spellings
+  (`analysis_id`, `original_sd`, `original_sd_method`, `original_sd_dispersion`,
+  `notes`), reports `unavailable` rather than fabricating a value for a missing
+  or unusable sample size, and is order-preserving and independent of
+  `--n-workers`.
 
 ### Changed
 

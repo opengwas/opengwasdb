@@ -18,6 +18,13 @@ from opengwasdb.ancestry.reference import load_reference
 from opengwasdb.build.eaf_orientation import DEFAULT_SAMPLE_SITES
 from opengwasdb.build.liftover import normalise_build
 from opengwasdb.build.observed import build_dense_observed_from_sources
+from opengwasdb.build.phenotype_sd_pipeline import (
+    AfSource,
+    estimate_manifest_phenotype_sd,
+    load_af_reference,
+    read_sd_manifest,
+    write_sd_estimates,
+)
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -118,6 +125,30 @@ _REPORT_FORMAT_OPTION = typer.Option(
     ReportFormat.text,
     "--format",
     help="Output format: text (human readable) or json (machine readable)",
+)
+
+# Module-level option singletons rather than inline `typer.Option(...)` defaults:
+# the call in a default value is what ruff's B008 flags, and these are shared by
+# the one command that needs them.
+_AF_SOURCE_OPTION = typer.Option(
+    AfSource.source,
+    "--af-source",
+    help="Where the estimator's allele frequency comes from: source or reference",
+)
+_AF_REFERENCE_OPTION = typer.Option(
+    None,
+    "--af-reference",
+    help=(
+        "Reference frequency table (an 'eaf' column) or LD panel directory, "
+        "required with --af-source reference"
+    ),
+)
+_AF_REFERENCE_ANCESTRY_OPTION = typer.Option(
+    None,
+    help="Population to read from an --af-reference panel directory, e.g. EUR",
+)
+_N_WORKERS_OPTION = typer.Option(
+    1, "--n-workers", "--workers", help="Fork process-pool size"
 )
 
 
@@ -546,6 +577,57 @@ def assign_ancestry_command(
             },
             sort_keys=True,
         )
+    )
+
+
+@app.command("estimate-phenotype-sd")
+def estimate_phenotype_sd_command(
+    manifest_path: Path,
+    out_path: Path,
+    af_source: AfSource = _AF_SOURCE_OPTION,
+    af_reference: Path | None = _AF_REFERENCE_OPTION,
+    af_reference_ancestry: str | None = _AF_REFERENCE_ANCESTRY_OPTION,
+    n_workers: int = _N_WORKERS_OPTION,
+) -> None:
+    """Estimate a phenotype SD per Analysis from a canonical analyses.tsv.
+
+    MANIFEST_PATH is the registry's canonical `analyses.tsv` (ADR 0034), read
+    through the same column-alias resolver `assign-ancestry` uses. Each row's
+    `source_file`/`source_reader_capability` resolves a `SourceReader`, which
+    is read once for the se/af/beta evidence its caller-chosen
+    `original_sd_method` needs -- no arrays on the command line.
+
+    Output is a TSV keyed by analysis_id with the shared-core `analyses.tsv`
+    spellings (analysis_id, original_sd, original_sd_method,
+    original_sd_dispersion, notes), so a caller merges a column rather than
+    translating a table. A missing or unusable `sample_size` reports
+    `unavailable` rather than a fabricated estimate. This command computes the
+    number; the tier, the tolerance, and whether a disagreement blocks a
+    release stay registry decisions (ADR 0029).
+    """
+    if af_source is AfSource.reference and af_reference is None:
+        raise typer.BadParameter("--af-source reference requires --af-reference")
+    reference = (
+        load_af_reference(af_reference, ancestry=af_reference_ancestry)
+        if af_source is AfSource.reference and af_reference is not None
+        else None
+    )
+    rows = read_sd_manifest(manifest_path)
+    estimates = estimate_manifest_phenotype_sd(
+        rows,
+        af_source=af_source,
+        af_reference=reference,
+        n_workers=n_workers,
+    )
+    write_sd_estimates(out_path, estimates)
+    _echo_summary(
+        {
+            "out_path": str(out_path),
+            "n_analyses": len(estimates),
+            "n_estimated": sum(
+                1 for e in estimates if e.original_sd_method != "unavailable"
+            ),
+        }
     )
 
 
