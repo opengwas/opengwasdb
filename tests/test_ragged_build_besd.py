@@ -1,5 +1,7 @@
 """Integration test for ragged BESD builder (issue 036)."""
 
+from __future__ import annotations
+
 import struct
 from pathlib import Path
 
@@ -10,7 +12,6 @@ from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.store.open import open_store
-
 
 # ── Synthetic BESD fixture ────────────────────────────────────────────────────
 
@@ -505,3 +506,208 @@ def test_hg19_source_build_fails_loudly_when_liftover_loses_a_variant(tmp_path):
             release_id="v1",
             source_build="hg19",
         )
+
+
+def test_no_analyses_manifest_build_is_byte_identical(tmp_path):
+    """Issue #173: omitting --analyses produces byte-identical outputs."""
+    prefix = _make_besd_fixture(tmp_path)
+    out1 = tmp_path / "out1.opengwasdb"
+    out2 = tmp_path / "out2.opengwasdb"
+
+    build_ragged_from_besd(prefix, out1, store_id="test", release_id="v1", tissue="Blood")
+    build_ragged_from_besd(prefix, out2, store_id="test", release_id="v1", tissue="Blood")
+
+    assert (out1 / "analyses.tsv").read_bytes() == (out2 / "analyses.tsv").read_bytes()
+
+
+def test_analyses_overlay_applies_passthrough_metadata_and_attributes(tmp_path):
+    """Issue #173: --analyses overlays metadata, sample_size, original_sd, and attribution."""
+    from opengwasdb.model.analyses import read_analyses
+
+    prefix = _make_besd_fixture(tmp_path)
+    manifest = tmp_path / "analyses_overlay.tsv"
+    manifest.write_text(
+        "analysis_id\tsample_size\tsample_size_kind\tsample_size_scope\tstored_effect_scale\t"
+        "original_sd_method\toriginal_sd\tassigned_ancestry\tancestry_assignment_method\t"
+        "ancestry_prop_EUR\tlicense\tpublication_doi\tpublication_pmid\tconsortium\t"
+        "first_author\ttissue\n"
+        "ENSG00000000001\t31684\ttotal\tanalysis\tsd\tmeasured_sd\t4.2\tEUR\tconsensus\t"
+        "0.95\tCC-BY-4.0\t10.1038/s41588-021-00913-z\t34475573\teQTLGen\tVosa\tWhole_Blood\n"
+        "ENSG00000000002\t31684\ttotal\tanalysis\tsd\tmeasured_sd\t4.2\tEUR\tconsensus\t"
+        "0.95\tCC-BY-4.0\t10.1038/s41588-021-00913-z\t34475573\teQTLGen\tVosa\tWhole_Blood\n"
+        "ENSG00000000003\t31684\ttotal\tanalysis\tsd\tmeasured_sd\t4.2\tEUR\tconsensus\t"
+        "0.95\tCC-BY-4.0\t10.1038/s41588-021-00913-z\t34475573\teQTLGen\tVosa\tWhole_Blood\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out_overlay.opengwasdb"
+    result = build_ragged_from_besd(
+        prefix, out, store_id="eqtlgen", release_id="v1", analyses_path=manifest
+    )
+    assert result.n_analyses == 3
+
+    table = read_analyses(out / "analyses.tsv")
+    assert len(table.rows) == 3
+    r0 = table.rows[0]
+    assert r0["analysis_id"] == "ENSG00000000001"
+    assert r0["sample_size"] == "31684"
+    assert r0["sample_size_kind"] == "total"
+    assert r0["sample_size_scope"] == "analysis"
+    assert r0["original_sd_method"] == "measured_sd"
+    assert r0["original_sd"] == "4.2"
+    assert r0["assigned_ancestry"] == "EUR"
+    assert r0["ancestry_assignment_method"] == "consensus"
+    assert r0["ancestry_prop_EUR"] == "0.95"
+    assert r0["license"] == "CC-BY-4.0"
+    assert r0["publication_doi"] == "10.1038/s41588-021-00913-z"
+    assert r0["consortium"] == "eQTLGen"
+    assert r0["first_author"] == "Vosa"
+    assert r0["tissue"] == "Whole_Blood"
+
+
+def test_analyses_overlay_malformed_sample_size_fails_loudly(tmp_path):
+    """Issue #173: malformed sample_size (e.g. '31,684') fails loudly naming analysis and value."""
+    prefix = _make_besd_fixture(tmp_path)
+    manifest = tmp_path / "malformed_n.tsv"
+    manifest.write_text(
+        "analysis_id\tsample_size\n"
+        "ENSG00000000001\t31,684\n"
+        "ENSG00000000002\t1000\n"
+        "ENSG00000000003\t1000\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError, match=r"analysis 'ENSG00000000001' has invalid sample_size '31,684'"
+    ):
+        build_ragged_from_besd(
+            prefix, tmp_path / "out_bad_n.opengwasdb", store_id="t", release_id="v1",
+            analyses_path=manifest
+        )
+
+
+def test_analyses_overlay_with_tissue_suffix_joins_correctly(tmp_path):
+    """Issue #173: when tissue is supplied, manifest joined by suffixed analysis_id."""
+    from opengwasdb.model.analyses import read_analyses
+
+    prefix = _make_besd_fixture(tmp_path)
+    manifest = tmp_path / "analyses_tissue_suffixed.tsv"
+    manifest.write_text(
+        "analysis_id\tsample_size\tlicense\n"
+        "ENSG00000000001::Whole_Blood\t31684\tCC-BY-4.0\n"
+        "ENSG00000000002::Whole_Blood\t31684\tCC-BY-4.0\n"
+        "ENSG00000000003::Whole_Blood\t31684\tCC-BY-4.0\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out_tissue_overlay.opengwasdb"
+    build_ragged_from_besd(
+        prefix,
+        out,
+        store_id="eqtlgen",
+        release_id="v1",
+        tissue="Whole_Blood",
+        analyses_path=manifest,
+    )
+
+    table = read_analyses(out / "analyses.tsv")
+    assert len(table.rows) == 3
+    assert table.rows[0]["analysis_id"] == "ENSG00000000001::Whole_Blood"
+    assert table.rows[0]["sample_size"] == "31684"
+    assert table.rows[0]["license"] == "CC-BY-4.0"
+    assert table.rows[0]["tissue"] == "Whole_Blood"
+
+
+def test_besd_derived_trait_position_stays_authoritative(tmp_path):
+    """Issue #173: BESD-derived trait_chr and trait_bp stay authoritative over manifest."""
+    from opengwasdb.model.analyses import read_analyses
+
+    prefix = _make_besd_fixture(tmp_path)
+    manifest = tmp_path / "analyses_pos_conflict.tsv"
+    # Supply conflicting trait_chr and trait_bp in manifest
+    manifest.write_text(
+        "analysis_id\ttrait_chr\ttrait_bp\tsample_size\n"
+        "ENSG00000000001\t99\t9999999\t1000\n"
+        "ENSG00000000002\t99\t9999999\t1000\n"
+        "ENSG00000000003\t99\t9999999\t1000\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out_pos.opengwasdb"
+    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1", analyses_path=manifest)
+
+    table = read_analyses(out / "analyses.tsv")
+    # Position from EPI probe: probe 1 is chr1:1050000, probe 2 is chr1:1150000
+    assert table.rows[0]["trait_chr"] == "1"
+    assert table.rows[0]["trait_bp"] == "1050000"
+    assert table.rows[1]["trait_chr"] == "1"
+    assert table.rows[1]["trait_bp"] == "1150000"
+    assert table.rows[2]["trait_chr"] == "2"
+    assert table.rows[2]["trait_bp"] == "2050000"
+
+
+def test_analyses_manifest_mismatch_fails_loudly_in_both_directions(tmp_path):
+    """Issue #173: mismatch between BESD EPI probes and manifest fails loudly naming the IDs."""
+    prefix = _make_besd_fixture(tmp_path)
+
+    # 1. Manifest has extra ID not in BESD EPI
+    manifest_extra = tmp_path / "extra_id.tsv"
+    manifest_extra.write_text(
+        "analysis_id\tsample_size\n"
+        "ENSG00000000001\t1000\n"
+        "ENSG00000000002\t1000\n"
+        "ENSG00000000003\t1000\n"
+        "ENSG00000099999\t1000\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="ENSG00000099999"):
+        build_ragged_from_besd(
+            prefix, tmp_path / "out_extra.opengwasdb", store_id="t", release_id="v1",
+            analyses_path=manifest_extra
+        )
+
+    # 2. Manifest is missing an ID that exists in BESD EPI
+    manifest_missing = tmp_path / "missing_id.tsv"
+    manifest_missing.write_text(
+        "analysis_id\tsample_size\n"
+        "ENSG00000000001\t1000\n"
+        "ENSG00000000002\t1000\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="ENSG00000000003"):
+        build_ragged_from_besd(
+            prefix, tmp_path / "out_missing.opengwasdb", store_id="t", release_id="v1",
+            analyses_path=manifest_missing
+        )
+
+
+def test_cli_build_ragged_besd_accepts_analyses_option(tmp_path):
+    """Issue #173: CLI build-ragged-besd accepts --analyses option."""
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+    from opengwasdb.model.analyses import read_analyses
+
+    prefix = _make_besd_fixture(tmp_path)
+    manifest = tmp_path / "cli_analyses.tsv"
+    manifest.write_text(
+        "analysis_id\tsample_size\tlicense\n"
+        "ENSG00000000001\t5000\tCC0\n"
+        "ENSG00000000002\t5000\tCC0\n"
+        "ENSG00000000003\t5000\tCC0\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "cli_out.opengwasdb"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "build-ragged-besd",
+            str(prefix),
+            str(out),
+            "--store-id", "cli-test",
+            "--release-id", "v1",
+            "--analyses", str(manifest),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    table = read_analyses(out / "analyses.tsv")
+    assert table.rows[0]["sample_size"] == "5000"
+    assert table.rows[0]["license"] == "CC0"
+

@@ -694,7 +694,10 @@ def build_ragged_besd_command(
     output_path: Path,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
-    tissue: str = typer.Option(None),
+    analyses: Path | None = typer.Option(
+        None, "--analyses", help="Optional analyses.tsv manifest with metadata"
+    ),
+    tissue: str | None = typer.Option(None),
     source_build: str = typer.Option("hg38"),
     overwrite: bool = typer.Option(False),
 ) -> None:
@@ -702,26 +705,25 @@ def build_ragged_besd_command(
 
     BESD_PREFIX is the path without extension (.esi, .epi, .besd are appended).
     Use --source-build hg19 to liftover coordinates to hg38 inline.
+    Optionally, --analyses overlays Analytical and Attribution Metadata from a manifest.
     """
     result = build_ragged_from_besd(
         besd_prefix,
         output_path,
         store_id=store_id,
         release_id=release_id,
+        analyses_path=analyses,
         tissue=tissue or None,
         source_build=source_build,
         overwrite=overwrite,
     )
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-                "n_associations": result.n_associations,
-            },
-            sort_keys=True,
-        )
+    _echo_summary(
+        {
+            "output_path": str(result.output_path),
+            "n_variants": result.n_variants,
+            "n_analyses": result.n_analyses,
+            "n_associations": result.n_associations,
+        }
     )
 
 

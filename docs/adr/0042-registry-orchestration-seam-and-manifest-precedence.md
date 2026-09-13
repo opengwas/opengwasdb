@@ -2,8 +2,8 @@
 
 Records the boundary between `opengwasdb` and the `opengwasdb-stores` registry
 (epic #177), establishing shared canonical column alias resolution (#172),
-per-release builder option precedence (#174), and machine-readable validation
-evidence (#175).
+BESD metadata overlay (#173), per-release builder option precedence (#174),
+and machine-readable validation evidence (#175).
 
 ## Context
 
@@ -17,12 +17,15 @@ registry into manifest synthesis, column projection, and redundant parsing:
    `analysis_label`, `sample_size`) after issue #170, but Ragged SSF still
    required legacy names (`n`, `filtered_file`), and alias resolution was
    duplicated across builder modules.
-2. **Per-release constants as row columns (#174)**: Per-release configuration
+2. **Missing BESD manifest input (#173)**: `build-ragged-besd` derived all
+   analysis metadata from `.epi` probe records alone, with no mechanism to
+   supply registry-side Analytical and Attribution Metadata (e.g. for eQTLGen).
+3. **Per-release constants as row columns (#174)**: Per-release configuration
    such as `source_reader_capability` and `source_assembly` were only readable
    as per-row manifest columns. For homogeneous collections (e.g. FinnGen R13 or
    UK Biobank), the registry had to materialize a derived manifest with
    identical columns on every row purely to reach builder defaults.
-3. **Evidence scraping from prose (#175)**: `validate` and `info` emitted only
+4. **Evidence scraping from prose (#175)**: `validate` and `info` emitted only
    human-readable text, forcing downstream tools to parse English prose off
    stdout/stderr to populate registry `validation.yaml` records.
 
@@ -44,7 +47,21 @@ model:
   as empty strings in Dense `analyses.tsv` (ADR 0034), while Ancestry pipeline
   manifest reading retains its fallback to `analysis_id`.
 
-### 2. Per-release CLI option precedence
+### 2. BESD Analysis metadata overlay (`build-ragged-besd --analyses`)
+
+`build-ragged-besd` accepts an optional `--analyses <analyses.tsv>` manifest:
+
+- Joined to EPI probe analyses by `analysis_id`.
+- Mismatches in either direction (extra manifest IDs not in BESD, or BESD probes
+  missing from the manifest) fail loudly naming all offending IDs.
+- BESD `.epi`-derived genomic coordinates (`trait_chr`, `trait_bp`) remain
+  authoritative over manifest values.
+- Shared-core Analytical Metadata (`PassthroughMetadata`, `assigned_ancestry`,
+  `sample_size`, `stored_effect_scale`) and Attribution Metadata are overlaid
+  onto the generated `analyses.tsv`.
+- When omitted, output is byte-identical to prior builds.
+
+### 3. Per-release CLI option precedence
 
 `build-dense-vcf` and `build-hybrid` accept optional `--source-reader-capability`
 and `--source-assembly` flags. Precedence is strictly:
@@ -62,7 +79,7 @@ $$\text{per-row manifest column} > \text{CLI option} > \text{hardcoded default}$
   their established defaults: `opengwasdb.gwas-vcf` for capability and `hg19`
   for source assembly.
 
-### 3. Machine-readable validation and inspection evidence
+### 4. Machine-readable validation and inspection evidence
 
 `validate` and `info` support `--format json`, defaulting to human-readable text:
 
@@ -76,6 +93,8 @@ $$\text{per-row manifest column} > \text{CLI option} > \text{hardcoded default}$
 
 ## Consequences
 
+- The registry no longer needs post-build patching to attach Analytical and
+  Attribution Metadata to BESD-built stores.
 - The registry no longer needs to synthesize derived manifests with constant
   columns for homogeneous collections.
 - All builders consume canonical `analyses.tsv` files directly.

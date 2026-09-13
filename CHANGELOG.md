@@ -23,6 +23,12 @@ the end of this file.
   omit these columns (#174, #177, ADR 0042). Precedence is per-row manifest
   column > CLI option > hardcoded default. Invalid CLI values fail at argument
   parse time.
+- **`--analyses <analyses.tsv>` on `build-ragged-besd`**: allows overlaying
+  registry Analytical and Attribution Metadata (including `PassthroughMetadata`
+  fields, `assigned_ancestry`, `sample_size`, and attribution columns) onto
+  BESD-derived analyses joined by `analysis_id`, while keeping BESD `.epi`
+  coordinates authoritative and failing loudly on ID mismatch in either direction
+  (#173, #177, ADR 0042). When omitted, output is byte-identical to prior builds.
 - **`--format json` on `validate` and `info`**: provides machine-readable output
   for validation evidence (`{"ok": bool, "errors": [...], "warnings": [...]}`)
   and manifest inspection (with decomposed structured `encoding`), while default
