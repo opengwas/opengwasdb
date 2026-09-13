@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from cli_output import normalize_cli_output
 
 from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
@@ -896,13 +897,13 @@ def test_cli_invalid_options_fail_at_parse_time_hybrid(tmp_path):
 
     res_cap = runner.invoke(app, [*args, "--source-reader-capability", "unknown_capability"])
     assert res_cap.exit_code != 0
-    clean_cap_output = " ".join(res_cap.output.replace("│", " ").split())
+    clean_cap_output = normalize_cli_output(res_cap.output)
     assert "unknown source reader capability 'unknown_capability'" in clean_cap_output
     assert "known: opengwasdb.finngen-r13" in clean_cap_output
 
     res_ass = runner.invoke(app, [*args, "--source-assembly", "unknown_build"])
     assert res_ass.exit_code != 0
-    clean_ass_output = " ".join(res_ass.output.replace("│", " ").split())
+    clean_ass_output = normalize_cli_output(res_ass.output)
     assert "unknown genome build 'unknown_build'" in clean_ass_output.lower()
     assert "use hg19/hg38 or aliases grch37/grch38" in clean_ass_output.lower()
 

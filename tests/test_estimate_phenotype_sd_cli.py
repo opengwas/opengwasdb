@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from cli_output import normalize_cli_output
 from typer.testing import CliRunner
 
 from opengwasdb.build.phenotype_sd_pipeline import SD_OUTPUT_COLUMNS
@@ -326,7 +327,7 @@ def test_reference_af_source_requires_a_reference(tmp_path):
     )
     result = _run(manifest, tmp_path / "sd.tsv", "--af-source", "reference")
     assert result.exit_code != 0
-    clean = " ".join(result.output.replace("│", " ").split())
+    clean = normalize_cli_output(result.output)
     assert "--af-source reference requires --af-reference" in clean
 
 
