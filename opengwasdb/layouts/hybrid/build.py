@@ -617,10 +617,19 @@ def _source_origin_map(
     return hg38_to_source
 
 
-def _load_manifest(manifest_path: str | Path) -> list[_ManifestRow]:
+def _load_manifest(
+    manifest_path: str | Path,
+    *,
+    default_source_reader_capability: str | None = None,
+    default_source_assembly: str | None = None,
+) -> list[_ManifestRow]:
     """Read the build manifest, failing loudly on an empty one rather than
     building a store with no Analyses (a plausible empty answer)."""
-    manifest_rows = _read_manifest(manifest_path)
+    manifest_rows = _read_manifest(
+        manifest_path,
+        default_source_reader_capability=default_source_reader_capability,
+        default_source_assembly=default_source_assembly,
+    )
     if not manifest_rows:
         raise ValueError(f"manifest {manifest_path} contains no rows")
     return manifest_rows
@@ -1151,21 +1160,13 @@ def _finalise_store(
 
 
 def build_hybrid_from_vcf_manifest(
-    manifest_path: str | Path,
-    output_path: str | Path,
-    *,
-    reference_panel: str | Path,
-    chain_file: str | Path | None = None,
-    store_id: str,
-    release_id: str,
-    liftover_failure_threshold: float = 0.01,
-    chunk_shape: tuple[int, int] = DEFAULT_CHUNK_SHAPE,
-    dtype: str = DEFAULT_DTYPE,
-    overwrite: bool = False,
-    n_workers: int = 1,
-    eaf_reference: str | Path | None = None,
-    eaf_reference_ancestry: str | None = None,
-    allow_unverified_eaf: bool = False,
+    manifest_path: str | Path, output_path: str | Path, *, reference_panel: str | Path,
+    chain_file: str | Path | None = None, store_id: str, release_id: str,
+    liftover_failure_threshold: float = 0.01, chunk_shape: tuple[int, int] = DEFAULT_CHUNK_SHAPE,
+    dtype: str = DEFAULT_DTYPE, overwrite: bool = False, n_workers: int = 1,
+    eaf_reference: str | Path | None = None, eaf_reference_ancestry: str | None = None,
+    allow_unverified_eaf: bool = False, source_reader_capability: str | None = None,
+    source_assembly: str | None = None,
 ) -> HybridBuildResult:
     """Build a Hybrid store from a manifest of GWAS-VCF files and a reference
     panel. A thin orchestrator over three deep seams (issue #130):
@@ -1181,12 +1182,15 @@ def build_hybrid_from_vcf_manifest(
     study is read **once**: on-panel associations fill the nested Dense
     Component, off-panel associations go to the Ragged Overflow. Rows are
     assumed hg19 and lifted inline unless the manifest declares
-    ``source_assembly=hg38`` (issue #85). ``eaf_reference`` drives the
-    orientation check (issue #115) over both components; ``reference_panel``
-    is a variant set and carries no frequencies, so it cannot serve as that
-    reference - the two inputs are separate.
+    ``source_assembly=hg38`` (issue #85); ``source_assembly`` and
+    ``source_reader_capability`` options supply per-release defaults (#174).
+    ``eaf_reference`` drives orientation check (issue #115).
     """
-    manifest_rows = _load_manifest(manifest_path)
+    manifest_rows = _load_manifest(
+        manifest_path,
+        default_source_reader_capability=source_reader_capability,
+        default_source_assembly=source_assembly,
+    )
     with OpenGWASDBStore.staging(Path(output_path), overwrite=overwrite) as staged:
         options = _BuildOptions(
             out=Path(output_path),

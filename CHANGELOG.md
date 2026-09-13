@@ -18,6 +18,11 @@ the end of this file.
   and Ragged builders (#172, #177).
 - **`opengwasdb.readers.known_capabilities()`**: shared accessor returning all
   registered source reader capabilities in sorted order (#177).
+- **`--source-reader-capability` and `--source-assembly` on `build-dense-vcf` and
+  `build-hybrid`**: allow supplying per-release defaults for manifest rows that
+  omit these columns (#174, #177, ADR 0042). Precedence is per-row manifest
+  column > CLI option > hardcoded default. Invalid CLI values fail at argument
+  parse time.
 
 ### Changed
 

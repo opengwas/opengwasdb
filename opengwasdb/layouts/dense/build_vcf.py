@@ -75,13 +75,14 @@ from opengwasdb.model.enums import (
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import (
+    ManifestColumns,
     manifest_n,
     manifest_trait_name,
     require_columns,
     resolve_manifest_columns,
 )
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
-from opengwasdb.readers.registry import resolve_reader
+from opengwasdb.readers.registry import known_capabilities, resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.normalise import chromosome_sort_key
@@ -588,20 +589,14 @@ def _lift_manifest_variants(
 
 
 def build_dense_from_vcf_manifest(
-    manifest_path: str | Path,
-    output_path: str | Path,
-    *,
-    chain_file: str | Path | None = None,
-    store_id: str,
-    release_id: str,
+    manifest_path: str | Path, output_path: str | Path, *,
+    chain_file: str | Path | None = None, store_id: str, release_id: str,
     liftover_failure_threshold: float = 0.01,
     chunk_shape: tuple[int, int] = DEFAULT_CHUNK_SHAPE,
-    dtype: str = DEFAULT_DTYPE,
-    overwrite: bool = False,
-    n_workers: int = 1,
+    dtype: str = DEFAULT_DTYPE, overwrite: bool = False, n_workers: int = 1,
     eaf_reference: str | Path | None = None,
-    eaf_reference_ancestry: str | None = None,
-    allow_unverified_eaf: bool = False,
+    eaf_reference_ancestry: str | None = None, allow_unverified_eaf: bool = False,
+    source_reader_capability: str | None = None, source_assembly: str | None = None,
 ) -> DenseBuildResult:
     """Build a Dense Observed-Only Store from a manifest of GWAS-VCF files.
 
@@ -609,33 +604,34 @@ def build_dense_from_vcf_manifest(
     is staged atomically at ``output_path``, its two streaming passes never
     materialise the full association matrix (issue 043), and every phase runs
     before the store is committed. Keyword semantics live with the phase that
-    consumes each -- the manifest columns with `_read_manifest`; ``chain_file``
-    and ``liftover_failure_threshold`` with the hg19→hg38 lift (issue #85);
-    ``eaf_reference``/``eaf_reference_ancestry``/``allow_unverified_eaf``
-    with EAF orientation verification (issue #115, ADR 0037 §6).
+    consumes each -- the manifest columns and per-release defaults (#174) with
+    `_read_manifest`; ``chain_file`` and ``liftover_failure_threshold`` with the
+    hg19→hg38 lift (issue #85); ``eaf_reference``/``eaf_reference_ancestry``/
+    ``allow_unverified_eaf`` with EAF orientation verification (issue #115, ADR 0037 §6).
     """
-    manifest_rows = _read_manifest(manifest_path)
+    manifest_rows = _read_manifest(
+        manifest_path,
+        default_source_reader_capability=source_reader_capability,
+        default_source_assembly=source_assembly,
+    )
     if not manifest_rows:
         raise ValueError(f"manifest {manifest_path} contains no rows")
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         prepared = _prepare_axis(
-            staged, out, manifest_rows, chain_file,
-            liftover_failure_threshold, chunk_shape,
+            staged, out, manifest_rows, chain_file, liftover_failure_threshold, chunk_shape
         )
         # Phases 5-7 run inside one spill-dir lifetime: every spill is removed
         # even when a phase fails, keeping the staged release atomic.
         eaf_report, encoded = _spill_verify_and_encode(
-            staged, out, manifest_rows, prepared,
-            n_workers, chunk_shape, dtype,
+            staged, out, manifest_rows, prepared, n_workers, chunk_shape, dtype,
             eaf_reference, eaf_reference_ancestry, allow_unverified_eaf,
         )
         # Phase 8: top-hit indexes, manifest and analyses.tsv metadata.
         _finalize_store(
-            staged, prepared, encoded, eaf_report,
-            store_id, release_id, chain_file, chunk_shape, dtype,
-            allow_unverified_eaf,
+            staged, prepared, encoded, eaf_report, store_id, release_id, chain_file,
+            chunk_shape, dtype, allow_unverified_eaf,
         )
         log.info(
             "Build complete: %d variants × %d analyses",
@@ -1096,141 +1092,161 @@ def _fmt_duration(seconds: float) -> str:
     return f"{s}s"
 
 
-def _read_manifest(manifest_path: str | Path) -> list[_ManifestRow]:
-    """Read the build manifest: the canonical ``analyses.tsv`` names
-    ``analysis_id``/``source_file``/``analysis_label``/``sample_size`` (ADR
-    0034, issue #170) or their pre-ADR-0034 aliases ``trait_id``/``file_path``/
-    ``trait_name``/``n`` -- also the Analysis Catalogue's ``BUILD_COLUMNS``,
-    with the canonical spelling winning when both are present. Alongside them:
-    required ``stored_effect_scale`` (issue #17) and ``original_sd_method``
-    (issue #18) columns, and an ``original_sd`` column required only for the
-    ``original_sd_method`` tiers that carry an actual SD magnitude.
+def _parse_source_assembly(
+    row: Mapping[str, str], fallback: str, trait_id: str, manifest_path: str | Path
+) -> str:
+    """Resolve and validate source_assembly for one manifest row."""
+    raw = row.get("source_assembly") or fallback
+    try:
+        return normalise_build(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"manifest {manifest_path}: analysis {trait_id!r} has invalid "
+            f"source_assembly {raw!r}"
+        ) from exc
 
-    Neither column is part of the Catalogue/ancestry manifest shape: ancestry
-    assignment runs on allele frequencies alone and may run before a study's
-    effect scale or phenotype SD is even resolved, so these stay independent
-    build inputs rather than part of one combined schema. A manifest missing a
-    required column, carrying an out-of-vocabulary value, declaring
-    ``original_sd_method=unavailable``, omitting ``original_sd`` for a tier
-    that needs it, or supplying a stray ``original_sd`` for a tier that carries
-    no SD magnitude (``declared_standardised``, ``binary_trait``), fails the
-    build loudly rather than falling back to the old VCF-header inference or a
-    silently assumed ``sd=1`` (issue #18 AC3).
 
-    An optional ``source_reader_capability`` column (issue #20) selects the
-    ``SourceReader`` each row is built through; a manifest that omits it (every
-    manifest before this change) defaults every row to ``GWAS_VCF_CAPABILITY``,
-    the only format this builder has ever supported.
+def _parse_reader_capability(
+    row: Mapping[str, str], fallback: str, trait_id: str, manifest_path: str | Path
+) -> str:
+    """Resolve and validate source_reader_capability for one manifest row."""
+    capability = row.get("source_reader_capability") or fallback
+    if capability not in known_capabilities():
+        known = ", ".join(known_capabilities()) or "(none registered)"
+        raise ValueError(
+            f"manifest {manifest_path}: analysis {trait_id!r} has unknown "
+            f"source_reader_capability {capability!r}; known: {known}"
+        )
+    return capability
 
-    An optional ``source_assembly`` column (issue #85) declares the genome
-    build each row's *source file* is already in -- ``hg19``/``GRCh37`` or
-    ``hg38``/``GRCh38`` (aliases per `opengwasdb.build.liftover`). A row
-    omitting it defaults to ``hg19``, matching every source this builder read
-    before GWAS-SSF (#84): GWAS-VCF is conventionally hg19 here. This is not
-    inferred from the source file itself -- a harmonised GWAS-Catalog-SSF
-    file is already hg38 and must declare so, or `_lift_manifest_variants`
-    would liftover its already-correct coordinates a second time (issue #85).
-    An invalid value fails the build loudly, same as ``stored_effect_scale``.
 
-    An optional ``assigned_ancestry`` column (issue #22) carries a row's
-    Assigned Ancestry straight into the built store's ``analyses.tsv`` --
-    a Catalogue subset's kept rows already have this column (the Catalogue
-    is a superset of the build manifest), so ``opengwasdb.ancestry.subset``
-    no longer needs a separate post-build sidecar write to record it. Blank
-    or absent for a manifest with no ancestry annotation.
+def _parse_original_sd(
+    row: Mapping[str, str], trait_id: str, manifest_path: str | Path
+) -> float:
+    """Validate original_sd_method and original_sd, returning se_divisor."""
+    sd_method_raw = row["original_sd_method"]
+    try:
+        sd_method = OriginalSdMethod(sd_method_raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"manifest {manifest_path}: analysis {trait_id!r} has invalid "
+            f"original_sd_method {sd_method_raw!r}"
+        ) from exc
+    if sd_method is OriginalSdMethod.UNAVAILABLE:
+        raise ValueError(
+            f"manifest {manifest_path}: analysis {trait_id!r} has "
+            "original_sd_method='unavailable' -- its phenotype SD could not be "
+            "established upstream, so the build cannot standardise its effects (issue #18)"
+        )
+    se_divisor = 1.0
+    original_sd_raw = row.get("original_sd", "")
+    if sd_method in _SD_RESCALE_METHODS:
+        try:
+            se_divisor = float(original_sd_raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"manifest {manifest_path}: analysis {trait_id!r} has "
+                f"original_sd_method={sd_method.value!r} but original_sd "
+                f"{original_sd_raw!r} is not a valid number"
+            ) from exc
+        if not se_divisor > 0:
+            raise ValueError(
+                f"manifest {manifest_path}: analysis {trait_id!r} has "
+                f"non-positive original_sd {original_sd_raw!r}"
+            )
+    elif original_sd_raw:
+        raise ValueError(
+            f"manifest {manifest_path}: analysis {trait_id!r} has "
+            f"original_sd_method={sd_method.value!r}, which carries no SD "
+            f"magnitude, but original_sd={original_sd_raw!r} was supplied"
+        )
+    return se_divisor
 
-    Optional sample-size interpretation/counts, Original Effect Scale, and
-    ancestry-assignment method columns pass straight through as Analytical
-    Metadata (issue #86). They remain blank when omitted; the shared builder
-    never fabricates values that only the manifest producer can know.
 
-    Optional ``trait_ontology_id``/``trait_ontology_label`` and Attribution
-    (``license``/``publication_doi``/``publication_pmid``/``consortium``/
-    ``first_author``) columns (ADR 0034, issue #68) flow straight into
-    ``analyses.tsv`` when the manifest supplies them; blank or absent
-    otherwise -- never fabricated.
+def _parse_manifest_row(
+    row: Mapping[str, str],
+    cols: ManifestColumns,
+    manifest_path: str | Path,
+    fallback_assembly: str,
+    fallback_capability: str,
+) -> _ManifestRow:
+    """Parse and validate one manifest row into a _ManifestRow."""
+    trait_id = row[cols.analysis_id]
+    scale = row["stored_effect_scale"]
+    try:
+        StoredEffectScale(scale)
+    except ValueError as exc:
+        raise ValueError(
+            f"manifest {manifest_path}: analysis {trait_id!r} has invalid "
+            f"stored_effect_scale {scale!r}"
+        ) from exc
+    assembly = _parse_source_assembly(row, fallback_assembly, trait_id, manifest_path)
+    capability = _parse_reader_capability(row, fallback_capability, trait_id, manifest_path)
+    se_divisor = _parse_original_sd(row, trait_id, manifest_path)
+    return _ManifestRow(
+        trait_id=trait_id,
+        file_path=row[cols.source_file],
+        trait_name=manifest_trait_name(row, cols.analysis_label, trait_id),
+        n=manifest_n(row, cols.sample_size),
+        stored_effect_scale=scale,
+        se_divisor=se_divisor,
+        source_reader_capability=capability,
+        source_assembly=assembly,
+        original_sd=row.get("original_sd", ""),
+        assigned_ancestry=row.get("assigned_ancestry") or "",
+        metadata=PassthroughMetadata.from_manifest_row(row),
+        trait_ontology_id=row.get("trait_ontology_id") or "",
+        trait_ontology_label=(
+            row.get("trait_ontology_label") or row.get("trait_ontology_name") or ""
+        ),
+    )
+
+
+def _resolve_manifest_defaults(
+    default_capability: str | None, default_assembly: str | None
+) -> tuple[str, str]:
+    """Validate and resolve fallback capability and assembly."""
+    if default_capability is not None:
+        if not default_capability or default_capability not in known_capabilities():
+            known = ", ".join(known_capabilities()) or "(none registered)"
+            raise ValueError(
+                f"unknown source reader capability {default_capability!r}; known: {known}"
+            )
+    if default_assembly is not None:
+        default_assembly = normalise_build(default_assembly)
+    return default_assembly or "hg19", default_capability or GWAS_VCF_CAPABILITY
+
+
+def _read_manifest(
+    manifest_path: str | Path,
+    *,
+    default_source_reader_capability: str | None = None,
+    default_source_assembly: str | None = None,
+) -> list[_ManifestRow]:
+    """Read the build manifest with canonical names, aliases, and option defaults.
+
+    Accepts canonical ``analyses.tsv`` names (``analysis_id``/``source_file``/
+    ``analysis_label``/``sample_size``, ADR 0034, #170) or legacy aliases
+    (``trait_id``/``file_path``/``trait_name``/``n``). Requires ``stored_effect_scale``
+    (#17) and ``original_sd_method`` (#18; ``original_sd`` required for rescaling tiers).
+
+    Optional ``source_reader_capability`` (#20, #174) and ``source_assembly`` (#85, #174)
+    fall back to CLI defaults (or GWAS-VCF/hg19). Note harmonised SSF is already hg38 and
+    must declare so or coordinates liftover twice (issue #85 double-liftover warning).
     """
+    fallback_assembly, fallback_capability = _resolve_manifest_defaults(
+        default_source_reader_capability, default_source_assembly
+    )
     with open(manifest_path, newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         fieldnames = list(reader.fieldnames or [])
         rows = list(reader)
     require_columns(fieldnames, manifest_path, "stored_effect_scale", "original_sd_method")
     cols = resolve_manifest_columns(fieldnames, manifest_path)
-    result = []
-    for row in rows:
-        trait_id = row[cols.analysis_id]
-        scale = row["stored_effect_scale"]
-        try:
-            StoredEffectScale(scale)
-        except ValueError as exc:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {trait_id!r} has invalid "
-                f"stored_effect_scale {scale!r}"
-            ) from exc
-        source_assembly_raw = row.get("source_assembly") or "hg19"
-        try:
-            source_assembly = normalise_build(source_assembly_raw)
-        except ValueError as exc:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {trait_id!r} has invalid "
-                f"source_assembly {source_assembly_raw!r}"
-            ) from exc
-        sd_method_raw = row["original_sd_method"]
-        try:
-            sd_method = OriginalSdMethod(sd_method_raw)
-        except ValueError as exc:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {trait_id!r} has invalid "
-                f"original_sd_method {sd_method_raw!r}"
-            ) from exc
-        if sd_method is OriginalSdMethod.UNAVAILABLE:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {trait_id!r} has "
-                "original_sd_method='unavailable' -- its phenotype SD could not be "
-                "established upstream, so the build cannot standardise its effects (issue #18)"
-            )
-        se_divisor = 1.0
-        original_sd_raw = row.get("original_sd", "")
-        if sd_method in _SD_RESCALE_METHODS:
-            try:
-                se_divisor = float(original_sd_raw)
-            except ValueError as exc:
-                raise ValueError(
-                    f"manifest {manifest_path}: analysis {trait_id!r} has "
-                    f"original_sd_method={sd_method.value!r} but original_sd "
-                    f"{original_sd_raw!r} is not a valid number"
-                ) from exc
-            if not se_divisor > 0:
-                raise ValueError(
-                    f"manifest {manifest_path}: analysis {trait_id!r} has "
-                    f"non-positive original_sd {original_sd_raw!r}"
-                )
-        elif original_sd_raw:
-            raise ValueError(
-                f"manifest {manifest_path}: analysis {trait_id!r} has "
-                f"original_sd_method={sd_method.value!r}, which carries no SD "
-                f"magnitude, but original_sd={original_sd_raw!r} was supplied"
-            )
-        result.append(
-            _ManifestRow(
-                trait_id=trait_id,
-                file_path=row[cols.source_file],
-                trait_name=manifest_trait_name(row, cols.analysis_label, trait_id),
-                n=manifest_n(row, cols.sample_size),
-                stored_effect_scale=scale,
-                se_divisor=se_divisor,
-                source_reader_capability=row.get("source_reader_capability") or GWAS_VCF_CAPABILITY,
-                source_assembly=source_assembly,
-                original_sd=original_sd_raw,
-                assigned_ancestry=row.get("assigned_ancestry") or "",
-                metadata=PassthroughMetadata.from_manifest_row(row),
-                trait_ontology_id=row.get("trait_ontology_id") or "",
-                trait_ontology_label=(
-                    row.get("trait_ontology_label") or row.get("trait_ontology_name") or ""
-                ),
-            )
-        )
-    return result
+    return [
+        _parse_manifest_row(row, cols, manifest_path, fallback_assembly, fallback_capability)
+        for row in rows
+    ]
 
 
 def _alid_sort_key(alid: str) -> tuple[tuple[int, str], int, str, str]:

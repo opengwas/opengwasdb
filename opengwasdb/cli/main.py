@@ -7,7 +7,7 @@ import math
 import sys
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import typer
@@ -16,6 +16,7 @@ from opengwasdb.ancestry.mixture import Gates
 from opengwasdb.ancestry.pipeline import annotate_catalogue, read_source_manifest
 from opengwasdb.ancestry.reference import load_reference
 from opengwasdb.build.eaf_orientation import DEFAULT_SAMPLE_SITES
+from opengwasdb.build.liftover import normalise_build
 from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import (
@@ -40,6 +41,7 @@ from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
 from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
+from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
@@ -74,6 +76,39 @@ _ALLOW_UNVERIFIED_HELP = (
     "Accept Analyses the supplied --eaf-reference could not verify (too little "
     "overlap or frequency spread) instead of failing. Recorded in the store's provenance."
 )
+
+_SOURCE_READER_CAPABILITY_HELP = (
+    "Default Source Reader Capability for manifest rows that omit source_reader_capability "
+    "(default: opengwasdb.gwas-vcf)"
+)
+_SOURCE_ASSEMBLY_HELP = (
+    "Default source genome build for manifest rows that omit source_assembly "
+    "(hg19/GRCh37 or hg38/GRCh38, default: hg19)"
+)
+
+
+def _validate_source_reader_capability(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if value not in known_capabilities():
+        known = ", ".join(known_capabilities()) or "(none registered)"
+        raise typer.BadParameter(
+            f"unknown source reader capability {value!r}; known: {known}"
+        )
+    return value
+
+
+def _validate_source_assembly(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return normalise_build(value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _echo_summary(payload: dict[str, Any]) -> None:
+    typer.echo(json.dumps(payload, sort_keys=True))
 
 
 @app.command()
@@ -226,108 +261,85 @@ def build_dense_vcf_command(
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
     n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 1 and Pass 2"),
-    chunk_variants: int = typer.Option(
-        DEFAULT_CHUNK_SHAPE[0], help="Zarr chunk size along the variant axis"
-    ),
-    chunk_analyses: int = typer.Option(
-        DEFAULT_CHUNK_SHAPE[1], help="Zarr chunk size along the analysis (trait) axis"
-    ),
+    chunk_variants: int = typer.Option(DEFAULT_CHUNK_SHAPE[0], help="Variant chunk size"),
+    chunk_analyses: int = typer.Option(DEFAULT_CHUNK_SHAPE[1], help="Analysis chunk size"),
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    source_reader_capability: str | None = typer.Option(
+        None, callback=_validate_source_reader_capability, help=_SOURCE_READER_CAPABILITY_HELP
+    ),
+    source_assembly: str | None = typer.Option(
+        None, callback=_validate_source_assembly, help=_SOURCE_ASSEMBLY_HELP
+    ),
 ) -> None:
     """Build a Dense Observed-Only store from a manifest of GWAS-VCF files.
 
     MANIFEST_PATH is a TSV with columns: trait_id, file_path, trait_name, n,
-    stored_effect_scale (issue #17 -- never inferred from the VCF header),
-    original_sd_method, and original_sd (issue #18 -- required for the
-    original_sd_method tiers that carry an SD magnitude; continuous-trait
-    statistics are rescaled by it, stored_se = original_se / original_sd).
-    VCF files must be in GRCh37/hg19 coordinates; liftover to hg38 is applied inline.
-
-    The zarr chunk shape (default 1000x1000) can be tuned with --chunk-variants /
-    --chunk-analyses; a narrower analysis chunk speeds up per-analysis (bulk) reads
-    at the cost of larger per-variant (phewas) reads.
+    stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
+    VCF files are hg19 by default; liftover to hg38 is applied inline.
+    --source-reader-capability and --source-assembly supply per-release defaults (#174).
     """
-
     result = build_dense_from_vcf_manifest(
-        manifest_path,
-        output_path,
-        store_id=store_id,
-        release_id=release_id,
-        overwrite=overwrite,
-        n_workers=n_workers,
-        chunk_shape=(chunk_variants, chunk_analyses),
-        eaf_reference=eaf_reference,
-        eaf_reference_ancestry=eaf_reference_ancestry,
+        manifest_path, output_path, store_id=store_id, release_id=release_id,
+        overwrite=overwrite, n_workers=n_workers, chunk_shape=(chunk_variants, chunk_analyses),
+        eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        source_reader_capability=source_reader_capability, source_assembly=source_assembly,
     )
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-            },
-            sort_keys=True,
-        )
-    )
+    _echo_summary({
+        "output_path": str(result.output_path),
+        "n_variants": result.n_variants,
+        "n_analyses": result.n_analyses,
+    })
 
 
 @app.command("build-hybrid")
 def build_hybrid_command(
     manifest_path: Path,
     output_path: Path,
-    reference_panel: Path = typer.Option(
-        ..., help="Dense Component axis: reference-panel ALIDs (text or variants.tsv.gz)"
-    ),
+    reference_panel: Path = typer.Option(..., help="Dense Component axis: reference-panel ALIDs"),
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
-    n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 2"),
-    chunk_variants: int = typer.Option(
-        DEFAULT_CHUNK_SHAPE[0], help="Zarr chunk size along the variant axis"
-    ),
-    chunk_analyses: int = typer.Option(
-        DEFAULT_CHUNK_SHAPE[1], help="Zarr chunk size along the analysis (trait) axis"
-    ),
+    n_workers: int = typer.Option(1, help="Process pool size for Pass 2"),
+    chunk_variants: int = typer.Option(DEFAULT_CHUNK_SHAPE[0], help="Zarr variant chunk size"),
+    chunk_analyses: int = typer.Option(DEFAULT_CHUNK_SHAPE[1], help="Zarr analysis chunk size"),
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    capability: str | None = typer.Option(
+        None, "--source-reader-capability", callback=_validate_source_reader_capability,
+        help=_SOURCE_READER_CAPABILITY_HELP,
+    ),
+    assembly: str | None = typer.Option(
+        None, "--source-assembly", callback=_validate_source_assembly,
+        help=_SOURCE_ASSEMBLY_HELP,
+    ),
 ) -> None:
     """Build a Hybrid store (Dense Component + Ragged Overflow) from a VCF manifest.
 
     MANIFEST_PATH is a TSV with columns: trait_id, file_path, trait_name, n,
-    stored_effect_scale (issue #17 -- never inferred from the VCF header),
-    original_sd_method, and original_sd (issue #18 -- see build-dense-vcf).
-    On-panel variants (in --reference-panel) fill the nested Dense Component;
-    off-panel variants go to the Ragged Overflow. VCFs are hg19; liftover to
-    hg38 is applied inline.
+    stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
+    On-panel variants in --reference-panel fill Dense Component; off-panel variants
+    go to Ragged Overflow. --source-reader-capability and --source-assembly supply
+    per-release defaults (#174).
     """
-    result = build_hybrid_from_vcf_manifest(
-        manifest_path,
-        output_path,
-        reference_panel=reference_panel,
-        store_id=store_id,
-        release_id=release_id,
-        overwrite=overwrite,
-        n_workers=n_workers,
-        chunk_shape=(chunk_variants, chunk_analyses),
-        eaf_reference=eaf_reference,
-        eaf_reference_ancestry=eaf_reference_ancestry,
-        allow_unverified_eaf=allow_unverified_eaf,
+    res = build_hybrid_from_vcf_manifest(
+        manifest_path, output_path, reference_panel=reference_panel,
+        store_id=store_id, release_id=release_id, overwrite=overwrite, n_workers=n_workers,
+        chunk_shape=(chunk_variants, chunk_analyses), eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
+        source_reader_capability=capability, source_assembly=assembly,
     )
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-                "n_panel": result.n_panel,
-                "n_off_panel": result.n_off_panel,
-                "n_overflow": result.n_overflow,
-            },
-            sort_keys=True,
+    _echo_summary(
+        dict(
+            output_path=str(res.output_path),
+            n_variants=res.n_variants,
+            n_analyses=res.n_analyses,
+            n_panel=res.n_panel,
+            n_off_panel=res.n_off_panel,
+            n_overflow=res.n_overflow,
         )
     )
 
