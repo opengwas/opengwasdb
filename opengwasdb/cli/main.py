@@ -683,12 +683,15 @@ def build_ragged_ssf_command(
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
-    MANIFEST_PATH is a TSV with columns: analysis_index, analysis_id, trait_id,
-    analysis_label, trait_ontology_id, trait_ontology_label, trait_chr,
-    trait_bp, n, tissue, context, mhc, filtered_file. FILTERED_DIR holds one
-    filtered GWAS-SSF ``.tsv.gz`` per analysis (as produced by the
-    opengwasdb-stores download+filter step), named by each row's
-    filtered_file column.
+    MANIFEST_PATH is a TSV with columns: analysis_index, analysis_id (or
+    legacy trait_id), analysis_label (or legacy trait_name), trait_ontology_id,
+    trait_ontology_label, trait_chr, trait_bp, sample_size (or legacy n),
+    tissue, context, mhc, source_file (or legacy filtered_file).
+
+    FILTERED_DIR holds one filtered GWAS-SSF ``.tsv.gz`` per analysis (as
+    produced by the opengwasdb-stores download+filter step). Relative
+    source_file paths are joined to FILTERED_DIR; absolute paths are used
+    directly.
     """
     result = build_ragged_from_ssf(
         manifest_path,

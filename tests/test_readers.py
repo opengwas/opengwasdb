@@ -26,6 +26,7 @@ from opengwasdb.readers import (
     SiteMetrics,
     af_only,
     is_palindromic,
+    known_capabilities,
     resolve_reader,
     site_metrics_arrays,
 )
@@ -118,8 +119,21 @@ def test_resolve_reader_returns_finngen_r13_reader_for_its_capability():
     assert isinstance(reader, FinnGenR13Reader)
 
 
+def test_known_capabilities_returns_sorted_registered_set():
+    """known_capabilities() returns a sorted tuple of all registered capabilities."""
+    caps = known_capabilities()
+    assert isinstance(caps, tuple)
+    assert caps == (FINNGEN_R13_CAPABILITY, GWAS_SSF_CAPABILITY, GWAS_VCF_CAPABILITY)
+
+
 def test_resolve_reader_rejects_unknown_capability(tmp_path):
-    with pytest.raises(ValueError, match="unknown source reader capability"):
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"unknown source reader capability '.*'; "
+            r"known: opengwasdb\.finngen-r13, opengwasdb\.gwas-ssf, opengwasdb\.gwas-vcf"
+        ),
+    ):
         resolve_reader(
             "opengwasdb.some-future-format", tmp_path / "study.vcf", StoredEffectScale.SD
         )

@@ -10,6 +10,23 @@ the end of this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`opengwasdb.model.manifest_columns`**: extracted shared manifest column alias
+  resolution supporting multiple legacy aliases per canonical name (`analysis_id`,
+  `source_file`, `analysis_label`, `sample_size`), used across Dense, Ancestry,
+  and Ragged builders (#172, #177).
+- **`opengwasdb.readers.known_capabilities()`**: shared accessor returning all
+  registered source reader capabilities in sorted order (#177).
+
+### Changed
+
+- **`build-ragged-ssf` accepts canonical `analyses.tsv` column names**
+  (`sample_size`, `source_file`) alongside legacy names (`n`, `filtered_file`,
+  `file_path`), with canonical spellings winning when both are present (#172, #177).
+  When a resolved `source_file` path is absolute, it is used directly; relative
+  paths are joined against `--filtered-dir`.
+
 ## [0.3.0] — 2026-09-12
 
 Work lands on `dev` and appears here under *Unreleased* until `dev` merges to

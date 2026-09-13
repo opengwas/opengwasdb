@@ -27,6 +27,16 @@ from opengwasdb.model.enums import (
     StoredEffectScale,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.model.manifest_columns import (
+    MANIFEST_COLUMN_ALIASES,
+    ManifestColumns,
+    manifest_column,
+    manifest_n,
+    manifest_trait_name,
+    require_columns,
+    required_manifest_column,
+    resolve_manifest_columns,
+)
 
 __all__ = [
     "ANALYSIS_COLUMNS",
@@ -38,6 +48,8 @@ __all__ = [
     "CompletionState",
     "EafScope",
     "InfoScope",
+    "MANIFEST_COLUMN_ALIASES",
+    "ManifestColumns",
     "OriginalSdMethod",
     "PrimaryStorageLayout",
     "SampleSizeKind",
@@ -46,8 +58,14 @@ __all__ = [
     "StoredEffectScale",
     "analyses_table_from_records",
     "classify_column",
+    "manifest_column",
+    "manifest_n",
+    "manifest_trait_name",
     "read_analyses",
     "read_analysis_records",
+    "require_columns",
+    "required_manifest_column",
+    "resolve_manifest_columns",
     "to_json_schema",
     "validate_analyses",
     "write_analyses",

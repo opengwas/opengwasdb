@@ -515,6 +515,30 @@ def test_canonical_analyses_tsv_columns_build_cleanly(tmp_path):
     assert analyses.rows[0]["sample_size"] == "1234"
 
 
+def test_blank_analysis_label_is_preserved_in_dense_build(tmp_path):
+    """ADR 0034: a manifest that includes analysis_label column with a blank value
+    preserves the blank in analyses.tsv rather than falling back to analysis_id."""
+    vcf = _make_vcf(
+        tmp_path, "trait_blank", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
+    )
+    manifest = tmp_path / "blank_label_manifest.tsv"
+    manifest.write_text(
+        "analysis_id\tsource_file\tanalysis_label\tsample_size"
+        "\tstored_effect_scale\toriginal_sd_method\n"
+        f"trait_blank\t{vcf}\t\t1234\tsd\tdeclared_standardised\n",
+        encoding="utf-8",
+    )
+
+    store_path = tmp_path / "blank-label-store.opengwasdb"
+    result = build_dense_from_vcf_manifest(
+        manifest, store_path, store_id="blank_label", release_id="v1"
+    )
+    assert result.n_analyses == 1
+    analyses = read_analyses(store_path / "analyses.tsv")
+    assert analyses.rows[0]["analysis_id"] == "trait_blank"
+    assert analyses.rows[0]["analysis_label"] == ""
+
+
 def _manifest_with_source_assembly(
     tmp_path: Path, entries: list[tuple[str, Path, str, str]]
 ) -> Path:

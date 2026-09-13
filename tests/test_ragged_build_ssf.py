@@ -693,3 +693,196 @@ def test_emptied_analysis_keeps_its_slot_and_scope(tmp_path):
     scopes = {r["analysis_id"]: r["eaf_scope"] for r in read_analyses(out / "analyses.tsv").rows}
     assert scopes == {"conflict_trait": "absent", "healthy_trait": "association"}
     assert validate_store(out).ok
+
+
+def test_canonical_analyses_tsv_columns_build_identical_to_legacy(tmp_path):
+    """Issue #172: canonical analyses.tsv column names (sample_size, source_file)
+    build a byte-identical analyses.tsv compared to the legacy (n, filtered_file) spelling."""
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    _write_one_association(filtered_dir, "trait_a.tsv.gz")
+
+    legacy_manifest = tmp_path / "legacy_manifest.tsv"
+    legacy_manifest.write_text(
+        "analysis_index\tanalysis_id\tanalysis_label\tn\tfiltered_file\n"
+        "0\ttrait_a\tTrait A\t1000\ttrait_a.tsv.gz\n",
+        encoding="utf-8",
+    )
+
+    canonical_manifest = tmp_path / "canonical_manifest.tsv"
+    canonical_manifest.write_text(
+        "analysis_index\tanalysis_id\tanalysis_label\tsample_size\tsource_file\n"
+        "0\ttrait_a\tTrait A\t1000\ttrait_a.tsv.gz\n",
+        encoding="utf-8",
+    )
+
+    legacy_out = tmp_path / "legacy.opengwasdb"
+    canonical_out = tmp_path / "canonical.opengwasdb"
+
+    build_ragged_from_ssf(
+        legacy_manifest, filtered_dir, legacy_out, store_id="test_store", release_id="v1"
+    )
+    build_ragged_from_ssf(
+        canonical_manifest, filtered_dir, canonical_out, store_id="test_store", release_id="v1"
+    )
+
+    legacy_analyses = (legacy_out / "analyses.tsv").read_bytes()
+    canonical_analyses = (canonical_out / "analyses.tsv").read_bytes()
+    assert len(legacy_analyses) > 0, "fixture must generate non-empty analyses.tsv"
+    assert canonical_analyses == legacy_analyses
+
+
+def test_canonical_sample_size_wins_over_legacy_n(tmp_path):
+    """Issue #172: when both sample_size and n are present, canonical sample_size wins."""
+    from opengwasdb.model.analyses import read_analyses
+
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    _write_one_association(filtered_dir, "trait_a.tsv.gz")
+
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "analysis_index\tanalysis_id\tsample_size\tn\tsource_file\n"
+        "0\ttrait_a\t5000\t1000\ttrait_a.tsv.gz\n",
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "out.opengwasdb"
+    build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test_store", release_id="v1")
+
+    table = read_analyses(out / "analyses.tsv")
+    assert len(table.rows) == 1
+    assert table.rows[0]["sample_size"] == "5000"
+
+
+def test_absolute_source_file_used_as_is(tmp_path):
+    """Issue #172: an absolute source_file path is used directly without joining to filtered_dir."""
+    external_dir = tmp_path / "external_sources"
+    external_dir.mkdir()
+    _write_one_association(external_dir, "trait_ext.tsv.gz")
+    abs_source = external_dir / "trait_ext.tsv.gz"
+    assert abs_source.is_absolute()
+
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "analysis_index\tanalysis_id\tsample_size\tsource_file\n"
+        f"0\ttrait_ext\t2500\t{abs_source}\n",
+        encoding="utf-8",
+    )
+
+    # filtered_dir is an empty directory; if absolute path is joined to filtered_dir it would fail
+    empty_filtered_dir = tmp_path / "empty_filtered"
+    empty_filtered_dir.mkdir()
+
+    out = tmp_path / "out.opengwasdb"
+    result = build_ragged_from_ssf(
+        manifest, empty_filtered_dir, out, store_id="test_store", release_id="v1"
+    )
+    assert result.n_variants == 1
+    assert result.n_associations == 1
+    assert (out / "analyses.tsv").exists()
+
+    # Query the store and verify actual row data was read from the absolute source
+    with query_store(out) as query:
+        rows = list(query.resolve(query.phewas("1:100000:A:G")))
+        assert len(rows) == 1, "fixture must contain exactly 1 association"
+        assert rows[0]["analysis_id"] == "trait_ext"
+        assert rows[0]["z"] == pytest.approx(2.0, rel=1e-3)
+        assert rows[0]["se"] == pytest.approx(0.5, rel=1e-3)
+
+
+def test_legacy_file_path_column_builds_successfully(tmp_path):
+    """Issue #172: source_file resolves from legacy file_path when present."""
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+    _write_one_association(filtered_dir, "trait_fp.tsv.gz")
+
+    manifest = tmp_path / "manifest_file_path.tsv"
+    manifest.write_text(
+        "analysis_index\tanalysis_id\tsample_size\tfile_path\n"
+        "0\ttrait_fp\t1500\ttrait_fp.tsv.gz\n",
+        encoding="utf-8",
+    )
+
+    out = tmp_path / "out.opengwasdb"
+    result = build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test_store", release_id="v1"
+    )
+    assert result.n_variants == 1
+    assert result.n_associations == 1
+    with query_store(out) as query:
+        rows = list(query.resolve(query.phewas("1:100000:A:G")))
+        assert len(rows) == 1
+        assert rows[0]["analysis_id"] == "trait_fp"
+        assert rows[0]["z"] == pytest.approx(2.0, rel=1e-3)
+        assert rows[0]["se"] == pytest.approx(0.5, rel=1e-3)
+
+
+def test_source_file_alias_precedence_deterministic(tmp_path):
+    """Issue #172: precedence order is canonical source_file > legacy file_path > filtered_file."""
+    filtered_dir = tmp_path / "filtered"
+    filtered_dir.mkdir()
+
+    # Create three files with distinguishable beta values
+    _write_filtered(
+        filtered_dir / "file_filtered.tsv.gz",
+        [{
+            "chromosome": "1", "base_pair_location": 100_000,
+            "effect_allele": "A", "other_allele": "G",
+            "beta": 3.0, "standard_error": 0.5, "rsid": "rs1",
+        }],
+    )
+    _write_filtered(
+        filtered_dir / "file_path.tsv.gz",
+        [{
+            "chromosome": "1", "base_pair_location": 100_000,
+            "effect_allele": "A", "other_allele": "G",
+            "beta": 2.0, "standard_error": 0.5, "rsid": "rs1",
+        }],
+    )
+    _write_filtered(
+        filtered_dir / "file_canonical.tsv.gz",
+        [{
+            "chromosome": "1", "base_pair_location": 100_000,
+            "effect_allele": "A", "other_allele": "G",
+            "beta": 1.0, "standard_error": 0.5, "rsid": "rs1",
+        }],
+    )
+
+    # 1. file_path wins over filtered_file when both legacy spellings are present
+    manifest_legacy = tmp_path / "manifest_legacy.tsv"
+    manifest_legacy.write_text(
+        "analysis_index\tanalysis_id\tfile_path\tfiltered_file\n"
+        "0\ttrait_legacy\tfile_path.tsv.gz\tfile_filtered.tsv.gz\n",
+        encoding="utf-8",
+    )
+    out_legacy = tmp_path / "out_legacy.opengwasdb"
+    build_ragged_from_ssf(
+        manifest_legacy, filtered_dir, out_legacy, store_id="test_store", release_id="v1"
+    )
+    with query_store(out_legacy) as query:
+        rows_legacy = list(query.resolve(query.phewas("1:100000:A:G")))
+        assert len(rows_legacy) == 1
+        assert rows_legacy[0]["analysis_id"] == "trait_legacy"
+        # beta=2.0 / se=0.5 -> z=4.0 from file_path.tsv.gz
+        assert rows_legacy[0]["z"] == pytest.approx(4.0, rel=1e-3)
+
+    # 2. canonical source_file wins over both file_path and filtered_file
+    manifest_all = tmp_path / "manifest_all.tsv"
+    manifest_all.write_text(
+        "analysis_index\tanalysis_id\tsource_file\tfile_path\tfiltered_file\n"
+        "0\ttrait_all\tfile_canonical.tsv.gz\tfile_path.tsv.gz\tfile_filtered.tsv.gz\n",
+        encoding="utf-8",
+    )
+    out_all = tmp_path / "out_all.opengwasdb"
+    build_ragged_from_ssf(
+        manifest_all, filtered_dir, out_all, store_id="test_store", release_id="v1"
+    )
+    with query_store(out_all) as query:
+        rows_all = list(query.resolve(query.phewas("1:100000:A:G")))
+        assert len(rows_all) == 1
+        assert rows_all[0]["analysis_id"] == "trait_all"
+        # beta=1.0 / se=0.5 -> z=2.0 from file_canonical.tsv.gz
+        assert rows_all[0]["z"] == pytest.approx(2.0, rel=1e-3)
+
+

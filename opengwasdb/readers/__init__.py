@@ -21,7 +21,7 @@ from opengwasdb.readers.interface import (
     af_only,
     site_metrics_arrays,
 )
-from opengwasdb.readers.registry import resolve_reader
+from opengwasdb.readers.registry import known_capabilities, resolve_reader
 
 __all__ = [
     "FINNGEN_R13_CAPABILITY",
@@ -36,6 +36,7 @@ __all__ = [
     "SourceReader",
     "af_only",
     "is_palindromic",
+    "known_capabilities",
     "load_liftover",
     "resolve_reader",
     "site_metrics_arrays",
