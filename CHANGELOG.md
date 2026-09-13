@@ -23,6 +23,12 @@ the end of this file.
   omit these columns (#174, #177, ADR 0042). Precedence is per-row manifest
   column > CLI option > hardcoded default. Invalid CLI values fail at argument
   parse time.
+- **`--format json` on `validate` and `info`**: provides machine-readable output
+  for validation evidence (`{"ok": bool, "errors": [...], "warnings": [...]}`)
+  and manifest inspection (with decomposed structured `encoding`), while default
+  human text output remains byte-for-byte unchanged (#175, #177, ADR 0042). On
+  invalid stores, `validate --format json` emits the JSON object on stdout and
+  exits non-zero.
 
 ### Changed
 

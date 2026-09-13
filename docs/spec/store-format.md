@@ -1071,6 +1071,34 @@ Validators MUST check at least:
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
 
+### 20.1 Validation and inspection CLI interface
+
+Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide both human-readable text output (default) and machine-readable JSON output via `--format json` (issue #175, ADR 0042):
+
+- `ogdb validate <store> --format json` outputs a single JSON object on `stdout`:
+  ```json
+  {"ok": true, "errors": [], "warnings": []}
+  ```
+  On failure (`ok=false`), it outputs the JSON object containing the recorded error strings on `stdout` and exits with a non-zero exit code. On success, `stderr` is empty.
+- `ogdb info <store> --format json` outputs a single JSON object on `stdout` representing the store release manifest with decomposed structured encoding:
+  ```json
+  {
+    "store_id": "...",
+    "release_id": "...",
+    "format_version": "0.1.0",
+    "primary_layout": "dense",
+    "association_coverage": "full",
+    "completion_state": "observed_only",
+    "reference_assembly": "GRCh38",
+    "encoding": {
+      "version": 3,
+      "z": {"kind": "int16_fixed", "scale": 1024},
+      "se": {"kind": "float16"},
+      "eaf": {"kind": "absent"}
+    }
+  }
+  ```
+
 ## 21. Compatibility
 
 `format_version` describes compatibility of the store representation. It does not describe biological data release version or source publication version. The **package version and `format_version` are independent**: a package release may change neither, one, or both. Which package reads and writes which format is recorded in the package's `CHANGELOG.md` compatibility table.

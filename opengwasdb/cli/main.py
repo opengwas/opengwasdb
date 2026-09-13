@@ -107,16 +107,47 @@ def _validate_source_assembly(value: str | None) -> str | None:
         raise typer.BadParameter(str(exc)) from exc
 
 
+class ReportFormat(StrEnum):
+    """Output format for info and validate commands (issue #175)."""
+
+    text = "text"
+    json = "json"
+
+
+_REPORT_FORMAT_OPTION = typer.Option(
+    ReportFormat.text,
+    "--format",
+    help="Output format: text (human readable) or json (machine readable)",
+)
+
+
 def _echo_summary(payload: dict[str, Any]) -> None:
     typer.echo(json.dumps(payload, sort_keys=True))
 
 
 @app.command()
-def info(store_path: Path) -> None:
+def info(
+    store_path: Path,
+    output_format: ReportFormat = _REPORT_FORMAT_OPTION,
+) -> None:
     """Print basic manifest information for a local Store Release."""
 
     store = open_store(store_path)
     manifest = store.manifest
+    if output_format is ReportFormat.json:
+        payload = {
+            "store_id": manifest.store_id,
+            "release_id": manifest.release_id,
+            "format_version": manifest.format_version,
+            "primary_layout": manifest.primary_layout.value,
+            "association_coverage": manifest.association_coverage.value,
+            "completion_state": manifest.completion_state.value,
+            "reference_assembly": manifest.reference_assembly,
+            "encoding": manifest.encoding.to_manifest(),
+        }
+        typer.echo(json.dumps(payload, sort_keys=True))
+        return
+
     typer.echo(f"store_id: {manifest.store_id}")
     typer.echo(f"release_id: {manifest.release_id}")
     typer.echo(f"format_version: {manifest.format_version}")
@@ -140,10 +171,24 @@ def info(store_path: Path) -> None:
 
 
 @app.command("validate")
-def validate_command(store_path: Path) -> None:
+def validate_command(
+    store_path: Path,
+    output_format: ReportFormat = _REPORT_FORMAT_OPTION,
+) -> None:
     """Validate a local Store Release."""
 
     result = validate_store(store_path)
+    if output_format is ReportFormat.json:
+        payload = {
+            "ok": result.ok,
+            "errors": result.errors,
+            "warnings": result.warnings,
+        }
+        typer.echo(json.dumps(payload, sort_keys=True))
+        if not result.ok:
+            raise typer.Exit(1)
+        return
+
     for warning in result.warnings:
         typer.echo(f"warning: {warning}", err=True)
     if result.ok:

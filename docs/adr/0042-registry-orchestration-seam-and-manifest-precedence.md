@@ -1,8 +1,9 @@
-# Registry-orchestration seam, canonical manifest column aliases, and per-release option precedence
+# Registry-orchestration seam, canonical manifest column aliases, per-release option precedence, and machine-readable evidence
 
 Records the boundary between `opengwasdb` and the `opengwasdb-stores` registry
-(epic #177), establishing shared canonical column alias resolution (#172) and
-per-release builder option precedence (#174).
+(epic #177), establishing shared canonical column alias resolution (#172),
+per-release builder option precedence (#174), and machine-readable validation
+evidence (#175).
 
 ## Context
 
@@ -21,6 +22,9 @@ registry into manifest synthesis, column projection, and redundant parsing:
    as per-row manifest columns. For homogeneous collections (e.g. FinnGen R13 or
    UK Biobank), the registry had to materialize a derived manifest with
    identical columns on every row purely to reach builder defaults.
+3. **Evidence scraping from prose (#175)**: `validate` and `info` emitted only
+   human-readable text, forcing downstream tools to parse English prose off
+   stdout/stderr to populate registry `validation.yaml` records.
 
 ## Decision
 
@@ -58,10 +62,24 @@ $$\text{per-row manifest column} > \text{CLI option} > \text{hardcoded default}$
   their established defaults: `opengwasdb.gwas-vcf` for capability and `hg19`
   for source assembly.
 
+### 3. Machine-readable validation and inspection evidence
+
+`validate` and `info` support `--format json`, defaulting to human-readable text:
+
+- `validate --format json` outputs a single structured JSON object
+  `{"ok": boolean, "errors": list[str], "warnings": list[str]}` on stdout with
+  empty stderr on success. If validation fails (`ok=false`), the JSON object is
+  emitted on stdout and the process exits with a non-zero exit code.
+- `info --format json` outputs a single structured JSON object containing core
+  manifest metadata and a decomposed, structured `encoding` dictionary
+  (`z`, `se`, `eaf`), avoiding composed human strings.
+
 ## Consequences
 
 - The registry no longer needs to synthesize derived manifests with constant
   columns for homogeneous collections.
 - All builders consume canonical `analyses.tsv` files directly.
-- Existing manifests with legacy column spellings or per-row overrides continue
-  to work without modification.
+- Registry `validation.yaml` can be populated directly from machine-readable JSON
+  output without prose scraping.
+- Existing human-readable text output remains byte-for-byte identical.
+
