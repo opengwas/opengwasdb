@@ -1,0 +1,138 @@
+{
+  "commit": "b688892",
+  "measured_at": "2026-09-16T08:50:50.892674+00:00",
+  "repetitions": 1,
+  "target_finngen_projected_speedup": 4.0,
+  "datasets": {
+    "finngen_r13": {
+      "path": "/data/opengwasdb/raw/finngen-r13-10/finngen_R13_BMI_IRN.gz",
+      "input_bytes": 604052556,
+      "cache_condition": "warm OS cache; round-robin workloads in isolated child processes",
+      "measurements": {
+        "decompression_only": {
+          "records": 21324894,
+          "seconds": [
+            8.255590389017016
+          ],
+          "median_seconds": 8.255590389017016,
+          "records_per_second": 2583085.278597396,
+          "input_mib_per_second": 69.77931089981561,
+          "uncompressed_bytes": 1763605064,
+          "peak_rss_kb": 71584,
+          "peak_rss_kb_by_repetition": [
+            71584
+          ]
+        },
+        "projected_variants": {
+          "records": 21324894,
+          "seconds": [
+            36.87216541194357
+          ],
+          "median_seconds": 36.87216541194357,
+          "records_per_second": 578346.667784596,
+          "input_mib_per_second": 15.62342222054983,
+          "uncompressed_bytes": null,
+          "peak_rss_kb": 69624,
+          "peak_rss_kb_by_repetition": [
+            69624
+          ]
+        },
+        "legacy_full_row_variants": {
+          "records": 21324894,
+          "seconds": [
+            159.42098836391233
+          ],
+          "median_seconds": 159.42098836391233,
+          "records_per_second": 133764.6580845515,
+          "input_mib_per_second": 3.6135104563631675,
+          "uncompressed_bytes": null,
+          "peak_rss_kb": 69764,
+          "peak_rss_kb_by_repetition": [
+            69764
+          ]
+        },
+        "associations": {
+          "records": 21324894,
+          "seconds": [
+            166.30086758499965
+          ],
+          "median_seconds": 166.30086758499965,
+          "records_per_second": 128230.80426264419,
+          "input_mib_per_second": 3.4640192608875453,
+          "uncompressed_bytes": null,
+          "peak_rss_kb": 69756,
+          "peak_rss_kb_by_repetition": [
+            69756
+          ]
+        }
+      },
+      "projected_speedup_over_legacy": 4.323613397337194,
+      "target_speedup": 4.0,
+      "meets_target": true
+    },
+    "gwas_ssf": {
+      "path": "/data/opengwasdb/raw/ebi-sun-pqtl-10/filtered/GCST90240120.filtered.tsv.gz",
+      "input_bytes": 106897,
+      "cache_condition": "warm OS cache; round-robin workloads in isolated child processes",
+      "measurements": {
+        "decompression_only": {
+          "records": 6384,
+          "seconds": [
+            0.00401508598588407
+          ],
+          "median_seconds": 0.00401508598588407,
+          "records_per_second": 1590003.3081344645,
+          "input_mib_per_second": 25.390470779278203,
+          "uncompressed_bytes": 385187,
+          "peak_rss_kb": 69584,
+          "peak_rss_kb_by_repetition": [
+            69584
+          ]
+        },
+        "projected_variants": {
+          "records": 6384,
+          "seconds": [
+            0.013910748064517975
+          ],
+          "median_seconds": 0.013910748064517975,
+          "records_per_second": 458925.7148782396,
+          "input_mib_per_second": 7.3285004464216374,
+          "uncompressed_bytes": null,
+          "peak_rss_kb": 69608,
+          "peak_rss_kb_by_repetition": [
+            69608
+          ]
+        },
+        "legacy_full_row_variants": {
+          "records": 6384,
+          "seconds": [
+            0.08421118184924126
+          ],
+          "median_seconds": 0.08421118184924126,
+          "records_per_second": 75809.409864701,
+          "input_mib_per_second": 1.210586541623242,
+          "uncompressed_bytes": null,
+          "peak_rss_kb": 69740,
+          "peak_rss_kb_by_repetition": [
+            69740
+          ]
+        },
+        "associations": {
+          "records": 6384,
+          "seconds": [
+            0.04974882514216006
+          ],
+          "median_seconds": 0.04974882514216006,
+          "records_per_second": 128324.63845643312,
+          "input_mib_per_second": 2.049192581122581,
+          "uncompressed_bytes": null,
+          "peak_rss_kb": 69740,
+          "peak_rss_kb_by_repetition": [
+            69740
+          ]
+        }
+      },
+      "projected_speedup_over_legacy": 6.0536774484499505
+    }
+  }
+}
