@@ -122,11 +122,6 @@ class CompletionResult:
     n_missing_imputation_failed: int
 
 
-def _work_dir_for(dest_path: Path) -> Path:
-    dest_path = Path(dest_path)
-    return dest_path.parent / f".{dest_path.name}.tmp"
-
-
 # ── Phase 2: per-block worker ───────────────────────────────────────────────
 
 

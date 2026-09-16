@@ -60,6 +60,24 @@ the end of this file.
   When a resolved `source_file` path is absolute, it is used directly; relative
   paths are joined against `--filtered-dir`.
 
+### Fixed
+
+- **Concurrent staging runs for one destination no longer delete each other's
+  work, and an interrupted run no longer leaks its staging directory.**
+  `OpenGWASDBStore.staging()` used a fixed `.{name}.tmp` sibling, so a second
+  invocation for the same destination deleted the directory the first was still
+  writing — on a real build the first then failed mid-run with
+  `variant_offsets.npy` ENOENT while appearing to be running. Each invocation
+  now writes to its own unique `.{name}.tmp.{pid}.{random}` directory and
+  removes only that directory; cleanup catches `BaseException`, so
+  `KeyboardInterrupt` and `SystemExit` discard it too (ADR 0043). Publication
+  of a finished release is serialised by an advisory lock on the destination's
+  parent directory and re-checks the destination at commit time: a no-overwrite
+  build that loses a race with a concurrent publisher now fails loudly with
+  `FileExistsError` instead of silently replacing it. The lock is host-local
+  (see ADR 0043 for the shared-filesystem caveat). The two-rename atomic
+  replacement and its rollback are unchanged.
+
 ## [0.3.0] — 2026-09-12
 
 Work lands on `dev` and appears here under *Unreleased* until `dev` merges to

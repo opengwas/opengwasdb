@@ -193,7 +193,9 @@ class TestCompletionFiles:
 
     def test_no_leftover_checkpoint_or_work_dir(self, tmp_path, completed_store):
         assert not (tmp_path / f".{completed_store.name}.checkpoint").exists()
-        assert not (tmp_path / f".{completed_store.name}.tmp").exists()
+        # Work directories are unique per invocation (`.{name}.tmp.{pid}.{token}`),
+        # so assert none remain rather than checking one fixed name.
+        assert list(tmp_path.glob(f".{completed_store.name}.tmp*")) == []
 
     def test_manifest_completion_state(self, completed_store):
         import json
@@ -823,7 +825,7 @@ class TestResume:
         checkpoint_dir = checkpoint_dir_for(dst)
         assert checkpoint_dir.exists()
         assert not dst.exists()
-        assert not complete_module._work_dir_for(dst).exists()
+        assert list(dst.parent.glob(f".{dst.name}.tmp*")) == []
         checkpointed = list((checkpoint_dir / "blocks").glob("*.npz"))
         assert len(checkpointed) == 1  # exactly one block finished before the crash
 

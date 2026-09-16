@@ -9,10 +9,13 @@ those artifacts: callers still work with ``zarr.Group`` and
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import os
 import shutil
 import sqlite3
+import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -298,6 +301,117 @@ class _ReleasePaths:
         return self._paths["variant_offsets"]
 
 
+@contextmanager
+def _destination_lock(dst: Path) -> Iterator[None]:
+    """Serialise publications of releases into ``dst``'s parent directory.
+
+    The lock is the parent directory's own inode, flocked through an
+    ``os.open`` handle, rather than a lock file. A lock file has to live
+    somewhere, and both obvious places fail: beside the destination it is
+    renamed into the published release when that destination is a Hybrid
+    release's nested Dense Component (staged at ``<outer-work>/dense``), and
+    under the system temp directory its identity moves with ``TMPDIR`` and
+    private temp namespaces -- two callers that do not share a temp root would
+    not contend -- while a tmp cleaner can unlink it mid-hold, dropping the
+    lock without any process noticing. A directory inode is a stable
+    filesystem identity, exists by the time a commit runs, and creates no
+    entry that could be published.
+
+    The cost is granularity: every destination in one parent directory shares
+    this lock, so commits to different releases in the same directory are
+    serialised for the duration of a commit, including deletion of a replaced
+    release. Commits happen once per build, so that is accepted in exchange
+    for a lock that cannot be moved or reaped out from under it.
+
+    Advisory and host-local: ``flock`` is enforced by the local kernel and is
+    released when the holding process dies, so a crashed builder cannot leave
+    a destination permanently locked. Whether it also serialises processes on
+    another host depends on the filesystem -- NFS and other network
+    filesystems may not propagate ``flock``, so this is not a cross-host lock.
+    A filesystem that refuses ``flock`` outright fails the commit loudly rather
+    than publishing unserialised. Each rename inside the critical section is
+    still atomic by the filesystem's own guarantee.
+
+    Two requirements follow, and both fail loudly rather than degrading: the
+    parent directory must be openable for reading (``os.open(O_RDONLY)`` needs
+    read/search permission on it, so a write-and-execute-only directory cannot
+    be locked), and the filesystem must implement ``flock`` on directories.
+    """
+    fd = os.open(dst.parent, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _new_staging_work_dir(dst: Path) -> Path:
+    """Create this invocation's own staging directory beside ``dst``.
+
+    Unique, and never reused. A fixed ``.{name}.tmp`` was the defect this
+    replaces: a second invocation for the same destination deleted the
+    directory the first was still writing, and the first build then failed
+    mid-run with ``variant_offsets.npy`` ENOENT. A name collision raises
+    rather than being cleaned up, for the same reason -- deleting a directory
+    is only safe when this call created it.
+
+    ``mkdir`` rather than ``tempfile.mkdtemp`` so the published release keeps
+    the umask-derived mode an ordinary staging ``mkdir`` gave it, instead of
+    ``mkdtemp``'s private 0700.
+    """
+    token = f"{os.getpid()}.{uuid.uuid4().hex[:12]}"
+    work = dst.with_name(f".{dst.name}.tmp.{token}")
+    work.mkdir()
+    return work
+
+
+def _commit_staged_release(dst: Path, work: Path, *, overwrite: bool) -> None:
+    """Publish the fully-written ``work`` directory at ``dst``, atomically.
+
+    The destination is checked again *under the parent-directory lock* rather
+    than trusting the check ``staging()`` made before the build began:
+    another process may have published to ``dst`` while this one was writing,
+    and a no-overwrite commit must fail loudly instead of clobbering it. That
+    entry-time check is fail-fast only -- it cannot see a future publication,
+    and it is not the thing that makes the decision.
+
+    Replacement keeps the old release reachable throughout: it is renamed to a
+    ``.{name}.old`` sibling, the new release is renamed in, and only then is
+    the old one deleted. A failure between the two renames moves the old
+    release back, so a failed commit leaves ``dst`` exactly as it was found
+    rather than absent or half-swapped.
+
+    ``overwrite=True`` is serialised by the lock but deliberately **last
+    writer wins**: both builds commit successfully and the later one replaces
+    the earlier, with no error and no record that a release was superseded.
+    The lock only makes each replacement atomic and ordered; it does not decide
+    which build *should* win, and it cannot stop two callers from doing
+    redundant work. A higher-level orchestrator that must not schedule two
+    builds for one destination, or that must reap a ``.{name}.tmp.*``
+    directory orphaned by a killed build, is therefore complementary to this
+    lock, not interchangeable with it (ADR 0043).
+    """
+    with _destination_lock(dst):
+        if dst.exists() and not overwrite:
+            raise FileExistsError(
+                f"output path already exists: {dst} "
+                "(published by another process while this release was staging)"
+            )
+        if dst.exists():
+            old = dst.with_name(f".{dst.name}.old")
+            if old.exists():
+                shutil.rmtree(old)
+            dst.rename(old)
+            try:
+                work.rename(dst)
+            except BaseException:
+                old.rename(dst)
+                raise
+            shutil.rmtree(old, ignore_errors=True)
+        else:
+            work.rename(dst)
+
+
 @dataclass(frozen=True)
 class OpenGWASDBStore(_ReleasePaths):
     """A local Store Release opened from an explicit path.
@@ -381,51 +495,57 @@ class OpenGWASDBStore(_ReleasePaths):
     def staging(dest_path: str | Path, *, overwrite: bool = False) -> Iterator[StagedRelease]:
         """Construct a release atomically at ``dest_path``.
 
-        Writes happen in a ``.{name}.tmp`` sibling directory. On successful
-        exit from the ``with`` block, replacing an existing release
-        (``overwrite=True``) is two renames -- the old release out to a
-        ``.{name}.old`` sibling, the new one in -- rather than deleting the
-        old release first: a directory can only be renamed onto an *empty*
-        destination on POSIX, so a full ``rmtree`` before the swap would
-        leave no release at ``dest_path`` for however long the deletion of a
-        large store takes. Renames are single filesystem operations, so that
-        window shrinks to two syscalls, and if a crash lands between them the
-        old release is still intact at its ``.old`` path rather than gone.
-        On any exception -- including one raised by the commit-time renames
-        themselves -- ``dest_path`` is left as it was found: if the swap
-        fails after the old release has been moved aside but before the new
-        one has moved in, the old release is moved back rather than left
-        stranded at ``.{name}.old``.
+        Each invocation writes into its **own** unique ``.{name}.tmp.*``
+        sibling, so two builds for one destination -- or a second build after
+        a crash -- can never delete or corrupt each other's work. Publication
+        happens on successful exit from the ``with`` block, under a
+        parent-directory advisory lock that also re-checks the destination: a
+        no-overwrite build that loses a race with a concurrent publisher
+        fails loudly rather than replacing it.
+
+        Replacing an existing release (``overwrite=True``) is two renames --
+        the old release out to a ``.{name}.old`` sibling, the new one in --
+        rather than deleting the old release first: a directory can only be
+        renamed onto an *empty* destination on POSIX, so a full ``rmtree``
+        before the swap would leave no release at ``dest_path`` for however
+        long the deletion of a large store takes. Renames are single
+        filesystem operations, so that window shrinks to two syscalls, and if
+        a crash lands between them the old release is still intact at its
+        ``.old`` path rather than gone.
+
+        ``overwrite=True`` is serialised by the lock but deliberately **last
+        writer wins**: two concurrent overwrite builds both succeed and the
+        later commit replaces the earlier. The lock orders and makes each
+        replacement atomic; it does not prevent redundant work or decide which
+        build should win, so an orchestrator that must not schedule two builds
+        for one destination, or that must reap an orphaned ``.{name}.tmp.*``
+        directory, is complementary to this context, not interchangeable with
+        it (ADR 0043).
+
+        On error or interruption -- any ``BaseException``, including
+        ``KeyboardInterrupt`` and ``SystemExit`` -- this invocation's own work
+        directory is discarded and ``dest_path`` is left as it was found.
         """
         dst = Path(dest_path)
         if dst.exists() and not overwrite:
             raise FileExistsError(f"output path already exists: {dst}")
         dst.parent.mkdir(parents=True, exist_ok=True)
-        work = dst.with_name(f".{dst.name}.tmp")
-        if work.exists():
-            shutil.rmtree(work)
-        work.mkdir(parents=True)
+        work = _new_staging_work_dir(dst)
 
         staged = StagedRelease(work)
         try:
             yield staged
-        except Exception:
+        except BaseException:
             shutil.rmtree(work, ignore_errors=True)
             raise
 
-        if dst.exists():
-            old = dst.with_name(f".{dst.name}.old")
-            if old.exists():
-                shutil.rmtree(old)
-            dst.rename(old)
-            try:
-                work.rename(dst)
-            except Exception:
-                old.rename(dst)
-                raise
-            shutil.rmtree(old, ignore_errors=True)
-        else:
-            work.rename(dst)
+        try:
+            _commit_staged_release(dst, work, overwrite=overwrite)
+        except BaseException:
+            # `work` is still there exactly when the swap did not complete;
+            # if it did, it has been renamed to `dst` and this is a no-op.
+            shutil.rmtree(work, ignore_errors=True)
+            raise
 
 
 @dataclass(frozen=True)

@@ -85,10 +85,10 @@ def test_restamp_publishes_a_0_1_0_release_and_leaves_the_source_untouched(
     # The source is byte-for-byte what it was: the tool read it and never wrote
     # into it (spec §21.4).
     assert _fingerprint(pre_reset_store) == before
-    # Published only once the restamped copy validated; the staging directory
-    # is gone.
+    # Published only once the restamped copy validated; no staging directory
+    # (unique per invocation) is left behind.
     assert destination.exists()
-    assert not (tmp_path / ".restamped.opengwasdb.tmp").exists()
+    assert list(tmp_path.glob(".restamped.opengwasdb.tmp*")) == []
 
     manifest = open_store(destination).manifest
     assert manifest.format_version == "0.1.0"
@@ -220,7 +220,7 @@ def test_a_restamped_store_that_fails_validation_is_not_published(
         restamp_module.restamp(pre_reset_store, destination)
 
     assert not destination.exists()
-    assert not (tmp_path / ".restamped.opengwasdb.tmp").exists()
+    assert list(tmp_path.glob(".restamped.opengwasdb.tmp*")) == []
     assert _fingerprint(pre_reset_store) == before
 
 

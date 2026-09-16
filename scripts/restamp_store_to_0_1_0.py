@@ -26,7 +26,7 @@ deleted.
 
 **Outside the Provenance Amendment exception, and the source is never written.**
 Spec §21.4 says a format change derives a *new* release. The destination is
-built in a `.name.tmp` staging directory and published by rename only when the
+built in a staging directory beside it and published by rename only when the
 staged copy validates with **no** errors, so a failure at any point leaves the
 source untouched and nothing where the destination was meant to appear (issues
 #156, #164). The published release is genuinely new -- a fresh UUID4
