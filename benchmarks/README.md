@@ -10,6 +10,36 @@ is needed to reproduce or update the report.
 
 ## Scripts
 
+### `benchmark_reader_projection.py`
+
+Measures the projection-aware tabular reader paths added in issue #179 against
+the retained full-row parser that previously powered `stream_variants()`. For
+one FinnGen R13 source and one GWAS-SSF source it records, under the same warm
+operating-system cache condition:
+
+1. decompression-only throughput;
+2. projected `stream_variants()` throughput;
+3. legacy full-row variant throughput;
+4. `stream_associations()` throughput; and
+5. peak RSS for each isolated workload.
+
+The harness refuses to write an artifact if projected and legacy variant row
+counts differ. The committed production measurement can be regenerated with:
+
+```bash
+pixi run -e dev python benchmarks/benchmark_reader_projection.py \
+  --finngen /data/opengwasdb/raw/finngen-r13-10/finngen_R13_BMI_IRN.gz \
+  --gwas-ssf /data/opengwasdb/raw/ebi-sun-pqtl-10/filtered/GCST90240120.filtered.tsv.gz \
+  --repetitions 1 \
+  --output docs/benchmark-output/opengwasdb_reader_projection_benchmark.json
+```
+
+Use more repetitions when reporting stable timing beyond the issue-179
+acceptance measurement; each repetition performs both full-row scans of the
+21.3-million-row FinnGen file and therefore takes several minutes.
+
+---
+
 ### `benchmark_vcf_ukb_chr1_dense.py`
 
 Builds and benchmarks a dense observed-only store from the 100 UKB chr1 GWAS-VCF

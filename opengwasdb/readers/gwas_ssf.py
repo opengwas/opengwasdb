@@ -5,13 +5,13 @@ Adapts the orientation and beta/se -> z parsing already proven by
 interface (issue #19), so a filtered/harmonised GWAS-Catalog-SSF file can
 route through `opengwasdb.readers.registry.resolve_reader` into the Dense
 and Hybrid builders (issue #20), not only the Ragged-only path that module
-serves. `stream_associations`/`stream_variants` share one row parser
-(`_iter_rows`) with `extract_at_sites`, so orientation and column handling
-live in exactly one place. `rsid`/`variant_id` are read into each
-`SourceVariant` (issue #109) so a Dense or Hybrid store built through this
-reader is queryable by rsid, exactly as the Ragged path already was;
-`ReaderAssociation` still has no rsid field -- an rsid names a variant, not
-an association.
+serves. `stream_associations` and `extract_at_sites` share the full row parser;
+`stream_variants` has a projection-aware path that reads only identity and
+alias columns while using the same normalization rules (issue #179).
+`rsid`/`variant_id` are read into each `SourceVariant` (issue #109) so a Dense
+or Hybrid store built through this reader is queryable by rsid, exactly as the
+Ragged path already was; `ReaderAssociation` still has no rsid field -- an
+rsid names a variant, not an association.
 
 `ref`/`alt` on each `ReaderAssociation`/`stream_variants` tuple are the
 source's own `other_allele`/`effect_allele` labelling (mirroring GWAS-VCF's
@@ -40,18 +40,28 @@ from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
 from opengwasdb.readers.tabular import (
     TabularRow,
+    VariantProjectionColumns,
     extract_at_sites,
     parse_af,
     parse_finite_float,
     parse_positive_float,
     stream_associations,
+    stream_projected_variants,
     stream_variants,
 )
 from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
 
 GWAS_SSF_CAPABILITY = "opengwasdb.gwas-ssf"
+_VARIANT_COLUMNS = VariantProjectionColumns(
+    chromosome=(b"chromosome",),
+    position=b"base_pair_location",
+    ref=b"other_allele",
+    alt=b"effect_allele",
+    aliases=(b"rsid", b"variant_id"),
+)
 
-def _rsid(row: dict[str, str]) -> str:
+
+def _rsid(rsid: str | None, variant_id: str | None) -> str:
     """The row's rs identifier, or "" if it names none.
 
     Harmonised GWAS-SSF carries a dedicated `rsid` column; `variant_id` is the
@@ -60,8 +70,8 @@ def _rsid(row: dict[str, str]) -> str:
     an rs identifier is dropped: it is not something a user can look the
     variant up by (issue #109).
     """
-    for column in ("rsid", "variant_id"):
-        value = (row.get(column) or "").strip()
+    for candidate in (rsid, variant_id):
+        value = (candidate or "").strip()
         if value.startswith("rs"):
             return value
     return ""
@@ -105,8 +115,17 @@ def _iter_rows(path: str | Path) -> Iterator[TabularRow]:
                 beta=beta,
                 se=se,
                 af_alt=parse_af(row.get("effect_allele_frequency")),
-                rsid=_rsid(row),
+                rsid=_rsid(row.get("rsid"), row.get("variant_id")),
             )
+
+
+def _iter_variants(path: str | Path) -> Iterator[SourceVariant]:
+    yield from stream_projected_variants(path, _VARIANT_COLUMNS)
+
+
+def stream_full_row_variants(path: str | Path) -> Iterator[SourceVariant]:
+    """Reference variant semantics retained for parity benchmarks (issue #179)."""
+    yield from stream_variants(_iter_rows(path))
 
 
 @dataclass(frozen=True)
@@ -126,7 +145,7 @@ class GwasSsfReader:
         yield from stream_associations(_iter_rows(self.path), self.stored_effect_scale)
 
     def stream_variants(self) -> Iterator[SourceVariant]:
-        yield from stream_variants(_iter_rows(self.path))
+        yield from _iter_variants(self.path)
 
     def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
         return extract_at_sites(_iter_rows(self.path), alids)

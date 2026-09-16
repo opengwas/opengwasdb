@@ -12,6 +12,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import opengwasdb.readers.finngen as finngen_module
+import opengwasdb.readers.gwas_ssf as gwas_ssf_module
+import opengwasdb.readers.tabular as tabular_module
 from opengwasdb.build.phenotype_sd import estimate_phenotype_sd
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.readers import (
@@ -91,6 +94,21 @@ def _write_ssf(path: Path, rows: list[dict]) -> None:
         fh.write("\t".join(_SSF_HEADER) + "\n")
         for row in rows:
             fh.write("\t".join(str(row.get(col, "")) for col in _SSF_HEADER) + "\n")
+
+
+def _variant_bytes(reader: FinnGenR13Reader | GwasSsfReader) -> bytes:
+    """Serialize the reader output exactly as a builder-facing byte stream."""
+    return b"".join(
+        f"{variant.chromosome}\t{variant.position}\t{variant.ref}\t{variant.alt}\t{variant.rsid}\n".encode()
+        for variant in reader.stream_variants()
+    )
+
+
+def _legacy_variant_bytes(variants) -> bytes:
+    return b"".join(
+        f"{variant.chromosome}\t{variant.position}\t{variant.ref}\t{variant.alt}\t{variant.rsid}\n".encode()
+        for variant in variants
+    )
 
 
 def test_resolve_reader_returns_gwas_ssf_reader_for_its_capability(tmp_path):
@@ -348,6 +366,59 @@ def test_finngen_r13_normalises_chromosome_23_to_x():
     assert sites["X:98536:A:C"].af == pytest.approx(0.00146324)
 
 
+def test_finngen_variant_projection_preserves_exact_output_without_parsing_statistics(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "finngen.tsv"
+    path.write_text(
+        '"extra"\t"alt"\t"rsids"\t"pos"\t"#chrom"\t"ref"\t'
+        '"beta"\t"sebeta"\t"af_alt"\t"pval"\t"mlogp"\t"nearest_genes"\n'
+        "x\tA\trs100,rs101\t100\t1\tG\tbad-beta\tbad-se\tbad-af\tbad-p\tbad-m\tGENE1\n"
+        "x\tG\t.\t200\t1\tA\tbad-beta\tbad-se\tbad-af\tbad-p\tbad-m\tGENE2\n"
+        "x\tA\trs102\t100\t1\tG\tbad-beta\tbad-se\tbad-af\tbad-p\tbad-m\tGENE1\n"
+        "x\tC\trsX\t300\t23\tA\tbad-beta\tbad-se\tbad-af\tbad-p\tbad-m\tGENEX\n"
+        "x\tC\trsBadChrom\t400\t\tA\tbad-beta\tbad-se\tbad-af\tbad-p\tbad-m\tGENE\n"
+        "x\tC\trsBadPos\t0\t1\tA\tbad-beta\tbad-se\tbad-af\tbad-p\tbad-m\tGENE\n"
+        "x\tN\trsBadAllele\t500\t1\tA\tbad-beta\tbad-se\tbad-af\tbad-p\tbad-m\tGENE\n"
+        '"x"\t"A"\t"rsQuoted"\t"600"\t"1"\t"G"\tbad-beta\tbad-se\tbad-af\tbad-p\tbad-m\tGENE\n',
+        encoding="utf-8",
+    )
+
+    legacy = _legacy_variant_bytes(finngen_module.stream_full_row_variants(path))
+
+    def fail_if_called(value):
+        raise AssertionError(f"variant projection parsed association statistic {value!r}")
+
+    monkeypatch.setattr(tabular_module, "parse_finite_float", fail_if_called)
+    monkeypatch.setattr(tabular_module, "parse_positive_float", fail_if_called)
+    monkeypatch.setattr(tabular_module, "parse_af", fail_if_called)
+
+    projected = _variant_bytes(FinnGenR13Reader(path))
+
+    assert projected == legacy == (
+        b"1\t100\tG\tA\trs100\n"
+        b"1\t200\tA\tG\t\n"
+        b"1\t100\tG\tA\trs102\n"
+        b"X\t300\tA\tC\trsX\n"
+        b"1\t600\tG\tA\trsQuoted\n"
+    )
+
+
+def test_finngen_variant_projection_is_byte_identical_without_optional_rsid_column(tmp_path):
+    path = tmp_path / "finngen.tsv.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        fh.write(
+            "alt\tsebeta\tchrom\tref\tpos\tbeta\taf_alt\textra\n"
+            "G\t0.5\t1\tA\t100\t1.0\t0.2\tx\n"
+            "A\t0.6\t23\tC\t200\t-1.0\t0.3\ty\n"
+        )
+
+    projected = _variant_bytes(FinnGenR13Reader(path))
+    legacy = _legacy_variant_bytes(finngen_module.stream_full_row_variants(path))
+
+    assert projected == legacy == b"1\t100\tA\tG\t\nX\t200\tC\tA\t\n"
+
+
 # --- GWAS-VCF manifest authority (issue #17) ---
 
 
@@ -526,6 +597,102 @@ def test_gwas_ssf_reader_uses_constructor_scale(tmp_path):
 
     assert len(associations) == 1
     assert associations[0].stored_effect_scale is StoredEffectScale.LOG_OR
+
+
+def test_gwas_ssf_variant_projection_preserves_exact_output_without_parsing_statistics(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "study.tsv"
+    path.write_text(
+        "extra\tother_allele\tvariant_id\tstandard_error\tchromosome\t"
+        "effect_allele_frequency\tbase_pair_location\teffect_allele\trsid\tbeta\n"
+        "x\tA\trsFallback\tbad-se\t1\tbad-af\t100\tG\t\tbad-beta\n"
+        "x\tG\tnot-an-rsid\tbad-se\t1\tbad-af\t200\tA\trsPrimary\tbad-beta\n"
+        "x\tA\trsDuplicate\tbad-se\t1\tbad-af\t100\tG\t\tbad-beta\n"
+        "x\tA\trsBadChrom\tbad-se\t\tbad-af\t300\tC\t\tbad-beta\n"
+        "x\tA\trsBadPos\tbad-se\t1\tbad-af\t0\tC\t\tbad-beta\n"
+        "x\tA\trsBadAllele\tbad-se\t1\tbad-af\t400\tN\t\tbad-beta\n"
+        '"x"\t"A"\t"rsQuoted"\tbad-se\t"1"\tbad-af\t"500"\t"G"\t""\tbad-beta\n',
+        encoding="utf-8",
+    )
+
+    legacy = _legacy_variant_bytes(gwas_ssf_module.stream_full_row_variants(path))
+
+    def fail_if_called(value):
+        raise AssertionError(f"variant projection parsed association statistic {value!r}")
+
+    monkeypatch.setattr(gwas_ssf_module, "parse_finite_float", fail_if_called)
+    monkeypatch.setattr(gwas_ssf_module, "parse_positive_float", fail_if_called)
+    monkeypatch.setattr(gwas_ssf_module, "parse_af", fail_if_called)
+
+    projected = _variant_bytes(GwasSsfReader(path))
+
+    assert projected == legacy == (
+        b"1\t100\tA\tG\trsFallback\n"
+        b"1\t200\tG\tA\trsPrimary\n"
+        b"1\t100\tA\tG\trsDuplicate\n"
+        b"1\t500\tA\tG\trsQuoted\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("reader_type", "header"),
+    [
+        (FinnGenR13Reader, "#chrom\tpos\tref\n"),
+        (GwasSsfReader, "chromosome\tbase_pair_location\tother_allele\n"),
+    ],
+)
+def test_projected_variant_reader_fails_loudly_when_identity_column_is_missing(
+    tmp_path, reader_type, header
+):
+    path = tmp_path / "missing-required-column.tsv"
+    path.write_text(header, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="missing required variant columns"):
+        list(reader_type(path).stream_variants())
+
+
+def test_gwas_ssf_variant_projection_is_byte_identical_without_optional_aliases(tmp_path):
+    path = tmp_path / "study.tsv.gz"
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        fh.write(
+            "beta\tother_allele\tchromosome\tstandard_error\teffect_allele\t"
+            "base_pair_location\textra\n"
+            "1.0\tA\t1\t0.5\tG\t100\tx\n"
+            "-1.0\tG\t1\t0.6\tA\t200\ty\n"
+        )
+
+    projected = _variant_bytes(GwasSsfReader(path))
+    legacy = _legacy_variant_bytes(gwas_ssf_module.stream_full_row_variants(path))
+
+    assert projected == legacy == b"1\t100\tA\tG\t\n1\t200\tG\tA\t\n"
+
+
+@pytest.mark.parametrize(
+    ("header", "row", "expected"),
+    [
+        (
+            "chromosome\tbase_pair_location\tother_allele\teffect_allele\n",
+            '1\t100\tA\t"G"\n',
+            b"1\t100\tA\tG\t\n",
+        ),
+        (
+            "chromosome\tbase_pair_location\tother_allele\teffect_allele\trsid\n",
+            '1\t100\tA\tG\t"rs1"\n',
+            b"1\t100\tA\tG\trs1\n",
+        ),
+    ],
+)
+def test_gwas_ssf_projection_preserves_quoted_final_projected_column(
+    tmp_path, header, row, expected
+):
+    path = tmp_path / "quoted-final-column.tsv"
+    path.write_text(header + row, encoding="utf-8")
+
+    projected = _variant_bytes(GwasSsfReader(path))
+    legacy = _legacy_variant_bytes(gwas_ssf_module.stream_full_row_variants(path))
+
+    assert projected == legacy == expected
 
 
 # --- Site extraction: orientation, palindromes, liftover (issue #21) ---

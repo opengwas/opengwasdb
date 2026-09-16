@@ -47,6 +47,13 @@ the end of this file.
 
 ### Changed
 
+- **FinnGen R13 and GWAS-SSF `stream_variants()` now project only variant
+  identity and alias columns** instead of parsing association statistics and
+  materializing a full tabular row during Dense/Hybrid Pass 1. Header names,
+  source order, duplicates, rsid fallback, chromosome/allele normalization,
+  and variants with unusable statistics retain their existing behavior. A
+  reproducible benchmark records decompression, projected variants, the
+  pre-change full-row path, associations, and per-path peak RSS (#179).
 - **`build-ragged-ssf` accepts canonical `analyses.tsv` column names**
   (`sample_size`, `source_file`) alongside legacy names (`n`, `filtered_file`,
   `file_path`), with canonical spellings winning when both are present (#172, #177).
