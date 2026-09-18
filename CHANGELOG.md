@@ -93,6 +93,16 @@ the end of this file.
 
 ### Changed
 
+- **Dense and Hybrid map phases split the manifest into size-balanced chunks**:
+  `_split_manifest_rows` now targets `min(sources, 4 * n_workers)` contiguous
+  chunks balanced by cumulative on-disk source size instead of exactly
+  `n_workers` chunks of equal row count. This stops one oversized source from
+  setting the makespan of the worker that happened to own it: a dominating
+  source lands in its own chunk while the remaining sources spread across the
+  rest. Chunk rank is its manifest-order index, fixed before submission, so
+  task completion order cannot affect shard sorting or first-named-rsid
+  selection, and the artifact stays bit-for-bit identical to the pre-change
+  output and between serial and parallel modes (#195).
 - **`benchmark_extract_variant_reference.py` now exercises the tree reduce**:
   every synthetic source carries the same genome-wide panel, so every worker
   contributes a shard to every window rather than almost every window being a

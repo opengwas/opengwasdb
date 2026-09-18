@@ -504,6 +504,39 @@ def _pass1_spill_records(
     return specs, records_by_spill
 
 
+def _imbalanced_manifest(
+    tmp_path: Path, *, huge_rows: int = 400, small_rows: int = 15, n_small: int = 12
+) -> Path:
+    """One source far larger on disk than many small, overlapping sources.
+
+    The one big source would set the map makespan if it shared a chunk; the
+    small sources share the same positions so the reduce has real overlap to
+    collapse (issue #195).
+    """
+    huge = _make_vcf(
+        tmp_path,
+        "huge",
+        [
+            f"1\t{100_000 + j * 1_000}\t"
+            f"{f'rs_huge_{j}' if j % 2 == 0 else '.'}\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n"
+            for j in range(huge_rows)
+        ],
+    )
+    entries: list[tuple[str, Path, str, str]] = [("huge", huge, "", "hg38")]
+    for i in range(n_small):
+        small = _make_vcf(
+            tmp_path,
+            f"small_{i}",
+            [
+                f"1\t{100_000 + j * 1_000}\t"
+                f"{f'rs_{i}_{j}' if j % 3 == 0 else '.'}\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n"
+                for j in range(small_rows)
+            ],
+        )
+        entries.append((f"small_{i}", small, "", "hg38"))
+    return _make_manifest(tmp_path, entries, name="imbalanced.tsv")
+
+
 @pytest.mark.parametrize("n_workers", [1, 2, 3])
 def test_artifact_is_invariant_across_window_and_batch_configurations(tmp_path, n_workers):
     """Issue #188 AC: the genomic-window partition and reduction batch size are
@@ -802,6 +835,52 @@ def test_reduction_runs_more_than_one_level_when_spills_exceed_batch(tmp_path, n
     )
     assert result.n_window_shards > result.n_windows
     assert result.reduce_levels > 1
+
+
+# ── size-balanced chunking (issue #195) ──────────────────────────────────────
+
+
+def test_artifact_is_independent_of_task_completion_order(tmp_path, monkeypatch):
+    """Issue #195 AC: chunk rank is fixed at split time, so the order results
+    arrive in cannot change the artifact. Reversing the futures ``as_completed``
+    yields exercises the opposite completion order directly, with no timing."""
+    import opengwasdb.layouts.dense.build_vcf as build_vcf
+
+    manifest = _imbalanced_manifest(tmp_path)
+    forward = tmp_path / "forward.variant-ref.tsv.gz"
+    reverse = tmp_path / "reverse.variant-ref.tsv.gz"
+    extract_variant_reference(manifest, forward, n_workers=2, window_size_mb=200.0)
+
+    real_as_completed = build_vcf.as_completed
+
+    def reversed_completion(futures, timeout=None):
+        return reversed(list(real_as_completed(futures, timeout)))
+
+    monkeypatch.setattr(build_vcf, "as_completed", reversed_completion)
+    extract_variant_reference(manifest, reverse, n_workers=2, window_size_mb=200.0)
+
+    # The fixture really has cross-chunk rsid conflicts, so the comparison is
+    # meaningful: a completion-order rank would move these winners.
+    assert "rs_huge_0" in _artifact_text(forward)
+    assert _artifact_text(forward) == _artifact_text(reverse)
+
+
+def test_imbalanced_manifest_artifact_is_identical_across_worker_counts(tmp_path):
+    """Issue #195 AC: the size-balanced split never changes the artifact -- it
+    is identical to the serial read and across every worker count."""
+    manifest = _imbalanced_manifest(tmp_path)
+    baseline: str | None = None
+    for n_workers in (1, 2, 3, 5, 8):
+        artifact = tmp_path / f"imbalanced-{n_workers}.variant-ref.tsv.gz"
+        extract_variant_reference(
+            manifest, artifact, n_workers=n_workers, window_size_mb=200.0
+        )
+        text = _artifact_text(artifact)
+        if baseline is None:
+            baseline = text
+        else:
+            assert text == baseline, n_workers
+    assert baseline is not None and len(baseline.splitlines()) > 400
 
 
 # ── two-stage build == one command ───────────────────────────────────────────

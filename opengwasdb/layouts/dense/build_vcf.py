@@ -569,25 +569,191 @@ def _pass1_record_site(record: _Pass1Record) -> tuple[str, int, str, str]:
     return record[0]
 
 
-def _split_manifest_rows(
-    manifest_rows: list[_ManifestRow], n_chunks: int
-) -> list[list[_ManifestRow]]:
-    """Contiguous, manifest-order slices of the input rows.
+def _source_file_size(row: _ManifestRow) -> int:
+    """A manifest row's source size in bytes, used only to balance the map split.
 
-    Contiguity is what keeps "first named rsid wins" deterministic: worker
-    ``i`` always owns the rows before worker ``i + 1``, so the merge can
-    resolve a site seen in several shards by shard order.
+    A path the split cannot stat counts as one byte rather than zero: the split
+    is a scheduling heuristic, and an unreadable source still fails loudly when
+    its worker's reader opens it. Zero-weighting it here would let a chunk that
+    is not actually free look balanced (issue #195).
+    """
+    try:
+        return Path(row.file_path).stat().st_size
+    except OSError:
+        return 1
+
+
+def _chunks_needed(sizes: Sequence[int], ceiling: int) -> int:
+    """Greedy contiguous chunks needed to keep every chunk at or below ``ceiling``."""
+    chunks = 1
+    current = 0
+    for size in sizes:
+        if current > 0 and current + size > ceiling:
+            chunks += 1
+            current = size
+        else:
+            current += size
+    return chunks
+
+
+def _balanced_ceiling(sizes: Sequence[int], target_chunks: int) -> int:
+    """Smallest chunk-weight ceiling a contiguous partition into ``target_chunks`` meets.
+
+    ``_chunks_needed`` is monotone in the ceiling, so the linear-partition
+    bottleneck is exact by binary search (issue #195).
+    """
+    low, high = max(sizes, default=0), sum(sizes)
+    while low < high:
+        middle = (low + high) // 2
+        if _chunks_needed(sizes, middle) <= target_chunks:
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+def _greedy_chunk_bounds(sizes: Sequence[int], ceiling: int) -> list[int]:
+    """Start indices of the greedy contiguous partition under ``ceiling``."""
+    bounds = [0]
+    current = 0
+    for index, size in enumerate(sizes):
+        if current > 0 and current + size > ceiling:
+            bounds.append(index)
+            current = size
+        else:
+            current += size
+    bounds.append(len(sizes))
+    return bounds
+
+
+def _heaviest_splittable_chunk(bounds: Sequence[int], prefix: Sequence[int]) -> int:
+    """Index of the heaviest chunk holding more than one row, or -1 when none can split."""
+    best, best_weight = -1, -1
+    for chunk in range(len(bounds) - 1):
+        start, end = bounds[chunk], bounds[chunk + 1]
+        if end - start > 1 and prefix[end] - prefix[start] > best_weight:
+            best = chunk
+            best_weight = prefix[end] - prefix[start]
+    return best
+
+
+def _chunk_midpoint(prefix: Sequence[int], start: int, end: int) -> int:
+    """The element boundary inside ``(start, end)`` nearest the chunk's half-weight."""
+    half = (prefix[end] - prefix[start]) / 2
+    return min(range(start + 1, end), key=lambda i: abs(prefix[i] - prefix[start] - half))
+
+
+def _split_to_target(bounds: list[int], prefix: Sequence[int], target_chunks: int) -> list[int]:
+    """Split the heaviest chunks until the contiguous partition has ``target_chunks`` parts.
+
+    The greedy partition holds at most ``target_chunks`` chunks, so this only
+    adds boundaries. It runs only while rows outnumber chunks, so a chunk with
+    more than one row always exists to split.
+    """
+    while len(bounds) - 1 < target_chunks:
+        chunk = _heaviest_splittable_chunk(bounds, prefix)
+        bounds.insert(chunk + 1, _chunk_midpoint(prefix, bounds[chunk], bounds[chunk + 1]))
+    return bounds
+
+
+def _prefix_sums(sizes: Sequence[int]) -> list[int]:
+    """``prefix[i]`` is the cumulative size of ``sizes[:i]``."""
+    prefix = [0]
+    for size in sizes:
+        prefix.append(prefix[-1] + size)
+    return prefix
+
+
+def _partition_exactly(
+    sizes: Sequence[int], start: int, end: int, chunks: int
+) -> list[int]:
+    """Boundaries splitting ``sizes[start:end]`` into exactly ``chunks`` contiguous parts.
+
+    Absolute indices within ``sizes``. The local min-max ceiling is found on the
+    slice alone, so a dominating source outside it cannot inflate the ceiling and
+    leave the slice's own chunks unbalanced (issue #195).
+    """
+    sub = sizes[start:end]
+    bounds = _greedy_chunk_bounds(sub, _balanced_ceiling(sub, chunks))
+    return [start + bound for bound in _split_to_target(bounds, _prefix_sums(sub), chunks)]
+
+
+def _allocate_subchunks(weights: Sequence[int], limits: Sequence[int], extra: int) -> list[int]:
+    """Hand ``extra`` additional parts to the chunks with the largest weight-per-part.
+
+    ``limits`` caps each chunk at its row count. The caller guarantees the extra
+    parts fit across all chunks; a failure to place one means the split is
+    internally inconsistent, so it fails loudly rather than returning a short
+    partition (issue #195).
+    """
+    allocations = [1] * len(weights)
+    for _ in range(extra):
+        target, target_load = -1, -1.0
+        for index in range(len(weights)):
+            if allocations[index] >= limits[index]:
+                continue
+            load = weights[index] / allocations[index]
+            if load > target_load:
+                target, target_load = index, load
+        if target < 0:
+            raise ValueError(
+                f"cannot allocate {extra} extra chunk(s) across {len(weights)} chunk(s)"
+            )
+        allocations[target] += 1
+    return allocations
+
+
+def _chunks_from_bounds(
+    manifest_rows: list[_ManifestRow], bounds: Sequence[int]
+) -> list[list[_ManifestRow]]:
+    """Slice ``manifest_rows`` between consecutive ``bounds``."""
+    return [manifest_rows[bounds[i] : bounds[i + 1]] for i in range(len(bounds) - 1)]
+
+
+def _balanced_bounds(sizes: Sequence[int], target_chunks: int) -> list[int]:
+    """Boundaries for exactly ``target_chunks`` contiguous, size-balanced parts.
+
+    The min-max greedy gives at most ``target_chunks`` parts under a ceiling a
+    dominating source forces high; the extra parts are then allocated to the
+    heaviest chunks and each is subdivided with its own local ceiling, so the
+    non-dominating sources are balanced among themselves (issue #195).
+    """
+    prefix = _prefix_sums(sizes)
+    bounds = _greedy_chunk_bounds(sizes, _balanced_ceiling(sizes, target_chunks))
+    initial_chunks = len(bounds) - 1
+    weights = [prefix[bounds[i + 1]] - prefix[bounds[i]] for i in range(initial_chunks)]
+    limits = [bounds[i + 1] - bounds[i] for i in range(initial_chunks)]
+    allocations = _allocate_subchunks(weights, limits, target_chunks - initial_chunks)
+    final = [0]
+    for index, allocation in enumerate(allocations):
+        final.extend(
+            _partition_exactly(sizes, bounds[index], bounds[index + 1], allocation)[1:]
+        )
+    return final
+
+
+def _split_manifest_rows(
+    manifest_rows: list[_ManifestRow], n_workers: int
+) -> list[list[_ManifestRow]]:
+    """Contiguous, size-balanced, manifest-order slices of the input rows.
+
+    Contiguity is what keeps "first named rsid wins" deterministic: chunk
+    ``i`` always owns the rows before chunk ``i + 1``, and the reduction merges
+    shards by that chunk rank (issue #109). Balancing by on-disk source size
+    rather than row count stops one oversized source setting the map phase's
+    makespan (issue #195): the partition targets ``min(n, 4 * n_workers)``
+    contiguous chunks of near-equal cumulative size, so a dominating source
+    lands alone while the rest spread across many chunks the pool can balance.
+    Fewer sources than workers leaves each source its own chunk.
     """
     n = len(manifest_rows)
-    n_chunks = min(n_chunks, n)
-    base, extra = divmod(n, n_chunks)
-    chunks: list[list[_ManifestRow]] = []
-    start = 0
-    for i in range(n_chunks):
-        size = base + (1 if i < extra else 0)
-        chunks.append(manifest_rows[start : start + size])
-        start += size
-    return chunks
+    if n == 0:
+        return []
+    if n <= n_workers:
+        return [[row] for row in manifest_rows]
+    target_chunks = min(n, max(n_workers, 4 * n_workers))
+    sizes = [_source_file_size(row) for row in manifest_rows]
+    return _chunks_from_bounds(manifest_rows, _balanced_bounds(sizes, target_chunks))
 
 
 def _write_pass1_shard(
@@ -928,11 +1094,24 @@ def _map_reduce_windows(
     tmp_dir: Path,
     stats: _Pass1Stats | None = None,
 ) -> dict[tuple[str, WindowKey], _ShardSpec]:
-    """Map rows to window shards, then tree-reduce every window in parallel."""
+    """Map rows to window shards, then tree-reduce every window in parallel.
+
+    The manifest is split into more contiguous, size-balanced chunks than there
+    are workers (issue #195). Each chunk's rank is its manifest-order index,
+    fixed here before any task is submitted, and results are collected in
+    completion order -- so which chunk finishes first can never affect shard
+    sorting or first-named-rsid resolution.
+    """
     tasks = [
-        (i, chunk, str(tmp_dir), size_bp, map_spill_records)
-        for i, chunk in enumerate(_split_manifest_rows(manifest_rows, workers))
+        (chunk_idx, chunk, str(tmp_dir), size_bp, map_spill_records)
+        for chunk_idx, chunk in enumerate(_split_manifest_rows(manifest_rows, workers))
     ]
+    log.info(
+        "Pass 1: %d source(s) → %d size-balanced chunk(s) across %d worker(s)",
+        len(manifest_rows),
+        len(tasks),
+        workers,
+    )
     groups: dict[tuple[str, WindowKey], list[_ShardSpec]] = {}
     map_start = time.monotonic()
     with _fork_pool(workers) as pool:
