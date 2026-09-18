@@ -17,10 +17,12 @@ import multiprocessing
 import shutil
 import tempfile
 import time
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -507,6 +509,18 @@ class _ShardSpec:
     path: Path
 
 
+@dataclass(frozen=True)
+class _WindowShards:
+    """The union pass's result: one final sorted shard per ``(assembly, window)``.
+
+    The shards are the seam (issue #193): the map + tree reduce core exposes
+    them, and a consumer decides what to build from them. Their paths are only
+    valid while the context that yielded this object is open.
+    """
+
+    shards: Mapping[tuple[str, WindowKey], _ShardSpec]
+
+
 @dataclass
 class _Pass1Stats:
     """Structured measurements from the windowed Pass 1 (issue #191).
@@ -714,6 +728,39 @@ def _pass1_worker(task: tuple[int, list[_ManifestRow], str, int]) -> list[_Shard
     return specs
 
 
+def _validate_union_options(window_size_mb: float, reduction_batch_size: int) -> None:
+    """Fail loudly on an unusable window or batch setting before any I/O."""
+    window_size_bp(window_size_mb)
+    if reduction_batch_size < 2:
+        raise ValueError(f"reduction batch size must be at least 2, got {reduction_batch_size}")
+
+
+def _consume_manifest_shards(
+    manifest_rows: list[_ManifestRow],
+    *,
+    n_workers: int,
+    window_size_mb: float,
+    reduction_batch_size: int,
+    stats: _Pass1Stats | None,
+    consume: Callable[[_WindowShards], Any],
+) -> Any:
+    """Run the union core and hand its final per-window shards to ``consume``.
+
+    This is the assembly seam (issue #193): the in-memory site union and Dense /
+    Hybrid's materialised lookup are both consumers of the same core, and a
+    later streaming artifact writer (issues #196/#197) plugs in the same way.
+    """
+    _validate_union_options(window_size_mb, reduction_batch_size)
+    with _reduce_manifest_windows(
+        manifest_rows,
+        n_workers=n_workers,
+        window_size_mb=window_size_mb,
+        reduction_batch_size=reduction_batch_size,
+        stats=stats,
+    ) as window_shards:
+        return consume(window_shards)
+
+
 def _collect_manifest_variant_sites(
     manifest_rows: list[_ManifestRow],
     *,
@@ -725,52 +772,35 @@ def _collect_manifest_variant_sites(
     """Pass 1: read every manifest source once for its variant sites.
 
     Returns the ``tuples_by_assembly`` union and ``rsid_by_site`` (first named
-    rsid wins, issue #109). ``n_workers <= 1`` keeps the serial read;
-    ``n_workers > 1`` runs the windowed map + parallel tree-reduce (issues #5,
-    #188). Workers return shard metadata rather than variant sets, so no large
-    object crosses the process pipe. ``stats``, when given, is filled in place
-    with the map/reduce phase timings and window-shard counts (issue #191).
+    rsid wins, issue #109). The map + tree-reduce core
+    (`_reduce_manifest_windows`) exposes the final per-window shards, and this
+    consumer materialises them into memory (issue #193). ``stats``, when given,
+    is filled in place with the map/reduce timings and shard counts (#191).
     """
-    window_size_bp(window_size_mb)  # fail loudly before any I/O on a bad window
-    if reduction_batch_size < 2:
-        raise ValueError(f"reduction batch size must be at least 2, got {reduction_batch_size}")
-    if not manifest_rows:
-        return {}, {}
-    if n_workers <= 1:
-        serial_start = time.monotonic()
-        result = _collect_manifest_variant_sites_serial(manifest_rows)
-        if stats is not None:
-            stats.map_seconds = time.monotonic() - serial_start
-        return result
-    return _collect_manifest_variant_sites_parallel(
-        manifest_rows, n_workers, window_size_mb, reduction_batch_size, stats
+    return _consume_manifest_shards(
+        manifest_rows, n_workers=n_workers, window_size_mb=window_size_mb,
+        reduction_batch_size=reduction_batch_size, stats=stats,
+        consume=_materialize_site_union,
     )
 
 
-def _collect_manifest_variant_sites_serial(
-    manifest_rows: list[_ManifestRow],
-) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
-    """The pre-parallel Pass 1 read, kept verbatim for ``n_workers <= 1``."""
-    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
-    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
+def _map_manifest_windows_serial(
+    manifest_rows: list[_ManifestRow], size_bp: int, tmp_dir: Path, stats: _Pass1Stats | None
+) -> dict[tuple[str, WindowKey], _ShardSpec]:
+    """Read every source in this process, one sorted shard per window.
+
+    The ``n_workers <= 1`` arm of the core. It runs the same per-window map a
+    worker process would, so the serial and parallel arms hand the consumer the
+    same shard shape; no tree reduce runs, so the stats report no window split.
+    """
     log.info("Pass 1: collecting source variants from %d files (serial)", len(manifest_rows))
-    t0 = time.monotonic()
-    for i, row in enumerate(manifest_rows):
-        reader = resolve_reader(
-            row.source_reader_capability, row.file_path, StoredEffectScale(row.stored_effect_scale)
-        )
-        sites = tuples_by_assembly.setdefault(row.source_assembly, set())
-        for variant in reader.stream_variants():
-            sites.add(variant.site)
-            if variant.rsid:
-                rsid_by_site.setdefault(variant.site, variant.rsid)
-        n_total = sum(len(t) for t in tuples_by_assembly.values())
-        _log_progress(
-            "Pass 1", i + 1, len(manifest_rows), t0, f"{n_total} unique variants so far", every=250
-        )
-    # The serial read is one shard of rank 0, so its rsid order is site order
-    # (issue #192): the dict's insertion order is the stated selection order.
-    return tuples_by_assembly, dict(sorted(rsid_by_site.items()))
+    start = time.monotonic()
+    groups: dict[tuple[str, WindowKey], list[_ShardSpec]] = {}
+    for spec in _pass1_worker((0, manifest_rows, str(tmp_dir), size_bp)):
+        groups.setdefault((spec.assembly, spec.window), []).append(spec)
+    if stats is not None:
+        stats.map_seconds = time.monotonic() - start
+    return {key: shards[0] for key, shards in groups.items()}
 
 
 def _map_reduce_windows(
@@ -806,22 +836,22 @@ def _map_reduce_windows(
     return final
 
 
-def _concatenate_window_shards(
-    final: dict[tuple[str, WindowKey], _ShardSpec],
-    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]],
-    rsid_by_site: dict[tuple[str, int, str, str], str],
-) -> None:
-    """Stream the final window shards, in genomic order, into the union.
+def _materialize_site_union(
+    window_shards: _WindowShards,
+) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
+    """Read the final per-window shards into the in-memory site union.
 
     ``rsid_by_site`` is inserted in ``(rank, site)`` order (issue #192): the
     final shard's manifest-order rank is the primary key and its records are
-    already sorted by site. Sorting the ranked records here -- rather than
-    letting the union set's hash order decide -- is what makes the rsid an ALID
-    carries deterministic.
+    already sorted by site. Reading the shards here -- rather than letting the
+    union set's hash order decide -- is what makes the rsid an ALID carries
+    deterministic.
     """
+    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
+    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
     ranked: list[tuple[int, tuple[str, int, str, str], str]] = []
-    for key in sorted(final):
-        spec = final[key]
+    for key in sorted(window_shards.shards):
+        spec = window_shards.shards[key]
         sites = tuples_by_assembly.setdefault(key[0], set())
         for site, rsid in _iter_pass1_shard(spec.path):
             sites.add(site)
@@ -830,49 +860,75 @@ def _concatenate_window_shards(
     ranked.sort()
     for _rank, site, rsid in ranked:
         rsid_by_site.setdefault(site, rsid)
+    return tuples_by_assembly, rsid_by_site
 
 
-def _collect_manifest_variant_sites_parallel(
+def _materialize_manifest_lookup(
+    window_shards: _WindowShards,
+    *,
+    chain_file: str | Path | None,
+    liftover_failure_threshold: float,
+) -> tuple[dict[tuple[str, int, str, str], str], dict[str, str]]:
+    """The Dense and Hybrid consumer: final window shards -> the hg38 lookup.
+
+    This is the assembly seam (issue #193). The union pass hands over final
+    per-window shards; this consumer materialises the whole site union and lifts
+    it, which is what Dense and Hybrid need. A later streaming artifact writer
+    (issues #196/#197) can consume the same shards per window without building
+    either dict.
+    """
+    tuples_by_assembly, rsid_by_site = _materialize_site_union(window_shards)
+    return _resolve_manifest_variants_to_alids(
+        tuples_by_assembly,
+        rsid_by_site,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
+    )
+
+
+@contextmanager
+def _reduce_manifest_windows(
     manifest_rows: list[_ManifestRow],
+    *,
     n_workers: int,
     window_size_mb: float,
     reduction_batch_size: int,
     stats: _Pass1Stats | None = None,
-) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
-    """Windowed map + parallel tree-reduce Pass 1 (issues #5, #188).
+) -> Iterator[_WindowShards]:
+    """Map every manifest source into window shards and tree-reduce each window.
 
-    Each worker spills sorted shards per ``(assembly, window)``; every window's
-    shards are then tree-reduced in parallel batches, and the final window
-    shards are concatenated in genomic order. There is no single parent k-way
-    merge over all shards, so the parent never becomes the bottleneck.
+    The union pass core (issues #5, #188): each source is read once and routed
+    into sorted per-window shards, and each window's shards are tree-reduced in
+    parallel batches. What it exposes is the shards -- not an in-memory union --
+    so a consumer can choose what to build from them (issue #193).
     """
     size_bp = window_size_bp(window_size_mb)
-    workers = min(n_workers, len(manifest_rows))
-    log.info(
-        "Pass 1: collecting source variants from %d files (parallel, %d workers, "
-        "%g Mb windows, batch %d)",
-        len(manifest_rows),
-        workers,
-        window_size_mb,
-        reduction_batch_size,
-    )
-    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
-    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
-    start = time.monotonic()
+    workers = min(n_workers, len(manifest_rows)) if manifest_rows else 0
     with tempfile.TemporaryDirectory(prefix=".pass1windows.") as tmp_dir_str:
-        final = _map_reduce_windows(
-            manifest_rows, workers, size_bp, reduction_batch_size, Path(tmp_dir_str), stats
+        tmp_dir = Path(tmp_dir_str)
+        if workers <= 1:
+            yield _WindowShards(
+                shards=_map_manifest_windows_serial(manifest_rows, size_bp, tmp_dir, stats)
+            )
+            return
+        log.info(
+            "Pass 1: collecting source variants from %d files (parallel, %d workers, "
+            "%g Mb windows, batch %d)",
+            len(manifest_rows),
+            workers,
+            window_size_mb,
+            reduction_batch_size,
         )
-        _concatenate_window_shards(final, tuples_by_assembly, rsid_by_site)
-        n_windows = len(final)
-    n_total = sum(len(t) for t in tuples_by_assembly.values())
-    log.info(
-        "Pass 1 merge: %d window(s) → %d unique variants in %s",
-        n_windows,
-        n_total,
-        _fmt_duration(time.monotonic() - start),
-    )
-    return tuples_by_assembly, rsid_by_site
+        start = time.monotonic()
+        final = _map_reduce_windows(
+            manifest_rows, workers, size_bp, reduction_batch_size, tmp_dir, stats
+        )
+        log.info(
+            "Pass 1 merge: %d window(s) in %s",
+            len(final),
+            _fmt_duration(time.monotonic() - start),
+        )
+        yield _WindowShards(shards=final)
 
 
 def _lift_manifest_variants(
@@ -921,19 +977,19 @@ def _lift_manifest_variants(
     misattribute one row's association to the other's variant -- exactly the
     kind of silent corruption this fix exists to remove -- so any such tuple
     is dropped from both groups (never guessed) before returning.
+
+    The union pass core (`_reduce_manifest_windows`) exposes final per-window
+    shards; this function hands them to the `_materialize_manifest_lookup`
+    consumer, which is the Dense and Hybrid assembly seam (issue #193).
     """
-    tuples_by_assembly, rsid_by_site = _collect_manifest_variant_sites(
-        manifest_rows,
-        n_workers=n_workers,
-        window_size_mb=window_size_mb,
-        reduction_batch_size=reduction_batch_size,
-        stats=stats,
-    )
-    return _resolve_manifest_variants_to_alids(
-        tuples_by_assembly,
-        rsid_by_site,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
+    return _consume_manifest_shards(
+        manifest_rows, n_workers=n_workers, window_size_mb=window_size_mb,
+        reduction_batch_size=reduction_batch_size, stats=stats,
+        consume=partial(
+            _materialize_manifest_lookup,
+            chain_file=chain_file,
+            liftover_failure_threshold=liftover_failure_threshold,
+        ),
     )
 
 
