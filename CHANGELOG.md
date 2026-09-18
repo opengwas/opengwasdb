@@ -93,6 +93,19 @@ the end of this file.
 
 ### Changed
 
+- **`extract-variant-reference` streams every manifest, retiring the in-memory
+  assembly**: hg19 and mixed manifests now lift each pre-lift window in a worker,
+  re-bucket every survivor by post-lift window, merge those buckets per post-lift
+  window and concatenate the compressed members in genomic order. Cross-assembly
+  ambiguous raw tuples are dropped by the window-local intersection, which is
+  exactly the global hg38 ∩ successfully-lifted-hg19 rule; liftover attempt and
+  failure counts are aggregated across workers and `liftover_failure_threshold`
+  is enforced before any artifact byte is written, so a breaching manifest leaves
+  nothing on disk. The `_extract_materialised_reference` path and the in-memory
+  `write_variant_reference` extraction path are removed: every extraction path
+  keeps the parent free of a global site set or lookup, and the artifact is
+  bit-for-bit identical to the old writer's for all-hg19 and mixed manifests
+  across worker, window, batch and spill configurations (#197).
 - **All-hg38 `extract-variant-reference` streams the artifact in parallel**:
   manifests whose sources all declare hg38 (no liftover) now compress each
   final window shard to a standalone gzip member in a worker pool and append
@@ -102,8 +115,8 @@ the end of this file.
   shard row or materialises a global site set or lookup. The artifact's
   decompressed content is bit-for-bit identical to the materialising writer's
   across worker counts, window sizes and batch sizes, and remains readable as
-  ordinary (multi-member) gzip. Manifests with any hg19 row keep the existing
-  liftover + in-memory writer path unchanged (#196).
+  ordinary (multi-member) gzip; all-hg38 is the fast case where post-lift
+  windows equal pre-lift windows (#196).
 - **Dense and Hybrid map phases split the manifest into size-balanced chunks**:
   `_split_manifest_rows` now targets `min(sources, 4 * n_workers)` contiguous
   chunks balanced by cumulative on-disk source size instead of exactly

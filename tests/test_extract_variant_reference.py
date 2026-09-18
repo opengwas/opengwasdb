@@ -939,9 +939,15 @@ def _streaming_writer_output(
 
 
 def _materialising_writer_output(
-    manifest: Path, *, n_workers: int = 2, window_size_mb: float = 5.0
+    manifest: Path,
+    *,
+    n_workers: int = 2,
+    window_size_mb: float = 5.0,
+    reduction_batch_size: int = 16,
+    map_spill_records: int = 5_000_000,
+    liftover_failure_threshold: float = 0.01,
 ) -> str:
-    """The pre-#196 path's artifact text, from the same all-hg38 manifest."""
+    """The retired materialising path's artifact text, from the same manifest."""
     from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
     from opengwasdb.variants.reference import write_variant_reference
 
@@ -949,9 +955,11 @@ def _materialising_writer_output(
     source_lookup, rsid_by_alid = _lift_manifest_variants(
         rows,
         chain_file=None,
-        liftover_failure_threshold=0.01,
+        liftover_failure_threshold=liftover_failure_threshold,
         n_workers=n_workers,
         window_size_mb=window_size_mb,
+        reduction_batch_size=reduction_batch_size,
+        map_spill_records=map_spill_records,
     )
     out = Path(manifest).parent / "materialised.variant-ref.tsv.gz"
     write_variant_reference(
@@ -1022,12 +1030,12 @@ def test_all_hg38_streaming_writes_concatenated_gzip_members(tmp_path):
     assert len(rows) == result.n_variants
 
 
-def test_all_hg38_streaming_never_materialises_the_union(tmp_path, monkeypatch):
-    """Issue #196 AC: the all-hg38 path never calls the materialising consumer
-    or the in-memory writer -- the parent holds no global site set or lookup.
+def _forbid_materialising(monkeypatch):
+    """Patch the retired materialising consumers to fail loudly if called.
 
-    This is the test that fails against the pre-#196 code, where the all-hg38
-    extraction went through ``_materialize_site_union``.
+    Returns the mocked ``_materialize_site_union`` so a test can assert it was
+    never invoked; a fork child that did invoke it would raise through the
+    worker future (issues #196/#197).
     """
     from unittest.mock import Mock
 
@@ -1041,6 +1049,17 @@ def test_all_hg38_streaming_never_materialises_the_union(tmp_path, monkeypatch):
         "write_variant_reference",
         Mock(side_effect=AssertionError("in-memory writer used")),
     )
+    return materialise
+
+
+def test_all_hg38_streaming_never_materialises_the_union(tmp_path, monkeypatch):
+    """Issue #196 AC: the all-hg38 path never calls the materialising consumer
+    or the in-memory writer -- the parent holds no global site set or lookup.
+
+    This is the test that fails against the pre-#196 code, where the all-hg38
+    extraction went through ``_materialize_site_union``.
+    """
+    materialise = _forbid_materialising(monkeypatch)
     manifest = _wide_manifest(tmp_path)
     artifact = tmp_path / "streamed.variant-ref.tsv.gz"
 
@@ -1050,22 +1069,31 @@ def test_all_hg38_streaming_never_materialises_the_union(tmp_path, monkeypatch):
     assert result.n_variants > 0
 
 
-def test_hg19_manifest_still_uses_the_materialising_path(tmp_path, monkeypatch):
-    """Issue #196 AC: any hg19 row keeps the existing liftover + in-memory writer."""
-    from unittest.mock import Mock
+def test_hg19_and_mixed_manifests_stream_without_materialising(tmp_path, monkeypatch):
+    """Issue #197 AC: every extraction path streams -- the parent never calls the
+    materialising consumer or the in-memory writer, even for hg19/mixed rows.
 
-    import opengwasdb.variants.reference as reference
+    Observed to fail against the pre-#197 code, where the hg19 and mixed paths
+    went through ``_materialize_site_union`` and ``write_variant_reference``.
+    """
+    materialise = _forbid_materialising(monkeypatch)
+    hg19 = _two_variant_vcf(tmp_path)
+    hg38 = tmp_path / "hg38_extra.tsv.gz"
+    _write_ssf(hg38, [("1", 5_000_000, "A", "G", "rs_hg38")])
+    cases = {
+        "hg19": _make_manifest(tmp_path, [("t1", hg19, "", "")], name="hg19.tsv"),
+        "mixed": _make_manifest(
+            tmp_path,
+            [("t1", hg19, "", ""), ("t2", hg38, GWAS_SSF_CAPABILITY, "hg38")],
+            name="mixed.tsv",
+        ),
+    }
 
-    streaming = Mock(side_effect=AssertionError("streaming writer used for an hg19 manifest"))
-    monkeypatch.setattr(reference, "_write_streaming_artifact", streaming)
-    vcf = _two_variant_vcf(tmp_path)  # the manifest omits source_assembly -> hg19
-    manifest = _make_manifest(tmp_path, [("trait_a", vcf, "", "")])
-    artifact = tmp_path / "hg19.variant-ref.tsv.gz"
-
-    result = extract_variant_reference(manifest, artifact)
-
-    assert not streaming.called
-    assert result.n_variants == 2
+    for label, manifest in cases.items():
+        artifact = tmp_path / f"{label}.variant-ref.tsv.gz"
+        result = extract_variant_reference(manifest, artifact, n_workers=2)
+        assert result.n_variants > 0, label
+    assert not materialise.called
 
 
 def test_all_hg38_manifest_with_no_variants_fails_loudly(tmp_path):
@@ -1080,27 +1108,181 @@ def test_all_hg38_manifest_with_no_variants_fails_loudly(tmp_path):
     assert not out.exists(), "a failed streaming extraction must not leave a partial artifact"
 
 
-def test_mixed_assembly_manifest_uses_the_materialising_path(tmp_path, monkeypatch):
-    """Issue #196 AC: one hg19 row among hg38 rows still forces the old path."""
-    from unittest.mock import Mock
+def _cross_assembly_collision_manifest(tmp_path: Path) -> Path:
+    """hg19 and hg38 rows sharing raw tuples in different pre-lift windows.
 
-    import opengwasdb.variants.reference as reference
+    ``1:1_000_000:C:T`` and ``1:3_000_000:A:G`` lift to hg38, and each also
+    collides with an hg38 row declared at the same *pre-lift* string; both pairs
+    are ambiguous and must be dropped. A clean hg19 row at ``1:100_000``
+    survives and keeps the artifact non-empty (issue #197).
+    """
+    colliding = [
+        "1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+        "1\t3000000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+    ]
+    clean = "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"
+    hg19 = _make_vcf(tmp_path, "collide_hg19", [*colliding, clean])
+    hg38 = _make_vcf(tmp_path, "collide_hg38", colliding)
+    return _make_manifest(
+        tmp_path,
+        [("hg19", hg19, "", ""), ("hg38", hg38, "", "hg38")],
+        name="collide.tsv",
+    )
 
-    streaming = Mock(side_effect=AssertionError("streaming writer used for a mixed manifest"))
-    monkeypatch.setattr(reference, "_write_streaming_artifact", streaming)
-    hg19 = _two_variant_vcf(tmp_path)
-    hg38 = tmp_path / "hg38_extra.tsv.gz"
-    _write_ssf(hg38, [("1", 500_000, "A", "G", "rs_hg38")])
-    manifest = _make_manifest(
+
+def test_window_local_ambiguity_drops_exactly_the_global_intersection(tmp_path, caplog):
+    """Issue #197 AC: collisions are found per pre-lift window, and their union is
+    exactly the global hg38 ∩ successfully-lifted-hg19 set.
+
+    The two ambiguous pairs sit in different pre-lift windows at
+    ``window_size_mb=1`` and the surviving artifact is byte-identical to the
+    materialising writer's, which applies the global rule.
+    """
+    import logging
+
+    manifest = _cross_assembly_collision_manifest(tmp_path)
+    artifact = tmp_path / "collide.variant-ref.tsv.gz"
+
+    with caplog.at_level(logging.WARNING):
+        result = extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=1.0)
+
+    reference = read_variant_reference(artifact)
+    assert set(reference.alids) == {"1:100000:A:G"}
+    assert result.n_variants == 1
+    assert reference.source_lookup[("1", 100_000, "A", "G")] == "1:100000:A:G"
+    assert "raw variant tuple" in caplog.text
+    assert _artifact_text(artifact) == _materialising_writer_output(
+        manifest, n_workers=2, window_size_mb=1.0
+    )
+
+
+def _hg19_hg38_manifest(tmp_path: Path) -> Path:
+    """An hg19 source and an hg38 source sharing some pre-lift tuples.
+
+    Some positions lift, some fail, and the first few collide with an hg38 row
+    at the same pre-lift string, so the comparison exercises collision dropping,
+    liftover failure omission, re-windowing and per-ALID grouping (issue #197).
+    """
+    positions = [100_000, 1_000_000, 1_500_000, 2_500_000, 4_000_000]
+    hg19 = _make_vcf(
+        tmp_path,
+        "hg19_rows",
+        [
+            f"1\t{pos}\t"
+            f"{f'rs_hg19_{pos}' if pos % 2 == 0 else '.'}"
+            f"\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n"
+            for pos in positions
+        ],
+    )
+    hg38 = tmp_path / "hg38_rows.tsv.gz"
+    _write_ssf(hg38, [("1", pos, "A", "G", f"rs_hg38_{pos}") for pos in positions[:3]])
+    return _make_manifest(
         tmp_path,
         [("hg19", hg19, "", ""), ("hg38", hg38, GWAS_SSF_CAPABILITY, "hg38")],
     )
-    artifact = tmp_path / "mixed.variant-ref.tsv.gz"
 
-    result = extract_variant_reference(manifest, artifact)
 
-    assert not streaming.called
-    assert result.n_variants == 3
+@pytest.mark.parametrize(
+    ("window_size_mb", "batch", "spill"), [(1, 2, 3), (5, 3, 10), (20, 16, 5_000_000)]
+)
+@pytest.mark.parametrize("n_workers", [1, 2, 4])
+def test_hg19_and_mixed_streaming_matches_the_materialising_writer(
+    tmp_path, n_workers, window_size_mb, batch, spill
+):
+    """Issue #197 AC: hg19 and mixed artifacts are byte-identical to the retired
+    materialising writer's across worker, window, batch and spill configs."""
+    manifest = _hg19_hg38_manifest(tmp_path)
+    expected = _materialising_writer_output(
+        manifest,
+        n_workers=n_workers,
+        window_size_mb=window_size_mb,
+        reduction_batch_size=batch,
+        map_spill_records=spill,
+        liftover_failure_threshold=1.0,
+    )
+    actual = tmp_path / f"hg19-{n_workers}-{window_size_mb}-{batch}-{spill}.variant-ref.tsv.gz"
+
+    extract_variant_reference(
+        manifest,
+        actual,
+        n_workers=n_workers,
+        window_size_mb=window_size_mb,
+        reduction_batch_size=batch,
+        map_spill_records=spill,
+        liftover_failure_threshold=1.0,
+    )
+
+    assert expected.splitlines()[0] == "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys"
+    assert len(expected.splitlines()) > 1
+    assert _artifact_text(actual) == expected
+
+
+def test_hg19_variant_is_re_windowed_to_its_post_lift_position(tmp_path):
+    """Issue #197 AC: a lifted variant is bucketed by its hg38 window, not its
+    pre-lift one. 1:1_000_000 lifts to 1:1_064_620, crossing a 50 kb boundary."""
+    vcf = _make_vcf(
+        tmp_path,
+        "shift_hg19",
+        ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0.5\n"],
+    )
+    manifest = _make_manifest(tmp_path, [("shift", vcf, "", "")])
+    artifact = tmp_path / "shift.variant-ref.tsv.gz"
+
+    result = extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=0.05)
+
+    reference = read_variant_reference(artifact)
+    assert result.n_variants == 1
+    assert reference.alids == ["1:1064620:C:T"]
+    assert reference.source_lookup[("1", 1_000_000, "C", "T")] == "1:1064620:C:T"
+    assert _artifact_text(artifact) == _materialising_writer_output(
+        manifest, n_workers=2, window_size_mb=0.05
+    )
+
+
+def test_liftover_failure_threshold_aggregates_across_windows_and_writes_nothing(tmp_path):
+    """Issue #197 AC: failures are counted per window worker, aggregated in the
+    parent and enforced before any artifact bytes exist."""
+    from opengwasdb.build.liftover import LiftoverFailureError
+
+    vcf = _make_vcf(
+        tmp_path,
+        "bad_hg19",
+        [
+            "1\t200000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+            "1\t300000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+            "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+        ],
+    )
+    manifest = _make_manifest(tmp_path, [("bad", vcf, "", "")])
+    out = tmp_path / "bad.variant-ref.tsv.gz"
+
+    with pytest.raises(LiftoverFailureError, match="exceeds threshold"):
+        extract_variant_reference(
+            manifest, out, n_workers=2, window_size_mb=0.05, liftover_failure_threshold=0.5
+        )
+    assert not out.exists(), "a threshold breach must leave no partial artifact"
+
+
+def test_liftover_failures_under_threshold_write_the_survivors(tmp_path):
+    """Issue #197 AC: failures under the threshold are omitted, the survivors
+    are written, and nothing else is dropped."""
+    vcf = _make_vcf(
+        tmp_path,
+        "mostly_ok_hg19",
+        [
+            "1\t200000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+            "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+        ],
+    )
+    manifest = _make_manifest(tmp_path, [("ok", vcf, "", "")])
+    artifact = tmp_path / "ok.variant-ref.tsv.gz"
+
+    result = extract_variant_reference(
+        manifest, artifact, n_workers=2, window_size_mb=1.0, liftover_failure_threshold=0.9
+    )
+
+    assert result.n_variants == 1
+    assert read_variant_reference(artifact).alids == ["1:100000:A:G"]
 
 
 def _extraction_peak_bytes(manifest: Path, artifact: Path) -> int:

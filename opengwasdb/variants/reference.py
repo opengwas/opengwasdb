@@ -26,14 +26,15 @@ exists to prevent.
 from __future__ import annotations
 
 import gzip
+import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import IO, TYPE_CHECKING
+from typing import IO, TYPE_CHECKING, TypeVar
 
 from opengwasdb.variants.axis import parse_canonical_alid
 from opengwasdb.variants.windows import (
@@ -45,8 +46,15 @@ from opengwasdb.variants.windows import (
 )
 
 if TYPE_CHECKING:
-    from opengwasdb.layouts.dense.build_vcf import _ManifestRow, _Pass1Stats, _WindowShards
+    from opengwasdb.layouts.dense.build_vcf import (
+        _ManifestRow,
+        _Pass1Stats,
+        _ShardSpec,
+        _WindowShards,
+    )
     from opengwasdb.variants.windows import WindowKey
+
+log = logging.getLogger(__name__)
 
 __all__ = [
     "VariantReference",
@@ -150,6 +158,49 @@ class _UnionOptions:
     map_spill_records: int
 
 
+@dataclass(frozen=True)
+class _LiftedBucket:
+    """One pre-lift window's intermediate sub-shard for one post-lift window."""
+
+    post_window: WindowKey
+    path: Path
+
+
+@dataclass(frozen=True)
+class _StagedWindow:
+    """One pre-lift window's step-A result: sub-shards plus lift and drop counts."""
+
+    buckets: tuple[_LiftedBucket, ...]
+    attempts: int
+    failures: int
+    collisions: int
+
+
+@dataclass(frozen=True)
+class _LiftStageTask:
+    """Step A input: one pre-lift window's final shards and the lift settings.
+
+    ``shards`` is ``(assembly, path, chunk, spill)`` per final shard; the chunk
+    and spill are the shard's rank, which orders equal sites during step B.
+    """
+
+    index: int
+    window: WindowKey
+    shards: tuple[tuple[str, str, int, int], ...]
+    size_bp: int
+    members_dir: str
+    chain_file: str | None
+
+
+@dataclass(frozen=True)
+class _LiftMergeTask:
+    """Step B input: every intermediate sub-shard for one post-lift window."""
+
+    window: WindowKey
+    sub_shards: tuple[str, ...]
+    member_path: str
+
+
 def extract_variant_reference(
     manifest_path: str | Path,
     output_path: str | Path,
@@ -197,7 +248,7 @@ def extract_variant_reference(
         return _extract_streaming_reference(
             manifest_rows, manifest_path, output_path, options, stats
         )
-    return _extract_materialised_reference(
+    return _extract_lifted_reference(
         manifest_rows,
         manifest_path,
         output_path,
@@ -218,17 +269,19 @@ def _all_hg38(manifest_rows: Sequence[_ManifestRow]) -> bool:
     return bool(manifest_rows) and all(row.source_assembly == "hg38" for row in manifest_rows)
 
 
-def _extract_streaming_reference(
+def _streaming_extraction(
     manifest_rows: list[_ManifestRow],
     manifest_path: str | Path,
     output_path: str | Path,
     options: _UnionOptions,
     stats: _Pass1Stats,
+    consume: Callable[[_WindowShards], _StreamedArtifact],
 ) -> VariantReferenceExtraction:
-    """All-hg38 arm: per-window parallel compression, then ordered concatenation.
+    """Run the map/reduce core and hand the shards to a streaming consumer.
 
-    The parent never materialises the union; ``_write_streaming_artifact``
-    returns only counts and its own phase time (issue #196).
+    Both streaming arms share this: the consumer writes the artifact and returns
+    only counts and its own phase time, so the parent never materialises the
+    union (issues #196/#197).
     """
     from opengwasdb.layouts.dense.build_vcf import _consume_manifest_shards
 
@@ -239,9 +292,7 @@ def _extract_streaming_reference(
         reduction_batch_size=options.reduction_batch_size,
         map_spill_records=options.map_spill_records,
         stats=stats,
-        consume=partial(
-            _write_streaming_artifact, output_path=output_path, n_workers=options.n_workers
-        ),
+        consume=consume,
     )
     if streamed.n_variants == 0:
         raise ValueError(f"manifest {manifest_path} yielded no hg38 variants to reference")
@@ -255,7 +306,27 @@ def _extract_streaming_reference(
     )
 
 
-def _extract_materialised_reference(
+def _extract_streaming_reference(
+    manifest_rows: list[_ManifestRow],
+    manifest_path: str | Path,
+    output_path: str | Path,
+    options: _UnionOptions,
+    stats: _Pass1Stats,
+) -> VariantReferenceExtraction:
+    """All-hg38 arm: per-window parallel compression, then ordered concatenation.
+
+    The parent never materialises the union; ``_write_streaming_artifact``
+    returns only counts and its own phase time (issue #196).
+    """
+    writer = partial(
+        _write_streaming_artifact, output_path=output_path, n_workers=options.n_workers
+    )
+    return _streaming_extraction(
+        manifest_rows, manifest_path, output_path, options, stats, writer
+    )
+
+
+def _extract_lifted_reference(
     manifest_rows: list[_ManifestRow],
     manifest_path: str | Path,
     output_path: str | Path,
@@ -265,41 +336,23 @@ def _extract_materialised_reference(
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
 ) -> VariantReferenceExtraction:
-    """hg19 (or mixed) arm: lift the union, then write it from memory.
+    """hg19 or mixed arm: lift per pre-lift window, re-window and concatenate.
 
-    Unchanged from before issue #196; the all-hg38 streaming path does not
-    touch it.
+    The parent never materialises the union; ``_write_lifted_streaming_artifact``
+    lifts each pre-lift window in a worker, re-buckets every surviving record by
+    post-lift window, merges those buckets per post-lift window and concatenates
+    the members in genomic order (issue #197).
     """
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants
-
-    source_lookup, rsid_by_alid = _lift_manifest_variants(
-        manifest_rows,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
+    writer = partial(
+        _write_lifted_streaming_artifact,
+        output_path=output_path,
         n_workers=options.n_workers,
         window_size_mb=options.window_size_mb,
-        reduction_batch_size=options.reduction_batch_size,
-        map_spill_records=options.map_spill_records,
-        stats=stats,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
     )
-    unique_alids = set(source_lookup.values())
-    if not unique_alids:
-        raise ValueError(f"manifest {manifest_path} yielded no hg38 variants to reference")
-    write_start = time.monotonic()
-    write_variant_reference(
-        output_path,
-        list(unique_alids),
-        source_lookup,
-        rsid_by_alid,
-        window_size_mb=options.window_size_mb,
-    )
-    return _extraction_summary(
-        output_path,
-        len(unique_alids),
-        len(source_lookup),
-        len(rsid_by_alid),
-        stats,
-        time.monotonic() - write_start,
+    return _streaming_extraction(
+        manifest_rows, manifest_path, output_path, options, stats, writer
     )
 
 
@@ -398,6 +451,26 @@ def _artifact_line(alid: str, source_keys: Sequence[str], rsid: str) -> str:
 # ── streaming all-hg38 artifact (issue #196) ─────────────────────────────────
 
 
+def _write_member(
+    member_path: str | Path,
+    rsid_by_alid: Mapping[str, str],
+    source_keys_by_alid: Mapping[str, list[str]],
+) -> None:
+    """Write one window's ALIDs, sorted by ``_alid_sort_key``, as a gzip member."""
+    # Local import: build_vcf imports this module, so a module-level import
+    # would be a cycle. By call time build_vcf is fully loaded.
+    from opengwasdb.layouts.dense.build_vcf import _alid_sort_key
+
+    with gzip.open(member_path, "wt", encoding="utf-8") as handle:
+        for alid in sorted(source_keys_by_alid, key=_alid_sort_key):
+            source_keys = source_keys_by_alid[alid]
+            source_keys.sort()
+            handle.write(_artifact_line(alid, source_keys, rsid_by_alid.get(alid, "")))
+
+
+# ── streaming all-hg38 artifact (issue #196) ─────────────────────────────────
+
+
 def _stream_window_artifact(task: tuple[WindowKey, str, str]) -> _WindowArtifact:
     """Compress one final window shard into a standalone gzip member.
 
@@ -409,9 +482,7 @@ def _stream_window_artifact(task: tuple[WindowKey, str, str]) -> _WindowArtifact
     produces within one window. Runs in a worker process, so only the member
     path and integer counts cross back (issue #196).
     """
-    # Local import: build_vcf imports this module, so a module-level import
-    # would be a cycle. By call time build_vcf is fully loaded.
-    from opengwasdb.layouts.dense.build_vcf import _alid_sort_key, _iter_pass1_shard
+    from opengwasdb.layouts.dense.build_vcf import _iter_pass1_shard
 
     window, shard_path, member_path = task
     rsid_by_alid: dict[str, str] = {}
@@ -424,27 +495,25 @@ def _stream_window_artifact(task: tuple[WindowKey, str, str]) -> _WindowArtifact
             rsid_by_alid[alid] = rsid
         source_keys_by_alid.setdefault(alid, []).append(f"{chrom}:{pos}:{ref}:{alt}")
         n_source_keys += 1
-    with gzip.open(member_path, "wt", encoding="utf-8") as handle:
-        for alid in sorted(source_keys_by_alid, key=_alid_sort_key):
-            source_keys = source_keys_by_alid[alid]
-            source_keys.sort()
-            handle.write(_artifact_line(alid, source_keys, rsid_by_alid.get(alid, "")))
+    _write_member(member_path, rsid_by_alid, source_keys_by_alid)
     return _WindowArtifact(
         window, Path(member_path), len(source_keys_by_alid), n_source_keys, len(rsid_by_alid)
     )
 
 
-def _run_window_artifacts(
-    tasks: Sequence[tuple[WindowKey, str, str]], n_workers: int
-) -> list[_WindowArtifact]:
-    """Compress the window members in parallel, preserving task order."""
+_T = TypeVar("_T")
+_R = TypeVar("_R")
+
+
+def _run_pooled(tasks: Sequence[_T], worker: Callable[[_T], _R], n_workers: int) -> list[_R]:
+    """Run ``worker`` over ``tasks`` in a fork pool, preserving task order."""
     from opengwasdb.layouts.dense.build_vcf import _fork_pool
 
     workers = min(n_workers, len(tasks))
     if workers <= 1:
-        return [_stream_window_artifact(task) for task in tasks]
+        return [worker(task) for task in tasks]
     with _fork_pool(workers) as pool:
-        futures = [pool.submit(_stream_window_artifact, task) for task in tasks]
+        futures = [pool.submit(worker, task) for task in tasks]
         return [future.result() for future in futures]
 
 
@@ -456,6 +525,28 @@ def _concatenate_window_members(
         for artifact in sorted(artifacts, key=lambda artifact: artifact.window):
             with open(artifact.path, "rb") as member:
                 shutil.copyfileobj(member, target)
+
+
+def _streaming_output_path(output_path: str | Path) -> Path:
+    """The artifact path, with its parent directory ensured to exist."""
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def _finish_members(
+    out: Path, artifacts: Sequence[_WindowArtifact], write_start: float
+) -> _StreamedArtifact:
+    """Write the header member, append the window members, summarise the counts."""
+    with gzip.open(out, "wt", encoding="utf-8") as handle:
+        handle.write(_ARTIFACT_HEADER)
+    _concatenate_window_members(out, artifacts)
+    return _StreamedArtifact(
+        n_variants=sum(artifact.n_alids for artifact in artifacts),
+        n_source_keys=sum(artifact.n_source_keys for artifact in artifacts),
+        n_rsids=sum(artifact.n_rsids for artifact in artifacts),
+        write_seconds=time.monotonic() - write_start,
+    )
 
 
 def _write_streaming_artifact(
@@ -476,8 +567,7 @@ def _write_streaming_artifact(
     shards = window_shards.shards
     if not shards:
         return _StreamedArtifact(0, 0, 0, time.monotonic() - write_start)
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    out = _streaming_output_path(output_path)
     ordered = sorted(shards.items(), key=lambda item: item[0])
     with tempfile.TemporaryDirectory(prefix=".variantrefmembers.") as members_dir_str:
         members_dir = Path(members_dir_str)
@@ -485,16 +575,277 @@ def _write_streaming_artifact(
             (window, str(spec.path), str(members_dir / f"{index:06d}.window.tsv.gz"))
             for index, ((_assembly, window), spec) in enumerate(ordered)
         ]
-        artifacts = _run_window_artifacts(tasks, n_workers)
-        with gzip.open(out, "wt", encoding="utf-8") as handle:
-            handle.write(_ARTIFACT_HEADER)
-        _concatenate_window_members(out, artifacts)
-    return _StreamedArtifact(
-        n_variants=sum(artifact.n_alids for artifact in artifacts),
-        n_source_keys=sum(artifact.n_source_keys for artifact in artifacts),
-        n_rsids=sum(artifact.n_rsids for artifact in artifacts),
-        write_seconds=time.monotonic() - write_start,
+        artifacts = _run_pooled(tasks, _stream_window_artifact, n_workers)
+        return _finish_members(out, artifacts, write_start)
+
+
+# ── streaming hg19/mixed artifact (issue #197) ──────────────────────────────
+
+
+def _lifted_line(
+    rank: tuple[int, int],
+    pre_site: tuple[str, int, str, str],
+    post_chrom: str,
+    post_pos: int,
+    rsid: str,
+) -> str:
+    """One intermediate record: rank, pre-lift site, post-lift locus and rsid."""
+    chunk, spill = rank
+    chrom, pos, ref, alt = pre_site
+    return f"{chunk}\t{spill}\t{chrom}\t{pos}\t{ref}\t{alt}\t{post_chrom}\t{post_pos}\t{rsid}\n"
+
+
+def _read_assembly_records(
+    shards: Sequence[tuple[str, str, int, int]],
+) -> tuple[
+    dict[tuple[str, int, str, str], tuple[tuple[int, int], str]],
+    dict[tuple[str, int, str, str], tuple[tuple[int, int], str]],
+]:
+    """Read one pre-lift window's final shards into per-assembly site records."""
+    from opengwasdb.layouts.dense.build_vcf import _iter_pass1_shard
+
+    hg38_records: dict[tuple[str, int, str, str], tuple[tuple[int, int], str]] = {}
+    hg19_records: dict[tuple[str, int, str, str], tuple[tuple[int, int], str]] = {}
+    for assembly, path, chunk, spill in shards:
+        target = hg38_records if assembly == "hg38" else hg19_records
+        rank = (chunk, spill)
+        for site, rsid in _iter_pass1_shard(Path(path)):
+            target[site] = (rank, rsid)
+    return hg38_records, hg19_records
+
+
+def _bucket_lifted_records(
+    hg38_records: Mapping[tuple[str, int, str, str], tuple[tuple[int, int], str]],
+    hg19_records: Mapping[tuple[str, int, str, str], tuple[tuple[int, int], str]],
+    lifted: Mapping[tuple[str, int, str, str], str],
+    size_bp: int,
+) -> tuple[dict[WindowKey, list[str]], int]:
+    """Drop cross-assembly ambiguous tuples, then bucket survivors by post-lift window.
+
+    A raw tuple in the hg38 group that also successfully lifted from hg19 is
+    dropped from both: because a raw tuple fixes its pre-lift window, the union
+    of these window-local intersections is exactly the global rule (issue #197).
+    Returns the buckets and the number of dropped tuples.
+    """
+    collisions = hg38_records.keys() & lifted.keys()
+    buckets: dict[WindowKey, list[str]] = {}
+    for site, (rank, rsid) in hg38_records.items():
+        if site in collisions:
+            continue
+        buckets.setdefault(window_key(site[0], site[1], size_bp), []).append(
+            _lifted_line(rank, site, site[0], site[1], rsid)
+        )
+    for site, (rank, rsid) in hg19_records.items():
+        alid = lifted.get(site)
+        if alid is None or site in collisions:
+            continue
+        post_chrom, post_pos, _a1, _a2 = alid.split(":")
+        buckets.setdefault(window_key(post_chrom, int(post_pos), size_bp), []).append(
+            _lifted_line(rank, site, post_chrom, int(post_pos), rsid)
+        )
+    return buckets, len(collisions)
+
+
+def _stage_liftover_window(task: _LiftStageTask) -> _StagedWindow:
+    """Lift one pre-lift window and re-bucket the survivors by post-lift window.
+
+    Both assemblies' final shards are read once, the hg19 rows are lifted with a
+    per-worker cached LiftOver, ambiguous raw tuples are dropped from both, and
+    each survivor is written to the intermediate sub-shard of the post-lift
+    window its hg38 locus falls in. Lift attempts and failures are counted; only
+    bucket paths and counts cross back (issue #197).
+    """
+    from opengwasdb.build.liftover import liftover_batch
+
+    hg38_records, hg19_records = _read_assembly_records(task.shards)
+    lifted, attempts, failures = liftover_batch(
+        hg19_records, chain_file=task.chain_file, from_build="hg19", to_build="hg38"
     )
+    buckets, collisions = _bucket_lifted_records(
+        hg38_records, hg19_records, lifted, task.size_bp
+    )
+    members_dir = Path(task.members_dir)
+    specs: list[_LiftedBucket] = []
+    for index, (post_window, lines) in enumerate(buckets.items()):
+        sub_shard_path = members_dir / f"{task.index:06d}.{index:03d}.lift.tsv"
+        with open(sub_shard_path, "w", encoding="utf-8") as handle:
+            handle.writelines(lines)
+        specs.append(_LiftedBucket(post_window, sub_shard_path))
+    return _StagedWindow(tuple(specs), attempts, failures, collisions)
+
+
+def _read_lifted_records(
+    paths: Sequence[str],
+) -> list[tuple[int, int, str, int, str, str, str, int, str]]:
+    """Read step A's intermediate sub-shards back into typed records."""
+    records: list[tuple[int, int, str, int, str, str, str, int, str]] = []
+    for path in paths:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                (
+                    raw_chunk,
+                    raw_spill,
+                    raw_pre_chrom,
+                    raw_pre_pos,
+                    raw_pre_ref,
+                    raw_pre_alt,
+                    raw_post_chrom,
+                    raw_post_pos,
+                    raw_rsid,
+                ) = line.rstrip("\n").split("\t")
+                records.append(
+                    (
+                        int(raw_chunk),
+                        int(raw_spill),
+                        raw_pre_chrom,
+                        int(raw_pre_pos),
+                        raw_pre_ref,
+                        raw_pre_alt,
+                        raw_post_chrom,
+                        int(raw_post_pos),
+                        raw_rsid,
+                    )
+                )
+    return records
+
+
+def _compress_lifted_window(task: _LiftMergeTask) -> _WindowArtifact:
+    """Merge one post-lift window's intermediate sub-shards into a gzip member.
+
+    Records are ordered by ``(rank, pre-lift site)``, so an ALID several records
+    resolve to takes the first non-empty rsid exactly as the materialising
+    writer's global ``(rank, site)`` insertion did. Source keys are combined and
+    sorted and the window's ALIDs are sorted by ``_alid_sort_key``.
+    """
+    records = _read_lifted_records(task.sub_shards)
+    records.sort(key=lambda record: record[:6])
+    rsid_by_alid: dict[str, str] = {}
+    source_keys_by_alid: dict[str, list[str]] = {}
+    for _chunk, _spill, pre_chrom, pre_pos, pre_ref, pre_alt, post_chrom, post_pos, rsid in records:
+        a1, a2 = sorted((pre_ref, pre_alt))
+        alid = f"{post_chrom}:{post_pos}:{a1}:{a2}"
+        if rsid and alid not in rsid_by_alid:
+            rsid_by_alid[alid] = rsid
+        source_keys_by_alid.setdefault(alid, []).append(
+            f"{pre_chrom}:{pre_pos}:{pre_ref}:{pre_alt}"
+        )
+    _write_member(task.member_path, rsid_by_alid, source_keys_by_alid)
+    return _WindowArtifact(
+        task.window,
+        Path(task.member_path),
+        len(source_keys_by_alid),
+        sum(len(keys) for keys in source_keys_by_alid.values()),
+        len(rsid_by_alid),
+    )
+
+
+def _stage_all_windows(
+    shards: Mapping[tuple[str, WindowKey], _ShardSpec],
+    size_bp: int,
+    n_workers: int,
+    chain_file: str | None,
+    work_dir: str,
+) -> list[_StagedWindow]:
+    """Step A: one lift-and-rebucket task per pre-lift window, in parallel."""
+    by_window: dict[WindowKey, list[tuple[str, str, int, int]]] = {}
+    for (assembly, window), spec in sorted(shards.items()):
+        by_window.setdefault(window, []).append(
+            (assembly, str(spec.path), spec.rank[0], spec.rank[1])
+        )
+    tasks = [
+        _LiftStageTask(
+            index=index,
+            window=window,
+            shards=tuple(specs),
+            size_bp=size_bp,
+            members_dir=work_dir,
+            chain_file=chain_file,
+        )
+        for index, (window, specs) in enumerate(sorted(by_window.items()))
+    ]
+    return _run_pooled(tasks, _stage_liftover_window, n_workers)
+
+
+def _enforce_liftover_threshold(staged: Sequence[_StagedWindow], threshold: float) -> None:
+    """Aggregate per-window lift counts and fail before writing any artifact."""
+    from opengwasdb.build.liftover import LiftoverFailureError
+
+    attempts = sum(stage.attempts for stage in staged)
+    failures = sum(stage.failures for stage in staged)
+    if not failures:
+        return
+    rate = failures / attempts
+    log.warning(
+        "Liftover hg19→hg38: %d/%d variants failed (%.1f%%) across %d window(s)",
+        failures,
+        attempts,
+        rate * 100,
+        len(staged),
+    )
+    if rate > threshold:
+        raise LiftoverFailureError(
+            f"Liftover failure rate {rate:.1%} ({failures}/{attempts}) exceeds "
+            f"threshold {threshold:.1%}"
+        )
+
+
+def _merge_lifted_windows(
+    staged: Sequence[_StagedWindow], n_workers: int, work_dir: str
+) -> list[_WindowArtifact]:
+    """Step B: merge each post-lift window's sub-shards and compress it."""
+    buckets_by_post: dict[WindowKey, list[str]] = {}
+    for stage in staged:
+        for bucket in stage.buckets:
+            buckets_by_post.setdefault(bucket.post_window, []).append(str(bucket.path))
+    tasks = [
+        _LiftMergeTask(
+            window=window,
+            sub_shards=tuple(paths),
+            member_path=str(Path(work_dir) / f"member.{index:06d}.tsv.gz"),
+        )
+        for index, (window, paths) in enumerate(sorted(buckets_by_post.items()))
+    ]
+    return _run_pooled(tasks, _compress_lifted_window, n_workers)
+
+
+def _write_lifted_streaming_artifact(
+    window_shards: _WindowShards,
+    *,
+    output_path: str | Path,
+    n_workers: int,
+    window_size_mb: float,
+    chain_file: str | Path | None,
+    liftover_failure_threshold: float,
+) -> _StreamedArtifact:
+    """Lift, re-window and concatenate every pre-lift window's records.
+
+    Step A lifts each pre-lift window; the parent aggregates attempt/failure
+    counts and enforces the threshold before any post-lift member is written.
+    Step B merges the intermediate sub-shards per post-lift window and compresses
+    each; step C writes the header and appends the post-lift members in genomic
+    order. No step reads a row or builds a site set in the parent (issue #197).
+    """
+    size_bp = window_size_bp(window_size_mb)
+    write_start = time.monotonic()
+    shards = window_shards.shards
+    if not shards:
+        return _StreamedArtifact(0, 0, 0, time.monotonic() - write_start)
+    out = _streaming_output_path(output_path)
+    with tempfile.TemporaryDirectory(prefix=".variantreflift.") as work_dir:
+        chain_file_str = str(chain_file) if chain_file is not None else None
+        staged = _stage_all_windows(shards, size_bp, n_workers, chain_file_str, work_dir)
+        collisions = sum(stage.collisions for stage in staged)
+        if collisions:
+            log.warning(
+                "%d raw variant tuple(s) declared both hg38 and hg19 in this manifest "
+                "(same chrom/pos/ref/alt string, two different builds -> two different "
+                "physical loci) -- dropped from both rather than guessed which one owns "
+                "the stored row",
+                collisions,
+            )
+        _enforce_liftover_threshold(staged, liftover_failure_threshold)
+        artifacts = _merge_lifted_windows(staged, n_workers, work_dir)
+        return _finish_members(out, artifacts, write_start)
 
 
 # ── reading ──────────────────────────────────────────────────────────────────
