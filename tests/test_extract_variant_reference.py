@@ -537,6 +537,48 @@ def _imbalanced_manifest(
     return _make_manifest(tmp_path, entries, name="imbalanced.tsv")
 
 
+def _all_hg38_collision_manifest(tmp_path: Path) -> Path:
+    """All-hg38 sources naming both allele orders at shared positions.
+
+    Every ALID collides across two raw sites (and across three sources), so the
+    artifact must combine the source keys and pick the smaller site's rsid. The
+    positions sit in different windows, so the artifact is several gzip members
+    (issue #196).
+    """
+    positions = [100_000, 2_100_000, 4_100_000]
+    entries: list[tuple[str, Path, str, str]] = []
+    for file_idx in range(3):
+        source = tmp_path / f"collide_{file_idx}.tsv.gz"
+        _write_ssf(
+            source,
+            [
+                ("1", pos, ref, alt, f"rs_{ref}{alt}_{file_idx}_{pos}")
+                for pos in positions
+                for ref, alt in (("A", "G"), ("G", "A"))
+            ],
+        )
+        entries.append((f"collide_{file_idx}", source, GWAS_SSF_CAPABILITY, "hg38"))
+    return _make_manifest(tmp_path, entries, name="collide.tsv")
+
+
+def _hg38_scaling_manifest(
+    tmp_path: Path, name: str, *, variants_per_source: int, n_sources: int = 4
+) -> Path:
+    """All-hg38 sources whose variant count can be scaled without adding sources."""
+    entries: list[tuple[str, Path, str, str]] = []
+    for file_idx in range(n_sources):
+        source = tmp_path / f"{name}_{file_idx}.tsv.gz"
+        _write_ssf(
+            source,
+            [
+                ("1", 100_000 + j * 1_000, "A", "G", f"rs_{name}_{file_idx}_{j}")
+                for j in range(variants_per_source)
+            ],
+        )
+        entries.append((f"{name}_{file_idx}", source, GWAS_SSF_CAPABILITY, "hg38"))
+    return _make_manifest(tmp_path, entries, name=f"{name}.tsv")
+
+
 @pytest.mark.parametrize("n_workers", [1, 2, 3])
 def test_artifact_is_invariant_across_window_and_batch_configurations(tmp_path, n_workers):
     """Issue #188 AC: the genomic-window partition and reduction batch size are
@@ -881,6 +923,239 @@ def test_imbalanced_manifest_artifact_is_identical_across_worker_counts(tmp_path
         else:
             assert text == baseline, n_workers
     assert baseline is not None and len(baseline.splitlines()) > 400
+
+
+# ── streaming all-hg38 artifact (issue #196) ────────────────────────────────
+
+
+def _streaming_writer_output(
+    tmp_path: Path, manifest: Path, *, n_workers: int = 2, window_size_mb: float = 5.0
+) -> str:
+    artifact = tmp_path / "streamed.variant-ref.tsv.gz"
+    extract_variant_reference(
+        manifest, artifact, n_workers=n_workers, window_size_mb=window_size_mb
+    )
+    return _artifact_text(artifact)
+
+
+def _materialising_writer_output(
+    manifest: Path, *, n_workers: int = 2, window_size_mb: float = 5.0
+) -> str:
+    """The pre-#196 path's artifact text, from the same all-hg38 manifest."""
+    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
+    from opengwasdb.variants.reference import write_variant_reference
+
+    rows = _read_manifest(manifest)
+    source_lookup, rsid_by_alid = _lift_manifest_variants(
+        rows,
+        chain_file=None,
+        liftover_failure_threshold=0.01,
+        n_workers=n_workers,
+        window_size_mb=window_size_mb,
+    )
+    out = Path(manifest).parent / "materialised.variant-ref.tsv.gz"
+    write_variant_reference(
+        out,
+        list(set(source_lookup.values())),
+        source_lookup,
+        rsid_by_alid,
+        window_size_mb=window_size_mb,
+    )
+    return _artifact_text(out)
+
+
+@pytest.mark.parametrize(("window_size_mb", "batch"), [(1, 2), (5, 3), (20, 16)])
+def test_all_hg38_streaming_matches_the_materialising_writer(tmp_path, window_size_mb, batch):
+    """Issue #196 AC: for an all-hg38 manifest the streamed artifact is
+    byte-identical to the materialising writer's, for every window and batch
+    configuration (and both use the same first-named-rsid rule)."""
+    manifest = _wide_manifest(tmp_path)
+    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
+    from opengwasdb.variants.reference import write_variant_reference
+
+    rows = _read_manifest(manifest)
+    source_lookup, rsid_by_alid = _lift_manifest_variants(
+        rows, chain_file=None, liftover_failure_threshold=0.01,
+        n_workers=2, window_size_mb=window_size_mb, reduction_batch_size=batch,
+    )
+    expected = tmp_path / f"expected-{window_size_mb}-{batch}.variant-ref.tsv.gz"
+    write_variant_reference(
+        expected, list(set(source_lookup.values())), source_lookup, rsid_by_alid,
+        window_size_mb=window_size_mb,
+    )
+    actual = tmp_path / f"actual-{window_size_mb}-{batch}.variant-ref.tsv.gz"
+    extract_variant_reference(
+        manifest, actual, n_workers=2, window_size_mb=window_size_mb,
+        reduction_batch_size=batch,
+    )
+
+    assert _artifact_text(actual) == _artifact_text(expected)
+
+
+@pytest.mark.parametrize("n_workers", [1, 2])
+def test_all_hg38_streaming_collapses_swapped_alleles(tmp_path, n_workers):
+    """Issue #196 AC: the streamed writer groups colliding ALIDs exactly like the
+    materialising one -- source keys combined and sorted, smaller site's rsid."""
+    manifest = _all_hg38_collision_manifest(tmp_path)
+
+    actual = _streaming_writer_output(tmp_path, manifest, n_workers=n_workers, window_size_mb=1.0)
+    expected = _materialising_writer_output(manifest, n_workers=n_workers, window_size_mb=1.0)
+
+    assert actual == expected
+    reference = read_variant_reference(tmp_path / "streamed.variant-ref.tsv.gz")
+    assert reference.source_lookup[("1", 100_000, "G", "A")] == "1:100000:A:G"
+    assert reference.rsid_by_alid["1:100000:A:G"] == "rs_AG_0_100000"
+
+
+def test_all_hg38_streaming_writes_concatenated_gzip_members(tmp_path):
+    """Issue #196 AC: the artifact is a header member plus one gzip member per
+    window, and reads back as ordinary gzip."""
+    manifest = _wide_manifest(tmp_path)
+    artifact = tmp_path / "members.variant-ref.tsv.gz"
+    result = extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=5)
+
+    raw = artifact.read_bytes()
+    assert raw.count(b"\x1f\x8b\x08") >= 1 + result.n_windows
+    with gzip.open(artifact, "rt", encoding="utf-8") as handle:
+        header, *rows = handle.read().splitlines()
+    assert header == "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys"
+    assert len(rows) == result.n_variants
+
+
+def test_all_hg38_streaming_never_materialises_the_union(tmp_path, monkeypatch):
+    """Issue #196 AC: the all-hg38 path never calls the materialising consumer
+    or the in-memory writer -- the parent holds no global site set or lookup.
+
+    This is the test that fails against the pre-#196 code, where the all-hg38
+    extraction went through ``_materialize_site_union``.
+    """
+    from unittest.mock import Mock
+
+    import opengwasdb.layouts.dense.build_vcf as build_vcf
+    import opengwasdb.variants.reference as reference
+
+    materialise = Mock(side_effect=AssertionError("materialising consumer used"))
+    monkeypatch.setattr(build_vcf, "_materialize_site_union", materialise)
+    monkeypatch.setattr(
+        reference,
+        "write_variant_reference",
+        Mock(side_effect=AssertionError("in-memory writer used")),
+    )
+    manifest = _wide_manifest(tmp_path)
+    artifact = tmp_path / "streamed.variant-ref.tsv.gz"
+
+    result = extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=5)
+
+    assert not materialise.called
+    assert result.n_variants > 0
+
+
+def test_hg19_manifest_still_uses_the_materialising_path(tmp_path, monkeypatch):
+    """Issue #196 AC: any hg19 row keeps the existing liftover + in-memory writer."""
+    from unittest.mock import Mock
+
+    import opengwasdb.variants.reference as reference
+
+    streaming = Mock(side_effect=AssertionError("streaming writer used for an hg19 manifest"))
+    monkeypatch.setattr(reference, "_write_streaming_artifact", streaming)
+    vcf = _two_variant_vcf(tmp_path)  # the manifest omits source_assembly -> hg19
+    manifest = _make_manifest(tmp_path, [("trait_a", vcf, "", "")])
+    artifact = tmp_path / "hg19.variant-ref.tsv.gz"
+
+    result = extract_variant_reference(manifest, artifact)
+
+    assert not streaming.called
+    assert result.n_variants == 2
+
+
+def test_all_hg38_manifest_with_no_variants_fails_loudly(tmp_path):
+    """Issue #196 AC: an all-hg38 manifest resolving no variants fails before
+    writing anything, on the streaming path too."""
+    vcf = _make_vcf(tmp_path, "empty_hg38", [])
+    manifest = _make_manifest(tmp_path, [("empty_hg38", vcf, "", "hg38")])
+    out = tmp_path / "empty.variant-ref.tsv.gz"
+
+    with pytest.raises(ValueError, match="yielded no hg38 variants"):
+        extract_variant_reference(manifest, out)
+    assert not out.exists(), "a failed streaming extraction must not leave a partial artifact"
+
+
+def test_mixed_assembly_manifest_uses_the_materialising_path(tmp_path, monkeypatch):
+    """Issue #196 AC: one hg19 row among hg38 rows still forces the old path."""
+    from unittest.mock import Mock
+
+    import opengwasdb.variants.reference as reference
+
+    streaming = Mock(side_effect=AssertionError("streaming writer used for a mixed manifest"))
+    monkeypatch.setattr(reference, "_write_streaming_artifact", streaming)
+    hg19 = _two_variant_vcf(tmp_path)
+    hg38 = tmp_path / "hg38_extra.tsv.gz"
+    _write_ssf(hg38, [("1", 500_000, "A", "G", "rs_hg38")])
+    manifest = _make_manifest(
+        tmp_path,
+        [("hg19", hg19, "", ""), ("hg38", hg38, GWAS_SSF_CAPABILITY, "hg38")],
+    )
+    artifact = tmp_path / "mixed.variant-ref.tsv.gz"
+
+    result = extract_variant_reference(manifest, artifact)
+
+    assert not streaming.called
+    assert result.n_variants == 3
+
+
+def _extraction_peak_bytes(manifest: Path, artifact: Path) -> int:
+    import tracemalloc
+
+    tracemalloc.start()
+    tracemalloc.reset_peak()
+    extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=20)
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    return peak
+
+
+def _materialising_peak_bytes(manifest: Path) -> int:
+    """The pre-#196 parent peak: the whole union is materialised in-process."""
+    import tracemalloc
+
+    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
+
+    rows = _read_manifest(manifest)
+    tracemalloc.start()
+    tracemalloc.reset_peak()
+    _lift_manifest_variants(
+        rows,
+        chain_file=None,
+        liftover_failure_threshold=0.01,
+        n_workers=2,
+        window_size_mb=20,
+    )
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    return peak
+
+
+def test_streaming_parent_memory_is_flat_as_the_union_grows(tmp_path):
+    """Issue #196 AC: the parent's allocations track windows, not the union.
+
+    Two manifests with the same four sources differ 10x in variant count. The
+    streaming parent only collects shard specs and per-window counts, so its
+    traced peak barely moves, while the materialising consumer's peak grows
+    with the union it holds.
+    """
+    small = _hg38_scaling_manifest(tmp_path, "small", variants_per_source=50)
+    large = _hg38_scaling_manifest(tmp_path, "large", variants_per_source=500)
+    # Warm lazy imports and the process pool so the first measurement is not
+    # dominated by one-off allocation.
+    _extraction_peak_bytes(small, tmp_path / "warm.variant-ref.tsv.gz")
+
+    small_stream = _extraction_peak_bytes(small, tmp_path / "small.variant-ref.tsv.gz")
+    large_stream = _extraction_peak_bytes(large, tmp_path / "large.variant-ref.tsv.gz")
+    small_material = _materialising_peak_bytes(small)
+    large_material = _materialising_peak_bytes(large)
+
+    assert large_stream < 2 * small_stream, (small_stream, large_stream)
+    assert large_material > 2 * small_material, (small_material, large_material)
 
 
 # ── two-stage build == one command ───────────────────────────────────────────

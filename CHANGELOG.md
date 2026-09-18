@@ -93,6 +93,17 @@ the end of this file.
 
 ### Changed
 
+- **All-hg38 `extract-variant-reference` streams the artifact in parallel**:
+  manifests whose sources all declare hg38 (no liftover) now compress each
+  final window shard to a standalone gzip member in a worker pool and append
+  those members' raw bytes in genomic order, writing the header as the first
+  member. This removes both serial O(union) stages (`_concatenate_window_shards`
+  and `write_variant_reference`) from this path, so the parent never reads a
+  shard row or materialises a global site set or lookup. The artifact's
+  decompressed content is bit-for-bit identical to the materialising writer's
+  across worker counts, window sizes and batch sizes, and remains readable as
+  ordinary (multi-member) gzip. Manifests with any hg19 row keep the existing
+  liftover + in-memory writer path unchanged (#196).
 - **Dense and Hybrid map phases split the manifest into size-balanced chunks**:
   `_split_manifest_rows` now targets `min(sources, 4 * n_workers)` contiguous
   chunks balanced by cumulative on-disk source size instead of exactly
