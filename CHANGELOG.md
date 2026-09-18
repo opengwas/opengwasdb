@@ -81,6 +81,15 @@ the end of this file.
   `write_seconds`, plus the window, total-shard and reduced-window counts, so an
   operator or benchmark can see where an extraction spent its time instead of
   one total (#191).
+- **`--map-spill-records` on `extract-variant-reference`** (and the
+  `extract_variant_reference` API): a map worker now spills every window buffer
+  to disk once it has buffered that many distinct sites (default 5,000,000),
+  instead of accumulating its whole manifest slice in memory. A shard's rank is
+  `(chunk_idx, spill_idx)`, so a later spill of the same chunk still merges
+  after an earlier one and first-named-rsid selection is unchanged. Windows
+  holding more shards than `reduction_batch_size` descend more than one tree
+  level, reported as `reduce_levels`; a non-positive threshold fails loudly. The
+  artifact is bit-for-bit unchanged across spill thresholds (#194).
 
 ### Changed
 

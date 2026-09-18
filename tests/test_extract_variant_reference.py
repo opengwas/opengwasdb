@@ -12,6 +12,7 @@ import gzip
 import os
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -356,6 +357,7 @@ def test_cli_is_registered_with_the_required_options():
         "--liftover-failure-threshold",
         "--source-reader-capability",
         "--source-assembly",
+        "--map-spill-records",
     ):
         assert option in output, option
     assert "manifest_path" in output
@@ -424,6 +426,82 @@ def _wide_manifest(tmp_path: Path, *, n_files: int = 4, per_file: int = 8) -> Pa
         vcf = _make_vcf(tmp_path, f"wide_{file_idx}", rows)
         entries.append((f"wide_{file_idx}", vcf, "", "hg38"))
     return _make_manifest(tmp_path, entries, name="wide.tsv")
+
+
+def _many_variant_manifest(
+    tmp_path: Path, *, n_files: int = 2, per_file: int = 1_200, name: str = "many.tsv"
+) -> Path:
+    """A manifest whose sources overlap heavily inside one genomic window.
+
+    Each file carries ``per_file`` distinct positions and every file repeats
+    the same positions, so the union is exactly ``per_file`` variants while
+    the map reads ``n_files * per_file`` rows. A low ``map_spill_records``
+    therefore forces several spills per worker, all routed to one window
+    buffer -- the shape issue #194 is about.
+    """
+    entries: list[tuple[str, Path, str, str]] = []
+    for file_idx in range(n_files):
+        rows = [
+            f"1\t{100_000 + j * 1_000}\t"
+            f"{f'rs{file_idx}_{j}' if j % 2 == 0 else '.'}\t"
+            f"A\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n"
+            for j in range(per_file)
+        ]
+        vcf = _make_vcf(tmp_path, f"many_{file_idx}", rows)
+        entries.append((f"many_{file_idx}", vcf, "", "hg38"))
+    return _make_manifest(tmp_path, entries, name=name)
+
+
+def _extract_with_spill(
+    manifest: Path, artifact: Path, *, n_workers: int, spill_records: int
+) -> None:
+    """Extract into ``artifact`` with one 200 Mb window and a chosen spill size.
+
+    A single wide window keeps every variant in one window buffer, so a low
+    threshold is guaranteed to force spills -- the shape the spill tests need.
+    """
+    extract_variant_reference(
+        manifest,
+        artifact,
+        n_workers=n_workers,
+        window_size_mb=200.0,
+        map_spill_records=spill_records,
+    )
+
+
+def _pass1_spill_records(
+    tmp_path: Path, *, per_file: int, threshold: int = 20
+) -> tuple[list, Counter]:
+    """Run one worker over a one-window fixture, count records per spill.
+
+    Returns the shard specs and a ``(chunk, spill) -> record count`` tally, so a
+    test can assert both the rank ordering and that no spill oversized the
+    buffer (issue #194).
+    """
+    from opengwasdb.layouts.dense.build_vcf import (
+        _iter_pass1_shard,
+        _pass1_worker,
+        _read_manifest,
+    )
+    from opengwasdb.variants.windows import window_size_bp
+
+    vcf = _make_vcf(
+        tmp_path,
+        "bounded",
+        [
+            f"1\t{100_000 + j * 1_000}\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n"
+            for j in range(per_file)
+        ],
+    )
+    manifest = _make_manifest(tmp_path, [("bounded", vcf, "", "hg38")])
+    rows = _read_manifest(manifest)
+    shard_dir = tmp_path / "shards"
+    shard_dir.mkdir()
+    specs = _pass1_worker((0, rows, str(shard_dir), window_size_bp(200.0), threshold))
+    records_by_spill: Counter[tuple[int, int]] = Counter()
+    for spec in specs:
+        records_by_spill[spec.rank] += sum(1 for _ in _iter_pass1_shard(spec.path))
+    return specs, records_by_spill
 
 
 @pytest.mark.parametrize("n_workers", [1, 2, 3])
@@ -570,6 +648,160 @@ def test_cli_accepts_window_and_batch_options(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert _artifact_text(default) == _artifact_text(sharded)
+
+
+def test_map_spill_records_defaults_to_five_million(tmp_path):
+    """Issue #194 AC: the option defaults to 5,000,000 variants buffered."""
+    from opengwasdb.variants.windows import DEFAULT_MAP_SPILL_RECORDS
+
+    assert DEFAULT_MAP_SPILL_RECORDS == 5_000_000
+    manifest = _many_variant_manifest(tmp_path, per_file=8)
+    result = extract_variant_reference(manifest, tmp_path / "default.variant-ref.tsv.gz")
+    assert result.reduce_levels == 0
+
+
+def test_map_spill_records_must_be_positive(tmp_path):
+    """Issue #194 AC: a non-positive spill threshold fails loudly, in both the
+    serial and parallel arms, rather than silently replacing it with a default."""
+    manifest = _many_variant_manifest(tmp_path, per_file=8)
+    for n_workers in (1, 2):
+        with pytest.raises(ValueError, match="map spill record count must be at least 1"):
+            extract_variant_reference(
+                manifest,
+                tmp_path / f"zero-{n_workers}.variant-ref.tsv.gz",
+                n_workers=n_workers,
+                map_spill_records=0,
+            )
+    with pytest.raises(ValueError, match="map spill record count must be at least 1"):
+        extract_variant_reference(
+            manifest, tmp_path / "negative.variant-ref.tsv.gz", map_spill_records=-5
+        )
+
+
+def test_cli_map_spill_records_rejects_non_positive(tmp_path):
+    manifest = _many_variant_manifest(tmp_path, per_file=8)
+    result = CliRunner().invoke(
+        app,
+        [
+            "extract-variant-reference", str(manifest),
+            "--output-path", str(tmp_path / "out.variant-ref.tsv.gz"),
+            "--map-spill-records", "0",
+        ],
+    )
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "map spill record count must be at least 1" in str(result.exception)
+
+
+@pytest.mark.parametrize("n_workers", [1, 2])
+def test_artifact_is_bit_identical_across_spill_thresholds(tmp_path, n_workers):
+    """Issue #194 AC: the spill threshold changes only how a worker buffers;
+    the artifact is bit-for-bit identical for every threshold, including ones
+    low enough to force many spills per worker."""
+    manifest = _many_variant_manifest(tmp_path)
+    baseline: str | None = None
+    for spill_records in (5_000_000, 1_000, 500, 50):
+        artifact = (
+            tmp_path / f"spill-{n_workers}-{spill_records}.variant-ref.tsv.gz"
+        )
+        _extract_with_spill(
+            manifest, artifact, n_workers=n_workers, spill_records=spill_records
+        )
+        text = _artifact_text(artifact)
+        if baseline is None:
+            baseline = text
+        else:
+            assert text == baseline, (n_workers, spill_records)
+    assert baseline is not None and len(baseline.splitlines()) > 1_000
+
+
+def test_cli_accepts_a_spill_threshold_and_writes_the_same_artifact(tmp_path):
+    manifest = _many_variant_manifest(tmp_path)
+    default = tmp_path / "default.variant-ref.tsv.gz"
+    spilled = tmp_path / "spilled.variant-ref.tsv.gz"
+    extract_variant_reference(manifest, default, n_workers=2, window_size_mb=200.0)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "extract-variant-reference", str(manifest),
+            "--output-path", str(spilled), "--n-workers", "2",
+            "--window-size-mb", "200", "--map-spill-records", "500",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _artifact_text(default) == _artifact_text(spilled)
+
+
+def test_pass1_worker_ranks_by_chunk_then_spill(tmp_path):
+    """Issue #194 AC: a shard's rank is ``(chunk_idx, spill_idx)``, and a later
+    spill of one chunk sorts strictly after an earlier one, so manifest order
+    survives spilling. No spill buffers more than the threshold."""
+    specs, records_by_spill = _pass1_spill_records(tmp_path, per_file=60, threshold=20)
+
+    assert {spec.rank[0] for spec in specs} == {0}
+    assert sorted(spec.rank[1] for spec in specs) == [0, 1, 2]
+    # Element-wise tuple comparison is what preserves manifest order: any spill
+    # of chunk 0 -- indeed any spill of chunk 1 -- sorts after every earlier one.
+    assert (0, 0) < (0, 1) < (0, 2) < (1, 0)
+    assert max(records_by_spill.values()) == 20
+
+
+@pytest.mark.parametrize("per_file", [60, 240])
+def test_pass1_worker_spill_size_does_not_grow_with_rows(tmp_path, per_file):
+    """Issue #194 AC: with the same threshold, a 4x larger slice still spills
+    in threshold-sized pieces -- worker memory tracks the threshold, not the
+    number of rows in the chunk."""
+    _specs, records_by_spill = _pass1_spill_records(
+        tmp_path, per_file=per_file, threshold=20
+    )
+    assert max(records_by_spill.values()) == 20
+    assert len(records_by_spill) == per_file // 20
+
+
+def test_first_named_rsid_survives_spills_within_a_chunk(tmp_path):
+    """Issue #194 AC: a site named early and again after a spill keeps the
+    earlier rsid. With one worker the whole manifest is one chunk, so this is
+    the (chunk, spill) rank ordering doing its job, not chunk order."""
+    early_rows = ["1\t100000\trsEARLY\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n"]
+    early_rows += [
+        f"1\t{200_000 + j * 1_000}\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n"
+        for j in range(59)
+    ]
+    early = _make_vcf(tmp_path, "early", early_rows)
+    late = _make_vcf(
+        tmp_path, "late", ["1\t100000\trsLATE\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n"]
+    )
+    manifest = _make_manifest(
+        tmp_path, [("early", early, "", "hg38"), ("late", late, "", "hg38")]
+    )
+    for n_workers, spill_records in ((1, 20), (2, 20), (2, 5_000_000)):
+        artifact = tmp_path / f"names-{n_workers}-{spill_records}.variant-ref.tsv.gz"
+        _extract_with_spill(
+            manifest, artifact, n_workers=n_workers, spill_records=spill_records
+        )
+        assert read_variant_reference(artifact).rsid_by_alid == {
+            "1:100000:A:G": "rsEARLY"
+        }, (n_workers, spill_records)
+
+
+@pytest.mark.parametrize("n_workers", [1, 2])
+def test_reduction_runs_more_than_one_level_when_spills_exceed_batch(tmp_path, n_workers):
+    """Issue #194 AC: many spills per worker leave a window with more shards
+    than ``reduction_batch_size``, so the tree reduce descends more than one
+    level. ``reduce_levels`` records that descent."""
+    manifest = _many_variant_manifest(tmp_path)
+    result = extract_variant_reference(
+        manifest,
+        tmp_path / f"levels-{n_workers}.variant-ref.tsv.gz",
+        n_workers=n_workers,
+        window_size_mb=200.0,
+        reduction_batch_size=2,
+        map_spill_records=50,
+    )
+    assert result.n_window_shards > result.n_windows
+    assert result.reduce_levels > 1
 
 
 # ── two-stage build == one command ───────────────────────────────────────────

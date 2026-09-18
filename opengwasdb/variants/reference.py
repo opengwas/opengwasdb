@@ -30,15 +30,19 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO
+from typing import IO, TYPE_CHECKING
 
 from opengwasdb.variants.axis import parse_canonical_alid
 from opengwasdb.variants.windows import (
+    DEFAULT_MAP_SPILL_RECORDS,
     DEFAULT_REDUCTION_BATCH_SIZE,
     DEFAULT_WINDOW_SIZE_MB,
     window_key,
     window_size_bp,
 )
+
+if TYPE_CHECKING:
+    from opengwasdb.layouts.dense.build_vcf import _Pass1Stats
 
 __all__ = [
     "VariantReference",
@@ -84,6 +88,9 @@ class VariantReferenceExtraction:
     serial path has no windowed split, so it reports ``reduce_seconds == 0``
     and zero window counts. ``n_reduced_windows`` counts windows that held more
     than one worker shard and therefore actually ran the tree reduce.
+    ``reduce_levels`` is the number of tree-reduce levels; more than one means a
+    window held more shards than ``reduction_batch_size`` -- the many-spills
+    case of issue #194.
     """
 
     output_path: Path
@@ -96,6 +103,7 @@ class VariantReferenceExtraction:
     n_windows: int = 0
     n_window_shards: int = 0
     n_reduced_windows: int = 0
+    reduce_levels: int = 0
 
 
 def extract_variant_reference(
@@ -109,6 +117,7 @@ def extract_variant_reference(
     source_assembly: str | None = None,
     window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
     reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
+    map_spill_records: int = DEFAULT_MAP_SPILL_RECORDS,
 ) -> VariantReferenceExtraction:
     """Extract, lift and canonicalise a manifest's variant axis into an artifact.
     The standalone front end to the build's Pass 1 (issue #187): every source is
@@ -119,6 +128,10 @@ def extract_variant_reference(
     manifest, or one resolving no variants, fails loudly. ``window_size_mb`` and
     ``reduction_batch_size`` shape the windowed tree-reduce (issue #188) and
     never change the artifact; phase timings and shard counts ride on the result.
+    ``map_spill_records`` bounds how many variants a map worker buffers before
+    spilling to disk, so a worker's peak memory tracks that threshold rather
+    than the size of its manifest slice (issue #194). A non-positive value
+    fails loudly before any source is read.
     """
     from opengwasdb.layouts.dense.build_vcf import (
         _lift_manifest_variants,
@@ -141,6 +154,7 @@ def extract_variant_reference(
         n_workers=n_workers,
         window_size_mb=window_size_mb,
         reduction_batch_size=reduction_batch_size,
+        map_spill_records=map_spill_records,
         stats=stats,
     )
     unique_alids = set(source_lookup.values())
@@ -151,12 +165,30 @@ def extract_variant_reference(
         output_path, list(unique_alids), source_lookup, rsid_by_alid, window_size_mb=window_size_mb
     )
     write_seconds = time.monotonic() - write_start
+    return _extraction_summary(output_path, source_lookup, rsid_by_alid, stats, write_seconds)
+
+
+def _extraction_summary(
+    output_path: str | Path,
+    source_lookup: Mapping[SourceKey, str],
+    rsid_by_alid: Mapping[str, str],
+    stats: _Pass1Stats,
+    write_seconds: float,
+) -> VariantReferenceExtraction:
+    """Assemble the extraction's result from its lookups and phase timings."""
+    unique_alids = set(source_lookup.values())
     return VariantReferenceExtraction(
-        output_path=Path(output_path), n_variants=len(unique_alids),
-        n_source_keys=len(source_lookup), n_rsids=len(rsid_by_alid),
-        map_seconds=stats.map_seconds, reduce_seconds=stats.reduce_seconds,
-        write_seconds=write_seconds, n_windows=stats.n_windows,
-        n_window_shards=stats.n_window_shards, n_reduced_windows=stats.n_reduced_windows,
+        output_path=Path(output_path),
+        n_variants=len(unique_alids),
+        n_source_keys=len(source_lookup),
+        n_rsids=len(rsid_by_alid),
+        map_seconds=stats.map_seconds,
+        reduce_seconds=stats.reduce_seconds,
+        write_seconds=write_seconds,
+        n_windows=stats.n_windows,
+        n_window_shards=stats.n_window_shards,
+        n_reduced_windows=stats.n_reduced_windows,
+        reduce_levels=stats.reduce_levels,
     )
 
 

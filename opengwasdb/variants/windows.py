@@ -13,6 +13,7 @@ from __future__ import annotations
 from opengwasdb.variants.normalise import chromosome_sort_key
 
 __all__ = [
+    "DEFAULT_MAP_SPILL_RECORDS",
     "DEFAULT_REDUCTION_BATCH_SIZE",
     "DEFAULT_WINDOW_SIZE_MB",
     "WindowKey",
@@ -24,6 +25,10 @@ __all__ = [
 DEFAULT_WINDOW_SIZE_MB = 20.0
 #: Shards merged per tree-reduction task when no caller chooses one.
 DEFAULT_REDUCTION_BATCH_SIZE = 16
+#: Buffered variants a map worker may hold before spilling every window buffer
+#: to a shard (issue #194). At the default, a worker's peak memory tracks this
+#: constant rather than the number of rows in its manifest slice.
+DEFAULT_MAP_SPILL_RECORDS = 5_000_000
 
 #: ``(chromosome_sort_key, window index)`` -- comparable, and genomic-ordered.
 WindowKey = tuple[tuple[int, str], int]
