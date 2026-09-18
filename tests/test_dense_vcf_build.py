@@ -783,6 +783,215 @@ class TestParallel:
             np.testing.assert_array_equal(s["z"][:], p["z"][:])
 
 
+def _assert_dense_stores_match(serial_path: Path, parallel_path: Path) -> None:
+    from opengwasdb.variants.axis import iter_variant_records
+
+    assert validate_store(parallel_path).ok
+    serial_records = {
+        r.alid: r for r in iter_variant_records(serial_path / "variants.tsv.gz")
+    }
+    parallel_records = {
+        r.alid: r for r in iter_variant_records(parallel_path / "variants.tsv.gz")
+    }
+    assert serial_records.keys() == parallel_records.keys()
+    for alid in serial_records:
+        assert dict(serial_records[alid]) == dict(parallel_records[alid]), alid
+
+    serial_root = open_store(serial_path).arrays(mode="r")
+    parallel_root = open_store(parallel_path).arrays(mode="r")
+    for name in ("z", "se"):
+        s = serial_root[name][:]
+        p = parallel_root[name][:]
+        assert s.shape == p.shape
+        np.testing.assert_array_equal(np.isnan(s), np.isnan(p))
+        np.testing.assert_allclose(s[~np.isnan(s)], p[~np.isnan(p)])
+
+
+class TestPass1Parallel:
+    """Stage 1 (variant-union) parallelism must be bit-for-bit deterministic.
+
+    The union and rsid maps are compared directly (before liftover) and again
+    through the built store's variant axis, rsid column, and statistic arrays
+    (after liftover and ALID generation).
+    """
+
+    def test_pass1_parallel_union_and_rsids_match_serial(self, tmp_path):
+        from opengwasdb.layouts.dense.build_vcf import (
+            _collect_manifest_variant_sites,
+            _read_manifest,
+        )
+
+        vcf1 = _make_vcf(
+            tmp_path,
+            "trait_a",
+            [
+                f"1\t{HG19_POS_1}\trsZ\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",  # no rsid
+                f"1\t{HG19_POS_3}\trs300\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n",
+            ],
+        )
+        vcf2 = _make_vcf(
+            tmp_path,
+            "trait_b",
+            [
+                f"1\t{HG19_POS_1}\trsA\tA\tG\t.\tPASS\t.\tES:SE\t6.0:0.5\n",  # must lose
+                f"1\t{HG19_POS_2}\trs200\tC\tT\t.\tPASS\t.\tES:SE\t1.2:0.3\n",  # fills blank
+                "1\t2000000\trs400\tG\tA\t.\tPASS\t.\tES:SE\t1.0:0.2\n",
+            ],
+        )
+        manifest = _make_manifest(
+            tmp_path, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
+        )
+        rows = _read_manifest(manifest)
+
+        serial = _collect_manifest_variant_sites(rows, n_workers=1)
+        parallel = _collect_manifest_variant_sites(rows, n_workers=2)
+
+        assert serial == parallel
+        tuples_by_assembly, rsid_by_site = parallel
+        assert tuples_by_assembly == {
+            "hg19": {
+                ("1", HG19_POS_1, "A", "G"),
+                ("1", HG19_POS_2, "C", "T"),
+                ("1", HG19_POS_3, "G", "A"),
+                ("1", 2_000_000, "G", "A"),
+            }
+        }
+        # First named rsid wins across shards -- and by manifest order, not
+        # rsid-string order ("rsZ" sorts after "rsA" but came first).
+        assert rsid_by_site[("1", HG19_POS_1, "A", "G")] == "rsZ"
+        assert rsid_by_site[("1", HG19_POS_2, "C", "T")] == "rs200"
+        assert rsid_by_site[("1", HG19_POS_3, "G", "A")] == "rs300"
+
+    def test_parallel_stage1_store_matches_serial_variant_axis_and_arrays(self, tmp_path):
+        """Parallel Pass 1 produces the same union, ALIDs, rsids, and dense
+        arrays as serial Pass 1 -- including a mixed hg19/hg38 manifest so
+        the liftover and passthrough groups are both exercised."""
+        from opengwasdb.variants.axis import iter_variant_records
+
+        vcf_a = _make_vcf(
+            tmp_path,
+            "trait_a",
+            [
+                f"1\t{HG19_POS_1}\trs1\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                f"1\t{HG19_POS_2}\trs2\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
+                f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n",
+            ],
+        )
+        vcf_b = _make_vcf(
+            tmp_path,
+            "trait_b",
+            [
+                f"1\t{HG19_POS_1}\trsX\tA\tG\t.\tPASS\t.\tES:SE\t6.0:0.5\n",  # must lose to rs1
+                f"1\t{HG19_POS_3}\trs3\tG\tA\t.\tPASS\t.\tES:SE\t1.2:0.3\n",
+            ],
+        )
+        vcf_ssf = _make_vcf(
+            tmp_path,
+            "trait_ssf",
+            ["1\t5000000\trs5\tC\tT\t.\tPASS\t.\tES:SE\t0.8:0.4\n"],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path,
+            [
+                ("trait_a", vcf_a, "Trait A", ""),
+                ("trait_b", vcf_b, "Trait B", ""),
+                ("trait_ssf", vcf_ssf, "Trait SSF", "hg38"),
+            ],
+        )
+
+        serial_path = tmp_path / "serial.opengwasdb"
+        parallel_path = tmp_path / "parallel.opengwasdb"
+        build_dense_from_vcf_manifest(
+            manifest, serial_path, store_id="s", release_id="r", n_workers=1
+        )
+        build_dense_from_vcf_manifest(
+            manifest, parallel_path, store_id="s", release_id="r", n_workers=3
+        )
+
+        _assert_dense_stores_match(serial_path, parallel_path)
+
+        parallel_records = {
+            r.alid: r for r in iter_variant_records(parallel_path / "variants.tsv.gz")
+        }
+        # The rsid column carries the first-named rsid from the manifest order,
+        # including a blank on the first occurrence filled by a later file.
+        assert parallel_records[HG38_ALID_1].rsid == "rs1"
+        assert parallel_records[HG38_ALID_2].rsid == "rs2"
+        assert parallel_records[HG38_ALID_3].rsid == "rs3"
+        assert parallel_records["1:5000000:C:T"].rsid == "rs5"
+
+        serial_root = open_store(serial_path).arrays(mode="r")
+        parallel_root = open_store(parallel_path).arrays(mode="r")
+        for key in ("p_5e_04", "p_5e_06", "p_5e_08"):
+            s = serial_root[f"top_hits/{key}"]
+            p = parallel_root[f"top_hits/{key}"]
+            np.testing.assert_array_equal(s["variant_index"][:], p["variant_index"][:])
+            np.testing.assert_array_equal(s["analysis_index"][:], p["analysis_index"][:])
+            np.testing.assert_array_equal(s["z"][:], p["z"][:])
+
+    def test_pass1_parallel_supports_generic_readers_mixed_manifest(self, tmp_path):
+        """The parallel stage 1 variant-union routine is generic across file types:
+        a mixed manifest containing GWAS-VCF and GWAS-SSF files produces the exact
+        same variant union, rsid mapping, and dense store arrays in parallel as serial."""
+        vcf_path = _make_vcf(
+            tmp_path,
+            "trait_vcf",
+            [
+                f"1\t{HG19_POS_1}\trs_vcf1\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
+            ],
+        )
+        ssf_path = tmp_path / "trait_ssf.tsv.gz"
+        _write_ssf(
+            ssf_path,
+            [
+                {
+                    "chromosome": "1",
+                    "base_pair_location": HG19_POS_2,
+                    "effect_allele": "T",
+                    "other_allele": "C",
+                    "beta": 1.5,
+                    "standard_error": 0.3,
+                },
+                {
+                    "chromosome": "1",
+                    "base_pair_location": HG19_POS_3,
+                    "effect_allele": "A",
+                    "other_allele": "G",
+                    "beta": 0.6,
+                    "standard_error": 0.2,
+                },
+            ],
+        )
+
+        manifest = tmp_path / "mixed_manifest.tsv"
+        header = (
+            "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\t"
+            "original_sd_method\toriginal_sd\tsource_reader_capability\tsource_assembly\n"
+        )
+        row_vcf = (
+            f"trait_vcf\t{vcf_path}\tTrait VCF\t1000\tsd\tdeclared_standardised\t\t"
+            "opengwasdb.gwas-vcf\thg19\n"
+        )
+        row_ssf = (
+            f"trait_ssf\t{ssf_path}\tTrait SSF\t1000\tsd\tdeclared_standardised\t\t"
+            f"{GWAS_SSF_CAPABILITY}\thg19\n"
+        )
+        manifest.write_text(header + row_vcf + row_ssf, encoding="utf-8")
+
+        serial_path = tmp_path / "serial_mixed.opengwasdb"
+        parallel_path = tmp_path / "parallel_mixed.opengwasdb"
+        build_dense_from_vcf_manifest(
+            manifest, serial_path, store_id="s", release_id="r", n_workers=1
+        )
+        build_dense_from_vcf_manifest(
+            manifest, parallel_path, store_id="s", release_id="r", n_workers=2
+        )
+
+        _assert_dense_stores_match(serial_path, parallel_path)
+
+
 class TestTopHitHarvest:
     def test_store_without_frequency_builds_compatible_index(self, two_trait_store):
         root = open_store(two_trait_store).arrays(mode="r")
@@ -994,6 +1203,116 @@ class TestForkSafeLookup:
         assert sorted(r.tolist()) == [0, 1]
         # row 0 kept the later (pos 200) occurrence: z=6.0 flipped to -6.0
         assert z[r.tolist().index(0)] == pytest.approx(-6.0, rel=5e-3)
+
+
+def test_sorted_alids_matches_reference_with_long_keys():
+    """`_sorted_alids` preserves `_alid_sort_key` order even when a rare
+    long indel would have padded a fixed-width numpy string array to 200+ bytes."""
+    from opengwasdb.layouts.dense.build_vcf import _alid_sort_key, _sorted_alids
+
+    long_a = "A" * 200
+    long_c = "C" * 150
+    alids = {
+        "1:10:A:G",
+        "1:2:C:T",
+        "2:1:A:G",
+        "10:9:G:C",
+        "X:100:A:C",
+        "Y:1:G:T",
+        "M:5:A:C",
+        "MT:5:A:C",
+        f"1:10:A:{long_a}",
+        f"1:10:A:{long_c}",
+        f"1:10:C:{long_a}",
+    }
+
+    assert _sorted_alids(alids) == sorted(alids, key=_alid_sort_key)
+
+
+def test_axis_metadata_long_keys_match_reference_sort():
+    """`_axis_metadata` sorts the variant axis exactly like the scalar
+    `sorted(..., key=_alid_sort_key)` reference, including >100-byte alleles."""
+    from opengwasdb.layouts.dense.build_vcf import (
+        _alid_sort_key,
+        _axis_metadata,
+        _ManifestRow,
+    )
+
+    long_a = "A" * 200
+    source_lookup = {
+        ("1", 10, "A", "G"): "1:10:A:G",
+        ("2", 5, "C", "T"): "2:5:C:T",
+        ("1", 10, "A", long_a): f"1:10:A:{long_a}",
+        ("X", 5, "A", "C"): "X:5:A:C",
+        ("10", 2, "G", "C"): "10:2:C:G",
+    }
+    row = _ManifestRow(
+        trait_id="t",
+        file_path="unused",
+        trait_name="Trait",
+        n=1000,
+        stored_effect_scale="sd",
+        se_divisor=1.0,
+        source_reader_capability="opengwasdb.gwas-vcf",
+        source_assembly="hg38",
+        original_sd="",
+        assigned_ancestry="",
+    )
+
+    axis, variant_index = _axis_metadata(source_lookup, [row])
+    expected = sorted(set(source_lookup.values()), key=_alid_sort_key)
+
+    assert axis.alids == expected
+    assert variant_index == {alid: i for i, alid in enumerate(expected)}
+
+
+def test_build_variant_key_index_long_keys_sorted_and_searchable():
+    """The Pass 2 key index stays sorted in ASCII byte order and binary-searchable
+    when a 300-byte allele is present, without padding every key to that width."""
+    from opengwasdb.layouts.dense.build_vcf import _build_variant_key_index
+
+    long_alt = "A" * 300
+    long_alt_c = "C" * 250
+    source_lookup = {
+        ("1", 10, "A", "G"): "1:10:A:G",
+        ("2", 5, "C", "T"): "2:5:C:T",
+        ("1", 10, "A", long_alt): f"1:10:A:{long_alt}",
+        ("1", 10, "A", long_alt_c): f"1:10:A:{long_alt_c}",
+        ("1", 20, "G", "C"): "1:20:C:G",
+    }
+    variant_index = {
+        "1:10:A:G": 0,
+        "2:5:C:T": 1,
+        f"1:10:A:{long_alt}": 2,
+        f"1:10:A:{long_alt_c}": 3,
+        "1:20:C:G": 4,
+    }
+
+    keys, rows = _build_variant_key_index(source_lookup, variant_index)
+
+    # Variable-length Python bytes, not an S array padded to the 300-byte max.
+    assert keys.dtype == object
+    assert list(keys) == sorted(keys)
+
+    expected = sorted(
+        (
+            (f"{chrom}:{pos}:{ref}:{alt}".encode(), variant_index[alid])
+            for (chrom, pos, ref, alt), alid in source_lookup.items()
+        ),
+        key=lambda kv: kv[0],
+    )
+    assert list(keys) == [key for key, _ in expected]
+    assert rows.tolist() == [row for _, row in expected]
+
+    # `np.searchsorted` must find the long and short keys and not snap a missing
+    # key to a neighbour.
+    query = np.array(
+        [b"1:10:A:G", b"1:10:A:" + long_alt.encode(), b"9:9:A:G"],
+        dtype="S",
+    )
+    idx = np.searchsorted(keys, query)
+    idx_clip = np.minimum(idx, len(keys) - 1)
+    assert (keys[idx_clip] == query).tolist() == [True, True, False]
 
 
 def test_ez_preferred_over_es_se(tmp_path):

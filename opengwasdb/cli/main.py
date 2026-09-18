@@ -378,7 +378,7 @@ def build_hybrid_command(
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
-    n_workers: int = typer.Option(1, help="Process pool size for Pass 2"),
+    n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 1 and Pass 2"),
     chunk_variants: int = typer.Option(DEFAULT_CHUNK_SHAPE[0], help="Zarr variant chunk size"),
     chunk_analyses: int = typer.Option(DEFAULT_CHUNK_SHAPE[1], help="Zarr analysis chunk size"),
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),

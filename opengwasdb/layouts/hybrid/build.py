@@ -50,7 +50,6 @@ from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     _RESOLVE_BATCH,
     EafSpillSurvey,
-    _alid_sort_key,
     _apply_eaf_scope,
     _apply_se_divisor,
     _create_dense_zarr,
@@ -62,6 +61,7 @@ from opengwasdb.layouts.dense.build_vcf import (
     _ManifestRow,
     _pass2_worker_tasks,
     _read_manifest,
+    _sorted_alids,
     _write_dense_bands,
     _write_index,
     survey_eaf_spills,
@@ -194,7 +194,12 @@ def _build_routing_index(
         poss.append(pos)
         refs.append(ref)
         alts.append(alt)
-    keys = _encode_variant_keys(chroms, poss, refs, alts)
+    keys_list = [
+        f"{chrom}:{pos}:{ref}:{alt}".encode()
+        for chrom, pos, ref, alt in zip(chroms, poss, refs, alts, strict=True)
+    ]
+    keys = np.array(keys_list, dtype=object)
+    del keys_list, chroms, poss, refs, alts
     targets_arr = np.array(targets, dtype=np.int64)
     ispanel_arr = np.array(ispanel, dtype=bool)
     order = np.argsort(keys, kind="stable")
@@ -571,9 +576,10 @@ def _partition_variants(
     0026). Nothing observed is dropped, so an off-panel variant is always on
     the shared root axis."""
     observed_alids = set(source_lookup.values())
-    off_panel_alids = sorted(observed_alids - panel_alids, key=_alid_sort_key)
-    panel_sorted = sorted(panel_alids, key=_alid_sort_key)
-    shared_sorted = sorted(panel_alids | set(off_panel_alids), key=_alid_sort_key)
+    off_panel_set = observed_alids - panel_alids
+    off_panel_alids = _sorted_alids(off_panel_set)
+    panel_sorted = _sorted_alids(panel_alids)
+    shared_sorted = _sorted_alids(panel_alids | off_panel_set)
     dense_row = {alid: i for i, alid in enumerate(panel_sorted)}
     shared_index = {alid: i for i, alid in enumerate(shared_sorted)}
     log.info(
@@ -653,6 +659,7 @@ def _lift_and_partition(
         manifest_rows,
         chain_file=options.chain_file,
         liftover_failure_threshold=options.liftover_failure_threshold,
+        n_workers=options.n_workers,
     )
     partition = _partition_variants(
         source_lookup,

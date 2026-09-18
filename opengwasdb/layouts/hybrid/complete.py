@@ -49,7 +49,7 @@ from opengwasdb.encoding import (
     StoreEncoding,
 )
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
-from opengwasdb.layouts.dense.build_vcf import _alid_sort_key, _write_index
+from opengwasdb.layouts.dense.build_vcf import _sorted_alids, _write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
@@ -368,7 +368,7 @@ def _remap_shared_axis(
         # narrow imprecision for the crossed-over cells' summary statistics).
         build_dense_top_hit_indexes(dense.dir, encoding=dense.encoding)
 
-    union = sorted(set(dense.alids) | set(overflow_alids.tolist()), key=_alid_sort_key)
+    union = _sorted_alids(set(dense.alids) | set(overflow_alids.tolist()))
     return _SharedAxis(
         alids=union,
         index={alid: i for i, alid in enumerate(union)},
