@@ -52,6 +52,14 @@ the end of this file.
   fork; source variants absent from the reference are dropped and reference
   variants no study observes are stored as `NaN`. Omitting the option preserves
   the existing inline two-pass build (#185).
+- **`--variant-reference <path>` on `build-hybrid`**: build the Dense Component
+  axis from a precomputed variant reference and route associations by its
+  source-coordinate map, bypassing Pass 1 variant discovery. On-reference
+  variants fill the Dense Component; off-reference variants -- including ones
+  the reference never named, which are resolved from the source's declared
+  assembly during Pass 2 -- go to the Ragged Overflow. `--reference-panel`
+  remains supported, alone or as a subset of the reference; an inconsistent
+  panel is ignored in favour of the reference, with a warning (#186).
 
 ### Changed
 

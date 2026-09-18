@@ -33,6 +33,7 @@ from opengwasdb.variants.normalise import (
 )
 from opengwasdb.variants.reference import (
     VariantReference,
+    load_variant_reference,
     read_variant_reference,
     write_variant_reference,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "parse_canonical_alid",
     "is_indexable_alid",
     "is_indexable_rsid",
+    "load_variant_reference",
     "read_variant_reference",
     "write_variant_reference",
     "variant_offsets_path",

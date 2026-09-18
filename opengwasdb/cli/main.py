@@ -383,7 +383,10 @@ def build_dense_vcf_command(
 def build_hybrid_command(
     manifest_path: Path,
     output_path: Path,
-    reference_panel: Path = typer.Option(..., help="Dense Component axis: reference-panel ALIDs"),
+    reference_panel: Path | None = typer.Option(
+        None, help="Dense Component axis: reference-panel ALIDs (legacy; see --variant-reference)"
+    ),
+    variant_reference: Annotated[Path | None, typer.Option(help=_VARIANT_REFERENCE_HELP)] = None,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
@@ -406,12 +409,14 @@ def build_hybrid_command(
 
     MANIFEST_PATH is a TSV with columns: trait_id, file_path, trait_name, n,
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
-    On-panel variants in --reference-panel fill Dense Component; off-panel variants
-    go to Ragged Overflow. --source-reader-capability and --source-assembly supply
-    per-release defaults (#174).
+    On-panel variants in --reference-panel fill the Dense Component; off-panel variants
+    go to Ragged Overflow. --variant-reference supplies a precomputed axis and source
+    map, bypassing Pass 1 (#186). --source-reader-capability and --source-assembly
+    supply per-release defaults (#174).
     """
     res = build_hybrid_from_vcf_manifest(
         manifest_path, output_path, reference_panel=reference_panel,
+        variant_reference=variant_reference,
         store_id=store_id, release_id=release_id, overwrite=overwrite, n_workers=n_workers,
         chunk_shape=(chunk_variants, chunk_analyses), eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,

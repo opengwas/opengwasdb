@@ -26,7 +26,7 @@ import shutil
 import tempfile
 import time
 from concurrent.futures import as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -39,7 +39,7 @@ from opengwasdb.build.eaf_orientation import (
     site_hashes,
     verify_eaf_orientation,
 )
-from opengwasdb.build.liftover import LiftoverFailureError
+from opengwasdb.build.liftover import LiftoverFailureError, build_liftover_lookup
 from opengwasdb.encoding import (
     EncodingMeasurements,
     StoreEncoding,
@@ -91,6 +91,7 @@ from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
+from opengwasdb.variants.reference import VariantReference, load_variant_reference
 
 log = logging.getLogger(__name__)
 
@@ -217,6 +218,71 @@ def _dedup_last_wins(
     return target[keep], z[keep], se[keep], eaf[keep]
 
 
+def _match_hybrid_batch(
+    chroms: list[str],
+    keys_sorted: np.ndarray,
+    poss: list[int],
+    targets_sorted: np.ndarray,
+    refs: list[str],
+    ispanel_sorted: np.ndarray,
+    alts: list[str],
+    zs: list[float],
+    ses: list[float],
+    eafs: list[float],
+) -> tuple[
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+]:
+    """Resolve one batch to ``(dense, overflow, off_reference)`` arrays.
+
+    Dense and overflow entries carry their pre-assigned target index. An
+    off-reference entry -- a source coordinate the routing index does not hold
+    -- carries its raw ``chrom:pos:ref:alt`` key instead: the reference never
+    named it, so its shared index is only assigned after Pass 2. Order
+    preserving within each result.
+    """
+    z_arr = np.array(zs, dtype=np.float32)
+    se_arr = np.array(ses, dtype=np.float32)
+    eaf_arr = np.array(eafs, dtype=np.float32)
+    empty = (
+        np.empty(0, dtype=np.int64),
+        np.empty(0, dtype=np.float32),
+        np.empty(0, dtype=np.float32),
+        np.empty(0, dtype=np.float32),
+    )
+    if len(keys_sorted) == 0:
+        keys = np.array(
+            [f"{c}:{p}:{r}:{a}" for c, p, r, a in zip(chroms, poss, refs, alts, strict=True)],
+            dtype=object,
+        )
+        return empty, empty, (keys, z_arr, se_arr, eaf_arr)
+    query = _encode_variant_keys(chroms, poss, refs, alts)
+    idx = np.searchsorted(keys_sorted, query)
+    idx_clip = np.minimum(idx, len(keys_sorted) - 1)
+    matched = keys_sorted[idx_clip] == query
+    panel = ispanel_sorted[idx_clip[matched]]
+    tgt = targets_sorted[idx_clip[matched]]
+    z_m, se_m, eaf_m = z_arr[matched], se_arr[matched], eaf_arr[matched]
+    unmatched = ~matched
+    keys = np.array(
+        [f"{chroms[j]}:{poss[j]}:{refs[j]}:{alts[j]}" for j in np.flatnonzero(unmatched)],
+        dtype=object,
+    )
+    return (
+        (tgt[panel], z_m[panel], se_m[panel], eaf_m[panel]),
+        (tgt[~panel], z_m[~panel], se_m[~panel], eaf_m[~panel]),
+        (keys, z_arr[unmatched], se_arr[unmatched], eaf_arr[unmatched]),
+    )
+
+
+def _extend(accumulators: tuple[list[np.ndarray], ...], parts: tuple[np.ndarray, ...]) -> None:
+    """Append each non-empty part of ``parts`` to its accumulator."""
+    for accumulator, part in zip(accumulators, parts, strict=True):
+        if len(part):
+            accumulator.append(part)
+
+
 def _resolve_column_hybrid(
     file_path: str,
     keys_sorted: np.ndarray,
@@ -229,11 +295,14 @@ def _resolve_column_hybrid(
 ) -> tuple[
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
 ]:
-    """Stream one study once, routing each association to the dense fill (on-panel)
-    or the ragged overflow (off-panel). Returns ``(dense, overflow)`` where each is
-    ``(index int64, z f32, se f32, eaf f32)`` deduped last-wins by index; `eaf` is
-    NaN where the source reports no frequency (ADR 0036).
+    """Stream one study once, routing each association to the dense fill (on-panel),
+    the ragged overflow (off-panel/reference), or -- when the routing index does
+    not hold its source coordinate at all -- an off-reference bucket keyed by the
+    raw coordinate. Returns ``(dense, overflow, off_reference)`` where each is
+    ``(index/key, z f32, se f32, eaf f32)`` deduped last-wins; `eaf` is NaN where
+    the source reports no frequency (ADR 0036).
 
     ``capability`` resolves a ``SourceReader`` (issue #20) rather than this
     module streaming a VCF itself; ``stored_effect_scale`` is required to
@@ -253,6 +322,10 @@ def _resolve_column_hybrid(
     o_z: list[np.ndarray] = []
     o_se: list[np.ndarray] = []
     o_eaf: list[np.ndarray] = []
+    u_keys: list[str] = []
+    u_z: list[np.ndarray] = []
+    u_se: list[np.ndarray] = []
+    u_eaf: list[np.ndarray] = []
 
     chroms: list[str] = []
     poss: list[int] = []
@@ -265,30 +338,23 @@ def _resolve_column_hybrid(
     def _flush() -> None:
         if not zs:
             return
-        if len(keys_sorted) == 0:
-            for lst in (chroms, poss, refs, alts, zs, ses, eafs):
-                lst.clear()
-            return
-        query = _encode_variant_keys(chroms, poss, refs, alts)
-        idx = np.searchsorted(keys_sorted, query)
-        idx_clip = np.minimum(idx, len(keys_sorted) - 1)
-        matched = keys_sorted[idx_clip] == query
-        tgt = targets_sorted[idx_clip[matched]]
-        panel = ispanel_sorted[idx_clip[matched]]
-        z_arr = np.array(zs, dtype=np.float32)[matched]
-        se_arr = np.array(ses, dtype=np.float32)[matched]
-        eaf_arr = np.array(eafs, dtype=np.float32)[matched]
-        if panel.any():
-            d_idx.append(tgt[panel])
-            d_z.append(z_arr[panel])
-            d_se.append(se_arr[panel])
-            d_eaf.append(eaf_arr[panel])
-        off = ~panel
-        if off.any():
-            o_idx.append(tgt[off])
-            o_z.append(z_arr[off])
-            o_se.append(se_arr[off])
-            o_eaf.append(eaf_arr[off])
+        dense, overflow, unknown = _match_hybrid_batch(
+            chroms,
+            keys_sorted,
+            poss,
+            targets_sorted,
+            refs,
+            ispanel_sorted,
+            alts,
+            zs,
+            ses,
+            eafs,
+        )
+        _extend((d_idx, d_z, d_se, d_eaf), dense)
+        _extend((o_idx, o_z, o_se, o_eaf), overflow)
+        if len(unknown[0]):
+            u_keys.extend(str(key) for key in unknown[0])
+            _extend((u_z, u_se, u_eaf), unknown[1:])
         for lst in (chroms, poss, refs, alts, zs, ses, eafs):
             lst.clear()
 
@@ -325,9 +391,30 @@ def _resolve_column_hybrid(
         )
         return idx, z, _apply_se_divisor(se, se_divisor), eaf
 
+    def _assemble_unknown() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        if not u_keys:
+            return (
+                np.empty(0, dtype=object),
+                np.empty(0, dtype=np.float32),
+                np.empty(0, dtype=np.float32),
+                np.empty(0, dtype=np.float32),
+            )
+        z, se, eaf = np.concatenate(u_z), np.concatenate(u_se), np.concatenate(u_eaf)
+        seen: dict[str, int] = {}
+        for i, key in enumerate(u_keys):
+            seen[key] = i
+        keep = np.array(sorted(seen.values()), dtype=np.int64)
+        return (
+            np.array([u_keys[i] for i in keep.tolist()], dtype=object),
+            z[keep],
+            _apply_se_divisor(se[keep], se_divisor),
+            eaf[keep],
+        )
+
     return (
         _assemble(d_idx, d_z, d_se, d_eaf),
         _assemble(o_idx, o_z, o_se, o_eaf),
+        _assemble_unknown(),
     )
 
 
@@ -336,9 +423,11 @@ def _spill_hybrid_column(
     col_idx: int,
     dense: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     overflow: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    off_reference: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
 ) -> None:
     """Spill one resolved study column: dense rows to ``{col}.npz`` (the layout the
-    dense band-writer consumes) and overflow to ``{col}.ovf.npz``."""
+    dense band-writer consumes), overflow to ``{col}.ovf.npz``, and off-reference
+    associations -- keyed by raw source coordinate -- to ``{col}.unk.npz``."""
     d_rows, d_z, d_se, d_eaf = dense
     o_idx, o_z, o_se, o_eaf = overflow
     for suffix, arrs in (
@@ -349,6 +438,12 @@ def _spill_hybrid_column(
         tmp = spill_dir / f"{col_idx}{suffix}.tmp.npz"
         np.savez(tmp, **arrs)
         tmp.replace(final)
+    u_keys, u_z, u_se, u_eaf = off_reference
+    if len(u_keys):
+        final = spill_dir / f"{col_idx}.unk.npz"
+        tmp = spill_dir / f"{col_idx}.unk.tmp.npz"
+        np.savez(tmp, keys=u_keys, z=u_z, se=u_se, eaf=u_eaf)
+        tmp.replace(final)
 
 
 def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
@@ -357,7 +452,7 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
     assert _pass2_ispanel_sorted is not None
     assert _pass2_spill_dir is not None
     col_idx, file_path, se_divisor, capability, stored_effect_scale = task
-    dense, overflow = _resolve_column_hybrid(
+    dense, overflow, off_reference = _resolve_column_hybrid(
         file_path,
         _pass2_keys_sorted,
         _pass2_targets_sorted,
@@ -366,7 +461,7 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
         capability=capability,
         stored_effect_scale=stored_effect_scale,
     )
-    _spill_hybrid_column(_pass2_spill_dir, col_idx, dense, overflow)
+    _spill_hybrid_column(_pass2_spill_dir, col_idx, dense, overflow, off_reference)
     return col_idx
 
 
@@ -416,7 +511,8 @@ class _BuildOptions:
     take one argument rather than a dozen."""
 
     out: Path
-    reference_panel: str | Path
+    reference_panel: str | Path | None
+    variant_reference: str | Path | None
     store_id: str
     release_id: str
     chain_file: str | Path | None
@@ -547,22 +643,48 @@ class _ComponentResult:
     analyses: list[Analysis]
 
 
-def _stage_dense_component(
-    staged: StagedRelease,
-    reference_panel: str | Path,
-) -> tuple[Path, StagedRelease, set[str]]:
-    """Open the nested Dense Component's staging directory inside the outer
-    store's, and read the reference panel that defines its axis. A panel with
-    no ALIDs fails the build loudly rather than building a Dense axis that
-    stores nothing."""
+def _open_dense_component(staged: StagedRelease) -> tuple[Path, StagedRelease]:
+    """Open the nested Dense Component's staging directory inside the outer store's."""
     dense_dir = dense_component_path(staged.path)
     dense_dir.mkdir()
-    dense_staged = StagedRelease(dense_dir)
-    panel_alids = read_reference_panel_alids(reference_panel)
+    return dense_dir, StagedRelease(dense_dir)
+
+
+def _panel_alids(options: _BuildOptions) -> set[str]:
+    """Read the legacy ``--reference-panel`` ALIDs, failing loudly when empty."""
+    if options.reference_panel is None:
+        raise ValueError("a variant reference or reference panel is required")
+    panel_alids = read_reference_panel_alids(options.reference_panel)
     if not panel_alids:
-        raise ValueError(f"reference panel {reference_panel} contained no ALIDs")
+        raise ValueError(f"reference panel {options.reference_panel} contained no ALIDs")
     log.info("Reference panel: %d variants", len(panel_alids))
-    return dense_dir, dense_staged, panel_alids
+    return panel_alids
+
+
+def _resolve_reference_panel(options: _BuildOptions, reference: VariantReference) -> set[str]:
+    """The Dense axis a ``--variant-reference`` build stores.
+
+    The reference defines it. When ``--reference-panel`` is also supplied the two
+    must be consistent -- every panel ALID one the reference carries -- and the
+    panel then narrows the Dense axis (off-panel variants go to the Overflow).
+    An inconsistent panel is ignored and the reference axis used instead, with a
+    warning (issue #186).
+    """
+    reference_alids = set(reference.alids)
+    if options.reference_panel is None:
+        return reference_alids
+    panel_alids = _panel_alids(options)
+    unknown = _sorted_alids(panel_alids - reference_alids)
+    if unknown:
+        log.warning(
+            "--reference-panel lists %d ALID(s) absent from variant reference %s "
+            "(e.g. %r); --variant-reference takes precedence",
+            len(unknown),
+            options.variant_reference,
+            unknown[0],
+        )
+        return reference_alids
+    return panel_alids
 
 
 def _partition_variants(
@@ -641,25 +763,57 @@ def _load_manifest(
     return manifest_rows
 
 
-def _lift_and_partition(
-    staged: StagedRelease,
-    manifest_rows: list[_ManifestRow],
-    options: _BuildOptions,
-) -> _SourceAxis:
-    """Phase - lifting and partition/routing: open the Dense staging dir,
-    read the panel, run Pass 1 (the union of every source row's variants and
-    the hg19 -> hg38 lift for the rows that need one), partition the union
-    into on-panel/off-panel, derive the provenance map (collision handling)
-    and the Analyses, and compose the fork-safe routing index."""
-    dense_dir, dense_staged, panel_alids = _stage_dense_component(
-        staged,
-        options.reference_panel,
-    )
+def _axis_source(
+    staged: StagedRelease, manifest_rows: list[_ManifestRow], options: _BuildOptions
+) -> tuple[
+    Path,
+    StagedRelease,
+    dict[tuple[str, int, str, str], str],
+    dict[str, str],
+    set[str],
+]:
+    """Open the Dense staging dir and resolve the source-coordinate routing.
+
+    With ``--variant-reference`` the reference replaces Pass 1 entirely: its
+    ``source_lookup`` is the routing and its ALIDs define the Dense axis. Without
+    one, the legacy Pass 1 reads every source once and lifts hg19 rows.
+    """
+    dense_dir, dense_staged = _open_dense_component(staged)
+    if options.variant_reference is not None:
+        reference = load_variant_reference(options.variant_reference)
+        panel_alids = _resolve_reference_panel(options, reference)
+        log.info(
+            "Single-pass build: variant axis loaded from %s (%d panel variants); "
+            "Pass 1 variant discovery bypassed",
+            options.variant_reference,
+            len(panel_alids),
+        )
+        return dense_dir, dense_staged, reference.source_lookup, reference.rsid_by_alid, panel_alids
+    panel_alids = _panel_alids(options)
     source_lookup, rsid_by_alid = _lift_manifest_variants(
         manifest_rows,
         chain_file=options.chain_file,
         liftover_failure_threshold=options.liftover_failure_threshold,
         n_workers=options.n_workers,
+    )
+    return dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids
+
+
+def _lift_and_partition(
+    staged: StagedRelease,
+    manifest_rows: list[_ManifestRow],
+    options: _BuildOptions,
+) -> _SourceAxis:
+    """Phase - axis source and partition/routing: open the Dense staging dir,
+    resolve the Dense panel and the source-coordinate routing, partition the
+    known variants into on-panel/off-panel, derive the provenance map and the
+    Analyses, and compose the fork-safe routing index.
+
+    Source coordinates the reference does not hold are not known until Pass 2;
+    ``_finalise_reference_partition`` adds them to the shared axis there.
+    """
+    dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids = _axis_source(
+        staged, manifest_rows, options
     )
     partition = _partition_variants(
         source_lookup,
@@ -714,6 +868,185 @@ def _write_dense_component_skeleton(
     return dense_to_shared
 
 
+def _parse_source_key(key: str) -> tuple[str, int, str, str]:
+    chrom, position, ref, alt = key.split(":")
+    return chrom, int(position), ref, alt
+
+
+def _canonical_key(key: str) -> str:
+    chrom, position, ref, alt = _parse_source_key(key)
+    a1, a2 = sorted((ref, alt))
+    return f"{chrom}:{position}:{a1}:{a2}"
+
+
+def _unknown_key_assembly(prepared: _PreparedBuild) -> dict[str, str | None]:
+    """``{raw source key: declared assembly}`` for every off-reference spill entry.
+
+    A raw coordinate string declared hg19 in one row and hg38 in another names
+    two different physical loci; it cannot be resolved to one hg38 ALID and is
+    left out (``None``) rather than guessed -- the same rule the inline Pass 1
+    applies to its cross-assembly collisions.
+    """
+    key_assembly: dict[str, str | None] = {}
+    for col, row in enumerate(prepared.manifest_rows):
+        path = prepared.spill_dir / f"{col}.unk.npz"
+        if not path.exists():
+            continue
+        with np.load(path, allow_pickle=True) as data:
+            for key in data["keys"]:
+                name = str(key)
+                if name in key_assembly and key_assembly[name] != row.source_assembly:
+                    key_assembly[name] = None
+                else:
+                    key_assembly[name] = row.source_assembly
+    return key_assembly
+
+
+def _resolve_unknown_keys(
+    prepared: _PreparedBuild, options: _BuildOptions
+) -> dict[str, str]:
+    """Map every resolvable off-reference source key to its hg38 ALID.
+
+    Each spill belongs to one manifest row, so its keys are on that row's own
+    assembly: hg38 rows canonicalise directly, hg19 rows go through one shared
+    lift. A key that fails liftover, or that two rows declared on different
+    assemblies, is omitted.
+    """
+    key_to_alid: dict[str, str] = {}
+    hg19_keys: list[str] = []
+    for key, assembly in _unknown_key_assembly(prepared).items():
+        if assembly == "hg38":
+            key_to_alid[key] = _canonical_key(key)
+        elif assembly is not None:
+            hg19_keys.append(key)
+    if hg19_keys:
+        tuples_by_key = {key: _parse_source_key(key) for key in hg19_keys}
+        lifted = build_liftover_lookup(
+            tuples_by_key.values(),
+            from_build="hg19",
+            to_build="hg38",
+            failure_threshold=options.liftover_failure_threshold,
+            chain_file=options.chain_file,
+        )
+        for key, parsed in tuples_by_key.items():
+            alid = lifted.get(parsed)
+            if alid is not None:
+                key_to_alid[key] = alid
+    return key_to_alid
+
+
+def _unknown_origins(key_to_alid: dict[str, str]) -> dict[str, str | None]:
+    """The source-build ALID each off-reference hg38 ALID came from (collisions blank)."""
+    origins: dict[str, str | None] = {}
+    for key, alid in key_to_alid.items():
+        origin = _canonical_key(key)
+        if alid not in origins:
+            origins[alid] = origin
+        elif origins[alid] != origin:
+            origins[alid] = None
+    return origins
+
+
+def _append_overflow_spill(
+    spill_dir: Path, col: int, idx: np.ndarray, z: np.ndarray, se: np.ndarray, eaf: np.ndarray
+) -> None:
+    """Append resolved off-reference entries to a column's existing overflow spill."""
+    overflow_path = spill_dir / f"{col}.ovf.npz"
+    if overflow_path.exists():
+        with np.load(overflow_path) as data:
+            idx, z, se, eaf = (
+                np.concatenate([data["variant_index"], idx]),
+                np.concatenate([data["z"], z]),
+                np.concatenate([data["se"], se]),
+                np.concatenate([data["eaf"], eaf]),
+            )
+    idx, z, se, eaf = _dedup_last_wins(idx, z, se, eaf)
+    np.savez(overflow_path, variant_index=idx, z=z, se=se, eaf=eaf)
+
+
+def _merge_unknown_column(
+    spill_dir: Path, col: int, key_to_alid: dict[str, str], shared_index: dict[str, int]
+) -> None:
+    """Fold one column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices.
+
+    Keys that failed liftover (or were declared on two assemblies) are absent
+    from ``key_to_alid`` and their associations are dropped with them.
+    """
+    unknown_path = spill_dir / f"{col}.unk.npz"
+    if not unknown_path.exists():
+        return
+    with np.load(unknown_path, allow_pickle=True) as data:
+        keys = [str(key) for key in data["keys"]]
+        z, se, eaf = data["z"], data["se"], data["eaf"]
+    keep = np.array([i for i, key in enumerate(keys) if key in key_to_alid], dtype=np.int64)
+    if len(keep):
+        idx = np.array(
+            [shared_index[key_to_alid[keys[int(i)]]] for i in keep.tolist()], dtype=np.int64
+        )
+        _append_overflow_spill(spill_dir, col, idx, z[keep], se[keep], eaf[keep])
+    unknown_path.unlink()
+
+
+def _merge_unknown_spills(
+    prepared: _PreparedBuild, key_to_alid: dict[str, str], shared_index: dict[str, int]
+) -> None:
+    """Fold every column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices."""
+    for col in range(prepared.n_analyses):
+        _merge_unknown_column(prepared.spill_dir, col, key_to_alid, shared_index)
+
+
+def _finalise_reference_partition(
+    prepared: _PreparedBuild, options: _BuildOptions
+) -> _PreparedBuild:
+    """Add Pass 2-discovered off-reference variants to the shared axis.
+
+    With ``--variant-reference`` the reference fixes the Dense axis and the
+    routing for the variants it knows, but a study may observe variants the
+    reference never listed. Those are off-reference and belong in the Ragged
+    Overflow; they are unknown until Pass 2 streams them, so their shared
+    indices -- and therefore the panel's mapping onto them -- are only
+    computable now. A legacy ``--reference-panel`` build already knows its
+    whole union before Pass 2 and is returned unchanged.
+    """
+    if options.variant_reference is None:
+        return prepared
+    key_to_alid = _resolve_unknown_keys(prepared, options)
+    if not key_to_alid:
+        return prepared
+    unknown_alids = set(key_to_alid.values())
+    off_panel = _sorted_alids(set(prepared.partition.off_panel_alids) | unknown_alids)
+    panel = prepared.partition.panel_sorted
+    shared_sorted = _sorted_alids(set(panel) | set(off_panel))
+    shared_index = {alid: i for i, alid in enumerate(shared_sorted)}
+    _merge_unknown_spills(prepared, key_to_alid, shared_index)
+    dense_to_shared = np.array([shared_index[alid] for alid in panel], dtype=np.int32)
+    np.save(dense_to_shared_path(prepared.staged.path), dense_to_shared)
+    hg38_to_source = dict(prepared.hg38_to_source)
+    for alid, origin in _unknown_origins(key_to_alid).items():
+        if alid in hg38_to_source and hg38_to_source[alid] != origin:
+            hg38_to_source[alid] = None
+        else:
+            hg38_to_source[alid] = origin
+    log.info(
+        "Single-pass build: %d off-reference variant(s) routed to the Ragged Overflow",
+        len(unknown_alids),
+    )
+    partition = replace(
+        prepared.partition,
+        off_panel_alids=off_panel,
+        shared_sorted=shared_sorted,
+        shared_index=shared_index,
+        n_off_panel=len(off_panel),
+        n_shared=len(shared_sorted),
+    )
+    return replace(
+        prepared,
+        partition=partition,
+        dense_to_shared=dense_to_shared,
+        hg38_to_source=hg38_to_source,
+    )
+
+
 def _route_serial(
     prepared: _PreparedBuild,
     analysis_index: dict[str, int],
@@ -723,7 +1056,7 @@ def _route_serial(
     """Route each study once, in this process, spilling the dense rows and the
     overflow associations it resolves (last-wins dedup per target index)."""
     for i, row in enumerate(prepared.manifest_rows):
-        dense, overflow = _resolve_column_hybrid(
+        dense, overflow, off_reference = _resolve_column_hybrid(
             row.file_path,
             prepared.keys_sorted,
             prepared.targets_sorted,
@@ -732,7 +1065,9 @@ def _route_serial(
             capability=row.source_reader_capability,
             stored_effect_scale=row.stored_effect_scale,
         )
-        _spill_hybrid_column(prepared.spill_dir, analysis_index[row.trait_id], dense, overflow)
+        _spill_hybrid_column(
+            prepared.spill_dir, analysis_index[row.trait_id], dense, overflow, off_reference
+        )
         _log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {row.trait_id}", every=25)
 
 
@@ -1035,7 +1370,10 @@ def _write_shared_metadata(
         chunk_shape=options.chunk_shape,
         dtype=options.dtype,
         encoding=components.encoding,
-        eaf_orientation=components.eaf_provenance,
+        eaf_provenance=components.eaf_provenance,
+        variant_reference=(
+            str(options.variant_reference) if options.variant_reference is not None else None
+        ),
     )
     dense_counted = add_hit_counts(prepared.dense_dir, components.analyses)
     shared_analyses = add_hit_counts(prepared.staged.path, dense_counted)
@@ -1095,15 +1433,20 @@ def _prepare_build(
 def _build_components(
     prepared: _PreparedBuild,
     options: _BuildOptions,
-) -> _ComponentResult:
+) -> tuple[_PreparedBuild, _ComponentResult]:
     """Seam - the spill-lifetime build: Pass 2 routing, EAF verification,
     joint encoding, the component writes (Dense bands, Overflow CSR, shared SE
     fit, Dense top hits/manifest/analyses.tsv). The spill directory is removed
     in a finally whichever phase fails, and the store's files are only touched
-    while the spills exist."""
+    while the spills exist. Returns the (possibly repartitioned) prepared build
+    alongside the components, because a variant-reference build learns its
+    off-reference variants only here."""
     spill_dir = prepared.spill_dir
     try:
         routed = _route_studies(prepared, options)
+        # Off-reference variants are only known once Pass 2 has streamed the
+        # sources; fold them into the shared axis before anything reads it.
+        prepared = _finalise_reference_partition(prepared, options)
         evidence = _verify_eaf_orientation(prepared, routed, options)
         plan = _plan_joint_encoding(prepared, evidence, options)
         dense = _write_dense_component_bands(prepared, plan, routed.pass2_start, options)
@@ -1120,7 +1463,7 @@ def _build_components(
         )
     finally:
         shutil.rmtree(spill_dir, ignore_errors=True)
-    return _ComponentResult(
+    return prepared, _ComponentResult(
         csr=overflow.csr,
         encoding=encoding,
         se_coefficients=se_coefficients,
@@ -1167,7 +1510,8 @@ def _finalise_store(
 
 
 def build_hybrid_from_vcf_manifest(
-    manifest_path: str | Path, output_path: str | Path, *, reference_panel: str | Path,
+    manifest_path: str | Path, output_path: str | Path, *,
+    reference_panel: str | Path | None = None, variant_reference: str | Path | None = None,
     chain_file: str | Path | None = None, store_id: str, release_id: str,
     liftover_failure_threshold: float = 0.01, chunk_shape: tuple[int, int] = DEFAULT_CHUNK_SHAPE,
     dtype: str = DEFAULT_DTYPE, overwrite: bool = False, n_workers: int = 1,
@@ -1176,23 +1520,30 @@ def build_hybrid_from_vcf_manifest(
     source_assembly: str | None = None,
 ) -> HybridBuildResult:
     """Build a Hybrid store from a manifest of GWAS-VCF files and a reference
-    panel. A thin orchestrator over three deep seams (issue #130):
-    ``_prepare_build`` (lifting, partition/routing, Dense skeleton), the
-    spill-lifetime ``_build_components`` (Pass 2 routing, EAF verification,
-    joint encoding, component writes) and ``_finalise_store`` (overflow flush,
-    shared metadata, result). Each seam and phase helper preserves the
-    contracts its docstring names: the staging context's atomicity, the
-    collision/provenance rules, the disjoint-partition layout and the one
-    encoding both components share (ADR 0037).
+    panel or precomputed variant reference. A thin orchestrator over three deep
+    seams (issue #130): ``_prepare_build`` (axis source, partition/routing,
+    Dense skeleton), the spill-lifetime ``_build_components`` (Pass 2 routing,
+    EAF verification, joint encoding, component writes) and ``_finalise_store``
+    (overflow flush, shared metadata, result). Each seam and phase helper
+    preserves the contracts its docstring names: the staging context's
+    atomicity, the collision/provenance rules, the disjoint-partition layout
+    and the one encoding both components share (ADR 0037).
 
-    The Dense Component axis is exactly ``reference_panel`` (hg38 ALIDs). Each
-    study is read **once**: on-panel associations fill the nested Dense
-    Component, off-panel associations go to the Ragged Overflow. Rows are
-    assumed hg19 and lifted inline unless the manifest declares
+    The Dense Component axis is exactly ``variant_reference``'s ALIDs (or, when
+    both are given, the ``--reference-panel`` subset, which the reference must
+    carry; an inconsistent panel is ignored in favour of the reference). With a
+    reference, Pass 1 variant discovery is bypassed
+    (single-pass build, issue #186) and the reference's source-coordinate map
+    routes on-reference associations to the Dense Component and off-reference
+    ones to the Ragged Overflow during Pass 2. With only ``reference_panel``,
+    the legacy two-pass build reads every source once and lifts hg19 rows.
+    Rows are assumed hg19 and lifted inline unless the manifest declares
     ``source_assembly=hg38`` (issue #85); ``source_assembly`` and
     ``source_reader_capability`` options supply per-release defaults (#174).
-    ``eaf_reference`` drives orientation check (issue #115).
+    ``eaf_reference`` drives the orientation check (issue #115).
     """
+    if reference_panel is None and variant_reference is None:
+        raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
     manifest_rows = _load_manifest(
         manifest_path,
         default_source_reader_capability=source_reader_capability,
@@ -1202,6 +1553,7 @@ def build_hybrid_from_vcf_manifest(
         options = _BuildOptions(
             out=Path(output_path),
             reference_panel=reference_panel,
+            variant_reference=variant_reference,
             store_id=store_id,
             release_id=release_id,
             chain_file=chain_file,
@@ -1214,7 +1566,7 @@ def build_hybrid_from_vcf_manifest(
             allow_unverified_eaf=allow_unverified_eaf,
         )
         prepared = _prepare_build(staged, manifest_rows, options)
-        components = _build_components(prepared, options)
+        prepared, components = _build_components(prepared, options)
         result = _finalise_store(prepared, components, options)
     return result
 
@@ -1286,8 +1638,32 @@ def _write_hybrid_manifest(
     chunk_shape: tuple[int, int],
     dtype: str,
     encoding: StoreEncoding,
-    eaf_orientation: dict[str, Any] | None = None,
+    eaf_provenance: dict[str, Any] | None = None,
+    variant_reference: str | None = None,
 ) -> None:
+    provenance: dict[str, Any] = {
+        "builder": (
+            "opengwasdb.v0.1_hybrid_single_pass"
+            if variant_reference is not None
+            else "opengwasdb.v0.1_hybrid_vcf"
+        ),
+        "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
+        "n_variants": n_variants,
+        "n_analyses": n_analyses,
+        "hybrid": {
+            "dense_component": DENSE_SUBDIR,
+            "n_panel": n_panel,
+            "n_off_panel": n_off_panel,
+            "n_overflow_associations": n_overflow,
+            "se_dtype": encoding.se.dtype,
+            "chunk_shape": list(chunk_shape),
+            "compressor": DEFAULT_COMPRESSOR,
+        },
+    }
+    if eaf_provenance is not None:
+        provenance["eaf_orientation"] = eaf_provenance
+    if variant_reference is not None:
+        provenance["variant_reference"] = variant_reference
     manifest = StoreManifest(
         encoding=encoding,
         store_id=store_id,
@@ -1298,21 +1674,6 @@ def _write_hybrid_manifest(
         completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly="GRCh38",
         created_at=datetime.now(UTC).isoformat(),
-        provenance={
-            "builder": "opengwasdb.v0.1_hybrid_vcf",
-            "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
-            "n_variants": n_variants,
-            "n_analyses": n_analyses,
-            "hybrid": {
-                "dense_component": DENSE_SUBDIR,
-                "n_panel": n_panel,
-                "n_off_panel": n_off_panel,
-                "n_overflow_associations": n_overflow,
-                "se_dtype": encoding.se.dtype,
-                "chunk_shape": list(chunk_shape),
-                "compressor": DEFAULT_COMPRESSOR,
-            },
-            **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
-        },
+        provenance=provenance,
     )
     staged.write_manifest(manifest)
