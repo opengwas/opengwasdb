@@ -33,6 +33,8 @@ from opengwasdb.variants.normalise import (
 )
 from opengwasdb.variants.reference import (
     VariantReference,
+    VariantReferenceExtraction,
+    extract_variant_reference,
     read_variant_reference,
     write_variant_reference,
 )
@@ -50,7 +52,9 @@ __all__ = [
     "VariantNormalisationError",
     "VariantRecord",
     "VariantReference",
+    "VariantReferenceExtraction",
     "chromosome_sort_key",
+    "extract_variant_reference",
     "iter_variant_records",
     "normalise_allele",
     "normalise_chromosome",

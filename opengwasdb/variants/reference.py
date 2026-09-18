@@ -33,7 +33,13 @@ from typing import IO
 
 from opengwasdb.variants.axis import parse_canonical_alid
 
-__all__ = ["VariantReference", "read_variant_reference", "write_variant_reference"]
+__all__ = [
+    "VariantReference",
+    "VariantReferenceExtraction",
+    "extract_variant_reference",
+    "read_variant_reference",
+    "write_variant_reference",
+]
 
 #: A source's own variant identity, exactly as a SourceReader streams it.
 SourceKey = tuple[str, int, str, str]
@@ -58,6 +64,74 @@ class VariantReference:
     source_lookup: dict[SourceKey, str]
     rsid_by_alid: dict[str, str]
     explicit_source_keys: bool
+
+
+@dataclass(frozen=True)
+class VariantReferenceExtraction:
+    """What :func:`extract_variant_reference` wrote, for its caller's summary."""
+
+    output_path: Path
+    n_variants: int
+    n_source_keys: int
+    n_rsids: int
+
+
+def extract_variant_reference(
+    manifest_path: str | Path,
+    output_path: str | Path,
+    *,
+    chain_file: str | Path | None = None,
+    liftover_failure_threshold: float = 0.01,
+    n_workers: int = 1,
+    source_reader_capability: str | None = None,
+    source_assembly: str | None = None,
+) -> VariantReferenceExtraction:
+    """Extract, lift and canonicalise a manifest's variant axis into an artifact.
+
+    The standalone front end to the build's Pass 1 (issue #187): every manifest
+    source is read once through ``resolve_reader`` (GWAS-VCF, GWAS-SSF, FinnGen,
+    ...), hg19 rows are lifted to GRCh38, and the union is written as the
+    ``*.variant-ref.tsv.gz`` artifact ``--variant-reference`` consumes. The
+    rsid map follows the build's deterministic "first named wins" rule, so a
+    store built from the artifact matches one built from the same manifest in a
+    single command. An empty manifest, or a manifest whose sources resolve no
+    variants at all, fails loudly rather than writing a header-only axis.
+    """
+    from opengwasdb.layouts.dense.build_vcf import (
+        _lift_manifest_variants,
+        _read_manifest,
+        _sorted_alids,
+    )
+
+    manifest_rows = _read_manifest(
+        manifest_path,
+        default_source_reader_capability=source_reader_capability,
+        default_source_assembly=source_assembly,
+    )
+    if len(manifest_rows) == 0:
+        raise ValueError(
+            f"manifest {manifest_path} contains no rows: nothing to extract a "
+            "variant reference from"
+        )
+    source_lookup, rsid_by_alid = _lift_manifest_variants(
+        manifest_rows,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
+        n_workers=n_workers,
+    )
+    alids = _sorted_alids(source_lookup.values())
+    if not alids:
+        raise ValueError(
+            f"manifest {manifest_path} yielded no variants: every source was empty "
+            "or every row failed to resolve to an hg38 ALID"
+        )
+    write_variant_reference(output_path, alids, source_lookup, rsid_by_alid)
+    return VariantReferenceExtraction(
+        output_path=Path(output_path),
+        n_variants=len(alids),
+        n_source_keys=len(source_lookup),
+        n_rsids=len(rsid_by_alid),
+    )
 
 
 def read_variant_reference(path: str | Path) -> VariantReference:

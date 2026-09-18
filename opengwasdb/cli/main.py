@@ -52,6 +52,7 @@ from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
+from opengwasdb.variants.reference import extract_variant_reference
 
 logging.basicConfig(
     level=logging.INFO,
@@ -332,6 +333,62 @@ def build_dense_command(
             },
             sort_keys=True,
         )
+    )
+
+
+@app.command("extract-variant-reference")
+def extract_variant_reference_command(
+    manifest_path: Path,
+    output_path: Annotated[
+        Path,
+        typer.Option("--output-path", help="Where to write the *.variant-ref.tsv.gz artifact"),
+    ],
+    chain_file: Annotated[
+        Path | None,
+        typer.Option(help="hg19->hg38 chain file (default: pyliftover's builtin chain)"),
+    ] = None,
+    n_workers: Annotated[
+        int, typer.Option(help="Fork-based process pool size for the variant union")
+    ] = 1,
+    liftover_failure_threshold: Annotated[
+        float,
+        typer.Option(help="Maximum fraction of hg19 variants allowed to fail liftover"),
+    ] = 0.01,
+    source_reader_capability: Annotated[
+        str | None,
+        typer.Option(
+            callback=_validate_source_reader_capability,
+            help=_SOURCE_READER_CAPABILITY_HELP,
+        ),
+    ] = None,
+    source_assembly: Annotated[
+        str | None,
+        typer.Option(callback=_validate_source_assembly, help=_SOURCE_ASSEMBLY_HELP),
+    ] = None,
+) -> None:
+    """Extract, lift and canonicalise a manifest's variant axis (#187).
+
+    Reads every manifest source once through its source reader, lifts hg19
+    rows to GRCh38, and writes the *.variant-ref.tsv.gz artifact that
+    `build-dense-vcf --variant-reference` (and `build-hybrid`) consumes -- so a
+    later build can skip Pass 1 and still match the inline two-pass store.
+    """
+    result = extract_variant_reference(
+        manifest_path,
+        output_path,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
+        n_workers=n_workers,
+        source_reader_capability=source_reader_capability,
+        source_assembly=source_assembly,
+    )
+    _echo_summary(
+        {
+            "output_path": str(result.output_path),
+            "n_variants": result.n_variants,
+            "n_source_keys": result.n_source_keys,
+            "n_rsids": result.n_rsids,
+        }
     )
 
 

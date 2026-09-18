@@ -60,6 +60,14 @@ the end of this file.
   assembly during Pass 2 -- go to the Ragged Overflow. `--reference-panel`
   remains supported, alone or as a subset of the reference; an inconsistent
   panel is ignored in favour of the reference, with a warning (#186).
+- **`extract-variant-reference`**: a standalone command (and the
+  `opengwasdb.variants.extract_variant_reference` API) that reads every source in
+  a manifest once through its registered reader, lifts hg19 rows to GRCh38,
+  canonicalises alleles, and writes the `*.variant-ref.tsv.gz` artifact
+  (`alid`, `chromosome`, `position`, `a1`, `a2`, `rsid`, `source_keys`) that
+  `build-dense-vcf --variant-reference` and `build-hybrid --variant-reference`
+  consume. First-named rsids and the variant union are identical to the builders'
+  inline Pass 1, so the two stages reproduce the one-command store bit for bit (#187).
 
 ### Changed
 
