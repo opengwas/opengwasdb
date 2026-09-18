@@ -44,6 +44,38 @@ the end of this file.
   `notes`), reports `unavailable` rather than fabricating a value for a missing
   or unusable sample size, and is order-preserving and independent of
   `--n-workers`.
+- **`--variant-reference <path>` on `build-dense-vcf`**: build the Dense axis
+  from a precomputed variant reference (`*.variant-ref.tsv.gz`, a plain ALID
+  list, or a store `variants.tsv.gz`), bypassing the Pass 1 variant union and
+  liftover entirely and proceeding straight to Pass 2. The axis, index, and
+  fork-safe Pass 2 lookup arrays are composed from the reference before workers
+  fork; source variants absent from the reference are dropped and reference
+  variants no study observes are stored as `NaN`. Omitting the option preserves
+  the existing inline two-pass build (#185).
+- **`--variant-reference <path>` on `build-hybrid`**: build the Dense Component
+  axis from a precomputed variant reference and route associations by its
+  source-coordinate map, bypassing Pass 1 variant discovery. On-reference
+  variants fill the Dense Component; off-reference variants -- including ones
+  the reference never named, which are resolved from the source's declared
+  assembly during Pass 2 -- go to the Ragged Overflow. `--reference-panel`
+  remains supported, alone or as a subset of the reference; an inconsistent
+  panel is ignored in favour of the reference, with a warning (#186).
+- **`extract-variant-reference`**: a standalone command (and the
+  `opengwasdb.variants.extract_variant_reference` API) that reads every source in
+  a manifest once through its registered reader, lifts hg19 rows to GRCh38,
+  canonicalises alleles, and writes the `*.variant-ref.tsv.gz` artifact
+  (`alid`, `chromosome`, `position`, `a1`, `a2`, `rsid`, `source_keys`) that
+  `build-dense-vcf --variant-reference` and `build-hybrid --variant-reference`
+  consume. First-named rsids and the variant union are identical to the builders'
+  inline Pass 1, so the two stages reproduce the one-command store bit for bit (#187).
+- **`--window-size-mb` and `--reduction-batch-size` on `extract-variant-reference`**:
+  the variant union is now computed with a parallel map + genomic-window tree
+  reduce instead of one parent-process k-way merge, so 1,000+ source manifests
+  reduce in bounded-memory batches across the worker pool. Variants are
+  partitioned into non-overlapping `(chromosome, floor(position / window))`
+  windows; final window shards concatenate in genomic order without a global
+  re-sort, and the artifact is bit-for-bit invariant across window size and
+  batch size (#188).
 
 ### Changed
 

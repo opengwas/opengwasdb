@@ -7,7 +7,7 @@ import math
 import sys
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import numpy as np
 import typer
@@ -52,6 +52,8 @@ from opengwasdb.readers import known_capabilities
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
+from opengwasdb.variants.reference import extract_variant_reference
+from opengwasdb.variants.windows import DEFAULT_REDUCTION_BATCH_SIZE, DEFAULT_WINDOW_SIZE_MB
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,6 +93,12 @@ _SOURCE_READER_CAPABILITY_HELP = (
 _SOURCE_ASSEMBLY_HELP = (
     "Default source genome build for manifest rows that omit source_assembly "
     "(hg19/GRCh37 or hg38/GRCh38, default: hg19)"
+)
+_VARIANT_REFERENCE_HELP = (
+    "Build against a precomputed variant axis instead of running Pass 1: a "
+    "*.variant-ref.tsv.gz artifact, a plain ALID list, or a store variants.tsv.gz. "
+    "Source variants absent from the reference are dropped; reference variants "
+    "no study observes are stored as NaN."
 )
 
 
@@ -329,6 +337,59 @@ def build_dense_command(
     )
 
 
+@app.command("extract-variant-reference")
+def extract_variant_reference_command(
+    manifest_path: Path,
+    output_path: Annotated[
+        Path, typer.Option("--output-path", help="Where to write the artifact")
+    ],
+    chain_file: Annotated[
+        Path | None, typer.Option(help="hg19->hg38 chain file")
+    ] = None,
+    n_workers: Annotated[
+        int, typer.Option(help="Fork pool size for the variant union")
+    ] = 1,
+    liftover_failure_threshold: Annotated[
+        float, typer.Option(help="Maximum hg19 liftover failure rate")
+    ] = 0.01,
+    source_reader_capability: Annotated[
+        str | None,
+        typer.Option(
+            callback=_validate_source_reader_capability, help=_SOURCE_READER_CAPABILITY_HELP
+        ),
+    ] = None,
+    source_assembly: Annotated[
+        str | None,
+        typer.Option(callback=_validate_source_assembly, help=_SOURCE_ASSEMBLY_HELP),
+    ] = None,
+    window_size_mb: Annotated[
+        float, typer.Option(help="Genomic window size in megabases")
+    ] = DEFAULT_WINDOW_SIZE_MB,
+    reduction_batch_size: Annotated[
+        int, typer.Option(help="Shards merged per reduction task")
+    ] = DEFAULT_REDUCTION_BATCH_SIZE,
+) -> None:
+    """Extract, lift and canonicalise a manifest's variant axis (#187) into the
+    *.variant-ref.tsv.gz artifact `build-dense-vcf --variant-reference`
+    consumes. --window-size-mb and --reduction-batch-size shape the parallel
+    genomic tree-reduce (issue #188) and never change the artifact.
+    """
+    result = extract_variant_reference(
+        manifest_path, output_path, chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold, n_workers=n_workers,
+        source_reader_capability=source_reader_capability, source_assembly=source_assembly,
+        window_size_mb=window_size_mb, reduction_batch_size=reduction_batch_size,
+    )
+    _echo_summary(
+        {
+            "output_path": str(result.output_path),
+            "n_variants": result.n_variants,
+            "n_source_keys": result.n_source_keys,
+            "n_rsids": result.n_rsids,
+        }
+    )
+
+
 @app.command("build-dense-vcf")
 def build_dense_vcf_command(
     manifest_path: Path,
@@ -348,6 +409,7 @@ def build_dense_vcf_command(
     source_assembly: str | None = typer.Option(
         None, callback=_validate_source_assembly, help=_SOURCE_ASSEMBLY_HELP
     ),
+    variant_reference: Annotated[Path | None, typer.Option(help=_VARIANT_REFERENCE_HELP)] = None,
 ) -> None:
     """Build a Dense Observed-Only store from a manifest of GWAS-VCF files.
 
@@ -355,6 +417,7 @@ def build_dense_vcf_command(
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
     VCF files are hg19 by default; liftover to hg38 is applied inline.
     --source-reader-capability and --source-assembly supply per-release defaults (#174).
+    --variant-reference supplies a precomputed axis, bypassing Pass 1 (#185).
     """
     result = build_dense_from_vcf_manifest(
         manifest_path, output_path, store_id=store_id, release_id=release_id,
@@ -362,6 +425,7 @@ def build_dense_vcf_command(
         eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=source_reader_capability, source_assembly=source_assembly,
+        variant_reference=variant_reference,
     )
     _echo_summary({
         "output_path": str(result.output_path),
@@ -374,7 +438,10 @@ def build_dense_vcf_command(
 def build_hybrid_command(
     manifest_path: Path,
     output_path: Path,
-    reference_panel: Path = typer.Option(..., help="Dense Component axis: reference-panel ALIDs"),
+    reference_panel: Path | None = typer.Option(
+        None, help="Dense Component axis: reference-panel ALIDs (legacy; see --variant-reference)"
+    ),
+    variant_reference: Annotated[Path | None, typer.Option(help=_VARIANT_REFERENCE_HELP)] = None,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
@@ -397,12 +464,14 @@ def build_hybrid_command(
 
     MANIFEST_PATH is a TSV with columns: trait_id, file_path, trait_name, n,
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
-    On-panel variants in --reference-panel fill Dense Component; off-panel variants
-    go to Ragged Overflow. --source-reader-capability and --source-assembly supply
-    per-release defaults (#174).
+    On-panel variants in --reference-panel fill the Dense Component; off-panel variants
+    go to Ragged Overflow. --variant-reference supplies a precomputed axis and source
+    map, bypassing Pass 1 (#186). --source-reader-capability and --source-assembly
+    supply per-release defaults (#174).
     """
     res = build_hybrid_from_vcf_manifest(
         manifest_path, output_path, reference_panel=reference_panel,
+        variant_reference=variant_reference,
         store_id=store_id, release_id=release_id, overwrite=overwrite, n_workers=n_workers,
         chunk_shape=(chunk_variants, chunk_analyses), eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,

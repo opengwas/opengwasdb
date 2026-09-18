@@ -40,6 +40,26 @@ acceptance measurement; each repetition performs both full-row scans of the
 
 ---
 
+### `benchmark_extract_variant_reference.py`
+
+Synthetic scaling benchmark for the genomic-window map + tree-reduce added in
+issue #188. It generates a manifest of overlapping GWAS-SSF sources and runs
+`extract_variant_reference` across a grid of worker counts, window sizes and
+reduction batch sizes, asserting every artifact is byte-identical to the first
+before reporting timings and speedup.
+
+```bash
+pixi run -e dev python benchmarks/benchmark_extract_variant_reference.py \
+  --n-files 128 --variants-per-file 2000 \
+  --worker-counts 1 2 4 8 16 --window-sizes-mb 5 20 --reduction-batch-sizes 4 16 \
+  --repetitions 3 --output /tmp/opengwasdb_extract_variant_reference_benchmark.json
+```
+
+Synthetic inputs keep it runnable anywhere; raise `--n-files` and
+`--variants-per-file` to production-scale values on a compute node.
+
+---
+
 ### `benchmark_vcf_ukb_chr1_dense.py`
 
 Builds and benchmarks a dense observed-only store from the 100 UKB chr1 GWAS-VCF

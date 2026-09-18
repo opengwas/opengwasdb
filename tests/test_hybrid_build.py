@@ -949,3 +949,348 @@ def test_build_routing_index_long_keys_sorted_and_searchable():
     hits = keys[np.minimum(np.searchsorted(keys, query), len(keys) - 1)] == query
     assert hits.tolist() == [True, True, False]
 
+
+
+# ── single-pass builds from a precomputed variant reference (issue #186) ─────
+
+
+def _hybrid_manifest(tmp_path: Path) -> Path:
+    """The same two-trait, three-variant manifest the `hybrid_store` fixture uses."""
+    vcf1 = _make_vcf(
+        tmp_path,
+        "trait_a",
+        [
+            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",  # dense
+            f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE:AF\t1.5:0.3:0.3\n",  # overflow
+            f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",  # dense
+        ],
+    )
+    vcf2 = _make_vcf(
+        tmp_path,
+        "trait_b",
+        [
+            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t6.0:0.5:0.25\n",  # dense
+            f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t1.2:0.3:0.45\n",  # dense
+        ],
+    )
+    return _make_manifest(
+        tmp_path, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
+    )
+
+
+def _write_reference_artifact(
+    tmp_path: Path, manifest: Path, *, panel_only: bool = False
+) -> Path:
+    """Write the artifact the inline two-pass Pass 1 would recompute.
+
+    ``panel_only`` drops the off-panel source key so the artifact is a genuine
+    external panel: only the Dense axis is named, and the off-panel hg19 source
+    can only be resolved during Pass 2.
+    """
+    from opengwasdb.layouts.dense.build_vcf import (
+        _lift_manifest_variants,
+        _read_manifest,
+        _sorted_alids,
+    )
+    from opengwasdb.variants.reference import write_variant_reference
+
+    rows = _read_manifest(manifest)
+    source_lookup, rsid_by_alid = _lift_manifest_variants(
+        rows, chain_file=None, liftover_failure_threshold=0.01
+    )
+    if panel_only:
+        panel = {HG38_ALID_1, HG38_ALID_3}
+        alids = _sorted_alids(panel)
+        source_lookup = {key: alid for key, alid in source_lookup.items() if alid in panel}
+    else:
+        alids = _sorted_alids(source_lookup.values())
+    path = tmp_path / (
+        "panel-only.variant-ref.tsv.gz" if panel_only else "union.variant-ref.tsv.gz"
+    )
+    write_variant_reference(path, alids, source_lookup, rsid_by_alid)
+    return path
+
+
+def _assert_hybrid_stores_match(reference: Path, candidate: Path) -> None:
+    """Every stored data artifact matches: variant tables, dense matrix,
+    overflow CSR, top hits and analyses.tsv (manifest timestamps excluded)."""
+    assert validate_store(candidate).ok, validate_store(candidate).errors
+
+    for name in ("variants.tsv.gz", "dense/variants.tsv.gz"):
+        with gzip.open(reference / name, "rt", encoding="utf-8") as handle:
+            left = handle.read()
+        with gzip.open(candidate / name, "rt", encoding="utf-8") as handle:
+            right = handle.read()
+        assert left == right, name
+
+    np.testing.assert_array_equal(
+        np.load(reference / "dense" / "dense_to_shared.npy"),
+        np.load(candidate / "dense" / "dense_to_shared.npy"),
+    )
+    ref_store = open_store(reference)
+    cand_store = open_store(candidate)
+    ref_dense = ref_store.dense_component().arrays(mode="r")
+    cand_dense = cand_store.dense_component().arrays(mode="r")
+    for name in ("z", "se"):
+        np.testing.assert_array_equal(ref_dense[name][:], cand_dense[name][:])
+    ref_ragged = ref_store.arrays(mode="r")["ragged"]
+    cand_ragged = cand_store.arrays(mode="r")["ragged"]
+    for name in ("offsets", "variant_index", "z", "se"):
+        np.testing.assert_array_equal(ref_ragged[name][:], cand_ragged[name][:])
+
+    with query_store(reference) as left_q, query_store(candidate) as right_q:
+        for threshold in (5e-4, 5e-6, 5e-8):
+            left_hits = left_q.top_hits(threshold=threshold)
+            right_hits = right_q.top_hits(threshold=threshold)
+            for field in ("variant_index", "analysis_index", "z", "se"):
+                np.testing.assert_array_equal(left_hits[field], right_hits[field])
+
+    assert (reference / "analyses.tsv").read_text() == (candidate / "analyses.tsv").read_text()
+
+
+class TestVariantReference:
+    def test_reference_alone_is_a_full_union_single_pass_build(self, tmp_path):
+        """With no separate panel the reference's own ALIDs are the Dense axis;
+        all three observed variants are on it and the overflow is empty."""
+        manifest = _hybrid_manifest(tmp_path)
+        reference = _write_reference_artifact(tmp_path, manifest)
+        store = tmp_path / "union.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r"
+        )
+
+        assert result.n_panel == 3
+        assert result.n_off_panel == 0
+        assert result.n_overflow == 0
+        assert validate_store(store).ok
+        with query_store(store) as q:
+            assert q.lookup([HG38_ALID_1], ["trait_a"])["z"][0] == pytest.approx(-4.0, rel=5e-3)
+
+    def test_reference_plus_panel_partitions_and_matches_two_pass(self, tmp_path, monkeypatch):
+        """A full-union reference plus a subset ``--reference-panel`` routes the
+        off-panel variant to the Overflow and reproduces the legacy two-pass
+        store exactly, without ever running Pass 1."""
+        import opengwasdb.layouts.hybrid.build as hybrid_build
+
+        manifest = _hybrid_manifest(tmp_path)
+        reference = _write_reference_artifact(tmp_path, manifest)
+        panel = _panel(tmp_path)
+
+        two_pass = tmp_path / "two-pass.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+        )
+
+        def _no_pass1(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("Pass 1 ran despite --variant-reference")
+
+        monkeypatch.setattr(hybrid_build, "_lift_manifest_variants", _no_pass1)
+
+        single_pass = tmp_path / "single-pass.opengwasdb"
+        result = build_hybrid_from_vcf_manifest(
+            manifest, single_pass, reference_panel=panel, variant_reference=reference,
+            store_id="s", release_id="r", n_workers=2,
+        )
+
+        assert result.n_panel == 2
+        assert result.n_off_panel == 1
+        assert result.n_overflow == 1
+        _assert_hybrid_stores_match(two_pass, single_pass)
+
+    def test_panel_only_reference_lifts_off_reference_during_pass2(self, tmp_path, monkeypatch):
+        """A panel-only reference names only the Dense axis; the off-panel hg19
+        variant is unknown until Pass 2, is lifted there, and lands in the
+        Overflow -- matching the legacy two-pass store."""
+        import opengwasdb.layouts.hybrid.build as hybrid_build
+
+        manifest = _hybrid_manifest(tmp_path)
+        reference = _write_reference_artifact(tmp_path, manifest, panel_only=True)
+
+        two_pass = tmp_path / "two-pass.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            manifest, two_pass, reference_panel=_panel(tmp_path), store_id="s", release_id="r"
+        )
+
+        def _no_pass1(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("Pass 1 ran despite --variant-reference")
+
+        monkeypatch.setattr(hybrid_build, "_lift_manifest_variants", _no_pass1)
+
+        single_pass = tmp_path / "single-pass.opengwasdb"
+        result = build_hybrid_from_vcf_manifest(
+            manifest, single_pass, variant_reference=reference, store_id="s", release_id="r",
+            n_workers=2,
+        )
+
+        assert result.n_panel == 2
+        assert result.n_off_panel == 1
+        assert result.n_overflow == 1
+        _assert_hybrid_stores_match(two_pass, single_pass)
+
+    def test_off_panel_and_off_reference_overflow_indices_are_remapped(self, tmp_path):
+        """B1: a partial reference plus a strict-subset panel writes on-reference
+        off-panel variants under the initial shared indices during Pass 2; a
+        genuinely off-reference variant then shifts that axis. The existing
+        spills must be re-keyed, or they silently point at the wrong variant.
+
+        The off-reference variant sorts *between* two known off-panel variants,
+        so every later index moves -- the shift that exposes the stale index.
+        """
+        vcf_a = _make_vcf(
+            tmp_path,
+            "trait_a",
+            [
+                f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",  # dense A
+                f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE:AF\t1.5:0.3:0.3\n",  # off-panel B
+                f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",  # off-panel C
+            ],
+        )
+        # hg38, position 500000: sorts between HG38_ALID_1 (100000) and
+        # HG38_ALID_2 (1064620), so it inserts at shared index 1.
+        vcf_d = _make_vcf(
+            tmp_path,
+            "trait_d",
+            ["1\t500000\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t0.8:0.4:0.25\n"],
+        )
+        ref_manifest = _manifest_with_source_assembly(
+            tmp_path, [("trait_a", vcf_a, "Trait A", "")]
+        )
+        reference = _write_reference_artifact(tmp_path, ref_manifest)
+        build_manifest = _manifest_with_source_assembly(
+            tmp_path,
+            [("trait_a", vcf_a, "Trait A", ""), ("trait_d", vcf_d, "Trait D", "hg38")],
+        )
+        panel = tmp_path / "panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")  # strict subset of the reference
+
+        two_pass = tmp_path / "two-pass.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            build_manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+        )
+        single_pass = tmp_path / "single-pass.opengwasdb"
+        result = build_hybrid_from_vcf_manifest(
+            build_manifest, single_pass, reference_panel=panel,
+            variant_reference=reference, store_id="s", release_id="r",
+        )
+
+        # The fixture must actually exercise the shift: one on-reference
+        # off-panel variant above and one below the inserted off-reference one.
+        assert result.n_panel == 1
+        assert result.n_off_panel == 3
+        assert result.n_overflow == 3
+        _assert_hybrid_stores_match(two_pass, single_pass)
+
+        with query_store(single_pass) as q:
+            assert q.lookup([HG38_ALID_1], ["trait_a"])["z"][0] == pytest.approx(-4.0, rel=5e-3)
+            assert q.lookup([HG38_ALID_2], ["trait_a"])["z"][0] == pytest.approx(-5.0, rel=5e-3)
+            assert q.lookup([HG38_ALID_3], ["trait_a"])["z"][0] == pytest.approx(3.0, rel=5e-3)
+            assert q.lookup(["1:500000:A:G"], ["trait_d"])["z"][0] == pytest.approx(-2.0, rel=5e-3)
+
+    def test_inconsistent_panel_defers_to_the_reference(self, tmp_path, caplog):
+        """A panel carrying an ALID the reference does not is inconsistent, so
+        the reference axis wins (with a warning) instead of failing the build."""
+        import logging
+
+        manifest = _hybrid_manifest(tmp_path)
+        reference = _write_reference_artifact(tmp_path, manifest)
+        bad_panel = tmp_path / "bad-panel.txt"
+        bad_panel.write_text(f"{HG38_ALID_1}\n9:1:A:G\n", encoding="utf-8")
+        store = tmp_path / "inconsistent.opengwasdb"
+
+        with caplog.at_level(logging.WARNING):
+            result = build_hybrid_from_vcf_manifest(
+                manifest, store, reference_panel=bad_panel,
+                variant_reference=reference, store_id="s", release_id="r",
+            )
+
+        assert "--variant-reference takes precedence" in caplog.text
+        assert result.n_panel == 3  # the reference's own axis, not the bad panel
+        assert result.n_off_panel == 0
+        assert validate_store(store).ok
+
+    def test_neither_reference_nor_panel_fails_loudly(self, tmp_path):
+        manifest = _hybrid_manifest(tmp_path)
+        with pytest.raises(ValueError, match="--reference-panel or --variant-reference"):
+            build_hybrid_from_vcf_manifest(
+                manifest, tmp_path / "store.opengwasdb", store_id="s", release_id="r"
+            )
+
+    def test_cli_accepts_variant_reference_without_reference_panel(self, tmp_path):
+        from typer.testing import CliRunner
+
+        from opengwasdb.cli.main import app
+
+        manifest = _hybrid_manifest(tmp_path)
+        reference = _write_reference_artifact(tmp_path, manifest)
+        store = tmp_path / "cli.opengwasdb"
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "build-hybrid", str(manifest), str(store),
+                "--variant-reference", str(reference),
+                "--store-id", "s", "--release-id", "r",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert validate_store(store).ok
+
+    def test_logs_single_pass(self, tmp_path, caplog):
+        import logging
+
+        manifest = _hybrid_manifest(tmp_path)
+        reference = _write_reference_artifact(tmp_path, manifest)
+        store = tmp_path / "logged.opengwasdb"
+
+        with caplog.at_level(logging.INFO):
+            build_hybrid_from_vcf_manifest(
+                manifest, store, variant_reference=reference, store_id="s", release_id="r"
+            )
+
+        assert "Single-pass build: variant axis loaded from" in caplog.text
+        assert "Pass 1: collecting source variants" not in caplog.text
+
+    def test_off_reference_variant_that_fails_liftover_is_dropped(self, tmp_path):
+        """A failed off-reference lift is dropped under the threshold -- it must
+        not crash the spill merge while its sibling lifts successfully."""
+        from opengwasdb.variants.reference import write_variant_reference
+
+        vcf = _make_vcf(
+            tmp_path, "trait_mixed",
+            [
+                f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",  # on-panel
+                f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",  # off-ref, lifts
+                "1\t200000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0.5\n",           # off-ref, fails
+            ],
+        )
+        manifest = _make_manifest(tmp_path, [("trait_mixed", vcf, "Trait mixed")])
+        reference = tmp_path / "panel-only.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1}
+        )
+        store = tmp_path / "failed-lift.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r",
+            liftover_failure_threshold=1.0,
+        )
+
+        assert result.n_panel == 1
+        assert result.n_off_panel == 1
+        assert result.n_overflow == 1
+        assert validate_store(store).ok
+
+    def test_manifest_records_the_variant_reference(self, tmp_path):
+        manifest = _hybrid_manifest(tmp_path)
+        reference = _write_reference_artifact(tmp_path, manifest)
+        store = tmp_path / "provenance.opengwasdb"
+
+        build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r"
+        )
+
+        provenance = StoreManifest.load(store).provenance
+        assert provenance["variant_reference"] == str(reference)
+        assert provenance["builder"] == "opengwasdb.v0.1_hybrid_single_pass"

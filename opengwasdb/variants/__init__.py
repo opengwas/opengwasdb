@@ -31,6 +31,13 @@ from opengwasdb.variants.normalise import (
     normalise_chromosome,
     orient_to_canonical,
 )
+from opengwasdb.variants.reference import (
+    VariantReference,
+    VariantReferenceExtraction,
+    extract_variant_reference,
+    read_variant_reference,
+    write_variant_reference,
+)
 
 __all__ = [
     "VARIANT_AXIS_FORMAT",
@@ -44,7 +51,10 @@ __all__ = [
     "VariantAxis",
     "VariantNormalisationError",
     "VariantRecord",
+    "VariantReference",
+    "VariantReferenceExtraction",
     "chromosome_sort_key",
+    "extract_variant_reference",
     "iter_variant_records",
     "normalise_allele",
     "normalise_chromosome",
@@ -52,6 +62,8 @@ __all__ = [
     "parse_canonical_alid",
     "is_indexable_alid",
     "is_indexable_rsid",
+    "read_variant_reference",
+    "write_variant_reference",
     "variant_offsets_path",
     "variant_rsid_bytes_path",
     "variant_rsid_rows_path",
