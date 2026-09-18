@@ -91,7 +91,7 @@ from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
-from opengwasdb.variants.reference import VariantReference, load_variant_reference
+from opengwasdb.variants.reference import VariantReference, read_variant_reference
 
 log = logging.getLogger(__name__)
 
@@ -665,10 +665,10 @@ def _resolve_reference_panel(options: _BuildOptions, reference: VariantReference
     """The Dense axis a ``--variant-reference`` build stores.
 
     The reference defines it. When ``--reference-panel`` is also supplied the two
-    must be consistent -- every panel ALID one the reference carries -- and the
-    panel then narrows the Dense axis (off-panel variants go to the Overflow).
-    An inconsistent panel is ignored and the reference axis used instead, with a
-    warning (issue #186).
+    must be consistent -- every panel ALID must be one the reference carries --
+    and the panel then narrows the Dense axis (off-panel variants go to the
+    Overflow). An inconsistent panel is ignored and the reference axis used
+    instead, with a warning (issue #186).
     """
     reference_alids = set(reference.alids)
     if options.reference_panel is None:
@@ -780,7 +780,7 @@ def _axis_source(
     """
     dense_dir, dense_staged = _open_dense_component(staged)
     if options.variant_reference is not None:
-        reference = load_variant_reference(options.variant_reference)
+        reference = read_variant_reference(options.variant_reference)
         panel_alids = _resolve_reference_panel(options, reference)
         log.info(
             "Single-pass build: variant axis loaded from %s (%d panel variants); "
@@ -987,6 +987,31 @@ def _merge_unknown_column(
     unknown_path.unlink()
 
 
+def _remap_overflow_spills(
+    prepared: _PreparedBuild, shared_index: dict[str, int]
+) -> None:
+    """Re-key existing overflow spills from the initial shared axis to the final one.
+
+    Pass 2 wrote each on-reference off-panel association under the shared index
+    the *initial* partition assigned it. Adding off-reference variants shifts
+    every shared index at or after the first insertion point, so those entries
+    have to be translated through their ALID before the two sets are combined --
+    otherwise they silently point at whichever variant now occupies their old
+    index (issue #186 review).
+    """
+    old_alids = prepared.partition.shared_sorted
+    for col in range(prepared.n_analyses):
+        path = prepared.spill_dir / f"{col}.ovf.npz"
+        if not path.exists():
+            continue
+        with np.load(path) as data:
+            vi = data["variant_index"].astype(np.int64)
+            z, se, eaf = data["z"], data["se"], data["eaf"]
+        remapped = np.array([shared_index[old_alids[int(i)]] for i in vi], dtype=np.int64)
+        remapped, z, se, eaf = _dedup_last_wins(remapped, z, se, eaf)
+        np.savez(path, variant_index=remapped, z=z, se=se, eaf=eaf)
+
+
 def _merge_unknown_spills(
     prepared: _PreparedBuild, key_to_alid: dict[str, str], shared_index: dict[str, int]
 ) -> None:
@@ -1018,6 +1043,9 @@ def _finalise_reference_partition(
     panel = prepared.partition.panel_sorted
     shared_sorted = _sorted_alids(set(panel) | set(off_panel))
     shared_index = {alid: i for i, alid in enumerate(shared_sorted)}
+    # Existing overflow entries carry the *initial* axis's indices; translate
+    # them before mixing in the off-reference entries keyed to the new one.
+    _remap_overflow_spills(prepared, shared_index)
     _merge_unknown_spills(prepared, key_to_alid, shared_index)
     dense_to_shared = np.array([shared_index[alid] for alid in panel], dtype=np.int32)
     np.save(dense_to_shared_path(prepared.staged.path), dense_to_shared)

@@ -33,12 +33,7 @@ from typing import IO
 
 from opengwasdb.variants.axis import parse_canonical_alid
 
-__all__ = [
-    "VariantReference",
-    "load_variant_reference",
-    "read_variant_reference",
-    "write_variant_reference",
-]
+__all__ = ["VariantReference", "read_variant_reference", "write_variant_reference"]
 
 #: A source's own variant identity, exactly as a SourceReader streams it.
 SourceKey = tuple[str, int, str, str]
@@ -86,10 +81,6 @@ def read_variant_reference(path: str | Path) -> VariantReference:
         f"variant reference {reference_path} has neither an 'alid' nor a "
         "'source_keys' column"
     )
-
-
-#: The name issue #186 (and the parent issue) refers to this reader by.
-load_variant_reference = read_variant_reference
 
 
 def write_variant_reference(

@@ -1128,6 +1128,65 @@ class TestVariantReference:
         assert result.n_overflow == 1
         _assert_hybrid_stores_match(two_pass, single_pass)
 
+    def test_off_panel_and_off_reference_overflow_indices_are_remapped(self, tmp_path):
+        """B1: a partial reference plus a strict-subset panel writes on-reference
+        off-panel variants under the initial shared indices during Pass 2; a
+        genuinely off-reference variant then shifts that axis. The existing
+        spills must be re-keyed, or they silently point at the wrong variant.
+
+        The off-reference variant sorts *between* two known off-panel variants,
+        so every later index moves -- the shift that exposes the stale index.
+        """
+        vcf_a = _make_vcf(
+            tmp_path,
+            "trait_a",
+            [
+                f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",  # dense A
+                f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE:AF\t1.5:0.3:0.3\n",  # off-panel B
+                f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",  # off-panel C
+            ],
+        )
+        # hg38, position 500000: sorts between HG38_ALID_1 (100000) and
+        # HG38_ALID_2 (1064620), so it inserts at shared index 1.
+        vcf_d = _make_vcf(
+            tmp_path,
+            "trait_d",
+            ["1\t500000\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t0.8:0.4:0.25\n"],
+        )
+        ref_manifest = _manifest_with_source_assembly(
+            tmp_path, [("trait_a", vcf_a, "Trait A", "")]
+        )
+        reference = _write_reference_artifact(tmp_path, ref_manifest)
+        build_manifest = _manifest_with_source_assembly(
+            tmp_path,
+            [("trait_a", vcf_a, "Trait A", ""), ("trait_d", vcf_d, "Trait D", "hg38")],
+        )
+        panel = tmp_path / "panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")  # strict subset of the reference
+
+        two_pass = tmp_path / "two-pass.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            build_manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+        )
+        single_pass = tmp_path / "single-pass.opengwasdb"
+        result = build_hybrid_from_vcf_manifest(
+            build_manifest, single_pass, reference_panel=panel,
+            variant_reference=reference, store_id="s", release_id="r",
+        )
+
+        # The fixture must actually exercise the shift: one on-reference
+        # off-panel variant above and one below the inserted off-reference one.
+        assert result.n_panel == 1
+        assert result.n_off_panel == 3
+        assert result.n_overflow == 3
+        _assert_hybrid_stores_match(two_pass, single_pass)
+
+        with query_store(single_pass) as q:
+            assert q.lookup([HG38_ALID_1], ["trait_a"])["z"][0] == pytest.approx(-4.0, rel=5e-3)
+            assert q.lookup([HG38_ALID_2], ["trait_a"])["z"][0] == pytest.approx(-5.0, rel=5e-3)
+            assert q.lookup([HG38_ALID_3], ["trait_a"])["z"][0] == pytest.approx(3.0, rel=5e-3)
+            assert q.lookup(["1:500000:A:G"], ["trait_d"])["z"][0] == pytest.approx(-2.0, rel=5e-3)
+
     def test_inconsistent_panel_defers_to_the_reference(self, tmp_path, caplog):
         """A panel carrying an ALID the reference does not is inconsistent, so
         the reference axis wins (with a warning) instead of failing the build."""
