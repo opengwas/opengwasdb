@@ -768,7 +768,9 @@ def _collect_manifest_variant_sites_serial(
         _log_progress(
             "Pass 1", i + 1, len(manifest_rows), t0, f"{n_total} unique variants so far", every=250
         )
-    return tuples_by_assembly, rsid_by_site
+    # The serial read is one shard of rank 0, so its rsid order is site order
+    # (issue #192): the dict's insertion order is the stated selection order.
+    return tuples_by_assembly, dict(sorted(rsid_by_site.items()))
 
 
 def _map_reduce_windows(
@@ -809,13 +811,25 @@ def _concatenate_window_shards(
     tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]],
     rsid_by_site: dict[tuple[str, int, str, str], str],
 ) -> None:
-    """Stream the final window shards, in genomic order, into the union."""
+    """Stream the final window shards, in genomic order, into the union.
+
+    ``rsid_by_site`` is inserted in ``(rank, site)`` order (issue #192): the
+    final shard's manifest-order rank is the primary key and its records are
+    already sorted by site. Sorting the ranked records here -- rather than
+    letting the union set's hash order decide -- is what makes the rsid an ALID
+    carries deterministic.
+    """
+    ranked: list[tuple[int, tuple[str, int, str, str], str]] = []
     for key in sorted(final):
+        spec = final[key]
         sites = tuples_by_assembly.setdefault(key[0], set())
-        for site, rsid in _iter_pass1_shard(final[key].path):
+        for site, rsid in _iter_pass1_shard(spec.path):
             sites.add(site)
             if rsid:
-                rsid_by_site.setdefault(site, rsid)
+                ranked.append((spec.rank, site, rsid))
+    ranked.sort()
+    for _rank, site, rsid in ranked:
+        rsid_by_site.setdefault(site, rsid)
 
 
 def _collect_manifest_variant_sites_parallel(
@@ -965,11 +979,7 @@ def _resolve_manifest_variants_to_alids(
             del passthrough_lookup[key]
             del lifted_lookup[key]
     source_lookup = {**passthrough_lookup, **lifted_lookup}
-    rsid_by_alid: dict[str, str] = {}
-    for site, alid in source_lookup.items():
-        rsid = rsid_by_site.get(site)
-        if rsid:
-            rsid_by_alid.setdefault(alid, rsid)
+    rsid_by_alid = _rekey_rsids_to_alids(source_lookup, rsid_by_site)
     log.info(
         "Pass 1 liftover/finalisation: %d source variants → %d hg38 ALIDs in %s",
         len(source_lookup),
@@ -977,6 +987,25 @@ def _resolve_manifest_variants_to_alids(
         _fmt_duration(time.monotonic() - finalise_start),
     )
     return source_lookup, rsid_by_alid
+
+
+def _rekey_rsids_to_alids(
+    source_lookup: Mapping[tuple[str, int, str, str], str],
+    rsid_by_site: Mapping[tuple[str, int, str, str], str],
+) -> dict[str, str]:
+    """The rsid each ALID carries: the first non-empty in ``(rank, site)`` order.
+
+    ``rsid_by_site`` is produced in that order (issue #192), so iterating it
+    directly pins the winner for an ALID several source keys resolve to.
+    Iterating ``source_lookup`` would fall back to the union set's per-process
+    string hash order and let the answer move between runs (issue #192).
+    """
+    by_alid: dict[str, str] = {}
+    for site, rsid in rsid_by_site.items():
+        alid = source_lookup.get(site)
+        if alid and rsid:
+            by_alid.setdefault(alid, rsid)
+    return by_alid
 
 
 def build_dense_from_vcf_manifest(

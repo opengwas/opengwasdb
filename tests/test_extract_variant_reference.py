@@ -9,6 +9,9 @@ the CLI surface, and that two stages match one command bit for bit."""
 from __future__ import annotations
 
 import gzip
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -197,6 +200,63 @@ def test_first_named_rsid_wins_in_manifest_order(tmp_path):
         artifact = tmp_path / f"names-{n_workers}.variant-ref.tsv.gz"
         extract_variant_reference(manifest, artifact, n_workers=n_workers)
         assert read_variant_reference(artifact).rsid_by_alid == {HG38_ALID_1: "rsFIRST"}
+
+
+def _swapped_allele_manifest(tmp_path: Path) -> Path:
+    """Two hg38 sources reporting one locus with the alleles swapped.
+
+    Both source keys resolve to ``1:100000:A:G`` but carry different rsids --
+    exactly the collision the rsid rule has to settle deterministically.
+    """
+    first = tmp_path / "swapped_a.tsv.gz"
+    _write_ssf(first, [("1", 100_000, "A", "G", "rsAG")])
+    second = tmp_path / "swapped_b.tsv.gz"
+    _write_ssf(second, [("1", 100_000, "G", "A", "rsGA")])
+    return _make_manifest(
+        tmp_path,
+        [
+            ("swapped_a", first, GWAS_SSF_CAPABILITY, "hg38"),
+            ("swapped_b", second, GWAS_SSF_CAPABILITY, "hg38"),
+        ],
+        name="swapped.tsv",
+    )
+
+
+@pytest.mark.parametrize("n_workers", [1, 2])
+def test_rsid_for_a_colliding_alid_is_the_smallest_site(tmp_path, n_workers):
+    """Issue #192: two source keys differing only in allele order collapse to one
+    ALID; the winner is the first non-empty rsid in (rank, site) order. Both
+    sites share one manifest-order rank here, so the lexicographically smaller
+    site -- ("1", 100000, "A", "G") -- wins."""
+    manifest = _swapped_allele_manifest(tmp_path)
+    artifact = tmp_path / f"swapped-{n_workers}.variant-ref.tsv.gz"
+    extract_variant_reference(manifest, artifact, n_workers=n_workers)
+    assert read_variant_reference(artifact).rsid_by_alid == {HG38_ALID_1: "rsAG"}
+
+
+@pytest.mark.parametrize("n_workers", [1, 2])
+def test_rsid_selection_is_stable_across_python_hash_seeds(tmp_path, n_workers):
+    """Issue #192: the selected rsid must not move with PYTHONHASHSEED. The
+    previous implementation iterated the union set, so the winner flipped
+    between seeds; every seed must now pick the same canonical rsid."""
+    manifest = _swapped_allele_manifest(tmp_path)
+    results = set()
+    for seed in ("0", "1", "2"):
+        artifact = tmp_path / f"seed-{seed}-{n_workers}.variant-ref.tsv.gz"
+        completed = subprocess.run(
+            [
+                sys.executable, "-c", "from opengwasdb.cli.main import app; app()",
+                "extract-variant-reference", str(manifest),
+                "--output-path", str(artifact), "--n-workers", str(n_workers),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        assert completed.returncode == 0, completed.stderr
+        results.add(read_variant_reference(artifact).rsid_by_alid[HG38_ALID_1])
+    assert results == {"rsAG"}, f"rsid moved across PYTHONHASHSEED: {sorted(results)}"
 
 
 def test_extracts_across_gwas_vcf_gwas_ssf_and_finngen(tmp_path):

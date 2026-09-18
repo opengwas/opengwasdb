@@ -121,6 +121,16 @@ the end of this file.
 
 ### Fixed
 
+- **The rsid an ALID carries is now deterministic, not set-iteration order.**
+  When two source keys differing only in allele order (or two source positions
+  lifting onto one hg38 ALID) carried different rsids, the winner was decided by
+  the union set's iteration order, which varies with the per-process
+  `PYTHONHASHSEED` -- one manifest produced `rsAG` or `rsGA` on different runs.
+  The rule is now explicit and enforced: the rsid for an ALID is the first
+  non-empty rsid in `(rank, site)` order, where `rank` is the shard's
+  manifest-order rank and ties break by site. `rsid_by_site` is produced in that
+  order and consumed directly, so nothing downstream depends on hash order
+  (#192).
 - **Concurrent staging runs for one destination no longer delete each other's
   work, and an interrupted run no longer leaks its staging directory.**
   `OpenGWASDBStore.staging()` used a fixed `.{name}.tmp` sibling, so a second
