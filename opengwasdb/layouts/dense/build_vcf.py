@@ -505,7 +505,6 @@ class _ShardSpec:
     assembly: str
     window: WindowKey
     path: Path
-    n_records: int
 
 
 def _pass1_record_site(record: _Pass1Record) -> tuple[str, int, str, str]:
@@ -541,26 +540,27 @@ def _split_manifest_rows(
 
 
 def _write_pass1_shard(
-    shard_dir: Path,
-    worker_idx: int,
-    assembly: str,
-    window: WindowKey,
-    records: list[_Pass1Record],
-) -> tuple[str, int]:
+    shard_dir: Path, worker_idx: int, shard_idx: int, records: list[_Pass1Record]
+) -> str:
     """Write one worker's sorted, deduplicated variants for one window.
 
     One tab-separated record per variant (``chrom pos ref alt rsid``); the
     empty rsid means the worker's slice never named one, so a later shard can
     still supply it at merge time. Sorted here so a merge task streams its
     batch instead of holding it whole.
+
+    The filename is keyed only by ``(worker, per-worker shard index)``, never
+    by a chromosome sort rank: ranks are not unique -- ``M`` and ``MT`` are
+    both 25, and every unrecognised contig is 1000 -- so a rank-keyed name
+    would let one chromosome's shard silently overwrite another's. The window
+    is carried in the returned spec, not the name.
     """
     records.sort(key=_pass1_record_site)
-    (rank, _), index = window
-    path = shard_dir / f"{worker_idx:06d}.{assembly}.{rank:04d}.{index:07d}.variants.tsv"
+    path = shard_dir / f"{worker_idx:06d}.{shard_idx:06d}.pass1.variants.tsv"
     with open(path, "w", encoding="utf-8") as fh:
         for (chrom, pos, ref, alt), rsid in records:
             fh.write(f"{chrom}\t{pos}\t{ref}\t{alt}\t{rsid}\n")
-    return str(path), len(records)
+    return str(path)
 
 
 def _iter_pass1_shard(path: Path) -> Iterator[_Pass1Record]:
@@ -579,7 +579,7 @@ def _first_named_rsid(group: Iterator[_Pass1Record]) -> str:
     return ""
 
 
-def _reduce_worker(task: tuple[str, tuple[str, ...]]) -> tuple[str, int]:
+def _reduce_worker(task: tuple[str, tuple[str, ...]]) -> str:
     """Merge a batch of rank-ordered sorted shards into one.
 
     ``heapq.merge`` emits equal sites rank-by-rank and ``_first_named_rsid``
@@ -591,13 +591,11 @@ def _reduce_worker(task: tuple[str, tuple[str, ...]]) -> tuple[str, int]:
     merged = heapq.merge(
         *(_iter_pass1_shard(Path(path)) for path in shard_paths), key=_pass1_record_site
     )
-    n = 0
     with open(out_path_str, "w", encoding="utf-8") as fh:
         for site, group in itertools.groupby(merged, key=_pass1_record_site):
             rsid = _first_named_rsid(group)
             fh.write(f"{site[0]}\t{site[1]}\t{site[2]}\t{site[3]}\t{rsid}\n")
-            n += 1
-    return out_path_str, n
+    return out_path_str
 
 
 def _schedule_reduction_batches(
@@ -624,16 +622,15 @@ def _schedule_reduction_batches(
 def _apply_reduction_results(
     groups: dict[tuple[str, WindowKey], list[_ShardSpec]],
     batches: list[tuple[tuple[str, WindowKey], list[_ShardSpec]]],
-    results: list[tuple[str, int]],
+    results: list[str],
 ) -> None:
     """Replace each merged batch with its single output shard."""
-    for (key, batch), (path, n) in zip(batches, results, strict=True):
+    for (key, batch), path in zip(batches, results, strict=True):
         merged = _ShardSpec(
             rank=min(spec.rank for spec in batch),
             assembly=batch[0].assembly,
             window=batch[0].window,
             path=Path(path),
-            n_records=n,
         )
         groups[key] = [spec for spec in groups[key] if spec not in batch] + [merged]
 
@@ -683,11 +680,9 @@ def _pass1_worker(task: tuple[int, list[_ManifestRow], str, int]) -> list[_Shard
             if existing is None or (not existing and variant.rsid):
                 sites[variant.site] = variant.rsid or ""
     specs: list[_ShardSpec] = []
-    for (assembly, window), sites in sites_by_window.items():
-        path, n = _write_pass1_shard(
-            shard_dir, worker_idx, assembly, window, list(sites.items())
-        )
-        specs.append(_ShardSpec(worker_idx, assembly, window, Path(path), n))
+    for shard_idx, ((assembly, window), sites) in enumerate(sites_by_window.items()):
+        path = _write_pass1_shard(shard_dir, worker_idx, shard_idx, list(sites.items()))
+        specs.append(_ShardSpec(worker_idx, assembly, window, Path(path)))
     return specs
 
 
@@ -706,6 +701,9 @@ def _collect_manifest_variant_sites(
     #188). Workers return shard metadata rather than variant sets, so no large
     object crosses the process pipe.
     """
+    window_size_bp(window_size_mb)  # fail loudly before any I/O on a bad window
+    if reduction_batch_size < 2:
+        raise ValueError(f"reduction batch size must be at least 2, got {reduction_batch_size}")
     if not manifest_rows:
         return {}, {}
     if n_workers <= 1:
@@ -792,8 +790,6 @@ def _collect_manifest_variant_sites_parallel(
     merge over all shards, so the parent never becomes the bottleneck.
     """
     size_bp = window_size_bp(window_size_mb)
-    if reduction_batch_size < 2:
-        raise ValueError(f"reduction batch size must be at least 2, got {reduction_batch_size}")
     workers = min(n_workers, len(manifest_rows))
     log.info(
         "Pass 1: collecting source variants from %d files (parallel, %d workers, "
