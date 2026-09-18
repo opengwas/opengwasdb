@@ -907,3 +907,45 @@ def test_cli_invalid_options_fail_at_parse_time_hybrid(tmp_path):
     assert "unknown genome build 'unknown_build'" in clean_ass_output.lower()
     assert "use hg19/hg38 or aliases grch37/grch38" in clean_ass_output.lower()
 
+
+def test_build_routing_index_long_keys_sorted_and_searchable():
+    """The Hybrid routing index keeps variable-length bytes keys (no 300-byte
+    padding) while remaining sorted and binary-searchable."""
+    from opengwasdb.layouts.hybrid.build import _build_routing_index
+
+    long_alt = "A" * 300
+    source_lookup = {
+        ("1", 10, "A", "G"): "1:10:A:G",
+        ("2", 5, "C", "T"): "2:5:C:T",
+        ("1", 10, "A", long_alt): f"1:10:A:{long_alt}",
+        ("1", 20, "G", "C"): "1:20:C:G",
+    }
+    dense_row = {"1:10:A:G": 0, "2:5:C:T": 1}
+    shared_index = {f"1:10:A:{long_alt}": 0, "1:20:C:G": 1}
+
+    keys, targets, ispanel = _build_routing_index(source_lookup, dense_row, shared_index)
+
+    assert keys.dtype == object
+    assert list(keys) == sorted(keys)
+
+    expected = []
+    for (chrom, pos, ref, alt), alid in source_lookup.items():
+        row = dense_row.get(alid)
+        if row is not None:
+            expected.append((f"{chrom}:{pos}:{ref}:{alt}".encode(), row, True))
+        else:
+            sidx = shared_index.get(alid)
+            if sidx is not None:
+                expected.append((f"{chrom}:{pos}:{ref}:{alt}".encode(), sidx, False))
+    expected.sort(key=lambda kv: kv[0])
+
+    assert list(keys) == [key for key, _, _ in expected]
+    assert targets.tolist() == [target for _, target, _ in expected]
+    assert ispanel.tolist() == [panel for _, _, panel in expected]
+
+    long_key = b"1:10:A:" + long_alt.encode()
+    missing_key = b"22:9:C:T"
+    query = np.array([b"1:10:A:G", long_key, missing_key], dtype="S")
+    hits = keys[np.minimum(np.searchsorted(keys, query), len(keys) - 1)] == query
+    assert hits.tolist() == [True, True, False]
+

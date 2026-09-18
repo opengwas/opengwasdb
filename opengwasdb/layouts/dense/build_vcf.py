@@ -10,12 +10,14 @@ assumption is left in this module.
 from __future__ import annotations
 
 import csv
+import heapq
+import itertools
 import logging
 import multiprocessing
 import shutil
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -165,16 +167,17 @@ _SD_RESCALE_METHODS = frozenset(
 
 # Pass 2 fork-safe lookup + spill dir, set in the parent immediately before the
 # process pool is created. Forked workers (fork start method — see _fork_pool())
-# inherit these; because the lookup is a pair of numpy arrays (one contiguous C
-# buffer with a single object refcount) rather than Python dicts, a worker reading
-# it via searchsorted never touches per-element refcounts, so it does not
-# refcount-COW ~n_variants dict pages per worker (issue 043 item 2).
+# inherit these; the lookup is a pair of numpy arrays — a sorted object array of
+# Python bytes keys (variable-length, so one rare 546-byte indel no longer pads
+# every key to 546 bytes) and an int32 row array — rather than Python dicts. A
+# worker binary-searches the key array without chaining ~n_variants dict pages,
+# so it avoids the refcount-COW that forced issue 043 item 2.
 #
 # Why disk-spill and not return arrays: an earlier design returned each file's
 # result over IPC. At genome-wide scale (~9.85M rows/file × thousands of files)
 # that pipe traffic deadlocked the pool. Workers write a compact per-file .npz to
 # _pass2_spill_dir and return only col_idx, so no large object crosses the pipe.
-_pass2_keys_sorted: np.ndarray | None = None  # sorted 'S' byte keys
+_pass2_keys_sorted: np.ndarray | None = None  # sorted object array of bytes keys
 _pass2_rows_sorted: np.ndarray | None = None  # int32 row per key, same order
 _pass2_spill_dir: Path | None = None
 
@@ -237,8 +240,20 @@ def _build_variant_key_index(
         refs.append(ref)
         alts.append(alt)
         rows.append(row)
-    keys = _encode_variant_keys(chroms, poss, refs, alts)
+    # Encode as Python bytes and sort the object array directly. ``_encode_variant_keys``
+    # returns an ``S`` array padded to the longest key in the batch; with a rare
+    # 546-byte indel present that pads every one of ~21.3M keys to 546 bytes
+    # (~11.6 GB) and makes ``np.argsort`` walk the whole padded buffer. Python bytes
+    # objects stay at their real length, so the sort and the fork-inherited key
+    # table cost memory proportional to the actual key bytes, not the maximum.
+    keys_list = [
+        f"{chrom}:{pos}:{ref}:{alt}".encode()
+        for chrom, pos, ref, alt in zip(chroms, poss, refs, alts, strict=True)
+    ]
+    keys = np.array(keys_list, dtype=object)
+    del keys_list, chroms, poss, refs, alts
     rows_arr = np.array(rows, dtype=np.int32)
+    del rows
     order = np.argsort(keys, kind="stable")
     return keys[order], rows_arr[order]
 
@@ -465,17 +480,161 @@ def _log_progress(
     )
 
 
+_Pass1Record = tuple[tuple[str, int, str, str], str]
+
+
+def _pass1_record_site(record: _Pass1Record) -> tuple[str, int, str, str]:
+    """The variant identity a shard record is sorted and grouped by.
+
+    Both the worker-side sort and the parent-side ``heapq.merge`` compare
+    sites only, never the rsid -- the rsid must not influence ordering, or a
+    site's rsids would be emitted in rsid-string order instead of manifest
+    order and the wrong "first named" would win (issue #109).
+    """
+    return record[0]
+
+
+def _split_manifest_rows(
+    manifest_rows: list[_ManifestRow], n_chunks: int
+) -> list[list[_ManifestRow]]:
+    """Contiguous, manifest-order slices of the input rows.
+
+    Contiguity is what keeps "first named rsid wins" deterministic: worker
+    ``i`` always owns the rows before worker ``i + 1``, so the merge can
+    resolve a site seen in several shards by shard order.
+    """
+    n = len(manifest_rows)
+    n_chunks = min(n_chunks, n)
+    base, extra = divmod(n, n_chunks)
+    chunks: list[list[_ManifestRow]] = []
+    start = 0
+    for i in range(n_chunks):
+        size = base + (1 if i < extra else 0)
+        chunks.append(manifest_rows[start : start + size])
+        start += size
+    return chunks
+
+
+def _write_pass1_shard(
+    shard_dir: Path,
+    worker_idx: int,
+    assembly: str,
+    records: list[_Pass1Record],
+) -> tuple[str, int]:
+    """Write one worker's sorted, deduplicated variants for one assembly.
+
+    One tab-separated record per variant (``chrom pos ref alt rsid``); the
+    empty rsid means the worker's slice never named one, so a later shard can
+    still supply it at merge time. Sorted here so the parent merges shards
+    without ever holding them all in memory.
+    """
+    records.sort(key=_pass1_record_site)
+    path = shard_dir / f"{worker_idx:06d}.{assembly}.variants.tsv"
+    with open(path, "w", encoding="utf-8") as fh:
+        for (chrom, pos, ref, alt), rsid in records:
+            fh.write(f"{chrom}\t{pos}\t{ref}\t{alt}\t{rsid}\n")
+    return str(path), len(records)
+
+
+def _iter_pass1_shard(path: Path) -> Iterator[_Pass1Record]:
+    """Stream one shard's records back as ``(site, rsid)`` tuples."""
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            chrom, pos_str, ref, alt, rsid = line.rstrip("\n").split("\t")
+            yield (chrom, int(pos_str), ref, alt), rsid
+
+
+def _first_named_rsid(group: Iterator[_Pass1Record]) -> str:
+    """The first non-empty rsid in one shard-group, in merged (manifest) order."""
+    for _site, rsid in group:
+        if rsid:
+            return rsid
+    return ""
+
+
+def _merge_pass1_shards(
+    shard_specs: Mapping[str, Sequence[tuple[int, Path, int]]],
+    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]],
+    rsid_by_site: dict[tuple[str, int, str, str], str],
+) -> None:
+    """k-way merge each assembly's sorted shards into the global union.
+
+    Shards are passed in ``worker_idx`` order so ``heapq.merge`` emits equal
+    sites shard-by-shard in manifest order; ``_first_named_rsid`` then takes
+    the first non-empty rsid for a site, matching the serial ``setdefault``
+    semantics (issue #109) exactly.
+    """
+    for assembly, specs in shard_specs.items():
+        ordered = sorted(specs, key=lambda spec: spec[0])
+        merged = heapq.merge(
+            *(_iter_pass1_shard(path) for (_idx, path, _n) in ordered),
+            key=_pass1_record_site,
+        )
+        sites = tuples_by_assembly.setdefault(assembly, set())
+        for site, group in itertools.groupby(merged, key=_pass1_record_site):
+            sites.add(site)
+            rsid = _first_named_rsid(group)
+            if rsid:
+                rsid_by_site[site] = rsid
+
+
+def _pass1_worker(task: tuple[int, list[_ManifestRow], str]) -> list[tuple[int, str, str, int]]:
+    """Extract one worker's slice of manifest rows to sorted disk shards.
+
+    Returns only shard metadata ``(worker_idx, assembly, path, n_variants)``
+    -- never the variant sets themselves -- so no large object crosses the
+    process pipe (the same rule that governs the Pass 2 spills).
+    """
+    worker_idx, rows, shard_dir_str = task
+    shard_dir = Path(shard_dir_str)
+    sites_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
+    rsids_by_assembly: dict[str, dict[tuple[str, int, str, str], str]] = {}
+    for row in rows:
+        reader = resolve_reader(
+            row.source_reader_capability, row.file_path, StoredEffectScale(row.stored_effect_scale)
+        )
+        sites = sites_by_assembly.setdefault(row.source_assembly, set())
+        rsids = rsids_by_assembly.setdefault(row.source_assembly, {})
+        for variant in reader.stream_variants():
+            site = variant.site
+            sites.add(site)
+            if variant.rsid:
+                rsids.setdefault(site, variant.rsid)
+    specs: list[tuple[int, str, str, int]] = []
+    for assembly in sorted(sites_by_assembly):
+        sites = sites_by_assembly[assembly]
+        rsids = rsids_by_assembly.get(assembly, {})
+        records: list[_Pass1Record] = [(site, rsids.get(site, "")) for site in sites]
+        path, n = _write_pass1_shard(shard_dir, worker_idx, assembly, records)
+        specs.append((worker_idx, assembly, path, n))
+    return specs
+
+
 def _collect_manifest_variant_sites(
     manifest_rows: list[_ManifestRow],
+    *,
+    n_workers: int = 1,
 ) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
-    """Pass 1: one serial read of every manifest source for its variant sites.
+    """Pass 1: read every manifest source once for its variant sites.
 
     Returns the ``tuples_by_assembly`` union and ``rsid_by_site`` (first named
-    rsid wins, issue #109) so the serial source scan happens exactly once and
-    the rsids it saw ride along on that same read rather than a second,
-    genome-scale re-read. Streaming order is preserved within each file;
-    progress is reported every 250 files.
+    rsid wins, issue #109). ``n_workers <= 1`` keeps the serial read;
+    ``n_workers > 1`` runs a disk-backed map-reduce where each worker writes
+    sorted, deduplicated shards and the parent k-way-merges them -- workers
+    return shard paths rather than variant sets so no large object crosses
+    the process pipe.
     """
+    if not manifest_rows:
+        return {}, {}
+    if n_workers <= 1:
+        return _collect_manifest_variant_sites_serial(manifest_rows)
+    return _collect_manifest_variant_sites_parallel(manifest_rows, n_workers)
+
+
+def _collect_manifest_variant_sites_serial(
+    manifest_rows: list[_ManifestRow],
+) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
+    """The pre-parallel Pass 1 read, kept verbatim for ``n_workers <= 1``."""
     tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
     rsid_by_site: dict[tuple[str, int, str, str], str] = {}
     log.info("Pass 1: collecting source variants from %d files (serial)", len(manifest_rows))
@@ -496,11 +655,61 @@ def _collect_manifest_variant_sites(
     return tuples_by_assembly, rsid_by_site
 
 
+def _collect_manifest_variant_sites_parallel(
+    manifest_rows: list[_ManifestRow],
+    n_workers: int,
+) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
+    """Disk-backed map-reduce Pass 1 (issue 5): workers spill sorted shards,
+    the parent merges them, and the shard directory is removed when done."""
+    workers = min(n_workers, len(manifest_rows))
+    chunks = _split_manifest_rows(manifest_rows, workers)
+    log.info(
+        "Pass 1: collecting source variants from %d files (parallel, %d workers)",
+        len(manifest_rows),
+        workers,
+    )
+    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
+    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
+    extract_start = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix=".pass1shards.") as shard_dir_str:
+        shard_dir = Path(shard_dir_str)
+        tasks = [(i, chunk, str(shard_dir)) for i, chunk in enumerate(chunks)]
+        all_specs: list[tuple[int, str, str, int]] = []
+        with _fork_pool(workers) as pool:
+            futures = [pool.submit(_pass1_worker, task) for task in tasks]
+            for future in as_completed(futures):
+                all_specs.extend(future.result())
+        extract_elapsed = time.monotonic() - extract_start
+        all_specs.sort(key=lambda spec: (spec[0], spec[1]))
+        shard_specs: dict[str, list[tuple[int, Path, int]]] = {}
+        for worker_idx, assembly, path, n in all_specs:
+            shard_specs.setdefault(assembly, []).append((worker_idx, Path(path), n))
+            log.info("Pass 1 shard %d [%s]: %d variants", worker_idx, assembly, n)
+        log.info(
+            "Pass 1 extraction: %d files → %d shard(s) in %s",
+            len(manifest_rows),
+            len(all_specs),
+            _fmt_duration(extract_elapsed),
+        )
+        merge_start = time.monotonic()
+        _merge_pass1_shards(shard_specs, tuples_by_assembly, rsid_by_site)
+        merge_elapsed = time.monotonic() - merge_start
+    n_total = sum(len(t) for t in tuples_by_assembly.values())
+    log.info(
+        "Pass 1 merge: %d shard(s) → %d unique variants in %s",
+        len(all_specs),
+        n_total,
+        _fmt_duration(merge_elapsed),
+    )
+    return tuples_by_assembly, rsid_by_site
+
+
 def _lift_manifest_variants(
     manifest_rows: list[_ManifestRow],
     *,
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
+    n_workers: int = 1,
 ) -> tuple[dict[tuple[str, int, str, str], str], dict[str, str]]:
     """Resolve every manifest row's union of source variants to hg38 ALIDs
     (issue #85; the dense and hybrid builders' shared Pass 1).
@@ -515,7 +724,8 @@ def _lift_manifest_variants(
     same as when GWAS-VCF was the only source this builder ever saw.
     ``liftover_failure_threshold`` therefore applies only to the hg19 group's
     own failure rate, not diluted by (or inflated against) hg38 rows that
-    were never at risk of failing.
+    were never at risk of failing. ``n_workers`` controls the union pass's
+    parallelism (issue 5); the serial read is kept for ``n_workers <= 1``.
 
     Returns one merged ``{(chrom, pos, ref, alt): hg38_alid}`` lookup -- the
     shape the fork-safe Pass 2 key index (`_build_variant_key_index` /
@@ -538,8 +748,26 @@ def _lift_manifest_variants(
     kind of silent corruption this fix exists to remove -- so any such tuple
     is dropped from both groups (never guessed) before returning.
     """
-    tuples_by_assembly, rsid_by_site = _collect_manifest_variant_sites(manifest_rows)
+    tuples_by_assembly, rsid_by_site = _collect_manifest_variant_sites(
+        manifest_rows, n_workers=n_workers
+    )
+    return _resolve_manifest_variants_to_alids(
+        tuples_by_assembly,
+        rsid_by_site,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
+    )
 
+
+def _resolve_manifest_variants_to_alids(
+    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]],
+    rsid_by_site: dict[tuple[str, int, str, str], str],
+    *,
+    chain_file: str | Path | None,
+    liftover_failure_threshold: float,
+) -> tuple[dict[tuple[str, int, str, str], str], dict[str, str]]:
+    """Lift the union to hg38 ALIDs and re-key the rsids onto them (issues #85, #109)."""
+    finalise_start = time.monotonic()
     passthrough_lookup: dict[tuple[str, int, str, str], str] = {}
     passthrough = tuples_by_assembly.pop("hg38", set())
     if passthrough:
@@ -547,7 +775,6 @@ def _lift_manifest_variants(
         for chrom, pos, ref, alt in passthrough:
             a1, a2 = sorted((ref, alt))
             passthrough_lookup[(chrom, pos, ref, alt)] = f"{chrom}:{pos}:{a1}:{a2}"
-
     lifted_lookup: dict[tuple[str, int, str, str], str] = {}
     hg19_tuples = tuples_by_assembly.pop("hg19", set())
     if hg19_tuples:
@@ -560,9 +787,7 @@ def _lift_manifest_variants(
             chain_file=chain_file,
         )
         log.info("Liftover complete: %d variants mapped", len(lifted_lookup))
-
     assert not tuples_by_assembly, f"unhandled source_assembly values: {sorted(tuples_by_assembly)}"
-
     ambiguous = passthrough_lookup.keys() & lifted_lookup.keys()
     if ambiguous:
         log.warning(
@@ -575,16 +800,18 @@ def _lift_manifest_variants(
         for key in ambiguous:
             del passthrough_lookup[key]
             del lifted_lookup[key]
-
     source_lookup = {**passthrough_lookup, **lifted_lookup}
-    # Re-key the identifiers onto the hg38 ALIDs the store's rows are keyed by.
-    # Several source sites can lift onto one ALID; the first named wins, the
-    # same first-wins rule the Ragged builders already apply.
     rsid_by_alid: dict[str, str] = {}
     for site, alid in source_lookup.items():
         rsid = rsid_by_site.get(site)
         if rsid:
             rsid_by_alid.setdefault(alid, rsid)
+    log.info(
+        "Pass 1 liftover/finalisation: %d source variants → %d hg38 ALIDs in %s",
+        len(source_lookup),
+        len(set(source_lookup.values())),
+        _fmt_duration(time.monotonic() - finalise_start),
+    )
     return source_lookup, rsid_by_alid
 
 
@@ -620,7 +847,8 @@ def build_dense_from_vcf_manifest(
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         prepared = _prepare_axis(
-            staged, out, manifest_rows, chain_file, liftover_failure_threshold, chunk_shape
+            staged, out, manifest_rows, chain_file, liftover_failure_threshold, chunk_shape,
+            n_workers,
         )
         # Phases 5-7 run inside one spill-dir lifetime: every spill is removed
         # even when a phase fails, keeping the staged release atomic.
@@ -706,7 +934,7 @@ def _axis_metadata(
     the axis so the caller can free it (it is the one ~n_variants-sized dict)
     once the Pass 2 lookup arrays are built.
     """
-    hg38_alids = sorted(set(source_lookup.values()), key=_alid_sort_key)
+    hg38_alids = _sorted_alids(source_lookup.values())
     variant_index: dict[str, int] = {alid: i for i, alid in enumerate(hg38_alids)}
     analysis_index: dict[str, int] = {row.trait_id: i for i, row in enumerate(manifest_rows)}
     analyses: list[Analysis] = [_manifest_row_to_analysis(row) for row in manifest_rows]
@@ -785,7 +1013,7 @@ def _build_pass2_lookup(
     dicts before the pool is created.
     """
     keys_sorted, rows_sorted = _build_variant_key_index(source_lookup, variant_index)
-    max_key_len = keys_sorted.dtype.itemsize if len(keys_sorted) else 0
+    max_key_len = max((len(key) for key in keys_sorted), default=0)
     log.info(
         "Pass 2 lookup: %d variant keys, max key length %d bytes",
         len(keys_sorted),
@@ -801,6 +1029,7 @@ def _prepare_axis(
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
     chunk_shape: tuple[int, int],
+    n_workers: int,
 ) -> _PreparedBuild:
     """Phases 1-4: union/liftover, axis metadata, index + axis, Pass 2 lookup.
 
@@ -813,6 +1042,7 @@ def _prepare_axis(
         manifest_rows,
         chain_file=chain_file,
         liftover_failure_threshold=liftover_failure_threshold,
+        n_workers=n_workers,
     )
     axis, variant_index = _axis_metadata(source_lookup, manifest_rows)
     _write_axis_and_index(staged, source_lookup, axis, rsid_by_alid, chunk_shape)
@@ -1252,6 +1482,66 @@ def _read_manifest(
 def _alid_sort_key(alid: str) -> tuple[tuple[int, str], int, str, str]:
     chrom, pos_str, a1, a2 = alid.split(":")
     return (chromosome_sort_key(chrom), int(pos_str), a1, a2)
+
+
+def _sorted_alids(alids: Iterable[str]) -> list[str]:
+    """Sort unique ALIDs by ``(chromosome_sort_key, position, a1, a2)``.
+
+    Exactly equivalent to ``sorted(set(alids), key=_alid_sort_key)`` but built
+    for genome-scale axis construction: the ALIDs are parsed once and each one
+    is re-encoded as a sortable byte key, then ``np.argsort`` orders the byte
+    keys in C rather than calling ``_alid_sort_key`` once per element (~21M
+    Python calls on a dense pilot build).
+
+    The sort key is ``fixed-width rank \\x00 chrom \\x00 zero-padded-position
+    \\x00 a1 \\x00 a2``. ``\\x00`` is smaller than every character that can
+    appear in a chromosome, position or allele, so it terminates the variable-
+    length fields and makes lexicographic byte order equal to the Python tuple
+    order ``_alid_sort_key`` produces.
+    """
+    unique = list(set(alids))
+    if not unique:
+        return []
+
+    n = len(unique)
+    ranks = np.empty(n, dtype=np.int64)
+    chroms: list[str] = [""] * n
+    positions: list[str] = [""] * n
+    a1s: list[str] = [""] * n
+    a2s: list[str] = [""] * n
+    special = {"X": 23, "Y": 24, "M": 25, "MT": 25}
+    pos_width = 1
+    for i, alid in enumerate(unique):
+        chrom, pos_str, a1, a2 = alid.split(":")
+        chroms[i] = chrom
+        positions[i] = pos_str
+        a1s[i] = a1
+        a2s[i] = a2
+        if chrom.isdigit():
+            ranks[i] = int(chrom)
+        else:
+            ranks[i] = special.get(chrom.upper(), 1000)
+        if len(pos_str) > pos_width:
+            pos_width = len(pos_str)
+
+    keys = np.empty(n, dtype=object)
+    rank_width = len(str(int(ranks.max())))
+    for i in range(n):
+        keys[i] = (
+            f"{ranks[i]:0{rank_width}d}".encode()
+            + b"\x00"
+            + chroms[i].encode()
+            + b"\x00"
+            + positions[i].zfill(pos_width).encode()
+            + b"\x00"
+            + a1s[i].encode()
+            + b"\x00"
+            + a2s[i].encode()
+        )
+    del chroms, positions, a1s, a2s
+    order = np.argsort(keys, kind="stable")
+    del keys
+    return [unique[i] for i in order]
 
 
 def _write_index(

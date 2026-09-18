@@ -59,6 +59,22 @@ the end of this file.
   `file_path`), with canonical spellings winning when both are present (#172, #177).
   When a resolved `source_file` path is absolute, it is used directly; relative
   paths are joined against `--filtered-dir`.
+- **Pass 1 variant-union construction now honours `--n-workers`** in the Dense
+  and Hybrid VCF builders. `n_workers <= 1` keeps the serial read; `n_workers > 1`
+  splits manifest rows across a fork pool, each worker spills sorted,
+  deduplicated shards to a temporary directory, and a k-way merge combines them
+  into the global union. Workers return shard paths rather than variant sets, so
+  no large object crosses the process pipe; the first-named-rsid rule (#109) is
+  preserved deterministically by manifest order. Build logs now report input
+  files, per-worker shard sizes, final unique variants, and extraction/merge/
+  liftover timings (#5).
+- **Dense and Hybrid Pass 2 lookup construction no longer pads every variant
+  key to the longest allele.** `_build_variant_key_index` / `_build_routing_index`
+  now sort variable-length Python bytes instead of an `S`-dtyped numpy array, so
+  one rare 546-byte indel no longer forces a ~11.6 GB padded array and its
+  multi-minute `np.argsort` at genome scale. `_axis_metadata` and the hybrid
+  partition/completion ALID sorts use a vectorised byte-key sort instead of one
+  `_alid_sort_key` call per ALID (~21M calls). Output order is unchanged (#182).
 
 ### Fixed
 
