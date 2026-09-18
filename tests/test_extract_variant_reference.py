@@ -256,7 +256,7 @@ def test_manifest_whose_sources_resolve_no_variants_fails_loudly(tmp_path):
     manifest = _make_manifest(tmp_path, [("trait_empty", vcf, "", "")])
     out = tmp_path / "out.variant-ref.tsv.gz"
 
-    with pytest.raises(ValueError, match="yielded no variants"):
+    with pytest.raises(ValueError, match="yielded no hg38 variants"):
         extract_variant_reference(manifest, out)
     assert not out.exists(), "a failed extraction must not leave a partial artifact"
 
@@ -341,6 +341,117 @@ def test_cli_invalid_source_assembly_fails_at_parse_time(tmp_path):
     clean = normalize_cli_output(result.output).lower()
     assert "unknown genome build 'hg17'" in clean
     assert "use hg19/hg38 or aliases grch37/grch38" in clean
+
+
+# ── genomic windows and hierarchical reduction (issue #188) ──────────────────
+
+
+def _wide_manifest(tmp_path: Path, *, n_files: int = 4, per_file: int = 8) -> Path:
+    """A manifest spanning several windows and with overlapping sources.
+
+    Every file shares ``1:500000`` so the reduction has genuine overlap to
+    collapse, and each file's other variants spread over tens of megabases so
+    different window sizes partition them differently.
+    """
+    entries: list[tuple[str, Path, str, str]] = []
+    for file_idx in range(n_files):
+        rows: list[str] = []
+        for j in range(per_file):
+            position = 100_000 + j * 3_000_000 + file_idx * 1000
+            rsid = f"rs{file_idx}_{j}" if (file_idx + j) % 3 == 0 else "."
+            rows.append(f"1\t{position}\t{rsid}\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n")
+        rows.append(f"1\t500000\trs_shared_{file_idx}\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0.5\n")
+        vcf = _make_vcf(tmp_path, f"wide_{file_idx}", rows)
+        entries.append((f"wide_{file_idx}", vcf, "", "hg38"))
+    return _make_manifest(tmp_path, entries, name="wide.tsv")
+
+
+@pytest.mark.parametrize("n_workers", [1, 2, 3])
+def test_artifact_is_invariant_across_window_and_batch_configurations(tmp_path, n_workers):
+    """Issue #188 AC: the genomic-window partition and reduction batch size are
+    implementation detail -- the artifact is bit-for-bit identical for every
+    combination, and for the serial read."""
+    manifest = _wide_manifest(tmp_path)
+    baseline: str | None = None
+    for window_size_mb, batch in ((1, 2), (5, 3), (20, 16)):
+        artifact = tmp_path / f"inv-{n_workers}-{window_size_mb}-{batch}.variant-ref.tsv.gz"
+        extract_variant_reference(
+            manifest,
+            artifact,
+            n_workers=n_workers,
+            window_size_mb=window_size_mb,
+            reduction_batch_size=batch,
+        )
+        text = _artifact_text(artifact)
+        if baseline is None:
+            baseline = text
+        else:
+            assert text == baseline, (n_workers, window_size_mb, batch)
+
+    # The fixture must genuinely exercise overlap: the shared variant is present
+    # and its first-named rsid (file 0) wins across every configuration.
+    assert baseline is not None and "1:500000:C:T" in baseline
+    shared = next(row for row in baseline.splitlines() if row.startswith("1:500000:C:T\t"))
+    assert shared.split("\t")[5] == "rs_shared_0"
+
+
+def test_window_partition_is_non_overlapping_and_genome_ordered():
+    """Issue #188 AC: windows are ``(chromosome, floor(position / size))`` --
+    non-overlapping, and comparable in genomic order (2 before 10, X after 22)."""
+    from opengwasdb.variants.windows import window_key, window_size_bp
+
+    size_bp = window_size_bp(1.0)
+    assert size_bp == 1_000_000
+    assert window_key("1", 0, size_bp) == window_key("1", 999_999, size_bp)
+    assert window_key("1", 1_000_000, size_bp) != window_key("1", 999_999, size_bp)
+    assert window_key("1", 1, size_bp)[0] != window_key("2", 1, size_bp)[0]
+    assert window_key("2", 1, size_bp) < window_key("10", 1, size_bp)
+    assert window_key("22", 1, size_bp) < window_key("X", 1, size_bp)
+    with pytest.raises(ValueError, match="window size must be positive"):
+        window_size_bp(0)
+
+
+def test_artifact_rows_are_in_genomic_order_after_windowed_assembly(tmp_path):
+    """Window outputs concatenate in order, so the whole artifact is sorted
+    without a global re-sort."""
+    from opengwasdb.layouts.dense.build_vcf import _alid_sort_key
+
+    manifest = _wide_manifest(tmp_path)
+    artifact = tmp_path / "ordered.variant-ref.tsv.gz"
+    extract_variant_reference(manifest, artifact, n_workers=2, window_size_mb=5)
+    alids = [line.split("\t")[0] for line in _artifact_text(artifact).splitlines()[1:]]
+    assert alids == sorted(alids, key=_alid_sort_key)
+    assert len(alids) > 10, "fixture must span enough variants to be meaningful"
+
+
+def test_reduction_batch_size_below_two_fails_loudly(tmp_path):
+    manifest = _wide_manifest(tmp_path)
+    with pytest.raises(ValueError, match="reduction batch size must be at least 2"):
+        extract_variant_reference(
+            manifest,
+            tmp_path / "out.variant-ref.tsv.gz",
+            n_workers=2,
+            reduction_batch_size=1,
+        )
+
+
+def test_cli_accepts_window_and_batch_options(tmp_path):
+    manifest = _wide_manifest(tmp_path)
+    default = tmp_path / "default.variant-ref.tsv.gz"
+    sharded = tmp_path / "sharded.variant-ref.tsv.gz"
+    extract_variant_reference(manifest, default, n_workers=2)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "extract-variant-reference", str(manifest),
+            "--output-path", str(sharded), "--n-workers", "2",
+            "--window-size-mb", "5", "--reduction-batch-size", "4",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _artifact_text(default) == _artifact_text(sharded)
 
 
 # ── two-stage build == one command ───────────────────────────────────────────

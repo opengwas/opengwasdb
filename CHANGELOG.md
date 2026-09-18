@@ -68,6 +68,14 @@ the end of this file.
   `build-dense-vcf --variant-reference` and `build-hybrid --variant-reference`
   consume. First-named rsids and the variant union are identical to the builders'
   inline Pass 1, so the two stages reproduce the one-command store bit for bit (#187).
+- **`--window-size-mb` and `--reduction-batch-size` on `extract-variant-reference`**:
+  the variant union is now computed with a parallel map + genomic-window tree
+  reduce instead of one parent-process k-way merge, so 1,000+ source manifests
+  reduce in bounded-memory batches across the worker pool. Variants are
+  partitioned into non-overlapping `(chromosome, floor(position / window))`
+  windows; final window shards concatenate in genomic order without a global
+  re-sort, and the artifact is bit-for-bit invariant across window size and
+  batch size (#188).
 
 ### Changed
 

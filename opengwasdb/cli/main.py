@@ -53,6 +53,7 @@ from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.reference import extract_variant_reference
+from opengwasdb.variants.windows import DEFAULT_REDUCTION_BATCH_SIZE, DEFAULT_WINDOW_SIZE_MB
 
 logging.basicConfig(
     level=logging.INFO,
@@ -340,47 +341,44 @@ def build_dense_command(
 def extract_variant_reference_command(
     manifest_path: Path,
     output_path: Annotated[
-        Path,
-        typer.Option("--output-path", help="Where to write the *.variant-ref.tsv.gz artifact"),
+        Path, typer.Option("--output-path", help="Where to write the artifact")
     ],
     chain_file: Annotated[
-        Path | None,
-        typer.Option(help="hg19->hg38 chain file (default: pyliftover's builtin chain)"),
+        Path | None, typer.Option(help="hg19->hg38 chain file")
     ] = None,
     n_workers: Annotated[
-        int, typer.Option(help="Fork-based process pool size for the variant union")
+        int, typer.Option(help="Fork pool size for the variant union")
     ] = 1,
     liftover_failure_threshold: Annotated[
-        float,
-        typer.Option(help="Maximum fraction of hg19 variants allowed to fail liftover"),
+        float, typer.Option(help="Maximum hg19 liftover failure rate")
     ] = 0.01,
     source_reader_capability: Annotated[
         str | None,
         typer.Option(
-            callback=_validate_source_reader_capability,
-            help=_SOURCE_READER_CAPABILITY_HELP,
+            callback=_validate_source_reader_capability, help=_SOURCE_READER_CAPABILITY_HELP
         ),
     ] = None,
     source_assembly: Annotated[
         str | None,
         typer.Option(callback=_validate_source_assembly, help=_SOURCE_ASSEMBLY_HELP),
     ] = None,
+    window_size_mb: Annotated[
+        float, typer.Option(help="Genomic window size in megabases")
+    ] = DEFAULT_WINDOW_SIZE_MB,
+    reduction_batch_size: Annotated[
+        int, typer.Option(help="Shards merged per reduction task")
+    ] = DEFAULT_REDUCTION_BATCH_SIZE,
 ) -> None:
-    """Extract, lift and canonicalise a manifest's variant axis (#187).
-
-    Reads every manifest source once through its source reader, lifts hg19
-    rows to GRCh38, and writes the *.variant-ref.tsv.gz artifact that
-    `build-dense-vcf --variant-reference` (and `build-hybrid`) consumes -- so a
-    later build can skip Pass 1 and still match the inline two-pass store.
+    """Extract, lift and canonicalise a manifest's variant axis (#187) into the
+    *.variant-ref.tsv.gz artifact `build-dense-vcf --variant-reference`
+    consumes. --window-size-mb and --reduction-batch-size shape the parallel
+    genomic tree-reduce (issue #188) and never change the artifact.
     """
     result = extract_variant_reference(
-        manifest_path,
-        output_path,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
-        n_workers=n_workers,
-        source_reader_capability=source_reader_capability,
-        source_assembly=source_assembly,
+        manifest_path, output_path, chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold, n_workers=n_workers,
+        source_reader_capability=source_reader_capability, source_assembly=source_assembly,
+        window_size_mb=window_size_mb, reduction_batch_size=reduction_batch_size,
     )
     _echo_summary(
         {

@@ -32,6 +32,12 @@ from pathlib import Path
 from typing import IO
 
 from opengwasdb.variants.axis import parse_canonical_alid
+from opengwasdb.variants.windows import (
+    DEFAULT_REDUCTION_BATCH_SIZE,
+    DEFAULT_WINDOW_SIZE_MB,
+    window_key,
+    window_size_bp,
+)
 
 __all__ = [
     "VariantReference",
@@ -85,23 +91,22 @@ def extract_variant_reference(
     n_workers: int = 1,
     source_reader_capability: str | None = None,
     source_assembly: str | None = None,
+    window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
+    reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
 ) -> VariantReferenceExtraction:
     """Extract, lift and canonicalise a manifest's variant axis into an artifact.
 
-    The standalone front end to the build's Pass 1 (issue #187): every manifest
-    source is read once through ``resolve_reader`` (GWAS-VCF, GWAS-SSF, FinnGen,
-    ...), hg19 rows are lifted to GRCh38, and the union is written as the
-    ``*.variant-ref.tsv.gz`` artifact ``--variant-reference`` consumes. The
-    rsid map follows the build's deterministic "first named wins" rule, so a
-    store built from the artifact matches one built from the same manifest in a
-    single command. An empty manifest, or a manifest whose sources resolve no
-    variants at all, fails loudly rather than writing a header-only axis.
+    The standalone front end to the build's Pass 1 (issue #187): every source
+    is read once through ``resolve_reader`` (GWAS-VCF, GWAS-SSF, FinnGen, ...),
+    hg19 rows are lifted to GRCh38, and the union is written as the
+    ``*.variant-ref.tsv.gz`` artifact ``--variant-reference`` consumes. First-
+    named rsids and the union follow the build's own rule, so a store built from
+    the artifact matches the one-command two-pass store. An empty manifest, or
+    one whose sources resolve no variants, fails loudly rather than writing a
+    header-only axis. ``window_size_mb`` and ``reduction_batch_size`` shape the
+    parallel windowed tree-reduce (issue #188) and never change the artifact.
     """
-    from opengwasdb.layouts.dense.build_vcf import (
-        _lift_manifest_variants,
-        _read_manifest,
-        _sorted_alids,
-    )
+    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
 
     manifest_rows = _read_manifest(
         manifest_path,
@@ -109,26 +114,25 @@ def extract_variant_reference(
         default_source_assembly=source_assembly,
     )
     if len(manifest_rows) == 0:
-        raise ValueError(
-            f"manifest {manifest_path} contains no rows: nothing to extract a "
-            "variant reference from"
-        )
+        raise ValueError(f"manifest {manifest_path} contains no rows to extract a reference from")
     source_lookup, rsid_by_alid = _lift_manifest_variants(
         manifest_rows,
         chain_file=chain_file,
         liftover_failure_threshold=liftover_failure_threshold,
         n_workers=n_workers,
+        window_size_mb=window_size_mb,
+        reduction_batch_size=reduction_batch_size,
     )
-    alids = _sorted_alids(source_lookup.values())
-    if not alids:
-        raise ValueError(
-            f"manifest {manifest_path} yielded no variants: every source was empty "
-            "or every row failed to resolve to an hg38 ALID"
-        )
-    write_variant_reference(output_path, alids, source_lookup, rsid_by_alid)
+    unique_alids = set(source_lookup.values())
+    if not unique_alids:
+        raise ValueError(f"manifest {manifest_path} yielded no hg38 variants to reference")
+    write_variant_reference(
+        output_path, list(unique_alids), source_lookup, rsid_by_alid,
+        window_size_mb=window_size_mb,
+    )
     return VariantReferenceExtraction(
         output_path=Path(output_path),
-        n_variants=len(alids),
+        n_variants=len(unique_alids),
         n_source_keys=len(source_lookup),
         n_rsids=len(rsid_by_alid),
     )
@@ -162,25 +166,37 @@ def write_variant_reference(
     alids: Sequence[str],
     source_lookup: Mapping[SourceKey, str],
     rsid_by_alid: Mapping[str, str] | None = None,
+    *,
+    window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
 ) -> None:
     """Write the artifact the inline two-pass Pass 1 would otherwise recompute.
 
     ``source_lookup`` is exactly the ``(source coord) -> hg38 ALID`` map
     ``_lift_manifest_variants`` returns, so a store built through a written
     artifact is identical to one built from the same manifest in two passes.
+
+    Rows are assembled window by window (issue #188): each genomic window's
+    ALIDs are sorted and the windows concatenate in genomic order, so the axis
+    is never re-sorted as a whole -- only one window at a time.
     """
     # Local import: build_vcf imports this module, so a module-level import
     # would be a cycle. By call time build_vcf is fully loaded.
-    from opengwasdb.layouts.dense.build_vcf import _sorted_alids
+    from opengwasdb.layouts.dense.build_vcf import _alid_sort_key
 
+    size_bp = window_size_bp(window_size_mb)
     keys_by_alid = _source_keys_by_alid(source_lookup)
     rsids = rsid_by_alid or {}
+    windows: dict[tuple[tuple[int, str], int], list[str]] = {}
+    for alid in set(alids):
+        chrom, position, _a1, _a2 = alid.split(":")
+        windows.setdefault(window_key(chrom, int(position), size_bp), []).append(alid)
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(out, "wt", encoding="utf-8") as handle:
         handle.write("#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n")
-        for alid in _sorted_alids(alids):
-            handle.write(_artifact_line(alid, keys_by_alid.get(alid, ()), rsids.get(alid, "")))
+        for window in sorted(windows):
+            for alid in sorted(windows[window], key=_alid_sort_key):
+                handle.write(_artifact_line(alid, keys_by_alid.get(alid, ()), rsids.get(alid, "")))
 
 
 def _artifact_line(alid: str, source_keys: Sequence[str], rsid: str) -> str:
