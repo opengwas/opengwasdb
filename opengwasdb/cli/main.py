@@ -7,7 +7,7 @@ import math
 import sys
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import numpy as np
 import typer
@@ -91,6 +91,12 @@ _SOURCE_READER_CAPABILITY_HELP = (
 _SOURCE_ASSEMBLY_HELP = (
     "Default source genome build for manifest rows that omit source_assembly "
     "(hg19/GRCh37 or hg38/GRCh38, default: hg19)"
+)
+_VARIANT_REFERENCE_HELP = (
+    "Build against a precomputed variant axis instead of running Pass 1: a "
+    "*.variant-ref.tsv.gz artifact, a plain ALID list, or a store variants.tsv.gz. "
+    "Source variants absent from the reference are dropped; reference variants "
+    "no study observes are stored as NaN."
 )
 
 
@@ -348,6 +354,7 @@ def build_dense_vcf_command(
     source_assembly: str | None = typer.Option(
         None, callback=_validate_source_assembly, help=_SOURCE_ASSEMBLY_HELP
     ),
+    variant_reference: Annotated[Path | None, typer.Option(help=_VARIANT_REFERENCE_HELP)] = None,
 ) -> None:
     """Build a Dense Observed-Only store from a manifest of GWAS-VCF files.
 
@@ -355,6 +362,7 @@ def build_dense_vcf_command(
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
     VCF files are hg19 by default; liftover to hg38 is applied inline.
     --source-reader-capability and --source-assembly supply per-release defaults (#174).
+    --variant-reference supplies a precomputed axis, bypassing Pass 1 (#185).
     """
     result = build_dense_from_vcf_manifest(
         manifest_path, output_path, store_id=store_id, release_id=release_id,
@@ -362,6 +370,7 @@ def build_dense_vcf_command(
         eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=source_reader_capability, source_assembly=source_assembly,
+        variant_reference=variant_reference,
     )
     _echo_summary({
         "output_path": str(result.output_path),

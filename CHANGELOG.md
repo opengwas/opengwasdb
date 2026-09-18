@@ -44,6 +44,14 @@ the end of this file.
   `notes`), reports `unavailable` rather than fabricating a value for a missing
   or unusable sample size, and is order-preserving and independent of
   `--n-workers`.
+- **`--variant-reference <path>` on `build-dense-vcf`**: build the Dense axis
+  from a precomputed variant reference (`*.variant-ref.tsv.gz`, a plain ALID
+  list, or a store `variants.tsv.gz`), bypassing the Pass 1 variant union and
+  liftover entirely and proceeding straight to Pass 2. The axis, index, and
+  fork-safe Pass 2 lookup arrays are composed from the reference before workers
+  fork; source variants absent from the reference are dropped and reference
+  variants no study observes are stored as `NaN`. Omitting the option preserves
+  the existing inline two-pass build (#185).
 
 ### Changed
 

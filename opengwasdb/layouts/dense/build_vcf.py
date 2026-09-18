@@ -88,6 +88,7 @@ from opengwasdb.readers.registry import known_capabilities, resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.normalise import chromosome_sort_key
+from opengwasdb.variants.reference import VariantReference, read_variant_reference
 
 log = logging.getLogger(__name__)
 
@@ -824,6 +825,7 @@ def build_dense_from_vcf_manifest(
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None, allow_unverified_eaf: bool = False,
     source_reader_capability: str | None = None, source_assembly: str | None = None,
+    variant_reference: str | Path | None = None,
 ) -> DenseBuildResult:
     """Build a Dense Observed-Only Store from a manifest of GWAS-VCF files.
 
@@ -835,6 +837,9 @@ def build_dense_from_vcf_manifest(
     `_read_manifest`; ``chain_file`` and ``liftover_failure_threshold`` with the
     hg19→hg38 lift (issue #85); ``eaf_reference``/``eaf_reference_ancestry``/
     ``allow_unverified_eaf`` with EAF orientation verification (issue #115, ADR 0037 §6).
+    ``variant_reference`` (issue #185) supplies a precomputed axis
+    (``*.variant-ref.tsv.gz``, an ALID list, or a store ``variants.tsv.gz``);
+    Pass 1 and liftover are then bypassed.
     """
     manifest_rows = _read_manifest(
         manifest_path,
@@ -848,7 +853,7 @@ def build_dense_from_vcf_manifest(
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         prepared = _prepare_axis(
             staged, out, manifest_rows, chain_file, liftover_failure_threshold, chunk_shape,
-            n_workers,
+            n_workers, variant_reference,
         )
         # Phases 5-7 run inside one spill-dir lifetime: every spill is removed
         # even when a phase fails, keeping the staged release atomic.
@@ -920,21 +925,28 @@ class _PreparedBuild:
     axis: _AxisMetadata
     keys_sorted: np.ndarray
     rows_sorted: np.ndarray
+    #: The ``--variant-reference`` a single-pass build was given, or None for
+    #: the inline two-pass build. Recorded in the store manifest's provenance
+    #: so the axis's origin is auditable (issue #185).
+    variant_reference: str | None = None
 
 
 def _axis_metadata(
     source_lookup: Mapping[tuple[str, int, str, str], str],
     manifest_rows: Sequence[_ManifestRow],
+    alids: Sequence[str] | None = None,
 ) -> tuple[_AxisMetadata, dict[str, int]]:
     """Resolve the store's axis metadata.
 
     Sorting hg38 ALIDs by (chromosome, position, a1, a2) gives the variant
     axis a stable, position-ordered row index; the manifest's own row order
-    fixes the analysis column order. The variant index is returned alongside
-    the axis so the caller can free it (it is the one ~n_variants-sized dict)
-    once the Pass 2 lookup arrays are built.
+    fixes the analysis column order. ``alids`` overrides the source lookup as
+    the authority when a precomputed variant reference supplied the axis
+    (issue #185). The variant index is returned alongside the axis so the
+    caller can free it (it is the one ~n_variants-sized dict) once the Pass 2
+    lookup arrays are built.
     """
-    hg38_alids = _sorted_alids(source_lookup.values())
+    hg38_alids = _sorted_alids(alids if alids is not None else source_lookup.values())
     variant_index: dict[str, int] = {alid: i for i, alid in enumerate(hg38_alids)}
     analysis_index: dict[str, int] = {row.trait_id: i for i, row in enumerate(manifest_rows)}
     analyses: list[Analysis] = [_manifest_row_to_analysis(row) for row in manifest_rows]
@@ -1022,6 +1034,66 @@ def _build_pass2_lookup(
     return keys_sorted, rows_sorted
 
 
+def _resolve_axis_source(
+    manifest_rows: list[_ManifestRow],
+    chain_file: str | Path | None,
+    liftover_failure_threshold: float,
+    n_workers: int,
+    variant_reference: str | Path | None,
+) -> tuple[list[str] | None, dict[tuple[str, int, str, str], str], dict[str, str]]:
+    """The hg38 axis, its source-coordinate lookup and its rsids.
+
+    With a precomputed ``variant_reference`` the reference is the authority and
+    Pass 1 never runs (single-pass build, issue #185); otherwise the manifest's
+    sources are read once and lifted (the inline two-pass build). ``alids`` is
+    None in the two-pass case so the axis is derived from the lifted union.
+    """
+    if variant_reference is not None:
+        reference = _load_variant_reference(variant_reference, manifest_rows)
+        return reference.alids, reference.source_lookup, reference.rsid_by_alid
+    source_lookup, rsid_by_alid = _lift_manifest_variants(
+        manifest_rows,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
+        n_workers=n_workers,
+    )
+    return None, source_lookup, rsid_by_alid
+
+
+def _load_variant_reference(
+    variant_reference: str | Path, manifest_rows: Sequence[_ManifestRow]
+) -> VariantReference:
+    """Read the reference and note when it cannot resolve the manifest's assembly.
+
+    An identity reference (a plain ALID list or a store ``variants.tsv.gz``)
+    carries no source-key mapping, so it resolves only rows already on hg38.
+    The reference is the axis authority and no liftover runs in Pass 2, so a
+    manifest declaring hg19 against one keeps only coordinates that happen to
+    coincide; that is the documented off-reference behaviour, but it is worth
+    saying so rather than letting the shortfall pass unremarked.
+    """
+    reference = read_variant_reference(variant_reference)
+    log.info(
+        "Single-pass build: variant axis loaded from %s (%d variants); "
+        "Pass 1 variant union and liftover bypassed",
+        variant_reference,
+        len(reference.alids),
+    )
+    if not reference.explicit_source_keys:
+        non_hg38 = sorted(
+            {row.source_assembly for row in manifest_rows if row.source_assembly != "hg38"}
+        )
+        if non_hg38:
+            log.warning(
+                "Variant reference %s carries no source-key mapping and resolves only hg38 "
+                "coordinates, but the manifest declares %s; variants whose source coordinate "
+                "differs from the reference will be dropped",
+                variant_reference,
+                ", ".join(non_hg38),
+            )
+    return reference
+
+
 def _prepare_axis(
     staged: StagedRelease,
     out: Path,
@@ -1030,24 +1102,29 @@ def _prepare_axis(
     liftover_failure_threshold: float,
     chunk_shape: tuple[int, int],
     n_workers: int,
+    variant_reference: str | Path | None,
 ) -> _PreparedBuild:
-    """Phases 1-4: union/liftover, axis metadata, index + axis, Pass 2 lookup.
+    """Phases 1-4: axis source, axis metadata, index + axis, Pass 2 lookup.
 
-    hg19-declared rows are lifted to GRCh38 once (issue #85), the axis
-    metadata and provenance-carrying variant axis are written, and the Pass 2
-    lookup arrays are composed -- the parent ``source_lookup``/``variant_index``
-    dicts then drop out of scope before any worker forks (issue 043).
+    hg19-declared rows are lifted to GRCh38 once (issue #85), or a precomputed
+    ``variant_reference`` supplies the axis directly and Pass 1 is skipped
+    (single-pass build, issue #185). Either way the axis metadata and
+    provenance-carrying variant axis are written, and the Pass 2 lookup arrays
+    are composed -- the parent ``source_lookup``/``variant_index`` dicts then
+    drop out of scope before any worker forks (issue 043).
     """
-    source_lookup, rsid_by_alid = _lift_manifest_variants(
-        manifest_rows,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
-        n_workers=n_workers,
+    alids, source_lookup, rsid_by_alid = _resolve_axis_source(
+        manifest_rows, chain_file, liftover_failure_threshold, n_workers, variant_reference,
     )
-    axis, variant_index = _axis_metadata(source_lookup, manifest_rows)
+    axis, variant_index = _axis_metadata(source_lookup, manifest_rows, alids=alids)
     _write_axis_and_index(staged, source_lookup, axis, rsid_by_alid, chunk_shape)
     keys_sorted, rows_sorted = _build_pass2_lookup(source_lookup, variant_index)
-    return _PreparedBuild(axis=axis, keys_sorted=keys_sorted, rows_sorted=rows_sorted)
+    return _PreparedBuild(
+        axis=axis,
+        keys_sorted=keys_sorted,
+        rows_sorted=rows_sorted,
+        variant_reference=str(variant_reference) if variant_reference is not None else None,
+    )
 
 
 def _spill_columns_serial(
@@ -1300,6 +1377,7 @@ def _finalize_store(
         dtype,
         encoding=encoded.encoding,
         eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
+        variant_reference=prepared.variant_reference,
     )
     write_top_hit_indexes_for_store(
         staged.path, encoded.hits.rows, encoded.hits.cols, encoded.hits.z, encoded.hits.se,
@@ -2045,6 +2123,7 @@ def _write_manifest(
     dtype: str,
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
+    variant_reference: str | None = None,
 ) -> None:
     manifest = StoreManifest(
         encoding=encoding,
@@ -2057,7 +2136,11 @@ def _write_manifest(
         reference_assembly="GRCh38",
         created_at=datetime.now(UTC).isoformat(),
         provenance={
-            "builder": "opengwasdb.v0.1_dense_vcf_two_pass",
+            "builder": (
+                "opengwasdb.v0.1_dense_vcf_single_pass"
+                if variant_reference is not None
+                else "opengwasdb.v0.1_dense_vcf_two_pass"
+            ),
             "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
             "n_variants": n_variants,
             "n_analyses": n_analyses,
@@ -2069,6 +2152,11 @@ def _write_manifest(
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
             },
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
+            **(
+                {"variant_reference": variant_reference}
+                if variant_reference is not None
+                else {}
+            ),
         },
     )
     staged.write_manifest(manifest)

@@ -26,6 +26,7 @@ from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
+from opengwasdb.variants.reference import read_variant_reference, write_variant_reference
 
 # hg19 positions used in fixtures and their expected hg38 positions
 HG19_POS_1 = 100_000   # → hg38 100000  REF=A ALT=G  (ALT>REF → flip, stored z = -z)
@@ -1793,3 +1794,431 @@ def test_direct_api_empty_source_assembly_fails_loudly(tmp_path):
             manifest, store_path, store_id="s", release_id="r", source_reader_capability=""
         )
 
+
+
+# ── single-pass builds from a precomputed variant reference (issue #185) ─────
+
+
+def _write_reference_from_manifest(
+    tmp_path: Path, manifest: Path, name: str = "panel.variant-ref.tsv.gz"
+) -> Path:
+    """Write the artifact the inline two-pass Pass 1 would recompute.
+
+    Uses the builder's own Pass 1 (union + liftover + first-named rsid) so the
+    reference genuinely matches the manifest's variant union.
+    """
+    from opengwasdb.layouts.dense.build_vcf import (
+        _lift_manifest_variants,
+        _read_manifest,
+        _sorted_alids,
+    )
+
+    rows = _read_manifest(manifest)
+    source_lookup, rsid_by_alid = _lift_manifest_variants(
+        rows, chain_file=None, liftover_failure_threshold=0.01
+    )
+    path = tmp_path / name
+    write_variant_reference(
+        path, _sorted_alids(source_lookup.values()), source_lookup, rsid_by_alid
+    )
+    return path
+
+
+def _assert_dense_stores_data_identical(reference: Path, candidate: Path) -> None:
+    """The stored data (z/se, axis, top hits, analyses) matches exactly.
+
+    ``manifest.json`` is excluded: it carries a ``created_at`` timestamp and the
+    axis-origin provenance, which are expected to differ between runs.
+    """
+    import gzip
+
+    from opengwasdb.layouts.dense.top_hits import threshold_key
+    from opengwasdb.variants.axis import iter_variant_records
+
+    with gzip.open(reference / "variants.tsv.gz", "rt", encoding="utf-8") as a:
+        reference_axis = a.read()
+    with gzip.open(candidate / "variants.tsv.gz", "rt", encoding="utf-8") as b:
+        candidate_axis = b.read()
+    assert reference_axis == candidate_axis
+    np.testing.assert_array_equal(
+        np.load(reference / "variant_offsets.npy"), np.load(candidate / "variant_offsets.npy")
+    )
+    assert {r.alid for r in iter_variant_records(reference / "variants.tsv.gz")} == {
+        r.alid for r in iter_variant_records(candidate / "variants.tsv.gz")
+    }
+
+    reference_root = open_store(reference).arrays(mode="r")
+    candidate_root = open_store(candidate).arrays(mode="r")
+    for name in ("z", "se"):
+        np.testing.assert_array_equal(reference_root[name][:], candidate_root[name][:])
+    for threshold in (5e-4, 5e-6, 5e-8):
+        key = f"top_hits/{threshold_key(threshold)}"
+        for field in ("variant_index", "analysis_index", "z", "se"):
+            np.testing.assert_array_equal(
+                reference_root[key][field][:], candidate_root[key][field][:]
+            )
+    assert (reference / "analyses.tsv").read_text() == (candidate / "analyses.tsv").read_text()
+
+
+class TestVariantReferenceSinglePass:
+    def _mixed_manifest(self, tmp_path: Path) -> Path:
+        vcf_hg19 = _make_vcf(
+            tmp_path,
+            "trait_hg19",
+            [
+                f"1\t{HG19_POS_1}\trs1\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
+                f"1\t{HG19_POS_3}\trs3\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n",
+            ],
+        )
+        vcf_second = _make_vcf(
+            tmp_path,
+            "trait_second",
+            [
+                # Same site as trait_hg19's rs1, named differently: first named
+                # in manifest order must still win.
+                f"1\t{HG19_POS_1}\trsX\tA\tG\t.\tPASS\t.\tES:SE\t6.0:0.5\n",
+                f"1\t{HG19_POS_3}\trs3b\tG\tA\t.\tPASS\t.\tES:SE\t1.2:0.3\n",
+            ],
+        )
+        vcf_hg38 = _make_vcf(
+            tmp_path, "trait_hg38",
+            ["1\t5000000\trs5\tC\tT\t.\tPASS\t.\tES:SE\t0.8:0.4\n"],
+        )
+        return _manifest_with_source_assembly(
+            tmp_path,
+            [
+                ("trait_hg19", vcf_hg19, "Trait hg19", ""),
+                ("trait_second", vcf_second, "Trait second", ""),
+                ("trait_hg38", vcf_hg38, "Trait hg38", "hg38"),
+            ],
+        )
+
+    def test_single_pass_matches_two_pass_bit_for_bit(self, tmp_path):
+        manifest = self._mixed_manifest(tmp_path)
+        reference = _write_reference_from_manifest(tmp_path, manifest)
+
+        two_pass = tmp_path / "two-pass.opengwasdb"
+        single_pass = tmp_path / "single-pass.opengwasdb"
+        build_dense_from_vcf_manifest(
+            manifest, two_pass, store_id="s", release_id="r", n_workers=2
+        )
+        build_dense_from_vcf_manifest(
+            manifest, single_pass, store_id="s", release_id="r", n_workers=2,
+            variant_reference=reference,
+        )
+
+        assert validate_store(single_pass).ok
+        _assert_dense_stores_data_identical(two_pass, single_pass)
+
+        provenance = json.loads((single_pass / "manifest.json").read_text())["provenance"]
+        assert provenance["variant_reference"] == str(reference)
+        assert provenance["builder"] == "opengwasdb.v0.1_dense_vcf_single_pass"
+
+    def test_single_pass_never_runs_the_union_pass(self, tmp_path, monkeypatch):
+        """The reference supplies the axis, so the Pass 1 variant-union read is
+        never invoked -- proven by making it raise."""
+        import opengwasdb.layouts.dense.build_vcf as build_vcf
+
+        manifest = self._mixed_manifest(tmp_path)
+        reference = _write_reference_from_manifest(tmp_path, manifest)
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("Pass 1 ran despite a supplied variant reference")
+
+        monkeypatch.setattr(build_vcf, "_collect_manifest_variant_sites", _boom)
+        store = tmp_path / "union-bypassed.opengwasdb"
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", variant_reference=reference
+        )
+        assert validate_store(store).ok
+
+    def test_single_pass_logs_pass1_bypass(self, tmp_path, caplog):
+        import logging
+
+        manifest = self._mixed_manifest(tmp_path)
+        reference = _write_reference_from_manifest(tmp_path, manifest)
+        store = tmp_path / "logged.opengwasdb"
+
+        with caplog.at_level(logging.INFO):
+            build_dense_from_vcf_manifest(
+                manifest, store, store_id="s", release_id="r", variant_reference=reference
+            )
+
+        assert "Single-pass build: variant axis loaded from" in caplog.text
+        assert "Pass 1: collecting source variants" not in caplog.text
+
+    def test_omitted_reference_still_runs_two_pass(self, tmp_path, caplog):
+        import logging
+
+        manifest = self._mixed_manifest(tmp_path)
+        store = tmp_path / "two-pass.opengwasdb"
+
+        with caplog.at_level(logging.INFO):
+            build_dense_from_vcf_manifest(manifest, store, store_id="s", release_id="r")
+
+        assert "Pass 1" in caplog.text
+        provenance = json.loads((store / "manifest.json").read_text())["provenance"]
+        assert "variant_reference" not in provenance
+        assert provenance["builder"] == "opengwasdb.v0.1_dense_vcf_two_pass"
+
+    def test_plain_alid_list_drops_off_reference_and_keeps_unobserved_nan(self, tmp_path):
+        vcf = _make_vcf(
+            tmp_path,
+            "trait_hg38",
+            [
+                "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",    # in reference
+                "1\t200000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",    # off-reference
+                "1\t5000000\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n",   # in reference
+            ],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("trait_hg38", vcf, "Trait hg38", "hg38")]
+        )
+        reference = tmp_path / "panel.alids"
+        reference.write_text("1:100000:A:G\n1:5000000:A:G\n1:9000000:C:T\n", encoding="utf-8")
+        store = tmp_path / "plain-list.opengwasdb"
+
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", variant_reference=reference
+        )
+
+        assert validate_store(store).ok
+        from opengwasdb.encoding import DenseZPlane
+        from opengwasdb.variants.axis import iter_variant_records
+
+        records = {r.alid for r in iter_variant_records(store / "variants.tsv.gz")}
+        assert records == {"1:100000:A:G", "1:5000000:A:G", "1:9000000:C:T"}
+        assert "1:200000:C:T" not in records
+
+        opened = open_store(store)
+        z_column = DenseZPlane.open(opened.arrays(mode="r"), opened.manifest.encoding).column(0)
+        assert z_column.shape == (3,)
+        assert z_column[0] == pytest.approx(-4.0, rel=5e-3)  # 100000, A1=A, flipped
+        assert z_column[1] == pytest.approx(3.0, rel=5e-3)   # 5000000, A1=A, no flip
+        assert np.isnan(z_column[2])                          # 9000000, unobserved
+
+    def test_store_variants_table_is_accepted_as_reference(self, tmp_path):
+        vcf = _make_vcf(
+            tmp_path,
+            "trait_hg38",
+            [
+                "1\t100000\trs1\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                "1\t5000000\trs5\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n",
+            ],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("trait_hg38", vcf, "Trait hg38", "hg38")]
+        )
+        source_store = tmp_path / "source.opengwasdb"
+        build_dense_from_vcf_manifest(manifest, source_store, store_id="s", release_id="r")
+
+        rebuilt = tmp_path / "rebuilt.opengwasdb"
+        build_dense_from_vcf_manifest(
+            manifest, rebuilt, store_id="s", release_id="r",
+            variant_reference=source_store / "variants.tsv.gz",
+        )
+
+        assert validate_store(rebuilt).ok
+        _assert_dense_stores_data_identical(source_store, rebuilt)
+
+
+class TestVariantReferenceErrors:
+    def _one_row_manifest(self, tmp_path: Path) -> Path:
+        vcf = _make_vcf(
+            tmp_path, "trait_a",
+            [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"],
+        )
+        return _make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
+
+    def test_identity_reference_with_hg19_manifest_warns_and_drops(self, tmp_path, caplog):
+        """An identity panel resolves only hg38 coordinates; an hg19 manifest is
+        accepted (off-reference variants drop as documented), but the assembly
+        mismatch is logged so it cannot pass unremarked."""
+        import logging
+
+        from opengwasdb.variants.axis import iter_variant_records
+
+        vcf = _make_vcf(
+            tmp_path, "trait_hg19",
+            [
+                f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                f"1\t{HG19_POS_2}\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
+            ],
+        )
+        manifest = _make_manifest(tmp_path, [("trait_hg19", vcf, "Trait hg19")])
+        reference = tmp_path / "panel.alids"
+        reference.write_text("1:100000:A:G\n", encoding="utf-8")
+        store = tmp_path / "identity.opengwasdb"
+
+        with caplog.at_level(logging.WARNING):
+            build_dense_from_vcf_manifest(
+                manifest, store, store_id="s", release_id="r", variant_reference=reference
+            )
+
+        assert "carries no source-key mapping" in caplog.text
+        assert validate_store(store).ok
+        assert {r.alid for r in iter_variant_records(store / "variants.tsv.gz")} == {
+            "1:100000:A:G"
+        }
+
+    def test_artifact_round_trips_source_keys_and_rsids(self, tmp_path):
+        source_lookup = {
+            ("1", HG19_POS_1, "A", "G"): HG38_ALID_1,
+            ("1", HG19_POS_2, "C", "T"): HG38_ALID_2,
+            ("1", HG19_POS_3, "G", "A"): HG38_ALID_3,
+        }
+        rsid_by_alid = {HG38_ALID_1: "rs1", HG38_ALID_3: "rs3"}
+        path = tmp_path / "roundtrip.variant-ref.tsv.gz"
+        write_variant_reference(path, list(source_lookup.values()), source_lookup, rsid_by_alid)
+
+        reference = read_variant_reference(path)
+
+        assert reference.explicit_source_keys is True
+        assert set(reference.alids) == set(source_lookup.values())
+        assert reference.rsid_by_alid == rsid_by_alid
+        for key, alid in source_lookup.items():
+            assert reference.source_lookup[key] == alid
+
+    def test_missing_file_fails_loudly(self, tmp_path):
+        manifest = self._one_row_manifest(tmp_path)
+        with pytest.raises(ValueError, match="does not exist"):
+            build_dense_from_vcf_manifest(
+                manifest, tmp_path / "store.opengwasdb", store_id="s", release_id="r",
+                variant_reference=tmp_path / "absent.variant-ref.tsv.gz",
+            )
+
+    def test_empty_reference_fails_loudly(self, tmp_path):
+        import gzip
+
+        manifest = self._one_row_manifest(tmp_path)
+        empty = tmp_path / "empty.variant-ref.tsv.gz"
+        with gzip.open(empty, "wt", encoding="utf-8"):
+            pass
+        with pytest.raises(ValueError, match="is empty"):
+            build_dense_from_vcf_manifest(
+                manifest, tmp_path / "store.opengwasdb", store_id="s", release_id="r",
+                variant_reference=empty,
+            )
+
+    def test_reference_with_no_alid_rows_fails_loudly(self, tmp_path):
+        import gzip
+
+        manifest = self._one_row_manifest(tmp_path)
+        header_only = tmp_path / "header-only.variant-ref.tsv.gz"
+        with gzip.open(header_only, "wt", encoding="utf-8") as handle:
+            handle.write("#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n")
+        with pytest.raises(ValueError, match="contained no ALIDs"):
+            build_dense_from_vcf_manifest(
+                manifest, tmp_path / "store.opengwasdb", store_id="s", release_id="r",
+                variant_reference=header_only,
+            )
+
+    def test_invalid_alid_fails_loudly(self, tmp_path):
+        manifest = self._one_row_manifest(tmp_path)
+        bad = tmp_path / "bad.alids"
+        bad.write_text("1:100000:A:G\nnot-an-alid\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="invalid ALID"):
+            build_dense_from_vcf_manifest(
+                manifest, tmp_path / "store.opengwasdb", store_id="s", release_id="r",
+                variant_reference=bad,
+            )
+
+    def test_mismatched_artifact_columns_fail_loudly(self, tmp_path):
+        import gzip
+
+        manifest = self._one_row_manifest(tmp_path)
+        bad = tmp_path / "mismatch.variant-ref.tsv.gz"
+        with gzip.open(bad, "wt", encoding="utf-8") as handle:
+            handle.write("#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n")
+            handle.write("1:100000:A:G\t1\t999\tA\tG\t\t1:100000:A:G\n")
+        with pytest.raises(ValueError, match="row columns describe"):
+            build_dense_from_vcf_manifest(
+                manifest, tmp_path / "store.opengwasdb", store_id="s", release_id="r",
+                variant_reference=bad,
+            )
+
+    def test_tabular_reference_without_known_columns_fails_loudly(self, tmp_path):
+        import gzip
+
+        bad = tmp_path / "unknown.tsv.gz"
+        with gzip.open(bad, "wt", encoding="utf-8") as handle:
+            handle.write("foo\tbar\n1\t2\n")
+        with pytest.raises(ValueError, match="neither an 'alid' nor a 'source_keys' column"):
+            read_variant_reference(bad)
+
+    def test_variant_artifact_missing_required_column_fails_loudly(self, tmp_path):
+        import gzip
+
+        bad = tmp_path / "missing-column.variant-ref.tsv.gz"
+        with gzip.open(bad, "wt", encoding="utf-8") as handle:
+            handle.write("#alid\tchromosome\tposition\ta1\ta2\n1:100000:A:G\t1\t100000\tA\tG\n")
+        with pytest.raises(ValueError, match="missing the column"):
+            read_variant_reference(bad)
+
+    def test_conflicting_source_key_fails_loudly(self, tmp_path):
+        import gzip
+
+        bad = tmp_path / "conflict.variant-ref.tsv.gz"
+        with gzip.open(bad, "wt", encoding="utf-8") as handle:
+            handle.write("#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n")
+            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:200000:A:G\n")
+            handle.write("1:100000:C:T\t1\t100000\tC\tT\t\t1:200000:A:G\n")
+        with pytest.raises(ValueError, match="maps to both"):
+            read_variant_reference(bad)
+
+    def test_duplicate_alid_in_artifact_fails_loudly(self, tmp_path):
+        import gzip
+
+        bad = tmp_path / "duplicate.variant-ref.tsv.gz"
+        with gzip.open(bad, "wt", encoding="utf-8") as handle:
+            handle.write("#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n")
+            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:100000:A:G\n")
+            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:100000:A:G\n")
+        with pytest.raises(ValueError, match="duplicate ALID"):
+            read_variant_reference(bad)
+
+    def test_invalid_source_key_fails_loudly(self, tmp_path):
+        import gzip
+
+        bad = tmp_path / "bad-key.variant-ref.tsv.gz"
+        with gzip.open(bad, "wt", encoding="utf-8") as handle:
+            handle.write("#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n")
+            handle.write("1:100000:A:G\t1\t100000\tA\tG\t\t1:not-a-position:A:G\n")
+        with pytest.raises(ValueError, match="invalid source key"):
+            read_variant_reference(bad)
+
+
+def test_cli_variant_reference_builds_single_pass(tmp_path):
+    """The CLI exposes --variant-reference and produces a valid store (#185)."""
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    vcf = _make_vcf(
+        tmp_path, "trait_hg38",
+        [
+            "1\t100000\trs1\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+            "1\t5000000\trs5\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n",
+        ],
+    )
+    manifest = _manifest_with_source_assembly(
+        tmp_path, [("trait_hg38", vcf, "Trait hg38", "hg38")]
+    )
+    reference = tmp_path / "panel.alids"
+    reference.write_text("1:100000:A:G\n1:5000000:A:G\n", encoding="utf-8")
+    store = tmp_path / "cli.opengwasdb"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-dense-vcf", str(manifest), str(store),
+            "--store-id", "s", "--release-id", "r",
+            "--variant-reference", str(reference),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert validate_store(store).ok
+    z = open_store(store).arrays(mode="r")["z"][:]
+    assert z.shape == (2, 1)
