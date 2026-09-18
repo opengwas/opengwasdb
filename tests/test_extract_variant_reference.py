@@ -442,6 +442,46 @@ def test_artifact_rows_are_in_genomic_order_after_windowed_assembly(tmp_path):
     assert len(alids) > 10, "fixture must span enough variants to be meaningful"
 
 
+def test_extraction_reports_phase_timings_and_window_shards(tmp_path):
+    """Issue #191: a parallel extraction reports map, reduce and write separately,
+    and shows the tree reduce ran on the great majority of windows. Every source
+    spans the same windows, so each window holds one shard per worker."""
+    rows = [
+        (chromosome, 1_000_000 + i * 5_000_000, "A", "G", ".")
+        for chromosome in ("1", "2", "3")
+        for i in range(10)
+    ]
+    entries = []
+    for file_idx in range(4):
+        source = tmp_path / f"overlap_{file_idx}.tsv.gz"
+        _write_ssf(source, rows)
+        entries.append((f"overlap_{file_idx}", source, GWAS_SSF_CAPABILITY, "hg38"))
+    manifest = _make_manifest(tmp_path, entries, name="overlap.tsv")
+
+    result = extract_variant_reference(
+        manifest, tmp_path / "out.variant-ref.tsv.gz", n_workers=2
+    )
+
+    assert result.map_seconds > 0
+    assert result.reduce_seconds >= 0
+    assert result.write_seconds > 0
+    assert result.n_windows > 0
+    assert result.n_window_shards > result.n_windows
+    assert result.n_reduced_windows >= 0.9 * result.n_windows
+
+
+def test_serial_extraction_reports_no_reduce_split(tmp_path):
+    """The serial read has no windowed split: it reports map and write times but
+    zero windows, so a caller cannot mistake it for a tree reduce."""
+    manifest = _wide_manifest(tmp_path)
+    result = extract_variant_reference(manifest, tmp_path / "serial.variant-ref.tsv.gz")
+    assert result.map_seconds > 0
+    assert result.write_seconds > 0
+    assert result.reduce_seconds == 0
+    assert result.n_windows == 0
+    assert result.n_reduced_windows == 0
+
+
 def test_reduction_batch_size_below_two_fails_loudly(tmp_path):
     manifest = _wide_manifest(tmp_path)
     with pytest.raises(ValueError, match="reduction batch size must be at least 2"):

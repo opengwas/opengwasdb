@@ -76,9 +76,20 @@ the end of this file.
   windows; final window shards concatenate in genomic order without a global
   re-sort, and the artifact is bit-for-bit invariant across window size and
   batch size (#188).
+- **Phase timings and window-shard counts on `VariantReferenceExtraction`**:
+  `extract_variant_reference` records `map_seconds`, `reduce_seconds` and
+  `write_seconds`, plus the window, total-shard and reduced-window counts, so an
+  operator or benchmark can see where an extraction spent its time instead of
+  one total (#191).
 
 ### Changed
 
+- **`benchmark_extract_variant_reference.py` now exercises the tree reduce**:
+  every synthetic source carries the same genome-wide panel, so every worker
+  contributes a shard to every window rather than almost every window being a
+  single-shard no-op. The run reports map, reduce and write separately alongside
+  the total, speedup and window/shard counts, and still asserts every artifact is
+  byte-identical across configurations before any timing (#191).
 - **FinnGen R13 and GWAS-SSF `stream_variants()` now project only variant
   identity and alias columns** instead of parsing association statistics and
   materializing a full tabular row during Dense/Hybrid Pass 1. Header names,

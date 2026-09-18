@@ -507,6 +507,34 @@ class _ShardSpec:
     path: Path
 
 
+@dataclass
+class _Pass1Stats:
+    """Structured measurements from the windowed Pass 1 (issue #191).
+
+    Filled in place by the phases so the build log and the scaling benchmark can
+    report map, reduce and shard-count figures without decoding log lines. The
+    artifact write is timed by the caller that owns it. ``n_reduced_windows``
+    counts windows that held more than one shard and therefore actually ran the
+    tree reduce -- a single-shard window is already final.
+    """
+
+    map_seconds: float = 0.0
+    reduce_seconds: float = 0.0
+    n_windows: int = 0
+    n_window_shards: int = 0
+    n_reduced_windows: int = 0
+
+
+def _record_map_stats(
+    stats: _Pass1Stats, groups: Mapping[tuple[str, WindowKey], list[_ShardSpec]], seconds: float
+) -> None:
+    """Record the map phase's wall time and the shard shape of its windows."""
+    stats.map_seconds = seconds
+    stats.n_windows = len(groups)
+    stats.n_window_shards = sum(len(shards) for shards in groups.values())
+    stats.n_reduced_windows = sum(1 for shards in groups.values() if len(shards) > 1)
+
+
 def _pass1_record_site(record: _Pass1Record) -> tuple[str, int, str, str]:
     """The variant identity a shard record is sorted and grouped by.
 
@@ -692,6 +720,7 @@ def _collect_manifest_variant_sites(
     n_workers: int = 1,
     window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
     reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
+    stats: _Pass1Stats | None = None,
 ) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
     """Pass 1: read every manifest source once for its variant sites.
 
@@ -699,7 +728,8 @@ def _collect_manifest_variant_sites(
     rsid wins, issue #109). ``n_workers <= 1`` keeps the serial read;
     ``n_workers > 1`` runs the windowed map + parallel tree-reduce (issues #5,
     #188). Workers return shard metadata rather than variant sets, so no large
-    object crosses the process pipe.
+    object crosses the process pipe. ``stats``, when given, is filled in place
+    with the map/reduce phase timings and window-shard counts (issue #191).
     """
     window_size_bp(window_size_mb)  # fail loudly before any I/O on a bad window
     if reduction_batch_size < 2:
@@ -707,9 +737,13 @@ def _collect_manifest_variant_sites(
     if not manifest_rows:
         return {}, {}
     if n_workers <= 1:
-        return _collect_manifest_variant_sites_serial(manifest_rows)
+        serial_start = time.monotonic()
+        result = _collect_manifest_variant_sites_serial(manifest_rows)
+        if stats is not None:
+            stats.map_seconds = time.monotonic() - serial_start
+        return result
     return _collect_manifest_variant_sites_parallel(
-        manifest_rows, n_workers, window_size_mb, reduction_batch_size
+        manifest_rows, n_workers, window_size_mb, reduction_batch_size, stats
     )
 
 
@@ -743,6 +777,7 @@ def _map_reduce_windows(
     size_bp: int,
     reduction_batch_size: int,
     tmp_dir: Path,
+    stats: _Pass1Stats | None = None,
 ) -> dict[tuple[str, WindowKey], _ShardSpec]:
     """Map rows to window shards, then tree-reduce every window in parallel."""
     tasks = [
@@ -750,16 +785,23 @@ def _map_reduce_windows(
         for i, chunk in enumerate(_split_manifest_rows(manifest_rows, workers))
     ]
     groups: dict[tuple[str, WindowKey], list[_ShardSpec]] = {}
+    map_start = time.monotonic()
     with _fork_pool(workers) as pool:
         for future in as_completed([pool.submit(_pass1_worker, task) for task in tasks]):
             for spec in future.result():
                 groups.setdefault((spec.assembly, spec.window), []).append(spec)
+        if stats is not None:
+            _record_map_stats(stats, groups, time.monotonic() - map_start)
         log.info(
             "Pass 1 extraction: %d files → %d window group(s)",
             len(manifest_rows),
             len(groups),
         )
-        return _reduce_shard_groups(groups, pool, reduction_batch_size, tmp_dir)
+        reduce_start = time.monotonic()
+        final = _reduce_shard_groups(groups, pool, reduction_batch_size, tmp_dir)
+        if stats is not None:
+            stats.reduce_seconds = time.monotonic() - reduce_start
+    return final
 
 
 def _concatenate_window_shards(
@@ -781,6 +823,7 @@ def _collect_manifest_variant_sites_parallel(
     n_workers: int,
     window_size_mb: float,
     reduction_batch_size: int,
+    stats: _Pass1Stats | None = None,
 ) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
     """Windowed map + parallel tree-reduce Pass 1 (issues #5, #188).
 
@@ -804,7 +847,7 @@ def _collect_manifest_variant_sites_parallel(
     start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix=".pass1windows.") as tmp_dir_str:
         final = _map_reduce_windows(
-            manifest_rows, workers, size_bp, reduction_batch_size, Path(tmp_dir_str)
+            manifest_rows, workers, size_bp, reduction_batch_size, Path(tmp_dir_str), stats
         )
         _concatenate_window_shards(final, tuples_by_assembly, rsid_by_site)
         n_windows = len(final)
@@ -826,6 +869,7 @@ def _lift_manifest_variants(
     n_workers: int = 1,
     window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
     reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
+    stats: _Pass1Stats | None = None,
 ) -> tuple[dict[tuple[str, int, str, str], str], dict[str, str]]:
     """Resolve every manifest row's union of source variants to hg38 ALIDs
     (issue #85; the dense and hybrid builders' shared Pass 1).
@@ -869,6 +913,7 @@ def _lift_manifest_variants(
         n_workers=n_workers,
         window_size_mb=window_size_mb,
         reduction_batch_size=reduction_batch_size,
+        stats=stats,
     )
     return _resolve_manifest_variants_to_alids(
         tuples_by_assembly,

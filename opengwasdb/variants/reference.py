@@ -26,6 +26,7 @@ exists to prevent.
 from __future__ import annotations
 
 import gzip
+import time
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,12 +75,27 @@ class VariantReference:
 
 @dataclass(frozen=True)
 class VariantReferenceExtraction:
-    """What :func:`extract_variant_reference` wrote, for its caller's summary."""
+    """What :func:`extract_variant_reference` wrote, for its caller's summary.
+
+    The phase timings (issue #191) let a caller -- the scaling benchmark, or a
+    build log -- see *where* an extraction spent its time instead of one total:
+    ``map_seconds`` is the parallel per-source extraction, ``reduce_seconds``
+    the windowed tree-merge and ``write_seconds`` the artifact assembly. The
+    serial path has no windowed split, so it reports ``reduce_seconds == 0``
+    and zero window counts. ``n_reduced_windows`` counts windows that held more
+    than one worker shard and therefore actually ran the tree reduce.
+    """
 
     output_path: Path
     n_variants: int
     n_source_keys: int
     n_rsids: int
+    map_seconds: float = 0.0
+    reduce_seconds: float = 0.0
+    write_seconds: float = 0.0
+    n_windows: int = 0
+    n_window_shards: int = 0
+    n_reduced_windows: int = 0
 
 
 def extract_variant_reference(
@@ -95,18 +111,20 @@ def extract_variant_reference(
     reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
 ) -> VariantReferenceExtraction:
     """Extract, lift and canonicalise a manifest's variant axis into an artifact.
-
-    The standalone front end to the build's Pass 1 (issue #187): every source
-    is read once through ``resolve_reader`` (GWAS-VCF, GWAS-SSF, FinnGen, ...),
-    hg19 rows are lifted to GRCh38, and the union is written as the
-    ``*.variant-ref.tsv.gz`` artifact ``--variant-reference`` consumes. First-
-    named rsids and the union follow the build's own rule, so a store built from
-    the artifact matches the one-command two-pass store. An empty manifest, or
-    one whose sources resolve no variants, fails loudly rather than writing a
-    header-only axis. ``window_size_mb`` and ``reduction_batch_size`` shape the
-    parallel windowed tree-reduce (issue #188) and never change the artifact.
+    The standalone front end to the build's Pass 1 (issue #187): every source is
+    read once through ``resolve_reader``, hg19 rows are lifted to GRCh38, and the
+    union is written as the ``*.variant-ref.tsv.gz`` artifact
+    ``--variant-reference`` consumes. First-named rsids and the union follow the
+    build's rule, so the two-stage store matches the one-command build; an empty
+    manifest, or one resolving no variants, fails loudly. ``window_size_mb`` and
+    ``reduction_batch_size`` shape the windowed tree-reduce (issue #188) and
+    never change the artifact; phase timings and shard counts ride on the result.
     """
-    from opengwasdb.layouts.dense.build_vcf import _lift_manifest_variants, _read_manifest
+    from opengwasdb.layouts.dense.build_vcf import (
+        _lift_manifest_variants,
+        _Pass1Stats,
+        _read_manifest,
+    )
 
     manifest_rows = _read_manifest(
         manifest_path,
@@ -115,6 +133,7 @@ def extract_variant_reference(
     )
     if len(manifest_rows) == 0:
         raise ValueError(f"manifest {manifest_path} contains no rows to extract a reference from")
+    stats = _Pass1Stats()
     source_lookup, rsid_by_alid = _lift_manifest_variants(
         manifest_rows,
         chain_file=chain_file,
@@ -122,19 +141,22 @@ def extract_variant_reference(
         n_workers=n_workers,
         window_size_mb=window_size_mb,
         reduction_batch_size=reduction_batch_size,
+        stats=stats,
     )
     unique_alids = set(source_lookup.values())
     if not unique_alids:
         raise ValueError(f"manifest {manifest_path} yielded no hg38 variants to reference")
+    write_start = time.monotonic()
     write_variant_reference(
-        output_path, list(unique_alids), source_lookup, rsid_by_alid,
-        window_size_mb=window_size_mb,
+        output_path, list(unique_alids), source_lookup, rsid_by_alid, window_size_mb=window_size_mb
     )
+    write_seconds = time.monotonic() - write_start
     return VariantReferenceExtraction(
-        output_path=Path(output_path),
-        n_variants=len(unique_alids),
-        n_source_keys=len(source_lookup),
-        n_rsids=len(rsid_by_alid),
+        output_path=Path(output_path), n_variants=len(unique_alids),
+        n_source_keys=len(source_lookup), n_rsids=len(rsid_by_alid),
+        map_seconds=stats.map_seconds, reduce_seconds=stats.reduce_seconds,
+        write_seconds=write_seconds, n_windows=stats.n_windows,
+        n_window_shards=stats.n_window_shards, n_reduced_windows=stats.n_reduced_windows,
     )
 
 
