@@ -17,10 +17,12 @@ import multiprocessing
 import shutil
 import tempfile
 import time
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -84,12 +86,14 @@ from opengwasdb.model.manifest_columns import (
     resolve_manifest_columns,
 )
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
+from opengwasdb.readers.interface import SourceVariant
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.normalise import chromosome_sort_key
 from opengwasdb.variants.reference import VariantReference, read_variant_reference
 from opengwasdb.variants.windows import (
+    DEFAULT_MAP_SPILL_RECORDS,
     DEFAULT_REDUCTION_BATCH_SIZE,
     DEFAULT_WINDOW_SIZE_MB,
     WindowKey,
@@ -495,16 +499,63 @@ _Pass1Record = tuple[tuple[str, int, str, str], str]
 class _ShardSpec:
     """One intermediate variant shard on disk, tagged with its window and rank.
 
-    ``rank`` is the lowest manifest-order worker index that contributed to the
-    shard; merging shards in rank order emits equal sites lowest-rank-first,
-    which is what keeps "first named rsid wins" deterministic across the
-    reduction tree (issue #109).
+    ``rank`` is ``(chunk_idx, spill_idx)`` -- the manifest-order chunk that
+    produced the shard, then the buffer spill sequence within that chunk.
+    Merging shards in rank order emits equal sites lowest-rank-first, which is
+    what keeps "first named rsid wins" deterministic across the reduction tree
+    (issue #109). A tuple rather than the old bare chunk index is what lets a
+    later spill from one chunk sort strictly after an earlier one (issue #194):
+    Python compares tuples element by element, so manifest order and first-named
+    selection are unchanged by spilling.
     """
 
-    rank: int
+    rank: tuple[int, int]
     assembly: str
     window: WindowKey
     path: Path
+
+
+@dataclass(frozen=True)
+class _WindowShards:
+    """The union pass's result: one final sorted shard per ``(assembly, window)``.
+
+    The shards are the seam (issue #193): the map + tree reduce core exposes
+    them, and a consumer decides what to build from them. Their paths are only
+    valid while the context that yielded this object is open.
+    """
+
+    shards: Mapping[tuple[str, WindowKey], _ShardSpec]
+
+
+@dataclass
+class _Pass1Stats:
+    """Structured measurements from the windowed Pass 1 (issue #191).
+
+    Filled in place by the phases so the build log and the scaling benchmark can
+    report map, reduce and shard-count figures without decoding log lines. The
+    artifact write is timed by the caller that owns it. ``n_reduced_windows``
+    counts windows that held more than one shard and therefore actually ran the
+    tree reduce -- a single-shard window is already final. ``reduce_levels`` is
+    the number of tree-reduce levels that ran; more than one means a window held
+    more shards than ``reduction_batch_size`` (issue #194).
+    """
+
+    map_seconds: float = 0.0
+    reduce_seconds: float = 0.0
+    n_windows: int = 0
+    n_window_shards: int = 0
+    n_reduced_windows: int = 0
+    reduce_levels: int = 0
+
+
+def _record_map_stats(
+    stats: _Pass1Stats, groups: Mapping[tuple[str, WindowKey], list[_ShardSpec]], seconds: float
+) -> None:
+    """Record the map phase's wall time and the shard shape of its windows."""
+    stats.map_seconds = seconds
+    stats.n_windows = len(groups)
+    stats.n_window_shards = sum(len(shards) for shards in groups.values())
+    stats.n_reduced_windows = sum(1 for shards in groups.values() if len(shards) > 1)
 
 
 def _pass1_record_site(record: _Pass1Record) -> tuple[str, int, str, str]:
@@ -518,25 +569,191 @@ def _pass1_record_site(record: _Pass1Record) -> tuple[str, int, str, str]:
     return record[0]
 
 
-def _split_manifest_rows(
-    manifest_rows: list[_ManifestRow], n_chunks: int
-) -> list[list[_ManifestRow]]:
-    """Contiguous, manifest-order slices of the input rows.
+def _source_file_size(row: _ManifestRow) -> int:
+    """A manifest row's source size in bytes, used only to balance the map split.
 
-    Contiguity is what keeps "first named rsid wins" deterministic: worker
-    ``i`` always owns the rows before worker ``i + 1``, so the merge can
-    resolve a site seen in several shards by shard order.
+    A path the split cannot stat counts as one byte rather than zero: the split
+    is a scheduling heuristic, and an unreadable source still fails loudly when
+    its worker's reader opens it. Zero-weighting it here would let a chunk that
+    is not actually free look balanced (issue #195).
+    """
+    try:
+        return Path(row.file_path).stat().st_size
+    except OSError:
+        return 1
+
+
+def _chunks_needed(sizes: Sequence[int], ceiling: int) -> int:
+    """Greedy contiguous chunks needed to keep every chunk at or below ``ceiling``."""
+    chunks = 1
+    current = 0
+    for size in sizes:
+        if current > 0 and current + size > ceiling:
+            chunks += 1
+            current = size
+        else:
+            current += size
+    return chunks
+
+
+def _balanced_ceiling(sizes: Sequence[int], target_chunks: int) -> int:
+    """Smallest chunk-weight ceiling a contiguous partition into ``target_chunks`` meets.
+
+    ``_chunks_needed`` is monotone in the ceiling, so the linear-partition
+    bottleneck is exact by binary search (issue #195).
+    """
+    low, high = max(sizes, default=0), sum(sizes)
+    while low < high:
+        middle = (low + high) // 2
+        if _chunks_needed(sizes, middle) <= target_chunks:
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+def _greedy_chunk_bounds(sizes: Sequence[int], ceiling: int) -> list[int]:
+    """Start indices of the greedy contiguous partition under ``ceiling``."""
+    bounds = [0]
+    current = 0
+    for index, size in enumerate(sizes):
+        if current > 0 and current + size > ceiling:
+            bounds.append(index)
+            current = size
+        else:
+            current += size
+    bounds.append(len(sizes))
+    return bounds
+
+
+def _heaviest_splittable_chunk(bounds: Sequence[int], prefix: Sequence[int]) -> int:
+    """Index of the heaviest chunk holding more than one row, or -1 when none can split."""
+    best, best_weight = -1, -1
+    for chunk in range(len(bounds) - 1):
+        start, end = bounds[chunk], bounds[chunk + 1]
+        if end - start > 1 and prefix[end] - prefix[start] > best_weight:
+            best = chunk
+            best_weight = prefix[end] - prefix[start]
+    return best
+
+
+def _chunk_midpoint(prefix: Sequence[int], start: int, end: int) -> int:
+    """The element boundary inside ``(start, end)`` nearest the chunk's half-weight."""
+    half = (prefix[end] - prefix[start]) / 2
+    return min(range(start + 1, end), key=lambda i: abs(prefix[i] - prefix[start] - half))
+
+
+def _split_to_target(bounds: list[int], prefix: Sequence[int], target_chunks: int) -> list[int]:
+    """Split the heaviest chunks until the contiguous partition has ``target_chunks`` parts.
+
+    The greedy partition holds at most ``target_chunks`` chunks, so this only
+    adds boundaries. It runs only while rows outnumber chunks, so a chunk with
+    more than one row always exists to split.
+    """
+    while len(bounds) - 1 < target_chunks:
+        chunk = _heaviest_splittable_chunk(bounds, prefix)
+        bounds.insert(chunk + 1, _chunk_midpoint(prefix, bounds[chunk], bounds[chunk + 1]))
+    return bounds
+
+
+def _prefix_sums(sizes: Sequence[int]) -> list[int]:
+    """``prefix[i]`` is the cumulative size of ``sizes[:i]``."""
+    prefix = [0]
+    for size in sizes:
+        prefix.append(prefix[-1] + size)
+    return prefix
+
+
+def _partition_exactly(
+    sizes: Sequence[int], start: int, end: int, chunks: int
+) -> list[int]:
+    """Boundaries splitting ``sizes[start:end]`` into exactly ``chunks`` contiguous parts.
+
+    Absolute indices within ``sizes``. The local min-max ceiling is found on the
+    slice alone, so a dominating source outside it cannot inflate the ceiling and
+    leave the slice's own chunks unbalanced (issue #195).
+    """
+    sub = sizes[start:end]
+    bounds = _greedy_chunk_bounds(sub, _balanced_ceiling(sub, chunks))
+    return [start + bound for bound in _split_to_target(bounds, _prefix_sums(sub), chunks)]
+
+
+def _allocate_subchunks(weights: Sequence[int], limits: Sequence[int], extra: int) -> list[int]:
+    """Hand ``extra`` additional parts to the chunks with the largest weight-per-part.
+
+    ``limits`` caps each chunk at its row count. The caller guarantees the extra
+    parts fit across all chunks; a failure to place one means the split is
+    internally inconsistent, so it fails loudly rather than returning a short
+    partition (issue #195).
+    """
+    allocations = [1] * len(weights)
+    for _ in range(extra):
+        target, target_load = -1, -1.0
+        for index in range(len(weights)):
+            if allocations[index] >= limits[index]:
+                continue
+            load = weights[index] / allocations[index]
+            if load > target_load:
+                target, target_load = index, load
+        if target < 0:
+            raise ValueError(
+                f"cannot allocate {extra} extra chunk(s) across {len(weights)} chunk(s)"
+            )
+        allocations[target] += 1
+    return allocations
+
+
+def _chunks_from_bounds(
+    manifest_rows: list[_ManifestRow], bounds: Sequence[int]
+) -> list[list[_ManifestRow]]:
+    """Slice ``manifest_rows`` between consecutive ``bounds``."""
+    return [manifest_rows[bounds[i] : bounds[i + 1]] for i in range(len(bounds) - 1)]
+
+
+def _balanced_bounds(sizes: Sequence[int], target_chunks: int) -> list[int]:
+    """Boundaries for exactly ``target_chunks`` contiguous, size-balanced parts.
+
+    The min-max greedy gives at most ``target_chunks`` parts under a ceiling a
+    dominating source forces high; the extra parts are then allocated to the
+    heaviest chunks and each is subdivided with its own local ceiling, so the
+    non-dominating sources are balanced among themselves (issue #195).
+    """
+    prefix = _prefix_sums(sizes)
+    bounds = _greedy_chunk_bounds(sizes, _balanced_ceiling(sizes, target_chunks))
+    initial_chunks = len(bounds) - 1
+    weights = [prefix[bounds[i + 1]] - prefix[bounds[i]] for i in range(initial_chunks)]
+    limits = [bounds[i + 1] - bounds[i] for i in range(initial_chunks)]
+    allocations = _allocate_subchunks(weights, limits, target_chunks - initial_chunks)
+    final = [0]
+    for index, allocation in enumerate(allocations):
+        final.extend(
+            _partition_exactly(sizes, bounds[index], bounds[index + 1], allocation)[1:]
+        )
+    return final
+
+
+def _split_manifest_rows(
+    manifest_rows: list[_ManifestRow], n_workers: int
+) -> list[list[_ManifestRow]]:
+    """Contiguous, size-balanced, manifest-order slices of the input rows.
+
+    Contiguity is what keeps "first named rsid wins" deterministic: chunk
+    ``i`` always owns the rows before chunk ``i + 1``, and the reduction merges
+    shards by that chunk rank (issue #109). Balancing by on-disk source size
+    rather than row count stops one oversized source setting the map phase's
+    makespan (issue #195): the partition targets ``min(n, 4 * n_workers)``
+    contiguous chunks of near-equal cumulative size, so a dominating source
+    lands alone while the rest spread across many chunks the pool can balance.
+    Fewer sources than workers leaves each source its own chunk.
     """
     n = len(manifest_rows)
-    n_chunks = min(n_chunks, n)
-    base, extra = divmod(n, n_chunks)
-    chunks: list[list[_ManifestRow]] = []
-    start = 0
-    for i in range(n_chunks):
-        size = base + (1 if i < extra else 0)
-        chunks.append(manifest_rows[start : start + size])
-        start += size
-    return chunks
+    if n == 0:
+        return []
+    if n <= n_workers:
+        return [[row] for row in manifest_rows]
+    target_chunks = min(n, max(n_workers, 4 * n_workers))
+    sizes = [_source_file_size(row) for row in manifest_rows]
+    return _chunks_from_bounds(manifest_rows, _balanced_bounds(sizes, target_chunks))
 
 
 def _write_pass1_shard(
@@ -635,29 +852,86 @@ def _apply_reduction_results(
         groups[key] = [spec for spec in groups[key] if spec not in batch] + [merged]
 
 
+def _merge_shards_serial(tasks: list[tuple[str, tuple[str, ...]]]) -> list[str]:
+    """Run each merge task in this process (the serial arm's tree-reduce)."""
+    return [_reduce_worker(task) for task in tasks]
+
+
+def _merge_shards_parallel(
+    tasks: list[tuple[str, tuple[str, ...]]], pool: ProcessPoolExecutor
+) -> list[str]:
+    """Submit every merge task to the pool, then collect in task order."""
+    futures = [pool.submit(_reduce_worker, task) for task in tasks]
+    return [future.result() for future in futures]
+
+
 def _reduce_shard_groups(
     groups: dict[tuple[str, WindowKey], list[_ShardSpec]],
-    pool: ProcessPoolExecutor,
+    merge: Callable[[list[tuple[str, tuple[str, ...]]]], list[str]],
     batch_size: int,
     tmp_dir: Path,
+    stats: _Pass1Stats | None = None,
 ) -> dict[tuple[str, WindowKey], _ShardSpec]:
-    """Tree-reduce every window's shards in parallel batches.
+    """Tree-reduce every window's shards in batches.
 
-    One level at a time: each window's shards are batched by ``batch_size`` and
-    a worker merges each batch, so all windows at a level run together in the
-    shared pool. Repeats until every window is one shard. A window with a
-    single shard is already final.
+    One level at a time: each window's shards are sorted by ``(chunk, spill)``
+    rank, batched by ``batch_size`` and merged. Repeats until every window is
+    one shard, so a window holding more shards than ``batch_size`` -- many
+    spills, say -- is reduced over more than one level (issue #194). A window
+    with a single shard is already final. ``merge`` decides whether the batches
+    run on a process pool or in this process; the reduction shape is identical.
     """
     level = 0
     while any(len(shards) > 1 for shards in groups.values()):
         tasks, batches = _schedule_reduction_batches(groups, batch_size, tmp_dir, level)
-        results = [future.result() for future in [pool.submit(_reduce_worker, t) for t in tasks]]
-        _apply_reduction_results(groups, batches, results)
+        _apply_reduction_results(groups, batches, merge(tasks))
         level += 1
+    if stats is not None:
+        stats.reduce_levels = level
     return {key: shards[0] for key, shards in groups.items()}
 
 
-def _pass1_worker(task: tuple[int, list[_ManifestRow], str, int]) -> list[_ShardSpec]:
+def _flush_pass1_buffers(
+    sites_by_window: dict[tuple[str, WindowKey], dict[tuple[str, int, str, str], str]],
+    shard_dir: Path,
+    worker_idx: int,
+    spill_idx: int,
+    shard_idx: int,
+    specs: list[_ShardSpec],
+) -> tuple[int, int]:
+    """Write every buffered window as a shard, then clear the buffers.
+
+    Returns the next ``(spill_idx, shard_idx)``. Every shard written here is
+    tagged with the same ``(worker_idx, spill_idx)`` rank, so a later spill of
+    this chunk can never merge ahead of an earlier one (issue #194).
+    """
+    for (assembly, window), sites in sites_by_window.items():
+        path = _write_pass1_shard(shard_dir, worker_idx, shard_idx, list(sites.items()))
+        shard_idx += 1
+        specs.append(_ShardSpec((worker_idx, spill_idx), assembly, window, Path(path)))
+    sites_by_window.clear()
+    return spill_idx + 1, shard_idx
+
+
+def _buffer_pass1_variant(
+    sites: dict[tuple[str, int, str, str], str], variant: SourceVariant
+) -> bool:
+    """Add one variant to a window buffer; return whether its site is new.
+
+    The first non-empty rsid for a site wins and a later empty rsid never
+    clears it, matching the serial read. The bool lets ``_pass1_worker`` count
+    distinct sites to enforce its spill bound without a second lookup.
+    """
+    existing = sites.get(variant.site)
+    if existing is None:
+        sites[variant.site] = variant.rsid or ""
+        return True
+    if not existing and variant.rsid:
+        sites[variant.site] = variant.rsid
+    return False
+
+
+def _pass1_worker(task: tuple[int, list[_ManifestRow], str, int, int]) -> list[_ShardSpec]:
     """Extract one worker's slice of manifest rows to sorted, windowed shards.
 
     Returns only shard metadata -- never the variant sets themselves -- so no
@@ -665,25 +939,78 @@ def _pass1_worker(task: tuple[int, list[_ManifestRow], str, int]) -> list[_Shard
     Pass 2 spills). Each variant is routed to its ``(assembly, window)`` buffer
     and the worker's first non-empty rsid per site is kept, matching the
     serial read.
+
+    The buffers hold at most ``map_spill_records`` distinct sites: once that
+    many are buffered every window buffer is written to disk and cleared, so
+    peak memory tracks the threshold rather than the number of rows in the
+    slice (issue #194). ``spill_idx`` rises with reading order and a site seen
+    again in a later spill becomes a later-ranked shard, so the reduction still
+    resolves it to the first non-empty rsid in manifest order.
     """
-    worker_idx, rows, shard_dir_str, size_bp = task
+    worker_idx, rows, shard_dir_str, size_bp, map_spill_records = task
     shard_dir = Path(shard_dir_str)
     sites_by_window: dict[tuple[str, WindowKey], dict[tuple[str, int, str, str], str]] = {}
+    specs: list[_ShardSpec] = []
+    buffered = 0
+    spill_idx = 0
+    shard_idx = 0
     for row in rows:
         reader = resolve_reader(
             row.source_reader_capability, row.file_path, StoredEffectScale(row.stored_effect_scale)
         )
         for variant in reader.stream_variants():
             key = (row.source_assembly, window_key(variant.chromosome, variant.position, size_bp))
-            sites = sites_by_window.setdefault(key, {})
-            existing = sites.get(variant.site)
-            if existing is None or (not existing and variant.rsid):
-                sites[variant.site] = variant.rsid or ""
-    specs: list[_ShardSpec] = []
-    for shard_idx, ((assembly, window), sites) in enumerate(sites_by_window.items()):
-        path = _write_pass1_shard(shard_dir, worker_idx, shard_idx, list(sites.items()))
-        specs.append(_ShardSpec(worker_idx, assembly, window, Path(path)))
+            if _buffer_pass1_variant(sites_by_window.setdefault(key, {}), variant):
+                buffered += 1
+            if buffered >= map_spill_records:
+                spill_idx, shard_idx = _flush_pass1_buffers(
+                    sites_by_window, shard_dir, worker_idx, spill_idx, shard_idx, specs
+                )
+                buffered = 0
+    if sites_by_window:
+        _flush_pass1_buffers(sites_by_window, shard_dir, worker_idx, spill_idx, shard_idx, specs)
     return specs
+
+
+def _validate_union_options(
+    window_size_mb: float, reduction_batch_size: int, map_spill_records: int
+) -> None:
+    """Fail loudly on an unusable window, batch or spill setting before any I/O."""
+    window_size_bp(window_size_mb)
+    if reduction_batch_size < 2:
+        raise ValueError(f"reduction batch size must be at least 2, got {reduction_batch_size}")
+    if map_spill_records < 1:
+        raise ValueError(
+            f"map spill record count must be at least 1, got {map_spill_records}"
+        )
+
+
+def _consume_manifest_shards(
+    manifest_rows: list[_ManifestRow],
+    *,
+    n_workers: int,
+    window_size_mb: float,
+    reduction_batch_size: int,
+    map_spill_records: int,
+    stats: _Pass1Stats | None,
+    consume: Callable[[_WindowShards], Any],
+) -> Any:
+    """Run the union core and hand its final per-window shards to ``consume``.
+
+    This is the assembly seam (issue #193): the in-memory site union and Dense /
+    Hybrid's materialised lookup are both consumers of the same core, and a
+    later streaming artifact writer (issues #196/#197) plugs in the same way.
+    """
+    _validate_union_options(window_size_mb, reduction_batch_size, map_spill_records)
+    with _reduce_manifest_windows(
+        manifest_rows,
+        n_workers=n_workers,
+        window_size_mb=window_size_mb,
+        reduction_batch_size=reduction_batch_size,
+        map_spill_records=map_spill_records,
+        stats=stats,
+    ) as window_shards:
+        return consume(window_shards)
 
 
 def _collect_manifest_variant_sites(
@@ -692,49 +1019,70 @@ def _collect_manifest_variant_sites(
     n_workers: int = 1,
     window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
     reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
+    map_spill_records: int = DEFAULT_MAP_SPILL_RECORDS,
+    stats: _Pass1Stats | None = None,
 ) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
     """Pass 1: read every manifest source once for its variant sites.
 
     Returns the ``tuples_by_assembly`` union and ``rsid_by_site`` (first named
-    rsid wins, issue #109). ``n_workers <= 1`` keeps the serial read;
-    ``n_workers > 1`` runs the windowed map + parallel tree-reduce (issues #5,
-    #188). Workers return shard metadata rather than variant sets, so no large
-    object crosses the process pipe.
+    rsid wins, issue #109). The map + tree-reduce core
+    (`_reduce_manifest_windows`) exposes the final per-window shards, and this
+    consumer materialises them into memory (issue #193). ``stats``, when given,
+    is filled in place with the map/reduce timings and shard counts (#191).
     """
-    window_size_bp(window_size_mb)  # fail loudly before any I/O on a bad window
-    if reduction_batch_size < 2:
-        raise ValueError(f"reduction batch size must be at least 2, got {reduction_batch_size}")
-    if not manifest_rows:
-        return {}, {}
-    if n_workers <= 1:
-        return _collect_manifest_variant_sites_serial(manifest_rows)
-    return _collect_manifest_variant_sites_parallel(
-        manifest_rows, n_workers, window_size_mb, reduction_batch_size
+    return _consume_manifest_shards(
+        manifest_rows, n_workers=n_workers, window_size_mb=window_size_mb,
+        reduction_batch_size=reduction_batch_size, map_spill_records=map_spill_records,
+        stats=stats, consume=_materialize_site_union,
     )
 
 
-def _collect_manifest_variant_sites_serial(
+def _finalise_serial_groups(
+    groups: dict[tuple[str, WindowKey], list[_ShardSpec]],
+    reduction_batch_size: int,
+    tmp_dir: Path,
+    stats: _Pass1Stats | None,
+) -> dict[tuple[str, WindowKey], _ShardSpec]:
+    """Reduce the serial map's shards, or return the single-shard windows.
+
+    With one shard per window there is nothing to reduce and the stats report
+    no window split; when a low spill threshold left several shards in a
+    window the tree reduce runs in this process (issue #194).
+    """
+    if all(len(shards) == 1 for shards in groups.values()):
+        return {key: shards[0] for key, shards in groups.items()}
+    if stats is not None:
+        _record_map_stats(stats, groups, stats.map_seconds)
+    reduce_start = time.monotonic()
+    final = _reduce_shard_groups(groups, _merge_shards_serial, reduction_batch_size, tmp_dir, stats)
+    if stats is not None:
+        stats.reduce_seconds = time.monotonic() - reduce_start
+    return final
+
+
+def _map_manifest_windows_serial(
     manifest_rows: list[_ManifestRow],
-) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
-    """The pre-parallel Pass 1 read, kept verbatim for ``n_workers <= 1``."""
-    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
-    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
+    size_bp: int,
+    reduction_batch_size: int,
+    map_spill_records: int,
+    tmp_dir: Path,
+    stats: _Pass1Stats | None,
+) -> dict[tuple[str, WindowKey], _ShardSpec]:
+    """Read every source in this process, then reduce any window that spilled.
+
+    The ``n_workers <= 1`` arm of the core. It runs the same per-window map a
+    worker process would, so the serial and parallel arms hand the consumer the
+    same shard shape; ``_finalise_serial_groups`` then reduces only when a low
+    spill threshold actually split a window (issue #194).
+    """
     log.info("Pass 1: collecting source variants from %d files (serial)", len(manifest_rows))
-    t0 = time.monotonic()
-    for i, row in enumerate(manifest_rows):
-        reader = resolve_reader(
-            row.source_reader_capability, row.file_path, StoredEffectScale(row.stored_effect_scale)
-        )
-        sites = tuples_by_assembly.setdefault(row.source_assembly, set())
-        for variant in reader.stream_variants():
-            sites.add(variant.site)
-            if variant.rsid:
-                rsid_by_site.setdefault(variant.site, variant.rsid)
-        n_total = sum(len(t) for t in tuples_by_assembly.values())
-        _log_progress(
-            "Pass 1", i + 1, len(manifest_rows), t0, f"{n_total} unique variants so far", every=250
-        )
-    return tuples_by_assembly, rsid_by_site
+    start = time.monotonic()
+    groups: dict[tuple[str, WindowKey], list[_ShardSpec]] = {}
+    for spec in _pass1_worker((0, manifest_rows, str(tmp_dir), size_bp, map_spill_records)):
+        groups.setdefault((spec.assembly, spec.window), []).append(spec)
+    if stats is not None:
+        stats.map_seconds = time.monotonic() - start
+    return _finalise_serial_groups(groups, reduction_batch_size, tmp_dir, stats)
 
 
 def _map_reduce_windows(
@@ -742,80 +1090,159 @@ def _map_reduce_windows(
     workers: int,
     size_bp: int,
     reduction_batch_size: int,
+    map_spill_records: int,
     tmp_dir: Path,
+    stats: _Pass1Stats | None = None,
 ) -> dict[tuple[str, WindowKey], _ShardSpec]:
-    """Map rows to window shards, then tree-reduce every window in parallel."""
+    """Map rows to window shards, then tree-reduce every window in parallel.
+
+    The manifest is split into more contiguous, size-balanced chunks than there
+    are workers (issue #195). Each chunk's rank is its manifest-order index,
+    fixed here before any task is submitted, and results are collected in
+    completion order -- so which chunk finishes first can never affect shard
+    sorting or first-named-rsid resolution.
+    """
     tasks = [
-        (i, chunk, str(tmp_dir), size_bp)
-        for i, chunk in enumerate(_split_manifest_rows(manifest_rows, workers))
+        (chunk_idx, chunk, str(tmp_dir), size_bp, map_spill_records)
+        for chunk_idx, chunk in enumerate(_split_manifest_rows(manifest_rows, workers))
     ]
+    log.info(
+        "Pass 1: %d source(s) → %d size-balanced chunk(s) across %d worker(s)",
+        len(manifest_rows),
+        len(tasks),
+        workers,
+    )
     groups: dict[tuple[str, WindowKey], list[_ShardSpec]] = {}
+    map_start = time.monotonic()
     with _fork_pool(workers) as pool:
         for future in as_completed([pool.submit(_pass1_worker, task) for task in tasks]):
             for spec in future.result():
                 groups.setdefault((spec.assembly, spec.window), []).append(spec)
+        if stats is not None:
+            _record_map_stats(stats, groups, time.monotonic() - map_start)
         log.info(
             "Pass 1 extraction: %d files → %d window group(s)",
             len(manifest_rows),
             len(groups),
         )
-        return _reduce_shard_groups(groups, pool, reduction_batch_size, tmp_dir)
+        reduce_start = time.monotonic()
+        final = _reduce_shard_groups(
+            groups,
+            partial(_merge_shards_parallel, pool=pool),
+            reduction_batch_size,
+            tmp_dir,
+            stats,
+        )
+        if stats is not None:
+            stats.reduce_seconds = time.monotonic() - reduce_start
+    return final
 
 
-def _concatenate_window_shards(
-    final: dict[tuple[str, WindowKey], _ShardSpec],
-    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]],
-    rsid_by_site: dict[tuple[str, int, str, str], str],
-) -> None:
-    """Stream the final window shards, in genomic order, into the union."""
-    for key in sorted(final):
+def _materialize_site_union(
+    window_shards: _WindowShards,
+) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
+    """Read the final per-window shards into the in-memory site union.
+
+    ``rsid_by_site`` is inserted in ``(rank, site)`` order (issue #192): the
+    final shard's manifest-order rank is the primary key and its records are
+    already sorted by site. Reading the shards here -- rather than letting the
+    union set's hash order decide -- is what makes the rsid an ALID carries
+    deterministic.
+    """
+    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
+    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
+    ranked: list[tuple[tuple[int, int], tuple[str, int, str, str], str]] = []
+    for key in sorted(window_shards.shards):
+        spec = window_shards.shards[key]
         sites = tuples_by_assembly.setdefault(key[0], set())
-        for site, rsid in _iter_pass1_shard(final[key].path):
+        for site, rsid in _iter_pass1_shard(spec.path):
             sites.add(site)
             if rsid:
-                rsid_by_site.setdefault(site, rsid)
+                ranked.append((spec.rank, site, rsid))
+    ranked.sort()
+    for _rank, site, rsid in ranked:
+        rsid_by_site.setdefault(site, rsid)
+    return tuples_by_assembly, rsid_by_site
 
 
-def _collect_manifest_variant_sites_parallel(
+def _materialize_manifest_lookup(
+    window_shards: _WindowShards,
+    *,
+    chain_file: str | Path | None,
+    liftover_failure_threshold: float,
+) -> tuple[dict[tuple[str, int, str, str], str], dict[str, str]]:
+    """The Dense and Hybrid consumer: final window shards -> the hg38 lookup.
+
+    This is the assembly seam (issue #193). The union pass hands over final
+    per-window shards; this consumer materialises the whole site union and lifts
+    it, which is what Dense and Hybrid need. A later streaming artifact writer
+    (issues #196/#197) can consume the same shards per window without building
+    either dict.
+    """
+    tuples_by_assembly, rsid_by_site = _materialize_site_union(window_shards)
+    return _resolve_manifest_variants_to_alids(
+        tuples_by_assembly,
+        rsid_by_site,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
+    )
+
+
+@contextmanager
+def _reduce_manifest_windows(
     manifest_rows: list[_ManifestRow],
+    *,
     n_workers: int,
     window_size_mb: float,
     reduction_batch_size: int,
-) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
-    """Windowed map + parallel tree-reduce Pass 1 (issues #5, #188).
+    map_spill_records: int = DEFAULT_MAP_SPILL_RECORDS,
+    stats: _Pass1Stats | None = None,
+) -> Iterator[_WindowShards]:
+    """Map every manifest source into window shards and tree-reduce each window.
 
-    Each worker spills sorted shards per ``(assembly, window)``; every window's
-    shards are then tree-reduced in parallel batches, and the final window
-    shards are concatenated in genomic order. There is no single parent k-way
-    merge over all shards, so the parent never becomes the bottleneck.
+    The union pass core (issues #5, #188): each source is read once and routed
+    into sorted per-window shards, and each window's shards are tree-reduced in
+    parallel batches. A worker spills its buffers whenever ``map_spill_records``
+    variants are buffered, so peak memory tracks that threshold rather than the
+    row count of its manifest slice (issue #194). What it exposes is the shards
+    -- not an in-memory union -- so a consumer can choose what to build from
+    them (issue #193).
     """
     size_bp = window_size_bp(window_size_mb)
-    workers = min(n_workers, len(manifest_rows))
-    log.info(
-        "Pass 1: collecting source variants from %d files (parallel, %d workers, "
-        "%g Mb windows, batch %d)",
-        len(manifest_rows),
-        workers,
-        window_size_mb,
-        reduction_batch_size,
-    )
-    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
-    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
-    start = time.monotonic()
+    workers = min(n_workers, len(manifest_rows)) if manifest_rows else 0
     with tempfile.TemporaryDirectory(prefix=".pass1windows.") as tmp_dir_str:
-        final = _map_reduce_windows(
-            manifest_rows, workers, size_bp, reduction_batch_size, Path(tmp_dir_str)
+        tmp_dir = Path(tmp_dir_str)
+        if workers <= 1:
+            yield _WindowShards(
+                shards=_map_manifest_windows_serial(
+                    manifest_rows, size_bp, reduction_batch_size, map_spill_records, tmp_dir, stats
+                )
+            )
+            return
+        log.info(
+            "Pass 1: collecting source variants from %d files (parallel, %d workers, "
+            "%g Mb windows, batch %d)",
+            len(manifest_rows),
+            workers,
+            window_size_mb,
+            reduction_batch_size,
         )
-        _concatenate_window_shards(final, tuples_by_assembly, rsid_by_site)
-        n_windows = len(final)
-    n_total = sum(len(t) for t in tuples_by_assembly.values())
-    log.info(
-        "Pass 1 merge: %d window(s) → %d unique variants in %s",
-        n_windows,
-        n_total,
-        _fmt_duration(time.monotonic() - start),
-    )
-    return tuples_by_assembly, rsid_by_site
+        start = time.monotonic()
+        final = _map_reduce_windows(
+            manifest_rows,
+            workers,
+            size_bp,
+            reduction_batch_size,
+            map_spill_records,
+            tmp_dir,
+            stats,
+        )
+        log.info(
+            "Pass 1 merge: %d window(s) in %s",
+            len(final),
+            _fmt_duration(time.monotonic() - start),
+        )
+        yield _WindowShards(shards=final)
 
 
 def _lift_manifest_variants(
@@ -826,6 +1253,8 @@ def _lift_manifest_variants(
     n_workers: int = 1,
     window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
     reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
+    map_spill_records: int = DEFAULT_MAP_SPILL_RECORDS,
+    stats: _Pass1Stats | None = None,
 ) -> tuple[dict[tuple[str, int, str, str], str], dict[str, str]]:
     """Resolve every manifest row's union of source variants to hg38 ALIDs
     (issue #85; the dense and hybrid builders' shared Pass 1).
@@ -863,18 +1292,20 @@ def _lift_manifest_variants(
     misattribute one row's association to the other's variant -- exactly the
     kind of silent corruption this fix exists to remove -- so any such tuple
     is dropped from both groups (never guessed) before returning.
+
+    The union pass core (`_reduce_manifest_windows`) exposes final per-window
+    shards; this function hands them to the `_materialize_manifest_lookup`
+    consumer, which is the Dense and Hybrid assembly seam (issue #193).
     """
-    tuples_by_assembly, rsid_by_site = _collect_manifest_variant_sites(
-        manifest_rows,
-        n_workers=n_workers,
-        window_size_mb=window_size_mb,
-        reduction_batch_size=reduction_batch_size,
-    )
-    return _resolve_manifest_variants_to_alids(
-        tuples_by_assembly,
-        rsid_by_site,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
+    return _consume_manifest_shards(
+        manifest_rows, n_workers=n_workers, window_size_mb=window_size_mb,
+        reduction_batch_size=reduction_batch_size, map_spill_records=map_spill_records,
+        stats=stats,
+        consume=partial(
+            _materialize_manifest_lookup,
+            chain_file=chain_file,
+            liftover_failure_threshold=liftover_failure_threshold,
+        ),
     )
 
 
@@ -920,11 +1351,7 @@ def _resolve_manifest_variants_to_alids(
             del passthrough_lookup[key]
             del lifted_lookup[key]
     source_lookup = {**passthrough_lookup, **lifted_lookup}
-    rsid_by_alid: dict[str, str] = {}
-    for site, alid in source_lookup.items():
-        rsid = rsid_by_site.get(site)
-        if rsid:
-            rsid_by_alid.setdefault(alid, rsid)
+    rsid_by_alid = _rekey_rsids_to_alids(source_lookup, rsid_by_site)
     log.info(
         "Pass 1 liftover/finalisation: %d source variants → %d hg38 ALIDs in %s",
         len(source_lookup),
@@ -932,6 +1359,25 @@ def _resolve_manifest_variants_to_alids(
         _fmt_duration(time.monotonic() - finalise_start),
     )
     return source_lookup, rsid_by_alid
+
+
+def _rekey_rsids_to_alids(
+    source_lookup: Mapping[tuple[str, int, str, str], str],
+    rsid_by_site: Mapping[tuple[str, int, str, str], str],
+) -> dict[str, str]:
+    """The rsid each ALID carries: the first non-empty in ``(rank, site)`` order.
+
+    ``rsid_by_site`` is produced in that order (issue #192), so iterating it
+    directly pins the winner for an ALID several source keys resolve to.
+    Iterating ``source_lookup`` would fall back to the union set's per-process
+    string hash order and let the answer move between runs (issue #192).
+    """
+    by_alid: dict[str, str] = {}
+    for site, rsid in rsid_by_site.items():
+        alid = source_lookup.get(site)
+        if alid and rsid:
+            by_alid.setdefault(alid, rsid)
+    return by_alid
 
 
 def build_dense_from_vcf_manifest(

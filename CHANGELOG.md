@@ -76,9 +76,63 @@ the end of this file.
   windows; final window shards concatenate in genomic order without a global
   re-sort, and the artifact is bit-for-bit invariant across window size and
   batch size (#188).
+- **Phase timings and window-shard counts on `VariantReferenceExtraction`**:
+  `extract_variant_reference` records `map_seconds`, `reduce_seconds` and
+  `write_seconds`, plus the window, total-shard and reduced-window counts, so an
+  operator or benchmark can see where an extraction spent its time instead of
+  one total (#191).
+- **`--map-spill-records` on `extract-variant-reference`** (and the
+  `extract_variant_reference` API): a map worker now spills every window buffer
+  to disk once it has buffered that many distinct sites (default 5,000,000),
+  instead of accumulating its whole manifest slice in memory. A shard's rank is
+  `(chunk_idx, spill_idx)`, so a later spill of the same chunk still merges
+  after an earlier one and first-named-rsid selection is unchanged. Windows
+  holding more shards than `reduction_batch_size` descend more than one tree
+  level, reported as `reduce_levels`; a non-positive threshold fails loudly. The
+  artifact is bit-for-bit unchanged across spill thresholds (#194).
 
 ### Changed
 
+- **`extract-variant-reference` streams every manifest, retiring the in-memory
+  assembly**: hg19 and mixed manifests now lift each pre-lift window in a worker,
+  re-bucket every survivor by post-lift window, merge those buckets per post-lift
+  window and concatenate the compressed members in genomic order. Cross-assembly
+  ambiguous raw tuples are dropped by the window-local intersection, which is
+  exactly the global hg38 ∩ successfully-lifted-hg19 rule; liftover attempt and
+  failure counts are aggregated across workers and `liftover_failure_threshold`
+  is enforced before any artifact byte is written, so a breaching manifest leaves
+  nothing on disk. The `_extract_materialised_reference` path and the in-memory
+  `write_variant_reference` extraction path are removed: every extraction path
+  keeps the parent free of a global site set or lookup, and the artifact is
+  bit-for-bit identical to the old writer's for all-hg19 and mixed manifests
+  across worker, window, batch and spill configurations (#197).
+- **All-hg38 `extract-variant-reference` streams the artifact in parallel**:
+  manifests whose sources all declare hg38 (no liftover) now compress each
+  final window shard to a standalone gzip member in a worker pool and append
+  those members' raw bytes in genomic order, writing the header as the first
+  member. This removes both serial O(union) stages (`_concatenate_window_shards`
+  and `write_variant_reference`) from this path, so the parent never reads a
+  shard row or materialises a global site set or lookup. The artifact's
+  decompressed content is bit-for-bit identical to the materialising writer's
+  across worker counts, window sizes and batch sizes, and remains readable as
+  ordinary (multi-member) gzip; all-hg38 is the fast case where post-lift
+  windows equal pre-lift windows (#196).
+- **Dense and Hybrid map phases split the manifest into size-balanced chunks**:
+  `_split_manifest_rows` now targets `min(sources, 4 * n_workers)` contiguous
+  chunks balanced by cumulative on-disk source size instead of exactly
+  `n_workers` chunks of equal row count. This stops one oversized source from
+  setting the makespan of the worker that happened to own it: a dominating
+  source lands in its own chunk while the remaining sources spread across the
+  rest. Chunk rank is its manifest-order index, fixed before submission, so
+  task completion order cannot affect shard sorting or first-named-rsid
+  selection, and the artifact stays bit-for-bit identical to the pre-change
+  output and between serial and parallel modes (#195).
+- **`benchmark_extract_variant_reference.py` now exercises the tree reduce**:
+  every synthetic source carries the same genome-wide panel, so every worker
+  contributes a shard to every window rather than almost every window being a
+  single-shard no-op. The run reports map, reduce and write separately alongside
+  the total, speedup and window/shard counts, and still asserts every artifact is
+  byte-identical across configurations before any timing (#191).
 - **FinnGen R13 and GWAS-SSF `stream_variants()` now project only variant
   identity and alias columns** instead of parsing association statistics and
   materializing a full tabular row during Dense/Hybrid Pass 1. Header names,
@@ -107,9 +161,42 @@ the end of this file.
   multi-minute `np.argsort` at genome scale. `_axis_metadata` and the hybrid
   partition/completion ALID sorts use a vectorised byte-key sort instead of one
   `_alid_sort_key` call per ALID (~21M calls). Output order is unchanged (#182).
+- **Variant-reference extraction verified at production scale (#198)**: an
+  82-source real manifest (64 UKB GWAS-VCF hg19 + 16 EBI GWAS-SSF hg38 + 2
+  FinnGen R13 hg38, 15.6 GB) extracts 28,488,575 variants from 38,302,643
+  source keys in 204.3 s at 16 workers against 2232.3 s at one -- a 10.9x
+  end-to-end speedup (map 9.6x, reduce 13.6x, write 14.6x) with the reduction
+  observed descending three tree levels. The serial and 16-worker artifacts are
+  byte-identical, and the parent's peak RSS stays flat (~1.9 GB) as an all-hg38
+  union grows 2.3 M -> 21.3 M variants. On a real mixed manifest the current
+  artifact matches the pre-#190 writer's `alid`, `chromosome`, `position`, `a1`,
+  `a2` and `source_keys` columns for all 21,559,975 rows; the 1,229 `rsid`-only
+  differences are the deterministic `(rank, site)` tie-break accumulated after
+  the pre-#190 commit, plus three where the streaming path declines an rsid from
+  a failed-liftover tuple that shares a valid hg38 tuple's raw string. A store built
+  via `build-dense-vcf --variant-reference` is byte-identical to the unified
+  two-pass build except `manifest.json` provenance, confirming #185. Numbers and
+  tables: `benchmarks/README.md`.
 
 ### Fixed
 
+- **An all-dropped lifted extraction no longer leaves a header-only artifact.**
+  `_finish_members` writes nothing when no window produced a member, so an
+  hg19/mixed manifest whose every variant is an ambiguous cross-assembly
+  collision (or fails liftover under a permissive threshold) fails loudly with
+  `yielded no hg38 variants` and leaves no partial artifact on disk. A window
+  shard carrying an unknown `source_assembly` is now rejected instead of being
+  treated as hg19 (#197 review).
+- **The rsid an ALID carries is now deterministic, not set-iteration order.**
+  When two source keys differing only in allele order (or two source positions
+  lifting onto one hg38 ALID) carried different rsids, the winner was decided by
+  the union set's iteration order, which varies with the per-process
+  `PYTHONHASHSEED` -- one manifest produced `rsAG` or `rsGA` on different runs.
+  The rule is now explicit and enforced: the rsid for an ALID is the first
+  non-empty rsid in `(rank, site)` order, where `rank` is the shard's
+  manifest-order rank and ties break by site. `rsid_by_site` is produced in that
+  order and consumed directly, so nothing downstream depends on hash order
+  (#192).
 - **Concurrent staging runs for one destination no longer delete each other's
   work, and an interrupted run no longer leaks its staging directory.**
   `OpenGWASDBStore.staging()` used a fixed `.{name}.tmp` sibling, so a second

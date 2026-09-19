@@ -53,7 +53,11 @@ from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.reference import extract_variant_reference
-from opengwasdb.variants.windows import DEFAULT_REDUCTION_BATCH_SIZE, DEFAULT_WINDOW_SIZE_MB
+from opengwasdb.variants.windows import (
+    DEFAULT_MAP_SPILL_RECORDS,
+    DEFAULT_REDUCTION_BATCH_SIZE,
+    DEFAULT_WINDOW_SIZE_MB,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -368,17 +372,25 @@ def extract_variant_reference_command(
     reduction_batch_size: Annotated[
         int, typer.Option(help="Shards merged per reduction task")
     ] = DEFAULT_REDUCTION_BATCH_SIZE,
+    map_spill_records: Annotated[
+        int,
+        typer.Option(
+            help="Variants a map worker buffers before spilling its window shards"
+        ),
+    ] = DEFAULT_MAP_SPILL_RECORDS,
 ) -> None:
     """Extract, lift and canonicalise a manifest's variant axis (#187) into the
     *.variant-ref.tsv.gz artifact `build-dense-vcf --variant-reference`
     consumes. --window-size-mb and --reduction-batch-size shape the parallel
     genomic tree-reduce (issue #188) and never change the artifact.
+    --map-spill-records bounds a worker's peak memory (issue #194).
     """
     result = extract_variant_reference(
         manifest_path, output_path, chain_file=chain_file,
         liftover_failure_threshold=liftover_failure_threshold, n_workers=n_workers,
         source_reader_capability=source_reader_capability, source_assembly=source_assembly,
         window_size_mb=window_size_mb, reduction_batch_size=reduction_batch_size,
+        map_spill_records=map_spill_records,
     )
     _echo_summary(
         {

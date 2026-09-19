@@ -42,21 +42,106 @@ acceptance measurement; each repetition performs both full-row scans of the
 
 ### `benchmark_extract_variant_reference.py`
 
-Synthetic scaling benchmark for the genomic-window map + tree-reduce added in
-issue #188. It generates a manifest of overlapping GWAS-SSF sources and runs
-`extract_variant_reference` across a grid of worker counts, window sizes and
-reduction batch sizes, asserting every artifact is byte-identical to the first
-before reporting timings and speedup.
+Synthetic scaling benchmark for the genomic-window map + tree-reduce
+(issues #188 and #191). Every generated GWAS-SSF source carries the same
+genome-wide panel -- thousands of positions spread across all chromosomes at a
+near-uniform spacing -- so cross-file overlap is total and every worker
+contributes a shard to every genomic window. That is the production shape: the
+tree reduce cannot be skipped, and the `reduced` column below stays equal to the
+window count. The run asserts every artifact is byte-identical to the first
+before reporting any timing, so a fast wrong answer fails.
+
+Map (per-source extraction), reduce (windowed tree-merge) and write (artifact
+assembly) are timed and reported separately, alongside the end-to-end total and
+speedup and the window/shard counts, so a regression in one phase cannot be
+averaged away into the total.
 
 ```bash
 pixi run -e dev python benchmarks/benchmark_extract_variant_reference.py \
-  --n-files 128 --variants-per-file 2000 \
-  --worker-counts 1 2 4 8 16 --window-sizes-mb 5 20 --reduction-batch-sizes 4 16 \
+  --n-files 128 --variants-per-file 4000 \
+  --worker-counts 1 2 4 8 --window-sizes-mb 5 20 --reduction-batch-sizes 4 16 \
   --repetitions 3 --output /tmp/opengwasdb_extract_variant_reference_benchmark.json
 ```
 
-Synthetic inputs keep it runnable anywhere; raise `--n-files` and
-`--variants-per-file` to production-scale values on a compute node.
+**Current-implementation baseline** (128 sources × 4,002 genome-wide panel
+positions = 4,002 union variants, `nproc=224` Intel Xeon Platinum 8480+, medians
+of 3 repetitions, `speedup` against the median serial total). Re-run, not
+hand-edited:
+
+```
+128 sources x 4002 genome-wide panel positions, 4002 unique variants
+workers  window batch    total      map   reduce    write    other speedup  windows  shards  reduced
+      1       5     4    0.966    0.909    0.000    0.045    0.012   1.00x        0       0        0
+      1       5    16    0.970    0.922    0.000    0.045    0.003   0.99x        0       0        0
+      1      20     4    0.964    0.916    0.000    0.044    0.004   1.00x        0       0        0
+      1      20    16    0.960    0.911    0.000    0.045    0.004   1.01x        0       0        0
+      2       5     4    1.238    0.956    0.085    0.071    0.125   0.78x      614    1228      614
+      2       5    16    0.910    0.674    0.082    0.071    0.083   1.06x      614    1228      614
+      2      20     4    0.788    0.658    0.029    0.070    0.031   1.23x      162     324      162
+      2      20    16    0.793    0.660    0.031    0.070    0.031   1.22x      162     324      162
+      4       5     4    0.937    0.664    0.087    0.071    0.116   1.03x      614    2456      614
+      4       5    16    0.959    0.672    0.090    0.072    0.126   1.01x      614    2456      614
+      4      20     4    0.776    0.629    0.031    0.071    0.046   1.24x      162     648      162
+      4      20    16    0.775    0.635    0.029    0.071    0.039   1.25x      162     648      162
+      8       5     4    1.000    0.462    0.236    0.077    0.225   0.97x      614    4912      614
+      8       5    16    0.878    0.466    0.103    0.073    0.237   1.10x      614    4912      614
+      8      20     4    0.569    0.352    0.075    0.072    0.070   1.70x      162    1296      162
+      8      20    16    0.492    0.353    0.035    0.038    0.066   1.96x      162    1296      162
+byte-identical artifact across all 16 configurations
+```
+
+The map phase dominates and parallelises to ~2.6x on 8 workers at 20 Mb windows;
+the reduce stays small at this union size, while the 5 Mb grid shows the cost of
+merging 614 windows. Later #190 work is judged against these numbers.
+
+**Real-data verification** (2026-09-19, IEU compute node, `nproc=224`, real
+sources under `/data/opengwasdb/raw/`). The synthetic grid above isolates the
+reduce; this run checks the rewrite against real input. The manifest is 82
+sources -- 64 UKB GWAS-VCF (hg19), 16 EBI GWAS-SSF (hg38) and 2 FinnGen R13
+(hg38), 15.6 GB -- and every run calls `extract_variant_reference(manifest, out,
+window_size_mb=20, reduction_batch_size=4, liftover_failure_threshold=1.0)`
+with the worker count shown:
+
+```
+82 real sources (64 UKB hg19 + 16 EBI hg38 + 2 FinnGen hg38), 15.6 GB
+workers    total      map   reduce    write   variants  source_keys  windows  shards  reduced  levels    RSS
+      1   2232.3   1326.2    394.8    509.4   28,488,575  38,302,643      322    8779      321       3  1909 MB
+     16    204.3    138.1     29.0     34.9   28,488,575  38,302,643      322   10514      321       3  1893 MB
+speedup    10.9x     9.6x     13.6x     14.6x
+```
+
+The serial and 16-worker artifacts are byte-identical (decompressed sha256
+`aa55d7003241a2d7c51e169c41f2cfe0a536eba5e042ba15a40ce491e1e192b8`), and the
+reduction descends three levels at this union size, so it is not the
+single-level no-op the small synthetic panels can hide.
+
+Parent peak RSS is flat with respect to union size. All-hg38 EBI manifests at 16
+workers, union grown ~9x, `ru_maxrss` of the parent process only (a fork-pool
+worker's memory is not the parent's):
+
+| EBI sources | union variants | parent peak RSS | reduce levels |
+|---:|---:|---:|---:|
+| 1 | 2,314,363 | 1893 MB | 0 |
+| 4 | 8,786,033 | 1901 MB | 1 |
+| 16 | 21,236,235 | 1911 MB | 2 |
+| 32 | 21,328,262 | 1889 MB | 2 |
+
+Artifact identity: on a 9-source real mixed manifest (6 UKB hg19 + 1 FinnGen
+hg38 + 2 EBI hg38) the current streaming artifact and the pre-#190 materialising
+writer's both carry 21,559,975 variants; the `alid`, `chromosome`, `position`,
+`a1`, `a2` and `source_keys` columns are byte-identical. 1,229 of the 21,559,975
+rows differ in the `rsid` column only: 1,226 are the deterministic `(rank,
+site)` tie-break accumulated between the pre-#190 commit and the current writer
+(#192, #194, #195), and 3 are the streaming path declining to take an rsid from
+a pre-lift tuple that failed liftover but whose raw string coincides with a
+valid hg38 tuple. No variant, coordinate, allele or source-key value differs.
+
+Store identity (#185): a real 4-source manifest (2 UKB hg19 + 2 EBI hg38,
+4,616,591 variants x 4 analyses) built once with `build-dense-vcf` and once with
+`build-dense-vcf --variant-reference` from that manifest's extraction artifact
+produces stores whose every file is byte-identical except `manifest.json`, and
+that differs only in `created_at` and the provenance `builder` /
+`variant_reference` fields.
 
 ---
 
