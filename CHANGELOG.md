@@ -161,6 +161,22 @@ the end of this file.
   multi-minute `np.argsort` at genome scale. `_axis_metadata` and the hybrid
   partition/completion ALID sorts use a vectorised byte-key sort instead of one
   `_alid_sort_key` call per ALID (~21M calls). Output order is unchanged (#182).
+- **Variant-reference extraction verified at production scale (#198)**: an
+  82-source real manifest (64 UKB GWAS-VCF hg19 + 16 EBI GWAS-SSF hg38 + 2
+  FinnGen R13 hg38, 15.6 GB) extracts 28,488,575 variants from 38,302,643
+  source keys in 204.3 s at 16 workers against 2232.3 s at one -- a 10.9x
+  end-to-end speedup (map 9.6x, reduce 13.6x, write 14.6x) with the reduction
+  observed descending three tree levels. The serial and 16-worker artifacts are
+  byte-identical, and the parent's peak RSS stays flat (~1.9 GB) as an all-hg38
+  union grows 2.3 M -> 21.3 M variants. On a real mixed manifest the current
+  artifact matches the pre-#190 writer's `alid`, `chromosome`, `position`, `a1`,
+  `a2` and `source_keys` columns for all 21,559,975 rows; the 1,229 `rsid`-only
+  differences are the deterministic `(rank, site)` tie-break accumulated after
+  the pre-#190 commit, plus three where the streaming path declines an rsid from
+  a failed-liftover tuple that shares a valid hg38 tuple's raw string. A store built
+  via `build-dense-vcf --variant-reference` is byte-identical to the unified
+  two-pass build except `manifest.json` provenance, confirming #185. Numbers and
+  tables: `benchmarks/README.md`.
 
 ### Fixed
 

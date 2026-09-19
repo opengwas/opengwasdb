@@ -94,6 +94,55 @@ The map phase dominates and parallelises to ~2.6x on 8 workers at 20 Mb windows;
 the reduce stays small at this union size, while the 5 Mb grid shows the cost of
 merging 614 windows. Later #190 work is judged against these numbers.
 
+**Real-data verification** (2026-09-19, IEU compute node, `nproc=224`, real
+sources under `/data/opengwasdb/raw/`). The synthetic grid above isolates the
+reduce; this run checks the rewrite against real input. The manifest is 82
+sources -- 64 UKB GWAS-VCF (hg19), 16 EBI GWAS-SSF (hg38) and 2 FinnGen R13
+(hg38), 15.6 GB -- and every run calls `extract_variant_reference(manifest, out,
+window_size_mb=20, reduction_batch_size=4, liftover_failure_threshold=1.0)`
+with the worker count shown:
+
+```
+82 real sources (64 UKB hg19 + 16 EBI hg38 + 2 FinnGen hg38), 15.6 GB
+workers    total      map   reduce    write   variants  source_keys  windows  shards  reduced  levels    RSS
+      1   2232.3   1326.2    394.8    509.4   28,488,575  38,302,643      322    8779      321       3  1909 MB
+     16    204.3    138.1     29.0     34.9   28,488,575  38,302,643      322   10514      321       3  1893 MB
+speedup    10.9x     9.6x     13.6x     14.6x
+```
+
+The serial and 16-worker artifacts are byte-identical (decompressed sha256
+`aa55d7003241a2d7c51e169c41f2cfe0a536eba5e042ba15a40ce491e1e192b8`), and the
+reduction descends three levels at this union size, so it is not the
+single-level no-op the small synthetic panels can hide.
+
+Parent peak RSS is flat with respect to union size. All-hg38 EBI manifests at 16
+workers, union grown ~9x, `ru_maxrss` of the parent process only (a fork-pool
+worker's memory is not the parent's):
+
+| EBI sources | union variants | parent peak RSS | reduce levels |
+|---:|---:|---:|---:|
+| 1 | 2,314,363 | 1893 MB | 0 |
+| 4 | 8,786,033 | 1901 MB | 1 |
+| 16 | 21,236,235 | 1911 MB | 2 |
+| 32 | 21,328,262 | 1889 MB | 2 |
+
+Artifact identity: on a 9-source real mixed manifest (6 UKB hg19 + 1 FinnGen
+hg38 + 2 EBI hg38) the current streaming artifact and the pre-#190 materialising
+writer's both carry 21,559,975 variants; the `alid`, `chromosome`, `position`,
+`a1`, `a2` and `source_keys` columns are byte-identical. 1,229 of the 21,559,975
+rows differ in the `rsid` column only: 1,226 are the deterministic `(rank,
+site)` tie-break accumulated between the pre-#190 commit and the current writer
+(#192, #194, #195), and 3 are the streaming path declining to take an rsid from
+a pre-lift tuple that failed liftover but whose raw string coincides with a
+valid hg38 tuple. No variant, coordinate, allele or source-key value differs.
+
+Store identity (#185): a real 4-source manifest (2 UKB hg19 + 2 EBI hg38,
+4,616,591 variants x 4 analyses) built once with `build-dense-vcf` and once with
+`build-dense-vcf --variant-reference` from that manifest's extraction artifact
+produces stores whose every file is byte-identical except `manifest.json`, and
+that differs only in `created_at` and the provenance `builder` /
+`variant_reference` fields.
+
 ---
 
 ### `benchmark_vcf_ukb_chr1_dense.py`
