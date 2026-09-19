@@ -1156,6 +1156,31 @@ def test_window_local_ambiguity_drops_exactly_the_global_intersection(tmp_path, 
     )
 
 
+def test_all_dropped_lifted_manifest_fails_without_a_partial_artifact(tmp_path):
+    """Issue #197 review: when every variant is an ambiguous cross-assembly
+    collision the streaming writer must not leave a header-only artifact.
+
+    The two hg19 rows lift and collide with two identical hg38 rows, so every
+    record is dropped from both groups.
+    """
+    rows = [
+        "1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+        "1\t3000000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+    ]
+    hg19 = _make_vcf(tmp_path, "all_collide_hg19", rows)
+    hg38 = _make_vcf(tmp_path, "all_collide_hg38", rows)
+    manifest = _make_manifest(
+        tmp_path,
+        [("hg19", hg19, "", ""), ("hg38", hg38, "", "hg38")],
+        name="all_collide.tsv",
+    )
+    out = tmp_path / "all_collide.variant-ref.tsv.gz"
+
+    with pytest.raises(ValueError, match="yielded no hg38 variants"):
+        extract_variant_reference(manifest, out, n_workers=2, window_size_mb=1.0)
+    assert not out.exists(), "an all-dropped extraction must leave no partial artifact"
+
+
 def _hg19_hg38_manifest(tmp_path: Path) -> Path:
     """An hg19 source and an hg38 source sharing some pre-lift tuples.
 

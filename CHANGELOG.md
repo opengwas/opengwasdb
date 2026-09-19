@@ -164,6 +164,13 @@ the end of this file.
 
 ### Fixed
 
+- **An all-dropped lifted extraction no longer leaves a header-only artifact.**
+  `_finish_members` writes nothing when no window produced a member, so an
+  hg19/mixed manifest whose every variant is an ambiguous cross-assembly
+  collision (or fails liftover under a permissive threshold) fails loudly with
+  `yielded no hg38 variants` and leaves no partial artifact on disk. A window
+  shard carrying an unknown `source_assembly` is now rejected instead of being
+  treated as hg19 (#197 review).
 - **The rsid an ALID carries is now deterministic, not set-iteration order.**
   When two source keys differing only in allele order (or two source positions
   lifting onto one hg38 ALID) carried different rsids, the winner was decided by

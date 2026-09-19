@@ -448,9 +448,6 @@ def _artifact_line(alid: str, source_keys: Sequence[str], rsid: str) -> str:
     )
 
 
-# ── streaming all-hg38 artifact (issue #196) ─────────────────────────────────
-
-
 def _write_member(
     member_path: str | Path,
     rsid_by_alid: Mapping[str, str],
@@ -537,7 +534,14 @@ def _streaming_output_path(output_path: str | Path) -> Path:
 def _finish_members(
     out: Path, artifacts: Sequence[_WindowArtifact], write_start: float
 ) -> _StreamedArtifact:
-    """Write the header member, append the window members, summarise the counts."""
+    """Write the header member, append the window members, summarise the counts.
+
+    An empty result writes no file at all: a header-only artifact reads back as
+    an empty reference, indistinguishable from a real answer, and the caller's
+    ``n_variants == 0`` guard must see no artifact on disk (issue #197 review).
+    """
+    if not artifacts:
+        return _StreamedArtifact(0, 0, 0, time.monotonic() - write_start)
     with gzip.open(out, "wt", encoding="utf-8") as handle:
         handle.write(_ARTIFACT_HEADER)
     _concatenate_window_members(out, artifacts)
@@ -607,7 +611,12 @@ def _read_assembly_records(
     hg38_records: dict[tuple[str, int, str, str], tuple[tuple[int, int], str]] = {}
     hg19_records: dict[tuple[str, int, str, str], tuple[tuple[int, int], str]] = {}
     for assembly, path, chunk, spill in shards:
-        target = hg38_records if assembly == "hg38" else hg19_records
+        if assembly == "hg38":
+            target = hg38_records
+        elif assembly == "hg19":
+            target = hg19_records
+        else:
+            raise ValueError(f"unhandled source_assembly value {assembly!r} in window shards")
         rank = (chunk, spill)
         for site, rsid in _iter_pass1_shard(Path(path)):
             target[site] = (rank, rsid)
