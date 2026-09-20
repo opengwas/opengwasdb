@@ -536,19 +536,51 @@ class VariantAxis:
                 records[index] = record
         return records
 
+    def _alids_by_indices(self, positions: np.ndarray, vi: np.ndarray) -> np.ndarray:
+        """Decode the ALIDs of requested rows from the mmap'd index.
+
+        `positions` is each row's slot in the sorted index, or -1 for rows
+        whose long-allele ALID was left out of it (#127); those few are
+        sought from the table by `by_index()`, so the fallback is correct
+        and bounded by how many unindexed rows a query actually returns.
+        """
+        alid_bytes = np.asarray(self._alid_bytes)
+        indexed = positions >= 0
+        if indexed.all():
+            return np.array(
+                [b.decode("utf-8") for b in alid_bytes[positions]], dtype=object
+            )
+        alids: np.ndarray = np.empty(vi.size, dtype=object)
+        alids[indexed] = [b.decode("utf-8") for b in alid_bytes[positions[indexed]]]
+        for slot in np.flatnonzero(~indexed):
+            record = self.by_index(int(vi[slot]))
+            if record is None:
+                raise ValueError(f"no variant row at index {int(vi[slot])}")
+            alids[slot] = record.alid
+        return alids
+
     def identity_by_indices(self, variant_index: np.ndarray) -> dict[str, np.ndarray] | None:
         """chromosome/position/effect_allele/other_allele/alid for `variant_index`,
-        resolved with zero `variants.tsv.gz` I/O -- not even a scan.
+        resolved without a table scan.
 
         An ALID *is* `chromosome:position:effect_allele:other_allele`
         (`parse_canonical_alid`), and the mmap'd ALID search index
         (`_alid_bytes`/`_alid_rows`, already loaded at construction for
         `by_alid()`) already holds the reverse of what's needed here:
         `_alid_rows[k]` is the variant_index of the k-th alid in sorted
-        order. That's a permutation of `0..n_variants-1`, so inverting it
-        once (cached on this instance) gives `variant_index -> sorted
-        position` and, from there, alid-by-index via pure numpy fancy
-        indexing -- no `by_index()`/`by_indices()` seek or scan at all.
+        order. Inverting it once (cached on this instance) gives
+        `variant_index -> sorted position` and, from there, alid-by-index
+        via pure numpy fancy indexing. When the index covers every row
+        (issue 029 stores whose ALIDs all fit the fixed width), that is the
+        whole resolution: zero `by_index()`/`by_indices()` seeks or scans.
+
+        It is not the whole resolution when ALIDs exceed the fixed index
+        width (#127): those rows are absent from the index — a *partial*
+        permutation — and are recovered one seek per row via `by_index()`.
+        A production store can carry 100k+ such rows (OGS-00010 carries
+        115,043 long-allele ALIDs); an earlier revision of this method
+        assumed fullness and raised `ValueError: shape mismatch` for any
+        request spanning an unindexed row.
         `rsid` is the one identity field this can't produce: it isn't part
         of the alid, so it's the only reason a caller still needs
         `by_indices()`.
@@ -560,15 +592,7 @@ class VariantAxis:
         if self._alid_bytes is None or self._alid_rows is None:
             return None
         vi = np.asarray(variant_index, dtype="int64")
-        if self._alid_inverse is None:
-            rows = np.asarray(self._alid_rows, dtype="int64")
-            inverse = np.empty(self.n_variants, dtype="int64")
-            inverse[rows] = np.arange(self.n_variants, dtype="int64")
-            self._alid_inverse = inverse
-        positions = self._alid_inverse[vi]
-        alid_bytes = np.asarray(self._alid_bytes)[positions]
-        alids = np.array([b.decode("utf-8") for b in alid_bytes], dtype=object)
-        if len(alids) == 0:
+        if vi.size == 0:
             empty = np.empty(0, dtype=object)
             return {
                 "chromosome": empty,
@@ -577,6 +601,12 @@ class VariantAxis:
                 "other_allele": empty,
                 "alid": empty,
             }
+        if self._alid_inverse is None:
+            rows = np.asarray(self._alid_rows, dtype="int64")
+            inverse = np.full(self.n_variants, -1, dtype="int64")
+            inverse[rows] = np.arange(rows.size, dtype="int64")
+            self._alid_inverse = inverse
+        alids = self._alids_by_indices(self._alid_inverse[vi], vi)
         parts = np.array([a.split(":") for a in alids], dtype=object)
         return {
             "chromosome": parts[:, 0],

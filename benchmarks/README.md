@@ -331,6 +331,72 @@ pixi run -e report quarto render docs/benchmark-output/opengwasdb_ukbb_dense_ben
 
 ---
 
+### `benchmark_ogs00010_completed.py`
+
+Benchmarks the Reference-Completed full-scale release **OGS-00010** (the
+OGS-00009 `ukb-b` store completed against the EUR LD panel) and writes the
+artifact the Reference-Completed showcase report renders. Covers:
+
+1. the same query shapes as `benchmark_ukbb_dense.py`, driven identically
+   (same Analysis, same PheWAS variant, same region, and the same random
+   variant/analysis selections re-derived from the source release's recorded
+   axis size and seed), plus the `observed_only=True` variants of the
+   top-hits and bulk shapes;
+2. per-shape baseline/peak RSS, same fresh-interpreter probe method;
+3. the cell budget (observed / imputed / rejected / off-panel) from the
+   release manifest's completion provenance and the indexed top-hit tiers;
+4. imputation performance and quality: the `complete` step record
+   (`records/complete.json` on the release tree) for wall clock, blocks and
+   throughput, and the `completion_quality` table for the per-(Analysis,
+   block) Pearson-r distribution;
+5. three MR pairs (BMI -> CHD, the statin-use LDL proxy -> CHD, past tobacco
+   smoking -> the C34.1 cancer-site trait), each on all variants, on
+   `observed_only`, and on imputed-in-both sides, with per-instrument
+   scatter data and a 2 Mb regional window around each exposure's strongest
+   imputed hit carrying every axis variant's status;
+6. a cross-release fidelity check: the statin-pair cells OGS-00009 reports
+   must decode identically (z and se) and keep status `observed` inside
+   OGS-00010, or the run fails loudly.
+
+The per-shape RSS probe method (fresh interpreter, background peak sampler,
+`/proc/self/statm`) lives in `benchmarks/_rss.py` and is shared with
+`benchmark_ukbb_dense.py`, so the two reports measure memory the same way and
+their numbers stay comparable.
+
+**Output files written to `docs/benchmark-output/`:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_ogs00010_completed_benchmark.json` | The full measurement artifact |
+| `opengwasdb_ogs00010_completed_benchmark.qmd` / `.html` | Rendered showcase report (linked from `docs/index.html`) |
+
+**Usage** (run from the repo root, on the machine holding the stores):
+
+```bash
+pixi run -e dev python benchmarks/benchmark_ogs00010_completed.py \
+    --reps 5 \
+    --store /data/opengwasdb/stores/OGS-00010/store.opengwasdb \
+    --source-store /data/opengwasdb/stores/OGS-00009/store.opengwasdb \
+    --manifest /data/opengwasdb/stores/OGS-00009/work/analyses.tsv \
+    --output docs/benchmark-output/opengwasdb_ogs00010_completed_benchmark.json
+
+cd docs/benchmark-output && pixi run -e report quarto render \
+    opengwasdb_ogs00010_completed_benchmark.qmd
+```
+
+All paths above are the script's built-in defaults. The report's prose is
+computed from the artifact at render time (no hand-edited numbers); the
+gate-rejected tail of the imputation-quality histogram is exported as
+explicit bins plus `n_attempts_below_gate` so no attempt row can silently
+drop out of the plot.
+
+The script refuses to run against a stale reference: it re-measures the
+source release's PheWAS count and aborts if it disagrees with the published
+OGS-00009 artifact, and it aborts on any MR condition that resolves to zero
+instruments. `--skip-rss` drops the memory probes for a timings-only run.
+
+---
+
 ### `benchmark_se_residual_queries.py`
 
 Compares physical-SE query latency between the format-2.0 `float16` release

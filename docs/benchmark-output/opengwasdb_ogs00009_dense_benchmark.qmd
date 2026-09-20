@@ -268,7 +268,8 @@ more.
 
 - **Observed-only.** OGS-00009 stores what the source GWAS-VCFs reported.
   Missing associations are absent, not imputed. The Reference-Completed twin
-  (OGS-00010) is a separate Store Release and is not measured here.
+  (OGS-00010) is a separate Store Release, measured in
+  [its own report](opengwasdb_ogs00010_completed_benchmark.html).
 - **Warm cache.** Timings are taken after a warm-up call with the operating
   system cache warm. A cold first query against a given region will be slower,
   bounded by disk rather than by the store format.

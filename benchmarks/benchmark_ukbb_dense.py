@@ -15,13 +15,10 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import gc
+import json
 import re
-import resource
 import subprocess
-import sys
-import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -32,6 +29,7 @@ import numpy as np
 import zarr
 
 from benchmarks._artifact import provenance, write_artifact
+from benchmarks._rss import run_probe, sample_query
 from opengwasdb.layouts.dense.top_hits import threshold_key, write_top_hit_indexes
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -418,52 +416,6 @@ def regional_imputation_check(q, analyses_by_id: dict[str, int]) -> dict:
     }
 
 
-_PAGE_KB = resource.getpagesize() / 1024.0
-
-
-def _rss_mb() -> float:
-    """Current (not high-water) RSS of this process in MB.
-
-    `ru_maxrss` is a lifetime high-water mark that cannot be reset, so it
-    cannot answer "what did this query cost" once anything earlier in the
-    process allocated more. /proc/self/statm reports resident pages *now*,
-    which is what a peak-during-query sampler needs.
-    """
-    with open("/proc/self/statm") as fh:
-        return int(fh.read().split()[1]) * _PAGE_KB / 1024.0
-
-
-class _RssSampler:
-    """Poll RSS on a background thread and keep the maximum seen.
-
-    A query's peak is transient -- intermediate buffers are freed before it
-    returns -- so sampling before and after would miss it entirely. The
-    interval trades resolution against perturbing the measurement; 5 ms
-    resolves the sub-second shapes without measurably slowing them.
-    """
-
-    def __init__(self, interval: float = 0.005) -> None:
-        self._interval = interval
-        self._stop = threading.Event()
-        self.peak_mb = 0.0
-
-    def __enter__(self) -> "_RssSampler":
-        self.peak_mb = _rss_mb()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        return self
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            self.peak_mb = max(self.peak_mb, _rss_mb())
-            self._stop.wait(self._interval)
-
-    def __exit__(self, *exc: object) -> None:
-        self._stop.set()
-        self._thread.join(timeout=2.0)
-        self.peak_mb = max(self.peak_mb, _rss_mb())
-
-
 def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]:
     """Open the store, run one query shape, report baseline and peak RSS.
 
@@ -485,30 +437,14 @@ def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]
     del patterns
 
     gc.collect()
-    baseline = _rss_mb()
-    with _RssSampler() as sampler:
-        result = fn()
-    peak = max(sampler.peak_mb, _rss_mb())
-    return {
-        "query": shape,
-        "baseline_mb": round(baseline, 1),
-        "peak_mb": round(peak, 1),
-        "delta_mb": round(peak - baseline, 1),
-        "result_count": len(result["z"]),
-    }
+    record = sample_query(fn)
+    record["query"] = shape
+    return record
 
 
 def _shape_rss_subprocess(args: argparse.Namespace, shape: str) -> dict[str, float]:
     """Re-invoke this script for one shape and read back its RSS record."""
-    out = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()),
-         "--rss-shape", shape, "--store", str(args.store),
-         "--phewas-alid", args.phewas_alid],
-        capture_output=True, text=True,
-    )
-    if out.returncode != 0:
-        raise SystemExit(f"RSS probe for {shape!r} failed:\n{out.stdout}\n{out.stderr}")
-    return json.loads(out.stdout.strip().splitlines()[-1])
+    return run_probe(shape, ["--store", str(args.store), "--phewas-alid", args.phewas_alid])
 
 
 def _parse_args() -> argparse.Namespace:

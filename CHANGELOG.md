@@ -180,6 +180,16 @@ the end of this file.
 
 ### Fixed
 
+- **`VariantAxis.identity_by_indices()` no longer assumes the ALID index is
+  complete.** The method inverted `_alid_rows` as a permutation of every axis
+  row, but long-allele ALIDs are deliberately left out of the fixed-width
+  index (#127), so any store carrying one raises
+  `ValueError: shape mismatch` the moment a request spans an unindexed row —
+  on OGS-00010 (115,043 long-allele rows) this broke `query --format table`
+  and any `resolve_rows()` path. Indexed rows still resolve with zero table
+  I/O; unindexed rows now fall back to one `by_index()` seek each, which is
+  correct and bounded by how many long-allele rows a query actually returns
+  (found by the OGS-00010 completion benchmark).
 - **An all-dropped lifted extraction no longer leaves a header-only artifact.**
   `_finish_members` writes nothing when no window produced a member, so an
   hg19/mixed manifest whose every variant is an ambiguous cross-assembly
