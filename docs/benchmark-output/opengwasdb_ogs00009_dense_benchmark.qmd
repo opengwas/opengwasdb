@@ -1,0 +1,281 @@
+---
+title: "OpenGWASDB at full scale — OGS-00009"
+subtitle: "All 2,024 UK Biobank ukb-b traits in one Dense Store Release · 19.9 billion associations"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+from pathlib import Path
+
+HERE = Path(".")
+b = json.loads((HERE / "opengwasdb_ukbb_dense_benchmark.json").read_text())
+
+dataset, storage, build = b["dataset"], b["storage"], b["build"]
+n_cells = dataset["n_variants"] * dataset["n_analyses"]
+timings = {row["query"]: row for row in b["timings"]}
+memory = {row["query"]: row for row in b["memory"]}
+
+
+def md_table(headers, rows):
+    separator = "|" + "|".join(["---"] * len(headers)) + "|"
+    heading = "| " + " | ".join(headers) + " |"
+    body = "\n".join("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
+    return f"{heading}\n{separator}\n{body}"
+
+
+def fmt_ms(value):
+    return f"{value:,.2f} ms" if value < 1_000 else f"{value / 1_000:,.2f} s"
+
+
+def fmt_mb(value):
+    return f"{value:,.1f} MB" if value < 1_024 else f"{value / 1_024:,.2f} GB"
+
+
+# Presentation order: cheapest shape first, so the cost gradient reads top to
+# bottom rather than in the order the harness happened to run them.
+ORDER = [
+    ("tophits", "Top hits for one Analysis (p < 5e-8)"),
+    ("phewas", "PheWAS: one variant, all Analyses"),
+    ("regional_one_analysis", "Region restricted to one Analysis"),
+    ("random_lookup_10_variants_100_analyses", "Random lookup: 10 variants x 100 Analyses"),
+    ("random_lookup_100_variants_10_analyses", "Random lookup: 100 variants x 10 Analyses"),
+    ("regional", "Region across all Analyses"),
+    ("bulk", "One Analysis, genome-wide"),
+]
+```
+
+::: {.callout-important}
+## What this measures
+
+Every UK Biobank `ukb-b` GWAS in the OpenGWAS collection — **all 2,024 traits,
+9,847,701 variants, 19.9 billion associations** — built into a single Dense
+Store Release and queried through the public API.
+
+```{python}
+#| echo: false
+#| output: asis
+print(f"""
+* **{storage['store_gb']:,.2f} GB** on disk, against **{storage['raw_vcf_gb']:,.2f} GB**
+  of source GWAS-VCF across {storage['n_source_files']:,} files — a
+  **{storage['compression_ratio']:.2f}x** reduction.
+* An indexed query returns in **{timings['tophits']['median_ms']:.2f} ms**; a
+  PheWAS across all 2,024 traits in **{timings['phewas']['median_ms']:.2f} ms**.
+* Those queries need **~{memory['tophits']['baseline_mb']:.0f} MB** of RAM.
+  A laptop can open this store.
+* Built in **{build['build_hours']:.2f} hours**.
+""")
+```
+
+The cost is concentrated in one shape: reading a whole Analysis genome-wide
+takes tens of seconds and tens of gigabytes. Everything targeted — a variant, a
+region, a trait's top hits — is cheap in both time and memory.
+:::
+
+## Scope
+
+```{python}
+#| echo: false
+#| output: asis
+enc = dataset["encoding"]
+print(md_table(
+    ["Property", "Value"],
+    [
+        ["Store Release", "OGS-00009 (`ukb-b-full-observed`)"],
+        ["Completion state", "Observed-only"],
+        ["Analyses", f"{dataset['n_analyses']:,}"],
+        ["Variants", f"{dataset['n_variants']:,}"],
+        ["Associations", f"{n_cells:,}"],
+        ["Reference assembly", dataset["reference_assembly"]],
+        ["Encoding", f"z `{enc['z']['kind']}`, se `{enc['se']['kind']}`, eaf `{enc['eaf']['kind']}`"],
+        ["Measured at", b["measured_at"]],
+        ["opengwasdb commit", f"`{b['commit']}`"],
+    ],
+))
+```
+
+Timings are the median of 5 repetitions after a warm-up call, under a warm
+operating-system cache. Memory is measured separately — see
+[Memory footprint](#memory-footprint).
+
+## Storage
+
+```{python}
+#| echo: false
+#| output: asis
+bytes_per_cell = storage["store_bytes"] / n_cells
+print(md_table(
+    ["Measure", "Value"],
+    [
+        ["Store Release", f"{storage['store_gb']:,.2f} GB"],
+        ["Source GWAS-VCF", f"{storage['raw_vcf_gb']:,.2f} GB across {storage['n_source_files']:,} files"],
+        ["Compression ratio", f"**{storage['compression_ratio']:.2f}x**"],
+        ["Bytes per association", f"{bytes_per_cell:.3f} B"],
+    ],
+))
+```
+
+The source files are already compressed — this is a reduction against bgzipped
+VCF, not against plain text. It comes from storing
+z and standard error in fixed-point and residual codings rather than as text
+floats, and from sharing one variant axis across all 2,024 Analyses instead of
+repeating positions and alleles in every file.
+
+## Build
+
+```{python}
+#| echo: false
+#| output: asis
+cells_per_second = n_cells / build["build_seconds"]
+print(md_table(
+    ["Measure", "Value"],
+    [
+        ["Build wall clock", f"{build['build_hours']:.2f} h ({build['build_seconds']:,.0f} s)"],
+        ["Workers", "32"],
+        ["Throughput", f"{cells_per_second / 1e6:,.1f} million associations/s"],
+    ],
+))
+```
+
+## Query performance
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Query", "Median", "p95", "Results"],
+    [
+        [
+            label,
+            f"**{fmt_ms(timings[key]['median_ms'])}**",
+            fmt_ms(timings[key]["p95_ms"]),
+            f"{timings[key]['result_count']:,}",
+        ]
+        for key, label in ORDER
+    ],
+))
+```
+
+The spread across these shapes is the point. A top-hits lookup and a
+whole-Analysis scan differ by more than four orders of magnitude in latency,
+and they differ by a similar factor in result size — the store is not paying a
+fixed cost per query, it is paying for what the query actually returns.
+
+Two shapes are worth reading carefully:
+
+- **PheWAS** — one variant against all 2,024 traits in
+  `{python} f"{timings['phewas']['median_ms']:.2f}"` ms. This is the shape a
+  per-file collection is worst at: it would need 2,024 file opens and 2,024
+  index seeks. Here it is a single strided read.
+- **Whole Analysis, genome-wide** — `{python} fmt_ms(timings['bulk']['median_ms'])`
+  for `{python} f"{timings['bulk']['result_count']:,}"` associations. This is
+  the shape a per-file collection is *best* at, because that is exactly how the
+  source data is laid out. The Dense Store is competitive rather than better
+  here, and this is the trade being made.
+
+## Memory footprint
+
+Each query shape runs in a fresh interpreter. `Baseline` is resident memory
+with the store open but before the query runs; `Peak` is sampled on a
+background thread *during* the query, because intermediate buffers are freed
+before a query returns and a before/after reading misses them entirely.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Query", "Baseline", "Peak", "Query cost", "Results"],
+    [
+        [
+            label,
+            fmt_mb(memory[key]["baseline_mb"]),
+            fmt_mb(memory[key]["peak_mb"]),
+            f"**{fmt_mb(memory[key]['delta_mb'])}**",
+            f"{memory[key]['result_count']:,}",
+        ]
+        for key, label in ORDER
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+base = memory["tophits"]["baseline_mb"]
+print(f"""
+Baseline is **~{base:.0f} MB** regardless of which shape follows it, and it does
+not scale with the store: having {dataset['n_analyses']:,} Analyses and
+{n_cells:,} associations available costs about as much resident memory as
+opening a text editor. Nothing is loaded until it is asked for.
+""")
+```
+
+Query cost then tracks result size almost linearly, from
+`{python} fmt_mb(memory['tophits']['delta_mb'])` for a top-hits lookup to
+`{python} fmt_mb(memory['bulk']['delta_mb'])` for a genome-wide Analysis read.
+The practical consequence: targeted queries are safe to run concurrently and on
+modest hardware, while whole-Analysis reads need to be budgeted — 32 concurrent
+`bulk` reads would need more memory than most machines have.
+
+## Scientific validation
+
+An end-to-end Mendelian randomisation run over the store, as a correctness
+check that instruments, effect signs and standard errors survive the build.
+
+```{python}
+#| echo: false
+#| output: asis
+mr = b["mr"]
+labels = b["labels"]
+print(md_table(
+    ["Property", "Value"],
+    [
+        ["Exposure", f"`{mr['exposure_id']}` — {labels[mr['exposure_id']]}"],
+        ["Outcome", f"`{mr['outcome_id']}` — {labels[mr['outcome_id']]}"],
+        ["Instruments", f"{mr['n_instruments']:,} (from {mr['n_instruments_raw']:,} before pruning)"],
+        ["IVW beta", f"{mr['ivw_beta']:.4f}"],
+        ["IVW se", f"{mr['ivw_se']:.4f}"],
+        ["IVW p", f"{mr['ivw_pval']:.3g}"],
+    ],
+))
+```
+
+::: {.callout-warning}
+## This is not a causal estimate
+
+The exposure is **statin use**, a treatment proxy, so this estimate is
+confounded by indication — people prescribed cholesterol-lowering medication
+are people with high cholesterol. The positive sign is what that confounding
+predicts, and it is the expected result here.
+
+The original benchmark used self-reported high cholesterol as an LDL proxy.
+Neither that trait nor the `ukb-b` collection as a whole carries any LDL or
+lipid biomarker measurement, so no better instrument was available in this
+store. This section is a pipeline correctness check — instruments are found,
+effects have plausible magnitudes, standard errors propagate — and nothing
+more.
+:::
+
+## Limitations
+
+- **Observed-only.** OGS-00009 stores what the source GWAS-VCFs reported.
+  Missing associations are absent, not imputed. The Reference-Completed twin
+  (OGS-00010) is a separate Store Release and is not measured here.
+- **Warm cache.** Timings are taken after a warm-up call with the operating
+  system cache warm. A cold first query against a given region will be slower,
+  bounded by disk rather than by the store format.
+- **One machine.** Single measurement host; no cross-platform or
+  cross-filesystem comparison.
+- **Memory sampling resolution.** The peak sampler polls at 5 ms, so a
+  shorter-lived allocation spike inside a sub-millisecond query can be missed.
+  This affects `tophits` and `phewas` only, whose reported costs are near zero
+  regardless.
+- **The MR is a smoke test**, for the reasons above.

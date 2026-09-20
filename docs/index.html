@@ -39,11 +39,75 @@
       code {
         font-size: 0.95em;
       }
+      .featured {
+        border: 2px solid #2b6cb0;
+        border-radius: 8px;
+        padding: 1.25rem 1.5rem;
+        margin-top: 1.5rem;
+      }
+      .featured h2 {
+        margin-top: 0;
+      }
+      .featured .headline {
+        font-size: 1.15em;
+      }
+      .featured .figures {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+        margin: 1rem 0 0.5rem;
+        padding: 0;
+        list-style: none;
+      }
+      .featured .figures li {
+        margin: 0;
+      }
+      .featured .figures strong {
+        display: block;
+        font-size: 1.5em;
+        line-height: 1.2;
+      }
+      .featured .figures span {
+        color: #666;
+        font-size: 0.9em;
+      }
+      @media (prefers-color-scheme: dark) {
+        .featured {
+          border-color: #63b3ed;
+        }
+        .featured .figures span {
+          color: #aaa;
+        }
+      }
     </style>
   </head>
   <body>
     <h1>OpenGWASDB docs</h1>
     <p class="lede">Rendered reports and key design documents for this repo.</p>
+
+    <section class="featured">
+      <h2>
+        <a href="benchmark-output/opengwasdb_ogs00009_dense_benchmark.html">
+          OpenGWASDB at full scale — OGS-00009
+        </a>
+      </h2>
+      <p class="headline">
+        Every UK Biobank <code>ukb-b</code> GWAS in the OpenGWAS collection — all 2,024
+        traits, 9,847,701 variants, 19.9 billion associations — in a single Dense Store
+        Release, with query timings and memory footprint measured through the public API.
+      </p>
+      <ul class="figures">
+        <li><strong>9.95&times;</strong><span>34.68 GB vs 345.01 GB of source VCF</span></li>
+        <li><strong>1.12 ms</strong><span>top hits for one trait</span></li>
+        <li><strong>7.93 ms</strong><span>PheWAS across all 2,024 traits</span></li>
+        <li><strong>~157 MB</strong><span>RAM to open and query the store</span></li>
+      </ul>
+      <p>
+        This is the headline evidence for the project: a whole GWAS collection compressed
+        an order of magnitude, queried in milliseconds, on memory a laptop has.
+        <a href="benchmark-output/opengwasdb_ogs00009_dense_benchmark.html">Read the full report &rarr;</a>
+      </p>
+    </section>
 
     <section>
       <h2>Format explainer</h2>
@@ -64,13 +128,23 @@
       <h2>Rendered reports</h2>
       <ul>
         <li>
-          <a href="benchmark-output/opengwasdb_ukbb_dense_benchmark.html">
-            ukb-b Dense Store — Performance &amp; MR Validation
+          <a href="benchmark-output/opengwasdb_ogs00009_dense_benchmark.html">
+            OGS-00009 — Full-scale performance and memory footprint
           </a>
           <br>
-          Genome-wide store of 2,514 UK Biobank GWAS (~9.85M variants): all query-type
-          timings, storage/build vs raw VCF (7.3× smaller), and an end-to-end MR IVW
-          analysis (high cholesterol → heart attack) with scatter plot.
+          All 2,024 UK Biobank <code>ukb-b</code> GWAS (9,847,701 variants, 19.9 billion
+          associations): every query-shape timing, per-shape peak memory, storage and build
+          against the raw VCF collection (9.95× smaller), and an end-to-end MR IVW run as a
+          correctness check.
+        </li>
+        <li>
+          <a href="benchmark-output/opengwasdb_ukbb_dense_benchmark.html">
+            ukb-b Dense Store — format 2.0 vs format 3.0
+          </a>
+          <br>
+          Residual-coded standard errors measured against the float16 release on the same
+          data (issue #148): storage reduction, build cost and per-query latency change for
+          each encoding. Measured on the earlier 2,514-Analysis ukb-b store.
         </li>
         <li>
           <a href="benchmark-output/opengwasdb_hybrid_ieua_benchmark.html">
@@ -174,6 +248,7 @@
     <section>
       <h2>Report sources (Quarto)</h2>
       <ul>
+        <li><a href="benchmark-output/opengwasdb_ogs00009_dense_benchmark.qmd">opengwasdb_ogs00009_dense_benchmark.qmd</a></li>
         <li><a href="benchmark-output/opengwasdb_ukbb_dense_benchmark.qmd">opengwasdb_ukbb_dense_benchmark.qmd</a></li>
         <li><a href="benchmark-output/opengwasdb_hybrid_ieua_benchmark.qmd">opengwasdb_hybrid_ieua_benchmark.qmd</a></li>
         <li><a href="benchmark-output/opengwasdb_chunk_comparison_benchmark.qmd">opengwasdb_chunk_comparison_benchmark.qmd</a></li>

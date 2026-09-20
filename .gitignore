@@ -24,3 +24,4 @@ data/**/build.log.*
 .claude/worktrees/
 quality/.running/
 quality/.events.jsonl
+logs/
