@@ -262,35 +262,58 @@ pixi run -e report quarto render opengwasdb_eqtlgen_ragged_benchmark.qmd
 ### `benchmark_ukbb_dense.py`
 
 Benchmarks the genome-wide `ukb-b` Dense Store Release: query timings for the
-bulk/phewas/regional/top-hits/random-lookup shapes, storage vs its source
-VCF, build time from `data/ukb-b/build.log`, and an MR IVW validation
-(self-reported high cholesterol -> heart attack). Requires the `ukb-b` store
-tree, its build manifest and its source VCFs — on the IEU compute node at
-the defaults below, or pass `--store`, `--manifest` and `--build-log` to
-point at a copy. The artifact records the store's `format_version` and
-`encoding`, so a format-2.0 timing cannot be mistaken for a format-3.0 one
-(issue #148).
+bulk/phewas/regional/top-hits/random-lookup shapes, per-shape peak memory,
+storage vs its source VCF, build time, and an MR IVW validation. Requires the
+store tree, a build manifest and the source VCFs. The artifact records the
+store's `format_version` and `encoding`, so a format-2.0 timing cannot be
+mistaken for a format-3.0 one (issue #148).
+
+The current release under measurement is **OGS-00009** (`ukb-b-full-observed`):
+2,024 Analyses, 9,847,701 variants. The script's built-in `--store` default
+points at an older 2,514-Analysis store that no longer exists, so pass the
+paths explicitly as below.
+
+The MR pair is `ukb-b-17805` (cholesterol lowering medication) ->
+`ukb-b-1668` (ICD10 I25.1 atherosclerotic heart disease). The exposure is a
+treatment proxy, so that estimate is confounded by indication and is a
+pipeline correctness check, not a causal result; the `ukb-b` collection carries
+no LDL or lipid biomarker to do better with.
+
+`--skip-rss` drops the memory probes when only timings are wanted. Each probe
+re-opens the store in a fresh interpreter, so they roughly double the run.
 
 **Output files written to `docs/benchmark-output/`:**
 
 | File | Description |
 |---|---|
-| `opengwasdb_ukbb_dense_benchmark.json` | Query timings + storage + MR result |
-| `opengwasdb_ukbb_dense_benchmark.qmd` / `.html` | Rendered report |
+| `opengwasdb_ukbb_dense_benchmark.json` | Query timings + memory + storage + MR result |
+| `opengwasdb_ogs00009_dense_benchmark.qmd` / `.html` | Rendered report (linked from `docs/index.html`) |
+
+Note that `opengwasdb_ukbb_dense_benchmark.qmd` is a *different* report — the
+format-2.0 vs 3.0 comparison for issue #148 — and reads the
+`opengwasdb_ukbb_dense_issue148_*.json` artifacts, not this one.
 
 **Usage** (run from the repo root, in the Pixi `dev` environment):
 
 ```bash
-pixi run -e dev python benchmarks/benchmark_ukbb_dense.py --reps 5
-```
-
-Optional arguments mirror the defaults in the script header:
-
-```bash
 pixi run -e dev python benchmarks/benchmark_ukbb_dense.py \
     --reps 5 \
-    --store /local-scratch/data/opengwas/opengwasdb/ukb-b.opengwasdb \
+    --store /data/opengwasdb/stores/OGS-00009/store.opengwasdb \
+    --manifest /data/opengwasdb/stores/OGS-00009/work/analyses.tsv \
+    --build-seconds 21298 \
     --output docs/benchmark-output/opengwasdb_ukbb_dense_benchmark.json
+```
+
+`--manifest` takes the release's own `work/analyses.tsv`, whose
+`analysis_id`/`source_file` columns the harness reads directly. `--build-seconds`
+supplies the build wall clock for a release whose build time lives in its
+`records/build.json` step record rather than in a parsable build log.
+
+Render the report with the `report` environment:
+
+```bash
+cd docs/benchmark-output && pixi run -e report quarto render \
+    opengwasdb_ogs00009_dense_benchmark.qmd --to html
 ```
 
 The `--top-hits-experiment` mode re-measures top-hit index chunk sizes
@@ -305,6 +328,72 @@ Render the report with the `report` environment:
 ```bash
 pixi run -e report quarto render docs/benchmark-output/opengwasdb_ukbb_dense_benchmark.qmd
 ```
+
+---
+
+### `benchmark_ogs00010_completed.py`
+
+Benchmarks the Reference-Completed full-scale release **OGS-00010** (the
+OGS-00009 `ukb-b` store completed against the EUR LD panel) and writes the
+artifact the Reference-Completed showcase report renders. Covers:
+
+1. the same query shapes as `benchmark_ukbb_dense.py`, driven identically
+   (same Analysis, same PheWAS variant, same region, and the same random
+   variant/analysis selections re-derived from the source release's recorded
+   axis size and seed), plus the `observed_only=True` variants of the
+   top-hits and bulk shapes;
+2. per-shape baseline/peak RSS, same fresh-interpreter probe method;
+3. the cell budget (observed / imputed / rejected / off-panel) from the
+   release manifest's completion provenance and the indexed top-hit tiers;
+4. imputation performance and quality: the `complete` step record
+   (`records/complete.json` on the release tree) for wall clock, blocks and
+   throughput, and the `completion_quality` table for the per-(Analysis,
+   block) Pearson-r distribution;
+5. three MR pairs (BMI -> CHD, the statin-use LDL proxy -> CHD, past tobacco
+   smoking -> the C34.1 cancer-site trait), each on all variants, on
+   `observed_only`, and on imputed-in-both sides, with per-instrument
+   scatter data and a 2 Mb regional window around each exposure's strongest
+   imputed hit carrying every axis variant's status;
+6. a cross-release fidelity check: the statin-pair cells OGS-00009 reports
+   must decode identically (z and se) and keep status `observed` inside
+   OGS-00010, or the run fails loudly.
+
+The per-shape RSS probe method (fresh interpreter, background peak sampler,
+`/proc/self/statm`) lives in `benchmarks/_rss.py` and is shared with
+`benchmark_ukbb_dense.py`, so the two reports measure memory the same way and
+their numbers stay comparable.
+
+**Output files written to `docs/benchmark-output/`:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_ogs00010_completed_benchmark.json` | The full measurement artifact |
+| `opengwasdb_ogs00010_completed_benchmark.qmd` / `.html` | Rendered showcase report (linked from `docs/index.html`) |
+
+**Usage** (run from the repo root, on the machine holding the stores):
+
+```bash
+pixi run -e dev python benchmarks/benchmark_ogs00010_completed.py \
+    --reps 5 \
+    --store /data/opengwasdb/stores/OGS-00010/store.opengwasdb \
+    --source-store /data/opengwasdb/stores/OGS-00009/store.opengwasdb \
+    --manifest /data/opengwasdb/stores/OGS-00009/work/analyses.tsv \
+    --output docs/benchmark-output/opengwasdb_ogs00010_completed_benchmark.json
+
+cd docs/benchmark-output && pixi run -e report quarto render \
+    opengwasdb_ogs00010_completed_benchmark.qmd
+```
+
+All paths above are the script's built-in defaults. The report's prose is
+computed from the artifact at render time (no hand-edited numbers); the
+gate-rejected tail of the imputation-quality histogram is exported as
+explicit bins plus `n_attempts_below_gate` so no attempt row can silently
+drop out of the plot.
+
+The script refuses to run against a stale reference: it re-measures the
+source release's PheWAS count and aborts if it disagrees with the published
+OGS-00009 artifact, and it aborts on any MR condition that resolves to zero
+instruments. `--skip-rss` drops the memory probes for a timings-only run.
 
 ---
 

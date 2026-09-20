@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
 import re
 import subprocess
@@ -28,6 +29,7 @@ import numpy as np
 import zarr
 
 from benchmarks._artifact import provenance, write_artifact
+from benchmarks._rss import run_probe, sample_query
 from opengwasdb.layouts.dense.top_hits import threshold_key, write_top_hit_indexes
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -40,10 +42,19 @@ OUTPUT = Path(
     "opengwasdb_ukbb_dense_benchmark.json"
 )
 
-# MR: exposure = self-reported high cholesterol (LDL-raising proxy),
-# outcome = doctor-diagnosed heart attack (CHD). Both binary (log-OR scale).
-EXPOSURE = "ukb-b-10912"
-OUTCOME = "ukb-b-11590"
+# MR: exposure = cholesterol-lowering medication use, outcome = ICD10 I25.1
+# atherosclerotic heart disease (CHD). Both binary (log-OR scale).
+#
+# The original pair (ukb-b-10912 self-reported high cholesterol -> ukb-b-11590
+# heart attack) is not in the ukb-b collection this store was built from, so it
+# cannot be measured here. Statin use is the usual LDL-liability proxy when no
+# lipid biomarker is available -- and none is: the ukb-b batch carries no LDL
+# trait at all. It is a *treatment* proxy, so the IVW estimate below is
+# confounded by indication and is not an LDL -> CHD causal estimate. It is
+# retained as a query-shape driver and an end-to-end correctness check, not as
+# an epidemiological result.
+EXPOSURE = "ukb-b-17805"
+OUTCOME = "ukb-b-1668"
 CLUMP_KB = 1000  # greedy distance-based pruning window (approx. independence)
 
 # Regional query window: chr19 44.5-45.5 Mb spans the APOE/APOC cluster.
@@ -405,6 +416,37 @@ def regional_imputation_check(q, analyses_by_id: dict[str, int]) -> dict:
     }
 
 
+def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]:
+    """Open the store, run one query shape, report baseline and peak RSS.
+
+    Runs in a fresh interpreter (see `--rss-shape`) so one shape's allocations
+    cannot be charged to the next. The strong-instrument variant is passed in
+    by the parent rather than rediscovered here: finding it needs a global
+    `top_hits` scan whose own allocation would swamp every shape's figure.
+
+    `baseline_mb` is RSS with the store open and the shape's inputs built but
+    before the query runs, so `delta_mb` is what the query itself costs on top
+    of having a store open.
+    """
+    q = query_store(args.store)
+    an = q.analyses_table()
+    n_analyses = len(an)
+    n_variants = int(q._root["z"].shape[0])
+    patterns = _query_patterns(q, an, n_variants, n_analyses, args.phewas_alid)
+    fn = patterns[shape]
+    del patterns
+
+    gc.collect()
+    record = sample_query(fn)
+    record["query"] = shape
+    return record
+
+
+def _shape_rss_subprocess(args: argparse.Namespace, shape: str) -> dict[str, float]:
+    """Re-invoke this script for one shape and read back its RSS record."""
+    return run_probe(shape, ["--store", str(args.store), "--phewas-alid", args.phewas_alid])
+
+
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--reps", type=int, default=5)
@@ -413,6 +455,14 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--manifest", type=Path, default=MANIFEST)
     ap.add_argument("--build-log", type=Path, default=BUILD_LOG)
     ap.add_argument("--top-hits-experiment", action="store_true")
+    ap.add_argument("--rss-shape", default=None,
+                    help="internal: measure one query shape's RSS and exit")
+    ap.add_argument("--phewas-alid", default=None,
+                    help="internal: instrument variant supplied by the parent")
+    ap.add_argument("--skip-rss", action="store_true",
+                    help="skip the per-shape RSS probes")
+    ap.add_argument("--build-seconds", type=float, default=None,
+                    help="build wall-clock when no parsable build log exists")
     return ap.parse_args()
 
 
@@ -466,6 +516,10 @@ def main() -> None:
         run_top_hit_experiment(args.store, args.output, args.reps)
         return
 
+    if args.rss_shape:
+        print(json.dumps(_measure_shape_rss(args, args.rss_shape)))
+        return
+
     q = query_store(args.store)
     plan = StoreManifest.load(args.store)  # the artifact must name the format it timed
     an = q.analyses_table()
@@ -487,9 +541,18 @@ def main() -> None:
                         "p95_ms": round(p95, 3), "result_count": cnt})
         print(f"{name:15s} median={med:9.2f} ms  count={cnt:,}")
 
+    memory = []
+    if not args.skip_rss:
+        args.phewas_alid = phewas_alid
+        for name in patterns:
+            record = _shape_rss_subprocess(args, name)
+            memory.append(record)
+            print(f"{name:15s} peak={record['peak_mb']:9.1f} MB  "
+                  f"delta={record['delta_mb']:9.1f} MB")
+
     store_bytes = _dir_bytes(args.store)
     raw_bytes, n_files = _raw_vcf_bytes(args.manifest, set(analyses_by_id))
-    build_seconds = _build_seconds(args.build_log)
+    build_seconds = args.build_seconds or _build_seconds(args.build_log)
 
     imputed_only_mr = bool(getattr(q, "_is_completed", False))
     mr = run_mr(q, analyses_by_id, imputed_only=imputed_only_mr)
@@ -498,7 +561,8 @@ def main() -> None:
 
     result = {
         "dataset": {"n_variants": n_variants, "n_analyses": n_analyses,
-                    "reference_assembly": "GRCh38", "store": str(args.store),
+                    "reference_assembly": getattr(plan, "reference_assembly", None),
+                    "store": str(args.store),
                     "format_version": plan.format_version,
                     "encoding": plan.encoding.to_manifest()},
         "storage": {
@@ -519,6 +583,7 @@ def main() -> None:
             ],
         },
         "timings": timings,
+        "memory": memory,
         "mr": mr,
         "regional_imputation_check": regional_imputation_check(q, analyses_by_id),
         "labels": {

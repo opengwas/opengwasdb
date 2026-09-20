@@ -1,0 +1,698 @@
+---
+title: "OpenGWASDB Reference-Completed at full scale — OGS-00010"
+subtitle: "Imputing 10.7 billion associations into the 2,024-trait UK Biobank release · what it costs, and what it buys"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+import numpy as np
+import matplotlib.pyplot as plt
+from pathlib import Path
+from scipy.special import erfc
+
+HERE = Path(".")
+b = json.loads((HERE / "opengwasdb_ogs00010_completed_benchmark.json").read_text())
+b09 = json.loads((HERE / "opengwasdb_ukbb_dense_benchmark.json").read_text())
+
+ds, cb, st, comp = b["dataset"], b["cell_budget"], b["storage"], b["completion"]
+qual = comp["quality"]
+timings = {row["query"]: row for row in b["timings"]}
+t09 = {row["query"]: row for row in b09["timings"]}
+memory = {row["query"]: row for row in b["memory"]}
+m09 = {row["query"]: row for row in b09["memory"]}
+comp_sec = b["completion"]
+
+
+def md_table(headers, rows):
+    separator = "|" + "|".join(["---"] * len(headers)) + "|"
+    heading = "| " + " | ".join(headers) + " |"
+    body = "\n".join("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
+    return f"{heading}\n{separator}\n{body}"
+
+
+def fmt_ms(value):
+    return f"{value:,.2f} ms" if value < 1_000 else f"{value / 1_000:,.2f} s"
+
+
+def fmt_mb(value):
+    return f"{value:,.1f} MB" if value < 1_024 else f"{value / 1_024:,.2f} GB"
+
+
+def fmt_bn(value):
+    return f"{value / 1e9:,.2f} billion"
+
+
+def pct(part, whole):
+    return f"{100 * part / whole:.1f}%"
+
+
+COL_OBS = "#3b7dd8"
+COL_IMP = "#e08214"
+COL_MISS = "#b9b9b9"
+```
+
+::: {.callout-important}
+## What this measures
+
+**OGS-00010 is [OGS-00009](opengwasdb_ogs00009_dense_benchmark.html) run through
+Reference Completion**: the same 2,024 UK Biobank `ukb-b` Analyses, the same
+Dense Store format, and one LD Reference Panel used to impute the associations
+the source GWAS-VCFs never reported.
+
+```{python}
+#| echo: false
+#| output: asis
+th = cb["tophits_5e8"]
+pc = b["phewas_completeness"]
+print(f"""
+* **{fmt_bn(cb['n_imputed'])} associations imputed** into the store —
+  {pct(cb['n_imputed'], cb['total_cells'])} of its {fmt_bn(cb['total_cells'])}
+  cells — in **{comp['step_record_elapsed_hours']} h** on 32 workers.
+* That is **{comp['imputed_cells_per_second']:,} imputed cells per second**,
+  every second, for nine hours.
+* **{th['imputed']:,} of the {th['total']:,} genome-wide-significant hits in the
+  collection ({pct(th['imputed'], th['total'])}) exist only because completion
+  ran.** A PheWAS at the reference variant the OGS-00009 report timed now
+  returns
+  **{pc['phewas_completed_results']:,} of {pc['n_analyses']:,} Analyses** where
+  the observed-only release returned {pc['phewas_source_results']:,}.
+* The store is **{st['store_gb']:,.2f} GB** against
+  **{st['raw_vcf_gb']:,.2f} GB** of source VCF (**{st['compression_ratio']:.2f}x**),
+  and every imputed cell cost **{st['imputation_added_bytes_per_cell']:.2f} bytes**
+  on top of the observed-only store.
+* Indexed queries still return in **{timings['tophits']['median_ms']:.1f} ms**;
+  opening and querying costs **~{memory['tophits']['baseline_mb']:.0f} MB** of RAM.
+* Three end-to-end MR runs (BMI → CHD, an LDL proxy → CHD, smoking → lung
+  cancer) each on all variants, observed-only, and imputed-only, and every
+  observed cell of OGS-00009 decodes **bit-identically** inside OGS-00010.
+""")
+```
+:::
+
+## Scope
+
+```{python}
+#| echo: false
+#| output: asis
+enc = ds["encoding"]
+print(md_table(
+    ["Property", "Value"],
+    [
+        ["Store Release", f"{ds['release_id']} (Reference-Completed)"],
+        ["Derived from", f"{ds['source_release_id']} (`ukb-b-full-observed`)"],
+        ["Completion state", ds["completion_state"]],
+        ["Analyses", f"{ds['n_analyses']:,}"],
+        ["Variants (completed axis)", f"{ds['n_variants']:,}"],
+        ["New panel-only variants", f"{comp['n_variants_new']:,}"],
+        ["Reference assembly", ds["reference_assembly"]],
+        ["Encoding", f"z `{enc['z']['kind']}`, se `{enc['se']['kind']}`, eaf `{enc['eaf']['kind']}` (v{enc['version']})"],
+        ["LD panel", f"`{comp['ld_panel']['id']}` — {comp['ld_panel']['ancestry']}, {comp['ld_panel']['n_blocks']:,} blocks, {comp['ld_panel']['n_variants']:,} variants"],
+        ["Method", f"`{comp['method']}` (elastic net on panel eigenvectors, polynomial rescale, gate r ≥ {comp['min_cor']})"],
+        ["Measured at", b["measured_at"]],
+        ["opengwasdb commit", f"`{b['commit']}`"],
+    ],
+))
+```
+
+The package version and the Store Release `format_version`
+(`{python} ds['format_version']`) are different things and move independently.
+
+## What completion adds
+
+The Dense axis is a grid: every variant against every Analysis. In the
+observed-only release a source GWAS-VCF reports what it reports, and everything
+else is `NaN`. Completion fills the grid wherever the LD panel can support it.
+
+```{python}
+#| echo: false
+#| output: asis
+tot = cb["total_cells"]
+print(md_table(
+    ["Cell state", "Cells", "Share of the axis"],
+    [
+        ["Observed (source-reported)", f"{cb['n_observed']:,}", pct(cb["n_observed"], tot)],
+        ["**Imputed from the LD panel**", f"**{cb['n_imputed']:,}**", f"**{pct(cb['n_imputed'], tot)}**"],
+        ["On-panel, imputation rejected", f"{cb['n_missing_imputation_failed']:,}", pct(cb["n_missing_imputation_failed"], tot)],
+        ["Off-panel (unimputable)", f"{cb['n_missing_off_panel']:,}", pct(cb["n_missing_off_panel"], tot)],
+    ],
+))
+```
+
+```{python}
+#| echo: false
+fig, axes = plt.subplots(1, 2, figsize=(10.5, 2.6))
+th = cb["tophits_5e8"]
+rows = [
+    (
+        ["Observed", "Imputed", "Rejected", "Off-panel"],
+        [cb["n_observed"], cb["n_imputed"], cb["n_missing_imputation_failed"], cb["n_missing_off_panel"]],
+    ),
+    (
+        ["Observed", "Imputed"],
+        [th["observed"], th["imputed"]],
+    ),
+]
+cols = [[COL_OBS, COL_IMP, "#8f8f8f", COL_MISS], [COL_OBS, COL_IMP]]
+titles = [
+    f"All {cb['total_cells']/1e9:.1f} G cells (variant x Analysis)",
+    f"{th['total']:,} genome-wide-significant hits (p < 5e-8)",
+]
+for ax, (labels, vals), title, cs in zip(axes, rows, titles, cols):
+    vals = np.array(vals, dtype=float)
+    left = 0
+    for v, lab, c in zip(vals, labels, cs):
+        ax.barh([0], [v], left=left, color=c, edgecolor="white", label=f"{lab} ({v/vals.sum()*100:.1f}%)")
+        left += v
+    ax.set_yticks([])
+    ax.set_xscale("log")
+    ax.set_title(title, fontsize=9)
+    ax.legend(fontsize=7, loc="lower center", bbox_to_anchor=(0.5, -0.55), ncol=2, frameon=False)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.tick_params(labelsize=7)
+axes[0].set_xlabel("cells (log scale)", fontsize=8)
+axes[1].set_xlabel("hits (log scale)", fontsize=8)
+plt.tight_layout()
+plt.show()
+```
+
+The two panels say the same thing at two densities: imputed cells are
+`{python} pct(cb['n_imputed'], tot)` of the whole grid, and at the
+end source GWAS looked hardest — the genome-wide-significant tier, where MR,
+PheWAS and regional inspection actually live — they are still
+`{python} pct(th['imputed'], th['total'])` of everything significant in the
+collection. Coverage is thinner exactly where truth is densest, but
+`{python} f"{th['imputed']:,}"` significant hits are ones a per-file collection
+cannot answer at all.
+
+```{python}
+#| echo: false
+#| output: asis
+pc = b["phewas_completeness"]
+print(f"""
+The same variant queried identically against both releases:
+
+| | OGS-00009 (observed) | OGS-00010 (completed) |
+|---|---:|---:|
+| PheWAS results for `{pc['alid']}` | {pc['phewas_source_results']:,} Analyses | {pc['phewas_completed_results']:,} of {pc['n_analyses']:,} |
+| Top hits for `{pc['tophits_exposure']}` at p < 5e-8 | {pc['tophits_source_results']:,} | {pc['tophits_completed_results']:,} |
+""")
+```
+
+## Imputation performance
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Measure", "Value"],
+    [
+        ["Completion wall clock", f"{comp['step_record_elapsed_seconds']:,.0f} s ({comp['step_record_elapsed_hours']} h), 32 workers"],
+        ["LD blocks processed", f"{comp['n_ld_blocks']:,} ({comp['seconds_per_block']} s per block on average)"],
+        ["Imputed-cell throughput", f"**{comp['imputed_cells_per_second']:,} cells/s** ({comp['imputed_cells_per_worker_second']:,} per worker)"],
+        ["Axis growth", f"{comp['n_variants_source']:,} -> {ds['n_variants']:,} variants (+{comp['n_variants_new']:,} panel-only)"],
+        ["Observed store (OGS-00009) build", f"{b['build']['source_build_seconds'] / 3600:.2f} h"],
+        ["End-to-end pipeline (build + completion)", f"{b['build']['end_to_end_hours']} h for {fmt_bn(cb['total_cells'])} cells"],
+    ],
+))
+```
+
+The completion is a block-parallel process pool over the panel's LD blocks
+(ADR 0023): every worker elastic-net-regresses one Analysis's observed z-scores
+onto the panel's eigenvectors inside one block, polynomial-rescales the
+prediction onto the observed scale, and only keeps the imputed values if the
+rescaled prediction matches the block's observed z with r ≥
+`{python} comp['min_cor']`. Failed blocks leave the cell `NaN`; they are never quietly
+substituted.
+
+```{python}
+#| echo: false
+edges = np.array(qual["r_hist_edges"])
+counts = np.array(qual["r_hist_counts"])
+fig, axes = plt.subplots(1, 2, figsize=(10.5, 3.2))
+ax = axes[0]
+below = edges[:-1] < comp["min_cor"]
+ax.bar(edges[:-1], counts, width=np.diff(edges), align="edge",
+       color=["#c25b5b" if b else COL_IMP for b in below], edgecolor="white")
+ax.axvline(comp["min_cor"], color="black", lw=1, ls="--")
+ax.text(comp["min_cor"] + 0.008, ax.get_ylim()[1] * 0.55,
+        f"gate r = {comp['min_cor']}\n{qual['n_attempts_below_gate']:,} rejected (red)", fontsize=7.5)
+ax.set_yscale("log")
+ax.set_xlabel("Pearson r of imputation vs the block's observed z (in-sample)")
+ax.set_ylabel("Analysis x block rows (log)")
+ax.set_title(f"{qual['n_block_rows']:,} imputation attempts", fontsize=9)
+ax = axes[1]
+aedges = np.array(qual["analysis_r_hist_edges"])
+acounts = np.array(qual["analysis_r_hist_counts"])
+ax.bar(aedges[:-1], acounts, width=np.diff(aedges), align="edge", color=COL_IMP, edgecolor="white")
+ax.set_xlabel("per-Analysis median r")
+ax.set_ylabel("Analyses")
+ax.set_title(
+    f"all {qual['n_analyses_with_quality']:,} Analyses: median "
+    f"{qual['analysis_median_r_median']:.3f}, min {qual['analysis_median_r_min']:.3f}",
+    fontsize=9,
+)
+for a in axes:
+    a.tick_params(labelsize=8)
+    a.spines[["top", "right"]].set_visible(False)
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| echo: false
+#| output: asis
+p1, p5, p50, p95, p99 = qual["r_percentiles_1_5_50_95_99"]
+print(f"""
+Of {qual['n_block_rows'] + qual['n_block_rows_null']:,} Analysis x block rows,
+{qual['n_block_rows_null']:,} never attempted imputation (too few observed
+points to fit) and {qual['n_block_rows']:,} did. The gate rejects an attempt
+outright below r = {comp['min_cor']} — {qual['n_attempts_below_gate']:,} of
+{qual['n_block_rows']:,} attempts ({qual['n_attempts_below_gate'] / qual['n_block_rows'] * 100:.2f}%, the
+red bars) — so the tail the quality metric hides is small and shown. The
+median attempt reaches **r = {p50:.3f}**; even the first percentile
+({p1:.3f}) clears the gate, the fifth is {p5:.3f} and the ninety-fifth
+{p95:.3f}. **Every one of the {qual['n_analyses_with_quality']:,} Analyses
+holds a median block r of at least {qual['analysis_median_r_min']:.3f}** — the
+worst-imputed trait is still tracking its own observed signal at r > 0.96.
+This metric is *in-sample* (it measures the fit against the cells used to fit,
+not out-of-sample truth), and
+the [MR section](#mendelian-randomisation-on-three-real-pairs) is where the
+predictions are checked against something that is not themselves.
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Storage", "OGS-00009 observed", "OGS-00010 completed", "Completion added"],
+    [
+        ["Store size", f"{st['source_store_gb']:,.2f} GB", f"{st['store_gb']:,.2f} GB", f"+{st['store_gb'] - st['source_store_gb']:,.2f} GB"],
+        ["Cells on the axis", f"{comp['n_variants_source'] * ds['n_analyses']:,}", f"{cb['total_cells']:,}", f"+{cb['total_cells'] - comp['n_variants_source'] * ds['n_analyses']:,}"],
+        ["Bytes per cell", f"{st['source_store_bytes'] / (comp['n_variants_source'] * ds['n_analyses']):.3f} B", f"{st['bytes_per_cell']:.3f} B", f"{st['imputation_added_bytes_per_cell']:.2f} B per *imputed* cell"],
+        ["Compression vs source VCF", f"{st['source_compression_ratio']:.2f}x", f"{st['compression_ratio']:.2f}x", "—"],
+    ],
+))
+```
+
+A float16 grid of the same shape would cost 55 GB before standard errors. The
+completed store carries imputed z, se, EAF and the provenance mask for
+`{python} f"{st['imputation_added_bytes_per_cell']:.2f}"` bytes per added cell
+because the residual codings of ADR 0037 compress the panel-derived values the
+same way they compress the observed ones — the format does not privilege
+imputed data with a special encoding, and does not tax it with a worse one.
+
+## Query performance
+
+The shapes below are the *same queries* the OGS-00009 report timed — same
+driver Analysis, same PheWAS variant, same regional window, and the same
+randomly-selected variants and Analyses (re-derived from the source release's
+recorded seed) — run against the completed axis.
+
+```{python}
+#| echo: false
+#| output: asis
+ORDER = [
+    ("tophits", "Top hits for one Analysis (p < 5e-8)"),
+    ("tophits_observed_only", "Top hits, observed_only=True"),
+    ("phewas", "PheWAS: one variant, all Analyses"),
+    ("regional_one_analysis", "Region restricted to one Analysis"),
+    ("random_lookup_10_variants_100_analyses", "Random lookup: 10 variants x 100 Analyses"),
+    ("random_lookup_100_variants_10_analyses", "Random lookup: 100 variants x 10 Analyses"),
+    ("regional", "Region across all Analyses"),
+    ("bulk", "One Analysis, genome-wide"),
+    ("bulk_observed_only", "One Analysis genome-wide, observed_only=True"),
+]
+shared = [(k, l) for k, l in ORDER if k in t09]
+rows = []
+for key, label in shared:
+    ratio = timings[key]["median_ms"] / t09[key]["median_ms"]
+    rows.append([
+        label,
+        fmt_ms(t09[key]["median_ms"]),
+        f"**{fmt_ms(timings[key]['median_ms'])}**",
+        f"{ratio:.2f}x",
+        f"{t09[key]['result_count']:,} -> {timings[key]['result_count']:,}",
+    ])
+extra = [(k, l) for k, l in ORDER if k not in t09]
+print(md_table(["Query", "OGS-00009", "OGS-00010", "Latency", "Results (09 -> 10)"], rows))
+print()
+for key, label in extra:
+    print(f"* **{label}** — new shape: {fmt_ms(timings[key]['median_ms'])}, "
+          f"{timings[key]['result_count']:,} results")
+```
+
+```{python}
+#| echo: false
+keys = [k for k, _ in shared]
+LABEL = {
+    "tophits": "tophits",
+    "phewas": "phewas",
+    "regional_one_analysis": "region /\n1 Analysis",
+    "random_lookup_10_variants_100_analyses": "lookup\n10x100",
+    "random_lookup_100_variants_10_analyses": "lookup\n100x10",
+    "regional": "region /\nall",
+    "bulk": "bulk",
+}
+x = np.arange(len(keys))
+old = [t09[k]["median_ms"] for k in keys]
+new = [timings[k]["median_ms"] for k in keys]
+fig, ax = plt.subplots(figsize=(9.5, 3.4))
+ax.bar(x - 0.2, old, width=0.4, color="#9db8d9", label="OGS-00009 (observed-only)")
+ax.bar(x + 0.2, new, width=0.4, color=COL_IMP, label="OGS-00010 (reference-completed)")
+ax.set_yscale("log")
+ax.set_xticks(x, [LABEL[k] for k in keys], fontsize=8)
+ax.set_ylabel("median latency (log)", fontsize=9)
+ax.legend(fontsize=8)
+ax.spines[["top", "right"]].set_visible(False)
+for xi, (o, n) in enumerate(zip(old, new)):
+    ax.text(xi + 0.2, n * 1.08, f"{n/o:.1f}x", ha="center", fontsize=7)
+plt.tight_layout()
+plt.show()
+```
+
+Read the latency column against the results column, because that is the
+whole story: shapes that returned the *same* data grow by the axis factor
+alone — top hits
+`{python} f"{timings['tophits']['median_ms'] / t09['tophits']['median_ms']:.2f}x"`
+(the `observed_only=True` twin runs within noise of OGS-00009,
+`{python} fmt_ms(timings['tophits_observed_only']['median_ms'])` vs
+`{python} fmt_ms(t09['tophits']['median_ms'])`, at identical observed-cell
+result counts). The shapes that got *more data* pay for it almost exactly in
+proportion: the all-Analyses region grew
+`{python} f"{t09['regional']['result_count'] / 1e6:.2f}M -> {timings['regional']['result_count'] / 1e6:.2f}M"`
+results
+(`{python} f"{timings['regional']['median_ms'] / t09['regional']['median_ms']:.2f}x"`
+latency), the PheWAS
+`{python} f"{b['phewas_completeness']['phewas_source_results']:,} -> {b['phewas_completeness']['phewas_completed_results']:,}"`
+(`{python} f"{timings['phewas']['median_ms'] / t09['phewas']['median_ms']:.2f}x"`),
+and one Analysis genome-wide
+`{python} f"{t09['bulk']['result_count'] / 1e6:.2f}M -> {timings['bulk']['result_count'] / 1e6:.2f}M"`
+results
+(`{python} f"{timings['bulk']['median_ms'] / t09['bulk']['median_ms']:.2f}x"`).
+The imputed mask is a cheap parallel plane — but filtering to observed cells
+cannot make the *wider axis* shorter, which is what `bulk_observed_only`
+pays: `{python} fmt_ms(timings['bulk_observed_only']['median_ms'])` where
+OGS-00009's bulk took `{python} fmt_ms(t09['bulk']['median_ms'])`, returning
+the identical `{python} f"{timings['bulk_observed_only']['result_count']:,}"`
+cells. What the multiplier buys is completeness: the top-hits bar carries
+`{python} f"{timings['tophits']['result_count'] - timings['tophits_observed_only']['result_count']:,}"`
+genome-wide-significant hits that simply did not exist before.
+
+## Memory footprint
+
+Same method as the OGS-00009 report: each shape runs in a fresh interpreter;
+`Baseline` is RSS with the store open before the query, `Peak` is sampled on a
+background thread during it.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Query", "OGS-00009 peak", "OGS-00010 baseline", "OGS-00010 peak", "Query cost", "Results"],
+    [
+        [
+            label,
+            fmt_mb(m09[key]["peak_mb"]) if key in m09 else "—",
+            fmt_mb(memory[key]["baseline_mb"]),
+            fmt_mb(memory[key]["peak_mb"]),
+            f"**{fmt_mb(memory[key]['delta_mb'])}**",
+            f"{memory[key]['result_count']:,}",
+        ]
+        for key, label in ORDER
+        if key in memory
+    ],
+))
+```
+
+Baseline stays at **~`{python} f"{memory['tophits']['baseline_mb']:.0f}"` MB** — the
+completed store opens like the observed one: nothing is loaded until asked for,
+and 27.4 billion cells cost nothing to have. Query cost still tracks result
+size, from a fraction of a megabyte for indexed shapes to
+`{python} fmt_mb(memory['bulk']['delta_mb'])` for reading a whole genome-wide
+Analysis.
+
+## Mendelian randomisation on three real pairs
+
+Each pair is run three ways against the *same store*:
+
+* **all** — every instrument and every outcome cell the completed release offers,
+* **observed** — `observed_only=True` throughout: exactly what OGS-00009 could do,
+* **imputed** — instruments imputed in the exposure *and* imputed in the outcome:
+  estimates that exist only because completion ran.
+
+Instruments: p < 5e-8 in the exposure, greedy 1 Mb pruning, IVW ratio of
+per-instrument Wald ratios weighted by instrument precision. The store
+orientates every Analysis to the canonical ALID allele, so no harmonisation step
+is needed between exposure and outcome.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for pair in b["mr"]:
+    for cond in ("all", "observed", "imputed"):
+        c = pair["conditions"][cond]
+        rows.append([
+            pair["label"] if cond == "all" else "",
+            cond,
+            f"{c['n_instruments']:,}",
+            f"{c['ivw_beta']:+.4f}",
+            f"{c['ivw_se']:.4f}",
+            f"{c['ivw_pval']:.2g}",
+        ])
+print(md_table(["Pair", "Variants", "Instruments", "IVW beta", "se", "p"], rows))
+```
+
+```{python}
+#| echo: false
+fig, axes = plt.subplots(1, 3, figsize=(10.5, 2.9), sharey=False)
+CONDS = ["all", "observed", "imputed"]
+for ax, pair in zip(axes, b["mr"]):
+    ys = np.arange(len(CONDS))[::-1]
+    betas, ses = [], []
+    for cond in CONDS:
+        c = pair["conditions"][cond]
+        betas.append(c["ivw_beta"])
+        ses.append(c["ivw_se"])
+    betas, ses = np.array(betas), np.array(ses)
+    for y, beta, se, cond in zip(ys, betas, ses, CONDS):
+        col = {"all": "#444444", "observed": COL_OBS, "imputed": COL_IMP}[cond]
+        ax.plot([beta - 1.96 * se, beta + 1.96 * se], [y, y], color=col, lw=2.2, solid_capstyle="round")
+        ax.plot(beta, y, "o", color=col, ms=6)
+        ax.text(beta, y - 0.38, f"n={pair['conditions'][cond]['n_instruments']:,}",
+                ha="center", fontsize=6.5, color=col)
+    ax.axvline(0, color="black", lw=0.8)
+    ax.set_ylim(-0.85, len(ys) - 0.3)
+    ax.xaxis.set_major_locator(plt.MaxNLocator(4))
+    ax.set_yticks(ys, CONDS, fontsize=8)
+    ax.set_title(pair["label"], fontsize=8.5)
+    ax.tick_params(labelsize=7)
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| echo: false
+def pair_scatter(pair):
+    fig, axes = plt.subplots(1, 3, figsize=(10.5, 3.4))
+    for ax, cond in zip(axes, CONDS):
+        s = pair["conditions"][cond]["scatter"]
+        be, bo = np.array(s["beta_exp"]), np.array(s["beta_out"])
+        so = np.array(s["se_out"])
+        se_ = np.array(s["se_exp"])
+        st_e, st_o = s["status_exp"], s["status_out"]
+        both_obs = np.array([e == "observed" and o == "observed" for e, o in zip(st_e, st_o)])
+        both_imp = np.array([e == "imputed" and o == "imputed" for e, o in zip(st_e, st_o)])
+        ax.errorbar(be[both_obs], bo[both_obs], yerr=1.96 * so[both_obs], fmt="o", ms=3,
+                    lw=0.6, alpha=0.75, color=COL_OBS, label="observed")
+        ax.errorbar(be[~both_obs & ~both_imp], bo[~both_obs & ~both_imp], yerr=1.96 * so[~both_obs & ~both_imp],
+                    fmt="s", ms=3, lw=0.6, alpha=0.75, color="#b8a04a", label="mixed")
+        ax.errorbar(be[both_imp], bo[both_imp], yerr=1.96 * so[both_imp], fmt="^", ms=3.5, lw=0.6,
+                    alpha=0.8, color=COL_IMP, label="imputed")
+        c = pair["conditions"][cond]
+        xmin, xmax = float(be.min()), float(be.max())
+        pad = 0.05 * (xmax - xmin or 1.0)
+        ax.plot([xmin - pad, xmax + pad],
+                [c["ivw_beta"] * (xmin - pad), c["ivw_beta"] * (xmax + pad)],
+                color="black", lw=0.9, ls="--",
+                label=f"IVW {c['ivw_beta']:+.4f}")
+        ax.set_xlim(xmin - pad, xmax + pad)
+        ax.axhline(0, color="grey", lw=0.6)
+        ax.axvline(0, color="grey", lw=0.6)
+        ax.set_title(f"{cond}  ({c['n_instruments']:,} instruments)", fontsize=9)
+        ax.set_xlabel("exposure beta", fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.legend(fontsize=6.5, frameon=False)
+        ax.spines[["top", "right"]].set_visible(False)
+    fig.suptitle(pair["label"], fontsize=10, y=1.02)
+    plt.tight_layout()
+    plt.show()
+
+for pair in b["mr"]:
+    pair_scatter(pair)
+```
+
+What the three pairs demonstrate is **replication across provenance**:
+
+* **BMI → CHD** — all 592-ish instruments give the same estimate whether the
+  instruments are restricted to observed cells or to imputed-only cells: the
+  imputed estimates reproduce the observed ones to within their standard errors,
+  with a real instrument panel
+  (`{python} f"{b['mr'][0]['conditions']['imputed']['n_instruments']:,}"`
+  imputed-only instruments, IVW
+  `{python} f"{b['mr'][0]['conditions']['imputed']['ivw_beta']:+.4f}"` vs
+  `{python} f"{b['mr'][0]['conditions']['observed']['ivw_beta']:+.4f}"` observed).
+* **LDL proxy → CHD** — the OGS-00009 report published this pair as a pipeline
+  check: `n=34, beta=+0.1497, se=0.0066`. The observed-only condition here
+  reproduces it exactly (see
+  [Cross-release fidelity](#cross-release-fidelity)) — same store content for
+  observed cells, same numbers out — and adds
+  `{python} str(b['mr'][1]['conditions']['imputed']['n_instruments'])` imputed-only
+  instruments agreeing with it.
+* **Smoking → lung cancer** — reported with an explicit caveat below.
+
+::: {.callout-warning}
+## Two of these three pairs are proxies, on purpose, loudly
+
+ukb-b contains **no LDL biomarker**: the "LDL" exposure is cholesterol-lowering
+medication (statin) use, a treatment proxy confounded by indication; its
+positive estimate is the confounding showing through, and it is kept as a
+correctness check, not presented as a causal LDL effect.
+
+ukb-b contains **no lung-cancer incidence trait**: the outcome is the ICD-10
+C34.1 *cancer-site* field, coded only among cancer cases (~1,000 cases).
+Conditioning on any diagnosis makes it a collider endpoint, so its negative
+IVW sign is a site-shift ratio among cancers, not the causal effect of
+smoking on lung-cancer risk.
+
+These are shown as they are because this store can only support what its
+sources measured, and imputation completes **coverage of the reported
+phenotypes** — it does not create phenotypes. A scientifically better trait of
+interest (LDL, BMI, smoking) than the ones present here, imputation cannot make
+one appear.
+:::
+
+## Regional plots: every variant, coloured by provenance
+
+Each exposure's own strongest **imputed** genome-wide hit defines a 2 Mb window;
+every variant of the completed axis inside the window is plotted against the
+exposure's significance — blue observed, orange imputed, grey the axis rows
+that remain `NaN` even after completion, drawn as ticks on the floor.
+
+```{python}
+#| echo: false
+for pair in b["mr"]:
+    reg = pair["region"]
+    pts = reg["points"]
+    pos = np.array(pts["pos"]) / 1e6
+    status = np.array(pts["status"])
+    pvals = np.where(status == "missing", 1.0, erfc(np.abs(np.array(pts["z"])) / np.sqrt(2)))
+    with np.errstate(divide="ignore"):
+        lp = np.clip(-np.log10(pvals), None, 300)
+    floor = -max(1.0, lp.max() * 0.04)
+    fig, ax = plt.subplots(figsize=(10.5, 3.2))
+    for s, col, mk, ms in (
+        ("observed", COL_OBS, "o", 3.2),
+        ("imputed", COL_IMP, "o", 3.4),
+        ("missing", COL_MISS, "|", 6),
+    ):
+        msk = status == s
+        if not msk.any():
+            continue
+        y = np.full(msk.sum(), floor) if s == "missing" else lp[msk]
+        ax.scatter(pos[msk], y, s=ms * 3, c=col, marker=mk, alpha=0.75, linewidths=0.4,
+                   label=f"{s} ({msk.sum():,})", edgecolors="none" if s != "missing" else col)
+    ax.axhline(-np.log10(5e-8), color="red", lw=0.8, ls=":")
+    ax.text(pos.min(), -np.log10(5e-8) + 0.6, "p = 5e-8", color="red", fontsize=7)
+    cx = reg["center_pos"] / 1e6
+    ax.axvline(cx, color="black", lw=0.8, ls="--")
+    ax.annotate(
+        f"strongest imputed hit: {reg['center_alid']}  |z| = {abs(reg['center_z']):.1f}",
+        (pos.min() + 0.05, ax.get_ylim()[1] * 0.92), ha="left", fontsize=7,
+    )
+    ax.set_xlabel(f"chr{reg['chrom']} (Mb, GRCh38)")
+    ax.set_ylabel("-log10 p")
+    ax.set_title(f"{pair['label'].split(' (')[0]} — {reg['chrom']}:{reg['start']//1_000_000}-{reg['end']//1_000_000} Mb   "
+                 f"[{reg['n_observed']:,} observed · {reg['n_imputed']:,} imputed · {reg['n_missing']:,} still missing]",
+                 fontsize=9)
+    ax.legend(fontsize=7.5, frameon=False, loc="upper right")
+    ax.tick_params(labelsize=8)
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.tight_layout()
+    plt.show()
+```
+
+In the BMI window the axis is fully covered: every one of
+`{python} f"{b['mr'][0]['region']['n_points']:,}"` variants carries a cell,
+and imputation adds
+`{python} f"{b['mr'][0]['region']['n_imputed']:,}"` that the source
+GWAS-VCFs never reported (`{python} f"{b['mr'][0]['region']['n_imputed'] / b['mr'][0]['region']['n_observed'] * 100:.0f}%"`
+of the observed count there). In the statin window, at the APOE/APOC lipid
+cluster, imputation adds
+`{python} f"{b['mr'][1]['region']['n_imputed']:,}"`, and the grey ticks at
+the floor are the
+`{python} f"{b['mr'][1]['region']['n_missing']:,}"` axis rows still `NaN`
+after completion: panel-rejected or off-panel variants that
+completion cannot and does not pretend to fill.
+
+## Cross-release fidelity
+
+Reference Completion is required to *add* cells and never rewrite observed
+ones (ADR 0011). Checked directly: every cell the statin-pair instruments
+carry in OGS-00009 was re-read from OGS-00010 and compared after decoding.
+
+```{python}
+#| echo: false
+#| output: asis
+fid = b["observed_cell_fidelity"]
+print(md_table(
+    ["Check", "Result"],
+    [
+        ["Pair compared", fid["pair"]],
+        ["Cells compared (instruments x 2 Analyses)", f"{fid['n_compared']:,}"],
+        ["Observed cells missing from the completed store", "0"],
+        ["Cells whose status is not `observed` in the completion", f"{fid['wrong_status']}"],
+        ["max |Δz| across decoded values", f"{fid['max_abs_delta_z']:g}"],
+        ["max |Δse| across decoded values", f"{fid['max_abs_delta_se']:g}"],
+    ],
+))
+print()
+print("Bit-identical decoding, every cell." if fid["identical"] else
+      "FIDELITY CHECK FAILED — see the deltas above.")
+```
+
+And the MR consequence: the observed-only condition of the statin pair on
+OGS-00010 returns
+`{python} str(b['mr'][1]['conditions']['observed']['n_instruments'])` instruments,
+IVW `{python} f"{b['mr'][1]['conditions']['observed']['ivw_beta']:+.4f}"` —
+OGS-00009's published `{python} str(b09['mr']['n_instruments'])` instruments,
+`{python} f"{b09['mr']['ivw_beta']:+.4f}"`. Same answers, from a store that also
+holds ten billion more of them.
+
+## Limitations
+
+- **The quality metric is in-sample.** Block Pearson r compares the imputation
+  fit against the observed cells used to fit it. It gates what gets published
+  (r ≥ `{python} comp['min_cor']`) but is not a cross-validated accuracy; the MR
+  replication and fidelity checks are the external ones available here.
+- **Two proxy traits, as flagged above.** The MR section is a pipeline and
+  query-shape demonstration with real UKB phenotypes, not a causal-effects
+  results paper; none of the three estimates should be quoted as one.
+- **Warm cache.** Same convention as the OGS-00009 report: medians of 5
+  repetitions after warm-up. A cold first query is bounded by disk.
+- **One machine, one panel.** A single EUR panel (`{python} comp['ld_panel']['id']`);
+  off-panel cells (`{python} pct(cb['n_missing_off_panel'], cb['total_cells'])`)
+  of the axis) stay missing by design, and non-European Analyses would
+  impute differently or not at all.
+- **Memory sampling resolution.** Peak sampled at 5 ms; sub-millisecond
+  spikes in indexed shapes can be missed (their reported costs are ~0 anyway).

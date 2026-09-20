@@ -141,6 +141,44 @@ def test_identity_by_indices_empty_returns_empty_arrays(tmp_path):
         axis.close()
 
 
+def test_identity_by_indices_with_non_indexable_alids(tmp_path):
+    """Long-allele ALIDs (issue #127) leave the mmap'd index a PARTIAL
+    permutation of the axis, not a permutation (this is what broke OGS-00010,
+    whose 115k long-allele rows sit outside the fixed-width index).
+
+    Identity must still resolve every requested row: index rows from the
+    mmap'd index, long-allele rows via the table read `by_index` performs.
+    """
+    from opengwasdb.variants.axis import _ALID_WIDTH, is_indexable_alid
+
+    long_allele = "A" * (_ALID_WIDTH + 8)  # alid exceeds the fixed width
+    variants = [
+        CanonicalVariant(
+            chromosome="1",
+            position=5000 + i,
+            effect_allele=long_allele if i % 10 == 0 else "A",
+            other_allele="G",
+        )
+        for i in range(60)
+    ]
+    write_variant_axis(tmp_path, variants, {})
+    axis = VariantAxis(tmp_path)
+    try:
+        assert not is_indexable_alid(f"1:5000:{long_allele}:G")
+        rows = np.arange(60, dtype="int64")
+        identity = axis.identity_by_indices(rows)
+        assert identity is not None
+        for i, vi in enumerate(rows):
+            record = axis.by_index(int(vi))
+            assert identity["alid"][i] == record.alid
+            assert identity["chromosome"][i] == record.chromosome
+            assert identity["position"][i] == record.position
+            assert identity["effect_allele"][i] == record.effect_allele
+            assert identity["other_allele"][i] == record.other_allele
+    finally:
+        axis.close()
+
+
 def test_identity_by_indices_none_without_mmap_alid_index(tmp_path):
     axis = _build_axis(tmp_path)
     try:
