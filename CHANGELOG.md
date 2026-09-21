@@ -120,12 +120,39 @@ the end of this file.
   one-pass resolver never reads. `TabularMetricsRow` is its row shape, and
   `stream_full_row_metrics` keeps the full-row parser's semantics so the two are
   asserted equal field for field (#207).
+- **`opengwasdb.build.resolve.ScanLimit`**: an explicit, deterministic bound on
+  one source scan -- a fixed number of source rows, a fixed number of distinct
+  usable ancestry-reference sites, or neither (the default full scan). The bound
+  is checked after the row has been fed to both stages, so a bounded resolution
+  is exactly the full resolution of the rows read; the stream is closed when the
+  bound stops it; and `ScanDiagnostics.stop_reason` records whether EOF, the row
+  bound or the site bound ended the scan. It exists so the issue #209 evaluation
+  can compare a prefix with the full source under a recorded rule; a full scan
+  stays the default and the only mode a release relies on. The study itself
+  rejects every bounded rule -- each one turns the Unassigned `GCST90859377`
+  into a confident EUR label -- so no bound is exposed on the manifest CLI
+  (#209, ADR 0046).
+- **Issue #209 evaluation harness and parser parity fixtures**:
+  `benchmarks/benchmark_resolver_evidence_scan.py` compares the full scan with
+  every preregistered fixed-row and usable-site prefix across the frozen
+  106-Analysis evaluation manifest (`docs/benchmark-output/opengwasdb_resolver_evidence_scan_manifest.tsv`),
+  and benchmarks the current projection against external `gzip -dc`/`pigz -dc`,
+  pandas' C engine and R `data.table::fread` with decompression measured
+  separately. `tests/test_resolver_evidence_scan_parsers.py` asserts the
+  external-decompressor prototype is field-for-field identical to
+  `stream_projected_metrics` on projection, reordered/extra columns, the legacy
+  `hm_*` layout, ragged and quoted rows, invalid alleles, missing values,
+  orientation and duplicate rows (#209, ADR 0046).
 - **`opengwasdb.build.phenotype_sd.has_usable_sample_size`**: ADR-0029's
   sample-size rule, split out of `estimate_phenotype_sd` so a caller reporting
   *why* it has no estimate asks the same question the estimator answers (#207).
 
 ### Changed
 
+- **`opengwasdb.build.resolve_manifest` records a scan's stop reason**: every
+  per-Analysis record's `diagnostics` now carries `stop_reason` (`eof`,
+  `row_limit` or `ancestry_site_limit`), so a record written under a scan bound
+  can never be read back as a full-source resolution (#209).
 - **`extract-variant-reference` streams every manifest, retiring the in-memory
   assembly**: hg19 and mixed manifests now lift each pre-lift window in a worker,
   re-bucket every survivor by post-lift window, merge those buckets per post-lift

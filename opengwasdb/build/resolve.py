@@ -75,10 +75,18 @@ __all__ = [
     "MetricsReader",
     "PhenotypeSdResolution",
     "ScanDiagnostics",
+    "ScanLimit",
+    "ScanStop",
     "SdReason",
     "SdStatus",
     "resolve_analysis",
 ]
+
+#: The stopping-rule contract's version (issue #209). A caller that persists a
+#: resolution binds this alongside the thresholds, so a resumed run whose rule
+#: has since changed cannot silently keep an old record (the manifest resolver
+#: does exactly that). Bump it whenever what `ScanLimit` means changes.
+SCAN_LIMIT_VERSION = 1
 
 #: How many qualifying evidence rows one Analysis's phenotype-SD estimate is
 #: drawn from. A robust median-implied-SD estimate needs nowhere near this many
@@ -88,6 +96,62 @@ __all__ = [
 #: `opengwasdb.build.eaf_orientation.DEFAULT_SAMPLE_SITES`'s scale deliberately:
 #: both are "an Analysis's own variants, bounded".
 DEFAULT_EVIDENCE_SAMPLE = 20_000
+
+
+class ScanStop(StrEnum):
+    """What ended a source scan (issue #209).
+
+    `EOF` is a full scan -- the default and, until an early-stop rule is
+    independently validated, the only one a release may rely on. `ROW_LIMIT` and
+    `ANCESTRY_SITE_LIMIT` say the scan stopped before the file ended, which makes
+    the resolution a statement about a prefix rather than about the source and
+    must travel with it.
+    """
+
+    EOF = "eof"
+    ROW_LIMIT = "row_limit"
+    ANCESTRY_SITE_LIMIT = "ancestry_site_limit"
+
+
+@dataclass(frozen=True)
+class ScanLimit:
+    """A deterministic bound on one source scan (issue #209).
+
+    This is the evaluated early-stop mechanism, not a tuned default: the
+    resolver defaults to a full scan (`scan_limit=None`), and this exists so a
+    study can compare a prefix's resolution with the full source's under a bound
+    that is recorded rather than implied.
+
+    The two rules bound different things and are checked after each row is
+    admitted to the ancestry fit, so `max_rows` counts source rows and
+    `max_ancestry_sites` counts *distinct* reference sites with a usable
+    frequency -- the evidence the NNLS fit actually consumes, rather than
+    matches that a repeated ALID could inflate. `max_rows` wins when one row
+    reaches both, which keeps the reported `stop_reason` a fact about the
+    bound that was reached first rather than about dict size.
+
+    A bound that fails is not a fallback to a default: `resolve_analysis`
+    refuses a non-positive bound rather than reading less (or more) than asked.
+    """
+
+    max_rows: int | None = None
+    max_ancestry_sites: int | None = None
+
+    def validate(self) -> None:
+        for name, value in (
+            ("max_rows", self.max_rows),
+            ("max_ancestry_sites", self.max_ancestry_sites),
+        ):
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be a positive row/site count, got {value!r}")
+
+    def as_fingerprint(self) -> dict[str, int | None]:
+        """The rule's provenance, in the shape a resume fingerprint stores."""
+        return {
+            "scan_limit_version": SCAN_LIMIT_VERSION,
+            "max_rows": self.max_rows,
+            "max_ancestry_sites": self.max_ancestry_sites,
+        }
 
 
 class SdStatus(StrEnum):
@@ -168,6 +232,10 @@ class ScanDiagnostics:
     #: Distinct panel sites this source contributed a frequency at -- how much of
     #: a bounded `extraction_panel` the file actually covers.
     ancestry_sites: int
+    #: What ended the scan (issue #209). `EOF` is a whole source; the other two
+    #: name the bound that stopped it. Travels with the resolution because a
+    #: prefix's fit must never be read as the source's fit.
+    stop_reason: ScanStop = ScanStop.EOF
 
 
 @dataclass(frozen=True)
@@ -244,6 +312,7 @@ class _Scan:
 
     panel_af: dict[str, float] = field(default_factory=dict)
     rows_read: int = 0
+    stop_reason: ScanStop = ScanStop.EOF
 
 
 @dataclass
@@ -332,22 +401,50 @@ def _diagnostics(request: AnalysisRequest, scan: _Scan) -> ScanDiagnostics:
         source_file=str(request.source_file),
         rows_read=scan.rows_read,
         ancestry_sites=len(scan.panel_af),
+        stop_reason=scan.stop_reason,
     )
 
 
 def _scan(
-    reader: MetricsReader, panel: Collection[str], scan: _Scan, evidence: _EvidenceSample
+    reader: MetricsReader,
+    panel: Collection[str],
+    scan: _Scan,
+    evidence: _EvidenceSample,
+    limit: ScanLimit | None,
 ) -> None:
     """One pass over the source, feeding the ancestry fit and the SD evidence.
 
     This is the whole point of the module: the two stages read different things
     from the same row, so they are accumulated together rather than by two
     scans of a genome-wide file.
+
+    `limit` binds the scan to a prefix (issue #209). The bound is checked after
+    the row has been fed to both stages, so a resolution computed under a limit
+    is exactly the resolution a full scan would have produced from the same
+    rows -- nothing is admitted half-way. The stream is always closed, so an
+    early stop releases the source rather than leaving a compressed handle for
+    the garbage collector.
     """
-    for row in reader.stream_metrics():
-        scan.rows_read += 1
-        _accumulate_ancestry(row, panel, scan.panel_af)
-        evidence.admit(row)
+    stream = reader.stream_metrics()
+    try:
+        for row in stream:
+            scan.rows_read += 1
+            _accumulate_ancestry(row, panel, scan.panel_af)
+            evidence.admit(row)
+            if limit is not None:
+                if limit.max_rows is not None and scan.rows_read >= limit.max_rows:
+                    scan.stop_reason = ScanStop.ROW_LIMIT
+                    break
+                if (
+                    limit.max_ancestry_sites is not None
+                    and len(scan.panel_af) >= limit.max_ancestry_sites
+                ):
+                    scan.stop_reason = ScanStop.ANCESTRY_SITE_LIMIT
+                    break
+    finally:
+        close = getattr(stream, "close", None)
+        if close is not None:
+            close()
 
 
 def _accumulate_ancestry(
@@ -528,6 +625,7 @@ def resolve_analysis(
     gates: Gates | None = None,
     af_references: Mapping[str, AfReference] | None = None,
     evidence_sample: int = DEFAULT_EVIDENCE_SAMPLE,
+    scan_limit: ScanLimit | None = None,
 ) -> AnalysisResolution:
     """Resolve one Analysis's ancestry and phenotype SD from one source scan.
 
@@ -541,6 +639,12 @@ def resolve_analysis(
     is read only by the reference-MAF tier, only after the ancestry fit has said
     which ancestry to look up.
 
+    `scan_limit` bounds the scan to a deterministic prefix (issue #209); `None`
+    reads the whole source, which is the default and the only mode a release
+    should rely on until an early-stop rule has been independently validated. A
+    bounded resolution is *not* interchangeable with a full one and
+    `diagnostics.stop_reason` says which it is.
+
     A source that cannot be read at all comes back as a resolution with `error`
     set rather than as an exception, because one unreadable file in a batch of
     thousands is a per-Analysis outcome (issue #207). A caller error -- a
@@ -551,6 +655,8 @@ def resolve_analysis(
         raise ValueError(
             f"evidence_sample must be a positive row count, got {evidence_sample!r}"
         )
+    if scan_limit is not None:
+        scan_limit.validate()
     if not isinstance(reader, MetricsReader):
         raise TypeError(
             f"{type(reader).__name__} cannot stream source metrics; the one-pass resolver "
@@ -560,7 +666,7 @@ def resolve_analysis(
     evidence = _EvidenceSample(k=evidence_sample, tier=request.original_sd_method)
     panel: Collection[str] = reference.index if extraction_panel is None else extraction_panel
     try:
-        _scan(reader, panel, scan, evidence)
+        _scan(reader, panel, scan, evidence, scan_limit)
     except (OSError, EOFError, ValueError) as exc:
         return AnalysisResolution(
             analysis_id=request.analysis_id,

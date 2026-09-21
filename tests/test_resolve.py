@@ -34,9 +34,12 @@ from opengwasdb.build.phenotype_sd_pipeline import (
     estimate_manifest_phenotype_sd,
 )
 from opengwasdb.build.resolve import (
+    SCAN_LIMIT_VERSION,
     AfReference,
     AnalysisRequest,
     AnalysisResolution,
+    ScanLimit,
+    ScanStop,
     SdReason,
     SdStatus,
     resolve_analysis,
@@ -207,6 +210,7 @@ def _resolve(
     extraction_panel: Sequence[str] | None = None,
     af_references: Mapping[str, AfReference] | None = None,
     evidence_sample: int = 20_000,
+    scan_limit: ScanLimit | None = None,
 ) -> AnalysisResolution:
     return resolve_analysis(
         AnalysisRequest("GCST000001", path, sample_size, method, stored_effect_scale),
@@ -216,6 +220,7 @@ def _resolve(
         extraction_panel=extraction_panel,
         af_references=af_references,
         evidence_sample=evidence_sample,
+        scan_limit=scan_limit,
     )
 
 
@@ -859,3 +864,139 @@ def test_fixture_standard_deviation_is_recovered_to_ten_significant_figures(tmp_
     assert frequencies.min() > 0.0 and frequencies.max() < 1.0, "frequencies must be usable"
     assert frequencies.max() - frequencies.min() > 0.5, "frequencies must genuinely vary"
     assert math.isclose(float(np.median(implied)), _TRUE_SD, rel_tol=1e-9)
+
+
+# --- bounded scans (issue #209) -------------------------------------------
+
+
+def test_the_default_scan_reads_the_whole_source(tmp_path, panel):
+    path = _assigned_european(tmp_path, panel)
+
+    resolution = _resolve(path, panel)
+
+    assert resolution.diagnostics.stop_reason is ScanStop.EOF
+    assert resolution.diagnostics.rows_read == N_VARIANTS
+
+
+def test_a_row_limit_is_exactly_the_full_resolution_of_that_prefix(tmp_path, panel):
+    """A bounded scan must be nothing more than the rows it read.
+
+    If a row were admitted half-way, or the evidence sample drawn with
+    knowledge of rows past the bound, this would diverge from resolving a file
+    that physically ends after seven rows.
+    """
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    rows = _study_rows(frequencies)
+    full_path = _write_ssf(tmp_path / "full.tsv.gz", rows)
+    prefix_path = _write_ssf(tmp_path / "prefix.tsv.gz", rows[:100])
+
+    bounded = _resolve(full_path, panel, scan_limit=ScanLimit(max_rows=100))
+    truncated = _resolve(prefix_path, panel)
+
+    assert bounded.diagnostics.stop_reason is ScanStop.ROW_LIMIT
+    assert bounded.diagnostics.rows_read == 100
+    assert bounded.diagnostics.ancestry_sites == 100
+    assert bounded.ancestry is not None and truncated.ancestry is not None
+    assert bounded.ancestry.gate_reason == "ok", "the prefix must be long enough to fit"
+    _assert_same_fit(bounded.ancestry, truncated.ancestry)
+    assert bounded.phenotype_sd is not None and truncated.phenotype_sd is not None
+    assert bounded.phenotype_sd.status is truncated.phenotype_sd.status
+    assert (
+        bounded.phenotype_sd.n_evidence_considered
+        == truncated.phenotype_sd.n_evidence_considered
+    )
+
+
+def test_a_site_limit_stops_when_the_fit_has_that_many_distinct_sites(tmp_path, panel):
+    path = _assigned_european(tmp_path, panel)
+
+    resolution = _resolve(path, panel, scan_limit=ScanLimit(max_ancestry_sites=10))
+
+    assert resolution.diagnostics.stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert resolution.diagnostics.ancestry_sites == 10
+    assert resolution.diagnostics.rows_read == 10, "each fixture row is a distinct site"
+
+
+def test_a_bounded_scan_does_not_fabricate_an_assignment_it_cannot_support(tmp_path, panel):
+    """A prefix too short to clear the gates is Unassigned, as the full scan would be too.
+
+    The failure this guards is the tempting one: padding a short prefix with the
+    reference's own frequencies so it clears the overlap gate.
+    """
+    path = _assigned_european(tmp_path, panel)
+
+    resolution = _resolve(path, panel, scan_limit=ScanLimit(max_rows=3))
+
+    assert resolution.ancestry is not None
+    assert resolution.ancestry.assigned_ancestry is None
+    assert resolution.ancestry.gate_reason == "overlap"
+
+
+def test_a_site_limit_counts_distinct_sites_not_repeated_rows(tmp_path, panel):
+    """A repeated ALID cannot reach the bound: the fit sees one site either way."""
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    rows = _study_rows(frequencies)
+    repeated = [rows[0]] * 25 + rows[1:6]
+    path = _write_ssf(tmp_path / "repeated.tsv.gz", repeated)
+
+    resolution = _resolve(path, panel, scan_limit=ScanLimit(max_ancestry_sites=5))
+
+    assert resolution.diagnostics.stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert resolution.diagnostics.ancestry_sites == 5
+    assert resolution.diagnostics.rows_read == 29, (
+        "24 repeats plus five distinct sites: the bound counts sites, not rows"
+    )
+
+
+def test_the_row_limit_wins_when_one_row_reaches_both_bounds(tmp_path, panel):
+    path = _assigned_european(tmp_path, panel)
+
+    resolution = _resolve(
+        path, panel, scan_limit=ScanLimit(max_rows=5, max_ancestry_sites=5)
+    )
+
+    assert resolution.diagnostics.stop_reason is ScanStop.ROW_LIMIT
+    assert resolution.diagnostics.rows_read == 5
+
+
+@pytest.mark.parametrize("limit", [ScanLimit(max_rows=0), ScanLimit(max_ancestry_sites=-1)])
+def test_a_non_positive_bound_is_refused_rather_than_defaulted(tmp_path, panel, limit):
+    path = _assigned_european(tmp_path, panel)
+
+    with pytest.raises(ValueError, match="positive"):
+        _resolve(path, panel, scan_limit=limit)
+
+
+def test_an_early_stop_closes_the_source_stream(tmp_path, panel):
+    """A stopped scan must release the compressed handle, not leak it to the GC."""
+    path = _assigned_european(tmp_path, panel)
+    closed = False
+
+    class _CloseTrackingReader:
+        def stream_metrics(self) -> Iterator[TabularMetricsRow]:
+            nonlocal closed
+            try:
+                yield from GwasSsfReader(path).stream_metrics()
+            finally:
+                closed = True
+
+    resolution = resolve_analysis(
+        AnalysisRequest("GCST000001", path, _STUDY_N, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF),
+        reader=_CloseTrackingReader(),
+        reference=panel,
+        gates=_GATES,
+        scan_limit=ScanLimit(max_rows=3),
+    )
+
+    assert resolution.diagnostics.stop_reason is ScanStop.ROW_LIMIT
+    assert closed, "the source stream must be closed when the bound stops it"
+
+
+def test_a_scan_limit_fingerprint_binds_the_version_and_thresholds():
+    fingerprint = ScanLimit(max_rows=25_000).as_fingerprint()
+
+    assert fingerprint == {
+        "scan_limit_version": SCAN_LIMIT_VERSION,
+        "max_rows": 25_000,
+        "max_ancestry_sites": None,
+    }

@@ -455,6 +455,9 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
         "source_file": d.source_file,
         "rows_read": d.rows_read,
         "ancestry_sites": d.ancestry_sites,
+        # Issue #209: whether the scan ended at EOF or at a bound. A record
+        # written under a future scan limit must not be readable as a full scan.
+        "stop_reason": d.stop_reason.value,
     }
 
 
