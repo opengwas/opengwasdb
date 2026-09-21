@@ -18,6 +18,13 @@ source's own `other_allele`/`effect_allele` labelling (mirroring GWAS-VCF's
 REF/ALT, where ALT is likewise the effect allele) -- not reordered to
 canonical A1/A2, per the interface's contract.
 
+`stream_metrics` (issue #207) is the third projection: identity plus the
+effect allele's frequency, `beta` and `standard_error`, read by column index in
+one pass. It exists because the pre-build annotation stages both want a
+statistic `ReaderAssociation` does not carry or does not keep -- it holds a
+`z` rather than the beta behind it, and it drops rows with an unusable beta that
+ancestry assignment could still read a frequency from.
+
 `extract_at_sites` has no GWAS-VCF/bcftools equivalent to call into (issue
 #21 built that combined AF+SE lookup around bcftools -R specifically): it
 scans the file once, reading `effect_allele_frequency` where the file
@@ -39,6 +46,8 @@ from pathlib import Path
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
 from opengwasdb.readers.tabular import (
+    MetricsProjectionColumns,
+    TabularMetricsRow,
     TabularRow,
     VariantProjectionColumns,
     extract_at_sites,
@@ -46,6 +55,7 @@ from opengwasdb.readers.tabular import (
     parse_finite_float,
     parse_positive_float,
     stream_associations,
+    stream_projected_metrics,
     stream_projected_variants,
     stream_variants,
 )
@@ -58,6 +68,15 @@ _VARIANT_COLUMNS = VariantProjectionColumns(
     ref=b"other_allele",
     alt=b"effect_allele",
     aliases=(b"rsid", b"variant_id"),
+)
+_METRICS_COLUMNS = MetricsProjectionColumns(
+    chromosome=(b"chromosome",),
+    position=b"base_pair_location",
+    ref=b"other_allele",
+    alt=b"effect_allele",
+    frequency=b"effect_allele_frequency",
+    beta=b"beta",
+    standard_error=b"standard_error",
 )
 
 
@@ -128,6 +147,18 @@ def stream_full_row_variants(path: str | Path) -> Iterator[SourceVariant]:
     yield from stream_variants(_iter_rows(path))
 
 
+def stream_full_row_metrics(path: str | Path) -> Iterator[TabularMetricsRow]:
+    """Reference metrics semantics: the full-row parser's own rows (issue #207).
+
+    Kept so the projection `stream_metrics` replaces can be compared against it
+    field for field on the same file -- the arrangement
+    `stream_full_row_variants` provides for the variant projection. A
+    `TabularRow` *is* a `TabularMetricsRow`; it adds only the identifier this
+    seam never reads.
+    """
+    yield from _iter_rows(path)
+
+
 @dataclass(frozen=True)
 class GwasSsfReader:
     """SourceReader for one filtered/harmonised GWAS-Catalog-SSF file.
@@ -146,6 +177,19 @@ class GwasSsfReader:
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _iter_variants(self.path)
+
+    def stream_metrics(self) -> Iterator[TabularMetricsRow]:
+        """Yield each row's identity and statistics from one projected scan.
+
+        The seam issue #207's one-pass resolver reads: ancestry assignment wants
+        a frequency and phenotype-SD estimation wants a standard error, and this
+        yields both -- plus the beta the beta-distribution tier needs -- for
+        every row in one pass over the file. `ReaderAssociation` cannot serve
+        that: it carries a `z` rather than the beta behind it, and it drops every
+        row whose beta is unusable, which is a row ancestry assignment can still
+        read a frequency from.
+        """
+        yield from stream_projected_metrics(self.path, _METRICS_COLUMNS)
 
     def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
         return extract_at_sites(_iter_rows(self.path), alids)

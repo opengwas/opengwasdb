@@ -32,6 +32,7 @@ outcome over a defaulted value.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypeGuard
 
 import numpy as np
 
@@ -99,6 +100,20 @@ def _unavailable(notes: str) -> PhenotypeSdEstimate:
     )
 
 
+def has_usable_sample_size(sample_size: float | None) -> TypeGuard[float]:
+    """Whether ADR-0029's estimator can report anything for this `N`.
+
+    The formula only ever yields `sd_scale / sqrt(N)` as a combined quantity, so
+    a missing, non-finite, or non-positive sample size leaves nothing to report.
+    Split out rather than inlined because a caller reporting *why* it has no
+    estimate has to ask the same question (issue #207), and two copies of this
+    rule would be two chances for one to drift.
+    """
+    if sample_size is None or not np.isfinite(sample_size):
+        return False
+    return sample_size > 0
+
+
 def estimate_phenotype_sd(
     method: OriginalSdMethod,
     sample_size: float | None,
@@ -127,7 +142,7 @@ def estimate_phenotype_sd(
             f"estimate_phenotype_sd only computes {sorted(m.value for m in _ESTIMATION_METHODS)}, "
             f"got {method.value!r} -- that tier is a caller decision, not an estimate"
         )
-    if sample_size is None or not np.isfinite(sample_size) or sample_size <= 0:
+    if not has_usable_sample_size(sample_size):
         return _unavailable("sample size is missing, non-finite, or non-positive")
 
     if method is OriginalSdMethod.ESTIMATED_FROM_BETA_DISTRIBUTION:
