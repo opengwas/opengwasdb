@@ -90,6 +90,29 @@ the end of this file.
   holding more shards than `reduction_batch_size` descend more than one tree
   level, reported as `reduce_levels`; a non-positive threshold fails loudly. The
   artifact is bit-for-bit unchanged across spill thresholds (#194).
+- **`opengwasdb.build.resolve`**: resolves one Analysis's AF-based Ancestry
+  Assignment and its phenotype-SD estimate from a *single* scan of its source
+  (`resolve_analysis`), reusing the existing ancestry mixture, EAF-orientation
+  and ADR-0029 estimator rather than restating any of them. The method tier, the
+  extraction panel and every acceptance threshold stay the caller's: nothing
+  here falls back from source AF to reference AF, and nothing here emits a
+  verdict. Per-Analysis memory is bounded by the panel and by a deterministic
+  bottom-`k`-by-hash sample of the evidence (`evidence_sample`), not by the
+  source's row count, and the resolution says when that sample was drawn. For
+  the same file it reproduces `assign-ancestry`'s fit and
+  `estimate-phenotype-sd`'s estimate exactly; on a real 258 MB, 8.26M-row
+  GWAS-Catalog source one pass took 55.4s where the two existing passes took
+  160.8s and agreed (#207, ADR 0044).
+- **`opengwasdb.readers.tabular.stream_projected_metrics`** and
+  **`GwasSsfReader.stream_metrics`**: a column-projected scan yielding each
+  row's variant identity, `beta`, standard error and effect-allele frequency in
+  one pass, without a dict per row and without the identifier columns the
+  one-pass resolver never reads. `TabularMetricsRow` is its row shape, and
+  `stream_full_row_metrics` keeps the full-row parser's semantics so the two are
+  asserted equal field for field (#207).
+- **`opengwasdb.build.phenotype_sd.has_usable_sample_size`**: ADR-0029's
+  sample-size rule, split out of `estimate_phenotype_sd` so a caller reporting
+  *why* it has no estimate asks the same question the estimator answers (#207).
 
 ### Changed
 
