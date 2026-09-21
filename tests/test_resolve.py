@@ -47,7 +47,7 @@ from opengwasdb.build.resolve import (
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader
-from opengwasdb.readers.tabular import TabularMetricsRow
+from opengwasdb.readers.tabular import DEFAULT_CHUNK_ROWS, MetricsChunk
 
 N_VARIANTS = 200
 _STUDY_N = 20_000.0
@@ -211,10 +211,11 @@ def _resolve(
     af_references: Mapping[str, AfReference] | None = None,
     evidence_sample: int = 20_000,
     scan_limit: ScanLimit | None = None,
+    chunk_rows: int = DEFAULT_CHUNK_ROWS,
 ) -> AnalysisResolution:
     return resolve_analysis(
         AnalysisRequest("GCST000001", path, sample_size, method, stored_effect_scale),
-        reader=GwasSsfReader(path),
+        reader=GwasSsfReader(path, chunk_rows=chunk_rows),
         reference=panel,
         gates=_GATES,
         extraction_panel=extraction_panel,
@@ -232,11 +233,11 @@ class _CountingReader:
     scans: int = 0
     rows: int = 0
 
-    def stream_metrics(self) -> Iterator[TabularMetricsRow]:
+    def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
         self.scans += 1
-        for row in self.inner.stream_metrics():
-            self.rows += 1
-            yield row
+        for chunk in self.inner.stream_metric_chunks():
+            self.rows += len(chunk)
+            yield chunk
 
 
 def _assigned_european(tmp_path: Path, panel: AncestryReference) -> Path:
@@ -650,13 +651,22 @@ def test_extraction_panel_bounds_the_ancestry_fit(tmp_path, panel):
 # --- bounded evidence ------------------------------------------------------
 
 
+#: Small enough that a block is not what the peak measures. The source scan
+#: holds one block of ALIDs at a time (issue #209), which is bounded by
+#: configuration but is not *small*; measuring the evidence bound through it
+#: would measure the block instead.
+_TINY_BLOCK = 64
+
+
 def _peak_bytes(
     path: Path, panel: AncestryReference, evidence_sample: int
 ) -> tuple[int, AnalysisResolution]:
     """Peak Python allocation while resolving one file, and the resolution."""
     tracemalloc.start()
     try:
-        resolution = _resolve(path, panel, evidence_sample=evidence_sample)
+        resolution = _resolve(
+            path, panel, evidence_sample=evidence_sample, chunk_rows=_TINY_BLOCK
+        )
         peak = tracemalloc.get_traced_memory()[1]
     finally:
         tracemalloc.stop()
@@ -685,7 +695,12 @@ def test_evidence_sample_bounds_memory_independently_of_row_count(tmp_path, pane
     assert large.phenotype_sd.evidence_sampled is True
     assert small.phenotype_sd is not None
     assert small.phenotype_sd.evidence_sampled is False
-    assert large_peak < small_peak + 512 * 1024, (
+    # The allowance covers what the blocked scan added and the evidence bound
+    # does not control: one block, plus pandas parser state that grows with the
+    # number of blocks rather than with the rows in them (issue #209). The claim
+    # is unchanged -- 100x the rows costs well under 2x the memory, where an
+    # unbounded sample would cost 100x.
+    assert large_peak < small_peak + 1024 * 1024, (
         f"100x the rows cost {large_peak - small_peak} more bytes of peak memory"
     )
 
@@ -700,7 +715,11 @@ def test_unbounded_evidence_is_what_the_bound_is_holding_back(tmp_path, panel):
 
     assert unbounded.phenotype_sd is not None and bounded.phenotype_sd is not None
     assert unbounded.phenotype_sd.evidence_sampled is False
-    assert unbounded_peak > 10 * bounded_peak, (
+    # A difference rather than a ratio: the blocked scan put a constant floor
+    # under both peaks, which flatters the unbounded case (issue #209). What the
+    # bound is worth is the gap, and that the bounded peak stays small.
+    assert bounded_peak < 2 * 1024 * 1024, f"bounded peak {bounded_peak} is not small"
+    assert unbounded_peak - bounded_peak > 4 * 1024 * 1024, (
         f"unbounded {unbounded_peak} vs bounded {bounded_peak} bytes"
     )
     assert unbounded.phenotype_sd.estimate is not None
@@ -973,10 +992,10 @@ def test_an_early_stop_closes_the_source_stream(tmp_path, panel):
     closed = False
 
     class _CloseTrackingReader:
-        def stream_metrics(self) -> Iterator[TabularMetricsRow]:
+        def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
             nonlocal closed
             try:
-                yield from GwasSsfReader(path).stream_metrics()
+                yield from GwasSsfReader(path).stream_metric_chunks()
             finally:
                 closed = True
 

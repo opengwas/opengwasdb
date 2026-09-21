@@ -43,6 +43,7 @@ from dataclasses import asdict, astuple, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import threadpoolctl
 
 # One worker is one CPU-bound Python scan. `_init_worker` caps every forked
@@ -59,6 +60,7 @@ from opengwasdb.build.resolve import (
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.readers.gwas_ssf import _METRICS_COLUMNS, GwasSsfReader
 from opengwasdb.readers.tabular import (
+    MetricsChunk,
     TabularMetricsRow,
     _metrics_fields,
     _project_metrics_row,
@@ -114,15 +116,17 @@ class _Coverage:
     _seen: set[str] = field(default_factory=set)
     _span: dict[str, list[int]] = field(default_factory=dict)
 
-    def observe(self, row: TabularMetricsRow) -> None:
-        if row.chromosome not in self._seen:
-            self._seen.add(row.chromosome)
-            self.chromosomes.append(row.chromosome)
-            self._span[row.chromosome] = [row.position, row.position]
+    def observe(self, alid: str) -> None:
+        chromosome, position_text, _a1, _a2 = alid.rsplit(":", 3)
+        position = int(position_text)
+        if chromosome not in self._seen:
+            self._seen.add(chromosome)
+            self.chromosomes.append(chromosome)
+            self._span[chromosome] = [position, position]
             return
-        span = self._span[row.chromosome]
-        span[0] = min(span[0], row.position)
-        span[1] = max(span[1], row.position)
+        span = self._span[chromosome]
+        span[0] = min(span[0], position)
+        span[1] = max(span[1], position)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -136,15 +140,39 @@ class _Coverage:
 
 @dataclass
 class _TrackingReader:
-    """A reader that passes rows through while recording prefix locality."""
+    """A reader that passes blocks through while recording prefix locality.
+
+    A block is offered whole and a bounded scan may consume only part of it, so
+    observing a block as it is yielded would credit a prefix with chromosomes it
+    never read -- which is the one thing this measurement exists to report
+    (issue #209). A block is therefore observed only once the *next* one is
+    asked for, which proves it was consumed entirely, and `finish` observes the
+    last one against the row count the resolver actually reports.
+    """
 
     inner: GwasSsfReader
     coverage: _Coverage
+    _pending: np.ndarray | None = None
+    _observed: int = 0
 
-    def stream_metrics(self) -> Iterator[TabularMetricsRow]:
-        for row in self.inner.stream_metrics():
-            self.coverage.observe(row)
-            yield row
+    def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
+        for chunk in self.inner.stream_metric_chunks():
+            self._observe(None)
+            self._pending = chunk.alid
+            yield chunk
+
+    def finish(self, rows_read: int) -> None:
+        """Observe the prefix of the last block the scan actually consumed."""
+        self._observe(rows_read - self._observed)
+
+    def _observe(self, rows: int | None) -> None:
+        if self._pending is None:
+            return
+        alids = self._pending if rows is None else self._pending[: max(rows, 0)]
+        for alid in alids.tolist():
+            self.coverage.observe(alid)
+        self._observed += len(alids)
+        self._pending = None
 
 
 def _load_manifest(path: Path) -> list[AnalysisRow]:
@@ -238,6 +266,7 @@ def _resolve_with_limit(
         scan_limit=limit,
     )
     elapsed = time.perf_counter() - started
+    reader.finish(resolution.diagnostics.rows_read)
     return {
         "limit": None if limit is None else asdict(limit),
         "stop_reason": resolution.diagnostics.stop_reason.value,

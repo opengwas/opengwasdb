@@ -64,8 +64,7 @@ from opengwasdb.build.phenotype_sd import (
     se_scale_samples,
 )
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
-from opengwasdb.readers.gwas_vcf import is_palindromic
-from opengwasdb.readers.tabular import TabularMetricsRow
+from opengwasdb.readers.tabular import MetricsChunk
 
 __all__ = [
     "AfReference",
@@ -298,7 +297,7 @@ class MetricsReader(Protocol):
     than reading a 100 GB VCF row by row.
     """
 
-    def stream_metrics(self) -> Iterator[TabularMetricsRow]: ...
+    def stream_metric_chunks(self) -> Iterator[MetricsChunk]: ...
 
 
 @dataclass
@@ -341,24 +340,31 @@ class _EvidenceSample:
     # hash) still gets two entries rather than one.
     _heap: list[tuple[int, int, float, float, float, str]] = field(default_factory=list)
 
-    def admit(self, row: TabularMetricsRow) -> None:
-        """Offer one row; it is retained only if it qualifies and outranks the heap."""
-        if not self._qualifies(row):
-            return
-        self.considered += 1
-        self._sequence += 1
-        entry = (
-            -site_hash(row.alid),
-            self._sequence,
-            _or_nan(row.se),
-            _or_nan(row.af_alt),
-            _or_nan(row.beta),
-            row.alid,
-        )
-        if len(self._heap) < self.k:
-            heapq.heappush(self._heap, entry)
-        elif entry > self._heap[0]:
-            heapq.heapreplace(self._heap, entry)
+    def admit(self, chunk: MetricsChunk) -> None:
+        """Offer one block; each qualifying row is retained if it outranks the heap.
+
+        Which rows qualify is decided for the whole block at once; the retention
+        itself stays row by row, because the selection is a bottom-`k` over a
+        cryptographic hash of each ALID and there is no array form of that. The
+        rows admitted, and the sample they produce, are the same either way.
+        """
+        qualifying = np.flatnonzero(self._qualifies(chunk))
+        self.considered += int(qualifying.size)
+        for index in qualifying.tolist():
+            alid = chunk.alid[index]
+            self._sequence += 1
+            entry = (
+                -site_hash(alid),
+                self._sequence,
+                float(chunk.se[index]),
+                float(chunk.af_alt[index]),
+                float(chunk.beta[index]),
+                alid,
+            )
+            if len(self._heap) < self.k:
+                heapq.heappush(self._heap, entry)
+            elif entry > self._heap[0]:
+                heapq.heapreplace(self._heap, entry)
 
     def retained(self) -> list[tuple[float, float, float, str]]:
         """`(se, af_alt, beta, alid)` per retained row, in source row order."""
@@ -367,7 +373,7 @@ class _EvidenceSample:
             for _hash, _sequence, se, af, beta, alid in sorted(self._heap, key=_entry_sequence)
         ]
 
-    def _qualifies(self, row: TabularMetricsRow) -> bool:
+    def _qualifies(self, chunk: MetricsChunk) -> np.ndarray:
         """The row rule both stages share: `stream_associations`' own admission.
 
         A row needs a usable standard error and beta to be evidence at all --
@@ -379,17 +385,11 @@ class _EvidenceSample:
         nothing.
         """
         if self.tier not in ESTIMATION_METHODS:
-            return False
-        if row.se is None or row.beta is None:
-            return False
+            return np.zeros(len(chunk), dtype=bool)
+        qualifying: np.ndarray = np.isfinite(chunk.se) & np.isfinite(chunk.beta)
         if self.tier is OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF:
-            return row.af_alt is not None
-        return True
-
-
-def _or_nan(value: float | None) -> float:
-    """A missing value as NaN, so the heap stays one numeric shape (ADR 0029)."""
-    return float("nan") if value is None else value
+            qualifying &= np.isfinite(chunk.af_alt)
+        return qualifying
 
 
 def _entry_sequence(entry: tuple[int, int, float, float, float, str]) -> int:
@@ -421,36 +421,65 @@ def _scan(
     `limit` binds the scan to a prefix (issue #209). The bound is checked after
     the row has been fed to both stages, so a resolution computed under a limit
     is exactly the resolution a full scan would have produced from the same
-    rows -- nothing is admitted half-way. The stream is always closed, so an
+    rows -- nothing is admitted half-way, and a block is truncated at the
+    stopping row rather than accepted whole. The stream is always closed, so an
     early stop releases the source rather than leaving a compressed handle for
     the garbage collector.
     """
-    stream = reader.stream_metrics()
+    stream = reader.stream_metric_chunks()
     try:
-        for row in stream:
-            scan.rows_read += 1
-            _accumulate_ancestry(row, panel, scan.panel_af)
-            evidence.admit(row)
-            if limit is not None:
-                if limit.max_rows is not None and scan.rows_read >= limit.max_rows:
-                    scan.stop_reason = ScanStop.ROW_LIMIT
-                    break
-                if (
-                    limit.max_ancestry_sites is not None
-                    and len(scan.panel_af) >= limit.max_ancestry_sites
-                ):
-                    scan.stop_reason = ScanStop.ANCESTRY_SITE_LIMIT
-                    break
+        for chunk in stream:
+            block = _bounded(chunk, scan, limit)
+            stopped = _accumulate_ancestry(block, panel, scan.panel_af, limit)
+            if stopped is not None and stopped + 1 < len(block):
+                block = _slice(block, stopped + 1)
+                scan.stop_reason = ScanStop.ANCESTRY_SITE_LIMIT
+            elif stopped is not None and scan.stop_reason is ScanStop.EOF:
+                # Both bounds can land on one row; `max_rows` is checked first
+                # row-wise, so it keeps precedence here too.
+                scan.stop_reason = ScanStop.ANCESTRY_SITE_LIMIT
+            evidence.admit(block)
+            scan.rows_read += len(block)
+            if scan.stop_reason is not ScanStop.EOF:
+                break
     finally:
         close = getattr(stream, "close", None)
         if close is not None:
             close()
 
 
+def _slice(chunk: MetricsChunk, rows: int) -> MetricsChunk:
+    """The first `rows` rows of a block, as a block."""
+    if rows >= len(chunk):
+        return chunk
+    return MetricsChunk(
+        alid=chunk.alid[:rows],
+        flipped=chunk.flipped[:rows],
+        palindromic=chunk.palindromic[:rows],
+        af_alt=chunk.af_alt[:rows],
+        beta=chunk.beta[:rows],
+        se=chunk.se[:rows],
+    )
+
+
+def _bounded(chunk: MetricsChunk, scan: _Scan, limit: ScanLimit | None) -> MetricsChunk:
+    """The part of a block a `max_rows` bound leaves, marking the stop if it ends."""
+    if limit is None or limit.max_rows is None:
+        return chunk
+    remaining = limit.max_rows - scan.rows_read
+    if remaining > len(chunk):
+        return chunk
+    scan.stop_reason = ScanStop.ROW_LIMIT
+    return _slice(chunk, remaining)
+
+
 def _accumulate_ancestry(
-    row: TabularMetricsRow, panel: Collection[str], panel_af: dict[str, float]
-) -> None:
-    """Record this row's A1-oriented frequency when it is panel evidence.
+    chunk: MetricsChunk,
+    panel: Collection[str],
+    panel_af: dict[str, float],
+    limit: ScanLimit | None = None,
+) -> int | None:
+    """Record this block's A1-oriented frequencies at panel sites.
 
     The filter is `opengwasdb.readers.tabular.extract_at_sites`'s, unchanged: a
     usable frequency, a usable standard error, no palindromic pair (neither the
@@ -459,13 +488,27 @@ def _accumulate_ancestry(
     here match the same Analysis assigned by `assign_from_source`.
 
     Later rows win a repeated ALID, which is also what a dict built by
-    `extract_at_sites` does.
+    `extract_at_sites` does -- so the frequencies are written in row order even
+    though which rows qualify is decided for the block at once.
+
+    Returns the row index at which a `max_ancestry_sites` bound was reached, or
+    `None` if the block ran to its end. The index is the caller's stopping point
+    for the SD evidence too: a bounded scan must not feed one stage rows the
+    other never saw.
     """
-    if row.se is None or row.af_alt is None:
-        return
-    if is_palindromic(row.ref, row.alt) or row.alid not in panel:
-        return
-    panel_af[row.alid] = (1.0 - row.af_alt) if row.flipped else row.af_alt
+    usable = np.isfinite(chunk.se) & np.isfinite(chunk.af_alt) & ~chunk.palindromic
+    rows = np.flatnonzero(usable)
+    frequencies = np.where(chunk.flipped[rows], 1.0 - chunk.af_alt[rows], chunk.af_alt[rows])
+    sites = limit.max_ancestry_sites if limit is not None else None
+    for row, alid, frequency in zip(
+        rows.tolist(), chunk.alid[rows].tolist(), frequencies.tolist(), strict=True
+    ):
+        if alid not in panel:
+            continue
+        panel_af[alid] = frequency
+        if sites is not None and len(panel_af) >= sites:
+            return int(row)
+    return None
 
 
 def _skip_reason(request: AnalysisRequest) -> SdReason | None:
