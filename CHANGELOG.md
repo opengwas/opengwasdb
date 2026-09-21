@@ -90,6 +90,16 @@ the end of this file.
   holding more shards than `reduction_batch_size` descend more than one tree
   level, reported as `reduce_levels`; a non-positive threshold fails loudly. The
   artifact is bit-for-bit unchanged across spill thresholds (#194).
+- **`opengwasdb resolve-analyses` CLI and `opengwasdb.build.resolve_manifest`**:
+  manifest-level CLI and pipeline that processes a canonical `analyses.tsv` manifest
+  using the bounded one-pass resolver, checkpointing each Analysis into an atomic
+  versioned JSON record (`{records_dir}/{analysis_id}.json`) and a deterministic
+  manifest-ordered `index.json`. Features content-aware `--resume` that invalidates
+  records on changed source size/mtime/checksum, tool version, references, extraction
+  panel, admission gates, or method tiers; fork-shares the ~1 GB ancestry reference once
+  per invocation without per-Analysis reloads; mitigates straggler tails via largest-first
+  scheduling; and isolates ordinary source/parser errors into `controlled_failure`
+  records while failing systemic setup errors loudly (#208, ADR 0045).
 - **`opengwasdb.build.resolve`**: resolves one Analysis's AF-based Ancestry
   Assignment and its phenotype-SD estimate from a *single* scan of its source
   (`resolve_analysis`), reusing the existing ancestry mixture, EAF-orientation
