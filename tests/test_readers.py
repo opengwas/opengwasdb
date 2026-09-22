@@ -1193,3 +1193,90 @@ def test_gwas_ssf_reader_reads_a_whitespace_padded_odds_ratio(tmp_path):
     associations = list(reader.stream_associations())
     assert len(associations) == 1
     assert associations[0].z == pytest.approx(math.log(2.0) / 0.50)
+
+
+# --- `BETA`, an enumerated spelling of `beta` (issue #214) ---
+
+
+def test_gwas_ssf_reader_reads_upper_case_beta(tmp_path):
+    """`GCST90044776` spells the effect column `BETA`; it is read as `beta`."""
+    path = tmp_path / "upper-beta.tsv"
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t0.25\t0.50\t0.30"], header=_effect_header("BETA"))
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    assert reader.effect_source == EffectSource(
+        column_name="BETA",
+        kind=EffectSourceKind.BETA,
+        is_derived=False,
+        assumes_standardised=False,
+    )
+    associations = list(reader.stream_associations())
+    assert len(associations) == 1, "the BETA row must reach the association stream"
+    assert associations[0].z == pytest.approx(0.25 / 0.50)
+    assert associations[0].se == 0.50
+    assert associations[0].eaf == 0.30
+    assert _metrics_rows(path) == _reference_metrics_rows(path)
+
+
+def test_gwas_ssf_reader_reads_the_gcst90044776_header_shape(tmp_path):
+    """The real header's `BETA` sits among study-specific columns; none confuse it."""
+    path = tmp_path / "gcst90044776-shaped.tsv"
+    header = (
+        "chromosome\tbase_pair_location\teffect_allele\tother_allele\t"
+        "standard_error\teffect_allele_frequency\tp_value\tvariant_id\tTEST\tNMISS\tBETA\tSTAT"
+    )
+    _write_metrics_fixture(
+        path,
+        ["1\t100\tA\tG\t0.05\t0.30\t1e-3\t1:100:A:G\tADD\t1000\t0.25\t2.0"],
+        header=header,
+    )
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    assert reader.effect_source is not None
+    assert reader.effect_source.column_name == "BETA"
+    associations = list(reader.stream_associations())
+    assert len(associations) == 1
+    assert associations[0].z == pytest.approx(0.25 / 0.05)
+
+
+def test_gwas_ssf_reader_rejects_both_beta_spellings(tmp_path):
+    """A file carrying `beta` and `BETA` is ambiguous, not silently preferred."""
+    path = tmp_path / "ambiguous-beta.tsv"
+    header = "\t".join(_SSF_HEADER) + "\tBETA"
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t0.25\t0.50\t0.30\t0.25"], header=header)
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    with pytest.raises(ValueError, match="Ambiguous effect column"):
+        _ = reader.effect_source
+    with pytest.raises(ValueError, match="Ambiguous effect column"):
+        list(reader.stream_associations())
+    with pytest.raises(ValueError, match="Ambiguous effect column"):
+        list(reader.stream_metrics())
+
+
+def test_other_gwas_ssf_columns_stay_case_sensitive(tmp_path):
+    """Only effect spellings are enumerated: `STANDARD_ERROR` is not `standard_error`.
+
+    The spelling rule is deliberately scoped to the effect column, so a
+    genuinely malformed file still fails loudly rather than being half-read.
+    """
+    path = tmp_path / "upper-se.tsv"
+    header = (
+        "chromosome\tbase_pair_location\teffect_allele\tother_allele\t"
+        "BETA\tSTANDARD_ERROR\teffect_allele_frequency"
+    )
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t0.25\t0.50\t0.30"], header=header)
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    assert reader.effect_source is not None
+    assert reader.effect_source.column_name == "BETA"
+    metrics = _metrics_rows(path)
+    assert len(metrics) == 1, "the row must still be projected"
+    assert metrics[0][7] == pytest.approx(0.25), "BETA is read"
+    assert metrics[0][8] is None, "STANDARD_ERROR is not standard_error"
+    assert metrics == _reference_metrics_rows(path)
+    assert list(reader.stream_associations()) == [], "no usable SE means no association"

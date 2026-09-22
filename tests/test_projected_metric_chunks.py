@@ -341,3 +341,32 @@ def test_duplicate_effect_column_raises_in_both_projections(tmp_path: Path) -> N
         list(stream_projected_metrics(path, _METRICS_COLUMNS))
     with pytest.raises(ValueError, match=r"Duplicate effect column 'odds_ratio' in header"):
         list(stream_projected_metric_chunks(path, _METRICS_COLUMNS))
+
+
+def test_upper_case_beta_projection_parity(tmp_path: Path) -> None:
+    """`BETA` is projected exactly as `beta`, identically in both paths."""
+    header = [column if column != "beta" else "BETA" for column in _HEADER]
+    rows = [
+        ["1", "100", "A", "G", "0.2", "0.1", "0.05"],
+        ["1", "200", "A", "C", "-0.3", "NA", "0.08"],
+        ["1", "300", "A", "C", "inf", "0.2", "0.03"],  # non-finite: absent
+    ]
+    path = _write(tmp_path / "upper_beta.tsv.gz", header, rows)
+
+    reference = _row_wise(path)
+    assert [row[4] for row in reference] == [0.2, -0.3, None], (
+        "the fixture must exercise a positive, a negative and an unusable BETA"
+    )
+    assert _blocked(path) == reference
+
+
+def test_ambiguous_beta_spelling_raises_in_both_projections(tmp_path: Path) -> None:
+    """Both `beta` and `BETA` present is refused by both projections."""
+    header = [*_HEADER, "BETA"]
+    rows = [["1", "100", "A", "G", "0.1", "0.05", "0.2", "0.1"]]
+    path = _write(tmp_path / "ambiguous_beta.tsv.gz", header, rows)
+
+    with pytest.raises(ValueError, match="Ambiguous effect column"):
+        list(stream_projected_metrics(path, _METRICS_COLUMNS))
+    with pytest.raises(ValueError, match="Ambiguous effect column"):
+        list(stream_projected_metric_chunks(path, _METRICS_COLUMNS))
