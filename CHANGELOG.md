@@ -178,6 +178,15 @@ the end of this file.
   per-Analysis record's `diagnostics` now carries `stop_reason` (`eof`,
   `row_limit` or `ancestry_site_limit`), so a record written under a scan bound
   can never be read back as a full-source resolution (#209).
+- **`resolve-analyses` bounds each source scan at 50,000 usable
+  ancestry-reference sites by default** (`--max-ancestry-sites`, `0` restores
+  the full scan; `--max-rows` bounds by rows instead). The #209 evaluation
+  measured a 13.4x aggregate speedup on the 106-Analysis frame, 105/106
+  assignment-and-gate agreement, and one false-positive EUR (`GCST90859377`),
+  which ADR 0047 records as accepted. The bound is part of every record's
+  fingerprint (`resolution_config.scan_limit`, with a rule version) and a
+  changed bound invalidates resume; `resolve_analysis` itself still defaults to
+  a full scan (#209, ADR 0047).
 - **`extract-variant-reference` streams every manifest, retiring the in-memory
   assembly**: hg19 and mixed manifests now lift each pre-lift window in a worker,
   re-bucket every survivor by post-lift window, merge those buckets per post-lift

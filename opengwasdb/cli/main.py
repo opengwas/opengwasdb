@@ -164,6 +164,26 @@ _AF_REFERENCE_ANCESTRY_OPTION = typer.Option(
 _N_WORKERS_OPTION = typer.Option(
     1, "--n-workers", "--workers", help="Fork process-pool size"
 )
+# Issue #209: the ancestry scan bound. A module-level singleton rather than an
+# inline `typer.Option(...)` default, so it does not add a new B008 finding.
+_MAX_ANCESTRY_SITES_OPTION = typer.Option(
+    50_000,
+    "--max-ancestry-sites",
+    help=(
+        "Stop each source scan once the ancestry fit holds this many distinct usable "
+        "reference sites (issue #209). 0 reads the whole source. Default 50000: the "
+        "measured ~13x saving on the 106-Analysis frame, at the cost of the one "
+        "false-positive EUR it produced (see ADR 0047)."
+    ),
+)
+_MAX_ROWS_OPTION = typer.Option(
+    None,
+    "--max-rows",
+    help=(
+        "Stop each source scan after this many rows (issue #209). "
+        "Unset reads the whole source."
+    ),
+)
 
 
 def _echo_summary(payload: dict[str, Any]) -> None:
@@ -815,6 +835,8 @@ def resolve_analyses_command(
             help="Max qualifying evidence rows to retain per Analysis for SD estimation",
         ),
     ] = DEFAULT_EVIDENCE_SAMPLE,
+    max_ancestry_sites: int = _MAX_ANCESTRY_SITES_OPTION,
+    max_rows: int | None = _MAX_ROWS_OPTION,
     n_workers: int = _N_WORKERS_OPTION,
     resume: Annotated[
         bool,
@@ -866,6 +888,8 @@ def resolve_analyses_command(
             residual_max=residual_max,
             orientation_flip_r=orientation_flip_r,
             evidence_sample=evidence_sample,
+            max_ancestry_sites=max_ancestry_sites or None,
+            max_rows=max_rows,
             n_workers=n_workers,
             resume=resume,
             largest_first=largest_first,

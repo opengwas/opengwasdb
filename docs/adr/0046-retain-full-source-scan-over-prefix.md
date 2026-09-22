@@ -1,5 +1,11 @@
 # Retain the full source scan: a prefix is not a substitute for one-pass Analysis resolution
 
+> **Superseded in part by [ADR 0047](./0047-adopt-50k-ancestry-site-bound.md).**
+> The evaluation and its numbers stand unchanged; the *policy* decision to keep
+> the full scan for the full-catalog release is superseded by ADR 0047, which
+> adopts a 50,000-site bound on the maintainer's judgement that the compute
+> saving across ~6,000 GWAS outweighs the measured false-positive EUR.
+
 The Phase B resolver (`opengwasdb.build.resolve.resolve_analysis`, ADR 0044)
 reads each compressed GWAS-SSF source once and accumulates the ancestry fit's
 frequencies and the phenotype-SD evidence in that pass. It still decompresses
