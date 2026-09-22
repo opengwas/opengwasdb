@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.readers.effect_source import EffectSourceKind, resolve_effect_source
 from opengwasdb.readers.gwas_vcf import is_palindromic
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
 from opengwasdb.stats import parse_af
@@ -85,11 +86,17 @@ class VariantProjectionColumns:
 class MetricsProjectionColumns:
     """Provider column names needed by a metrics-only tabular scan (issue #207).
 
-    Identity columns are required. `frequency`, `beta` and `standard_error` are
+    Identity columns are required. `frequency` and `standard_error` are
     optional on purpose: a harmonised file that reports `odds_ratio` instead of
     `beta` still names every variant, and ancestry assignment reads only
     frequencies -- refusing the whole file over a column one of the two stages
     never reads would throw away the other stage's evidence with it.
+
+    The effect column is deliberately *not* declared here. It is resolved from
+    the header by :func:`opengwasdb.readers.effect_source.resolve_effect_source`
+    (issue #213), because `beta` and `odds_ratio` are two permitted spellings
+    of the same thing and the file -- not the provider declaration -- says which
+    one it used.
     """
 
     chromosome: tuple[bytes, ...]
@@ -97,7 +104,6 @@ class MetricsProjectionColumns:
     ref: bytes
     alt: bytes
     frequency: bytes
-    beta: bytes
     standard_error: bytes
 
 
@@ -396,7 +402,8 @@ class _ResolvedMetricsProjection:
     ref: int
     alt: int
     frequency: int | None
-    beta: int | None
+    effect: int | None
+    effect_kind: EffectSourceKind | None
     standard_error: int | None
     last_identity: int
     split_limit: int
@@ -409,21 +416,26 @@ def _metrics_projection_indexes(
     if found is None:
         return None
     indexes, (chromosome, position, ref, alt) = found
-    optional = (
-        indexes.get(columns.frequency),
-        indexes.get(columns.beta),
-        indexes.get(columns.standard_error),
+    effect_source = resolve_effect_source(header)
+    effect = (
+        None
+        if effect_source is None
+        else indexes.get(effect_source.column_name.encode("utf-8"))
     )
+    frequency = indexes.get(columns.frequency)
+    standard_error = indexes.get(columns.standard_error)
     last_identity = max(chromosome, position, ref, alt)
+    optional = (frequency, effect, standard_error)
     last_selected = max([last_identity, *(index for index in optional if index is not None)])
     return _ResolvedMetricsProjection(
         chromosome=chromosome,
         position=position,
         ref=ref,
         alt=alt,
-        frequency=optional[0],
-        beta=optional[1],
-        standard_error=optional[2],
+        frequency=frequency,
+        effect=effect,
+        effect_kind=None if effect_source is None else effect_source.kind,
+        standard_error=standard_error,
         last_identity=last_identity,
         split_limit=last_selected + (last_selected < len(header) - 1),
     )
@@ -533,9 +545,23 @@ def _project_metrics_row(
         alid=alid,
         flipped=flipped,
         af_alt=_metrics_float(_metrics_cell(row, projection.frequency), parse_af),
-        beta=_metrics_float(_metrics_cell(row, projection.beta), parse_finite_float),
+        beta=_effect_beta(_metrics_cell(row, projection.effect), projection.effect_kind),
         se=_metrics_float(_metrics_cell(row, projection.standard_error), parse_positive_float),
     )
+
+
+def _effect_beta(cell: bytes, kind: EffectSourceKind | None) -> float | None:
+    """The beta the row carries, on the scale the association stream expects.
+
+    An `odds_ratio` is read as its log, and only a positive finite value has
+    one; anything else is absent, exactly as an unusable `beta` is. The
+    standard error is not touched by the transform -- GWAS-SSF reports it on
+    the log scale already (issue #213).
+    """
+    if kind is EffectSourceKind.ODDS_RATIO:
+        raw = _metrics_float(cell, parse_positive_float)
+        return math.log(raw) if raw is not None else None
+    return _metrics_float(cell, parse_finite_float)
 
 
 def _metrics_fields(line: bytes, split_limit: int) -> list[bytes]:
@@ -590,7 +616,7 @@ _MAX_POSITION = 2**63 - 1
 _PALINDROME_CODES = {"A": 1, "T": 2, "C": 3, "G": 4}
 _PALINDROME_PAIRS = ((1, 2), (2, 1), (3, 4), (4, 3))
 
-_STATISTIC_FIELDS = ("frequency", "beta", "standard_error")
+_STATISTIC_FIELDS = ("frequency", "effect", "standard_error")
 _PROJECTED_FIELDS = ("chromosome", "position", "ref", "alt", *_STATISTIC_FIELDS)
 _MISSING_TOKENS = sorted(_MISSING)
 
@@ -775,7 +801,21 @@ def _palindromic(effect: np.ndarray, other: np.ndarray) -> np.ndarray:
     return ambiguous
 
 
-def _projected_chunk(frame: pd.DataFrame, names: dict[str, str]) -> MetricsChunk:
+def _effect_usable(effect_kind: EffectSourceKind | None) -> Callable[[np.ndarray], np.ndarray]:
+    """The row-wise usability rule for the resolved effect kind, as an array rule.
+
+    `parse_positive_float` is what an `odds_ratio` is read through row-wise, so
+    the blocked path applies the same `> 0` bound before the log; a `beta` is
+    only required to be finite.
+    """
+    if effect_kind is EffectSourceKind.ODDS_RATIO:
+        return lambda values: np.isfinite(values) & (values > 0.0)
+    return np.isfinite
+
+
+def _projected_chunk(
+    frame: pd.DataFrame, names: dict[str, str], effect_kind: EffectSourceKind | None
+) -> MetricsChunk:
     """One block's projection, reduced to the rows naming a canonical variant."""
     chromosome, _, chromosome_ok = _category_arrays(
         frame[names["chromosome"]], normalise_chromosome
@@ -788,6 +828,11 @@ def _projected_chunk(frame: pd.DataFrame, names: dict[str, str]) -> MetricsChunk
     lower = np.where(effect < other, effect, other)
     upper = np.where(effect < other, other, effect)
     text = np.where(position_ok, position, 0).astype(str).astype(object)
+    beta = _statistic_array(frame, names.get("effect"), _effect_usable(effect_kind))
+    if effect_kind is EffectSourceKind.ODDS_RATIO:
+        # Every value that survived `_effect_usable` is positive, so the only
+        # `NaN`s entering `log` are already-absent ones, which stay absent.
+        beta = np.log(beta)
     return MetricsChunk(
         alid=(chromosome + ":" + text + ":" + lower + ":" + upper)[keep],
         flipped=(effect != lower)[keep],
@@ -795,7 +840,7 @@ def _projected_chunk(frame: pd.DataFrame, names: dict[str, str]) -> MetricsChunk
         af_alt=_statistic_array(
             frame, names.get("frequency"), lambda v: np.isfinite(v) & (v >= 0.0) & (v <= 1.0)
         )[keep],
-        beta=_statistic_array(frame, names.get("beta"), np.isfinite)[keep],
+        beta=beta[keep],
         se=_statistic_array(
             frame, names.get("standard_error"), lambda v: np.isfinite(v) & (v > 0.0)
         )[keep],
@@ -859,7 +904,7 @@ def stream_projected_metric_chunks(
     )
     with frames:
         for frame in frames:
-            yield _projected_chunk(frame, names)
+            yield _projected_chunk(frame, names, projection.effect_kind)
 
 
 def metrics_chunks_from_rows(

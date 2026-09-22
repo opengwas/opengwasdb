@@ -114,6 +114,35 @@ def test_ordinary_projection_parity(tmp_path: Path) -> None:
     _assert_parity(path, expected_rows=7)
 
 
+def test_odds_ratio_projection_parity(tmp_path: Path) -> None:
+    """`odds_ratio` is projected on the log scale, identically in both paths.
+
+    A non-positive, missing or unparseable odds ratio is absent, exactly as an
+    unusable beta is; the usable ones are `log(or)`.
+    """
+    header = [column if column != "beta" else "odds_ratio" for column in _HEADER]
+    rows = [
+        ["1", "100", "A", "G", "2.0", "0.05", "0.2"],
+        ["1", "200", "A", "C", "0.5", "0.05", "0.2"],  # negative log-OR
+        ["1", "300", "A", "C", "0", "0.05", "0.2"],  # non-positive: absent
+        ["1", "400", "A", "C", "-3.0", "0.05", "0.2"],  # negative: absent
+        ["1", "500", "A", "C", "NA", "0.05", "0.2"],  # missing: absent
+        ["1", "600", "A", "C", "bad", "0.05", "0.2"],  # unparseable: absent
+    ]
+    path = _write(tmp_path / "odds_ratio.tsv.gz", header, rows)
+
+    reference = _row_wise(path)
+    assert [row[4] for row in reference] == [
+        pytest.approx(math.log(2.0)),
+        pytest.approx(math.log(0.5)),
+        None,
+        None,
+        None,
+        None,
+    ], "the fixture must exercise each odds-ratio usability rule before parity means anything"
+    assert _blocked(path) == reference
+
+
 def test_reordered_and_extra_columns_parity(tmp_path: Path) -> None:
     """Columns are resolved by name, and unread columns are not read."""
     header = [
@@ -288,10 +317,27 @@ def test_repeated_reads_are_deterministic(tmp_path: Path) -> None:
 
 
 def test_duplicate_projected_column_raises(tmp_path: Path) -> None:
-    """Two columns with one projected name would silently read the wrong one."""
-    header = [*_HEADER, "beta"]
+    """Two columns with one non-effect projected name would silently read the wrong one."""
+    header = [*_HEADER, "standard_error"]
     rows = [["1", "100", "A", "G", "0.1", "0.05", "0.2", "0.9"]]
     path = _write(tmp_path / "duplicate.tsv.gz", header, rows)
 
     with pytest.raises(ValueError, match="appears 2 times"):
+        list(stream_projected_metric_chunks(path, _METRICS_COLUMNS))
+
+
+def test_duplicate_effect_column_raises_in_both_projections(tmp_path: Path) -> None:
+    """A repeated `odds_ratio` is rejected, not resolved by last-wins.
+
+    The row-wise projection used a dict lookup whose silent answer was the last
+    one; the blocked path refuses a duplicate projected column for its own
+    reason, and now both go through the effect-source rule first.
+    """
+    header = [column for column in _HEADER if column != "beta"] + ["odds_ratio", "odds_ratio"]
+    rows = [["1", "100", "A", "G", "0.05", "0.2", "0.9", "0.8"]]
+    path = _write(tmp_path / "duplicate_effect.tsv.gz", header, rows)
+
+    with pytest.raises(ValueError, match=r"Duplicate effect column 'odds_ratio' in header"):
+        list(stream_projected_metrics(path, _METRICS_COLUMNS))
+    with pytest.raises(ValueError, match=r"Duplicate effect column 'odds_ratio' in header"):
         list(stream_projected_metric_chunks(path, _METRICS_COLUMNS))
