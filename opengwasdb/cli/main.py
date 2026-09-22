@@ -25,6 +25,8 @@ from opengwasdb.build.phenotype_sd_pipeline import (
     read_sd_manifest,
     write_sd_estimates,
 )
+from opengwasdb.build.resolve import DEFAULT_EVIDENCE_SAMPLE
+from opengwasdb.build.resolve_manifest import resolve_analyses_manifest
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import (
     complete_dense_store,
@@ -710,6 +712,170 @@ def estimate_phenotype_sd_command(
             ),
         }
     )
+
+
+@app.command("resolve-analyses")
+def resolve_analyses_command(
+    manifest_path: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to canonical analyses.tsv manifest",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    records_dir: Annotated[
+        Path,
+        typer.Argument(
+            help="Directory to write versioned per-Analysis JSON records and index",
+        ),
+    ],
+    ancestry_reference: Annotated[
+        Path,
+        typer.Option(
+            "--ancestry-reference",
+            help="Ancestry Reference Panel: ref_freqs.hg38.tsv.gz",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    ancestry_groups: Annotated[
+        Path,
+        typer.Option(
+            "--ancestry-groups",
+            help="Fine→super-population map: ancestry_groups.tsv",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    extraction_panel: Annotated[
+        Path | None,
+        typer.Option(
+            "--extraction-panel",
+            help="Variant list or QC panel file for bounded ancestry extraction",
+        ),
+    ] = None,
+    af_reference: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--af-reference",
+            help=(
+                "Reference frequency table (or LD panel) for reference-MAF SD tier, "
+                "optionally keyed by ancestry as ANCESTRY=PATH (e.g. EUR=/path/to/ukb.tsv.gz). "
+                "Can be repeated."
+            ),
+        ),
+    ] = None,
+    af_reference_ancestry: Annotated[
+        str | None,
+        typer.Option(
+            "--af-reference-ancestry",
+            help="Default ancestry population for unkeyed --af-reference (default: EUR)",
+        ),
+    ] = None,
+    default_source_reader_capability: Annotated[
+        str | None,
+        typer.Option(
+            "--default-source-reader-capability",
+            help="Default reader capability for manifest rows omitting source_reader_capability",
+        ),
+    ] = None,
+    maf_floor: Annotated[
+        float,
+        typer.Option(help="Drop reference variants below this MAF"),
+    ] = 0.01,
+    tau: Annotated[
+        float,
+        typer.Option(help="Gate: min dominant super-population proportion"),
+    ] = 0.50,
+    delta: Annotated[
+        float,
+        typer.Option(help="Gate: min margin over the runner-up"),
+    ] = 0.20,
+    n_min: Annotated[
+        int,
+        typer.Option(help="Gate: min overlapping reference sites"),
+    ] = 5_000,
+    residual_max: Annotated[
+        float,
+        typer.Option(help="Gate: max RMS NNLS residual"),
+    ] = 0.06,
+    orientation_flip_r: Annotated[
+        float,
+        typer.Option(
+            help="Gate: orientation correlation threshold for mis-oriented EAF reporting",
+        ),
+    ] = -0.5,
+    evidence_sample: Annotated[
+        int,
+        typer.Option(
+            help="Max qualifying evidence rows to retain per Analysis for SD estimation",
+        ),
+    ] = DEFAULT_EVIDENCE_SAMPLE,
+    n_workers: int = _N_WORKERS_OPTION,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume/--no-resume", help="Skip unchanged successful records"),
+    ] = False,
+    largest_first: Annotated[
+        bool,
+        typer.Option(
+            "--largest-first/--manifest-order",
+            help="Schedule larger sources first to avoid straggler tails",
+        ),
+    ] = True,
+    reference_version: Annotated[
+        str,
+        typer.Option(help="Ancestry reference version stamp (default: reference filename)"),
+    ] = "",
+) -> None:
+    """Resolve an entire analyses.tsv manifest into versioned per-Analysis records.
+
+    Processes each Analysis in MANIFEST_PATH once using the bounded one-pass
+    resolver (issue #207), producing an Assigned Ancestry and an estimated
+    phenotype SD from a single source scan.
+
+    Outputs are written to RECORDS_DIR as atomic {analysis_id}.json records
+    plus a deterministic index.json. When --resume is active, successful records
+    whose fingerprints (source content/mtime, tool version, references, extraction
+    panel, gates, and method tiers) match the current run are preserved without
+    re-executing. Missing, failed, or stale records are rerun.
+
+    The Ancestry Reference Panel is loaded once in the parent process and
+    fork-shared across workers. Ordinary source, parser, or statistical errors
+    are isolated to the affected Analysis and recorded as controlled_failure,
+    while systemic configuration errors fail the command immediately.
+    """
+    try:
+        summary = resolve_analyses_manifest(
+            manifest_path=manifest_path,
+            records_dir=records_dir,
+            ancestry_reference=ancestry_reference,
+            ancestry_groups=ancestry_groups,
+            extraction_panel=extraction_panel,
+            af_references=af_reference,
+            af_reference_ancestry=af_reference_ancestry,
+            default_source_reader_capability=default_source_reader_capability,
+            maf_floor=maf_floor,
+            tau=tau,
+            delta=delta,
+            n_min=n_min,
+            residual_max=residual_max,
+            orientation_flip_r=orientation_flip_r,
+            evidence_sample=evidence_sample,
+            n_workers=n_workers,
+            resume=resume,
+            largest_first=largest_first,
+            reference_version=reference_version,
+        )
+    except (ValueError, FileNotFoundError, TypeError, OSError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    _echo_summary(summary.as_dict())
 
 
 @app.command("route-catalogue")

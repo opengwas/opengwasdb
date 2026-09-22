@@ -845,3 +845,148 @@ def test_fake_reader_needs_no_bcftools_or_fixture_vcf():
 
     assert len(associations) == 1
     assert associations[0].z == 1.0
+
+
+# --- Metrics projection: the one-pass resolver's row stream (issue #207) ---
+
+
+def _metrics_fields(rows) -> list[tuple]:
+    """Rows as comparable tuples, so two streams can be compared field for field.
+
+    `rsid` is deliberately not one of them: it is the one field the metrics seam
+    does not carry, and the parity claim is about the nine it does.
+    """
+    return [
+        (
+            row.chromosome,
+            row.position,
+            row.ref,
+            row.alt,
+            row.alid,
+            row.flipped,
+            row.af_alt,
+            row.beta,
+            row.se,
+        )
+        for row in rows
+    ]
+
+
+def _metrics_rows(path: Path) -> list[tuple]:
+    return _metrics_fields(GwasSsfReader(path).stream_metrics())
+
+
+def _reference_metrics_rows(path: Path) -> list[tuple]:
+    return _metrics_fields(gwas_ssf_module.stream_full_row_metrics(path))
+
+
+def _write_metrics_fixture(path: Path, rows: list[str], header: str | None = None) -> None:
+    columns = header or "\t".join(_SSF_HEADER)
+    path.write_text(columns + "\n" + "".join(row + "\n" for row in rows), encoding="utf-8")
+
+
+# Every row here is one the projection has to agree about: a plain row, a row
+# whose effect allele is not the canonical A1 (so `flipped` is load-bearing), a
+# lowercase allele, a `chr`-prefixed chromosome, an indel, and rows the
+# full-row parser drops outright (bad position, identical alleles, too few
+# cells). A projection tested only on well-formed rows would not have been
+# tested at all.
+_METRICS_FIXTURE_ROWS = [
+    "1\t100\tA\tC\t0.10\t0.20\t0.30",
+    "1\t200\tC\tA\t0.11\t0.21\t0.31",
+    "1\t300\ta\tc\t0.12\t0.22\t0.32",
+    "chr1\t400\tA\tC\t0.13\t0.23\t0.33",
+    "1\t500\tA\tCG\t0.14\t0.24\t0.34",
+    "1\t0\tA\tC\t0.15\t0.25\t0.35",
+    "1\t600\tA\tA\t0.16\t0.26\t0.36",
+    "1\t700\tA\tC\t0.17\t0.27",
+    "1\t800\tA\tC\tNA\t0.28\t1.4",
+    "1\t900\tA\tC\t0.19\tNA\t0.39",
+]
+
+
+def test_gwas_ssf_metrics_projection_agrees_with_the_full_row_parser(tmp_path):
+    path = tmp_path / "metrics.tsv"
+    _write_metrics_fixture(path, _METRICS_FIXTURE_ROWS)
+
+    projected = _metrics_rows(path)
+    reference = _reference_metrics_rows(path)
+
+    # The fixture must actually reach the interesting rows before either stream
+    # is compared: a fixture of dropped rows would compare two empty lists.
+    assert len(reference) == 8, "fixture must keep the rows it is meant to test"
+    assert any(row[5] for row in reference), "fixture must include a flipped row"
+    assert any(row[0] == "1" and row[3] == "a" for row in reference), (
+        "fixture must include a lowercase allele row"
+    )
+    assert any(row[2] == "CG" for row in reference), "fixture must include an indel"
+    assert projected == reference
+
+
+def test_gwas_ssf_metrics_projection_without_optional_statistics_columns(tmp_path):
+    """A file with no `effect_allele_frequency` still names its variants."""
+    path = tmp_path / "no-frequency.tsv"
+    _write_metrics_fixture(
+        path,
+        ["1\t100\tA\tC\t0.10\t0.20", "1\t200\tC\tA\t0.11\t0.21"],
+        header="\t".join(column for column in _SSF_HEADER if column != "effect_allele_frequency"),
+    )
+
+    projected = _metrics_rows(path)
+
+    assert projected == _reference_metrics_rows(path)
+    assert [row[6] for row in projected] == [None, None]
+
+
+def test_gwas_ssf_metrics_projection_keeps_rows_the_association_stream_drops(tmp_path):
+    """The reason the metrics seam exists, asserted rather than assumed.
+
+    A row carrying a frequency and a standard error but no usable beta is
+    evidence for ancestry assignment and none for the SD estimator; the
+    association stream drops it, so a resolver built on that stream would lose
+    ancestry evidence the source actually carries.
+    """
+    path = tmp_path / "no-beta-column.tsv"
+    _write_metrics_fixture(
+        path,
+        ["1\t100\tA\tC\t0.20\t0.30"],
+        header="\t".join(column for column in _SSF_HEADER if column != "beta"),
+    )
+
+    metrics = _metrics_rows(path)
+    associations = list(GwasSsfReader(path).stream_associations())
+
+    assert len(metrics) == 1, "the metrics stream must see the row"
+    assert metrics[0][7] is None, "the row has no beta, and none is fabricated"
+    assert metrics[0][6] == pytest.approx(0.30)
+    assert associations == [], "the association stream must drop the same row"
+
+
+def test_metrics_projection_fails_loudly_when_identity_column_is_missing(tmp_path):
+    path = tmp_path / "missing-allele-column.tsv"
+    _write_metrics_fixture(
+        path,
+        ["1\t100\tA\tC\t0.10\t0.20\t0.30"],
+        header="\t".join(column for column in _SSF_HEADER if column != "other_allele"),
+    )
+
+    with pytest.raises(ValueError, match=r"missing required variant columns"):
+        list(GwasSsfReader(path).stream_metrics())
+
+
+def test_metrics_projection_preserves_a_quoted_final_projected_column(tmp_path):
+    path = tmp_path / "quoted-metrics.tsv"
+    _write_metrics_fixture(path, ['1\t100\tA\tC\t0.10\t0.20\t"0.30"'])
+
+    assert _metrics_rows(path) == _reference_metrics_rows(path)
+
+
+def test_metrics_projection_survives_a_row_shorter_than_the_header(tmp_path):
+    """A truncated row is a row with missing cells, never a borrowed one."""
+    path = tmp_path / "short-row.tsv"
+    _write_metrics_fixture(path, ["1\t100\tA", "1\t200\tA\tC\t0.11\t0.21\t0.31"])
+
+    projected = _metrics_rows(path)
+
+    assert len(projected) == 1, "the truncated row names no usable variant"
+    assert projected == _reference_metrics_rows(path)
