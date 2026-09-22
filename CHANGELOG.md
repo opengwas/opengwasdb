@@ -166,6 +166,20 @@ the end of this file.
   `beta == log(odds_ratio)` for 200,000/200,000 rows each, `standard_error`
   unchanged; `GCST006329` now raises `Duplicate effect column 'beta' in header`
   where it previously yielded an empty association stream (#213, ADR 0049).
+- **`BETA` accepted as an enumerated spelling of the `beta` effect column**:
+  the effect source resolves `BETA` to the same `EffectSourceKind.BETA` as
+  `beta`, reporting the matched spelling in `effect_source.column_name`
+  (`"BETA"` or `"beta"`). The accepted set is explicit — `("beta", "BETA")` —
+  not a blanket case-insensitive match, so `Beta`/`bEtA` do not resolve and the
+  other GWAS-SSF column names keep their specified spelling. A header carrying
+  both `beta` and `BETA` (padding included) raises
+  `ValueError("Ambiguous effect column: header carries both 'beta' and
+  'BETA'")` rather than silently preferring one; two of either spelling is
+  still a duplicate. Verified on the real `GCST90044776` (26,825,889 rows):
+  resolves to `BETA`, `beta` equals the raw column bit-for-bit for
+  300,000/300,000 rows, and row-wise/blocked projection parity holds. That
+  file's `standard_error` is `NA` in all 26.8M rows, so it still yields no
+  associations — a source-data gap, not the spelling (#214, ADR 0050).
 
 ### Changed
 

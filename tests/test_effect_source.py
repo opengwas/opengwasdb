@@ -13,6 +13,8 @@ failure mode if it is not enforced:
   last-wins. A real harmonised file (`GCST006329`) carries `beta ` and `beta`.
 * Surrounding whitespace is not part of a column's name, so `beta ` and `beta`
   collide; the matched cell is still looked up by its verbatim spelling.
+* `beta` accepts the enumerated spellings `("beta", "BETA")` (issue #214);
+  mixed case is *not* folded, and a header carrying both spellings is ambiguous.
 * Neither column -> `None`, never a fabricated source.
 """
 
@@ -145,3 +147,79 @@ def test_effect_source_is_frozen():
     attribute = "column_name"
     with pytest.raises(dataclasses.FrozenInstanceError):
         setattr(source, attribute, "odds_ratio")
+
+
+# --- `BETA`, an enumerated spelling of `beta` (issue #214) ---
+
+
+def test_upper_case_beta_resolves_to_the_beta_kind():
+    """`GCST90044776` spells the column `BETA`; it is the same effect source."""
+    source = resolve_effect_source(["chromosome", "BETA", "standard_error"])
+
+    assert source == EffectSource(
+        column_name="BETA",
+        kind=EffectSourceKind.BETA,
+        is_derived=False,
+        assumes_standardised=False,
+    )
+
+
+def test_a_padded_upper_case_beta_resolves_to_the_exact_header_name():
+    source = resolve_effect_source(["BETA "])
+
+    assert source is not None
+    assert source.kind is EffectSourceKind.BETA
+    assert source.column_name == "BETA "
+
+
+def test_upper_case_beta_wins_over_odds_ratio():
+    source = resolve_effect_source(["BETA", "odds_ratio"])
+
+    assert source is not None
+    assert source.kind is EffectSourceKind.BETA
+    assert source.column_name == "BETA"
+
+
+@pytest.mark.parametrize("spelling", ["Beta", "bEtA", "BEta"])
+def test_mixed_case_beta_is_not_an_accepted_spelling(spelling):
+    """The accepted set is enumerated, not case-folded: only `beta` and `BETA`."""
+    assert resolve_effect_source(["chromosome", spelling, "standard_error"]) is None
+
+
+def test_a_file_carrying_both_beta_and_upper_case_beta_is_ambiguous():
+    """Two spellings of one column is a header no reader can choose from."""
+    with pytest.raises(
+        ValueError, match=r"Ambiguous effect column: header carries both 'beta' and 'BETA'"
+    ):
+        resolve_effect_source(["chromosome", "beta", "standard_error", "BETA"])
+
+
+def test_a_padded_beta_and_upper_case_beta_are_ambiguous():
+    with pytest.raises(
+        ValueError, match=r"Ambiguous effect column: header carries both 'beta' and 'BETA'"
+    ):
+        resolve_effect_source(["beta ", "BETA"])
+
+
+def test_two_upper_case_betas_are_a_duplicate():
+    with pytest.raises(ValueError, match=r"Duplicate effect column 'BETA' in header"):
+        resolve_effect_source(["BETA", "BETA"])
+
+
+def test_a_padded_and_unpadded_upper_case_beta_are_a_duplicate():
+    with pytest.raises(ValueError, match=r"Duplicate effect column 'BETA' in header"):
+        resolve_effect_source(["BETA ", "BETA"])
+
+
+def test_a_duplicate_is_reported_before_ambiguity():
+    """A header with two `beta`s and one `BETA` is a duplicate, not only ambiguous."""
+    with pytest.raises(ValueError, match=r"Duplicate effect column 'beta' in header"):
+        resolve_effect_source(["beta", "beta", "BETA"])
+
+
+def test_a_bytes_header_with_upper_case_beta_is_accepted():
+    source = resolve_effect_source([b"chromosome", b"BETA", b"standard_error"])
+
+    assert source is not None
+    assert source.kind is EffectSourceKind.BETA
+    assert source.column_name == "BETA"

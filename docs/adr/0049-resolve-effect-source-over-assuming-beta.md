@@ -1,5 +1,11 @@
 # Resolve an Analysis's effect source rather than assuming `beta`
 
+> **Extended by [ADR 0050](./0050-enumerate-effect-column-spellings.md):**
+> `beta` additionally accepts the `BETA` spelling, as an explicit enumerated
+> set rather than case-insensitive matching, and a header carrying both
+> spellings is refused as ambiguous. The resolution seam this ADR defines is
+> unchanged.
+
 GWAS-SSF permits an Analysis to report its effect as either `beta` or
 `odds_ratio`, and `beta = log(odds_ratio)`. The GWAS-SSF reader hardcoded
 `beta`, so a harmonised file that named every variant and reported a usable
