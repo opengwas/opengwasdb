@@ -6,6 +6,7 @@ fake, and the conformance suite all three share.
 from __future__ import annotations
 
 import gzip
+import math
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from opengwasdb.readers import (
     FINNGEN_R13_CAPABILITY,
     GWAS_SSF_CAPABILITY,
     GWAS_VCF_CAPABILITY,
+    EffectSource,
+    EffectSourceKind,
     FakeReader,
     FinnGenR13Reader,
     GwasSsfReader,
@@ -990,3 +993,203 @@ def test_metrics_projection_survives_a_row_shorter_than_the_header(tmp_path):
 
     assert len(projected) == 1, "the truncated row names no usable variant"
     assert projected == _reference_metrics_rows(path)
+
+
+# --- Effect source: beta or odds_ratio (issue #213) ---
+
+
+def _effect_header(effect_column: str) -> str:
+    """`_SSF_HEADER` with the effect column renamed, order preserved."""
+    return "\t".join(effect_column if column == "beta" else column for column in _SSF_HEADER)
+
+
+_ODDS_RATIO_HEADER = _effect_header("odds_ratio")
+
+
+def test_gwas_ssf_reader_reports_a_beta_file_as_beta(tmp_path):
+    """The rule for files that already carry `beta` is explicit, not incidental."""
+    path = tmp_path / "beta.tsv"
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t0.25\t0.50\t0.30"])
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    assert reader.effect_source == EffectSource(
+        column_name="beta",
+        kind=EffectSourceKind.BETA,
+        is_derived=False,
+        assumes_standardised=False,
+    )
+
+
+def test_gwas_ssf_reader_reads_odds_ratio_as_log_or_beta(tmp_path):
+    """An odds-ratio file yields a usable beta on the log-OR scale."""
+    path = tmp_path / "odds-ratio.tsv"
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t2.0\t0.50\t0.30"], header=_ODDS_RATIO_HEADER)
+
+    reader = GwasSsfReader(path, StoredEffectScale.LOG_OR)
+
+    assert reader.effect_source == EffectSource(
+        column_name="odds_ratio",
+        kind=EffectSourceKind.ODDS_RATIO,
+        is_derived=True,
+        assumes_standardised=False,
+    )
+
+    associations = list(reader.stream_associations())
+    assert len(associations) == 1, "the odds-ratio row must reach the association stream"
+    assert associations[0].z == pytest.approx(math.log(2.0) / 0.50)
+    # The standard error is already on the log scale in GWAS-SSF; it is carried
+    # through unchanged, never rescaled by the log transform.
+    assert associations[0].se == 0.50
+    assert associations[0].eaf == 0.30
+
+
+def test_gwas_ssf_reader_reads_odds_ratio_below_one_as_a_negative_beta(tmp_path):
+    """`log(0.5) < 0`, so the effect direction survives the transform."""
+    path = tmp_path / "protective.tsv"
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t0.5\t0.50\t0.30"], header=_ODDS_RATIO_HEADER)
+
+    associations = list(GwasSsfReader(path, StoredEffectScale.LOG_OR).stream_associations())
+
+    assert len(associations) == 1
+    assert associations[0].z == pytest.approx(math.log(0.5) / 0.50)
+    assert associations[0].z < 0.0
+
+
+def test_gwas_ssf_reader_drops_a_non_positive_or_unparseable_odds_ratio(tmp_path):
+    """An unusable `odds_ratio` drops the row exactly as an unusable `beta` does."""
+    path = tmp_path / "unusable.tsv"
+    _write_metrics_fixture(
+        path,
+        [
+            "1\t100\tA\tG\t0\t0.50\t0.30",  # zero: log undefined
+            "1\t200\tA\tC\t-2.0\t0.50\t0.30",  # negative: log undefined
+            "1\t300\tA\tC\tbad\t0.50\t0.30",  # unparseable
+            "1\t400\tA\tC\tNA\t0.50\t0.30",  # missing
+            "1\t500\tA\tC\t2.0\t0.50\t0.30",  # usable
+        ],
+        header=_ODDS_RATIO_HEADER,
+    )
+
+    associations = list(GwasSsfReader(path, StoredEffectScale.LOG_OR).stream_associations())
+
+    assert [association.position for association in associations] == [500], (
+        "only the usable odds-ratio row may reach the association stream"
+    )
+    # The metrics seam still sees every row, with the unusable beta absent.
+    assert [row[7] for row in _metrics_rows(path)] == [
+        None, None, None, None, pytest.approx(math.log(2.0))
+    ]
+
+
+def test_gwas_ssf_reader_prefers_beta_when_both_effect_columns_are_present(tmp_path):
+    """The explicit precedence rule, tested rather than assumed.
+
+    `odds_ratio=100.0` would give a very different beta; reading the row and
+    getting `beta`'s answer is what proves the precedence is real.
+    """
+    path = tmp_path / "both.tsv"
+    header = "\t".join(_SSF_HEADER) + "\todds_ratio"
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t0.25\t0.50\t0.30\t100.0"], header=header)
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    assert reader.effect_source is not None
+    assert reader.effect_source.kind is EffectSourceKind.BETA
+    associations = list(reader.stream_associations())
+    assert len(associations) == 1
+    assert associations[0].z == pytest.approx(0.25 / 0.50)
+
+
+def test_gwas_ssf_reader_rejects_a_duplicate_effect_column(tmp_path):
+    """`GCST006329` carries `beta` twice; last-wins would be a silent wrong answer."""
+    path = tmp_path / "duplicate.tsv"
+    header = "\t".join(_SSF_HEADER) + "\tbeta"
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t0.25\t0.50\t0.30\t9.99"], header=header)
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    with pytest.raises(ValueError, match=r"Duplicate effect column 'beta' in header"):
+        _ = reader.effect_source
+    with pytest.raises(ValueError, match=r"Duplicate effect column 'beta' in header"):
+        list(reader.stream_associations())
+
+
+def test_gwas_ssf_reader_reports_no_effect_source_when_the_file_names_none(tmp_path):
+    """A file with neither column is reported as having none, not guessed at."""
+    path = tmp_path / "no-effect.tsv"
+    header = "\t".join(column for column in _SSF_HEADER if column != "beta")
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t0.50\t0.30"], header=header)
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    assert reader.effect_source is None
+    assert list(reader.stream_associations()) == []
+
+
+def test_gwas_ssf_odds_ratio_metrics_projection_matches_the_full_row_parser(tmp_path):
+    """The projection and the reference parser agree on the log-OR beta."""
+    path = tmp_path / "or-metrics.tsv"
+    _write_metrics_fixture(
+        path,
+        [
+            "1\t100\tA\tG\t2.0\t0.50\t0.30",
+            "1\t200\tA\tC\t0.5\t0.25\t0.40",
+            "1\t300\tA\tC\t0\t0.25\t0.40",
+        ],
+        header=_ODDS_RATIO_HEADER,
+    )
+
+    projected = _metrics_rows(path)
+    reference = _reference_metrics_rows(path)
+
+    assert len(reference) == 3, "fixture must keep the rows it is meant to test"
+    assert projected == reference
+    assert [row[7] for row in projected] == [
+        pytest.approx(math.log(2.0)),
+        pytest.approx(math.log(0.5)),
+        None,
+    ]
+
+
+def test_gwas_ssf_reader_rejects_the_gcst006329_padded_beta_duplicate(tmp_path):
+    """The real `GCST006329` header: `beta ` holds the values, `beta` is all `NA`.
+
+    Matching the two exactly made them different columns, so `row.get("beta")`
+    read the empty one and every row silently dropped from the association
+    stream. Whitespace is not part of a column's name; the ambiguity is
+    refused instead of resolved.
+    """
+    path = tmp_path / "gcst006329-shaped.tsv"
+    header = (
+        "chromosome\tbase_pair_location\teffect_allele\tother_allele\t"
+        "beta \tstandard_error\teffect_allele_frequency\tbeta"
+    )
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t0.0458\t0.1342\t0.033\tNA"], header=header)
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    with pytest.raises(ValueError, match=r"Duplicate effect column 'beta' in header"):
+        _ = reader.effect_source
+    with pytest.raises(ValueError, match=r"Duplicate effect column 'beta' in header"):
+        list(reader.stream_associations())
+    with pytest.raises(ValueError, match=r"Duplicate effect column 'beta' in header"):
+        list(reader.stream_metrics())
+
+
+def test_gwas_ssf_reader_reads_a_whitespace_padded_odds_ratio(tmp_path):
+    """A lone padded spelling is still the column it names, and is read by it."""
+    path = tmp_path / "padded-odds-ratio.tsv"
+    header = (
+        "chromosome\tbase_pair_location\teffect_allele\tother_allele\t"
+        "odds_ratio \tstandard_error\teffect_allele_frequency"
+    )
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t2.0\t0.50\t0.30"], header=header)
+
+    reader = GwasSsfReader(path, StoredEffectScale.LOG_OR)
+
+    assert reader.effect_source is not None
+    assert reader.effect_source.column_name == "odds_ratio "
+    associations = list(reader.stream_associations())
+    assert len(associations) == 1
+    assert associations[0].z == pytest.approx(math.log(2.0) / 0.50)

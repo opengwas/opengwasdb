@@ -146,6 +146,26 @@ the end of this file.
 - **`opengwasdb.build.phenotype_sd.has_usable_sample_size`**: ADR-0029's
   sample-size rule, split out of `estimate_phenotype_sd` so a caller reporting
   *why* it has no estimate asks the same question the estimator answers (#207).
+- **`opengwasdb.readers.effect_source` and `GwasSsfReader.effect_source`**: a
+  GWAS-SSF Analysis's effect is now read from whichever permitted column its
+  file carries. A file reporting `odds_ratio` yields `beta = log(odds_ratio)`
+  through the association stream instead of being dropped, and the recorded
+  `standard_error` is carried through unchanged because GWAS-SSF reports it on
+  the log scale already. A non-positive or unparseable `odds_ratio` drops the
+  row exactly as an unusable `beta` does, and a header naming a candidate effect
+  column twice (as `GCST006329` does with `beta ` and `beta`) raises
+  `ValueError` rather than resolving last-wins — previously that file's `NA`
+  `beta` was read and every row silently dropped. Candidate names are matched
+  ignoring surrounding whitespace, so a padded spelling is the same column.
+  `beta` wins over `odds_ratio` when a file carries both, under an explicit
+  tested rule; files that already carry `beta` are unchanged.
+  `EffectSource`/`EffectSourceKind` are exported from `opengwasdb.readers`, and
+  both the row-wise and blocked metrics projections resolve the same way, so
+  their parity holds for `odds_ratio`. Verified on real GWAS-Catalog sources:
+  `GCST006980`/`GCST008225` resolve to `odds_ratio` with
+  `beta == log(odds_ratio)` for 200,000/200,000 rows each, `standard_error`
+  unchanged; `GCST006329` now raises `Duplicate effect column 'beta' in header`
+  where it previously yielded an empty association stream (#213, ADR 0049).
 
 ### Changed
 

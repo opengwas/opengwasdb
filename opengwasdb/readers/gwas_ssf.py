@@ -25,6 +25,13 @@ statistic `ReaderAssociation` does not carry or does not keep -- it holds a
 `z` rather than the beta behind it, and it drops rows with an unusable beta that
 ancestry assignment could still read a frequency from.
 
+The effect is read from whichever permitted column the file carries -- `beta`
+or `odds_ratio`, the latter as `log(odds_ratio)` -- resolved by
+`opengwasdb.readers.effect_source` and reported through `effect_source` rather
+than assumed (issue #213). A header naming either candidate twice raises,
+because `GCST006329` carries `beta` twice and a last-wins lookup would silently
+read one of two columns.
+
 `extract_at_sites` has no GWAS-VCF/bcftools equivalent to call into (issue
 #21 built that combined AF+SE lookup around bcftools -R specifically): it
 scans the file once, reading `effect_allele_frequency` where the file
@@ -39,11 +46,17 @@ from __future__ import annotations
 
 import csv
 import gzip
+import math
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.readers.effect_source import (
+    EffectSource,
+    EffectSourceKind,
+    resolve_effect_source,
+)
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
 from opengwasdb.readers.tabular import (
     DEFAULT_CHUNK_ROWS,
@@ -78,7 +91,6 @@ _METRICS_COLUMNS = MetricsProjectionColumns(
     ref=b"other_allele",
     alt=b"effect_allele",
     frequency=b"effect_allele_frequency",
-    beta=b"beta",
     standard_error=b"standard_error",
 )
 
@@ -99,18 +111,47 @@ def _rsid(rsid: str | None, variant_id: str | None) -> str:
     return ""
 
 
-def _iter_rows(path: str | Path) -> Iterator[TabularRow]:
+def _row_beta(row: dict[str, str], effect_source: EffectSource | None) -> float | None:
+    """One row's beta, read from whichever effect column the file resolved to.
+
+    `beta = log(odds_ratio)`, and only a positive value has a log: a
+    non-positive or unparseable `odds_ratio` is unusable in exactly the way an
+    unparseable `beta` is, so it yields `None` and the row drops from the
+    association stream. `standard_error` is untouched -- GWAS-SSF reports it on
+    the log scale already (issue #213).
+    """
+    if effect_source is None:
+        return None
+    if effect_source.kind is EffectSourceKind.ODDS_RATIO:
+        raw = parse_positive_float(row.get(effect_source.column_name))
+        return math.log(raw) if raw is not None else None
+    return parse_finite_float(row.get(effect_source.column_name))
+
+
+def _iter_rows(
+    path: str | Path, *, effect_source: EffectSource | None = None
+) -> Iterator[TabularRow]:
     """Parse each row of a filtered/harmonised GWAS-SSF file once.
 
     A row with an unparseable chromosome, position, or allele pair cannot be
     represented as a variant at all and is dropped from every stream; a row
-    with a valid identity but an unusable `beta`/`standard_error` still
+    with a valid identity but an unusable effect/`standard_error` still
     yields a `TabularRow` (its `beta`/`se` are `None`) so `stream_variants`
     can still see it per the interface's superset contract.
+
+    `effect_source` is the caller's resolution for this file, so the property
+    and the stream cannot disagree; when omitted it is resolved here, which is
+    what keeps `stream_full_row_metrics` a faithful reference for the
+    projection's odds-ratio handling.
     """
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
+        source = (
+            effect_source
+            if effect_source is not None
+            else resolve_effect_source(reader.fieldnames or ())
+        )
         for row in reader:
             effect_allele = row.get("effect_allele")
             other_allele = row.get("other_allele")
@@ -126,7 +167,6 @@ def _iter_rows(path: str | Path) -> Iterator[TabularRow]:
             except VariantNormalisationError:
                 continue
             se = parse_positive_float(row.get("standard_error"))
-            beta = parse_finite_float(row.get("beta"))
             yield TabularRow(
                 chromosome=ori.variant.chromosome,
                 position=ori.variant.position,
@@ -134,7 +174,7 @@ def _iter_rows(path: str | Path) -> Iterator[TabularRow]:
                 ref=other_allele,
                 alt=effect_allele,
                 flipped=ori.flipped,
-                beta=beta,
+                beta=_row_beta(row, source),
                 se=se,
                 af_alt=parse_af(row.get("effect_allele_frequency")),
                 rsid=_rsid(row.get("rsid"), row.get("variant_id")),
@@ -143,6 +183,17 @@ def _iter_rows(path: str | Path) -> Iterator[TabularRow]:
 
 def _iter_variants(path: str | Path) -> Iterator[SourceVariant]:
     yield from stream_projected_variants(path, _VARIANT_COLUMNS)
+
+
+def _header(path: str | Path) -> list[str]:
+    """A GWAS-SSF file's header names, reading no data row.
+
+    Shares `_iter_rows`' opener rule so the effect source `GwasSsfReader`
+    reports is the one its row parser would resolve for the same file.
+    """
+    opener = gzip.open if str(path).endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", newline="") as fh:
+        return next(csv.reader(fh, delimiter="\t"), [])
 
 
 def stream_full_row_variants(path: str | Path) -> Iterator[SourceVariant]:
@@ -181,8 +232,23 @@ class GwasSsfReader:
     stored_effect_scale: StoredEffectScale = StoredEffectScale.SD
     chunk_rows: int = DEFAULT_CHUNK_ROWS
 
+    @property
+    def effect_source(self) -> EffectSource | None:
+        """Which effect column this file's Analysis resolves to (issue #213).
+
+        Reported to the caller rather than assumed: a file may carry `beta`,
+        `odds_ratio`, or neither, and which one it uses is a fact the caller
+        needs (for a manifest record, a diagnostic, or to know a beta is
+        derived). A header naming a candidate effect column twice raises
+        `ValueError` here -- `GCST006329` carries `beta` twice, and a
+        last-wins lookup would silently read one of two columns.
+        """
+        return resolve_effect_source(_header(self.path))
+
     def stream_associations(self) -> Iterator[ReaderAssociation]:
-        yield from stream_associations(_iter_rows(self.path), self.stored_effect_scale)
+        yield from stream_associations(
+            _iter_rows(self.path, effect_source=self.effect_source), self.stored_effect_scale
+        )
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         yield from _iter_variants(self.path)

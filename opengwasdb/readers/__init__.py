@@ -4,6 +4,11 @@
 
 from __future__ import annotations
 
+from opengwasdb.readers.effect_source import (
+    EffectSource,
+    EffectSourceKind,
+    resolve_effect_source,
+)
 from opengwasdb.readers.fake import FakeReader
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY, FinnGenR13Reader
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
@@ -27,6 +32,8 @@ __all__ = [
     "FINNGEN_R13_CAPABILITY",
     "GWAS_SSF_CAPABILITY",
     "GWAS_VCF_CAPABILITY",
+    "EffectSource",
+    "EffectSourceKind",
     "FakeReader",
     "FinnGenR13Reader",
     "GwasSsfReader",
@@ -38,6 +45,7 @@ __all__ = [
     "is_palindromic",
     "known_capabilities",
     "load_liftover",
+    "resolve_effect_source",
     "resolve_reader",
     "site_metrics_arrays",
     "write_regions_file",
