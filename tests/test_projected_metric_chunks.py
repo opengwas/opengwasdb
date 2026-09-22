@@ -370,3 +370,45 @@ def test_ambiguous_beta_spelling_raises_in_both_projections(tmp_path: Path) -> N
         list(stream_projected_metrics(path, _METRICS_COLUMNS))
     with pytest.raises(ValueError, match="Ambiguous effect column"):
         list(stream_projected_metric_chunks(path, _METRICS_COLUMNS))
+
+
+# --- z-score derivation parity (issue #215) ---
+
+_Z_HEADER = (
+    "chromosome base_pair_location effect_allele other_allele z"
+    " effect_allele_frequency n"
+).split()
+
+
+def test_z_score_projection_parity(tmp_path: Path) -> None:
+    """`z` derives beta and se identically in the row-wise and blocked paths."""
+    rows = [
+        ["1", "100", "A", "G", "-2.0", "0.25", "1000"],
+        ["1", "200", "A", "C", "1.5", "0.4", "25000"],
+        ["1", "300", "A", "C", "0.0", "0.5", "100"],
+        ["1", "400", "A", "C", "-1.0", "0", "1000"],  # EAF zero: absent
+        ["1", "500", "A", "C", "-1.0", "1", "1000"],  # EAF one: absent
+        ["1", "600", "A", "C", "-1.0", "0.25", "0"],  # N zero: absent
+        ["1", "700", "A", "C", "NA", "0.25", "1000"],  # z missing: absent
+    ]
+    path = _write(tmp_path / "z.tsv.gz", _Z_HEADER, rows)
+
+    reference = _row_wise(path)
+    assert [row[4] for row in reference][:3] == [
+        pytest.approx(-0.10307361440601463),
+        pytest.approx(0.01369244779134152),
+        pytest.approx(0.0),
+    ], "the fixture must derive each usable z before parity means anything"
+    assert [row[4] for row in reference][3:] == [None, None, None, None]
+    assert _blocked(path) == reference
+
+
+def test_z_score_parity_without_a_sample_size_column(tmp_path: Path) -> None:
+    """Without `n`/`N` the derivation is unusable in both paths, identically."""
+    header = [column for column in _Z_HEADER if column != "n"]
+    rows = [["1", "100", "A", "G", "-2.0", "0.25"]]
+    path = _write(tmp_path / "z_no_n.tsv.gz", header, rows)
+
+    reference = _row_wise(path)
+    assert [row[4] for row in reference] == [None], "no N means no derived beta"
+    assert _blocked(path) == reference

@@ -8,12 +8,19 @@ import math
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
 from opengwasdb.model.enums import StoredEffectScale
-from opengwasdb.readers.effect_source import EffectSourceKind, resolve_effect_source
+from opengwasdb.readers.effect_source import (
+    EffectSourceKind,
+    UnsignedZScoreError,
+    derive_z_score_effect,
+    resolve_effect_source,
+    resolve_sample_size_column,
+)
 from opengwasdb.readers.gwas_vcf import is_palindromic
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
 from opengwasdb.stats import parse_af
@@ -23,6 +30,11 @@ from opengwasdb.variants.normalise import (
     normalise_allele,
     normalise_chromosome,
 )
+
+if TYPE_CHECKING:
+    # Only ever a signature annotation here; the value itself comes from the
+    # caller's resolved effect source (issue #215).
+    from opengwasdb.readers.effect_source import EffectSource
 
 _MISSING = {"", ".", "NA", "NaN", "nan", "None"}
 _VALID_DISTINCT_ALLELE_CODES = frozenset(
@@ -403,10 +415,16 @@ class _ResolvedMetricsProjection:
     alt: int
     frequency: int | None
     effect: int | None
-    effect_kind: EffectSourceKind | None
+    effect_source: EffectSource | None
     standard_error: int | None
+    sample_size: int | None
     last_identity: int
     split_limit: int
+
+    @property
+    def effect_kind(self) -> EffectSourceKind | None:
+        """The resolved effect kind, for call sites that need only that."""
+        return None if self.effect_source is None else self.effect_source.kind
 
 
 def _metrics_projection_indexes(
@@ -424,8 +442,15 @@ def _metrics_projection_indexes(
     )
     frequency = indexes.get(columns.frequency)
     standard_error = indexes.get(columns.standard_error)
+    # The per-row sample size is only read when a z-score derivation needs it;
+    # a beta/odds_ratio file never pays for the lookup or its ambiguity rule.
+    sample_size: int | None = None
+    if effect_source is not None and effect_source.kind is EffectSourceKind.Z_SCORE:
+        sample_size_name = resolve_sample_size_column(header)
+        if sample_size_name is not None:
+            sample_size = indexes.get(sample_size_name.encode("utf-8"))
     last_identity = max(chromosome, position, ref, alt)
-    optional = (frequency, effect, standard_error)
+    optional = (frequency, effect, standard_error, sample_size)
     last_selected = max([last_identity, *(index for index in optional if index is not None)])
     return _ResolvedMetricsProjection(
         chromosome=chromosome,
@@ -434,8 +459,9 @@ def _metrics_projection_indexes(
         alt=alt,
         frequency=frequency,
         effect=effect,
-        effect_kind=None if effect_source is None else effect_source.kind,
+        effect_source=effect_source,
         standard_error=standard_error,
+        sample_size=sample_size,
         last_identity=last_identity,
         split_limit=last_selected + (last_selected < len(header) - 1),
     )
@@ -537,6 +563,7 @@ def _project_metrics_row(
     if identity is None:
         return None
     chromosome, position, ref, alt, alid, flipped = identity
+    beta, se = _projected_effect(row, projection)
     return TabularMetricsRow(
         chromosome=chromosome,
         position=position,
@@ -545,8 +572,32 @@ def _project_metrics_row(
         alid=alid,
         flipped=flipped,
         af_alt=_metrics_float(_metrics_cell(row, projection.frequency), parse_af),
-        beta=_effect_beta(_metrics_cell(row, projection.effect), projection.effect_kind),
-        se=_metrics_float(_metrics_cell(row, projection.standard_error), parse_positive_float),
+        beta=beta,
+        se=se,
+    )
+
+
+def _projected_effect(
+    row: list[bytes], projection: _ResolvedMetricsProjection
+) -> tuple[float | None, float | None]:
+    """The row's ``(beta, se)``, deriving both from a signed z where that is the source.
+
+    A z-score derivation consumes the row's own EAF and sample size and yields
+    `(None, None)` for any row it cannot honestly derive -- an EAF outside
+    `(0, 1)`, a non-positive or absent N -- exactly as an unusable beta drops
+    the row (issue #215).
+    """
+    source = projection.effect_source
+    if source is not None and source.kind is EffectSourceKind.Z_SCORE:
+        derived = derive_z_score_effect(
+            _metrics_float(_metrics_cell(row, projection.effect), parse_finite_float),
+            _metrics_float(_metrics_cell(row, projection.frequency), parse_af),
+            _metrics_float(_metrics_cell(row, projection.sample_size), parse_positive_float),
+        )
+        return derived if derived is not None else (None, None)
+    return (
+        _effect_beta(_metrics_cell(row, projection.effect), projection.effect_kind),
+        _metrics_float(_metrics_cell(row, projection.standard_error), parse_positive_float),
     )
 
 
@@ -580,6 +631,57 @@ def _metrics_fields(line: bytes, split_limit: int) -> list[bytes]:
         ]
     row[-1] = row[-1].rstrip(b"\r\n")
     return row
+
+
+def require_signed_z_score(path: str | Path, column_name: str) -> None:
+    """Refuse a z-score column that carries no negative value.
+
+    A signed z has both directions; a `|z|` or chi-square statistic has the same
+    magnitude with no sign, and reading it as signed would give every derived
+    effect the wrong direction (issue #215). The column is read until a negative
+    value proves it signed -- before any row is yielded, because a prefix cannot
+    prove a column is signed and a partially consumed stream must not look
+    plausible. A column with no negative value is read to the end and refused.
+
+    A column with no usable value at all is not *unsigned* -- it is unusable,
+    and every row drops for that reason. Only a column that has values and none
+    of them negative is refused.
+
+    This is the file-reading half of the guard; the scale policy that decides
+    *whether* a z-score source is admissible at all lives with the reader
+    (`GwasSsfReader`), which is where `stored_effect_scale` is known.
+    """
+    frames = pd.read_csv(
+        path,
+        sep="\t",
+        usecols=[column_name],
+        # The same missing-value vocabulary and float rule the projections use,
+        # so a value this guard sees is a value they would see.
+        keep_default_na=False,
+        na_values={column_name: _MISSING_TOKENS},
+        chunksize=DEFAULT_CHUNK_ROWS,
+        engine="c",
+    )
+    seen = False
+    with frames:
+        for frame in frames:
+            column = frame[column_name]
+            values = (
+                column.to_numpy(dtype="float64", copy=False)
+                if column.dtype.kind == "f"
+                else _floats_from_text(column)
+            )
+            finite = np.isfinite(values)
+            if not finite.any():
+                continue
+            seen = True
+            if bool((values[finite] < 0.0).any()):
+                return
+    if seen:
+        raise UnsignedZScoreError(
+            f"{path}: z-score column {column_name!r} carries no negative value; "
+            "an unsigned statistic is not a signed z"
+        )
 
 
 def stream_projected_metrics(
@@ -616,7 +718,7 @@ _MAX_POSITION = 2**63 - 1
 _PALINDROME_CODES = {"A": 1, "T": 2, "C": 3, "G": 4}
 _PALINDROME_PAIRS = ((1, 2), (2, 1), (3, 4), (4, 3))
 
-_STATISTIC_FIELDS = ("frequency", "effect", "standard_error")
+_STATISTIC_FIELDS = ("frequency", "effect", "standard_error", "sample_size")
 _PROJECTED_FIELDS = ("chromosome", "position", "ref", "alt", *_STATISTIC_FIELDS)
 _MISSING_TOKENS = sorted(_MISSING)
 
@@ -813,8 +915,50 @@ def _effect_usable(effect_kind: EffectSourceKind | None) -> Callable[[np.ndarray
     return np.isfinite
 
 
+def _z_score_arrays(
+    frame: pd.DataFrame, names: dict[str, str]
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(beta, se)`` derived from a signed z, EAF and per-row N (issue #215).
+
+    The usability rules mirror `derive_z_score_effect`: a finite z, an EAF in
+    `(0, 1)` and a positive N. Every unusable input is already `NaN`, so the
+    expression is `NaN` for that row and `beta`/`se` stay absent -- never a
+    substituted frequency or a study-level N.
+    """
+    z = _statistic_array(frame, names.get("effect"), np.isfinite)
+    af = _statistic_array(
+        frame, names.get("frequency"), lambda v: np.isfinite(v) & (v > 0.0) & (v < 1.0)
+    )
+    n = _statistic_array(frame, names.get("sample_size"), lambda v: np.isfinite(v) & (v > 0.0))
+    # A `NaN` anywhere propagates through the whole expression; `errstate` only
+    # keeps numpy from warning about it, it does not change the answer.
+    with np.errstate(invalid="ignore", divide="ignore"):
+        se = 1.0 / np.sqrt(2.0 * af * (1.0 - af) * (n + z * z))
+        beta = z * se
+    usable = np.isfinite(se)
+    return np.where(usable, beta, np.nan), np.where(usable, se, np.nan)
+
+
+def _projected_effect_arrays(
+    frame: pd.DataFrame, names: dict[str, str], effect_source: EffectSource | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """One block's ``(beta, se)`` arrays, from the resolved effect source."""
+    kind = None if effect_source is None else effect_source.kind
+    if kind is EffectSourceKind.Z_SCORE:
+        return _z_score_arrays(frame, names)
+    beta = _statistic_array(frame, names.get("effect"), _effect_usable(kind))
+    if kind is EffectSourceKind.ODDS_RATIO:
+        # Every value that survived `_effect_usable` is positive, so the only
+        # `NaN`s entering `log` are already-absent ones, which stay absent.
+        beta = np.log(beta)
+    se = _statistic_array(
+        frame, names.get("standard_error"), lambda v: np.isfinite(v) & (v > 0.0)
+    )
+    return beta, se
+
+
 def _projected_chunk(
-    frame: pd.DataFrame, names: dict[str, str], effect_kind: EffectSourceKind | None
+    frame: pd.DataFrame, names: dict[str, str], effect_source: EffectSource | None
 ) -> MetricsChunk:
     """One block's projection, reduced to the rows naming a canonical variant."""
     chromosome, _, chromosome_ok = _category_arrays(
@@ -828,11 +972,7 @@ def _projected_chunk(
     lower = np.where(effect < other, effect, other)
     upper = np.where(effect < other, other, effect)
     text = np.where(position_ok, position, 0).astype(str).astype(object)
-    beta = _statistic_array(frame, names.get("effect"), _effect_usable(effect_kind))
-    if effect_kind is EffectSourceKind.ODDS_RATIO:
-        # Every value that survived `_effect_usable` is positive, so the only
-        # `NaN`s entering `log` are already-absent ones, which stay absent.
-        beta = np.log(beta)
+    beta, se = _projected_effect_arrays(frame, names, effect_source)
     return MetricsChunk(
         alid=(chromosome + ":" + text + ":" + lower + ":" + upper)[keep],
         flipped=(effect != lower)[keep],
@@ -841,9 +981,42 @@ def _projected_chunk(
             frame, names.get("frequency"), lambda v: np.isfinite(v) & (v >= 0.0) & (v <= 1.0)
         )[keep],
         beta=beta[keep],
-        se=_statistic_array(
-            frame, names.get("standard_error"), lambda v: np.isfinite(v) & (v > 0.0)
-        )[keep],
+        se=se[keep],
+    )
+
+
+def _metric_frame_reader(
+    path: str | Path, names: dict[str, str], chunk_rows: int
+) -> pd.io.parsers.TextFileReader:
+    """The chunked pandas reader for one metrics projection.
+
+    The position keeps its source text: pandas would happily read `1e5` and
+    `100.5` as numbers, and `int()` -- the rule the row-wise projection applies
+    -- rejects both, so the literal is the only thing that can be checked
+    against it. Missing values are `_MISSING` and nothing else, per column:
+    pandas' own default token list would turn a chromosome spelled `NA` -- which
+    the row-wise projection keeps -- into a dropped row, while a statistic has
+    exactly the missing spellings `parse_finite_float` accepts.
+    """
+    dtypes: dict[str, str] = {names["position"]: "str"}
+    dtypes.update(
+        dict.fromkeys((names[field] for field in ("chromosome", "ref", "alt")), "category")
+    )
+    return pd.read_csv(
+        path,
+        sep="\t",
+        usecols=list(names.values()),
+        dtype=dtypes,
+        keep_default_na=False,
+        na_values={
+            names[field]: _MISSING_TOKENS for field in _STATISTIC_FIELDS if field in names
+        },
+        # `float()` is correctly rounded and pandas' default converter is not;
+        # on a real source that is a one-in-a-hundred-thousand row whose
+        # frequency differs from the row-wise projection in its last place.
+        float_precision="round_trip",
+        chunksize=chunk_rows,
+        engine="c",
     )
 
 
@@ -873,38 +1046,10 @@ def stream_projected_metric_chunks(
         header_line = fh.readline()
     projection = _required_metrics_projection(path, header_line, columns)
     names = _projected_column_names(_header_cells(header_line), projection)
-    # The position keeps its source text: pandas would happily read `1e5` and
-    # `100.5` as numbers, and `int()` -- the rule the row-wise projection
-    # applies -- rejects both, so the literal is the only thing that can be
-    # checked against it.
-    dtypes: dict[str, str] = {names["position"]: "str"}
-    dtypes.update(dict.fromkeys((names[field] for field in ("chromosome", "ref", "alt")),
-                                "category"))
-    frames = pd.read_csv(
-        path,
-        sep="\t",
-        usecols=list(names.values()),
-        dtype=dtypes,
-        # Missing values are `_MISSING` and nothing else, per column: pandas'
-        # own default token list would turn a chromosome spelled `NA` -- which
-        # the row-wise projection keeps -- into a dropped row, while a statistic
-        # has exactly the missing spellings `parse_finite_float` accepts.
-        keep_default_na=False,
-        na_values={
-            names[field]: _MISSING_TOKENS
-            for field in _STATISTIC_FIELDS
-            if field in names
-        },
-        # `float()` is correctly rounded and pandas' default converter is not;
-        # on a real source that is a one-in-a-hundred-thousand row whose
-        # frequency differs from the row-wise projection in its last place.
-        float_precision="round_trip",
-        chunksize=chunk_rows,
-        engine="c",
-    )
+    frames = _metric_frame_reader(path, names, chunk_rows)
     with frames:
         for frame in frames:
-            yield _projected_chunk(frame, names, projection.effect_kind)
+            yield _projected_chunk(frame, names, projection.effect_source)
 
 
 def metrics_chunks_from_rows(

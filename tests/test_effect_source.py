@@ -24,7 +24,15 @@ import dataclasses
 
 import pytest
 
-from opengwasdb.readers import EffectSource, EffectSourceKind, resolve_effect_source
+from opengwasdb.readers import (
+    CaseControlZScoreError,
+    EffectSource,
+    EffectSourceKind,
+    UnsignedZScoreError,
+    derive_z_score_effect,
+    resolve_effect_source,
+    resolve_sample_size_column,
+)
 
 
 def test_beta_column_resolves_to_beta():
@@ -223,3 +231,111 @@ def test_a_bytes_header_with_upper_case_beta_is_accepted():
     assert source is not None
     assert source.kind is EffectSourceKind.BETA
     assert source.column_name == "BETA"
+
+
+# --- z-score: a derived, standardised effect (issue #215) ---
+
+_Z_SCORE_SPELLINGS = ("z_score", "Zscore", "ZScore", "z")
+
+
+@pytest.mark.parametrize("spelling", _Z_SCORE_SPELLINGS)
+def test_z_score_spellings_resolve_to_a_derived_standardised_source(spelling):
+    """A signed z is an approximation of a standardised beta, not a unit change."""
+    source = resolve_effect_source(["chromosome", spelling, "effect_allele_frequency"])
+
+    assert source == EffectSource(
+        column_name=spelling,
+        kind=EffectSourceKind.Z_SCORE,
+        is_derived=True,
+        assumes_standardised=True,
+    )
+
+
+def test_z_score_kind_value_is_its_canonical_spelling():
+    assert EffectSourceKind.Z_SCORE.value == "z_score"
+
+
+@pytest.mark.parametrize("spelling", ["zscore", "ZSCORE", "Z_SCORE", "Z"])
+def test_mixed_case_z_score_spellings_are_not_accepted(spelling):
+    """The set is enumerated, so no other casing resolves."""
+    assert resolve_effect_source(["chromosome", spelling]) is None
+
+
+def test_beta_and_odds_ratio_take_precedence_over_z_score():
+    beta = resolve_effect_source(["z", "odds_ratio", "beta"])
+    odds_ratio = resolve_effect_source(["z", "odds_ratio"])
+
+    assert beta is not None and beta.kind is EffectSourceKind.BETA
+    assert odds_ratio is not None and odds_ratio.kind is EffectSourceKind.ODDS_RATIO
+
+
+def test_multiple_z_score_spellings_are_ambiguous():
+    with pytest.raises(
+        ValueError, match=r"Ambiguous effect column: header carries both 'z_score' and 'z'"
+    ):
+        resolve_effect_source(["z", "z_score"])
+
+
+def test_duplicate_z_score_spelling_is_a_duplicate():
+    with pytest.raises(ValueError, match=r"Duplicate effect column 'z' in header"):
+        resolve_effect_source(["z", "z"])
+
+
+def test_derive_z_score_effect_known_answer():
+    beta, se = derive_z_score_effect(-2.0, 0.25, 1000)
+
+    assert se == 0.051536807203007316
+    assert beta == -0.10307361440601463
+    assert beta == pytest.approx(-2.0 * se)
+
+
+def test_derive_z_score_effect_carries_the_sign():
+    positive, _ = derive_z_score_effect(1.5, 0.4, 25000)
+    negative, _ = derive_z_score_effect(-1.5, 0.4, 25000)
+
+    assert positive == 0.01369244779134152
+    assert positive == -negative
+
+
+@pytest.mark.parametrize(
+    ("z", "af", "n"),
+    [
+        (None, 0.25, 1000),
+        (2.0, None, 1000),
+        (2.0, 0.25, None),
+        (2.0, 0.0, 1000),
+        (2.0, 1.0, 1000),
+        (2.0, -0.1, 1000),
+        (2.0, 1.5, 1000),
+        (2.0, 0.25, 0),
+        (2.0, 0.25, -5),
+    ],
+)
+def test_derive_z_score_effect_rejects_unusable_inputs(z, af, n):
+    assert derive_z_score_effect(z, af, n) is None
+
+
+def test_resolve_sample_size_column_accepts_n_and_upper_case_N():
+    assert resolve_sample_size_column(["chromosome", "n"]) == "n"
+    assert resolve_sample_size_column(["chromosome", "N"]) == "N"
+
+
+def test_resolve_sample_size_column_is_none_when_absent():
+    assert resolve_sample_size_column(["chromosome", "z"]) is None
+
+
+def test_both_sample_size_spellings_are_ambiguous():
+    with pytest.raises(
+        ValueError, match=r"Ambiguous sample-size column: header carries both 'n' and 'N'"
+    ):
+        resolve_sample_size_column(["n", "N"])
+
+
+def test_duplicate_sample_size_spelling_is_a_duplicate():
+    with pytest.raises(ValueError, match=r"Duplicate sample-size column 'n' in header"):
+        resolve_sample_size_column(["n", "n"])
+
+
+def test_z_score_error_types_are_distinguishable_value_errors():
+    assert issubclass(CaseControlZScoreError, ValueError)
+    assert issubclass(UnsignedZScoreError, ValueError)

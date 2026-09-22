@@ -25,12 +25,15 @@ statistic `ReaderAssociation` does not carry or does not keep -- it holds a
 `z` rather than the beta behind it, and it drops rows with an unusable beta that
 ancestry assignment could still read a frequency from.
 
-The effect is read from whichever permitted column the file carries -- `beta`
-or `odds_ratio`, the latter as `log(odds_ratio)` -- resolved by
+The effect is read from whichever permitted column the file carries -- `beta`,
+`odds_ratio` (as `log(odds_ratio)`), or a signed `z_score` -- resolved by
 `opengwasdb.readers.effect_source` and reported through `effect_source` rather
-than assumed (issue #213). A header naming either candidate twice raises,
-because `GCST006329` carries `beta` twice and a last-wins lookup would silently
-read one of two columns.
+than assumed (issues #213-#215). A header naming a candidate column twice
+raises, because `GCST006329` carries `beta ` and `beta` and a last-wins lookup
+would silently read one of two columns. A z-score source derives
+`beta = z * se` with `se = 1 / sqrt(2 f (1 - f) (N + z^2))` from the row's own
+EAF and per-row N, and carries `assumes_standardised` because that formula
+assumes `var(Y) = 1`.
 
 `extract_at_sites` has no GWAS-VCF/bcftools equivalent to call into (issue
 #21 built that combined AF+SE lookup around bcftools -R specifically): it
@@ -47,7 +50,7 @@ from __future__ import annotations
 import csv
 import gzip
 import math
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,7 +58,10 @@ from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.effect_source import (
     EffectSource,
     EffectSourceKind,
+    derive_z_score_effect,
+    refuse_case_control_z_score,
     resolve_effect_source,
+    resolve_sample_size_column,
 )
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
 from opengwasdb.readers.tabular import (
@@ -69,6 +75,7 @@ from opengwasdb.readers.tabular import (
     parse_af,
     parse_finite_float,
     parse_positive_float,
+    require_signed_z_score,
     stream_associations,
     stream_projected_metric_chunks,
     stream_projected_metrics,
@@ -111,21 +118,83 @@ def _rsid(rsid: str | None, variant_id: str | None) -> str:
     return ""
 
 
-def _row_beta(row: dict[str, str], effect_source: EffectSource | None) -> float | None:
-    """One row's beta, read from whichever effect column the file resolved to.
+def _row_effect(
+    row: dict[str, str], effect_source: EffectSource | None, sample_size_column: str | None
+) -> tuple[float | None, float | None]:
+    """One row's ``(beta, se)``, from whichever effect column the file resolved to.
 
-    `beta = log(odds_ratio)`, and only a positive value has a log: a
-    non-positive or unparseable `odds_ratio` is unusable in exactly the way an
-    unparseable `beta` is, so it yields `None` and the row drops from the
-    association stream. `standard_error` is untouched -- GWAS-SSF reports it on
-    the log scale already (issue #213).
+    `beta = log(odds_ratio)`; a signed z derives both by the #215 formula. A
+    non-positive or unparseable `odds_ratio`/`z` is unusable in exactly the way
+    an unparseable `beta` is, so it yields `(None, None)` and the row drops from
+    the association stream. `standard_error` is read verbatim for a beta or
+    odds-ratio source -- GWAS-SSF reports it on the log scale already (#213).
     """
     if effect_source is None:
-        return None
+        return None, parse_positive_float(row.get("standard_error"))
+    if effect_source.kind is EffectSourceKind.Z_SCORE:
+        derived = derive_z_score_effect(
+            parse_finite_float(row.get(effect_source.column_name)),
+            parse_af(row.get("effect_allele_frequency")),
+            parse_positive_float(row.get(sample_size_column)) if sample_size_column else None,
+        )
+        return derived if derived is not None else (None, None)
     if effect_source.kind is EffectSourceKind.ODDS_RATIO:
         raw = parse_positive_float(row.get(effect_source.column_name))
-        return math.log(raw) if raw is not None else None
-    return parse_finite_float(row.get(effect_source.column_name))
+        beta = math.log(raw) if raw is not None else None
+    else:
+        beta = parse_finite_float(row.get(effect_source.column_name))
+    return beta, parse_positive_float(row.get("standard_error"))
+
+
+def _tabular_row(
+    row: dict[str, str], source: EffectSource | None, sample_size_column: str | None
+) -> TabularRow | None:
+    """One source row as a `TabularRow`, or `None` when it names no canonical variant.
+
+    A row whose chromosome, position or allele pair cannot be represented is
+    dropped from every stream; a row with a valid identity but an unusable
+    effect/`standard_error` still yields a row (its `beta`/`se` are `None`) so
+    `stream_variants` can still see it per the interface's superset contract.
+    """
+    effect_allele = row.get("effect_allele")
+    other_allele = row.get("other_allele")
+    if effect_allele is None or other_allele is None:
+        return None
+    try:
+        ori = orient_to_canonical(
+            row.get("chromosome", ""),
+            row.get("base_pair_location", ""),
+            effect_allele,
+            other_allele,
+        )
+    except VariantNormalisationError:
+        return None
+    beta, se = _row_effect(row, source, sample_size_column)
+    return TabularRow(
+        chromosome=ori.variant.chromosome,
+        position=ori.variant.position,
+        alid=ori.variant.alid,
+        ref=other_allele,
+        alt=effect_allele,
+        flipped=ori.flipped,
+        beta=beta,
+        se=se,
+        af_alt=parse_af(row.get("effect_allele_frequency")),
+        rsid=_rsid(row.get("rsid"), row.get("variant_id")),
+    )
+
+
+def _sample_size_column(
+    fieldnames: Sequence[str] | None, source: EffectSource | None
+) -> str | None:
+    """The per-row sample-size column, resolved only for a z-score source.
+
+    Only a z-score derivation needs a sample size, so only it pays for the
+    lookup and its duplicate/ambiguity rule (issue #215).
+    """
+    if source is not None and source.kind is EffectSourceKind.Z_SCORE:
+        return resolve_sample_size_column(fieldnames or ())
+    return None
 
 
 def _iter_rows(
@@ -133,52 +202,20 @@ def _iter_rows(
 ) -> Iterator[TabularRow]:
     """Parse each row of a filtered/harmonised GWAS-SSF file once.
 
-    A row with an unparseable chromosome, position, or allele pair cannot be
-    represented as a variant at all and is dropped from every stream; a row
-    with a valid identity but an unusable effect/`standard_error` still
-    yields a `TabularRow` (its `beta`/`se` are `None`) so `stream_variants`
-    can still see it per the interface's superset contract.
-
     `effect_source` is the caller's resolution for this file, so the property
     and the stream cannot disagree; when omitted it is resolved here, which is
     what keeps `stream_full_row_metrics` a faithful reference for the
-    projection's odds-ratio handling.
+    projection's effect handling.
     """
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
-        source = (
-            effect_source
-            if effect_source is not None
-            else resolve_effect_source(reader.fieldnames or ())
-        )
+        source = effect_source or resolve_effect_source(reader.fieldnames or ())
+        sample_size_column = _sample_size_column(reader.fieldnames, source)
         for row in reader:
-            effect_allele = row.get("effect_allele")
-            other_allele = row.get("other_allele")
-            if effect_allele is None or other_allele is None:
-                continue
-            try:
-                ori = orient_to_canonical(
-                    row.get("chromosome", ""),
-                    row.get("base_pair_location", ""),
-                    effect_allele,
-                    other_allele,
-                )
-            except VariantNormalisationError:
-                continue
-            se = parse_positive_float(row.get("standard_error"))
-            yield TabularRow(
-                chromosome=ori.variant.chromosome,
-                position=ori.variant.position,
-                alid=ori.variant.alid,
-                ref=other_allele,
-                alt=effect_allele,
-                flipped=ori.flipped,
-                beta=_row_beta(row, source),
-                se=se,
-                af_alt=parse_af(row.get("effect_allele_frequency")),
-                rsid=_rsid(row.get("rsid"), row.get("variant_id")),
-            )
+            parsed = _tabular_row(row, source, sample_size_column)
+            if parsed is not None:
+                yield parsed
 
 
 def _iter_variants(path: str | Path) -> Iterator[SourceVariant]:
@@ -194,6 +231,25 @@ def _header(path: str | Path) -> list[str]:
     opener = gzip.open if str(path).endswith(".gz") else open
     with opener(path, "rt", encoding="utf-8", newline="") as fh:
         return next(csv.reader(fh, delimiter="\t"), [])
+
+
+def require_z_score_usable(
+    path: str | Path,
+    effect_source: EffectSource | None,
+    stored_effect_scale: StoredEffectScale,
+) -> None:
+    """Refuse a z-score source that cannot be honestly derived from (issue #215).
+
+    This is the policy half of the guard, and it lives with the reader because
+    only the reader knows the Analysis's `stored_effect_scale`. A signed z
+    derives a phenotype-SD-standardised beta, so a case-control scale is refused
+    outright; and the column must be signed, which is a fact about its values
+    and not its header (`require_signed_z_score` reads them).
+    """
+    if effect_source is None or effect_source.kind is not EffectSourceKind.Z_SCORE:
+        return
+    refuse_case_control_z_score(effect_source, stored_effect_scale)
+    require_signed_z_score(path, effect_source.column_name)
 
 
 def stream_full_row_variants(path: str | Path) -> Iterator[SourceVariant]:
@@ -246,8 +302,12 @@ class GwasSsfReader:
         return resolve_effect_source(_header(self.path))
 
     def stream_associations(self) -> Iterator[ReaderAssociation]:
+        source = self.effect_source
+        # A z-score source is derived, not read: refuse it on a case-control
+        # scale and refuse an unsigned column before yielding any row (#215).
+        require_z_score_usable(self.path, source, self.stored_effect_scale)
         yield from stream_associations(
-            _iter_rows(self.path, effect_source=self.effect_source), self.stored_effect_scale
+            _iter_rows(self.path, effect_source=source), self.stored_effect_scale
         )
 
     def stream_variants(self) -> Iterator[SourceVariant]:
@@ -264,6 +324,7 @@ class GwasSsfReader:
         row whose beta is unusable, which is a row ancestry assignment can still
         read a frequency from.
         """
+        require_z_score_usable(self.path, self.effect_source, self.stored_effect_scale)
         yield from stream_projected_metrics(self.path, _METRICS_COLUMNS)
 
     def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
@@ -274,6 +335,7 @@ class GwasSsfReader:
         once rather than every row's separately roughly halves the time a
         genome-wide source takes.
         """
+        require_z_score_usable(self.path, self.effect_source, self.stored_effect_scale)
         yield from stream_projected_metric_chunks(
             self.path, _METRICS_COLUMNS, chunk_rows=self.chunk_rows
         )
