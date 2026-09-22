@@ -164,13 +164,13 @@ palindromic/invalid identities; and duplicate/file-order determinism.
 ## 9. Reproduction
 
 ```bash
-# Ancestry prefix study (writes the JSON artifact)
+# Ancestry prefix study (writes the v2 JSON artifact)
 pixi run -e dev python benchmarks/benchmark_resolver_evidence_scan.py \
   --manifest docs/benchmark-output/opengwasdb_resolver_evidence_scan_manifest.tsv \
   --ancestry-reference /data/opengwasdb/reference/ancestry-mixture/ref_freqs.hg38.tsv.gz \
   --ancestry-groups /data/opengwasdb/reference/ancestry-mixture/ancestry_groups.tsv \
   --cores 64 --parser-analyses 0 \
-  --output docs/benchmark-output/opengwasdb_resolver_evidence_scan.json
+  --output docs/benchmark-output/opengwasdb_resolver_evidence_scan_v2.json
 
 # Parser/decompressor prototype benchmark
 pixi run -e dev python benchmarks/benchmark_resolver_evidence_scan.py \
@@ -185,7 +185,11 @@ pixi run -e dev python benchmarks/benchmark_resolver_evidence_scan.py \
   --manifest docs/benchmark-output/opengwasdb_resolver_evidence_scan_manifest.tsv \
   --ancestry-reference /data/opengwasdb/reference/ancestry-mixture/ref_freqs.hg38.tsv.gz \
   --ancestry-groups /data/opengwasdb/reference/ancestry-mixture/ancestry_groups.tsv \
-  --report-only docs/benchmark-output/opengwasdb_resolver_evidence_scan.json \
+  --report-only docs/benchmark-output/opengwasdb_resolver_evidence_scan_v2.json \
   --merge docs/benchmark-output/opengwasdb_resolver_evidence_scan_parsers.json \
-  --report docs/spec/bounded-evidence-scan-report.md
+  --report docs/spec/bounded-evidence-scan-report-v2.md
 ```
+
+Note: The historical v1 evaluation artifacts remain preserved at
+`docs/benchmark-output/opengwasdb_resolver_evidence_scan.json` and
+`docs/spec/bounded-evidence-scan-report.md`.

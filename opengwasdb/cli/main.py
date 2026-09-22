@@ -164,16 +164,17 @@ _AF_REFERENCE_ANCESTRY_OPTION = typer.Option(
 _N_WORKERS_OPTION = typer.Option(
     1, "--n-workers", "--workers", help="Fork process-pool size"
 )
-# Issue #209: the ancestry scan bound. A module-level singleton rather than an
+# Issue #209, #212: the ancestry scan bound. A module-level singleton rather than an
 # inline `typer.Option(...)` default, so it does not add a new B008 finding.
 _MAX_ANCESTRY_SITES_OPTION = typer.Option(
     50_000,
     "--max-ancestry-sites",
     help=(
-        "Stop each source scan once the ancestry fit holds this many distinct usable "
-        "reference sites (issue #209). 0 reads the whole source. Default 50000: the "
-        "measured ~13x saving on the 106-Analysis frame, at the cost of the one "
-        "false-positive EUR it produced (see ADR 0047)."
+        "Stop ancestry evidence accumulation once this many distinct usable reference "
+        "sites are collected (issue #209, issue #212, ADR 0048). 0 reads the whole source "
+        "for ancestry. Case-control analyses terminate physically at this bound (at the cost of "
+        "the one accepted false-positive EUR GCST90859377; see ADR 0047/0048), while "
+        "quantitative analyses continue reading to EOF for whole-source phenotype-SD evidence."
     ),
 )
 _MAX_ROWS_OPTION = typer.Option(

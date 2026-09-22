@@ -927,13 +927,34 @@ def test_a_row_limit_is_exactly_the_full_resolution_of_that_prefix(tmp_path, pan
 
 
 def test_a_site_limit_stops_when_the_fit_has_that_many_distinct_sites(tmp_path, panel):
+    """A site limit bounds ancestry for quantitative traits while continuing for SD,
+    and physically terminates early for non-quantitative traits.
+    """
     path = _assigned_european(tmp_path, panel)
 
-    resolution = _resolve(path, panel, scan_limit=ScanLimit(max_ancestry_sites=10))
+    # Case-control physically stops at the ancestry bound:
+    cc_resolution = _resolve(
+        path,
+        panel,
+        method=OriginalSdMethod.BINARY_TRAIT,
+        stored_effect_scale=StoredEffectScale.LOG_OR,
+        scan_limit=ScanLimit(max_ancestry_sites=10),
+    )
+    assert cc_resolution.diagnostics.stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert cc_resolution.diagnostics.ancestry_stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert cc_resolution.diagnostics.ancestry_sites == 10
+    assert cc_resolution.diagnostics.rows_read == 10
+    assert cc_resolution.diagnostics.ancestry_rows_read == 10
 
-    assert resolution.diagnostics.stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
-    assert resolution.diagnostics.ancestry_sites == 10
-    assert resolution.diagnostics.rows_read == 10, "each fixture row is a distinct site"
+    # Quantitative bounds ancestry at 10 sites but continues to EOF for SD evidence:
+    quant_resolution = _resolve(path, panel, scan_limit=ScanLimit(max_ancestry_sites=10))
+    full_resolution = _resolve(path, panel, scan_limit=None)
+    assert quant_resolution.diagnostics.stop_reason is ScanStop.EOF
+    assert quant_resolution.diagnostics.ancestry_stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert quant_resolution.diagnostics.ancestry_sites == 10
+    assert quant_resolution.diagnostics.ancestry_rows_read == 10
+    assert quant_resolution.diagnostics.rows_read == N_VARIANTS
+    assert quant_resolution.phenotype_sd.estimate == full_resolution.phenotype_sd.estimate
 
 
 def test_a_bounded_scan_does_not_fabricate_an_assignment_it_cannot_support(tmp_path, panel):
@@ -958,13 +979,27 @@ def test_a_site_limit_counts_distinct_sites_not_repeated_rows(tmp_path, panel):
     repeated = [rows[0]] * 25 + rows[1:6]
     path = _write_ssf(tmp_path / "repeated.tsv.gz", repeated)
 
-    resolution = _resolve(path, panel, scan_limit=ScanLimit(max_ancestry_sites=5))
-
-    assert resolution.diagnostics.stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
-    assert resolution.diagnostics.ancestry_sites == 5
-    assert resolution.diagnostics.rows_read == 29, (
-        "24 repeats plus five distinct sites: the bound counts sites, not rows"
+    # Case-control stops physically once 5 distinct sites are accumulated (row 29)
+    cc_resolution = _resolve(
+        path,
+        panel,
+        method=OriginalSdMethod.BINARY_TRAIT,
+        stored_effect_scale=StoredEffectScale.LOG_OR,
+        scan_limit=ScanLimit(max_ancestry_sites=5),
     )
+    assert cc_resolution.diagnostics.stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert cc_resolution.diagnostics.ancestry_stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert cc_resolution.diagnostics.ancestry_sites == 5
+    assert cc_resolution.diagnostics.rows_read == 29
+    assert cc_resolution.diagnostics.ancestry_rows_read == 29
+
+    # Quantitative bounds ancestry at row 29 but reads all 30 rows for SD evidence
+    quant_resolution = _resolve(path, panel, scan_limit=ScanLimit(max_ancestry_sites=5))
+    assert quant_resolution.diagnostics.stop_reason is ScanStop.EOF
+    assert quant_resolution.diagnostics.ancestry_stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert quant_resolution.diagnostics.ancestry_sites == 5
+    assert quant_resolution.diagnostics.ancestry_rows_read == 29
+    assert quant_resolution.diagnostics.rows_read == len(repeated)
 
 
 def test_the_row_limit_wins_when_one_row_reaches_both_bounds(tmp_path, panel):
@@ -975,7 +1010,9 @@ def test_the_row_limit_wins_when_one_row_reaches_both_bounds(tmp_path, panel):
     )
 
     assert resolution.diagnostics.stop_reason is ScanStop.ROW_LIMIT
+    assert resolution.diagnostics.ancestry_stop_reason is ScanStop.ROW_LIMIT
     assert resolution.diagnostics.rows_read == 5
+    assert resolution.diagnostics.ancestry_rows_read == 5
 
 
 @pytest.mark.parametrize("limit", [ScanLimit(max_rows=0), ScanLimit(max_ancestry_sites=-1)])
@@ -1019,3 +1056,212 @@ def test_a_scan_limit_fingerprint_binds_the_version_and_thresholds():
         "max_rows": 25_000,
         "max_ancestry_sites": None,
     }
+
+
+def test_quantitative_sd_differs_on_truncated_prefix_but_bounded_scan_recovers_full_sd(
+    tmp_path, panel
+):
+    """Regression test for issue #212: phenotype SD must not be truncated by ancestry site limit.
+
+    When a file has varying SE values across early vs late rows, truncating the
+    scan at the ancestry bound produces a distorted SD estimate. Decoupling the
+    ancestry bound from SD evidence ensures the bounded resolver matches the full
+    unbounded scan exactly.
+    """
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    rows = _study_rows(frequencies)
+    # Early rows have small SE (low implied SD), late rows have large SE (high implied SD)
+    modified = []
+    for i, row in enumerate(rows):
+        se = 0.01 if i < 15 else 0.50
+        modified_row = dict(row)
+        modified_row["standard_error"] = str(se)
+        modified.append(modified_row)
+
+    full_path = _write_ssf(tmp_path / "varying_se_full.tsv.gz", modified)
+    prefix_path = _write_ssf(tmp_path / "varying_se_prefix.tsv.gz", modified[:10])
+
+    full_scan = _resolve(full_path, panel, scan_limit=None)
+    prefix_truncated = _resolve(prefix_path, panel, scan_limit=None)
+    ancestry_bounded = _resolve(
+        full_path, panel, scan_limit=ScanLimit(max_ancestry_sites=10)
+    )
+
+    assert full_scan.phenotype_sd.estimate is not None
+    assert prefix_truncated.phenotype_sd.estimate is not None
+    assert ancestry_bounded.phenotype_sd.estimate is not None
+
+    # The physically truncated prefix gives a different (distorted) SD:
+    assert (
+        prefix_truncated.phenotype_sd.estimate.sd
+        != full_scan.phenotype_sd.estimate.sd
+    )
+    # But the ancestry-bounded scan continues to EOF and recovers the full SD:
+    assert (
+        ancestry_bounded.phenotype_sd.estimate.sd
+        == full_scan.phenotype_sd.estimate.sd
+    )
+    assert (
+        ancestry_bounded.phenotype_sd.n_evidence_considered
+        == full_scan.phenotype_sd.n_evidence_considered
+        == len(modified)
+    )
+    # Ancestry diagnostics report the prefix bound, scan diagnostics report EOF:
+    assert ancestry_bounded.diagnostics.stop_reason is ScanStop.EOF
+    assert ancestry_bounded.diagnostics.ancestry_stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert ancestry_bounded.diagnostics.ancestry_sites == 10
+    assert ancestry_bounded.diagnostics.ancestry_rows_read == 10
+    assert ancestry_bounded.diagnostics.rows_read == len(modified)
+
+
+def test_mid_block_ancestry_bound_retains_later_rows_for_quantitative_sd(
+    tmp_path, panel
+):
+    """An ancestry site limit reached mid-block must not drop subsequent rows in that block from SD.
+
+    The remainder of the block must be admitted to the SD evidence reservoir.
+    """
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    rows = _study_rows(frequencies)
+    path = _write_ssf(tmp_path / "mid_block.tsv.gz", rows)
+
+    # Use a chunk size of 20 with max_ancestry_sites=5 (reached at row 5 of chunk 0)
+    resolution = _resolve(
+        path, panel, scan_limit=ScanLimit(max_ancestry_sites=5), chunk_rows=20
+    )
+    full = _resolve(path, panel, scan_limit=None, chunk_rows=20)
+
+    assert resolution.diagnostics.ancestry_sites == 5
+    assert resolution.diagnostics.ancestry_rows_read == 5
+    assert resolution.diagnostics.ancestry_stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert resolution.diagnostics.stop_reason is ScanStop.EOF
+    assert resolution.diagnostics.rows_read == len(rows)
+    assert (
+        resolution.phenotype_sd.n_evidence_considered
+        == full.phenotype_sd.n_evidence_considered
+        == len(rows)
+    )
+    assert resolution.phenotype_sd.estimate == full.phenotype_sd.estimate
+
+
+def test_quantitative_with_both_max_ancestry_sites_and_max_rows(tmp_path, panel):
+    """When both bounds are set on quantitative, ancestry and physical scan stop independently.
+
+    Ancestry stops at the site bound and the physical scan stops at the row bound.
+    """
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    rows = _study_rows(frequencies)
+    path = _write_ssf(tmp_path / "two_bounds.tsv.gz", rows)
+
+    resolution = _resolve(
+        path, panel, scan_limit=ScanLimit(max_rows=25, max_ancestry_sites=5), chunk_rows=10
+    )
+
+    assert resolution.diagnostics.ancestry_sites == 5
+    assert resolution.diagnostics.ancestry_rows_read == 5
+    assert resolution.diagnostics.ancestry_stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert resolution.diagnostics.stop_reason is ScanStop.ROW_LIMIT
+    assert resolution.diagnostics.rows_read == 25
+    assert resolution.phenotype_sd.n_evidence_considered == 25
+
+
+@pytest.mark.parametrize(
+    "method,scale",
+    [
+        (OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF, StoredEffectScale.SD),
+        (OriginalSdMethod.BINARY_TRAIT, StoredEffectScale.LOG_OR),
+    ],
+)
+def test_sparse_source_reaches_eof_before_ancestry_bound(
+    tmp_path, panel, method, scale
+):
+    """A source with fewer reference sites than max_ancestry_sites reaches EOF on both."""
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    rows = _study_rows(frequencies)[:15]
+    path = _write_ssf(tmp_path / "sparse.tsv.gz", rows)
+
+    res = _resolve(
+        path,
+        panel,
+        method=method,
+        stored_effect_scale=scale,
+        scan_limit=ScanLimit(max_ancestry_sites=50),
+    )
+    assert res.diagnostics.stop_reason is ScanStop.EOF
+    assert res.diagnostics.ancestry_stop_reason is ScanStop.EOF
+    assert res.diagnostics.rows_read == 15
+    assert res.diagnostics.ancestry_rows_read == 15
+    assert res.diagnostics.ancestry_sites == 15
+
+
+@pytest.mark.parametrize(
+    "method",
+    [OriginalSdMethod.DECLARED_STANDARDISED, OriginalSdMethod.SOURCE_PROVIDED],
+)
+def test_predeclared_sd_scale_under_site_bound_stops_physically(
+    tmp_path, panel, method
+):
+    """When an Analysis already declared or provided its scale, no SD estimation is needed
+    and the physical scan terminates immediately at the ancestry bound.
+    """
+    path = _assigned_european(tmp_path, panel)
+
+    resolution = _resolve(
+        path,
+        panel,
+        method=method,
+        stored_effect_scale=StoredEffectScale.SD,
+        scan_limit=ScanLimit(max_ancestry_sites=10),
+    )
+
+    assert resolution.diagnostics.stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert resolution.diagnostics.ancestry_stop_reason is ScanStop.ANCESTRY_SITE_LIMIT
+    assert resolution.diagnostics.ancestry_sites == 10
+    assert resolution.diagnostics.rows_read == 10
+    assert resolution.diagnostics.ancestry_rows_read == 10
+    assert resolution.phenotype_sd.status is SdStatus.SKIPPED
+    assert resolution.phenotype_sd.reason is SdReason.SCALE_ALREADY_DECLARED
+
+
+@pytest.mark.parametrize(
+    "method,scale,expected_sd_status,expected_sd_reason",
+    [
+        (
+            OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
+            StoredEffectScale.SD,
+            SdStatus.UNAVAILABLE,
+            SdReason.NO_QUALIFYING_EVIDENCE,
+        ),
+        (
+            OriginalSdMethod.BINARY_TRAIT,
+            StoredEffectScale.LOG_OR,
+            SdStatus.SKIPPED,
+            SdReason.NON_QUANTITATIVE,
+        ),
+    ],
+)
+def test_empty_source_under_scan_limit(
+    tmp_path, panel, method, scale, expected_sd_status, expected_sd_reason
+):
+    """An empty source file (header only) handles scan limits cleanly without error."""
+    path = _write_ssf(tmp_path / "empty.tsv.gz", [])
+
+    res = _resolve(
+        path,
+        panel,
+        method=method,
+        stored_effect_scale=scale,
+        scan_limit=ScanLimit(max_ancestry_sites=10, max_rows=100),
+    )
+    assert res.error == ""
+    assert res.diagnostics.rows_read == 0
+    assert res.diagnostics.ancestry_rows_read == 0
+    assert res.diagnostics.ancestry_sites == 0
+    assert res.diagnostics.stop_reason is ScanStop.EOF
+    assert res.diagnostics.ancestry_stop_reason is ScanStop.EOF
+    assert res.ancestry is not None
+    assert res.ancestry.assigned_ancestry is None
+    assert res.ancestry.gate_reason == "overlap"
+    assert res.phenotype_sd is not None
+    assert res.phenotype_sd.status is expected_sd_status
+    assert res.phenotype_sd.reason is expected_sd_reason

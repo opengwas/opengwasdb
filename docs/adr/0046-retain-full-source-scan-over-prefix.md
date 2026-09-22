@@ -1,10 +1,9 @@
 # Retain the full source scan: a prefix is not a substitute for one-pass Analysis resolution
 
-> **Superseded in part by [ADR 0047](./0047-adopt-50k-ancestry-site-bound.md).**
+> **Superseded in part by [ADR 0047](./0047-adopt-50k-ancestry-site-bound.md) and [ADR 0048](./0048-decouple-ancestry-site-bound-from-quantitative-phenotype-sd.md).**
 > The evaluation and its numbers stand unchanged; the *policy* decision to keep
-> the full scan for the full-catalog release is superseded by ADR 0047, which
-> adopts a 50,000-site bound on the maintainer's judgement that the compute
-> saving across ~6,000 GWAS outweighs the measured false-positive EUR.
+> the full scan across all studies was superseded by ADR 0047 (adopting a 50,000-site bound)
+> and refined by ADR 0048 (decoupling ancestry-site bound from quantitative phenotype SD evidence).
 
 The Phase B resolver (`opengwasdb.build.resolve.resolve_analysis`, ADR 0044)
 reads each compressed GWAS-SSF source once and accumulates the ancestry fit's
@@ -80,10 +79,11 @@ parity-checked benchmark fixture in
 
 ## Consequences
 
-- **`ScanDiagnostics.stop_reason` travels with every resolution.** `eof` is a
-  whole source; `row_limit` and `ancestry_site_limit` are a prefix. The
-  manifest resolver writes it into each per-Analysis record, so a record
-  produced under a bound can never be read back as a full-source resolution.
+- **`ScanDiagnostics.stop_reason` and `ancestry_stop_reason` travel with every resolution.**
+  `eof` indicates the physical stream reached the end of the file; `row_limit` and
+  `ancestry_site_limit` indicate early physical termination. Under ADR 0048, quantitative
+  studies stream to `eof` for exact whole-file phenotype SD while `ancestry_stop_reason`
+  records `ancestry_site_limit`.
 - **The frozen evaluation frame is committed.** The 106-Analysis manifest and
   the preregistered criteria live in this repository, so a later proposal must
   clear the same bar on the same frame rather than a fresh, friendlier one.
