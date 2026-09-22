@@ -5,9 +5,14 @@
 from __future__ import annotations
 
 from opengwasdb.readers.effect_source import (
+    CaseControlZScoreError,
     EffectSource,
     EffectSourceKind,
+    UnsignedZScoreError,
+    derive_z_score_effect,
+    refuse_case_control_z_score,
     resolve_effect_source,
+    resolve_sample_size_column,
 )
 from opengwasdb.readers.fake import FakeReader
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY, FinnGenR13Reader
@@ -32,6 +37,7 @@ __all__ = [
     "FINNGEN_R13_CAPABILITY",
     "GWAS_SSF_CAPABILITY",
     "GWAS_VCF_CAPABILITY",
+    "CaseControlZScoreError",
     "EffectSource",
     "EffectSourceKind",
     "FakeReader",
@@ -41,12 +47,16 @@ __all__ = [
     "ReaderAssociation",
     "SiteMetrics",
     "SourceReader",
+    "UnsignedZScoreError",
     "af_only",
+    "derive_z_score_effect",
     "is_palindromic",
     "known_capabilities",
     "load_liftover",
+    "refuse_case_control_z_score",
     "resolve_effect_source",
     "resolve_reader",
+    "resolve_sample_size_column",
     "site_metrics_arrays",
     "write_regions_file",
 ]

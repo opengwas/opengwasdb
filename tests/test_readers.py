@@ -22,6 +22,7 @@ from opengwasdb.readers import (
     FINNGEN_R13_CAPABILITY,
     GWAS_SSF_CAPABILITY,
     GWAS_VCF_CAPABILITY,
+    CaseControlZScoreError,
     EffectSource,
     EffectSourceKind,
     FakeReader,
@@ -30,6 +31,7 @@ from opengwasdb.readers import (
     GwasVcfReader,
     ReaderAssociation,
     SiteMetrics,
+    UnsignedZScoreError,
     af_only,
     is_palindromic,
     known_capabilities,
@@ -1280,3 +1282,197 @@ def test_other_gwas_ssf_columns_stay_case_sensitive(tmp_path):
     assert metrics[0][8] is None, "STANDARD_ERROR is not standard_error"
     assert metrics == _reference_metrics_rows(path)
     assert list(reader.stream_associations()) == [], "no usable SE means no association"
+
+
+# --- z-score derivation: beta from a signed z, EAF and per-row N (issue #215) ---
+
+_Z_HEADER = (
+    "chromosome\tbase_pair_location\teffect_allele\tother_allele\t"
+    "z\teffect_allele_frequency\tn"
+)
+# se = 1 / sqrt(2 * 0.25 * 0.75 * (1000 + (-2.0)^2)); beta = z * se.
+_Z_KNOWN_SE = 0.051536807203007316
+_Z_KNOWN_BETA = -0.10307361440601463
+
+
+def test_gwas_ssf_reader_derives_beta_from_a_signed_z_score(tmp_path):
+    path = tmp_path / "z.tsv"
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t-2.0\t0.25\t1000"], header=_Z_HEADER)
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+    source = reader.effect_source
+
+    assert source is not None
+    assert source.kind is EffectSourceKind.Z_SCORE
+    assert source.column_name == "z"
+    # The derivation is an approximation on the SD scale; both facts travel.
+    assert source.is_derived is True
+    assert source.assumes_standardised is True
+
+    associations = list(reader.stream_associations())
+    assert len(associations) == 1, "the signed z row must reach the association stream"
+    assert associations[0].se == pytest.approx(_Z_KNOWN_SE)
+    # beta / se recovers the source z, by construction.
+    assert associations[0].z == pytest.approx(-2.0)
+
+    metrics = _metrics_rows(path)
+    assert len(metrics) == 1
+    assert metrics[0][7] == pytest.approx(_Z_KNOWN_BETA)
+    assert metrics[0][8] == pytest.approx(_Z_KNOWN_SE)
+    assert metrics == _reference_metrics_rows(path)
+
+
+def test_gwas_ssf_reader_z_derivation_uses_the_rows_own_n(tmp_path):
+    """A larger per-row N must give a smaller SE; no study-level scalar is used."""
+    path = tmp_path / "z-n.tsv"
+    _write_metrics_fixture(
+        path,
+        [
+            "1\t100\tA\tG\t-2.0\t0.25\t1000",
+            "1\t200\tA\tC\t-2.0\t0.25\t4000",
+        ],
+        header=_Z_HEADER,
+    )
+
+    metrics = _metrics_rows(path)
+
+    assert len(metrics) == 2
+    small_n_se = metrics[0][8]
+    large_n_se = metrics[1][8]
+    assert small_n_se == pytest.approx(1.0 / math.sqrt(2 * 0.25 * 0.75 * (1000 + 4)))
+    assert large_n_se == pytest.approx(1.0 / math.sqrt(2 * 0.25 * 0.75 * (4000 + 4)))
+    assert small_n_se > large_n_se, "the row with N=4000 must be more precise"
+    # The full-row parser must use the row's own N too, not only the projection.
+    assert metrics == _reference_metrics_rows(path)
+
+
+def test_gwas_ssf_reader_drops_z_rows_with_unusable_eaf_or_n(tmp_path):
+    """An out-of-range EAF or a non-positive N drops the row, never approximates it."""
+    path = tmp_path / "z-unusable.tsv"
+    _write_metrics_fixture(
+        path,
+        [
+            "1\t100\tA\tG\t-2.0\t0\t1000",  # EAF zero
+            "1\t200\tA\tC\t-2.0\t1\t1000",  # EAF one
+            "1\t300\tA\tC\t-2.0\tNA\t1000",  # EAF missing
+            "1\t400\tA\tC\t-2.0\t0.25\t0",  # N zero
+            "1\t500\tA\tC\t-2.0\t0.25\t-5",  # N negative
+            "1\t600\tA\tC\t-2.0\t0.25\tNA",  # N missing
+            "1\t700\tA\tC\t-2.0\t0.25\t1000",  # usable
+        ],
+        header=_Z_HEADER,
+    )
+
+    associations = list(GwasSsfReader(path, StoredEffectScale.SD).stream_associations())
+
+    assert [association.position for association in associations] == [700]
+    assert [row[8] for row in _metrics_rows(path)] == [
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        pytest.approx(_Z_KNOWN_SE),
+    ]
+
+
+def test_gwas_ssf_reader_z_derivation_requires_a_sample_size_column(tmp_path):
+    """No `n`/`N` column means derivation cannot proceed; nothing is substituted."""
+    path = tmp_path / "z-no-n.tsv"
+    header = (
+        "chromosome\tbase_pair_location\teffect_allele\tother_allele\t"
+        "z\teffect_allele_frequency"
+    )
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t-2.0\t0.25"], header=header)
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    assert list(reader.stream_associations()) == []
+    metrics = _metrics_rows(path)
+    assert len(metrics) == 1
+    assert metrics[0][7] is None and metrics[0][8] is None
+
+
+def test_gwas_ssf_reader_derives_z_score_with_an_upper_case_sample_size_column(tmp_path):
+    path = tmp_path / "z-upper-n.tsv"
+    header = (
+        "chromosome\tbase_pair_location\teffect_allele\tother_allele\t"
+        "Zscore\teffect_allele_frequency\tN"
+    )
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t-2.0\t0.25\t1000"], header=header)
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    assert reader.effect_source is not None
+    assert reader.effect_source.column_name == "Zscore"
+    associations = list(reader.stream_associations())
+    assert len(associations) == 1
+    assert associations[0].se == pytest.approx(_Z_KNOWN_SE)
+
+
+def test_gwas_ssf_reader_rejects_an_unsigned_z_score_column(tmp_path):
+    """A z column with no negative value is not a signed z; refuse it outright."""
+    path = tmp_path / "z-unsigned.tsv"
+    _write_metrics_fixture(
+        path,
+        ["1\t100\tA\tG\t0.5\t0.25\t1000", "1\t200\tA\tC\t2.0\t0.25\t1000"],
+        header=_Z_HEADER,
+    )
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    with pytest.raises(UnsignedZScoreError):
+        list(reader.stream_associations())
+    with pytest.raises(UnsignedZScoreError):
+        list(reader.stream_metrics())
+    with pytest.raises(UnsignedZScoreError):
+        list(reader.stream_metric_chunks())
+
+
+def test_gwas_ssf_reader_accepts_a_signed_z_column_containing_zero(tmp_path):
+    path = tmp_path / "z-zero.tsv"
+    _write_metrics_fixture(
+        path,
+        ["1\t100\tA\tG\t0.0\t0.25\t1000", "1\t200\tA\tC\t-1.5\t0.25\t1000"],
+        header=_Z_HEADER,
+    )
+
+    associations = list(GwasSsfReader(path, StoredEffectScale.SD).stream_associations())
+
+    assert [association.position for association in associations] == [100, 200]
+
+
+@pytest.mark.parametrize(
+    "scale", [StoredEffectScale.LOG_OR, StoredEffectScale.LOG_HAZARD]
+)
+def test_gwas_ssf_reader_refuses_a_case_control_z_score(tmp_path, scale):
+    """A standardised beta is not a log-OR/log-hazard; the scale must not be faked."""
+    path = tmp_path / "z-case-control.tsv"
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t-2.0\t0.25\t1000"], header=_Z_HEADER)
+
+    reader = GwasSsfReader(path, scale)
+
+    with pytest.raises(CaseControlZScoreError):
+        list(reader.stream_associations())
+    with pytest.raises(CaseControlZScoreError):
+        list(reader.stream_metrics())
+    with pytest.raises(CaseControlZScoreError):
+        list(reader.stream_metric_chunks())
+
+
+def test_gwas_ssf_reader_beta_takes_precedence_over_z_score(tmp_path):
+    path = tmp_path / "beta-and-z.tsv"
+    header = (
+        "chromosome\tbase_pair_location\teffect_allele\tother_allele\t"
+        "beta\tstandard_error\tz\teffect_allele_frequency\tn"
+    )
+    _write_metrics_fixture(path, ["1\t100\tA\tG\t0.25\t0.5\t-2.0\t0.25\t1000"], header=header)
+
+    reader = GwasSsfReader(path, StoredEffectScale.SD)
+
+    assert reader.effect_source is not None
+    assert reader.effect_source.kind is EffectSourceKind.BETA
+    associations = list(reader.stream_associations())
+    assert len(associations) == 1
+    assert associations[0].z == pytest.approx(0.25 / 0.5)

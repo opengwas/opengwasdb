@@ -180,6 +180,26 @@ the end of this file.
   300,000/300,000 rows, and row-wise/blocked projection parity holds. That
   file's `standard_error` is `NA` in all 26.8M rows, so it still yields no
   associations — a source-data gap, not the spelling (#214, ADR 0050).
+- **`opengwasdb.readers.effect_source` derives an effect from a signed z-score**:
+  a GWAS-SSF Analysis whose effect column is a signed `z_score` (spellings
+  `("z_score", "Zscore", "ZScore", "z")`) now yields
+  `se = 1 / sqrt(2 f (1 - f) (N + z^2))` and `beta = z * se` from the row's own
+  effect-allele frequency and **per-row** sample size (`n`/`N`, resolved as an
+  enumerated set), where previously every row was dropped. The formula assumes a
+  standardised phenotype, so the resolved `EffectSource` reports
+  `is_derived=True` and `assumes_standardised=True`; a case-control Analysis
+  (`log_or`/`log_hazard`) is refused with `CaseControlZScoreError` rather than
+  being handed a standardised beta, and a z column carrying no negative value is
+  refused with `UnsignedZScoreError`. An EAF outside `(0, 1)`, a non-positive or
+  absent N, or a missing `n`/`N` column drops the row, never a substituted
+  frequency or study-level N. Precedence is
+  `("beta", "BETA") > "odds_ratio" > z-score`; both the row-wise and blocked
+  projections derive identically. Verified on the real GWAS-Catalog pool: of the
+  77 z-only sources, exactly 36 are usable under this rule (matching the issue's
+  count), and on `GCST90129599` (`Zscore`, uppercase `N`) and `GCST90559206`
+  (`z_score`) the derived beta and se equal the formula bit-for-bit for 20/20
+  rows each, with the case-control refusal reproduced on real data (#215,
+  ADR 0051).
 
 ### Changed
 

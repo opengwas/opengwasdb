@@ -1,5 +1,11 @@
 # Enumerate accepted effect-column spellings
 
+> **Extended by [ADR 0051](./0051-derive-effect-from-signed-z-score.md):** a
+> signed `z_score` joins the candidate set with the enumerated spellings
+> `("z_score", "Zscore", "ZScore", "z")` below `odds_ratio` in precedence,
+> and its per-row sample-size companion (`n`/`N`) is enumerated the same way.
+> The spelling rule this ADR defines is unchanged.
+
 ADR 0049 made an Analysis's effect column a resolved fact and defined
 `resolve_effect_source`. This ADR extends the candidate set with the `BETA`
 spelling a real harmonised file uses, and fixes the rule as an *enumerated* set
