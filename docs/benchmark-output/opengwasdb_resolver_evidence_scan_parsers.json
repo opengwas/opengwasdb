@@ -1,0 +1,1067 @@
+{
+  "commit": "96dd203",
+  "measured_at": "2026-09-21T20:56:52.699206+00:00",
+  "issue": 209,
+  "manifest": "docs/benchmark-output/opengwasdb_resolver_evidence_scan_manifest.tsv",
+  "manifest_sha256": "962618a5f72e0fa6027173e7b0b102cba472c9b4c9ff460f7bada04f17c2d557",
+  "tool_versions": {
+    "python": "3.11.15",
+    "pandas": "3.0.5",
+    "gzip": "gzip 1.9",
+    "pigz": "pigz 2.4",
+    "R": "R version 4.5.3 (2026-03-11) -- \"Reassured Reassurer\"",
+    "data.table": "1.18.4"
+  },
+  "parity": [
+    {
+      "analysis_id": "GCST004293",
+      "projected_rows_compared": 5000,
+      "external_rows_compared": 10000,
+      "production_equals_external": true
+    },
+    {
+      "analysis_id": "GCST90502916",
+      "projected_rows_compared": 5000,
+      "external_rows_compared": 10000,
+      "production_equals_external": true
+    },
+    {
+      "analysis_id": "GCST90101888",
+      "projected_rows_compared": 5000,
+      "external_rows_compared": 10000,
+      "production_equals_external": true
+    },
+    {
+      "analysis_id": "GCST90841074",
+      "projected_rows_compared": 5000,
+      "external_rows_compared": 10000,
+      "production_equals_external": true
+    },
+    {
+      "analysis_id": "GCST90572714",
+      "projected_rows_compared": 5000,
+      "external_rows_compared": 10000,
+      "production_equals_external": true
+    },
+    {
+      "analysis_id": "GCST90093342",
+      "projected_rows_compared": 5000,
+      "external_rows_compared": 10000,
+      "production_equals_external": true
+    },
+    {
+      "analysis_id": "GCST90270866",
+      "projected_rows_compared": 5000,
+      "external_rows_compared": 10000,
+      "production_equals_external": true
+    },
+    {
+      "analysis_id": "GCST90566755",
+      "projected_rows_compared": 5000,
+      "external_rows_compared": 10000,
+      "production_equals_external": true
+    },
+    {
+      "analysis_id": "GCST90664487",
+      "projected_rows_compared": 5000,
+      "external_rows_compared": 10000,
+      "production_equals_external": true
+    },
+    {
+      "analysis_id": "GCST006464",
+      "projected_rows_compared": 5000,
+      "external_rows_compared": 10000,
+      "production_equals_external": true
+    },
+    {
+      "analysis_id": "GCST90628007",
+      "projected_rows_compared": 5000,
+      "external_rows_compared": 10000,
+      "production_equals_external": true
+    },
+    {
+      "analysis_id": "GCST000553",
+      "projected_rows_compared": 0,
+      "external_rows_compared": 0,
+      "production_equals_external": true
+    }
+  ],
+  "parsers": {
+    "sample": "one source per size decile plus the legacy-layout edge case",
+    "repetitions": 1,
+    "projected_methods": [
+      "current",
+      "gzip_dc",
+      "pigz_dc"
+    ],
+    "parse_only_methods": [
+      "pandas_parse",
+      "r_fread_parse"
+    ],
+    "interpretation": "projected methods produce resolver rows and are parity-checked against stream_projected_metrics; parse-only methods are CSV-parse upper bounds and are not equivalent projected reads",
+    "datasets": [
+      {
+        "analysis_id": "GCST004293",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST004001-GCST005000/GCST004293/harmonised/28452372-GCST004293-EFO_0004617.h.tsv.gz",
+        "input_bytes": 221110,
+        "projected": {
+          "current": {
+            "rows": 5569,
+            "median_seconds": 0.030855588149279356,
+            "rows_per_second": 180485.94546495675,
+            "seconds": [
+              0.030855588149279356
+            ],
+            "peak_rss_kb": 104232,
+            "input_mib_per_second": 6.833994772046204
+          },
+          "gzip_dc": {
+            "rows": 5569,
+            "median_seconds": 0.044476058101281524,
+            "rows_per_second": 125213.43477243853,
+            "seconds": [
+              0.044476058101281524
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 4.741133479509283,
+            "speedup_over_current": 0.6937572587708777
+          },
+          "pigz_dc": {
+            "rows": 5569,
+            "median_seconds": 0.04236216004937887,
+            "rows_per_second": 131461.66280257126,
+            "seconds": [
+              0.04236216004937887
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 4.977718979740216,
+            "speedup_over_current": 0.7283761761277745
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 5569,
+            "median_seconds": 0.028771733166649938,
+            "rows_per_second": 193558.03029812512,
+            "seconds": [
+              0.028771733166649938
+            ],
+            "peak_rss_kb": 109408,
+            "input_mib_per_second": 7.328961619351012
+          },
+          "r_fread_parse": {
+            "rows": 5569,
+            "median_seconds": 0.4154270358849317,
+            "rows_per_second": 13405.482838008036,
+            "seconds": [
+              0.4154270358849317
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 0.5075907677780354
+          }
+        }
+      },
+      {
+        "analysis_id": "GCST90502916",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST90502001-GCST90503000/GCST90502916/harmonised/GCST90502916.h.tsv.gz",
+        "input_bytes": 45016417,
+        "projected": {
+          "current": {
+            "rows": 1145324,
+            "median_seconds": 5.66551686800085,
+            "rows_per_second": 202157.01880067692,
+            "seconds": [
+              5.66551686800085
+            ],
+            "peak_rss_kb": 104240,
+            "input_mib_per_second": 7.5775964858582165
+          },
+          "gzip_dc": {
+            "rows": 1145324,
+            "median_seconds": 4.574758847011253,
+            "rows_per_second": 250357.2403053014,
+            "seconds": [
+              4.574758847011253
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 9.384319948926061,
+            "speedup_over_current": 1.238429621640538
+          },
+          "pigz_dc": {
+            "rows": 1145324,
+            "median_seconds": 5.470438861986622,
+            "rows_per_second": 209366.01777212237,
+            "seconds": [
+              5.470438861986622
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 7.847816563284476,
+            "speedup_over_current": 1.0356603941540778
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 1145324,
+            "median_seconds": 2.838029819075018,
+            "rows_per_second": 403563.06064933754,
+            "seconds": [
+              2.838029819075018
+            ],
+            "peak_rss_kb": 231780,
+            "input_mib_per_second": 15.127043564160271
+          },
+          "r_fread_parse": {
+            "rows": 1145324,
+            "median_seconds": 1.656500728102401,
+            "rows_per_second": 691411.7093760787,
+            "seconds": [
+              1.656500728102401
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 25.91668085694907
+          }
+        }
+      },
+      {
+        "analysis_id": "GCST90101888",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST90101001-GCST90102000/GCST90101888/harmonised/35681050-GCST90101888-EFO_0004505.h.tsv.gz",
+        "input_bytes": 159023095,
+        "projected": {
+          "current": {
+            "rows": 5281624,
+            "median_seconds": 22.28038640599698,
+            "rows_per_second": 237052.62124980026,
+            "seconds": [
+              22.28038640599698
+            ],
+            "peak_rss_kb": 104240,
+            "input_mib_per_second": 6.806715047639902
+          },
+          "gzip_dc": {
+            "rows": 5281624,
+            "median_seconds": 18.41008263709955,
+            "rows_per_second": 286887.5769930875,
+            "seconds": [
+              18.41008263709955
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 8.237673040712876,
+            "speedup_over_current": 1.2102273979530156
+          },
+          "pigz_dc": {
+            "rows": 5281624,
+            "median_seconds": 19.596041470998898,
+            "rows_per_second": 269525.0470773153,
+            "seconds": [
+              19.596041470998898
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 7.739126376180329,
+            "speedup_over_current": 1.1369840403211418
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 5281624,
+            "median_seconds": 8.288814546074718,
+            "rows_per_second": 637198.9589875896,
+            "seconds": [
+              8.288814546074718
+            ],
+            "peak_rss_kb": 206036,
+            "input_mib_per_second": 18.296493494205397
+          },
+          "r_fread_parse": {
+            "rows": 5281624,
+            "median_seconds": 4.7309389628935605,
+            "rows_per_second": 1116400.7909266339,
+            "seconds": [
+              4.7309389628935605
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 32.05626675939493
+          }
+        }
+      },
+      {
+        "analysis_id": "GCST90841074",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST90841001-GCST90842000/GCST90841074/harmonised/GCST90841074.h.tsv.gz",
+        "input_bytes": 206373467,
+        "projected": {
+          "current": {
+            "rows": 7939024,
+            "median_seconds": 32.49091168004088,
+            "rows_per_second": 244345.9906013327,
+            "seconds": [
+              32.49091168004088
+            ],
+            "peak_rss_kb": 104240,
+            "input_mib_per_second": 6.057480842758708
+          },
+          "gzip_dc": {
+            "rows": 7939024,
+            "median_seconds": 28.008102247025818,
+            "rows_per_second": 283454.5493293122,
+            "seconds": [
+              28.008102247025818
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 7.027005019110582,
+            "speedup_over_current": 1.1600540227066292
+          },
+          "pigz_dc": {
+            "rows": 7939024,
+            "median_seconds": 29.23133930005133,
+            "rows_per_second": 271592.89276855194,
+            "seconds": [
+              29.23133930005133
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 6.732947575387597,
+            "speedup_over_current": 1.111509511984072
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 7939024,
+            "median_seconds": 12.787039557937533,
+            "rows_per_second": 620864.897150636,
+            "seconds": [
+              12.787039557937533
+            ],
+            "peak_rss_kb": 254500,
+            "input_mib_per_second": 15.391606022164952
+          },
+          "r_fread_parse": {
+            "rows": 7939024,
+            "median_seconds": 4.74269404890947,
+            "rows_per_second": 1673948.1649307506,
+            "seconds": [
+              4.74269404890947
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 41.498159703316254
+          }
+        }
+      },
+      {
+        "analysis_id": "GCST90572714",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST90572001-GCST90573000/GCST90572714/harmonised/GCST90572714.h.tsv.gz",
+        "input_bytes": 233547591,
+        "projected": {
+          "current": {
+            "rows": 7830526,
+            "median_seconds": 32.37768131005578,
+            "rows_per_second": 241849.49888823618,
+            "seconds": [
+              32.37768131005578
+            ],
+            "peak_rss_kb": 104240,
+            "input_mib_per_second": 6.879070093449745
+          },
+          "gzip_dc": {
+            "rows": 7830526,
+            "median_seconds": 26.09237235598266,
+            "rows_per_second": 300107.85884728323,
+            "seconds": [
+              26.09237235598266
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 8.53614750535256,
+            "speedup_over_current": 1.240886833451615
+          },
+          "pigz_dc": {
+            "rows": 7830526,
+            "median_seconds": 28.29895114689134,
+            "rows_per_second": 276707.2871130133,
+            "seconds": [
+              28.29895114689134
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 7.870551033468897,
+            "speedup_over_current": 1.1441300824893819
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 7830526,
+            "median_seconds": 13.522643769159913,
+            "rows_per_second": 579067.6833370777,
+            "seconds": [
+              13.522643769159913
+            ],
+            "peak_rss_kb": 253268,
+            "input_mib_per_second": 16.47076880803526
+          },
+          "r_fread_parse": {
+            "rows": 7830526,
+            "median_seconds": 4.512549152132124,
+            "rows_per_second": 1735277.7190914748,
+            "seconds": [
+              4.512549152132124
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 49.357543084049304
+          }
+        }
+      },
+      {
+        "analysis_id": "GCST90093342",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST90093001-GCST90094000/GCST90093342/harmonised/33143745-GCST90093342-GO_0035456.h.tsv.gz",
+        "input_bytes": 261348445,
+        "projected": {
+          "current": {
+            "rows": 7991018,
+            "median_seconds": 36.02447433187626,
+            "rows_per_second": 221821.91824320797,
+            "seconds": [
+              36.02447433187626
+            ],
+            "peak_rss_kb": 104240,
+            "input_mib_per_second": 6.918665830709158
+          },
+          "gzip_dc": {
+            "rows": 7991018,
+            "median_seconds": 28.937485452042893,
+            "rows_per_second": 276147.6291104575,
+            "seconds": [
+              28.937485452042893
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 8.613094598086988,
+            "speedup_over_current": 1.2449068662713765
+          },
+          "pigz_dc": {
+            "rows": 7991018,
+            "median_seconds": 29.65015771589242,
+            "rows_per_second": 269510.134703831,
+            "seconds": [
+              29.65015771589242
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 8.406069944633671,
+            "speedup_over_current": 1.21498423978255
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 7991018,
+            "median_seconds": 12.561859551817179,
+            "rows_per_second": 636133.3660066301,
+            "seconds": [
+              12.561859551817179
+            ],
+            "peak_rss_kb": 196656,
+            "input_mib_per_second": 19.84111497195943
+          },
+          "r_fread_parse": {
+            "rows": 7991018,
+            "median_seconds": 5.644713915884495,
+            "rows_per_second": 1415663.9502159522,
+            "seconds": [
+              5.644713915884495
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 44.15481516748519
+          }
+        }
+      },
+      {
+        "analysis_id": "GCST90270866",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST90270001-GCST90271000/GCST90270866/harmonised/GCST90270866.h.tsv.gz",
+        "input_bytes": 310361185,
+        "projected": {
+          "current": {
+            "rows": 10764699,
+            "median_seconds": 45.61188887595199,
+            "rows_per_second": 236006.4287027474,
+            "seconds": [
+              45.61188887595199
+            ],
+            "peak_rss_kb": 104240,
+            "input_mib_per_second": 6.489174165728541
+          },
+          "gzip_dc": {
+            "rows": 10764699,
+            "median_seconds": 36.508166833082214,
+            "rows_per_second": 294857.28629478783,
+            "seconds": [
+              36.508166833082214
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 8.10732273403825,
+            "speedup_over_current": 1.2493612479775444
+          },
+          "pigz_dc": {
+            "rows": 10764699,
+            "median_seconds": 41.49079867498949,
+            "rows_per_second": 259447.8617855318,
+            "seconds": [
+              41.49079867498949
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 7.133713989514656,
+            "speedup_over_current": 1.0993254006326632
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 10764699,
+            "median_seconds": 18.14000491402112,
+            "rows_per_second": 593423.1578779531,
+            "seconds": [
+              18.14000491402112
+            ],
+            "peak_rss_kb": 236216,
+            "input_mib_per_second": 16.316615808363508
+          },
+          "r_fread_parse": {
+            "rows": 10764699,
+            "median_seconds": 7.790142287034541,
+            "rows_per_second": 1381835.9926385602,
+            "seconds": [
+              7.790142287034541
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 37.99461935843282
+          }
+        }
+      },
+      {
+        "analysis_id": "GCST90566755",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST90566001-GCST90567000/GCST90566755/harmonised/GCST90566755.h.tsv.gz",
+        "input_bytes": 336310299,
+        "projected": {
+          "current": {
+            "rows": 6362616,
+            "median_seconds": 30.68478847411461,
+            "rows_per_second": 207354.07726103248,
+            "seconds": [
+              30.68478847411461
+            ],
+            "peak_rss_kb": 104240,
+            "input_mib_per_second": 10.45242644477643
+          },
+          "gzip_dc": {
+            "rows": 6362616,
+            "median_seconds": 21.996669618878514,
+            "rows_per_second": 289253.6056703476,
+            "seconds": [
+              21.996669618878514
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 14.580866106382825,
+            "speedup_over_current": 1.394974285006289
+          },
+          "pigz_dc": {
+            "rows": 6362616,
+            "median_seconds": 23.511171769117936,
+            "rows_per_second": 270620.9653215725,
+            "seconds": [
+              23.511171769117936
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 13.641620998256155,
+            "speedup_over_current": 1.3051152352355004
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 6362616,
+            "median_seconds": 12.79185717809014,
+            "rows_per_second": 497395.7972965702,
+            "seconds": [
+              12.79185717809014
+            ],
+            "peak_rss_kb": 256596,
+            "input_mib_per_second": 25.073020284228384
+          },
+          "r_fread_parse": {
+            "rows": 6362616,
+            "median_seconds": 6.134603854967281,
+            "rows_per_second": 1037168.1938106067,
+            "seconds": [
+              6.134603854967281
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 52.28218513889959
+          }
+        }
+      },
+      {
+        "analysis_id": "GCST90664487",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST90664001-GCST90665000/GCST90664487/harmonised/GCST90664487.h.tsv.gz",
+        "input_bytes": 376211819,
+        "projected": {
+          "current": {
+            "rows": 12259932,
+            "median_seconds": 49.53225597902201,
+            "rows_per_second": 247514.1048530547,
+            "seconds": [
+              49.53225597902201
+            ],
+            "peak_rss_kb": 104240,
+            "input_mib_per_second": 7.243432430388987
+          },
+          "gzip_dc": {
+            "rows": 12259932,
+            "median_seconds": 43.601978216087446,
+            "rows_per_second": 281178.34331371135,
+            "seconds": [
+              43.601978216087446
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 8.228607140957646,
+            "speedup_over_current": 1.1360093740138268
+          },
+          "pigz_dc": {
+            "rows": 12259932,
+            "median_seconds": 47.638031585142016,
+            "rows_per_second": 257355.9736213742,
+            "seconds": [
+              47.638031585142016
+            ],
+            "peak_rss_kb": 104184,
+            "input_mib_per_second": 7.531452022057919,
+            "speedup_over_current": 1.0397628602788616
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 12259932,
+            "median_seconds": 18.861912216991186,
+            "rows_per_second": 649983.5148716263,
+            "seconds": [
+              18.861912216991186
+            ],
+            "peak_rss_kb": 243328,
+            "input_mib_per_second": 19.021589390368252
+          },
+          "r_fread_parse": {
+            "rows": 12259932,
+            "median_seconds": 8.196752157993615,
+            "rows_per_second": 1495706.0752463893,
+            "seconds": [
+              8.196752157993615
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 43.7714282917393
+          }
+        }
+      },
+      {
+        "analysis_id": "GCST006464",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST006001-GCST007000/GCST006464/harmonised/30093612-GCST006464-EFO_1001512.h.tsv.gz",
+        "input_bytes": 420167356,
+        "projected": {
+          "current": {
+            "rows": 9525227,
+            "median_seconds": 43.626942105125636,
+            "rows_per_second": 218333.59250913214,
+            "seconds": [
+              43.626942105125636
+            ],
+            "peak_rss_kb": 104240,
+            "input_mib_per_second": 9.184755948376308
+          },
+          "gzip_dc": {
+            "rows": 9525227,
+            "median_seconds": 35.30954452208243,
+            "rows_per_second": 269763.51943715854,
+            "seconds": [
+              35.30954452208243
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 11.34828617681329,
+            "speedup_over_current": 1.235556637606626
+          },
+          "pigz_dc": {
+            "rows": 9525227,
+            "median_seconds": 37.16621092800051,
+            "rows_per_second": 256287.27713063225,
+            "seconds": [
+              37.16621092800051
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 10.781373887851386,
+            "speedup_over_current": 1.1738334636705647
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 9525227,
+            "median_seconds": 20.382685031974688,
+            "rows_per_second": 467319.54033816466,
+            "seconds": [
+              20.382685031974688
+            ],
+            "peak_rss_kb": 260164,
+            "input_mib_per_second": 19.6589809135024
+          },
+          "r_fread_parse": {
+            "rows": 9525227,
+            "median_seconds": 8.89905748819001,
+            "rows_per_second": 1070363.5764395255,
+            "seconds": [
+              8.89905748819001
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 45.0275567430929
+          }
+        }
+      },
+      {
+        "analysis_id": "GCST90628007",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST90628001-GCST90629000/GCST90628007/harmonised/GCST90628007.h.tsv.gz",
+        "input_bytes": 491148898,
+        "projected": {
+          "current": {
+            "rows": 12407200,
+            "median_seconds": 52.82761448901147,
+            "rows_per_second": 234862.01525493432,
+            "seconds": [
+              52.82761448901147
+            ],
+            "peak_rss_kb": 104240,
+            "input_mib_per_second": 8.866500864832025
+          },
+          "gzip_dc": {
+            "rows": 12407200,
+            "median_seconds": 43.19473164109513,
+            "rows_per_second": 287238.7332578283,
+            "seconds": [
+              43.19473164109513
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 10.843824507250893,
+            "speedup_over_current": 1.2230105960133268
+          },
+          "pigz_dc": {
+            "rows": 12407200,
+            "median_seconds": 47.609953806968406,
+            "rows_per_second": 260600.96698064904,
+            "seconds": [
+              47.609953806968406
+            ],
+            "peak_rss_kb": 104372,
+            "input_mib_per_second": 9.838196681578726,
+            "speedup_over_current": 1.1095918030754186
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 12407200,
+            "median_seconds": 20.417999916011468,
+            "rows_per_second": 607659.9104239624,
+            "seconds": [
+              20.417999916011468
+            ],
+            "peak_rss_kb": 201612,
+            "input_mib_per_second": 22.940351233252986
+          },
+          "r_fread_parse": {
+            "rows": 12407200,
+            "median_seconds": 8.771604284178466,
+            "rows_per_second": 1414473.293372244,
+            "seconds": [
+              8.771604284178466
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 53.39913593670536
+          }
+        }
+      },
+      {
+        "analysis_id": "GCST000553",
+        "path": "/data/opengwasdb/raw/ebi-gwas-catalog/GCST000001-GCST001000/GCST000553/harmonised/20045101-GCST000553-EFO_0004839.h.tsv.gz",
+        "input_bytes": 29852313,
+        "projected": {
+          "current": {
+            "rows": 0,
+            "median_seconds": 6.630579767981544,
+            "rows_per_second": 0.0,
+            "seconds": [
+              6.630579767981544
+            ],
+            "peak_rss_kb": 104084,
+            "input_mib_per_second": 4.293649302116299
+          },
+          "gzip_dc": {
+            "rows": 0,
+            "median_seconds": 5.279936481034383,
+            "rows_per_second": 0.0,
+            "seconds": [
+              5.279936481034383
+            ],
+            "peak_rss_kb": 104212,
+            "input_mib_per_second": 5.391993690773155,
+            "speedup_over_current": 1.2558067302132694
+          },
+          "pigz_dc": {
+            "rows": 0,
+            "median_seconds": 5.212802650174126,
+            "rows_per_second": 0.0,
+            "seconds": [
+              5.212802650174126
+            ],
+            "peak_rss_kb": 104212,
+            "input_mib_per_second": 5.461435259297497,
+            "speedup_over_current": 1.2719798183343962
+          }
+        },
+        "parse_only": {
+          "pandas_parse": {
+            "rows": 2354410,
+            "median_seconds": 4.052605050150305,
+            "rows_per_second": 580962.1147051274,
+            "seconds": [
+              4.052605050150305
+            ],
+            "peak_rss_kb": 181732,
+            "input_mib_per_second": 7.02495896864278
+          },
+          "r_fread_parse": {
+            "rows": 2354410,
+            "median_seconds": 1.6223893181886524,
+            "rows_per_second": 1451199.150293116,
+            "seconds": [
+              1.6223893181886524
+            ],
+            "peak_rss_kb": 104288,
+            "input_mib_per_second": 17.547812891917705
+          }
+        }
+      }
+    ],
+    "decompression_only": [
+      {
+        "analysis_id": "GCST004293",
+        "input_bytes": 221110,
+        "python_gzip": {
+          "median_seconds": 0.009563148953020573,
+          "input_mib_per_second": 22.049947055774183,
+          "value": 787787
+        },
+        "gzip_dc": {
+          "median_seconds": 0.012394378893077374,
+          "input_mib_per_second": 17.013109726568175,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 0.007590822177007794,
+          "input_mib_per_second": 27.77919482019891,
+          "value": 1
+        }
+      },
+      {
+        "analysis_id": "GCST90502916",
+        "input_bytes": 45016417,
+        "python_gzip": {
+          "median_seconds": 0.9823522451333702,
+          "input_mib_per_second": 43.70224725623253,
+          "value": 126345218
+        },
+        "gzip_dc": {
+          "median_seconds": 1.2812356038484722,
+          "input_mib_per_second": 33.507498995954386,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 1.287069987040013,
+          "input_mib_per_second": 33.355607031336234,
+          "value": 1
+        }
+      },
+      {
+        "analysis_id": "GCST90101888",
+        "input_bytes": 159023095,
+        "python_gzip": {
+          "median_seconds": 3.1079852951224893,
+          "input_mib_per_second": 48.79567533827544,
+          "value": 716561431
+        },
+        "gzip_dc": {
+          "median_seconds": 3.7911987509578466,
+          "input_mib_per_second": 40.00218700710829,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 3.2987837770488113,
+          "input_mib_per_second": 45.97338039312394,
+          "value": 1
+        }
+      },
+      {
+        "analysis_id": "GCST90841074",
+        "input_bytes": 206373467,
+        "python_gzip": {
+          "median_seconds": 2.6009311580564827,
+          "input_mib_per_second": 75.67023619828493,
+          "value": 714668819
+        },
+        "gzip_dc": {
+          "median_seconds": 3.5625711230095476,
+          "input_mib_per_second": 55.244672532839516,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 5.254962548147887,
+          "input_mib_per_second": 37.45280261511657,
+          "value": 1
+        }
+      },
+      {
+        "analysis_id": "GCST90572714",
+        "input_bytes": 233547591,
+        "python_gzip": {
+          "median_seconds": 4.720456072827801,
+          "input_mib_per_second": 47.183648308335066,
+          "value": 742185984
+        },
+        "gzip_dc": {
+          "median_seconds": 4.528777062892914,
+          "input_mib_per_second": 49.1806808112069,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 6.336655928986147,
+          "input_mib_per_second": 35.14919252225954,
+          "value": 1
+        }
+      },
+      {
+        "analysis_id": "GCST90093342",
+        "input_bytes": 261348445,
+        "python_gzip": {
+          "median_seconds": 3.6131237950176,
+          "input_mib_per_second": 68.98221975480287,
+          "value": 1091146059
+        },
+        "gzip_dc": {
+          "median_seconds": 5.007999456021935,
+          "input_mib_per_second": 49.76863552361372,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 4.595731348032132,
+          "input_mib_per_second": 54.23321790468349,
+          "value": 1
+        }
+      },
+      {
+        "analysis_id": "GCST90270866",
+        "input_bytes": 310361185,
+        "python_gzip": {
+          "median_seconds": 3.9903053930029273,
+          "input_mib_per_second": 74.17564867664542,
+          "value": 1167882638
+        },
+        "gzip_dc": {
+          "median_seconds": 5.640123185003176,
+          "input_mib_per_second": 52.47819617325291,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 9.24815226206556,
+          "input_mib_per_second": 32.0046083321947,
+          "value": 1
+        }
+      },
+      {
+        "analysis_id": "GCST90566755",
+        "input_bytes": 336310299,
+        "python_gzip": {
+          "median_seconds": 4.424242579843849,
+          "input_mib_per_second": 72.49387634403323,
+          "value": 888386641
+        },
+        "gzip_dc": {
+          "median_seconds": 6.253052942920476,
+          "input_mib_per_second": 51.2918245578471,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 7.545934331836179,
+          "input_mib_per_second": 42.50374842861402,
+          "value": 1
+        }
+      },
+      {
+        "analysis_id": "GCST90664487",
+        "input_bytes": 376211819,
+        "python_gzip": {
+          "median_seconds": 6.393167678965256,
+          "input_mib_per_second": 56.11984032410778,
+          "value": 1289926361
+        },
+        "gzip_dc": {
+          "median_seconds": 7.6521040860097855,
+          "input_mib_per_second": 46.88691440629184,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 10.201508442871273,
+          "input_mib_per_second": 35.16965665597147,
+          "value": 1
+        }
+      },
+      {
+        "analysis_id": "GCST006464",
+        "input_bytes": 420167356,
+        "python_gzip": {
+          "median_seconds": 7.492664701072499,
+          "input_mib_per_second": 53.47934706756128,
+          "value": 1463996259
+        },
+        "gzip_dc": {
+          "median_seconds": 8.218742097960785,
+          "input_mib_per_second": 48.754762131901295,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 5.0930254210252315,
+          "input_mib_per_second": 78.67677517479572,
+          "value": 1
+        }
+      },
+      {
+        "analysis_id": "GCST90628007",
+        "input_bytes": 491148898,
+        "python_gzip": {
+          "median_seconds": 6.109358309069648,
+          "input_mib_per_second": 76.66862309556727,
+          "value": 1500161351
+        },
+        "gzip_dc": {
+          "median_seconds": 8.33931461814791,
+          "input_mib_per_second": 56.16721649217016,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 11.917373867938295,
+          "input_mib_per_second": 39.30363306080163,
+          "value": 1
+        }
+      },
+      {
+        "analysis_id": "GCST000553",
+        "input_bytes": 29852313,
+        "python_gzip": {
+          "median_seconds": 0.8322069069836289,
+          "input_mib_per_second": 34.20950241401981,
+          "value": 220187502
+        },
+        "gzip_dc": {
+          "median_seconds": 1.459015325177461,
+          "input_mib_per_second": 19.512738284608258,
+          "value": 1
+        },
+        "pigz_dc": {
+          "median_seconds": 0.7206510279793292,
+          "input_mib_per_second": 39.505090658438654,
+          "value": 1
+        }
+      }
+    ]
+  }
+}
