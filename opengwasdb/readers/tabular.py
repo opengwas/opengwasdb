@@ -9,6 +9,9 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.gwas_vcf import is_palindromic
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
@@ -55,7 +58,11 @@ __all__ = [
     "parse_af",
     "parse_finite_float",
     "parse_positive_float",
+    "DEFAULT_CHUNK_ROWS",
+    "MetricsChunk",
+    "metrics_chunks_from_rows",
     "project_source_variant",
+    "stream_projected_metric_chunks",
     "stream_projected_metrics",
     "stream_projected_variants",
     "stream_associations",
@@ -570,6 +577,326 @@ def stream_projected_metrics(
             projected = _project_metrics_row(row, projection)
             if projected is not None:
                 yield projected
+
+
+#: The largest position an ``int64`` column can carry. A source naming a larger
+#: one is refused rather than wrapped: the row-wise projection has no such
+#: bound, so this is the one coordinate the two paths disagree about, and it is
+#: eleven orders of magnitude beyond the longest human chromosome.
+_MAX_POSITION = 2**63 - 1
+
+#: Single-base codes for the strand-ambiguity test, keyed by the *verbatim*
+#: upper-cased cell, because that is what `is_palindromic` is given row-wise.
+_PALINDROME_CODES = {"A": 1, "T": 2, "C": 3, "G": 4}
+_PALINDROME_PAIRS = ((1, 2), (2, 1), (3, 4), (4, 3))
+
+_STATISTIC_FIELDS = ("frequency", "beta", "standard_error")
+_PROJECTED_FIELDS = ("chromosome", "position", "ref", "alt", *_STATISTIC_FIELDS)
+_MISSING_TOKENS = sorted(_MISSING)
+
+#: Rows per block. Peak memory is a block's ALID strings rather than the whole
+#: source, so this is the knob that bounds a resolver worker's footprint: 50,000
+#: costs about 23 MB against a genome-wide source where 1,000,000 costs 359 MB,
+#: and measures fractionally *faster* for it (issue #209).
+DEFAULT_CHUNK_ROWS = 50_000
+
+
+@dataclass(frozen=True)
+class MetricsChunk:
+    """A block of projected source rows held as columns (issue #209).
+
+    The column-oriented counterpart of :class:`TabularMetricsRow`: the same
+    projection over many rows at once, so the resolver's per-row Python cost --
+    a frozen dataclass, an f-string ALID and six parse calls for every row of a
+    genome-wide file -- becomes a handful of array operations per block. Only
+    rows naming a usable canonical variant are present, which is exactly the set
+    `stream_projected_metrics` yields, in the same order.
+
+    `palindromic` travels instead of the source's own `ref`/`alt` labels because
+    deciding strand ambiguity is the only thing those labels are read for. It is
+    computed from the *verbatim* labels, as `is_palindromic` is given them
+    row-wise -- not from the normalised alleles, which differ for a
+    whitespace-padded cell. Matching the row-wise answer matters more than
+    matching the tidier one.
+
+    Absent statistics are `NaN`, never `0.0`. Each of `af_alt`, `beta` and `se`
+    carries the usability rule its row-wise `parse_*` counterpart applies, so a
+    value present here is one the row-wise path would also have reported.
+    """
+
+    alid: np.ndarray
+    flipped: np.ndarray
+    palindromic: np.ndarray
+    af_alt: np.ndarray
+    beta: np.ndarray
+    se: np.ndarray
+
+    def __len__(self) -> int:
+        return int(self.alid.shape[0])
+
+
+def _projected_column_names(
+    header: list[bytes], projection: _ResolvedMetricsProjection
+) -> dict[str, str]:
+    """Each projected field's own header name; fields the file lacks are absent.
+
+    `read_csv` selects columns by name, so a header that repeats a projected
+    name would let pandas mangle one of them and hand back one column's values
+    under another column's name -- a wrong answer with nothing to see. It raises
+    here instead.
+    """
+    names: dict[str, str] = {}
+    for field_name in _PROJECTED_FIELDS:
+        index: int | None = getattr(projection, field_name)
+        if index is None:
+            continue
+        cell = header[index]
+        if header.count(cell) != 1:
+            raise ValueError(
+                f"projected column {cell.decode('utf-8', 'replace')!r} appears "
+                f"{header.count(cell)} times in the header; it must be unique"
+            )
+        names[field_name] = cell.decode("utf-8")
+    return names
+
+
+def _category_arrays(
+    column: pd.Series, normalise: Callable[[str], str]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-row normalised label, single-base code, and validity.
+
+    Normalisation runs once per *category* rather than once per row, which is the
+    whole reason the identity columns are read as categoricals: a genome-wide
+    source has millions of rows and a few tens of thousands of distinct allele
+    strings. The rule applied is the shared `normalise_*` function itself, not a
+    re-spelling of it, so the two projections cannot drift apart.
+    """
+    categories = column.cat.categories
+    normalised = np.empty(len(categories), dtype=object)
+    base = np.zeros(len(categories), dtype=np.int8)
+    valid = np.zeros(len(categories), dtype=bool)
+    for index, value in enumerate(categories):
+        text = str(value)
+        base[index] = _PALINDROME_CODES.get(text.upper(), 0)
+        try:
+            normalised[index] = normalise(text)
+        except VariantNormalisationError:
+            normalised[index] = ""
+            continue
+        valid[index] = True
+    codes = column.cat.codes.to_numpy()
+    if codes.min(initial=0) < 0:
+        # `keep_default_na=False` is what makes this unreachable: a cell the
+        # source omits arrives as the empty category, which `normalise_*`
+        # rejects on its own. Indexing with -1 would instead silently pick the
+        # last category, which is a wrong allele wearing a right one's name.
+        raise ValueError(
+            f"{column.name!r} has a missing category despite keep_default_na=False"
+        )
+    return normalised[codes], base[codes], valid[codes]
+
+
+def _positions_from_text(column: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+    """`int()` per cell, for a column that is not wholly integer literals."""
+    position = np.zeros(len(column), dtype="int64")
+    valid = np.zeros(len(column), dtype=bool)
+    for index, cell in enumerate(column.to_numpy(dtype=object)):
+        try:
+            value = int(cell)
+        except (TypeError, ValueError):
+            continue
+        if 0 < value <= _MAX_POSITION:
+            position[index] = value
+            valid[index] = True
+    return position, valid
+
+
+def _position_arrays(column: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+    """Per-row position and validity, under `int()`'s own grammar.
+
+    `to_numeric` reports an integer dtype exactly when every cell is a plain
+    integer literal, which is what a `base_pair_location` column ordinarily is
+    and is all the checking that case needs. Anything else -- one `1e5`, one
+    `100.5`, one empty cell -- falls back to `int()` per cell, because a float
+    parser accepts positions the row-wise projection drops and would put a
+    variant at a coordinate no row of the source names.
+    """
+    converted = pd.to_numeric(column, errors="coerce")
+    if converted.dtype.kind not in "iu":
+        return _positions_from_text(column)
+    position = converted.to_numpy(dtype="int64")
+    return position, (position > 0) & (position <= _MAX_POSITION)
+
+
+def _floats_from_text(column: pd.Series) -> np.ndarray:
+    """`float()` per cell -- the row-wise rule -- for a column pandas left as text.
+
+    Reached only when a statistic column carries a token that is neither a
+    number nor one of `_MISSING`, which is a malformed source rather than an
+    ordinary one. `to_numeric` would be the vectorised answer and is not used:
+    it is a digit less accurate than `float()` on a long decimal, and a
+    statistic that differs from the row-wise projection in its last place is
+    exactly the difference nothing downstream would report.
+    """
+    values = np.full(len(column), np.nan)
+    for index, cell in enumerate(column.to_numpy(dtype=object)):
+        try:
+            values[index] = float(cell)
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
+def _statistic_array(
+    frame: pd.DataFrame, name: str | None, usable: Callable[[np.ndarray], np.ndarray]
+) -> np.ndarray:
+    """One statistic column as float64, every unusable value `NaN`.
+
+    A column the file does not carry is all-`NaN` rather than missing, which is
+    what the row-wise projection reports for it too: `_metrics_cell` hands an
+    absent column the same empty cell it hands a short row.
+    """
+    if name is None:
+        return np.full(len(frame), np.nan)
+    column = frame[name]
+    values = (
+        column.to_numpy(dtype="float64", copy=False)
+        if column.dtype.kind == "f"
+        else _floats_from_text(column)
+    )
+    return np.where(usable(values), values, np.nan)
+
+
+def _palindromic(effect: np.ndarray, other: np.ndarray) -> np.ndarray:
+    """`is_palindromic`, over two arrays of single-base codes."""
+    ambiguous = np.zeros(effect.shape, dtype=bool)
+    for first, second in _PALINDROME_PAIRS:
+        ambiguous |= (effect == first) & (other == second)
+    return ambiguous
+
+
+def _projected_chunk(frame: pd.DataFrame, names: dict[str, str]) -> MetricsChunk:
+    """One block's projection, reduced to the rows naming a canonical variant."""
+    chromosome, _, chromosome_ok = _category_arrays(
+        frame[names["chromosome"]], normalise_chromosome
+    )
+    effect, effect_base, effect_ok = _category_arrays(frame[names["alt"]], normalise_allele)
+    other, other_base, other_ok = _category_arrays(frame[names["ref"]], normalise_allele)
+    position, position_ok = _position_arrays(frame[names["position"]])
+
+    keep = chromosome_ok & position_ok & effect_ok & other_ok & (effect != other)
+    lower = np.where(effect < other, effect, other)
+    upper = np.where(effect < other, other, effect)
+    text = np.where(position_ok, position, 0).astype(str).astype(object)
+    return MetricsChunk(
+        alid=(chromosome + ":" + text + ":" + lower + ":" + upper)[keep],
+        flipped=(effect != lower)[keep],
+        palindromic=_palindromic(effect_base, other_base)[keep],
+        af_alt=_statistic_array(
+            frame, names.get("frequency"), lambda v: np.isfinite(v) & (v >= 0.0) & (v <= 1.0)
+        )[keep],
+        beta=_statistic_array(frame, names.get("beta"), np.isfinite)[keep],
+        se=_statistic_array(
+            frame, names.get("standard_error"), lambda v: np.isfinite(v) & (v > 0.0)
+        )[keep],
+    )
+
+
+def stream_projected_metric_chunks(
+    path: str | Path, columns: MetricsProjectionColumns, *, chunk_rows: int = DEFAULT_CHUNK_ROWS
+) -> Iterator[MetricsChunk]:
+    """Stream the projection `stream_projected_metrics` produces, by block.
+
+    Row-for-row and field-for-field identical to the row-wise projection --
+    `tests/test_projected_metric_chunks.py` holds that bar -- and about twice as
+    quick on a genome-wide source, because allele and chromosome normalisation
+    run once per distinct string rather than once per row, and the statistics
+    are parsed a column at a time (issue #209).
+
+    Two differences are deliberate. A byte that is not valid UTF-8 fails the
+    whole block, where the row-wise path drops only that row when the byte lands
+    in an identity cell: both refuse to invent a value, and `resolve_analysis`
+    turns this one into a per-Analysis error rather than a quietly shorter file.
+    A header that repeats a projected column name raises, for the reason
+    `_projected_column_names` gives.
+
+    `chunk_rows` bounds memory, not semantics: the projection of a source does
+    not depend on how it is blocked, which is what the parity tests assert.
+    """
+    opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
+    with opener(path, "rb") as fh:
+        header_line = fh.readline()
+    projection = _required_metrics_projection(path, header_line, columns)
+    names = _projected_column_names(_header_cells(header_line), projection)
+    # The position keeps its source text: pandas would happily read `1e5` and
+    # `100.5` as numbers, and `int()` -- the rule the row-wise projection
+    # applies -- rejects both, so the literal is the only thing that can be
+    # checked against it.
+    dtypes: dict[str, str] = {names["position"]: "str"}
+    dtypes.update(dict.fromkeys((names[field] for field in ("chromosome", "ref", "alt")),
+                                "category"))
+    frames = pd.read_csv(
+        path,
+        sep="\t",
+        usecols=list(names.values()),
+        dtype=dtypes,
+        # Missing values are `_MISSING` and nothing else, per column: pandas'
+        # own default token list would turn a chromosome spelled `NA` -- which
+        # the row-wise projection keeps -- into a dropped row, while a statistic
+        # has exactly the missing spellings `parse_finite_float` accepts.
+        keep_default_na=False,
+        na_values={
+            names[field]: _MISSING_TOKENS
+            for field in _STATISTIC_FIELDS
+            if field in names
+        },
+        # `float()` is correctly rounded and pandas' default converter is not;
+        # on a real source that is a one-in-a-hundred-thousand row whose
+        # frequency differs from the row-wise projection in its last place.
+        float_precision="round_trip",
+        chunksize=chunk_rows,
+        engine="c",
+    )
+    with frames:
+        for frame in frames:
+            yield _projected_chunk(frame, names)
+
+
+def metrics_chunks_from_rows(
+    rows: Iterable[TabularMetricsRow], *, chunk_rows: int = DEFAULT_CHUNK_ROWS
+) -> Iterator[MetricsChunk]:
+    """Block a row-wise projection, for a reader that has no blocked one.
+
+    The resolver accumulates from :class:`MetricsChunk` and only that, so there
+    is one accumulation to get right rather than a fast one and a slow one that
+    can disagree. A reader that can only yield rows pays for the blocking and
+    gets the same answer (issue #209).
+    """
+    batch: list[TabularMetricsRow] = []
+    for row in rows:
+        batch.append(row)
+        if len(batch) >= chunk_rows:
+            yield _chunk_of_rows(batch)
+            batch = []
+    if batch:
+        yield _chunk_of_rows(batch)
+
+
+def _chunk_of_rows(rows: list[TabularMetricsRow]) -> MetricsChunk:
+    return MetricsChunk(
+        alid=np.array([row.alid for row in rows], dtype=object),
+        flipped=np.array([row.flipped for row in rows], dtype=bool),
+        palindromic=np.array(
+            [is_palindromic(row.ref, row.alt) for row in rows], dtype=bool
+        ),
+        af_alt=np.array([_or_nan(row.af_alt) for row in rows], dtype="float64"),
+        beta=np.array([_or_nan(row.beta) for row in rows], dtype="float64"),
+        se=np.array([_or_nan(row.se) for row in rows], dtype="float64"),
+    )
+
+
+def _or_nan(value: float | None) -> float:
+    return math.nan if value is None else value
 
 
 @dataclass(frozen=True)

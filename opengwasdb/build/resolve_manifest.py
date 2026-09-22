@@ -57,6 +57,7 @@ from opengwasdb.build.resolve import (
     AnalysisResolution,
     PhenotypeSdResolution,
     ScanDiagnostics,
+    ScanLimit,
     resolve_analysis,
 )
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
@@ -455,6 +456,9 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
         "source_file": d.source_file,
         "rows_read": d.rows_read,
         "ancestry_sites": d.ancestry_sites,
+        # Issue #209: whether the scan ended at EOF or at a bound. A record
+        # written under a future scan limit must not be readable as a full scan.
+        "stop_reason": d.stop_reason.value,
     }
 
 
@@ -483,6 +487,7 @@ def _build_analysis_fingerprints(
     gates: Gates,
     maf_floor: float,
     evidence_sample: int,
+    scan_limit: ScanLimit | None,
 ) -> dict[str, Any]:
     file_bytes, file_mtime_ns = _stat_source_file(row.source_file)
     fp = {
@@ -506,6 +511,11 @@ def _build_analysis_fingerprints(
             "source_reader_capability": row.source_reader_capability,
             "maf_floor": maf_floor,
             "evidence_sample": evidence_sample,
+            # Issue #209: the scan bound travels in the fingerprint, so a record
+            # resolved under one bound can never be resumed as another. The
+            # version is always present so a change to what a bound *means*
+            # invalidates too.
+            "scan_limit": None if scan_limit is None else scan_limit.as_fingerprint(),
             "gates": {
                 "tau": gates.tau,
                 "delta": gates.delta,
@@ -552,6 +562,7 @@ _WORKER_GATES: Gates | None = None
 _WORKER_EXTRACTION_PANEL: Collection[str] | None = None
 _WORKER_AF_REFERENCES: Mapping[str, AfReference] | None = None
 _WORKER_EVIDENCE_SAMPLE: int = DEFAULT_EVIDENCE_SAMPLE
+_WORKER_SCAN_LIMIT: ScanLimit | None = None
 _WORKER_RECORDS_DIR: Path | None = None
 _REFERENCE_LOAD_CALLS: int = 0
 
@@ -583,6 +594,7 @@ def _execute_analysis(
             gates=_WORKER_GATES,
             af_references=_WORKER_AF_REFERENCES,
             evidence_sample=_WORKER_EVIDENCE_SAMPLE,
+            scan_limit=_WORKER_SCAN_LIMIT,
         )
         if res.error:
             return res, RecordStatus.CONTROLLED_FAILURE, res.error
@@ -889,15 +901,18 @@ def _setup_worker_globals(
     panel_set: set[str] | None,
     af_refs: dict[str, AfReference],
     evidence_sample: int,
+    scan_limit: ScanLimit | None,
     out_dir: Path,
 ) -> None:
     global _WORKER_ANCESTRY_REFERENCE, _WORKER_GATES, _WORKER_EXTRACTION_PANEL
     global _WORKER_AF_REFERENCES, _WORKER_EVIDENCE_SAMPLE, _WORKER_RECORDS_DIR
+    global _WORKER_SCAN_LIMIT
     _WORKER_ANCESTRY_REFERENCE = ref
     _WORKER_GATES = gates
     _WORKER_EXTRACTION_PANEL = panel_set
     _WORKER_AF_REFERENCES = af_refs
     _WORKER_EVIDENCE_SAMPLE = evidence_sample
+    _WORKER_SCAN_LIMIT = scan_limit
     _WORKER_RECORDS_DIR = out_dir
 
 
@@ -914,6 +929,7 @@ def _prepare_pipeline_context(
     residual_max: float,
     orientation_flip_r: float,
     evidence_sample: int,
+    scan_limit: ScanLimit | None,
     reference_version: str,
     out_dir: Path,
 ) -> dict[str, Any]:
@@ -941,7 +957,7 @@ def _prepare_pipeline_context(
         residual_max=residual_max,
         orientation_flip_r=orientation_flip_r,
     )
-    _setup_worker_globals(ref, gates, panel_set, af_refs, evidence_sample, out_dir)
+    _setup_worker_globals(ref, gates, panel_set, af_refs, evidence_sample, scan_limit, out_dir)
     return {
         "opengwasdb_version": _get_opengwasdb_version(),
         "opengwasdb_git_hash": _get_git_hash(),
@@ -954,6 +970,7 @@ def _prepare_pipeline_context(
         "gates": gates,
         "maf_floor": maf_floor,
         "evidence_sample": evidence_sample,
+        "scan_limit": scan_limit,
     }
 
 
@@ -1017,12 +1034,26 @@ def resolve_analyses_manifest(
     residual_max: float = 0.06,
     orientation_flip_r: float = -0.5,
     evidence_sample: int = DEFAULT_EVIDENCE_SAMPLE,
+    max_ancestry_sites: int | None = None,
+    max_rows: int | None = None,
     n_workers: int = 1,
     resume: bool = False,
     largest_first: bool = True,
     reference_version: str = "",
 ) -> ManifestResolutionSummary:
-    """Resolve an entire manifest with atomic checkpointed records and resume."""
+    """Resolve an entire manifest with atomic checkpointed records and resume.
+
+    `max_ancestry_sites` and `max_rows` bound each Analysis's source scan (issue
+    #209): the scan stops once the ancestry fit holds that many distinct usable
+    reference sites, or once that many source rows have been read. Both are
+    `None` by default, which reads the whole source. A bounded resolution is
+    recorded with its `stop_reason` and bound in the fingerprint, so a record
+    produced under one bound can never be resumed as another.
+    """
+    scan_limit = None
+    if max_ancestry_sites is not None or max_rows is not None:
+        scan_limit = ScanLimit(max_rows=max_rows, max_ancestry_sites=max_ancestry_sites)
+        scan_limit.validate()
     out_dir = _validate_resolution_params(evidence_sample, n_workers, records_dir)
     rows = read_resolve_manifest(manifest_path, default_capability=default_source_reader_capability)
     fp_kwargs = _prepare_pipeline_context(
@@ -1038,6 +1069,7 @@ def resolve_analyses_manifest(
         residual_max,
         orientation_flip_r,
         evidence_sample,
+        scan_limit,
         reference_version,
         out_dir,
     )

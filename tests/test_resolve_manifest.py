@@ -218,6 +218,28 @@ def _invoke_cli_resolve(
     return runner.invoke(app, [*base_args, *extra_flags])
 
 
+def _invoke_cli_standard(
+    runner: CliRunner,
+    setup: dict[str, Any],
+    records_dir: Path,
+    *extra_flags: str,
+) -> Any:
+    """The release gates the CLI tests use, so a test only states what it varies."""
+    return _invoke_cli_resolve(
+        runner,
+        setup,
+        setup["manifest_path"],
+        records_dir,
+        "--n-min",
+        "10",
+        "--residual-max",
+        "0.25",
+        "--n-workers",
+        "1",
+        *extra_flags,
+    )
+
+
 def test_manifest_resolution_produces_atomic_records_and_index(
     test_setup: dict[str, Any]
 ) -> None:
@@ -468,18 +490,7 @@ def test_systemic_errors_raise_and_return_nonzero(test_setup: dict[str, Any]) ->
 def test_cli_runner_successful_execution(test_setup: dict[str, Any]) -> None:
     runner = CliRunner()
     records_dir = test_setup["tmp_path"] / "cli_success"
-    res = _invoke_cli_resolve(
-        runner,
-        test_setup,
-        test_setup["manifest_path"],
-        records_dir,
-        "--n-min",
-        "10",
-        "--residual-max",
-        "0.25",
-        "--n-workers",
-        "1",
-    )
+    res = _invoke_cli_standard(runner, test_setup, records_dir)
     assert res.exit_code == 0
     payload = json.loads(res.stdout)
     assert payload["n_total"] == 5
@@ -487,3 +498,68 @@ def test_cli_runner_successful_execution(test_setup: dict[str, Any]) -> None:
     assert payload["n_failed"] == 1
     assert payload["failed_analyses"] == ["GCST_CORRUPT"]
     assert (records_dir / "index.json").is_file()
+
+
+# --- bounded scans (issue #209) -------------------------------------------
+
+
+def test_scan_limit_bounds_the_ancestry_fit_and_is_recorded(
+    test_setup: dict[str, Any]
+) -> None:
+    """A manifest run under a bound records the bound and the reason it stopped."""
+    records_dir = test_setup["tmp_path"] / "records_scan_limit"
+    _run_standard_resolve(test_setup, records_dir, max_ancestry_sites=20)
+
+    with open(records_dir / "GCST_EUR_QUANT.json", encoding="utf-8") as fh:
+        record = json.load(fh)
+
+    assert record["diagnostics"]["stop_reason"] == "ancestry_site_limit"
+    assert record["diagnostics"]["ancestry_sites"] == 20, (
+        "the fit must stop at the bound, not at the source's 50 sites"
+    )
+    assert record["diagnostics"]["rows_read"] == 20
+    assert record["ancestry"]["assigned_ancestry"] == "EUR"
+    assert record["fingerprints"]["resolution_config"]["scan_limit"] == {
+        "scan_limit_version": 1,
+        "max_rows": None,
+        "max_ancestry_sites": 20,
+    }
+
+
+def test_scan_limit_invalidates_resume_when_changed(test_setup: dict[str, Any]) -> None:
+    """A record resolved under one bound is not resumable under another."""
+    records_dir = test_setup["tmp_path"] / "records_scan_resume"
+    _run_standard_resolve(test_setup, records_dir, max_ancestry_sites=20, resume=False)
+
+    same = _run_standard_resolve(test_setup, records_dir, max_ancestry_sites=20, resume=True)
+    assert same.n_resumed == 4
+
+    changed = _run_standard_resolve(test_setup, records_dir, max_ancestry_sites=30, resume=True)
+    assert changed.n_resumed == 0, "a changed scan bound must invalidate every record"
+
+
+def test_cli_scan_limit_option_contract(test_setup: dict[str, Any]) -> None:
+    runner = CliRunner()
+    records_dir = test_setup["tmp_path"] / "cli_scan_limit"
+    res = _invoke_cli_standard(
+        runner, test_setup, records_dir, "--max-ancestry-sites", "20"
+    )
+    assert res.exit_code == 0, res.output
+    with open(records_dir / "GCST_EUR_QUANT.json", encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["diagnostics"]["stop_reason"] == "ancestry_site_limit"
+    assert record["diagnostics"]["ancestry_sites"] == 20
+
+
+def test_cli_scan_limit_zero_reads_the_whole_source(test_setup: dict[str, Any]) -> None:
+    runner = CliRunner()
+    records_dir = test_setup["tmp_path"] / "cli_scan_full"
+    res = _invoke_cli_standard(
+        runner, test_setup, records_dir, "--max-ancestry-sites", "0"
+    )
+    assert res.exit_code == 0, res.output
+    with open(records_dir / "GCST_EUR_QUANT.json", encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["diagnostics"]["stop_reason"] == "eof"
+    assert record["diagnostics"]["ancestry_sites"] == 50
+    assert record["fingerprints"]["resolution_config"]["scan_limit"] is None

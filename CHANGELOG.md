@@ -120,12 +120,73 @@ the end of this file.
   one-pass resolver never reads. `TabularMetricsRow` is its row shape, and
   `stream_full_row_metrics` keeps the full-row parser's semantics so the two are
   asserted equal field for field (#207).
+- **`opengwasdb.build.resolve.ScanLimit`**: an explicit, deterministic bound on
+  one source scan -- a fixed number of source rows, a fixed number of distinct
+  usable ancestry-reference sites, or neither (the default full scan). The bound
+  is checked after the row has been fed to both stages, so a bounded resolution
+  is exactly the full resolution of the rows read; the stream is closed when the
+  bound stops it; and `ScanDiagnostics.stop_reason` records whether EOF, the row
+  bound or the site bound ended the scan. It exists so the issue #209 evaluation
+  can compare a prefix with the full source under a recorded rule; a full scan
+  stays the default and the only mode a release relies on. The study itself
+  rejects every bounded rule -- each one turns the Unassigned `GCST90859377`
+  into a confident EUR label -- so no bound is exposed on the manifest CLI
+  (#209, ADR 0046).
+- **Issue #209 evaluation harness and parser parity fixtures**:
+  `benchmarks/benchmark_resolver_evidence_scan.py` compares the full scan with
+  every preregistered fixed-row and usable-site prefix across the frozen
+  106-Analysis evaluation manifest (`docs/benchmark-output/opengwasdb_resolver_evidence_scan_manifest.tsv`),
+  and benchmarks the current projection against external `gzip -dc`/`pigz -dc`,
+  pandas' C engine and R `data.table::fread` with decompression measured
+  separately. `tests/test_resolver_evidence_scan_parsers.py` asserts the
+  external-decompressor prototype is field-for-field identical to
+  `stream_projected_metrics` on projection, reordered/extra columns, the legacy
+  `hm_*` layout, ragged and quoted rows, invalid alleles, missing values,
+  orientation and duplicate rows (#209, ADR 0046).
 - **`opengwasdb.build.phenotype_sd.has_usable_sample_size`**: ADR-0029's
   sample-size rule, split out of `estimate_phenotype_sd` so a caller reporting
   *why* it has no estimate asks the same question the estimator answers (#207).
 
 ### Changed
 
+- **The one-pass resolver reads its source in blocks, ~1.6x faster end to end**:
+  `stream_projected_metric_chunks` projects a genome-wide source a block at a
+  time into `MetricsChunk` columns, and `resolve_analysis` accumulates from
+  those rather than from a dataclass per row (#209). Allele and chromosome
+  normalisation now runs once per distinct string instead of once per row, and
+  the statistics are parsed a column at a time; the projection itself is ~2.1x
+  quicker and a whole resolution ~1.6x. Measured on four real GWAS-Catalog-SSF
+  sources (28.4M rows): 201.2s to 125.4s, with every resolved value --
+  `assigned_ancestry`, `gate_reason`, `residual`, `original_sd`, dispersion and
+  the evidence counts -- bit-for-bit identical. The row-wise
+  `stream_projected_metrics` is retained as the parity reference.
+- **`GwasSsfReader(chunk_rows=...)`** bounds what one resolver worker holds:
+  50,000 rows by default, about 23 MB of a block's ALIDs against a genome-wide
+  source, where the whole file would be hundreds of megabytes per worker (#209).
+  Peak memory is now bounded by this rather than being independent of the
+  source; it is fractionally faster than larger blocks as well.
+- **`MetricsChunk` carries `palindromic` rather than the source's `ref`/`alt`
+  labels**, because deciding strand ambiguity is the only thing those labels
+  were read for. It is computed from the verbatim labels, matching the row-wise
+  answer for a whitespace-padded allele rather than the tidier normalised one.
+- **Two projection edges now fail loudly rather than quietly**: a header that
+  repeats a projected column name raises instead of letting pandas hand back the
+  wrong column, and a byte that is not valid UTF-8 fails the block rather than
+  dropping the one row it lands in. `resolve_analysis` turns the latter into a
+  per-Analysis error, not a silently shorter file (#209).
+- **`opengwasdb.build.resolve_manifest` records a scan's stop reason**: every
+  per-Analysis record's `diagnostics` now carries `stop_reason` (`eof`,
+  `row_limit` or `ancestry_site_limit`), so a record written under a scan bound
+  can never be read back as a full-source resolution (#209).
+- **`resolve-analyses` bounds each source scan at 50,000 usable
+  ancestry-reference sites by default** (`--max-ancestry-sites`, `0` restores
+  the full scan; `--max-rows` bounds by rows instead). The #209 evaluation
+  measured a 13.4x aggregate speedup on the 106-Analysis frame, 105/106
+  assignment-and-gate agreement, and one false-positive EUR (`GCST90859377`),
+  which ADR 0047 records as accepted. The bound is part of every record's
+  fingerprint (`resolution_config.scan_limit`, with a rule version) and a
+  changed bound invalidates resume; `resolve_analysis` itself still defaults to
+  a full scan (#209, ADR 0047).
 - **`extract-variant-reference` streams every manifest, retiring the in-memory
   assembly**: hg19 and mixed manifests now lift each pre-lift window in a worker,
   re-bucket every survivor by post-lift window, merge those buckets per post-lift

@@ -46,6 +46,8 @@ from pathlib import Path
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
 from opengwasdb.readers.tabular import (
+    DEFAULT_CHUNK_ROWS,
+    MetricsChunk,
     MetricsProjectionColumns,
     TabularMetricsRow,
     TabularRow,
@@ -55,6 +57,7 @@ from opengwasdb.readers.tabular import (
     parse_finite_float,
     parse_positive_float,
     stream_associations,
+    stream_projected_metric_chunks,
     stream_projected_metrics,
     stream_projected_variants,
     stream_variants,
@@ -167,10 +170,16 @@ class GwasSsfReader:
     resolved by the caller from the build manifest (issue #16's schema) --
     the file's own columns carry no effect-scale concept, so it is never
     derived from `path` itself.
+
+    `chunk_rows` bounds what `stream_metric_chunks` holds at once, and so what a
+    resolver worker costs against a genome-wide source: a block's ALIDs, not the
+    file's (issue #209). It is on the reader because that is where the caller
+    running sixty-four of these can reach it.
     """
 
     path: str | Path
     stored_effect_scale: StoredEffectScale = StoredEffectScale.SD
+    chunk_rows: int = DEFAULT_CHUNK_ROWS
 
     def stream_associations(self) -> Iterator[ReaderAssociation]:
         yield from stream_associations(_iter_rows(self.path), self.stored_effect_scale)
@@ -190,6 +199,18 @@ class GwasSsfReader:
         read a frequency from.
         """
         yield from stream_projected_metrics(self.path, _METRICS_COLUMNS)
+
+    def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
+        """The same projection `stream_metrics` yields, a block at a time.
+
+        What the one-pass resolver actually reads (issue #209): the projection
+        is identical row for row, and normalising a block's distinct alleles
+        once rather than every row's separately roughly halves the time a
+        genome-wide source takes.
+        """
+        yield from stream_projected_metric_chunks(
+            self.path, _METRICS_COLUMNS, chunk_rows=self.chunk_rows
+        )
 
     def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
         return extract_at_sites(_iter_rows(self.path), alids)
