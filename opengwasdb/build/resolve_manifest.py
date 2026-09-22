@@ -452,13 +452,21 @@ def _phenotype_sd_to_dict(p: PhenotypeSdResolution | None) -> dict[str, Any] | N
 
 
 def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
+    """Serialize ScanDiagnostics to a dictionary.
+
+    Note: `ancestry_rows_read` and `ancestry_stop_reason` are additive fields
+    under record_schema_version 1 (issue #212). Cache and resume invalidation for
+    the decoupled phenotype-SD scan semantics is governed by `scan_limit_version = 2`
+    in `resolution_config.scan_limit`.
+    """
     return {
         "source_file": d.source_file,
         "rows_read": d.rows_read,
         "ancestry_sites": d.ancestry_sites,
-        # Issue #209: whether the scan ended at EOF or at a bound. A record
-        # written under a future scan limit must not be readable as a full scan.
+        # Issue #209, #212: whether the physical scan ended at EOF or at a bound.
         "stop_reason": d.stop_reason.value,
+        "ancestry_rows_read": d.ancestry_rows_read,
+        "ancestry_stop_reason": d.ancestry_stop_reason.value,
     }
 
 
@@ -1043,10 +1051,13 @@ def resolve_analyses_manifest(
 ) -> ManifestResolutionSummary:
     """Resolve an entire manifest with atomic checkpointed records and resume.
 
-    `max_ancestry_sites` and `max_rows` bound each Analysis's source scan (issue
-    #209): the scan stops once the ancestry fit holds that many distinct usable
-    reference sites, or once that many source rows have been read. Both are
-    `None` by default, which reads the whole source. A bounded resolution is
+    `max_ancestry_sites` bounds ancestry evidence accumulation (issue #209, issue #212):
+    ancestry accumulation stops once that many distinct usable reference sites have
+    been collected. Analyses requiring phenotype-SD estimation (quantitative traits)
+    continue reading to EOF so whole-file SD evidence is collected without truncation,
+    while non-quantitative Analyses terminate physical streaming at the ancestry bound.
+    `max_rows` bounds physical source rows for both ancestry and phenotype SD.
+    Both are `None` by default, which reads the whole source. A bounded resolution is
     recorded with its `stop_reason` and bound in the fingerprint, so a record
     produced under one bound can never be resumed as another.
     """

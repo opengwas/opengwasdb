@@ -1,5 +1,12 @@
 # Adopt a 50,000-site ancestry bound for the full-catalog release
 
+> **Superseded in part by [ADR 0048](./0048-decouple-ancestry-site-bound-from-quantitative-phenotype-sd.md).**
+> ADR 0048 decouples the 50,000-site ancestry bound from quantitative phenotype-SD
+> evidence gathering so that quantitative Studies stream to EOF for exact SD
+> estimation while case-control Studies retain early termination. The 13.4x whole-frame
+> speedup noted below was measured under v1 physical-stop semantics across all studies;
+> under v2 semantics, speedup applies to the case-control subset.
+
 ADR 0046 retained the full source scan after the #209 evaluation rejected every
 preregistered early-stop rule. This ADR supersedes that policy decision for the
 full GWAS Catalog release, on the maintainer's explicit judgement that the

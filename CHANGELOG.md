@@ -149,6 +149,18 @@ the end of this file.
 
 ### Changed
 
+- **`resolve_analysis` decouples the ancestry site bound from quantitative phenotype-SD evidence**:
+  `max_ancestry_sites` bounds ancestry accumulation only (#212, ADR 0048). When
+  phenotype-SD estimation is required (quantitative traits), ancestry accumulation
+  stops at the site bound while the same physical source stream continues to EOF
+  (or an explicit `max_rows` bound) to collect whole-file SD evidence, matching
+  the full unbounded SD estimate exactly. When phenotype-SD estimation is skipped
+  (case-control/log-OR/log-hazard or declared scale), the physical scan terminates
+  immediately at the ancestry bound. Diagnostics separately report physical scan
+  completion (`stop_reason`, `rows_read`) and ancestry completion
+  (`ancestry_stop_reason`, `ancestry_rows_read`). `SCAN_LIMIT_VERSION` is bumped
+  from 1 to 2, invalidating any resume records produced under the old truncated-SD
+  semantics.
 - **The one-pass resolver reads its source in blocks, ~1.6x faster end to end**:
   `stream_projected_metric_chunks` projects a genome-wide source a block at a
   time into `MetricsChunk` columns, and `resolve_analysis` accumulates from
@@ -178,15 +190,14 @@ the end of this file.
   per-Analysis record's `diagnostics` now carries `stop_reason` (`eof`,
   `row_limit` or `ancestry_site_limit`), so a record written under a scan bound
   can never be read back as a full-source resolution (#209).
-- **`resolve-analyses` bounds each source scan at 50,000 usable
-  ancestry-reference sites by default** (`--max-ancestry-sites`, `0` restores
+- **`resolve-analyses` bounds each source scan at 50,000 usable ancestry-reference sites by default (v1 semantics; amended by #212 / ADR 0048)** (`--max-ancestry-sites`, `0` restores
   the full scan; `--max-rows` bounds by rows instead). The #209 evaluation
-  measured a 13.4x aggregate speedup on the 106-Analysis frame, 105/106
-  assignment-and-gate agreement, and one false-positive EUR (`GCST90859377`),
-  which ADR 0047 records as accepted. The bound is part of every record's
-  fingerprint (`resolution_config.scan_limit`, with a rule version) and a
-  changed bound invalidates resume; `resolve_analysis` itself still defaults to
-  a full scan (#209, ADR 0047).
+  measured a 13.4x aggregate speedup on the 106-Analysis frame under whole-scan
+  truncation, 105/106 assignment-and-gate agreement, and one false-positive EUR
+  (`GCST90859377`), which ADR 0047 records as accepted. The bound is part of
+  every record's fingerprint (`resolution_config.scan_limit`, with a rule
+  version) and a changed bound invalidates resume; `resolve_analysis` itself
+  still defaults to a full scan (#209, ADR 0047).
 - **`extract-variant-reference` streams every manifest, retiring the in-memory
   assembly**: hg19 and mixed manifests now lift each pre-lift window in a worker,
   re-bucket every survivor by post-lift window, merge those buckets per post-lift

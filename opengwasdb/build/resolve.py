@@ -81,11 +81,11 @@ __all__ = [
     "resolve_analysis",
 ]
 
-#: The stopping-rule contract's version (issue #209). A caller that persists a
-#: resolution binds this alongside the thresholds, so a resumed run whose rule
-#: has since changed cannot silently keep an old record (the manifest resolver
-#: does exactly that). Bump it whenever what `ScanLimit` means changes.
-SCAN_LIMIT_VERSION = 1
+#: The stopping-rule contract's version (issue #209, issue #212). A caller that
+#: persists a resolution binds this alongside the thresholds, so a resumed run
+#: whose rule has since changed cannot silently keep an old record (the manifest
+#: resolver does exactly that). Bump it whenever what `ScanLimit` means changes.
+SCAN_LIMIT_VERSION = 2
 
 #: How many qualifying evidence rows one Analysis's phenotype-SD estimate is
 #: drawn from. A robust median-implied-SD estimate needs nowhere near this many
@@ -98,13 +98,14 @@ DEFAULT_EVIDENCE_SAMPLE = 20_000
 
 
 class ScanStop(StrEnum):
-    """What ended a source scan (issue #209).
+    """What ended a physical source scan (issue #209, issue #212).
 
-    `EOF` is a full scan -- the default and, until an early-stop rule is
-    independently validated, the only one a release may rely on. `ROW_LIMIT` and
-    `ANCESTRY_SITE_LIMIT` say the scan stopped before the file ended, which makes
-    the resolution a statement about a prefix rather than about the source and
-    must travel with it.
+    `EOF` is a full physical scan -- the file was read to the end. `ROW_LIMIT`
+    means the scan reached an explicit physical `max_rows` bound.
+    `ANCESTRY_SITE_LIMIT` means the physical scan terminated early upon
+    reaching `max_ancestry_sites` because no phenotype SD was required
+    (e.g. case-control Studies). For quantitative Studies, `stop_reason` is
+    `EOF` while `ancestry_stop_reason` is `ANCESTRY_SITE_LIMIT`.
     """
 
     EOF = "eof"
@@ -114,23 +115,19 @@ class ScanStop(StrEnum):
 
 @dataclass(frozen=True)
 class ScanLimit:
-    """A deterministic bound on one source scan (issue #209).
+    """A deterministic bound on one source scan (issue #209, issue #212, ADR 0048).
 
-    This is the evaluated early-stop mechanism, not a tuned default: the
-    resolver defaults to a full scan (`scan_limit=None`), and this exists so a
-    study can compare a prefix's resolution with the full source's under a bound
-    that is recorded rather than implied.
+    `max_ancestry_sites` bounds ancestry evidence accumulation: once reached,
+    ancestry accumulation stops. For quantitative Studies requiring phenotype-SD
+    estimation, the physical stream continues to EOF (or `max_rows`) so that
+    whole-file SD evidence is collected without truncation. For Studies where
+    phenotype-SD estimation is skipped (e.g. case-control), the physical scan
+    terminates immediately at the ancestry bound.
 
-    The two rules bound different things and are checked after each row is
-    admitted to the ancestry fit, so `max_rows` counts source rows and
-    `max_ancestry_sites` counts *distinct* reference sites with a usable
-    frequency -- the evidence the NNLS fit actually consumes, rather than
-    matches that a repeated ALID could inflate. `max_rows` wins when one row
-    reaches both, which keeps the reported `stop_reason` a fact about the
-    bound that was reached first rather than about dict size.
-
-    A bound that fails is not a fallback to a default: `resolve_analysis`
-    refuses a non-positive bound rather than reading less (or more) than asked.
+    `max_rows` bounds the entire physical source stream for both ancestry and
+    phenotype SD. When a single row reaches both `max_rows` and `max_ancestry_sites`,
+    `max_rows` takes precedence as the physical bound so both `stop_reason` and
+    `ancestry_stop_reason` record `ROW_LIMIT`.
     """
 
     max_rows: int | None = None
@@ -231,10 +228,16 @@ class ScanDiagnostics:
     #: Distinct panel sites this source contributed a frequency at -- how much of
     #: a bounded `extraction_panel` the file actually covers.
     ancestry_sites: int
-    #: What ended the scan (issue #209). `EOF` is a whole source; the other two
-    #: name the bound that stopped it. Travels with the resolution because a
-    #: prefix's fit must never be read as the source's fit.
+    #: What ended the physical source scan (issue #209, issue #212). `EOF` is a
+    #: full scan; `ROW_LIMIT` is a hard `max_rows` limit; `ANCESTRY_SITE_LIMIT`
+    #: is an early physical stop when no phenotype SD estimation is needed.
     stop_reason: ScanStop = ScanStop.EOF
+    #: At which source row ancestry accumulation stopped (issue #212). Equals
+    #: `rows_read` if ancestry was accumulated through the whole physical scan.
+    ancestry_rows_read: int = 0
+    #: What ended ancestry accumulation (issue #212): `EOF`, `ROW_LIMIT`, or
+    #: `ANCESTRY_SITE_LIMIT`.
+    ancestry_stop_reason: ScanStop = ScanStop.EOF
 
 
 @dataclass(frozen=True)
@@ -312,6 +315,8 @@ class _Scan:
     panel_af: dict[str, float] = field(default_factory=dict)
     rows_read: int = 0
     stop_reason: ScanStop = ScanStop.EOF
+    ancestry_rows_read: int = 0
+    ancestry_stop_reason: ScanStop = ScanStop.EOF
 
 
 @dataclass
@@ -397,11 +402,16 @@ def _entry_sequence(entry: tuple[int, int, float, float, float, str]) -> int:
 
 
 def _diagnostics(request: AnalysisRequest, scan: _Scan) -> ScanDiagnostics:
+    ancestry_rows = (
+        scan.ancestry_rows_read if scan.ancestry_rows_read > 0 else scan.rows_read
+    )
     return ScanDiagnostics(
         source_file=str(request.source_file),
         rows_read=scan.rows_read,
         ancestry_sites=len(scan.panel_af),
         stop_reason=scan.stop_reason,
+        ancestry_rows_read=ancestry_rows,
+        ancestry_stop_reason=scan.ancestry_stop_reason,
     )
 
 
@@ -411,6 +421,8 @@ def _scan(
     scan: _Scan,
     evidence: _EvidenceSample,
     limit: ScanLimit | None,
+    *,
+    needs_sd: bool,
 ) -> None:
     """One pass over the source, feeding the ancestry fit and the SD evidence.
 
@@ -418,34 +430,51 @@ def _scan(
     from the same row, so they are accumulated together rather than by two
     scans of a genome-wide file.
 
-    `limit` binds the scan to a prefix (issue #209). The bound is checked after
-    the row has been fed to both stages, so a resolution computed under a limit
-    is exactly the resolution a full scan would have produced from the same
-    rows -- nothing is admitted half-way, and a block is truncated at the
-    stopping row rather than accepted whole. The stream is always closed, so an
-    early stop releases the source rather than leaving a compressed handle for
-    the garbage collector.
+    `limit` binds the scan to a prefix (issue #209, issue #212).
+    `max_ancestry_sites` bounds ancestry evidence only: once reached, ancestry
+    accumulation stops and `diagnostics.ancestry_stop_reason` records
+    `ANCESTRY_SITE_LIMIT`. If phenotype SD estimation is requested (`needs_sd`),
+    the same physical source stream continues to EOF (or an explicit `max_rows`
+    bound) so the deterministic phenotype SD evidence is drawn from the whole
+    source without truncation. If no phenotype SD is needed (e.g. case-control),
+    the physical scan terminates immediately at the ancestry bound.
+
+    `max_rows`, when set, remains a hard physical bound on the source stream for
+    both ancestry and phenotype SD.
     """
     stream = reader.stream_metric_chunks()
+    ancestry_active = True
     try:
         for chunk in stream:
             block = _bounded(chunk, scan, limit)
-            stopped = _accumulate_ancestry(block, panel, scan.panel_af, limit)
-            if stopped is not None and stopped + 1 < len(block):
-                block = _slice(block, stopped + 1)
-                scan.stop_reason = ScanStop.ANCESTRY_SITE_LIMIT
-            elif stopped is not None and scan.stop_reason is ScanStop.EOF:
-                # Both bounds can land on one row; `max_rows` is checked first
-                # row-wise, so it keeps precedence here too.
-                scan.stop_reason = ScanStop.ANCESTRY_SITE_LIMIT
+            if ancestry_active:
+                stopped = _accumulate_ancestry(block, panel, scan.panel_af, limit)
+                if stopped is not None:
+                    ancestry_active = False
+                    scan.ancestry_rows_read = scan.rows_read + (stopped + 1)
+                    if scan.stop_reason is ScanStop.ROW_LIMIT and stopped + 1 == len(block):
+                        scan.ancestry_stop_reason = ScanStop.ROW_LIMIT
+                    else:
+                        scan.ancestry_stop_reason = ScanStop.ANCESTRY_SITE_LIMIT
+                    if not needs_sd:
+                        if stopped + 1 < len(block):
+                            block = _slice(block, stopped + 1)
+                        scan.stop_reason = scan.ancestry_stop_reason
+
             evidence.admit(block)
             scan.rows_read += len(block)
+            if not ancestry_active and not needs_sd:
+                break
             if scan.stop_reason is not ScanStop.EOF:
                 break
     finally:
         close = getattr(stream, "close", None)
         if close is not None:
             close()
+
+    if ancestry_active:
+        scan.ancestry_rows_read = scan.rows_read
+        scan.ancestry_stop_reason = scan.stop_reason
 
 
 def _slice(chunk: MetricsChunk, rows: int) -> MetricsChunk:
@@ -492,9 +521,10 @@ def _accumulate_ancestry(
     though which rows qualify is decided for the block at once.
 
     Returns the row index at which a `max_ancestry_sites` bound was reached, or
-    `None` if the block ran to its end. The index is the caller's stopping point
-    for the SD evidence too: a bounded scan must not feed one stage rows the
-    other never saw.
+    `None` if the block ran to its end. For non-quantitative Analyses where no
+    phenotype SD is needed, this index is also the caller's stopping point for
+    the physical scan; for quantitative Analyses, ancestry accumulation stops
+    here while the physical stream continues to EOF for whole-source SD evidence.
     """
     usable = np.isfinite(chunk.se) & np.isfinite(chunk.af_alt) & ~chunk.palindromic
     rows = np.flatnonzero(usable)
@@ -682,11 +712,15 @@ def resolve_analysis(
     is read only by the reference-MAF tier, only after the ancestry fit has said
     which ancestry to look up.
 
-    `scan_limit` bounds the scan to a deterministic prefix (issue #209); `None`
-    reads the whole source, which is the default and the only mode a release
-    should rely on until an early-stop rule has been independently validated. A
-    bounded resolution is *not* interchangeable with a full one and
-    `diagnostics.stop_reason` says which it is.
+    `scan_limit` bounds the scan to a deterministic prefix (issue #209, issue #212,
+    ADR 0048); `None` reads the whole source for both ancestry and phenotype SD.
+    When `scan_limit.max_ancestry_sites` is set, ancestry accumulation stops at
+    that bound; quantitative Analyses continue reading to EOF for exact whole-file
+    phenotype-SD estimation, while non-quantitative Analyses terminate physical
+    streaming early at the ancestry bound. Explicit `max_rows` bounds the entire
+    physical scan for both. `diagnostics` records physical scan completion
+    (`stop_reason`, `rows_read`) and ancestry completion (`ancestry_stop_reason`,
+    `ancestry_rows_read`).
 
     A source that cannot be read at all comes back as a resolution with `error`
     set rather than as an exception, because one unreadable file in a batch of
@@ -708,8 +742,9 @@ def resolve_analysis(
     scan = _Scan()
     evidence = _EvidenceSample(k=evidence_sample, tier=request.original_sd_method)
     panel: Collection[str] = reference.index if extraction_panel is None else extraction_panel
+    needs_sd = _skip_reason(request) is None
     try:
-        _scan(reader, panel, scan, evidence, scan_limit)
+        _scan(reader, panel, scan, evidence, scan_limit, needs_sd=needs_sd)
     except (OSError, EOFError, ValueError) as exc:
         return AnalysisResolution(
             analysis_id=request.analysis_id,

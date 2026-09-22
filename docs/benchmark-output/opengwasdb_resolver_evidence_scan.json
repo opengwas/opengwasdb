@@ -2,6 +2,7 @@
   "commit": "96dd203",
   "measured_at": "2026-09-21T20:44:09.922931+00:00",
   "issue": 209,
+  "scan_limit_version": 1,
   "manifest": "docs/benchmark-output/opengwasdb_resolver_evidence_scan_manifest.tsv",
   "manifest_sha256": "962618a5f72e0fa6027173e7b0b102cba472c9b4c9ff460f7bada04f17c2d557",
   "tool_versions": {

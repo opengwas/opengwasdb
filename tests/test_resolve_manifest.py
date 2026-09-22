@@ -506,24 +506,42 @@ def test_cli_runner_successful_execution(test_setup: dict[str, Any]) -> None:
 def test_scan_limit_bounds_the_ancestry_fit_and_is_recorded(
     test_setup: dict[str, Any]
 ) -> None:
-    """A manifest run under a bound records the bound and the reason it stopped."""
+    """A manifest run under a bound records the bound and the reason it stopped,
+    continuing quantitative traits to EOF for SD evidence and stopping case-control
+    traits early at the ancestry bound (issue #212).
+    """
     records_dir = test_setup["tmp_path"] / "records_scan_limit"
     _run_standard_resolve(test_setup, records_dir, max_ancestry_sites=20)
 
+    # Quantitative analysis: ancestry stopped at 20 sites, physical scan read all 50 rows for SD
     with open(records_dir / "GCST_EUR_QUANT.json", encoding="utf-8") as fh:
-        record = json.load(fh)
+        quant_record = json.load(fh)
 
-    assert record["diagnostics"]["stop_reason"] == "ancestry_site_limit"
-    assert record["diagnostics"]["ancestry_sites"] == 20, (
+    assert quant_record["diagnostics"]["stop_reason"] == "eof"
+    assert quant_record["diagnostics"]["ancestry_stop_reason"] == "ancestry_site_limit"
+    assert quant_record["diagnostics"]["ancestry_sites"] == 20, (
         "the fit must stop at the bound, not at the source's 50 sites"
     )
-    assert record["diagnostics"]["rows_read"] == 20
-    assert record["ancestry"]["assigned_ancestry"] == "EUR"
-    assert record["fingerprints"]["resolution_config"]["scan_limit"] == {
-        "scan_limit_version": 1,
+    assert quant_record["diagnostics"]["ancestry_rows_read"] == 20
+    assert quant_record["diagnostics"]["rows_read"] == 50
+    assert quant_record["ancestry"]["assigned_ancestry"] == "EUR"
+    assert quant_record["phenotype_sd"]["status"] == "estimated"
+    assert quant_record["fingerprints"]["resolution_config"]["scan_limit"] == {
+        "scan_limit_version": 2,
         "max_rows": None,
         "max_ancestry_sites": 20,
     }
+
+    # Case-control analysis: physical scan stopped early at 20 rows because no SD needed
+    with open(records_dir / "GCST_EUR_CC.json", encoding="utf-8") as fh:
+        cc_record = json.load(fh)
+
+    assert cc_record["diagnostics"]["stop_reason"] == "ancestry_site_limit"
+    assert cc_record["diagnostics"]["ancestry_stop_reason"] == "ancestry_site_limit"
+    assert cc_record["diagnostics"]["ancestry_sites"] == 20
+    assert cc_record["diagnostics"]["ancestry_rows_read"] == 20
+    assert cc_record["diagnostics"]["rows_read"] == 20
+    assert cc_record["phenotype_sd"]["status"] == "skipped"
 
 
 def test_scan_limit_invalidates_resume_when_changed(test_setup: dict[str, Any]) -> None:
@@ -538,6 +556,25 @@ def test_scan_limit_invalidates_resume_when_changed(test_setup: dict[str, Any]) 
     assert changed.n_resumed == 0, "a changed scan bound must invalidate every record"
 
 
+def test_scan_limit_version_bump_invalidates_v1_records(test_setup: dict[str, Any]) -> None:
+    """An old record written with scan_limit_version 1 must not resume under version 2."""
+    records_dir = test_setup["tmp_path"] / "records_scan_v1_invalidation"
+    _run_standard_resolve(test_setup, records_dir, max_ancestry_sites=20, resume=False)
+
+    # Mutate recorded fingerprint scan_limit_version back to 1
+    record_file = records_dir / "GCST_EUR_QUANT.json"
+    data = json.loads(record_file.read_text(encoding="utf-8"))
+    data["fingerprints"]["resolution_config"]["scan_limit"]["scan_limit_version"] = 1
+    data["fingerprints"]["fingerprint_digest"] = compute_fingerprint_digest(data["fingerprints"])
+    record_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    # Resuming with current code (version 2) should recompute the mutated record
+    res = _run_standard_resolve(test_setup, records_dir, max_ancestry_sites=20, resume=True)
+    assert res.n_resumed == 3, (
+        "GCST_EUR_QUANT with v1 scan_limit must be invalidated and recomputed"
+    )
+
+
 def test_cli_scan_limit_option_contract(test_setup: dict[str, Any]) -> None:
     runner = CliRunner()
     records_dir = test_setup["tmp_path"] / "cli_scan_limit"
@@ -546,9 +583,18 @@ def test_cli_scan_limit_option_contract(test_setup: dict[str, Any]) -> None:
     )
     assert res.exit_code == 0, res.output
     with open(records_dir / "GCST_EUR_QUANT.json", encoding="utf-8") as fh:
-        record = json.load(fh)
-    assert record["diagnostics"]["stop_reason"] == "ancestry_site_limit"
-    assert record["diagnostics"]["ancestry_sites"] == 20
+        quant_record = json.load(fh)
+    assert quant_record["diagnostics"]["stop_reason"] == "eof"
+    assert quant_record["diagnostics"]["ancestry_stop_reason"] == "ancestry_site_limit"
+    assert quant_record["diagnostics"]["ancestry_sites"] == 20
+    assert quant_record["diagnostics"]["rows_read"] == 50
+
+    with open(records_dir / "GCST_EUR_CC.json", encoding="utf-8") as fh:
+        cc_record = json.load(fh)
+    assert cc_record["diagnostics"]["stop_reason"] == "ancestry_site_limit"
+    assert cc_record["diagnostics"]["ancestry_stop_reason"] == "ancestry_site_limit"
+    assert cc_record["diagnostics"]["ancestry_sites"] == 20
+    assert cc_record["diagnostics"]["rows_read"] == 20
 
 
 def test_cli_scan_limit_zero_reads_the_whole_source(test_setup: dict[str, Any]) -> None:
