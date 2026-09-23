@@ -151,6 +151,9 @@ chr:pos:A1:A2
 where:
 
 - coordinates are on the release's declared Reference Assembly;
+- chromosome labels use canonical `X`, `Y`, and `MT`; source labels `23`, `24`,
+  and `25`/`26`/`M` respectively MUST be normalised to those labels before
+  identity assignment (ADR 0052);
 - alleles are trimmed and left-aligned before identity assignment;
 - `A1` is alphabetically first;
 - `A2` is the other allele.

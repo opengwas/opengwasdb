@@ -40,7 +40,6 @@ _MISSING = {"", ".", "NA", "NaN", "nan", "None"}
 _VALID_DISTINCT_ALLELE_CODES = frozenset(
     (ref, alt) for ref in b"ACGT" for alt in b"ACGT" if ref != alt
 )
-_CHROMOSOME_23_SENTINELS = (b"\0", b"23")
 _SINGLE_ALLELE_TEXT = {bytes((code,)): chr(code) for code in b"ACGTacgt"}
 
 
@@ -159,11 +158,9 @@ class _ResolvedProjection:
     split_limit: int
 
 
-def _normalise_projected_chromosome(value: bytes, chromosome_23_is_x: bool) -> str:
+def _normalise_projected_chromosome(value: bytes) -> str:
     stripped = value.strip()
-    if chromosome_23_is_x and stripped == b"23":
-        return "X"
-    if stripped.isdigit():
+    if stripped in _FAST_AUTOSOMES:
         return stripped.decode("ascii")
     return normalise_chromosome(value.decode("utf-8"))
 
@@ -186,8 +183,6 @@ def project_source_variant(
     ref_bytes: bytes,
     alt_bytes: bytes,
     rsid: str,
-    *,
-    chromosome_23_is_x: bool = False,
 ) -> SourceVariant | None:
     """Validate projected identity fields without constructing an orientation.
 
@@ -197,15 +192,7 @@ def project_source_variant(
     reader contract (issue #179).
     """
     try:
-        stripped_chromosome = chromosome_bytes.strip()
-        if stripped_chromosome == _CHROMOSOME_23_SENTINELS[chromosome_23_is_x]:
-            chromosome = "X"
-        elif stripped_chromosome.isdigit():
-            chromosome = stripped_chromosome.decode("ascii")
-        else:
-            chromosome = _normalise_projected_chromosome(
-                chromosome_bytes, chromosome_23_is_x
-            )
+        chromosome = _normalise_projected_chromosome(chromosome_bytes)
         position = int(position_bytes)
         if position <= 0:
             raise VariantNormalisationError(f"invalid position {position_bytes!r}")
@@ -346,7 +333,6 @@ def _required_projection(
 def _projected_variant(
     row: list[bytes],
     projection: _ResolvedProjection,
-    chromosome_23_is_x: bool,
 ) -> tuple[SourceVariant, ...]:
     try:
         rsid = _fallback_rsid(
@@ -360,7 +346,6 @@ def _projected_variant(
         row[projection.ref],
         row[projection.alt],
         rsid,
-        chromosome_23_is_x=chromosome_23_is_x,
     )
     return () if variant is None else (variant,)
 
@@ -368,8 +353,6 @@ def _projected_variant(
 def stream_projected_variants(
     path: str | Path,
     columns: VariantProjectionColumns,
-    *,
-    chromosome_23_is_x: bool = False,
 ) -> Iterator[SourceVariant]:
     """Stream header-indexed identity fields without parsing statistics."""
     opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
@@ -385,25 +368,26 @@ def stream_projected_variants(
             row[-1] = row[-1].rstrip(b"\r\n")
             if len(row) <= last_required:
                 continue
-            yield from _projected_variant(
-                row, projection, chromosome_23_is_x
-            )
+            yield from _projected_variant(row, projection)
 
 
-# Chromosome labels `normalise_chromosome` returns unchanged, so the hot path
-# can skip the string work for the labels production data actually uses.
-# Anything else -- `chr1`, a contig name, `23` -- falls back to it, which is
-# also what keeps this map from silently becoming the rule.
+# The common unprefixed spellings can skip decoding while returning exactly
+# the same explicit canonical labels as `normalise_chromosome` (ADR 0052).
+_FAST_AUTOSOMES = frozenset(str(number).encode() for number in range(1, 23))
+_FAST_CHROMOSOME_SPELLINGS = (
+    *(str(number) for number in range(1, 27)),
+    "X",
+    "x",
+    "Y",
+    "y",
+    "M",
+    "m",
+    "MT",
+    "mt",
+)
 _FAST_CHROMOSOMES: dict[bytes, str] = {
-    **{str(number).encode(): str(number) for number in range(1, 23)},
-    b"X": "X",
-    b"x": "X",
-    b"Y": "Y",
-    b"y": "Y",
-    b"M": "M",
-    b"m": "M",
-    b"MT": "MT",
-    b"mt": "MT",
+    spelling.encode(): normalise_chromosome(spelling)
+    for spelling in _FAST_CHROMOSOME_SPELLINGS
 }
 
 

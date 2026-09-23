@@ -625,15 +625,17 @@ def test_window_partition_is_non_overlapping_and_genome_ordered():
 
 
 def test_chromosomes_sharing_a_sort_rank_do_not_collide(tmp_path):
-    """M and MT both sort as rank 25, and every unrecognised contig as 1000. A
-    shard filename keyed on that rank lets one chromosome's shard overwrite
-    another's, silently dropping its variants from the reference (issue #188
-    review). All four contigs must survive in both serial and parallel mode."""
+    """Unrecognised contigs share rank 1000 without overwriting each other.
+
+    M and MT deliberately collapse to the same canonical physical chromosome
+    under ADR 0052; the unrelated contigs must still survive in both serial and
+    parallel mode (issue #188 review).
+    """
     contigs = ["M", "MT", "GL000207.1", "KI270728.1"]
     source = tmp_path / "ranks.tsv.gz"
     _write_ssf(source, [(chrom, 1000, "A", "G", ".") for chrom in contigs])
     manifest = _make_manifest(tmp_path, [("ranks", source, GWAS_SSF_CAPABILITY, "hg38")])
-    expected = {f"{chrom}:1000:A:G" for chrom in contigs}
+    expected = {"MT:1000:A:G", "GL000207.1:1000:A:G", "KI270728.1:1000:A:G"}
 
     for n_workers in (1, 2):
         artifact = tmp_path / f"ranks-{n_workers}.variant-ref.tsv.gz"

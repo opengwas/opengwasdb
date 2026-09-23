@@ -5,6 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 VALID_BASES = frozenset("ACGT")
+_AUTOSOMES = frozenset(str(number) for number in range(1, 23))
+_CHROMOSOME_ALIASES = {
+    "23": "X",
+    "X": "X",
+    "24": "Y",
+    "Y": "Y",
+    "25": "MT",
+    "26": "MT",
+    "M": "MT",
+    "MT": "MT",
+}
 
 
 class VariantNormalisationError(ValueError):
@@ -34,14 +45,25 @@ class Orientation:
 
 
 def normalise_chromosome(chromosome: str) -> str:
-    """Normalise chromosome labels without changing assembly coordinates."""
+    """Return the canonical label for a supported physical chromosome.
+
+    The canonical non-autosomal labels are explicitly ``X``, ``Y`` and ``MT``;
+    numeric PLINK-style spellings are aliases, not separate identities (ADR 0052).
+    """
 
     chrom = str(chromosome).strip()
-    if not chrom:
-        raise VariantNormalisationError("chromosome is missing")
     if chrom.lower().startswith("chr"):
         chrom = chrom[3:]
-    return chrom.upper() if chrom.upper() in {"X", "Y", "MT", "M"} else chrom
+    canonical = _CHROMOSOME_ALIASES.get(chrom.upper())
+    if canonical is not None:
+        return canonical
+    if chrom in _AUTOSOMES:
+        return chrom
+    if not chrom:
+        raise VariantNormalisationError("chromosome is missing")
+    if chrom.isdigit():
+        raise VariantNormalisationError(f"unsupported chromosome {chromosome!r}")
+    return chrom
 
 
 def normalise_allele(allele: str) -> str:
@@ -91,5 +113,5 @@ def chromosome_sort_key(chromosome: str) -> tuple[int, str]:
     chrom = normalise_chromosome(chromosome)
     if chrom.isdigit():
         return (int(chrom), chrom)
-    special = {"X": 23, "Y": 24, "M": 25, "MT": 25}
+    special = {"X": 23, "Y": 24, "MT": 25}
     return (special.get(chrom.upper(), 1000), chrom)
