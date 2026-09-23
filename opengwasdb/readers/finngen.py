@@ -17,11 +17,15 @@ from pathlib import Path
 import opengwasdb.readers.tabular as tabular
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
-from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
+from opengwasdb.variants.normalise import (
+    VariantNormalisationError,
+    normalise_chromosome,
+    orient_to_canonical,
+)
 
 FINNGEN_R13_CAPABILITY = "opengwasdb.finngen-r13"
 _FINNGEN_CHROMOSOMES = {
-    str(chromosome).encode(): "X" if chromosome == 23 else str(chromosome)
+    str(chromosome).encode(): normalise_chromosome(str(chromosome))
     for chromosome in range(1, 24)
 }
 _FINNGEN_ALLELE_PAIRS = {
@@ -52,8 +56,6 @@ def _iter_rows(path: str | Path) -> Iterator[tabular.TabularRow]:
             # R13 uses #chrom. Accepting chrom as well preserves compatibility
             # with older captured FinnGen releases without changing semantics.
             chromosome = row.get("#chrom", row.get("chrom", ""))
-            # FinnGen's chromosome vocabulary is 1-23, where 23 is chromosome X.
-            chromosome = "X" if chromosome.strip() == "23" else chromosome
             ref = row.get("ref")
             alt = row.get("alt")
             if ref is None or alt is None:
@@ -149,7 +151,6 @@ def _fallback_variant(
         row[ref],
         row[alt],
         identifier,
-        chromosome_23_is_x=True,
     )
     return () if variant is None else (variant,)
 

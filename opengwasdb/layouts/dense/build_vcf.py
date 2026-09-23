@@ -90,7 +90,7 @@ from opengwasdb.readers.interface import SourceVariant
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
-from opengwasdb.variants.normalise import chromosome_sort_key
+from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromosome
 from opengwasdb.variants.reference import VariantReference, read_variant_reference
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
@@ -2151,18 +2151,15 @@ def _sorted_alids(alids: Iterable[str]) -> list[str]:
     positions: list[str] = [""] * n
     a1s: list[str] = [""] * n
     a2s: list[str] = [""] * n
-    special = {"X": 23, "Y": 24, "M": 25, "MT": 25}
     pos_width = 1
     for i, alid in enumerate(unique):
         chrom, pos_str, a1, a2 = alid.split(":")
-        chroms[i] = chrom
+        canonical_chrom = normalise_chromosome(chrom)
+        chroms[i] = canonical_chrom
         positions[i] = pos_str
         a1s[i] = a1
         a2s[i] = a2
-        if chrom.isdigit():
-            ranks[i] = int(chrom)
-        else:
-            ranks[i] = special.get(chrom.upper(), 1000)
+        ranks[i] = chromosome_sort_key(canonical_chrom)[0]
         if len(pos_str) > pos_width:
             pos_width = len(pos_str)
 

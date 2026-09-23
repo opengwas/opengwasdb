@@ -203,6 +203,12 @@ the end of this file.
 
 ### Changed
 
+- **Non-autosomal chromosome spellings now share one canonical ALID identity**:
+  source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
+  explicit canonical labels `X`, `Y`, and `MT` respectively in every reader
+  path (#216, ADR 0052). This is a breaking change to variant identity:
+  affected Stores built with numeric or `M` non-autosomal ALIDs must be rebuilt
+  before reference completion or joins against post-change Stores.
 - **`resolve_analysis` decouples the ancestry site bound from quantitative phenotype-SD evidence**:
   `max_ancestry_sites` bounds ancestry accumulation only (#212, ADR 0048). When
   phenotype-SD estimation is required (quantitative traits), ancestry accumulation
