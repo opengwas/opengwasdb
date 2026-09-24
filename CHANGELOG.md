@@ -207,6 +207,26 @@ the end of this file.
 
 ### Changed
 
+- **Pass 2 off-reference keys are now fixed-width `uint64`, not pickled strings**:
+  a Hybrid build with `--variant-reference` encodes each off-reference source
+  coordinate in the Pass 2 worker. SNVs with one-base A/C/G/T alleles pack
+  losslessly (chromosome 5 bits, position 28 bits, ref 2 bits, alt 2 bits) and
+  decode back to the exact raw key; every other key is hashed into a tagged
+  part of the `uint64` space with its raw string in a small per-column side
+  file, since liftover and canonicalisation still need it. A hash collision
+  between two distinct keys fails the build loudly, naming both, and a hash
+  outside the 63-bit region is refused rather than truncated. The change
+  removes `allow_pickle` from the Hybrid build and shrinks the off-reference
+  spill from about 30 B/row to about 20 B/row (#218).
+- **The EAF spill survey and the Ragged Overflow CSR assembly now use
+  `--n-workers`**: both walked every Analysis's spill one column at a time on a
+  single core, which on OGS-00011 is ~6 h of the post-Pass-2 tail (#219). Each
+  column is now read, sampled and sorted in a forked worker through
+  `ordered_map`, with only a bounded number of results in flight; the parent
+  concatenates the EAF samples and appends to the CSR in Analysis order, so the
+  orientation report, encoding measurements, CSR contents and CSR offsets are
+  unchanged. `--n-workers 1` keeps the serial path, and a spill is still
+  deleted only after its column has been consumed.
 - **The Dense Component band write loads each band's columns across
   `--n-workers`**: the `z`, `se` and `eaf` passes decode the retained
   per-Analysis spills in a forked worker pool while one band buffer stays
@@ -217,6 +237,20 @@ the end of this file.
   `--n-workers 1` keeps the serial path. A result tagged with the wrong
   Analysis now fails the build loudly rather than being written into another
   band's slot. Shared by the Dense Layout and Hybrid builders.
+- **The post-Pass-2 tail logs its phases and uses `--n-workers` (#221)**: the
+  SE fit, measurement, exception count and rewrite, and the Dense top-hit gather
+  and scan, run their independent zarr row chunks across the build's process
+  pool, reducing in row-chunk order so the chosen SE encoding, the fitted
+  coefficients, the rewritten `se` plane, the exception table and both Top-Hit
+  Indexes are byte-for-byte the serial path's (`n_workers <= 1` stays
+  in-process). Each phase now logs its start, end and elapsed wall-clock time,
+  with progress through the chunk loop and the `PhaseTimer` accounting the SE
+  passes already kept; the SE fit reports its Dense chunks and its Overflow fold
+  separately, and a `float16` outcome charges the narrowing rewrite it actually
+  performs rather than hiding it. The Ragged Overflow CSR flush, the Ragged
+  Top-Hit Index and the `float16` narrowing remain serial and are logged; they
+  reduce whole flat arrays or make one zarr write, so their profiling evidence
+  is recorded on the issue instead of a forced pool.
 - **Non-autosomal chromosome spellings now share one canonical ALID identity**:
   source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
   explicit canonical labels `X`, `Y`, and `MT` respectively in every reader

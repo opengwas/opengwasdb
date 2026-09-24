@@ -87,4 +87,10 @@ def test_a_float16_outcome_still_charges_the_measurement_it_paid_for(tmp_path) -
     # The survey is paid for whether or not it selects the coding; that is the
     # cost issue #144 exists to expose.
     assert any(name.startswith("measure.") for name in timer.seconds)
-    assert not any(name.startswith("rewrite.") for name in timer.seconds)
+    # The float16 outcome still has a rewrite -- the narrowing of the scratch
+    # plane -- and issue #221 charges it rather than leaving it invisible. It
+    # must not charge the residual rewrite (count/encode/write).
+    assert "rewrite.narrow" in timer.seconds
+    assert not any(
+        name.startswith("rewrite.") and name != "rewrite.narrow" for name in timer.seconds
+    )

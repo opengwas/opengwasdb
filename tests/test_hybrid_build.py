@@ -23,6 +23,7 @@ from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
 from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.layouts.hybrid.unknown_keys import UnknownKeyEncodingError
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -1049,6 +1050,19 @@ def _assert_hybrid_stores_match(reference: Path, candidate: Path) -> None:
     assert (reference / "analyses.tsv").read_text() == (candidate / "analyses.tsv").read_text()
 
 
+def _assert_hybrid_build_fails_naming_keys(
+    manifest: Path, store: Path, reference: Path, *keys: str
+) -> None:
+    """Build until the injected hash collision fails it, naming every raw key."""
+    with pytest.raises(UnknownKeyEncodingError) as excinfo:
+        build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r"
+        )
+    message = str(excinfo.value)
+    for key in keys:
+        assert key in message
+
+
 class TestVariantReference:
     def test_reference_alone_is_a_full_union_single_pass_build(self, tmp_path):
         """With no separate panel the reference's own ALIDs are the Dense axis;
@@ -1282,6 +1296,87 @@ class TestVariantReference:
         assert result.n_off_panel == 1
         assert result.n_overflow == 1
         assert validate_store(store).ok
+
+    def test_off_reference_hash_collision_fails_the_build_naming_both_keys(
+        self, tmp_path, monkeypatch
+    ):
+        """Two distinct off-reference keys forced onto one hash must fail the
+        build loudly, naming both, rather than silently merging one into the
+        other. The collision is injected through the module's hash function."""
+        import opengwasdb.layouts.hybrid.unknown_keys as unknown_keys
+        from opengwasdb.variants.reference import write_variant_reference
+
+        vcf = _make_vcf(
+            tmp_path,
+            "trait_collide",
+            [
+                f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",  # on-panel
+                "1\t2000000\t.\tC\tCT\t.\tPASS\t.\tES:SE:AF\t1.0:0.5:0.2\n",  # off-ref indel
+                "1\t3000000\t.\tC\tCA\t.\tPASS\t.\tES:SE:AF\t1.5:0.5:0.2\n",  # off-ref indel
+            ],
+        )
+        manifest = _make_manifest(tmp_path, [("trait_collide", vcf, "Trait collide")])
+        reference = tmp_path / "panel-only.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1}
+        )
+        monkeypatch.setattr(unknown_keys, "_stable_hash", lambda key: 99)
+
+        _assert_hybrid_build_fails_naming_keys(
+            manifest,
+            tmp_path / "collision.opengwasdb",
+            reference,
+            "1:2000000:C:CT",
+            "1:3000000:C:CA",
+        )
+
+    def test_cross_analysis_hash_collision_fails_the_build_naming_both_keys(
+        self, tmp_path, monkeypatch
+    ):
+        """A hash is a function of the key string alone, so two keys that never
+        share an Analysis can still collide. The per-column encoder cannot see
+        that; the build-wide check in `_unknown_key_assembly` must, and must
+        name both keys (issue #218 review round 1)."""
+        import opengwasdb.layouts.hybrid.unknown_keys as unknown_keys
+        from opengwasdb.variants.reference import write_variant_reference
+
+        vcf_a = _make_vcf(
+            tmp_path,
+            "trait_a",
+            [
+                f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",  # on-panel
+                "1\t2000000\t.\tC\tCT\t.\tPASS\t.\tES:SE:AF\t1.0:0.5:0.2\n",  # off-ref, A only
+            ],
+        )
+        vcf_b = _make_vcf(
+            tmp_path,
+            "trait_b",
+            [
+                f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t3.0:0.5:0.2\n",  # on-panel
+                "1\t3000000\t.\tC\tCA\t.\tPASS\t.\tES:SE:AF\t1.5:0.5:0.2\n",  # off-ref, B only
+            ],
+        )
+        manifest = _make_manifest(
+            tmp_path, [("trait_a", vcf_a, "Trait A"), ("trait_b", vcf_b, "Trait B")]
+        )
+        reference = tmp_path / "panel-only.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference,
+            [HG38_ALID_1, HG38_ALID_3],
+            {
+                ("1", HG19_POS_1, "A", "G"): HG38_ALID_1,
+                ("1", HG19_POS_3, "G", "A"): HG38_ALID_3,
+            },
+        )
+        monkeypatch.setattr(unknown_keys, "_stable_hash", lambda key: 99)
+
+        _assert_hybrid_build_fails_naming_keys(
+            manifest,
+            tmp_path / "cross-collision.opengwasdb",
+            reference,
+            "1:2000000:C:CT",
+            "1:3000000:C:CA",
+        )
 
     def test_manifest_records_the_variant_reference(self, tmp_path):
         manifest = _hybrid_manifest(tmp_path)
