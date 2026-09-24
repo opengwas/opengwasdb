@@ -207,6 +207,16 @@ the end of this file.
 
 ### Changed
 
+- **The Dense Component band write loads each band's columns across
+  `--n-workers`**: the `z`, `se` and `eaf` passes decode the retained
+  per-Analysis spills in a forked worker pool while one band buffer stays
+  resident, instead of one column at a time on one core (#220). Output is
+  byte-for-byte unchanged: the columns are loaded through
+  `ordered_map`, so the overflow table, the top-hit candidate order,
+  `column_has_eaf` and the written planes are the serial path's, and
+  `--n-workers 1` keeps the serial path. A result tagged with the wrong
+  Analysis now fails the build loudly rather than being written into another
+  band's slot. Shared by the Dense Layout and Hybrid builders.
 - **Non-autosomal chromosome spellings now share one canonical ALID identity**:
   source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
   explicit canonical labels `X`, `Y`, and `MT` respectively in every reader
