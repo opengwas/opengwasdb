@@ -72,3 +72,16 @@ before the pool is created), so those dicts are never pickled per task.
 - Transient disk: the spill dir holds at most ~`n_workers` `.npz` files at once
   (the parent drains them as fast as workers produce), so it stayed at ~289 MB
   during the ukb-b run despite ~400 GB of total spill written over the build.
+
+## Scope note (issue #220)
+
+The "no large object ever crosses the process boundary" rule above governs
+**Pass 2**, where the parent had to hold every worker's result to merge it and
+the volume was the whole build's. It is not a rule against every pool in the
+build. The band write that consumes Pass 2's spills (ADR 0036) loads a *band's*
+columns in parallel and returns each already-encoded column to the parent,
+bounded by `ordered_map`'s in-flight window (`2 * n_workers`, issue #220). There
+the result is a fraction of one band, the parent consumes results in Analysis
+order and discards each as it is scattered, and peak memory is the band buffer
+plus that fixed window. Writing the encoded column to disk and reading it back
+would instead pay two extra passes over the same bytes to avoid a bounded pipe.

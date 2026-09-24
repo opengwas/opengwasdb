@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 import zarr
 from cli_output import normalize_cli_output
+from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
 from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
@@ -1389,3 +1390,54 @@ class TestVariantReference:
         provenance = StoreManifest.load(store).provenance
         assert provenance["variant_reference"] == str(reference)
         assert provenance["builder"] == "opengwasdb.v0.1_hybrid_single_pass"
+
+
+def test_hybrid_band_write_matches_serial_across_workers(tmp_path):
+    """Issue #220: the Dense Component band write loads each band's columns
+    across ``--n-workers``; a Hybrid Store Release (and its nested Dense
+    Component) must be identical to the serial build's. A one-column chunk over
+    two Analyses puts the overflow cell and the top hit in different bands."""
+    vcf_a = _make_vcf(
+        tmp_path,
+        "trait_a",
+        [
+            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",  # z -4.0, hit
+            f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",  # z  3.0
+        ],
+    )
+    vcf_b = _make_vcf(
+        tmp_path,
+        "trait_b",
+        [
+            # |z| = 137 is beyond the int16 fixed-point plane -> overflow table.
+            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t68.5:0.5:0.25\n",
+        ],
+    )
+    manifest = _make_manifest(
+        tmp_path, [("trait_a", vcf_a, "Trait A"), ("trait_b", vcf_b, "Trait B")]
+    )
+    serial = tmp_path / "serial.opengwasdb"
+    parallel = tmp_path / "parallel.opengwasdb"
+    for out, workers in ((serial, 1), (parallel, 2)):
+        build_hybrid_from_vcf_manifest(
+            manifest,
+            out,
+            reference_panel=_panel(tmp_path),
+            store_id="s",
+            release_id="r",
+            n_workers=workers,
+            chunk_shape=(1000, 1),
+        )
+
+    assert validate_store(parallel).ok
+    rs = open_store(serial).dense_component().arrays(mode="r")
+    rp = open_store(parallel).dense_component().arrays(mode="r")
+
+    if "z_overflow_index" in rs:
+        assert rs["z_overflow_index"][:].size > 0, "fixture carries no z overflow cell"
+    assert_same_band_arrays(rs, rp)
+    assert_same_top_hits(rs, rp, ("variant_index", "analysis_index", "z", "se"))
+
+    ss = {r["analysis_id"]: r["eaf_scope"] for r in read_analyses(serial / "analyses.tsv").rows}
+    ps = {r["analysis_id"]: r["eaf_scope"] for r in read_analyses(parallel / "analyses.tsv").rows}
+    assert ss == ps

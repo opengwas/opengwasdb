@@ -52,6 +52,7 @@ from opengwasdb.encoding import (
     positions_row_band,
     write_eaf_baseline,
 )
+from opengwasdb.encoding.timing import log_phase
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import (
     DenseBuildResult,
@@ -1847,6 +1848,7 @@ def _write_encoded_bands(
         dtype,
         pass2_start,
         encoding,
+        n_workers,
     )
     encoding = optimise_dense_se(staged.arrays(mode="a"), encoding, n_workers=n_workers)
     return _EncodedBands(
@@ -2242,6 +2244,9 @@ def _write_dense_eaf(
     band_cols: int,
     codec: StoreCodec,
     pass2_start: float,
+    n_workers: int,
+    column_has_eaf: np.ndarray,
+    encoding: StoreEncoding,
 ) -> None:
     """Write the `eaf` plane the store's plan declares.
 
@@ -2256,26 +2261,33 @@ def _write_dense_eaf(
     compute each baseline and encode against it. The staging array is deleted
     afterwards, and peak disk is 5 bytes per cell against the 4 the `float32`
     plane occupied on its own.
+
+    What is written is decided by the plan, not by whether the array happens to
+    be wanted here: a Hybrid release's two components share one plan, and a
+    Dense Component with no EAF where the Ragged Overflow has some would
+    otherwise declare a plane it does not have. An all-absent `int8` plane
+    costs essentially nothing compressed.
     """
+    if column_has_eaf.any() and encoding.eaf.is_absent:
+        raise ValueError(
+            "the encoding plan declares no eaf plane, but "
+            f"{int(column_has_eaf.sum())} of {n_analyses} Analyses carried a frequency; "
+            "the plan and the data disagree (ADR 0037 §2)"
+        )
+    if encoding.eaf.is_absent:
+        return
     residual = codec.encoding.eaf.is_residual
     staging = _EAF_STAGING if residual else "eaf"
     _create_eaf_array(staged, n_variants, n_analyses, effective_chunks, name=staging)
     root = staged.arrays(mode="a")
     eaf_zarr = root[staging]
-    eaf_band = np.empty((n_variants, band_cols), dtype="float32")
-    for c0 in range(0, n_analyses, band_cols):
-        c1 = min(c0 + band_cols, n_analyses)
-        w = c1 - c0
-        eaf_band[:, :w] = np.nan
-        for c in range(c0, c1):
-            local = c - c0
-            with np.load(spill_dir / f"{c}.npz") as data:
-                eaf_band[data["rows"], local] = data["eaf"]
-        eaf_zarr[:, c0:c1] = eaf_band[:, :w]
-        _log_progress(
-            "Band-write eaf", c1, n_analyses, pass2_start, f"cols {c0}:{c1}", every=band_cols
-        )
-    del eaf_band
+    loader = partial(_load_eaf_column, spill_dir, n_variants)
+    with log_phase(log, "Band-write eaf"):
+        for _c, _loaded, flush in _ordered_bands(
+            loader, n_analyses, n_workers, n_variants, band_cols, "float32", "eaf"
+        ):
+            if flush is not None:
+                _flush_band(eaf_zarr, flush, "Band-write eaf", n_analyses, pass2_start, band_cols)
     if not residual:
         return
     _encode_residual_dense_eaf(
@@ -2612,6 +2624,158 @@ def survey_eaf_spills(
     )
 
 
+@dataclass(frozen=True)
+class _LoadedZeColumn:
+    """One Analysis's decoded z column and everything the z pass derives from it.
+
+    ``column`` is the Analysis's ``n_variants``-long encoded band column, with
+    the plane's missing marker on every variant it does not observe -- the
+    shape the band buffer wants, so the parent's share is a straight copy
+    rather than a scatter. Shipping the dense column, not just its non-missing
+    cells, is what keeps the process boundary cheap: for a Dense Component it
+    is 2 bytes per variant against the spill's 10 bytes per association, and
+    the scatter (and the fill) happen in the workers. The column index travels
+    with it rather than being inferred from the order results arrive in, so a
+    result can never be placed against the wrong Analysis (issue #220).
+    """
+
+    col: int
+    column: np.ndarray
+    has_eaf: bool
+    overflow_index: np.ndarray
+    overflow_value: np.ndarray
+    hit_rows: np.ndarray
+    hit_z: np.ndarray
+    hit_se: np.ndarray
+
+
+def _load_z_column(
+    spill_dir: Path, n_variants: int, n_analyses: int, codec: StoreCodec, dtype: str, c: int
+) -> _LoadedZeColumn:
+    """Load one Analysis's spill and encode/harvest it, in a worker.
+
+    A private overflow builder collects this column's out-of-range cells; the
+    parent merges the returned entries in Analysis order, so the table is the
+    one the serial loop built. The harvest thresholds the stored (quantised)
+    z, exactly as the serial loop does -- not the source z.
+    """
+    with np.load(spill_dir / f"{c}.npz") as data:
+        rows = data["rows"]
+        overflow = ZOverflowBuilder()
+        codes = codec.encode_z(
+            data["z"],
+            positions=rows.astype(np.int64) * n_analyses + c,
+            overflow=overflow,
+        )
+        column = np.full(n_variants, codec.z_fill_value, dtype=codec.z_dtype)
+        column[rows] = codes
+        zc = codec.quantise_z(data["z"])  # what a query will read back
+        hit = np.abs(zc) >= _TOP_HIT_Z_CRIT
+        table = overflow.table()
+        has_eaf = bool(np.isfinite(data["eaf"]).any())
+        if np.any(hit):
+            hit_rows = rows[hit]
+            hit_z = zc[hit]
+            hit_se = data["se"][hit].astype(dtype).astype(np.float32)
+        else:
+            hit_rows = np.empty(0, dtype=np.int64)
+            hit_z = np.empty(0, dtype=np.float32)
+            hit_se = np.empty(0, dtype=np.float32)
+        return _LoadedZeColumn(
+            col=c,
+            column=column,
+            has_eaf=has_eaf,
+            overflow_index=table.index,
+            overflow_value=table.value,
+            hit_rows=hit_rows,
+            hit_z=hit_z,
+            hit_se=hit_se,
+        )
+
+
+def _load_sparse_column(
+    spill_dir: Path, n_variants: int, key: str, dtype: str, c: int
+) -> np.ndarray:
+    """Scatter one spilled array onto a missing-filled ``n_variants`` column."""
+    with np.load(spill_dir / f"{c}.npz") as data:
+        column = np.full(n_variants, np.nan, dtype=dtype)
+        column[data["rows"]] = data[key]
+        return column
+
+
+@dataclass(frozen=True)
+class _LoadedColumn:
+    """One Analysis's decoded band column, tagged with the Analysis it is from."""
+
+    col: int
+    column: np.ndarray
+
+
+def _load_se_column(spill_dir: Path, n_variants: int, dtype: str, c: int) -> _LoadedColumn:
+    return _LoadedColumn(
+        col=c, column=_load_sparse_column(spill_dir, n_variants, "se", dtype, c)
+    )
+
+
+def _load_eaf_column(spill_dir: Path, n_variants: int, c: int) -> _LoadedColumn:
+    return _LoadedColumn(
+        col=c, column=_load_sparse_column(spill_dir, n_variants, "eaf", "float32", c)
+    )
+
+
+def _ordered_bands(
+    loader: Callable[[int], Any],
+    n_analyses: int,
+    n_workers: int,
+    n_variants: int,
+    band_cols: int,
+    dtype: str,
+    what: str,
+) -> Iterator[tuple[int, Any, tuple[int, int, np.ndarray] | None]]:
+    """Drive one band pass, yielding ``(column, loaded, band_to_write)``.
+
+    ``loader(c)`` returns an object carrying ``.col`` and an ``n_variants``-long
+    ``.column``; the band is filled a column at a time and yielded for writing
+    at each band boundary, then replaced. So one band is the only large resident
+    allocation, and loader results in flight are bounded by ``ordered_map``'s
+    window. ``ordered_map`` yields in input order and a loader result whose
+    ``.col`` does not match the Analysis being placed fails the build rather
+    than being written into another Analysis's band slot (issue #220).
+    """
+    band: np.ndarray | None = None
+    band_start = 0
+    columns = ordered_map(loader, range(n_analyses), n_workers)
+    for c, loaded in zip(range(n_analyses), columns, strict=True):
+        if loaded.col != c:
+            raise ValueError(
+                f"band-write {what} columns arrived out of order: expected {c}, got {loaded.col}"
+            )
+        if band is None:
+            band = np.empty((n_variants, band_cols), dtype=dtype)
+            band_start = c
+        local = c - band_start
+        band[:, local] = loaded.column
+        flush: tuple[int, int, np.ndarray] | None = None
+        if local == band_cols - 1 or c == n_analyses - 1:
+            flush = (band_start, c + 1, band)
+            band = None
+        yield c, loaded, flush
+
+
+def _flush_band(
+    arr: Any,
+    flush: tuple[int, int, np.ndarray],
+    label: str,
+    n_analyses: int,
+    pass2_start: float,
+    band_cols: int,
+) -> None:
+    """Write one finished band to its plane and report progress."""
+    start, stop, band = flush
+    arr[:, start:stop] = band[:, : stop - start]
+    _log_progress(label, stop, n_analyses, pass2_start, f"cols {start}:{stop}", every=band_cols)
+
+
 def _write_dense_z_bands(
     root: Any,
     spill_dir: Path,
@@ -2621,19 +2785,24 @@ def _write_dense_z_bands(
     codec: StoreCodec,
     dtype: str,
     pass2_start: float,
+    n_workers: int,
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray], np.ndarray]:
     """z pass: encode, write, and harvest stored-value top hits.
 
-    One ``(n_variants × band_cols)`` buffer is resident at a time. The top-hit
-    harvest thresholds on the **quantised/decoded stored** z -- what a query
-    reads back -- not the source z, and reads each hit's se straight from the
-    spill rounded to the stored dtype. The overflow table is part of the z
-    plane, not an addendum: it is written in the same pass that finished
-    writing z. Returns the per-band hit parts and the per-\Analysis
-    ``column_has_eaf`` survey for the coordinator.
+    One ``(n_variants × band_cols)`` buffer is resident at a time; the columns
+    filling the current band are loaded and encoded by ``n_workers`` forked
+    workers and returned in Analysis order (``ordered_map``), so the overflow
+    table, the top-hit candidate order and ``column_has_eaf`` are exactly the
+    serial path's. At ``n_workers <= 1`` ``ordered_map`` runs the same loader
+    in this process, which is the serial path. The top-hit harvest thresholds
+    on the **quantised/decoded stored** z -- what a query reads back -- not the
+    source z, and reads each hit's se straight from the spill rounded to the
+    stored dtype. The overflow table is part of the z plane, not an addendum:
+    it is written in the same pass that finished writing z. Returns the
+    per-column hit parts and the per-Analysis ``column_has_eaf`` survey for
+    the coordinator.
     """
     z_arr = root["z"]
-    band = np.empty((n_variants, band_cols), dtype=codec.z_dtype)
     overflow = ZOverflowBuilder()
     hit_rows_parts: list[np.ndarray] = []
     hit_cols_parts: list[np.ndarray] = []
@@ -2641,32 +2810,27 @@ def _write_dense_z_bands(
     hit_se_parts: list[np.ndarray] = []
     column_has_eaf = np.zeros(n_analyses, dtype=bool)
 
-    log.info("Band-write z: %d analyses in bands of %d", n_analyses, band_cols)
-    for c0 in range(0, n_analyses, band_cols):
-        c1 = min(c0 + band_cols, n_analyses)
-        w = c1 - c0
-        band[:, :w] = codec.z_fill_value
-        for c in range(c0, c1):
-            local = c - c0
-            with np.load(spill_dir / f"{c}.npz") as data:
-                rows = data["rows"]
-                column_has_eaf[c] = bool(np.isfinite(data["eaf"]).any())
-                band[rows, local] = codec.encode_z(
-                    data["z"],
-                    positions=rows.astype(np.int64) * n_analyses + c,
-                    overflow=overflow,
-                )
-                zc = codec.quantise_z(data["z"])  # what a query will read back
-                hit = np.abs(zc) >= _TOP_HIT_Z_CRIT
-                if np.any(hit):
-                    hit_rows_parts.append(rows[hit])
-                    hit_cols_parts.append(np.full(int(np.count_nonzero(hit)), c, dtype=np.int64))
-                    hit_z_parts.append(zc[hit])
-                    hit_se_parts.append(data["se"][hit].astype(dtype).astype(np.float32))
-        z_arr[:, c0:c1] = band[:, :w]
-        _log_progress(
-            "Band-write z", c1, n_analyses, pass2_start, f"cols {c0}:{c1}", every=band_cols
-        )
+    log.info(
+        "Band-write z: %d analyses in bands of %d (n_workers=%d)",
+        n_analyses,
+        band_cols,
+        n_workers,
+    )
+    loader = partial(_load_z_column, spill_dir, n_variants, n_analyses, codec, dtype)
+    with log_phase(log, "Band-write z"):
+        for c, loaded, flush in _ordered_bands(
+            loader, n_analyses, n_workers, n_variants, band_cols, codec.z_dtype, "z"
+        ):
+            if loaded.overflow_index.size:
+                overflow.add(loaded.overflow_index, loaded.overflow_value)
+            column_has_eaf[c] = loaded.has_eaf
+            if loaded.hit_rows.size:
+                hit_rows_parts.append(loaded.hit_rows)
+                hit_cols_parts.append(np.full(loaded.hit_rows.size, c, dtype=np.int64))
+                hit_z_parts.append(loaded.hit_z)
+                hit_se_parts.append(loaded.hit_se)
+            if flush is not None:
+                _flush_band(z_arr, flush, "Band-write z", n_analyses, pass2_start, band_cols)
     overflow.table().write(root)
     return hit_rows_parts, hit_cols_parts, hit_z_parts, hit_se_parts, column_has_eaf
 
@@ -2679,87 +2843,31 @@ def _write_dense_se_bands(
     band_cols: int,
     dtype: str,
     pass2_start: float,
+    n_workers: int,
 ) -> None:
     """se pass: the independent float-scratch write over one band at a time.
 
     ``z`` and ``se`` no longer share a dtype (ADR 0037), so this pass owns a
-    fresh buffer of its own rather than reusing the z pass's.
+    fresh buffer of its own rather than reusing the z pass's. Its columns are
+    loaded in parallel exactly as the z pass's are, and ``ordered_map`` keeps
+    them in Analysis order so the written band is the serial one.
     """
     se_arr = root["se"]
-    band = np.empty((n_variants, band_cols), dtype=dtype)
-    for c0 in range(0, n_analyses, band_cols):
-        c1 = min(c0 + band_cols, n_analyses)
-        w = c1 - c0
-        band[:, :w] = np.nan
-        for c in range(c0, c1):
-            local = c - c0
-            with np.load(spill_dir / f"{c}.npz") as data:
-                band[data["rows"], local] = data["se"]
-        se_arr[:, c0:c1] = band[:, :w]
-        _log_progress(
-            "Band-write se", c1, n_analyses, pass2_start, f"cols {c0}:{c1}", every=band_cols
-        )
+    loader = partial(_load_se_column, spill_dir, n_variants, dtype)
+    with log_phase(log, "Band-write se"):
+        for _c, _loaded, flush in _ordered_bands(
+            loader, n_analyses, n_workers, n_variants, band_cols, dtype, "se"
+        ):
+            if flush is not None:
+                _flush_band(se_arr, flush, "Band-write se", n_analyses, pass2_start, band_cols)
 
 
-def _write_dense_bands(
-    staged: StagedRelease,
-    spill_dir: Path,
-    n_variants: int,
-    n_analyses: int,
-    effective_chunks: tuple[int, int],
-    dtype: str,
-    pass2_start: float,
-    encoding: StoreEncoding,
+def _concatenate_hits(
+    parts: tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray]],
+    column_has_eaf: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Stream the retained per-column spills into the zarr in chunk-column bands.
-
-    ``z`` and ``se`` are written in two separate passes so only one band is
-    ever resident, and the top-hit harvest runs in the z-pass on the stored z.
-    Spills are retained through the se pass and the EAF write, and are only
-    unlinked once both consumed them. Returns the concatenated top-hit
-    candidate arrays ``(rows, cols, z, se)`` plus the per-\Analysis
-    ``column_has_eaf`` survey for the index build and EAF decision.
-    """
-    root = staged.arrays(mode="a")
-    band_cols = effective_chunks[1]
-    codec = StoreCodec(encoding)
-    hit_rows_parts, hit_cols_parts, hit_z_parts, hit_se_parts, column_has_eaf = (
-        _write_dense_z_bands(
-            root, spill_dir, n_variants, n_analyses, band_cols, codec, dtype, pass2_start
-        )
-    )
-    _write_dense_se_bands(
-        root, spill_dir, n_variants, n_analyses, band_cols, dtype, pass2_start
-    )
-
-    # Pass 3 -- eaf. Its own float32 buffer, since eaf cannot share z/se's
-    # float16 (see `_create_eaf_array`). What is written is decided by the
-    # plan, not by whether the array happens to be wanted here.
-    if column_has_eaf.any() and encoding.eaf.is_absent:
-        raise ValueError(
-            "the encoding plan declares no eaf plane, but "
-            f"{int(column_has_eaf.sum())} of {n_analyses} Analyses carried a frequency; "
-            "the plan and the data disagree (ADR 0037 §2)"
-        )
-    if not encoding.eaf.is_absent:
-        # Written whenever the plan says so, even if *this* component carries
-        # no frequency: a Hybrid release's two components share one plan, and
-        # a Dense Component with no EAF where the Ragged Overflow has some
-        # would otherwise declare a plane it does not have. An all-absent
-        # `int8` plane costs essentially nothing compressed.
-        _write_dense_eaf(
-            staged,
-            spill_dir,
-            n_variants,
-            n_analyses,
-            effective_chunks,
-            band_cols,
-            codec,
-            pass2_start,
-        )
-    for c in range(n_analyses):
-        (spill_dir / f"{c}.npz").unlink(missing_ok=True)
-
+    """Assemble the harvested top-hit candidates from their per-column parts."""
+    hit_rows_parts, hit_cols_parts, hit_z_parts, hit_se_parts = parts
     if hit_rows_parts:
         return (
             np.concatenate(hit_rows_parts),
@@ -2775,6 +2883,55 @@ def _write_dense_bands(
         np.empty(0, dtype=np.float32),
         column_has_eaf,
     )
+
+
+def _write_dense_bands(
+    staged: StagedRelease,
+    spill_dir: Path,
+    n_variants: int,
+    n_analyses: int,
+    effective_chunks: tuple[int, int],
+    dtype: str,
+    pass2_start: float,
+    encoding: StoreEncoding,
+    n_workers: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Stream the retained per-column spills into the zarr in chunk-column bands.
+
+    ``z`` and ``se`` are written in two separate passes so only one band is
+    ever resident, and the top-hit harvest runs in the z-pass on the stored z.
+    Each pass loads the band's columns across ``n_workers`` forked workers
+    (issue #220); ``n_workers <= 1`` runs the loaders serially in-process.
+    Spills are retained through the se pass and the EAF write, and are only
+    unlinked once both consumed them. Returns the concatenated top-hit
+    candidate arrays ``(rows, cols, z, se)`` plus the per-Analysis
+    ``column_has_eaf`` survey for the index build and EAF decision.
+    """
+    root = staged.arrays(mode="a")
+    band_cols = effective_chunks[1]
+    codec = StoreCodec(encoding)
+    rows_parts, cols_parts, z_parts, se_parts, column_has_eaf = _write_dense_z_bands(
+        root, spill_dir, n_variants, n_analyses, band_cols, codec, dtype, pass2_start, n_workers
+    )
+    _write_dense_se_bands(
+        root, spill_dir, n_variants, n_analyses, band_cols, dtype, pass2_start, n_workers
+    )
+    _write_dense_eaf(
+        staged,
+        spill_dir,
+        n_variants,
+        n_analyses,
+        effective_chunks,
+        band_cols,
+        codec,
+        pass2_start,
+        n_workers,
+        column_has_eaf,
+        encoding,
+    )
+    for c in range(n_analyses):
+        (spill_dir / f"{c}.npz").unlink(missing_ok=True)
+    return _concatenate_hits((rows_parts, cols_parts, z_parts, se_parts), column_has_eaf)
 
 
 def _write_manifest(

@@ -218,7 +218,6 @@ the end of this file.
   outside the 63-bit region is refused rather than truncated. The change
   removes `allow_pickle` from the Hybrid build and shrinks the off-reference
   spill from about 30 B/row to about 20 B/row (#218).
-
 - **The EAF spill survey and the Ragged Overflow CSR assembly now use
   `--n-workers`**: both walked every Analysis's spill one column at a time on a
   single core, which on OGS-00011 is ~6 h of the post-Pass-2 tail (#219). Each
@@ -228,6 +227,16 @@ the end of this file.
   orientation report, encoding measurements, CSR contents and CSR offsets are
   unchanged. `--n-workers 1` keeps the serial path, and a spill is still
   deleted only after its column has been consumed.
+- **The Dense Component band write loads each band's columns across
+  `--n-workers`**: the `z`, `se` and `eaf` passes decode the retained
+  per-Analysis spills in a forked worker pool while one band buffer stays
+  resident, instead of one column at a time on one core (#220). Output is
+  byte-for-byte unchanged: the columns are loaded through
+  `ordered_map`, so the overflow table, the top-hit candidate order,
+  `column_has_eaf` and the written planes are the serial path's, and
+  `--n-workers 1` keeps the serial path. A result tagged with the wrong
+  Analysis now fails the build loudly rather than being written into another
+  band's slot. Shared by the Dense Layout and Hybrid builders.
 - **The post-Pass-2 tail logs its phases and uses `--n-workers` (#221)**: the
   SE fit, measurement, exception count and rewrite, and the Dense top-hit gather
   and scan, run their independent zarr row chunks across the build's process
