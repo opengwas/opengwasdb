@@ -207,6 +207,15 @@ the end of this file.
 
 ### Changed
 
+- **The EAF spill survey and the Ragged Overflow CSR assembly now use
+  `--n-workers`**: both walked every Analysis's spill one column at a time on a
+  single core, which on OGS-00011 is ~6 h of the post-Pass-2 tail (#219). Each
+  column is now read, sampled and sorted in a forked worker through
+  `ordered_map`, with only a bounded number of results in flight; the parent
+  concatenates the EAF samples and appends to the CSR in Analysis order, so the
+  orientation report, encoding measurements, CSR contents and CSR offsets are
+  unchanged. `--n-workers 1` keeps the serial path, and a spill is still
+  deleted only after its column has been consumed.
 - **Non-autosomal chromosome spellings now share one canonical ALID identity**:
   source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
   explicit canonical labels `X`, `Y`, and `MT` respectively in every reader
