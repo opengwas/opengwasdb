@@ -215,9 +215,12 @@ the end of this file.
   Indexes are byte-for-byte the serial path's (`n_workers <= 1` stays
   in-process). Each phase now logs its start, end and elapsed wall-clock time,
   with progress through the chunk loop and the `PhaseTimer` accounting the SE
-  passes already kept. The Ragged Overflow CSR flush and ragged Top-Hit Index
-  remain serial and are logged; they reduce whole flat arrays with one sort, so
-  their profiling evidence is recorded on the issue instead of a forced pool.
+  passes already kept; the SE fit reports its Dense chunks and its Overflow fold
+  separately, and a `float16` outcome charges the narrowing rewrite it actually
+  performs rather than hiding it. The Ragged Overflow CSR flush, the Ragged
+  Top-Hit Index and the `float16` narrowing remain serial and are logged; they
+  reduce whole flat arrays or make one zarr write, so their profiling evidence
+  is recorded on the issue instead of a forced pool.
 - **Non-autosomal chromosome spellings now share one canonical ALID identity**:
   source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
   explicit canonical labels `X`, `Y`, and `MT` respectively in every reader

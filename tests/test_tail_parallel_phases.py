@@ -19,6 +19,7 @@ from opengwasdb.build import ordered_pool
 from opengwasdb.encoding import se as se_module
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
 from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
+from opengwasdb.encoding.timing import PhaseTimer
 from opengwasdb.layouts.dense.top_hits import (
     _gather_in_row_chunks,
     build_top_hit_indexes,
@@ -141,19 +142,20 @@ def test_the_se_reduction_is_sensitive_to_chunk_order(tmp_path, monkeypatch) -> 
     assert not np.array_equal(got["exceptions"], expected["exceptions"])
 
 
-def test_joint_overflow_measurement_matches_across_workers(tmp_path) -> None:
+def test_joint_overflow_measurement_matches_across_workers(tmp_path, caplog) -> None:
     """The Hybrid overflow's flat chunks parallelise with the same decision."""
     dense_chunks = (1000, 2)
     serial_group = _two_analysis_group(tmp_path, "dense-serial.zarr", dense_chunks)
     parallel_group = _two_analysis_group(tmp_path, "dense-parallel.zarr", dense_chunks)
     overflow = _overflow_cells()
 
-    serial_choice, serial_coefficients = optimise_dense_se_joint(
-        serial_group, _PRELIMINARY, overflow=overflow, overflow_chunk=97, n_workers=1
-    )
-    parallel_choice, parallel_coefficients = optimise_dense_se_joint(
-        parallel_group, _PRELIMINARY, overflow=overflow, overflow_chunk=97, n_workers=3
-    )
+    with caplog.at_level(logging.INFO, logger="opengwasdb.encoding.se"):
+        serial_choice, serial_coefficients = optimise_dense_se_joint(
+            serial_group, _PRELIMINARY, overflow=overflow, overflow_chunk=97, n_workers=1
+        )
+        parallel_choice, parallel_coefficients = optimise_dense_se_joint(
+            parallel_group, _PRELIMINARY, overflow=overflow, overflow_chunk=97, n_workers=3
+        )
 
     assert serial_choice.se.is_residual
     assert parallel_choice == serial_choice
@@ -163,6 +165,13 @@ def test_joint_overflow_measurement_matches_across_workers(tmp_path) -> None:
     parallel = _se_snapshot(parallel_group)
     for name, values in serial.items():
         np.testing.assert_array_equal(parallel[name], values, err_msg=name)
+
+    # The dense progress is not the whole phase: the overflow fold is its own
+    # logged step, so 100% of the dense loop is not reported as "SE fit done".
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(message.startswith("SE fit (dense):") for message in messages)
+    assert any(message.startswith("SE fit (overflow): start") for message in messages)
+    assert any(message.startswith("SE fit (overflow): done in") for message in messages)
 
 
 def _two_analysis_group(tmp_path: Path, name: str, chunks: tuple[int, int]):
@@ -214,7 +223,49 @@ def test_se_phases_log_start_end_and_progress(tmp_path, caplog) -> None:
     for label in ("SE fit", "SE measurement", "SE rewrite", "SE rewrite count"):
         assert any(message.startswith(f"{label}: start") for message in messages), label
         assert any(message.startswith(f"{label}: done in") for message in messages), label
+    # The dense loop's progress says so; it is not labelled as the whole fit.
+    assert any(message.startswith("SE fit (dense):") for message in messages)
     assert any("elapsed" in message and "ETA" in message for message in messages)
+    assert any("SE phase timings" in message for message in messages)
+
+
+def _bad_fit_group(tmp_path: Path, name: str, chunks: tuple[int, int] = (200, 1)):
+    """A Dense scratch plane whose SE defies the MAF model, so the coding loses."""
+    group = zarr.open_group(str(tmp_path / name), mode="w")
+    n_rows = 600
+    eaf = np.linspace(0.05, 0.95, n_rows, dtype=np.float32)[:, None]
+    predictor = np.log(2 * eaf * (1 - eaf))
+    se = np.exp(-3.0 - 0.5 * predictor + 6.0 * np.sin(np.arange(n_rows)[:, None])).astype(
+        np.float32
+    )
+    group.create_dataset("eaf", data=eaf, chunks=chunks, dtype="float32")
+    group.create_dataset("se", data=se, chunks=chunks, dtype="float32")
+    group.create_dataset("z", data=np.ones_like(eaf), chunks=chunks, dtype="float16")
+    return group, se
+
+
+def test_the_float16_fallback_is_logged_and_timed(tmp_path, caplog) -> None:
+    """The path a real build selected must log its start, end and progress."""
+    group, source_se = _bad_fit_group(tmp_path, "fallback.zarr")
+    timer = PhaseTimer()
+    with caplog.at_level(logging.INFO, logger="opengwasdb.encoding.se"):
+        selected, coefficients = optimise_dense_se_joint(group, _PRELIMINARY, timer=timer)
+
+    assert not selected.se.is_residual, "fixture is meaningful only if the coding is declined"
+    assert coefficients is None
+    assert group["se"].dtype == np.dtype("float16")
+    np.testing.assert_array_equal(
+        np.asarray(group["se"][:], dtype=np.float32),
+        np.asarray(source_se, dtype=np.float16).astype(np.float32),
+    )
+    assert "rewrite.narrow" in timer.seconds
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(message.startswith("SE float16 narrowing: start") for message in messages)
+    assert any(message.startswith("SE float16 narrowing: done in") for message in messages)
+    assert any(
+        message.startswith("SE float16 narrowing:") and "elapsed" in message
+        for message in messages
+    )
     assert any("SE phase timings" in message for message in messages)
 
 

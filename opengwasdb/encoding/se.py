@@ -892,7 +892,7 @@ class _FitAccumulators:
 def _accumulate_fit_bands(
     starts: range, n_workers: int, acc: _FitAccumulators
 ) -> bool:
-    """Add every row chunk's partial sums in row order; return the AND of eligibility."""
+    """Add the Dense row chunks' partial sums in row order; AND of eligibility."""
     eligible = True
     started = time.monotonic()
     sums_iter = ordered_map(_fit_one_band, starts, n_workers)
@@ -900,9 +900,30 @@ def _accumulate_fit_bands(
         eligible = eligible and sums.eligible
         acc.add_band(sums)
         log_progress(
-            log, "SE fit", index, len(starts), started, every=max(1, len(starts) // 20)
+            log, "SE fit (dense)", index, len(starts), started,
+            every=max(1, len(starts) // 20),
         )
     return eligible
+
+
+def _fold_overflow_fit(overflow: OverflowCells, acc: _FitAccumulators) -> bool:
+    """Join the flat overflow cells to the Dense fit, logged as its own step.
+
+    The overflow is one flat array rather than row chunks, so it has no chunk
+    progress of its own; the start/end line is what keeps the dense progress
+    line from appearing to report the whole phase done (issue #221).
+    """
+    with log_phase(log, "SE fit (overflow)"):
+        return _add_fit_sums(
+            overflow.se_values,
+            overflow.eaf_values,
+            overflow.analysis_indices,
+            acc.count,
+            acc.sx,
+            acc.sy,
+            acc.sxx,
+            acc.sxy,
+        )
 
 
 def _fit_shared_coefficients(
@@ -938,16 +959,7 @@ def _fit_shared_coefficients(
             with timer.phase("fit"):
                 eligible = _accumulate_fit_bands(starts, n_workers, acc)
                 if overflow is not None:
-                    eligible &= _add_fit_sums(
-                        overflow.se_values,
-                        overflow.eaf_values,
-                        overflow.analysis_indices,
-                        acc.count,
-                        acc.sx,
-                        acc.sy,
-                        acc.sxx,
-                        acc.sxy,
-                    )
+                    eligible &= _fold_overflow_fit(overflow, acc)
     finally:
         _FIT = None
     coefficients, solved = solve_log_se(
@@ -1060,16 +1072,19 @@ def _measure_overflow_component(
 
 
 def _fall_back_to_float16(
-    group: Any, encoding: StoreEncoding
+    group: Any, encoding: StoreEncoding, timer: PhaseTimer
 ) -> tuple[StoreEncoding, np.ndarray | None]:
-    """Narrow the scratch plane and report no coefficients.
+    """Narrow the scratch plane, report the timing, and report no coefficients.
 
     Both exits from the decision reach here: a store with no EAF cannot fit a
     model at all, and one whose fit does not earn its bytes declines it. Either
     way the plane must end up in the `float16` its manifest declares, and a
-    caller must not be handed coefficients no array was coded against.
+    caller must not be handed coefficients no array was coded against. The
+    timing report is emitted after the narrowing so the SE total is complete
+    (issue #221).
     """
-    _narrow_dense_se_to_float16(group)
+    _narrow_dense_se_to_float16(group, timer)
+    log.info("SE phase timings:\n%s", timer.format_report())
     return encoding, None
 
 
@@ -1151,7 +1166,7 @@ def optimise_dense_se_joint(
     """
     timer = timer or PhaseTimer()
     if encoding.eaf.is_absent:
-        return _fall_back_to_float16(group, encoding)
+        return _fall_back_to_float16(group, encoding, timer)
     source = group["se"]
     n_analyses = int(source.shape[1])
     _check_overflow_width(overflow, n_analyses)
@@ -1180,7 +1195,7 @@ def optimise_dense_se_joint(
     log.info("SE fit: %s", _format_solution(coefficients, eligible, selected))
     log.info("SE phase timings:\n%s", timer.format_report())
     if not se_choice.is_residual:
-        return _fall_back_to_float16(group, selected)
+        return _fall_back_to_float16(group, selected, timer)
     _rewrite_selected(group, source, eaf_plane, coefficients, selected, timer, n_workers)
     log.info("SE phase timings:\n%s", timer.format_report())
     return selected, coefficients
@@ -1199,7 +1214,7 @@ def _format_solution(
     )
 
 
-def _narrow_dense_se_to_float16(group: Any) -> None:
+def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> None:
     """Bring a `float32` scratch plane down to the declared `float16`.
 
     Builders keep the scratch in `float32` so an exact exception is the
@@ -1207,12 +1222,18 @@ def _narrow_dense_se_to_float16(group: Any) -> None:
     measured decision is `float16` after all, the plane still has to end up in
     the encoding the manifest declares, so it is narrowed here rather than
     left wider than its own declaration.
+
+    The copy logs its start, elapsed time and row-chunk progress, and is charged
+    as ``rewrite.narrow`` when a timer is supplied (issue #221). It is left
+    serial: on the 50-Analysis Hybrid subset the whole-plane copy took 23s and
+    is zarr-read/zarr-write bound rather than independent chunk work.
     """
     source = group["se"]
     if source.dtype == np.dtype("float16"):
         return
     n_rows = int(source.shape[0])
     row_chunk = int(source.chunks[0])
+    starts = range(0, n_rows, row_chunk)
     pending = group.create_dataset(
         "se_pending",
         shape=source.shape,
@@ -1221,9 +1242,16 @@ def _narrow_dense_se_to_float16(group: Any) -> None:
         dtype="float16",
         fill_value=np.nan,
     )
-    for r0 in range(0, n_rows, row_chunk):
-        r1 = min(r0 + row_chunk, n_rows)
-        pending[r0:r1] = np.asarray(source[r0:r1], dtype=np.float16)
+    started = time.monotonic()
+    with log_phase(log, "SE float16 narrowing"):
+        with _optional_phase(timer, "rewrite.narrow"):
+            for index, r0 in enumerate(starts, start=1):
+                r1 = min(r0 + row_chunk, n_rows)
+                pending[r0:r1] = np.asarray(source[r0:r1], dtype=np.float16)
+                log_progress(
+                    log, "SE float16 narrowing", index, len(starts), started,
+                    every=max(1, len(starts) // 20),
+                )
     del group["se"]
     group.move("se_pending", "se")
 
@@ -1245,7 +1273,7 @@ def rewrite_dense_se(
     source = group["se"]
     n_analyses = int(source.shape[1])
     if not encoding.se.is_residual:
-        _narrow_dense_se_to_float16(group)
+        _narrow_dense_se_to_float16(group, timer)
         return
     if coefficients is None:
         raise ValueError("residual SE needs se_coefficients")
