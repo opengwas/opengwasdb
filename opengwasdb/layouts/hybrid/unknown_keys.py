@@ -255,6 +255,17 @@ def hashed_lookup(
     lookup: dict[int, str] = {}
     for position, raw in zip(positions.tolist(), hashed_raw, strict=True):
         value = int(values[position])
+        # A side file can pair a row with a real key that belongs to a different
+        # row; re-deriving the encoding is the only way to prove the pair. This
+        # is cheap next to the lookup it guards and refuses a swapped, stale or
+        # otherwise corrupt entry rather than attaching a row's statistics to
+        # the wrong variant (issue #218 review round 2).
+        recomputed = encode_key(raw)
+        if recomputed != value:
+            raise UnknownKeyEncodingError(
+                f"side file row {position} names raw key {raw!r}, which encodes to "
+                f"{recomputed}, not the stored {value}; the side file cannot be trusted"
+            )
         existing = lookup.get(value)
         if existing is not None and existing != raw:
             raise UnknownKeyEncodingError(

@@ -148,6 +148,20 @@ def test_hashed_lookup_rejects_a_packed_row_name() -> None:
         hashed_lookup(values, np.array([0]), ["1:6:A:AT"])
 
 
+def test_hashed_lookup_rejects_two_swapped_side_entries() -> None:
+    """Swapping two genuine raw keys keeps every tagged row covered, so only
+    re-deriving each key's encoding can prove the side file pairs the right key
+    with the right row. Without that check the spill decodes to the two keys in
+    the wrong order, attaching each row's statistics to the other variant."""
+    encoded = encode_keys(["1:5:A:AT", "1:6:A:GA"])
+    swapped = list(reversed(encoded.hashed_raw))
+
+    with pytest.raises(UnknownKeyEncodingError, match="encodes to"):
+        hashed_lookup(encoded.values, encoded.hashed_index, swapped)
+    with pytest.raises(UnknownKeyEncodingError, match="encodes to"):
+        decode_keys(encoded.values, encoded.hashed_index, swapped)
+
+
 def test_unpacking_a_hashed_value_is_refused() -> None:
     with pytest.raises(UnknownKeyEncodingError, match="hashed key"):
         unpack_key(encode_key("1:5:A:AT"))
