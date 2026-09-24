@@ -38,8 +38,10 @@ __all__ = [
     "MAX_POSITION",
     "UnknownKeyEncodingError",
     "decode_keys",
+    "decode_spill",
     "encode_key",
     "encode_keys",
+    "hashed_lookup",
     "is_hashed",
     "pack_key",
     "unpack_key",
@@ -229,26 +231,30 @@ def is_hashed(values: np.ndarray) -> np.ndarray:
     return mask
 
 
-def _hashed_lookup(
+def hashed_lookup(
     values: np.ndarray, hashed_index: np.ndarray, hashed_raw: Sequence[str]
 ) -> dict[int, str]:
+    """``{encoded value: raw key}`` for a spill's hashed rows, validated.
+
+    The side file is the only place a hashed key's raw string exists, so it must
+    name every tagged row in ``values`` exactly once. A short, duplicated or
+    misplaced entry raises rather than decoding to a shorter, plausible key list
+    or a wrong key.
+    """
     if len(hashed_index) != len(hashed_raw):
         raise UnknownKeyEncodingError(
-            f"side file has {len(hashed_raw)} raw key(s) for {len(hashed_index)} "
-            "hashed row(s)"
+            f"side file has {len(hashed_raw)} raw key(s) for {len(hashed_index)} hashed row(s)"
+        )
+    positions = np.asarray(hashed_index, dtype=np.int64)
+    tagged = np.flatnonzero(is_hashed(values))
+    if len(positions) != len(tagged) or not np.array_equal(np.sort(positions), tagged):
+        raise UnknownKeyEncodingError(
+            f"side file names {len(positions)} hashed row(s) but the spill has {len(tagged)}; "
+            "the raw keys cannot be placed"
         )
     lookup: dict[int, str] = {}
-    for position, raw in zip(hashed_index.tolist(), hashed_raw, strict=True):
-        index = int(position)
-        if not 0 <= index < len(values):
-            raise UnknownKeyEncodingError(
-                f"side file names row {index}, outside the {len(values)} spilled row(s)"
-            )
-        value = int(values[index])
-        if not value & HASH_TAG:
-            raise UnknownKeyEncodingError(
-                f"side file names row {index}, which holds a packed key"
-            )
+    for position, raw in zip(positions.tolist(), hashed_raw, strict=True):
+        value = int(values[position])
         existing = lookup.get(value)
         if existing is not None and existing != raw:
             raise UnknownKeyEncodingError(
@@ -289,6 +295,26 @@ def _decode_packed(values: np.ndarray) -> list[str]:
     ]
 
 
+def decode_spill(
+    values: np.ndarray, hashed_index: np.ndarray, hashed_raw: Sequence[str]
+) -> tuple[list[str], dict[int, str]]:
+    """Decode a spill to raw keys and its hashed-value lookup in one pass.
+
+    The lookup travels back because a build-wide collision check has to see every
+    column's hashed keys without re-reading the side files (issue #218 review).
+    """
+    hashed = hashed_lookup(values, hashed_index, hashed_raw)
+    decoded: list[str] = [""] * len(values)
+    packed_positions = np.flatnonzero(~is_hashed(values))
+    if len(packed_positions):
+        packed_raw = _decode_packed(values[packed_positions])
+        for position, raw in zip(packed_positions.tolist(), packed_raw, strict=True):
+            decoded[position] = raw
+    for position, raw in zip(hashed_index.tolist(), hashed_raw, strict=True):
+        decoded[int(position)] = raw
+    return decoded, hashed
+
+
 def decode_keys(
     values: np.ndarray, hashed_index: np.ndarray, hashed_raw: Sequence[str]
 ) -> list[str]:
@@ -298,13 +324,5 @@ def decode_keys(
     per-column side file. Every row must decode -- a missing or misplaced side
     entry fails loudly rather than producing a shorter, plausible key list.
     """
-    _hashed_lookup(values, hashed_index, hashed_raw)  # validates the side file
-    decoded: list[str] = [""] * len(values)
-    packed_positions = np.flatnonzero(~is_hashed(values))
-    if len(packed_positions):
-        packed_raw = _decode_packed(values[packed_positions])
-        for position, raw in zip(packed_positions.tolist(), packed_raw, strict=True):
-            decoded[position] = raw
-    for position, raw in zip(hashed_index.tolist(), hashed_raw, strict=True):
-        decoded[int(position)] = raw
-    return decoded
+    raw_keys, _ = decode_spill(values, hashed_index, hashed_raw)
+    return raw_keys

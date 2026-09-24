@@ -20,6 +20,7 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     decode_keys,
     encode_key,
     encode_keys,
+    hashed_lookup,
     is_hashed,
     unpack_key,
 )
@@ -127,6 +128,24 @@ def test_missing_side_entry_fails_loudly() -> None:
     encoded = encode_keys(["1:5:A:AT"])
     with pytest.raises(UnknownKeyEncodingError, match="side file"):
         decode_keys(encoded.values, encoded.hashed_index, [])
+
+
+def test_hashed_lookup_rejects_a_short_side_file() -> None:
+    encoded = encode_keys(["1:5:A:AT", "1:6:A:GA"])
+    with pytest.raises(UnknownKeyEncodingError, match="hashed row"):
+        hashed_lookup(encoded.values, encoded.hashed_index[:1], encoded.hashed_raw[:1])
+
+
+def test_hashed_lookup_rejects_a_duplicated_row() -> None:
+    encoded = encode_keys(["1:5:A:AT", "1:6:A:GA"])
+    with pytest.raises(UnknownKeyEncodingError, match="hashed row"):
+        hashed_lookup(encoded.values, np.array([0, 0]), encoded.hashed_raw)
+
+
+def test_hashed_lookup_rejects_a_packed_row_name() -> None:
+    values = np.array([encode_key("1:5:A:C"), encode_key("1:6:A:AT")], dtype=np.uint64)
+    with pytest.raises(UnknownKeyEncodingError, match="hashed row"):
+        hashed_lookup(values, np.array([0]), ["1:6:A:AT"])
 
 
 def test_unpacking_a_hashed_value_is_refused() -> None:

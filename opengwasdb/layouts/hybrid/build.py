@@ -80,7 +80,8 @@ from opengwasdb.layouts.hybrid.layout import (
     dense_to_shared_path,
 )
 from opengwasdb.layouts.hybrid.unknown_keys import (
-    decode_keys,
+    UnknownKeyEncodingError,
+    decode_spill,
     encode_keys,
     is_hashed,
 )
@@ -963,19 +964,25 @@ def _read_unknown_side_file(spill_dir: Path, col: int) -> list[str]:
 
 @dataclass(frozen=True)
 class _UnknownSpill:
-    """One column's off-reference spill with its keys decoded to raw strings."""
+    """One column's off-reference spill with its keys decoded to raw strings.
+
+    ``hashed_entries`` is the column's ``{encoded value: raw key}`` map, kept so
+    the build-wide collision check can span every column without re-reading the
+    side files (issue #218 review).
+    """
 
     z: np.ndarray
     se: np.ndarray
     eaf: np.ndarray
     raw_keys: list[str]
+    hashed_entries: dict[int, str]
 
 
 def _load_unknown_spill(spill_dir: Path, col: int) -> _UnknownSpill | None:
     """Read one column's ``.unk`` spill; ``None`` when the column spilled none.
 
     The keys are uint64 by contract (issue #218) -- no pickle -- and a hashed
-    key whose side-file entry is missing raises in ``decode_keys`` rather than
+    key whose side-file entry is missing raises in ``decode_spill`` rather than
     silently shrinking the column.
     """
     path = spill_dir / f"{col}.unk.npz"
@@ -985,8 +992,31 @@ def _load_unknown_spill(spill_dir: Path, col: int) -> _UnknownSpill | None:
         keys = data["keys"]
         z, se, eaf = data["z"], data["se"], data["eaf"]
         hashed_index = data["hashed_index"]
-    raw_keys = decode_keys(keys, hashed_index, _read_unknown_side_file(spill_dir, col))
-    return _UnknownSpill(z=z, se=se, eaf=eaf, raw_keys=raw_keys)
+    raw_keys, hashed_entries = decode_spill(
+        keys, hashed_index, _read_unknown_side_file(spill_dir, col)
+    )
+    return _UnknownSpill(
+        z=z, se=se, eaf=eaf, raw_keys=raw_keys, hashed_entries=hashed_entries
+    )
+
+
+def _record_hashed_keys(seen: dict[int, str], spill: _UnknownSpill) -> None:
+    """Merge one column's hashed keys into the build-wide map, refusing collisions.
+
+    ``encode_keys`` refuses a collision within one Analysis, but a hash is a
+    function of the key string alone, so two Analyses can still hand the same
+    value to two different keys. The spill's last-wins dedup is per column, so
+    that is only dangerous when the build-wide key table is built -- here, in the
+    first consolidation step that sees every column (issue #218 review).
+    """
+    for value, raw in spill.hashed_entries.items():
+        existing = seen.get(value)
+        if existing is not None and existing != raw:
+            raise UnknownKeyEncodingError(
+                f"hash collision between off-reference keys {existing!r} and {raw!r} "
+                f"(both encode to {value}); refusing to merge them"
+            )
+        seen[value] = raw
 
 
 def _unknown_key_assembly(prepared: _PreparedBuild) -> dict[str, str | None]:
@@ -995,13 +1025,17 @@ def _unknown_key_assembly(prepared: _PreparedBuild) -> dict[str, str | None]:
     A raw coordinate string declared hg19 in one row and hg38 in another names
     two different physical loci; it cannot be resolved to one hg38 ALID and is
     left out (``None``) rather than guessed -- the same rule the inline Pass 1
-    applies to its cross-assembly collisions.
+    applies to its cross-assembly collisions. Every column's hashed keys are
+    checked against every other column's first: two distinct raw keys sharing a
+    hash must fail the build, not silently become one variant (#218 review).
     """
     key_assembly: dict[str, str | None] = {}
+    hashed_seen: dict[int, str] = {}
     for col, row in enumerate(prepared.manifest_rows):
         spill = _load_unknown_spill(prepared.spill_dir, col)
         if spill is None:
             continue
+        _record_hashed_keys(hashed_seen, spill)
         for name in spill.raw_keys:
             if name in key_assembly and key_assembly[name] != row.source_assembly:
                 key_assembly[name] = None
