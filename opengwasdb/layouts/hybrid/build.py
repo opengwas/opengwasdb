@@ -46,6 +46,7 @@ from opengwasdb.encoding import (
     combine_eaf_measurements,
     optimise_dense_se_joint,
 )
+from opengwasdb.encoding.timing import format_duration
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     _RESOLVE_BATCH,
@@ -1309,16 +1310,19 @@ def _fit_joint_se(
     prepared: _PreparedBuild,
     plan: _EncodingPlan,
     overflow: _OverflowAssembled,
+    options: _BuildOptions,
 ) -> tuple[StoreEncoding, np.ndarray | None]:
     """Phase - one SE model and one decision across both components. They
     partition the same Analyses, so fitting or gating either in isolation
     could leave the shared manifest describing only half of the data it
-    governs."""
+    governs. The Dense row chunks fit, measure and rewrite across
+    ``--n-workers`` (issue #221)."""
     dense_group = prepared.dense_staged.arrays(mode="a")
     return optimise_dense_se_joint(
         dense_group,
         plan.encoding,
         overflow=overflow.csr.se_fit_inputs(plan.encoding),
+        n_workers=options.n_workers,
     )
 
 
@@ -1341,6 +1345,7 @@ def _finish_dense_component(
         dense.all_z,
         dense.all_se,
         encoding,
+        n_workers=options.n_workers,
     )
     eaf_provenance = evidence.report.provenance(allow_unverified=options.allow_unverified_eaf)
     _write_dense_manifest(
@@ -1366,8 +1371,12 @@ def _flush_overflow_component(
 ) -> int:
     """Flush the assembled overflow CSR into the store's root zarr and build
     its top-hit index. Returns the overflow association count the shared
-    manifest's provenance records."""
+    manifest's provenance records. Each step logs its start and elapsed time
+    (issue #221)."""
+    log.info("Ragged Overflow CSR flush: start (%d associations)", csr.n_associations)
+    started = time.monotonic()
     csr.flush(staged.path, encoding, se_coefficients=se_coefficients)
+    log.info("Ragged Overflow CSR flush: done in %s", format_duration(time.monotonic() - started))
     n_overflow = csr.n_associations
     log.info("Building Ragged Overflow top-hit index")
     build_ragged_top_hit_indexes(staged.path, encoding=encoding)
@@ -1480,7 +1489,7 @@ def _build_components(
         dense = _write_dense_component_bands(prepared, plan, routed.pass2_start, options)
         overflow = _assemble_overflow(prepared)
         analyses = _stamp_analyses(prepared, dense, overflow, evidence)
-        encoding, se_coefficients = _fit_joint_se(prepared, plan, overflow)
+        encoding, se_coefficients = _fit_joint_se(prepared, plan, overflow, options)
         eaf_provenance = _finish_dense_component(
             prepared,
             dense,

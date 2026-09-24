@@ -1,11 +1,59 @@
-"""Wall-clock accounting for the passes an encoding decision makes over a plane."""
+"""Wall-clock accounting and progress logging for a build's long phases."""
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+
+def format_duration(seconds: float) -> str:
+    """Compact `1h28m` / `3m05s` / `7s` rendering of a wall-clock interval."""
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m{secs:02d}s" if minutes else f"{secs}s"
+
+
+@contextmanager
+def log_phase(logger: logging.Logger, label: str) -> Iterator[None]:
+    """Log `label`'s start and its elapsed time on the way out, even on failure."""
+    logger.info("%s: start", label)
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        logger.info("%s: done in %s", label, format_duration(time.monotonic() - started))
+
+
+def log_progress(
+    logger: logging.Logger,
+    label: str,
+    completed: int,
+    total: int,
+    started: float,
+    *,
+    every: int,
+    extra: str = "",
+) -> None:
+    """One progress line per `every` items, and always on the last.
+
+    Idle-cheap for the caller: it returns before reading the clock unless this
+    item is one to report, so a phase may call it after every row chunk.
+    """
+    if completed % every and completed != total:
+        return
+    elapsed = time.monotonic() - started
+    eta = elapsed / completed * (total - completed) if completed else 0.0
+    suffix = f" ({extra})" if extra else ""
+    logger.info(
+        "%s: %d/%d%s — elapsed %s, ETA %s",
+        label, completed, total, suffix,
+        format_duration(elapsed), format_duration(eta),
+    )
 
 class PhaseTimer:
     """Seconds accumulated per named phase, over a run that visits each many times.

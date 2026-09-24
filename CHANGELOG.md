@@ -207,6 +207,17 @@ the end of this file.
 
 ### Changed
 
+- **The post-Pass-2 tail logs its phases and uses `--n-workers` (#221)**: the
+  SE fit, measurement, exception count and rewrite, and the Dense top-hit gather
+  and scan, run their independent zarr row chunks across the build's process
+  pool, reducing in row-chunk order so the chosen SE encoding, the fitted
+  coefficients, the rewritten `se` plane, the exception table and both Top-Hit
+  Indexes are byte-for-byte the serial path's (`n_workers <= 1` stays
+  in-process). Each phase now logs its start, end and elapsed wall-clock time,
+  with progress through the chunk loop and the `PhaseTimer` accounting the SE
+  passes already kept. The Ragged Overflow CSR flush and ragged Top-Hit Index
+  remain serial and are logged; they reduce whole flat arrays with one sort, so
+  their profiling evidence is recorded on the issue instead of a forced pool.
 - **Non-autosomal chromosome spellings now share one canonical ALID identity**:
   source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
   explicit canonical labels `X`, `Y`, and `MT` respectively in every reader

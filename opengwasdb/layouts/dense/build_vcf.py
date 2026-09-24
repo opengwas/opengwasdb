@@ -1428,7 +1428,7 @@ def build_dense_from_vcf_manifest(
         # Phase 8: top-hit indexes, manifest and analyses.tsv metadata.
         _finalize_store(
             staged, prepared, encoded, eaf_report, store_id, release_id, chain_file,
-            chunk_shape, dtype, allow_unverified_eaf,
+            chunk_shape, dtype, allow_unverified_eaf, n_workers,
         )
         log.info(
             "Build complete: %d variants × %d analyses",
@@ -1809,6 +1809,7 @@ def _write_encoded_bands(
     chunk_shape: tuple[int, int],
     dtype: str,
     pass2_start: float,
+    n_workers: int,
 ) -> _EncodedBands:
     """Create the statistic arrays and fill them from the spills.
 
@@ -1843,7 +1844,7 @@ def _write_encoded_bands(
         pass2_start,
         encoding,
     )
-    encoding = optimise_dense_se(staged.arrays(mode="a"), encoding)
+    encoding = optimise_dense_se(staged.arrays(mode="a"), encoding, n_workers=n_workers)
     return _EncodedBands(
         encoding=encoding,
         hits=_HitCandidates(rows=rows, cols=cols, z=z, se=se),
@@ -1903,6 +1904,7 @@ def _spill_verify_and_encode(
             chunk_shape,
             dtype,
             pass2_start,
+            n_workers,
         )
     finally:
         shutil.rmtree(spill_dir, ignore_errors=True)
@@ -1920,6 +1922,7 @@ def _finalize_store(
     chunk_shape: tuple[int, int],
     dtype: str,
     allow_unverified_eaf: bool,
+    n_workers: int,
 ) -> None:
     """Phase 8: write the store's final metadata.
 
@@ -1945,7 +1948,7 @@ def _finalize_store(
     )
     write_top_hit_indexes_for_store(
         staged.path, encoded.hits.rows, encoded.hits.cols, encoded.hits.z, encoded.hits.se,
-        encoded.encoding,
+        encoded.encoding, n_workers=n_workers,
     )
     analyses = apply_orientation_evidence(
         _apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
