@@ -219,6 +219,30 @@ the end of this file.
   removes `allow_pickle` from the Hybrid build and shrinks the off-reference
   spill from about 30 B/row to about 20 B/row (#218).
 
+- **The EAF spill survey and the Ragged Overflow CSR assembly now use
+  `--n-workers`**: both walked every Analysis's spill one column at a time on a
+  single core, which on OGS-00011 is ~6 h of the post-Pass-2 tail (#219). Each
+  column is now read, sampled and sorted in a forked worker through
+  `ordered_map`, with only a bounded number of results in flight; the parent
+  concatenates the EAF samples and appends to the CSR in Analysis order, so the
+  orientation report, encoding measurements, CSR contents and CSR offsets are
+  unchanged. `--n-workers 1` keeps the serial path, and a spill is still
+  deleted only after its column has been consumed.
+- **The post-Pass-2 tail logs its phases and uses `--n-workers` (#221)**: the
+  SE fit, measurement, exception count and rewrite, and the Dense top-hit gather
+  and scan, run their independent zarr row chunks across the build's process
+  pool, reducing in row-chunk order so the chosen SE encoding, the fitted
+  coefficients, the rewritten `se` plane, the exception table and both Top-Hit
+  Indexes are byte-for-byte the serial path's (`n_workers <= 1` stays
+  in-process). Each phase now logs its start, end and elapsed wall-clock time,
+  with progress through the chunk loop and the `PhaseTimer` accounting the SE
+  passes already kept; the SE fit reports its Dense chunks and its Overflow fold
+  separately, and a `float16` outcome charges the narrowing rewrite it actually
+  performs rather than hiding it. The Ragged Overflow CSR flush, the Ragged
+  Top-Hit Index and the `float16` narrowing remain serial and are logged; they
+  reduce whole flat arrays or make one zarr write, so their profiling evidence
+  is recorded on the issue instead of a forced pool.
+- **Non-autosomal chromosome spellings now share one canonical ALID identity**:
   source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
   explicit canonical labels `X`, `Y`, and `MT` respectively in every reader
   path (#216, ADR 0052). This is a breaking change to variant identity:

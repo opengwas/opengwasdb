@@ -4,28 +4,42 @@ from __future__ import annotations
 
 import multiprocessing
 import os
-from typing import Any
 
 import pytest
 
 from opengwasdb.build.ordered_pool import ordered_map
 
+_ITEMS = 16
+# Item 0 waits for every other item to finish before returning, and each item
+# logs its completion position here. A shared counter rather than a sleep makes
+# that ordering a condition, not a race with the clock; a map that yields in
+# completion order therefore fails the order assertion below.
+_fork = multiprocessing.get_context("fork")
+_completed = _fork.Value("i", 0)
+_completion_order = _fork.Array("i", _ITEMS)
 
-def _probe(i: int) -> tuple[int, int]:
-    return i, os.getpid()
 
-
-def _coordinated_probe(item: tuple[int, Any, Any]) -> tuple[int, int]:
-    """Item 0 blocks until item 1 has recorded itself, so completion order is
-    provably not input order -- by waiting on the condition, not the clock.
-    """
-    i, later_done, completion_order = item
+def _reverse_completion(i: int) -> tuple[int, int]:
     if i == 0:
-        later_done.wait()
-    completion_order.append(i)
-    if i == 1:
-        later_done.set()
+        while True:
+            with _completed.get_lock():
+                if _completed.value >= _ITEMS - 1:
+                    break
+            os.sched_yield()
+    with _completed.get_lock():
+        position = _completed.value
+        _completed.value += 1
+    _completion_order[position] = i
     return i, os.getpid()
+
+
+def _identity(i: int) -> tuple[int, int]:
+    return i, os.getpid()
+
+
+def _reset_completion() -> None:
+    with _completed.get_lock():
+        _completed.value = 0
 
 
 def _fail_on_three(i: int) -> int:
@@ -35,25 +49,22 @@ def _fail_on_three(i: int) -> int:
 
 
 def test_parallel_results_come_back_in_input_order() -> None:
-    manager = multiprocessing.Manager()
-    later_done = manager.Event()
-    completion_order = manager.list()
+    _reset_completion()
+    # max_in_flight covers the whole input so item 0 can block on later items
+    # that would otherwise not be submitted until it yielded.
     results = list(
-        ordered_map(
-            _coordinated_probe,
-            [(i, later_done, completion_order) for i in range(16)],
-            n_workers=4,
-        )
+        ordered_map(_reverse_completion, range(_ITEMS), n_workers=4, max_in_flight=_ITEMS)
     )
-    assert [i for i, _ in results] == list(range(16))
-    # Fixture is meaningful only if work really left the parent process.
+    assert [i for i, _ in results] == list(range(_ITEMS))
+    # Fixture is meaningful only if work really left the parent process...
     assert {pid for _, pid in results} - {os.getpid()}
-    # ... and only if completion really left input order while yielding did not.
-    assert completion_order[0] != 0
+    # ... and if completion order really differed from input order: item 0,
+    # which input order demands is returned first, completed last.
+    assert list(_completion_order)[-1] == 0
 
 
 def test_serial_path_runs_in_process() -> None:
-    results = list(ordered_map(_probe, range(4), n_workers=1))
+    results = list(ordered_map(_identity, range(4), n_workers=1))
     assert [i for i, _ in results] == [0, 1, 2, 3]
     assert {pid for _, pid in results} == {os.getpid()}
 

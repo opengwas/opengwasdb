@@ -38,6 +38,7 @@ from opengwasdb.build.eaf_orientation import (
     verify_eaf_orientation,
 )
 from opengwasdb.build.liftover import LiftoverFailureError, build_liftover_lookup, normalise_build
+from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import (
     EafExceptionBuilder,
     EafMeasurements,
@@ -1428,7 +1429,7 @@ def build_dense_from_vcf_manifest(
         # Phase 8: top-hit indexes, manifest and analyses.tsv metadata.
         _finalize_store(
             staged, prepared, encoded, eaf_report, store_id, release_id, chain_file,
-            chunk_shape, dtype, allow_unverified_eaf,
+            chunk_shape, dtype, allow_unverified_eaf, n_workers,
         )
         log.info(
             "Build complete: %d variants × %d analyses",
@@ -1779,6 +1780,7 @@ def _survey_and_verify_eaf(
     eaf_reference: str | Path | None,
     eaf_reference_ancestry: str | None,
     allow_unverified_eaf: bool,
+    n_workers: int,
 ) -> tuple[EafSpillSurvey, EafOrientationReport]:
     """Sample each Analysis's stored frequencies and verify their orientation.
 
@@ -1791,7 +1793,9 @@ def _survey_and_verify_eaf(
     verify in the store's provenance instead of rejecting them.
     """
     id_by_col = {axis.analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
-    eaf_survey = survey_eaf_spills(spill_dir, id_by_col, axis.alids, site_hashes(axis.alids))
+    eaf_survey = survey_eaf_spills(
+        spill_dir, id_by_col, axis.alids, site_hashes(axis.alids), n_workers=n_workers
+    )
     eaf_report = verify_eaf_orientation(
         eaf_survey.observations,
         eaf_reference=eaf_reference,
@@ -1809,6 +1813,7 @@ def _write_encoded_bands(
     chunk_shape: tuple[int, int],
     dtype: str,
     pass2_start: float,
+    n_workers: int,
 ) -> _EncodedBands:
     """Create the statistic arrays and fill them from the spills.
 
@@ -1843,7 +1848,7 @@ def _write_encoded_bands(
         pass2_start,
         encoding,
     )
-    encoding = optimise_dense_se(staged.arrays(mode="a"), encoding)
+    encoding = optimise_dense_se(staged.arrays(mode="a"), encoding, n_workers=n_workers)
     return _EncodedBands(
         encoding=encoding,
         hits=_HitCandidates(rows=rows, cols=cols, z=z, se=se),
@@ -1894,6 +1899,7 @@ def _spill_verify_and_encode(
             eaf_reference=eaf_reference,
             eaf_reference_ancestry=eaf_reference_ancestry,
             allow_unverified_eaf=allow_unverified_eaf,
+            n_workers=n_workers,
         )
         encoded = _write_encoded_bands(
             staged,
@@ -1903,6 +1909,7 @@ def _spill_verify_and_encode(
             chunk_shape,
             dtype,
             pass2_start,
+            n_workers,
         )
     finally:
         shutil.rmtree(spill_dir, ignore_errors=True)
@@ -1920,6 +1927,7 @@ def _finalize_store(
     chunk_shape: tuple[int, int],
     dtype: str,
     allow_unverified_eaf: bool,
+    n_workers: int,
 ) -> None:
     """Phase 8: write the store's final metadata.
 
@@ -1945,7 +1953,7 @@ def _finalize_store(
     )
     write_top_hit_indexes_for_store(
         staged.path, encoded.hits.rows, encoded.hits.cols, encoded.hits.z, encoded.hits.se,
-        encoded.encoding,
+        encoded.encoding, n_workers=n_workers,
     )
     analyses = apply_orientation_evidence(
         _apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
@@ -2448,6 +2456,107 @@ class EafSpillSurvey:
         )
 
 
+@dataclass(frozen=True)
+class _SurveyContext:
+    """Immutable per-call state a forked survey worker reads.
+
+    Set as a module global immediately before `ordered_map` forks, so the
+    workers inherit `hashes`/`row_map` without pickling them once per column.
+    Cleared once the map is drained.
+    """
+
+    spill_dir: Path
+    hashes: np.ndarray
+    k: int
+    suffix: str
+    index_key: str
+    row_map: np.ndarray | None
+
+
+@dataclass(frozen=True)
+class _SurveyColumn:
+    """One Analysis's contribution to the survey: its sample and its counts.
+
+    Carries the Analysis id so the parent can key `observations` and order the
+    concatenated samples by Analysis, not by whichever column finished first.
+    """
+
+    analysis_id: str
+    selected: np.ndarray
+    values: np.ndarray
+    n_spill_cells: int
+    n_eaf_cells: int
+
+
+_survey_context: _SurveyContext | None = None
+
+
+def _survey_column(task: tuple[int, str]) -> _SurveyColumn | None:
+    """Sample one Analysis's spill column. Runs in a forked worker.
+
+    Returns `None` for a column with no spill file, which the parent reads as
+    "this Analysis contributes nothing" rather than as a zero-valued sample.
+    """
+    col, analysis_id = task
+    context = _survey_context
+    if context is None:
+        raise RuntimeError("survey context is not set; call survey_eaf_spills")
+    path = context.spill_dir / f"{col}{context.suffix}.npz"
+    if not path.exists():
+        return None
+    with np.load(path) as data:
+        rows = data[context.index_key].astype(np.int64)
+        if context.row_map is not None:
+            rows = context.row_map[rows].astype(np.int64)
+        eaf = np.asarray(data["eaf"], dtype=np.float64)
+        n_spill_cells = int(eaf.size)
+        n_eaf_cells = int(np.count_nonzero(np.isfinite(eaf)))
+        selected, values = sample_column_rows(rows, eaf, context.hashes, k=context.k)
+    return _SurveyColumn(
+        analysis_id=analysis_id,
+        selected=selected,
+        values=values,
+        n_spill_cells=n_spill_cells,
+        n_eaf_cells=n_eaf_cells,
+    )
+
+
+@dataclass
+class _SurveyTotals:
+    """The running totals a survey accumulates across its columns."""
+
+    n_spill_cells: int = 0
+    n_eaf_cells: int = 0
+    sample_rows: list[np.ndarray] = field(default_factory=list)
+    sample_values: list[np.ndarray] = field(default_factory=list)
+
+
+def _concatenate_or_empty(parts: list[np.ndarray], dtype: Any) -> np.ndarray:
+    """The sample arrays concatenated in order, or an empty array of `dtype`."""
+    return np.concatenate(parts) if parts else np.empty(0, dtype=dtype)
+
+
+def _accumulate_survey_column(
+    result: _SurveyColumn | None,
+    alids: Sequence[str],
+    observations: dict[str, dict[str, float]],
+    totals: _SurveyTotals,
+) -> None:
+    """Fold one column's sample into the survey, in the order it is yielded."""
+    if result is None:
+        return
+    totals.n_spill_cells += result.n_spill_cells
+    totals.n_eaf_cells += result.n_eaf_cells
+    totals.sample_rows.append(result.selected)
+    totals.sample_values.append(result.values)
+    observations[result.analysis_id].update(
+        {
+            alids[row]: float(value)
+            for row, value in zip(result.selected.tolist(), result.values.tolist(), strict=True)
+        }
+    )
+
+
 def survey_eaf_spills(
     spill_dir: Path,
     id_by_col: Mapping[int, str],
@@ -2458,6 +2567,7 @@ def survey_eaf_spills(
     suffix: str = "",
     index_key: str = "rows",
     row_map: np.ndarray | None = None,
+    n_workers: int = 1,
 ) -> EafSpillSurvey:
     """Sample each Analysis's frequencies and count them, from the spills.
 
@@ -2471,40 +2581,34 @@ def survey_eaf_spills(
     by dense row, while both of its components are sampled on the shared axis
     so that an Analysis living mostly off-panel is checked on the same footing
     as one sitting on it.
+
+    The columns are independent, so `n_workers` > 1 surveys them through
+    `ordered_map`: each worker loads, samples and counts one column, and the
+    parent concatenates the samples and fills `observations` in Analysis order,
+    never in completion order. `n_workers <= 1` is the serial path.
     """
+    global _survey_context
     observations: dict[str, dict[str, float]] = {aid: {} for aid in id_by_col.values()}
-    n_spill_cells = 0
-    n_eaf_cells = 0
-    sample_rows: list[np.ndarray] = []
-    sample_values: list[np.ndarray] = []
-    for col, analysis_id in id_by_col.items():
-        path = spill_dir / f"{col}{suffix}.npz"
-        if not path.exists():
-            continue
-        with np.load(path) as data:
-            rows = data[index_key].astype(np.int64)
-            if row_map is not None:
-                rows = row_map[rows].astype(np.int64)
-            eaf = np.asarray(data["eaf"], dtype=np.float64)
-            n_spill_cells += int(eaf.size)
-            n_eaf_cells += int(np.count_nonzero(np.isfinite(eaf)))
-            selected, values = sample_column_rows(rows, eaf, hashes, k=k)
-            sample_rows.append(selected)
-            sample_values.append(values)
-            observations[analysis_id].update(
-                {
-                    alids[row]: float(value)
-                    for row, value in zip(selected.tolist(), values.tolist(), strict=True)
-                }
-            )
+    totals = _SurveyTotals()
+    try:
+        _survey_context = _SurveyContext(
+            spill_dir=spill_dir,
+            hashes=hashes,
+            k=k,
+            suffix=suffix,
+            index_key=index_key,
+            row_map=row_map,
+        )
+        for result in ordered_map(_survey_column, list(id_by_col.items()), n_workers):
+            _accumulate_survey_column(result, alids, observations, totals)
+    finally:
+        _survey_context = None
     return EafSpillSurvey(
         observations=observations,
-        n_spill_cells=n_spill_cells,
-        n_eaf_cells=n_eaf_cells,
-        sample_rows=(np.concatenate(sample_rows) if sample_rows else np.empty(0, dtype=np.int64)),
-        sample_values=(
-            np.concatenate(sample_values) if sample_values else np.empty(0, dtype=np.float64)
-        ),
+        n_spill_cells=totals.n_spill_cells,
+        n_eaf_cells=totals.n_eaf_cells,
+        sample_rows=_concatenate_or_empty(totals.sample_rows, np.int64),
+        sample_values=_concatenate_or_empty(totals.sample_values, np.float64),
     )
 
 

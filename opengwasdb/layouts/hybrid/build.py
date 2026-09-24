@@ -40,12 +40,14 @@ from opengwasdb.build.eaf_orientation import (
     verify_eaf_orientation,
 )
 from opengwasdb.build.liftover import LiftoverFailureError, build_liftover_lookup
+from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import (
     EncodingMeasurements,
     StoreEncoding,
     combine_eaf_measurements,
     optimise_dense_se_joint,
 )
+from opengwasdb.encoding.timing import format_duration
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     _RESOLVE_BATCH,
@@ -482,8 +484,51 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
     return col_idx
 
 
+@dataclass(frozen=True)
+class _OverflowColumn:
+    """One Analysis's overflow spill, read, sorted and ready for the CSR.
+
+    `eaf` is ``None`` when the column carries no finite frequency, which is
+    what the writer turns into an all-NaN row (ADR 0036).
+    """
+
+    variant_index: np.ndarray
+    z: np.ndarray
+    se: np.ndarray
+    eaf: np.ndarray | None
+
+
+def _assemble_overflow_column(task: tuple[int, str]) -> _OverflowColumn | None:
+    """Load and sort one ``.ovf.npz`` column. Runs in a forked worker.
+
+    Returns `None` for a column with no spill file. The spill is *not* deleted
+    here: the parent deletes it once the column has been added to the CSR, so a
+    failure partway through combination cannot lose a spill that was never
+    used.
+    """
+    col, spill_dir = task
+    path = Path(spill_dir) / f"{col}.ovf.npz"
+    if not path.exists():
+        return None
+    with np.load(path) as data:
+        vi = data["variant_index"].astype(np.int32)
+        z = data["z"].astype(np.float32)
+        se = data["se"].astype(np.float32)
+        eaf = data["eaf"].astype(np.float32)
+    # Sort by variant_index for consistent within-analysis ordering (matches
+    # the ragged BESD builder and lets top-hit CSR cross-validation searchsort).
+    order = np.argsort(vi, kind="stable")
+    has_eaf = bool(np.isfinite(eaf).any())
+    return _OverflowColumn(
+        variant_index=vi[order],
+        z=z[order],
+        se=se[order],
+        eaf=eaf[order] if has_eaf else None,
+    )
+
+
 def _assemble_overflow_csr(
-    spill_dir: Path, n_analyses: int, n_variants: int
+    spill_dir: Path, n_analyses: int, n_variants: int, n_workers: int = 1
 ) -> tuple[RaggedCSRWriter, np.ndarray]:
     """Assemble the overflow CSR from per-column ``.ovf.npz`` spills, in analysis
     order (so CSR offsets align with analysis_index).
@@ -492,30 +537,26 @@ def _assemble_overflow_csr(
     into the *overflow* component. An Analysis can have EAF off-panel and none
     on it, so `eaf_scope` is the union of this and the Dense Component's own
     answer, never either alone (ADR 0036).
+
+    The columns are independent, so `n_workers` > 1 loads and sorts them through
+    `ordered_map`, which keeps only a bounded number of results in flight, and
+    the parent adds them to the CSR in analysis order. `n_workers <= 1` is the
+    serial path.
     """
     csr = RaggedCSRWriter(n_variants)
     column_has_eaf = np.zeros(n_analyses, dtype=bool)
-    for col in range(n_analyses):
-        path = spill_dir / f"{col}.ovf.npz"
-        if not path.exists():
+    tasks = ((col, str(spill_dir)) for col in range(n_analyses))
+    for col, result in enumerate(ordered_map(_assemble_overflow_column, tasks, n_workers)):
+        if result is None:
             csr.add_analysis(
                 np.empty(0, dtype=np.int32),
                 np.empty(0, dtype=np.float32),
-                np.empty(0, dtype=np.float16),
+                np.empty(0, dtype=np.float32),
             )
             continue
-        with np.load(path) as data:
-            vi = data["variant_index"].astype(np.int32)
-            z = data["z"].astype(np.float32)
-            se = data["se"].astype(np.float32)
-            eaf = data["eaf"].astype(np.float32)
-        # Sort by variant_index for consistent within-analysis ordering (matches
-        # the ragged BESD builder and lets top-hit CSR cross-validation searchsort).
-        order = np.argsort(vi, kind="stable")
-        has_eaf = bool(np.isfinite(eaf).any())
-        column_has_eaf[col] = has_eaf
-        csr.add_analysis(vi[order], z[order], se[order], eaf=eaf[order] if has_eaf else None)
-        path.unlink()
+        column_has_eaf[col] = result.eaf is not None
+        csr.add_analysis(result.variant_index, result.z, result.se, eaf=result.eaf)
+        (spill_dir / f"{col}.ovf.npz").unlink()
     return csr, column_has_eaf
 
 
@@ -1253,6 +1294,7 @@ def _verify_eaf_orientation(
         prepared.partition.shared_sorted,
         shared_hashes,
         row_map=prepared.dense_to_shared,
+        n_workers=options.n_workers,
     )
     overflow_survey = survey_eaf_spills(
         prepared.spill_dir,
@@ -1261,6 +1303,7 @@ def _verify_eaf_orientation(
         shared_hashes,
         suffix=".ovf",
         index_key="variant_index",
+        n_workers=options.n_workers,
     )
     observations = dense_survey.observations
     for analysis_id, off_panel in overflow_survey.observations.items():
@@ -1346,6 +1389,7 @@ def _write_dense_component_bands(
 
 def _assemble_overflow(
     prepared: _PreparedBuild,
+    options: _BuildOptions,
 ) -> _OverflowAssembled:
     """Phase - assemble the Ragged Overflow CSR from the per-column overflow
     spills, in analysis order so CSR offsets align with analysis_index."""
@@ -1354,6 +1398,7 @@ def _assemble_overflow(
         prepared.spill_dir,
         prepared.n_analyses,
         prepared.partition.n_shared,
+        n_workers=options.n_workers,
     )
     return _OverflowAssembled(csr=csr, overflow_has_eaf=overflow_has_eaf)
 
@@ -1377,16 +1422,19 @@ def _fit_joint_se(
     prepared: _PreparedBuild,
     plan: _EncodingPlan,
     overflow: _OverflowAssembled,
+    options: _BuildOptions,
 ) -> tuple[StoreEncoding, np.ndarray | None]:
     """Phase - one SE model and one decision across both components. They
     partition the same Analyses, so fitting or gating either in isolation
     could leave the shared manifest describing only half of the data it
-    governs."""
+    governs. The Dense row chunks fit, measure and rewrite across
+    ``--n-workers`` (issue #221)."""
     dense_group = prepared.dense_staged.arrays(mode="a")
     return optimise_dense_se_joint(
         dense_group,
         plan.encoding,
         overflow=overflow.csr.se_fit_inputs(plan.encoding),
+        n_workers=options.n_workers,
     )
 
 
@@ -1409,6 +1457,7 @@ def _finish_dense_component(
         dense.all_z,
         dense.all_se,
         encoding,
+        n_workers=options.n_workers,
     )
     eaf_provenance = evidence.report.provenance(allow_unverified=options.allow_unverified_eaf)
     _write_dense_manifest(
@@ -1434,8 +1483,12 @@ def _flush_overflow_component(
 ) -> int:
     """Flush the assembled overflow CSR into the store's root zarr and build
     its top-hit index. Returns the overflow association count the shared
-    manifest's provenance records."""
+    manifest's provenance records. Each step logs its start and elapsed time
+    (issue #221)."""
+    log.info("Ragged Overflow CSR flush: start (%d associations)", csr.n_associations)
+    started = time.monotonic()
     csr.flush(staged.path, encoding, se_coefficients=se_coefficients)
+    log.info("Ragged Overflow CSR flush: done in %s", format_duration(time.monotonic() - started))
     n_overflow = csr.n_associations
     log.info("Building Ragged Overflow top-hit index")
     build_ragged_top_hit_indexes(staged.path, encoding=encoding)
@@ -1567,9 +1620,9 @@ def _build_components(
         evidence = _verify_eaf_orientation(prepared, routed, options)
         plan = _plan_joint_encoding(prepared, evidence, options)
         dense = _write_dense_component_bands(prepared, plan, routed.pass2_start, options)
-        overflow = _assemble_overflow(prepared)
+        overflow = _assemble_overflow(prepared, options)
         analyses = _stamp_analyses(prepared, dense, overflow, evidence)
-        encoding, se_coefficients = _fit_joint_se(prepared, plan, overflow)
+        encoding, se_coefficients = _fit_joint_se(prepared, plan, overflow, options)
         eaf_provenance = _finish_dense_component(
             prepared,
             dense,
