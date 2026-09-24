@@ -12,6 +12,10 @@ the end of this file.
 
 ### Added
 
+- **`opengwasdb.build.ordered_pool.ordered_map`**: a forked worker-pool map that
+  yields results in input order with a bounded number in flight, and runs
+  serially at `n_workers <= 1`. Shared by the post-Pass-2 consolidation phases
+  parallelised under #217.
 - **`opengwasdb.model.manifest_columns`**: extracted shared manifest column alias
   resolution supporting multiple legacy aliases per canonical name (`analysis_id`,
   `source_file`, `analysis_label`, `sample_size`), used across Dense, Ancestry,
