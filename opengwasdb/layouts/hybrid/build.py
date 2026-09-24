@@ -77,6 +77,11 @@ from opengwasdb.layouts.hybrid.layout import (
     dense_component_path,
     dense_to_shared_path,
 )
+from opengwasdb.layouts.hybrid.unknown_keys import (
+    decode_keys,
+    encode_keys,
+    is_hashed,
+)
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.model.analyses import Analysis
@@ -94,6 +99,12 @@ from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.reference import VariantReference, read_variant_reference
 
 log = logging.getLogger(__name__)
+
+# One column's off-reference spill: encoded uint64 keys, z, se, eaf, and the
+# side-file half of the hashed keys (row positions plus their raw strings).
+_OffReferenceSpill = tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]
+]
 
 __all__ = [
     "build_hybrid_from_vcf_manifest",
@@ -295,7 +306,7 @@ def _resolve_column_hybrid(
 ) -> tuple[
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    _OffReferenceSpill,
 ]:
     """Stream one study once, routing each association to the dense fill (on-panel),
     the ragged overflow (off-panel/reference), or -- when the routing index does
@@ -391,25 +402,25 @@ def _resolve_column_hybrid(
         )
         return idx, z, _apply_se_divisor(se, se_divisor), eaf
 
-    def _assemble_unknown() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _assemble_unknown() -> _OffReferenceSpill:
         if not u_keys:
             return (
-                np.empty(0, dtype=object),
+                np.empty(0, dtype=np.uint64),
                 np.empty(0, dtype=np.float32),
                 np.empty(0, dtype=np.float32),
                 np.empty(0, dtype=np.float32),
+                np.empty(0, dtype=np.int64),
+                [],
             )
+        encoded = encode_keys(u_keys)
         z, se, eaf = np.concatenate(u_z), np.concatenate(u_se), np.concatenate(u_eaf)
-        seen: dict[str, int] = {}
-        for i, key in enumerate(u_keys):
-            seen[key] = i
-        keep = np.array(sorted(seen.values()), dtype=np.int64)
-        return (
-            np.array([u_keys[i] for i in keep.tolist()], dtype=object),
-            z[keep],
-            _apply_se_divisor(se[keep], se_divisor),
-            eaf[keep],
-        )
+        keys, z, se, eaf = _dedup_last_wins(encoded.values, z, se, eaf)
+        # Only the hashed survivors need a raw string in the side file; packed
+        # keys decode from their own bits.
+        lookup = encoded.hashed_lookup()
+        hashed_index = np.flatnonzero(is_hashed(keys)).astype(np.int64)
+        hashed_raw = [lookup[int(keys[position])] for position in hashed_index.tolist()]
+        return keys, z, _apply_se_divisor(se, se_divisor), eaf, hashed_index, hashed_raw
 
     return (
         _assemble(d_idx, d_z, d_se, d_eaf),
@@ -423,11 +434,13 @@ def _spill_hybrid_column(
     col_idx: int,
     dense: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     overflow: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    off_reference: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    off_reference: _OffReferenceSpill,
 ) -> None:
     """Spill one resolved study column: dense rows to ``{col}.npz`` (the layout the
     dense band-writer consumes), overflow to ``{col}.ovf.npz``, and off-reference
-    associations -- keyed by raw source coordinate -- to ``{col}.unk.npz``."""
+    associations -- keyed by one uint64 per raw source coordinate -- to
+    ``{col}.unk.npz`` with a ``{col}.unk.raw`` side file for any key the packed
+    encoding could not represent."""
     d_rows, d_z, d_se, d_eaf = dense
     o_idx, o_z, o_se, o_eaf = overflow
     for suffix, arrs in (
@@ -438,12 +451,16 @@ def _spill_hybrid_column(
         tmp = spill_dir / f"{col_idx}{suffix}.tmp.npz"
         np.savez(tmp, **arrs)
         tmp.replace(final)
-    u_keys, u_z, u_se, u_eaf = off_reference
+    u_keys, u_z, u_se, u_eaf, u_hashed_index, u_hashed_raw = off_reference
     if len(u_keys):
         final = spill_dir / f"{col_idx}.unk.npz"
         tmp = spill_dir / f"{col_idx}.unk.tmp.npz"
-        np.savez(tmp, keys=u_keys, z=u_z, se=u_se, eaf=u_eaf)
+        np.savez(
+            tmp, keys=u_keys, z=u_z, se=u_se, eaf=u_eaf, hashed_index=u_hashed_index
+        )
         tmp.replace(final)
+        if len(u_hashed_index):
+            _write_unknown_side_file(spill_dir, col_idx, u_hashed_raw)
 
 
 def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
@@ -879,6 +896,58 @@ def _canonical_key(key: str) -> str:
     return f"{chrom}:{position}:{a1}:{a2}"
 
 
+def _unknown_side_path(spill_dir: Path, col: int) -> Path:
+    """The per-column side file holding raw keys for the hashed entries."""
+    return spill_dir / f"{col}.unk.raw"
+
+
+def _write_unknown_side_file(spill_dir: Path, col: int, raw_keys: list[str]) -> None:
+    """Write a column's hashed raw keys, one per line, atomically.
+
+    ``chrom:pos:ref:alt`` cannot contain a newline, so the line order is the
+    side file's only structure and it parallels ``hashed_index`` exactly.
+    """
+    side = _unknown_side_path(spill_dir, col)
+    tmp = side.with_name(side.name + ".tmp")
+    tmp.write_text("\n".join(raw_keys) + "\n", encoding="utf-8")
+    tmp.replace(side)
+
+
+def _read_unknown_side_file(spill_dir: Path, col: int) -> list[str]:
+    side = _unknown_side_path(spill_dir, col)
+    if not side.exists():
+        return []
+    return side.read_text(encoding="utf-8").splitlines()
+
+
+@dataclass(frozen=True)
+class _UnknownSpill:
+    """One column's off-reference spill with its keys decoded to raw strings."""
+
+    z: np.ndarray
+    se: np.ndarray
+    eaf: np.ndarray
+    raw_keys: list[str]
+
+
+def _load_unknown_spill(spill_dir: Path, col: int) -> _UnknownSpill | None:
+    """Read one column's ``.unk`` spill; ``None`` when the column spilled none.
+
+    The keys are uint64 by contract (issue #218) -- no pickle -- and a hashed
+    key whose side-file entry is missing raises in ``decode_keys`` rather than
+    silently shrinking the column.
+    """
+    path = spill_dir / f"{col}.unk.npz"
+    if not path.exists():
+        return None
+    with np.load(path) as data:
+        keys = data["keys"]
+        z, se, eaf = data["z"], data["se"], data["eaf"]
+        hashed_index = data["hashed_index"]
+    raw_keys = decode_keys(keys, hashed_index, _read_unknown_side_file(spill_dir, col))
+    return _UnknownSpill(z=z, se=se, eaf=eaf, raw_keys=raw_keys)
+
+
 def _unknown_key_assembly(prepared: _PreparedBuild) -> dict[str, str | None]:
     """``{raw source key: declared assembly}`` for every off-reference spill entry.
 
@@ -889,16 +958,14 @@ def _unknown_key_assembly(prepared: _PreparedBuild) -> dict[str, str | None]:
     """
     key_assembly: dict[str, str | None] = {}
     for col, row in enumerate(prepared.manifest_rows):
-        path = prepared.spill_dir / f"{col}.unk.npz"
-        if not path.exists():
+        spill = _load_unknown_spill(prepared.spill_dir, col)
+        if spill is None:
             continue
-        with np.load(path, allow_pickle=True) as data:
-            for key in data["keys"]:
-                name = str(key)
-                if name in key_assembly and key_assembly[name] != row.source_assembly:
-                    key_assembly[name] = None
-                else:
-                    key_assembly[name] = row.source_assembly
+        for name in spill.raw_keys:
+            if name in key_assembly and key_assembly[name] != row.source_assembly:
+                key_assembly[name] = None
+            else:
+                key_assembly[name] = row.source_assembly
     return key_assembly
 
 
@@ -972,19 +1039,20 @@ def _merge_unknown_column(
     Keys that failed liftover (or were declared on two assemblies) are absent
     from ``key_to_alid`` and their associations are dropped with them.
     """
-    unknown_path = spill_dir / f"{col}.unk.npz"
-    if not unknown_path.exists():
+    spill = _load_unknown_spill(spill_dir, col)
+    if spill is None:
         return
-    with np.load(unknown_path, allow_pickle=True) as data:
-        keys = [str(key) for key in data["keys"]]
-        z, se, eaf = data["z"], data["se"], data["eaf"]
+    keys = spill.raw_keys
     keep = np.array([i for i, key in enumerate(keys) if key in key_to_alid], dtype=np.int64)
     if len(keep):
         idx = np.array(
             [shared_index[key_to_alid[keys[int(i)]]] for i in keep.tolist()], dtype=np.int64
         )
-        _append_overflow_spill(spill_dir, col, idx, z[keep], se[keep], eaf[keep])
-    unknown_path.unlink()
+        _append_overflow_spill(
+            spill_dir, col, idx, spill.z[keep], spill.se[keep], spill.eaf[keep]
+        )
+    (spill_dir / f"{col}.unk.npz").unlink()
+    _unknown_side_path(spill_dir, col).unlink(missing_ok=True)
 
 
 def _remap_overflow_spills(
@@ -1458,6 +1526,21 @@ def _prepare_build(
     )
 
 
+def _off_reference_spill_bytes(spill_dir: Path) -> tuple[int, int]:
+    """``(encoded key bytes, raw side-file bytes)`` for a Pass 2 spill directory.
+
+    Read after Pass 2 and before the ``.unk`` spills are folded away, so the peak
+    scratch the off-reference keys cost is visible in the build log (issue #218).
+    """
+    encoded = side = 0
+    for path in spill_dir.iterdir():
+        if path.name.endswith(".unk.npz"):
+            encoded += path.stat().st_size
+        elif path.name.endswith(".unk.raw"):
+            side += path.stat().st_size
+    return encoded, side
+
+
 def _build_components(
     prepared: _PreparedBuild,
     options: _BuildOptions,
@@ -1472,6 +1555,12 @@ def _build_components(
     spill_dir = prepared.spill_dir
     try:
         routed = _route_studies(prepared, options)
+        encoded_bytes, side_bytes = _off_reference_spill_bytes(spill_dir)
+        log.info(
+            "Pass 2 off-reference spill: %.2f GiB encoded keys + %.2f GiB raw side files",
+            encoded_bytes / 2**30,
+            side_bytes / 2**30,
+        )
         # Off-reference variants are only known once Pass 2 has streamed the
         # sources; fold them into the shared axis before anything reads it.
         prepared = _finalise_reference_partition(prepared, options)

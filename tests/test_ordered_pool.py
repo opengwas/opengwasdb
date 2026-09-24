@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import os
-import time
+from typing import Any
 
 import pytest
 
 from opengwasdb.build.ordered_pool import ordered_map
 
 
-def _slow_for_early_items(i: int) -> tuple[int, int]:
-    # Early items sleep longest, so completion order is the reverse of input
-    # order: a map that yields in completion order fails the assertion below.
-    time.sleep(0.02 * (8 - i) if i < 8 else 0)
+def _probe(i: int) -> tuple[int, int]:
+    return i, os.getpid()
+
+
+def _coordinated_probe(item: tuple[int, Any, Any]) -> tuple[int, int]:
+    """Item 0 blocks until item 1 has recorded itself, so completion order is
+    provably not input order -- by waiting on the condition, not the clock.
+    """
+    i, later_done, completion_order = item
+    if i == 0:
+        later_done.wait()
+    completion_order.append(i)
+    if i == 1:
+        later_done.set()
     return i, os.getpid()
 
 
@@ -24,14 +35,25 @@ def _fail_on_three(i: int) -> int:
 
 
 def test_parallel_results_come_back_in_input_order() -> None:
-    results = list(ordered_map(_slow_for_early_items, range(16), n_workers=4))
+    manager = multiprocessing.Manager()
+    later_done = manager.Event()
+    completion_order = manager.list()
+    results = list(
+        ordered_map(
+            _coordinated_probe,
+            [(i, later_done, completion_order) for i in range(16)],
+            n_workers=4,
+        )
+    )
     assert [i for i, _ in results] == list(range(16))
     # Fixture is meaningful only if work really left the parent process.
     assert {pid for _, pid in results} - {os.getpid()}
+    # ... and only if completion really left input order while yielding did not.
+    assert completion_order[0] != 0
 
 
 def test_serial_path_runs_in_process() -> None:
-    results = list(ordered_map(_slow_for_early_items, range(4), n_workers=1))
+    results = list(ordered_map(_probe, range(4), n_workers=1))
     assert [i for i, _ in results] == [0, 1, 2, 3]
     assert {pid for _, pid in results} == {os.getpid()}
 

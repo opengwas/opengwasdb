@@ -207,7 +207,18 @@ the end of this file.
 
 ### Changed
 
-- **Non-autosomal chromosome spellings now share one canonical ALID identity**:
+- **Pass 2 off-reference keys are now fixed-width `uint64`, not pickled strings**:
+  a Hybrid build with `--variant-reference` encodes each off-reference source
+  coordinate in the Pass 2 worker. SNVs with one-base A/C/G/T alleles pack
+  losslessly (chromosome 5 bits, position 28 bits, ref 2 bits, alt 2 bits) and
+  decode back to the exact raw key; every other key is hashed into a tagged
+  part of the `uint64` space with its raw string in a small per-column side
+  file, since liftover and canonicalisation still need it. A hash collision
+  between two distinct keys fails the build loudly, naming both, and a hash
+  outside the 63-bit region is refused rather than truncated. The change
+  removes `allow_pickle` from the Hybrid build and shrinks the off-reference
+  spill from about 30 B/row to about 20 B/row (#218).
+
   source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
   explicit canonical labels `X`, `Y`, and `MT` respectively in every reader
   path (#216, ADR 0052). This is a breaking change to variant identity:
