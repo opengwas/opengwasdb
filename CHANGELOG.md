@@ -251,6 +251,20 @@ the end of this file.
   Top-Hit Index and the `float16` narrowing remain serial and are logged; they
   reduce whole flat arrays or make one zarr write, so their profiling evidence
   is recorded on the issue instead of a forced pool.
+- **The EAF consensus baseline is one sort per site, computed only where it is
+  read (#224)**: with no `--eaf-reference`, each Analysis is correlated against
+  the leave-one-out median of the other Analyses. That median was rebuilt from
+  scratch with `np.median` for every (Analysis, site) pair and stored for every
+  Analysis at every site, although the correlation only ever reads the sites an
+  Analysis itself reported; on OGS-00011 (3,262 Analyses) the step ran on one
+  core for more than seven hours and held 300 GiB. The baseline is now columnar
+  over the observations: one sort by (site, value) gives every reporter's
+  leave-one-out median by index arithmetic, bit-identical to `np.median`
+  (including NaN propagation), at the reporting Analyses' sites only. The "at
+  least two *other* Analyses" rule is unchanged, and so is the
+  `EafOrientationReport`. Peak memory is now bounded by the observation count
+  (~146 B per observation), not by Analyses x sites: a synthetic 3,262 x 20,000
+  survey takes 40 s and 8.9 GiB.
 - **Non-autosomal chromosome spellings now share one canonical ALID identity**:
   source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
   explicit canonical labels `X`, `Y`, and `MT` respectively in every reader
