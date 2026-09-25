@@ -1416,6 +1416,64 @@ class TestVariantReference:
             "1:3000000:C:CA",
         )
 
+    def test_collision_where_all_keys_drop_still_fails_the_build_naming_both_keys(
+        self, tmp_path, monkeypatch
+    ):
+        """When all off-reference keys drop during resolution (e.g. declared on
+        conflicting assemblies), the empty-resolved branch must still verify
+        every column's hashed rows against canonical keys rather than returning
+        early, so cross-column collisions still fail loudly naming both keys."""
+        import opengwasdb.layouts.hybrid.unknown_keys as unknown_keys
+        from opengwasdb.variants.reference import write_variant_reference
+
+        vcf_a = _make_vcf(
+            tmp_path,
+            "trait_a",
+            [
+                # on-panel
+                f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",
+                # off-ref, A only (hg19)
+                "1\t2000000\t.\tC\tCT\t.\tPASS\t.\tES:SE:AF\t1.0:0.5:0.2\n",
+            ],
+        )
+        vcf_b = _make_vcf(
+            tmp_path,
+            "trait_b",
+            [
+                # on-panel (HG38_ALID_3)
+                "1\t1564620\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t3.0:0.5:0.2\n",
+                # off-ref, B only (hg38)
+                "1\t3000000\t.\tC\tCA\t.\tPASS\t.\tES:SE:AF\t1.5:0.5:0.2\n",
+            ],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path,
+            [
+                ("trait_a", vcf_a, "Trait A", "hg19"),
+                ("trait_b", vcf_b, "Trait B", "hg38"),
+            ],
+        )
+        reference = tmp_path / "panel-only.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference,
+            [HG38_ALID_1, HG38_ALID_3],
+            {
+                ("1", HG19_POS_1, "A", "G"): HG38_ALID_1,
+                ("1", 1564620, "A", "G"): HG38_ALID_3,
+            },
+        )
+        monkeypatch.setattr(unknown_keys, "_stable_hash", lambda key: 99)
+        monkeypatch.setattr(unknown_keys, "check_hash", lambda key: 7)
+        monkeypatch.setattr(hybrid_build, "check_hash", lambda key: 7)
+
+        _assert_hybrid_build_fails_naming_keys(
+            manifest,
+            tmp_path / "double-collision-dropped.opengwasdb",
+            reference,
+            "1:2000000:C:CT",
+            "1:3000000:C:CA",
+        )
+
     def test_off_reference_key_declared_on_two_assemblies_is_dropped(self, tmp_path):
         """The same raw key named hg19 in one Analysis and hg38 in another names
         two different physical loci. The sorted key table must drop it rather
