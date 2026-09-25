@@ -1,16 +1,15 @@
 """Unit tests for the sorted off-reference key table (ticket #222).
 
 The table replaces two per-association Python dicts with a sorted ``uint64``
-key array; these tests pin the vectorised merge's assembly OR, its build-wide
-hash guarantee, the lookup the fold uses, and the assembly/liftover rules that
-decide which keys resolve. They exercise the module directly because that is
-where the reduction order lives.
+key array; these tests pin the lookup the fold uses, the assembly/liftover
+rules that decide which distinct keys resolve, and the ALID index that maps
+them onto the shared axis without a dict. The build-wide merge that produces
+the distinct keys is ``test_hybrid_key_runs``'.
 """
 
 from __future__ import annotations
 
-import weakref
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 import pytest
@@ -19,69 +18,29 @@ from opengwasdb.layouts.hybrid import key_table
 from opengwasdb.layouts.hybrid.key_table import (
     HG19,
     HG38,
-    ChunkKeys,
+    DistinctKeys,
     KeyTable,
-    merge_chunks,
     resolve_keys,
 )
 from opengwasdb.layouts.hybrid.unknown_keys import (
-    HASH_TAG,
     UnknownKeyEncodingError,
     encode_key,
+    is_hashed,
 )
 
 
-def _hashed(raw: str, value: int) -> ChunkKeys:
-    """One hashed key in its own chunk, with a value the caller controls."""
-    return ChunkKeys(
-        values=np.array([value], dtype=np.uint64),
-        assembly_bits=np.array([HG19], dtype=np.int8),
-        hashed_values=np.array([value], dtype=np.uint64),
-        hashed_raw=[raw],
+def _distinct(*declared: tuple[str, int]) -> DistinctKeys:
+    """Distinct keys from ``(raw key, assembly bits)`` pairs, as the merge
+    would hand them to ``resolve_keys``: sorted, hashed raw keys attached."""
+    by_value = {encode_key(raw): (raw, bits) for raw, bits in declared}
+    values = np.array(sorted(by_value), dtype=np.uint64)
+    hashed = values[is_hashed(values)]
+    return DistinctKeys(
+        values=values,
+        assembly_bits=np.array([by_value[v][1] for v in values.tolist()], dtype=np.int8),
+        hashed_values=hashed,
+        hashed_raw=[by_value[v][0] for v in hashed.tolist()],
     )
-
-
-def _packed(key: str, bit: int) -> ChunkKeys:
-    """One packed SNV key in its own chunk, declared under ``bit``."""
-    value = np.uint64(encode_key(key))
-    return ChunkKeys(
-        values=np.array([value], dtype=np.uint64),
-        assembly_bits=np.array([bit], dtype=np.int8),
-        hashed_values=np.array([], dtype=np.uint64),
-        hashed_raw=[],
-    )
-
-
-def test_merge_chunks_ors_the_declaring_assemblies() -> None:
-    """The same key in an hg19 chunk and an hg38 chunk carries both bits, which
-    is what the two-assembly drop in ``resolve_keys`` keys off."""
-    merged = merge_chunks([_packed("1:5:A:G", HG19), _packed("1:5:A:G", HG38)])
-    assert len(merged.values) == 1, "the fixture must be one key declared twice"
-    assert int(merged.assembly_bits[0]) == (HG19 | HG38)
-
-
-def test_merge_chunks_repeats_one_assembly_without_widening_it() -> None:
-    merged = merge_chunks([_packed("1:5:A:G", HG38), _packed("1:5:A:G", HG38)])
-    assert len(merged.values) == 1
-    assert int(merged.assembly_bits[0]) == HG38
-
-
-def test_merge_chunks_detects_a_cross_chunk_hash_collision() -> None:
-    """Two distinct raw keys forced onto one hash must fail the build-wide
-    merge naming both, wherever in the manifest they sit (#218 review)."""
-    value = int(HASH_TAG | 7)
-    with pytest.raises(UnknownKeyEncodingError) as excinfo:
-        merge_chunks([_hashed("1:5:A:AT", value), _hashed("1:6:A:GA", value)])
-    message = str(excinfo.value)
-    assert "1:5:A:AT" in message
-    assert "1:6:A:GA" in message
-
-
-def test_merge_chunks_does_not_call_a_repeated_key_a_collision() -> None:
-    value = int(HASH_TAG | 7)
-    merged = merge_chunks([_hashed("1:5:A:AT", value), _hashed("1:5:A:AT", value)])
-    assert len(merged.hashed_values) == 1
-    assert merged.hashed_raw == ["1:5:A:AT"]
 
 
 def test_key_table_lookup_reports_matches_and_misses() -> None:
@@ -106,100 +65,39 @@ def test_key_table_lookup_of_an_empty_table_is_all_misses() -> None:
 
 
 def test_resolve_keys_drops_a_key_declared_on_two_assemblies() -> None:
-    merged = merge_chunks([_packed("1:5:A:G", HG19), _packed("1:5:A:G", HG38)])
-    resolved = resolve_keys(merged, liftover_failure_threshold=1.0, chain_file=None)
-    assert len(resolved.keys) == 0
+    resolved = resolve_keys(
+        _distinct(("1:5:A:G", HG19 | HG38), ("1:6:A:G", HG38)),
+        liftover_failure_threshold=1.0,
+        chain_file=None,
+    )
+    assert resolved.alids == ["1:6:A:G"], "only the single-assembly key may resolve"
 
 
 def test_resolve_keys_canonicalises_an_hg38_packed_snv() -> None:
     resolved = resolve_keys(
-        _packed("1:5:T:A", HG38), liftover_failure_threshold=1.0, chain_file=None
+        _distinct(("1:5:T:A", HG38)), liftover_failure_threshold=1.0, chain_file=None
     )
     assert resolved.alids == ["1:5:A:T"]
     assert resolved.origins == ["1:5:A:T"]
 
 
+def test_resolve_keys_canonicalises_an_hg38_hashed_key_from_its_raw_string() -> None:
+    distinct = _distinct(("1:5:CT:C", HG38))
+    assert len(distinct.hashed_values) == 1, "the fixture must be a hashed key"
+    resolved = resolve_keys(distinct, liftover_failure_threshold=1.0, chain_file=None)
+    assert resolved.alids == ["1:5:C:CT"]
+
+
 def test_resolve_keys_keeps_two_hg38_keys_on_one_alid() -> None:
     """A:G and G:A are two raw keys naming one physical SNV; both resolve, both
     carry the same ALID, and the provenance collision is left for the caller."""
-    merged = merge_chunks([_packed("1:5:A:G", HG38), _packed("1:5:G:A", HG38)])
-    resolved = resolve_keys(merged, liftover_failure_threshold=1.0, chain_file=None)
+    resolved = resolve_keys(
+        _distinct(("1:5:A:G", HG38), ("1:5:G:A", HG38)),
+        liftover_failure_threshold=1.0,
+        chain_file=None,
+    )
     assert len(resolved.keys) == 2
     assert resolved.alids == ["1:5:A:G", "1:5:A:G"]
-
-
-def _random_chunk(rng: np.random.Generator, universe: int, size: int) -> ChunkKeys:
-    """Distinct keys drawn from a small universe so chunks overlap heavily,
-    with a hashed subset whose raw key is a function of its value (no collision)."""
-    values = np.unique(rng.integers(0, universe, size=size).astype(np.uint64))
-    hashed_values = values[values % 5 == 0] | np.uint64(HASH_TAG)
-    values = np.unique(np.concatenate([values, hashed_values]))
-    return ChunkKeys(
-        values=values,
-        assembly_bits=rng.choice([HG19, HG38], size=len(values)).astype(np.int8),
-        hashed_values=hashed_values,
-        hashed_raw=[f"raw-{int(value)}" for value in hashed_values.tolist()],
-    )
-
-
-def test_merge_key_stream_matches_the_all_at_once_merge() -> None:
-    """The incremental fold must be the same reduction as one big merge: same
-    distinct keys, same OR of assemblies, same hashed raw keys."""
-    rng = np.random.default_rng(222)
-    chunks = [_random_chunk(rng, 400, 150) for _ in range(13)]
-    expected = merge_chunks(chunks)
-    assert int((expected.assembly_bits == (HG19 | HG38)).sum()) > 0, (
-        "the fixture must hold keys declared on both assemblies across chunks"
-    )
-    assert len(expected.hashed_values) > 0
-    streamed = key_table.merge_key_stream(iter(chunks))
-    np.testing.assert_array_equal(streamed.values, expected.values)
-    np.testing.assert_array_equal(streamed.assembly_bits, expected.assembly_bits)
-    np.testing.assert_array_equal(streamed.hashed_values, expected.hashed_values)
-    assert streamed.hashed_raw == expected.hashed_raw
-
-
-def test_merge_key_stream_of_nothing_is_empty() -> None:
-    merged = key_table.merge_key_stream(iter([]))
-    assert len(merged.values) == 0
-    assert merged.hashed_raw == []
-
-
-def test_merge_key_stream_detects_a_hash_collision_across_distant_chunks() -> None:
-    value = int(HASH_TAG | 7)
-    filler = [_packed(f"1:{position}:A:G", HG38) for position in range(10, 16)]
-    with pytest.raises(UnknownKeyEncodingError, match="hash collision"):
-        key_table.merge_key_stream(
-            iter([_hashed("1:5:A:AT", value), *filler, _hashed("1:6:A:GA", value)])
-        )
-
-
-def _tracked(chunks: list[ChunkKeys], live_counts: list[int]) -> Iterator[ChunkKeys]:
-    """Yield ``chunks``, recording before each how many earlier ones survive.
-
-    Only the stream holds a strong reference to a chunk after yielding it, so a
-    surviving earlier chunk is one the consumer is still retaining.
-    """
-    alive: list[weakref.ref[np.ndarray]] = []
-    while chunks:
-        live_counts.append(sum(ref() is not None for ref in alive))
-        chunk = chunks.pop(0)
-        alive.append(weakref.ref(chunk.values))
-        yield chunk
-        del chunk
-
-
-def test_merge_key_stream_releases_each_chunk_once_folded() -> None:
-    """Review round 1 blocker: ``merge_chunks(list(stream))`` retained every
-    worker result at once. The fold may keep at most one unmerged chunk (the
-    binary counter's lowest level) while the next arrives."""
-    rng = np.random.default_rng(7)
-    chunks = [_random_chunk(rng, 10_000, 2_000) for _ in range(32)]
-    live_counts: list[int] = []
-    merged = key_table.merge_key_stream(_tracked(chunks, live_counts))
-    assert len(live_counts) == 32, "the fixture must stream every chunk"
-    assert len(merged.values) > 2_000
-    assert max(live_counts) <= 1, f"earlier chunks retained: {live_counts}"
 
 
 def _length_hashes(strings: Sequence[str]) -> np.ndarray:
@@ -237,3 +135,23 @@ def test_alid_index_resolves_axis_alids_that_share_a_hash(monkeypatch) -> None:
     np.testing.assert_array_equal(
         key_table.AlidIndex(axis).lookup(["1:9:C:T", "10:5:A:G", "1:5:A:G"]), [1, 2, 0]
     )
+
+
+def test_drop_unresolved_keeps_only_resolved_keys_in_step() -> None:
+    values = np.array([1, 2, 3, 4], dtype=np.uint64)
+    resolved = key_table._drop_unresolved(
+        values, ["a", None, "c", "d"], ["oa", None, "oc", "od"]
+    )
+    assert resolved.keys.tolist() == [1, 3, 4]
+    assert resolved.alids == ["a", "c", "d"]
+    assert resolved.origins == ["oa", "oc", "od"]
+
+
+def test_drop_unresolved_reuses_the_lists_when_every_key_resolved() -> None:
+    """The lists are tens of millions long at OGS-00011 scale; a copy when
+    nothing is dropped doubles the resolve peak (ticket #222)."""
+    alids: list[str | None] = ["a", "b"]
+    origins: list[str | None] = ["oa", "ob"]
+    resolved = key_table._drop_unresolved(np.array([1, 2], dtype=np.uint64), alids, origins)
+    assert resolved.alids is alids
+    assert resolved.origins is origins

@@ -260,9 +260,13 @@ the end of this file.
   ALID dict (~15 billion inserts on OGS-00011); the table's `.unk` → `.ovf` fold
   is now one `np.searchsorted` per column. Workers and the parent fold the
   per-column and per-chunk distinct keys incrementally, releasing each once
-  merged, so no process holds every column's or every worker's keys at once;
-  and no ALID → shared-index dict over the whole axis is built or kept through
-  Pass 2 and consolidation (a sorted hash index replaces it). The two-assembly drop, the
+  merged, so no process holds every column's or every worker's keys at once.
+  The merge carries numbers only: each hashed key's raw string is replaced by
+  an independent 64-bit check hash (`unknown_keys.check_hash`) and the column
+  that first declared it, and the strings are read back from the side files
+  once, after the merge, and re-verified. No ALID → shared-index dict over the
+  whole axis is built or kept through Pass 2 and consolidation (a sorted hash
+  index replaces it). The two-assembly drop, the
   liftover-failure drop, an off-reference ALID joining an existing on-reference
   one, and the `hg38_to_source` collision blanking are unchanged, and the
   build-wide hash guarantee from #218 still fails a collision naming both keys

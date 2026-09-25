@@ -30,7 +30,7 @@ from concurrent.futures import as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -75,14 +75,21 @@ from opengwasdb.layouts.dense.constants import (
     DEFAULT_DTYPE,
 )
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
-from opengwasdb.layouts.hybrid.key_table import (
+from opengwasdb.layouts.hybrid.key_runs import (
     HG19,
     HG38,
+    HashedKeyCollision,
+    KeyRun,
+    column_run,
+    merge_key_stream,
+    read_run,
+    write_run,
+)
+from opengwasdb.layouts.hybrid.key_table import (
     AlidIndex,
-    ChunkKeys,
+    DistinctKeys,
     KeyTable,
     ResolvedKeys,
-    merge_key_stream,
     resolve_keys,
 )
 from opengwasdb.layouts.hybrid.layout import (
@@ -91,9 +98,11 @@ from opengwasdb.layouts.hybrid.layout import (
     dense_to_shared_path,
 )
 from opengwasdb.layouts.hybrid.unknown_keys import (
+    UnknownKeyEncodingError,
+    check_hash,
     encode_keys,
-    hashed_lookup,
     is_hashed,
+    validated_hashed_values,
 )
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
@@ -957,29 +966,34 @@ def _read_unknown_side_file(spill_dir: Path, col: int) -> list[str]:
     side = _unknown_side_path(spill_dir, col)
     if not side.exists():
         return []
-    return side.read_text(encoding="utf-8").splitlines()
+    # Line by line: the whole file as one string next to its split lines would
+    # double the peak in every key-table worker (ticket #222).
+    with side.open(encoding="utf-8") as handle:
+        return [line.rstrip("\n") for line in handle]
 
 
 @dataclass(frozen=True)
 class _UnknownKeySpill:
     """One column's ``.unk.npz`` keys and the raw strings of its hashed half.
 
-    Only the distinct keys and the side-file strings are needed to resolve the
+    Only the keys and the side-file strings are needed to resolve the
     build-wide table; the association arrays are left on disk until the fold
     (ticket #222), so this deliberately does not decode every row.
     """
 
     keys: np.ndarray
-    hashed_entries: dict[int, str]
+    hashed_values: np.ndarray
+    hashed_raw: list[str]
 
 
 def _load_unknown_key_spill(spill_dir: Path, col: int) -> _UnknownKeySpill | None:
-    """Read one column's encoded keys and validated hashed raw-key lookup.
+    """Read one column's encoded keys and its validated hashed raw keys.
 
     The keys are uint64 by contract (issue #218) -- no pickle -- and
-    ``hashed_lookup`` refuses a side file that does not name every tagged row
-    exactly once, so a corrupt spill fails here rather than resolving a shorter,
-    plausible key set.
+    ``validated_hashed_values`` refuses a side file that does not name every
+    tagged row exactly once, or names a key that does not encode to its row, so
+    a corrupt spill fails here rather than resolving a shorter, plausible key
+    set. ``hashed_raw`` stays in side-file order, paired with ``hashed_values``.
     """
     path = spill_dir / f"{col}.unk.npz"
     if not path.exists():
@@ -987,8 +1001,9 @@ def _load_unknown_key_spill(spill_dir: Path, col: int) -> _UnknownKeySpill | Non
     with np.load(path) as data:
         keys = data["keys"]
         hashed_index = data["hashed_index"]
-    entries = hashed_lookup(keys, hashed_index, _read_unknown_side_file(spill_dir, col))
-    return _UnknownKeySpill(keys=keys, hashed_entries=entries)
+    raw = _read_unknown_side_file(spill_dir, col)
+    named = validated_hashed_values(keys, hashed_index, raw)
+    return _UnknownKeySpill(keys=keys, hashed_values=named, hashed_raw=raw)
 
 
 def _assembly_bit(assembly: str) -> int:
@@ -996,57 +1011,63 @@ def _assembly_bit(assembly: str) -> int:
     return HG38 if assembly == "hg38" else HG19
 
 
-def _summarise_key_chunk(
-    task: tuple[Path, tuple[int, ...], tuple[str, ...]],
-) -> ChunkKeys:
-    """Distinct off-reference keys for one chunk of columns (ticket #222).
+_KeyChunkTask = tuple[Path, tuple[int, ...], tuple[str, ...], Path]
 
-    Each column contributes its distinct encoded values and one assembly bit;
+
+def _summarise_key_chunk(task: _KeyChunkTask) -> Path:
+    """The distinct off-reference keys of one chunk of columns (ticket #222).
+
+    Each column becomes a ``KeyRun`` -- its distinct values, one assembly bit,
+    and its hashed keys' check hashes, but no raw strings -- and
     ``merge_key_stream`` folds them in one at a time, so the worker holds its
-    running distinct set and never every column's keys at once. The parent then
-    merges the chunk results the same way. Only the hashed distinct keys' raw
-    strings are read from the side file -- liftover and the build-wide
-    collision check need them.
+    running distinct set and never every column's keys at once. The result is
+    spilled to ``out`` and only the path crosses the pool boundary (see
+    ``write_run``).
     """
-    spill_dir, cols, assemblies = task
-    return merge_key_stream(_column_key_stream(spill_dir, cols, assemblies))
+    spill_dir, cols, assemblies, out = task
+    write_run(merge_key_stream(_column_run_stream(spill_dir, cols, assemblies)), out)
+    return out
 
 
-def _column_key_stream(
+def _column_run_stream(
     spill_dir: Path, cols: Sequence[int], assemblies: Sequence[str]
-) -> Iterator[ChunkKeys]:
-    """Each spilled column's distinct off-reference keys, tagged with its assembly.
+) -> Iterator[KeyRun]:
+    """Each spilled column's key run, tagged with its assembly.
 
-    A generator, so each column's keys are released once ``merge_key_stream``
-    has folded them in; the full per-association key array never outlives the
-    reduction to distinct values.
+    A generator, so each column's run is released once ``merge_key_stream``
+    has folded it in; the full per-association key array and the side file's
+    strings never outlive the column's reduction to a run.
     """
     for col, assembly in zip(cols, assemblies, strict=True):
-        keys = _distinct_column_keys(spill_dir, col, assembly)
-        if keys is None:
+        run = _column_key_run(spill_dir, col, assembly)
+        if run is None:
             continue
-        yield keys
-        del keys
+        yield run
+        del run
 
 
-def _distinct_column_keys(spill_dir: Path, col: int, assembly: str) -> ChunkKeys | None:
-    """One column's distinct keys and assembly bit; ``None`` if it spilled none."""
+def _column_key_run(spill_dir: Path, col: int, assembly: str) -> KeyRun | None:
+    """One column's key run; ``None`` if it spilled no off-reference keys."""
     loaded = _load_unknown_key_spill(spill_dir, col)
     if loaded is None:
         return None
-    distinct = np.unique(loaded.keys)
-    hashed = distinct[is_hashed(distinct)]
-    return ChunkKeys(
-        values=distinct,
-        assembly_bits=np.full(len(distinct), _assembly_bit(assembly), dtype=np.int8),
-        hashed_values=hashed,
-        hashed_raw=[loaded.hashed_entries[int(value)] for value in hashed.tolist()],
+    checks = np.fromiter(
+        (check_hash(raw) for raw in loaded.hashed_raw),
+        dtype=np.uint64,
+        count=len(loaded.hashed_raw),
+    )
+    return column_run(
+        loaded.keys,
+        loaded.hashed_values,
+        checks,
+        column=col,
+        assembly_bit=_assembly_bit(assembly),
     )
 
 
 def _key_chunk_tasks(
     spill_dir: Path, prepared: _PreparedBuild, n_workers: int
-) -> list[tuple[Path, tuple[int, ...], tuple[str, ...]]]:
+) -> list[_KeyChunkTask]:
     """Split the manifest's columns into a bounded number of worker chunks."""
     rows = prepared.manifest_rows
     n = len(rows)
@@ -1054,12 +1075,115 @@ def _key_chunk_tasks(
         return []
     n_chunks = max(1, min(n, 4 * max(1, n_workers)))
     size = -(-n // n_chunks)
-    tasks: list[tuple[Path, tuple[int, ...], tuple[str, ...]]] = []
+    tasks: list[_KeyChunkTask] = []
     for start in range(0, n, size):
         cols = tuple(range(start, min(start + size, n)))
         assemblies = tuple(rows[col].source_assembly for col in cols)
-        tasks.append((spill_dir, cols, assemblies))
+        tasks.append((spill_dir, cols, assemblies, spill_dir / f"keyrun.{start}.npz"))
     return tasks
+
+
+def _merge_key_runs(prepared: _PreparedBuild, n_workers: int) -> KeyRun | None:
+    """The build-wide distinct off-reference keys, merged in parallel.
+
+    Workers return spill paths, so a pending result costs the parent nothing;
+    each chunk is loaded only when its turn comes and ``merge_key_stream``
+    releases it once merged. The parent never holds every worker result
+    (ticket #222 review round 1) -- ``list(...)`` here would. A hash collision
+    found by any merge is re-raised naming both raw keys.
+    """
+    tasks = _key_chunk_tasks(prepared.spill_dir, prepared, n_workers)
+    if not tasks:
+        return None
+    paths = ordered_map(_summarise_key_chunk, tasks, n_workers)
+    try:
+        return merge_key_stream(_load_key_run(path) for path in paths)
+    except HashedKeyCollision as collision:
+        raise UnknownKeyEncodingError(
+            _collision_message(prepared.spill_dir, collision)
+        ) from collision
+
+
+def _load_key_run(path: Path) -> KeyRun:
+    """Read one worker's spilled key run and delete the spill."""
+    run = read_run(path)
+    path.unlink()
+    return run
+
+
+def _collision_message(spill_dir: Path, collision: HashedKeyCollision) -> str:
+    """Name every raw key the two colliding columns hold for the shared value."""
+    raws: list[str] = []
+    for col in dict.fromkeys(collision.columns):
+        loaded = _load_unknown_key_spill(spill_dir, col)
+        if loaded is None:
+            continue
+        for value, raw in zip(loaded.hashed_values.tolist(), loaded.hashed_raw, strict=True):
+            if value == collision.value and raw not in raws:
+                raws.append(raw)
+    named = " and ".join(repr(raw) for raw in raws)
+    return (
+        f"hash collision between off-reference keys {named} (both encode to "
+        f"{collision.value}); refusing to merge them"
+    )
+
+
+_HashedRawTask = tuple[Path, int, np.ndarray, np.ndarray]
+
+
+def _column_hashed_raw(task: _HashedRawTask) -> list[str]:
+    """The raw keys one column's side file holds for ``values``, verified.
+
+    Each raw key must re-encode to its value (``validated_hashed_values``) and
+    match the check hash the merge carried for it, so a side file that changed
+    since the merge -- or a value the column never held -- fails loudly.
+    """
+    spill_dir, col, values, checks = task
+    loaded = _load_unknown_key_spill(spill_dir, col)
+    if loaded is None:
+        raise UnknownKeyEncodingError(
+            f"column {col}'s off-reference spill is gone; cannot read its hashed raw keys"
+        )
+    order = np.argsort(loaded.hashed_values, kind="stable")
+    held = loaded.hashed_values[order]
+    position = np.minimum(np.searchsorted(held, values), max(len(held) - 1, 0))
+    if not len(held) or not np.array_equal(held[position], values):
+        raise UnknownKeyEncodingError(
+            f"column {col}'s side file lacks a hashed key the merge assigned to it"
+        )
+    raws = [loaded.hashed_raw[index] for index in order[position].tolist()]
+    recomputed = np.fromiter(
+        (check_hash(raw) for raw in raws), dtype=np.uint64, count=len(raws)
+    )
+    if not np.array_equal(recomputed, checks):
+        raise UnknownKeyEncodingError(
+            f"column {col}'s side file no longer matches the merged key checks"
+        )
+    return raws
+
+
+def _fetch_hashed_raw(spill_dir: Path, merged: KeyRun, n_workers: int) -> list[str]:
+    """The raw key of every distinct hashed key, from its lowest declaring column.
+
+    One task per origin column, in parallel; each hashed key's string is read
+    once, after the merge, instead of being carried through it.
+    """
+    origin = merged.hashed_origin
+    order = np.argsort(origin, kind="stable")
+    cols, starts = np.unique(origin[order], return_index=True)
+    bounds = [*starts.tolist(), len(order)]
+    groups = [order[bounds[i] : bounds[i + 1]] for i in range(len(cols))]
+    tasks = (
+        (spill_dir, int(col), merged.hashed_values[group], merged.hashed_check[group])
+        for col, group in zip(cols.tolist(), groups, strict=True)
+    )
+    raw: list[str | None] = [None] * len(origin)
+    for group, raws in zip(groups, ordered_map(_column_hashed_raw, tasks, n_workers), strict=True):
+        for position, value in zip(group.tolist(), raws, strict=True):
+            raw[position] = value
+    if any(value is None for value in raw):
+        raise UnknownKeyEncodingError("a merged hashed key has no raw side-file key")
+    return cast(list[str], raw)
 
 
 def _resolve_off_reference_keys(
@@ -1067,25 +1191,23 @@ def _resolve_off_reference_keys(
 ) -> ResolvedKeys | None:
     """Resolve build-wide distinct off-reference keys to hg38 ALIDs, in parallel.
 
-    Workers reduce column chunks; the parent merges and resolves once per
-    distinct key. ``None`` means there was nothing to resolve, the same early
-    return the dict-based resolution took.
+    Workers reduce column chunks to key runs; the parent merges them, reads
+    the distinct hashed keys' raw strings, and resolves once per distinct key.
+    ``None`` means there was nothing to resolve, the same early return the
+    dict-based resolution took.
     """
-    tasks = _key_chunk_tasks(prepared.spill_dir, prepared, options.n_workers)
-    if not tasks:
+    merged = _merge_key_runs(prepared, options.n_workers)
+    if merged is None:
         return None
-    # Fold the ordered worker results as they arrive: `ordered_map` retains at
-    # most `max_in_flight` results and `merge_key_stream` releases each chunk
-    # once merged, so the parent never holds every worker result (ticket #222
-    # review round 1). `list(...)` would defeat both bounds.
-    chunks = ordered_map(
-        _summarise_key_chunk,
-        tasks,
-        options.n_workers,
-        max_in_flight=max(1, options.n_workers),
+    distinct = DistinctKeys(
+        values=merged.values,
+        assembly_bits=merged.assembly_bits,
+        hashed_values=merged.hashed_values,
+        hashed_raw=_fetch_hashed_raw(prepared.spill_dir, merged, options.n_workers),
     )
+    del merged
     resolved = resolve_keys(
-        merge_key_stream(chunks),
+        distinct,
         liftover_failure_threshold=options.liftover_failure_threshold,
         chain_file=options.chain_file,
     )

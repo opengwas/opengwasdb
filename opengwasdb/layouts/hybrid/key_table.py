@@ -8,27 +8,24 @@ them one at a time. This module replaces both dicts with a sorted ``uint64`` key
 array (the encoding from #218) aligned with each key's final shared Variant
 Index.
 
-Workers reduce a chunk of columns to sorted distinct keys, each carrying the
-assemblies that declared it; the parent merges those with a vectorised sort and
-reduction, never a per-key Python loop. Liftover and canonicalisation then run
-once per *distinct* key, and the ``.unk`` → ``.ovf`` fold binary-searches the
-table rather than walking a dict.
-
-The build-wide hash guarantee from #218 survives the rewrite: merging still
-compares every hashed key's raw string, so two distinct keys sharing one hash
-fail the build naming both, wherever in the manifest they sit.
+The build-wide distinct keys come from ``key_runs``' memory-bounded merge;
+here they are resolved -- liftover and canonicalisation once per *distinct*
+key -- into a :class:`KeyTable` the ``.unk`` → ``.ovf`` fold binary-searches
+rather than walking a dict. :class:`AlidIndex` maps ALIDs onto the shared axis
+without a ``str -> int`` dict over it.
 """
 
 from __future__ import annotations
 
-import itertools
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
 from opengwasdb.build.liftover import build_liftover_lookup
+from opengwasdb.layouts.hybrid.key_runs import HG19, HG38
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     is_hashed,
@@ -40,27 +37,22 @@ __all__ = [
     "HG19",
     "HG38",
     "AlidIndex",
-    "ChunkKeys",
+    "DistinctKeys",
     "KeyTable",
     "ResolvedKeys",
-    "merge_chunks",
-    "merge_key_stream",
     "resolve_keys",
 ]
 
-# One bit per source assembly, OR-ed when a key is declared more than once.
-# A key declared under both has no single physical locus and is dropped.
-HG19 = 1
-HG38 = 2
-
 
 @dataclass(frozen=True)
-class ChunkKeys:
-    """One worker's distinct off-reference keys, after reducing its columns.
+class DistinctKeys:
+    """The build's distinct off-reference keys, ready to resolve.
 
-    ``values`` is sorted ascending; ``assembly_bits`` parallels it.
-    ``hashed_values``/``hashed_raw`` are its hash-region subset, carried so the
-    parent can resolve and collision-check them without re-reading a spill.
+    ``values`` is sorted ascending; ``assembly_bits`` parallels it (the OR of
+    every declaring assembly's bit). ``hashed_values`` is its hash-region
+    subset, sorted, and ``hashed_raw`` the raw key of each -- read from the
+    side files once the merge is done, because liftover and canonicalisation
+    need the string.
     """
 
     values: np.ndarray
@@ -167,132 +159,6 @@ def _string_hashes(strings: Sequence[str]) -> np.ndarray:
     )
 
 
-def _run_starts(sorted_values: np.ndarray) -> np.ndarray:
-    """A bool mask marking the first element of each equal-value run."""
-    starts = np.empty(len(sorted_values), dtype=bool)
-    if len(sorted_values) == 0:
-        return starts
-    starts[0] = True
-    np.not_equal(sorted_values[1:], sorted_values[:-1], out=starts[1:])
-    return starts
-
-
-def _merge_values(chunks: Sequence[ChunkKeys]) -> tuple[np.ndarray, np.ndarray]:
-    """Distinct values with the OR of every declaring assembly's bit."""
-    if not chunks:
-        return np.empty(0, dtype=np.uint64), np.empty(0, dtype=np.int8)
-    values = np.concatenate([chunk.values for chunk in chunks])
-    bits = np.concatenate([chunk.assembly_bits for chunk in chunks])
-    order = np.argsort(values, kind="stable")
-    values, bits = values[order], bits[order]
-    starts = _run_starts(values)
-    return values[starts], np.bitwise_or.reduceat(bits, np.flatnonzero(starts))
-
-
-def _hashed_collision(values: np.ndarray, raw: np.ndarray, mismatch: np.ndarray) -> str:
-    """Name both raw keys of the first hashed-value collision found."""
-    bad = int(np.flatnonzero(mismatch)[0])
-    start = bad
-    while start > 0 and values[start - 1] == values[bad]:
-        start -= 1
-    return (
-        f"hash collision between off-reference keys {raw[start]!r} and {raw[bad]!r} "
-        f"(both encode to {int(values[bad])}); refusing to merge them"
-    )
-
-
-def _merge_hashed(chunks: Sequence[ChunkKeys]) -> tuple[np.ndarray, list[str]]:
-    """Distinct hashed values and their raw keys, refusing a collision.
-
-    A hash is a function of the raw string alone, so two distinct raw keys that
-    hash to one value would silently become one variant. Comparing the raw keys
-    of a value's occurrences is the only way to tell the two apart; this is the
-    build-wide half of the per-column check ``encode_keys`` already makes.
-    """
-    if not chunks:
-        return np.empty(0, dtype=np.uint64), []
-    values = np.concatenate([chunk.hashed_values for chunk in chunks])
-    raw_list = list(itertools.chain.from_iterable(chunk.hashed_raw for chunk in chunks))
-    if len(values) == 0:
-        return values, []
-    order = np.argsort(values, kind="stable")
-    values = values[order]
-    raw = np.asarray(raw_list, dtype=object)[order]
-    starts = _run_starts(values)
-    first = raw[starts]
-    mismatch = raw != first[np.cumsum(starts) - 1]
-    if bool(mismatch.any()):
-        raise UnknownKeyEncodingError(_hashed_collision(values, raw, mismatch))
-    return values[starts], first.tolist()
-
-
-def merge_chunks(chunks: Sequence[ChunkKeys]) -> ChunkKeys:
-    """Merge sorted per-chunk distinct keys into one build-wide set.
-
-    Vectorised: ``np.argsort`` + ``reduceat`` for the values and assemblies,
-    and a run comparison for the hashed collision check. Nothing here loops
-    per key in Python.
-    """
-    values, bits = _merge_values(chunks)
-    hashed_values, hashed_raw = _merge_hashed(chunks)
-    return ChunkKeys(
-        values=values,
-        assembly_bits=bits,
-        hashed_values=hashed_values,
-        hashed_raw=hashed_raw,
-    )
-
-
-def merge_key_stream(chunks: Iterable[ChunkKeys]) -> ChunkKeys:
-    """Fold an ordered stream of chunk results into one distinct-key table.
-
-    Each chunk is merged into a binary-counter tree of runs as it arrives, so a
-    chunk is released as soon as it is folded in and at most ``log2(n) + 2``
-    partial results are live. Calling ``merge_chunks(list(stream))`` instead
-    retains every worker result and concatenates them all at once: at
-    OGS-00011 scale that is the summed per-chunk tables, not the global
-    distinct-key table (ticket #222 review round 1).
-
-    A binary counter keeps the work ``O(S log n)`` for ``S`` summed chunk rows:
-    a run at level ``k`` is the deduped union of ``2**k`` chunks, and every
-    chunk is merged once per level it climbs.
-    """
-    carries: list[ChunkKeys | None] = []
-    for chunk in chunks:
-        _carry_in(carries, chunk)
-        # The loop name must not outlive the fold: the stream's next item is
-        # produced while this frame still holds it.
-        del chunk
-    return _drain(carries)
-
-
-def _carry_in(carries: list[ChunkKeys | None], current: ChunkKeys) -> None:
-    """Add one chunk to the binary counter, merging up while a level is full."""
-    level = 0
-    while level < len(carries) and carries[level] is not None:
-        existing = carries[level]
-        assert existing is not None  # the loop condition
-        carries[level] = None
-        current = merge_chunks([existing, current])
-        del existing
-        level += 1
-    if level == len(carries):
-        carries.append(current)
-    else:
-        carries[level] = current
-
-
-def _drain(carries: list[ChunkKeys | None]) -> ChunkKeys:
-    """Merge the counter's remaining levels, smallest first, into one table."""
-    result: ChunkKeys | None = None
-    while carries:
-        carry = carries.pop(0)
-        if carry is not None:
-            result = carry if result is None else merge_chunks([result, carry])
-        del carry
-    return result if result is not None else merge_chunks([])
-
-
 def _canonical_source_key(key: str) -> str:
     """The ALID a source key names before any liftover (alleles sorted)."""
     chrom, position, ref, alt = key.split(":")
@@ -300,7 +166,7 @@ def _canonical_source_key(key: str) -> str:
     return f"{chrom}:{int(position)}:{a1}:{a2}"
 
 
-def _hashed_raw_list(queries: np.ndarray, merged: ChunkKeys) -> list[str]:
+def _hashed_raw_list(queries: np.ndarray, merged: DistinctKeys) -> list[str]:
     """The side-file raw keys for hashed values, in ``queries`` order."""
     if len(queries) == 0:
         return []
@@ -322,7 +188,7 @@ def _origins(
     alids: Sequence[str | None],
     is_hg19: np.ndarray,
     hashed: np.ndarray,
-    merged: ChunkKeys,
+    merged: DistinctKeys,
 ) -> list[str | None]:
     """The canonical source coordinate of every distinct key.
 
@@ -344,7 +210,7 @@ def _origins(
 
 
 def _hg38_alids(
-    values: np.ndarray, bits: np.ndarray, hashed: np.ndarray, merged: ChunkKeys
+    values: np.ndarray, bits: np.ndarray, hashed: np.ndarray, merged: DistinctKeys
 ) -> list[str | None]:
     """Canonical ALIDs for the hg38-declared keys (``None`` for hg19 keys)."""
     alids: list[str | None] = [None] * len(values)
@@ -365,7 +231,7 @@ def _lift_hg19(
     values: np.ndarray,
     is_hg19: np.ndarray,
     hashed: np.ndarray,
-    merged: ChunkKeys,
+    merged: DistinctKeys,
     alids: list[str | None],
     *,
     liftover_failure_threshold: float,
@@ -401,7 +267,7 @@ def _split_source_key(key: str) -> tuple[str, int, str, str]:
 
 
 def resolve_keys(
-    merged: ChunkKeys,
+    merged: DistinctKeys,
     *,
     liftover_failure_threshold: float,
     chain_file: str | Path | None,
@@ -432,7 +298,21 @@ def resolve_keys(
             chain_file=chain_file,
         )
     origins = _origins(values, alids, is_hg19, hashed, merged)
+    return _drop_unresolved(values, alids, origins)
+
+
+def _drop_unresolved(
+    values: np.ndarray, alids: list[str | None], origins: list[str | None]
+) -> ResolvedKeys:
+    """Keep the keys that resolved; ``alids``/``origins`` are reused, not copied,
+    when every key did (the usual case -- they are tens of millions long)."""
     resolved = np.array([alid is not None for alid in alids], dtype=bool)
+    if bool(resolved.all()) and all(origin is not None for origin in origins):
+        return ResolvedKeys(
+            keys=values,
+            alids=cast(list[str], alids),
+            origins=cast(list[str], origins),
+        )
     kept = np.flatnonzero(resolved)
     resolved_alids: list[str] = []
     resolved_origins: list[str] = []

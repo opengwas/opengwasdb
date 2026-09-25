@@ -37,12 +37,14 @@ __all__ = [
     "EncodedKeys",
     "MAX_POSITION",
     "UnknownKeyEncodingError",
+    "check_hash",
     "decode_keys",
     "decode_packed",
     "decode_spill",
     "encode_key",
     "encode_keys",
     "hashed_lookup",
+    "validated_hashed_values",
     "is_hashed",
     "pack_key",
     "packed_alids",
@@ -101,6 +103,20 @@ def _stable_hash(key: str) -> int:
     """
     digest = hashlib.blake2b(key.encode("utf-8"), digest_size=8).digest()
     return int.from_bytes(digest, "little") & HASH_MASK
+
+
+def check_hash(key: str) -> int:
+    """A 64-bit hash of a raw key, independent of the one that encodes it.
+
+    The build-wide key merge carries this instead of the raw string (ticket
+    #222): two different raw keys that share an encoded value differ here
+    unless both hashes collide at once, so the merge can refuse the collision
+    without holding tens of millions of strings. Deliberately not routed
+    through ``_stable_hash``, so a test that forces value collisions still sees
+    distinct checks.
+    """
+    digest = hashlib.blake2b(key.encode("utf-8"), digest_size=8, person=b"ogdb-key-check").digest()
+    return int.from_bytes(digest, "little")
 
 
 def _split_key(key: str) -> tuple[str, int, str, str] | None:
@@ -244,6 +260,30 @@ def hashed_lookup(
     misplaced entry raises rather than decoding to a shorter, plausible key list
     or a wrong key.
     """
+    named = validated_hashed_values(values, hashed_index, hashed_raw)
+    lookup: dict[int, str] = {}
+    for value, raw in zip(named.tolist(), hashed_raw, strict=True):
+        existing = lookup.get(value)
+        if existing is not None and existing != raw:
+            raise UnknownKeyEncodingError(
+                f"hash collision between off-reference keys {existing!r} and {raw!r} "
+                f"(both encode to {value}); refusing to merge them"
+            )
+        lookup[value] = raw
+    return lookup
+
+
+def validated_hashed_values(
+    values: np.ndarray, hashed_index: np.ndarray, hashed_raw: Sequence[str]
+) -> np.ndarray:
+    """The encoded value each side-file row names, in side-file order, validated.
+
+    ``hashed_lookup``'s checks without its dict: every tagged row named exactly
+    once, and every raw key re-encoding to its row's stored value. Two rows
+    naming one value with different raw keys is left to the caller's collision
+    check (``hashed_lookup``, or the key table's run comparison, ticket #222),
+    which is what lets the key-table workers skip a per-row Python dict.
+    """
     if len(hashed_index) != len(hashed_raw):
         raise UnknownKeyEncodingError(
             f"side file has {len(hashed_raw)} raw key(s) for {len(hashed_index)} hashed row(s)"
@@ -255,28 +295,25 @@ def hashed_lookup(
             f"side file names {len(positions)} hashed row(s) but the spill has {len(tagged)}; "
             "the raw keys cannot be placed"
         )
-    lookup: dict[int, str] = {}
-    for position, raw in zip(positions.tolist(), hashed_raw, strict=True):
-        value = int(values[position])
-        # A side file can pair a row with a real key that belongs to a different
-        # row; re-deriving the encoding is the only way to prove the pair. This
-        # is cheap next to the lookup it guards and refuses a swapped, stale or
-        # otherwise corrupt entry rather than attaching a row's statistics to
-        # the wrong variant (issue #218 review round 2).
-        recomputed = encode_key(raw)
-        if recomputed != value:
-            raise UnknownKeyEncodingError(
-                f"side file row {position} names raw key {raw!r}, which encodes to "
-                f"{recomputed}, not the stored {value}; the side file cannot be trusted"
-            )
-        existing = lookup.get(value)
-        if existing is not None and existing != raw:
-            raise UnknownKeyEncodingError(
-                f"hash collision between off-reference keys {existing!r} and {raw!r} "
-                f"(both encode to {value}); refusing to merge them"
-            )
-        lookup[value] = raw
-    return lookup
+    named: np.ndarray = values[positions]
+    # A side file can pair a row with a real key that belongs to a different
+    # row; re-deriving the encoding is the only way to prove the pair. This is
+    # cheap next to the lookup it guards and refuses a swapped, stale or
+    # otherwise corrupt entry rather than attaching a row's statistics to the
+    # wrong variant (issue #218 review round 2). Compared as one array, so no
+    # per-row Python ints are kept (ticket #222).
+    recomputed = np.fromiter(
+        (encode_key(raw) for raw in hashed_raw), dtype=np.uint64, count=len(hashed_raw)
+    )
+    wrong = np.flatnonzero(recomputed != named)
+    if len(wrong):
+        row = int(wrong[0])
+        raise UnknownKeyEncodingError(
+            f"side file row {int(positions[row])} names raw key {hashed_raw[row]!r}, which "
+            f"encodes to {int(recomputed[row])}, not the stored {int(named[row])}; the side "
+            "file cannot be trusted"
+        )
+    return named
 
 
 def _packed_codes(
@@ -331,13 +368,27 @@ def decode_packed(values: np.ndarray) -> list[str]:
     ]
 
 
+# Keys per ``packed_alids`` block: bounds its per-field Python lists (a
+# position ``int`` alone is 28 bytes) to a few tens of MB, however many
+# distinct keys a build resolves.
+_ALID_BLOCK = 1 << 20
+
+
 def packed_alids(values: np.ndarray) -> list[str]:
     """Canonical ALIDs (alleles sorted) for packed SNV values, vectorised.
 
     Both alleles are single bases, so ordering them is a two-code comparison;
     this avoids building the raw key and re-parsing it per distinct key when a
-    build resolves an off-reference SNV (ticket #222).
+    build resolves an off-reference SNV (ticket #222). Blocked, so only the
+    returned strings scale with ``values`` -- not four parallel field lists.
     """
+    alids: list[str] = []
+    for start in range(0, len(values), _ALID_BLOCK):
+        alids.extend(_packed_alid_block(values[start : start + _ALID_BLOCK]))
+    return alids
+
+
+def _packed_alid_block(values: np.ndarray) -> list[str]:
     chromosome_codes, positions, ref_codes, alt_codes = _packed_codes(values)
     chromosomes = _CHROMOSOME_LABEL_ARRAY[chromosome_codes]
     ref_first = ref_codes <= alt_codes

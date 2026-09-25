@@ -26,8 +26,13 @@ from store_assertions import assert_same_band_arrays, assert_same_top_hits
 from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.hybrid.key_table import HG38, ChunkKeys
-from opengwasdb.layouts.hybrid.unknown_keys import UnknownKeyEncodingError, encode_key
+from opengwasdb.layouts.hybrid.key_runs import HG38, KeyRun, column_run, read_run
+from opengwasdb.layouts.hybrid.unknown_keys import (
+    UnknownKeyEncodingError,
+    check_hash,
+    encode_key,
+    encode_keys,
+)
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -1567,64 +1572,135 @@ def test_hybrid_band_write_matches_serial_across_workers(tmp_path):
 # ── Off-reference key resolution stays memory-bounded (ticket #222 review) ──
 
 
-def _hg38_key_chunk(positions: range) -> ChunkKeys:
-    """Distinct packed hg38 SNV keys, sorted as a worker would return them."""
-    values = np.unique(
-        np.array([encode_key(f"1:{position}:A:G") for position in positions], dtype=np.uint64)
-    )
-    return ChunkKeys(
-        values=values,
-        assembly_bits=np.full(len(values), HG38, dtype=np.int8),
-        hashed_values=np.empty(0, dtype=np.uint64),
-        hashed_raw=[],
-    )
+def _hg38_key_run(positions: range, column: int = 0) -> KeyRun:
+    """A column run of distinct packed hg38 SNV keys."""
+    keys = np.array([encode_key(f"1:{position}:A:G") for position in positions], dtype=np.uint64)
+    empty = np.empty(0, dtype=np.uint64)
+    return column_run(keys, empty, empty, column=column, assembly_bit=HG38)
 
 
-class _LiveChunks:
-    """Hand out chunks one at a time, recording before each how many earlier
+class _LiveRuns:
+    """Hand out runs one at a time, recording before each how many earlier
     ones are still alive -- i.e. retained by the code under test."""
 
     def __init__(self, n: int) -> None:
-        self._chunks = [_hg38_key_chunk(range(100 + i * 50, 300 + i * 50)) for i in range(n)]
+        self._runs = [_hg38_key_run(range(100 + i * 50, 300 + i * 50), i) for i in range(n)]
         self._alive: list[weakref.ref[np.ndarray]] = []
         self.live_counts: list[int] = []
 
-    def next(self) -> ChunkKeys:
+    def next(self) -> KeyRun:
         self.live_counts.append(sum(ref() is not None for ref in self._alive))
-        chunk = self._chunks.pop(0)
-        self._alive.append(weakref.ref(chunk.values))
-        return chunk
+        run = self._runs.pop(0)
+        self._alive.append(weakref.ref(run.values))
+        return run
+
+
+def _key_prepared(spill_dir: Path, n: int) -> SimpleNamespace:
+    rows = [SimpleNamespace(source_assembly="hg38") for _ in range(n)]
+    return SimpleNamespace(spill_dir=spill_dir, manifest_rows=rows)
+
+
+def _key_options(n_workers: int) -> SimpleNamespace:
+    return SimpleNamespace(n_workers=n_workers, liftover_failure_threshold=1.0, chain_file=None)
 
 
 def test_key_chunk_worker_folds_columns_one_at_a_time(tmp_path, monkeypatch):
-    """A worker must not hold every column's distinct keys before merging:
-    at OGS-00011 scale a chunk is dozens of columns of tens of millions of keys."""
-    live = _LiveChunks(24)
+    """A worker must not hold every column's keys before merging: at
+    OGS-00011 scale a chunk is dozens of columns of tens of millions of keys."""
+    live = _LiveRuns(24)
     monkeypatch.setattr(
-        hybrid_build, "_distinct_column_keys", lambda spill_dir, col, assembly: live.next()
+        hybrid_build, "_column_key_run", lambda spill_dir, col, assembly: live.next()
     )
     cols = tuple(range(24))
-    merged = hybrid_build._summarise_key_chunk((tmp_path, cols, ("hg38",) * 24))
+    out = hybrid_build._summarise_key_chunk(
+        (tmp_path, cols, ("hg38",) * 24, tmp_path / "keyrun.0.npz")
+    )
+    merged = read_run(out)
     assert len(live.live_counts) == 24, "the fixture must reach every column"
-    assert len(merged.values) == 200 + 23 * 50
+    assert merged.size == 200 + 23 * 50
     assert max(live.live_counts) <= 1, f"columns retained: {live.live_counts}"
 
 
 def test_off_reference_resolution_folds_worker_results_as_they_arrive(monkeypatch):
     """Review round 1 blocker: ``list(ordered_map(...))`` retained every worker
-    result in the parent before one all-at-once merge."""
-    live = _LiveChunks(32)
+    result in the parent before one all-at-once merge. Workers now return
+    spill paths; each must be loaded only when folded, and released after."""
+    live = _LiveRuns(32)
 
     def _fake_ordered_map(fn, items, n_workers, max_in_flight=None):
-        for _item in items:
-            yield live.next()
+        for item in items:
+            yield item[-1]
 
     monkeypatch.setattr(hybrid_build, "ordered_map", _fake_ordered_map)
-    rows = [SimpleNamespace(source_assembly="hg38") for _ in range(32)]
-    prepared = SimpleNamespace(spill_dir=Path("unused"), manifest_rows=rows)
-    options = SimpleNamespace(n_workers=8, liftover_failure_threshold=1.0, chain_file=None)
-    resolved = hybrid_build._resolve_off_reference_keys(prepared, options)
+    monkeypatch.setattr(hybrid_build, "_load_key_run", lambda path: live.next())
+    resolved = hybrid_build._resolve_off_reference_keys(
+        _key_prepared(Path("unused"), 32), _key_options(8)
+    )
     assert len(live.live_counts) == 32, "the fixture must yield one result per chunk task"
     assert resolved is not None
     assert len(resolved.keys) == 200 + 31 * 50
     assert max(live.live_counts) <= 1, f"worker results retained: {live.live_counts}"
+
+
+def test_off_reference_resolution_spills_and_removes_worker_results(tmp_path, monkeypatch):
+    """The worker result crosses the pool as a spill path; the parent reads it
+    back to the same keys and deletes the spill once loaded."""
+    run = _hg38_key_run(range(100, 400))
+    monkeypatch.setattr(hybrid_build, "_column_key_run", lambda spill_dir, col, assembly: run)
+    resolved = hybrid_build._resolve_off_reference_keys(
+        _key_prepared(tmp_path, 1), _key_options(1)
+    )
+    assert resolved is not None
+    np.testing.assert_array_equal(resolved.keys, run.values)
+    assert list(tmp_path.iterdir()) == [], "the key-run spill must be removed once read"
+
+
+def _write_unknown_spill(spill_dir: Path, col: int, raw_keys: list[str]) -> None:
+    """A column's ``.unk`` spill and side file, as Pass 2 writes them."""
+    encoded = encode_keys(raw_keys)
+    np.savez(
+        spill_dir / f"{col}.unk.npz",
+        keys=encoded.values,
+        hashed_index=encoded.hashed_index,
+    )
+    hybrid_build._write_unknown_side_file(spill_dir, col, encoded.hashed_raw)
+
+
+def test_off_reference_resolution_reads_hashed_raw_keys_after_the_merge(tmp_path):
+    """Runs carry no raw strings; each distinct hashed key's string is read
+    back from a column that declared it, so indels still canonicalise."""
+    _write_unknown_spill(tmp_path, 0, ["1:5:A:G", "1:7:CT:C"])
+    _write_unknown_spill(tmp_path, 1, ["1:7:CT:C", "2:9:GA:G", "1:5:A:G"])
+    resolved = hybrid_build._resolve_off_reference_keys(
+        _key_prepared(tmp_path, 2), _key_options(2)
+    )
+    assert resolved is not None
+    assert sorted(resolved.alids) == ["1:5:A:G", "1:7:C:CT", "2:9:G:GA"]
+    assert not [path for path in tmp_path.iterdir() if "keyrun" in path.name]
+
+
+def test_hashed_raw_read_pairs_each_value_with_its_own_raw_key(tmp_path):
+    """The side file is in row order, the requested values in sorted order;
+    each value must come back with its own raw key, not its neighbour's."""
+    raw = ["1:9:CT:C", "1:5:GA:G", "1:7:TA:T", "1:3:CA:C"]
+    _write_unknown_spill(tmp_path, 0, raw)
+    values = np.array([encode_key(key) for key in raw], dtype=np.uint64)
+    order = np.argsort(values)
+    assert order.tolist() != list(range(len(raw))), "the fixture's file order must differ"
+    wanted = np.sort(values)[1:3]
+    checks = np.array(
+        [check_hash(raw[index]) for index in order[1:3].tolist()], dtype=np.uint64
+    )
+    fetched = hybrid_build._column_hashed_raw((tmp_path, 0, wanted, checks))
+    assert [encode_key(key) for key in fetched] == wanted.tolist()
+
+
+def test_hashed_raw_read_refuses_a_side_file_that_no_longer_matches(tmp_path):
+    """The merge verified each hashed key by its check hash; reading the raw
+    key back must re-verify it rather than trust whatever the file now says."""
+    _write_unknown_spill(tmp_path, 0, ["1:7:CT:C"])
+    value = np.array([encode_key("1:7:CT:C")], dtype=np.uint64)
+    right = np.array([check_hash("1:7:CT:C")], dtype=np.uint64)
+    assert hybrid_build._column_hashed_raw((tmp_path, 0, value, right)) == ["1:7:CT:C"]
+    with pytest.raises(UnknownKeyEncodingError, match="no longer matches"):
+        hybrid_build._column_hashed_raw((tmp_path, 0, value, right + np.uint64(1)))
