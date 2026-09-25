@@ -13,6 +13,13 @@ here they are resolved -- liftover and canonicalisation once per *distinct*
 key -- into a :class:`KeyTable` the ``.unk`` → ``.ovf`` fold binary-searches
 rather than walking a dict. :class:`AlidIndex` maps ALIDs onto the shared axis
 without a ``str -> int`` dict over it.
+
+The merge's check hash only filters hash collisions early; the exact guarantee
+from #218 is :class:`CanonicalRawKeys`. It holds one raw key per distinct hashed
+value -- the one resolution used -- and the fold, which reads every column's
+side file anyway, compares every hashed row's raw key with it exactly. Two
+different raw keys sharing a value therefore always fail the build, naming
+both, whatever their check hashes.
 """
 
 from __future__ import annotations
@@ -36,12 +43,19 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
 __all__ = [
     "HG19",
     "HG38",
+    "RAW_KEY_DTYPE",
     "AlidIndex",
+    "CanonicalRawKeys",
     "DistinctKeys",
     "KeyTable",
     "ResolvedKeys",
+    "collision_message",
     "resolve_keys",
 ]
+
+# Variable-width NumPy strings for raw off-reference keys: ~21 bytes a key
+# against ~72 for a ``str`` in a list, and compared as whole arrays.
+RAW_KEY_DTYPE = np.dtypes.StringDType()
 
 
 @dataclass(frozen=True)
@@ -52,13 +66,67 @@ class DistinctKeys:
     every declaring assembly's bit). ``hashed_values`` is its hash-region
     subset, sorted, and ``hashed_raw`` the raw key of each -- read from the
     side files once the merge is done, because liftover and canonicalisation
-    need the string.
+    need the string. ``hashed_raw`` is a NumPy ``StringDType`` array: about 21
+    bytes a key where a list of ``str`` costs about 72.
     """
 
     values: np.ndarray
     assembly_bits: np.ndarray
     hashed_values: np.ndarray
-    hashed_raw: list[str]
+    hashed_raw: np.ndarray
+
+
+def collision_message(first: str, second: str, value: int) -> str:
+    """The build-failing message for two raw keys sharing one encoded value."""
+    return (
+        f"hash collision between off-reference keys {first!r} and {second!r} (both "
+        f"encode to {value}); refusing to merge them"
+    )
+
+
+@dataclass(frozen=True)
+class CanonicalRawKeys:
+    """One raw key per distinct hashed value: the exact collision check.
+
+    ``values`` is sorted and ``raw`` (``StringDType``) parallels it, holding
+    the key each value was resolved from. Every hashed row in every column must
+    carry exactly that key; anything else is a second raw key on the same
+    value -- a hash collision, whatever the check hashes said -- or a side file
+    that changed since the merge. Either fails the build loudly.
+    """
+
+    values: np.ndarray
+    raw: np.ndarray
+
+    def verify(self, column: int, values: np.ndarray, raws: np.ndarray) -> None:
+        """Refuse any of ``column``'s hashed rows whose raw key is not canonical.
+
+        ``values`` are the rows' encoded values and ``raws`` their raw keys
+        (``StringDType``), in the same order; compared as whole arrays.
+        """
+        if len(values) == 0:
+            return
+        if len(self.values) == 0:
+            raise UnknownKeyEncodingError(
+                f"column {column} has hashed off-reference key {str(raws[0])!r}, but the "
+                "build-wide key table has none; refusing to route it"
+            )
+        position = np.minimum(np.searchsorted(self.values, values), len(self.values) - 1)
+        absent = np.flatnonzero(self.values[position] != values)
+        if len(absent):
+            row = int(absent[0])
+            raise UnknownKeyEncodingError(
+                f"column {column} has hashed off-reference key {str(raws[row])!r}, which the "
+                "build-wide key table never saw; refusing to route it"
+            )
+        differ = np.flatnonzero(self.raw[position] != raws)
+        if len(differ):
+            row = int(differ[0])
+            raise UnknownKeyEncodingError(
+                collision_message(
+                    str(self.raw[position[row]]), str(raws[row]), int(values[row])
+                )
+            )
 
 
 @dataclass(frozen=True)
@@ -114,35 +182,40 @@ class AlidIndex:
 
     A hash hit is confirmed by comparing the axis string with the query, so a
     query absent from the axis fails loudly even if its hash happens to match
-    another ALID's. Two axis ALIDs sharing one hash would make the search
-    ambiguous; in that (astronomically rare) case the index falls back to a
-    dict rather than return another ALID's position.
+    another ALID's. Axis ALIDs that share a 64-bit hash are not rare at this
+    scale -- the birthday bound is about n^2 / 2^65, ~5e-5 for 45 million
+    ALIDs and ~1e-3 for a few hundred million -- so each such bucket is
+    resolved through a small exact map of just its members. Every other ALID
+    stays on the compact path; nothing axis-sized is ever built.
     """
 
     def __init__(self, axis: Sequence[str]) -> None:
         self._axis = np.asarray(axis, dtype=object)
-        self._fallback: dict[str, int] | None = None
         hashes = _string_hashes(axis)
         order = np.argsort(hashes, kind="stable")
         self._hashes = hashes[order]
         self._positions = order.astype(np.int64)
-        if bool((self._hashes[1:] == self._hashes[:-1]).any()):
-            self._fallback = {alid: index for index, alid in enumerate(axis)}
+        repeated = self._hashes[1:] == self._hashes[:-1]
+        self._shared_hashes = np.unique(self._hashes[1:][repeated])
+        bucketed = self._positions[np.isin(self._hashes, self._shared_hashes)]
+        self._bucket_members = {self._axis[at]: at for at in bucketed.tolist()}
+
+    @property
+    def n_bucketed(self) -> int:
+        """How many axis ALIDs share a hash with another, i.e. sit in the exact map."""
+        return len(self._bucket_members)
 
     def lookup(self, alids: Sequence[str]) -> np.ndarray:
         """The axis position of each ALID, in input order; absent ALIDs raise."""
         if not len(alids):
             return np.empty(0, dtype=np.int64)
-        if self._fallback is not None:
-            fallback = self._fallback
-            return np.fromiter(
-                (fallback[alid] for alid in alids), dtype=np.int64, count=len(alids)
-            )
         if not len(self._hashes):
             raise UnknownKeyEncodingError(f"ALID {alids[0]!r} is absent from an empty axis")
         queries = _string_hashes(alids)
         clipped = np.minimum(np.searchsorted(self._hashes, queries), len(self._hashes) - 1)
         positions = self._positions[clipped]
+        if len(self._shared_hashes):
+            self._resolve_buckets(alids, queries, positions)
         found = self._axis[positions] == np.asarray(alids, dtype=object)
         if not bool(found.all()):
             missing = alids[int(np.flatnonzero(~found)[0])]
@@ -150,6 +223,18 @@ class AlidIndex:
                 f"ALID {missing!r} is absent from the shared axis; refusing to guess its index"
             )
         return positions
+
+    def _resolve_buckets(
+        self, alids: Sequence[str], queries: np.ndarray, positions: np.ndarray
+    ) -> None:
+        """Overwrite, in place, the position of each query whose hash is shared
+        on the axis with its exact position; the binary search only found the
+        bucket. A query absent from the bucket keeps a position the caller's
+        string comparison then refuses."""
+        for query in np.flatnonzero(np.isin(queries, self._shared_hashes)).tolist():
+            exact = self._bucket_members.get(alids[query])
+            if exact is not None:
+                positions[query] = exact
 
 
 def _string_hashes(strings: Sequence[str]) -> np.ndarray:
@@ -180,7 +265,11 @@ def _hashed_raw_list(queries: np.ndarray, merged: DistinctKeys) -> list[str]:
         raise UnknownKeyEncodingError(
             "a hashed off-reference key has no raw side-file key; refusing to resolve it"
         )
-    return [merged.hashed_raw[int(index)] for index in side]
+    raw = merged.hashed_raw
+    if not isinstance(raw, np.ndarray):
+        raw = np.asarray(raw, dtype=RAW_KEY_DTYPE)
+    raws: list[str] = raw[side].tolist()
+    return raws
 
 
 def _origins(

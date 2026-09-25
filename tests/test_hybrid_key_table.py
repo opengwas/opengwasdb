@@ -39,7 +39,9 @@ def _distinct(*declared: tuple[str, int]) -> DistinctKeys:
         values=values,
         assembly_bits=np.array([by_value[v][1] for v in values.tolist()], dtype=np.int8),
         hashed_values=hashed,
-        hashed_raw=[by_value[v][0] for v in hashed.tolist()],
+        hashed_raw=np.array(
+            [by_value[v][0] for v in hashed.tolist()], dtype=key_table.RAW_KEY_DTYPE
+        ),
     )
 
 
@@ -100,6 +102,29 @@ def test_resolve_keys_keeps_two_hg38_keys_on_one_alid() -> None:
     assert resolved.alids == ["1:5:A:G", "1:5:A:G"]
 
 
+def test_canonical_raw_keys_verify_detects_hash_collision_naming_both_keys() -> None:
+    canonical = key_table.CanonicalRawKeys(
+        values=np.array([100, 200], dtype=np.uint64),
+        raw=np.array(["1:100:A:AT", "1:200:C:CT"], dtype=key_table.RAW_KEY_DTYPE),
+    )
+    # Matching keys pass
+    canonical.verify(
+        column=0,
+        values=np.array([100, 200], dtype=np.uint64),
+        raws=np.array(["1:100:A:AT", "1:200:C:CT"], dtype=key_table.RAW_KEY_DTYPE),
+    )
+    # Colliding raw key on value 200 fails naming both
+    with pytest.raises(UnknownKeyEncodingError) as excinfo:
+        canonical.verify(
+            column=1,
+            values=np.array([100, 200], dtype=np.uint64),
+            raws=np.array(["1:100:A:AT", "1:200:C:CA"], dtype=key_table.RAW_KEY_DTYPE),
+        )
+    assert "'1:200:C:CT'" in str(excinfo.value)
+    assert "'1:200:C:CA'" in str(excinfo.value)
+    assert "200" in str(excinfo.value)
+
+
 def _length_hashes(strings: Sequence[str]) -> np.ndarray:
     """A deliberately colliding hash: every string of one length shares it."""
     return np.array([len(value) for value in strings], dtype=np.uint64)
@@ -132,9 +157,49 @@ def test_alid_index_refuses_an_absent_alid_whose_hash_matches_the_axis(monkeypat
 def test_alid_index_resolves_axis_alids_that_share_a_hash(monkeypatch) -> None:
     monkeypatch.setattr(key_table, "_string_hashes", _length_hashes)
     axis = ["1:5:A:G", "1:9:C:T", "10:5:A:G"]
+    index = key_table.AlidIndex(axis)
     np.testing.assert_array_equal(
-        key_table.AlidIndex(axis).lookup(["1:9:C:T", "10:5:A:G", "1:5:A:G"]), [1, 2, 0]
+        index.lookup(["1:9:C:T", "10:5:A:G", "1:5:A:G"]), [1, 2, 0]
     )
+    assert index.n_bucketed == 2
+
+
+def test_alid_index_collision_allocates_only_colliding_buckets_never_whole_axis(
+    monkeypatch,
+) -> None:
+    """Review round 2 major: AlidIndex must handle only colliding buckets,
+    never allocate a whole-axis dict."""
+    axis = [f"1:{i}:A:G" for i in range(50)]
+
+    def _mock_hashes(strings: Sequence[str]) -> np.ndarray:
+        hashes = []
+        for s in strings:
+            if s in ("1:3:A:G", "1:7:A:G"):
+                hashes.append(42)
+            else:
+                hashes.append(1000 + int(s.split(":")[1]))
+        return np.array(hashes, dtype=np.uint64)
+
+    monkeypatch.setattr(key_table, "_string_hashes", _mock_hashes)
+    index = key_table.AlidIndex(axis)
+    assert index.n_bucketed == 2
+    assert not hasattr(index, "_fallback")
+    assert set(index._bucket_members.keys()) == {"1:3:A:G", "1:7:A:G"}
+    queries = ["1:7:A:G", "1:0:A:G", "1:3:A:G", "1:49:A:G"]
+    np.testing.assert_array_equal(index.lookup(queries), [7, 0, 3, 49])
+
+    def _mock_hashes_with_absent(strings: Sequence[str]) -> np.ndarray:
+        hashes = []
+        for s in strings:
+            if s in ("1:3:A:G", "1:7:A:G", "1:absent:A:G"):
+                hashes.append(42)
+            else:
+                hashes.append(1000 + int(s.split(":")[1]))
+        return np.array(hashes, dtype=np.uint64)
+
+    monkeypatch.setattr(key_table, "_string_hashes", _mock_hashes_with_absent)
+    with pytest.raises(UnknownKeyEncodingError, match="1:absent:A:G"):
+        index.lookup(["1:absent:A:G"])
 
 
 def test_drop_unresolved_keeps_only_resolved_keys_in_step() -> None:

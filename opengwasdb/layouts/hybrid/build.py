@@ -30,7 +30,7 @@ from concurrent.futures import as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 
@@ -86,10 +86,13 @@ from opengwasdb.layouts.hybrid.key_runs import (
     write_run,
 )
 from opengwasdb.layouts.hybrid.key_table import (
+    RAW_KEY_DTYPE,
     AlidIndex,
+    CanonicalRawKeys,
     DistinctKeys,
     KeyTable,
     ResolvedKeys,
+    collision_message,
     resolve_keys,
 )
 from opengwasdb.layouts.hybrid.layout import (
@@ -102,6 +105,7 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     check_hash,
     encode_keys,
     is_hashed,
+    placed_hashed_values,
     validated_hashed_values,
 )
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -1121,6 +1125,8 @@ def _collision_message(spill_dir: Path, collision: HashedKeyCollision) -> str:
         for value, raw in zip(loaded.hashed_values.tolist(), loaded.hashed_raw, strict=True):
             if value == collision.value and raw not in raws:
                 raws.append(raw)
+    if len(raws) == 2:
+        return collision_message(raws[0], raws[1], collision.value)
     named = " and ".join(repr(raw) for raw in raws)
     return (
         f"hash collision between off-reference keys {named} (both encode to "
@@ -1162,11 +1168,13 @@ def _column_hashed_raw(task: _HashedRawTask) -> list[str]:
     return raws
 
 
-def _fetch_hashed_raw(spill_dir: Path, merged: KeyRun, n_workers: int) -> list[str]:
+def _fetch_hashed_raw(spill_dir: Path, merged: KeyRun, n_workers: int) -> np.ndarray:
     """The raw key of every distinct hashed key, from its lowest declaring column.
 
     One task per origin column, in parallel; each hashed key's string is read
-    once, after the merge, instead of being carried through it.
+    once, after the merge, instead of being carried through it. Returned as a
+    ``RAW_KEY_DTYPE`` array parallel to ``merged.hashed_values``: it is kept
+    through the fold as the canonical key of each value.
     """
     origin = merged.hashed_origin
     order = np.argsort(origin, kind="stable")
@@ -1177,24 +1185,47 @@ def _fetch_hashed_raw(spill_dir: Path, merged: KeyRun, n_workers: int) -> list[s
         (spill_dir, int(col), merged.hashed_values[group], merged.hashed_check[group])
         for col, group in zip(cols.tolist(), groups, strict=True)
     )
-    raw: list[str | None] = [None] * len(origin)
+    raw = np.empty(len(origin), dtype=RAW_KEY_DTYPE)
+    filled = np.zeros(len(origin), dtype=bool)
     for group, raws in zip(groups, ordered_map(_column_hashed_raw, tasks, n_workers), strict=True):
-        for position, value in zip(group.tolist(), raws, strict=True):
-            raw[position] = value
-    if any(value is None for value in raw):
+        raw[group] = np.array(raws, dtype=RAW_KEY_DTYPE)
+        filled[group] = True
+    if not bool(filled.all()):
         raise UnknownKeyEncodingError("a merged hashed key has no raw side-file key")
-    return cast(list[str], raw)
+    return raw
+
+
+@dataclass(frozen=True)
+class _OffReferenceKeys:
+    """The resolved off-reference keys, and the canonical raw key of every
+    distinct hashed one -- which the fold checks each column's rows against."""
+
+    resolved: ResolvedKeys
+    canonical: CanonicalRawKeys
+
+    @property
+    def keys(self) -> np.ndarray:
+        return self.resolved.keys
+
+    @property
+    def alids(self) -> list[str]:
+        return self.resolved.alids
+
+    @property
+    def origins(self) -> list[str | None]:
+        return self.resolved.origins
 
 
 def _resolve_off_reference_keys(
     prepared: _PreparedBuild, options: _BuildOptions
-) -> ResolvedKeys | None:
+) -> _OffReferenceKeys | None:
     """Resolve build-wide distinct off-reference keys to hg38 ALIDs, in parallel.
 
     Workers reduce column chunks to key runs; the parent merges them, reads
     the distinct hashed keys' raw strings, and resolves once per distinct key.
-    ``None`` means there was nothing to resolve, the same early return the
-    dict-based resolution took.
+    ``None`` means no column spilled an off-reference key. The resolved keys
+    can be empty (every key dropped); the canonical raw keys are returned
+    either way, because every column's hashed rows must still be checked.
     """
     merged = _merge_key_runs(prepared, options.n_workers)
     if merged is None:
@@ -1211,7 +1242,8 @@ def _resolve_off_reference_keys(
         liftover_failure_threshold=options.liftover_failure_threshold,
         chain_file=options.chain_file,
     )
-    return resolved if len(resolved.keys) else None
+    canonical = CanonicalRawKeys(values=distinct.hashed_values, raw=distinct.hashed_raw)
+    return _OffReferenceKeys(resolved=resolved, canonical=canonical)
 
 
 def _unknown_origins(resolved: ResolvedKeys) -> dict[str, str | None]:
@@ -1259,18 +1291,24 @@ def _append_overflow_spill(
     np.savez(overflow_path, variant_index=idx, z=z, se=se, eaf=eaf)
 
 
-def _merge_unknown_column(spill_dir: Path, col: int, table: KeyTable) -> None:
+def _merge_unknown_column(
+    spill_dir: Path, col: int, table: KeyTable, canonical: CanonicalRawKeys
+) -> None:
     """Fold one column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices.
 
     Keys that failed liftover (or were declared on two assemblies) are absent
     from the table and their associations are dropped with them. The lookup is
     one ``np.searchsorted`` over the whole column, never a per-key Python dict
-    (ticket #222).
+    (ticket #222). Before any row is routed, every hashed row's raw key is
+    compared exactly with its value's canonical key, so a hash collision fails
+    the build rather than sending one key's statistics to another's variant.
     """
     path = spill_dir / f"{col}.unk.npz"
     if path.exists():
         with np.load(path) as data:
             keys, z, se, eaf = data["keys"], data["z"], data["se"], data["eaf"]
+            hashed_index = data["hashed_index"]
+        _verify_hashed_rows(spill_dir, col, keys, hashed_index, canonical)
         shared, matched = table.lookup(keys)
         if bool(matched.any()):
             _append_overflow_spill(
@@ -1278,6 +1316,25 @@ def _merge_unknown_column(spill_dir: Path, col: int, table: KeyTable) -> None:
             )
     path.unlink(missing_ok=True)
     _unknown_side_path(spill_dir, col).unlink(missing_ok=True)
+
+
+def _verify_hashed_rows(
+    spill_dir: Path,
+    col: int,
+    keys: np.ndarray,
+    hashed_index: np.ndarray,
+    canonical: CanonicalRawKeys,
+) -> None:
+    """Check each of one column's hashed rows carries its value's canonical raw key.
+
+    The exact half of the build-wide collision guarantee (#218, ticket #222
+    review round 2): the merge's check hash only filters, and two keys can
+    collide on both hashes. The side file is already this column's to read,
+    so the check costs no extra pass over the spills.
+    """
+    raws = _read_unknown_side_file(spill_dir, col)
+    values = placed_hashed_values(keys, hashed_index, raws)
+    canonical.verify(col, values, np.array(raws, dtype=RAW_KEY_DTYPE))
 
 
 def _remap_overflow_spills(prepared: _PreparedBuild, index: AlidIndex) -> None:
@@ -1305,10 +1362,17 @@ def _remap_overflow_spills(prepared: _PreparedBuild, index: AlidIndex) -> None:
         np.savez(path, variant_index=remapped, z=z, se=se, eaf=eaf)
 
 
-def _merge_unknown_spills(prepared: _PreparedBuild, table: KeyTable) -> None:
+def _merge_unknown_spills(
+    prepared: _PreparedBuild, table: KeyTable, canonical: CanonicalRawKeys
+) -> None:
     """Fold every column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices."""
     for col in range(prepared.n_analyses):
-        _merge_unknown_column(prepared.spill_dir, col, table)
+        _merge_unknown_column(prepared.spill_dir, col, table, canonical)
+
+
+_EMPTY_KEY_TABLE = KeyTable(
+    keys=np.empty(0, dtype=np.uint64), shared_index=np.empty(0, dtype=np.int64)
+)
 
 
 def _finalise_reference_partition(
@@ -1326,8 +1390,14 @@ def _finalise_reference_partition(
     """
     if options.variant_reference is None:
         return prepared
-    resolved = _resolve_off_reference_keys(prepared, options)
-    if resolved is None:
+    off_reference = _resolve_off_reference_keys(prepared, options)
+    if off_reference is None:
+        return prepared
+    resolved = off_reference.resolved
+    if not len(resolved.keys):
+        # Nothing joins the axis, but every hashed row is still checked exactly;
+        # the fold then drops the unresolved rows as it always did.
+        _merge_unknown_spills(prepared, _EMPTY_KEY_TABLE, off_reference.canonical)
         return prepared
     unknown_alids = set(resolved.alids)
     off_panel = _sorted_alids(set(prepared.partition.off_panel_alids) | unknown_alids)
@@ -1341,7 +1411,7 @@ def _finalise_reference_partition(
     # Existing overflow entries carry the *initial* axis's indices; translate
     # them before mixing in the off-reference entries keyed to the new one.
     _remap_overflow_spills(prepared, index)
-    _merge_unknown_spills(prepared, table)
+    _merge_unknown_spills(prepared, table, off_reference.canonical)
     dense_to_shared = index.lookup(panel).astype(np.int32)
     np.save(dense_to_shared_path(prepared.staged.path), dense_to_shared)
     hg38_to_source = _merge_unknown_provenance(prepared.hg38_to_source, resolved)

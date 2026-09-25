@@ -264,13 +264,16 @@ the end of this file.
   The merge carries numbers only: each hashed key's raw string is replaced by
   an independent 64-bit check hash (`unknown_keys.check_hash`) and the column
   that first declared it, and the strings are read back from the side files
-  once, after the merge, and re-verified. No ALID → shared-index dict over the
-  whole axis is built or kept through Pass 2 and consolidation (a sorted hash
-  index replaces it). The two-assembly drop, the
-  liftover-failure drop, an off-reference ALID joining an existing on-reference
-  one, and the `hg38_to_source` collision blanking are unchanged, and the
-  build-wide hash guarantee from #218 still fails a collision naming both keys
-  (#222).
+  once, after the merge, and re-verified. Every hashed row in every column is
+  verified against its value's canonical raw key before routing, guaranteeing
+  that two raw keys sharing an encoded value fail the build naming both keys even
+  if both hashes collide. No ALID → shared-index dict over the whole axis is built
+  or kept through Pass 2 and consolidation (a sorted hash index replaces it,
+  resolving colliding buckets through a small exact map of their members only).
+  The two-assembly drop, the liftover-failure drop, an off-reference ALID joining
+  an existing on-reference one, and the `hg38_to_source` collision blanking are
+  unchanged, and the build-wide hash guarantee from #218 still fails a collision
+  naming both keys (#222).
 - **Non-autosomal chromosome spellings now share one canonical ALID identity**:
   source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
   explicit canonical labels `X`, `Y`, and `MT` respectively in every reader

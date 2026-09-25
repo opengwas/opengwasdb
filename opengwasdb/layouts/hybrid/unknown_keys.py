@@ -44,6 +44,7 @@ __all__ = [
     "encode_key",
     "encode_keys",
     "hashed_lookup",
+    "placed_hashed_values",
     "validated_hashed_values",
     "is_hashed",
     "pack_key",
@@ -109,10 +110,12 @@ def check_hash(key: str) -> int:
     """A 64-bit hash of a raw key, independent of the one that encodes it.
 
     The build-wide key merge carries this instead of the raw string (ticket
-    #222): two different raw keys that share an encoded value differ here
-    unless both hashes collide at once, so the merge can refuse the collision
-    without holding tens of millions of strings. Deliberately not routed
-    through ``_stable_hash``, so a test that forces value collisions still sees
+    #222) as a fast, early filter: two different raw keys that share an
+    encoded value almost always differ here, so the merge refuses most
+    collisions before resolution starts. It is not the guarantee -- two keys
+    can collide on both hashes -- so the ``.unk`` fold still compares every
+    hashed row's raw key exactly. Deliberately not routed through
+    ``_stable_hash``, so a test that forces value collisions still sees
     distinct checks.
     """
     digest = hashlib.blake2b(key.encode("utf-8"), digest_size=8, person=b"ogdb-key-check").digest()
@@ -273,16 +276,16 @@ def hashed_lookup(
     return lookup
 
 
-def validated_hashed_values(
+def placed_hashed_values(
     values: np.ndarray, hashed_index: np.ndarray, hashed_raw: Sequence[str]
 ) -> np.ndarray:
-    """The encoded value each side-file row names, in side-file order, validated.
+    """The encoded value each side-file row names, in side-file order.
 
-    ``hashed_lookup``'s checks without its dict: every tagged row named exactly
-    once, and every raw key re-encoding to its row's stored value. Two rows
-    naming one value with different raw keys is left to the caller's collision
-    check (``hashed_lookup``, or the key table's run comparison, ticket #222),
-    which is what lets the key-table workers skip a per-row Python dict.
+    Only the placement is checked: every tagged row named exactly once, and no
+    packed row named. Whether each raw key really is its row's key is the
+    caller's to prove -- by re-encoding it (``validated_hashed_values``) or by
+    comparing it exactly with a key already proven for that value (the
+    off-reference fold, ticket #222).
     """
     if len(hashed_index) != len(hashed_raw):
         raise UnknownKeyEncodingError(
@@ -296,6 +299,23 @@ def validated_hashed_values(
             "the raw keys cannot be placed"
         )
     named: np.ndarray = values[positions]
+    return named
+
+
+def validated_hashed_values(
+    values: np.ndarray, hashed_index: np.ndarray, hashed_raw: Sequence[str]
+) -> np.ndarray:
+    """The encoded value each side-file row names, in side-file order, validated.
+
+    ``hashed_lookup``'s checks without its dict: every tagged row named exactly
+    once, and every raw key re-encoding to its row's stored value. Two rows
+    naming one value with different raw keys is left to the caller's collision
+    check (``hashed_lookup``, or the off-reference fold's exact comparison,
+    ticket #222), which is what lets the key-table workers skip a per-row
+    Python dict.
+    """
+    named = placed_hashed_values(values, hashed_index, hashed_raw)
+    positions = np.asarray(hashed_index, dtype=np.int64)
     # A side file can pair a row with a real key that belongs to a different
     # row; re-deriving the encoding is the only way to prove the pair. This is
     # cheap next to the lookup it guards and refuses a swapped, stale or
