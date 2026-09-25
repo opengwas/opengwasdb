@@ -50,6 +50,7 @@ __all__ = [
     "KeyTable",
     "ResolvedKeys",
     "collision_message",
+    "lookup_matched",
     "resolve_keys",
 ]
 
@@ -158,14 +159,62 @@ class KeyTable:
         """``(shared index, matched)`` for each query key, vectorised.
 
         A missing key gets index ``0`` and ``matched=False``; callers must use
-        the mask, never the index, for a miss.
+        the mask, never the index, for a miss. Query keys are sorted before
+        ``searchsorted`` for memory locality and CPU throughput (#217, #223).
         """
+        n = len(keys)
+        if n == 0:
+            return np.empty(0, dtype=np.int64), np.empty(0, dtype=bool)
         if len(self.keys) == 0:
-            return np.zeros(len(keys), dtype=np.int64), np.zeros(len(keys), dtype=bool)
-        position = np.searchsorted(self.keys, keys)
+            return np.zeros(n, dtype=np.int64), np.zeros(n, dtype=bool)
+        order = np.argsort(keys, kind="stable")
+        sorted_keys = keys[order]
+        position = np.searchsorted(self.keys, sorted_keys)
         clipped = np.minimum(position, len(self.keys) - 1)
-        matched = self.keys[clipped] == keys
-        return self.shared_index[clipped], matched
+        matched_sorted = self.keys[clipped] == sorted_keys
+        rev = np.empty_like(order)
+        rev[order] = np.arange(n)
+        shared = np.zeros(n, dtype=np.int64)
+        shared[order[matched_sorted]] = self.shared_index[clipped[matched_sorted]]
+        return shared, matched_sorted[rev]
+
+    def lookup_matched(self, keys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Return ``(keep_indices, shared_index)`` for matched keys in stream order.
+
+        Unmatched keys are dropped without allocating full-sized query arrays.
+        """
+        return lookup_matched(self.keys, self.shared_index, keys)
+
+
+def lookup_matched(
+    table_keys: np.ndarray,
+    table_shared_index: np.ndarray,
+    keys: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Find matched query keys in a sorted key table using vectorized searchsorted.
+
+    Returns ``(keep_indices, shared_index)`` where:
+    - ``keep_indices``: indices into the query ``keys`` array in original stream order;
+    - ``shared_index``: corresponding shared Variant Index for each kept key.
+
+    Unmatched keys are dropped. To maximize cache efficiency and CPU throughput
+    against large tables, query keys are sorted before ``searchsorted`` (#217, #223).
+    """
+    if len(keys) == 0 or len(table_keys) == 0:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+    order = np.argsort(keys, kind="stable")
+    sorted_keys = keys[order]
+    pos = np.searchsorted(table_keys, sorted_keys)
+    clipped = np.minimum(pos, len(table_keys) - 1)
+    matched = table_keys[clipped] == sorted_keys
+    if not bool(matched.any()):
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+    matched_order_idx = np.flatnonzero(matched)
+    matched_orig_idx = order[matched_order_idx]
+    stream_order = np.argsort(matched_orig_idx, kind="stable")
+    keep_indices = matched_orig_idx[stream_order]
+    shared = table_shared_index[clipped[matched_order_idx[stream_order]]]
+    return keep_indices, shared
 
 
 _UINT64_MASK = (1 << 64) - 1

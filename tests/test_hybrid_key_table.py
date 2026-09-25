@@ -20,6 +20,7 @@ from opengwasdb.layouts.hybrid.key_table import (
     HG38,
     DistinctKeys,
     KeyTable,
+    lookup_matched,
     resolve_keys,
 )
 from opengwasdb.layouts.hybrid.unknown_keys import (
@@ -220,3 +221,49 @@ def test_drop_unresolved_reuses_the_lists_when_every_key_resolved() -> None:
     resolved = key_table._drop_unresolved(np.array([1, 2], dtype=np.uint64), alids, origins)
     assert resolved.alids is alids
     assert resolved.origins is origins
+
+
+def test_lookup_matched_reports_matches_in_stream_order() -> None:
+    """Ticket #223: query keys are looked up after sorting, but results must
+    be returned in original stream order, with unmatched keys dropped."""
+    table = KeyTable(
+        keys=np.array([10, 20, 50], dtype=np.uint64),
+        shared_index=np.array([100, 200, 500], dtype=np.int64),
+    )
+    keys = np.array([30, 10, 50, 20], dtype=np.uint64)
+    keep, shared = table.lookup_matched(keys)
+    np.testing.assert_array_equal(keep, [1, 2, 3])
+    np.testing.assert_array_equal(shared, [100, 500, 200])
+    # Also verify standalone function directly
+    keep_fn, shared_fn = lookup_matched(table.keys, table.shared_index, keys)
+    np.testing.assert_array_equal(keep_fn, keep)
+    np.testing.assert_array_equal(shared_fn, shared)
+
+
+def test_lookup_matched_empty_table_or_keys() -> None:
+    table = KeyTable(
+        keys=np.empty(0, dtype=np.uint64),
+        shared_index=np.empty(0, dtype=np.int64),
+    )
+    keep, shared = table.lookup_matched(np.array([1, 2], dtype=np.uint64))
+    assert len(keep) == 0
+    assert len(shared) == 0
+
+    non_empty_table = KeyTable(
+        keys=np.array([10], dtype=np.uint64),
+        shared_index=np.array([100], dtype=np.int64),
+    )
+    keep, shared = non_empty_table.lookup_matched(np.empty(0, dtype=np.uint64))
+    assert len(keep) == 0
+    assert len(shared) == 0
+
+
+def test_lookup_matched_duplicate_and_unsorted_query_keys() -> None:
+    table = KeyTable(
+        keys=np.array([10, 20, 50], dtype=np.uint64),
+        shared_index=np.array([100, 200, 500], dtype=np.int64),
+    )
+    keys = np.array([50, 10, 20, 10], dtype=np.uint64)
+    keep, shared = table.lookup_matched(keys)
+    np.testing.assert_array_equal(keep, [0, 1, 2, 3])
+    np.testing.assert_array_equal(shared, [500, 100, 200, 100])
