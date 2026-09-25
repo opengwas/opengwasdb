@@ -242,6 +242,18 @@ the end of this file.
   Top-Hit Index and the `float16` narrowing remain serial and are logged; they
   reduce whole flat arrays or make one zarr write, so their profiling evidence
   is recorded on the issue instead of a forced pool.
+- **Off-reference key resolution builds a sorted `uint64` table, not two Python
+  dicts**: a `--variant-reference` Hybrid build resolves every Pass 2
+  off-reference key to its hg38 ALID and shared Variant Index through a sorted
+  key array built in parallel (`ordered_map`), with liftover and canonicalisation
+  run once per *distinct* key rather than once per association. The dict-based
+  resolution inserted every association into a raw-key → assembly and a raw-key →
+  ALID dict (~15 billion inserts on OGS-00011); the table's `.unk` → `.ovf` fold
+  is now one `np.searchsorted` per column. The two-assembly drop, the
+  liftover-failure drop, an off-reference ALID joining an existing on-reference
+  one, and the `hg38_to_source` collision blanking are unchanged, and the
+  build-wide hash guarantee from #218 still fails a collision naming both keys
+  (#222).
 - **Non-autosomal chromosome spellings now share one canonical ALID identity**:
   source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
   explicit canonical labels `X`, `Y`, and `MT` respectively in every reader

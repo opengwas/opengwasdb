@@ -1377,6 +1377,123 @@ class TestVariantReference:
             "1:3000000:C:CA",
         )
 
+    def test_off_reference_key_declared_on_two_assemblies_is_dropped(self, tmp_path):
+        """The same raw key named hg19 in one Analysis and hg38 in another names
+        two different physical loci. The sorted key table must drop it rather
+        than pick an assembly -- the rule the dict-based resolution applied."""
+        reference = _write_reference_artifact(
+            tmp_path, _hybrid_manifest(tmp_path), panel_only=True
+        )
+        vcf_hg19 = _make_vcf(
+            tmp_path, "two_asm_hg19", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
+        )
+        vcf_hg38 = _make_vcf(
+            tmp_path, "two_asm_hg38", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t2.0:0.4\n"]
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path,
+            [
+                ("two_asm_hg19", vcf_hg19, "hg19 row", ""),
+                ("two_asm_hg38", vcf_hg38, "hg38 row", "hg38"),
+            ],
+        )
+        store = tmp_path / "two-assembly.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r"
+        )
+
+        assert result.n_panel == 2
+        assert result.n_off_panel == 0, "the ambiguous key must resolve to nothing"
+        assert result.n_overflow == 0, "its associations must be dropped with it"
+        assert validate_store(store).ok
+
+    def test_off_reference_key_joining_an_on_reference_alid_blanks_its_provenance(
+        self, tmp_path
+    ):
+        """An off-reference key that lifts onto an ALID Pass 1 already knew is not
+        a new shared variant. Its source coordinate disagrees with the one Pass 1
+        recorded, so the variant table must write no source_alid (issue #85)
+        rather than misattribute one row's association to the other's variant."""
+        from opengwasdb.variants.axis import iter_variant_records
+
+        # The reference names ALID_1 and ALID_2 directly as hg38 source keys, so
+        # Pass 1 knows ALID_2; the panel keeps only ALID_1, which makes ALID_2 an
+        # on-reference off-panel variant rather than an off-reference discovery.
+        vcf_ref = _make_vcf(
+            tmp_path,
+            "join_ref_hg38",
+            [
+                "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.2\n",
+                "1\t1064620\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0.2\n",
+            ],
+        )
+        ref_manifest = _manifest_with_source_assembly(
+            tmp_path, [("join_ref", vcf_ref, "Ref", "hg38")]
+        )
+        reference = _write_reference_artifact(tmp_path, ref_manifest)
+        vcf_join = _make_vcf(
+            tmp_path, "join_hg19", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("join_hg19", vcf_join, "Join", "")]
+        )
+        panel = tmp_path / "join-panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
+        store = tmp_path / "join.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, reference_panel=panel, variant_reference=reference,
+            store_id="s", release_id="r",
+        )
+
+        assert result.n_panel == 1
+        assert result.n_off_panel == 1, "ALID_2 is on-reference but off-panel"
+        assert result.n_overflow == 1
+        validation = validate_store(store)
+        assert validation.ok, validation.errors
+        rows = {r.alid: r for r in iter_variant_records(store / "variants.tsv.gz")}
+        assert set(rows) == {HG38_ALID_1, HG38_ALID_2}
+        assert rows[HG38_ALID_2].source_alid is None
+
+    def test_two_off_reference_raw_keys_join_one_new_alid(self, tmp_path):
+        """Two raw keys from different assemblies can name one physical variant: an
+        hg19 key that lifts onto an hg38 coordinate and an hg38 key written
+        directly. Both must route to the one stored variant, and their disagreeing
+        origins must blank its source_alid rather than record either."""
+        from opengwasdb.variants.axis import iter_variant_records
+
+        reference = _write_reference_artifact(
+            tmp_path, _hybrid_manifest(tmp_path), panel_only=True
+        )
+        vcf_hg19 = _make_vcf(
+            tmp_path, "same_hg19", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
+        )
+        vcf_hg38 = _make_vcf(
+            tmp_path, "same_hg38", ["1\t1064620\t.\tC\tT\t.\tPASS\t.\tES:SE\t2.0:0.4\n"]
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path,
+            [
+                ("same_hg19", vcf_hg19, "hg19 row", ""),
+                ("same_hg38", vcf_hg38, "hg38 row", "hg38"),
+            ],
+        )
+        store = tmp_path / "same.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r"
+        )
+
+        assert result.n_panel == 2
+        assert result.n_off_panel == 1, "both raw keys resolve onto one new variant"
+        assert result.n_overflow == 2, "both Analyses' associations route to it"
+        validation = validate_store(store)
+        assert validation.ok, validation.errors
+        rows = {r.alid: r for r in iter_variant_records(store / "variants.tsv.gz")}
+        assert set(rows) == {HG38_ALID_1, HG38_ALID_2, HG38_ALID_3}
+        assert rows[HG38_ALID_2].source_alid is None
+
     def test_manifest_records_the_variant_reference(self, tmp_path):
         manifest = _hybrid_manifest(tmp_path)
         reference = _write_reference_artifact(tmp_path, manifest)

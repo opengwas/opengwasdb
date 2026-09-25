@@ -39,7 +39,7 @@ from opengwasdb.build.eaf_orientation import (
     site_hashes,
     verify_eaf_orientation,
 )
-from opengwasdb.build.liftover import LiftoverFailureError, build_liftover_lookup
+from opengwasdb.build.liftover import LiftoverFailureError
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import (
     EncodingMeasurements,
@@ -74,15 +74,23 @@ from opengwasdb.layouts.dense.constants import (
     DEFAULT_DTYPE,
 )
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
+from opengwasdb.layouts.hybrid.key_table import (
+    HG19,
+    HG38,
+    ChunkKeys,
+    KeyTable,
+    ResolvedKeys,
+    merge_chunks,
+    resolve_keys,
+)
 from opengwasdb.layouts.hybrid.layout import (
     DENSE_SUBDIR,
     dense_component_path,
     dense_to_shared_path,
 )
 from opengwasdb.layouts.hybrid.unknown_keys import (
-    UnknownKeyEncodingError,
-    decode_spill,
     encode_keys,
+    hashed_lookup,
     is_hashed,
 )
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -927,17 +935,6 @@ def _write_dense_component_skeleton(
     return dense_to_shared
 
 
-def _parse_source_key(key: str) -> tuple[str, int, str, str]:
-    chrom, position, ref, alt = key.split(":")
-    return chrom, int(position), ref, alt
-
-
-def _canonical_key(key: str) -> str:
-    chrom, position, ref, alt = _parse_source_key(key)
-    a1, a2 = sorted((ref, alt))
-    return f"{chrom}:{position}:{a1}:{a2}"
-
-
 def _unknown_side_path(spill_dir: Path, col: int) -> Path:
     """The per-column side file holding raw keys for the hashed entries."""
     return spill_dir / f"{col}.unk.raw"
@@ -963,130 +960,135 @@ def _read_unknown_side_file(spill_dir: Path, col: int) -> list[str]:
 
 
 @dataclass(frozen=True)
-class _UnknownSpill:
-    """One column's off-reference spill with its keys decoded to raw strings.
+class _UnknownKeySpill:
+    """One column's ``.unk.npz`` keys and the raw strings of its hashed half.
 
-    ``hashed_entries`` is the column's ``{encoded value: raw key}`` map, kept so
-    the build-wide collision check can span every column without re-reading the
-    side files (issue #218 review).
+    Only the distinct keys and the side-file strings are needed to resolve the
+    build-wide table; the association arrays are left on disk until the fold
+    (ticket #222), so this deliberately does not decode every row.
     """
 
-    z: np.ndarray
-    se: np.ndarray
-    eaf: np.ndarray
-    raw_keys: list[str]
+    keys: np.ndarray
     hashed_entries: dict[int, str]
 
 
-def _load_unknown_spill(spill_dir: Path, col: int) -> _UnknownSpill | None:
-    """Read one column's ``.unk`` spill; ``None`` when the column spilled none.
+def _load_unknown_key_spill(spill_dir: Path, col: int) -> _UnknownKeySpill | None:
+    """Read one column's encoded keys and validated hashed raw-key lookup.
 
-    The keys are uint64 by contract (issue #218) -- no pickle -- and a hashed
-    key whose side-file entry is missing raises in ``decode_spill`` rather than
-    silently shrinking the column.
+    The keys are uint64 by contract (issue #218) -- no pickle -- and
+    ``hashed_lookup`` refuses a side file that does not name every tagged row
+    exactly once, so a corrupt spill fails here rather than resolving a shorter,
+    plausible key set.
     """
     path = spill_dir / f"{col}.unk.npz"
     if not path.exists():
         return None
     with np.load(path) as data:
         keys = data["keys"]
-        z, se, eaf = data["z"], data["se"], data["eaf"]
         hashed_index = data["hashed_index"]
-    raw_keys, hashed_entries = decode_spill(
-        keys, hashed_index, _read_unknown_side_file(spill_dir, col)
-    )
-    return _UnknownSpill(
-        z=z, se=se, eaf=eaf, raw_keys=raw_keys, hashed_entries=hashed_entries
-    )
+    entries = hashed_lookup(keys, hashed_index, _read_unknown_side_file(spill_dir, col))
+    return _UnknownKeySpill(keys=keys, hashed_entries=entries)
 
 
-def _record_hashed_keys(seen: dict[int, str], spill: _UnknownSpill) -> None:
-    """Merge one column's hashed keys into the build-wide map, refusing collisions.
+def _assembly_bit(assembly: str) -> int:
+    """The key-table bit for a manifest row's normalised source assembly."""
+    return HG38 if assembly == "hg38" else HG19
 
-    ``encode_keys`` refuses a collision within one Analysis, but a hash is a
-    function of the key string alone, so two Analyses can still hand the same
-    value to two different keys. The spill's last-wins dedup is per column, so
-    that is only dangerous when the build-wide key table is built -- here, in the
-    first consolidation step that sees every column (issue #218 review).
+
+def _summarise_key_chunk(
+    task: tuple[Path, tuple[int, ...], tuple[str, ...]],
+) -> ChunkKeys:
+    """Distinct off-reference keys for one chunk of columns (ticket #222).
+
+    Each column contributes its distinct encoded values and one assembly bit;
+    ``merge_chunks`` reduces the chunk to a sorted set, which the parent then
+    merges across workers. Only the hashed distinct keys' raw strings are read
+    from the side file -- liftover and the build-wide collision check need them.
     """
-    for value, raw in spill.hashed_entries.items():
-        existing = seen.get(value)
-        if existing is not None and existing != raw:
-            raise UnknownKeyEncodingError(
-                f"hash collision between off-reference keys {existing!r} and {raw!r} "
-                f"(both encode to {value}); refusing to merge them"
-            )
-        seen[value] = raw
-
-
-def _unknown_key_assembly(prepared: _PreparedBuild) -> dict[str, str | None]:
-    """``{raw source key: declared assembly}`` for every off-reference spill entry.
-
-    A raw coordinate string declared hg19 in one row and hg38 in another names
-    two different physical loci; it cannot be resolved to one hg38 ALID and is
-    left out (``None``) rather than guessed -- the same rule the inline Pass 1
-    applies to its cross-assembly collisions. Every column's hashed keys are
-    checked against every other column's first: two distinct raw keys sharing a
-    hash must fail the build, not silently become one variant (#218 review).
-    """
-    key_assembly: dict[str, str | None] = {}
-    hashed_seen: dict[int, str] = {}
-    for col, row in enumerate(prepared.manifest_rows):
-        spill = _load_unknown_spill(prepared.spill_dir, col)
-        if spill is None:
+    spill_dir, cols, assemblies = task
+    chunks: list[ChunkKeys] = []
+    for col, assembly in zip(cols, assemblies, strict=True):
+        loaded = _load_unknown_key_spill(spill_dir, col)
+        if loaded is None:
             continue
-        _record_hashed_keys(hashed_seen, spill)
-        for name in spill.raw_keys:
-            if name in key_assembly and key_assembly[name] != row.source_assembly:
-                key_assembly[name] = None
-            else:
-                key_assembly[name] = row.source_assembly
-    return key_assembly
-
-
-def _resolve_unknown_keys(
-    prepared: _PreparedBuild, options: _BuildOptions
-) -> dict[str, str]:
-    """Map every resolvable off-reference source key to its hg38 ALID.
-
-    Each spill belongs to one manifest row, so its keys are on that row's own
-    assembly: hg38 rows canonicalise directly, hg19 rows go through one shared
-    lift. A key that fails liftover, or that two rows declared on different
-    assemblies, is omitted.
-    """
-    key_to_alid: dict[str, str] = {}
-    hg19_keys: list[str] = []
-    for key, assembly in _unknown_key_assembly(prepared).items():
-        if assembly == "hg38":
-            key_to_alid[key] = _canonical_key(key)
-        elif assembly is not None:
-            hg19_keys.append(key)
-    if hg19_keys:
-        tuples_by_key = {key: _parse_source_key(key) for key in hg19_keys}
-        lifted = build_liftover_lookup(
-            tuples_by_key.values(),
-            from_build="hg19",
-            to_build="hg38",
-            failure_threshold=options.liftover_failure_threshold,
-            chain_file=options.chain_file,
+        distinct = np.unique(loaded.keys)
+        hashed = distinct[is_hashed(distinct)]
+        chunks.append(
+            ChunkKeys(
+                values=distinct,
+                assembly_bits=np.full(len(distinct), _assembly_bit(assembly), dtype=np.int8),
+                hashed_values=hashed,
+                hashed_raw=[loaded.hashed_entries[int(value)] for value in hashed.tolist()],
+            )
         )
-        for key, parsed in tuples_by_key.items():
-            alid = lifted.get(parsed)
-            if alid is not None:
-                key_to_alid[key] = alid
-    return key_to_alid
+    return merge_chunks(chunks)
 
 
-def _unknown_origins(key_to_alid: dict[str, str]) -> dict[str, str | None]:
+def _key_chunk_tasks(
+    spill_dir: Path, prepared: _PreparedBuild, n_workers: int
+) -> list[tuple[Path, tuple[int, ...], tuple[str, ...]]]:
+    """Split the manifest's columns into a bounded number of worker chunks."""
+    rows = prepared.manifest_rows
+    n = len(rows)
+    if n == 0:
+        return []
+    n_chunks = max(1, min(n, 2 * max(1, n_workers)))
+    size = -(-n // n_chunks)
+    tasks: list[tuple[Path, tuple[int, ...], tuple[str, ...]]] = []
+    for start in range(0, n, size):
+        cols = tuple(range(start, min(start + size, n)))
+        assemblies = tuple(rows[col].source_assembly for col in cols)
+        tasks.append((spill_dir, cols, assemblies))
+    return tasks
+
+
+def _resolve_off_reference_keys(
+    prepared: _PreparedBuild, options: _BuildOptions
+) -> ResolvedKeys | None:
+    """Resolve build-wide distinct off-reference keys to hg38 ALIDs, in parallel.
+
+    Workers reduce column chunks; the parent merges and resolves once per
+    distinct key. ``None`` means there was nothing to resolve, the same early
+    return the dict-based resolution took.
+    """
+    tasks = _key_chunk_tasks(prepared.spill_dir, prepared, options.n_workers)
+    if not tasks:
+        return None
+    chunks = list(ordered_map(_summarise_key_chunk, tasks, options.n_workers))
+    resolved = resolve_keys(
+        merge_chunks(chunks),
+        liftover_failure_threshold=options.liftover_failure_threshold,
+        chain_file=options.chain_file,
+    )
+    return resolved if len(resolved.keys) else None
+
+
+def _unknown_origins(resolved: ResolvedKeys) -> dict[str, str | None]:
     """The source-build ALID each off-reference hg38 ALID came from (collisions blank)."""
     origins: dict[str, str | None] = {}
-    for key, alid in key_to_alid.items():
-        origin = _canonical_key(key)
+    for alid, origin in zip(resolved.alids, resolved.origins, strict=True):
         if alid not in origins:
             origins[alid] = origin
         elif origins[alid] != origin:
             origins[alid] = None
     return origins
+
+
+def _merge_unknown_provenance(
+    known: dict[str, str | None], resolved: ResolvedKeys
+) -> dict[str, str | None]:
+    """Fold the off-reference origins into the Pass 1 provenance map.
+
+    A stored variant reached from two different source coordinates keeps no
+    origin (issue #85); the off-reference side blanks exactly as Pass 1's does.
+    """
+    hg38_to_source = dict(known)
+    for alid, origin in _unknown_origins(resolved).items():
+        if alid in hg38_to_source and hg38_to_source[alid] != origin:
+            hg38_to_source[alid] = None
+        else:
+            hg38_to_source[alid] = origin
+    return hg38_to_source
 
 
 def _append_overflow_spill(
@@ -1106,27 +1108,24 @@ def _append_overflow_spill(
     np.savez(overflow_path, variant_index=idx, z=z, se=se, eaf=eaf)
 
 
-def _merge_unknown_column(
-    spill_dir: Path, col: int, key_to_alid: dict[str, str], shared_index: dict[str, int]
-) -> None:
+def _merge_unknown_column(spill_dir: Path, col: int, table: KeyTable) -> None:
     """Fold one column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices.
 
     Keys that failed liftover (or were declared on two assemblies) are absent
-    from ``key_to_alid`` and their associations are dropped with them.
+    from the table and their associations are dropped with them. The lookup is
+    one ``np.searchsorted`` over the whole column, never a per-key Python dict
+    (ticket #222).
     """
-    spill = _load_unknown_spill(spill_dir, col)
-    if spill is None:
-        return
-    keys = spill.raw_keys
-    keep = np.array([i for i, key in enumerate(keys) if key in key_to_alid], dtype=np.int64)
-    if len(keep):
-        idx = np.array(
-            [shared_index[key_to_alid[keys[int(i)]]] for i in keep.tolist()], dtype=np.int64
-        )
-        _append_overflow_spill(
-            spill_dir, col, idx, spill.z[keep], spill.se[keep], spill.eaf[keep]
-        )
-    (spill_dir / f"{col}.unk.npz").unlink()
+    path = spill_dir / f"{col}.unk.npz"
+    if path.exists():
+        with np.load(path) as data:
+            keys, z, se, eaf = data["keys"], data["z"], data["se"], data["eaf"]
+        shared, matched = table.lookup(keys)
+        if bool(matched.any()):
+            _append_overflow_spill(
+                spill_dir, col, shared[matched], z[matched], se[matched], eaf[matched]
+            )
+    path.unlink(missing_ok=True)
     _unknown_side_path(spill_dir, col).unlink(missing_ok=True)
 
 
@@ -1140,9 +1139,11 @@ def _remap_overflow_spills(
     every shared index at or after the first insertion point, so those entries
     have to be translated through their ALID before the two sets are combined --
     otherwise they silently point at whichever variant now occupies their old
-    index (issue #186 review).
+    index (issue #186 review). The translation is built once as an array and
+    indexed per column, not a dict lookup per association (ticket #222).
     """
     old_alids = prepared.partition.shared_sorted
+    old_to_new = np.array([shared_index[alid] for alid in old_alids], dtype=np.int64)
     for col in range(prepared.n_analyses):
         path = prepared.spill_dir / f"{col}.ovf.npz"
         if not path.exists():
@@ -1150,17 +1151,14 @@ def _remap_overflow_spills(
         with np.load(path) as data:
             vi = data["variant_index"].astype(np.int64)
             z, se, eaf = data["z"], data["se"], data["eaf"]
-        remapped = np.array([shared_index[old_alids[int(i)]] for i in vi], dtype=np.int64)
-        remapped, z, se, eaf = _dedup_last_wins(remapped, z, se, eaf)
+        remapped, z, se, eaf = _dedup_last_wins(old_to_new[vi], z, se, eaf)
         np.savez(path, variant_index=remapped, z=z, se=se, eaf=eaf)
 
 
-def _merge_unknown_spills(
-    prepared: _PreparedBuild, key_to_alid: dict[str, str], shared_index: dict[str, int]
-) -> None:
+def _merge_unknown_spills(prepared: _PreparedBuild, table: KeyTable) -> None:
     """Fold every column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices."""
     for col in range(prepared.n_analyses):
-        _merge_unknown_column(prepared.spill_dir, col, key_to_alid, shared_index)
+        _merge_unknown_column(prepared.spill_dir, col, table)
 
 
 def _finalise_reference_partition(
@@ -1178,26 +1176,27 @@ def _finalise_reference_partition(
     """
     if options.variant_reference is None:
         return prepared
-    key_to_alid = _resolve_unknown_keys(prepared, options)
-    if not key_to_alid:
+    resolved = _resolve_off_reference_keys(prepared, options)
+    if resolved is None:
         return prepared
-    unknown_alids = set(key_to_alid.values())
+    unknown_alids = set(resolved.alids)
     off_panel = _sorted_alids(set(prepared.partition.off_panel_alids) | unknown_alids)
     panel = prepared.partition.panel_sorted
     shared_sorted = _sorted_alids(set(panel) | set(off_panel))
     shared_index = {alid: i for i, alid in enumerate(shared_sorted)}
+    table = KeyTable(
+        keys=resolved.keys,
+        shared_index=np.array(
+            [shared_index[alid] for alid in resolved.alids], dtype=np.int64
+        ),
+    )
     # Existing overflow entries carry the *initial* axis's indices; translate
     # them before mixing in the off-reference entries keyed to the new one.
     _remap_overflow_spills(prepared, shared_index)
-    _merge_unknown_spills(prepared, key_to_alid, shared_index)
+    _merge_unknown_spills(prepared, table)
     dense_to_shared = np.array([shared_index[alid] for alid in panel], dtype=np.int32)
     np.save(dense_to_shared_path(prepared.staged.path), dense_to_shared)
-    hg38_to_source = dict(prepared.hg38_to_source)
-    for alid, origin in _unknown_origins(key_to_alid).items():
-        if alid in hg38_to_source and hg38_to_source[alid] != origin:
-            hg38_to_source[alid] = None
-        else:
-            hg38_to_source[alid] = origin
+    hg38_to_source = _merge_unknown_provenance(prepared.hg38_to_source, resolved)
     log.info(
         "Single-pass build: %d off-reference variant(s) routed to the Ragged Overflow",
         len(unknown_alids),

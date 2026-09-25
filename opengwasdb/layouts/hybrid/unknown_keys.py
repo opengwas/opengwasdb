@@ -38,12 +38,15 @@ __all__ = [
     "MAX_POSITION",
     "UnknownKeyEncodingError",
     "decode_keys",
+    "decode_packed",
     "decode_spill",
     "encode_key",
     "encode_keys",
     "hashed_lookup",
     "is_hashed",
     "pack_key",
+    "packed_alids",
+    "packed_fields",
     "unpack_key",
 ]
 
@@ -276,12 +279,14 @@ def hashed_lookup(
     return lookup
 
 
-def _decode_packed(values: np.ndarray) -> list[str]:
-    """Decode a uint64 array of packed SNVs, field extraction vectorised.
+def _packed_codes(
+    values: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """``(chromosome, position, ref, alt)`` codes of packed SNV values.
 
-    Only the final string formatting is per key; the bit-shuffling and label
-    lookups run in numpy, which is what keeps the scratch-read pass from being
-    slower than the pickled form it replaced (issue #218).
+    The bit-shuffling runs in numpy so every consumer (raw-key decode, ALID
+    canonicalisation, liftover tuples) pastes on labels rather than re-parsing
+    a formatted string once per key (ticket #222).
     """
     chromosome_codes = (
         (values >> np.uint64(_CHROMOSOME_SHIFT)) & np.uint64(_CHROMOSOME_MASK)
@@ -291,17 +296,57 @@ def _decode_packed(values: np.ndarray) -> list[str]:
     )
     ref_codes = ((values >> np.uint64(_REF_SHIFT)) & np.uint64(0b11)).astype(np.int64)
     alt_codes = ((values >> np.uint64(_ALT_SHIFT)) & np.uint64(0b11)).astype(np.int64)
+    return chromosome_codes, positions, ref_codes, alt_codes
+
+
+def packed_fields(
+    values: np.ndarray,
+) -> tuple[list[str], list[int], list[str], list[str]]:
+    """The ``(chromosome, position, ref, alt)`` fields of packed SNV values.
+
+    The returned lists parallel ``values``. Only the label lookup and the final
+    list materialisation are per key; a caller that needs the raw key or an
+    ALID composes it from these instead of splitting a string.
+    """
+    chromosome_codes, positions, ref_codes, alt_codes = _packed_codes(values)
     chromosomes = _CHROMOSOME_LABEL_ARRAY[chromosome_codes]
     refs = _ALLELE_LABEL_ARRAY[ref_codes]
     alts = _ALLELE_LABEL_ARRAY[alt_codes]
+    return chromosomes.tolist(), positions.tolist(), refs.tolist(), alts.tolist()
+
+
+def decode_packed(values: np.ndarray) -> list[str]:
+    """Decode a uint64 array of packed SNVs to their raw ``chrom:pos:ref:alt``
+    keys, field extraction vectorised.
+
+    Keeps the scratch-read pass from being slower than the pickled form it
+    replaced (issue #218).
+    """
+    chromosomes, positions, refs, alts = packed_fields(values)
     return [
         f"{chromosome}:{position}:{ref}:{alt}"
         for chromosome, position, ref, alt in zip(
-            chromosomes.tolist(),
-            positions.tolist(),
-            refs.tolist(),
-            alts.tolist(),
-            strict=True,
+            chromosomes, positions, refs, alts, strict=True
+        )
+    ]
+
+
+def packed_alids(values: np.ndarray) -> list[str]:
+    """Canonical ALIDs (alleles sorted) for packed SNV values, vectorised.
+
+    Both alleles are single bases, so ordering them is a two-code comparison;
+    this avoids building the raw key and re-parsing it per distinct key when a
+    build resolves an off-reference SNV (ticket #222).
+    """
+    chromosome_codes, positions, ref_codes, alt_codes = _packed_codes(values)
+    chromosomes = _CHROMOSOME_LABEL_ARRAY[chromosome_codes]
+    ref_first = ref_codes <= alt_codes
+    a1 = _ALLELE_LABEL_ARRAY[np.where(ref_first, ref_codes, alt_codes)]
+    a2 = _ALLELE_LABEL_ARRAY[np.where(ref_first, alt_codes, ref_codes)]
+    return [
+        f"{chromosome}:{position}:{a1}:{a2}"
+        for chromosome, position, a1, a2 in zip(
+            chromosomes.tolist(), positions.tolist(), a1.tolist(), a2.tolist(), strict=True
         )
     ]
 
@@ -318,7 +363,7 @@ def decode_spill(
     decoded: list[str] = [""] * len(values)
     packed_positions = np.flatnonzero(~is_hashed(values))
     if len(packed_positions):
-        packed_raw = _decode_packed(values[packed_positions])
+        packed_raw = decode_packed(values[packed_positions])
         for position, raw in zip(packed_positions.tolist(), packed_raw, strict=True):
             decoded[position] = raw
     for position, raw in zip(hashed_index.tolist(), hashed_raw, strict=True):
