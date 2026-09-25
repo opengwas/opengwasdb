@@ -1410,6 +1410,7 @@ def _write_dense_component_bands(
         options.dtype,
         pass2_start,
         plan.encoding,
+        options.n_workers,
     )
     return _DenseWritten(
         all_rows=all_rows,

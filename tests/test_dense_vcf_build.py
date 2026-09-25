@@ -19,8 +19,10 @@ import numpy as np
 import pytest
 from cli_output import normalize_cli_output
 from residual_fixtures import write_gwas_vcf_with_eaf
+from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
+from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
@@ -1122,6 +1124,135 @@ class TestBandStreaming:
             np.testing.assert_array_equal(a[~np.isnan(a)], b[~np.isnan(b)])
         # banded store really used a 2-wide analysis chunk
         assert rb["z"].chunks[1] == 2
+
+
+def _eaf_vcf(tmp_path: Path, name: str, spec: list[tuple[int, float, float, float, float]]) -> Path:
+    """A GWAS-VCF with frequencies, from ``(pos, z, es, se, af)`` rows."""
+    return write_gwas_vcf_with_eaf(
+        tmp_path / f"{name}.vcf",
+        [
+            f"1\t{pos}\t.\tA\tG\t.\tPASS\t.\tES:SE:EZ:AF\t{es}:{se}:{z}:{af}\n"
+            for pos, z, es, se, af in spec
+        ],
+    )
+
+
+class TestParallelBandWrite:
+    """Issue #220: the z/se/eaf band passes load a band's columns across
+    ``--n-workers`` while every order-dependent output stays the serial path's.
+
+    The fixture deliberately spans two bands (a 2-wide analysis chunk over four
+    Analyses of different sizes, so columns finish out of order), carries a z
+    overflow cell in each band, has top hits in both bands, and holds
+    frequencies. A reduction that combined results in completion order, or
+    against the wrong Analysis, cannot pass this by luck.
+    """
+
+    def _manifest(self, tmp_path: Path) -> Path:
+        # 137 and -120 are outside the int16 fixed-point plane (|z| <= ~32) and
+        # land in the overflow table; 4.0 and 5.0 clear the loosest top-hit
+        # tier's |z| >= 3.4808. Column sizes differ (1, 2, 3, 2).
+        entries = [
+            (
+                "trait_a",
+                _eaf_vcf(tmp_path, "trait_a", [(HG19_POS_1, 137.0, 13.7, 0.1, 0.2)]),
+                "Trait A",
+            ),
+            (
+                "trait_b",
+                _eaf_vcf(
+                    tmp_path,
+                    "trait_b",
+                    [(HG19_POS_2, 4.0, 2.0, 0.5, 0.3), (HG19_POS_3, 1.0, 1.0, 1.0, 0.4)],
+                ),
+                "Trait B",
+            ),
+            (
+                "trait_c",
+                _eaf_vcf(
+                    tmp_path,
+                    "trait_c",
+                    [
+                        (HG19_POS_1, -120.0, -12.0, 0.1, 0.25),
+                        (HG19_POS_2, 5.0, 2.5, 0.5, 0.35),
+                        (HG19_POS_3, 0.5, 0.5, 1.0, 0.45),
+                    ],
+                ),
+                "Trait C",
+            ),
+            (
+                "trait_d",
+                _eaf_vcf(
+                    tmp_path,
+                    "trait_d",
+                    [(HG19_POS_1, 0.2, 0.2, 1.0, 0.5), (HG19_POS_3, 3.6, 1.8, 0.5, 0.55)],
+                ),
+                "Trait D",
+            ),
+        ]
+        return _make_manifest(tmp_path, entries)
+
+    def _build(self, manifest: Path, out: Path, n_workers: int) -> Path:
+        build_dense_from_vcf_manifest(
+            manifest,
+            out,
+            store_id="s",
+            release_id="r",
+            n_workers=n_workers,
+            chunk_shape=(1000, 2),
+            allow_unverified_eaf=True,
+        )
+        return out
+
+    def test_parallel_band_write_matches_serial(self, tmp_path):
+        manifest = self._manifest(tmp_path)
+        serial = self._build(manifest, tmp_path / "serial.opengwasdb", 1)
+        parallel = self._build(manifest, tmp_path / "parallel.opengwasdb", 3)
+
+        assert validate_store(parallel).ok
+        rs = open_store(serial).arrays(mode="r")
+        rp = open_store(parallel).arrays(mode="r")
+
+        # The fixture is only meaningful if it exercises the paths under test.
+        assert rs["z_overflow_index"][:].size >= 2, "fixture carries no z overflow cells"
+        assert rs["eaf"][:].shape == rp["eaf"][:].shape
+        assert np.isfinite(rs["eaf"][:]).any(), "fixture carries no frequencies"
+        bands = {int(c) // 2 for c in rs[f"top_hits/{threshold_key(5e-4)}"]["analysis_index"][:]}
+        assert bands == {0, 1}, f"fixture's top hits do not span both bands: {bands}"
+
+        assert_same_band_arrays(rs, rp)
+        assert_same_top_hits(
+            rs, rp, ("variant_index", "analysis_index", "z", "se", "eaf")
+        )
+
+        serial_scopes = {
+            row["analysis_id"]: row["eaf_scope"]
+            for row in read_analyses(serial / "analyses.tsv").rows
+        }
+        parallel_scopes = {
+            row["analysis_id"]: row["eaf_scope"]
+            for row in read_analyses(parallel / "analyses.tsv").rows
+        }
+        assert serial_scopes == parallel_scopes
+        assert set(serial_scopes.values()) == {"association"}, (
+            "fixture must have every Analysis carrying a frequency for "
+            "column_has_eaf to mean anything"
+        )
+
+    def test_a_pool_that_yields_out_of_order_fails_loudly(self, tmp_path, monkeypatch):
+        """If a worker pool ever returned a column's result against another
+        Analysis, the build must stop rather than write it into the wrong
+        band slot (issue #220). The real ``ordered_map`` preserves input
+        order; this replaces it with a deliberately out-of-order reduction."""
+        import opengwasdb.layouts.dense.build_vcf as build_vcf
+
+        def reversed_map(fn, items, n_workers, max_in_flight=None):
+            results = [fn(item) for item in items]
+            yield from reversed(results)
+
+        monkeypatch.setattr(build_vcf, "ordered_map", reversed_map)
+        with pytest.raises(ValueError, match="arrived out of order"):
+            self._build(self._manifest(tmp_path), tmp_path / "store.opengwasdb", 2)
 
 
 class TestForkSafeLookup:
