@@ -12,6 +12,10 @@ the end of this file.
 
 ### Added
 
+- **`opengwasdb.build.ordered_pool.ordered_map`**: a forked worker-pool map that
+  yields results in input order with a bounded number in flight, and runs
+  serially at `n_workers <= 1`. Shared by the post-Pass-2 consolidation phases
+  parallelised under #217.
 - **`opengwasdb.model.manifest_columns`**: extracted shared manifest column alias
   resolution supporting multiple legacy aliases per canonical name (`analysis_id`,
   `source_file`, `analysis_label`, `sample_size`), used across Dense, Ancestry,
@@ -203,6 +207,105 @@ the end of this file.
 
 ### Changed
 
+- **Pass 2 off-reference keys are now fixed-width `uint64`, not pickled strings**:
+  a Hybrid build with `--variant-reference` encodes each off-reference source
+  coordinate in the Pass 2 worker. SNVs with one-base A/C/G/T alleles pack
+  losslessly (chromosome 5 bits, position 28 bits, ref 2 bits, alt 2 bits) and
+  decode back to the exact raw key; every other key is hashed into a tagged
+  part of the `uint64` space with its raw string in a small per-column side
+  file, since liftover and canonicalisation still need it. A hash collision
+  between two distinct keys fails the build loudly, naming both, and a hash
+  outside the 63-bit region is refused rather than truncated. The change
+  removes `allow_pickle` from the Hybrid build and shrinks the off-reference
+  spill from about 30 B/row to about 20 B/row (#218).
+- **The EAF spill survey and the Ragged Overflow CSR assembly now use
+  `--n-workers`**: both walked every Analysis's spill one column at a time on a
+  single core, which on OGS-00011 is ~6 h of the post-Pass-2 tail (#219). Each
+  column is now read, sampled and sorted in a forked worker through
+  `ordered_map`, with only a bounded number of results in flight; the parent
+  concatenates the EAF samples and appends to the CSR in Analysis order, so the
+  orientation report, encoding measurements, CSR contents and CSR offsets are
+  unchanged. `--n-workers 1` keeps the serial path, and a spill is still
+  deleted only after its column has been consumed.
+- **The Dense Component band write loads each band's columns across
+  `--n-workers`**: the `z`, `se` and `eaf` passes decode the retained
+  per-Analysis spills in a forked worker pool while one band buffer stays
+  resident, instead of one column at a time on one core (#220). Output is
+  byte-for-byte unchanged: the columns are loaded through
+  `ordered_map`, so the overflow table, the top-hit candidate order,
+  `column_has_eaf` and the written planes are the serial path's, and
+  `--n-workers 1` keeps the serial path. A result tagged with the wrong
+  Analysis now fails the build loudly rather than being written into another
+  band's slot. Shared by the Dense Layout and Hybrid builders.
+- **The post-Pass-2 tail logs its phases and uses `--n-workers` (#221)**: the
+  SE fit, measurement, exception count and rewrite, and the Dense top-hit gather
+  and scan, run their independent zarr row chunks across the build's process
+  pool, reducing in row-chunk order so the chosen SE encoding, the fitted
+  coefficients, the rewritten `se` plane, the exception table and both Top-Hit
+  Indexes are byte-for-byte the serial path's (`n_workers <= 1` stays
+  in-process). Each phase now logs its start, end and elapsed wall-clock time,
+  with progress through the chunk loop and the `PhaseTimer` accounting the SE
+  passes already kept; the SE fit reports its Dense chunks and its Overflow fold
+  separately, and a `float16` outcome charges the narrowing rewrite it actually
+  performs rather than hiding it. The Ragged Overflow CSR flush, the Ragged
+  Top-Hit Index and the `float16` narrowing remain serial and are logged; they
+  reduce whole flat arrays or make one zarr write, so their profiling evidence
+  is recorded on the issue instead of a forced pool.
+- **Off-reference key resolution builds a sorted `uint64` table, not two Python
+  dicts**: a `--variant-reference` Hybrid build resolves every Pass 2
+  off-reference key to its hg38 ALID and shared Variant Index through a sorted
+  key array built in parallel (`ordered_map`), with liftover and canonicalisation
+  run once per *distinct* key rather than once per association. The dict-based
+  resolution inserted every association into a raw-key → assembly and a raw-key →
+  ALID dict (~15 billion inserts on OGS-00011); the table's `.unk` → `.ovf` fold
+  is now one `np.searchsorted` per column. Workers and the parent fold the
+  per-column and per-chunk distinct keys incrementally, releasing each once
+  merged, so no process holds every column's or every worker's keys at once.
+  The merge carries numbers only: each hashed key's raw string is replaced by
+  an independent 64-bit check hash (`unknown_keys.check_hash`) and the column
+  that first declared it, and the strings are read back from the side files
+  once, after the merge, and re-verified. Every hashed row in every column is
+  verified against its value's canonical raw key before routing, guaranteeing
+  that two raw keys sharing an encoded value fail the build naming both keys even
+  if both hashes collide. No ALID → shared-index dict over the whole axis is built
+  or kept through Pass 2 and consolidation (a sorted hash index replaces it,
+  resolving colliding buckets through a small exact map of their members only).
+  The two-assembly drop, the liftover-failure drop, an off-reference ALID joining
+  an existing on-reference one, and the `hg38_to_source` collision blanking are
+  unchanged, and the build-wide hash guarantee from #218 still fails a collision
+  naming both keys (#222).
+- **The EAF consensus baseline is one sort per site, computed only where it is
+  read (#224)**: with no `--eaf-reference`, each Analysis is correlated against
+  the leave-one-out median of the other Analyses. That median was rebuilt from
+  scratch with `np.median` for every (Analysis, site) pair and stored for every
+  Analysis at every site, although the correlation only ever reads the sites an
+  Analysis itself reported; on OGS-00011 (3,262 Analyses) the step ran on one
+  core for more than seven hours and held 300 GiB. The baseline is now columnar
+  over the observations: one sort by (site, value) gives every reporter's
+  leave-one-out median by index arithmetic, bit-identical to `np.median`
+  (including NaN propagation), at the reporting Analyses' sites only. The "at
+  least two *other* Analyses" rule is unchanged, and so is the
+  `EafOrientationReport`. Peak memory is now bounded by the observation count
+  (~146 B per observation), not by Analyses x sites: a synthetic 3,262 x 20,000
+  survey takes 40 s and 8.9 GiB.
+- **Fold off-reference spills into the Ragged Overflow Component in parallel with sorted searchsorted (#223)**:
+  the `.unk` → `.ovf` fold maps each column's keys against the global key table
+  using vectorized `searchsorted` after sorting the query keys, running across
+  `--n-workers` workers via `ordered_map` with `--n-workers 1` keeping a serial
+  in-process path. Workers receive the key table, canonical raw keys, and axis
+  remapping array as read-only NumPy buffers across fork, with zero per-key
+  Python objects or dicts. Existing overflow entries are translated to the final
+  shared axis and combined with off-reference entries in a single pass, writing
+  each column's overflow spill once, atomically (temporary file then rename),
+  with duplicate shared indices deduplicated last-wins (off-reference entries
+  winning over existing overflow entries). Off-reference spill files (`.unk.npz`
+  and `.unk.raw`) are unlinked only after the overflow spill is safely written.
+- **Non-autosomal chromosome spellings now share one canonical ALID identity**:
+  source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
+  explicit canonical labels `X`, `Y`, and `MT` respectively in every reader
+  path (#216, ADR 0052). This is a breaking change to variant identity:
+  affected Stores built with numeric or `M` non-autosomal ALIDs must be rebuilt
+  before reference completion or joins against post-change Stores.
 - **`resolve_analysis` decouples the ancestry site bound from quantitative phenotype-SD evidence**:
   `max_ancestry_sites` bounds ancestry accumulation only (#212, ADR 0048). When
   phenotype-SD estimation is required (quantitative traits), ancestry accumulation

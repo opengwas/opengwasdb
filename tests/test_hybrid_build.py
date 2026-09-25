@@ -13,15 +13,26 @@ Off-panel (→ Ragged Overflow):
 from __future__ import annotations
 
 import gzip
+import weakref
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import zarr
 from cli_output import normalize_cli_output
+from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
 from opengwasdb.layouts.dense.top_hits import threshold_key
+from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.layouts.hybrid.key_runs import HG38, KeyRun, column_run, read_run
+from opengwasdb.layouts.hybrid.unknown_keys import (
+    UnknownKeyEncodingError,
+    check_hash,
+    encode_key,
+    encode_keys,
+)
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -1048,6 +1059,55 @@ def _assert_hybrid_stores_match(reference: Path, candidate: Path) -> None:
     assert (reference / "analyses.tsv").read_text() == (candidate / "analyses.tsv").read_text()
 
 
+def _assert_hybrid_build_fails_naming_keys(
+    manifest: Path, store: Path, reference: Path, *keys: str
+) -> None:
+    """Build until the injected hash collision fails it, naming every raw key."""
+    with pytest.raises(UnknownKeyEncodingError) as excinfo:
+        build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r"
+        )
+    message = str(excinfo.value)
+    for key in keys:
+        assert key in message
+
+
+def _cross_analysis_collision_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    """Two Analyses, each with one off-reference indel the other lacks, so a
+    forced hash collision between them is invisible to the per-column encoder."""
+    from opengwasdb.variants.reference import write_variant_reference
+
+    vcf_a = _make_vcf(
+        tmp_path,
+        "trait_a",
+        [
+            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",  # on-panel
+            "1\t2000000\t.\tC\tCT\t.\tPASS\t.\tES:SE:AF\t1.0:0.5:0.2\n",  # off-ref, A only
+        ],
+    )
+    vcf_b = _make_vcf(
+        tmp_path,
+        "trait_b",
+        [
+            f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t3.0:0.5:0.2\n",  # on-panel
+            "1\t3000000\t.\tC\tCA\t.\tPASS\t.\tES:SE:AF\t1.5:0.5:0.2\n",  # off-ref, B only
+        ],
+    )
+    manifest = _make_manifest(
+        tmp_path, [("trait_a", vcf_a, "Trait A"), ("trait_b", vcf_b, "Trait B")]
+    )
+    reference = tmp_path / "panel-only.variant-ref.tsv.gz"
+    write_variant_reference(
+        reference,
+        [HG38_ALID_1, HG38_ALID_3],
+        {
+            ("1", HG19_POS_1, "A", "G"): HG38_ALID_1,
+            ("1", HG19_POS_3, "G", "A"): HG38_ALID_3,
+        },
+    )
+    return manifest, reference
+
+
 class TestVariantReference:
     def test_reference_alone_is_a_full_union_single_pass_build(self, tmp_path):
         """With no separate panel the reference's own ALIDs are the Dense axis;
@@ -1282,6 +1342,295 @@ class TestVariantReference:
         assert result.n_overflow == 1
         assert validate_store(store).ok
 
+    def test_off_reference_hash_collision_fails_the_build_naming_both_keys(
+        self, tmp_path, monkeypatch
+    ):
+        """Two distinct off-reference keys forced onto one hash must fail the
+        build loudly, naming both, rather than silently merging one into the
+        other. The collision is injected through the module's hash function."""
+        import opengwasdb.layouts.hybrid.unknown_keys as unknown_keys
+        from opengwasdb.variants.reference import write_variant_reference
+
+        vcf = _make_vcf(
+            tmp_path,
+            "trait_collide",
+            [
+                f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",  # on-panel
+                "1\t2000000\t.\tC\tCT\t.\tPASS\t.\tES:SE:AF\t1.0:0.5:0.2\n",  # off-ref indel
+                "1\t3000000\t.\tC\tCA\t.\tPASS\t.\tES:SE:AF\t1.5:0.5:0.2\n",  # off-ref indel
+            ],
+        )
+        manifest = _make_manifest(tmp_path, [("trait_collide", vcf, "Trait collide")])
+        reference = tmp_path / "panel-only.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference, [HG38_ALID_1], {("1", HG19_POS_1, "A", "G"): HG38_ALID_1}
+        )
+        monkeypatch.setattr(unknown_keys, "_stable_hash", lambda key: 99)
+
+        _assert_hybrid_build_fails_naming_keys(
+            manifest,
+            tmp_path / "collision.opengwasdb",
+            reference,
+            "1:2000000:C:CT",
+            "1:3000000:C:CA",
+        )
+
+    def test_cross_analysis_hash_collision_fails_the_build_naming_both_keys(
+        self, tmp_path, monkeypatch
+    ):
+        """A hash is a function of the key string alone, so two keys that never
+        share an Analysis can still collide. The per-column encoder cannot see
+        that; the build-wide check must, and must name both keys (issue #218
+        review round 1)."""
+        import opengwasdb.layouts.hybrid.unknown_keys as unknown_keys
+
+        manifest, reference = _cross_analysis_collision_fixture(tmp_path)
+        monkeypatch.setattr(unknown_keys, "_stable_hash", lambda key: 99)
+
+        _assert_hybrid_build_fails_naming_keys(
+            manifest,
+            tmp_path / "cross-collision.opengwasdb",
+            reference,
+            "1:2000000:C:CT",
+            "1:3000000:C:CA",
+        )
+
+    def test_collision_of_both_hashes_still_fails_the_build_naming_both_keys(
+        self, tmp_path, monkeypatch
+    ):
+        """The check hash is only a fast filter: two raw keys colliding on the
+        encoded value *and* the check hash must still fail the build, naming
+        both, never merge into one variant (#222 review round 2)."""
+        import opengwasdb.layouts.hybrid.unknown_keys as unknown_keys
+
+        manifest, reference = _cross_analysis_collision_fixture(tmp_path)
+        monkeypatch.setattr(unknown_keys, "_stable_hash", lambda key: 99)
+        monkeypatch.setattr(unknown_keys, "check_hash", lambda key: 7)
+        monkeypatch.setattr(hybrid_build, "check_hash", lambda key: 7)
+
+        _assert_hybrid_build_fails_naming_keys(
+            manifest,
+            tmp_path / "double-collision.opengwasdb",
+            reference,
+            "1:2000000:C:CT",
+            "1:3000000:C:CA",
+        )
+
+    def test_collision_where_all_keys_drop_still_fails_the_build_naming_both_keys(
+        self, tmp_path, monkeypatch
+    ):
+        """When all off-reference keys drop during resolution (e.g. declared on
+        conflicting assemblies), the empty-resolved branch must still verify
+        every column's hashed rows against canonical keys rather than returning
+        early, so cross-column collisions still fail loudly naming both keys."""
+        import opengwasdb.layouts.hybrid.unknown_keys as unknown_keys
+        from opengwasdb.variants.reference import write_variant_reference
+
+        vcf_a = _make_vcf(
+            tmp_path,
+            "trait_a",
+            [
+                # on-panel
+                f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",
+                # off-ref, A only (hg19)
+                "1\t2000000\t.\tC\tCT\t.\tPASS\t.\tES:SE:AF\t1.0:0.5:0.2\n",
+            ],
+        )
+        vcf_b = _make_vcf(
+            tmp_path,
+            "trait_b",
+            [
+                # on-panel (HG38_ALID_3)
+                "1\t1564620\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t3.0:0.5:0.2\n",
+                # off-ref, B only (hg38)
+                "1\t3000000\t.\tC\tCA\t.\tPASS\t.\tES:SE:AF\t1.5:0.5:0.2\n",
+            ],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path,
+            [
+                ("trait_a", vcf_a, "Trait A", "hg19"),
+                ("trait_b", vcf_b, "Trait B", "hg38"),
+            ],
+        )
+        reference = tmp_path / "panel-only.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference,
+            [HG38_ALID_1, HG38_ALID_3],
+            {
+                ("1", HG19_POS_1, "A", "G"): HG38_ALID_1,
+                ("1", 1564620, "A", "G"): HG38_ALID_3,
+            },
+        )
+        monkeypatch.setattr(unknown_keys, "_stable_hash", lambda key: 99)
+        monkeypatch.setattr(unknown_keys, "check_hash", lambda key: 7)
+        monkeypatch.setattr(hybrid_build, "check_hash", lambda key: 7)
+
+        _assert_hybrid_build_fails_naming_keys(
+            manifest,
+            tmp_path / "double-collision-dropped.opengwasdb",
+            reference,
+            "1:2000000:C:CT",
+            "1:3000000:C:CA",
+        )
+
+    def test_off_reference_key_declared_on_two_assemblies_is_dropped(self, tmp_path):
+        """The same raw key named hg19 in one Analysis and hg38 in another names
+        two different physical loci. The sorted key table must drop it rather
+        than pick an assembly -- the rule the dict-based resolution applied."""
+        reference = _write_reference_artifact(
+            tmp_path, _hybrid_manifest(tmp_path), panel_only=True
+        )
+        vcf_hg19 = _make_vcf(
+            tmp_path, "two_asm_hg19", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
+        )
+        vcf_hg38 = _make_vcf(
+            tmp_path, "two_asm_hg38", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t2.0:0.4\n"]
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path,
+            [
+                ("two_asm_hg19", vcf_hg19, "hg19 row", ""),
+                ("two_asm_hg38", vcf_hg38, "hg38 row", "hg38"),
+            ],
+        )
+        store = tmp_path / "two-assembly.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r"
+        )
+
+        assert result.n_panel == 2
+        assert result.n_off_panel == 0, "the ambiguous key must resolve to nothing"
+        assert result.n_overflow == 0, "its associations must be dropped with it"
+        assert validate_store(store).ok
+
+    def test_off_reference_key_joining_an_on_reference_alid_blanks_its_provenance(
+        self, tmp_path
+    ):
+        """An off-reference key that lifts onto an ALID Pass 1 already knew is not
+        a new shared variant. Its source coordinate disagrees with the one Pass 1
+        recorded, so the variant table must write no source_alid (issue #85)
+        rather than misattribute one row's association to the other's variant."""
+        from opengwasdb.variants.axis import iter_variant_records
+
+        # The reference names ALID_1 and ALID_2 directly as hg38 source keys, so
+        # Pass 1 knows ALID_2; the panel keeps only ALID_1, which makes ALID_2 an
+        # on-reference off-panel variant rather than an off-reference discovery.
+        vcf_ref = _make_vcf(
+            tmp_path,
+            "join_ref_hg38",
+            [
+                "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.2\n",
+                "1\t1064620\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0.2\n",
+            ],
+        )
+        ref_manifest = _manifest_with_source_assembly(
+            tmp_path, [("join_ref", vcf_ref, "Ref", "hg38")]
+        )
+        reference = _write_reference_artifact(tmp_path, ref_manifest)
+        vcf_join = _make_vcf(
+            tmp_path, "join_hg19", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("join_hg19", vcf_join, "Join", "")]
+        )
+        panel = tmp_path / "join-panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
+        store = tmp_path / "join.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, reference_panel=panel, variant_reference=reference,
+            store_id="s", release_id="r",
+        )
+
+        assert result.n_panel == 1
+        assert result.n_off_panel == 1, "ALID_2 is on-reference but off-panel"
+        assert result.n_overflow == 1
+        validation = validate_store(store)
+        assert validation.ok, validation.errors
+        rows = {r.alid: r for r in iter_variant_records(store / "variants.tsv.gz")}
+        assert set(rows) == {HG38_ALID_1, HG38_ALID_2}
+        assert rows[HG38_ALID_2].source_alid is None
+
+    def test_two_off_reference_raw_keys_join_one_new_alid(self, tmp_path):
+        """Two raw keys from different assemblies can name one physical variant: an
+        hg19 key that lifts onto an hg38 coordinate and an hg38 key written
+        directly. Both must route to the one stored variant, and their disagreeing
+        origins must blank its source_alid rather than record either."""
+        from opengwasdb.variants.axis import iter_variant_records
+
+        reference = _write_reference_artifact(
+            tmp_path, _hybrid_manifest(tmp_path), panel_only=True
+        )
+        vcf_hg19 = _make_vcf(
+            tmp_path, "same_hg19", ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
+        )
+        vcf_hg38 = _make_vcf(
+            tmp_path, "same_hg38", ["1\t1064620\t.\tC\tT\t.\tPASS\t.\tES:SE\t2.0:0.4\n"]
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path,
+            [
+                ("same_hg19", vcf_hg19, "hg19 row", ""),
+                ("same_hg38", vcf_hg38, "hg38 row", "hg38"),
+            ],
+        )
+        store = tmp_path / "same.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r"
+        )
+
+        assert result.n_panel == 2
+        assert result.n_off_panel == 1, "both raw keys resolve onto one new variant"
+        assert result.n_overflow == 2, "both Analyses' associations route to it"
+        validation = validate_store(store)
+        assert validation.ok, validation.errors
+        rows = {r.alid: r for r in iter_variant_records(store / "variants.tsv.gz")}
+        assert set(rows) == {HG38_ALID_1, HG38_ALID_2, HG38_ALID_3}
+        assert rows[HG38_ALID_2].source_alid is None
+
+    def test_two_raw_keys_in_same_analysis_join_one_variant_last_wins(self, tmp_path):
+        """Issue #223 AC4: when two different raw keys within the SAME Analysis
+        map to the same Variant Index (e.g. A:G and G:A both canonicalising to
+        A:G), the later stream occurrence must win (last-wins deduplication)."""
+        reference = _write_reference_artifact(
+            tmp_path, _hybrid_manifest(tmp_path), panel_only=True
+        )
+        # In a single study, row 1 is 1:500000:A:G (ES 1.0 -> z -2.0) and
+        # row 2 is 1:500000:G:A (ES 2.0 -> z -4.0).
+        vcf = _make_vcf(
+            tmp_path,
+            "trait_same",
+            [
+                "1\t500000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+                "1\t500000\t.\tG\tA\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+            ],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("trait_same", vcf, "Same Analysis", "hg38")]
+        )
+        store = tmp_path / "same_analysis.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r",
+            n_workers=2,
+        )
+
+        assert result.n_panel == 2
+        assert result.n_off_panel == 1, "both raw keys resolve to one variant"
+        assert result.n_overflow == 1, "deduplicated to exactly 1 association in overflow"
+
+        validation = validate_store(store)
+        assert validation.ok, validation.errors
+
+        with query_store(store) as q:
+            res = q.lookup(["1:500000:A:G"], ["trait_same"])
+            assert len(res["z"]) == 1
+            # Row 2 (z = 4.0) must win over Row 1 (z = -2.0)
+            assert res["z"][0] == pytest.approx(4.0, rel=5e-3)
+
     def test_manifest_records_the_variant_reference(self, tmp_path):
         manifest = _hybrid_manifest(tmp_path)
         reference = _write_reference_artifact(tmp_path, manifest)
@@ -1294,3 +1643,191 @@ class TestVariantReference:
         provenance = StoreManifest.load(store).provenance
         assert provenance["variant_reference"] == str(reference)
         assert provenance["builder"] == "opengwasdb.v0.1_hybrid_single_pass"
+
+
+def test_hybrid_band_write_matches_serial_across_workers(tmp_path):
+    """Issue #220: the Dense Component band write loads each band's columns
+    across ``--n-workers``; a Hybrid Store Release (and its nested Dense
+    Component) must be identical to the serial build's. A one-column chunk over
+    two Analyses puts the overflow cell and the top hit in different bands."""
+    vcf_a = _make_vcf(
+        tmp_path,
+        "trait_a",
+        [
+            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",  # z -4.0, hit
+            f"1\t{HG19_POS_3}\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",  # z  3.0
+        ],
+    )
+    vcf_b = _make_vcf(
+        tmp_path,
+        "trait_b",
+        [
+            # |z| = 137 is beyond the int16 fixed-point plane -> overflow table.
+            f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t68.5:0.5:0.25\n",
+        ],
+    )
+    manifest = _make_manifest(
+        tmp_path, [("trait_a", vcf_a, "Trait A"), ("trait_b", vcf_b, "Trait B")]
+    )
+    serial = tmp_path / "serial.opengwasdb"
+    parallel = tmp_path / "parallel.opengwasdb"
+    for out, workers in ((serial, 1), (parallel, 2)):
+        build_hybrid_from_vcf_manifest(
+            manifest,
+            out,
+            reference_panel=_panel(tmp_path),
+            store_id="s",
+            release_id="r",
+            n_workers=workers,
+            chunk_shape=(1000, 1),
+        )
+
+    assert validate_store(parallel).ok
+    rs = open_store(serial).dense_component().arrays(mode="r")
+    rp = open_store(parallel).dense_component().arrays(mode="r")
+
+    if "z_overflow_index" in rs:
+        assert rs["z_overflow_index"][:].size > 0, "fixture carries no z overflow cell"
+    assert_same_band_arrays(rs, rp)
+    assert_same_top_hits(rs, rp, ("variant_index", "analysis_index", "z", "se"))
+
+    ss = {r["analysis_id"]: r["eaf_scope"] for r in read_analyses(serial / "analyses.tsv").rows}
+    ps = {r["analysis_id"]: r["eaf_scope"] for r in read_analyses(parallel / "analyses.tsv").rows}
+    assert ss == ps
+
+
+# ── Off-reference key resolution stays memory-bounded (ticket #222 review) ──
+
+
+def _hg38_key_run(positions: range, column: int = 0) -> KeyRun:
+    """A column run of distinct packed hg38 SNV keys."""
+    keys = np.array([encode_key(f"1:{position}:A:G") for position in positions], dtype=np.uint64)
+    empty = np.empty(0, dtype=np.uint64)
+    return column_run(keys, empty, empty, column=column, assembly_bit=HG38)
+
+
+class _LiveRuns:
+    """Hand out runs one at a time, recording before each how many earlier
+    ones are still alive -- i.e. retained by the code under test."""
+
+    def __init__(self, n: int) -> None:
+        self._runs = [_hg38_key_run(range(100 + i * 50, 300 + i * 50), i) for i in range(n)]
+        self._alive: list[weakref.ref[np.ndarray]] = []
+        self.live_counts: list[int] = []
+
+    def next(self) -> KeyRun:
+        self.live_counts.append(sum(ref() is not None for ref in self._alive))
+        run = self._runs.pop(0)
+        self._alive.append(weakref.ref(run.values))
+        return run
+
+
+def _key_prepared(spill_dir: Path, n: int) -> SimpleNamespace:
+    rows = [SimpleNamespace(source_assembly="hg38") for _ in range(n)]
+    return SimpleNamespace(spill_dir=spill_dir, manifest_rows=rows)
+
+
+def _key_options(n_workers: int) -> SimpleNamespace:
+    return SimpleNamespace(n_workers=n_workers, liftover_failure_threshold=1.0, chain_file=None)
+
+
+def test_key_chunk_worker_folds_columns_one_at_a_time(tmp_path, monkeypatch):
+    """A worker must not hold every column's keys before merging: at
+    OGS-00011 scale a chunk is dozens of columns of tens of millions of keys."""
+    live = _LiveRuns(24)
+    monkeypatch.setattr(
+        hybrid_build, "_column_key_run", lambda spill_dir, col, assembly: live.next()
+    )
+    cols = tuple(range(24))
+    out = hybrid_build._summarise_key_chunk(
+        (tmp_path, cols, ("hg38",) * 24, tmp_path / "keyrun.0.npz")
+    )
+    merged = read_run(out)
+    assert len(live.live_counts) == 24, "the fixture must reach every column"
+    assert merged.size == 200 + 23 * 50
+    assert max(live.live_counts) <= 1, f"columns retained: {live.live_counts}"
+
+
+def test_off_reference_resolution_folds_worker_results_as_they_arrive(monkeypatch):
+    """Review round 1 blocker: ``list(ordered_map(...))`` retained every worker
+    result in the parent before one all-at-once merge. Workers now return
+    spill paths; each must be loaded only when folded, and released after."""
+    live = _LiveRuns(32)
+
+    def _fake_ordered_map(fn, items, n_workers, max_in_flight=None):
+        for item in items:
+            yield item[-1]
+
+    monkeypatch.setattr(hybrid_build, "ordered_map", _fake_ordered_map)
+    monkeypatch.setattr(hybrid_build, "_load_key_run", lambda path: live.next())
+    resolved = hybrid_build._resolve_off_reference_keys(
+        _key_prepared(Path("unused"), 32), _key_options(8)
+    )
+    assert len(live.live_counts) == 32, "the fixture must yield one result per chunk task"
+    assert resolved is not None
+    assert len(resolved.keys) == 200 + 31 * 50
+    assert max(live.live_counts) <= 1, f"worker results retained: {live.live_counts}"
+
+
+def test_off_reference_resolution_spills_and_removes_worker_results(tmp_path, monkeypatch):
+    """The worker result crosses the pool as a spill path; the parent reads it
+    back to the same keys and deletes the spill once loaded."""
+    run = _hg38_key_run(range(100, 400))
+    monkeypatch.setattr(hybrid_build, "_column_key_run", lambda spill_dir, col, assembly: run)
+    resolved = hybrid_build._resolve_off_reference_keys(
+        _key_prepared(tmp_path, 1), _key_options(1)
+    )
+    assert resolved is not None
+    np.testing.assert_array_equal(resolved.keys, run.values)
+    assert list(tmp_path.iterdir()) == [], "the key-run spill must be removed once read"
+
+
+def _write_unknown_spill(spill_dir: Path, col: int, raw_keys: list[str]) -> None:
+    """A column's ``.unk`` spill and side file, as Pass 2 writes them."""
+    encoded = encode_keys(raw_keys)
+    np.savez(
+        spill_dir / f"{col}.unk.npz",
+        keys=encoded.values,
+        hashed_index=encoded.hashed_index,
+    )
+    hybrid_build._write_unknown_side_file(spill_dir, col, encoded.hashed_raw)
+
+
+def test_off_reference_resolution_reads_hashed_raw_keys_after_the_merge(tmp_path):
+    """Runs carry no raw strings; each distinct hashed key's string is read
+    back from a column that declared it, so indels still canonicalise."""
+    _write_unknown_spill(tmp_path, 0, ["1:5:A:G", "1:7:CT:C"])
+    _write_unknown_spill(tmp_path, 1, ["1:7:CT:C", "2:9:GA:G", "1:5:A:G"])
+    resolved = hybrid_build._resolve_off_reference_keys(
+        _key_prepared(tmp_path, 2), _key_options(2)
+    )
+    assert resolved is not None
+    assert sorted(resolved.alids) == ["1:5:A:G", "1:7:C:CT", "2:9:G:GA"]
+    assert not [path for path in tmp_path.iterdir() if "keyrun" in path.name]
+
+
+def test_hashed_raw_read_pairs_each_value_with_its_own_raw_key(tmp_path):
+    """The side file is in row order, the requested values in sorted order;
+    each value must come back with its own raw key, not its neighbour's."""
+    raw = ["1:9:CT:C", "1:5:GA:G", "1:7:TA:T", "1:3:CA:C"]
+    _write_unknown_spill(tmp_path, 0, raw)
+    values = np.array([encode_key(key) for key in raw], dtype=np.uint64)
+    order = np.argsort(values)
+    assert order.tolist() != list(range(len(raw))), "the fixture's file order must differ"
+    wanted = np.sort(values)[1:3]
+    checks = np.array(
+        [check_hash(raw[index]) for index in order[1:3].tolist()], dtype=np.uint64
+    )
+    fetched = hybrid_build._column_hashed_raw((tmp_path, 0, wanted, checks))
+    assert [encode_key(key) for key in fetched] == wanted.tolist()
+
+
+def test_hashed_raw_read_refuses_a_side_file_that_no_longer_matches(tmp_path):
+    """The merge verified each hashed key by its check hash; reading the raw
+    key back must re-verify it rather than trust whatever the file now says."""
+    _write_unknown_spill(tmp_path, 0, ["1:7:CT:C"])
+    value = np.array([encode_key("1:7:CT:C")], dtype=np.uint64)
+    right = np.array([check_hash("1:7:CT:C")], dtype=np.uint64)
+    assert hybrid_build._column_hashed_raw((tmp_path, 0, value, right)) == ["1:7:CT:C"]
+    with pytest.raises(UnknownKeyEncodingError, match="no longer matches"):
+        hybrid_build._column_hashed_raw((tmp_path, 0, value, right + np.uint64(1)))

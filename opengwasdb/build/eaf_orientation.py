@@ -661,24 +661,58 @@ def _correlate(
     """One Analysis against one baseline, keyed by ALID."""
     shared = [alid for alid in observed if alid in baseline]
     n = len(shared)
-    correlation = correlate_frequencies(
+    return _evidence(
+        analysis_id,
         np.fromiter((observed[alid] for alid in shared), dtype=np.float64, count=n),
         np.fromiter((baseline[alid] for alid in shared), dtype=np.float64, count=n),
         min_overlap=min_overlap,
         min_variance=min_variance,
     )
+
+
+def _evidence(
+    analysis_id: str,
+    observed: np.ndarray,
+    baseline: np.ndarray,
+    *,
+    min_overlap: int,
+    min_variance: float,
+) -> OrientationEvidence:
+    """One Analysis's verdict from its frequencies and its baseline's, aligned."""
+    correlation = correlate_frequencies(
+        observed, baseline, min_overlap=min_overlap, min_variance=min_variance
+    )
     return OrientationEvidence(
         analysis_id=analysis_id,
         outcome=correlation.outcome,
-        n_overlap=n,
+        n_overlap=int(observed.size),
         r=correlation.r,
         note=correlation.note,
     )
 
 
+@dataclass(frozen=True)
+class _ConsensusBaseline:
+    """One Analysis's consensus baseline, aligned with its own observations.
+
+    Position `i` of every array is the Analysis's `i`-th observed site, in the
+    order its `{alid: eaf}` mapping iterates. `has_baseline` is false where
+    fewer than two *other* Analyses report the site; `median` is NaN there and
+    must not be read.
+    """
+
+    observed: np.ndarray
+    median: np.ndarray
+    has_baseline: np.ndarray
+
+    def shared(self) -> tuple[np.ndarray, np.ndarray]:
+        """`(observed, baseline)` over the sites that have a baseline, in order."""
+        return self.observed[self.has_baseline], self.median[self.has_baseline]
+
+
 def _consensus_baselines(
     observations: Mapping[str, Mapping[str, float]],
-) -> dict[str, dict[str, float]]:
+) -> dict[str, _ConsensusBaseline]:
     """Per Analysis, the median EAF the *other* Analyses report at each site.
 
     Leaving the Analysis itself out is what makes the comparison independent:
@@ -686,18 +720,93 @@ def _consensus_baselines(
     which is precisely the direction that would hide a flip. Sites where fewer
     than two other Analyses report a frequency are dropped — a "median" of one
     is that one Analysis's opinion, not a consensus.
+
+    Computed only where it can be read — at the sites the Analysis itself
+    reported, the only ones `_correlate` ever compared — so it is columnar
+    over the observations and bounded by their count, not by Analyses x sites
+    (issue #224: OGS-00011 held 300 GiB here, almost all of it unreachable).
     """
-    per_site: dict[str, dict[str, float]] = {}
-    for analysis_id, observed in observations.items():
-        for alid, value in observed.items():
-            per_site.setdefault(alid, {})[analysis_id] = value
-    baselines: dict[str, dict[str, float]] = {a: {} for a in observations}
-    for alid, by_analysis in per_site.items():
-        for analysis_id in observations:
-            others = [v for a, v in by_analysis.items() if a != analysis_id]
-            if len(others) >= 2:
-                baselines[analysis_id][alid] = float(np.median(others))
-    return baselines
+    counts = [len(observed) for observed in observations.values()]
+    n_obs = sum(counts)
+    code: dict[str, int] = {}
+    site = np.fromiter(
+        (
+            code.setdefault(alid, len(code))
+            for observed in observations.values()
+            for alid in observed
+        ),
+        dtype=np.int64,
+        count=n_obs,
+    )
+    del code
+    value = np.fromiter(
+        (v for observed in observations.values() for v in observed.values()),
+        dtype=np.float64,
+        count=n_obs,
+    )
+    median, has_baseline = _leave_one_out_medians(site, value)
+    del site
+    bounds = np.cumsum([0, *counts])
+    return {
+        analysis_id: _ConsensusBaseline(
+            observed=value[lo:hi], median=median[lo:hi], has_baseline=has_baseline[lo:hi]
+        )
+        for analysis_id, lo, hi in zip(
+            observations, bounds[:-1].tolist(), bounds[1:].tolist(), strict=True
+        )
+    }
+
+
+def _leave_one_out_medians(
+    site: np.ndarray, value: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """For each observation, the median of the *other* values at its site.
+
+    One sort by (site, value) serves every observation at once: removing the
+    observation at rank `p` from a site's `n` sorted values leaves `m = n - 1`,
+    whose middle ranks `(m - 1) // 2` and `m // 2` sit at the same sorted
+    positions below `p` and one further along from it. Exactly `np.median`'s
+    arithmetic — the middle value when `m` is odd, `(a + b) / 2` when even, NaN
+    if any other value is NaN — so the baseline is bit-identical to computing
+    each median from scratch. Returns `(median, has_baseline)` in input order;
+    `has_baseline` is `m >= 2`, and `median` is NaN wherever it is false.
+    """
+    n_obs = site.size
+    median = np.full(n_obs, np.nan)
+    has_baseline = np.zeros(n_obs, dtype=bool)
+    if n_obs == 0:
+        return median, has_baseline
+    # NaN sorts last within a site, so a site's finite values keep their ranks.
+    order = np.lexsort((value, site))
+    sorted_site = site[order]
+    sorted_value = value[order]
+    first = np.empty(n_obs, dtype=bool)
+    first[0] = True
+    np.not_equal(sorted_site[1:], sorted_site[:-1], out=first[1:])
+    starts = np.flatnonzero(first)
+    group = np.cumsum(first) - 1
+    del first, sorted_site
+    sizes = np.diff(np.append(starts, n_obs))
+    nan_at_site = np.add.reduceat(np.isnan(sorted_value), starts)
+
+    others = sizes[group] - 1
+    keep = others >= 2
+    ranks = np.flatnonzero(keep)
+    start = starts[group[ranks]]
+    m = others[ranks]
+    p = ranks - start
+    low = (m - 1) // 2
+    high = m // 2
+    a = sorted_value[start + low + (low >= p)]
+    b = sorted_value[start + high + (high >= p)]
+    loo = np.where(m % 2 == 1, a, (a + b) / 2)
+    others_nan = nan_at_site[group[ranks]] - np.isnan(sorted_value[ranks])
+    loo[others_nan > 0] = np.nan
+
+    target = order[ranks]
+    median[target] = loo
+    has_baseline[target] = True
+    return median, has_baseline
 
 
 def check_eaf_orientation(
@@ -750,10 +859,9 @@ def check_eaf_orientation(
     if len(with_eaf) >= MIN_CONSENSUS_ANALYSES:
         baselines = _consensus_baselines(with_eaf)
         evidence = tuple(
-            _correlate(
+            _evidence(
                 analysis_id,
-                with_eaf[analysis_id],
-                baselines[analysis_id],
+                *baselines[analysis_id].shared(),
                 min_overlap=min_overlap,
                 min_variance=min_variance,
             )
