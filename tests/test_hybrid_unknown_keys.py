@@ -229,3 +229,25 @@ def test_a_fully_packed_spill_writes_no_side_file(tmp_path) -> None:
     )
     assert (tmp_path / "0.unk.npz").exists()
     assert not (tmp_path / "0.unk.raw").exists()
+
+
+def test_validation_names_the_row_whose_raw_key_does_not_encode_to_it() -> None:
+    """The re-encode check is one array comparison (ticket #222); the error must
+    still name the offending row and key, not the first row checked."""
+    raw = ["1:5:A:AT", "1:6:A:GA", "1:7:A:TA", "1:8:A:CA"]
+    encoded = encode_keys(raw)
+    assert encoded.hashed_index.tolist() == [0, 1, 2, 3], "every row must be hashed"
+    stale = [*raw[:2], "1:99:A:TA", raw[3]]
+    with pytest.raises(UnknownKeyEncodingError, match=r"row 2 names raw key '1:99:A:TA'"):
+        unknown_keys.validated_hashed_values(encoded.values, encoded.hashed_index, stale)
+
+
+def test_packed_alids_are_built_blockwise_without_losing_a_block(monkeypatch) -> None:
+    """``packed_alids`` builds tens of millions of strings a bounded block at a
+    time (ticket #222); every block, including a short last one, must land."""
+    keys = [f"1:{position}:G:A" for position in range(1, 8)]
+    values = np.array([encode_key(key) for key in keys], dtype=np.uint64)
+    expected = [f"1:{position}:A:G" for position in range(1, 8)]
+    assert unknown_keys.packed_alids(values) == expected
+    monkeypatch.setattr(unknown_keys, "_ALID_BLOCK", 3)
+    assert unknown_keys.packed_alids(values) == expected

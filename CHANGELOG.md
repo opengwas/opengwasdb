@@ -251,6 +251,29 @@ the end of this file.
   Top-Hit Index and the `float16` narrowing remain serial and are logged; they
   reduce whole flat arrays or make one zarr write, so their profiling evidence
   is recorded on the issue instead of a forced pool.
+- **Off-reference key resolution builds a sorted `uint64` table, not two Python
+  dicts**: a `--variant-reference` Hybrid build resolves every Pass 2
+  off-reference key to its hg38 ALID and shared Variant Index through a sorted
+  key array built in parallel (`ordered_map`), with liftover and canonicalisation
+  run once per *distinct* key rather than once per association. The dict-based
+  resolution inserted every association into a raw-key → assembly and a raw-key →
+  ALID dict (~15 billion inserts on OGS-00011); the table's `.unk` → `.ovf` fold
+  is now one `np.searchsorted` per column. Workers and the parent fold the
+  per-column and per-chunk distinct keys incrementally, releasing each once
+  merged, so no process holds every column's or every worker's keys at once.
+  The merge carries numbers only: each hashed key's raw string is replaced by
+  an independent 64-bit check hash (`unknown_keys.check_hash`) and the column
+  that first declared it, and the strings are read back from the side files
+  once, after the merge, and re-verified. Every hashed row in every column is
+  verified against its value's canonical raw key before routing, guaranteeing
+  that two raw keys sharing an encoded value fail the build naming both keys even
+  if both hashes collide. No ALID → shared-index dict over the whole axis is built
+  or kept through Pass 2 and consolidation (a sorted hash index replaces it,
+  resolving colliding buckets through a small exact map of their members only).
+  The two-assembly drop, the liftover-failure drop, an off-reference ALID joining
+  an existing on-reference one, and the `hg38_to_source` collision blanking are
+  unchanged, and the build-wide hash guarantee from #218 still fails a collision
+  naming both keys (#222).
 - **The EAF consensus baseline is one sort per site, computed only where it is
   read (#224)**: with no `--eaf-reference`, each Analysis is correlated against
   the leave-one-out median of the other Analyses. That median was rebuilt from
