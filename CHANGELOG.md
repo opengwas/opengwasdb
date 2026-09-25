@@ -288,6 +288,18 @@ the end of this file.
   `EafOrientationReport`. Peak memory is now bounded by the observation count
   (~146 B per observation), not by Analyses x sites: a synthetic 3,262 x 20,000
   survey takes 40 s and 8.9 GiB.
+- **Fold off-reference spills into the Ragged Overflow Component in parallel with sorted searchsorted (#223)**:
+  the `.unk` → `.ovf` fold maps each column's keys against the global key table
+  using vectorized `searchsorted` after sorting the query keys, running across
+  `--n-workers` workers via `ordered_map` with `--n-workers 1` keeping a serial
+  in-process path. Workers receive the key table, canonical raw keys, and axis
+  remapping array as read-only NumPy buffers across fork, with zero per-key
+  Python objects or dicts. Existing overflow entries are translated to the final
+  shared axis and combined with off-reference entries in a single pass, writing
+  each column's overflow spill once, atomically (temporary file then rename),
+  with duplicate shared indices deduplicated last-wins (off-reference entries
+  winning over existing overflow entries). Off-reference spill files (`.unk.npz`
+  and `.unk.raw`) are unlinked only after the overflow spill is safely written.
 - **Non-autosomal chromosome spellings now share one canonical ALID identity**:
   source labels `23`/`X`, `24`/`Y`, and `25`/`26`/`M`/`MT` normalise to the
   explicit canonical labels `X`, `Y`, and `MT` respectively in every reader

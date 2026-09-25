@@ -93,6 +93,7 @@ from opengwasdb.layouts.hybrid.key_table import (
     KeyTable,
     ResolvedKeys,
     collision_message,
+    lookup_matched,
     resolve_keys,
 )
 from opengwasdb.layouts.hybrid.layout import (
@@ -1274,48 +1275,120 @@ def _merge_unknown_provenance(
     return hg38_to_source
 
 
-def _append_overflow_spill(
-    spill_dir: Path, col: int, idx: np.ndarray, z: np.ndarray, se: np.ndarray, eaf: np.ndarray
-) -> None:
-    """Append resolved off-reference entries to a column's existing overflow spill."""
-    overflow_path = spill_dir / f"{col}.ovf.npz"
-    if overflow_path.exists():
-        with np.load(overflow_path) as data:
-            idx, z, se, eaf = (
-                np.concatenate([data["variant_index"], idx]),
-                np.concatenate([data["z"], z]),
-                np.concatenate([data["se"], se]),
-                np.concatenate([data["eaf"], eaf]),
-            )
-    idx, z, se, eaf = _dedup_last_wins(idx, z, se, eaf)
-    np.savez(overflow_path, variant_index=idx, z=z, se=se, eaf=eaf)
+@dataclass(frozen=True)
+class _FoldContext:
+    spill_dir: Path
+    table_keys: np.ndarray
+    table_shared_index: np.ndarray
+    canonical_values: np.ndarray
+    canonical_raw: np.ndarray
+    old_to_new: np.ndarray | None
 
 
-def _merge_unknown_column(
-    spill_dir: Path, col: int, table: KeyTable, canonical: CanonicalRawKeys
-) -> None:
+_fold_context: _FoldContext | None = None
+
+
+def _combine_overflow(
+    ex: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
+    off: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None,
+    needs_remap: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+    """Combine existing overflow and off-reference entries with last-wins precedence.
+
+    Off-reference entries are concatenated after existing overflow entries, so
+    they always win on duplicate shared indices (issue #223).
+    """
+    if ex is not None and off is not None:
+        comb = tuple(np.concatenate([e, o]) for e, o in zip(ex, off, strict=True))
+        return _dedup_last_wins(*comb)
+    if off is not None:
+        return _dedup_last_wins(*off)
+    if ex is not None and needs_remap:
+        return _dedup_last_wins(*ex)
+    return None
+
+
+def _load_existing_overflow(
+    spill_dir: Path, col: int, old_to_new: np.ndarray | None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+    """Load and re-index existing overflow spill if present."""
+    ovf_path = spill_dir / f"{col}.ovf.npz"
+    if not ovf_path.exists():
+        return None
+    with np.load(ovf_path) as data:
+        raw_vi = data["variant_index"].astype(np.int64)
+        z, se, eaf = data["z"], data["se"], data["eaf"]
+    vi = old_to_new[raw_vi] if old_to_new is not None else raw_vi
+    return vi, z, se, eaf
+
+
+def _load_fold_existing(
+    ctx: _FoldContext, spill_dir: Path, col: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+    """Load existing overflow unless an empty fold leaves it unchanged."""
+    if ctx.old_to_new is None and not len(ctx.table_keys):
+        return None
+    return _load_existing_overflow(spill_dir, col, ctx.old_to_new)
+
+
+def _load_off_reference(
+    ctx: _FoldContext, spill_dir: Path, col: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+    """Load, verify, and resolve off-reference associations with searchsorted."""
+    unk_path = spill_dir / f"{col}.unk.npz"
+    if not unk_path.exists():
+        return None
+    with np.load(unk_path) as data:
+        keys = data["keys"]
+        u_z, u_se, u_eaf = data["z"], data["se"], data["eaf"]
+        hashed_index = data["hashed_index"]
+    canonical = CanonicalRawKeys(ctx.canonical_values, ctx.canonical_raw)
+    _verify_hashed_rows(spill_dir, col, keys, hashed_index, canonical)
+    keep, shared = lookup_matched(ctx.table_keys, ctx.table_shared_index, keys)
+    if not len(keep):
+        return None
+    return shared, u_z[keep], u_se[keep], u_eaf[keep]
+
+
+def _fold_column(col: int) -> int:
     """Fold one column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices.
 
-    Keys that failed liftover (or were declared on two assemblies) are absent
-    from the table and their associations are dropped with them. The lookup is
-    one ``np.searchsorted`` over the whole column, never a per-key Python dict
-    (ticket #222). Before any row is routed, every hashed row's raw key is
-    compared exactly with its value's canonical key, so a hash collision fails
-    the build rather than sending one key's statistics to another's variant.
+    Remaps existing overflow entries if an axis shift occurred (old_to_new),
+    verifies hashed keys against canonical raw keys (failing loudly on hash collision),
+    looks up off-reference keys in the key table using sorted searchsorted, drops
+    unresolved keys, and deduplicates duplicate Variant Indices last-wins with
+    off-reference entries winning over existing overflow entries (ticket #223).
+    Writes the overflow spill once atomically (temp file then rename), and unlinks
+    the off-reference spill only after the overflow spill is safely written.
     """
-    path = spill_dir / f"{col}.unk.npz"
-    if path.exists():
-        with np.load(path) as data:
-            keys, z, se, eaf = data["keys"], data["z"], data["se"], data["eaf"]
-            hashed_index = data["hashed_index"]
-        _verify_hashed_rows(spill_dir, col, keys, hashed_index, canonical)
-        shared, matched = table.lookup(keys)
-        if bool(matched.any()):
-            _append_overflow_spill(
-                spill_dir, col, shared[matched], z[matched], se[matched], eaf[matched]
-            )
-    path.unlink(missing_ok=True)
-    _unknown_side_path(spill_dir, col).unlink(missing_ok=True)
+    assert _fold_context is not None
+    ctx = _fold_context
+    spill_dir = ctx.spill_dir
+    ovf_path = spill_dir / f"{col}.ovf.npz"
+    unk_path = spill_dir / f"{col}.unk.npz"
+
+    # With no remap (the all-keys-drop path), the existing overflow spill is
+    # already on the final axis and must remain untouched.  Avoid reading it.
+    ex = _load_fold_existing(ctx, spill_dir, col)
+    off = _load_off_reference(ctx, spill_dir, col)
+    if ex is None and off is None and not unk_path.exists():
+        return col
+
+    final = _combine_overflow(ex, off, ctx.old_to_new is not None)
+    if final is not None:
+        tmp_ovf = spill_dir / f"{col}.ovf.tmp.npz"
+        try:
+            np.savez(tmp_ovf, variant_index=final[0], z=final[1], se=final[2], eaf=final[3])
+            tmp_ovf.replace(ovf_path)
+        except BaseException:
+            tmp_ovf.unlink(missing_ok=True)
+            raise
+
+    if unk_path.exists():
+        unk_path.unlink()
+        _unknown_side_path(spill_dir, col).unlink(missing_ok=True)
+
+    return col
 
 
 def _verify_hashed_rows(
@@ -1337,42 +1410,71 @@ def _verify_hashed_rows(
     canonical.verify(col, values, np.array(raws, dtype=RAW_KEY_DTYPE))
 
 
-def _remap_overflow_spills(prepared: _PreparedBuild, index: AlidIndex) -> None:
-    """Re-key existing overflow spills from the initial shared axis to the final one.
-
-    Pass 2 wrote each on-reference off-panel association under the shared index
-    the *initial* partition assigned it. Adding off-reference variants shifts
-    every shared index at or after the first insertion point, so those entries
-    have to be translated through their ALID before the two sets are combined --
-    otherwise they silently point at whichever variant now occupies their old
-    index (issue #186 review). The translation is built once as an array and
-    indexed per column, not a dict lookup per association (ticket #222); the
-    ALID -> index lookup is the compact sorted hash index, not a dict.
-    """
-    old_alids = prepared.partition.shared_sorted
-    old_to_new = index.lookup(old_alids)
-    for col in range(prepared.n_analyses):
-        path = prepared.spill_dir / f"{col}.ovf.npz"
-        if not path.exists():
-            continue
-        with np.load(path) as data:
-            vi = data["variant_index"].astype(np.int64)
-            z, se, eaf = data["z"], data["se"], data["eaf"]
-        remapped, z, se, eaf = _dedup_last_wins(old_to_new[vi], z, se, eaf)
-        np.savez(path, variant_index=remapped, z=z, se=se, eaf=eaf)
-
-
-def _merge_unknown_spills(
-    prepared: _PreparedBuild, table: KeyTable, canonical: CanonicalRawKeys
+def _fold_unknown_spills(
+    spill_dir: Path,
+    n_analyses: int,
+    table: KeyTable,
+    canonical: CanonicalRawKeys,
+    old_to_new: np.ndarray | None,
+    n_workers: int,
 ) -> None:
-    """Fold every column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices."""
-    for col in range(prepared.n_analyses):
-        _merge_unknown_column(prepared.spill_dir, col, table, canonical)
+    """Fold every column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices.
+
+    Runs across ``--n-workers`` workers via ``ordered_map``. With ``n_workers <= 1``
+    it runs in-process on the serial path (ticket #223).
+    Workers receive the key table, canonical raw keys, and remapping index as
+    read-only arrays across the fork, with zero per-key Python objects or dicts.
+    This function takes ownership of those arrays' mutability: it marks the
+    caller-owned arrays read-only and deliberately leaves them read-only after
+    returning.  Callers must not write them after handing them to the fold.
+    Each column's overflow spill is written at most once, atomically.
+    """
+    global _fold_context
+    table_keys = table.keys
+    table_shared = table.shared_index
+    table_keys.flags.writeable = False
+    table_shared.flags.writeable = False
+
+    canonical_values = canonical.values
+    canonical_raw = canonical.raw
+    canonical_values.flags.writeable = False
+    canonical_raw.flags.writeable = False
+
+    if old_to_new is not None:
+        old_to_new.flags.writeable = False
+
+    _fold_context = _FoldContext(
+        spill_dir=spill_dir,
+        table_keys=table_keys,
+        table_shared_index=table_shared,
+        canonical_values=canonical_values,
+        canonical_raw=canonical_raw,
+        old_to_new=old_to_new,
+    )
+    try:
+        for _ in ordered_map(_fold_column, range(n_analyses), n_workers):
+            pass
+    finally:
+        _fold_context = None
 
 
 _EMPTY_KEY_TABLE = KeyTable(
     keys=np.empty(0, dtype=np.uint64), shared_index=np.empty(0, dtype=np.int64)
 )
+
+
+def _build_shared_key_table(
+    prepared: _PreparedBuild, resolved: ResolvedKeys
+) -> tuple[KeyTable, np.ndarray, AlidIndex, list[str], list[str]]:
+    """Build key table and axis remapping index for resolved off-reference variants."""
+    unknown_alids = set(resolved.alids)
+    off_panel = _sorted_alids(set(prepared.partition.off_panel_alids) | unknown_alids)
+    panel = prepared.partition.panel_sorted
+    shared_sorted = _sorted_alids(set(panel) | set(off_panel))
+    index = AlidIndex(shared_sorted)
+    table = KeyTable(keys=resolved.keys, shared_index=index.lookup(resolved.alids))
+    old_to_new = index.lookup(prepared.partition.shared_sorted)
+    return table, old_to_new, index, off_panel, shared_sorted
 
 
 def _finalise_reference_partition(
@@ -1397,28 +1499,47 @@ def _finalise_reference_partition(
     if not len(resolved.keys):
         # Nothing joins the axis, but every hashed row is still checked exactly;
         # the fold then drops the unresolved rows as it always did.
-        _merge_unknown_spills(prepared, _EMPTY_KEY_TABLE, off_reference.canonical)
+        _fold_unknown_spills(
+            prepared.spill_dir,
+            prepared.n_analyses,
+            _EMPTY_KEY_TABLE,
+            off_reference.canonical,
+            old_to_new=None,
+            n_workers=options.n_workers,
+        )
         return prepared
-    unknown_alids = set(resolved.alids)
-    off_panel = _sorted_alids(set(prepared.partition.off_panel_alids) | unknown_alids)
+    table, old_to_new, index, off_panel, shared_sorted = _build_shared_key_table(
+        prepared, resolved
+    )
+    _fold_unknown_spills(
+        prepared.spill_dir,
+        prepared.n_analyses,
+        table,
+        off_reference.canonical,
+        old_to_new=old_to_new,
+        n_workers=options.n_workers,
+    )
     panel = prepared.partition.panel_sorted
-    shared_sorted = _sorted_alids(set(panel) | set(off_panel))
-    # A sorted hash index replaces the str -> int dict of every shared variant:
-    # no global ALID dict is built or retained through consolidation (ticket
-    # #222 review round 1).
-    index = AlidIndex(shared_sorted)
-    table = KeyTable(keys=resolved.keys, shared_index=index.lookup(resolved.alids))
-    # Existing overflow entries carry the *initial* axis's indices; translate
-    # them before mixing in the off-reference entries keyed to the new one.
-    _remap_overflow_spills(prepared, index)
-    _merge_unknown_spills(prepared, table, off_reference.canonical)
     dense_to_shared = index.lookup(panel).astype(np.int32)
     np.save(dense_to_shared_path(prepared.staged.path), dense_to_shared)
     hg38_to_source = _merge_unknown_provenance(prepared.hg38_to_source, resolved)
     log.info(
         "Single-pass build: %d off-reference variant(s) routed to the Ragged Overflow",
-        len(unknown_alids),
+        len(off_panel) - prepared.partition.n_off_panel,
     )
+    return _update_partition(
+        prepared, off_panel, shared_sorted, dense_to_shared, hg38_to_source
+    )
+
+
+def _update_partition(
+    prepared: _PreparedBuild,
+    off_panel: list[str],
+    shared_sorted: list[str],
+    dense_to_shared: np.ndarray,
+    hg38_to_source: dict[str, str | None],
+) -> _PreparedBuild:
+    """Return prepared build updated with final shared partition and provenance."""
     partition = replace(
         prepared.partition,
         off_panel_alids=off_panel,

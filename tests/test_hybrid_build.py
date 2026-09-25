@@ -1591,6 +1591,46 @@ class TestVariantReference:
         assert set(rows) == {HG38_ALID_1, HG38_ALID_2, HG38_ALID_3}
         assert rows[HG38_ALID_2].source_alid is None
 
+    def test_two_raw_keys_in_same_analysis_join_one_variant_last_wins(self, tmp_path):
+        """Issue #223 AC4: when two different raw keys within the SAME Analysis
+        map to the same Variant Index (e.g. A:G and G:A both canonicalising to
+        A:G), the later stream occurrence must win (last-wins deduplication)."""
+        reference = _write_reference_artifact(
+            tmp_path, _hybrid_manifest(tmp_path), panel_only=True
+        )
+        # In a single study, row 1 is 1:500000:A:G (ES 1.0 -> z -2.0) and
+        # row 2 is 1:500000:G:A (ES 2.0 -> z -4.0).
+        vcf = _make_vcf(
+            tmp_path,
+            "trait_same",
+            [
+                "1\t500000\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n",
+                "1\t500000\t.\tG\tA\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+            ],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("trait_same", vcf, "Same Analysis", "hg38")]
+        )
+        store = tmp_path / "same_analysis.opengwasdb"
+
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=reference, store_id="s", release_id="r",
+            n_workers=2,
+        )
+
+        assert result.n_panel == 2
+        assert result.n_off_panel == 1, "both raw keys resolve to one variant"
+        assert result.n_overflow == 1, "deduplicated to exactly 1 association in overflow"
+
+        validation = validate_store(store)
+        assert validation.ok, validation.errors
+
+        with query_store(store) as q:
+            res = q.lookup(["1:500000:A:G"], ["trait_same"])
+            assert len(res["z"]) == 1
+            # Row 2 (z = 4.0) must win over Row 1 (z = -2.0)
+            assert res["z"][0] == pytest.approx(4.0, rel=5e-3)
+
     def test_manifest_records_the_variant_reference(self, tmp_path):
         manifest = _hybrid_manifest(tmp_path)
         reference = _write_reference_artifact(tmp_path, manifest)
