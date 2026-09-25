@@ -9,9 +9,13 @@ where the reduction order lives.
 
 from __future__ import annotations
 
+import weakref
+from collections.abc import Iterator, Sequence
+
 import numpy as np
 import pytest
 
+from opengwasdb.layouts.hybrid import key_table
 from opengwasdb.layouts.hybrid.key_table import (
     HG19,
     HG38,
@@ -122,3 +126,114 @@ def test_resolve_keys_keeps_two_hg38_keys_on_one_alid() -> None:
     resolved = resolve_keys(merged, liftover_failure_threshold=1.0, chain_file=None)
     assert len(resolved.keys) == 2
     assert resolved.alids == ["1:5:A:G", "1:5:A:G"]
+
+
+def _random_chunk(rng: np.random.Generator, universe: int, size: int) -> ChunkKeys:
+    """Distinct keys drawn from a small universe so chunks overlap heavily,
+    with a hashed subset whose raw key is a function of its value (no collision)."""
+    values = np.unique(rng.integers(0, universe, size=size).astype(np.uint64))
+    hashed_values = values[values % 5 == 0] | np.uint64(HASH_TAG)
+    values = np.unique(np.concatenate([values, hashed_values]))
+    return ChunkKeys(
+        values=values,
+        assembly_bits=rng.choice([HG19, HG38], size=len(values)).astype(np.int8),
+        hashed_values=hashed_values,
+        hashed_raw=[f"raw-{int(value)}" for value in hashed_values.tolist()],
+    )
+
+
+def test_merge_key_stream_matches_the_all_at_once_merge() -> None:
+    """The incremental fold must be the same reduction as one big merge: same
+    distinct keys, same OR of assemblies, same hashed raw keys."""
+    rng = np.random.default_rng(222)
+    chunks = [_random_chunk(rng, 400, 150) for _ in range(13)]
+    expected = merge_chunks(chunks)
+    assert int((expected.assembly_bits == (HG19 | HG38)).sum()) > 0, (
+        "the fixture must hold keys declared on both assemblies across chunks"
+    )
+    assert len(expected.hashed_values) > 0
+    streamed = key_table.merge_key_stream(iter(chunks))
+    np.testing.assert_array_equal(streamed.values, expected.values)
+    np.testing.assert_array_equal(streamed.assembly_bits, expected.assembly_bits)
+    np.testing.assert_array_equal(streamed.hashed_values, expected.hashed_values)
+    assert streamed.hashed_raw == expected.hashed_raw
+
+
+def test_merge_key_stream_of_nothing_is_empty() -> None:
+    merged = key_table.merge_key_stream(iter([]))
+    assert len(merged.values) == 0
+    assert merged.hashed_raw == []
+
+
+def test_merge_key_stream_detects_a_hash_collision_across_distant_chunks() -> None:
+    value = int(HASH_TAG | 7)
+    filler = [_packed(f"1:{position}:A:G", HG38) for position in range(10, 16)]
+    with pytest.raises(UnknownKeyEncodingError, match="hash collision"):
+        key_table.merge_key_stream(
+            iter([_hashed("1:5:A:AT", value), *filler, _hashed("1:6:A:GA", value)])
+        )
+
+
+def _tracked(chunks: list[ChunkKeys], live_counts: list[int]) -> Iterator[ChunkKeys]:
+    """Yield ``chunks``, recording before each how many earlier ones survive.
+
+    Only the stream holds a strong reference to a chunk after yielding it, so a
+    surviving earlier chunk is one the consumer is still retaining.
+    """
+    alive: list[weakref.ref[np.ndarray]] = []
+    while chunks:
+        live_counts.append(sum(ref() is not None for ref in alive))
+        chunk = chunks.pop(0)
+        alive.append(weakref.ref(chunk.values))
+        yield chunk
+        del chunk
+
+
+def test_merge_key_stream_releases_each_chunk_once_folded() -> None:
+    """Review round 1 blocker: ``merge_chunks(list(stream))`` retained every
+    worker result at once. The fold may keep at most one unmerged chunk (the
+    binary counter's lowest level) while the next arrives."""
+    rng = np.random.default_rng(7)
+    chunks = [_random_chunk(rng, 10_000, 2_000) for _ in range(32)]
+    live_counts: list[int] = []
+    merged = key_table.merge_key_stream(_tracked(chunks, live_counts))
+    assert len(live_counts) == 32, "the fixture must stream every chunk"
+    assert len(merged.values) > 2_000
+    assert max(live_counts) <= 1, f"earlier chunks retained: {live_counts}"
+
+
+def _length_hashes(strings: Sequence[str]) -> np.ndarray:
+    """A deliberately colliding hash: every string of one length shares it."""
+    return np.array([len(value) for value in strings], dtype=np.uint64)
+
+
+def test_alid_index_returns_axis_positions_in_query_order() -> None:
+    axis = ["1:5:A:G", "1:9:C:T", "2:1:A:C", "X:3:G:T"]
+    index = key_table.AlidIndex(axis)
+    np.testing.assert_array_equal(
+        index.lookup(["X:3:G:T", "1:5:A:G", "2:1:A:C"]), [3, 0, 2]
+    )
+    assert index.lookup([]).tolist() == []
+
+
+def test_alid_index_refuses_an_absent_alid() -> None:
+    with pytest.raises(UnknownKeyEncodingError, match="1:7:A:G"):
+        key_table.AlidIndex(["1:5:A:G", "1:9:C:T"]).lookup(["1:5:A:G", "1:7:A:G"])
+
+
+def test_alid_index_refuses_an_absent_alid_whose_hash_matches_the_axis(monkeypatch) -> None:
+    """A hash hit alone must not be trusted: an ALID off the axis that happens
+    to share another's hash would otherwise silently take that ALID's index."""
+    monkeypatch.setattr(key_table, "_string_hashes", _length_hashes)
+    index = key_table.AlidIndex(["1:5:A:G", "10:5:A:G"])
+    assert index.lookup(["10:5:A:G"]).tolist() == [1], "the fixture's hashes must be distinct"
+    with pytest.raises(UnknownKeyEncodingError, match="11:5:A:G"):
+        index.lookup(["11:5:A:G"])
+
+
+def test_alid_index_resolves_axis_alids_that_share_a_hash(monkeypatch) -> None:
+    monkeypatch.setattr(key_table, "_string_hashes", _length_hashes)
+    axis = ["1:5:A:G", "1:9:C:T", "10:5:A:G"]
+    np.testing.assert_array_equal(
+        key_table.AlidIndex(axis).lookup(["1:9:C:T", "10:5:A:G", "1:5:A:G"]), [1, 2, 0]
+    )

@@ -22,7 +22,7 @@ fail the build naming both, wherever in the manifest they sit.
 from __future__ import annotations
 
 import itertools
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,10 +39,12 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
 __all__ = [
     "HG19",
     "HG38",
+    "AlidIndex",
     "ChunkKeys",
     "KeyTable",
     "ResolvedKeys",
     "merge_chunks",
+    "merge_key_stream",
     "resolve_keys",
 ]
 
@@ -104,6 +106,65 @@ class KeyTable:
         clipped = np.minimum(position, len(self.keys) - 1)
         matched = self.keys[clipped] == keys
         return self.shared_index[clipped], matched
+
+
+_UINT64_MASK = (1 << 64) - 1
+
+
+class AlidIndex:
+    """ALID -> axis position as a sorted hash array, not a Python dict.
+
+    Mapping an ALID to its index on the shared axis used to build a
+    ``str -> int`` dict over every shared variant -- tens of millions of
+    entries resident through consolidation. This keys the axis by the
+    process-local string hash (sorted ``uint64``) and binary-searches it: 16
+    bytes per ALID, plus a pointer to the axis list the caller already holds.
+
+    A hash hit is confirmed by comparing the axis string with the query, so a
+    query absent from the axis fails loudly even if its hash happens to match
+    another ALID's. Two axis ALIDs sharing one hash would make the search
+    ambiguous; in that (astronomically rare) case the index falls back to a
+    dict rather than return another ALID's position.
+    """
+
+    def __init__(self, axis: Sequence[str]) -> None:
+        self._axis = np.asarray(axis, dtype=object)
+        self._fallback: dict[str, int] | None = None
+        hashes = _string_hashes(axis)
+        order = np.argsort(hashes, kind="stable")
+        self._hashes = hashes[order]
+        self._positions = order.astype(np.int64)
+        if bool((self._hashes[1:] == self._hashes[:-1]).any()):
+            self._fallback = {alid: index for index, alid in enumerate(axis)}
+
+    def lookup(self, alids: Sequence[str]) -> np.ndarray:
+        """The axis position of each ALID, in input order; absent ALIDs raise."""
+        if not len(alids):
+            return np.empty(0, dtype=np.int64)
+        if self._fallback is not None:
+            fallback = self._fallback
+            return np.fromiter(
+                (fallback[alid] for alid in alids), dtype=np.int64, count=len(alids)
+            )
+        if not len(self._hashes):
+            raise UnknownKeyEncodingError(f"ALID {alids[0]!r} is absent from an empty axis")
+        queries = _string_hashes(alids)
+        clipped = np.minimum(np.searchsorted(self._hashes, queries), len(self._hashes) - 1)
+        positions = self._positions[clipped]
+        found = self._axis[positions] == np.asarray(alids, dtype=object)
+        if not bool(found.all()):
+            missing = alids[int(np.flatnonzero(~found)[0])]
+            raise UnknownKeyEncodingError(
+                f"ALID {missing!r} is absent from the shared axis; refusing to guess its index"
+            )
+        return positions
+
+
+def _string_hashes(strings: Sequence[str]) -> np.ndarray:
+    """Each string's process-local hash as ``uint64``."""
+    return np.fromiter(
+        (hash(value) & _UINT64_MASK for value in strings), dtype=np.uint64, count=len(strings)
+    )
 
 
 def _run_starts(sorted_values: np.ndarray) -> np.ndarray:
@@ -180,6 +241,56 @@ def merge_chunks(chunks: Sequence[ChunkKeys]) -> ChunkKeys:
         hashed_values=hashed_values,
         hashed_raw=hashed_raw,
     )
+
+
+def merge_key_stream(chunks: Iterable[ChunkKeys]) -> ChunkKeys:
+    """Fold an ordered stream of chunk results into one distinct-key table.
+
+    Each chunk is merged into a binary-counter tree of runs as it arrives, so a
+    chunk is released as soon as it is folded in and at most ``log2(n) + 2``
+    partial results are live. Calling ``merge_chunks(list(stream))`` instead
+    retains every worker result and concatenates them all at once: at
+    OGS-00011 scale that is the summed per-chunk tables, not the global
+    distinct-key table (ticket #222 review round 1).
+
+    A binary counter keeps the work ``O(S log n)`` for ``S`` summed chunk rows:
+    a run at level ``k`` is the deduped union of ``2**k`` chunks, and every
+    chunk is merged once per level it climbs.
+    """
+    carries: list[ChunkKeys | None] = []
+    for chunk in chunks:
+        _carry_in(carries, chunk)
+        # The loop name must not outlive the fold: the stream's next item is
+        # produced while this frame still holds it.
+        del chunk
+    return _drain(carries)
+
+
+def _carry_in(carries: list[ChunkKeys | None], current: ChunkKeys) -> None:
+    """Add one chunk to the binary counter, merging up while a level is full."""
+    level = 0
+    while level < len(carries) and carries[level] is not None:
+        existing = carries[level]
+        assert existing is not None  # the loop condition
+        carries[level] = None
+        current = merge_chunks([existing, current])
+        del existing
+        level += 1
+    if level == len(carries):
+        carries.append(current)
+    else:
+        carries[level] = current
+
+
+def _drain(carries: list[ChunkKeys | None]) -> ChunkKeys:
+    """Merge the counter's remaining levels, smallest first, into one table."""
+    result: ChunkKeys | None = None
+    while carries:
+        carry = carries.pop(0)
+        if carry is not None:
+            result = carry if result is None else merge_chunks([result, carry])
+        del carry
+    return result if result is not None else merge_chunks([])
 
 
 def _canonical_source_key(key: str) -> str:

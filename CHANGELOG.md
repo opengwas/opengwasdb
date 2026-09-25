@@ -258,7 +258,11 @@ the end of this file.
   run once per *distinct* key rather than once per association. The dict-based
   resolution inserted every association into a raw-key → assembly and a raw-key →
   ALID dict (~15 billion inserts on OGS-00011); the table's `.unk` → `.ovf` fold
-  is now one `np.searchsorted` per column. The two-assembly drop, the
+  is now one `np.searchsorted` per column. Workers and the parent fold the
+  per-column and per-chunk distinct keys incrementally, releasing each once
+  merged, so no process holds every column's or every worker's keys at once;
+  and no ALID → shared-index dict over the whole axis is built or kept through
+  Pass 2 and consolidation (a sorted hash index replaces it). The two-assembly drop, the
   liftover-failure drop, an off-reference ALID joining an existing on-reference
   one, and the `hg38_to_source` collision blanking are unchanged, and the
   build-wide hash guarantee from #218 still fails a collision naming both keys

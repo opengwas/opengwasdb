@@ -25,6 +25,7 @@ import logging
 import shutil
 import tempfile
 import time
+from collections.abc import Iterator, Sequence
 from concurrent.futures import as_completed
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -77,10 +78,11 @@ from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.hybrid.key_table import (
     HG19,
     HG38,
+    AlidIndex,
     ChunkKeys,
     KeyTable,
     ResolvedKeys,
-    merge_chunks,
+    merge_key_stream,
     resolve_keys,
 )
 from opengwasdb.layouts.hybrid.layout import (
@@ -599,17 +601,18 @@ class _VariantPartition:
     The Dense Component axis is exactly the reference panel's ALIDs in genomic
     order; the Ragged Overflow holds the observed ALIDs outside it.
     ``shared_sorted`` is the union of the two -- the store's root variant axis
-    -- and ``dense_row``/``shared_index`` map an ALID to the index each
-    component stores it under. The layout contract both components share is
-    that dense row ``i`` is the ``i``-th panel ALID of ``shared_sorted``, so
-    ``dense_to_shared.npy`` is a strictly ascending map.
+    -- the store's root variant axis. The layout contract both components
+    share is that dense row ``i`` is the ``i``-th panel ALID of
+    ``shared_sorted``, so ``dense_to_shared.npy`` is a strictly ascending map.
+    No ALID -> index dict is kept here: at tens of millions of variants one
+    would stay resident through Pass 2 and consolidation (ticket #222 review);
+    the routing index builds its own and drops it, and later lookups go
+    through ``AlidIndex``.
     """
 
     panel_sorted: list[str]
     off_panel_alids: list[str]
     shared_sorted: list[str]
-    dense_row: dict[str, int]
-    shared_index: dict[str, int]
     n_panel: int
     n_off_panel: int
     n_shared: int
@@ -769,8 +772,6 @@ def _partition_variants(
     off_panel_alids = _sorted_alids(off_panel_set)
     panel_sorted = _sorted_alids(panel_alids)
     shared_sorted = _sorted_alids(panel_alids | off_panel_set)
-    dense_row = {alid: i for i, alid in enumerate(panel_sorted)}
-    shared_index = {alid: i for i, alid in enumerate(shared_sorted)}
     log.info(
         "Partition: %d panel (dense), %d off-panel (overflow), %d shared variants, %d analyses",
         len(panel_sorted),
@@ -782,8 +783,6 @@ def _partition_variants(
         panel_sorted=panel_sorted,
         off_panel_alids=off_panel_alids,
         shared_sorted=shared_sorted,
-        dense_row=dense_row,
-        shared_index=shared_index,
         n_panel=len(panel_sorted),
         n_off_panel=len(off_panel_alids),
         n_shared=len(shared_sorted),
@@ -891,10 +890,11 @@ def _lift_and_partition(
     hg38_to_source = _source_origin_map(source_lookup)
     keys_sorted, targets_sorted, ispanel_sorted = _build_routing_index(
         source_lookup,
-        partition.dense_row,
-        partition.shared_index,
+        {alid: i for i, alid in enumerate(partition.panel_sorted)},
+        {alid: i for i, alid in enumerate(partition.shared_sorted)},
     )
-    # The routing index is built: the source union is freed before Pass 2.
+    # The routing index is built: the source union (and the ALID -> index
+    # dicts, which lived only for that call) are freed before Pass 2.
     del source_lookup
     return _SourceAxis(
         dense_dir=dense_dir,
@@ -927,9 +927,10 @@ def _write_dense_component_skeleton(
     )
     # Ascending: the panel keeps genomic order, so dense row i is shared row
     # dense_to_shared[i] -- the mapping validation checks against.
-    dense_to_shared = np.array(
-        [axis.partition.shared_index[alid] for alid in axis.partition.panel_sorted],
-        dtype=np.int32,
+    dense_to_shared = (
+        AlidIndex(axis.partition.shared_sorted)
+        .lookup(axis.partition.panel_sorted)
+        .astype(np.int32)
     )
     np.save(dense_to_shared_path(staged.path), dense_to_shared)
     return dense_to_shared
@@ -1001,27 +1002,46 @@ def _summarise_key_chunk(
     """Distinct off-reference keys for one chunk of columns (ticket #222).
 
     Each column contributes its distinct encoded values and one assembly bit;
-    ``merge_chunks`` reduces the chunk to a sorted set, which the parent then
-    merges across workers. Only the hashed distinct keys' raw strings are read
-    from the side file -- liftover and the build-wide collision check need them.
+    ``merge_key_stream`` folds them in one at a time, so the worker holds its
+    running distinct set and never every column's keys at once. The parent then
+    merges the chunk results the same way. Only the hashed distinct keys' raw
+    strings are read from the side file -- liftover and the build-wide
+    collision check need them.
     """
     spill_dir, cols, assemblies = task
-    chunks: list[ChunkKeys] = []
+    return merge_key_stream(_column_key_stream(spill_dir, cols, assemblies))
+
+
+def _column_key_stream(
+    spill_dir: Path, cols: Sequence[int], assemblies: Sequence[str]
+) -> Iterator[ChunkKeys]:
+    """Each spilled column's distinct off-reference keys, tagged with its assembly.
+
+    A generator, so each column's keys are released once ``merge_key_stream``
+    has folded them in; the full per-association key array never outlives the
+    reduction to distinct values.
+    """
     for col, assembly in zip(cols, assemblies, strict=True):
-        loaded = _load_unknown_key_spill(spill_dir, col)
-        if loaded is None:
+        keys = _distinct_column_keys(spill_dir, col, assembly)
+        if keys is None:
             continue
-        distinct = np.unique(loaded.keys)
-        hashed = distinct[is_hashed(distinct)]
-        chunks.append(
-            ChunkKeys(
-                values=distinct,
-                assembly_bits=np.full(len(distinct), _assembly_bit(assembly), dtype=np.int8),
-                hashed_values=hashed,
-                hashed_raw=[loaded.hashed_entries[int(value)] for value in hashed.tolist()],
-            )
-        )
-    return merge_chunks(chunks)
+        yield keys
+        del keys
+
+
+def _distinct_column_keys(spill_dir: Path, col: int, assembly: str) -> ChunkKeys | None:
+    """One column's distinct keys and assembly bit; ``None`` if it spilled none."""
+    loaded = _load_unknown_key_spill(spill_dir, col)
+    if loaded is None:
+        return None
+    distinct = np.unique(loaded.keys)
+    hashed = distinct[is_hashed(distinct)]
+    return ChunkKeys(
+        values=distinct,
+        assembly_bits=np.full(len(distinct), _assembly_bit(assembly), dtype=np.int8),
+        hashed_values=hashed,
+        hashed_raw=[loaded.hashed_entries[int(value)] for value in hashed.tolist()],
+    )
 
 
 def _key_chunk_tasks(
@@ -1032,7 +1052,7 @@ def _key_chunk_tasks(
     n = len(rows)
     if n == 0:
         return []
-    n_chunks = max(1, min(n, 2 * max(1, n_workers)))
+    n_chunks = max(1, min(n, 4 * max(1, n_workers)))
     size = -(-n // n_chunks)
     tasks: list[tuple[Path, tuple[int, ...], tuple[str, ...]]] = []
     for start in range(0, n, size):
@@ -1054,9 +1074,18 @@ def _resolve_off_reference_keys(
     tasks = _key_chunk_tasks(prepared.spill_dir, prepared, options.n_workers)
     if not tasks:
         return None
-    chunks = list(ordered_map(_summarise_key_chunk, tasks, options.n_workers))
+    # Fold the ordered worker results as they arrive: `ordered_map` retains at
+    # most `max_in_flight` results and `merge_key_stream` releases each chunk
+    # once merged, so the parent never holds every worker result (ticket #222
+    # review round 1). `list(...)` would defeat both bounds.
+    chunks = ordered_map(
+        _summarise_key_chunk,
+        tasks,
+        options.n_workers,
+        max_in_flight=max(1, options.n_workers),
+    )
     resolved = resolve_keys(
-        merge_chunks(chunks),
+        merge_key_stream(chunks),
         liftover_failure_threshold=options.liftover_failure_threshold,
         chain_file=options.chain_file,
     )
@@ -1129,9 +1158,7 @@ def _merge_unknown_column(spill_dir: Path, col: int, table: KeyTable) -> None:
     _unknown_side_path(spill_dir, col).unlink(missing_ok=True)
 
 
-def _remap_overflow_spills(
-    prepared: _PreparedBuild, shared_index: dict[str, int]
-) -> None:
+def _remap_overflow_spills(prepared: _PreparedBuild, index: AlidIndex) -> None:
     """Re-key existing overflow spills from the initial shared axis to the final one.
 
     Pass 2 wrote each on-reference off-panel association under the shared index
@@ -1140,10 +1167,11 @@ def _remap_overflow_spills(
     have to be translated through their ALID before the two sets are combined --
     otherwise they silently point at whichever variant now occupies their old
     index (issue #186 review). The translation is built once as an array and
-    indexed per column, not a dict lookup per association (ticket #222).
+    indexed per column, not a dict lookup per association (ticket #222); the
+    ALID -> index lookup is the compact sorted hash index, not a dict.
     """
     old_alids = prepared.partition.shared_sorted
-    old_to_new = np.array([shared_index[alid] for alid in old_alids], dtype=np.int64)
+    old_to_new = index.lookup(old_alids)
     for col in range(prepared.n_analyses):
         path = prepared.spill_dir / f"{col}.ovf.npz"
         if not path.exists():
@@ -1183,18 +1211,16 @@ def _finalise_reference_partition(
     off_panel = _sorted_alids(set(prepared.partition.off_panel_alids) | unknown_alids)
     panel = prepared.partition.panel_sorted
     shared_sorted = _sorted_alids(set(panel) | set(off_panel))
-    shared_index = {alid: i for i, alid in enumerate(shared_sorted)}
-    table = KeyTable(
-        keys=resolved.keys,
-        shared_index=np.array(
-            [shared_index[alid] for alid in resolved.alids], dtype=np.int64
-        ),
-    )
+    # A sorted hash index replaces the str -> int dict of every shared variant:
+    # no global ALID dict is built or retained through consolidation (ticket
+    # #222 review round 1).
+    index = AlidIndex(shared_sorted)
+    table = KeyTable(keys=resolved.keys, shared_index=index.lookup(resolved.alids))
     # Existing overflow entries carry the *initial* axis's indices; translate
     # them before mixing in the off-reference entries keyed to the new one.
-    _remap_overflow_spills(prepared, shared_index)
+    _remap_overflow_spills(prepared, index)
     _merge_unknown_spills(prepared, table)
-    dense_to_shared = np.array([shared_index[alid] for alid in panel], dtype=np.int32)
+    dense_to_shared = index.lookup(panel).astype(np.int32)
     np.save(dense_to_shared_path(prepared.staged.path), dense_to_shared)
     hg38_to_source = _merge_unknown_provenance(prepared.hg38_to_source, resolved)
     log.info(
@@ -1205,7 +1231,6 @@ def _finalise_reference_partition(
         prepared.partition,
         off_panel_alids=off_panel,
         shared_sorted=shared_sorted,
-        shared_index=shared_index,
         n_off_panel=len(off_panel),
         n_shared=len(shared_sorted),
     )

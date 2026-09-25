@@ -13,7 +13,9 @@ Off-panel (→ Ragged Overflow):
 from __future__ import annotations
 
 import gzip
+import weakref
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -22,8 +24,10 @@ from cli_output import normalize_cli_output
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
 from opengwasdb.layouts.dense.top_hits import threshold_key
+from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.hybrid.unknown_keys import UnknownKeyEncodingError
+from opengwasdb.layouts.hybrid.key_table import HG38, ChunkKeys
+from opengwasdb.layouts.hybrid.unknown_keys import UnknownKeyEncodingError, encode_key
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -1558,3 +1562,69 @@ def test_hybrid_band_write_matches_serial_across_workers(tmp_path):
     ss = {r["analysis_id"]: r["eaf_scope"] for r in read_analyses(serial / "analyses.tsv").rows}
     ps = {r["analysis_id"]: r["eaf_scope"] for r in read_analyses(parallel / "analyses.tsv").rows}
     assert ss == ps
+
+
+# ── Off-reference key resolution stays memory-bounded (ticket #222 review) ──
+
+
+def _hg38_key_chunk(positions: range) -> ChunkKeys:
+    """Distinct packed hg38 SNV keys, sorted as a worker would return them."""
+    values = np.unique(
+        np.array([encode_key(f"1:{position}:A:G") for position in positions], dtype=np.uint64)
+    )
+    return ChunkKeys(
+        values=values,
+        assembly_bits=np.full(len(values), HG38, dtype=np.int8),
+        hashed_values=np.empty(0, dtype=np.uint64),
+        hashed_raw=[],
+    )
+
+
+class _LiveChunks:
+    """Hand out chunks one at a time, recording before each how many earlier
+    ones are still alive -- i.e. retained by the code under test."""
+
+    def __init__(self, n: int) -> None:
+        self._chunks = [_hg38_key_chunk(range(100 + i * 50, 300 + i * 50)) for i in range(n)]
+        self._alive: list[weakref.ref[np.ndarray]] = []
+        self.live_counts: list[int] = []
+
+    def next(self) -> ChunkKeys:
+        self.live_counts.append(sum(ref() is not None for ref in self._alive))
+        chunk = self._chunks.pop(0)
+        self._alive.append(weakref.ref(chunk.values))
+        return chunk
+
+
+def test_key_chunk_worker_folds_columns_one_at_a_time(tmp_path, monkeypatch):
+    """A worker must not hold every column's distinct keys before merging:
+    at OGS-00011 scale a chunk is dozens of columns of tens of millions of keys."""
+    live = _LiveChunks(24)
+    monkeypatch.setattr(
+        hybrid_build, "_distinct_column_keys", lambda spill_dir, col, assembly: live.next()
+    )
+    cols = tuple(range(24))
+    merged = hybrid_build._summarise_key_chunk((tmp_path, cols, ("hg38",) * 24))
+    assert len(live.live_counts) == 24, "the fixture must reach every column"
+    assert len(merged.values) == 200 + 23 * 50
+    assert max(live.live_counts) <= 1, f"columns retained: {live.live_counts}"
+
+
+def test_off_reference_resolution_folds_worker_results_as_they_arrive(monkeypatch):
+    """Review round 1 blocker: ``list(ordered_map(...))`` retained every worker
+    result in the parent before one all-at-once merge."""
+    live = _LiveChunks(32)
+
+    def _fake_ordered_map(fn, items, n_workers, max_in_flight=None):
+        for _item in items:
+            yield live.next()
+
+    monkeypatch.setattr(hybrid_build, "ordered_map", _fake_ordered_map)
+    rows = [SimpleNamespace(source_assembly="hg38") for _ in range(32)]
+    prepared = SimpleNamespace(spill_dir=Path("unused"), manifest_rows=rows)
+    options = SimpleNamespace(n_workers=8, liftover_failure_threshold=1.0, chain_file=None)
+    resolved = hybrid_build._resolve_off_reference_keys(prepared, options)
+    assert len(live.live_counts) == 32, "the fixture must yield one result per chunk task"
+    assert resolved is not None
+    assert len(resolved.keys) == 200 + 31 * 50
+    assert max(live.live_counts) <= 1, f"worker results retained: {live.live_counts}"
