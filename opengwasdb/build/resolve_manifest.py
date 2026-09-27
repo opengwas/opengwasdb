@@ -62,6 +62,11 @@ from opengwasdb.build.resolve import (
     resolve_analysis,
 )
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
+from opengwasdb.model.info_score_policy import (
+    INFO_SCORE_COLUMNS,
+    InfoScorePolicy,
+    parse_info_score_policy,
+)
 from opengwasdb.model.manifest_columns import resolve_manifest_columns
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
@@ -107,6 +112,7 @@ class ResolveManifestRow:
     size_bytes: int | None = None
     checksum: str | None = None
     checksum_algorithm: str | None = None
+    info_score_policy: InfoScorePolicy = InfoScorePolicy()
 
 
 @dataclass(frozen=True)
@@ -360,6 +366,12 @@ def _parse_manifest_row(
     )
     size_bytes = _extract_manifest_size(raw)
     checksum, algo = _extract_manifest_checksum(raw)
+    try:
+        info_score_policy = parse_info_score_policy(raw, reader_capability=cap)
+    except ValueError as exc:
+        raise ValueError(
+            f"analyses manifest {path}: analysis {analysis_id!r} has invalid INFO policy: {exc}"
+        ) from exc
 
     return ResolveManifestRow(
         manifest_index=idx,
@@ -372,6 +384,7 @@ def _parse_manifest_row(
         size_bytes=size_bytes,
         checksum=checksum,
         checksum_algorithm=algo,
+        info_score_policy=info_score_policy,
     )
 
 
@@ -388,6 +401,12 @@ def read_resolve_manifest(
         raw_rows = list(reader)
     if not raw_rows:
         raise ValueError(f"empty analyses manifest: {manifest_path}")
+    duplicates = [name for name in INFO_SCORE_COLUMNS if fieldnames.count(name) > 1]
+    if duplicates:
+        raise ValueError(
+            f"analyses manifest {manifest_path} has ambiguous INFO policy column(s): "
+            f"{', '.join(duplicates)}"
+        )
 
     cols = resolve_manifest_columns(fieldnames, manifest_path)
     known = known_capabilities()
@@ -539,6 +558,19 @@ def _build_analysis_fingerprints(
             "stored_effect_scale": row.stored_effect_scale.value,
             "sample_size": row.sample_size,
             "source_reader_capability": row.source_reader_capability,
+            "info_score_threshold": row.info_score_policy.info_score_threshold,
+            "imputation_score_column": (
+                row.info_score_policy.imputation_score_declaration.column_name
+                if row.info_score_policy.imputation_score_declaration else None
+            ),
+            "imputation_score_kind": (
+                row.info_score_policy.imputation_score_declaration.kind.value
+                if row.info_score_policy.imputation_score_declaration else None
+            ),
+            "imputation_score_provenance": (
+                row.info_score_policy.imputation_score_declaration.provenance
+                if row.info_score_policy.imputation_score_declaration else None
+            ),
             "maf_floor": maf_floor,
             "evidence_sample": evidence_sample,
             # Issue #209: the scan bound travels in the fingerprint, so a record

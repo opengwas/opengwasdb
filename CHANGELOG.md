@@ -19,6 +19,11 @@ the end of this file.
 
 ### Added
 
+- **CORE manifest INFO policy inputs**: parse and validate a per-Analysis
+  `info_score_threshold` with exact provider-backed score column, INFO/R² kind,
+  provenance and supported reader capability. Missing or `NaN` without mapping
+  means no filter; malformed or partial declarations fail. The resumable
+  manifest resolver fingerprints the policy (stores #175).
 - **Provider-declared GWAS-SSF imputation INFO/R² reader contract**: explicit
   per-Analysis source column, score kind and independent provenance; associations,
   projected rows and bounded chunks expose the same score and validity status.

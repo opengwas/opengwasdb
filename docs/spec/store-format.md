@@ -588,6 +588,22 @@ human-readable name is already `analysis_label`, it instead names the
 identifying vocabulary (`"Ensembl"`) rather than repeating the gene name.
 `analysis_id` MUST be unique within a Store Release.
 
+For CORE build-input manifests (stores #175), optional `info_score_threshold`,
+`imputation_score_column`, `imputation_score_kind`, and
+`imputation_score_provenance` are per-Analysis shared-core policy inputs. They
+are not inferred from source headers. A manifest omitting all four has no INFO
+filter; a literal `NaN` threshold without a mapping explicitly means unavailable
+and also has no filter. A numeric threshold, including zero, MUST be finite in
+`[0, 1]` and MUST accompany an exact source column name, a kind of
+`imputation_info` or `imputation_r2`, independent provider evidence in
+`imputation_score_provenance`, and an INFO-capable Source Reader (currently
+`opengwasdb.gwas-ssf`). Partial declarations, a mapping without a numeric
+threshold, malformed thresholds, and a declaration alongside `NaN` are invalid.
+The declared source column must occur exactly once with the declared spelling;
+the GWAS-SSF reader rejects absent, padded, or ambiguous source header columns
+when it opens the file. These inputs define an ingestion policy, not a claim
+that the current Store Release persists an INFO plane or applies that filter.
+
 `analyses.tsv` MUST be sufficient on its own to interpret every Analysis's stored
 effect scale, sample-size semantics, ancestry, and licensing/citation terms —
 this supersedes the general requirement in §3 that "Analysis metadata MUST be

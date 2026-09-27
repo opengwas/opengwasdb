@@ -42,6 +42,7 @@ from opengwasdb.model.enums import (
     SampleSizeScope,
     StoredEffectScale,
 )
+from opengwasdb.model.info_score_policy import INFO_SCORE_COLUMNS, parse_info_score_policy
 
 ANCESTRY_PROP_PREFIX = "ancestry_prop_"
 
@@ -68,6 +69,10 @@ SHARED_CORE_COLUMNS: tuple[str, ...] = (
     "original_sd",
     "original_sd_method",
     "original_sd_dispersion",
+    "info_score_threshold",
+    "imputation_score_column",
+    "imputation_score_kind",
+    "imputation_score_provenance",
 )
 
 # Top-Hit Count columns (ADR 0032, store-format spec §7a): one persisted
@@ -235,17 +240,14 @@ def validate_analyses(table: AnalysesTable) -> list[str]:
     missing = [column for column in REQUIRED_COLUMNS if column not in fieldnames]
     if missing:
         errors.append(f"analyses.tsv is missing required column(s): {', '.join(missing)}")
+    errors.extend(_info_policy_header_errors(table.fieldnames))
 
     for row in table.rows:
         analysis_id = row.get("analysis_id") or "<unknown analysis_id>"
         # A required column present in the header but blank on this row is
         # equally a missing-required-column failure from the row's point of
         # view -- it just cannot be caught by the header-level check above.
-        for column in REQUIRED_COLUMNS:
-            if column in fieldnames and not row.get(column, ""):
-                errors.append(
-                    f"analysis {analysis_id!r} has no value for required column {column!r}"
-                )
+        _validate_required_values(row, analysis_id, fieldnames, errors)
         for column, vocabulary in _VOCABULARIES.items():
             if column not in fieldnames:
                 continue
@@ -261,8 +263,31 @@ def validate_analyses(table: AnalysesTable) -> list[str]:
                     f"expected one of {allowed}"
                 )
         _validate_case_control_counts(row, analysis_id, fieldnames, errors)
+        _validate_info_policy(row, analysis_id, errors)
 
     return errors
+
+
+def _validate_required_values(
+    row: dict[str, str], analysis_id: str, fieldnames: set[str], errors: list[str]
+) -> None:
+    for column in REQUIRED_COLUMNS:
+        if column in fieldnames and not row.get(column, ""):
+            errors.append(f"analysis {analysis_id!r} has no value for required column {column!r}")
+
+
+def _info_policy_header_errors(fieldnames: tuple[str, ...]) -> list[str]:
+    duplicates = [name for name in INFO_SCORE_COLUMNS if fieldnames.count(name) > 1]
+    if duplicates:
+        return [f"analyses.tsv has ambiguous INFO policy column(s): {', '.join(duplicates)}"]
+    return []
+
+
+def _validate_info_policy(row: dict[str, str], analysis_id: str, errors: list[str]) -> None:
+    try:
+        parse_info_score_policy(row)
+    except ValueError as exc:
+        errors.append(f"analysis {analysis_id!r} has invalid INFO policy: {exc}")
 
 
 def _validate_case_control_counts(
