@@ -779,6 +779,16 @@ def resolve_analyses_command(
             help="Variant list or QC panel file for bounded ancestry extraction",
         ),
     ] = None,
+    variant_reference: Annotated[
+        Path | None,
+        typer.Option(
+            "--variant-reference",
+            help="Hybrid variant axis for per-Analysis scanned-row overlap diagnostics",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ] = None,
     af_reference: Annotated[
         list[str] | None,
         typer.Option(
@@ -879,6 +889,7 @@ def resolve_analyses_command(
             ancestry_reference=ancestry_reference,
             ancestry_groups=ancestry_groups,
             extraction_panel=extraction_panel,
+            variant_reference=variant_reference,
             af_references=af_reference,
             af_reference_ancestry=af_reference_ancestry,
             default_source_reader_capability=default_source_reader_capability,

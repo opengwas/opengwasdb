@@ -30,6 +30,7 @@ Contracts enforced here:
 from __future__ import annotations
 
 import csv
+import gzip
 import hashlib
 import json
 import logging
@@ -186,6 +187,23 @@ def load_extraction_panel(path: Path | str) -> set[str]:
         variants = _read_panel_lines(fh, col_idx, initial_var)
     if not variants:
         raise ValueError(f"no valid variants found in extraction panel: {panel_path}")
+    return variants
+
+
+def load_variant_reference(path: Path | str) -> set[str]:
+    """Load the Hybrid axis once in the parent; workers inherit the shared set."""
+    axis = Path(path)
+    if not axis.is_file():
+        raise FileNotFoundError(f"variant reference not found: {axis}")
+    opener = gzip.open if axis.suffix == ".gz" else open
+    with opener(axis, "rt", encoding="utf-8") as fh:
+        first = fh.readline()
+        if not first:
+            raise ValueError(f"empty variant reference: {axis}")
+        column, initial = _parse_panel_header(first)
+        variants = _read_panel_lines(fh, column, initial)
+    if not variants:
+        raise ValueError(f"no valid variants in variant reference: {axis}")
     return variants
 
 
@@ -467,6 +485,8 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
         "stop_reason": d.stop_reason.value,
         "ancestry_rows_read": d.ancestry_rows_read,
         "ancestry_stop_reason": d.ancestry_stop_reason.value,
+        "ancestry_reference_rows_matched": d.ancestry_reference_rows_matched,
+        "variant_reference_rows_matched": d.variant_reference_rows_matched,
     }
 
 
@@ -491,6 +511,7 @@ def _build_analysis_fingerprints(
     ancestry_groups_sha256: str,
     extraction_panel_sha256: str | None,
     extraction_panel_variants: int | None,
+    variant_reference_sha256: str | None,
     af_references_fp: list[dict[str, Any]],
     gates: Gates,
     maf_floor: float,
@@ -511,6 +532,7 @@ def _build_analysis_fingerprints(
         "ancestry_groups_sha256": ancestry_groups_sha256,
         "extraction_panel_sha256": extraction_panel_sha256,
         "extraction_panel_variants": extraction_panel_variants,
+        "variant_reference_sha256": variant_reference_sha256,
         "af_references": af_references_fp,
         "resolution_config": {
             "original_sd_method": row.original_sd_method.value,
@@ -568,6 +590,7 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
 _WORKER_ANCESTRY_REFERENCE: AncestryReference | None = None
 _WORKER_GATES: Gates | None = None
 _WORKER_EXTRACTION_PANEL: Collection[str] | None = None
+_WORKER_VARIANT_REFERENCE: Collection[str] | None = None
 _WORKER_AF_REFERENCES: Mapping[str, AfReference] | None = None
 _WORKER_EVIDENCE_SAMPLE: int = DEFAULT_EVIDENCE_SAMPLE
 _WORKER_SCAN_LIMIT: ScanLimit | None = None
@@ -599,6 +622,7 @@ def _execute_analysis(
             reader=reader,
             reference=_WORKER_ANCESTRY_REFERENCE,
             extraction_panel=_WORKER_EXTRACTION_PANEL,
+            variant_reference=_WORKER_VARIANT_REFERENCE,
             gates=_WORKER_GATES,
             af_references=_WORKER_AF_REFERENCES,
             evidence_sample=_WORKER_EVIDENCE_SAMPLE,
@@ -940,6 +964,7 @@ def _prepare_pipeline_context(
     scan_limit: ScanLimit | None,
     reference_version: str,
     out_dir: Path,
+    variant_reference: Path | str | None = None,
 ) -> dict[str, Any]:
     (
         ref,
@@ -966,6 +991,11 @@ def _prepare_pipeline_context(
         orientation_flip_r=orientation_flip_r,
     )
     _setup_worker_globals(ref, gates, panel_set, af_refs, evidence_sample, scan_limit, out_dir)
+    global _WORKER_VARIANT_REFERENCE
+    _WORKER_VARIANT_REFERENCE = (
+        load_variant_reference(variant_reference) if variant_reference is not None else None
+    )
+    axis_sha = compute_file_sha256(variant_reference) if variant_reference is not None else None
     return {
         "opengwasdb_version": _get_opengwasdb_version(),
         "opengwasdb_git_hash": _get_git_hash(),
@@ -974,6 +1004,7 @@ def _prepare_pipeline_context(
         "ancestry_groups_sha256": grp_sha,
         "extraction_panel_sha256": panel_sha,
         "extraction_panel_variants": panel_vars,
+        "variant_reference_sha256": axis_sha,
         "af_references_fp": af_refs_fp,
         "gates": gates,
         "maf_floor": maf_floor,
@@ -1032,6 +1063,7 @@ def resolve_analyses_manifest(
     ancestry_reference: Path | str,
     ancestry_groups: Path | str,
     extraction_panel: Path | str | None = None,
+    variant_reference: Path | str | None = None,
     af_references: Sequence[str] | None = None,
     af_reference_ancestry: str | None = None,
     default_source_reader_capability: str | None = None,
@@ -1083,6 +1115,7 @@ def resolve_analyses_manifest(
         scan_limit,
         reference_version,
         out_dir,
+        variant_reference,
     )
     return _execute_resolution_pipeline(
         rows, out_dir, manifest_path, fp_kwargs, resume, largest_first, n_workers

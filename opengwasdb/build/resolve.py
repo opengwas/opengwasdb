@@ -238,6 +238,10 @@ class ScanDiagnostics:
     #: What ended ancestry accumulation (issue #212): `EOF`, `ROW_LIMIT`, or
     #: `ANCESTRY_SITE_LIMIT`.
     ancestry_stop_reason: ScanStop = ScanStop.EOF
+    #: Source rows on the ancestry panel, counted before AF/SE eligibility filters.
+    ancestry_reference_rows_matched: int = 0
+    #: Source rows on the declared Hybrid variant axis, over the physical scan.
+    variant_reference_rows_matched: int | None = None
 
 
 @dataclass(frozen=True)
@@ -317,6 +321,8 @@ class _Scan:
     stop_reason: ScanStop = ScanStop.EOF
     ancestry_rows_read: int = 0
     ancestry_stop_reason: ScanStop = ScanStop.EOF
+    ancestry_reference_rows_matched: int = 0
+    variant_reference_rows_matched: int | None = None
 
 
 @dataclass
@@ -412,6 +418,8 @@ def _diagnostics(request: AnalysisRequest, scan: _Scan) -> ScanDiagnostics:
         stop_reason=scan.stop_reason,
         ancestry_rows_read=ancestry_rows,
         ancestry_stop_reason=scan.ancestry_stop_reason,
+        ancestry_reference_rows_matched=scan.ancestry_reference_rows_matched,
+        variant_reference_rows_matched=scan.variant_reference_rows_matched,
     )
 
 
@@ -423,6 +431,7 @@ def _scan(
     limit: ScanLimit | None,
     *,
     needs_sd: bool,
+    variant_reference: Collection[str] | None = None,
 ) -> None:
     """One pass over the source, feeding the ancestry fit and the SD evidence.
 
@@ -461,6 +470,18 @@ def _scan(
                             block = _slice(block, stopped + 1)
                         scan.stop_reason = scan.ancestry_stop_reason
 
+            ancestry_end = (
+                len(block) if ancestry_active
+                else max(0, scan.ancestry_rows_read - scan.rows_read)
+            )
+            scan.ancestry_reference_rows_matched += sum(
+                alid in panel for alid in block.alid[:ancestry_end]
+            )
+            if variant_reference is not None:
+                scan.variant_reference_rows_matched = (
+                    (scan.variant_reference_rows_matched or 0)
+                    + sum(alid in variant_reference for alid in block.alid)
+                )
             evidence.admit(block)
             scan.rows_read += len(block)
             if not ancestry_active and not needs_sd:
@@ -699,6 +720,7 @@ def resolve_analysis(
     af_references: Mapping[str, AfReference] | None = None,
     evidence_sample: int = DEFAULT_EVIDENCE_SAMPLE,
     scan_limit: ScanLimit | None = None,
+    variant_reference: Collection[str] | None = None,
 ) -> AnalysisResolution:
     """Resolve one Analysis's ancestry and phenotype SD from one source scan.
 
@@ -744,7 +766,10 @@ def resolve_analysis(
     panel: Collection[str] = reference.index if extraction_panel is None else extraction_panel
     needs_sd = _skip_reason(request) is None
     try:
-        _scan(reader, panel, scan, evidence, scan_limit, needs_sd=needs_sd)
+        _scan(
+            reader, panel, scan, evidence, scan_limit, needs_sd=needs_sd,
+            variant_reference=variant_reference,
+        )
     except (OSError, EOFError, ValueError) as exc:
         return AnalysisResolution(
             analysis_id=request.analysis_id,
