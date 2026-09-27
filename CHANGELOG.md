@@ -461,6 +461,18 @@ the end of this file.
 
 ### Fixed
 
+- **`RaggedCSRWriter.flush` no longer concatenates the component's planes.** It
+  built `variant_index`, `z`, `se` and `eaf` whole, encoded each in one piece and
+  then decoded the EAF plane back whole to encode SE against it -- a measured
+  72.9 bytes per cell, or 1.10 TB on OGS-00011's 15,078,327,210 Overflow cells.
+  The planes are now created at full length and filled a `region_cells` region at
+  a time, with the z overflow table and both exception tables accumulated across
+  regions and written once at the end. What is stored is unchanged: each plane's
+  codes are a per-cell function of its value, the side tables are keyed on global
+  flat position which `positions_flat(lo)` supplies per region, and regions are
+  visited in ascending order so the table rows keep the order a single whole-plane
+  pass produced (#228).
+
 - **The Hybrid joint SE fit no longer materialises the Ragged Overflow's flat
   planes.** `_fit_joint_se` passed `se_fit_inputs`'s three whole-plane arrays
   into `optimise_dense_se_joint`, which fitted and measured them in place.

@@ -9,6 +9,9 @@ drift apart silently.
 
 from __future__ import annotations
 
+import tracemalloc
+from pathlib import Path
+
 import numpy as np
 import pytest
 import zarr
@@ -172,3 +175,112 @@ def test_chunk_aligned_batches_end_on_multiples_and_reconstruct_the_cells(multip
     for field in ("se_values", "eaf_values", "analysis_indices"):
         streamed = np.concatenate([getattr(b, field) for b in batches])
         np.testing.assert_array_equal(streamed, getattr(whole, field), err_msg=field)
+
+
+# ── Seam: the CSR flush ──────────────────────────────────────────────────────
+
+
+def _model_writer(sizes, *, seed=0):
+    """A writer whose SE follows the log-SE model, so a residual SE plane is
+    worth choosing and the streamed SE write is actually exercised."""
+    rng = np.random.default_rng(seed)
+    truth = rng.uniform(0.05, 0.95, _N_VARIANTS)
+    coefficients = np.array([-3.0, -0.5])
+    writer = RaggedCSRWriter(_N_VARIANTS)
+    for count in sizes:
+        vi = np.sort(rng.choice(_N_VARIANTS, size=count, replace=False)).astype(np.int32)
+        eaf = np.clip(truth[vi] + rng.normal(0, 0.002, count), 1e-4, 1 - 1e-4)
+        x = np.log(2 * eaf * (1 - eaf))
+        se = np.exp(coefficients[0] + coefficients[1] * x + rng.normal(0, 0.01, count))
+        writer.add_analysis(
+            vi,
+            rng.standard_normal(count).astype(np.float32),
+            se.astype(np.float32),
+            eaf.astype(np.float32),
+        )
+    return writer
+
+
+def _residual_se_encoding(writer, n_analyses):
+    eaf_measured = writer.eaf_measurements()
+    preliminary = StoreEncoding.decide(
+        EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measured)
+    )
+    final = StoreEncoding.decide(
+        EncodingMeasurements(
+            n_analyses=n_analyses,
+            eaf=eaf_measured,
+            se=writer.se_measurements(preliminary),
+        )
+    )
+    assert final.eaf.is_residual, "fixture must select a residual EAF plane"
+    assert final.se.is_residual, "fixture must select a residual SE plane"
+    return final
+
+
+def _stored(path):
+    """Every array a flushed CSR wrote, by name, for comparison."""
+    root = zarr.open_group(str(Path(path) / "data.zarr" / "ragged"), mode="r")
+    out = {}
+
+    def walk(node, prefix=""):
+        for name in node.array_keys():
+            out[f"{prefix}{name}"] = np.asarray(node[name][:])
+        for name in node.group_keys():
+            walk(node[name], f"{prefix}{name}/")
+
+    walk(root)
+    return out
+
+
+@pytest.mark.parametrize("region_cells", [200, 997, 4096])
+def test_flush_writes_the_same_arrays_whatever_the_region_size(tmp_path, region_cells):
+    """One region is the pre-streaming path, which the round-trip tests already
+    pin as correct, so array-for-array agreement with a cut-up flush is what
+    shows the streamed write changed the footprint and nothing else."""
+    # Every Analysis carries enough cells to fit: `fit_se` declares the whole
+    # plane ineligible unless every Analysis's coefficients come out finite, so
+    # a one-cell Analysis would silently take the float16 branch and leave the
+    # streamed SE write untested. The empty and single-cell Analyses are covered
+    # by the cell-source tests above.
+    sizes = [1500, 1800, 900, 1900]
+    writer = _model_writer(sizes)
+    encoding = _residual_se_encoding(writer, len(sizes))
+
+    writer.flush(tmp_path / "whole", encoding, region_cells=1 << 30)
+    writer.flush(tmp_path / "cut", encoding, region_cells=region_cells)
+
+    whole, cut = _stored(tmp_path / "whole"), _stored(tmp_path / "cut")
+    assert sorted(cut) == sorted(whole)
+    for name in whole:
+        np.testing.assert_array_equal(cut[name], whole[name], err_msg=name)
+
+
+def _peak_bytes(work) -> int:
+    tracemalloc.start()
+    tracemalloc.reset_peak()
+    try:
+        work()
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return peak
+
+
+def test_flush_peak_memory_does_not_follow_the_cell_count(tmp_path):
+    """Four times the cells at a fixed region size must not cost four times the
+    peak: that ratio is what made the OGS-00011 Overflow's flush unaffordable at
+    a measured 72.9 bytes a cell."""
+    region = 512
+    small = _model_writer([500] * 4, seed=1)
+    large = _model_writer([2000] * 4, seed=1)
+    # One plan for both, chosen from the larger plane: the variable under test is
+    # the cell count, not the encoding.
+    encoding = _residual_se_encoding(large, 4)
+    assert large.n_associations == 4 * small.n_associations
+
+    peak_small = _peak_bytes(lambda: small.flush(tmp_path / "small", encoding, region_cells=region))
+    peak_large = _peak_bytes(lambda: large.flush(tmp_path / "large", encoding, region_cells=region))
+
+    growth = peak_large / peak_small
+    assert growth < 2.5, f"peak grew {growth:.1f}x for 4x the cells"
