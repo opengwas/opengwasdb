@@ -16,24 +16,69 @@ from opengwasdb.layouts.dense.top_hits import (
     TOP_HIT_CHUNK_SIZE,
     threshold_key,
     write_threshold_tier,
+    z_critical,
 )
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 
 log = logging.getLogger(__name__)
 
+#: Cells one top-hit scan slice covers. A slice holds its decoded ``z``
+#: (float32), a boolean keep mask and the Analysis indices the offsets assign
+#: its cells (int32) -- about 11 bytes a cell -- so 2**21 is roughly a 25 MiB
+#: working set whatever the component's cell count (issue #233).
+DEFAULT_TOP_HIT_SCAN_CELLS = 1 << 21
+
+#: The dtype each candidate array is gathered as. One table, so an optional
+#: array (`imputed`, `eaf`) cannot acquire a different dtype from the required
+#: ones by being gathered at a separate site.
+_CANDIDATE_DTYPES = {
+    "variant_index": "int32",
+    "analysis_index": "int32",
+    "z": "float32",
+    "se": "float32",
+    "imputed": "uint8",
+    "eaf": "float32",
+}
+
+
+def _slice_analysis_indices(offsets: np.ndarray, lo: int, hi: int) -> np.ndarray:
+    """The Analysis each cell of flat CSR range ``[lo, hi)`` belongs to.
+
+    Derived from the offsets' spans rather than by searching a materialised
+    position range: a slice is bounded, so repeating the Analysis index over
+    the spans it crosses costs O(analyses touched), not O(cells) (issue #233).
+    """
+    first = int(np.searchsorted(offsets, lo, side="right")) - 1
+    parts: list[np.ndarray] = []
+    for analysis in range(max(first, 0), len(offsets) - 1):
+        start, stop = int(offsets[analysis]), int(offsets[analysis + 1])
+        if start >= hi:
+            break
+        head, tail = max(lo, start), min(hi, stop)
+        if tail > head:
+            parts.append(np.full(tail - head, analysis, dtype=np.int32))
+    return np.concatenate(parts) if parts else np.empty(0, dtype=np.int32)
+
 
 def _read_ragged_columns(
     store_path: Path, encoding: StoreEncoding | None
 ) -> tuple[dict[str, np.ndarray], np.ndarray, int]:
-    """Decode every CSR association into the dense builder's parallel columns."""
+    """Decode every CSR association into the dense builder's parallel columns.
+
+    The materialising reference the streamed path must agree with: this is what
+    the top-hit phase did before issue #233, and what the equivalence tests in
+    ``tests/test_ragged_top_hits_streaming.py`` compare the slices against. The
+    build no longer calls it -- holding these columns costs 24 bytes a cell,
+    and decoding ``se``/``eaf`` for them adds whole-plane temporaries that took
+    the measured peak to 46.6 bytes a cell at 46,192,414 cells and 83.1 bytes a
+    cell at 523,060,451 cells.
+    """
     csr = RaggedCSRReader(store_path, encoding)
     offsets = csr._offsets[:]
     vi_all = csr._variant_index[:].astype(np.int32)
     z_all = csr.z_all()
     se_all = csr.se_all()
     n_analyses = len(offsets) - 1
-    # Derive analysis_index for every association via searchsorted on CSR offsets.
-    # offsets[i+1] is the exclusive end of analysis i -> searchsorted(offsets[1:], pos) gives i.
     positions = np.arange(len(vi_all), dtype=np.int64)
     analysis_indices = np.searchsorted(offsets[1:], positions, side="right").astype(np.int32)
     columns: dict[str, np.ndarray] = {
@@ -49,11 +94,77 @@ def _read_ragged_columns(
     return columns, np.abs(z_all), n_analyses
 
 
+def _collect_ragged_candidates(
+    csr: RaggedCSRReader,
+    thresholds: tuple[float, ...],
+    slice_cells: int,
+) -> tuple[dict[str, np.ndarray], np.ndarray, int]:
+    """Every cell clearing the loosest tier, gathered slice by slice.
+
+    The component is never decoded whole. Each slice contributes only the cells
+    whose decoded ``|z|`` clears ``z_critical(max(thresholds))`` -- a tiny
+    fraction of a real component -- and the downstream tier write sorts that
+    candidate set, not a plane (issue #233).
+
+    Analysis indices come from the CSR offsets (``_slice_analysis_indices``),
+    and the optional ``imputed``/``eaf`` columns are gathered only for the cells
+    that pass, so a no-frequency component and a Reference-Completed component
+    with an ``imputed`` column keep exactly the columns the materialising loader
+    produced.
+    """
+    total = int(len(csr._variant_index))
+    offsets = np.asarray(csr._offsets[:], dtype=np.int64)
+    n_analyses = len(offsets) - 1
+    loosest = z_critical(max(thresholds))
+    has_imputed = "imputed" in csr._root
+    has_eaf = csr._eaf_plane.can_report_frequencies
+
+    parts: dict[str, list[np.ndarray]] = {
+        "variant_index": [],
+        "analysis_index": [],
+        "z": [],
+        "se": [],
+    }
+    if has_imputed:
+        parts["imputed"] = []
+    if has_eaf:
+        parts["eaf"] = []
+
+    step = max(1, int(slice_cells))
+    for lo in range(0, total, step):
+        hi = min(lo + step, total)
+        z = csr.z_slice(lo, hi)
+        keep = np.abs(z) >= loosest
+        if not keep.any():
+            continue
+        positions = np.flatnonzero(keep).astype(np.int64) + lo
+        parts["variant_index"].append(
+            np.asarray(csr._variant_index.oindex[positions], dtype=np.int32)
+        )
+        parts["analysis_index"].append(_slice_analysis_indices(offsets, lo, hi)[keep])
+        parts["z"].append(z[keep])
+        parts["se"].append(csr.se_at(positions))
+        if has_imputed:
+            parts["imputed"].append(
+                np.asarray(csr._root["imputed"].oindex[positions], dtype=np.uint8)
+            )
+        if has_eaf:
+            parts["eaf"].append(csr.eaf_at(positions))
+
+    columns: dict[str, np.ndarray] = {}
+    for name, values in parts.items():
+        columns[name] = (
+            np.concatenate(values) if values else np.empty(0, dtype=_CANDIDATE_DTYPES[name])
+        )
+    return columns, np.abs(columns["z"]), n_analyses
+
+
 def build_ragged_top_hit_indexes(
     store_path: str | Path,
     thresholds: tuple[float, ...] = TOP_HIT_THRESHOLDS,
     encoding: StoreEncoding | None = None,
     n_workers: int = 1,
+    slice_cells: int = DEFAULT_TOP_HIT_SCAN_CELLS,
 ) -> None:
     """Build ranked top-hit arrays for each configured p-value threshold.
 
@@ -65,16 +176,24 @@ def build_ragged_top_hit_indexes(
     contradicts (issue 046). ``encoding`` is supplied by a builder that has not
     written its manifest yet; otherwise it is read from the release.
 
-    Each step logs its start and elapsed time (issue #221). ``n_workers`` is
-    accepted for a uniform build surface but the pass is left serial: it
-    decodes the flat CSR arrays whole and reduces them with one ``lexsort`` per
-    tier, so there is no independent row-chunk work to spread (see issue #221's
-    profiling note).
+    The CSR is scanned in slices of ``slice_cells``, never decoded whole
+    (issue #233): each slice contributes only the cells clearing the loosest
+    tier, and the tier write below sorts that candidate set. Analysis indices
+    are derived from the CSR offsets rather than by searching a materialised
+    position range. Each step logs its start and elapsed time (issue #221).
+    ``n_workers`` is accepted for a uniform build surface but the pass is left
+    serial: the slices feed one candidate sort and are I/O-bound, not
+    CPU-bound (see issue #221's profiling note).
     """
     store_path = Path(store_path)
-    log.info("Ragged top-hit index: reading CSR arrays (n_workers=%d, serial)", n_workers)
-    with log_phase(log, "Ragged top-hit read"):
-        columns, abs_z, n_analyses = _read_ragged_columns(store_path, encoding)
+    log.info(
+        "Ragged top-hit index: scanning CSR in slices (n_workers=%d, serial, slice_cells=%d)",
+        n_workers,
+        slice_cells,
+    )
+    csr = RaggedCSRReader(store_path, encoding)
+    with log_phase(log, "Ragged top-hit scan"):
+        columns, abs_z, n_analyses = _collect_ragged_candidates(csr, thresholds, slice_cells)
 
     root = zarr.open_group(str(store_path / "data.zarr"), mode="a")
     top = root.require_group("top_hits")

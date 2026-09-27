@@ -233,6 +233,15 @@ the end of this file.
 
 ### Changed
 
+- **The Ragged Overflow top-hit index scans the CSR in bounded slices (#233)**:
+  the phase no longer decodes every CSR association into parallel columns held
+  whole -- about 24 bytes a cell held and a measured 46.6-83.1 bytes a cell at
+  peak across two OGS-00011 subsets. It now streams `slice_cells` at a time
+  (default 2**21), keeps only the cells clearing the loosest tier, and derives
+  each cell's Analysis index from the CSR offsets rather than a materialised
+  position range. Every tier is bit-identical to the previous builder -- the
+  50-Analysis subset's 110,646 / 177,631 / 559,256 counts are unchanged -- and
+  the no-frequency and `imputed` branches keep their columns.
 - **Pass 2 off-reference keys are now fixed-width `uint64`, not pickled strings**:
   a Hybrid build with `--variant-reference` encodes each off-reference source
   coordinate in the Pass 2 worker. SNVs with one-base A/C/G/T alleles pack
