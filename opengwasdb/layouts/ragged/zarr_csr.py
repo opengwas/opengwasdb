@@ -64,6 +64,12 @@ class RaggedCSRWriter:
     because deciding it needs the frequencies this writer is still being fed:
     a build calls `eaf_measurements()` once everything is in, runs
     `StoreEncoding.decide()` once, and flushes with the answer.
+
+    The writer also holds the one per-variant EAF baseline derived from the
+    cells it has been fed (issue #230), because every phase that codes or fits
+    a cell needs it: a Hybrid build asks for it first in the joint SE fit's
+    Analysis-aligned batches, again in that fit's chunk-aligned measurement
+    batches, and again in the CSR flush.
     """
 
     def __init__(self, n_variants: int) -> None:
@@ -73,6 +79,10 @@ class RaggedCSRWriter:
         self._ses: list[np.ndarray] = []
         self._eafs: list[np.ndarray] = []
         self._offsets: list[int] = [0]
+        #: The baseline this writer has already derived, or `None` before the
+        #: first ask. `None` can only mean "not derived": a derivation under a
+        #: residual plan always returns an array, so it is never the answer.
+        self._derived_baseline: np.ndarray | None = None
 
     def add_analysis(
         self,
@@ -100,6 +110,10 @@ class RaggedCSRWriter:
         else:
             self._eafs.append(np.asarray(eaf, dtype=np.float32))
         self._offsets.append(self._offsets[-1] + n)
+        # A baseline is a median over every cell at its variant, so a new cell
+        # can move one: a held baseline must never outlive the cells it came
+        # from. Only `add_analysis` changes those cells.
+        self._derived_baseline = None
 
     @property
     def n_analyses(self) -> int:
@@ -272,16 +286,31 @@ class RaggedCSRWriter:
         if first < self.n_analyses:
             yield first, self.n_analyses
 
+    def _derive_eaf_baseline(self) -> np.ndarray:
+        """One pass over the per-Analysis runs, bounded in cells (issue #226)."""
+        return eaf_baseline_from_sorted_runs(self._variant_indices, self._eafs, self._n_variants)
+
     def _eaf_baseline(self, encoding: StoreEncoding) -> np.ndarray | None:
         """The per-variant Effect Allele Frequency Baseline, or None.
 
         From the per-Analysis runs rather than the concatenation: every column
         was sorted by variant index before it was added, and the bounded path
         keeps a billion-cell Overflow inside memory (issue #226).
+
+        Derived once and held for the writer's remaining life (issue #230).
+        The baseline is a function of the cells alone, and a Hybrid build asks
+        for it over the same cells three times -- the fit's Analysis-aligned
+        batches, the measurement's chunk-aligned batches and the flush -- so
+        deriving it per ask walks a 15-billion-cell Overflow twice more than it
+        needs to. What is held is one `float32` per variant, not per cell, and
+        each pass already held its own copy for that pass's duration, so the
+        reuse removes the passes and not a byte of peak.
         """
         if not encoding.eaf.is_residual:
             return None
-        return eaf_baseline_from_sorted_runs(self._variant_indices, self._eafs, self._n_variants)
+        if self._derived_baseline is None:
+            self._derived_baseline = self._derive_eaf_baseline()
+        return self._derived_baseline
 
     def _decode_round_trip(
         self,

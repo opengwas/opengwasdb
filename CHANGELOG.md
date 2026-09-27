@@ -12,6 +12,23 @@ the end of this file.
 
 ### Fixed
 
+- **The Ragged Overflow's per-variant EAF baseline is derived once per build.**
+  `RaggedCSRWriter` recomputed it on every ask, and a Hybrid build asks three
+  times over the same cells -- the joint SE fit's Analysis-aligned batches, that
+  fit's chunk-aligned measurement batches, and the CSR flush -- while a
+  standalone Ragged build asks twice (its own SE measurement, then the flush).
+  On a real 10-Analysis OGS-00011 subset (805,213 Overflow cells over
+  14,024,128 shared variants) that was three walks of the plane at 0.68 s,
+  0.46 s and 0.47 s; the writer now derives it in the first phase that needs it
+  and every later ask gets that array back, the same object rather than a copy,
+  until an Analysis is appended -- which drops it, because a new cell can move a
+  variant's median. What is held is one `float32` per variant, not per cell, and
+  every pass already held its own copy for that pass's duration, so the number
+  of passes changes and the peak does not. Nothing else changes either: the two
+  builds' stores decode array for array to identical values (66 arrays, including
+  the baseline itself), their manifests differ only in `created_at`, and the
+  chosen encoding is unchanged (#230).
+
 - **Hybrid reference routing for lowercase source alleles**: case-fold source
   allele keys when matching Dense reference variants and collecting genuinely
   off-reference associations, without changing effect orientation; reject
