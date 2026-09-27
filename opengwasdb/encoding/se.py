@@ -917,9 +917,12 @@ class _FitAccumulators:
     @classmethod
     def zeros(cls, n_analyses: int) -> _FitAccumulators:
         return cls(
-            np.zeros(n_analyses, dtype=np.int64),
-            *(np.zeros(n_analyses) for _ in range(4)),
-            np.zeros(n_analyses, dtype=np.int64),
+            count=np.zeros(n_analyses, dtype=np.int64),
+            sx=np.zeros(n_analyses),
+            sy=np.zeros(n_analyses),
+            sxx=np.zeros(n_analyses),
+            sxy=np.zeros(n_analyses),
+            without_eaf=np.zeros(n_analyses, dtype=np.int64),
         )
 
     def add_band(self, sums: _FitSums) -> None:
