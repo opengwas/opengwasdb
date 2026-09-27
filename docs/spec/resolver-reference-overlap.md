@@ -9,8 +9,8 @@ changes. Missing/empty axes fail setup rather than silently skipping overlap.
 Each successful per-Analysis record's `diagnostics` includes
 `ancestry_reference_rows_matched` / `ancestry_rows_read` and
 `variant_reference_rows_matched` / `rows_read`. The former counts **rows** on
-the ancestry extraction panel up to ancestry accumulation's stopping point,
-before AF/SE/palindromic filters; `ancestry_sites` still counts *distinct usable*
+the full ancestry Reference Resource up to ancestry accumulation's stopping point,
+even when an extraction panel narrows the fit, before AF/SE/palindromic filters; `ancestry_sites` still counts *distinct usable*
 sites for the ancestry fit. The latter counts **rows** on the supplied Hybrid
 axis over the physical scan, regardless of AF/SE eligibility. Repeated rows are
 counted repeatedly. The stream is never reread for either measurement. Without

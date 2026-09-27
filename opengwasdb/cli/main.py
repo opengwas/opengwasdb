@@ -779,16 +779,7 @@ def resolve_analyses_command(
             help="Variant list or QC panel file for bounded ancestry extraction",
         ),
     ] = None,
-    variant_reference: Annotated[
-        Path | None,
-        typer.Option(
-            "--variant-reference",
-            help="Hybrid variant axis for per-Analysis scanned-row overlap diagnostics",
-            exists=True,
-            dir_okay=False,
-            readable=True,
-        ),
-    ] = None,
+    variant_reference: Annotated[Path | None, typer.Option(help="Hybrid axis overlap")] = None,
     af_reference: Annotated[
         list[str] | None,
         typer.Option(
@@ -877,10 +868,9 @@ def resolve_analyses_command(
     panel, gates, and method tiers) match the current run are preserved without
     re-executing. Missing, failed, or stale records are rerun.
 
-    The Ancestry Reference Panel is loaded once in the parent process and
-    fork-shared across workers. Ordinary source, parser, or statistical errors
-    are isolated to the affected Analysis and recorded as controlled_failure,
-    while systemic configuration errors fail the command immediately.
+    The Ancestry Reference Panel and optional Hybrid axis are loaded once in the
+    parent and fork-shared across workers. Source/parser/statistical errors are
+    isolated to the affected Analysis; setup errors fail the command.
     """
     try:
         summary = resolve_analyses_manifest(

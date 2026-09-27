@@ -12,6 +12,10 @@ the end of this file.
 
 ### Added
 
+- **`resolve-analyses --variant-reference`**: count rows matching the Hybrid
+  axis and full ancestry reference during the existing per-Analysis scan;
+  persist scanned-row denominators and axis fingerprint in resumable records
+  so bundle generation can gate projected off-reference share (stores #174).
 - **`opengwasdb.build.ordered_pool.ordered_map`**: a forked worker-pool map that
   yields results in input order with a bounded number in flight, and runs
   serially at `n_workers <= 1`. Shared by the post-Pass-2 consolidation phases

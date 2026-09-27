@@ -431,6 +431,7 @@ def _scan(
     limit: ScanLimit | None,
     *,
     needs_sd: bool,
+    ancestry_reference: Collection[str],
     variant_reference: Collection[str] | None = None,
 ) -> None:
     """One pass over the source, feeding the ancestry fit and the SD evidence.
@@ -475,7 +476,7 @@ def _scan(
                 else max(0, scan.ancestry_rows_read - scan.rows_read)
             )
             scan.ancestry_reference_rows_matched += sum(
-                alid in panel for alid in block.alid[:ancestry_end]
+                alid in ancestry_reference for alid in block.alid[:ancestry_end]
             )
             if variant_reference is not None:
                 scan.variant_reference_rows_matched = (
@@ -768,7 +769,7 @@ def resolve_analysis(
     try:
         _scan(
             reader, panel, scan, evidence, scan_limit, needs_sd=needs_sd,
-            variant_reference=variant_reference,
+            ancestry_reference=reference.index, variant_reference=variant_reference,
         )
     except (OSError, EOFError, ValueError) as exc:
         return AnalysisResolution(
