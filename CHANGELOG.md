@@ -112,10 +112,11 @@ the end of this file.
   leaves nothing behind. A resumed build publishes atomically through the same
   Staged Release commit as an uninterrupted one, adopting the release the failed
   run had written (`OpenGWASDBStore.staging(adopt=..., retain_on_failure_to=...)`,
-  both defaults unchanged), and removes the checkpoint once it has; `--overwrite`
-  discards a stale one, and a build that finds one without `--resume` refuses and
-  names `resume_hybrid_build`. A failure logs the checkpoint directory and that
-  command. The cost is the retained spills -- 734 GB for OGS-00011 -- which
+  both defaults unchanged), and removes the checkpoint once it has. `--overwrite`
+  discards a stale checkpoint; every other build for that destination -- a plain
+  one included -- refuses it, naming `resume_hybrid_build` and the flag, rather
+  than orphaning a released build's Dense Component beside a fresh store. A
+  failure logs the checkpoint directory and that command. The cost is the retained spills -- 734 GB for OGS-00011 -- which
   `tests/test_hybrid_checkpoint.py::TestFootprint` pins as a bytes-per-cell
   ceiling (issue #227; ADR 0053).
 - **Hybrid build applies a declared INFO policy and records its dispositions**:
@@ -367,6 +368,11 @@ the end of this file.
 
 ### Changed
 
+- **The Reference Completion checkpoint refusal names the flag that discards
+  it**: `require_fresh_destination` said "overwrite=True to discard it", which
+  is the API spelling; it now adds `--overwrite`, the spelling an operator
+  typing the command sees. Shared by Reference Completion and the Hybrid build
+  (issue #227, ADR 0053), whose resume function the message also names.
 - **The Ragged Overflow top-hit index scans the CSR in bounded slices (#233)**:
   the phase no longer decodes every CSR association into parallel columns held
   whole -- about 24 bytes a cell held and a measured 46.6-83.1 bytes a cell at

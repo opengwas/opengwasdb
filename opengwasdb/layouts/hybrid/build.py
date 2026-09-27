@@ -2895,11 +2895,11 @@ def build_hybrid_from_vcf_manifest(
     ``source_assembly`` and ``source_reader_capability`` supply per-release
     defaults (#174), and ``eaf_reference`` drives the orientation check (#115).
 
-    ``checkpoint=True`` opts the build into phase-granularity resume and
-    ``resume=True`` continues such a build from the checkpoint this call's
-    ``output_path`` implies; see `_run_checkpointed_build` and
-    `_resume_requested` (issue #227). Without either flag nothing about the
-    build, or what it leaves on disk, changes.
+    ``checkpoint=True`` opts the build into phase-granularity resume; ``resume=True``
+    continues one from the checkpoint this call's ``output_path`` implies (issue #227;
+    `_run_checkpointed_build`, `_resume_requested`), and a destination whose checkpoint
+    is still there is refused unless ``overwrite=True`` discards it -- a plain build
+    included, which would otherwise orphan a released Dense Component.
     """
     if reference_panel is None and variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
@@ -2943,7 +2943,13 @@ def _run_checkpointed_build(
         default_source_reader_capability=defaults.source_reader_capability,
         default_source_assembly=defaults.source_assembly,
     )
-    state = _open_checkpoint(manifest_path, options, defaults, overwrite) if checkpoint else None
+    state = None
+    if checkpoint:
+        state = _open_checkpoint(manifest_path, options, defaults, overwrite)
+    else:
+        # A build that is not continuing a checkpoint must not orphan one in
+        # silence: refusing is the default, --overwrite the explicit discard.
+        _require_clear_checkpoint(options.out, overwrite)
     try:
         # The whole window is guarded, publication included: a commit that
         # loses a race still leaves a checkpoint, and the operator is told so.
@@ -3189,22 +3195,29 @@ def _require_unchanged_inputs(params: Mapping[str, Any]) -> None:
             )
 
 
+def _require_clear_checkpoint(out: Path, overwrite: bool) -> None:
+    """Refuse to build for a destination whose checkpoint is still there.
+
+    Called by *every* build, checkpointed or not: a checkpoint is a release's
+    only copy of a Dense Component it had already written -- hundreds of
+    gigabytes at release scale -- so a build that is not the resume of it is
+    either an explicit ``--overwrite`` or a refusal naming the function that
+    continues it. Without a checkpoint directory this says nothing, so a plain
+    build with nothing to resume behaves exactly as it always did.
+    """
+    require_fresh_destination(out, checkpoint_dir_for(out), overwrite, RESUME_FUNCTION)
+
+
 def _open_checkpoint(
     manifest_path: str | Path,
     options: _BuildOptions,
     defaults: _ManifestDefaults,
     overwrite: bool,
 ) -> CheckpointState:
-    """Create the checkpoint a build that opted in writes its phases into.
-
-    Refuses to clobber, and refuses to run beside an existing checkpoint
-    without being told to discard it: a stale checkpoint holds the only copy of
-    a released build's Dense Component, so it is either resumed -- naming the
-    function that does -- or discarded with ``overwrite=True``, never
-    overwritten in silence.
-    """
+    """Create the checkpoint a build that opted in writes its phases into,
+    refusing a stale one first (`_require_clear_checkpoint`)."""
+    _require_clear_checkpoint(options.out, overwrite)
     checkpoint_dir = checkpoint_dir_for(options.out)
-    require_fresh_destination(options.out, checkpoint_dir, overwrite, RESUME_FUNCTION)
     checkpoint_dir.mkdir(parents=True)
     params = _build_params(manifest_path, options, defaults, overwrite)
     write_build_params(checkpoint_dir, params)

@@ -83,10 +83,16 @@ OGS-00011 — and a phase marker is a promise that everything the next phase rea
 is on disk in full, so a resume validates the plate inventory (name and size)
 before reading anything, and refuses a checkpoint whose staged release is gone, a
 torn marker set, an absent or mismatched format version, an absent
-`build_params.json`, or a parameter or input identity that changed. The
-`--overwrite` that already discards a stale destination discards a stale
-checkpoint too, and a build finding one without `--resume` refuses naming
-`resume_hybrid_build`.
+`build_params.json`, or a parameter or input identity that changed.
+
+**A checkpoint directory is never orphaned, and never overwritten in silence.**
+Every build for that destination checks it, whether or not it asked for one of
+its own: a plain build that found a checkpoint it is not resuming refuses,
+naming `resume_hybrid_build`, rather than writing a store beside hundreds of
+gigabytes of a released build's Dense Component that nothing points at any more.
+`--overwrite` is the explicit way to discard it, and it discards it before the
+build starts rather than after. Without a checkpoint directory the check says
+nothing, so a plain build with nothing to resume is exactly the build it was.
 
 ## Considered options
 
@@ -147,6 +153,11 @@ checkpoint too, and a build finding one without `--resume` refuses naming
 - A checkpoint is a durable record of a build's *inputs* as well as its
   intermediates: an edited manifest, a rewritten reference or a touched file
   refuses a resume, and the honest response is a fresh `--checkpoint` build.
+- A destination with a stale checkpoint cannot be built into at all without
+  `--overwrite`. That is deliberate -- the alternative is a plain build that
+  succeeds while leaving the checkpoint's hundreds of gigabytes unreferenced --
+  but it means an operator who wants to keep the checkpoint must resume it, and
+  one who does not must say so.
 - What a resumed build produces is a store that decodes exactly as an
   uninterrupted one does — every zarr array (dtype, shape, values, NaN-aware),
   the same encodings, and the same `manifest.json` and `analyses.tsv` apart from

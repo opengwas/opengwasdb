@@ -38,6 +38,14 @@ from test_hybrid_build import (
     _hybrid_manifest,
     _write_reference_artifact,
 )
+from test_info_score_hybrid_build import (
+    NO_EFFECT_ROW,
+    SCORED_ROWS,
+    _info_analyses,
+    _manifest,
+    _panel,
+    _write_source,
+)
 
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest, resume_hybrid_build
@@ -67,6 +75,25 @@ def _build(manifest: Path, reference: Path, store: Path, **overrides: object):
     return build_hybrid_from_vcf_manifest(
         manifest, store, variant_reference=reference, store_id="s", release_id="r", **overrides
     )
+
+
+def _build_panel(manifest: Path, panel: Path, store: Path, **overrides: object):
+    """Build one store from the INFO fixture, a legacy panel-only build."""
+    return build_hybrid_from_vcf_manifest(
+        manifest, store, reference_panel=panel, store_id="s", release_id="r", **overrides
+    )
+
+
+def _info_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    """A manifest whose one Analysis declares an INFO threshold that filters.
+
+    The stores #175 fixture (`tests/test_info_score_hybrid_build.py`): a
+    GWAS-SSF source with a score per disposition, so a 0.7 threshold really
+    drops rows -- which is what makes the recorded counts non-trivial, and a
+    resumed run that lost them observable.
+    """
+    source = _write_source(tmp_path / "GCST_INFO.tsv.gz", [*SCORED_ROWS, NO_EFFECT_ROW])
+    return _manifest(tmp_path, source, "0.7"), _panel(tmp_path)
 
 
 def _crashing_fit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -112,6 +139,22 @@ def _dir_bytes(path: Path) -> int:
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
 
 
+def _assert_manifests_match(before: Path, after: Path) -> None:
+    """Both manifests equal apart from `created_at`, as byte-identity defines.
+
+    `_assert_hybrid_stores_match` covers every decoded array, the variant
+    tables and `analyses.tsv` but deliberately skips the manifests, whose
+    `created_at` always differs. This is the other half of the contract, and
+    the same comparison the real-data evidence's `verify_227.py` makes.
+    """
+    for name in ("manifest.json", "dense/manifest.json"):
+        one = json.loads((before / name).read_text(encoding="utf-8"))
+        two = json.loads((after / name).read_text(encoding="utf-8"))
+        one.pop("created_at", None)
+        two.pop("created_at", None)
+        assert one == two, name
+
+
 class TestCheckpointedBuild:
     def test_checkpointed_build_matches_uninterrupted_and_clears_up(self, tmp_path):
         """A build with --checkpoint that succeeds is the same store, and leaves
@@ -128,6 +171,7 @@ class TestCheckpointedBuild:
         assert list(tmp_path.glob(f".{plain.name}.hybridspill.*")) == []
         assert list(tmp_path.glob(f".{checked.name}.hybridspill.*")) == []
         _assert_hybrid_stores_match(plain, checked)
+        _assert_manifests_match(plain, checked)
 
     def test_resume_after_fit_crash_matches_uninterrupted(self, tmp_path, monkeypatch):
         manifest, reference = _fixture(tmp_path)
@@ -152,6 +196,59 @@ class TestCheckpointedBuild:
         assert resumed.n_overflow == 1
         assert validate_store(store).ok
         _assert_hybrid_stores_match(plain, store)
+        _assert_manifests_match(plain, store)
+
+    def test_resume_preserves_info_score_provenance(self, tmp_path, monkeypatch):
+        """Stores #175's per-Analysis declared-score counts are what the sources
+        yielded, not a function of the store: nothing else can recover them, so
+        a resumed run reloads them rather than writing a manifest without
+        `provenance.info_score`. The fixture's declared threshold drops rows, so
+        a missing or all-zero block could not pass the comparison by accident.
+        """
+        manifest, panel = _info_fixture(tmp_path)
+        plain = tmp_path / "plain.opengwasdb"
+        _build_panel(manifest, panel, plain)
+
+        store = tmp_path / "info.opengwasdb"
+        _crashing_fit(monkeypatch)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            _build_panel(manifest, panel, store, checkpoint=True)
+        monkeypatch.undo()
+        assert (checkpoint_dir_for(store) / "info_counts.json").exists()
+
+        resume_hybrid_build(checkpoint_dir_for(store))
+
+        uninterrupted, resumed = _info_analyses(plain), _info_analyses(store)
+        # Asserted meaningful first: the 0.7 threshold really filtered, so the
+        # equality below is over counts that carry the policy's decisions.
+        assert uninterrupted[0]["associations_below_threshold"] > 0
+        assert uninterrupted[0]["associations_retained"] > 0
+        assert (
+            uninterrupted[0]["associations_retained"]
+            < uninterrupted[0]["associations_observed"]
+        )
+        assert resumed == uninterrupted
+        _assert_hybrid_stores_match(plain, store)
+        _assert_manifests_match(plain, store)
+
+    def test_resume_may_change_n_workers(self, tmp_path, monkeypatch):
+        """`n_workers` is a pure runtime knob (ADR 0023), so a resume may raise
+        it even though every other parameter is compared -- and the store is the
+        one an uninterrupted build makes."""
+        manifest, reference = _fixture(tmp_path)
+        plain = tmp_path / "plain.opengwasdb"
+        _build(manifest, reference, plain)
+
+        store = tmp_path / "resumed.opengwasdb"
+        _crashing_fit(monkeypatch)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            _build(manifest, reference, store, checkpoint=True, n_workers=1)
+        monkeypatch.undo()
+
+        resume_hybrid_build(checkpoint_dir_for(store), n_workers=2)
+
+        _assert_hybrid_stores_match(plain, store)
+        _assert_manifests_match(plain, store)
 
     def test_resume_does_not_re_measure_the_plan_or_the_axis(self, tmp_path, monkeypatch):
         """The frozen state is the point of the ticket: a resumed run must not
@@ -237,6 +334,7 @@ class TestCheckpointedBuild:
 
         assert validate_store(store).ok
         _assert_hybrid_stores_match(plain, store)
+        _assert_manifests_match(plain, store)
 
     def test_partial_pass2_resumes_from_scratch_and_matches(self, tmp_path, monkeypatch):
         """A crash inside Pass 2 leaves no phase recorded, so the resume routes
@@ -266,6 +364,7 @@ class TestCheckpointedBuild:
         resume_hybrid_build(checkpoint_dir)
         assert validate_store(store).ok
         _assert_hybrid_stores_match(plain, store)
+        _assert_manifests_match(plain, store)
 
     def test_failure_log_names_the_checkpoint_and_the_resume(
         self, tmp_path, monkeypatch, caplog
@@ -464,6 +563,23 @@ class TestRefusals:
             _build(manifest, reference, store, checkpoint=True)
         assert checkpoint_dir_for(store).exists()
 
+    def test_a_plain_build_refuses_an_existing_checkpoint(self, tmp_path, monkeypatch):
+        """A build for that destination is either the resume of the checkpoint
+        beside it or an explicit `--overwrite`: doing neither would orphan the
+        only copy of a released build's Dense Component. Without a checkpoint
+        directory this check says nothing (every other test here covers that)."""
+        store = self._failed_build(tmp_path, monkeypatch)
+        manifest, reference = _fixture(tmp_path)
+
+        with pytest.raises(FileExistsError) as refused:
+            _build(manifest, reference, store)
+        assert "resume_hybrid_build" in str(refused.value)
+        assert "--overwrite" in str(refused.value)
+        assert checkpoint_dir_for(store).exists()
+
+        assert _build(manifest, reference, store, overwrite=True).n_overflow == 1
+        assert not checkpoint_dir_for(store).exists()
+
     def test_overwrite_discards_a_stale_checkpoint(self, tmp_path, monkeypatch):
         store = self._failed_build(tmp_path, monkeypatch)
         manifest, reference = _fixture(tmp_path)
@@ -495,6 +611,32 @@ class TestCli:
         assert resumed.exit_code == 0, resumed.output
         assert json.loads(resumed.output.strip().splitlines()[-1])["n_overflow"] == 1
         assert validate_store(store).ok
+
+    def test_cli_resume_may_change_n_workers(self, tmp_path, monkeypatch):
+        """`--resume` compares the parameters it is given, and `--n-workers` is
+        the one it must let through: the resumed run spreads the phases it
+        re-enters across two workers and still writes the same store."""
+        from typer.testing import CliRunner
+
+        from opengwasdb.cli.main import app
+
+        manifest, reference = _fixture(tmp_path)
+        plain = tmp_path / "plain.opengwasdb"
+        _build(manifest, reference, plain)
+
+        store = tmp_path / "cli.opengwasdb"
+        args = _cli_args(manifest, reference, store, "--store-id", "s", "--release-id", "r")
+
+        _crashing_fit(monkeypatch)
+        crashed = CliRunner().invoke(app, [*args, "--checkpoint", "--n-workers", "1"])
+        assert crashed.exit_code != 0, crashed.output
+        monkeypatch.undo()
+
+        resumed = CliRunner().invoke(app, [*args, "--resume", "--n-workers", "2"])
+        assert resumed.exit_code == 0, resumed.output
+        assert validate_store(store).ok
+        _assert_hybrid_stores_match(plain, store)
+        _assert_manifests_match(plain, store)
 
     def test_cli_resume_refuses_a_different_parameter(self, tmp_path, monkeypatch):
         """The refusal reaches the operator: the CLI does not swallow it, and the

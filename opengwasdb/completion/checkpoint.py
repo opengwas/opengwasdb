@@ -32,15 +32,23 @@ def require_fresh_destination(
 
     Shared by `complete_dense_store` and `complete_ragged_store`, which faced
     off identically here before this was extracted: only the resume function
-    named in the checkpoint's error message differed between them.
+    named in the checkpoint's error message differed between them; the Hybrid
+    build passes `resume_hybrid_build` (issue #227).
+
+    A checkpoint directory is never overwritten in silence, whichever build
+    finds it, so the refusal names both ways out: the resume function, and the
+    flag that discards it. `overwrite=True` is what that flag sets, so both
+    spellings are given -- a checkpoint holds the only copy of a release a
+    build had already written, which is not something to lose by guessing.
     """
     if dst.exists() and not overwrite:
         raise FileExistsError(f"Destination already exists: {dst}. Use overwrite=True.")
     if checkpoint_dir.exists():
         if not overwrite:
             raise FileExistsError(
-                f"A checkpoint directory already exists at {checkpoint_dir}. "
-                f"Use {resume_fn}() to continue it, or overwrite=True to discard it."
+                f"A checkpoint directory already exists at {checkpoint_dir}. Use "
+                f"{resume_fn}() to continue it, or --overwrite (overwrite=True) to "
+                f"discard it."
             )
         shutil.rmtree(checkpoint_dir)
 
