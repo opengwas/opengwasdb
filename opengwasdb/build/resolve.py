@@ -56,6 +56,11 @@ import numpy as np
 from opengwasdb.ancestry.mixture import AncestryAssignment, Gates, assign_ancestry
 from opengwasdb.ancestry.reference import AncestryReference
 from opengwasdb.build.eaf_orientation import site_hash
+from opengwasdb.build.info_score_filter import (
+    InfoScoreCounts,
+    count_info_scores,
+    retained_mask,
+)
 from opengwasdb.build.phenotype_sd import (
     ESTIMATION_METHODS,
     PhenotypeSdEstimate,
@@ -65,7 +70,6 @@ from opengwasdb.build.phenotype_sd import (
 )
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
-from opengwasdb.readers.interface import ImputationScoreStatus
 from opengwasdb.readers.tabular import MetricsChunk
 
 __all__ = [
@@ -340,13 +344,7 @@ class _Scan:
     ancestry_stop_reason: ScanStop = ScanStop.EOF
     ancestry_reference_rows_matched: int = 0
     variant_reference_rows_matched: int | None = None
-    canonical_rows_retained: int = 0
-    info_rows_below_threshold: int = 0
-    info_rows_missing: int = 0
-    info_rows_malformed: int = 0
-    info_rows_nonfinite: int = 0
-    info_rows_out_of_range: int = 0
-    info_rows_usable: int = 0
+    info_counts: InfoScoreCounts = field(default_factory=InfoScoreCounts)
     build_eligible_rows: int = 0
     build_eligible_rows_on_variant_reference: int | None = None
     build_eligible_rows_off_variant_reference: int | None = None
@@ -448,13 +446,13 @@ def _diagnostics(request: AnalysisRequest, scan: _Scan) -> ScanDiagnostics:
         ancestry_reference_rows_matched=scan.ancestry_reference_rows_matched,
         variant_reference_rows_matched=scan.variant_reference_rows_matched,
         canonical_rows_observed=scan.rows_read,
-        canonical_rows_retained=scan.canonical_rows_retained,
-        info_rows_below_threshold=scan.info_rows_below_threshold,
-        info_rows_missing=scan.info_rows_missing,
-        info_rows_malformed=scan.info_rows_malformed,
-        info_rows_nonfinite=scan.info_rows_nonfinite,
-        info_rows_out_of_range=scan.info_rows_out_of_range,
-        info_rows_usable=scan.info_rows_usable,
+        canonical_rows_retained=scan.info_counts.retained,
+        info_rows_below_threshold=scan.info_counts.below_threshold,
+        info_rows_missing=scan.info_counts.missing,
+        info_rows_malformed=scan.info_counts.malformed,
+        info_rows_nonfinite=scan.info_counts.nonfinite,
+        info_rows_out_of_range=scan.info_counts.out_of_range,
+        info_rows_usable=scan.info_counts.usable,
         info_score_state=request.info_score_policy.state,
         build_eligible_rows=scan.build_eligible_rows,
         build_eligible_rows_on_variant_reference=scan.build_eligible_rows_on_variant_reference,
@@ -531,7 +529,7 @@ def _scan(
                     (scan.variant_reference_rows_matched or 0)
                     + sum(alid in variant_reference for alid in observed.alid)
                 )
-            _count_info(observed, block, scan, info_score_policy)
+            _count_info(observed, scan, info_score_policy)
             _count_build_eligible(block, scan, variant_reference)
             evidence.admit(block)
             scan.rows_read += len(observed)
@@ -570,33 +568,17 @@ def _slice(chunk: MetricsChunk, rows: int) -> MetricsChunk:
 
 
 def _retained_indices(chunk: MetricsChunk, policy: InfoScorePolicy) -> np.ndarray:
-    """The rows a declared policy keeps. Only `FILTERED` drops any, and a row
-    whose score equals the threshold is kept (stores #175)."""
-    if policy.state is not InfoScoreState.FILTERED:
-        return np.arange(len(chunk))
-    assert policy.info_score_threshold is not None
-    usable = chunk.imputation_score_status == ImputationScoreStatus.USABLE
-    return np.flatnonzero(usable & (chunk.imputation_score >= policy.info_score_threshold))
-
-
-def _count_info(
-    observed: MetricsChunk, retained: MetricsChunk, scan: _Scan, policy: InfoScorePolicy
-) -> None:
-    """Record one block's score dispositions, over every observed row."""
-    statuses = observed.imputation_score_status
-    scan.info_rows_usable += int(np.count_nonzero(statuses == ImputationScoreStatus.USABLE))
-    scan.info_rows_missing += int(np.count_nonzero(statuses == ImputationScoreStatus.MISSING))
-    scan.info_rows_malformed += int(np.count_nonzero(statuses == ImputationScoreStatus.MALFORMED))
-    scan.info_rows_nonfinite += int(np.count_nonzero(statuses == ImputationScoreStatus.NONFINITE))
-    scan.info_rows_out_of_range += int(
-        np.count_nonzero(statuses == ImputationScoreStatus.OUT_OF_RANGE)
+    """The rows a declared policy keeps, by the shared rule (stores #175)."""
+    return np.flatnonzero(
+        retained_mask(chunk.imputation_score, chunk.imputation_score_status, policy)
     )
-    scan.canonical_rows_retained += len(retained)
-    if policy.state is InfoScoreState.FILTERED:
-        scan.info_rows_below_threshold += int(np.count_nonzero(
-            (statuses == ImputationScoreStatus.USABLE)
-            & (observed.imputation_score < policy.info_score_threshold)
-        ))
+
+
+def _count_info(observed: MetricsChunk, scan: _Scan, policy: InfoScorePolicy) -> None:
+    """Record one block's score dispositions, over every observed row."""
+    scan.info_counts += count_info_scores(
+        observed.imputation_score, observed.imputation_score_status, policy
+    )
 
 
 def _count_build_eligible(
@@ -885,7 +867,7 @@ def resolve_analysis(
             error=f"{type(exc).__name__}: {exc}",
         )
     if (request.info_score_policy.imputation_score_declaration is not None
-            and scan.info_rows_usable == 0):
+            and scan.info_counts.usable == 0):
         # A declared score nothing usable was found for is a controlled failure,
         # not an Analysis resolved from zero rows (stores #175).
         return AnalysisResolution(

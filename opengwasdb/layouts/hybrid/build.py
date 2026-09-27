@@ -21,13 +21,14 @@ context, collision/provenance rules, the disjoint-partition layout).
 
 from __future__ import annotations
 
+import csv
 import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import as_completed
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,11 @@ from opengwasdb.build.eaf_orientation import (
     apply_orientation_evidence,
     site_hashes,
     verify_eaf_orientation,
+)
+from opengwasdb.build.info_score_filter import (
+    InfoScoreCounts,
+    count_info_scores,
+    retained_mask,
 )
 from opengwasdb.build.liftover import LiftoverFailureError
 from opengwasdb.build.ordered_pool import ordered_map
@@ -118,8 +124,14 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
     StoredEffectScale,
 )
+from opengwasdb.model.info_score_policy import (
+    InfoScorePolicy,
+    InfoScoreState,
+    parse_info_score_policy,
+)
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
+from opengwasdb.readers.interface import ImputationScoreStatus
 from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
@@ -198,6 +210,10 @@ _pass2_keys_sorted: np.ndarray | None = None
 _pass2_targets_sorted: np.ndarray | None = None  # int64: dense row (panel) or shared idx (off)
 _pass2_ispanel_sorted: np.ndarray | None = None  # bool: True = on-panel target
 _pass2_spill_dir: Path | None = None
+# Column index -> that Analysis's declared INFO policy (stores #175), so a
+# worker applies the policy of the row its task came from without the task
+# tuple growing a sixth element the Dense builder does not share.
+_pass2_info_policies: Mapping[int, InfoScorePolicy] | None = None
 
 
 def _build_routing_index(
@@ -346,6 +362,21 @@ def _extend(accumulators: tuple[list[np.ndarray], ...], parts: tuple[np.ndarray,
             accumulator.append(part)
 
 
+def _retain_rows(lists: tuple[list[Any], ...], keep: np.ndarray) -> None:
+    """Keep `keep`'s rows in every positionally parallel batch list, in place.
+
+    The batch lists are one buffer shared with the caller's own loop, so a
+    dropped row must leave all of them together -- a filter that kept a
+    coordinate and dropped its z would route an association the policy
+    excluded.
+    """
+    if bool(keep.all()):
+        return
+    indices = np.flatnonzero(keep).tolist()
+    for values in lists:
+        values[:] = [values[index] for index in indices]
+
+
 def _resolve_column_hybrid(
     file_path: str,
     keys_sorted: np.ndarray,
@@ -355,17 +386,19 @@ def _resolve_column_hybrid(
     *,
     capability: str = GWAS_VCF_CAPABILITY,
     stored_effect_scale: str = StoredEffectScale.SD.value,
+    info_score_policy: InfoScorePolicy | None = None,
 ) -> tuple[
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     _OffReferenceSpill,
+    InfoScoreCounts,
 ]:
     """Stream one study once, routing each association to the dense fill (on-panel),
     the ragged overflow (off-panel/reference), or -- when the routing index does
     not hold its source coordinate at all -- an off-reference bucket keyed by the
-    raw coordinate. Returns ``(dense, overflow, off_reference)`` where each is
-    ``(index/key, z f32, se f32, eaf f32)`` deduped last-wins; `eaf` is NaN where
-    the source reports no frequency (ADR 0036).
+    raw coordinate. Returns ``(dense, overflow, off_reference, info_counts)``
+    where each is ``(index/key, z f32, se f32, eaf f32)`` deduped last-wins; `eaf`
+    is NaN where the source reports no frequency (ADR 0036).
 
     ``capability`` resolves a ``SourceReader`` (issue #20) rather than this
     module streaming a VCF itself; ``stored_effect_scale`` is required to
@@ -375,8 +408,22 @@ def _resolve_column_hybrid(
     (continuous-trait phenotype-SD standardisation, issue #18): a study's SD
     rescaling applies uniformly regardless of which component an association
     routes to. Defaults to 1.0 (no-op).
+
+    ``info_score_policy`` is this Analysis's declared imputation-score policy
+    (stores #175). Its declaration reaches the reader, and the shared
+    ``retained_mask`` rule is applied to each batch *before* the batch is
+    matched, so a row a declared positive threshold excludes reaches neither
+    component, the EAF survey nor the top-hit counts. ``info_counts`` reports
+    the dispositions behind that filter: the associations this reader yielded,
+    not canonical source rows.
     """
-    reader = resolve_reader(capability, file_path, StoredEffectScale(stored_effect_scale))
+    info_score_policy = info_score_policy or InfoScorePolicy()
+    reader = resolve_reader(
+        capability,
+        file_path,
+        StoredEffectScale(stored_effect_scale),
+        imputation_score_declaration=info_score_policy.imputation_score_declaration,
+    )
     d_idx: list[np.ndarray] = []
     d_z: list[np.ndarray] = []
     d_se: list[np.ndarray] = []
@@ -397,8 +444,21 @@ def _resolve_column_hybrid(
     zs: list[float] = []
     ses: list[float] = []
     eafs: list[float] = []
+    scores: list[float | None] = []
+    statuses: list[ImputationScoreStatus] = []
+    counts = InfoScoreCounts()
 
     def _flush() -> None:
+        nonlocal counts
+        if not zs:
+            return
+        block_scores = np.asarray(scores, dtype=np.float64)
+        block_statuses = np.asarray(statuses, dtype=object)
+        counts += count_info_scores(block_scores, block_statuses, info_score_policy)
+        _retain_rows(
+            (chroms, poss, refs, alts, zs, ses, eafs),
+            retained_mask(block_scores, block_statuses, info_score_policy),
+        )
         if not zs:
             return
         dense, overflow, unknown = _match_hybrid_batch(
@@ -429,6 +489,8 @@ def _resolve_column_hybrid(
         zs.append(assoc.z)
         ses.append(assoc.se)
         eafs.append(float("nan") if assoc.eaf is None else assoc.eaf)
+        scores.append(assoc.imputation_score.value)
+        statuses.append(assoc.imputation_score.status)
         if len(zs) >= _RESOLVE_BATCH:
             _flush()
     _flush()
@@ -478,6 +540,7 @@ def _resolve_column_hybrid(
         _assemble(d_idx, d_z, d_se, d_eaf),
         _assemble(o_idx, o_z, o_se, o_eaf),
         _assemble_unknown(),
+        counts,
     )
 
 
@@ -515,13 +578,14 @@ def _spill_hybrid_column(
             _write_unknown_side_file(spill_dir, col_idx, u_hashed_raw)
 
 
-def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
+def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, InfoScoreCounts]:
     assert _pass2_keys_sorted is not None
     assert _pass2_targets_sorted is not None
     assert _pass2_ispanel_sorted is not None
     assert _pass2_spill_dir is not None
+    assert _pass2_info_policies is not None
     col_idx, file_path, se_divisor, capability, stored_effect_scale = task
-    dense, overflow, off_reference = _resolve_column_hybrid(
+    dense, overflow, off_reference, info_counts = _resolve_column_hybrid(
         file_path,
         _pass2_keys_sorted,
         _pass2_targets_sorted,
@@ -529,9 +593,10 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
         se_divisor,
         capability=capability,
         stored_effect_scale=stored_effect_scale,
+        info_score_policy=_pass2_info_policies[col_idx],
     )
     _spill_hybrid_column(_pass2_spill_dir, col_idx, dense, overflow, off_reference)
-    return col_idx
+    return col_idx, info_counts
 
 
 @dataclass(frozen=True)
@@ -685,6 +750,7 @@ class _PreparedBuild:
     dense_staged: StagedRelease
     partition: _VariantPartition
     manifest_rows: list[_ManifestRow]
+    info_score_policies: Mapping[str, InfoScorePolicy]
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
     rsid_by_alid: dict[str, str]
@@ -698,10 +764,12 @@ class _PreparedBuild:
 
 @dataclass(frozen=True)
 class _RoutedSpills:
-    """What Pass 2 leaves for the EAF survey."""
+    """What Pass 2 leaves for the EAF survey: the {column: analysis_id} map, the
+    pass start time, and each Analysis's declared-score dispositions (#175)."""
 
     id_by_col: dict[int, str]
     pass2_start: float
+    info_counts: Mapping[str, InfoScoreCounts] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -750,6 +818,7 @@ class _ComponentResult:
     se_coefficients: np.ndarray | None
     eaf_provenance: dict[str, Any]
     analyses: list[Analysis]
+    info_counts: Mapping[str, InfoScoreCounts] = field(default_factory=dict)
 
 
 def _open_dense_component(staged: StagedRelease) -> tuple[Path, StagedRelease]:
@@ -855,9 +924,11 @@ def _load_manifest(
     *,
     default_source_reader_capability: str | None = None,
     default_source_assembly: str | None = None,
-) -> list[_ManifestRow]:
+) -> tuple[list[_ManifestRow], dict[str, InfoScorePolicy]]:
     """Read the build manifest, failing loudly on an empty one rather than
-    building a store with no Analyses (a plausible empty answer)."""
+    building a store with no Analyses (a plausible empty answer), alongside each
+    row's declared imputation-score policy (`_read_info_score_policies`).
+    """
     manifest_rows = _read_manifest(
         manifest_path,
         default_source_reader_capability=default_source_reader_capability,
@@ -865,7 +936,41 @@ def _load_manifest(
     )
     if not manifest_rows:
         raise ValueError(f"manifest {manifest_path} contains no rows")
-    return manifest_rows
+    return manifest_rows, _read_info_score_policies(manifest_path, manifest_rows)
+
+
+def _read_info_score_policies(
+    manifest_path: str | Path, rows: list[_ManifestRow]
+) -> dict[str, InfoScorePolicy]:
+    """Parse each Analysis's declared imputation-score policy (stores #175).
+
+    `_ManifestRow` carries the columns this builder routes with, not the INFO
+    policy columns, so the manifest is read once more here -- it lists Analyses,
+    not associations -- and matched row for row against the rows
+    `_read_manifest` produced. The reader capability is the row's own resolved
+    value, exactly as the manifest resolver parses the same row, so a CLI
+    default applies to both. A partial or contradictory declaration is a
+    manifest error naming its Analysis, never a filter silently not applied.
+    """
+    with open(manifest_path, newline="", encoding="utf-8") as fh:
+        raw_rows = list(csv.DictReader(fh, delimiter="\t"))
+    if len(raw_rows) != len(rows):
+        raise ValueError(
+            f"manifest {manifest_path} changed while it was read: {len(rows)} rows parsed, "
+            f"{len(raw_rows)} re-read"
+        )
+    policies: dict[str, InfoScorePolicy] = {}
+    for row, raw in zip(rows, raw_rows, strict=True):
+        try:
+            policies[row.trait_id] = parse_info_score_policy(
+                raw, reader_capability=row.source_reader_capability
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"manifest {manifest_path}: analysis {row.trait_id!r} has invalid INFO "
+                f"policy: {exc}"
+            ) from exc
+    return policies
 
 
 def _axis_source(
@@ -1585,11 +1690,13 @@ def _route_serial(
     analysis_index: dict[str, int],
     n_analyses: int,
     pass2_start: float,
-) -> None:
+) -> dict[str, InfoScoreCounts]:
     """Route each study once, in this process, spilling the dense rows and the
-    overflow associations it resolves (last-wins dedup per target index)."""
+    overflow associations it resolves (last-wins dedup per target index).
+    Returns each Analysis's declared-score dispositions (stores #175)."""
+    info_counts: dict[str, InfoScoreCounts] = {}
     for i, row in enumerate(prepared.manifest_rows):
-        dense, overflow, off_reference = _resolve_column_hybrid(
+        dense, overflow, off_reference, counts = _resolve_column_hybrid(
             row.file_path,
             prepared.keys_sorted,
             prepared.targets_sorted,
@@ -1597,11 +1704,14 @@ def _route_serial(
             row.se_divisor,
             capability=row.source_reader_capability,
             stored_effect_scale=row.stored_effect_scale,
+            info_score_policy=prepared.info_score_policies[row.trait_id],
         )
+        info_counts[row.trait_id] = counts
         _spill_hybrid_column(
             prepared.spill_dir, analysis_index[row.trait_id], dense, overflow, off_reference
         )
         _log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {row.trait_id}", every=25)
+    return info_counts
 
 
 def _route_parallel(
@@ -1611,24 +1721,31 @@ def _route_parallel(
     n_analyses: int,
     options: _BuildOptions,
     pass2_start: float,
-) -> None:
+) -> dict[str, InfoScoreCounts]:
     """Route each study through the fork pool. Workers read the routing arrays
     through the module-level globals below rather than as arguments: they are
     inherited by fork, which is what keeps a genome-scale lookup out of the
     per-column pickling the pool would otherwise do (dense.build_vcf's
-    rationale)."""
+    rationale). Each worker also applies its own Analysis's declared INFO policy
+    (stores #175) and returns its dispositions for the shared manifest."""
     global _pass2_keys_sorted, _pass2_targets_sorted, _pass2_ispanel_sorted
-    global _pass2_spill_dir
+    global _pass2_spill_dir, _pass2_info_policies
     _pass2_keys_sorted = prepared.keys_sorted
     _pass2_targets_sorted = prepared.targets_sorted
     _pass2_ispanel_sorted = prepared.ispanel_sorted
     _pass2_spill_dir = prepared.spill_dir
+    _pass2_info_policies = {
+        column: prepared.info_score_policies[row.trait_id]
+        for column, row in enumerate(prepared.manifest_rows)
+    }
+    info_counts: dict[str, InfoScoreCounts] = {}
     try:
         with _fork_pool(options.n_workers) as pool:
             tasks = _pass2_worker_tasks(prepared.manifest_rows, analysis_index)
             futures = [pool.submit(_pass2_worker, task) for task in tasks]
             for i, future in enumerate(as_completed(futures)):
-                col = future.result()
+                col, counts = future.result()
+                info_counts[id_by_col[col]] = counts
                 _log_progress(
                     "Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25
                 )
@@ -1637,6 +1754,29 @@ def _route_parallel(
         _pass2_targets_sorted = None
         _pass2_ispanel_sorted = None
         _pass2_spill_dir = None
+        _pass2_info_policies = None
+    return info_counts
+
+
+def _require_usable_declared_scores(
+    prepared: _PreparedBuild, counts_by_id: Mapping[str, InfoScoreCounts]
+) -> None:
+    """Refuse an Analysis whose declared score had no usable value (stores #175).
+
+    The resolver's own contract, on the builder's population: an Analysis that
+    declares a score and had none usable anywhere in the source is a failure
+    naming that Analysis, never an Analysis silently built from zero scored
+    associations -- which would look exactly like one whose source has no
+    associations at all.
+    """
+    for row in prepared.manifest_rows:
+        declaration = prepared.info_score_policies[row.trait_id].imputation_score_declaration
+        if declaration is not None and counts_by_id[row.trait_id].usable == 0:
+            raise ValueError(
+                f"Analysis {row.trait_id}: declared imputation score "
+                f"{declaration.column_name!r} has no usable scores in the associations "
+                "the source yielded"
+            )
 
 
 def _route_studies(
@@ -1645,8 +1785,9 @@ def _route_studies(
 ) -> _RoutedSpills:
     """Phase - Pass 2: read each study once and route every association into
     the dense spill or the overflow spill (fork pool when n_workers > 1).
-    Returns the {column: analysis_id} map the EAF survey keys and the pass
-    start time the band writer's progress reports from."""
+    Returns the {column: analysis_id} map the EAF survey keys, the pass start
+    time the band writer's progress reports from, and each Analysis's declared-
+    score dispositions for the shared manifest (stores #175)."""
     rows = prepared.manifest_rows
     analysis_index = {row.trait_id: i for i, row in enumerate(rows)}
     id_by_col = {i: row.trait_id for i, row in enumerate(rows)}
@@ -1654,14 +1795,14 @@ def _route_studies(
     log.info("Pass 2: routing %d analyses (n_workers=%d)", n_analyses, options.n_workers)
     pass2_start = time.monotonic()
     if options.n_workers <= 1:
-        _route_serial(
+        info_counts = _route_serial(
             prepared,
             analysis_index,
             n_analyses,
             pass2_start,
         )
     else:
-        _route_parallel(
+        info_counts = _route_parallel(
             prepared,
             analysis_index,
             id_by_col,
@@ -1669,7 +1810,10 @@ def _route_studies(
             options,
             pass2_start,
         )
-    return _RoutedSpills(id_by_col=id_by_col, pass2_start=pass2_start)
+    _require_usable_declared_scores(prepared, info_counts)
+    return _RoutedSpills(
+        id_by_col=id_by_col, pass2_start=pass2_start, info_counts=info_counts
+    )
 
 
 def _verify_eaf_orientation(
@@ -1895,6 +2039,53 @@ def _flush_overflow_component(
     return n_overflow
 
 
+def _info_score_counts_fields(counts: InfoScoreCounts) -> dict[str, int]:
+    """One Analysis's declared-score dispositions, as the store records them.
+
+    The `associations_` prefix is load-bearing: the denominator is the
+    associations the Analysis's Source Reader yielded after its own effect/SE
+    admission, not the canonical rows the resolver's `canonical_rows_*`
+    diagnostics count (stores #175).
+    """
+    return {
+        "associations_observed": counts.observed,
+        "associations_retained": counts.retained,
+        "associations_below_threshold": counts.below_threshold,
+        "associations_missing": counts.missing,
+        "associations_malformed": counts.malformed,
+        "associations_nonfinite": counts.nonfinite,
+        "associations_out_of_range": counts.out_of_range,
+        "associations_usable": counts.usable,
+    }
+
+
+def _info_score_provenance(
+    prepared: _PreparedBuild, counts_by_id: Mapping[str, InfoScoreCounts]
+) -> dict[str, Any] | None:
+    """The `provenance["info_score"]` block a store records (stores #175).
+
+    `None` when no Analysis's row carried an INFO policy -- an absent block
+    means the manifest declared no policy at all, so a legacy table builds a
+    manifest byte for byte as it did before this filter existed. When the block
+    is written, every Analysis appears in table order, so the list is the whole
+    table rather than only the rows a threshold dropped.
+    """
+    policies = prepared.info_score_policies
+    if all(policy.state is InfoScoreState.LEGACY_ABSENT for policy in policies.values()):
+        return None
+    return {
+        "analyses": [
+            {
+                "analysis_id": row.trait_id,
+                "info_score_state": policies[row.trait_id].state.value,
+                "info_score_threshold": policies[row.trait_id].info_score_threshold,
+                **_info_score_counts_fields(counts_by_id[row.trait_id]),
+            }
+            for row in prepared.manifest_rows
+        ]
+    }
+
+
 def _write_shared_metadata(
     prepared: _PreparedBuild,
     components: _ComponentResult,
@@ -1920,6 +2111,7 @@ def _write_shared_metadata(
         dtype=options.dtype,
         encoding=components.encoding,
         eaf_provenance=components.eaf_provenance,
+        info_score=_info_score_provenance(prepared, components.info_counts),
         variant_reference=(
             str(options.variant_reference) if options.variant_reference is not None else None
         ),
@@ -1944,6 +2136,7 @@ def _write_shared_metadata(
 def _prepare_build(
     staged: StagedRelease,
     manifest_rows: list[_ManifestRow],
+    info_score_policies: Mapping[str, InfoScorePolicy],
     options: _BuildOptions,
 ) -> _PreparedBuild:
     """Seam - preparation: lifting, partition/routing and the Dense skeleton,
@@ -1967,6 +2160,7 @@ def _prepare_build(
         dense_staged=axis.dense_staged,
         partition=axis.partition,
         manifest_rows=manifest_rows,
+        info_score_policies=info_score_policies,
         analyses=axis.analyses,
         hg38_to_source=axis.hg38_to_source,
         rsid_by_alid=axis.rsid_by_alid,
@@ -2039,6 +2233,7 @@ def _build_components(
         se_coefficients=se_coefficients,
         eaf_provenance=eaf_provenance,
         analyses=analyses,
+        info_counts=routed.info_counts,
     )
 
 
@@ -2114,7 +2309,7 @@ def build_hybrid_from_vcf_manifest(
     """
     if reference_panel is None and variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
-    manifest_rows = _load_manifest(
+    manifest_rows, info_score_policies = _load_manifest(
         manifest_path,
         default_source_reader_capability=source_reader_capability,
         default_source_assembly=source_assembly,
@@ -2135,7 +2330,7 @@ def build_hybrid_from_vcf_manifest(
             eaf_reference_ancestry=eaf_reference_ancestry,
             allow_unverified_eaf=allow_unverified_eaf,
         )
-        prepared = _prepare_build(staged, manifest_rows, options)
+        prepared = _prepare_build(staged, manifest_rows, info_score_policies, options)
         prepared, components = _build_components(prepared, options)
         result = _finalise_store(prepared, components, options)
     return result
@@ -2209,6 +2404,7 @@ def _write_hybrid_manifest(
     dtype: str,
     encoding: StoreEncoding,
     eaf_provenance: dict[str, Any] | None = None,
+    info_score: dict[str, Any] | None = None,
     variant_reference: str | None = None,
 ) -> None:
     provenance: dict[str, Any] = {
@@ -2232,6 +2428,8 @@ def _write_hybrid_manifest(
     }
     if eaf_provenance is not None:
         provenance["eaf_orientation"] = eaf_provenance
+    if info_score is not None:
+        provenance["info_score"] = info_score
     if variant_reference is not None:
         provenance["variant_reference"] = variant_reference
     manifest = StoreManifest(

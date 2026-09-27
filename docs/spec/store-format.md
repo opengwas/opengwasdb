@@ -616,8 +616,38 @@ and also has no filter. A numeric threshold, including zero, MUST be finite in
 threshold, malformed thresholds, and a declaration alongside `NaN` are invalid.
 The declared source column must occur exactly once with the declared spelling;
 the GWAS-SSF reader rejects absent, padded, or ambiguous source header columns
-when it opens the file. These inputs define an ingestion policy, not a claim
-that the current Store Release persists an INFO plane or applies that filter.
+when it opens the file. These inputs define an ingestion policy, and a CORE
+build applies it: the Hybrid builder (issue #175) passes the declaration to the
+Source Reader and drops every association the policy excludes — a usable score
+strictly below a positive threshold, or a score that is missing, malformed,
+non-finite or out of `[0, 1]` — before Dense/Overflow routing, before the EAF
+orientation check and before the Top-Hit Counts, so nothing a declared
+threshold rejected can be stored, counted or oriented. A score exactly equal to
+the threshold is kept. A literal `NaN` threshold and an explicit zero drop
+nothing while remaining distinct recorded states. An Analysis that declares a
+score and has no usable value anywhere in its source fails the build, naming
+that Analysis.
+
+What a Hybrid build filtered and how much it dropped is recorded per Analysis
+in `manifest.json`'s `provenance.info_score.analyses` (stores #175): one entry
+per Analysis of the build-input manifest, in `analyses.tsv` order, each carrying
+`analysis_id`, `info_score_state` (`legacy_absent`/`unavailable`/`disabled`/
+`filtered`), `info_score_threshold` (null when none was declared or the score is
+unavailable), `associations_observed`, `associations_retained`,
+`associations_below_threshold`, `associations_missing`, `associations_malformed`,
+`associations_nonfinite`, `associations_out_of_range` and
+`associations_usable`. The denominator is the associations the Analysis's Source
+Reader yielded after its own effect/SE admission, **not** raw source lines and
+not the whole-file canonical-row counts `resolve-analyses` reports separately:
+`associations_observed` = `associations_retained` +
+`associations_below_threshold` + the four unusable dispositions, and
+`associations_usable` = `associations_retained` + `associations_below_threshold`
+under a positive threshold. The whole block MUST be absent when no
+build-input row declared a policy — an absent block means the manifest declared
+none, never "nothing was dropped" — so a legacy manifest's release records
+exactly what it did before this filter existed. A policy may be `unavailable` or
+`disabled` for some Analyses of a table and `filtered` for others; every entry
+appears whenever the threshold column is present at all.
 
 `analyses.tsv` MUST be sufficient on its own to interpret every Analysis's stored
 effect scale, sample-size semantics, ancestry, and licensing/citation terms —

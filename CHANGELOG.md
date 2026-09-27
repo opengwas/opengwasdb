@@ -59,6 +59,24 @@ the end of this file.
 
 ### Added
 
+- **Hybrid build applies a declared INFO policy and records its dispositions**:
+  each Analysis's `info_score_threshold` row is parsed with the same
+  `parse_info_score_policy` the resolver uses, the declaration reaches the
+  GWAS-SSF Source Reader, and one shared retention function -- called by both the
+  resolver's scan and the builder's batch -- drops every association below a
+  positive threshold or carrying no usable score *before* Dense/Overflow
+  routing, the EAF orientation check, the SE fit and the Top-Hit Counts, so a row
+  a declared threshold rejected can no longer be stored or counted. Each
+  Analysis's dispositions (`associations_observed`/`_retained`/
+  `_below_threshold`/`_missing`/`_malformed`/`_nonfinite`/`_out_of_range`/
+  `_usable`, plus `info_score_state` and `info_score_threshold`) are recorded in
+  `manifest.json`'s `provenance.info_score`, counted over the associations the
+  Source Reader yielded rather than the resolver's canonical rows; the block is
+  omitted entirely when no row declared a policy, and a legacy manifest's store
+  is then unchanged (a mixed VCF/GWAS-SSF fixture: 52 of 52 arrays byte-identical
+  to the previous commit, manifest differing only in `created_at`). A declared
+  score with no usable value anywhere fails the build naming its Analysis, as the
+  resolver does (stores #175; `docs/spec/store-format.md` §7a).
 - **CORE resolver INFO filtering**: carry the provider-declared GWAS-SSF score through
   the one-pass Analysis resolver; apply a strictly-below-threshold row filter before
   ancestry/SD evidence, record canonical observed/retained and status dispositions,
