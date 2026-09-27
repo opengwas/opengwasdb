@@ -25,6 +25,13 @@ statistic `ReaderAssociation` does not carry or does not keep -- it holds a
 `z` rather than the beta behind it, and it drops rows with an unusable beta that
 ancestry assignment could still read a frequency from.
 
+Imputation quality is not inferred from the header: only an explicit per-Analysis
+`ImputationScoreDeclaration` backed by independent provider provenance enables
+`imputation_score` on associations, projected rows and bounded chunks (#175).
+An undeclared file always reports UNDECLARED, regardless of `info`, `INFO`,
+`info_score`, or `R2` columns; the caller must carry the same declaration into
+release metadata and filtering.
+
 The effect is read from whichever permitted column the file carries -- `beta`,
 `odds_ratio` (as `log(odds_ratio)`), or a signed `z_score` -- resolved by
 `opengwasdb.readers.effect_source` and reported through `effect_source` rather
@@ -63,7 +70,13 @@ from opengwasdb.readers.effect_source import (
     resolve_effect_source,
     resolve_sample_size_column,
 )
-from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
+from opengwasdb.readers.interface import (
+    ImputationScoreDeclaration,
+    ReaderAssociation,
+    SiteMetrics,
+    SourceVariant,
+    parse_imputation_score,
+)
 from opengwasdb.readers.tabular import (
     DEFAULT_CHUNK_ROWS,
     MetricsChunk,
@@ -76,6 +89,7 @@ from opengwasdb.readers.tabular import (
     parse_finite_float,
     parse_positive_float,
     require_signed_z_score,
+    resolve_imputation_score_column,
     stream_associations,
     stream_projected_metric_chunks,
     stream_projected_metrics,
@@ -147,7 +161,10 @@ def _row_effect(
 
 
 def _tabular_row(
-    row: dict[str, str], source: EffectSource | None, sample_size_column: str | None
+    row: dict[str, str],
+    source: EffectSource | None,
+    sample_size_column: str | None,
+    score_column: str | None = None,
 ) -> TabularRow | None:
     """One source row as a `TabularRow`, or `None` when it names no canonical variant.
 
@@ -181,6 +198,10 @@ def _tabular_row(
         se=se,
         af_alt=parse_af(row.get("effect_allele_frequency")),
         rsid=_rsid(row.get("rsid"), row.get("variant_id")),
+        imputation_score=parse_imputation_score(
+            row.get(score_column) if score_column is not None else None,
+            declared=score_column is not None,
+        ),
     )
 
 
@@ -197,8 +218,19 @@ def _sample_size_column(
     return None
 
 
+def _validated_score_column(fieldnames: Sequence[str] | None, name: str | None) -> str | None:
+    if name is not None:
+        resolve_imputation_score_column(
+            [field.encode("utf-8") for field in fieldnames or ()], name
+        )
+    return name
+
+
 def _iter_rows(
-    path: str | Path, *, effect_source: EffectSource | None = None
+    path: str | Path,
+    *,
+    effect_source: EffectSource | None = None,
+    score_column: str | None = None,
 ) -> Iterator[TabularRow]:
     """Parse each row of a filtered/harmonised GWAS-SSF file once.
 
@@ -212,8 +244,9 @@ def _iter_rows(
         reader = csv.DictReader(fh, delimiter="\t")
         source = effect_source or resolve_effect_source(reader.fieldnames or ())
         sample_size_column = _sample_size_column(reader.fieldnames, source)
+        score_column = _validated_score_column(reader.fieldnames, score_column)
         for row in reader:
-            parsed = _tabular_row(row, source, sample_size_column)
+            parsed = _tabular_row(row, source, sample_size_column, score_column)
             if parsed is not None:
                 yield parsed
 
@@ -287,6 +320,18 @@ class GwasSsfReader:
     path: str | Path
     stored_effect_scale: StoredEffectScale = StoredEffectScale.SD
     chunk_rows: int = DEFAULT_CHUNK_ROWS
+    imputation_score_declaration: ImputationScoreDeclaration | None = None
+
+    @property
+    def imputation_score_column(self) -> str | None:
+        """Exact provider-backed column, or None when no score is declared."""
+        declaration = self.imputation_score_declaration
+        if declaration is None:
+            return None
+        resolve_imputation_score_column(
+            [name.encode("utf-8") for name in _header(self.path)], declaration.column_name
+        )
+        return declaration.column_name
 
     @property
     def effect_source(self) -> EffectSource | None:
@@ -307,7 +352,8 @@ class GwasSsfReader:
         # scale and refuse an unsigned column before yielding any row (#215).
         require_z_score_usable(self.path, source, self.stored_effect_scale)
         yield from stream_associations(
-            _iter_rows(self.path, effect_source=source), self.stored_effect_scale
+            _iter_rows(self.path, effect_source=source, score_column=self.imputation_score_column),
+            self.stored_effect_scale,
         )
 
     def stream_variants(self) -> Iterator[SourceVariant]:
@@ -325,7 +371,9 @@ class GwasSsfReader:
         read a frequency from.
         """
         require_z_score_usable(self.path, self.effect_source, self.stored_effect_scale)
-        yield from stream_projected_metrics(self.path, _METRICS_COLUMNS)
+        yield from stream_projected_metrics(
+            self.path, _METRICS_COLUMNS, score_column=self.imputation_score_column
+        )
 
     def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
         """The same projection `stream_metrics` yields, a block at a time.
@@ -337,7 +385,10 @@ class GwasSsfReader:
         """
         require_z_score_usable(self.path, self.effect_source, self.stored_effect_scale)
         yield from stream_projected_metric_chunks(
-            self.path, _METRICS_COLUMNS, chunk_rows=self.chunk_rows
+            self.path,
+            _METRICS_COLUMNS,
+            chunk_rows=self.chunk_rows,
+            score_column=self.imputation_score_column,
         )
 
     def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:

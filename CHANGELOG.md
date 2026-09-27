@@ -19,6 +19,11 @@ the end of this file.
 
 ### Added
 
+- **Provider-declared GWAS-SSF imputation INFO/R² reader contract**: explicit
+  per-Analysis source column, score kind and independent provenance; associations,
+  projected rows and bounded chunks expose the same score and validity status.
+  Undeclared or unusable scores remain absent, never inferred from frequency or
+  similarly named source columns (stores #175).
 - **`resolve-analyses --variant-reference`**: count rows matching the Hybrid
   axis and full ancestry reference during the existing per-Analysis scan;
   persist scanned-row denominators and axis fingerprint in resumable records
