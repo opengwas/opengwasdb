@@ -20,10 +20,12 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+import numpy as np
 import pytest
 from test_resolve_manifest import _write_panel
 
 from opengwasdb.build.resolve import AnalysisRequest, resolve_analysis
+from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
@@ -57,6 +59,57 @@ SCORED_ROWS: tuple[tuple[int, float, float, str], ...] = (
 #: No effect size: the Source Reader drops this row before the INFO filter ever
 #: sees its (usable) score.
 NO_EFFECT_ROW = (3000, "NA", "0.1", "0.9")
+
+#: Associations grouped into flushes by the test that patches `_RESOLVE_BATCH`
+#: down to 3, so each comment below is one flush. Two flushes in a row drop every
+#: association they hold -- the case where a buffer left holding the previous
+#: batch filters one batch's rows against another's.
+MULTI_BATCH_ROWS: tuple[tuple[int, float, float, str], ...] = (
+    (1000, 2.0, 0.5, "0.9"),  # flush 1: kept
+    (1001, 1.5, 0.3, "0.7"),  # flush 1: kept, exactly at the threshold
+    (1002, 1.0, 0.2, "0.69"),  # flush 1: below threshold
+    (1003, 0.5, 0.1, "NA"),  # flush 2: every row dropped
+    (1004, 0.4, 0.1, "oops"),  # flush 2: malformed
+    (1005, 0.3, 0.1, "inf"),  # flush 2: nonfinite
+    (1006, 0.2, 0.1, "1.1"),  # flush 3: every row dropped
+    (1007, 1.0, 0.2, "0.1"),  # flush 3: below threshold
+    (1008, 0.5, 0.1, "NA"),  # flush 3: missing
+    (1009, 3.0, 0.5, "0.95"),  # flush 4: all kept
+    (1010, 2.5, 0.5, "0.8"),  # flush 4: kept
+    (1011, 1.5, 0.5, "0.75"),  # flush 4: kept
+    (1012, 0.9, 0.3, "0.9"),  # flush 5: kept
+    (1013, 0.8, 0.2, "1.2"),  # flush 5: out of range
+    (2000, 2.2, 0.4, "0.85"),  # flush 5: kept, off-panel
+)
+MULTI_BATCH_PANEL = tuple(f"1:{position}:A:C" for position in range(1000, 1014))
+MULTI_BATCH_ALIDS = (*MULTI_BATCH_PANEL, "1:2000:A:C")
+
+#: `MULTI_BATCH_ROWS`' whole-file dispositions, per policy the multi-batch test
+#: runs: a 0.7 threshold, and a literal NaN that filters nothing -- the second is
+#: where a buffer carried across flushes showed up only as double-counted totals,
+#: with no `IndexError` to notice it by.
+MULTI_BATCH_EXPECTED: dict[str, dict[str, int]] = {
+    "0.7": {
+        "associations_observed": 15,
+        "associations_retained": 7,
+        "associations_below_threshold": 2,
+        "associations_missing": 2,
+        "associations_malformed": 1,
+        "associations_nonfinite": 1,
+        "associations_out_of_range": 2,
+        "associations_usable": 9,
+    },
+    "NaN": {
+        "associations_observed": 15,
+        "associations_retained": 15,
+        "associations_below_threshold": 0,
+        "associations_missing": 0,
+        "associations_malformed": 0,
+        "associations_nonfinite": 0,
+        "associations_out_of_range": 0,
+        "associations_usable": 0,
+    },
+}
 
 #: The source columns: the GWAS-SSF required fields plus the declared score.
 _SSF_HEADER = (
@@ -101,9 +154,9 @@ def _manifest(
     return path
 
 
-def _panel(tmp_path: Path) -> Path:
+def _panel(tmp_path: Path, alids: Sequence[str] = PANEL_ALIDS) -> Path:
     panel = tmp_path / "panel.txt"
-    panel.write_text("\n".join(PANEL_ALIDS) + "\n", encoding="utf-8")
+    panel.write_text("\n".join(alids) + "\n", encoding="utf-8")
     return panel
 
 
@@ -112,9 +165,11 @@ def _build(
     policy: str,
     *,
     rows: Sequence[tuple] | None = None,
+    panel: Sequence[str] = PANEL_ALIDS,
     n_workers: int = 1,
     analysis_id: str = "GCST_INFO",
 ) -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     source = _write_source(
         tmp_path / f"{analysis_id}.tsv.gz",
         [*SCORED_ROWS, NO_EFFECT_ROW] if rows is None else list(rows),
@@ -124,7 +179,7 @@ def _build(
     build_hybrid_from_vcf_manifest(
         manifest,
         store,
-        reference_panel=_panel(tmp_path),
+        reference_panel=_panel(tmp_path, panel),
         store_id="hybrid-info-test",
         release_id="v1",
         n_workers=n_workers,
@@ -155,6 +210,68 @@ def _info_analyses(store: Path) -> list[dict]:
 def _hits(store: Path, analysis_id: str = "GCST_INFO") -> dict[str, str]:
     rows = {row["analysis_id"]: row for row in read_analyses(store / "analyses.tsv").rows}
     return rows[analysis_id]
+
+
+def _stored_arrays(store: Path, alids: Sequence[str]) -> dict[str, np.ndarray]:
+    """What the store answers for `alids`, as comparable arrays."""
+    query = query_store(store)
+    result = query.lookup(list(alids), ["GCST_INFO"])
+    arrays = {
+        name: np.array(result[name][:]) for name in ("variant_index", "z", "se", "eaf")
+    }
+    query.close()
+    return arrays
+
+
+def test_score_buffers_out_of_step_with_the_batch_fail_loudly():
+    """Nine buffers hold one batch. A score buffer left holding an earlier batch
+    would filter one batch's rows against another's mask -- the state that made
+    the first version of this filter raise IndexError or keep the wrong rows -- so
+    it is refused rather than routed (stores #175)."""
+    with pytest.raises(ValueError, match="hold 2 row"):
+        hybrid_build._require_one_batch([0.9, 0.7], [1.0])
+    hybrid_build._require_one_batch([0.9], [1.0])
+
+
+@pytest.mark.parametrize("policy", sorted(MULTI_BATCH_EXPECTED))
+@pytest.mark.parametrize("n_workers", [1, 2])
+def test_multi_batch_streaming_counts_each_association_once(
+    tmp_path, n_workers, policy, monkeypatch
+):
+    """More associations than one `_RESOLVE_BATCH`: every flush must begin and end
+    with the same empty buffers. A score buffer left holding the previous batch
+    made the retention mask longer than the statistic lists, so `_retain_rows`
+    either raised IndexError or silently kept another batch's rows -- and every
+    flush re-counted the earlier batches' dispositions, which under a policy that
+    filters nothing showed only in the totals.
+    """
+    whole = _build(
+        tmp_path / "whole",
+        policy,
+        rows=MULTI_BATCH_ROWS,
+        panel=MULTI_BATCH_PANEL,
+        n_workers=n_workers,
+    )
+    monkeypatch.setattr(hybrid_build, "_RESOLVE_BATCH", 3)
+    batched = _build(
+        tmp_path / "batched",
+        policy,
+        rows=MULTI_BATCH_ROWS,
+        panel=MULTI_BATCH_PANEL,
+        n_workers=n_workers,
+    )
+
+    entry = _info_analyses(batched)[0]
+    expected = MULTI_BATCH_EXPECTED[policy]
+    assert {name: entry[name] for name in expected} == expected
+    # Exactly the whole-file dispositions: no flush counted an earlier batch twice.
+    assert entry == _info_analyses(whole)[0]
+
+    whole_arrays = _stored_arrays(whole, MULTI_BATCH_ALIDS)
+    batched_arrays = _stored_arrays(batched, MULTI_BATCH_ALIDS)
+    assert batched_arrays["variant_index"].size == expected["associations_retained"]
+    for name, values in whole_arrays.items():
+        np.testing.assert_array_equal(values, batched_arrays[name], err_msg=name)
 
 
 @pytest.mark.parametrize("n_workers", [1, 2])

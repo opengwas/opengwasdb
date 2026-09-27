@@ -42,13 +42,18 @@ def retained_mask(
     `scores` is what a caller parsed from the declared column
     (`MetricsChunk.imputation_score` or `ReaderAssociation.imputation_score`)
     and `statuses` each row's validity. A state that does not filter keeps every
-    row, including rows carrying no score at all.
+    row, including rows carrying no score at all. Only *usable* scores are
+    compared against the threshold: every other status carries no number this
+    rule has an opinion about, and a row nothing was declared for carries none at
+    all.
     """
     if policy.state is not InfoScoreState.FILTERED:
         return np.ones(len(scores), dtype=bool)
     threshold = policy.info_score_threshold
     assert threshold is not None, "a FILTERED policy carries its threshold"
-    kept: np.ndarray = (statuses == ImputationScoreStatus.USABLE) & (scores >= threshold)
+    usable = statuses == ImputationScoreStatus.USABLE
+    kept = np.zeros(len(scores), dtype=bool)
+    kept[usable] = scores[usable] >= threshold
     return kept
 
 
@@ -97,7 +102,7 @@ def count_info_scores(
     if policy.state is InfoScoreState.FILTERED:
         threshold = policy.info_score_threshold
         assert threshold is not None, "a FILTERED policy carries its threshold"
-        below_threshold = int(np.count_nonzero(usable & (scores < threshold)))
+        below_threshold = int(np.count_nonzero(scores[usable] < threshold))
     return InfoScoreCounts(
         observed=len(scores),
         retained=int(np.count_nonzero(retained_mask(scores, statuses, policy))),

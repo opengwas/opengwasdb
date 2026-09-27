@@ -362,6 +362,21 @@ def _extend(accumulators: tuple[list[np.ndarray], ...], parts: tuple[np.ndarray,
             accumulator.append(part)
 
 
+def _require_one_batch(scores: Sequence[float | None], zs: Sequence[float]) -> None:
+    """Fail loudly unless the INFO score buffers are the association batch's rows.
+
+    Nine buffers hold one batch -- the INFO filter reads the two score ones and
+    routes the seven statistic ones. One left holding an earlier batch would
+    filter one batch's rows against another's mask, which either raises or, worse,
+    silently keeps the wrong rows, so it is refused here rather than routed
+    (stores #175).
+    """
+    if len(scores) != len(zs):
+        raise ValueError(
+            f"INFO score buffers hold {len(scores)} row(s) for {len(zs)} association(s)"
+        )
+
+
 def _retain_rows(lists: tuple[list[Any], ...], keep: np.ndarray) -> None:
     """Keep `keep`'s rows in every positionally parallel batch list, in place.
 
@@ -450,36 +465,44 @@ def _resolve_column_hybrid(
 
     def _flush() -> None:
         nonlocal counts
+        _require_one_batch(scores, zs)
         if not zs:
             return
         block_scores = np.asarray(scores, dtype=np.float64)
         block_statuses = np.asarray(statuses, dtype=object)
+        # The two score buffers are consumed into arrays above and the seven
+        # statistic ones are routed below: all nine are emptied on every exit
+        # path, so no batch is filtered or counted against another batch's rows.
+        scores.clear()
+        statuses.clear()
         counts += count_info_scores(block_scores, block_statuses, info_score_policy)
         _retain_rows(
             (chroms, poss, refs, alts, zs, ses, eafs),
             retained_mask(block_scores, block_statuses, info_score_policy),
         )
-        if not zs:
-            return
-        dense, overflow, unknown = _match_hybrid_batch(
-            chroms,
-            keys_sorted,
-            poss,
-            targets_sorted,
-            refs,
-            ispanel_sorted,
-            alts,
-            zs,
-            ses,
-            eafs,
-        )
-        _extend((d_idx, d_z, d_se, d_eaf), dense)
-        _extend((o_idx, o_z, o_se, o_eaf), overflow)
-        if len(unknown[0]):
-            u_keys.extend(str(key) for key in unknown[0])
-            _extend((u_z, u_se, u_eaf), unknown[1:])
-        for lst in (chroms, poss, refs, alts, zs, ses, eafs):
-            lst.clear()
+        try:
+            if not zs:
+                return
+            dense, overflow, unknown = _match_hybrid_batch(
+                chroms,
+                keys_sorted,
+                poss,
+                targets_sorted,
+                refs,
+                ispanel_sorted,
+                alts,
+                zs,
+                ses,
+                eafs,
+            )
+            _extend((d_idx, d_z, d_se, d_eaf), dense)
+            _extend((o_idx, o_z, o_se, o_eaf), overflow)
+            if len(unknown[0]):
+                u_keys.extend(str(key) for key in unknown[0])
+                _extend((u_z, u_se, u_eaf), unknown[1:])
+        finally:
+            for lst in (chroms, poss, refs, alts, zs, ses, eafs):
+                lst.clear()
 
     for assoc in reader.stream_associations():
         chroms.append(assoc.chromosome)
