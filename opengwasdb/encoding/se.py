@@ -428,6 +428,45 @@ def _accumulate_measurement(
     return band.float_bytes, band.finite
 
 
+@dataclass
+class _MeasureAccumulators:
+    """The running candidate costs of one Dense measurement pass.
+
+    `sides` and `code_bytes` are charged in row-chunk order -- the order the
+    serial pass appends, which is what makes the chosen encoding independent of
+    ``n_workers`` (issues #158, #221).
+    """
+
+    float_bytes: int
+    finite: np.ndarray
+    sides: dict[float, _SideTableCost]
+    code_bytes: dict[float, int]
+
+    @classmethod
+    def zeros(cls, compressor: Any, n_analyses: int) -> _MeasureAccumulators:
+        return cls(
+            float_bytes=0,
+            finite=np.zeros(n_analyses, dtype=np.int64),
+            sides={
+                candidate: _SideTableCost(compressor, n_analyses)
+                for candidate in SE_RANGE_CANDIDATES
+            },
+            code_bytes=dict.fromkeys(SE_RANGE_CANDIDATES, 0),
+        )
+
+    def add_band(self, band: _BandMeasurement, chunk_timer: PhaseTimer | None) -> None:
+        added_bytes, finite = _accumulate_measurement(
+            band, self.sides, self.code_bytes, chunk_timer
+        )
+        self.float_bytes += added_bytes
+        self.finite += finite
+
+    def cost(self) -> _ComponentCost:
+        return _ComponentCost(
+            self.float_bytes, self.finite, *_charged(self.sides, self.code_bytes)
+        )
+
+
 def _measure_dense(
     source: Any,
     eaf_plane: DenseEafPlane,
@@ -453,13 +492,8 @@ def _measure_dense(
     # keeps the fill its own writer declared. Each measured plane is charged
     # at its padded size with the fill its own writer declares (issue #158).
     float16_fill: Any = source.fill_value if source.dtype == np.dtype("float16") else float("nan")
-    sides = {candidate: _SideTableCost(compressor, n_analyses) for candidate in SE_RANGE_CANDIDATES}
-    code_bytes = dict.fromkeys(SE_RANGE_CANDIDATES, 0)
-    float_bytes = 0
-    finite_per_analysis = np.zeros(n_analyses, dtype=np.int64)
     columns = np.arange(n_analyses, dtype=np.int64)
     starts = range(0, n_rows, row_chunk)
-    n_chunks = len(starts)
     chunk_timer = timer if n_workers <= 1 else None
     _MEASURE = _MeasureContext(
         source,
@@ -475,27 +509,48 @@ def _measure_dense(
     )
     started = time.monotonic()
     try:
-        with log_phase(log, "SE measurement"):
-            umbrella = timer.phase("measure.parallel") if n_workers > 1 else nullcontext()
-            with umbrella:
-                bands = ordered_map(_measure_one_band, starts, n_workers)
-                for index, band in enumerate(bands, start=1):
-                    added_bytes, finite = _accumulate_measurement(
-                        band, sides, code_bytes, chunk_timer
-                    )
-                    float_bytes += added_bytes
-                    finite_per_analysis += finite
-                    log_progress(
-                        log,
-                        "SE measurement",
-                        index,
-                        n_chunks,
-                        started,
-                        every=max(1, n_chunks // 20),
-                    )
+        return _run_dense_measurement(
+            _MeasureAccumulators.zeros(compressor, n_analyses),
+            starts,
+            timer,
+            chunk_timer,
+            started,
+            n_workers,
+        )
     finally:
         _MEASURE = None
-    return _ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
+
+
+def _run_dense_measurement(
+    accumulators: _MeasureAccumulators,
+    starts: range,
+    timer: PhaseTimer,
+    chunk_timer: PhaseTimer | None,
+    started: float,
+    n_workers: int,
+) -> _ComponentCost:
+    """Measure each row chunk in order, folding its cost into `accumulators`.
+
+    ``n_workers > 1`` measures the independent chunks in a fork pool; the
+    reduction stays in row-chunk order, which is what keeps the compressed
+    side-table sizes -- and so the encoding decision -- identical either way.
+    """
+    n_chunks = len(starts)
+    with log_phase(log, "SE measurement"):
+        umbrella = timer.phase("measure.parallel") if n_workers > 1 else nullcontext()
+        with umbrella:
+            bands = ordered_map(_measure_one_band, starts, n_workers)
+            for index, band in enumerate(bands, start=1):
+                accumulators.add_band(band, chunk_timer)
+                log_progress(
+                    log,
+                    "SE measurement",
+                    index,
+                    n_chunks,
+                    started,
+                    every=max(1, n_chunks // 20),
+                )
+    return accumulators.cost()
 
 
 @dataclass
@@ -1419,11 +1474,7 @@ def optimise_dense_se_joint(
     timer = timer or PhaseTimer()
     if encoding.eaf.is_absent:
         return _fall_back_to_float16(group, encoding, timer)
-    source = group["se"]
-    n_analyses = int(source.shape[1])
-    overflow = _as_batches(overflow)
-    _check_overflow_width(overflow, n_analyses)
-    eaf_plane = DenseEafPlane.open(group, encoding)
+    source, eaf_plane, overflow = _joint_se_plane(group, encoding, overflow)
     sums = _accumulate_shared_sums(source, eaf_plane, overflow, timer, n_workers)
     gate = _se_eligibility(sums)
     if not gate.eligible:
@@ -1447,6 +1498,21 @@ def optimise_dense_se_joint(
     _rewrite_selected(group, source, eaf_plane, coefficients, selected, timer, n_workers)
     log.info("SE phase timings:\n%s", timer.format_report())
     return selected, coefficients
+
+
+def _joint_se_plane(
+    group: Any, encoding: StoreEncoding, overflow: OverflowCells | OverflowCellBatches | None
+) -> tuple[Any, DenseEafPlane, OverflowCellBatches | None]:
+    """Open the Dense SE plane and its decoded EAF view, and check the width.
+
+    The two components partition one Analysis's associations, so a Hybrid fit
+    over two different widths is a caller error rather than a plane to fit
+    (issue #228).
+    """
+    source = group["se"]
+    batches = _as_batches(overflow)
+    _check_overflow_width(batches, int(source.shape[1]))
+    return source, DenseEafPlane.open(group, encoding), batches
 
 
 def _format_solution(coefficients: np.ndarray, selected: StoreEncoding) -> str:
