@@ -952,6 +952,10 @@ For Dense Reference-Completed releases:
 
 - the dense matrix axis MUST contain only Reference Variant Set variants;
 - observed off-panel associations MUST be stored in Ragged Overflow rather than discarded;
+- Hybrid source-coordinate routing MUST treat allele-letter case as insignificant when
+  matching a variant reference, without changing source effect-allele order or
+  association sign/frequency orientation; conflicting case-folded source keys
+  MUST fail rather than select a Dense target arbitrarily;
 - the dense axis SHOULD be identical across Stores completed with the same LD Reference Panel.
 
 Observed-Only Dense releases remain source-faithful and do not require an LD Reference Panel or panel-defined axis. A later Reference-Completed release MAY use a different dense axis defined by the LD Reference Panel.

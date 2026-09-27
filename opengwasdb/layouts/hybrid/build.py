@@ -231,8 +231,11 @@ def _build_routing_index(
             ispanel.append(False)
         chroms.append(chrom)
         poss.append(pos)
-        refs.append(ref)
-        alts.append(alt)
+        # SourceReaders retain the source's allele spelling, while resolver
+        # ALIDs and identity reference keys use upper-case alleles. Case is not
+        # an effect-orientation change: keep ref/alt order intact.
+        refs.append(ref.upper())
+        alts.append(alt.upper())
     keys_list = [
         f"{chrom}:{pos}:{ref}:{alt}".encode()
         for chrom, pos, ref, alt in zip(chroms, poss, refs, alts, strict=True)
@@ -242,7 +245,21 @@ def _build_routing_index(
     targets_arr = np.array(targets, dtype=np.int64)
     ispanel_arr = np.array(ispanel, dtype=bool)
     order = np.argsort(keys, kind="stable")
-    return keys[order], targets_arr[order], ispanel_arr[order]
+    sorted_keys = keys[order]
+    sorted_targets = targets_arr[order]
+    sorted_panel = ispanel_arr[order]
+    # Two artifact keys differing only in case must not route to different
+    # stored variants after folding: that would make searchsorted's choice
+    # dependent on insertion order and silently misplace an association.
+    duplicate = sorted_keys[1:] == sorted_keys[:-1]
+    conflicting = duplicate & (
+        (sorted_targets[1:] != sorted_targets[:-1])
+        | (sorted_panel[1:] != sorted_panel[:-1])
+    )
+    if np.any(conflicting):
+        key = sorted_keys[1:][conflicting][0]
+        raise ValueError(f"source key {key!r} maps to conflicting variants after case folding")
+    return sorted_keys, sorted_targets, sorted_panel
 
 
 def _dedup_last_wins(
@@ -291,11 +308,16 @@ def _match_hybrid_batch(
     )
     if len(keys_sorted) == 0:
         keys = np.array(
-            [f"{c}:{p}:{r}:{a}" for c, p, r, a in zip(chroms, poss, refs, alts, strict=True)],
+            [
+                f"{c}:{p}:{r.upper()}:{a.upper()}"
+                for c, p, r, a in zip(chroms, poss, refs, alts, strict=True)
+            ],
             dtype=object,
         )
         return empty, empty, (keys, z_arr, se_arr, eaf_arr)
-    query = _encode_variant_keys(chroms, poss, refs, alts)
+    query = _encode_variant_keys(
+        chroms, poss, [ref.upper() for ref in refs], [alt.upper() for alt in alts]
+    )
     idx = np.searchsorted(keys_sorted, query)
     idx_clip = np.minimum(idx, len(keys_sorted) - 1)
     matched = keys_sorted[idx_clip] == query
@@ -304,7 +326,10 @@ def _match_hybrid_batch(
     z_m, se_m, eaf_m = z_arr[matched], se_arr[matched], eaf_arr[matched]
     unmatched = ~matched
     keys = np.array(
-        [f"{chroms[j]}:{poss[j]}:{refs[j]}:{alts[j]}" for j in np.flatnonzero(unmatched)],
+        [
+            f"{chroms[j]}:{poss[j]}:{refs[j].upper()}:{alts[j].upper()}"
+            for j in np.flatnonzero(unmatched)
+        ],
         dtype=object,
     )
     return (
@@ -816,7 +841,7 @@ def _source_origin_map(
     """
     hg38_to_source: dict[str, str | None] = {}
     for (chrom, pos, ref, alt), hg38_alid in source_lookup.items():
-        a1, a2 = sorted((ref, alt))
+        a1, a2 = sorted((ref.upper(), alt.upper()))
         origin = f"{chrom}:{pos}:{a1}:{a2}"
         if hg38_alid not in hg38_to_source:
             hg38_to_source[hg38_alid] = origin

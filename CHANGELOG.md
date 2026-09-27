@@ -10,6 +10,13 @@ the end of this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hybrid reference routing for lowercase source alleles**: case-fold source
+  allele keys when matching Dense reference variants and collecting genuinely
+  off-reference associations, without changing effect orientation; reject
+  conflicting case-folded reference keys (stores #174).
+
 ### Added
 
 - **`resolve-analyses --variant-reference`**: count rows matching the Hybrid

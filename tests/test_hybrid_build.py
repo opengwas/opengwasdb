@@ -23,6 +23,9 @@ import zarr
 from cli_output import normalize_cli_output
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
+from opengwasdb.ancestry.reference import AncestryReference
+from opengwasdb.build.resolve import AnalysisRequest, resolve_analysis
+from opengwasdb.build.resolve_manifest import load_variant_reference
 from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
@@ -34,9 +37,11 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     encode_keys,
 )
 from opengwasdb.model.analyses import read_analyses
+from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
+from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 
@@ -1106,6 +1111,92 @@ def _cross_analysis_collision_fixture(tmp_path: Path) -> tuple[Path, Path]:
         },
     )
     return manifest, reference
+
+
+@pytest.mark.parametrize("artifact_keys", [False, True], ids=["identity", "explicit-source-keys"])
+def test_resolver_overlap_routes_lowercase_ssf_to_dense(tmp_path, artifact_keys):
+    """The resolver's on-axis rows must populate Dense cells, not Overflow.
+
+    Both inputs are GRCh38: this tests source-allele case, not a guessed
+    hg19-to-hg38 mapping. A reversed allele order also checks that key matching
+    does not change the source effect's sign or frequency orientation.
+    """
+    source = tmp_path / "lowercase.tsv.gz"
+    with gzip.open(source, "wt", encoding="utf-8") as handle:
+        handle.write("\t".join([*_SSF_HEADER, "effect_allele_frequency"]) + "\n")
+        handle.write("1\t100000\tg\ta\t2\t0.5\t0.2\n")
+        handle.write("1\t100001\ta\tg\t0.6\t0.2\t0.4\n")
+        handle.write("1\t100002\tc\tt\t1\t0.5\t0.3\n")
+    axis = tmp_path / "axis.txt"
+    if artifact_keys:
+        from opengwasdb.variants.reference import write_variant_reference
+
+        axis = tmp_path / "axis.variant-ref.tsv.gz"
+        write_variant_reference(
+            axis, ["1:100000:A:G", "1:100001:A:G"],
+            {
+                ("1", 100000, "a", "g"): "1:100000:A:G",
+                ("1", 100001, "g", "a"): "1:100001:A:G",
+            },
+        )
+    else:
+        axis.write_text("1:100000:A:G\n1:100001:A:G\n", encoding="utf-8")
+    reference = AncestryReference(
+        alids=np.array(["1:100000:A:G", "1:100001:A:G"], dtype=object),
+        freqs=np.array([[0.8], [0.4]]), groups=["EUR"], superpops=["EUR"],
+        group_superpop_index=np.array([0]), group_to_superpop={"EUR": "EUR"},
+        index={"1:100000:A:G": 0, "1:100001:A:G": 1},
+    )
+    resolution = resolve_analysis(
+        AnalysisRequest("trait", source, 1000, OriginalSdMethod.DECLARED_STANDARDISED),
+        reader=GwasSsfReader(source, StoredEffectScale.SD), reference=reference,
+        variant_reference=load_variant_reference(axis),
+    )
+    assert not resolution.error
+    assert resolution.diagnostics.rows_read == 3
+    assert resolution.diagnostics.variant_reference_rows_matched == 2
+
+    manifest = _manifest_with_source_assembly(tmp_path, [("trait", source, "Trait", "hg38")])
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "source_assembly\n", "source_assembly\tsource_reader_capability\n"
+        ).replace("\thg38\n", f"\thg38\t{GWAS_SSF_CAPABILITY}\n"),
+        encoding="utf-8",
+    )
+    store = tmp_path / "store.opengwasdb"
+    result = build_hybrid_from_vcf_manifest(
+        manifest, store, variant_reference=axis, store_id="s", release_id="r"
+    )
+    assert result.n_panel == 2
+    assert result.n_off_panel == 1
+    assert result.n_overflow == 1
+    assert validate_store(store).ok
+    with gzip.open(store / "variants.tsv.gz", "rt", encoding="utf-8") as handle:
+        stored = handle.read()
+    assert "1:100000:A:G\t.\t1:100000:A:G" in stored
+    with query_store(store) as query:
+        dense = query.analysis("trait")
+        dense_rows = open_store(store).dense_component().arrays(mode="r")["z"][:, 0]
+        assert int(np.isfinite(dense_rows).sum()) == (
+            resolution.diagnostics.variant_reference_rows_matched
+        )
+        assert len(dense["z"]) == resolution.diagnostics.rows_read
+        first = query.lookup(["1:100000:A:G"], ["trait"])
+        assert first["z"][0] == pytest.approx(-4.0, rel=5e-3)
+        assert first["eaf"][0] == pytest.approx(0.8, abs=0.01)
+        second = query.lookup(["1:100001:A:G"], ["trait"])
+        assert second["z"][0] == pytest.approx(3.0, rel=5e-3)
+        overflow = query.lookup(["1:100002:C:T"], ["trait"])
+        assert overflow["z"][0] == pytest.approx(2.0, rel=5e-3)
+
+
+def test_hybrid_casefolded_reference_keys_refuse_conflicting_targets():
+    with pytest.raises(ValueError, match="conflicting variants after case folding"):
+        hybrid_build._build_routing_index(
+            {("1", 100, "a", "g"): "1:100:A:G", ("1", 100, "A", "G"): "1:100:A:T"},
+            {"1:100:A:G": 0, "1:100:A:T": 1},
+            {"1:100:A:G": 0, "1:100:A:T": 1},
+        )
 
 
 class TestVariantReference:

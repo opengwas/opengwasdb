@@ -18,3 +18,13 @@ counted repeatedly. The stream is never reread for either measurement. Without
 retain partial diagnostics; downstream release policy must not treat those as
 complete overlap estimates. An ancestry-site bound can stop a non-quantitative
 physical scan early; quantitative phenotype-SD scans normally continue to EOF.
+
+Overlap is a canonical-ALID measurement, not a guarantee of Dense routing. For
+GRCh38 sources, the Hybrid builder matches reference source keys without regard
+to allele-letter case (while preserving the source effect-allele order, Z sign,
+and EAF orientation); an on-axis source row must fill its Dense row, not become
+an off-reference Overflow association. The resolver-versus-built-store parity
+test covers this separately from ancestry/SD eligibility. A routing defect must
+not be classified as a low-overlap source exclusion. Cross-assembly comparisons
+still require explicit source-key/liftover evidence; canonical overlap alone
+does not establish that an hg19 source matches a GRCh38 axis.
