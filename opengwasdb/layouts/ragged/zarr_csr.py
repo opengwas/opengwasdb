@@ -20,7 +20,7 @@ from opengwasdb.encoding import (
     StoreEncoding,
     ZOverflowBuilder,
     ZOverflowTable,
-    eaf_baseline_from_pairs,
+    eaf_baseline_from_sorted_runs,
     fit_se,
     measure_eaf,
     positions_at,
@@ -137,7 +137,12 @@ class RaggedCSRWriter:
             else np.empty(0, dtype=np.float32)
         )
         baseline = (
-            eaf_baseline_from_pairs(vi, eaf, self._n_variants) if encoding.eaf.is_residual else None
+            # From the per-Analysis runs, not the concatenation: every column was
+            # sorted by variant index before it was added, and taking the bounded
+            # path keeps a billion-cell Overflow inside memory (issue #226).
+            eaf_baseline_from_sorted_runs(self._variant_indices, self._eafs, self._n_variants)
+            if encoding.eaf.is_residual
+            else None
         )
         codec = StoreCodec(encoding)
         exceptions = EafExceptionBuilder()
@@ -248,7 +253,9 @@ class RaggedCSRWriter:
         elif eaf_baseline is not None:
             baseline = np.asarray(eaf_baseline, dtype=np.float32)
         else:
-            baseline = eaf_baseline_from_pairs(vi_arr, eaf_arr, self._n_variants)
+            baseline = eaf_baseline_from_sorted_runs(
+                self._variant_indices, self._eafs, self._n_variants
+            )
 
         root.create_dataset(
             "offsets",

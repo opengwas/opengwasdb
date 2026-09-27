@@ -16,6 +16,13 @@ the end of this file.
   axis and full ancestry reference during the existing per-Analysis scan;
   persist scanned-row denominators and axis fingerprint in resumable records
   so bundle generation can gate projected off-reference share (stores #174).
+- **`opengwasdb.encoding.eaf_baseline_from_sorted_runs`**: per-variant EAF
+  baselines computed over variant-aligned blocks of per-Analysis runs already
+  sorted by variant index, with a `DEFAULT_BASELINE_CELL_BUDGET`-bounded working
+  set instead of one sized to the plane. Bit-identical to
+  `eaf_baseline_from_pairs` over the concatenated runs, and the path the Ragged
+  Overflow CSR now takes (#226).
+
 - **`opengwasdb.build.ordered_pool.ordered_map`**: a forked worker-pool map that
   yields results in input order with a bounded number in flight, and runs
   serially at `n_workers <= 1`. Shared by the post-Pass-2 consolidation phases
@@ -445,6 +452,19 @@ the end of this file.
   tables: `benchmarks/README.md`.
 
 ### Fixed
+
+- **The Hybrid joint SE fit no longer materialises the whole Ragged Overflow
+  plane.** `RaggedCSRWriter.se_fit_inputs` passed the concatenated plane to
+  `eaf_baseline_from_pairs`, which upcast both arrays to 8-byte dtypes and then
+  `lexsort`ed the full length — about 53 bytes of peak per cell, measured. On
+  OGS-00011's 15,078,327,210-cell Overflow that is ~750 GiB for one call, and the
+  build died with `MemoryError: Unable to allocate 112. GiB` after 8 h 15 m with
+  the Dense Component already fully written. Both baseline call sites now use
+  `eaf_baseline_from_sorted_runs`, whose peak is set by the cell budget rather
+  than the plane: measured flat at ~1.3-1.8 GiB across a 4x growth in cells
+  (46 -> 16 bytes per cell and still falling). Baselines are unchanged — every
+  variant's median is the same arithmetic over the same `float64` logits, which
+  the equivalence tests assert cell for cell (#226).
 
 - **`VariantAxis.identity_by_indices()` no longer assumes the ALID index is
   complete.** The method inverted `_alid_rows` as a permutation of every axis

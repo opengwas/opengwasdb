@@ -389,6 +389,13 @@ def eaf_baseline_from_pairs(
     (variant, logit) puts each variant's usable values in a contiguous, sorted
     run, so the median is two gathers rather than a Python loop over up to ten
     million variants.
+
+    Every intermediate here is as long as the plane, so peak memory is a fixed
+    multiple of the cell count: fine for a plane held as one array, unaffordable
+    for a Ragged Overflow with billions of cells (issue #226). A caller that
+    already holds its cells as per-Analysis runs sorted by variant -- which is
+    what the Overflow CSR writer holds -- should use
+    `eaf_baseline_from_sorted_runs` instead, which is exact and bounded.
     """
     variant_index = np.asarray(variant_index, dtype=np.int64)
     transformed = logit(values)
@@ -401,7 +408,144 @@ def eaf_baseline_from_pairs(
     usable = np.isfinite(transformed)
     if not np.any(usable):
         return _as_baseline(baseline)
-    vi, lv = variant_index[usable], transformed[usable]
+    _fill_median_logits(baseline, variant_index[usable], transformed[usable])
+    return _as_baseline(baseline)
+
+
+#: Cells gathered at once by `eaf_baseline_from_sorted_runs`. Peak working set is
+#: about this many cells of `float64` logit plus their indices (~12 B/cell), and
+#: does not grow with the plane: 2**25 cells is roughly 400 MiB.
+DEFAULT_BASELINE_CELL_BUDGET = 1 << 25
+
+
+def eaf_baseline_from_sorted_runs(
+    index_runs: Sequence[np.ndarray],
+    value_runs: Sequence[np.ndarray],
+    n_variants: int,
+    *,
+    cell_budget: int = DEFAULT_BASELINE_CELL_BUDGET,
+) -> np.ndarray:
+    """Per-variant baselines from per-Analysis runs, in bounded blocks.
+
+    Each run is one Analysis's `(variant_index, eaf)` **sorted ascending by
+    variant index** -- what the Overflow CSR writer already holds, because
+    every column is sorted before it is appended. That ordering is what makes
+    this bounded: a contiguous range of variants is a contiguous *slice* of
+    every run, located by one `searchsorted` per run, so a block's cells can be
+    gathered without touching the rest of the plane.
+
+    Blocks are cut on variant boundaries, never through one. A variant's median
+    is not computable from a subset of its values, so each block must hold all
+    the cells of every variant it covers for its medians to be final.
+
+    Bit-identical to `eaf_baseline_from_pairs` over the concatenated runs: the
+    logit is taken in the same `float64`, and each variant's median is the same
+    arithmetic over the same sorted values. Peak memory is `cell_budget`-bounded
+    rather than proportional to the plane (issue #226), so it is the path a
+    billion-cell Ragged Overflow can actually take.
+    """
+    if len(index_runs) != len(value_runs):
+        raise EafBaselineError(
+            f"{len(index_runs)} index runs does not match {len(value_runs)} value runs"
+        )
+    baseline = np.full(int(n_variants), np.nan, dtype=np.float64)
+    runs = _checked_runs(index_runs, value_runs)
+    if not runs or n_variants <= 0:
+        return _as_baseline(baseline)
+    edges = _variant_block_edges(runs, int(n_variants), max(1, int(cell_budget)))
+    # One searchsorted per run for every edge at once: the per-block slice
+    # bounds are then lookups, not a binary search per block per run.
+    bounds = np.empty((len(runs), len(edges)), dtype=np.int64)
+    for position, (run_index, _) in enumerate(runs):
+        bounds[position] = np.searchsorted(run_index, edges, side="left")
+    for block in range(len(edges) - 1):
+        vi, lv = _gather_block(runs, bounds[:, block], bounds[:, block + 1])
+        if len(vi):
+            _fill_median_logits(baseline, vi, lv)
+    return _as_baseline(baseline)
+
+
+def _checked_runs(
+    index_runs: Sequence[np.ndarray], value_runs: Sequence[np.ndarray]
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """The non-empty runs, each verified parallel and sorted by variant index.
+
+    Sortedness is the contract the whole bounded walk rests on, and a run that
+    quietly broke it would return wrong baselines rather than fail, so it is
+    checked rather than assumed. Each run is one Analysis, so the check is a
+    diff over thousands of elements, not over the plane.
+    """
+    runs: list[tuple[np.ndarray, np.ndarray]] = []
+    for position, (run_index, run_values) in enumerate(zip(index_runs, value_runs, strict=True)):
+        run_index = np.asarray(run_index)
+        run_values = np.asarray(run_values)
+        if run_index.shape != run_values.shape:
+            raise EafBaselineError(
+                f"run {position}: variant_index shape {run_index.shape} does not match "
+                f"values shape {run_values.shape}"
+            )
+        if run_index.size == 0:
+            continue
+        if np.any(np.diff(run_index) < 0):
+            raise EafBaselineError(f"run {position} is not sorted by variant index")
+        runs.append((run_index, run_values))
+    return runs
+
+
+def _variant_block_edges(
+    runs: Sequence[tuple[np.ndarray, np.ndarray]], n_variants: int, cell_budget: int
+) -> np.ndarray:
+    """Variant-aligned block edges, each block holding about `cell_budget` cells.
+
+    Cell counts are read off a fixed grid over the variant axis rather than per
+    variant, so choosing the edges costs one `searchsorted` per run and no pass
+    over the cells. A block is therefore bounded by the budget *or* by the
+    densest single grid interval, whichever is larger -- with a grid this fine
+    that interval is a few thousand variants, so the bound holds in practice
+    while the edge choice stays cheap.
+    """
+    grid = np.unique(np.linspace(0, n_variants, min(n_variants, 4096) + 1).astype(np.int64))
+    # cells_before[i] = cells whose variant index is below grid[i]
+    cells_before = np.zeros(len(grid), dtype=np.int64)
+    for run_index, _ in runs:
+        cells_before += np.searchsorted(run_index, grid, side="left")
+    edges = [int(grid[0])]
+    anchor = 0
+    for i in range(1, len(grid)):
+        if cells_before[i] - cells_before[anchor] >= cell_budget:
+            edges.append(int(grid[i]))
+            anchor = i
+    if edges[-1] != int(grid[-1]):
+        edges.append(int(grid[-1]))
+    return np.array(edges, dtype=np.int64)
+
+
+def _gather_block(
+    runs: Sequence[tuple[np.ndarray, np.ndarray]], starts: np.ndarray, stops: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """One block's `(variant_index, logit)` for the cells with a usable logit."""
+    index_parts: list[np.ndarray] = []
+    value_parts: list[np.ndarray] = []
+    for (run_index, run_values), start, stop in zip(runs, starts, stops, strict=True):
+        if stop > start:
+            index_parts.append(run_index[start:stop])
+            value_parts.append(run_values[start:stop])
+    if not index_parts:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
+    vi = np.concatenate(index_parts)
+    lv = logit(np.concatenate(value_parts))
+    usable = np.isfinite(lv)
+    return vi[usable], lv[usable]
+
+
+def _fill_median_logits(baseline: np.ndarray, vi: np.ndarray, lv: np.ndarray) -> None:
+    """Write each variant's median logit into `baseline`, in place.
+
+    Sorting by (variant, logit) puts each variant's values in a contiguous
+    sorted run, so the median is two gathers: the middle value when the count is
+    odd, the mean of the two middle ones when it is even -- `numpy.median`'s
+    arithmetic, on the values `numpy.median` would have seen.
+    """
     order = np.lexsort((lv, vi))
     vi, lv = vi[order], lv[order]
     starts = np.flatnonzero(np.concatenate(([True], vi[1:] != vi[:-1])))
@@ -409,7 +553,6 @@ def eaf_baseline_from_pairs(
     lower = lv[starts + (counts - 1) // 2]
     upper = lv[starts + counts // 2]
     baseline[vi[starts]] = (lower + upper) / 2.0
-    return _as_baseline(baseline)
 
 
 class StoreCodec:
