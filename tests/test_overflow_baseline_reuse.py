@@ -72,9 +72,12 @@ def test_the_baseline_is_derived_once_and_reused(tmp_path, monkeypatch) -> None:
 
     held = writer._eaf_baseline(encoding)
     writer.se_fit_inputs(encoding)
-    list(writer.se_fit_batches(encoding, cell_budget=1024))
-    list(writer.se_fit_chunk_batches(encoding, 64, cell_budget=64 * 8))
-    writer.flush(tmp_path / "reused", encoding, region_cells=512)
+    # The fit and the measurement read the frequencies back from the written
+    # `eaf` plane, so the write comes first (issue #232).
+    writer.write_eaf_plane(tmp_path / "reused", encoding, region_cells=512)
+    list(writer.se_fit_batches(cell_budget=1024))
+    list(writer.se_fit_chunk_batches(64, cell_budget=64 * 8))
+    writer.flush_se(tmp_path / "reused", encoding, region_cells=512)
 
     assert len(derivations) == 1, f"baseline derived {len(derivations)} times over the same cells"
     assert writer._eaf_baseline(encoding) is held, "every ask must get the held array back"

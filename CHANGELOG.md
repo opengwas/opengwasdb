@@ -12,6 +12,32 @@ the end of this file.
 
 ### Fixed
 
+- **The Ragged Overflow's `eaf` plane is written once, ahead of the SE fit, and
+  both SE passes read their frequencies back from it.** The SE coefficient fit
+  and the byte measurement each derived every Overflow cell's round-tripped
+  frequency for themselves -- a `StoreCodec.encode_eaf`/`decode_eaf` round trip
+  per pass over the whole component -- which #231 attributed as roughly half the
+  streaming overhead the #228 split added (encode and decode each ~half the
+  added SE-phase cost). The `eaf` plane's encoding is
+  already decided before the fit runs, so `RaggedCSRWriter.write_eaf_plane` now
+  creates the component's zarr group and writes the `eaf`/`z`/`variant_index`
+  planes and both frequency exception tables ahead of it, and `se_fit_batches` /
+  `se_fit_chunk_batches` decode that plane back a region at a time instead of
+  re-encoding. `flush_se` adds the SE half (and the completion marker) to the
+  same group rather than replacing it, so the group is created exactly once and
+  a build failing in between leaves a group with no `completion_state` -- and a
+  staged release that is discarded whole. Nothing stored changes: the `eaf`
+  plane, both exception tables, the chosen SE encoding and every other array
+  are identical to a build of the same inputs on the base, checked over the
+  synthetic fixtures and a real 10-Analysis OGS-00011 subset (805,213 Overflow
+  cells; 66 decoded arrays including both exception tables, 0 differences, and
+  the same chosen encoding), and both SE passes still decode, so the
+  duplication -- not the whole streaming overhead -- is what goes: on that
+  subset, which #229's eligibility gate sends to `float16` so only the fit pass
+  runs, the fit's own encode drops from 30.5 ms (0.038 us/cell) to zero while
+  its decode is unchanged. Peak memory stays bounded by the region budget; the
+  fit no longer materialises a per-pass copy of the frequencies (issue #232).
+
 - **Residual SE eligibility is decided before the fit and both measurement
   passes, not after them.** The joint SE optimiser fitted the plane, measured
   every candidate range over both components, and only then consulted the

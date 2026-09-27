@@ -1982,6 +1982,27 @@ def _stamp_analyses(
     )
 
 
+def _write_overflow_eaf_plane(
+    prepared: _PreparedBuild,
+    plan: _EncodingPlan,
+    overflow: _OverflowAssembled,
+) -> None:
+    """Phase - write the Ragged Overflow's frequency half before the SE fit.
+
+    The `eaf` plane's encoding is decided before the joint fit runs, so writing
+    the plane here lets both the fit and its byte measurement read the
+    frequencies a reader will get back, instead of each re-encoding every cell
+    (issue #232). The write also creates the component's zarr group exactly
+    once; the later SE flush adds to that group rather than replacing it. A
+    build failing in between is discarded whole by the staged release, and the
+    group it leaves carries no `completion_state` for a later phase to mistake
+    for a finished component."""
+    log.info(
+        "Ragged Overflow eaf plane: writing %d associations", overflow.csr.n_associations
+    )
+    overflow.csr.write_eaf_plane(prepared.staged.path, plan.encoding)
+
+
 def _fit_joint_se(
     prepared: _PreparedBuild,
     plan: _EncodingPlan,
@@ -1992,7 +2013,9 @@ def _fit_joint_se(
     partition the same Analyses, so fitting or gating either in isolation
     could leave the shared manifest describing only half of the data it
     governs. The Dense row chunks fit, measure and rewrite across
-    ``--n-workers`` (issue #221)."""
+    ``--n-workers`` (issue #221); the Overflow cells arrive as a streamed
+    source that reads its frequencies back from the plane
+    ``_write_overflow_eaf_plane`` already wrote (issue #232)."""
     dense_group = prepared.dense_staged.arrays(mode="a")
     return optimise_dense_se_joint(
         dense_group,
@@ -2000,7 +2023,7 @@ def _fit_joint_se(
         # A streamed source, not the materialised bundle: on OGS-00011 the flat
         # planes are 15,078,327,210 cells, and building them cost 85.8 bytes a
         # cell -- 1.29 TB on a 1,006 GB host (issue #228).
-        overflow=overflow.csr.se_fit_source(plan.encoding),
+        overflow=overflow.csr.se_fit_source(),
         n_workers=options.n_workers,
     )
 
@@ -2048,13 +2071,14 @@ def _flush_overflow_component(
     encoding: StoreEncoding,
     se_coefficients: np.ndarray | None,
 ) -> int:
-    """Flush the assembled overflow CSR into the store's root zarr and build
-    its top-hit index. Returns the overflow association count the shared
-    manifest's provenance records. Each step logs its start and elapsed time
-    (issue #221)."""
+    """Flush the assembled overflow CSR's SE half into the zarr group the eaf
+    write created, and build its top-hit index. The group already holds the
+    frequency half; this adds to it rather than replacing it (issue #232).
+    Returns the overflow association count the shared manifest's provenance
+    records. Each step logs its start and elapsed time (issue #221)."""
     log.info("Ragged Overflow CSR flush: start (%d associations)", csr.n_associations)
     started = time.monotonic()
-    csr.flush(staged.path, encoding, se_coefficients=se_coefficients)
+    csr.flush_se(staged.path, encoding, se_coefficients=se_coefficients)
     log.info("Ragged Overflow CSR flush: done in %s", format_duration(time.monotonic() - started))
     n_overflow = csr.n_associations
     log.info("Building Ragged Overflow top-hit index")
@@ -2239,6 +2263,7 @@ def _build_components(
         dense = _write_dense_component_bands(prepared, plan, routed.pass2_start, options)
         overflow = _assemble_overflow(prepared, options)
         analyses = _stamp_analyses(prepared, dense, overflow, evidence)
+        _write_overflow_eaf_plane(prepared, plan, overflow)
         encoding, se_coefficients = _fit_joint_se(prepared, plan, overflow, options)
         eaf_provenance = _finish_dense_component(
             prepared,

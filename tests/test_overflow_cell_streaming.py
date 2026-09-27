@@ -17,6 +17,7 @@ import pytest
 import zarr
 
 from opengwasdb.encoding import EncodingMeasurements, OverflowCells, StoreEncoding
+from opengwasdb.encoding.codec import StoreCodec
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, ZEncoding
 from opengwasdb.encoding.se import OverflowCellBatches, optimise_dense_se_joint
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
@@ -63,15 +64,21 @@ def _residual_encoding(writer, n_analyses):
 
 
 @pytest.mark.parametrize("cell_budget", [1, 10, 500, 10_000])
-def test_streamed_batches_reconstruct_the_materialised_cells(cell_budget):
+def test_streamed_batches_reconstruct_the_materialised_cells(tmp_path, cell_budget):
     """Concatenating the batches must give back exactly what `se_fit_inputs`
-    builds in one piece -- same values, same order, same dtypes."""
+    builds in one piece -- same values, same order, same dtypes.
+
+    The batches read their frequencies back from the written `eaf` plane, so
+    the plane has to be written first (issue #232); agreement with
+    `se_fit_inputs`' in-memory round trip is what shows the plane encodes a
+    per-cell function of the value and nothing batch-dependent."""
     sizes = [1500, 1, 0, 1800, 900, 1900]
     writer = _writer(sizes, without_eaf=(2, 4))
     encoding = _residual_encoding(writer, len(sizes))
+    writer.write_eaf_plane(tmp_path / "streamed", encoding)
 
     whole = writer.se_fit_inputs(encoding)
-    batches = list(writer.se_fit_batches(encoding, cell_budget=cell_budget))
+    batches = list(writer.se_fit_batches(cell_budget=cell_budget))
 
     for field in ("se_values", "eaf_values", "analysis_indices"):
         streamed = (
@@ -159,16 +166,17 @@ def test_streamed_overflow_selects_the_same_plan_as_one_bundle(tmp_path):
 
 
 @pytest.mark.parametrize("multiple", [1, 7, 64, 1000])
-def test_chunk_aligned_batches_end_on_multiples_and_reconstruct_the_cells(multiple):
+def test_chunk_aligned_batches_end_on_multiples_and_reconstruct_the_cells(tmp_path, multiple):
     """The byte measurement charges chunk by chunk and pads only the plane's
     final edge chunk, so every batch but the last must end on a chunk boundary
     -- a batch that ended anywhere else would change the selected SE range."""
     sizes = [1500, 1, 0, 1800, 900, 1900]
     writer = _writer(sizes, without_eaf=(2, 4))
     encoding = _residual_encoding(writer, len(sizes))
+    writer.write_eaf_plane(tmp_path / "streamed", encoding)
 
     whole = writer.se_fit_inputs(encoding)
-    batches = list(writer.se_fit_chunk_batches(encoding, multiple, cell_budget=3 * multiple))
+    batches = list(writer.se_fit_chunk_batches(multiple, cell_budget=3 * multiple))
 
     for batch in batches[:-1]:
         assert len(batch.se_values) % multiple == 0, "interior batch must end on a chunk boundary"
@@ -284,3 +292,93 @@ def test_flush_peak_memory_does_not_follow_the_cell_count(tmp_path):
 
     growth = peak_large / peak_small
     assert growth < 2.5, f"peak grew {growth:.1f}x for 4x the cells"
+
+
+# ── Seam: the eaf write, and the fit reading it back (issue #232) ────────────
+
+
+def test_write_eaf_plane_then_flush_se_leaves_one_complete_group(tmp_path):
+    """The eaf half is written first and the SE half is added to the same group.
+
+    A group carrying only the frequency half is not a finished component: it
+    has no `completion_state`, which only `flush_se` writes, so a build stopped
+    between the write and the flush cannot be mistaken for one. The two halves
+    together must store exactly what one `flush` stores, array for array.
+    """
+    sizes = [1500, 1800, 900, 1900]
+    writer = _model_writer(sizes)
+    encoding = _residual_se_encoding(writer, len(sizes))
+    store = tmp_path / "split"
+    writer.write_eaf_plane(store, encoding, region_cells=512)
+
+    half = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="r")
+    assert "eaf" in half and "se" not in half
+    assert "completion_state" not in half.attrs
+
+    writer.flush_se(store, encoding, region_cells=512)
+    whole = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="r")
+    assert "se" in whole
+    assert whole.attrs["completion_state"] == "observed_only"
+
+    one = _model_writer(sizes)
+    one.flush(tmp_path / "one", encoding, region_cells=512)
+    split_arrays, one_arrays = _stored(store), _stored(tmp_path / "one")
+    assert sorted(split_arrays) == sorted(one_arrays)
+    for name in one_arrays:
+        np.testing.assert_array_equal(split_arrays[name], one_arrays[name], err_msg=name)
+
+
+def test_fit_reads_the_plane_without_materialising_it(tmp_path):
+    """Four times the cells at the same largest Analysis must not cost four
+    times the fit's peak: the frequencies come back a batch at a time from the
+    written plane, never as one whole-plane array (issue #232)."""
+    budget = 512
+    small, large = _model_writer([2000] * 2, seed=1), _model_writer([2000] * 8, seed=1)
+    encoding = _residual_se_encoding(large, 8)
+    assert large.n_associations == 4 * small.n_associations
+
+    def fit_peak(writer, name):
+        writer.write_eaf_plane(tmp_path / name, encoding, region_cells=budget)
+
+        def consume() -> None:
+            for _batch in writer.se_fit_batches(cell_budget=budget):
+                pass
+
+        return _peak_bytes(consume)
+
+    growth = fit_peak(large, "large") / fit_peak(small, "small")
+    assert growth < 2.0, f"fit peak grew {growth:.1f}x for 4x the cells"
+
+
+def test_se_fit_reads_the_eaf_plane_back_instead_of_re_encoding(tmp_path, monkeypatch):
+    """The fit must not encode a cell the write already encoded (issue #232).
+
+    One `encode_eaf` per cell per build, at `write_eaf_plane`: a fit that
+    re-encoded would run the round trip twice over the whole component, which is
+    the duplication this ticket removes. `decode_eaf` must still run -- the fit
+    predicts from what a reader decodes.
+    """
+    calls = {"encode": 0, "decode": 0}
+    encode, decode = StoreCodec.encode_eaf, StoreCodec.decode_eaf
+
+    def counted_encode(self, *args, **kwargs):
+        calls["encode"] += 1
+        return encode(self, *args, **kwargs)
+
+    def counted_decode(self, *args, **kwargs):
+        calls["decode"] += 1
+        return decode(self, *args, **kwargs)
+
+    monkeypatch.setattr(StoreCodec, "encode_eaf", counted_encode)
+    monkeypatch.setattr(StoreCodec, "decode_eaf", counted_decode)
+
+    writer = _model_writer([1500, 1800, 900, 1900])
+    encoding = _residual_se_encoding(writer, 4)
+    writer.write_eaf_plane(tmp_path / "store", encoding)
+    written_encodes = calls["encode"]
+    assert written_encodes >= 1, "the write must encode the plane"
+
+    for _batch in writer.se_fit_batches(cell_budget=1024):
+        pass
+    assert calls["encode"] == written_encodes, "the fit re-encoded a cell it should read back"
+    assert calls["decode"] > 0, "the fit must still decode what it reads"
