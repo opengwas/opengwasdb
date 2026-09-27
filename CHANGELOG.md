@@ -59,6 +59,13 @@ the end of this file.
 
 ### Added
 
+- **CORE resolver INFO filtering**: carry the provider-declared GWAS-SSF score through
+  the one-pass Analysis resolver; apply a strictly-below-threshold row filter before
+  ancestry/SD evidence, record canonical observed/retained and status dispositions,
+  plus post-filter eligible on/off-axis row counts. Explicit zero, unavailable NaN,
+  and legacy absent policies are distinct and an inconsistent policy state is
+  rejected at construction; a declared score with no usable values fails the
+  Analysis (stores #175; `docs/info-score-resolver.md`).
 - **CORE manifest INFO policy inputs**: parse and validate a per-Analysis
   `info_score_threshold` with exact provider-backed score column, INFO/R² kind,
   provenance and supported reader capability. Missing or `NaN` without mapping

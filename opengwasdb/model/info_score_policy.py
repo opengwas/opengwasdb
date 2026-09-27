@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.interface import ImputationScoreDeclaration, ImputationScoreKind
@@ -21,12 +22,74 @@ INFO_SCORE_COLUMNS: tuple[str, ...] = (
 )
 
 
+class InfoScoreState(StrEnum):
+    """Why an Analysis does or does not apply its declared INFO threshold."""
+
+    LEGACY_ABSENT = "legacy_absent"
+    UNAVAILABLE = "unavailable"
+    DISABLED = "disabled"
+    FILTERED = "filtered"
+
+
+#: The states a policy with no threshold and no declaration may carry: only
+#: whether the manifest carried the threshold column at all separates them.
+_NO_THRESHOLD_STATES = (InfoScoreState.LEGACY_ABSENT, InfoScoreState.UNAVAILABLE)
+
+
+def _numeric_state(threshold: float) -> InfoScoreState:
+    """The state a validated finite threshold in [0, 1] means (stores #175)."""
+    return InfoScoreState.DISABLED if threshold == 0 else InfoScoreState.FILTERED
+
+
+def _expected_states(
+    threshold: float | None, declaration: ImputationScoreDeclaration | None
+) -> tuple[InfoScoreState, ...]:
+    """The states one threshold/declaration pair allows (stores #175).
+
+    A numeric threshold requires its declaration and fixes its own state; no
+    threshold requires the absence of one and leaves legacy and explicit
+    unavailability to the manifest.
+    """
+    if threshold is None:
+        if declaration is not None:
+            raise ValueError(
+                "an imputation score declaration requires a numeric info_score_threshold"
+            )
+        return _NO_THRESHOLD_STATES
+    if not math.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError(f"info_score_threshold must be finite in [0, 1], got {threshold!r}")
+    if declaration is None:
+        raise ValueError(
+            f"info_score_threshold {threshold!r} requires an imputation score declaration"
+        )
+    return (_numeric_state(threshold),)
+
+
 @dataclass(frozen=True)
 class InfoScorePolicy:
-    """A numeric cut-off with a provider declaration, or no filter."""
+    """A numeric cut-off with a provider declaration, or no filter.
+
+    `state` separates four situations callers must not collapse into one
+    absence: no threshold was declared (`LEGACY_ABSENT`), the manifest says the
+    score is unavailable (`UNAVAILABLE`), a zero threshold with a usable score
+    asked for no filtering (`DISABLED`), or a positive threshold filters rows
+    (`FILTERED`). It is derived by `parse_info_score_policy` -- never from a
+    source header -- and asserted here so a policy that contradicts its own
+    threshold and declaration cannot be constructed and silently applied.
+    """
 
     info_score_threshold: float | None = None
     imputation_score_declaration: ImputationScoreDeclaration | None = None
+    state: InfoScoreState = InfoScoreState.LEGACY_ABSENT
+
+    def __post_init__(self) -> None:
+        allowed = _expected_states(self.info_score_threshold, self.imputation_score_declaration)
+        if self.state not in allowed:
+            names = " or ".join(state.value for state in allowed)
+            raise ValueError(
+                f"info_score_state {self.state.value!r} contradicts info_score_threshold "
+                f"{self.info_score_threshold!r}; expected {names}"
+            )
 
 
 def parse_info_score_policy(
@@ -42,8 +105,14 @@ def parse_info_score_policy(
     values = {column: (row.get(column) or "").strip() for column in INFO_SCORE_COLUMNS[1:]}
     threshold = _parse_threshold(row.get("info_score_threshold"), any(values.values()))
     if threshold is None:
-        return InfoScorePolicy()
-    return InfoScorePolicy(threshold, _parse_declaration(row, values, reader_capability))
+        state = (
+            InfoScoreState.LEGACY_ABSENT
+            if row.get("info_score_threshold") is None
+            else InfoScoreState.UNAVAILABLE
+        )
+        return InfoScorePolicy(state=state)
+    declaration = _parse_declaration(row, values, reader_capability)
+    return InfoScorePolicy(threshold, declaration, _numeric_state(threshold))
 
 
 def _parse_threshold(raw: str | None, has_declaration: bool) -> float | None:

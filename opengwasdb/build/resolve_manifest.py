@@ -492,7 +492,11 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
     """Serialize ScanDiagnostics to a dictionary.
 
     Note: `ancestry_rows_read` and `ancestry_stop_reason` are additive fields
-    under record_schema_version 1 (issue #212). Cache and resume invalidation for
+    under record_schema_version 1 (issue #212), as are the canonical-row and
+    INFO-disposition counts, `info_score_state` and `build_eligible_rows*`
+    (stores #175): each is written by every run of this version, so an older
+    record lacking them is not resumable (its fingerprint digest differs) rather
+    than read as a zero. Cache and resume invalidation for
     the decoupled phenotype-SD scan semantics is governed by `scan_limit_version = 2`
     in `resolution_config.scan_limit`.
     """
@@ -506,6 +510,18 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
         "ancestry_stop_reason": d.ancestry_stop_reason.value,
         "ancestry_reference_rows_matched": d.ancestry_reference_rows_matched,
         "variant_reference_rows_matched": d.variant_reference_rows_matched,
+        "canonical_rows_observed": d.canonical_rows_observed,
+        "canonical_rows_retained": d.canonical_rows_retained,
+        "info_rows_below_threshold": d.info_rows_below_threshold,
+        "info_rows_missing": d.info_rows_missing,
+        "info_rows_malformed": d.info_rows_malformed,
+        "info_rows_nonfinite": d.info_rows_nonfinite,
+        "info_rows_out_of_range": d.info_rows_out_of_range,
+        "info_rows_usable": d.info_rows_usable,
+        "info_score_state": d.info_score_state.value,
+        "build_eligible_rows": d.build_eligible_rows,
+        "build_eligible_rows_on_variant_reference": d.build_eligible_rows_on_variant_reference,
+        "build_eligible_rows_off_variant_reference": d.build_eligible_rows_off_variant_reference,
     }
 
 
@@ -559,6 +575,7 @@ def _build_analysis_fingerprints(
             "sample_size": row.sample_size,
             "source_reader_capability": row.source_reader_capability,
             "info_score_threshold": row.info_score_policy.info_score_threshold,
+            "info_score_state": row.info_score_policy.state.value,
             "imputation_score_column": (
                 row.info_score_policy.imputation_score_declaration.column_name
                 if row.info_score_policy.imputation_score_declaration else None
@@ -637,18 +654,27 @@ def _execute_analysis(
     scale: StoredEffectScale,
     method: OriginalSdMethod,
     sample_size: float | None,
+    info_score_policy: InfoScorePolicy | None = None,
 ) -> tuple[AnalysisResolution, RecordStatus, str | None]:
     assert _WORKER_ANCESTRY_REFERENCE is not None
     assert _WORKER_GATES is not None
+    info_score_policy = info_score_policy or InfoScorePolicy()
     req = AnalysisRequest(
         analysis_id=analysis_id,
         source_file=source_file,
         sample_size=sample_size,
         original_sd_method=method,
         stored_effect_scale=scale,
+        info_score_policy=info_score_policy,
     )
     try:
-        reader = resolve_reader(cap, source_file, scale)
+        if info_score_policy.imputation_score_declaration is not None:
+            reader = resolve_reader(
+                cap, source_file, scale,
+                imputation_score_declaration=info_score_policy.imputation_score_declaration,
+            )
+        else:
+            reader = resolve_reader(cap, source_file, scale)
         res = resolve_analysis(
             req,
             reader=reader,
@@ -661,7 +687,13 @@ def _execute_analysis(
             scan_limit=_WORKER_SCAN_LIMIT,
         )
         if res.error:
-            return res, RecordStatus.CONTROLLED_FAILURE, res.error
+            # A declared score's failure must name its Analysis, whether it was
+            # raised by the scan or by the no-usable-scores check above.
+            error = res.error
+            if (info_score_policy.imputation_score_declaration is not None
+                    and not error.startswith(f"Analysis {analysis_id}:")):
+                error = f"Analysis {analysis_id}: {error}"
+            return res, RecordStatus.CONTROLLED_FAILURE, error
         return res, RecordStatus.SUCCESS, None
     except Exception as exc:
         err_msg = f"{type(exc).__name__}: {exc}"
@@ -715,7 +747,8 @@ def _worker_resolve_one(task: dict[str, Any]) -> dict[str, Any]:
     tracemalloc.start()
     t0 = time.monotonic()
     res, status, err_msg = _execute_analysis(
-        analysis_id, source_file, cap, scale, method, sample_size
+        analysis_id, source_file, cap, scale, method, sample_size,
+        task.get("info_score_policy", InfoScorePolicy()),
     )
     elapsed = time.monotonic() - t0
     _current, peak = tracemalloc.get_traced_memory()
@@ -854,6 +887,7 @@ def _build_single_task(
         "stored_effect_scale": row.stored_effect_scale.value,
         "original_sd_method": row.original_sd_method.value,
         "sample_size": row.sample_size,
+        "info_score_policy": row.info_score_policy,
         "fingerprints": fp,
         "record_path": str(rec_path),
         "size_weight": size_weight,

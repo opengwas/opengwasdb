@@ -64,6 +64,8 @@ from opengwasdb.build.phenotype_sd import (
     se_scale_samples,
 )
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
+from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
+from opengwasdb.readers.interface import ImputationScoreStatus
 from opengwasdb.readers.tabular import MetricsChunk
 
 __all__ = [
@@ -215,6 +217,7 @@ class AnalysisRequest:
     sample_size: float | None
     original_sd_method: OriginalSdMethod
     stored_effect_scale: StoredEffectScale = StoredEffectScale.SD
+    info_score_policy: InfoScorePolicy = InfoScorePolicy()
 
 
 @dataclass(frozen=True)
@@ -242,6 +245,20 @@ class ScanDiagnostics:
     ancestry_reference_rows_matched: int = 0
     #: Source rows on the declared Hybrid variant axis, over the physical scan.
     variant_reference_rows_matched: int | None = None
+    #: All counts below refer to canonical-identity rows yielded by the metrics
+    #: reader, NOT raw input lines or deduplicated stored cells.
+    canonical_rows_observed: int = 0
+    canonical_rows_retained: int = 0
+    info_rows_below_threshold: int = 0
+    info_rows_missing: int = 0
+    info_rows_malformed: int = 0
+    info_rows_nonfinite: int = 0
+    info_rows_out_of_range: int = 0
+    info_rows_usable: int = 0
+    info_score_state: InfoScoreState = InfoScoreState.LEGACY_ABSENT
+    build_eligible_rows: int = 0
+    build_eligible_rows_on_variant_reference: int | None = None
+    build_eligible_rows_off_variant_reference: int | None = None
 
 
 @dataclass(frozen=True)
@@ -323,6 +340,16 @@ class _Scan:
     ancestry_stop_reason: ScanStop = ScanStop.EOF
     ancestry_reference_rows_matched: int = 0
     variant_reference_rows_matched: int | None = None
+    canonical_rows_retained: int = 0
+    info_rows_below_threshold: int = 0
+    info_rows_missing: int = 0
+    info_rows_malformed: int = 0
+    info_rows_nonfinite: int = 0
+    info_rows_out_of_range: int = 0
+    info_rows_usable: int = 0
+    build_eligible_rows: int = 0
+    build_eligible_rows_on_variant_reference: int | None = None
+    build_eligible_rows_off_variant_reference: int | None = None
 
 
 @dataclass
@@ -420,6 +447,18 @@ def _diagnostics(request: AnalysisRequest, scan: _Scan) -> ScanDiagnostics:
         ancestry_stop_reason=scan.ancestry_stop_reason,
         ancestry_reference_rows_matched=scan.ancestry_reference_rows_matched,
         variant_reference_rows_matched=scan.variant_reference_rows_matched,
+        canonical_rows_observed=scan.rows_read,
+        canonical_rows_retained=scan.canonical_rows_retained,
+        info_rows_below_threshold=scan.info_rows_below_threshold,
+        info_rows_missing=scan.info_rows_missing,
+        info_rows_malformed=scan.info_rows_malformed,
+        info_rows_nonfinite=scan.info_rows_nonfinite,
+        info_rows_out_of_range=scan.info_rows_out_of_range,
+        info_rows_usable=scan.info_rows_usable,
+        info_score_state=request.info_score_policy.state,
+        build_eligible_rows=scan.build_eligible_rows,
+        build_eligible_rows_on_variant_reference=scan.build_eligible_rows_on_variant_reference,
+        build_eligible_rows_off_variant_reference=scan.build_eligible_rows_off_variant_reference,
     )
 
 
@@ -433,6 +472,7 @@ def _scan(
     needs_sd: bool,
     ancestry_reference: Collection[str],
     variant_reference: Collection[str] | None = None,
+    info_score_policy: InfoScorePolicy | None = None,
 ) -> None:
     """One pass over the source, feeding the ancestry fit and the SD evidence.
 
@@ -453,27 +493,35 @@ def _scan(
     both ancestry and phenotype SD.
     """
     stream = reader.stream_metric_chunks()
+    info_score_policy = info_score_policy or InfoScorePolicy()
     ancestry_active = True
     try:
         for chunk in stream:
-            block = _bounded(chunk, scan, limit)
+            observed = _bounded(chunk, scan, limit)
+            retained_indices = _retained_indices(observed, info_score_policy)
+            block = _take(observed, retained_indices)
+            stopped_physical: int | None = None
             if ancestry_active:
                 stopped = _accumulate_ancestry(block, panel, scan.panel_af, limit)
                 if stopped is not None:
                     ancestry_active = False
-                    scan.ancestry_rows_read = scan.rows_read + (stopped + 1)
-                    if scan.stop_reason is ScanStop.ROW_LIMIT and stopped + 1 == len(block):
+                    stopped_physical = int(retained_indices[stopped])
+                    scan.ancestry_rows_read = scan.rows_read + stopped_physical + 1
+                    if (scan.stop_reason is ScanStop.ROW_LIMIT
+                            and stopped_physical + 1 == len(observed)):
                         scan.ancestry_stop_reason = ScanStop.ROW_LIMIT
                     else:
                         scan.ancestry_stop_reason = ScanStop.ANCESTRY_SITE_LIMIT
                     if not needs_sd:
-                        if stopped + 1 < len(block):
-                            block = _slice(block, stopped + 1)
+                        observed = _slice(observed, stopped_physical + 1)
+                        block = _slice(block, stopped + 1)
                         scan.stop_reason = scan.ancestry_stop_reason
 
             ancestry_end = (
-                len(block) if ancestry_active
-                else max(0, scan.ancestry_rows_read - scan.rows_read)
+                len(block) if ancestry_active or (stopped_physical is not None and not needs_sd)
+                else int(np.searchsorted(
+                    retained_indices, scan.ancestry_rows_read - scan.rows_read
+                ))
             )
             scan.ancestry_reference_rows_matched += sum(
                 alid in ancestry_reference for alid in block.alid[:ancestry_end]
@@ -481,10 +529,12 @@ def _scan(
             if variant_reference is not None:
                 scan.variant_reference_rows_matched = (
                     (scan.variant_reference_rows_matched or 0)
-                    + sum(alid in variant_reference for alid in block.alid)
+                    + sum(alid in variant_reference for alid in observed.alid)
                 )
+            _count_info(observed, block, scan, info_score_policy)
+            _count_build_eligible(block, scan, variant_reference)
             evidence.admit(block)
-            scan.rows_read += len(block)
+            scan.rows_read += len(observed)
             if not ancestry_active and not needs_sd:
                 break
             if scan.stop_reason is not ScanStop.EOF:
@@ -499,18 +549,74 @@ def _scan(
         scan.ancestry_stop_reason = scan.stop_reason
 
 
+def _take(chunk: MetricsChunk, indices: np.ndarray) -> MetricsChunk:
+    return MetricsChunk(
+        alid=chunk.alid[indices],
+        flipped=chunk.flipped[indices],
+        palindromic=chunk.palindromic[indices],
+        af_alt=chunk.af_alt[indices],
+        beta=chunk.beta[indices],
+        se=chunk.se[indices],
+        imputation_score=chunk.imputation_score[indices],
+        imputation_score_status=chunk.imputation_score_status[indices],
+    )
+
+
 def _slice(chunk: MetricsChunk, rows: int) -> MetricsChunk:
-    """The first `rows` rows of a block, as a block."""
+    """The first `rows` rows of a block, including score and status arrays."""
     if rows >= len(chunk):
         return chunk
-    return MetricsChunk(
-        alid=chunk.alid[:rows],
-        flipped=chunk.flipped[:rows],
-        palindromic=chunk.palindromic[:rows],
-        af_alt=chunk.af_alt[:rows],
-        beta=chunk.beta[:rows],
-        se=chunk.se[:rows],
+    return _take(chunk, np.arange(rows))
+
+
+def _retained_indices(chunk: MetricsChunk, policy: InfoScorePolicy) -> np.ndarray:
+    """The rows a declared policy keeps. Only `FILTERED` drops any, and a row
+    whose score equals the threshold is kept (stores #175)."""
+    if policy.state is not InfoScoreState.FILTERED:
+        return np.arange(len(chunk))
+    assert policy.info_score_threshold is not None
+    usable = chunk.imputation_score_status == ImputationScoreStatus.USABLE
+    return np.flatnonzero(usable & (chunk.imputation_score >= policy.info_score_threshold))
+
+
+def _count_info(
+    observed: MetricsChunk, retained: MetricsChunk, scan: _Scan, policy: InfoScorePolicy
+) -> None:
+    """Record one block's score dispositions, over every observed row."""
+    statuses = observed.imputation_score_status
+    scan.info_rows_usable += int(np.count_nonzero(statuses == ImputationScoreStatus.USABLE))
+    scan.info_rows_missing += int(np.count_nonzero(statuses == ImputationScoreStatus.MISSING))
+    scan.info_rows_malformed += int(np.count_nonzero(statuses == ImputationScoreStatus.MALFORMED))
+    scan.info_rows_nonfinite += int(np.count_nonzero(statuses == ImputationScoreStatus.NONFINITE))
+    scan.info_rows_out_of_range += int(
+        np.count_nonzero(statuses == ImputationScoreStatus.OUT_OF_RANGE)
     )
+    scan.canonical_rows_retained += len(retained)
+    if policy.state is InfoScoreState.FILTERED:
+        scan.info_rows_below_threshold += int(np.count_nonzero(
+            (statuses == ImputationScoreStatus.USABLE)
+            & (observed.imputation_score < policy.info_score_threshold)
+        ))
+
+
+def _count_build_eligible(
+    chunk: MetricsChunk, scan: _Scan, variant_reference: Collection[str] | None
+) -> None:
+    # Reader SE parsing is positive-only; finite beta/SE implies a finite z
+    # except at extreme ratios where division overflows.
+    with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+        z = chunk.beta / chunk.se
+    eligible = np.isfinite(chunk.beta) & np.isfinite(chunk.se) & (chunk.se > 0) & np.isfinite(z)
+    scan.build_eligible_rows += int(np.count_nonzero(eligible))
+    if variant_reference is not None:
+        on = sum(alid in variant_reference for alid in chunk.alid[eligible])
+        scan.build_eligible_rows_on_variant_reference = (
+            (scan.build_eligible_rows_on_variant_reference or 0) + on
+        )
+        scan.build_eligible_rows_off_variant_reference = (
+            (scan.build_eligible_rows_off_variant_reference or 0)
+            + int(np.count_nonzero(eligible)) - on
+        )
 
 
 def _bounded(chunk: MetricsChunk, scan: _Scan, limit: ScanLimit | None) -> MetricsChunk:
@@ -770,12 +876,23 @@ def resolve_analysis(
         _scan(
             reader, panel, scan, evidence, scan_limit, needs_sd=needs_sd,
             ancestry_reference=reference.index, variant_reference=variant_reference,
+            info_score_policy=request.info_score_policy,
         )
     except (OSError, EOFError, ValueError) as exc:
         return AnalysisResolution(
             analysis_id=request.analysis_id,
             diagnostics=_diagnostics(request, scan),
             error=f"{type(exc).__name__}: {exc}",
+        )
+    if (request.info_score_policy.imputation_score_declaration is not None
+            and scan.info_rows_usable == 0):
+        # A declared score nothing usable was found for is a controlled failure,
+        # not an Analysis resolved from zero rows (stores #175).
+        return AnalysisResolution(
+            analysis_id=request.analysis_id,
+            diagnostics=_diagnostics(request, scan),
+            error=f"Analysis {request.analysis_id}: declared imputation score has no usable scores "
+                  "in scanned canonical rows",
         )
     ancestry = assign_ancestry(scan.panel_af, reference, gates)
     return AnalysisResolution(
