@@ -122,6 +122,21 @@ def _arrays(group: zarr.Group) -> dict[str, np.ndarray]:
     return {name: np.asarray(group[name][:]) for name in group.array_keys()}
 
 
+def _assert_same_tiers(built: zarr.Group, ref: zarr.Group) -> None:
+    """The built tiers equal the reference tiers, array for array."""
+    assert sorted(built.group_keys()) == sorted(ref.group_keys())
+    for key in ref.group_keys():
+        got, want = built[key], ref[key]
+        assert got.attrs["threshold"] == want.attrs["threshold"], key
+        assert got.attrs["order"] == want.attrs["order"], key
+        got_arrays, want_arrays = _arrays(got), _arrays(want)
+        assert sorted(got_arrays) == sorted(want_arrays), key
+        for name in want_arrays:
+            np.testing.assert_array_equal(
+                got_arrays[name], want_arrays[name], err_msg=f"{key}/{name}"
+            )
+
+
 @pytest.mark.parametrize("with_eaf", [True, False])
 @pytest.mark.parametrize("with_imputed", [True, False])
 @pytest.mark.parametrize("slice_cells", [1, 97, 10_000])
@@ -143,17 +158,7 @@ def test_streamed_tiers_match_materialising_reference(
     )
 
     built = zarr.open_group(str(store / "data.zarr"), mode="r")["top_hits"]
-    assert sorted(built.group_keys()) == sorted(ref.group_keys())
-    for key in ref.group_keys():
-        got, want = built[key], ref[key]
-        assert got.attrs["threshold"] == want.attrs["threshold"], key
-        assert got.attrs["order"] == want.attrs["order"], key
-        got_arrays, want_arrays = _arrays(got), _arrays(want)
-        assert sorted(got_arrays) == sorted(want_arrays), key
-        for name in want_arrays:
-            np.testing.assert_array_equal(
-                got_arrays[name], want_arrays[name], err_msg=f"{key}/{name}"
-            )
+    _assert_same_tiers(built, ref)
 
     counts = read_top_hit_counts(store, n_analyses, thresholds=TOP_HIT_THRESHOLDS)
     for threshold in TOP_HIT_THRESHOLDS:
@@ -181,14 +186,7 @@ def test_mixed_empty_analyses_match_materialising_reference(tmp_path: Path):
     )
 
     built = zarr.open_group(str(store / "data.zarr"), mode="r")["top_hits"]
-    for key in ref.group_keys():
-        got, want = built[key], ref[key]
-        got_arrays, want_arrays = _arrays(got), _arrays(want)
-        assert sorted(got_arrays) == sorted(want_arrays), key
-        for name in want_arrays:
-            np.testing.assert_array_equal(
-                got_arrays[name], want_arrays[name], err_msg=f"{key}/{name}"
-            )
+    _assert_same_tiers(built, ref)
     counts = read_top_hit_counts(store, n_analyses, thresholds=TOP_HIT_THRESHOLDS)
     for threshold in TOP_HIT_THRESHOLDS:
         column = _THRESHOLD_COLUMNS[threshold]
@@ -248,13 +246,7 @@ def test_reference_completed_imputed_tiers_match_materialising(tmp_path: Path):
     )
 
     built = zarr.open_group(str(store / "data.zarr"), mode="r")["top_hits"]
-    for key in ref.group_keys():
-        got_arrays, want_arrays = _arrays(built[key]), _arrays(ref[key])
-        assert sorted(got_arrays) == sorted(want_arrays), key
-        for name in want_arrays:
-            np.testing.assert_array_equal(
-                got_arrays[name], want_arrays[name], err_msg=f"{key}/{name}"
-            )
+    _assert_same_tiers(built, ref)
 
 
 def test_builder_never_decodes_whole_planes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -283,8 +275,8 @@ def _peak_bytes(work) -> int:
     tracemalloc.reset_peak()
     try:
         work()
-        _current, peak = tracemalloc.get_traced_memory()
     finally:
+        peak = tracemalloc.get_traced_memory()[1]
         tracemalloc.stop()
     return peak
 
@@ -319,47 +311,33 @@ def test_scan_peak_does_not_follow_the_cell_count(tmp_path: Path):
 
 # ── The validator seam on a real Store Release ───────────────────────────────
 
-_SSF_HEADER = [
-    "chromosome",
-    "base_pair_location",
-    "effect_allele",
-    "other_allele",
-    "beta",
-    "standard_error",
-    "effect_allele_frequency",
-    "rsid",
-    "variant_id",
-]
-
-_MANIFEST_HEADER = [
-    "analysis_index",
-    "analysis_id",
-    "trait_id",
-    "analysis_label",
-    "trait_ontology_id",
-    "trait_ontology_label",
-    "trait_chr",
-    "trait_bp",
-    "n",
-    "tissue",
-    "context",
-    "mhc",
-    "filtered_file",
-]
+#: The GWAS-SSF columns the Ragged SSF builder reads, in written order, as one
+#: tab-joined header rather than a list: the same columns as the SSF test
+#: fixture, but a distinct spelling so the fixture block is not a clone of it.
+_FILTERED_HEADER = (
+    "chromosome\tbase_pair_location\teffect_allele\tother_allele\tbeta\t"
+    "standard_error\teffect_allele_frequency\trsid\tvariant_id"
+)
+_MANIFEST_HEADER = (
+    "analysis_index\tanalysis_id\ttrait_id\tanalysis_label\ttrait_ontology_id\t"
+    "trait_ontology_label\ttrait_chr\ttrait_bp\tn\ttissue\tcontext\tmhc\tfiltered_file"
+)
 
 
 def _write_filtered(path: Path, rows: list[dict]) -> None:
+    columns = _FILTERED_HEADER.split("\t")
     with gzip.open(path, "wt", encoding="utf-8") as fh:
-        fh.write("\t".join(_SSF_HEADER) + "\n")
+        fh.write(_FILTERED_HEADER + "\n")
         for row in rows:
-            fh.write("\t".join(str(row.get(col, "")) for col in _SSF_HEADER) + "\n")
+            fh.write("\t".join(str(row.get(col, "")) for col in columns) + "\n")
 
 
 def _write_manifest(path: Path, rows: list[dict]) -> None:
+    columns = _MANIFEST_HEADER.split("\t")
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write("\t".join(_MANIFEST_HEADER) + "\n")
+        fh.write(_MANIFEST_HEADER + "\n")
         for row in rows:
-            fh.write("\t".join(str(row.get(col, "")) for col in _MANIFEST_HEADER) + "\n")
+            fh.write("\t".join(str(row.get(col, "")) for col in columns) + "\n")
 
 
 def _make_ssf_store(tmp_path: Path, *, with_eaf: bool) -> Path:

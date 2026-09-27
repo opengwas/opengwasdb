@@ -94,6 +94,52 @@ def _read_ragged_columns(
     return columns, np.abs(z_all), n_analyses
 
 
+def _gather_slice_candidates(
+    csr: RaggedCSRReader,
+    offsets: np.ndarray,
+    lo: int,
+    hi: int,
+    loosest: float,
+    has_imputed: bool,
+    has_eaf: bool,
+) -> dict[str, np.ndarray] | None:
+    """The candidate cells of one flat CSR slice, or None when none pass.
+
+    Only the slice's decoded ``z`` is held, and only the passing cells' companion
+    arrays are gathered -- the bounded working set issue #233 asks for.
+    """
+    z = csr.z_slice(lo, hi)
+    keep = np.abs(z) >= loosest
+    if not keep.any():
+        return None
+    positions = np.flatnonzero(keep).astype(np.int64) + lo
+    columns: dict[str, np.ndarray] = {
+        "variant_index": np.asarray(csr._variant_index.oindex[positions], dtype=np.int32),
+        "analysis_index": _slice_analysis_indices(offsets, lo, hi)[keep],
+        "z": z[keep],
+        "se": csr.se_at(positions),
+    }
+    if has_imputed:
+        columns["imputed"] = np.asarray(
+            csr._root["imputed"].oindex[positions], dtype=np.uint8
+        )
+    if has_eaf:
+        columns["eaf"] = csr.eaf_at(positions)
+    return columns
+
+
+def _concat_candidate_parts(
+    parts: dict[str, list[np.ndarray]],
+) -> dict[str, np.ndarray]:
+    """The gathered per-slice arrays, one candidate array per column."""
+    columns: dict[str, np.ndarray] = {}
+    for name, values in parts.items():
+        columns[name] = (
+            np.concatenate(values) if values else np.empty(0, dtype=_CANDIDATE_DTYPES[name])
+        )
+    return columns
+
+
 def _collect_ragged_candidates(
     csr: RaggedCSRReader,
     thresholds: tuple[float, ...],
@@ -132,30 +178,15 @@ def _collect_ragged_candidates(
 
     step = max(1, int(slice_cells))
     for lo in range(0, total, step):
-        hi = min(lo + step, total)
-        z = csr.z_slice(lo, hi)
-        keep = np.abs(z) >= loosest
-        if not keep.any():
+        slice_columns = _gather_slice_candidates(
+            csr, offsets, lo, min(lo + step, total), loosest, has_imputed, has_eaf
+        )
+        if slice_columns is None:
             continue
-        positions = np.flatnonzero(keep).astype(np.int64) + lo
-        parts["variant_index"].append(
-            np.asarray(csr._variant_index.oindex[positions], dtype=np.int32)
-        )
-        parts["analysis_index"].append(_slice_analysis_indices(offsets, lo, hi)[keep])
-        parts["z"].append(z[keep])
-        parts["se"].append(csr.se_at(positions))
-        if has_imputed:
-            parts["imputed"].append(
-                np.asarray(csr._root["imputed"].oindex[positions], dtype=np.uint8)
-            )
-        if has_eaf:
-            parts["eaf"].append(csr.eaf_at(positions))
+        for name, values in slice_columns.items():
+            parts[name].append(values)
 
-    columns: dict[str, np.ndarray] = {}
-    for name, values in parts.items():
-        columns[name] = (
-            np.concatenate(values) if values else np.empty(0, dtype=_CANDIDATE_DTYPES[name])
-        )
+    columns = _concat_candidate_parts(parts)
     return columns, np.abs(columns["z"]), n_analyses
 
 
