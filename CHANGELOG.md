@@ -85,6 +85,39 @@ the end of this file.
 
 ### Added
 
+- **Phase-granularity checkpoint and resume for the Hybrid build tail**: an
+  opt-in `--checkpoint` keeps what each phase produces beside the destination,
+  so a failure hours into a build costs a re-run of the phase it failed in
+  rather than the whole build -- the 7 h 35 m OGS-00011 discarded after a crash
+  in the joint SE fit. `--resume` (or `resume_hybrid_build(checkpoint_dir)`,
+  which takes only the directory) re-enters at the last recorded phase, reloads
+  every parameter and every external input's identity (path, size, mtime and
+  SHA-256) from the `build_params.json` the first run wrote, and refuses an
+  absent record, a mismatched format version, a changed parameter, a changed
+  input, a torn phase record, or a missing or truncated spill plate.
+  `n_workers` is the one parameter a resume may change. The phases recorded are
+  Pass 2 (its spills, and each Analysis's declared-score dispositions for
+  `provenance.info_score`), the off-reference fold (the post-Pass-2 axis -- key
+  table, `old_to_new`, shared ALID list and provenance maps -- frozen before its
+  first column, plus a completion file per folded column), EAF orientation (its
+  report, at full precision), the joint encoding plan (written before the first
+  Dense band write and never re-measured, so the codes those bands were written
+  under cannot change) and the Dense band write (its top-hit harvest, which the
+  write's own spill cleanup would otherwise take with it). The tail -- Overflow
+  CSR assembly, `eaf` plane, joint SE fit, Dense finish, CSR flush, shared
+  metadata -- carries no marker and re-runs wholesale from the retained `.ovf`
+  plates and the frozen plan, so a resume after a crash in `_fit_joint_se`
+  re-writes no band and measures nothing. Without `--checkpoint` nothing
+  changes: no checkpoint directory, no retained spills, and a failure still
+  leaves nothing behind. A resumed build publishes atomically through the same
+  Staged Release commit as an uninterrupted one, adopting the release the failed
+  run had written (`OpenGWASDBStore.staging(adopt=..., retain_on_failure_to=...)`,
+  both defaults unchanged), and removes the checkpoint once it has; `--overwrite`
+  discards a stale one, and a build that finds one without `--resume` refuses and
+  names `resume_hybrid_build`. A failure logs the checkpoint directory and that
+  command. The cost is the retained spills -- 734 GB for OGS-00011 -- which
+  `tests/test_hybrid_checkpoint.py::TestFootprint` pins as a bytes-per-cell
+  ceiling (issue #227; ADR 0053).
 - **Hybrid build applies a declared INFO policy and records its dispositions**:
   each Analysis's `info_score_threshold` row is parsed with the same
   `parse_info_score_policy` the resolver uses, the declaration reaches the

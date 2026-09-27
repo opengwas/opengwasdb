@@ -345,6 +345,48 @@ def _destination_lock(dst: Path) -> Iterator[None]:
         os.close(fd)
 
 
+def _adopt_staging_work_dir(work: Path, source: Path) -> None:
+    """Replace this invocation's fresh work dir with a retained one.
+
+    ``staging(adopt=...)`` is how a resumed build keeps writing the release a
+    previous invocation left behind: the empty directory ``_new_staging_work_dir``
+    just created exists only to be replaced, and the retained release is
+    renamed into its place so the commit at the end of the context publishes it
+    exactly as it publishes any other release. The rename requires one
+    filesystem, so the retained release must be a sibling of the destination --
+    which is where a checkpoint lives.
+    """
+    if not source.exists():
+        raise FileNotFoundError(f"staging(adopt=...) was given {source}, which does not exist")
+    shutil.rmtree(work)
+    source.rename(work)
+
+
+def _discard_staging_work_dir(work: Path, retain_to: Path | None) -> None:
+    """Remove this invocation's work dir, or move it out of the way instead.
+
+    ``staging(retain_on_failure_to=...)`` is how a build that crashed keeps the
+    release it had written: the caller gets the partial release at ``retain_to``
+    to resume from rather than losing it. The move is a rename, so it needs one
+    filesystem. A failure to retain is reported and the work directory is
+    removed: the exception being handled is the one worth propagating, and a
+    silent no-op would leave a build that believes it has a checkpoint.
+    """
+    if retain_to is None:
+        shutil.rmtree(work, ignore_errors=True)
+        return
+    if not work.exists():
+        return
+    try:
+        if retain_to.exists():
+            shutil.rmtree(retain_to)
+        retain_to.parent.mkdir(parents=True, exist_ok=True)
+        work.rename(retain_to)
+    except OSError:
+        log.warning("Could not retain staged release at %s; removing %s", retain_to, work)
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def _new_staging_work_dir(dst: Path) -> Path:
     """Create this invocation's own staging directory beside ``dst``.
 
@@ -492,51 +534,55 @@ class OpenGWASDBStore(_ReleasePaths):
 
     @staticmethod
     @contextmanager
-    def staging(dest_path: str | Path, *, overwrite: bool = False) -> Iterator[StagedRelease]:
+    def staging(
+        dest_path: str | Path,
+        *,
+        overwrite: bool = False,
+        adopt: Path | None = None,
+        retain_on_failure_to: Path | None = None,
+    ) -> Iterator[StagedRelease]:
         """Construct a release atomically at ``dest_path``.
 
         Each invocation writes into its **own** unique ``.{name}.tmp.*``
         sibling, so two builds for one destination -- or a second build after
         a crash -- can never delete or corrupt each other's work. Publication
         happens on successful exit from the ``with`` block, under a
-        parent-directory advisory lock that also re-checks the destination: a
+        parent-directory advisory lock that re-checks the destination: a
         no-overwrite build that loses a race with a concurrent publisher
         fails loudly rather than replacing it.
 
-        Replacing an existing release (``overwrite=True``) is two renames --
-        the old release out to a ``.{name}.old`` sibling, the new one in --
-        rather than deleting the old release first: a directory can only be
-        renamed onto an *empty* destination on POSIX, so a full ``rmtree``
-        before the swap would leave no release at ``dest_path`` for however
-        long the deletion of a large store takes. Renames are single
-        filesystem operations, so that window shrinks to two syscalls, and if
-        a crash lands between them the old release is still intact at its
-        ``.old`` path rather than gone.
-
-        ``overwrite=True`` is serialised by the lock but deliberately **last
-        writer wins**: two concurrent overwrite builds both succeed and the
-        later commit replaces the earlier. The lock orders and makes each
-        replacement atomic; it does not prevent redundant work or decide which
-        build should win, so an orchestrator that must not schedule two builds
-        for one destination, or that must reap an orphaned ``.{name}.tmp.*``
-        directory, is complementary to this context, not interchangeable with
-        it (ADR 0043).
+        Replacing an existing release (``overwrite=True``) is two renames
+        under that lock -- the old release aside, the new one in -- so
+        ``dest_path`` is never absent while a large store is deleted
+        (`_commit_staged_release` has the rest). It is last writer wins; an
+        orchestrator that must not schedule two builds for one destination is
+        complementary to this context, not interchangeable with it (ADR 0043).
 
         On error or interruption -- any ``BaseException``, including
         ``KeyboardInterrupt`` and ``SystemExit`` -- this invocation's own work
         directory is discarded and ``dest_path`` is left as it was found.
+
+        The two opt-in parameters serve a checkpointed build (issue #227)
+        without breaking that atomicity: ``adopt`` is the retained work
+        directory a resumed build carries on writing, and
+        ``retain_on_failure_to`` is where a failure moves this invocation's own
+        instead of deleting it. Both are renames, so the path must be on this
+        filesystem; each defaults to ``None``, preserving every existing
+        caller's behaviour.
         """
         dst = Path(dest_path)
         if dst.exists() and not overwrite:
             raise FileExistsError(f"output path already exists: {dst}")
         dst.parent.mkdir(parents=True, exist_ok=True)
         work = _new_staging_work_dir(dst)
+        if adopt is not None:
+            _adopt_staging_work_dir(work, Path(adopt))
 
         staged = StagedRelease(work)
         try:
             yield staged
         except BaseException:
-            shutil.rmtree(work, ignore_errors=True)
+            _discard_staging_work_dir(work, retain_on_failure_to)
             raise
 
         try:
@@ -544,7 +590,7 @@ class OpenGWASDBStore(_ReleasePaths):
         except BaseException:
             # `work` is still there exactly when the swap did not complete;
             # if it did, it has been renamed to `dst` and this is a no-op.
-            shutil.rmtree(work, ignore_errors=True)
+            _discard_staging_work_dir(work, retain_on_failure_to)
             raise
 
 

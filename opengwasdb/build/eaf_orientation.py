@@ -75,6 +75,8 @@ __all__ = [
     "DEFAULT_MIN_VARIANCE",
     "DEFAULT_SAMPLE_SITES",
     "EafOrientationError",
+    "EafOrientationMethod",
+    "EafOrientationOutcome",
     "EafOrientationReport",
     "EafReference",
     "EafReferenceError",
