@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -34,6 +35,11 @@ RAGGED_ZARR_PATH = "data.zarr/ragged"
 _COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
 # Chunk size for the flat association arrays (~400 KB per chunk at float16).
 _ASSOC_CHUNK = 200_000
+#: Cells one `se_fit_batches` batch aims to carry. The batch holds the variant
+#: indices, the source and round-tripped frequencies, the gathered baseline and
+#: the Analysis indices -- about 30 bytes a cell -- so 2**24 is roughly a
+#: 500 MiB working set, whatever the plane's total cell count (issue #228).
+DEFAULT_SE_FIT_CELL_BUDGET = 1 << 24
 _OFFSET_CHUNK = 10_000
 
 
@@ -128,6 +134,89 @@ class RaggedCSRWriter:
             chunks=_ASSOC_CHUNK,
         )[1]
 
+    def se_fit_batches(
+        self, encoding: StoreEncoding, *, cell_budget: int = DEFAULT_SE_FIT_CELL_BUDGET
+    ) -> Iterator[OverflowCells]:
+        """The cells `se_fit_inputs` returns, in Analysis-aligned batches.
+
+        Concatenated, the batches are that method's arrays exactly: the EAF
+        encode/decode round trip is a per-cell function of the value, its
+        variant's baseline and the plan, so a cell decodes to the same
+        frequency whichever batch carries it, and each batch's exception table
+        holds precisely the exceptions its own cells raised.
+
+        Batches never split an Analysis. The fit these feed accumulates
+        `numpy.bincount` sufficient statistics per Analysis, so an Analysis
+        confined to one batch has its sums added in the order the whole-array
+        pass would have added them -- which is what keeps the coefficients
+        bit-for-bit identical rather than merely close (issue #228). An
+        Analysis larger than the budget is its own batch: the budget bounds the
+        working set, and the plane's largest Analysis is the floor it cannot go
+        below.
+        """
+        baseline = self._eaf_baseline(encoding)
+        for first, last in self._analysis_batches(max(1, int(cell_budget))):
+            lo, hi = self._offsets[first], self._offsets[last]
+            if hi == lo:
+                continue
+            vi = np.concatenate(self._variant_indices[first:last]).astype(np.int32)
+            eaf = np.concatenate(self._eafs[first:last]).astype(np.float32)
+            se = np.concatenate(self._ses[first:last]).astype(np.float32)
+            yield OverflowCells(
+                se_values=se,
+                eaf_values=self._decode_round_trip(encoding, eaf, baseline, vi),
+                analysis_indices=np.repeat(
+                    np.arange(first, last, dtype=np.int64),
+                    np.diff(np.asarray(self._offsets[first : last + 1], dtype=np.int64)),
+                ),
+                n_analyses=self.n_analyses,
+            )
+
+    def _analysis_batches(self, cell_budget: int) -> Iterator[tuple[int, int]]:
+        """Half-open Analysis ranges whose cells stay within `cell_budget`."""
+        first = 0
+        for analysis in range(self.n_analyses):
+            spans = self._offsets[analysis + 1] - self._offsets[first]
+            if spans > cell_budget and analysis > first:
+                yield first, analysis
+                first = analysis
+        if first < self.n_analyses:
+            yield first, self.n_analyses
+
+    def _eaf_baseline(self, encoding: StoreEncoding) -> np.ndarray | None:
+        """The per-variant Effect Allele Frequency Baseline, or None.
+
+        From the per-Analysis runs rather than the concatenation: every column
+        was sorted by variant index before it was added, and the bounded path
+        keeps a billion-cell Overflow inside memory (issue #226).
+        """
+        if not encoding.eaf.is_residual:
+            return None
+        return eaf_baseline_from_sorted_runs(self._variant_indices, self._eafs, self._n_variants)
+
+    def _decode_round_trip(
+        self,
+        encoding: StoreEncoding,
+        eaf: np.ndarray,
+        baseline: np.ndarray | None,
+        vi: np.ndarray,
+    ) -> np.ndarray:
+        """The frequencies a reader gets back for these cells.
+
+        The SE model has to predict from what is stored, not from the source
+        (ADR 0037), so the fit and the measurement both see the round trip.
+        """
+        if encoding.eaf.is_absent:
+            return np.full(eaf.shape, np.nan, dtype=np.float32)
+        gathered = None if baseline is None else baseline[vi]
+        exceptions = EafExceptionBuilder()
+        raw = StoreCodec(encoding).encode_eaf(
+            eaf, baseline=gathered, positions=positions_flat(0), exceptions=exceptions
+        )
+        return StoreCodec(encoding, eaf_exceptions=exceptions.table()).decode_eaf(
+            raw, baseline=gathered, positions=positions_flat(0)
+        )
+
     def se_fit_inputs(self, encoding: StoreEncoding) -> OverflowCells:
         """Named `(se, decoded_eaf, analysis_index)` for a shared plan."""
         vi, eaf = self._flat()
@@ -136,14 +225,7 @@ class RaggedCSRWriter:
             if self.n_associations
             else np.empty(0, dtype=np.float32)
         )
-        baseline = (
-            # From the per-Analysis runs, not the concatenation: every column was
-            # sorted by variant index before it was added, and taking the bounded
-            # path keeps a billion-cell Overflow inside memory (issue #226).
-            eaf_baseline_from_sorted_runs(self._variant_indices, self._eafs, self._n_variants)
-            if encoding.eaf.is_residual
-            else None
-        )
+        baseline = self._eaf_baseline(encoding)
         codec = StoreCodec(encoding)
         exceptions = EafExceptionBuilder()
         raw = codec.encode_eaf(
@@ -253,9 +335,7 @@ class RaggedCSRWriter:
         elif eaf_baseline is not None:
             baseline = np.asarray(eaf_baseline, dtype=np.float32)
         else:
-            baseline = eaf_baseline_from_sorted_runs(
-                self._variant_indices, self._eafs, self._n_variants
-            )
+            baseline = self._eaf_baseline(encoding)
 
         root.create_dataset(
             "offsets",
