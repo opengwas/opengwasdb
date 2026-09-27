@@ -81,6 +81,7 @@ from opengwasdb.encoding.planes import (
     write_se_dense,
 )
 from opengwasdb.encoding.se import (
+    OverflowCellBatches,
     OverflowCells,
     optimise_dense_se,
     optimise_dense_se_joint,
@@ -111,6 +112,7 @@ __all__ = [
     "EafExceptionTable",
     "EafMeasurements",
     "EncodingMeasurements",
+    "OverflowCellBatches",
     "OverflowCells",
     "RaggedEafPlane",
     "RaggedSePlane",

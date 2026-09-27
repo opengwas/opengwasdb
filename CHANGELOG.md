@@ -16,6 +16,14 @@ the end of this file.
   axis and full ancestry reference during the existing per-Analysis scan;
   persist scanned-row denominators and axis fingerprint in resumable records
   so bundle generation can gate projected off-reference share (stores #174).
+- **`opengwasdb.encoding.OverflowCellBatches`**: a re-iterable source of Ragged
+  Overflow Component cells in bounded batches, in the two batchings the joint SE
+  optimiser needs -- Analysis-aligned for the fit's per-Analysis sums and
+  chunk-aligned for the byte measurement. `RaggedCSRWriter.se_fit_source`,
+  `se_fit_batches` and `se_fit_chunk_batches` produce them; `of_cells` wraps an
+  already-materialised bundle as a single batch, so callers holding one keep
+  today's behaviour and byte totals (#228).
+
 - **`opengwasdb.encoding.eaf_baseline_from_sorted_runs`**: per-variant EAF
   baselines computed over variant-aligned blocks of per-Analysis runs already
   sorted by variant index, with a `DEFAULT_BASELINE_CELL_BUDGET`-bounded working
@@ -452,6 +460,19 @@ the end of this file.
   tables: `benchmarks/README.md`.
 
 ### Fixed
+
+- **The Hybrid joint SE fit no longer materialises the Ragged Overflow's flat
+  planes.** `_fit_joint_se` passed `se_fit_inputs`'s three whole-plane arrays
+  into `optimise_dense_se_joint`, which fitted and measured them in place.
+  Measured across two real OGS-00011 subsets (46,192,414 and 523,060,451
+  Overflow cells), building those arrays cost 85.8 bytes per cell and the
+  coefficient fold a further 50.0 -- 1.29 TB and 0.75 TB projected on the full
+  15,078,327,210-cell release, against a 1,006 GB host. The fit now folds
+  Analysis-aligned batches and the measurement charges chunk-aligned ones, so
+  neither holds the plane. Results are unchanged by construction: the
+  coefficients are per-Analysis `numpy.bincount` sums and an Analysis is never
+  split across batches, while the byte totals are charged chunk by chunk and
+  only the plane's true final edge chunk is padded (#158, #228).
 
 - **The Hybrid joint SE fit no longer materialises the whole Ragged Overflow
   plane.** `RaggedCSRWriter.se_fit_inputs` passed the concatenated plane to

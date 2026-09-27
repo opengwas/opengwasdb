@@ -13,6 +13,7 @@ from numcodecs import Blosc
 from opengwasdb.encoding import (
     EafExceptionBuilder,
     EafMeasurements,
+    OverflowCellBatches,
     OverflowCells,
     RaggedEafPlane,
     RaggedSePlane,
@@ -171,6 +172,88 @@ class RaggedCSRWriter:
                 ),
                 n_analyses=self.n_analyses,
             )
+
+    def se_fit_chunk_batches(
+        self,
+        encoding: StoreEncoding,
+        multiple: int,
+        *,
+        cell_budget: int = DEFAULT_SE_FIT_CELL_BUDGET,
+    ) -> Iterator[OverflowCells]:
+        """The same cells, in batches whose lengths are multiples of `multiple`.
+
+        What the byte measurement needs rather than what the fit needs: it
+        charges each candidate chunk by chunk and pads only the plane's final
+        edge chunk (#158), so a batch that ended anywhere but a chunk boundary
+        would have its own edge padded and change the selected range. Batches
+        here therefore cut on flat position, crossing Analyses freely -- the
+        measurement groups by the Analysis index carried per cell, not by the
+        batch it arrived in.
+        """
+        total = self.n_associations
+        if total == 0:
+            return
+        baseline = self._eaf_baseline(encoding)
+        offsets = np.asarray(self._offsets, dtype=np.int64)
+        step = max(1, cell_budget // max(1, multiple)) * max(1, multiple)
+        for lo in range(0, total, step):
+            hi = min(lo + step, total)
+            batch = self._gather_flat(encoding, baseline, offsets, lo, hi)
+            if batch is not None:
+                yield batch
+
+    def _gather_flat(
+        self,
+        encoding: StoreEncoding,
+        baseline: np.ndarray | None,
+        offsets: np.ndarray,
+        lo: int,
+        hi: int,
+    ) -> OverflowCells | None:
+        """One flat cell range `[lo, hi)`, gathered across the Analyses it spans."""
+        indices: list[np.ndarray] = []
+        frequencies: list[np.ndarray] = []
+        errors: list[np.ndarray] = []
+        analyses: list[np.ndarray] = []
+        first = int(np.searchsorted(offsets, lo, side="right")) - 1
+        for analysis in range(max(first, 0), self.n_analyses):
+            start, stop = int(offsets[analysis]), int(offsets[analysis + 1])
+            if start >= hi:
+                break
+            head, tail = max(lo, start) - start, min(hi, stop) - start
+            if tail <= head:
+                continue
+            indices.append(self._variant_indices[analysis][head:tail])
+            frequencies.append(self._eafs[analysis][head:tail])
+            errors.append(self._ses[analysis][head:tail])
+            analyses.append(np.full(tail - head, analysis, dtype=np.int64))
+        if not indices:
+            return None
+        vi = np.concatenate(indices).astype(np.int32)
+        eaf = np.concatenate(frequencies).astype(np.float32)
+        return OverflowCells(
+            se_values=np.concatenate(errors).astype(np.float32),
+            eaf_values=self._decode_round_trip(encoding, eaf, baseline, vi),
+            analysis_indices=np.concatenate(analyses),
+            n_analyses=self.n_analyses,
+        )
+
+    def se_fit_source(
+        self, encoding: StoreEncoding, *, cell_budget: int = DEFAULT_SE_FIT_CELL_BUDGET
+    ) -> OverflowCellBatches:
+        """This component's cells as a source the joint SE optimiser can stream.
+
+        Both batchings the optimiser needs, from one writer: Analysis-aligned
+        for the fit's per-Analysis sums, chunk-aligned for the byte measurement
+        (issue #228).
+        """
+        return OverflowCellBatches(
+            n_analyses=self.n_analyses,
+            analysis_batches=lambda: self.se_fit_batches(encoding, cell_budget=cell_budget),
+            chunk_batches=lambda multiple: self.se_fit_chunk_batches(
+                encoding, multiple, cell_budget=cell_budget
+            ),
+        )
 
     def _analysis_batches(self, cell_budget: int) -> Iterator[tuple[int, int]]:
         """Half-open Analysis ranges whose cells stay within `cell_budget`."""

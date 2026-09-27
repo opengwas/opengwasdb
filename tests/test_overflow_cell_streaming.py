@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import zarr
 
-from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
+from opengwasdb.encoding import EncodingMeasurements, OverflowCells, StoreEncoding
+from opengwasdb.encoding.plan import EafEncoding, SeEncoding, ZEncoding
+from opengwasdb.encoding.se import OverflowCellBatches, optimise_dense_se_joint
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 
 # Small enough that the cells amortise the per-variant baseline: a residual
@@ -76,3 +79,96 @@ def test_streamed_batches_reconstruct_the_materialised_cells(cell_budget):
         expected = getattr(whole, field)
         assert streamed.dtype == expected.dtype, field
         np.testing.assert_array_equal(streamed, expected, err_msg=field)
+
+
+# ── Seam: the joint SE fit ───────────────────────────────────────────────────
+
+
+def _dense_group(path, n_analyses=2, n_rows=600):
+    """A Dense Component whose SE really does follow the log model, so the
+    joint selection has a residual plane worth choosing."""
+    group = zarr.open_group(str(path), mode="w")
+    eaf = np.repeat(np.linspace(0.05, 0.95, n_rows, dtype=np.float32)[:, None], n_analyses, axis=1)
+    coefficients = np.array([[-3.0, -0.5], [-2.7, -0.45]], dtype=np.float32)[:n_analyses]
+    se = np.exp(
+        coefficients[None, :, 0]
+        + coefficients[None, :, 1] * np.log(2 * eaf * (1 - eaf))
+        + 0.1 * np.sin(np.arange(n_rows)[:, None] * 0.1)
+    ).astype(np.float32)
+    group.create_dataset("eaf", data=eaf, chunks=(100, n_analyses), dtype="float32")
+    group.create_dataset("se", data=se, chunks=(100, n_analyses), dtype="float16")
+    group.create_dataset("z", data=np.ones_like(eaf), chunks=(100, n_analyses), dtype="float16")
+    return group, eaf, se
+
+
+def _grouped_overflow_cells(eaf, se, n_analyses):
+    """Overflow cells laid out the way a CSR holds them: Analysis by Analysis,
+    not interleaved, which is the ordering the batching relies on."""
+    return OverflowCells(
+        se_values=np.concatenate([se[:, a] for a in range(n_analyses)]).ravel(),
+        eaf_values=np.concatenate([eaf[:, a] for a in range(n_analyses)]).ravel(),
+        analysis_indices=np.concatenate(
+            [np.full(se.shape[0], a, dtype=np.int64) for a in range(n_analyses)]
+        ),
+        n_analyses=n_analyses,
+    )
+
+
+def test_streamed_overflow_selects_the_same_plan_as_one_bundle(tmp_path):
+    """The optimiser must not be able to tell how its Overflow cells arrived:
+    same chosen encoding, same coefficients, bit for bit."""
+    preliminary = StoreEncoding(
+        z=ZEncoding("float16"), se=SeEncoding("float16"), eaf=EafEncoding("float32")
+    )
+    group_a, eaf, se = _dense_group(tmp_path / "a.zarr")
+    group_b, _, _ = _dense_group(tmp_path / "b.zarr")
+    cells = _grouped_overflow_cells(eaf, se, 2)
+
+    def batches():
+        half = se.shape[0]
+        for a in range(2):
+            lo, hi = a * half, (a + 1) * half
+            yield OverflowCells(
+                se_values=cells.se_values[lo:hi],
+                eaf_values=cells.eaf_values[lo:hi],
+                analysis_indices=cells.analysis_indices[lo:hi],
+                n_analyses=2,
+            )
+
+    whole_plan, whole_coef = optimise_dense_se_joint(
+        group_a, preliminary, overflow=cells, overflow_chunk=200
+    )
+    streamed_plan, streamed_coef = optimise_dense_se_joint(
+        group_b,
+        preliminary,
+        overflow=OverflowCellBatches(
+            n_analyses=2, analysis_batches=batches, chunk_batches=lambda _n: batches()
+        ),
+        overflow_chunk=200,
+    )
+
+    assert whole_plan.se.is_residual, "fixture must select a residual SE plane to be meaningful"
+    assert streamed_plan == whole_plan
+    np.testing.assert_array_equal(streamed_coef, whole_coef)
+
+
+# ── Seam: chunk-aligned batches for the byte measurement ─────────────────────
+
+
+@pytest.mark.parametrize("multiple", [1, 7, 64, 1000])
+def test_chunk_aligned_batches_end_on_multiples_and_reconstruct_the_cells(multiple):
+    """The byte measurement charges chunk by chunk and pads only the plane's
+    final edge chunk, so every batch but the last must end on a chunk boundary
+    -- a batch that ended anywhere else would change the selected SE range."""
+    sizes = [1500, 1, 0, 1800, 900, 1900]
+    writer = _writer(sizes, without_eaf=(2, 4))
+    encoding = _residual_encoding(writer, len(sizes))
+
+    whole = writer.se_fit_inputs(encoding)
+    batches = list(writer.se_fit_chunk_batches(encoding, multiple, cell_budget=3 * multiple))
+
+    for batch in batches[:-1]:
+        assert len(batch.se_values) % multiple == 0, "interior batch must end on a chunk boundary"
+    for field in ("se_values", "eaf_values", "analysis_indices"):
+        streamed = np.concatenate([getattr(b, field) for b in batches])
+        np.testing.assert_array_equal(streamed, getattr(whole, field), err_msg=field)

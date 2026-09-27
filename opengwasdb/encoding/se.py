@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Any, NamedTuple
@@ -75,9 +76,7 @@ class OverflowCells:
         indices = _normalise_analysis_indices(self.analysis_indices, len(se))
         n_analyses = _normalise_analysis_count(self.n_analyses)
         if np.any(indices < 0) or np.any(indices >= n_analyses):
-            raise ValueError(
-                f"OverflowCells analysis_indices must lie within [0, {n_analyses})"
-            )
+            raise ValueError(f"OverflowCells analysis_indices must lie within [0, {n_analyses})")
 
         object.__setattr__(self, "se_values", se)
         object.__setattr__(self, "eaf_values", eaf)
@@ -103,9 +102,7 @@ def _normalise_analysis_indices(values: Any, n: int) -> np.ndarray:
     if ai.ndim != 1:
         raise ValueError("OverflowCells analysis_indices must be one-dimensional")
     if len(ai) != n:
-        raise ValueError(
-            "OverflowCells analysis_indices length must match se_values/eaf_values"
-        )
+        raise ValueError("OverflowCells analysis_indices length must match se_values/eaf_values")
     if ai.dtype.kind not in ("i", "u"):
         if (
             ai.dtype.kind != "f"
@@ -430,9 +427,7 @@ def _measure_dense(
     # already stored as `float16` (a migration input) is left untouched and
     # keeps the fill its own writer declared. Each measured plane is charged
     # at its padded size with the fill its own writer declares (issue #158).
-    float16_fill: Any = (
-        source.fill_value if source.dtype == np.dtype("float16") else float("nan")
-    )
+    float16_fill: Any = source.fill_value if source.dtype == np.dtype("float16") else float("nan")
     sides = {candidate: _SideTableCost(compressor, n_analyses) for candidate in SE_RANGE_CANDIDATES}
     code_bytes = dict.fromkeys(SE_RANGE_CANDIDATES, 0)
     float_bytes = 0
@@ -442,9 +437,16 @@ def _measure_dense(
     n_chunks = len(starts)
     chunk_timer = timer if n_workers <= 1 else None
     _MEASURE = _MeasureContext(
-        source, eaf_plane, coefficients,
+        source,
+        eaf_plane,
+        coefficients,
         np.broadcast_to(columns, (row_chunk, n_analyses)),
-        row_chunk, col_chunk, compressor, float16_fill, n_analyses, chunk_timer,
+        row_chunk,
+        col_chunk,
+        compressor,
+        float16_fill,
+        n_analyses,
+        chunk_timer,
     )
     started = time.monotonic()
     try:
@@ -459,7 +461,11 @@ def _measure_dense(
                     float_bytes += added_bytes
                     finite_per_analysis += finite
                     log_progress(
-                        log, "SE measurement", index, n_chunks, started,
+                        log,
+                        "SE measurement",
+                        index,
+                        n_chunks,
+                        started,
                         every=max(1, n_chunks // 20),
                     )
     finally:
@@ -512,7 +518,7 @@ def _measure_overflow_band(start: int) -> _BandMeasurement:
 
 
 def _measure_overflow(
-    overflow: OverflowCells,
+    overflow: OverflowCells | OverflowCellBatches,
     coefficients: np.ndarray,
     compressor: Any,
     chunk: int,
@@ -531,35 +537,42 @@ def _measure_overflow(
     the serial pass does, so the decision is unchanged (issue #221).
     """
     global _OVERFLOW
-    values = np.asarray(overflow.se_values).ravel()
-    frequencies = np.asarray(overflow.eaf_values).ravel()
-    analyses = np.asarray(overflow.analysis_indices).ravel()
+    # Callers that hold the whole plane pass it straight in; it becomes one batch,
+    # which chunks and charges exactly as it did before the streaming split.
+    batches = _as_batches(overflow)
+    assert batches is not None
     sides = {candidate: _SideTableCost(compressor, n_analyses) for candidate in SE_RANGE_CANDIDATES}
     code_bytes = dict.fromkeys(SE_RANGE_CANDIDATES, 0)
     float_bytes = 0
     finite_per_analysis = np.zeros(n_analyses, dtype=np.int64)
-    starts = range(0, len(values), chunk)
-    n_chunks = len(starts)
-    _OVERFLOW = _OverflowContext(
-        values, frequencies, analyses, coefficients, compressor, chunk, n_analyses
-    )
+    index = 0
     started = time.monotonic()
-    try:
-        with log_phase(log, "SE overflow measurement"):
-            with _optional_phase(timer, "measure.overflow"):
-                bands = ordered_map(_measure_overflow_band, starts, n_workers)
-                for index, band in enumerate(bands, start=1):
-                    added_bytes, finite = _accumulate_measurement(
-                        band, sides, code_bytes, None
-                    )
-                    float_bytes += added_bytes
-                    finite_per_analysis += finite
-                    log_progress(
-                        log, "SE overflow measurement", index, n_chunks, started,
-                        every=max(1, n_chunks // 20),
-                    )
-    finally:
-        _OVERFLOW = None
+    with log_phase(log, "SE overflow measurement"):
+        with _optional_phase(timer, "measure.overflow"):
+            # Batches arrive in plane order with lengths that are multiples of
+            # `chunk` (except the last), so chunking within a batch lands on the
+            # same boundaries the whole plane would have, only the true final
+            # edge chunk is padded, and the side tables are still folded in
+            # chunk order (issues #158, #221, #228).
+            for batch in batches.chunk_batches(chunk):
+                values = np.asarray(batch.se_values).ravel()
+                frequencies = np.asarray(batch.eaf_values).ravel()
+                analyses = np.asarray(batch.analysis_indices).ravel()
+                starts = range(0, len(values), chunk)
+                _OVERFLOW = _OverflowContext(
+                    values, frequencies, analyses, coefficients, compressor, chunk, n_analyses
+                )
+                try:
+                    for band in ordered_map(_measure_overflow_band, starts, n_workers):
+                        added_bytes, finite = _accumulate_measurement(band, sides, code_bytes, None)
+                        float_bytes += added_bytes
+                        finite_per_analysis += finite
+                        index += 1
+                        log_progress(
+                            log, "SE overflow measurement", index, index, started, every=20
+                        )
+                finally:
+                    _OVERFLOW = None
     return _ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
 
 
@@ -649,8 +662,9 @@ def _count_dense_exceptions(
     starts = range(0, n_rows, row_chunk)
     n_chunks = len(starts)
     global _COUNT
-    _COUNT = _CountContext(source, eaf_plane, coefficients, residual_range,
-                           analysis_index, row_chunk, n_rows)
+    _COUNT = _CountContext(
+        source, eaf_plane, coefficients, residual_range, analysis_index, row_chunk, n_rows
+    )
     count = 0
     started = time.monotonic()
     try:
@@ -660,7 +674,11 @@ def _count_dense_exceptions(
                 for index, band_count in enumerate(counts, start=1):
                     count += band_count
                     log_progress(
-                        log, "SE rewrite count", index, n_chunks, started,
+                        log,
+                        "SE rewrite count",
+                        index,
+                        n_chunks,
+                        started,
                         every=max(1, n_chunks // 20),
                     )
     finally:
@@ -720,9 +738,7 @@ class _RewriteSink:
     chunk_timer: PhaseTimer | None
 
 
-def _run_rewrite_bands(
-    sink: _RewriteSink, starts: range, n_workers: int, timer: PhaseTimer
-) -> int:
+def _run_rewrite_bands(sink: _RewriteSink, starts: range, n_workers: int, timer: PhaseTimer) -> int:
     """Encode every band across the pool and write them back in row order.
 
     The parent consumes ``ordered_map`` in row order, so the pending plane and
@@ -743,7 +759,11 @@ def _run_rewrite_bands(
                 sink.exception_value[cursor:end] = table.value
                 cursor = end
             log_progress(
-                log, "SE rewrite", index, sink.n_chunks, started,
+                log,
+                "SE rewrite",
+                index,
+                sink.n_chunks,
+                started,
                 every=max(1, sink.n_chunks // 20),
             )
     return cursor
@@ -797,14 +817,19 @@ def _rewrite_dense(
         fill_value=SE_MISSING,
     )
     exception_index, exception_value = _empty_exception_arrays(group, exception_count, compressor)
-    analysis_index = np.broadcast_to(
-        np.arange(n_analyses, dtype=np.int64), (row_chunk, n_analyses)
-    )
+    analysis_index = np.broadcast_to(np.arange(n_analyses, dtype=np.int64), (row_chunk, n_analyses))
     starts = range(0, n_rows, row_chunk)
     chunk_timer = timer if n_workers <= 1 else None
     _REWRITE = _RewriteContext(
-        source, DenseEafPlane.open(group, encoding), StoreCodec(encoding),
-        analysis_index, coefficients, row_chunk, n_rows, n_analyses, chunk_timer,
+        source,
+        DenseEafPlane.open(group, encoding),
+        StoreCodec(encoding),
+        analysis_index,
+        coefficients,
+        row_chunk,
+        n_rows,
+        n_analyses,
+        chunk_timer,
     )
     sink = _RewriteSink(
         pending, exception_index, exception_value, row_chunk, n_rows, len(starts), chunk_timer
@@ -889,9 +914,7 @@ class _FitAccumulators:
         self.sxy += sums.sxy
 
 
-def _accumulate_fit_bands(
-    starts: range, n_workers: int, acc: _FitAccumulators
-) -> bool:
+def _accumulate_fit_bands(starts: range, n_workers: int, acc: _FitAccumulators) -> bool:
     """Add the Dense row chunks' partial sums in row order; AND of eligibility."""
     eligible = True
     started = time.monotonic()
@@ -900,36 +923,48 @@ def _accumulate_fit_bands(
         eligible = eligible and sums.eligible
         acc.add_band(sums)
         log_progress(
-            log, "SE fit (dense)", index, len(starts), started,
+            log,
+            "SE fit (dense)",
+            index,
+            len(starts),
+            started,
             every=max(1, len(starts) // 20),
         )
     return eligible
 
 
-def _fold_overflow_fit(overflow: OverflowCells, acc: _FitAccumulators) -> bool:
-    """Join the flat overflow cells to the Dense fit, logged as its own step.
+def _fold_overflow_fit(overflow: OverflowCellBatches, acc: _FitAccumulators) -> bool:
+    """Join the overflow cells to the Dense fit, logged as its own step.
 
-    The overflow is one flat array rather than row chunks, so it has no chunk
-    progress of its own; the start/end line is what keeps the dense progress
-    line from appearing to report the whole phase done (issue #221).
+    One `_add_fit_sums` per batch rather than one over the whole plane, so the
+    Overflow joins the fit without ever being resident (issue #228). The sums
+    are per-Analysis and the batches never split an Analysis, so each
+    Analysis's statistics are accumulated exactly as a single whole-array call
+    would have accumulated them.
+
+    The start/end line is what keeps the dense progress line from appearing to
+    report the whole phase done (issue #221).
     """
+    eligible = True
     with log_phase(log, "SE fit (overflow)"):
-        return _add_fit_sums(
-            overflow.se_values,
-            overflow.eaf_values,
-            overflow.analysis_indices,
-            acc.count,
-            acc.sx,
-            acc.sy,
-            acc.sxx,
-            acc.sxy,
-        )
+        for batch in overflow.analysis_batches():
+            eligible &= _add_fit_sums(
+                batch.se_values,
+                batch.eaf_values,
+                batch.analysis_indices,
+                acc.count,
+                acc.sx,
+                acc.sy,
+                acc.sxx,
+                acc.sxy,
+            )
+    return eligible
 
 
 def _fit_shared_coefficients(
     source: Any,
     eaf_plane: DenseEafPlane,
-    overflow: OverflowCells | None,
+    overflow: OverflowCellBatches | None,
     timer: PhaseTimer,
     n_workers: int,
 ) -> tuple[np.ndarray, bool]:
@@ -1052,7 +1087,7 @@ def _shared_measurements(
 
 
 def _measure_overflow_component(
-    overflow: OverflowCells | None,
+    overflow: OverflowCellBatches | None,
     coefficients: np.ndarray,
     compressor: Any,
     chunk: int,
@@ -1064,9 +1099,7 @@ def _measure_overflow_component(
     if overflow is None:
         return _ComponentCost.empty(n_analyses), 0
     return (
-        _measure_overflow(
-            overflow, coefficients, compressor, chunk, n_analyses, timer, n_workers
-        ),
+        _measure_overflow(overflow, coefficients, compressor, chunk, n_analyses, timer, n_workers),
         _packed_coefficients(compressor, coefficients),
     )
 
@@ -1133,7 +1166,51 @@ def _rewrite_selected(
     _rewrite_dense(group, selected, coefficients, exception_count, timer, n_workers)
 
 
-def _check_overflow_width(overflow: OverflowCells | None, n_analyses: int) -> None:
+@dataclass(frozen=True)
+class OverflowCellBatches:
+    """A Hybrid Overflow Component's cells, re-iterable in bounded batches.
+
+    Re-iterable rather than a generator because the fit and the measurement each
+    need their own pass, and in *different* batchings, which is why the two are
+    named separately here instead of being one `__iter__` (issue #228):
+
+    - `analysis_batches` never splits an Analysis. The fit accumulates
+      `numpy.bincount` sufficient statistics per Analysis, so an Analysis
+      confined to one batch has its sums added in the order the whole-array pass
+      would have added them, and the coefficients come out bit-identical.
+    - `chunk_batches(n)` yields batches whose lengths are multiples of `n`,
+      except the last. The byte measurement charges each candidate chunk by
+      chunk and pads only the plane's final edge chunk (#158), so batch
+      boundaries that fall on chunk boundaries reproduce the whole-plane total
+      exactly -- and boundaries that do not would silently change the selected
+      range.
+
+    `of_cells` wraps an already-materialised bundle as a single batch, so every
+    caller that holds one keeps today's behaviour and today's byte totals.
+    """
+
+    n_analyses: int
+    analysis_batches: Callable[[], Iterator[OverflowCells]]
+    chunk_batches: Callable[[int], Iterator[OverflowCells]]
+
+    @classmethod
+    def of_cells(cls, cells: OverflowCells) -> OverflowCellBatches:
+        """One batch holding the whole plane: the pre-streaming behaviour."""
+        return cls(
+            n_analyses=cells.n_analyses,
+            analysis_batches=lambda: iter((cells,)),
+            chunk_batches=lambda _multiple: iter((cells,)),
+        )
+
+
+def _as_batches(overflow: OverflowCells | OverflowCellBatches | None) -> OverflowCellBatches | None:
+    """Accept either a materialised bundle or a streamed source."""
+    if overflow is None or isinstance(overflow, OverflowCellBatches):
+        return overflow
+    return OverflowCellBatches.of_cells(overflow)
+
+
+def _check_overflow_width(overflow: OverflowCellBatches | None, n_analyses: int) -> None:
     """Fail loudly when a Hybrid overflow was fitted over a different width."""
     if overflow is not None and overflow.n_analyses != n_analyses:
         raise ValueError(
@@ -1146,7 +1223,7 @@ def optimise_dense_se_joint(
     group: Any,
     encoding: StoreEncoding,
     *,
-    overflow: OverflowCells | None = None,
+    overflow: OverflowCells | OverflowCellBatches | None = None,
     overflow_compressor: Any = None,
     overflow_chunk: int = 200_000,
     timer: PhaseTimer | None = None,
@@ -1169,17 +1246,21 @@ def optimise_dense_se_joint(
         return _fall_back_to_float16(group, encoding, timer)
     source = group["se"]
     n_analyses = int(source.shape[1])
+    overflow = _as_batches(overflow)
     _check_overflow_width(overflow, n_analyses)
     eaf_plane = DenseEafPlane.open(group, encoding)
-    coefficients, eligible = _fit_shared_coefficients(
-        source, eaf_plane, overflow, timer, n_workers
-    )
+    coefficients, eligible = _fit_shared_coefficients(source, eaf_plane, overflow, timer, n_workers)
 
     compressor = source.compressor
     dense = _measure_dense(source, eaf_plane, coefficients, timer, n_workers)
     overflow_cost, overflow_coefficient_bytes = _measure_overflow_component(
-        overflow, coefficients, overflow_compressor or compressor, overflow_chunk, n_analyses,
-        timer, n_workers,
+        overflow,
+        coefficients,
+        overflow_compressor or compressor,
+        overflow_chunk,
+        n_analyses,
+        timer,
+        n_workers,
     )
 
     selected = _select_se_encoding(
@@ -1201,9 +1282,7 @@ def optimise_dense_se_joint(
     return selected, coefficients
 
 
-def _format_solution(
-    coefficients: np.ndarray, eligible: bool, selected: StoreEncoding
-) -> str:
+def _format_solution(coefficients: np.ndarray, eligible: bool, selected: StoreEncoding) -> str:
     """One line naming what the fit found and what it selected."""
     if not eligible:
         return "no eligible model (non-finite EAF); falling back to float16"
@@ -1249,7 +1328,11 @@ def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> 
                 r1 = min(r0 + row_chunk, n_rows)
                 pending[r0:r1] = np.asarray(source[r0:r1], dtype=np.float16)
                 log_progress(
-                    log, "SE float16 narrowing", index, len(starts), started,
+                    log,
+                    "SE float16 narrowing",
+                    index,
+                    len(starts),
+                    started,
                     every=max(1, len(starts) // 20),
                 )
     del group["se"]

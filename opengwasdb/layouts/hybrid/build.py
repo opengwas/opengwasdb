@@ -1805,7 +1805,10 @@ def _fit_joint_se(
     return optimise_dense_se_joint(
         dense_group,
         plan.encoding,
-        overflow=overflow.csr.se_fit_inputs(plan.encoding),
+        # A streamed source, not the materialised bundle: on OGS-00011 the flat
+        # planes are 15,078,327,210 cells, and building them cost 85.8 bytes a
+        # cell -- 1.29 TB on a 1,006 GB host (issue #228).
+        overflow=overflow.csr.se_fit_source(plan.encoding),
         n_workers=options.n_workers,
     )
 
