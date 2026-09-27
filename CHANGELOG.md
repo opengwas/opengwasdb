@@ -12,6 +12,29 @@ the end of this file.
 
 ### Fixed
 
+- **Residual SE eligibility is decided before the fit and both measurement
+  passes, not after them.** The joint SE optimiser fitted the plane, measured
+  every candidate range over both components, and only then consulted the
+  eligibility flag -- so a plane one Analysis condemned on its own paid for the
+  two measurements it could never use. It now reads the verdict out of the
+  pass that produces the fit's sums, and goes straight to the `float16`
+  fallback: on the 25-Analysis OGS-00011 Dense Component that is 19.0 s of one
+  plane read instead of 95.7 s (fit 19.3 s + 76.4 s of measurement), and no
+  second walk is added to find it out. Nothing the verdict produces changes --
+  the chosen encoding, the coefficients and every stored array are identical
+  for eligible and ineligible input alike, checked byte for byte against this
+  commit's predecessor over nine synthetic fixtures, both triggers on either
+  component, the byte-decision fallback and `eaf: absent`, plus the real
+  component (issue #229). The fallback also now says *why* it happened and how
+  many Analyses were responsible -- the two triggers are an Analysis whose
+  cells carry a finite SE and no frequency, and an Analysis the fit cannot
+  solve (fewer than two usable cells, or no spread in its frequencies) -- where
+  it used to report a non-finite EAF without having looked. On the real
+  25-Analysis component that is "10 of 25 Analyses cannot be fitted from too
+  few or degenerate cells". Residual SE remains all-or-nothing per component;
+  that limitation is now stated in the store-format spec and ADR 0037 §3
+  (issue #229).
+
 - **The Ragged Overflow's per-variant EAF baseline is derived once per build.**
   `RaggedCSRWriter` recomputed it on every ask, and a Hybrid build asks three
   times over the same cells -- the joint SE fit's Analysis-aligned batches, that

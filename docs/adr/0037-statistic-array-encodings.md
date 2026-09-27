@@ -333,6 +333,19 @@ It requires EAF **in the same cell**, and a zarr array has one dtype, so a
 single EAF-less Analysis forces the whole array back to `float16`. This is why
 the Hybrid case differs from Dense/Ragged.
 
+That all-or-nothing property belongs to the format and not to any release, so
+it is worth stating plainly: one Analysis without usable frequencies, or one
+the fit cannot solve at all (too few usable cells, or no spread in its
+frequencies), forces `float16` for every Analysis in the component. A build
+decides it from one bounded streaming pass over both components, **before** it
+fits a coefficient or measures a candidate, so the fallback costs the read the
+fit would have made instead of reading the plane and then measuring candidates
+it can never use; the pass reports which trigger fired and how many Analyses
+were responsible (issue #229). Falling back per Analysis was considered and is
+deliberately not built: the plan describes a whole component's plane, so a
+per-Analysis mix is format surface with its own version story (ADR 0041), not a
+tuning decision, and the gate is what keeps the uniform answer cheap.
+
 **As implemented** (issue #118, `format_version` 3.0, store-format spec §6a).
 Five details were settled during implementation:
 

@@ -331,6 +331,21 @@ side tables are charged. Otherwise the entire plane is `float16`. Zero SE,
 non-finite predictions, and out-of-range residuals are exact exceptions, never
 clips.
 
+**Residual SE is all-or-nothing per component, and that verdict is reached
+before the fit and the measurements.** One Analysis whose cells carry a finite
+SE and no frequency, or from which the fit yields no coefficients — fewer than
+two usable cells, or a frequency spread with no variation — leaves the whole
+plane, every other Analysis included, in `float16`. This is a property of the
+format rather than of any release: the plan declares one encoding for the
+entire plane and every reader decodes every cell against it. A build therefore
+decides it from one bounded streaming pass over both components, before it fits
+a coefficient or measures a candidate, so a plane that cannot be coded never
+pays for either; that pass reports which trigger fired and how many Analyses
+were responsible. Coding the Analyses that can be fitted and falling back only
+for those that cannot would need a representation for "this Analysis is coded
+differently", which is format surface with its own version story (ADR 0037,
+ADR 0041) and is deliberately not built (issue #229).
+
 **Every cell carrying a standard error owes a finite EAF, exact exceptions
 included.** A residual plane is defined over a store whose frequencies are
 complete where its standard errors are, and encoding refuses a finite `SE`
