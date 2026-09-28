@@ -64,7 +64,7 @@ from opengwasdb.build.phenotype_sd import (
     has_usable_sample_size,
     se_scale_samples,
 )
-from opengwasdb.build.row_admission import AdmissionCounts, admit_rows
+from opengwasdb.build.row_admission import Admission, AdmissionCounts, admit_rows
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
 from opengwasdb.model.maf_policy import MafPolicy, MafState
@@ -516,8 +516,8 @@ def _scan(
     try:
         for chunk in stream:
             observed = _bounded(chunk, scan, limit)
-            keep = _count_admission(observed, scan, info_score_policy, maf_policy)
-            retained_indices = np.flatnonzero(keep)
+            admission = _admit(observed, info_score_policy, maf_policy)
+            retained_indices = np.flatnonzero(admission.keep)
             block = _take(observed, retained_indices)
             stopped_physical: int | None = None
             if ancestry_active:
@@ -534,6 +534,9 @@ def _scan(
                     if stops_physical_at_ancestry:
                         observed = _slice(observed, stopped_physical + 1)
                         block = _slice(block, stopped + 1)
+                        # Tally only the prefix actually read; the rule is
+                        # row-wise, so the prefix's mask is unchanged.
+                        admission = _admit(observed, info_score_policy, maf_policy)
                         scan.stop_reason = scan.ancestry_stop_reason
 
             ancestry_end = (
@@ -552,6 +555,7 @@ def _scan(
                     (scan.variant_reference_rows_matched or 0)
                     + sum(alid in variant_reference for alid in observed.alid)
                 )
+            scan.admission += admission.counts
             _count_build_eligible(block, scan, variant_reference)
             evidence.admit(block)
             scan.rows_read += len(observed)
@@ -589,27 +593,29 @@ def _slice(chunk: MetricsChunk, rows: int) -> MetricsChunk:
     return _take(chunk, np.arange(rows))
 
 
-def _count_admission(
+def _admit(
     observed: MetricsChunk,
-    scan: _Scan,
     info_policy: InfoScorePolicy,
     maf_policy: MafPolicy,
-) -> np.ndarray:
-    """Record one block's dispositions and return the rows it admits.
+) -> Admission:
+    """One block's admission by the shared rule, in the builder's orientation.
 
     The keep mask and the tally come from the same `admit_rows` call, so the
     counts the record reports and the rows the scan keeps cannot disagree
-    (stores #176).
+    (stores #176). The frequency is oriented exactly as `stream_associations`
+    orients the builder's `eaf` (`1.0 - af_alt` on a flipped row): MAF is
+    symmetric in exact arithmetic but not in floating point, so a row whose
+    MAF lies on the threshold would otherwise be kept by one and dropped by
+    the other.
     """
-    admission = admit_rows(
+    af = np.where(observed.flipped, 1.0 - observed.af_alt, observed.af_alt)
+    return admit_rows(
         observed.imputation_score,
         observed.imputation_score_status,
-        observed.af_alt,
+        af,
         info_policy,
         maf_policy,
     )
-    scan.admission += admission.counts
-    return admission.keep
 
 
 def _count_build_eligible(

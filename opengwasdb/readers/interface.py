@@ -93,7 +93,7 @@ def parse_imputation_score(value: str | None, *, declared: bool) -> ImputationSc
     """
     if not declared:
         return ImputationScore()
-    if value is None or value.strip() in ("", ".", "NA", "NaN", "nan", "None"):
+    if value is None or value.strip() in ("", ".", "NA", "#NA", "NaN", "nan", "None"):
         return ImputationScore(status=ImputationScoreStatus.MISSING)
     try:
         number = float(value)

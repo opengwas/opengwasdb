@@ -24,7 +24,9 @@ the end of this file.
 - **A new optional per-Analysis `maf_threshold` column filters by minor allele
   frequency.** The value is a finite number in [0, 0.5] or the literal `NaN`; a
   missing column and `NaN` both mean no filter, `0` disables it. MAF is
-  `min(af, 1 - af)` from the reader's `effect_allele_frequency`; a row whose
+  `min(af, 1 - af)` from the reader's `effect_allele_frequency`, oriented to the
+  stored effect allele in both the resolver and the builder so that floating
+  point cannot make them disagree on a row at the threshold; a row whose
   frequency is missing, non-finite or outside [0, 1] is retained. The resolver
   records `maf_state`, `maf_rows_below_threshold` and `maf_rows_missing`, binds
   `maf_threshold` in the fingerprint's `resolution_config`, and the Hybrid
@@ -39,7 +41,9 @@ the end of this file.
   evidence is requested -- a variant reference, a declared INFO policy, or a
   numeric MAF threshold -- the scan now continues to EOF (or an explicit
   `max_rows`) and every whole-stream count covers all rows read; the ancestry
-  fields keep their bounded meaning and `stop_reason` is `eof`.
+  fields keep their bounded meaning and `stop_reason` is `eof`. Where the bounded
+  early stop still applies, the admission tallies cover only the prefix read,
+  not the whole chunk it arrived in.
 
 - **The Ragged Overflow's `eaf` plane is written once, ahead of the SE fit, and
   both SE passes read their frequencies back from it.** The SE coefficient fit

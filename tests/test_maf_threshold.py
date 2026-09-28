@@ -307,3 +307,23 @@ def test_resolver_and_builder_agree_on_a_fixture_with_both_filters(tmp_path: Pat
     # INFO first: the row both filters would drop is counted there, not under MAF.
     assert maf_block["associations_below_threshold"] == 1
     assert info_block["associations_below_threshold"] == 2
+
+
+def test_resolver_and_builder_agree_on_a_flipped_row_on_the_maf_threshold(tmp_path: Path):
+    """MAF is symmetric in exact arithmetic but not in floating point:
+    `min(0.1, 1 - 0.1)` is 0.1 while `min(0.9, 1 - 0.9)` is just below it. The
+    builder sees a flipped row's frequency as `1.0 - af_alt`, so the resolver
+    must orient it the same way or the two disagree on the boundary.
+    """
+    source = tmp_path / "flip.tsv"
+    source.write_text(
+        _HEADER + "\n"
+        + "1\t1000\tA\tC\t0.2\t0.1\t0.1\t0.9\n"
+        + "1\t1001\tC\tA\t0.2\t0.1\t0.1\t0.9\n",
+        encoding="utf-8",
+    )
+    d = _diagnostics(tmp_path, source, "0.1")
+    info_block, maf_block = _builder_blocks(tmp_path, source, "0.1")
+
+    assert d["maf_rows_below_threshold"] == maf_block["associations_below_threshold"] == 1
+    assert d["canonical_rows_retained"] == info_block["associations_retained"] == 1

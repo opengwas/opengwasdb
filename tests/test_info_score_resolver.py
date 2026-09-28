@@ -249,6 +249,8 @@ def test_whole_stream_evidence_stops_the_case_control_early_scan(tmp_path: Path)
     d = json.loads((bare.records_dir / "GCST_CC.json").read_text())["diagnostics"]
     assert d["stop_reason"] == d["ancestry_stop_reason"] == "ancestry_site_limit"
     assert d["rows_read"] == d["canonical_rows_observed"] == 2
+    # The admission tally covers the prefix read, not the whole chunk it came in.
+    assert d["canonical_rows_retained"] == 2
 
 
 def test_bounded_chunk_preserves_scores_and_physical_limit(tmp_path: Path, sources):
