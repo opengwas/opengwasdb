@@ -67,6 +67,7 @@ from opengwasdb.model.info_score_policy import (
     InfoScorePolicy,
     parse_info_score_policy,
 )
+from opengwasdb.model.maf_policy import MAF_COLUMNS, MafPolicy, parse_maf_policy
 from opengwasdb.model.manifest_columns import resolve_manifest_columns
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
@@ -113,6 +114,7 @@ class ResolveManifestRow:
     checksum: str | None = None
     checksum_algorithm: str | None = None
     info_score_policy: InfoScorePolicy = InfoScorePolicy()
+    maf_policy: MafPolicy = MafPolicy()
 
 
 @dataclass(frozen=True)
@@ -372,6 +374,12 @@ def _parse_manifest_row(
         raise ValueError(
             f"analyses manifest {path}: analysis {analysis_id!r} has invalid INFO policy: {exc}"
         ) from exc
+    try:
+        maf_policy = parse_maf_policy(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"analyses manifest {path}: analysis {analysis_id!r} has invalid MAF policy: {exc}"
+        ) from exc
 
     return ResolveManifestRow(
         manifest_index=idx,
@@ -385,6 +393,7 @@ def _parse_manifest_row(
         checksum=checksum,
         checksum_algorithm=algo,
         info_score_policy=info_score_policy,
+        maf_policy=maf_policy,
     )
 
 
@@ -406,6 +415,12 @@ def read_resolve_manifest(
         raise ValueError(
             f"analyses manifest {manifest_path} has ambiguous INFO policy column(s): "
             f"{', '.join(duplicates)}"
+        )
+    maf_duplicates = [name for name in MAF_COLUMNS if fieldnames.count(name) > 1]
+    if maf_duplicates:
+        raise ValueError(
+            f"analyses manifest {manifest_path} has ambiguous MAF policy column(s): "
+            f"{', '.join(maf_duplicates)}"
         )
 
     cols = resolve_manifest_columns(fieldnames, manifest_path)
@@ -519,6 +534,9 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
         "info_rows_out_of_range": d.info_rows_out_of_range,
         "info_rows_usable": d.info_rows_usable,
         "info_score_state": d.info_score_state.value,
+        "maf_state": d.maf_state.value,
+        "maf_rows_below_threshold": d.maf_rows_below_threshold,
+        "maf_rows_missing": d.maf_rows_missing,
         "build_eligible_rows": d.build_eligible_rows,
         "build_eligible_rows_on_variant_reference": d.build_eligible_rows_on_variant_reference,
         "build_eligible_rows_off_variant_reference": d.build_eligible_rows_off_variant_reference,
@@ -576,6 +594,7 @@ def _build_analysis_fingerprints(
             "source_reader_capability": row.source_reader_capability,
             "info_score_threshold": row.info_score_policy.info_score_threshold,
             "info_score_state": row.info_score_policy.state.value,
+            "maf_threshold": row.maf_policy.maf_threshold,
             "imputation_score_column": (
                 row.info_score_policy.imputation_score_declaration.column_name
                 if row.info_score_policy.imputation_score_declaration else None
@@ -655,6 +674,7 @@ def _execute_analysis(
     method: OriginalSdMethod,
     sample_size: float | None,
     info_score_policy: InfoScorePolicy | None = None,
+    maf_policy: MafPolicy | None = None,
 ) -> tuple[AnalysisResolution, RecordStatus, str | None]:
     assert _WORKER_ANCESTRY_REFERENCE is not None
     assert _WORKER_GATES is not None
@@ -666,6 +686,7 @@ def _execute_analysis(
         original_sd_method=method,
         stored_effect_scale=scale,
         info_score_policy=info_score_policy,
+        maf_policy=maf_policy or MafPolicy(),
     )
     try:
         if info_score_policy.imputation_score_declaration is not None:
@@ -749,6 +770,7 @@ def _worker_resolve_one(task: dict[str, Any]) -> dict[str, Any]:
     res, status, err_msg = _execute_analysis(
         analysis_id, source_file, cap, scale, method, sample_size,
         task.get("info_score_policy", InfoScorePolicy()),
+        task.get("maf_policy", MafPolicy()),
     )
     elapsed = time.monotonic() - t0
     _current, peak = tracemalloc.get_traced_memory()
@@ -888,6 +910,7 @@ def _build_single_task(
         "original_sd_method": row.original_sd_method.value,
         "sample_size": row.sample_size,
         "info_score_policy": row.info_score_policy,
+        "maf_policy": row.maf_policy,
         "fingerprints": fp,
         "record_path": str(rec_path),
         "size_weight": size_weight,

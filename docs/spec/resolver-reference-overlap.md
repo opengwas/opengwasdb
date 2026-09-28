@@ -29,11 +29,15 @@ not be classified as a low-overlap source exclusion. Cross-assembly comparisons
 still require explicit source-key/liftover evidence; canonical overlap alone
 does not establish that an hg19 source matches a GRCh38 axis.
 
-With a provider-declared INFO policy (stores #175) a positive threshold removes
-unusable and below-threshold rows before ancestry, SD and routing evidence, so
-`ancestry_reference_rows_matched` counts only INFO-retained rows while the legacy
-`variant_reference_rows_matched` and `rows_read` stay pre-INFO canonical-row counts
-over the same bounded scan. A publication projection over a filtered source must
-therefore use that record's `build_eligible_rows_off_variant_reference` /
-`build_eligible_rows` diagnostics rather than these legacy counts; see
+With a provider-declared INFO policy (stores #175) or a numeric MAF threshold
+(stores #176), a positive threshold removes only below-threshold usable rows
+before ancestry, SD and routing evidence, so `ancestry_reference_rows_matched`
+counts only admitted rows while the legacy `variant_reference_rows_matched` and
+`rows_read` stay pre-admission canonical-row counts. Naming a variant reference
+also makes the Analysis whole-stream (stores #176, section 0): the physical scan
+continues to EOF, so `rows_read` and `variant_reference_rows_matched` are no
+longer a prefix even for a case-control Analysis the ancestry bound would once
+have stopped early. A publication projection over a filtered source must use
+that record's `build_eligible_rows_off_variant_reference` / `build_eligible_rows`
+diagnostics rather than these legacy counts; see
 [`info-score-resolver.md`](../info-score-resolver.md).

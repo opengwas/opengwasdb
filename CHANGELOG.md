@@ -10,7 +10,36 @@ the end of this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **A declared INFO threshold no longer drops unscored or out-of-range rows.**
+  A *usable* score is any finite number, so a score above 1 passes any
+  threshold <= 1, a negative score falls below any positive one, and the
+  `out_of_range` status is informational rather than a drop disposition; rows
+  whose score is missing, malformed or non-finite are retained and counted by
+  reason. A declared Analysis with no usable score is no longer a controlled
+  failure in the resolver or a refused Analysis in the Hybrid build: every row
+  is retained and the record reports `info_score_state = no_usable_scores`
+  (stores #176, superseding parts of #175).
+- **A new optional per-Analysis `maf_threshold` column filters by minor allele
+  frequency.** The value is a finite number in [0, 0.5] or the literal `NaN`; a
+  missing column and `NaN` both mean no filter, `0` disables it. MAF is
+  `min(af, 1 - af)` from the reader's `effect_allele_frequency`; a row whose
+  frequency is missing, non-finite or outside [0, 1] is retained. The resolver
+  records `maf_state`, `maf_rows_below_threshold` and `maf_rows_missing`, binds
+  `maf_threshold` in the fingerprint's `resolution_config`, and the Hybrid
+  build records a `provenance.maf` block (stores #176).
+
 ### Fixed
+
+- **Whole-stream evidence is no longer truncated to the ancestry-prefix early
+  stop (stores #174, #176).** For a case-control Analysis (`needs_sd=False`) the
+  ancestry bound used to end the physical scan, so the #174 overlap counts and
+  every INFO/MAF count described only a ~1% prefix. Whenever whole-stream
+  evidence is requested -- a variant reference, a declared INFO policy, or a
+  numeric MAF threshold -- the scan now continues to EOF (or an explicit
+  `max_rows`) and every whole-stream count covers all rows read; the ancestry
+  fields keep their bounded meaning and `stop_reason` is `eof`.
 
 - **The Ragged Overflow's `eaf` plane is written once, ahead of the SE fit, and
   both SE passes read their frequencies back from it.** The SE coefficient fit
@@ -84,6 +113,13 @@ the end of this file.
   conflicting case-folded reference keys (stores #174).
 
 ### Added
+
+- **One shared row-admission rule for the resolver and the Hybrid builder**
+  (`opengwasdb.build.row_admission.admit_rows`, `keep = ~info_drop & ~maf_drop`),
+  so the resolver's `canonical_rows_retained` and the builder's
+  `associations_retained` cannot drift; a row both filters would drop is counted
+  once, under INFO. `admit_rows` is the one place the declared INFO threshold
+  and the new `maf_threshold` are applied (stores #176).
 
 - **Phase-granularity checkpoint and resume for the Hybrid build tail**: an
   opt-in `--checkpoint` keeps what each phase produces beside the destination,

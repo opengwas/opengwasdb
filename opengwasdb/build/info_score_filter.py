@@ -3,8 +3,9 @@
 `opengwasdb.build.resolve` applies it to the canonical rows its metrics scan
 yields and `opengwasdb.layouts.hybrid.build` applies it to the associations its
 Source Reader yields, before evidence filtering and Dense/Overflow routing
-respectively, so which rows a declared policy keeps cannot drift between the
-resolver's record and the store a build writes.
+respectively. `opengwasdb.build.row_admission` combines it with the MAF filter
+and both callers go through that, so which rows are admitted cannot drift between
+the resolver's record and the store a build writes.
 
 Only `FILTERED` drops a row, and only when the row carries a *usable* score (any
 finite number, in range or not) strictly below the threshold: equality passes,
@@ -73,10 +74,11 @@ class InfoScoreCounts:
 
     `observed = retained + below_threshold`: every row is either kept or dropped,
     and only a usable score below a positive threshold is dropped. `retained`
-    is what the INFO rule alone keeps -- unscored rows included. `usable` counts
-    the rows the declared column yielded a usable score (a finite number) for,
-    so it is the rows dropped plus the usable rows kept, not the whole of
-    `retained`.
+    is what the INFO rule alone keeps -- unscored rows included -- *before* any
+    MAF filter, which `opengwasdb.build.row_admission.AdmissionCounts` applies on
+    top. `usable` counts the rows the declared column yielded a usable score
+    (a finite number) for, so it is the rows dropped plus the usable rows kept,
+    not the whole of `retained`.
     """
 
     observed: int = 0

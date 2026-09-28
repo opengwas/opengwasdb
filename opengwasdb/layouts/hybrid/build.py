@@ -28,7 +28,7 @@ import tempfile
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import as_completed
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -44,14 +44,10 @@ from opengwasdb.build.eaf_orientation import (
     site_hashes,
     verify_eaf_orientation,
 )
-from opengwasdb.build.info_score_filter import (
-    InfoScoreCounts,
-    count_info_scores,
-    declared_score_state,
-    retained_mask,
-)
+from opengwasdb.build.info_score_filter import declared_score_state
 from opengwasdb.build.liftover import LiftoverFailureError
 from opengwasdb.build.ordered_pool import ordered_map
+from opengwasdb.build.row_admission import AdmissionCounts, admit_rows
 from opengwasdb.encoding import (
     EafMeasurements,
     EncodingMeasurements,
@@ -169,6 +165,7 @@ from opengwasdb.model.info_score_policy import (
     InfoScoreState,
     parse_info_score_policy,
 )
+from opengwasdb.model.maf_policy import MafPolicy, MafState, parse_maf_policy
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.interface import ImputationScoreStatus
@@ -255,6 +252,9 @@ _pass2_spill_dir: Path | None = None
 # worker applies the policy of the row its task came from without the task
 # tuple growing a sixth element the Dense builder does not share.
 _pass2_info_policies: Mapping[int, InfoScorePolicy] | None = None
+# Column index -> that Analysis's declared MAF policy (stores #176), carried the
+# same way as the INFO policy above.
+_pass2_maf_policies: Mapping[int, MafPolicy] | None = None
 
 
 def _build_routing_index(
@@ -443,11 +443,12 @@ def _resolve_column_hybrid(
     capability: str = GWAS_VCF_CAPABILITY,
     stored_effect_scale: str = StoredEffectScale.SD.value,
     info_score_policy: InfoScorePolicy | None = None,
+    maf_policy: MafPolicy | None = None,
 ) -> tuple[
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     _OffReferenceSpill,
-    InfoScoreCounts,
+    AdmissionCounts,
 ]:
     """Stream one study once, routing each association to the dense fill (on-panel),
     the ragged overflow (off-panel/reference), or -- when the routing index does
@@ -465,15 +466,16 @@ def _resolve_column_hybrid(
     rescaling applies uniformly regardless of which component an association
     routes to. Defaults to 1.0 (no-op).
 
-    ``info_score_policy`` is this Analysis's declared imputation-score policy
-    (stores #175). Its declaration reaches the reader, and the shared
-    ``retained_mask`` rule is applied to each batch *before* the batch is
-    matched, so a row a declared positive threshold excludes reaches neither
-    component, the EAF survey nor the top-hit counts. ``info_counts`` reports
-    the dispositions behind that filter: the associations this reader yielded,
-    not canonical source rows.
+    ``info_score_policy``/``maf_policy`` are this Analysis's declared
+    imputation-score and MAF policies (stores #175, #176). Its declaration
+    reaches the reader, and the one shared ``admit_rows`` rule is applied to
+    each batch *before* the batch is matched, so a row either filter excludes
+    reaches neither component, the EAF survey nor the top-hit counts.
+    ``counts`` reports the dispositions behind that filter: the associations
+    this reader yielded, not canonical source rows.
     """
     info_score_policy = info_score_policy or InfoScorePolicy()
+    maf_policy = maf_policy or MafPolicy()
     reader = resolve_reader(
         capability,
         file_path,
@@ -502,7 +504,7 @@ def _resolve_column_hybrid(
     eafs: list[float] = []
     scores: list[float | None] = []
     statuses: list[ImputationScoreStatus] = []
-    counts = InfoScoreCounts()
+    counts = AdmissionCounts()
 
     def _flush() -> None:
         nonlocal counts
@@ -511,15 +513,19 @@ def _resolve_column_hybrid(
             return
         block_scores = np.asarray(scores, dtype=np.float64)
         block_statuses = np.asarray(statuses, dtype=object)
-        # The two score buffers are consumed into arrays above and the seven
-        # statistic ones are routed below: all nine are emptied on every exit
-        # path, so no batch is filtered or counted against another batch's rows.
+        block_af = np.asarray(eafs, dtype=np.float64)
+        # The nine buffers are consumed into arrays above and routed below: all
+        # of them are emptied on every exit path, so no batch is filtered or
+        # counted against another batch's rows.
         scores.clear()
         statuses.clear()
-        counts += count_info_scores(block_scores, block_statuses, info_score_policy)
+        admission = admit_rows(
+            block_scores, block_statuses, block_af, info_score_policy, maf_policy
+        )
+        counts += admission.counts
         _retain_rows(
             (chroms, poss, refs, alts, zs, ses, eafs),
-            retained_mask(block_scores, block_statuses, info_score_policy),
+            admission.keep,
         )
         try:
             if not zs:
@@ -642,14 +648,15 @@ def _spill_hybrid_column(
             _write_unknown_side_file(spill_dir, col_idx, u_hashed_raw)
 
 
-def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, InfoScoreCounts]:
+def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, AdmissionCounts]:
     assert _pass2_keys_sorted is not None
     assert _pass2_targets_sorted is not None
     assert _pass2_ispanel_sorted is not None
     assert _pass2_spill_dir is not None
     assert _pass2_info_policies is not None
+    assert _pass2_maf_policies is not None
     col_idx, file_path, se_divisor, capability, stored_effect_scale = task
-    dense, overflow, off_reference, info_counts = _resolve_column_hybrid(
+    dense, overflow, off_reference, counts = _resolve_column_hybrid(
         file_path,
         _pass2_keys_sorted,
         _pass2_targets_sorted,
@@ -658,9 +665,10 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, InfoScor
         capability=capability,
         stored_effect_scale=stored_effect_scale,
         info_score_policy=_pass2_info_policies[col_idx],
+        maf_policy=_pass2_maf_policies[col_idx],
     )
     _spill_hybrid_column(_pass2_spill_dir, col_idx, dense, overflow, off_reference)
-    return col_idx, info_counts
+    return col_idx, counts
 
 
 @dataclass(frozen=True)
@@ -827,6 +835,7 @@ class _PreparedBuild:
     partition: _VariantPartition
     manifest_rows: list[_ManifestRow]
     info_score_policies: Mapping[str, InfoScorePolicy]
+    maf_policies: Mapping[str, MafPolicy]
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
     rsid_by_alid: dict[str, str]
@@ -845,7 +854,7 @@ class _RoutedSpills:
 
     id_by_col: dict[int, str]
     pass2_start: float
-    info_counts: Mapping[str, InfoScoreCounts] = field(default_factory=dict)
+    info_counts: Mapping[str, AdmissionCounts] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -899,7 +908,7 @@ class _ComponentResult:
     se_coefficients: np.ndarray | None
     eaf_provenance: dict[str, Any]
     analyses: list[Analysis]
-    info_counts: Mapping[str, InfoScoreCounts] = field(default_factory=dict)
+    info_counts: Mapping[str, AdmissionCounts] = field(default_factory=dict)
 
 
 def _open_dense_component(staged: StagedRelease) -> tuple[Path, StagedRelease]:
@@ -1004,15 +1013,28 @@ def _source_origin_map(
     return hg38_to_source
 
 
+@dataclass(frozen=True)
+class DeclaredPolicies:
+    """The per-Analysis declared INFO and MAF policies one manifest carries.
+
+    Read together from a single re-read of the manifest (`_read_declared_policies`)
+    because they travel together everywhere: Pass 2 applies both to one batch, the
+    manifest provenance records both, and a resumed build re-derives both.
+    """
+
+    info: Mapping[str, InfoScorePolicy]
+    maf: Mapping[str, MafPolicy]
+
+
 def _load_manifest(
     manifest_path: str | Path,
     *,
     default_source_reader_capability: str | None = None,
     default_source_assembly: str | None = None,
-) -> tuple[list[_ManifestRow], dict[str, InfoScorePolicy]]:
+) -> tuple[list[_ManifestRow], DeclaredPolicies]:
     """Read the build manifest, failing loudly on an empty one rather than
     building a store with no Analyses (a plausible empty answer), alongside each
-    row's declared imputation-score policy (`_read_info_score_policies`).
+    row's declared INFO and MAF policies (`_read_declared_policies`).
     """
     manifest_rows = _read_manifest(
         manifest_path,
@@ -1021,21 +1043,21 @@ def _load_manifest(
     )
     if not manifest_rows:
         raise ValueError(f"manifest {manifest_path} contains no rows")
-    return manifest_rows, _read_info_score_policies(manifest_path, manifest_rows)
+    return manifest_rows, _read_declared_policies(manifest_path, manifest_rows)
 
 
-def _read_info_score_policies(
+def _read_declared_policies(
     manifest_path: str | Path, rows: list[_ManifestRow]
-) -> dict[str, InfoScorePolicy]:
-    """Parse each Analysis's declared imputation-score policy (stores #175).
+) -> DeclaredPolicies:
+    """Parse each Analysis's declared INFO and MAF policies (stores #175, #176).
 
-    `_ManifestRow` carries the columns this builder routes with, not the INFO
-    policy columns, so the manifest is read once more here -- it lists Analyses,
-    not associations -- and matched row for row against the rows
-    `_read_manifest` produced. The reader capability is the row's own resolved
-    value, exactly as the manifest resolver parses the same row, so a CLI
-    default applies to both. A partial or contradictory declaration is a
-    manifest error naming its Analysis, never a filter silently not applied.
+    `_ManifestRow` carries the columns this builder routes with, not the policy
+    columns, so the manifest is read once more here -- it lists Analyses, not
+    associations -- and matched row for row against the rows `_read_manifest`
+    produced. The reader capability is the row's own resolved value, exactly as
+    the manifest resolver parses the same row, so a CLI default applies to both.
+    A partial or contradictory declaration is a manifest error naming its
+    Analysis, never a filter silently not applied.
     """
     with open(manifest_path, newline="", encoding="utf-8") as fh:
         raw_rows = list(csv.DictReader(fh, delimiter="\t"))
@@ -1044,10 +1066,11 @@ def _read_info_score_policies(
             f"manifest {manifest_path} changed while it was read: {len(rows)} rows parsed, "
             f"{len(raw_rows)} re-read"
         )
-    policies: dict[str, InfoScorePolicy] = {}
+    info: dict[str, InfoScorePolicy] = {}
+    maf: dict[str, MafPolicy] = {}
     for row, raw in zip(rows, raw_rows, strict=True):
         try:
-            policies[row.trait_id] = parse_info_score_policy(
+            info[row.trait_id] = parse_info_score_policy(
                 raw, reader_capability=row.source_reader_capability
             )
         except ValueError as exc:
@@ -1055,7 +1078,14 @@ def _read_info_score_policies(
                 f"manifest {manifest_path}: analysis {row.trait_id!r} has invalid INFO "
                 f"policy: {exc}"
             ) from exc
-    return policies
+        try:
+            maf[row.trait_id] = parse_maf_policy(raw)
+        except ValueError as exc:
+            raise ValueError(
+                f"manifest {manifest_path}: analysis {row.trait_id!r} has invalid MAF "
+                f"policy: {exc}"
+            ) from exc
+    return DeclaredPolicies(info=info, maf=maf)
 
 
 def _axis_source(
@@ -1985,11 +2015,11 @@ def _route_serial(
     analysis_index: dict[str, int],
     n_analyses: int,
     pass2_start: float,
-) -> dict[str, InfoScoreCounts]:
+) -> dict[str, AdmissionCounts]:
     """Route each study once, in this process, spilling the dense rows and the
     overflow associations it resolves (last-wins dedup per target index).
-    Returns each Analysis's declared-score dispositions (stores #175)."""
-    info_counts: dict[str, InfoScoreCounts] = {}
+    Returns each Analysis's admitted-row dispositions (stores #175, #176)."""
+    info_counts: dict[str, AdmissionCounts] = {}
     for i, row in enumerate(prepared.manifest_rows):
         dense, overflow, off_reference, counts = _resolve_column_hybrid(
             row.file_path,
@@ -2000,6 +2030,7 @@ def _route_serial(
             capability=row.source_reader_capability,
             stored_effect_scale=row.stored_effect_scale,
             info_score_policy=prepared.info_score_policies[row.trait_id],
+            maf_policy=prepared.maf_policies[row.trait_id],
         )
         info_counts[row.trait_id] = counts
         _spill_hybrid_column(
@@ -2016,15 +2047,16 @@ def _route_parallel(
     n_analyses: int,
     options: _BuildOptions,
     pass2_start: float,
-) -> dict[str, InfoScoreCounts]:
+) -> dict[str, AdmissionCounts]:
     """Route each study through the fork pool. Workers read the routing arrays
     through the module-level globals below rather than as arguments: they are
     inherited by fork, which is what keeps a genome-scale lookup out of the
     per-column pickling the pool would otherwise do (dense.build_vcf's
-    rationale). Each worker also applies its own Analysis's declared INFO policy
-    (stores #175) and returns its dispositions for the shared manifest."""
+    rationale). Each worker also applies its own Analysis's declared INFO and MAF
+    policies (stores #175, #176) and returns its dispositions for the shared
+    manifest."""
     global _pass2_keys_sorted, _pass2_targets_sorted, _pass2_ispanel_sorted
-    global _pass2_spill_dir, _pass2_info_policies
+    global _pass2_spill_dir, _pass2_info_policies, _pass2_maf_policies
     _pass2_keys_sorted = prepared.keys_sorted
     _pass2_targets_sorted = prepared.targets_sorted
     _pass2_ispanel_sorted = prepared.ispanel_sorted
@@ -2033,7 +2065,11 @@ def _route_parallel(
         column: prepared.info_score_policies[row.trait_id]
         for column, row in enumerate(prepared.manifest_rows)
     }
-    info_counts: dict[str, InfoScoreCounts] = {}
+    _pass2_maf_policies = {
+        column: prepared.maf_policies[row.trait_id]
+        for column, row in enumerate(prepared.manifest_rows)
+    }
+    info_counts: dict[str, AdmissionCounts] = {}
     try:
         with _fork_pool(options.n_workers) as pool:
             tasks = _pass2_worker_tasks(prepared.manifest_rows, analysis_index)
@@ -2050,6 +2086,7 @@ def _route_parallel(
         _pass2_ispanel_sorted = None
         _pass2_spill_dir = None
         _pass2_info_policies = None
+        _pass2_maf_policies = None
     return info_counts
 
 
@@ -2356,36 +2393,40 @@ def _flush_overflow_component(
     return n_overflow
 
 
-def _info_score_counts_fields(counts: InfoScoreCounts) -> dict[str, int]:
-    """One Analysis's declared-score dispositions, as the store records them.
+def _info_score_counts_fields(counts: AdmissionCounts) -> dict[str, int]:
+    """One Analysis's admitted-row dispositions, as the store records them.
 
     The `associations_` prefix is load-bearing: the denominator is the
     associations the Analysis's Source Reader yielded after its own effect/SE
     admission, not the canonical rows the resolver's `canonical_rows_*`
-    diagnostics count (stores #175).
+    diagnostics count (stores #175). `associations_retained` is the rows the
+    combined INFO-then-MAF rule admits, so it matches the resolver's
+    `canonical_rows_retained` on the same population (stores #176).
     """
+    info = counts.info
     return {
-        "associations_observed": counts.observed,
-        "associations_retained": counts.retained,
-        "associations_below_threshold": counts.below_threshold,
-        "associations_missing": counts.missing,
-        "associations_malformed": counts.malformed,
-        "associations_nonfinite": counts.nonfinite,
-        "associations_out_of_range": counts.out_of_range,
-        "associations_usable": counts.usable,
+        "associations_observed": info.observed,
+        "associations_retained": counts.admitted,
+        "associations_below_threshold": info.below_threshold,
+        "associations_missing": info.missing,
+        "associations_malformed": info.malformed,
+        "associations_nonfinite": info.nonfinite,
+        "associations_out_of_range": info.out_of_range,
+        "associations_usable": info.usable,
     }
 
 
 def _info_score_provenance(
-    prepared: _PreparedBuild, counts_by_id: Mapping[str, InfoScoreCounts]
+    prepared: _PreparedBuild, counts_by_id: Mapping[str, AdmissionCounts]
 ) -> dict[str, Any] | None:
-    """The `provenance["info_score"]` block a store records (stores #175).
+    """The `provenance["info_score"]` block a store records (stores #175, #176).
 
     `None` when no Analysis's row carried an INFO policy -- an absent block
     means the manifest declared no policy at all, so a legacy table builds a
     manifest byte for byte as it did before this filter existed. When the block
     is written, every Analysis appears in table order, so the list is the whole
-    table rather than only the rows a threshold dropped.
+    table rather than only the rows a threshold dropped. A declared score with no
+    usable value reports `no_usable_scores`; its rows are all retained.
     """
     policies = prepared.info_score_policies
     if all(policy.state is InfoScoreState.LEGACY_ABSENT for policy in policies.values()):
@@ -2395,10 +2436,38 @@ def _info_score_provenance(
             {
                 "analysis_id": row.trait_id,
                 "info_score_state": declared_score_state(
-                    policies[row.trait_id], counts_by_id[row.trait_id].usable
+                    policies[row.trait_id], counts_by_id[row.trait_id].info.usable
                 ).value,
                 "info_score_threshold": policies[row.trait_id].info_score_threshold,
                 **_info_score_counts_fields(counts_by_id[row.trait_id]),
+            }
+            for row in prepared.manifest_rows
+        ]
+    }
+
+
+def _maf_provenance(
+    prepared: _PreparedBuild, counts_by_id: Mapping[str, AdmissionCounts]
+) -> dict[str, Any] | None:
+    """The `provenance["maf"]` block a store records (stores #176).
+
+    `None` when no Analysis's row carried a numeric MAF threshold, so a table
+    that never declares one builds exactly as it did before this filter
+    existed. The counts are the associations the Source Reader yielded, the same
+    population as the INFO block beside it; a row both filters would drop is
+    counted under INFO, not here.
+    """
+    policies = prepared.maf_policies
+    if all(policy.state is MafState.UNAVAILABLE for policy in policies.values()):
+        return None
+    return {
+        "analyses": [
+            {
+                "analysis_id": row.trait_id,
+                "maf_state": policies[row.trait_id].state.value,
+                "maf_threshold": policies[row.trait_id].maf_threshold,
+                "associations_below_threshold": counts_by_id[row.trait_id].maf_below_threshold,
+                "associations_missing": counts_by_id[row.trait_id].maf_missing,
             }
             for row in prepared.manifest_rows
         ]
@@ -2431,6 +2500,7 @@ def _write_shared_metadata(
         encoding=components.encoding,
         eaf_provenance=components.eaf_provenance,
         info_score=_info_score_provenance(prepared, components.info_counts),
+        maf=_maf_provenance(prepared, components.info_counts),
         variant_reference=(
             str(options.variant_reference) if options.variant_reference is not None else None
         ),
@@ -2455,7 +2525,7 @@ def _write_shared_metadata(
 def _prepare_build(
     staged: StagedRelease,
     manifest_rows: list[_ManifestRow],
-    info_score_policies: Mapping[str, InfoScorePolicy],
+    policies: DeclaredPolicies,
     options: _BuildOptions,
     spill_dir: Path | None = None,
 ) -> _PreparedBuild:
@@ -2488,7 +2558,8 @@ def _prepare_build(
         dense_staged=axis.dense_staged,
         partition=axis.partition,
         manifest_rows=manifest_rows,
-        info_score_policies=info_score_policies,
+        info_score_policies=policies.info,
+        maf_policies=policies.maf,
         analyses=axis.analyses,
         hg38_to_source=axis.hg38_to_source,
         rsid_by_alid=axis.rsid_by_alid,
@@ -2606,7 +2677,7 @@ def _record_pass2_product(
     write_json(
         state.path / INFO_COUNTS,
         {
-            row.trait_id: asdict(routed.info_counts[row.trait_id])
+            row.trait_id: routed.info_counts[row.trait_id].as_dict()
             for row in prepared.manifest_rows
         },
     )
@@ -2621,7 +2692,7 @@ def _recorded_routing(prepared: _PreparedBuild, state: CheckpointState) -> _Rout
         id_by_col={col: row.trait_id for col, row in enumerate(prepared.manifest_rows)},
         pass2_start=time.monotonic(),
         info_counts={
-            row.trait_id: InfoScoreCounts(**recorded[row.trait_id])
+            row.trait_id: AdmissionCounts.from_dict(recorded[row.trait_id])
             for row in prepared.manifest_rows
         },
     )
@@ -2919,7 +2990,7 @@ def _run_checkpointed_build(
     Release work directory is retained inside the checkpoint instead of removed
     (issue #227).
     """
-    manifest_rows, info_score_policies = _load_manifest(
+    manifest_rows, policies = _load_manifest(
         manifest_path,
         default_source_reader_capability=defaults.source_reader_capability,
         default_source_assembly=defaults.source_assembly,
@@ -2942,7 +3013,7 @@ def _run_checkpointed_build(
             prepared = _prepare_build(
                 staged,
                 manifest_rows,
-                info_score_policies,
+                policies,
                 options,
                 None if state is None else state.spill_dir,
             )
@@ -3053,7 +3124,7 @@ def resume_hybrid_build(
 def _resume_prepared(
     staged: StagedRelease,
     manifest_rows: list[_ManifestRow],
-    policies: Mapping[str, InfoScorePolicy],
+    policies: DeclaredPolicies,
     options: _BuildOptions,
     state: CheckpointState,
 ) -> _PreparedBuild:
@@ -3073,7 +3144,7 @@ def _resume_prepared(
 def _recorded_prepared(
     staged: StagedRelease,
     manifest_rows: list[_ManifestRow],
-    policies: Mapping[str, InfoScorePolicy],
+    policies: DeclaredPolicies,
     state: CheckpointState,
 ) -> _PreparedBuild:
     """Rebuild the prepared build from the checkpoint's recorded axis alone.
@@ -3105,7 +3176,8 @@ def _recorded_prepared(
             n_shared=len(shared_sorted),
         ),
         manifest_rows=manifest_rows,
-        info_score_policies=policies,
+        info_score_policies=policies.info,
+        maf_policies=policies.maf,
         analyses=[_manifest_row_to_analysis(row) for row in manifest_rows],
         hg38_to_source=read_str_map(state.path / PROVENANCE_SOURCE),
         rsid_by_alid={
@@ -3414,6 +3486,7 @@ def _write_hybrid_manifest(
     encoding: StoreEncoding,
     eaf_provenance: dict[str, Any] | None = None,
     info_score: dict[str, Any] | None = None,
+    maf: dict[str, Any] | None = None,
     variant_reference: str | None = None,
 ) -> None:
     provenance: dict[str, Any] = {
@@ -3439,6 +3512,8 @@ def _write_hybrid_manifest(
         provenance["eaf_orientation"] = eaf_provenance
     if info_score is not None:
         provenance["info_score"] = info_score
+    if maf is not None:
+        provenance["maf"] = maf
     if variant_reference is not None:
         provenance["variant_reference"] = variant_reference
     manifest = StoreManifest(
