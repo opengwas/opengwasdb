@@ -43,6 +43,7 @@ from opengwasdb.model.enums import (
     StoredEffectScale,
 )
 from opengwasdb.model.info_score_policy import INFO_SCORE_COLUMNS, parse_info_score_policy
+from opengwasdb.model.maf_policy import MAF_COLUMNS, parse_maf_policy
 
 ANCESTRY_PROP_PREFIX = "ancestry_prop_"
 
@@ -73,6 +74,7 @@ SHARED_CORE_COLUMNS: tuple[str, ...] = (
     "imputation_score_column",
     "imputation_score_kind",
     "imputation_score_provenance",
+    "maf_threshold",
 )
 
 # Top-Hit Count columns (ADR 0032, store-format spec §7a): one persisted
@@ -241,6 +243,7 @@ def validate_analyses(table: AnalysesTable) -> list[str]:
     if missing:
         errors.append(f"analyses.tsv is missing required column(s): {', '.join(missing)}")
     errors.extend(_info_policy_header_errors(table.fieldnames))
+    errors.extend(_maf_header_errors(table.fieldnames))
 
     for row in table.rows:
         analysis_id = row.get("analysis_id") or "<unknown analysis_id>"
@@ -264,6 +267,7 @@ def validate_analyses(table: AnalysesTable) -> list[str]:
                 )
         _validate_case_control_counts(row, analysis_id, fieldnames, errors)
         _validate_info_policy(row, analysis_id, errors)
+        _validate_maf_policy(row, analysis_id, errors)
 
     return errors
 
@@ -283,11 +287,25 @@ def _info_policy_header_errors(fieldnames: tuple[str, ...]) -> list[str]:
     return []
 
 
+def _maf_header_errors(fieldnames: tuple[str, ...]) -> list[str]:
+    duplicates = [name for name in MAF_COLUMNS if fieldnames.count(name) > 1]
+    if duplicates:
+        return [f"analyses.tsv has ambiguous MAF policy column(s): {', '.join(duplicates)}"]
+    return []
+
+
 def _validate_info_policy(row: dict[str, str], analysis_id: str, errors: list[str]) -> None:
     try:
         parse_info_score_policy(row)
     except ValueError as exc:
         errors.append(f"analysis {analysis_id!r} has invalid INFO policy: {exc}")
+
+
+def _validate_maf_policy(row: dict[str, str], analysis_id: str, errors: list[str]) -> None:
+    try:
+        parse_maf_policy(row)
+    except ValueError as exc:
+        errors.append(f"analysis {analysis_id!r} has invalid MAF policy: {exc}")
 
 
 def _validate_case_control_counts(

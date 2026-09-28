@@ -1,16 +1,19 @@
 """Hybrid build's declared-INFO filter, its recorded counts, and resolver parity.
 
-Stores #175: a build must drop exactly the associations a declared policy
-excludes -- below a positive threshold, or carrying no usable score -- *before*
-Dense/Overflow routing, the EAF/SE writes and the top-hit counts, and must
-record per-Analysis dispositions in `manifest.json`'s `provenance.info_score`
-block. The rows here are hg38, so a row needs no liftover and a probe of the
-built store can be read back as the source wrote it.
+Stores #175/#176: a build must drop exactly the associations a declared policy
+*and* a declared MAF threshold exclude, *before* Dense/Overflow routing, the
+EAF/SE writes and the top-hit counts, and must record per-Analysis dispositions
+in `manifest.json`'s `provenance.info_score` block. Under #176 only a usable
+score strictly below a positive threshold is dropped, so rows whose score is
+missing, malformed, non-finite or out of range are retained. The rows here are
+hg38, so a row needs no liftover and a probe of the built store can be read back
+as the source wrote it.
 
-The filtered fixture is one Analysis whose seven associations have one score per
-disposition, plus one association with no effect size at all -- the row a Source
-Reader drops before any INFO policy runs, which is exactly why the builder's
-denominator and the resolver's `canonical_rows_*` are not the same population.
+The filtered fixture is one Analysis whose seven associations carry a score
+across the dispositions, plus one association with no effect size at all -- the
+row a Source Reader drops before any INFO policy runs, which is exactly why the
+builder's denominator and the resolver's `canonical_rows_*` are not the same
+population.
 """
 
 from __future__ import annotations
@@ -51,10 +54,10 @@ SCORED_ROWS: tuple[tuple[int, float, float, str], ...] = (
     (1000, 2.0, 0.5, "0.9"),  # kept, on-panel, z 4.0
     (1001, 1.5, 0.3, "0.7"),  # kept -- exactly at the threshold, z 5.0
     (2000, 1.0, 0.2, "0.69"),  # dropped: below threshold, off-panel
-    (1002, 0.5, 0.1, "NA"),  # dropped: missing
-    (1003, 0.4, 0.1, "oops"),  # dropped: malformed
-    (1004, 0.3, 0.1, "inf"),  # dropped: nonfinite
-    (1005, 0.2, 0.1, "1.1"),  # dropped: out of range
+    (1002, 0.5, 0.1, "NA"),  # kept: missing, z 5.0
+    (1003, 0.4, 0.1, "oops"),  # kept: malformed, z 4.0
+    (1004, 0.3, 0.1, "inf"),  # kept: nonfinite, z 3.0
+    (1005, 0.2, 0.1, "1.1"),  # kept: out of range (usable), z 2.0
 )
 #: No effect size: the Source Reader drops this row before the INFO filter ever
 #: sees its (usable) score.
@@ -68,17 +71,17 @@ MULTI_BATCH_ROWS: tuple[tuple[int, float, float, str], ...] = (
     (1000, 2.0, 0.5, "0.9"),  # flush 1: kept
     (1001, 1.5, 0.3, "0.7"),  # flush 1: kept, exactly at the threshold
     (1002, 1.0, 0.2, "0.69"),  # flush 1: below threshold
-    (1003, 0.5, 0.1, "NA"),  # flush 2: every row dropped
-    (1004, 0.4, 0.1, "oops"),  # flush 2: malformed
-    (1005, 0.3, 0.1, "inf"),  # flush 2: nonfinite
-    (1006, 0.2, 0.1, "1.1"),  # flush 3: every row dropped
+    (1003, 0.5, 0.1, "NA"),  # flush 2: kept, missing
+    (1004, 0.4, 0.1, "oops"),  # flush 2: kept, malformed
+    (1005, 0.3, 0.1, "inf"),  # flush 2: kept, nonfinite
+    (1006, 0.2, 0.1, "1.1"),  # flush 3: kept, out of range
     (1007, 1.0, 0.2, "0.1"),  # flush 3: below threshold
-    (1008, 0.5, 0.1, "NA"),  # flush 3: missing
+    (1008, 0.5, 0.1, "NA"),  # flush 3: kept, missing
     (1009, 3.0, 0.5, "0.95"),  # flush 4: all kept
     (1010, 2.5, 0.5, "0.8"),  # flush 4: kept
     (1011, 1.5, 0.5, "0.75"),  # flush 4: kept
     (1012, 0.9, 0.3, "0.9"),  # flush 5: kept
-    (1013, 0.8, 0.2, "1.2"),  # flush 5: out of range
+    (1013, 0.8, 0.2, "1.2"),  # flush 5: kept, out of range
     (2000, 2.2, 0.4, "0.85"),  # flush 5: kept, off-panel
 )
 MULTI_BATCH_PANEL = tuple(f"1:{position}:A:C" for position in range(1000, 1014))
@@ -91,13 +94,13 @@ MULTI_BATCH_ALIDS = (*MULTI_BATCH_PANEL, "1:2000:A:C")
 MULTI_BATCH_EXPECTED: dict[str, dict[str, int]] = {
     "0.7": {
         "associations_observed": 15,
-        "associations_retained": 7,
+        "associations_retained": 13,
         "associations_below_threshold": 2,
         "associations_missing": 2,
         "associations_malformed": 1,
         "associations_nonfinite": 1,
         "associations_out_of_range": 2,
-        "associations_usable": 9,
+        "associations_usable": 11,
     },
     "NaN": {
         "associations_observed": 15,
@@ -279,8 +282,9 @@ def test_declared_threshold_drops_rows_before_routing_and_counts_each_reason(
     tmp_path, n_workers
 ):
     """The green path: a 0.7 threshold keeps the two rows at or above it (the
-    one exactly at it included) and drops the rest by disposition, so nothing a
-    policy excluded reaches the dense fill, the overflow spill or the top hits.
+    one exactly at it included) and every unscored row, and drops only the
+    0.69 row -- so the dropped row reaches neither the dense fill, the overflow
+    spill nor the top hits (stores #176).
     """
     store = _build(tmp_path, "0.7", n_workers=n_workers)
     entries = _info_analyses(store)
@@ -291,8 +295,8 @@ def test_declared_threshold_drops_rows_before_routing_and_counts_each_reason(
     assert entry["info_score_threshold"] == 0.7
     # Seven associations reached the filter: the no-effect row never did.
     assert entry["associations_observed"] == len(SCORED_ROWS)
-    assert entry["associations_retained"] == 2
-    assert entry["associations_usable"] == 3
+    assert entry["associations_retained"] == 6
+    assert entry["associations_usable"] == 4
     assert entry["associations_below_threshold"] == 1
     assert entry["associations_missing"] == 1
     assert entry["associations_malformed"] == 1
@@ -301,23 +305,23 @@ def test_declared_threshold_drops_rows_before_routing_and_counts_each_reason(
 
     query = query_store(store)
     kept = query.lookup(list(PANEL_ALIDS), ["GCST_INFO"])
-    # Exactly the two kept panel rows carry a cell, with the kept z values (z 5.0
-    # and z 4.0 both hit the 5e-6 tier).
-    assert kept["z"].size == 2
-    assert sorted(round(float(value), 3) for value in kept["z"]) == [4.0, 5.0]
+    # Six kept panel rows carry a cell, with the kept z values.
+    assert kept["z"].size == 6
+    assert sorted(round(float(value), 3) for value in kept["z"]) == [2.0, 3.0, 4.0, 4.0, 5.0, 5.0]
     # The below-threshold row was off-panel, so a filter applied after routing
     # would have left it in the Ragged Overflow.
     assert query.lookup([OFF_PANEL_ALID], ["GCST_INFO"])["z"].size == 0
-    # Invalid statuses are dropped too, not stored against their own values.
+    # Unscored rows are retained, each stored against its own z.
     for alid in ("1:1002:A:C", "1:1003:A:C", "1:1004:A:C", "1:1005:A:C"):
-        assert query.lookup([alid], ["GCST_INFO"])["z"].size == 0, alid
+        assert query.lookup([alid], ["GCST_INFO"])["z"].size == 1, alid
     query.close()
 
     hits = _hits(store)
-    # Both kept rows clear the 5e-4 tier; only z 5.0 clears 5e-6 -- the dropped
-    # z 5.0 row would have made that count two.
-    assert hits["n_hits_5e4"] == "2"
-    assert hits["n_hits_5e6"] == "1"
+    # Four kept rows clear the 5e-4 tier; two clear 5e-6. The dropped 0.69 row
+    # would have added one to neither tier, and the old semantics would have
+    # dropped the four unscored/out-of-range rows below their z values.
+    assert hits["n_hits_5e4"] == "4"
+    assert hits["n_hits_5e6"] == "2"
 
 
 def test_score_equal_to_the_threshold_is_kept_and_nothing_above_is_dropped(tmp_path):
@@ -347,7 +351,7 @@ def test_zero_threshold_disables_the_filter_but_still_records_the_state(tmp_path
     assert entry["info_score_threshold"] == 0.0
     assert entry["associations_observed"] == entry["associations_retained"] == len(SCORED_ROWS)
     assert entry["associations_below_threshold"] == 0
-    assert entry["associations_usable"] == 3
+    assert entry["associations_usable"] == 4
     query = query_store(store)
     # The row whose score is out of range is kept: a disabled filter drops
     # nothing, whatever the column says.
@@ -414,7 +418,7 @@ def test_every_analysis_appears_when_the_threshold_column_is_present(tmp_path):
     entries = {entry["analysis_id"]: entry for entry in _info_analyses(store)}
     assert set(entries) == {"GCST_INFO", "GCST_NAN"}
     assert entries["GCST_INFO"]["info_score_state"] == "filtered"
-    assert entries["GCST_INFO"]["associations_retained"] == 2
+    assert entries["GCST_INFO"]["associations_retained"] == 6
     unavailable = entries["GCST_NAN"]
     assert unavailable["info_score_state"] == "unavailable"
     assert unavailable["info_score_threshold"] is None
@@ -443,19 +447,29 @@ def test_blank_threshold_cell_beside_a_declared_one_is_a_manifest_error(tmp_path
 
 @pytest.mark.parametrize("n_workers", [1, 2])
 @pytest.mark.parametrize("policy", ["0.7", "0"])
-def test_declared_score_with_no_usable_value_fails_naming_the_analysis(
+def test_declared_score_with_no_usable_value_is_built_with_no_usable_scores(
     tmp_path, policy, n_workers
 ):
-    """A declared score nothing usable was found for is a controlled failure
-    naming its Analysis -- at a positive threshold and at zero alike, because an
-    explicit zero still declares the score is readable."""
+    """A declared score nothing usable was found for is built, with every row
+    retained and `info_score_state = no_usable_scores` -- at a positive threshold
+    and at zero alike (stores #176)."""
     source = _write_source(
         tmp_path / "all_invalid.tsv.gz", [(1000, 2.0, 0.5, "NA"), (1001, 1.5, 0.3, "oops")]
     )
     manifest = _manifest(tmp_path, source, policy)
-    _expect_manifest_error(
-        manifest, tmp_path, r"Analysis GCST_INFO: declared imputation score", n_workers=n_workers
+    store = tmp_path / "store_no_usable.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, store, reference_panel=_panel(tmp_path), store_id="s", release_id="r",
+        n_workers=n_workers,
     )
+    entry = _info_analyses(store)[0]
+    assert entry["info_score_state"] == "no_usable_scores"
+    assert entry["associations_observed"] == entry["associations_retained"] == 2
+    assert entry["associations_below_threshold"] == 0
+    assert entry["associations_usable"] == 0
+    query = query_store(store)
+    assert query.lookup(["1:1000:A:C", "1:1001:A:C"], ["GCST_INFO"])["z"].size == 2
+    query.close()
 
 
 def test_builder_dispositions_agree_with_the_resolver_on_the_same_source(tmp_path):
@@ -496,11 +510,11 @@ def test_builder_dispositions_agree_with_the_resolver_on_the_same_source(tmp_pat
     assert resolution.error == ""
     diagnostics = resolution.diagnostics
     assert diagnostics.canonical_rows_observed == len(SCORED_ROWS) + 1
-    assert diagnostics.canonical_rows_retained == 3
+    assert diagnostics.canonical_rows_retained == 7
 
     # The rule's outcome, on both populations: the rows a build stores are the
     # rows the resolver called build-eligible.
-    assert builder["associations_retained"] == diagnostics.build_eligible_rows == 2
+    assert builder["associations_retained"] == diagnostics.build_eligible_rows == 6
     for builder_name, resolver_name in (
         ("associations_below_threshold", "info_rows_below_threshold"),
         ("associations_missing", "info_rows_missing"),

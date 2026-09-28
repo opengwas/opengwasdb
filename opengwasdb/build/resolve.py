@@ -56,11 +56,7 @@ import numpy as np
 from opengwasdb.ancestry.mixture import AncestryAssignment, Gates, assign_ancestry
 from opengwasdb.ancestry.reference import AncestryReference
 from opengwasdb.build.eaf_orientation import site_hash
-from opengwasdb.build.info_score_filter import (
-    InfoScoreCounts,
-    count_info_scores,
-    retained_mask,
-)
+from opengwasdb.build.info_score_filter import declared_score_state
 from opengwasdb.build.phenotype_sd import (
     ESTIMATION_METHODS,
     PhenotypeSdEstimate,
@@ -68,8 +64,10 @@ from opengwasdb.build.phenotype_sd import (
     has_usable_sample_size,
     se_scale_samples,
 )
+from opengwasdb.build.row_admission import Admission, AdmissionCounts, admit_rows
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.info_score_policy import InfoScorePolicy, InfoScoreState
+from opengwasdb.model.maf_policy import MafPolicy, MafState
 from opengwasdb.readers.tabular import MetricsChunk
 
 __all__ = [
@@ -222,6 +220,7 @@ class AnalysisRequest:
     original_sd_method: OriginalSdMethod
     stored_effect_scale: StoredEffectScale = StoredEffectScale.SD
     info_score_policy: InfoScorePolicy = InfoScorePolicy()
+    maf_policy: MafPolicy = MafPolicy()
 
 
 @dataclass(frozen=True)
@@ -260,6 +259,14 @@ class ScanDiagnostics:
     info_rows_out_of_range: int = 0
     info_rows_usable: int = 0
     info_score_state: InfoScoreState = InfoScoreState.LEGACY_ABSENT
+    #: Whether a declared MAF threshold applied (stores #176): `unavailable`
+    #: (NaN/absent), `disabled` (0) or `filtered` (> 0).
+    maf_state: MafState = MafState.UNAVAILABLE
+    #: Admitted rows dropped by MAF that INFO did not already drop.
+    maf_rows_below_threshold: int = 0
+    #: Observed rows whose `af` was missing, non-finite or outside [0, 1];
+    #: retained, never dropped by MAF.
+    maf_rows_missing: int = 0
     build_eligible_rows: int = 0
     build_eligible_rows_on_variant_reference: int | None = None
     build_eligible_rows_off_variant_reference: int | None = None
@@ -344,7 +351,7 @@ class _Scan:
     ancestry_stop_reason: ScanStop = ScanStop.EOF
     ancestry_reference_rows_matched: int = 0
     variant_reference_rows_matched: int | None = None
-    info_counts: InfoScoreCounts = field(default_factory=InfoScoreCounts)
+    admission: AdmissionCounts = field(default_factory=AdmissionCounts)
     build_eligible_rows: int = 0
     build_eligible_rows_on_variant_reference: int | None = None
     build_eligible_rows_off_variant_reference: int | None = None
@@ -446,14 +453,19 @@ def _diagnostics(request: AnalysisRequest, scan: _Scan) -> ScanDiagnostics:
         ancestry_reference_rows_matched=scan.ancestry_reference_rows_matched,
         variant_reference_rows_matched=scan.variant_reference_rows_matched,
         canonical_rows_observed=scan.rows_read,
-        canonical_rows_retained=scan.info_counts.retained,
-        info_rows_below_threshold=scan.info_counts.below_threshold,
-        info_rows_missing=scan.info_counts.missing,
-        info_rows_malformed=scan.info_counts.malformed,
-        info_rows_nonfinite=scan.info_counts.nonfinite,
-        info_rows_out_of_range=scan.info_counts.out_of_range,
-        info_rows_usable=scan.info_counts.usable,
-        info_score_state=request.info_score_policy.state,
+        canonical_rows_retained=scan.admission.admitted,
+        info_rows_below_threshold=scan.admission.info.below_threshold,
+        info_rows_missing=scan.admission.info.missing,
+        info_rows_malformed=scan.admission.info.malformed,
+        info_rows_nonfinite=scan.admission.info.nonfinite,
+        info_rows_out_of_range=scan.admission.info.out_of_range,
+        info_rows_usable=scan.admission.info.usable,
+        info_score_state=declared_score_state(
+            request.info_score_policy, scan.admission.info.usable
+        ),
+        maf_state=request.maf_policy.state,
+        maf_rows_below_threshold=scan.admission.maf_below_threshold,
+        maf_rows_missing=scan.admission.maf_missing,
         build_eligible_rows=scan.build_eligible_rows,
         build_eligible_rows_on_variant_reference=scan.build_eligible_rows_on_variant_reference,
         build_eligible_rows_off_variant_reference=scan.build_eligible_rows_off_variant_reference,
@@ -471,6 +483,8 @@ def _scan(
     ancestry_reference: Collection[str],
     variant_reference: Collection[str] | None = None,
     info_score_policy: InfoScorePolicy | None = None,
+    maf_policy: MafPolicy | None = None,
+    whole_stream: bool = False,
 ) -> None:
     """One pass over the source, feeding the ancestry fit and the SD evidence.
 
@@ -482,21 +496,28 @@ def _scan(
     `max_ancestry_sites` bounds ancestry evidence only: once reached, ancestry
     accumulation stops and `diagnostics.ancestry_stop_reason` records
     `ANCESTRY_SITE_LIMIT`. If phenotype SD estimation is requested (`needs_sd`),
-    the same physical source stream continues to EOF (or an explicit `max_rows`
-    bound) so the deterministic phenotype SD evidence is drawn from the whole
-    source without truncation. If no phenotype SD is needed (e.g. case-control),
-    the physical scan terminates immediately at the ancestry bound.
+    or whole-stream evidence is (`whole_stream`, stores #176), the same physical
+    source stream continues to EOF (or an explicit `max_rows` bound) so every
+    whole-stream count covers all rows read. Only when neither is true -- a
+    case-control Analysis with no declared INFO or MAF filter and no variant
+    reference -- does the physical scan terminate immediately at the ancestry
+    bound, which is the #174 behaviour.
 
     `max_rows`, when set, remains a hard physical bound on the source stream for
     both ancestry and phenotype SD.
     """
     stream = reader.stream_metric_chunks()
     info_score_policy = info_score_policy or InfoScorePolicy()
+    maf_policy = maf_policy or MafPolicy()
+    # The ancestry bound stops the *physical* scan only when nothing whole-stream
+    # was requested. It always stops ancestry accumulation.
+    stops_physical_at_ancestry = not (needs_sd or whole_stream)
     ancestry_active = True
     try:
         for chunk in stream:
             observed = _bounded(chunk, scan, limit)
-            retained_indices = _retained_indices(observed, info_score_policy)
+            admission = _admit(observed, info_score_policy, maf_policy)
+            retained_indices = np.flatnonzero(admission.keep)
             block = _take(observed, retained_indices)
             stopped_physical: int | None = None
             if ancestry_active:
@@ -510,13 +531,18 @@ def _scan(
                         scan.ancestry_stop_reason = ScanStop.ROW_LIMIT
                     else:
                         scan.ancestry_stop_reason = ScanStop.ANCESTRY_SITE_LIMIT
-                    if not needs_sd:
+                    if stops_physical_at_ancestry:
                         observed = _slice(observed, stopped_physical + 1)
                         block = _slice(block, stopped + 1)
+                        # Tally only the prefix actually read; the rule is
+                        # row-wise, so the prefix's mask is unchanged.
+                        admission = _admit(observed, info_score_policy, maf_policy)
                         scan.stop_reason = scan.ancestry_stop_reason
 
             ancestry_end = (
-                len(block) if ancestry_active or (stopped_physical is not None and not needs_sd)
+                len(block) if ancestry_active or (
+                    stopped_physical is not None and stops_physical_at_ancestry
+                )
                 else int(np.searchsorted(
                     retained_indices, scan.ancestry_rows_read - scan.rows_read
                 ))
@@ -529,11 +555,11 @@ def _scan(
                     (scan.variant_reference_rows_matched or 0)
                     + sum(alid in variant_reference for alid in observed.alid)
                 )
-            _count_info(observed, scan, info_score_policy)
+            scan.admission += admission.counts
             _count_build_eligible(block, scan, variant_reference)
             evidence.admit(block)
             scan.rows_read += len(observed)
-            if not ancestry_active and not needs_sd:
+            if not ancestry_active and stops_physical_at_ancestry:
                 break
             if scan.stop_reason is not ScanStop.EOF:
                 break
@@ -567,17 +593,28 @@ def _slice(chunk: MetricsChunk, rows: int) -> MetricsChunk:
     return _take(chunk, np.arange(rows))
 
 
-def _retained_indices(chunk: MetricsChunk, policy: InfoScorePolicy) -> np.ndarray:
-    """The rows a declared policy keeps, by the shared rule (stores #175)."""
-    return np.flatnonzero(
-        retained_mask(chunk.imputation_score, chunk.imputation_score_status, policy)
-    )
+def _admit(
+    observed: MetricsChunk,
+    info_policy: InfoScorePolicy,
+    maf_policy: MafPolicy,
+) -> Admission:
+    """One block's admission by the shared rule, in the builder's orientation.
 
-
-def _count_info(observed: MetricsChunk, scan: _Scan, policy: InfoScorePolicy) -> None:
-    """Record one block's score dispositions, over every observed row."""
-    scan.info_counts += count_info_scores(
-        observed.imputation_score, observed.imputation_score_status, policy
+    The keep mask and the tally come from the same `admit_rows` call, so the
+    counts the record reports and the rows the scan keeps cannot disagree
+    (stores #176). The frequency is oriented exactly as `stream_associations`
+    orients the builder's `eaf` (`1.0 - af_alt` on a flipped row): MAF is
+    symmetric in exact arithmetic but not in floating point, so a row whose
+    MAF lies on the threshold would otherwise be kept by one and dropped by
+    the other.
+    """
+    af = np.where(observed.flipped, 1.0 - observed.af_alt, observed.af_alt)
+    return admit_rows(
+        observed.imputation_score,
+        observed.imputation_score_status,
+        af,
+        info_policy,
+        maf_policy,
     )
 
 
@@ -827,15 +864,19 @@ def resolve_analysis(
     ADR 0048); `None` reads the whole source for both ancestry and phenotype SD.
     When `scan_limit.max_ancestry_sites` is set, ancestry accumulation stops at
     that bound; quantitative Analyses continue reading to EOF for exact whole-file
-    phenotype-SD estimation, while non-quantitative Analyses terminate physical
-    streaming early at the ancestry bound. Explicit `max_rows` bounds the entire
-    physical scan for both. `diagnostics` records physical scan completion
-    (`stop_reason`, `rows_read`) and ancestry completion (`ancestry_stop_reason`,
-    `ancestry_rows_read`).
+    phenotype-SD estimation, and so does a case-control Analysis when whole-stream
+    evidence is requested -- a declared INFO policy, a numeric MAF threshold, or a
+    variant reference (stores #176). Only a case-control Analysis with none of
+    those terminates physical streaming early at the ancestry bound. Explicit
+    `max_rows` bounds the entire physical scan for both. `diagnostics` records
+    physical scan completion (`stop_reason`, `rows_read`) and ancestry completion
+    (`ancestry_stop_reason`, `ancestry_rows_read`).
 
     A source that cannot be read at all comes back as a resolution with `error`
     set rather than as an exception, because one unreadable file in a batch of
-    thousands is a per-Analysis outcome (issue #207). A caller error -- a
+    thousands is a per-Analysis outcome (issue #207). A declared score with no
+    usable value is *not* such an error (stores #176): every row is retained and
+    the record reports `info_score_state = no_usable_scores`. A caller error -- a
     non-positive `evidence_sample`, a reader with no single-scan metrics path --
     raises, because it is a defect in the call, not in the data.
     """
@@ -854,27 +895,23 @@ def resolve_analysis(
     evidence = _EvidenceSample(k=evidence_sample, tier=request.original_sd_method)
     panel: Collection[str] = reference.index if extraction_panel is None else extraction_panel
     needs_sd = _skip_reason(request) is None
+    whole_stream = (
+        variant_reference is not None
+        or request.info_score_policy.imputation_score_declaration is not None
+        or request.maf_policy.maf_threshold is not None
+    )
     try:
         _scan(
             reader, panel, scan, evidence, scan_limit, needs_sd=needs_sd,
             ancestry_reference=reference.index, variant_reference=variant_reference,
-            info_score_policy=request.info_score_policy,
+            info_score_policy=request.info_score_policy, maf_policy=request.maf_policy,
+            whole_stream=whole_stream,
         )
     except (OSError, EOFError, ValueError) as exc:
         return AnalysisResolution(
             analysis_id=request.analysis_id,
             diagnostics=_diagnostics(request, scan),
             error=f"{type(exc).__name__}: {exc}",
-        )
-    if (request.info_score_policy.imputation_score_declaration is not None
-            and scan.info_counts.usable == 0):
-        # A declared score nothing usable was found for is a controlled failure,
-        # not an Analysis resolved from zero rows (stores #175).
-        return AnalysisResolution(
-            analysis_id=request.analysis_id,
-            diagnostics=_diagnostics(request, scan),
-            error=f"Analysis {request.analysis_id}: declared imputation score has no usable scores "
-                  "in scanned canonical rows",
         )
     ancestry = assign_ancestry(scan.panel_af, reference, gates)
     return AnalysisResolution(

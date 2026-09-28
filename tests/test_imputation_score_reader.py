@@ -44,13 +44,14 @@ def _declared(
 
 
 def test_declared_score_same_on_associations_rows_and_bounded_chunks(tmp_path: Path) -> None:
-    values = ["0", "0.6", "1", "", "NA", "bogus", "inf", "-0.1", "1.01"]
+    values = ["0", "0.6", "1", "", "NA", "#NA", "bogus", "inf", "-0.1", "1.01"]
     path = _file(tmp_path / "quality.tsv", "info", values)
     reader = GwasSsfReader(path, chunk_rows=2, imputation_score_declaration=_declared())
     expected = [
         ImputationScoreStatus.USABLE,
         ImputationScoreStatus.USABLE,
         ImputationScoreStatus.USABLE,
+        ImputationScoreStatus.MISSING,
         ImputationScoreStatus.MISSING,
         ImputationScoreStatus.MISSING,
         ImputationScoreStatus.MALFORMED,
@@ -67,10 +68,15 @@ def test_declared_score_same_on_associations_rows_and_bounded_chunks(tmp_path: P
     assert [s for chunk in chunks for s in chunk.imputation_score_status] == expected
     assert [row.imputation_score.value for row in rows[:3]] == [0.0, 0.6, 1.0]
     assert [float(v) for chunk in chunks for v in chunk.imputation_score][:3] == [0.0, 0.6, 1.0]
-    assert all(row.imputation_score.value is None for row in rows[3:])
+    # Scored rows with no number are missing/malformed/nonfinite; a finite score
+    # outside [0, 1] keeps its number and is `OUT_OF_RANGE` but still usable
+    # (stores #176).
+    assert all(row.imputation_score.value is None for row in rows[3:8])
+    assert [row.imputation_score.value for row in rows[8:]] == [-0.1, 1.01]
     assert all(
-        math.isnan(float(v)) for v in [v for chunk in chunks for v in chunk.imputation_score][3:]
+        math.isnan(float(v)) for v in [v for chunk in chunks for v in chunk.imputation_score][3:8]
     )
+    assert [float(v) for chunk in chunks for v in chunk.imputation_score][8:] == [-0.1, 1.01]
     fallback_chunks = list(metrics_chunks_from_rows(rows, chunk_rows=2))
     assert [s for chunk in fallback_chunks for s in chunk.imputation_score_status] == expected
 

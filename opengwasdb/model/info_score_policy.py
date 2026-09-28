@@ -23,12 +23,19 @@ INFO_SCORE_COLUMNS: tuple[str, ...] = (
 
 
 class InfoScoreState(StrEnum):
-    """Why an Analysis does or does not apply its declared INFO threshold."""
+    """Why an Analysis does or does not apply its declared INFO threshold.
+
+    `NO_USABLE_SCORES` is the one member a *policy* never carries: it is the
+    outcome a declared score with no usable value is recorded as (stores #176).
+    `InfoScorePolicy` validates against the policy states, so it can never be
+    constructed with this one.
+    """
 
     LEGACY_ABSENT = "legacy_absent"
     UNAVAILABLE = "unavailable"
     DISABLED = "disabled"
     FILTERED = "filtered"
+    NO_USABLE_SCORES = "no_usable_scores"
 
 
 #: The states a policy with no threshold and no declaration may carry: only
