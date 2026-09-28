@@ -471,6 +471,7 @@ def _scan(
     ancestry_reference: Collection[str],
     variant_reference: Collection[str] | None = None,
     info_score_policy: InfoScorePolicy | None = None,
+    whole_stream: bool = False,
 ) -> None:
     """One pass over the source, feeding the ancestry fit and the SD evidence.
 
@@ -482,16 +483,21 @@ def _scan(
     `max_ancestry_sites` bounds ancestry evidence only: once reached, ancestry
     accumulation stops and `diagnostics.ancestry_stop_reason` records
     `ANCESTRY_SITE_LIMIT`. If phenotype SD estimation is requested (`needs_sd`),
-    the same physical source stream continues to EOF (or an explicit `max_rows`
-    bound) so the deterministic phenotype SD evidence is drawn from the whole
-    source without truncation. If no phenotype SD is needed (e.g. case-control),
-    the physical scan terminates immediately at the ancestry bound.
+    or whole-stream evidence is (`whole_stream`, stores #176), the same physical
+    source stream continues to EOF (or an explicit `max_rows` bound) so every
+    whole-stream count covers all rows read. Only when neither is true -- a
+    case-control Analysis with no declared INFO filter and no variant reference
+    -- does the physical scan terminate immediately at the ancestry bound, which
+    is the #174 behaviour.
 
     `max_rows`, when set, remains a hard physical bound on the source stream for
     both ancestry and phenotype SD.
     """
     stream = reader.stream_metric_chunks()
     info_score_policy = info_score_policy or InfoScorePolicy()
+    # The ancestry bound stops the *physical* scan only when nothing whole-stream
+    # was requested. It always stops ancestry accumulation.
+    stops_physical_at_ancestry = not (needs_sd or whole_stream)
     ancestry_active = True
     try:
         for chunk in stream:
@@ -510,13 +516,15 @@ def _scan(
                         scan.ancestry_stop_reason = ScanStop.ROW_LIMIT
                     else:
                         scan.ancestry_stop_reason = ScanStop.ANCESTRY_SITE_LIMIT
-                    if not needs_sd:
+                    if stops_physical_at_ancestry:
                         observed = _slice(observed, stopped_physical + 1)
                         block = _slice(block, stopped + 1)
                         scan.stop_reason = scan.ancestry_stop_reason
 
             ancestry_end = (
-                len(block) if ancestry_active or (stopped_physical is not None and not needs_sd)
+                len(block) if ancestry_active or (
+                    stopped_physical is not None and stops_physical_at_ancestry
+                )
                 else int(np.searchsorted(
                     retained_indices, scan.ancestry_rows_read - scan.rows_read
                 ))
@@ -533,7 +541,7 @@ def _scan(
             _count_build_eligible(block, scan, variant_reference)
             evidence.admit(block)
             scan.rows_read += len(observed)
-            if not ancestry_active and not needs_sd:
+            if not ancestry_active and stops_physical_at_ancestry:
                 break
             if scan.stop_reason is not ScanStop.EOF:
                 break
@@ -854,11 +862,15 @@ def resolve_analysis(
     evidence = _EvidenceSample(k=evidence_sample, tier=request.original_sd_method)
     panel: Collection[str] = reference.index if extraction_panel is None else extraction_panel
     needs_sd = _skip_reason(request) is None
+    whole_stream = (
+        variant_reference is not None
+        or request.info_score_policy.imputation_score_declaration is not None
+    )
     try:
         _scan(
             reader, panel, scan, evidence, scan_limit, needs_sd=needs_sd,
             ancestry_reference=reference.index, variant_reference=variant_reference,
-            info_score_policy=request.info_score_policy,
+            info_score_policy=request.info_score_policy, whole_stream=whole_stream,
         )
     except (OSError, EOFError, ValueError) as exc:
         return AnalysisResolution(

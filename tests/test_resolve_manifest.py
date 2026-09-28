@@ -503,9 +503,13 @@ def test_cli_runner_successful_execution(test_setup: dict[str, Any]) -> None:
 # --- bounded scans (issue #209) -------------------------------------------
 
 
-def test_reference_overlap_is_recorded_on_the_scanned_prefix_and_invalidates_resume(
+def test_reference_overlap_whole_stream_evidence_and_resume_invalidation(
     test_setup: dict[str, Any]
 ) -> None:
+    """With a variant reference every count is whole-stream, even for the
+    case-control Analysis the ancestry bound would otherwise stop early (stores
+    #176, section 0).
+    """
     axis = test_setup["tmp_path"] / "reference" / "hybrid-axis.txt.gz"
     with gzip.open(axis, "wt", encoding="utf-8") as fh:
         fh.write("\n".join(_alid(i) for i in range(0, 50, 2)) + "\n")
@@ -519,8 +523,13 @@ def test_reference_overlap_is_recorded_on_the_scanned_prefix_and_invalidates_res
     assert quant["diagnostics"]["ancestry_rows_read"] == 20
     assert quant["diagnostics"]["variant_reference_rows_matched"] == 25
     assert quant["diagnostics"]["rows_read"] == 50
-    assert cc["diagnostics"]["variant_reference_rows_matched"] == 10
-    assert cc["diagnostics"]["rows_read"] == 20
+    # The case-control Analysis requested whole-stream evidence by naming a
+    # variant reference, so only ancestry stops at the bound.
+    assert cc["diagnostics"]["variant_reference_rows_matched"] == 25
+    assert cc["diagnostics"]["rows_read"] == 50
+    assert cc["diagnostics"]["stop_reason"] == "eof"
+    assert cc["diagnostics"]["ancestry_stop_reason"] == "ancestry_site_limit"
+    assert cc["diagnostics"]["ancestry_rows_read"] == 20
     assert quant["fingerprints"]["variant_reference_sha256"]
     assert _run_standard_resolve(
         test_setup, records, variant_reference=axis, max_ancestry_sites=20, resume=True
