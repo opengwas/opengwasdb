@@ -30,6 +30,7 @@ Contracts enforced here:
 from __future__ import annotations
 
 import csv
+import gzip
 import hashlib
 import json
 import logging
@@ -61,6 +62,11 @@ from opengwasdb.build.resolve import (
     resolve_analysis,
 )
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
+from opengwasdb.model.info_score_policy import (
+    INFO_SCORE_COLUMNS,
+    InfoScorePolicy,
+    parse_info_score_policy,
+)
 from opengwasdb.model.manifest_columns import resolve_manifest_columns
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
@@ -106,6 +112,7 @@ class ResolveManifestRow:
     size_bytes: int | None = None
     checksum: str | None = None
     checksum_algorithm: str | None = None
+    info_score_policy: InfoScorePolicy = InfoScorePolicy()
 
 
 @dataclass(frozen=True)
@@ -186,6 +193,23 @@ def load_extraction_panel(path: Path | str) -> set[str]:
         variants = _read_panel_lines(fh, col_idx, initial_var)
     if not variants:
         raise ValueError(f"no valid variants found in extraction panel: {panel_path}")
+    return variants
+
+
+def load_variant_reference(path: Path | str) -> set[str]:
+    """Load the Hybrid axis once in the parent; workers inherit the shared set."""
+    axis = Path(path)
+    if not axis.is_file():
+        raise FileNotFoundError(f"variant reference not found: {axis}")
+    opener = gzip.open if axis.suffix == ".gz" else open
+    with opener(axis, "rt", encoding="utf-8") as fh:
+        first = fh.readline()
+        if not first:
+            raise ValueError(f"empty variant reference: {axis}")
+        column, initial = _parse_panel_header(first)
+        variants = _read_panel_lines(fh, column, initial)
+    if not variants:
+        raise ValueError(f"no valid variants in variant reference: {axis}")
     return variants
 
 
@@ -342,6 +366,12 @@ def _parse_manifest_row(
     )
     size_bytes = _extract_manifest_size(raw)
     checksum, algo = _extract_manifest_checksum(raw)
+    try:
+        info_score_policy = parse_info_score_policy(raw, reader_capability=cap)
+    except ValueError as exc:
+        raise ValueError(
+            f"analyses manifest {path}: analysis {analysis_id!r} has invalid INFO policy: {exc}"
+        ) from exc
 
     return ResolveManifestRow(
         manifest_index=idx,
@@ -354,6 +384,7 @@ def _parse_manifest_row(
         size_bytes=size_bytes,
         checksum=checksum,
         checksum_algorithm=algo,
+        info_score_policy=info_score_policy,
     )
 
 
@@ -370,6 +401,12 @@ def read_resolve_manifest(
         raw_rows = list(reader)
     if not raw_rows:
         raise ValueError(f"empty analyses manifest: {manifest_path}")
+    duplicates = [name for name in INFO_SCORE_COLUMNS if fieldnames.count(name) > 1]
+    if duplicates:
+        raise ValueError(
+            f"analyses manifest {manifest_path} has ambiguous INFO policy column(s): "
+            f"{', '.join(duplicates)}"
+        )
 
     cols = resolve_manifest_columns(fieldnames, manifest_path)
     known = known_capabilities()
@@ -455,7 +492,11 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
     """Serialize ScanDiagnostics to a dictionary.
 
     Note: `ancestry_rows_read` and `ancestry_stop_reason` are additive fields
-    under record_schema_version 1 (issue #212). Cache and resume invalidation for
+    under record_schema_version 1 (issue #212), as are the canonical-row and
+    INFO-disposition counts, `info_score_state` and `build_eligible_rows*`
+    (stores #175): each is written by every run of this version, so an older
+    record lacking them is not resumable (its fingerprint digest differs) rather
+    than read as a zero. Cache and resume invalidation for
     the decoupled phenotype-SD scan semantics is governed by `scan_limit_version = 2`
     in `resolution_config.scan_limit`.
     """
@@ -467,6 +508,20 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
         "stop_reason": d.stop_reason.value,
         "ancestry_rows_read": d.ancestry_rows_read,
         "ancestry_stop_reason": d.ancestry_stop_reason.value,
+        "ancestry_reference_rows_matched": d.ancestry_reference_rows_matched,
+        "variant_reference_rows_matched": d.variant_reference_rows_matched,
+        "canonical_rows_observed": d.canonical_rows_observed,
+        "canonical_rows_retained": d.canonical_rows_retained,
+        "info_rows_below_threshold": d.info_rows_below_threshold,
+        "info_rows_missing": d.info_rows_missing,
+        "info_rows_malformed": d.info_rows_malformed,
+        "info_rows_nonfinite": d.info_rows_nonfinite,
+        "info_rows_out_of_range": d.info_rows_out_of_range,
+        "info_rows_usable": d.info_rows_usable,
+        "info_score_state": d.info_score_state.value,
+        "build_eligible_rows": d.build_eligible_rows,
+        "build_eligible_rows_on_variant_reference": d.build_eligible_rows_on_variant_reference,
+        "build_eligible_rows_off_variant_reference": d.build_eligible_rows_off_variant_reference,
     }
 
 
@@ -491,6 +546,7 @@ def _build_analysis_fingerprints(
     ancestry_groups_sha256: str,
     extraction_panel_sha256: str | None,
     extraction_panel_variants: int | None,
+    variant_reference_sha256: str | None,
     af_references_fp: list[dict[str, Any]],
     gates: Gates,
     maf_floor: float,
@@ -511,12 +567,27 @@ def _build_analysis_fingerprints(
         "ancestry_groups_sha256": ancestry_groups_sha256,
         "extraction_panel_sha256": extraction_panel_sha256,
         "extraction_panel_variants": extraction_panel_variants,
+        "variant_reference_sha256": variant_reference_sha256,
         "af_references": af_references_fp,
         "resolution_config": {
             "original_sd_method": row.original_sd_method.value,
             "stored_effect_scale": row.stored_effect_scale.value,
             "sample_size": row.sample_size,
             "source_reader_capability": row.source_reader_capability,
+            "info_score_threshold": row.info_score_policy.info_score_threshold,
+            "info_score_state": row.info_score_policy.state.value,
+            "imputation_score_column": (
+                row.info_score_policy.imputation_score_declaration.column_name
+                if row.info_score_policy.imputation_score_declaration else None
+            ),
+            "imputation_score_kind": (
+                row.info_score_policy.imputation_score_declaration.kind.value
+                if row.info_score_policy.imputation_score_declaration else None
+            ),
+            "imputation_score_provenance": (
+                row.info_score_policy.imputation_score_declaration.provenance
+                if row.info_score_policy.imputation_score_declaration else None
+            ),
             "maf_floor": maf_floor,
             "evidence_sample": evidence_sample,
             # Issue #209: the scan bound travels in the fingerprint, so a record
@@ -568,6 +639,7 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
 _WORKER_ANCESTRY_REFERENCE: AncestryReference | None = None
 _WORKER_GATES: Gates | None = None
 _WORKER_EXTRACTION_PANEL: Collection[str] | None = None
+_WORKER_VARIANT_REFERENCE: Collection[str] | None = None
 _WORKER_AF_REFERENCES: Mapping[str, AfReference] | None = None
 _WORKER_EVIDENCE_SAMPLE: int = DEFAULT_EVIDENCE_SAMPLE
 _WORKER_SCAN_LIMIT: ScanLimit | None = None
@@ -582,30 +654,46 @@ def _execute_analysis(
     scale: StoredEffectScale,
     method: OriginalSdMethod,
     sample_size: float | None,
+    info_score_policy: InfoScorePolicy | None = None,
 ) -> tuple[AnalysisResolution, RecordStatus, str | None]:
     assert _WORKER_ANCESTRY_REFERENCE is not None
     assert _WORKER_GATES is not None
+    info_score_policy = info_score_policy or InfoScorePolicy()
     req = AnalysisRequest(
         analysis_id=analysis_id,
         source_file=source_file,
         sample_size=sample_size,
         original_sd_method=method,
         stored_effect_scale=scale,
+        info_score_policy=info_score_policy,
     )
     try:
-        reader = resolve_reader(cap, source_file, scale)
+        if info_score_policy.imputation_score_declaration is not None:
+            reader = resolve_reader(
+                cap, source_file, scale,
+                imputation_score_declaration=info_score_policy.imputation_score_declaration,
+            )
+        else:
+            reader = resolve_reader(cap, source_file, scale)
         res = resolve_analysis(
             req,
             reader=reader,
             reference=_WORKER_ANCESTRY_REFERENCE,
             extraction_panel=_WORKER_EXTRACTION_PANEL,
+            variant_reference=_WORKER_VARIANT_REFERENCE,
             gates=_WORKER_GATES,
             af_references=_WORKER_AF_REFERENCES,
             evidence_sample=_WORKER_EVIDENCE_SAMPLE,
             scan_limit=_WORKER_SCAN_LIMIT,
         )
         if res.error:
-            return res, RecordStatus.CONTROLLED_FAILURE, res.error
+            # A declared score's failure must name its Analysis, whether it was
+            # raised by the scan or by the no-usable-scores check above.
+            error = res.error
+            if (info_score_policy.imputation_score_declaration is not None
+                    and not error.startswith(f"Analysis {analysis_id}:")):
+                error = f"Analysis {analysis_id}: {error}"
+            return res, RecordStatus.CONTROLLED_FAILURE, error
         return res, RecordStatus.SUCCESS, None
     except Exception as exc:
         err_msg = f"{type(exc).__name__}: {exc}"
@@ -659,7 +747,8 @@ def _worker_resolve_one(task: dict[str, Any]) -> dict[str, Any]:
     tracemalloc.start()
     t0 = time.monotonic()
     res, status, err_msg = _execute_analysis(
-        analysis_id, source_file, cap, scale, method, sample_size
+        analysis_id, source_file, cap, scale, method, sample_size,
+        task.get("info_score_policy", InfoScorePolicy()),
     )
     elapsed = time.monotonic() - t0
     _current, peak = tracemalloc.get_traced_memory()
@@ -798,6 +887,7 @@ def _build_single_task(
         "stored_effect_scale": row.stored_effect_scale.value,
         "original_sd_method": row.original_sd_method.value,
         "sample_size": row.sample_size,
+        "info_score_policy": row.info_score_policy,
         "fingerprints": fp,
         "record_path": str(rec_path),
         "size_weight": size_weight,
@@ -940,6 +1030,7 @@ def _prepare_pipeline_context(
     scan_limit: ScanLimit | None,
     reference_version: str,
     out_dir: Path,
+    variant_reference: Path | str | None = None,
 ) -> dict[str, Any]:
     (
         ref,
@@ -966,6 +1057,11 @@ def _prepare_pipeline_context(
         orientation_flip_r=orientation_flip_r,
     )
     _setup_worker_globals(ref, gates, panel_set, af_refs, evidence_sample, scan_limit, out_dir)
+    global _WORKER_VARIANT_REFERENCE
+    _WORKER_VARIANT_REFERENCE = (
+        load_variant_reference(variant_reference) if variant_reference is not None else None
+    )
+    axis_sha = compute_file_sha256(variant_reference) if variant_reference is not None else None
     return {
         "opengwasdb_version": _get_opengwasdb_version(),
         "opengwasdb_git_hash": _get_git_hash(),
@@ -974,6 +1070,7 @@ def _prepare_pipeline_context(
         "ancestry_groups_sha256": grp_sha,
         "extraction_panel_sha256": panel_sha,
         "extraction_panel_variants": panel_vars,
+        "variant_reference_sha256": axis_sha,
         "af_references_fp": af_refs_fp,
         "gates": gates,
         "maf_floor": maf_floor,
@@ -1032,6 +1129,7 @@ def resolve_analyses_manifest(
     ancestry_reference: Path | str,
     ancestry_groups: Path | str,
     extraction_panel: Path | str | None = None,
+    variant_reference: Path | str | None = None,
     af_references: Sequence[str] | None = None,
     af_reference_ancestry: str | None = None,
     default_source_reader_capability: str | None = None,
@@ -1083,6 +1181,7 @@ def resolve_analyses_manifest(
         scan_limit,
         reference_version,
         out_dir,
+        variant_reference,
     )
     return _execute_resolution_pipeline(
         rows, out_dir, manifest_path, fp_kwargs, resume, largest_first, n_workers

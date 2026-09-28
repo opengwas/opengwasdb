@@ -331,6 +331,21 @@ side tables are charged. Otherwise the entire plane is `float16`. Zero SE,
 non-finite predictions, and out-of-range residuals are exact exceptions, never
 clips.
 
+**Residual SE is all-or-nothing per component, and that verdict is reached
+before the fit and the measurements.** One Analysis whose cells carry a finite
+SE and no frequency, or from which the fit yields no coefficients — fewer than
+two usable cells, or a frequency spread with no variation — leaves the whole
+plane, every other Analysis included, in `float16`. This is a property of the
+format rather than of any release: the plan declares one encoding for the
+entire plane and every reader decodes every cell against it. A build therefore
+decides it from one bounded streaming pass over both components, before it fits
+a coefficient or measures a candidate, so a plane that cannot be coded never
+pays for either; that pass reports which trigger fired and how many Analyses
+were responsible. Coding the Analyses that can be fitted and falling back only
+for those that cannot would need a representation for "this Analysis is coded
+differently", which is format surface with its own version story (ADR 0037,
+ADR 0041) and is deliberately not built (issue #229).
+
 **Every cell carrying a standard error owes a finite EAF, exact exceptions
 included.** A residual plane is defined over a store whose frequencies are
 complete where its standard errors are, and encoding refuses a finite `SE`
@@ -587,6 +602,52 @@ be that specific term's human-readable name; for a gene-centric CURIE, whose
 human-readable name is already `analysis_label`, it instead names the
 identifying vocabulary (`"Ensembl"`) rather than repeating the gene name.
 `analysis_id` MUST be unique within a Store Release.
+
+For CORE build-input manifests (stores #175), optional `info_score_threshold`,
+`imputation_score_column`, `imputation_score_kind`, and
+`imputation_score_provenance` are per-Analysis shared-core policy inputs. They
+are not inferred from source headers. A manifest omitting all four has no INFO
+filter; a literal `NaN` threshold without a mapping explicitly means unavailable
+and also has no filter. A numeric threshold, including zero, MUST be finite in
+`[0, 1]` and MUST accompany an exact source column name, a kind of
+`imputation_info` or `imputation_r2`, independent provider evidence in
+`imputation_score_provenance`, and an INFO-capable Source Reader (currently
+`opengwasdb.gwas-ssf`). Partial declarations, a mapping without a numeric
+threshold, malformed thresholds, and a declaration alongside `NaN` are invalid.
+The declared source column must occur exactly once with the declared spelling;
+the GWAS-SSF reader rejects absent, padded, or ambiguous source header columns
+when it opens the file. These inputs define an ingestion policy, and a CORE
+build applies it: the Hybrid builder (issue #175) passes the declaration to the
+Source Reader and drops every association the policy excludes — a usable score
+strictly below a positive threshold, or a score that is missing, malformed,
+non-finite or out of `[0, 1]` — before Dense/Overflow routing, before the EAF
+orientation check and before the Top-Hit Counts, so nothing a declared
+threshold rejected can be stored, counted or oriented. A score exactly equal to
+the threshold is kept. A literal `NaN` threshold and an explicit zero drop
+nothing while remaining distinct recorded states. An Analysis that declares a
+score and has no usable value anywhere in its source fails the build, naming
+that Analysis.
+
+What a Hybrid build filtered and how much it dropped is recorded per Analysis
+in `manifest.json`'s `provenance.info_score.analyses` (stores #175): one entry
+per Analysis of the build-input manifest, in `analyses.tsv` order, each carrying
+`analysis_id`, `info_score_state` (`legacy_absent`/`unavailable`/`disabled`/
+`filtered`), `info_score_threshold` (null when none was declared or the score is
+unavailable), `associations_observed`, `associations_retained`,
+`associations_below_threshold`, `associations_missing`, `associations_malformed`,
+`associations_nonfinite`, `associations_out_of_range` and
+`associations_usable`. The denominator is the associations the Analysis's Source
+Reader yielded after its own effect/SE admission, **not** raw source lines and
+not the whole-file canonical-row counts `resolve-analyses` reports separately:
+`associations_observed` = `associations_retained` +
+`associations_below_threshold` + the four unusable dispositions, and
+`associations_usable` = `associations_retained` + `associations_below_threshold`
+under a positive threshold. The whole block MUST be absent when no
+build-input row declared a policy — an absent block means the manifest declared
+none, never "nothing was dropped" — so a legacy manifest's release records
+exactly what it did before this filter existed. A policy may be `unavailable` or
+`disabled` for some Analyses of a table and `filtered` for others; every entry
+appears whenever the threshold column is present at all.
 
 `analyses.tsv` MUST be sufficient on its own to interpret every Analysis's stored
 effect scale, sample-size semantics, ancestry, and licensing/citation terms —
@@ -952,6 +1013,10 @@ For Dense Reference-Completed releases:
 
 - the dense matrix axis MUST contain only Reference Variant Set variants;
 - observed off-panel associations MUST be stored in Ragged Overflow rather than discarded;
+- Hybrid source-coordinate routing MUST treat allele-letter case as insignificant when
+  matching a variant reference, without changing source effect-allele order or
+  association sign/frequency orientation; conflicting case-folded source keys
+  MUST fail rather than select a Dense target arbitrarily;
 - the dense axis SHOULD be identical across Stores completed with the same LD Reference Panel.
 
 Observed-Only Dense releases remain source-faithful and do not require an LD Reference Panel or panel-defined axis. A later Reference-Completed release MAY use a different dense axis defined by the LD Reference Panel.

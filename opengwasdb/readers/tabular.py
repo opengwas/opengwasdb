@@ -6,7 +6,7 @@ import csv
 import gzip
 import math
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,7 +22,14 @@ from opengwasdb.readers.effect_source import (
     resolve_sample_size_column,
 )
 from opengwasdb.readers.gwas_vcf import is_palindromic
-from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
+from opengwasdb.readers.interface import (
+    ImputationScore,
+    ImputationScoreStatus,
+    ReaderAssociation,
+    SiteMetrics,
+    SourceVariant,
+    parse_imputation_score,
+)
 from opengwasdb.stats import parse_af
 from opengwasdb.variants.normalise import (
     VALID_BASES,
@@ -144,6 +151,7 @@ class TabularMetricsRow:
     af_alt: float | None
     beta: float | None
     se: float | None
+    imputation_score: ImputationScore = ImputationScore()
 
 
 @dataclass(frozen=True)
@@ -402,6 +410,7 @@ class _ResolvedMetricsProjection:
     effect_source: EffectSource | None
     standard_error: int | None
     sample_size: int | None
+    imputation_score: int | None
     last_identity: int
     split_limit: int
 
@@ -412,7 +421,7 @@ class _ResolvedMetricsProjection:
 
 
 def _metrics_projection_indexes(
-    header: list[bytes], columns: MetricsProjectionColumns
+    header: list[bytes], columns: MetricsProjectionColumns, score_column: str | None = None
 ) -> _ResolvedMetricsProjection | None:
     found = _header_identity(header, columns)
     if found is None:
@@ -433,8 +442,9 @@ def _metrics_projection_indexes(
         sample_size_name = resolve_sample_size_column(header)
         if sample_size_name is not None:
             sample_size = indexes.get(sample_size_name.encode("utf-8"))
+    score_index = resolve_imputation_score_column(header, score_column)
     last_identity = max(chromosome, position, ref, alt)
-    optional = (frequency, effect, standard_error, sample_size)
+    optional = (frequency, effect, standard_error, sample_size, score_index)
     last_selected = max([last_identity, *(index for index in optional if index is not None)])
     return _ResolvedMetricsProjection(
         chromosome=chromosome,
@@ -446,15 +456,33 @@ def _metrics_projection_indexes(
         effect_source=effect_source,
         standard_error=standard_error,
         sample_size=sample_size,
+        imputation_score=score_index,
         last_identity=last_identity,
         split_limit=last_selected + (last_selected < len(header) - 1),
     )
 
 
+def resolve_imputation_score_column(header: list[bytes], column_name: str | None) -> int | None:
+    """Resolve an explicitly declared name, refusing stripped-name collisions."""
+    if column_name is None:
+        return None
+    exact = column_name.encode("utf-8")
+    matches = [i for i, name in enumerate(header) if name.strip() == exact]
+    if len(matches) != 1 or header[matches[0]] != exact:
+        raise ValueError(
+            f"imputation score column {column_name!r} must occur exactly once "
+            "with its declared spelling (no padded duplicates)"
+        )
+    return matches[0]
+
+
 def _required_metrics_projection(
-    path: str | Path, header_line: bytes, columns: MetricsProjectionColumns
+    path: str | Path,
+    header_line: bytes,
+    columns: MetricsProjectionColumns,
+    score_column: str | None = None,
 ) -> _ResolvedMetricsProjection:
-    projection = _metrics_projection_indexes(_header_cells(header_line), columns)
+    projection = _metrics_projection_indexes(_header_cells(header_line), columns, score_column)
     if projection is None:
         raise _missing_columns(
             path,
@@ -558,6 +586,14 @@ def _project_metrics_row(
         af_alt=_metrics_float(_metrics_cell(row, projection.frequency), parse_af),
         beta=beta,
         se=se,
+        imputation_score=(
+            parse_imputation_score(
+                _metrics_cell(row, projection.imputation_score).decode("utf-8"),
+                declared=True,
+            )
+            if projection.imputation_score is not None
+            else ImputationScore()
+        ),
     )
 
 
@@ -669,7 +705,7 @@ def require_signed_z_score(path: str | Path, column_name: str) -> None:
 
 
 def stream_projected_metrics(
-    path: str | Path, columns: MetricsProjectionColumns
+    path: str | Path, columns: MetricsProjectionColumns, *, score_column: str | None = None
 ) -> Iterator[TabularMetricsRow]:
     """Stream every row's variant identity and statistics, column-projected.
 
@@ -681,7 +717,7 @@ def stream_projected_metrics(
     """
     opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
     with opener(path, "rb") as fh:
-        projection = _required_metrics_projection(path, fh.readline(), columns)
+        projection = _required_metrics_projection(path, fh.readline(), columns, score_column)
         for line in fh:
             row = _metrics_fields(line, projection.split_limit)
             if len(row) <= projection.last_identity:
@@ -703,7 +739,7 @@ _PALINDROME_CODES = {"A": 1, "T": 2, "C": 3, "G": 4}
 _PALINDROME_PAIRS = ((1, 2), (2, 1), (3, 4), (4, 3))
 
 _STATISTIC_FIELDS = ("frequency", "effect", "standard_error", "sample_size")
-_PROJECTED_FIELDS = ("chromosome", "position", "ref", "alt", *_STATISTIC_FIELDS)
+_PROJECTED_FIELDS = ("chromosome", "position", "ref", "alt", *_STATISTIC_FIELDS, "imputation_score")
 _MISSING_TOKENS = sorted(_MISSING)
 
 #: Rows per block. Peak memory is a block's ALID strings rather than the whole
@@ -742,6 +778,23 @@ class MetricsChunk:
     af_alt: np.ndarray
     beta: np.ndarray
     se: np.ndarray
+    imputation_score: np.ndarray = field(default_factory=lambda: np.array([], dtype="float64"))
+    imputation_score_status: np.ndarray = field(default_factory=lambda: np.array([], dtype=object))
+
+    def __post_init__(self) -> None:
+        # Older blocked readers construct MetricsChunk without a score (#175).
+        if not self.imputation_score.size and len(self.alid):
+            object.__setattr__(self, "imputation_score", np.full(len(self.alid), np.nan))
+        if not self.imputation_score_status.size and len(self.alid):
+            object.__setattr__(
+                self,
+                "imputation_score_status",
+                np.full(len(self.alid), ImputationScoreStatus.UNDECLARED, dtype=object),
+            )
+        if len(self.imputation_score) != len(self.alid) or len(self.imputation_score_status) != len(
+            self.alid
+        ):
+            raise ValueError("imputation score arrays must align with MetricsChunk.alid")
 
     def __len__(self) -> int:
         return int(self.alid.shape[0])
@@ -941,6 +994,22 @@ def _projected_effect_arrays(
     return beta, se
 
 
+def _score_arrays(frame: pd.DataFrame, name: str | None) -> tuple[np.ndarray, np.ndarray]:
+    if name is None:
+        return (
+            np.full(len(frame), np.nan),
+            np.full(len(frame), ImputationScoreStatus.UNDECLARED, dtype=object),
+        )
+    scores = [
+        parse_imputation_score(str(cell), declared=True)
+        for cell in frame[name].to_numpy(dtype=object)
+    ]
+    return (
+        np.array([_or_nan(score.value) for score in scores], dtype="float64"),
+        np.array([score.status for score in scores], dtype=object),
+    )
+
+
 def _projected_chunk(
     frame: pd.DataFrame, names: dict[str, str], effect_source: EffectSource | None
 ) -> MetricsChunk:
@@ -957,6 +1026,7 @@ def _projected_chunk(
     upper = np.where(effect < other, other, effect)
     text = np.where(position_ok, position, 0).astype(str).astype(object)
     beta, se = _projected_effect_arrays(frame, names, effect_source)
+    scores, statuses = _score_arrays(frame, names.get("imputation_score"))
     return MetricsChunk(
         alid=(chromosome + ":" + text + ":" + lower + ":" + upper)[keep],
         flipped=(effect != lower)[keep],
@@ -966,6 +1036,8 @@ def _projected_chunk(
         )[keep],
         beta=beta[keep],
         se=se[keep],
+        imputation_score=scores[keep],
+        imputation_score_status=statuses[keep],
     )
 
 
@@ -983,6 +1055,8 @@ def _metric_frame_reader(
     exactly the missing spellings `parse_finite_float` accepts.
     """
     dtypes: dict[str, str] = {names["position"]: "str"}
+    if "imputation_score" in names:
+        dtypes[names["imputation_score"]] = "str"
     dtypes.update(
         dict.fromkeys((names[field] for field in ("chromosome", "ref", "alt")), "category")
     )
@@ -1005,7 +1079,11 @@ def _metric_frame_reader(
 
 
 def stream_projected_metric_chunks(
-    path: str | Path, columns: MetricsProjectionColumns, *, chunk_rows: int = DEFAULT_CHUNK_ROWS
+    path: str | Path,
+    columns: MetricsProjectionColumns,
+    *,
+    chunk_rows: int = DEFAULT_CHUNK_ROWS,
+    score_column: str | None = None,
 ) -> Iterator[MetricsChunk]:
     """Stream the projection `stream_projected_metrics` produces, by block.
 
@@ -1028,7 +1106,7 @@ def stream_projected_metric_chunks(
     opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
     with opener(path, "rb") as fh:
         header_line = fh.readline()
-    projection = _required_metrics_projection(path, header_line, columns)
+    projection = _required_metrics_projection(path, header_line, columns, score_column)
     names = _projected_column_names(_header_cells(header_line), projection)
     frames = _metric_frame_reader(path, names, chunk_rows)
     with frames:
@@ -1056,7 +1134,15 @@ def metrics_chunks_from_rows(
         yield _chunk_of_rows(batch)
 
 
+def _score_chunk_arrays(rows: list[TabularMetricsRow]) -> tuple[np.ndarray, np.ndarray]:
+    return (
+        np.array([_or_nan(row.imputation_score.value) for row in rows]),
+        np.array([row.imputation_score.status for row in rows], dtype=object),
+    )
+
+
 def _chunk_of_rows(rows: list[TabularMetricsRow]) -> MetricsChunk:
+    scores, statuses = _score_chunk_arrays(rows)
     return MetricsChunk(
         alid=np.array([row.alid for row in rows], dtype=object),
         flipped=np.array([row.flipped for row in rows], dtype=bool),
@@ -1066,6 +1152,8 @@ def _chunk_of_rows(rows: list[TabularMetricsRow]) -> MetricsChunk:
         af_alt=np.array([_or_nan(row.af_alt) for row in rows], dtype="float64"),
         beta=np.array([_or_nan(row.beta) for row in rows], dtype="float64"),
         se=np.array([_or_nan(row.se) for row in rows], dtype="float64"),
+        imputation_score=scores,
+        imputation_score_status=statuses,
     )
 
 
@@ -1106,6 +1194,7 @@ def stream_associations(
             se=row.se,
             stored_effect_scale=stored_effect_scale,
             eaf=eaf,
+            imputation_score=row.imputation_score,
         )
 
 

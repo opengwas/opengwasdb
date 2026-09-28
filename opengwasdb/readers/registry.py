@@ -16,7 +16,7 @@ from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY, FinnGenR13Reader
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader
-from opengwasdb.readers.interface import SourceReader
+from opengwasdb.readers.interface import ImputationScoreDeclaration, SourceReader
 
 _READERS: dict[str, Callable[[str | Path, StoredEffectScale], SourceReader]] = {
     FINNGEN_R13_CAPABILITY: FinnGenR13Reader,
@@ -31,7 +31,8 @@ def known_capabilities() -> tuple[str, ...]:
 
 
 def resolve_reader(
-    capability: str, path: str | Path, stored_effect_scale: StoredEffectScale
+    capability: str, path: str | Path, stored_effect_scale: StoredEffectScale,
+    *, imputation_score_declaration: ImputationScoreDeclaration | None = None,
 ) -> SourceReader:
     """Return a SourceReader for `path`, given its Source Collection's
     `source_reader_capability` string.
@@ -50,4 +51,10 @@ def resolve_reader(
         raise ValueError(
             f"unknown source reader capability {capability!r}; known: {known}"
         ) from None
+    if imputation_score_declaration is not None:
+        if capability != GWAS_SSF_CAPABILITY:
+            raise ValueError(f"imputation score declaration unsupported by {capability!r}")
+        return GwasSsfReader(
+            path, stored_effect_scale, imputation_score_declaration=imputation_score_declaration
+        )
     return reader_factory(path, stored_effect_scale)

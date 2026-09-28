@@ -87,6 +87,17 @@ _EAF_REFERENCE_HELP = (
     "column. A source reporting frequency against the other allele fails the build."
 )
 _EAF_ANCESTRY_HELP = "Population to read from an --eaf-reference panel directory, e.g. EUR"
+_CHECKPOINT_HELP = (
+    "Keep what each build phase produces beside the destination, so a failure hours in "
+    "costs a re-run of the phase it failed in rather than the whole build (#227). "
+    "Retains the Pass 2 spills and the partially built release until the build "
+    "succeeds, or until --overwrite discards them."
+)
+_RESUME_HELP = (
+    "Continue the checkpointed build for OUTPUT_PATH (#227). Every other parameter "
+    "is compared against the ones that build was started with, and a difference is "
+    "refused; use resume_hybrid_build(checkpoint_dir) to resume without restating them."
+)
 _ALLOW_UNVERIFIED_HELP = (
     "Accept Analyses the supplied --eaf-reference could not verify (too little "
     "overlap or frequency spread) instead of failing. Recorded in the store's provenance."
@@ -480,6 +491,10 @@ def build_hybrid_command(
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
+    checkpoint: Annotated[
+        bool, typer.Option("--checkpoint", help=_CHECKPOINT_HELP)
+    ] = False,
+    resume: Annotated[bool, typer.Option("--resume", help=_RESUME_HELP)] = False,
     n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 1 and Pass 2"),
     chunk_variants: int = typer.Option(DEFAULT_CHUNK_SHAPE[0], help="Zarr variant chunk size"),
     chunk_analyses: int = typer.Option(DEFAULT_CHUNK_SHAPE[1], help="Zarr analysis chunk size"),
@@ -502,7 +517,8 @@ def build_hybrid_command(
     On-panel variants in --reference-panel fill the Dense Component; off-panel variants
     go to Ragged Overflow. --variant-reference supplies a precomputed axis and source
     map, bypassing Pass 1 (#186). --source-reader-capability and --source-assembly
-    supply per-release defaults (#174).
+    supply per-release defaults (#174). --checkpoint keeps a resumable record of
+    each phase (#227), and --resume continues the build for OUTPUT_PATH from one.
     """
     res = build_hybrid_from_vcf_manifest(
         manifest_path, output_path, reference_panel=reference_panel,
@@ -511,6 +527,7 @@ def build_hybrid_command(
         chunk_shape=(chunk_variants, chunk_analyses), eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=capability, source_assembly=assembly,
+        checkpoint=checkpoint, resume=resume,
     )
     _echo_summary(
         dict(
@@ -779,6 +796,7 @@ def resolve_analyses_command(
             help="Variant list or QC panel file for bounded ancestry extraction",
         ),
     ] = None,
+    variant_reference: Annotated[Path | None, typer.Option(help="Hybrid axis overlap")] = None,
     af_reference: Annotated[
         list[str] | None,
         typer.Option(
@@ -867,10 +885,9 @@ def resolve_analyses_command(
     panel, gates, and method tiers) match the current run are preserved without
     re-executing. Missing, failed, or stale records are rerun.
 
-    The Ancestry Reference Panel is loaded once in the parent process and
-    fork-shared across workers. Ordinary source, parser, or statistical errors
-    are isolated to the affected Analysis and recorded as controlled_failure,
-    while systemic configuration errors fail the command immediately.
+    The Ancestry Reference Panel and optional Hybrid axis are loaded once in the
+    parent and fork-shared across workers. Source/parser/statistical errors are
+    isolated to the affected Analysis; setup errors fail the command.
     """
     try:
         summary = resolve_analyses_manifest(
@@ -879,6 +896,7 @@ def resolve_analyses_command(
             ancestry_reference=ancestry_reference,
             ancestry_groups=ancestry_groups,
             extraction_panel=extraction_panel,
+            variant_reference=variant_reference,
             af_references=af_reference,
             af_reference_ancestry=af_reference_ancestry,
             default_source_reader_capability=default_source_reader_capability,

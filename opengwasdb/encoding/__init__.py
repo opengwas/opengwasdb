@@ -6,6 +6,7 @@ is the only place a store's stored bytes become physical values.
 """
 
 from opengwasdb.encoding.codec import (
+    DEFAULT_BASELINE_CELL_BUDGET,
     EAF_BASELINE,
     EAF_EXCEPTION_INDEX,
     EAF_EXCEPTION_VALUE,
@@ -23,6 +24,7 @@ from opengwasdb.encoding.codec import (
     ZOverflowTable,
     eaf_baseline_from_grid,
     eaf_baseline_from_pairs,
+    eaf_baseline_from_sorted_runs,
     expit,
     logit,
     positions_at,
@@ -79,6 +81,7 @@ from opengwasdb.encoding.planes import (
     write_se_dense,
 )
 from opengwasdb.encoding.se import (
+    OverflowCellBatches,
     OverflowCells,
     optimise_dense_se,
     optimise_dense_se_joint,
@@ -86,6 +89,7 @@ from opengwasdb.encoding.se import (
 )
 
 __all__ = [
+    "DEFAULT_BASELINE_CELL_BUDGET",
     "DEFAULT_PER_VARIANT_CHUNK",
     "DEFAULT_Z_SCALE",
     "ENCODING_VERSION",
@@ -108,6 +112,7 @@ __all__ = [
     "EafExceptionTable",
     "EafMeasurements",
     "EncodingMeasurements",
+    "OverflowCellBatches",
     "OverflowCells",
     "RaggedEafPlane",
     "RaggedSePlane",
@@ -134,6 +139,7 @@ __all__ = [
     "Z_OVERFLOW_VALUE",
     "eaf_baseline_from_grid",
     "eaf_baseline_from_pairs",
+    "eaf_baseline_from_sorted_runs",
     "expit",
     "logit",
     "measure_eaf",

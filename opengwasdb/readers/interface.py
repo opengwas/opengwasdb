@@ -24,11 +24,73 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 import numpy as np
 
 from opengwasdb.model.enums import StoredEffectScale
+
+
+class ImputationScoreStatus(StrEnum):
+    """A score's validity, independently of whether an association has an effect."""
+
+    UNDECLARED = "undeclared"
+    USABLE = "usable"
+    MISSING = "missing"
+    MALFORMED = "malformed"
+    NONFINITE = "nonfinite"
+    OUT_OF_RANGE = "out_of_range"
+
+
+class ImputationScoreKind(StrEnum):
+    IMPUTATION_INFO = "imputation_info"
+    IMPUTATION_R2 = "imputation_r2"
+
+
+@dataclass(frozen=True)
+class ImputationScoreDeclaration:
+    """Explicit provider-backed mapping; a header name alone is not provenance.
+
+    The caller must supply independent evidence that `column_name` measures
+    imputation INFO or R² for this Analysis. Neither EAF nor a familiar-looking
+    header is evidence. Preserve this declaration in release metadata (#175).
+    """
+
+    column_name: str
+    kind: ImputationScoreKind
+    provenance: str
+
+    def __post_init__(self) -> None:
+        if not self.column_name or self.column_name != self.column_name.strip():
+            raise ValueError("imputation score column name must be exact and nonempty")
+        if not isinstance(self.kind, ImputationScoreKind):
+            raise ValueError("imputation score kind must be imputation_info or imputation_r2")
+        if not isinstance(self.provenance, str) or not self.provenance.strip():
+            raise ValueError("imputation score requires independent provider provenance")
+
+
+@dataclass(frozen=True)
+class ImputationScore:
+    value: float | None = None
+    status: ImputationScoreStatus = ImputationScoreStatus.UNDECLARED
+
+
+def parse_imputation_score(value: str | None, *, declared: bool) -> ImputationScore:
+    """Parse a declared score in [0, 1], without substituting a default."""
+    if not declared:
+        return ImputationScore()
+    if value is None or value.strip() in ("", ".", "NA", "NaN", "nan", "None"):
+        return ImputationScore(status=ImputationScoreStatus.MISSING)
+    try:
+        number = float(value)
+    except ValueError:
+        return ImputationScore(status=ImputationScoreStatus.MALFORMED)
+    if not np.isfinite(number):
+        return ImputationScore(status=ImputationScoreStatus.NONFINITE)
+    if not 0.0 <= number <= 1.0:
+        return ImputationScore(status=ImputationScoreStatus.OUT_OF_RANGE)
+    return ImputationScore(number, ImputationScoreStatus.USABLE)
 
 
 @dataclass(frozen=True)
@@ -57,6 +119,8 @@ class ReaderAssociation:
     se: float
     stored_effect_scale: StoredEffectScale
     eaf: float | None = None
+    # Present only with an independent provider-backed declaration (#175).
+    imputation_score: ImputationScore = ImputationScore()
 
     def __post_init__(self) -> None:
         if self.se < 0:

@@ -10,7 +10,168 @@ the end of this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Ragged Overflow's `eaf` plane is written once, ahead of the SE fit, and
+  both SE passes read their frequencies back from it.** The SE coefficient fit
+  and the byte measurement each derived every Overflow cell's round-tripped
+  frequency for themselves -- a `StoreCodec.encode_eaf`/`decode_eaf` round trip
+  per pass over the whole component -- which #231 attributed as roughly half the
+  streaming overhead the #228 split added (encode and decode each ~half the
+  added SE-phase cost). The `eaf` plane's encoding is
+  already decided before the fit runs, so `RaggedCSRWriter.write_eaf_plane` now
+  creates the component's zarr group and writes the `eaf`/`z`/`variant_index`
+  planes and both frequency exception tables ahead of it, and `se_fit_batches` /
+  `se_fit_chunk_batches` decode that plane back a region at a time instead of
+  re-encoding. `flush_se` adds the SE half (and the completion marker) to the
+  same group rather than replacing it, so the group is created exactly once and
+  a build failing in between leaves a group with no `completion_state` -- and a
+  staged release that is discarded whole. Nothing stored changes: the `eaf`
+  plane, both exception tables, the chosen SE encoding and every other array
+  are identical to a build of the same inputs on the base, checked over the
+  synthetic fixtures and a real 10-Analysis OGS-00011 subset (805,213 Overflow
+  cells; 66 decoded arrays including both exception tables, 0 differences, and
+  the same chosen encoding), and both SE passes still decode, so the
+  duplication -- not the whole streaming overhead -- is what goes: on that
+  subset, which #229's eligibility gate sends to `float16` so only the fit pass
+  runs, the fit's own encode drops from 30.5 ms (0.038 us/cell) to zero while
+  its decode is unchanged. Peak memory stays bounded by the region budget; the
+  fit no longer materialises a per-pass copy of the frequencies (issue #232).
+
+- **Residual SE eligibility is decided before the fit and both measurement
+  passes, not after them.** The joint SE optimiser fitted the plane, measured
+  every candidate range over both components, and only then consulted the
+  eligibility flag -- so a plane one Analysis condemned on its own paid for the
+  two measurements it could never use. It now reads the verdict out of the
+  pass that produces the fit's sums, and goes straight to the `float16`
+  fallback: on the 25-Analysis OGS-00011 Dense Component that is 19.0 s of one
+  plane read instead of 95.7 s (fit 19.3 s + 76.4 s of measurement), and no
+  second walk is added to find it out. Nothing the verdict produces changes --
+  the chosen encoding, the coefficients and every stored array are identical
+  for eligible and ineligible input alike, checked byte for byte against this
+  commit's predecessor over nine synthetic fixtures, both triggers on either
+  component, the byte-decision fallback and `eaf: absent`, plus the real
+  component (issue #229). The fallback also now says *why* it happened and how
+  many Analyses were responsible -- the two triggers are an Analysis whose
+  cells carry a finite SE and no frequency, and an Analysis the fit cannot
+  solve (fewer than two usable cells, or no spread in its frequencies) -- where
+  it used to report a non-finite EAF without having looked. On the real
+  25-Analysis component that is "10 of 25 Analyses cannot be fitted from too
+  few or degenerate cells". Residual SE remains all-or-nothing per component;
+  that limitation is now stated in the store-format spec and ADR 0037 §3
+  (issue #229).
+
+- **The Ragged Overflow's per-variant EAF baseline is derived once per build.**
+  `RaggedCSRWriter` recomputed it on every ask, and a Hybrid build asks three
+  times over the same cells -- the joint SE fit's Analysis-aligned batches, that
+  fit's chunk-aligned measurement batches, and the CSR flush -- while a
+  standalone Ragged build asks twice (its own SE measurement, then the flush).
+  On a real 10-Analysis OGS-00011 subset (805,213 Overflow cells over
+  14,024,128 shared variants) that was three walks of the plane at 0.68 s,
+  0.46 s and 0.47 s; the writer now derives it in the first phase that needs it
+  and every later ask gets that array back, the same object rather than a copy,
+  until an Analysis is appended -- which drops it, because a new cell can move a
+  variant's median. What is held is one `float32` per variant, not per cell, and
+  every pass already held its own copy for that pass's duration, so the number
+  of passes changes and the peak does not. Nothing else changes either: the two
+  builds' stores decode array for array to identical values (66 arrays, including
+  the baseline itself), their manifests differ only in `created_at`, and the
+  chosen encoding is unchanged (#230).
+
+- **Hybrid reference routing for lowercase source alleles**: case-fold source
+  allele keys when matching Dense reference variants and collecting genuinely
+  off-reference associations, without changing effect orientation; reject
+  conflicting case-folded reference keys (stores #174).
+
 ### Added
+
+- **Phase-granularity checkpoint and resume for the Hybrid build tail**: an
+  opt-in `--checkpoint` keeps what each phase produces beside the destination,
+  so a failure hours into a build costs a re-run of the phase it failed in
+  rather than the whole build -- the 7 h 35 m OGS-00011 discarded after a crash
+  in the joint SE fit. `--resume` (or `resume_hybrid_build(checkpoint_dir)`,
+  which takes only the directory) re-enters at the last recorded phase, reloads
+  every parameter and every external input's identity (path, size, mtime and
+  SHA-256) from the `build_params.json` the first run wrote, and refuses an
+  absent record, a mismatched format version, a changed parameter, a changed
+  input, a torn phase record, or a missing or truncated spill plate.
+  `n_workers` is the one parameter a resume may change. The phases recorded are
+  Pass 2 (its spills, and each Analysis's declared-score dispositions for
+  `provenance.info_score`), the off-reference fold (the post-Pass-2 axis -- key
+  table, `old_to_new`, shared ALID list and provenance maps -- frozen before its
+  first column, plus a completion file per folded column), EAF orientation (its
+  report, at full precision), the joint encoding plan (written before the first
+  Dense band write and never re-measured, so the codes those bands were written
+  under cannot change) and the Dense band write (its top-hit harvest, which the
+  write's own spill cleanup would otherwise take with it). The tail -- Overflow
+  CSR assembly, `eaf` plane, joint SE fit, Dense finish, CSR flush, shared
+  metadata -- carries no marker and re-runs wholesale from the retained `.ovf`
+  plates and the frozen plan, so a resume after a crash in `_fit_joint_se`
+  re-writes no band and measures nothing. Without `--checkpoint` nothing
+  changes: no checkpoint directory, no retained spills, and a failure still
+  leaves nothing behind. A resumed build publishes atomically through the same
+  Staged Release commit as an uninterrupted one, adopting the release the failed
+  run had written (`OpenGWASDBStore.staging(adopt=..., retain_on_failure_to=...)`,
+  both defaults unchanged), and removes the checkpoint once it has. `--overwrite`
+  discards a stale checkpoint; every other build for that destination -- a plain
+  one included -- refuses it, naming `resume_hybrid_build` and the flag, rather
+  than orphaning a released build's Dense Component beside a fresh store. A
+  failure logs the checkpoint directory and that command. The cost is the retained spills -- 734 GB for OGS-00011 -- which
+  `tests/test_hybrid_checkpoint.py::TestFootprint` pins as a bytes-per-cell
+  ceiling (issue #227; ADR 0053).
+- **Hybrid build applies a declared INFO policy and records its dispositions**:
+  each Analysis's `info_score_threshold` row is parsed with the same
+  `parse_info_score_policy` the resolver uses, the declaration reaches the
+  GWAS-SSF Source Reader, and one shared retention function -- called by both the
+  resolver's scan and the builder's batch -- drops every association below a
+  positive threshold or carrying no usable score *before* Dense/Overflow
+  routing, the EAF orientation check, the SE fit and the Top-Hit Counts, so a row
+  a declared threshold rejected can no longer be stored or counted. Each
+  Analysis's dispositions (`associations_observed`/`_retained`/
+  `_below_threshold`/`_missing`/`_malformed`/`_nonfinite`/`_out_of_range`/
+  `_usable`, plus `info_score_state` and `info_score_threshold`) are recorded in
+  `manifest.json`'s `provenance.info_score`, counted over the associations the
+  Source Reader yielded rather than the resolver's canonical rows; the block is
+  omitted entirely when no row declared a policy, and a legacy manifest's store
+  is then unchanged (a mixed VCF/GWAS-SSF fixture: 52 of 52 arrays byte-identical
+  to the previous commit, manifest differing only in `created_at`). A declared
+  score with no usable value anywhere fails the build naming its Analysis, as the
+  resolver does (stores #175; `docs/spec/store-format.md` §7a).
+- **CORE resolver INFO filtering**: carry the provider-declared GWAS-SSF score through
+  the one-pass Analysis resolver; apply a strictly-below-threshold row filter before
+  ancestry/SD evidence, record canonical observed/retained and status dispositions,
+  plus post-filter eligible on/off-axis row counts. Explicit zero, unavailable NaN,
+  and legacy absent policies are distinct and an inconsistent policy state is
+  rejected at construction; a declared score with no usable values fails the
+  Analysis (stores #175; `docs/info-score-resolver.md`).
+- **CORE manifest INFO policy inputs**: parse and validate a per-Analysis
+  `info_score_threshold` with exact provider-backed score column, INFO/R² kind,
+  provenance and supported reader capability. Missing or `NaN` without mapping
+  means no filter; malformed or partial declarations fail. The resumable
+  manifest resolver fingerprints the policy (stores #175).
+- **Provider-declared GWAS-SSF imputation INFO/R² reader contract**: explicit
+  per-Analysis source column, score kind and independent provenance; associations,
+  projected rows and bounded chunks expose the same score and validity status.
+  Undeclared or unusable scores remain absent, never inferred from frequency or
+  similarly named source columns (stores #175).
+- **`resolve-analyses --variant-reference`**: count rows matching the Hybrid
+  axis and full ancestry reference during the existing per-Analysis scan;
+  persist scanned-row denominators and axis fingerprint in resumable records
+  so bundle generation can gate projected off-reference share (stores #174).
+- **`opengwasdb.encoding.OverflowCellBatches`**: a re-iterable source of Ragged
+  Overflow Component cells in bounded batches, in the two batchings the joint SE
+  optimiser needs -- Analysis-aligned for the fit's per-Analysis sums and
+  chunk-aligned for the byte measurement. `RaggedCSRWriter.se_fit_source`,
+  `se_fit_batches` and `se_fit_chunk_batches` produce them; `of_cells` wraps an
+  already-materialised bundle as a single batch, so callers holding one keep
+  today's behaviour and byte totals (#228).
+
+- **`opengwasdb.encoding.eaf_baseline_from_sorted_runs`**: per-variant EAF
+  baselines computed over variant-aligned blocks of per-Analysis runs already
+  sorted by variant index, with a `DEFAULT_BASELINE_CELL_BUDGET`-bounded working
+  set instead of one sized to the plane. Bit-identical to
+  `eaf_baseline_from_pairs` over the concatenated runs, and the path the Ragged
+  Overflow CSR now takes (#226).
 
 - **`opengwasdb.build.ordered_pool.ordered_map`**: a forked worker-pool map that
   yields results in input order with a bounded number in flight, and runs
@@ -207,6 +368,20 @@ the end of this file.
 
 ### Changed
 
+- **The Reference Completion checkpoint refusal names the flag that discards
+  it**: `require_fresh_destination` said "overwrite=True to discard it", which
+  is the API spelling; it now adds `--overwrite`, the spelling an operator
+  typing the command sees. Shared by Reference Completion and the Hybrid build
+  (issue #227, ADR 0053), whose resume function the message also names.
+- **The Ragged Overflow top-hit index scans the CSR in bounded slices (#233)**:
+  the phase no longer decodes every CSR association into parallel columns held
+  whole -- about 24 bytes a cell held and a measured 46.6-83.1 bytes a cell at
+  peak across two OGS-00011 subsets. It now streams `slice_cells` at a time
+  (default 2**21), keeps only the cells clearing the loosest tier, and derives
+  each cell's Analysis index from the CSR offsets rather than a materialised
+  position range. Every tier is bit-identical to the previous builder -- the
+  50-Analysis subset's 110,646 / 177,631 / 559,256 counts are unchanged -- and
+  the no-frequency and `imputed` branches keep their columns.
 - **Pass 2 off-reference keys are now fixed-width `uint64`, not pickled strings**:
   a Hybrid build with `--variant-reference` encodes each off-reference source
   coordinate in the Pass 2 worker. SNVs with one-base A/C/G/T alleles pack
@@ -441,6 +616,44 @@ the end of this file.
   tables: `benchmarks/README.md`.
 
 ### Fixed
+
+- **`RaggedCSRWriter.flush` no longer concatenates the component's planes.** It
+  built `variant_index`, `z`, `se` and `eaf` whole, encoded each in one piece and
+  then decoded the EAF plane back whole to encode SE against it -- a measured
+  72.9 bytes per cell, or 1.10 TB on OGS-00011's 15,078,327,210 Overflow cells.
+  The planes are now created at full length and filled a `region_cells` region at
+  a time, with the z overflow table and both exception tables accumulated across
+  regions and written once at the end. What is stored is unchanged: each plane's
+  codes are a per-cell function of its value, the side tables are keyed on global
+  flat position which `positions_flat(lo)` supplies per region, and regions are
+  visited in ascending order so the table rows keep the order a single whole-plane
+  pass produced (#228).
+
+- **The Hybrid joint SE fit no longer materialises the Ragged Overflow's flat
+  planes.** `_fit_joint_se` passed `se_fit_inputs`'s three whole-plane arrays
+  into `optimise_dense_se_joint`, which fitted and measured them in place.
+  Measured across two real OGS-00011 subsets (46,192,414 and 523,060,451
+  Overflow cells), building those arrays cost 85.8 bytes per cell and the
+  coefficient fold a further 50.0 -- 1.29 TB and 0.75 TB projected on the full
+  15,078,327,210-cell release, against a 1,006 GB host. The fit now folds
+  Analysis-aligned batches and the measurement charges chunk-aligned ones, so
+  neither holds the plane. Results are unchanged by construction: the
+  coefficients are per-Analysis `numpy.bincount` sums and an Analysis is never
+  split across batches, while the byte totals are charged chunk by chunk and
+  only the plane's true final edge chunk is padded (#158, #228).
+
+- **The Hybrid joint SE fit no longer materialises the whole Ragged Overflow
+  plane.** `RaggedCSRWriter.se_fit_inputs` passed the concatenated plane to
+  `eaf_baseline_from_pairs`, which upcast both arrays to 8-byte dtypes and then
+  `lexsort`ed the full length — about 53 bytes of peak per cell, measured. On
+  OGS-00011's 15,078,327,210-cell Overflow that is ~750 GiB for one call, and the
+  build died with `MemoryError: Unable to allocate 112. GiB` after 8 h 15 m with
+  the Dense Component already fully written. Both baseline call sites now use
+  `eaf_baseline_from_sorted_runs`, whose peak is set by the cell budget rather
+  than the plane: measured flat at ~1.3-1.8 GiB across a 4x growth in cells
+  (46 -> 16 bytes per cell and still falling). Baselines are unchanged — every
+  variant's median is the same arithmetic over the same `float64` logits, which
+  the equivalence tests assert cell for cell (#226).
 
 - **`VariantAxis.identity_by_indices()` no longer assumes the ALID index is
   complete.** The method inverted `_alid_rows` as a permutation of every axis

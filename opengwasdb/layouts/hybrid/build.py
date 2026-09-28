@@ -21,13 +21,14 @@ context, collision/provenance rules, the disjoint-partition layout).
 
 from __future__ import annotations
 
+import csv
 import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import as_completed
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -35,14 +36,23 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.build.eaf_orientation import (
+    EafOrientationMethod,
+    EafOrientationOutcome,
     EafOrientationReport,
+    OrientationEvidence,
     apply_orientation_evidence,
     site_hashes,
     verify_eaf_orientation,
 )
+from opengwasdb.build.info_score_filter import (
+    InfoScoreCounts,
+    count_info_scores,
+    retained_mask,
+)
 from opengwasdb.build.liftover import LiftoverFailureError
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import (
+    EafMeasurements,
     EncodingMeasurements,
     StoreEncoding,
     combine_eaf_measurements,
@@ -75,6 +85,41 @@ from opengwasdb.layouts.dense.constants import (
     DEFAULT_DTYPE,
 )
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
+from opengwasdb.layouts.hybrid.checkpoint import (
+    AXIS,
+    AXIS_CANONICAL_RAW,
+    AXIS_OFF_PANEL,
+    AXIS_PANEL,
+    AXIS_SHARED,
+    FOLD_DIR,
+    HITS,
+    INFO_COUNTS,
+    ORIENTATION,
+    PLAN,
+    PROVENANCE_RSID,
+    PROVENANCE_SOURCE,
+    RESUME_FUNCTION,
+    CheckpointState,
+    checkpoint_dir_for,
+    completed_phases,
+    input_identities,
+    input_identity,
+    load_npz,
+    mark_phase,
+    read_build_params,
+    read_json,
+    read_lines,
+    read_str_map,
+    record_plates,
+    require_fresh_destination,
+    require_intact_plates,
+    require_matching_params,
+    save_npz,
+    write_build_params,
+    write_json,
+    write_lines,
+    write_str_map,
+)
 from opengwasdb.layouts.hybrid.key_runs import (
     HG19,
     HG38,
@@ -118,8 +163,14 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
     StoredEffectScale,
 )
+from opengwasdb.model.info_score_policy import (
+    InfoScorePolicy,
+    InfoScoreState,
+    parse_info_score_policy,
+)
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
+from opengwasdb.readers.interface import ImputationScoreStatus
 from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
@@ -135,6 +186,7 @@ _OffReferenceSpill = tuple[
 
 __all__ = [
     "build_hybrid_from_vcf_manifest",
+    "resume_hybrid_build",
     "HybridBuildResult",
     "read_reference_panel_alids",
     "LiftoverFailureError",
@@ -198,6 +250,10 @@ _pass2_keys_sorted: np.ndarray | None = None
 _pass2_targets_sorted: np.ndarray | None = None  # int64: dense row (panel) or shared idx (off)
 _pass2_ispanel_sorted: np.ndarray | None = None  # bool: True = on-panel target
 _pass2_spill_dir: Path | None = None
+# Column index -> that Analysis's declared INFO policy (stores #175), so a
+# worker applies the policy of the row its task came from without the task
+# tuple growing a sixth element the Dense builder does not share.
+_pass2_info_policies: Mapping[int, InfoScorePolicy] | None = None
 
 
 def _build_routing_index(
@@ -231,8 +287,11 @@ def _build_routing_index(
             ispanel.append(False)
         chroms.append(chrom)
         poss.append(pos)
-        refs.append(ref)
-        alts.append(alt)
+        # SourceReaders retain the source's allele spelling, while resolver
+        # ALIDs and identity reference keys use upper-case alleles. Case is not
+        # an effect-orientation change: keep ref/alt order intact.
+        refs.append(ref.upper())
+        alts.append(alt.upper())
     keys_list = [
         f"{chrom}:{pos}:{ref}:{alt}".encode()
         for chrom, pos, ref, alt in zip(chroms, poss, refs, alts, strict=True)
@@ -242,7 +301,21 @@ def _build_routing_index(
     targets_arr = np.array(targets, dtype=np.int64)
     ispanel_arr = np.array(ispanel, dtype=bool)
     order = np.argsort(keys, kind="stable")
-    return keys[order], targets_arr[order], ispanel_arr[order]
+    sorted_keys = keys[order]
+    sorted_targets = targets_arr[order]
+    sorted_panel = ispanel_arr[order]
+    # Two artifact keys differing only in case must not route to different
+    # stored variants after folding: that would make searchsorted's choice
+    # dependent on insertion order and silently misplace an association.
+    duplicate = sorted_keys[1:] == sorted_keys[:-1]
+    conflicting = duplicate & (
+        (sorted_targets[1:] != sorted_targets[:-1])
+        | (sorted_panel[1:] != sorted_panel[:-1])
+    )
+    if np.any(conflicting):
+        key = sorted_keys[1:][conflicting][0]
+        raise ValueError(f"source key {key!r} maps to conflicting variants after case folding")
+    return sorted_keys, sorted_targets, sorted_panel
 
 
 def _dedup_last_wins(
@@ -291,11 +364,16 @@ def _match_hybrid_batch(
     )
     if len(keys_sorted) == 0:
         keys = np.array(
-            [f"{c}:{p}:{r}:{a}" for c, p, r, a in zip(chroms, poss, refs, alts, strict=True)],
+            [
+                f"{c}:{p}:{r.upper()}:{a.upper()}"
+                for c, p, r, a in zip(chroms, poss, refs, alts, strict=True)
+            ],
             dtype=object,
         )
         return empty, empty, (keys, z_arr, se_arr, eaf_arr)
-    query = _encode_variant_keys(chroms, poss, refs, alts)
+    query = _encode_variant_keys(
+        chroms, poss, [ref.upper() for ref in refs], [alt.upper() for alt in alts]
+    )
     idx = np.searchsorted(keys_sorted, query)
     idx_clip = np.minimum(idx, len(keys_sorted) - 1)
     matched = keys_sorted[idx_clip] == query
@@ -304,7 +382,10 @@ def _match_hybrid_batch(
     z_m, se_m, eaf_m = z_arr[matched], se_arr[matched], eaf_arr[matched]
     unmatched = ~matched
     keys = np.array(
-        [f"{chroms[j]}:{poss[j]}:{refs[j]}:{alts[j]}" for j in np.flatnonzero(unmatched)],
+        [
+            f"{chroms[j]}:{poss[j]}:{refs[j].upper()}:{alts[j].upper()}"
+            for j in np.flatnonzero(unmatched)
+        ],
         dtype=object,
     )
     return (
@@ -321,6 +402,36 @@ def _extend(accumulators: tuple[list[np.ndarray], ...], parts: tuple[np.ndarray,
             accumulator.append(part)
 
 
+def _require_one_batch(scores: Sequence[float | None], zs: Sequence[float]) -> None:
+    """Fail loudly unless the INFO score buffers are the association batch's rows.
+
+    Nine buffers hold one batch -- the INFO filter reads the two score ones and
+    routes the seven statistic ones. One left holding an earlier batch would
+    filter one batch's rows against another's mask, which either raises or, worse,
+    silently keeps the wrong rows, so it is refused here rather than routed
+    (stores #175).
+    """
+    if len(scores) != len(zs):
+        raise ValueError(
+            f"INFO score buffers hold {len(scores)} row(s) for {len(zs)} association(s)"
+        )
+
+
+def _retain_rows(lists: tuple[list[Any], ...], keep: np.ndarray) -> None:
+    """Keep `keep`'s rows in every positionally parallel batch list, in place.
+
+    The batch lists are one buffer shared with the caller's own loop, so a
+    dropped row must leave all of them together -- a filter that kept a
+    coordinate and dropped its z would route an association the policy
+    excluded.
+    """
+    if bool(keep.all()):
+        return
+    indices = np.flatnonzero(keep).tolist()
+    for values in lists:
+        values[:] = [values[index] for index in indices]
+
+
 def _resolve_column_hybrid(
     file_path: str,
     keys_sorted: np.ndarray,
@@ -330,17 +441,19 @@ def _resolve_column_hybrid(
     *,
     capability: str = GWAS_VCF_CAPABILITY,
     stored_effect_scale: str = StoredEffectScale.SD.value,
+    info_score_policy: InfoScorePolicy | None = None,
 ) -> tuple[
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     _OffReferenceSpill,
+    InfoScoreCounts,
 ]:
     """Stream one study once, routing each association to the dense fill (on-panel),
     the ragged overflow (off-panel/reference), or -- when the routing index does
     not hold its source coordinate at all -- an off-reference bucket keyed by the
-    raw coordinate. Returns ``(dense, overflow, off_reference)`` where each is
-    ``(index/key, z f32, se f32, eaf f32)`` deduped last-wins; `eaf` is NaN where
-    the source reports no frequency (ADR 0036).
+    raw coordinate. Returns ``(dense, overflow, off_reference, info_counts)``
+    where each is ``(index/key, z f32, se f32, eaf f32)`` deduped last-wins; `eaf`
+    is NaN where the source reports no frequency (ADR 0036).
 
     ``capability`` resolves a ``SourceReader`` (issue #20) rather than this
     module streaming a VCF itself; ``stored_effect_scale`` is required to
@@ -350,8 +463,22 @@ def _resolve_column_hybrid(
     (continuous-trait phenotype-SD standardisation, issue #18): a study's SD
     rescaling applies uniformly regardless of which component an association
     routes to. Defaults to 1.0 (no-op).
+
+    ``info_score_policy`` is this Analysis's declared imputation-score policy
+    (stores #175). Its declaration reaches the reader, and the shared
+    ``retained_mask`` rule is applied to each batch *before* the batch is
+    matched, so a row a declared positive threshold excludes reaches neither
+    component, the EAF survey nor the top-hit counts. ``info_counts`` reports
+    the dispositions behind that filter: the associations this reader yielded,
+    not canonical source rows.
     """
-    reader = resolve_reader(capability, file_path, StoredEffectScale(stored_effect_scale))
+    info_score_policy = info_score_policy or InfoScorePolicy()
+    reader = resolve_reader(
+        capability,
+        file_path,
+        StoredEffectScale(stored_effect_scale),
+        imputation_score_declaration=info_score_policy.imputation_score_declaration,
+    )
     d_idx: list[np.ndarray] = []
     d_z: list[np.ndarray] = []
     d_se: list[np.ndarray] = []
@@ -372,29 +499,50 @@ def _resolve_column_hybrid(
     zs: list[float] = []
     ses: list[float] = []
     eafs: list[float] = []
+    scores: list[float | None] = []
+    statuses: list[ImputationScoreStatus] = []
+    counts = InfoScoreCounts()
 
     def _flush() -> None:
+        nonlocal counts
+        _require_one_batch(scores, zs)
         if not zs:
             return
-        dense, overflow, unknown = _match_hybrid_batch(
-            chroms,
-            keys_sorted,
-            poss,
-            targets_sorted,
-            refs,
-            ispanel_sorted,
-            alts,
-            zs,
-            ses,
-            eafs,
+        block_scores = np.asarray(scores, dtype=np.float64)
+        block_statuses = np.asarray(statuses, dtype=object)
+        # The two score buffers are consumed into arrays above and the seven
+        # statistic ones are routed below: all nine are emptied on every exit
+        # path, so no batch is filtered or counted against another batch's rows.
+        scores.clear()
+        statuses.clear()
+        counts += count_info_scores(block_scores, block_statuses, info_score_policy)
+        _retain_rows(
+            (chroms, poss, refs, alts, zs, ses, eafs),
+            retained_mask(block_scores, block_statuses, info_score_policy),
         )
-        _extend((d_idx, d_z, d_se, d_eaf), dense)
-        _extend((o_idx, o_z, o_se, o_eaf), overflow)
-        if len(unknown[0]):
-            u_keys.extend(str(key) for key in unknown[0])
-            _extend((u_z, u_se, u_eaf), unknown[1:])
-        for lst in (chroms, poss, refs, alts, zs, ses, eafs):
-            lst.clear()
+        try:
+            if not zs:
+                return
+            dense, overflow, unknown = _match_hybrid_batch(
+                chroms,
+                keys_sorted,
+                poss,
+                targets_sorted,
+                refs,
+                ispanel_sorted,
+                alts,
+                zs,
+                ses,
+                eafs,
+            )
+            _extend((d_idx, d_z, d_se, d_eaf), dense)
+            _extend((o_idx, o_z, o_se, o_eaf), overflow)
+            if len(unknown[0]):
+                u_keys.extend(str(key) for key in unknown[0])
+                _extend((u_z, u_se, u_eaf), unknown[1:])
+        finally:
+            for lst in (chroms, poss, refs, alts, zs, ses, eafs):
+                lst.clear()
 
     for assoc in reader.stream_associations():
         chroms.append(assoc.chromosome)
@@ -404,6 +552,8 @@ def _resolve_column_hybrid(
         zs.append(assoc.z)
         ses.append(assoc.se)
         eafs.append(float("nan") if assoc.eaf is None else assoc.eaf)
+        scores.append(assoc.imputation_score.value)
+        statuses.append(assoc.imputation_score.status)
         if len(zs) >= _RESOLVE_BATCH:
             _flush()
     _flush()
@@ -453,6 +603,7 @@ def _resolve_column_hybrid(
         _assemble(d_idx, d_z, d_se, d_eaf),
         _assemble(o_idx, o_z, o_se, o_eaf),
         _assemble_unknown(),
+        counts,
     )
 
 
@@ -490,13 +641,14 @@ def _spill_hybrid_column(
             _write_unknown_side_file(spill_dir, col_idx, u_hashed_raw)
 
 
-def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
+def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, InfoScoreCounts]:
     assert _pass2_keys_sorted is not None
     assert _pass2_targets_sorted is not None
     assert _pass2_ispanel_sorted is not None
     assert _pass2_spill_dir is not None
+    assert _pass2_info_policies is not None
     col_idx, file_path, se_divisor, capability, stored_effect_scale = task
-    dense, overflow, off_reference = _resolve_column_hybrid(
+    dense, overflow, off_reference, info_counts = _resolve_column_hybrid(
         file_path,
         _pass2_keys_sorted,
         _pass2_targets_sorted,
@@ -504,9 +656,10 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
         se_divisor,
         capability=capability,
         stored_effect_scale=stored_effect_scale,
+        info_score_policy=_pass2_info_policies[col_idx],
     )
     _spill_hybrid_column(_pass2_spill_dir, col_idx, dense, overflow, off_reference)
-    return col_idx
+    return col_idx, info_counts
 
 
 @dataclass(frozen=True)
@@ -553,7 +706,12 @@ def _assemble_overflow_column(task: tuple[int, str]) -> _OverflowColumn | None:
 
 
 def _assemble_overflow_csr(
-    spill_dir: Path, n_analyses: int, n_variants: int, n_workers: int = 1
+    spill_dir: Path,
+    n_analyses: int,
+    n_variants: int,
+    n_workers: int = 1,
+    *,
+    consume_spills: bool = True,
 ) -> tuple[RaggedCSRWriter, np.ndarray]:
     """Assemble the overflow CSR from per-column ``.ovf.npz`` spills, in analysis
     order (so CSR offsets align with analysis_index).
@@ -567,6 +725,12 @@ def _assemble_overflow_csr(
     `ordered_map`, which keeps only a bounded number of results in flight, and
     the parent adds them to the CSR in analysis order. `n_workers <= 1` is the
     serial path.
+
+    ``consume_spills=False`` keeps each plate after it has been added (issue
+    #227): the build tail that a checkpoint re-runs wholesale re-assembles the
+    CSR, and the assembled writer lives only in memory, so the plates are its
+    only durable input. The plates are read and combined identically either
+    way -- the two differ in what is left on disk, not in what is written.
     """
     csr = RaggedCSRWriter(n_variants)
     column_has_eaf = np.zeros(n_analyses, dtype=bool)
@@ -581,7 +745,8 @@ def _assemble_overflow_csr(
             continue
         column_has_eaf[col] = result.eaf is not None
         csr.add_analysis(result.variant_index, result.z, result.se, eaf=result.eaf)
-        (spill_dir / f"{col}.ovf.npz").unlink()
+        if consume_spills:
+            (spill_dir / f"{col}.ovf.npz").unlink()
     return csr, column_has_eaf
 
 
@@ -660,6 +825,7 @@ class _PreparedBuild:
     dense_staged: StagedRelease
     partition: _VariantPartition
     manifest_rows: list[_ManifestRow]
+    info_score_policies: Mapping[str, InfoScorePolicy]
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
     rsid_by_alid: dict[str, str]
@@ -673,18 +839,25 @@ class _PreparedBuild:
 
 @dataclass(frozen=True)
 class _RoutedSpills:
-    """What Pass 2 leaves for the EAF survey."""
+    """What Pass 2 leaves for the EAF survey: the {column: analysis_id} map, the
+    pass start time, and each Analysis's declared-score dispositions (#175)."""
 
     id_by_col: dict[int, str]
     pass2_start: float
+    info_counts: Mapping[str, InfoScoreCounts] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class _EafEvidence:
-    """The per-component frequency surveys and the orientation report."""
+    """The EAF orientation phase's product: each component's frequency survey,
+    which the encoding plan is measured from, and the orientation report the
+    Analyses are stamped and the manifest's provenance written from.
 
-    dense_survey: EafSpillSurvey
-    overflow_survey: EafSpillSurvey
+    A resumed run that reloads the *report* records no survey -- the plan the
+    surveys fed is recorded too, so nothing measures again (issue #227)."""
+
+    dense_survey: EafSpillSurvey | None
+    overflow_survey: EafSpillSurvey | None
     report: EafOrientationReport
 
 
@@ -725,12 +898,17 @@ class _ComponentResult:
     se_coefficients: np.ndarray | None
     eaf_provenance: dict[str, Any]
     analyses: list[Analysis]
+    info_counts: Mapping[str, InfoScoreCounts] = field(default_factory=dict)
 
 
 def _open_dense_component(staged: StagedRelease) -> tuple[Path, StagedRelease]:
-    """Open the nested Dense Component's staging directory inside the outer store's."""
+    """Open the nested Dense Component's staging directory inside the outer store's.
+
+    Tolerates an existing one: a resumed checkpointed build adopts the release
+    the interrupted run was writing, Dense Component included (issue #227).
+    """
     dense_dir = dense_component_path(staged.path)
-    dense_dir.mkdir()
+    dense_dir.mkdir(exist_ok=True)
     return dense_dir, StagedRelease(dense_dir)
 
 
@@ -816,7 +994,7 @@ def _source_origin_map(
     """
     hg38_to_source: dict[str, str | None] = {}
     for (chrom, pos, ref, alt), hg38_alid in source_lookup.items():
-        a1, a2 = sorted((ref, alt))
+        a1, a2 = sorted((ref.upper(), alt.upper()))
         origin = f"{chrom}:{pos}:{a1}:{a2}"
         if hg38_alid not in hg38_to_source:
             hg38_to_source[hg38_alid] = origin
@@ -830,9 +1008,11 @@ def _load_manifest(
     *,
     default_source_reader_capability: str | None = None,
     default_source_assembly: str | None = None,
-) -> list[_ManifestRow]:
+) -> tuple[list[_ManifestRow], dict[str, InfoScorePolicy]]:
     """Read the build manifest, failing loudly on an empty one rather than
-    building a store with no Analyses (a plausible empty answer)."""
+    building a store with no Analyses (a plausible empty answer), alongside each
+    row's declared imputation-score policy (`_read_info_score_policies`).
+    """
     manifest_rows = _read_manifest(
         manifest_path,
         default_source_reader_capability=default_source_reader_capability,
@@ -840,7 +1020,41 @@ def _load_manifest(
     )
     if not manifest_rows:
         raise ValueError(f"manifest {manifest_path} contains no rows")
-    return manifest_rows
+    return manifest_rows, _read_info_score_policies(manifest_path, manifest_rows)
+
+
+def _read_info_score_policies(
+    manifest_path: str | Path, rows: list[_ManifestRow]
+) -> dict[str, InfoScorePolicy]:
+    """Parse each Analysis's declared imputation-score policy (stores #175).
+
+    `_ManifestRow` carries the columns this builder routes with, not the INFO
+    policy columns, so the manifest is read once more here -- it lists Analyses,
+    not associations -- and matched row for row against the rows
+    `_read_manifest` produced. The reader capability is the row's own resolved
+    value, exactly as the manifest resolver parses the same row, so a CLI
+    default applies to both. A partial or contradictory declaration is a
+    manifest error naming its Analysis, never a filter silently not applied.
+    """
+    with open(manifest_path, newline="", encoding="utf-8") as fh:
+        raw_rows = list(csv.DictReader(fh, delimiter="\t"))
+    if len(raw_rows) != len(rows):
+        raise ValueError(
+            f"manifest {manifest_path} changed while it was read: {len(rows)} rows parsed, "
+            f"{len(raw_rows)} re-read"
+        )
+    policies: dict[str, InfoScorePolicy] = {}
+    for row, raw in zip(rows, raw_rows, strict=True):
+        try:
+            policies[row.trait_id] = parse_info_score_policy(
+                raw, reader_capability=row.source_reader_capability
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"manifest {manifest_path}: analysis {row.trait_id!r} has invalid INFO "
+                f"policy: {exc}"
+            ) from exc
+    return policies
 
 
 def _axis_source(
@@ -1283,9 +1497,66 @@ class _FoldContext:
     canonical_values: np.ndarray
     canonical_raw: np.ndarray
     old_to_new: np.ndarray | None
+    marker_dir: Path | None = None
 
 
 _fold_context: _FoldContext | None = None
+
+
+#: The axes that fold under nothing: no off-reference key resolved, so no
+#: column has an entry to rewrite -- only its unresolved rows to drop.
+_EMPTY_KEY_TABLE = KeyTable(
+    keys=np.empty(0, dtype=np.uint64), shared_index=np.empty(0, dtype=np.int64)
+)
+_EMPTY_CANONICAL = CanonicalRawKeys(
+    values=np.empty(0, dtype=np.uint64), raw=np.empty(0, dtype=RAW_KEY_DTYPE)
+)
+
+#: Empty routing arrays. They are a resume's only: Pass 2 and the fold are the
+#: two readers of the routing index, and a resumed run that reaches either of
+#: them re-derives it from the recorded inputs in `_prepare_build` instead.
+_NO_ROUTING = (
+    np.empty(0, dtype=object),
+    np.empty(0, dtype=np.int64),
+    np.empty(0, dtype=bool),
+)
+
+
+@dataclass(frozen=True)
+class _FoldInputs:
+    """What the off-reference fold runs under: the one build-wide key table
+    every column's keys are looked up in, the old->new shared-index remap, the
+    canonical raw keys each hashed row is checked against, and the axis and
+    provenance the fold leaves behind.
+
+    Recorded whole, before the fold's first column (issue #227): the key table
+    is resolved from *every* column's spill, so a fold resumed without it could
+    not re-derive it from the columns that are left, and an association whose
+    key only an already-folded column carried would be dropped in silence.
+    """
+
+    table: KeyTable
+    old_to_new: np.ndarray | None
+    canonical: CanonicalRawKeys
+    off_panel: list[str]
+    shared_sorted: list[str]
+    dense_to_shared: np.ndarray
+    hg38_to_source: dict[str, str | None]
+
+
+def _folded_columns(state: CheckpointState | None) -> frozenset[int]:
+    """The columns a checkpoint records as already folded.
+
+    One file per column, written by the worker that folded it: the fold's
+    results are yielded to the parent in order but computed ahead of that, so
+    the parent's own progress is not the record of which columns are done.
+    """
+    if state is None:
+        return frozenset()
+    marker_dir = state.path / FOLD_DIR
+    if not marker_dir.exists():
+        return frozenset()
+    return frozenset(int(path.stem) for path in marker_dir.glob("*.done"))
 
 
 def _combine_overflow(
@@ -1372,6 +1643,7 @@ def _fold_column(col: int) -> int:
     ex = _load_fold_existing(ctx, spill_dir, col)
     off = _load_off_reference(ctx, spill_dir, col)
     if ex is None and off is None and not unk_path.exists():
+        _mark_folded(ctx, col)
         return col
 
     final = _combine_overflow(ex, off, ctx.old_to_new is not None)
@@ -1388,7 +1660,19 @@ def _fold_column(col: int) -> int:
         unk_path.unlink()
         _unknown_side_path(spill_dir, col).unlink(missing_ok=True)
 
+    _mark_folded(ctx, col)
     return col
+
+
+def _mark_folded(ctx: _FoldContext, col: int) -> None:
+    """Record that one column's fold is complete, after its write is durable.
+
+    Written last, and only when a checkpoint asked for it: the mark is what a
+    resumed fold skips the column on, so a mark before the atomic overflow
+    write has landed would drop the column's off-reference associations.
+    """
+    if ctx.marker_dir is not None:
+        (ctx.marker_dir / f"{col}.done").touch()
 
 
 def _verify_hashed_rows(
@@ -1417,6 +1701,9 @@ def _fold_unknown_spills(
     canonical: CanonicalRawKeys,
     old_to_new: np.ndarray | None,
     n_workers: int,
+    *,
+    marker_dir: Path | None = None,
+    already_folded: frozenset[int] = frozenset(),
 ) -> None:
     """Fold every column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices.
 
@@ -1428,8 +1715,12 @@ def _fold_unknown_spills(
     caller-owned arrays read-only and deliberately leaves them read-only after
     returning.  Callers must not write them after handing them to the fold.
     Each column's overflow spill is written at most once, atomically.
+
+    ``marker_dir`` (issue #227) makes each column's completion a file the
+    worker writes, and ``already_folded`` the columns a previous run wrote one
+    for: the two together are what lets an interrupted fold resume on the
+    columns it has left, rather than re-remapping entries it already rewrote.
     """
-    global _fold_context
     table_keys = table.keys
     table_shared = table.shared_index
     table_keys.flags.writeable = False
@@ -1443,6 +1734,7 @@ def _fold_unknown_spills(
     if old_to_new is not None:
         old_to_new.flags.writeable = False
 
+    global _fold_context
     _fold_context = _FoldContext(
         spill_dir=spill_dir,
         table_keys=table_keys,
@@ -1450,17 +1742,14 @@ def _fold_unknown_spills(
         canonical_values=canonical_values,
         canonical_raw=canonical_raw,
         old_to_new=old_to_new,
+        marker_dir=marker_dir,
     )
+    pending = [col for col in range(n_analyses) if col not in already_folded]
     try:
-        for _ in ordered_map(_fold_column, range(n_analyses), n_workers):
+        for _ in ordered_map(_fold_column, pending, n_workers):
             pass
     finally:
         _fold_context = None
-
-
-_EMPTY_KEY_TABLE = KeyTable(
-    keys=np.empty(0, dtype=np.uint64), shared_index=np.empty(0, dtype=np.int64)
-)
 
 
 def _build_shared_key_table(
@@ -1478,7 +1767,7 @@ def _build_shared_key_table(
 
 
 def _finalise_reference_partition(
-    prepared: _PreparedBuild, options: _BuildOptions
+    prepared: _PreparedBuild, options: _BuildOptions, state: CheckpointState | None = None
 ) -> _PreparedBuild:
     """Add Pass 2-discovered off-reference variants to the shared axis.
 
@@ -1489,46 +1778,181 @@ def _finalise_reference_partition(
     indices -- and therefore the panel's mapping onto them -- are only
     computable now. A legacy ``--reference-panel`` build already knows its
     whole union before Pass 2 and is returned unchanged.
+
+    With a checkpoint (issue #227) the axis this computes is recorded before
+    the fold's first column, and a resumed fold runs under exactly that record
+    instead of resolving the keys again: the resolved key set comes from every
+    column's spill, and the columns already folded have none left.
     """
     if options.variant_reference is None:
+        _record_axis(state, prepared, None)
         return prepared
-    off_reference = _resolve_off_reference_keys(prepared, options)
-    if off_reference is None:
+    recorded = _recorded_axis(state)
+    if recorded is not None:
+        return _fold_recorded_axis(prepared, options, state, recorded)
+    fold = _off_reference_fold_inputs(prepared, options)
+    _record_axis(state, prepared, fold)
+    if fold is None:
         return prepared
-    resolved = off_reference.resolved
-    if not len(resolved.keys):
-        # Nothing joins the axis, but every hashed row is still checked exactly;
-        # the fold then drops the unresolved rows as it always did.
-        _fold_unknown_spills(
-            prepared.spill_dir,
-            prepared.n_analyses,
-            _EMPTY_KEY_TABLE,
-            off_reference.canonical,
-            old_to_new=None,
-            n_workers=options.n_workers,
-        )
-        return prepared
-    table, old_to_new, index, off_panel, shared_sorted = _build_shared_key_table(
-        prepared, resolved
-    )
+    return _fold_under(prepared, options, state, fold)
+
+
+def _fold_recorded_axis(
+    prepared: _PreparedBuild,
+    options: _BuildOptions,
+    state: CheckpointState | None,
+    fold: _FoldInputs,
+) -> _PreparedBuild:
+    """Fold this run's remaining columns under the axis the first run recorded.
+
+    Nothing is resolved and nothing is measured here: the key table, the
+    remap and the provenance are the first run's, which is the only way the
+    columns folded after the interruption can land on the axis the ones before
+    it did.
+    """
+    return _fold_under(prepared, options, state, fold)
+
+
+def _fold_under(
+    prepared: _PreparedBuild,
+    options: _BuildOptions,
+    state: CheckpointState | None,
+    fold: _FoldInputs,
+) -> _PreparedBuild:
+    """Fold this run's columns under `fold`, then carry the axis it produced.
+
+    The recorded axis is written back to the release as the fold's own output:
+    the EAF survey and the query facade both read that sidecar, and a resumed
+    run must leave the map its indices were built against rather than the
+    pre-fold one `_prepare_build` may have re-written.
+    """
     _fold_unknown_spills(
         prepared.spill_dir,
         prepared.n_analyses,
-        table,
-        off_reference.canonical,
-        old_to_new=old_to_new,
+        fold.table,
+        fold.canonical,
+        old_to_new=fold.old_to_new,
         n_workers=options.n_workers,
+        marker_dir=_fold_marker_dir(state),
+        already_folded=_folded_columns(state),
     )
-    panel = prepared.partition.panel_sorted
-    dense_to_shared = index.lookup(panel).astype(np.int32)
-    np.save(dense_to_shared_path(prepared.staged.path), dense_to_shared)
-    hg38_to_source = _merge_unknown_provenance(prepared.hg38_to_source, resolved)
+    np.save(dense_to_shared_path(prepared.staged.path), fold.dense_to_shared)
+    return _update_partition(
+        prepared, fold.off_panel, fold.shared_sorted, fold.dense_to_shared, fold.hg38_to_source
+    )
+
+
+def _off_reference_fold_inputs(
+    prepared: _PreparedBuild, options: _BuildOptions
+) -> _FoldInputs | None:
+    """Resolve the build's off-reference keys into the axis the fold runs under.
+
+    ``None`` means no column spilled an off-reference key at all, so there is
+    nothing to fold: the axis is Pass 1's partition and its provenance map.
+    An empty but present resolution still folds -- every hashed row is checked
+    exactly, and the fold then drops the unresolved rows as it always did.
+    """
+    off_reference = _resolve_off_reference_keys(prepared, options)
+    if off_reference is None:
+        return None
+    resolved = off_reference.resolved
+    if not len(resolved.keys):
+        return _FoldInputs(
+            table=_EMPTY_KEY_TABLE,
+            old_to_new=None,
+            canonical=off_reference.canonical,
+            off_panel=prepared.partition.off_panel_alids,
+            shared_sorted=prepared.partition.shared_sorted,
+            dense_to_shared=prepared.dense_to_shared,
+            hg38_to_source=prepared.hg38_to_source,
+        )
+    table, old_to_new, index, off_panel, shared_sorted = _build_shared_key_table(
+        prepared, resolved
+    )
+    dense_to_shared = index.lookup(prepared.partition.panel_sorted).astype(np.int32)
     log.info(
         "Single-pass build: %d off-reference variant(s) routed to the Ragged Overflow",
         len(off_panel) - prepared.partition.n_off_panel,
     )
-    return _update_partition(
-        prepared, off_panel, shared_sorted, dense_to_shared, hg38_to_source
+    return _FoldInputs(
+        table=table,
+        old_to_new=old_to_new,
+        canonical=off_reference.canonical,
+        off_panel=off_panel,
+        shared_sorted=shared_sorted,
+        dense_to_shared=dense_to_shared,
+        hg38_to_source=_merge_unknown_provenance(prepared.hg38_to_source, resolved),
+    )
+
+
+def _fold_marker_dir(state: CheckpointState | None) -> Path | None:
+    """Where a fold records its per-column completions, or ``None`` without one.
+
+    Created here rather than by the workers that write into it: those run in a
+    forked pool, and a missing directory would be one ENOENT per column.
+    """
+    if state is None:
+        return None
+    marker_dir = state.path / FOLD_DIR
+    marker_dir.mkdir(exist_ok=True)
+    return marker_dir
+
+
+def _record_axis(
+    state: CheckpointState | None, prepared: _PreparedBuild, fold: _FoldInputs | None
+) -> None:
+    """Record the axis the fold is about to run under, before its first column.
+
+    `None` for ``fold`` is the no-off-reference case: the axis is Pass 1's
+    partition, and it is recorded all the same, because every phase after the
+    fold reads it and none of them may re-derive it.
+    """
+    if state is None:
+        return
+    inputs = fold or _FoldInputs(
+        table=_EMPTY_KEY_TABLE,
+        old_to_new=None,
+        canonical=_EMPTY_CANONICAL,
+        off_panel=prepared.partition.off_panel_alids,
+        shared_sorted=prepared.partition.shared_sorted,
+        dense_to_shared=prepared.dense_to_shared,
+        hg38_to_source=prepared.hg38_to_source,
+    )
+    save_npz(
+        state.path / AXIS,
+        keys=inputs.table.keys,
+        shared_index=inputs.table.shared_index,
+        old_to_new=(
+            inputs.old_to_new if inputs.old_to_new is not None else np.empty(0, dtype=np.int64)
+        ),
+        canonical_values=inputs.canonical.values,
+        dense_to_shared=inputs.dense_to_shared,
+    )
+    write_lines(state.path / AXIS_CANONICAL_RAW, inputs.canonical.raw.tolist())
+    write_lines(state.path / AXIS_PANEL, prepared.partition.panel_sorted)
+    write_lines(state.path / AXIS_OFF_PANEL, inputs.off_panel)
+    write_lines(state.path / AXIS_SHARED, inputs.shared_sorted)
+    write_str_map(state.path / PROVENANCE_SOURCE, inputs.hg38_to_source)
+    write_str_map(state.path / PROVENANCE_RSID, prepared.rsid_by_alid)
+
+
+def _recorded_axis(state: CheckpointState | None) -> _FoldInputs | None:
+    """The axis an interrupted fold left behind, or ``None`` when there is none."""
+    if state is None or not (state.path / AXIS).exists():
+        return None
+    arrays = load_npz(state.path / AXIS)
+    old_to_new = arrays["old_to_new"]
+    return _FoldInputs(
+        table=KeyTable(keys=arrays["keys"], shared_index=arrays["shared_index"]),
+        old_to_new=old_to_new if len(old_to_new) else None,
+        canonical=CanonicalRawKeys(
+            values=arrays["canonical_values"],
+            raw=np.array(read_lines(state.path / AXIS_CANONICAL_RAW), dtype=RAW_KEY_DTYPE),
+        ),
+        off_panel=read_lines(state.path / AXIS_OFF_PANEL),
+        shared_sorted=read_lines(state.path / AXIS_SHARED),
+        dense_to_shared=arrays["dense_to_shared"].astype(np.int32),
+        hg38_to_source=read_str_map(state.path / PROVENANCE_SOURCE),
     )
 
 
@@ -1560,11 +1984,13 @@ def _route_serial(
     analysis_index: dict[str, int],
     n_analyses: int,
     pass2_start: float,
-) -> None:
+) -> dict[str, InfoScoreCounts]:
     """Route each study once, in this process, spilling the dense rows and the
-    overflow associations it resolves (last-wins dedup per target index)."""
+    overflow associations it resolves (last-wins dedup per target index).
+    Returns each Analysis's declared-score dispositions (stores #175)."""
+    info_counts: dict[str, InfoScoreCounts] = {}
     for i, row in enumerate(prepared.manifest_rows):
-        dense, overflow, off_reference = _resolve_column_hybrid(
+        dense, overflow, off_reference, counts = _resolve_column_hybrid(
             row.file_path,
             prepared.keys_sorted,
             prepared.targets_sorted,
@@ -1572,11 +1998,14 @@ def _route_serial(
             row.se_divisor,
             capability=row.source_reader_capability,
             stored_effect_scale=row.stored_effect_scale,
+            info_score_policy=prepared.info_score_policies[row.trait_id],
         )
+        info_counts[row.trait_id] = counts
         _spill_hybrid_column(
             prepared.spill_dir, analysis_index[row.trait_id], dense, overflow, off_reference
         )
         _log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {row.trait_id}", every=25)
+    return info_counts
 
 
 def _route_parallel(
@@ -1586,24 +2015,31 @@ def _route_parallel(
     n_analyses: int,
     options: _BuildOptions,
     pass2_start: float,
-) -> None:
+) -> dict[str, InfoScoreCounts]:
     """Route each study through the fork pool. Workers read the routing arrays
     through the module-level globals below rather than as arguments: they are
     inherited by fork, which is what keeps a genome-scale lookup out of the
     per-column pickling the pool would otherwise do (dense.build_vcf's
-    rationale)."""
+    rationale). Each worker also applies its own Analysis's declared INFO policy
+    (stores #175) and returns its dispositions for the shared manifest."""
     global _pass2_keys_sorted, _pass2_targets_sorted, _pass2_ispanel_sorted
-    global _pass2_spill_dir
+    global _pass2_spill_dir, _pass2_info_policies
     _pass2_keys_sorted = prepared.keys_sorted
     _pass2_targets_sorted = prepared.targets_sorted
     _pass2_ispanel_sorted = prepared.ispanel_sorted
     _pass2_spill_dir = prepared.spill_dir
+    _pass2_info_policies = {
+        column: prepared.info_score_policies[row.trait_id]
+        for column, row in enumerate(prepared.manifest_rows)
+    }
+    info_counts: dict[str, InfoScoreCounts] = {}
     try:
         with _fork_pool(options.n_workers) as pool:
             tasks = _pass2_worker_tasks(prepared.manifest_rows, analysis_index)
             futures = [pool.submit(_pass2_worker, task) for task in tasks]
             for i, future in enumerate(as_completed(futures)):
-                col = future.result()
+                col, counts = future.result()
+                info_counts[id_by_col[col]] = counts
                 _log_progress(
                     "Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25
                 )
@@ -1612,6 +2048,29 @@ def _route_parallel(
         _pass2_targets_sorted = None
         _pass2_ispanel_sorted = None
         _pass2_spill_dir = None
+        _pass2_info_policies = None
+    return info_counts
+
+
+def _require_usable_declared_scores(
+    prepared: _PreparedBuild, counts_by_id: Mapping[str, InfoScoreCounts]
+) -> None:
+    """Refuse an Analysis whose declared score had no usable value (stores #175).
+
+    The resolver's own contract, on the builder's population: an Analysis that
+    declares a score and had none usable anywhere in the source is a failure
+    naming that Analysis, never an Analysis silently built from zero scored
+    associations -- which would look exactly like one whose source has no
+    associations at all.
+    """
+    for row in prepared.manifest_rows:
+        declaration = prepared.info_score_policies[row.trait_id].imputation_score_declaration
+        if declaration is not None and counts_by_id[row.trait_id].usable == 0:
+            raise ValueError(
+                f"Analysis {row.trait_id}: declared imputation score "
+                f"{declaration.column_name!r} has no usable scores in the associations "
+                "the source yielded"
+            )
 
 
 def _route_studies(
@@ -1620,8 +2079,9 @@ def _route_studies(
 ) -> _RoutedSpills:
     """Phase - Pass 2: read each study once and route every association into
     the dense spill or the overflow spill (fork pool when n_workers > 1).
-    Returns the {column: analysis_id} map the EAF survey keys and the pass
-    start time the band writer's progress reports from."""
+    Returns the {column: analysis_id} map the EAF survey keys, the pass start
+    time the band writer's progress reports from, and each Analysis's declared-
+    score dispositions for the shared manifest (stores #175)."""
     rows = prepared.manifest_rows
     analysis_index = {row.trait_id: i for i, row in enumerate(rows)}
     id_by_col = {i: row.trait_id for i, row in enumerate(rows)}
@@ -1629,14 +2089,14 @@ def _route_studies(
     log.info("Pass 2: routing %d analyses (n_workers=%d)", n_analyses, options.n_workers)
     pass2_start = time.monotonic()
     if options.n_workers <= 1:
-        _route_serial(
+        info_counts = _route_serial(
             prepared,
             analysis_index,
             n_analyses,
             pass2_start,
         )
     else:
-        _route_parallel(
+        info_counts = _route_parallel(
             prepared,
             analysis_index,
             id_by_col,
@@ -1644,7 +2104,10 @@ def _route_studies(
             options,
             pass2_start,
         )
-    return _RoutedSpills(id_by_col=id_by_col, pass2_start=pass2_start)
+    _require_usable_declared_scores(prepared, info_counts)
+    return _RoutedSpills(
+        id_by_col=id_by_col, pass2_start=pass2_start, info_counts=info_counts
+    )
 
 
 def _verify_eaf_orientation(
@@ -1701,22 +2164,15 @@ def _plan_joint_encoding(
     The Dense Component and the Ragged Overflow partition one Analysis's
     associations, so a shared result contract needs a shared encoding: their
     measurements are combined rather than either one taken alone. Materialises
-    the Dense zarr skeleton under the plan and returns the effective chunks."""
+    the Dense zarr skeleton under the plan and returns the effective chunks.
+
+    This is the only site that measures the plan, and `_plan_phase` calls it
+    only when no plan is recorded: a resumed run reloads the frozen one, because
+    the Dense bands already on disk were written under exactly those codes.
+    """
     encoding = StoreEncoding.decide(
         EncodingMeasurements(
-            n_analyses=prepared.n_analyses,
-            eaf=combine_eaf_measurements(
-                [
-                    evidence.dense_survey.measurements(
-                        n_cells=prepared.partition.n_panel * prepared.n_analyses,
-                        n_variants=prepared.partition.n_panel,
-                    ),
-                    evidence.overflow_survey.measurements(
-                        n_cells=evidence.overflow_survey.n_spill_cells,
-                        n_variants=prepared.partition.n_shared,
-                    ),
-                ]
-            ),
+            n_analyses=prepared.n_analyses, eaf=_combined_eaf(prepared, evidence)
         )
     )
     log.info("Encoding plan: %s", encoding.to_manifest())
@@ -1729,6 +2185,30 @@ def _plan_joint_encoding(
         encoding,
     )
     return _EncodingPlan(encoding=encoding, effective_chunks=effective_chunks)
+
+
+def _combined_eaf(prepared: _PreparedBuild, evidence: _EafEvidence) -> EafMeasurements:
+    """Both components' EAF measurements, merged into the plan's one input.
+
+    Only a run that is *measuring* the plan has surveys; a resumed run reloads
+    the plan instead of re-measuring it (issue #227).
+    """
+    dense, overflow = evidence.dense_survey, evidence.overflow_survey
+    if dense is None or overflow is None:
+        raise RuntimeError(
+            "the encoding plan cannot be measured without both components' EAF surveys"
+        )
+    return combine_eaf_measurements(
+        [
+            dense.measurements(
+                n_cells=prepared.partition.n_panel * prepared.n_analyses,
+                n_variants=prepared.partition.n_panel,
+            ),
+            overflow.measurements(
+                n_cells=overflow.n_spill_cells, n_variants=prepared.partition.n_shared
+            ),
+        ]
+    )
 
 
 def _write_dense_component_bands(
@@ -1762,6 +2242,8 @@ def _write_dense_component_bands(
 def _assemble_overflow(
     prepared: _PreparedBuild,
     options: _BuildOptions,
+    *,
+    consume_spills: bool = True,
 ) -> _OverflowAssembled:
     """Phase - assemble the Ragged Overflow CSR from the per-column overflow
     spills, in analysis order so CSR offsets align with analysis_index."""
@@ -1771,6 +2253,7 @@ def _assemble_overflow(
         prepared.n_analyses,
         prepared.partition.n_shared,
         n_workers=options.n_workers,
+        consume_spills=consume_spills,
     )
     return _OverflowAssembled(csr=csr, overflow_has_eaf=overflow_has_eaf)
 
@@ -1790,6 +2273,27 @@ def _stamp_analyses(
     )
 
 
+def _write_overflow_eaf_plane(
+    prepared: _PreparedBuild,
+    plan: _EncodingPlan,
+    overflow: _OverflowAssembled,
+) -> None:
+    """Phase - write the Ragged Overflow's frequency half before the SE fit.
+
+    The `eaf` plane's encoding is decided before the joint fit runs, so writing
+    the plane here lets both the fit and its byte measurement read the
+    frequencies a reader will get back, instead of each re-encoding every cell
+    (issue #232). The write also creates the component's zarr group exactly
+    once; the later SE flush adds to that group rather than replacing it. A
+    build failing in between is discarded whole by the staged release, and the
+    group it leaves carries no `completion_state` for a later phase to mistake
+    for a finished component."""
+    log.info(
+        "Ragged Overflow eaf plane: writing %d associations", overflow.csr.n_associations
+    )
+    overflow.csr.write_eaf_plane(prepared.staged.path, plan.encoding)
+
+
 def _fit_joint_se(
     prepared: _PreparedBuild,
     plan: _EncodingPlan,
@@ -1800,12 +2304,17 @@ def _fit_joint_se(
     partition the same Analyses, so fitting or gating either in isolation
     could leave the shared manifest describing only half of the data it
     governs. The Dense row chunks fit, measure and rewrite across
-    ``--n-workers`` (issue #221)."""
+    ``--n-workers`` (issue #221); the Overflow cells arrive as a streamed
+    source that reads its frequencies back from the plane
+    ``_write_overflow_eaf_plane`` already wrote (issue #232)."""
     dense_group = prepared.dense_staged.arrays(mode="a")
     return optimise_dense_se_joint(
         dense_group,
         plan.encoding,
-        overflow=overflow.csr.se_fit_inputs(plan.encoding),
+        # A streamed source, not the materialised bundle: on OGS-00011 the flat
+        # planes are 15,078,327,210 cells, and building them cost 85.8 bytes a
+        # cell -- 1.29 TB on a 1,006 GB host (issue #228).
+        overflow=overflow.csr.se_fit_source(),
         n_workers=options.n_workers,
     )
 
@@ -1853,18 +2362,66 @@ def _flush_overflow_component(
     encoding: StoreEncoding,
     se_coefficients: np.ndarray | None,
 ) -> int:
-    """Flush the assembled overflow CSR into the store's root zarr and build
-    its top-hit index. Returns the overflow association count the shared
-    manifest's provenance records. Each step logs its start and elapsed time
-    (issue #221)."""
+    """Flush the assembled overflow CSR's SE half into the zarr group the eaf
+    write created, and build its top-hit index. The group already holds the
+    frequency half; this adds to it rather than replacing it (issue #232).
+    Returns the overflow association count the shared manifest's provenance
+    records. Each step logs its start and elapsed time (issue #221)."""
     log.info("Ragged Overflow CSR flush: start (%d associations)", csr.n_associations)
     started = time.monotonic()
-    csr.flush(staged.path, encoding, se_coefficients=se_coefficients)
+    csr.flush_se(staged.path, encoding, se_coefficients=se_coefficients)
     log.info("Ragged Overflow CSR flush: done in %s", format_duration(time.monotonic() - started))
     n_overflow = csr.n_associations
     log.info("Building Ragged Overflow top-hit index")
     build_ragged_top_hit_indexes(staged.path, encoding=encoding)
     return n_overflow
+
+
+def _info_score_counts_fields(counts: InfoScoreCounts) -> dict[str, int]:
+    """One Analysis's declared-score dispositions, as the store records them.
+
+    The `associations_` prefix is load-bearing: the denominator is the
+    associations the Analysis's Source Reader yielded after its own effect/SE
+    admission, not the canonical rows the resolver's `canonical_rows_*`
+    diagnostics count (stores #175).
+    """
+    return {
+        "associations_observed": counts.observed,
+        "associations_retained": counts.retained,
+        "associations_below_threshold": counts.below_threshold,
+        "associations_missing": counts.missing,
+        "associations_malformed": counts.malformed,
+        "associations_nonfinite": counts.nonfinite,
+        "associations_out_of_range": counts.out_of_range,
+        "associations_usable": counts.usable,
+    }
+
+
+def _info_score_provenance(
+    prepared: _PreparedBuild, counts_by_id: Mapping[str, InfoScoreCounts]
+) -> dict[str, Any] | None:
+    """The `provenance["info_score"]` block a store records (stores #175).
+
+    `None` when no Analysis's row carried an INFO policy -- an absent block
+    means the manifest declared no policy at all, so a legacy table builds a
+    manifest byte for byte as it did before this filter existed. When the block
+    is written, every Analysis appears in table order, so the list is the whole
+    table rather than only the rows a threshold dropped.
+    """
+    policies = prepared.info_score_policies
+    if all(policy.state is InfoScoreState.LEGACY_ABSENT for policy in policies.values()):
+        return None
+    return {
+        "analyses": [
+            {
+                "analysis_id": row.trait_id,
+                "info_score_state": policies[row.trait_id].state.value,
+                "info_score_threshold": policies[row.trait_id].info_score_threshold,
+                **_info_score_counts_fields(counts_by_id[row.trait_id]),
+            }
+            for row in prepared.manifest_rows
+        ]
+    }
 
 
 def _write_shared_metadata(
@@ -1892,6 +2449,7 @@ def _write_shared_metadata(
         dtype=options.dtype,
         encoding=components.encoding,
         eaf_provenance=components.eaf_provenance,
+        info_score=_info_score_provenance(prepared, components.info_counts),
         variant_reference=(
             str(options.variant_reference) if options.variant_reference is not None else None
         ),
@@ -1916,29 +2474,40 @@ def _write_shared_metadata(
 def _prepare_build(
     staged: StagedRelease,
     manifest_rows: list[_ManifestRow],
+    info_score_policies: Mapping[str, InfoScorePolicy],
     options: _BuildOptions,
+    spill_dir: Path | None = None,
 ) -> _PreparedBuild:
     """Seam - preparation: lifting, partition/routing and the Dense skeleton,
     then the routing index and spill directory. Nothing here reads a spill;
-    the returned record is the whole handoff to the spill-lifetime seam."""
+    the returned record is the whole handoff to the spill-lifetime seam.
+
+    ``spill_dir`` names where the spills go: a checkpointed build hands in its
+    own directory, so a failure leaves them where the resume looks for them
+    (issue #227), and everything else gets this invocation's private mkdtemp.
+    """
     axis = _lift_and_partition(staged, manifest_rows, options)
     dense_to_shared = _write_dense_component_skeleton(
         staged,
         axis,
         options.chunk_shape,
     )
-    spill_dir = Path(
-        tempfile.mkdtemp(
-            prefix=f".{options.out.name}.hybridspill.",
-            dir=staged.path.parent,
+    if spill_dir is None:
+        spill_dir = Path(
+            tempfile.mkdtemp(
+                prefix=f".{options.out.name}.hybridspill.",
+                dir=staged.path.parent,
+            )
         )
-    )
+    else:
+        spill_dir.mkdir(parents=True, exist_ok=True)
     return _PreparedBuild(
         staged=staged,
         dense_dir=axis.dense_dir,
         dense_staged=axis.dense_staged,
         partition=axis.partition,
         manifest_rows=manifest_rows,
+        info_score_policies=info_score_policies,
         analyses=axis.analyses,
         hg38_to_source=axis.hg38_to_source,
         rsid_by_alid=axis.rsid_by_alid,
@@ -1969,48 +2538,290 @@ def _off_reference_spill_bytes(spill_dir: Path) -> tuple[int, int]:
 def _build_components(
     prepared: _PreparedBuild,
     options: _BuildOptions,
+    state: CheckpointState | None = None,
 ) -> tuple[_PreparedBuild, _ComponentResult]:
     """Seam - the spill-lifetime build: Pass 2 routing, EAF verification,
     joint encoding, the component writes (Dense bands, Overflow CSR, shared SE
-    fit, Dense top hits/manifest/analyses.tsv). The spill directory is removed
-    in a finally whichever phase fails, and the store's files are only touched
-    while the spills exist. Returns the (possibly repartitioned) prepared build
-    alongside the components, because a variant-reference build learns its
-    off-reference variants only here."""
+    fit, Dense top hits/manifest/analyses.tsv). Returns the (possibly
+    repartitioned) prepared build alongside the components, because a
+    variant-reference build learns its off-reference variants only here.
+
+    The spill directory is removed once the usable phases have read it, and the
+    store's files are only touched while the spills exist. A `None` state is a
+    build that did not ask for a checkpoint: its spills are removed whichever
+    phase fails, exactly as they always were. With a checkpoint they are kept
+    on failure -- they sit inside it, and the resumed build reads them (issue
+    #227).
+    """
     spill_dir = prepared.spill_dir
     try:
-        routed = _route_studies(prepared, options)
-        encoded_bytes, side_bytes = _off_reference_spill_bytes(spill_dir)
-        log.info(
-            "Pass 2 off-reference spill: %.2f GiB encoded keys + %.2f GiB raw side files",
-            encoded_bytes / 2**30,
-            side_bytes / 2**30,
+        prepared, components = _run_build_phases(prepared, options, state)
+    except BaseException:
+        if state is None:
+            shutil.rmtree(spill_dir, ignore_errors=True)
+        raise
+    shutil.rmtree(spill_dir, ignore_errors=True)
+    return prepared, components
+
+
+def _run_build_phases(
+    prepared: _PreparedBuild,
+    options: _BuildOptions,
+    state: CheckpointState | None,
+) -> tuple[_PreparedBuild, _ComponentResult]:
+    """Walk the build's phases, re-entering at the one the checkpoint recorded.
+
+    A phase whose completion the checkpoint records is reloaded from it; one it
+    does not is computed, its product recorded and its marker set. The tail
+    after the recorded phases runs wholesale either way. Without a checkpoint
+    every phase is computed, which is the build this seam has always run.
+    """
+    routed = _pass2_phase(prepared, options, state)
+    prepared = _fold_phase(prepared, options, state)
+    evidence = _orientation_phase(prepared, routed, options, state)
+    plan = _plan_phase(prepared, evidence, options, state)
+    dense = _dense_bands_phase(prepared, plan, routed, options, state)
+    return _tail_phase(prepared, routed, plan, dense, evidence, options, state)
+
+
+def _pass2_phase(
+    prepared: _PreparedBuild, options: _BuildOptions, state: CheckpointState | None
+) -> _RoutedSpills:
+    """Phase - Pass 2: route each study once, or reload the recorded routing.
+
+    The recorded form is each Analysis's declared-score dispositions (stores
+    #175), which the shared manifest's `provenance.info_score` is written from
+    and which nothing else can recover: they are what the sources yielded, not
+    a function of the store.
+    """
+    if state is not None and state.has("pass2"):
+        return _recorded_routing(prepared, state)
+    routed = _route_studies(prepared, options)
+    _log_spill_bytes(prepared.spill_dir)
+    if state is not None:
+        _record_pass2_product(state, prepared, routed)
+    return routed
+
+
+def _log_spill_bytes(spill_dir: Path) -> None:
+    """Log the off-reference scratch Pass 2 has just spilled (issue #218)."""
+    encoded_bytes, side_bytes = _off_reference_spill_bytes(spill_dir)
+    log.info(
+        "Pass 2 off-reference spill: %.2f GiB encoded keys + %.2f GiB raw side files",
+        encoded_bytes / 2**30,
+        side_bytes / 2**30,
+    )
+
+
+def _record_pass2_product(
+    state: CheckpointState, prepared: _PreparedBuild, routed: _RoutedSpills
+) -> None:
+    """Record Pass 2's product: the dispositions its workers returned.
+
+    The plates are recorded too, with their sizes, so a resume can refuse a
+    spill directory that lost one rather than build a store short of the
+    associations it claims.
+    """
+    write_json(
+        state.path / INFO_COUNTS,
+        {
+            row.trait_id: asdict(routed.info_counts[row.trait_id])
+            for row in prepared.manifest_rows
+        },
+    )
+    record_plates(state.path, (path.name for path in state.spill_dir.iterdir()))
+    mark_phase(state.path, "pass2")
+
+
+def _recorded_routing(prepared: _PreparedBuild, state: CheckpointState) -> _RoutedSpills:
+    """Rebuild the routing records a resumed run does not route again."""
+    recorded = read_json(state.path / INFO_COUNTS)
+    return _RoutedSpills(
+        id_by_col={col: row.trait_id for col, row in enumerate(prepared.manifest_rows)},
+        pass2_start=time.monotonic(),
+        info_counts={
+            row.trait_id: InfoScoreCounts(**recorded[row.trait_id])
+            for row in prepared.manifest_rows
+        },
+    )
+
+
+def _fold_phase(
+    prepared: _PreparedBuild, options: _BuildOptions, state: CheckpointState | None
+) -> _PreparedBuild:
+    """Phase - the off-reference fold, or the axis a completed fold left.
+
+    When the fold is recorded the incoming prepared build already carries the
+    post-fold axis: `_resume_prepared` rebuilt it from the checkpoint rather
+    than re-deriving it, so there is nothing left to fold. When it is not, the
+    fold runs -- under the recorded axis if the interrupted run got as far as
+    writing one, and under a freshly resolved one otherwise.
+    """
+    if state is None:
+        return _finalise_reference_partition(prepared, options)
+    if state.has("fold"):
+        return prepared
+    prepared = _finalise_reference_partition(prepared, options, state)
+    record_plates(
+        state.path,
+        [
+            *(f"{col}.npz" for col in range(prepared.n_analyses)),
+            *(f"{col}.ovf.npz" for col in range(prepared.n_analyses)),
+        ],
+    )
+    mark_phase(state.path, "fold")
+    return prepared
+
+
+def _orientation_phase(
+    prepared: _PreparedBuild,
+    routed: _RoutedSpills,
+    options: _BuildOptions,
+    state: CheckpointState | None,
+) -> _EafEvidence:
+    """Phase - EAF orientation, or the report a resumed run reloads.
+
+    The report is reloaded only when the plan it fed is recorded as well: a
+    crash inside the plan phase leaves it to be measured again, and the plan is
+    measured from these surveys, so they are recomputed on the spills that are
+    still there. Recomputing the report is safe -- it is a pure function of the
+    same retained frequencies -- and the recorded one is not rewritten.
+    """
+    if state is not None and state.has("orientation") and state.has("plan"):
+        return _recorded_evidence(state)
+    evidence = _verify_eaf_orientation(prepared, routed, options)
+    if state is not None and not state.has("orientation"):
+        write_json(state.path / ORIENTATION, _report_payload(evidence.report))
+        mark_phase(state.path, "orientation")
+    return evidence
+
+
+def _recorded_evidence(state: CheckpointState) -> _EafEvidence:
+    """The orientation report alone, which is all a resumed run still reads."""
+    return _EafEvidence(
+        dense_survey=None,
+        overflow_survey=None,
+        report=_report_from_payload(read_json(state.path / ORIENTATION)),
+    )
+
+
+def _plan_phase(
+    prepared: _PreparedBuild,
+    evidence: _EafEvidence,
+    options: _BuildOptions,
+    state: CheckpointState | None,
+) -> _EncodingPlan:
+    """Phase - the joint encoding plan, frozen before the first band write.
+
+    The plan is measured from the data and the Dense bands are written under it,
+    so a resumed run reloads it verbatim: re-measuring could choose different
+    codes for cells already written, which no later check would catch. The order
+    is what makes that safe -- the marker is set after the plan (and the Dense
+    zarr skeleton it creates) is on disk, and the first band write happens after
+    that, so a plan that has to be measured again has no bands to contradict.
+    """
+    if state is not None and state.has("plan"):
+        return _recorded_plan(state)
+    plan = _plan_joint_encoding(prepared, evidence, options)
+    if state is not None:
+        write_json(
+            state.path / PLAN,
+            {
+                "encoding": plan.encoding.to_manifest(),
+                "effective_chunks": list(plan.effective_chunks),
+            },
         )
-        # Off-reference variants are only known once Pass 2 has streamed the
-        # sources; fold them into the shared axis before anything reads it.
-        prepared = _finalise_reference_partition(prepared, options)
-        evidence = _verify_eaf_orientation(prepared, routed, options)
-        plan = _plan_joint_encoding(prepared, evidence, options)
-        dense = _write_dense_component_bands(prepared, plan, routed.pass2_start, options)
-        overflow = _assemble_overflow(prepared, options)
-        analyses = _stamp_analyses(prepared, dense, overflow, evidence)
-        encoding, se_coefficients = _fit_joint_se(prepared, plan, overflow, options)
-        eaf_provenance = _finish_dense_component(
-            prepared,
-            dense,
-            analyses,
-            encoding,
-            evidence,
-            options,
+        mark_phase(state.path, "plan")
+    return plan
+
+
+def _recorded_plan(state: CheckpointState) -> _EncodingPlan:
+    """The plan a resumed run must write its remaining bands under."""
+    recorded = read_json(state.path / PLAN)
+    return _EncodingPlan(
+        encoding=StoreEncoding.from_manifest(recorded["encoding"]),
+        effective_chunks=tuple(recorded["effective_chunks"]),
+    )
+
+
+def _dense_bands_phase(
+    prepared: _PreparedBuild,
+    plan: _EncodingPlan,
+    routed: _RoutedSpills,
+    options: _BuildOptions,
+    state: CheckpointState | None,
+) -> _DenseWritten:
+    """Phase - the Dense band write, or the harvest a completed write left.
+
+    The band write unlinks each column's dense spill once both its passes have
+    read it, so its top-hit harvest has to be recorded: a resumed run cannot
+    re-write the bands from spills that are gone, and the finish phase needs the
+    candidates whether the bands were just written or written hours ago.
+    """
+    if state is not None and state.has("dense_bands"):
+        return _recorded_hits(state)
+    dense = _write_dense_component_bands(prepared, plan, routed.pass2_start, options)
+    if state is not None:
+        save_npz(
+            state.path / HITS,
+            all_rows=dense.all_rows,
+            all_cols=dense.all_cols,
+            all_z=dense.all_z,
+            all_se=dense.all_se,
+            column_has_eaf=dense.column_has_eaf,
         )
-    finally:
-        shutil.rmtree(spill_dir, ignore_errors=True)
+        record_plates(
+            state.path, (f"{col}.ovf.npz" for col in range(prepared.n_analyses))
+        )
+        mark_phase(state.path, "dense_bands")
+    return dense
+
+
+def _recorded_hits(state: CheckpointState) -> _DenseWritten:
+    """The Dense band write's own products, as the finish phase reads them."""
+    arrays = load_npz(state.path / HITS)
+    return _DenseWritten(
+        all_rows=arrays["all_rows"],
+        all_cols=arrays["all_cols"],
+        all_z=arrays["all_z"],
+        all_se=arrays["all_se"],
+        column_has_eaf=arrays["column_has_eaf"],
+    )
+
+
+def _tail_phase(
+    prepared: _PreparedBuild,
+    routed: _RoutedSpills,
+    plan: _EncodingPlan,
+    dense: _DenseWritten,
+    evidence: _EafEvidence,
+    options: _BuildOptions,
+    state: CheckpointState | None,
+) -> tuple[_PreparedBuild, _ComponentResult]:
+    """Phase - everything after the Dense band write, re-run wholesale.
+
+    No marker, deliberately (issue #227): the CSR assembly, the frequency
+    plane, the joint SE fit, the Dense finish and the Overflow flush are cheap
+    beside the phases above once the spills and the plan are in hand, and each
+    is idempotent over what a failed attempt left -- the frequency plane is
+    recreated, zarr chunk writes and the top-hit tiers are replaced, the
+    manifest and analyses are rewritten. The `.ovf` plates survive a
+    checkpointed run precisely so the CSR can be re-assembled here.
+    """
+    overflow = _assemble_overflow(prepared, options, consume_spills=state is None)
+    analyses = _stamp_analyses(prepared, dense, overflow, evidence)
+    _write_overflow_eaf_plane(prepared, plan, overflow)
+    encoding, se_coefficients = _fit_joint_se(prepared, plan, overflow, options)
+    eaf_provenance = _finish_dense_component(
+        prepared, dense, analyses, encoding, evidence, options
+    )
     return prepared, _ComponentResult(
         csr=overflow.csr,
         encoding=encoding,
         se_coefficients=se_coefficients,
         eaf_provenance=eaf_provenance,
         analyses=analyses,
+        info_counts=routed.info_counts,
     )
 
 
@@ -2059,7 +2870,8 @@ def build_hybrid_from_vcf_manifest(
     dtype: str = DEFAULT_DTYPE, overwrite: bool = False, n_workers: int = 1,
     eaf_reference: str | Path | None = None, eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False, source_reader_capability: str | None = None,
-    source_assembly: str | None = None,
+    source_assembly: str | None = None, checkpoint: bool = False,
+    resume: bool = False,
 ) -> HybridBuildResult:
     """Build a Hybrid store from a manifest of GWAS-VCF files and a reference
     panel or precomputed variant reference. A thin orchestrator over three deep
@@ -2073,44 +2885,483 @@ def build_hybrid_from_vcf_manifest(
 
     The Dense Component axis is exactly ``variant_reference``'s ALIDs (or, when
     both are given, the ``--reference-panel`` subset, which the reference must
-    carry; an inconsistent panel is ignored in favour of the reference). With a
-    reference, Pass 1 variant discovery is bypassed
-    (single-pass build, issue #186) and the reference's source-coordinate map
-    routes on-reference associations to the Dense Component and off-reference
-    ones to the Ragged Overflow during Pass 2. With only ``reference_panel``,
-    the legacy two-pass build reads every source once and lifts hg19 rows.
-    Rows are assumed hg19 and lifted inline unless the manifest declares
-    ``source_assembly=hg38`` (issue #85); ``source_assembly`` and
-    ``source_reader_capability`` options supply per-release defaults (#174).
-    ``eaf_reference`` drives the orientation check (issue #115).
+    carry; an inconsistent panel defers to the reference). With a reference,
+    Pass 1 variant discovery is bypassed (single-pass build, issue #186) and
+    the reference's source-coordinate map routes on-reference associations to
+    the Dense Component and off-reference ones to the Ragged Overflow during
+    Pass 2. With only ``reference_panel``, the legacy two-pass build reads every
+    source once and lifts hg19 rows. Rows are assumed hg19 and lifted inline
+    unless the manifest declares ``source_assembly=hg38`` (issue #85);
+    ``source_assembly`` and ``source_reader_capability`` supply per-release
+    defaults (#174), and ``eaf_reference`` drives the orientation check (#115).
+
+    ``checkpoint=True`` opts the build into phase-granularity resume; ``resume=True``
+    continues one from the checkpoint this call's ``output_path`` implies (issue #227;
+    `_run_checkpointed_build`, `_resume_requested`), and a destination whose checkpoint
+    is still there is refused unless ``overwrite=True`` discards it -- a plain build
+    included, which would otherwise orphan a released Dense Component.
     """
     if reference_panel is None and variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
-    manifest_rows = _load_manifest(
-        manifest_path,
-        default_source_reader_capability=source_reader_capability,
-        default_source_assembly=source_assembly,
+    options = _BuildOptions(
+        out=Path(output_path),
+        reference_panel=reference_panel,
+        variant_reference=variant_reference,
+        store_id=store_id,
+        release_id=release_id,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
+        chunk_shape=chunk_shape,
+        dtype=dtype,
+        n_workers=n_workers,
+        eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf,
     )
-    with OpenGWASDBStore.staging(Path(output_path), overwrite=overwrite) as staged:
-        options = _BuildOptions(
-            out=Path(output_path),
-            reference_panel=reference_panel,
-            variant_reference=variant_reference,
-            store_id=store_id,
-            release_id=release_id,
-            chain_file=chain_file,
-            liftover_failure_threshold=liftover_failure_threshold,
-            chunk_shape=chunk_shape,
-            dtype=dtype,
-            n_workers=n_workers,
-            eaf_reference=eaf_reference,
-            eaf_reference_ancestry=eaf_reference_ancestry,
-            allow_unverified_eaf=allow_unverified_eaf,
-        )
-        prepared = _prepare_build(staged, manifest_rows, options)
-        prepared, components = _build_components(prepared, options)
-        result = _finalise_store(prepared, components, options)
+    defaults = _ManifestDefaults(source_reader_capability, source_assembly)
+    if resume:
+        return _resume_requested(manifest_path, options, defaults, overwrite)
+    return _run_checkpointed_build(manifest_path, options, defaults, overwrite, checkpoint)
+
+
+def _run_checkpointed_build(
+    manifest_path: str | Path,
+    options: _BuildOptions,
+    defaults: _ManifestDefaults,
+    overwrite: bool,
+    checkpoint: bool,
+) -> HybridBuildResult:
+    """Run one build, keeping its phases in a checkpoint when asked to.
+
+    The spill directory a checkpointed build uses is the checkpoint's own, so a
+    failure leaves the spills where the resume looks for them, and the Staged
+    Release work directory is retained inside the checkpoint instead of removed
+    (issue #227).
+    """
+    manifest_rows, info_score_policies = _load_manifest(
+        manifest_path,
+        default_source_reader_capability=defaults.source_reader_capability,
+        default_source_assembly=defaults.source_assembly,
+    )
+    state = None
+    if checkpoint:
+        state = _open_checkpoint(manifest_path, options, defaults, overwrite)
+    else:
+        # A build that is not continuing a checkpoint must not orphan one in
+        # silence: refusing is the default, --overwrite the explicit discard.
+        _require_clear_checkpoint(options.out, overwrite)
+    try:
+        # The whole window is guarded, publication included: a commit that
+        # loses a race still leaves a checkpoint, and the operator is told so.
+        with OpenGWASDBStore.staging(
+            options.out,
+            overwrite=overwrite,
+            retain_on_failure_to=None if state is None else state.staged_dir,
+        ) as staged:
+            prepared = _prepare_build(
+                staged,
+                manifest_rows,
+                info_score_policies,
+                options,
+                None if state is None else state.spill_dir,
+            )
+            result = _run_and_publish(prepared, options, state)
+    except BaseException:
+        _log_failed_checkpoint(state)
+        raise
+    if state is not None:
+        state.discard()
     return result
+
+
+def _run_and_publish(
+    prepared: _PreparedBuild, options: _BuildOptions, state: CheckpointState | None
+) -> HybridBuildResult:
+    """Run the phase sequence over the open release, then finalise the store."""
+    prepared, components = _build_components(prepared, options, state)
+    return _finalise_store(prepared, components, options)
+
+
+@dataclass(frozen=True)
+class _ManifestDefaults:
+    """The per-release manifest defaults the caller supplied, recorded with
+    every other build parameter because they decide what each Manifest Row
+    means -- and so what the store holds (issue #174)."""
+
+    source_reader_capability: str | None
+    source_assembly: str | None
+
+
+# ── Checkpointed build and resume (issue #227) ──────────────────────────────
+
+
+def _resume_requested(
+    manifest_path: str | Path,
+    options: _BuildOptions,
+    defaults: _ManifestDefaults,
+    overwrite: bool,
+) -> HybridBuildResult:
+    """Resume the checkpoint ``output_path`` implies, refusing a different request.
+
+    The requested parameters are compared against the recorded ones before
+    anything is read from the checkpoint: a resumed run writes into a store the
+    first run configured, and a parameter that differs would mix records from
+    one configuration with the rest of a store built under another.
+    """
+    checkpoint_dir = checkpoint_dir_for(options.out)
+    recorded = read_build_params(checkpoint_dir)
+    require_matching_params(recorded, _build_params(manifest_path, options, defaults, overwrite))
+    return resume_hybrid_build(checkpoint_dir, n_workers=options.n_workers)
+
+
+def resume_hybrid_build(
+    checkpoint_dir: str | Path, *, n_workers: int | None = None
+) -> HybridBuildResult:
+    """Resume an interrupted checkpointed Hybrid build from its checkpoint.
+
+    Takes only the checkpoint directory (ADR 0023): every build parameter and
+    every external input's identity rides in the ``build_params.json`` the first
+    run wrote, so a resumed run cannot silently apply a different configuration
+    than the records on disk were computed under. ``n_workers`` is the one
+    exception and the only one -- a pure runtime knob no computed value depends
+    on.
+
+    Re-enters at the phase the checkpoint records as last complete, reloading
+    the frozen encoding plan and the post-Pass-2 axis rather than re-measuring
+    either, and re-running the tail wholesale. It publishes through the same
+    Staged Release commit an uninterrupted build uses -- adopting the release
+    the failed run left, rather than writing beside it -- and removes the
+    checkpoint once the release is published.
+    """
+    path = Path(checkpoint_dir)
+    params = read_build_params(path)
+    _require_unchanged_inputs(params)
+    options = _options_from_params(params, n_workers)
+    defaults = _ManifestDefaults(
+        params.get("source_reader_capability"), params.get("source_assembly")
+    )
+    rows, policies = _load_manifest(
+        params["manifest_path"],
+        default_source_reader_capability=defaults.source_reader_capability,
+        default_source_assembly=defaults.source_assembly,
+    )
+    state = CheckpointState(path=path, params=params, completed=completed_phases(path))
+    if not state.staged_dir.exists():
+        raise FileNotFoundError(
+            f"The checkpoint at {path} holds no staged release to resume: "
+            f"{state.staged_dir} is absent, so the Dense Component it had written "
+            f"is gone. Start the build again with --checkpoint."
+        )
+    _require_intact_plates(state, len(rows))
+    try:
+        with OpenGWASDBStore.staging(
+            Path(params["output_path"]),
+            overwrite=bool(params["overwrite"]),
+            adopt=state.staged_dir,
+            retain_on_failure_to=state.staged_dir,
+        ) as staged:
+            prepared = _resume_prepared(staged, rows, policies, options, state)
+            result = _run_and_publish(prepared, options, state)
+    except BaseException:
+        _log_failed_checkpoint(state)
+        raise
+    state.discard()
+    return result
+
+
+def _resume_prepared(
+    staged: StagedRelease,
+    manifest_rows: list[_ManifestRow],
+    policies: Mapping[str, InfoScorePolicy],
+    options: _BuildOptions,
+    state: CheckpointState,
+) -> _PreparedBuild:
+    """The prepared build a resumed phase sequence re-enters with.
+
+    Before the fold it is `_prepare_build`'s own output: the routing index and
+    the pre-fold partition are pure functions of the recorded inputs, and the
+    fold's own records are the checkpoint's. After the fold it is rebuilt from
+    the recorded axis instead -- no Pass 1 and no measurement -- because the
+    Dense rows and the Overflow plates are already keyed on that axis.
+    """
+    if state.has("fold"):
+        return _recorded_prepared(staged, manifest_rows, policies, state)
+    return _prepare_build(staged, manifest_rows, policies, options, state.spill_dir)
+
+
+def _recorded_prepared(
+    staged: StagedRelease,
+    manifest_rows: list[_ManifestRow],
+    policies: Mapping[str, InfoScorePolicy],
+    state: CheckpointState,
+) -> _PreparedBuild:
+    """Rebuild the prepared build from the checkpoint's recorded axis alone.
+
+    The routing index is deliberately empty: Pass 2 and the fold are its only
+    readers, and both are recorded complete when this runs -- a run that
+    reaches either re-derives it in `_prepare_build` instead. The Dense row map
+    is re-saved from the record, so the release being resumed carries the map
+    the record's indices were built against rather than whatever it had left.
+    """
+    # The Dense Component's staging directory already exists -- it is the one
+    # the interrupted run wrote its bands into -- so it is opened, not made.
+    dense_dir, dense_staged = _open_dense_component(staged)
+    panel = read_lines(state.path / AXIS_PANEL)
+    off_panel = read_lines(state.path / AXIS_OFF_PANEL)
+    shared_sorted = read_lines(state.path / AXIS_SHARED)
+    dense_to_shared = load_npz(state.path / AXIS)["dense_to_shared"].astype(np.int32)
+    np.save(dense_to_shared_path(staged.path), dense_to_shared)
+    return _PreparedBuild(
+        staged=staged,
+        dense_dir=dense_dir,
+        dense_staged=dense_staged,
+        partition=_VariantPartition(
+            panel_sorted=panel,
+            off_panel_alids=off_panel,
+            shared_sorted=shared_sorted,
+            n_panel=len(panel),
+            n_off_panel=len(off_panel),
+            n_shared=len(shared_sorted),
+        ),
+        manifest_rows=manifest_rows,
+        info_score_policies=policies,
+        analyses=[_manifest_row_to_analysis(row) for row in manifest_rows],
+        hg38_to_source=read_str_map(state.path / PROVENANCE_SOURCE),
+        rsid_by_alid={
+            alid: rsid
+            for alid, rsid in read_str_map(state.path / PROVENANCE_RSID).items()
+            if rsid
+        },
+        dense_to_shared=dense_to_shared,
+        spill_dir=state.spill_dir,
+        keys_sorted=_NO_ROUTING[0],
+        targets_sorted=_NO_ROUTING[1],
+        ispanel_sorted=_NO_ROUTING[2],
+        n_analyses=len(manifest_rows),
+    )
+
+
+def _require_intact_plates(state: CheckpointState, n_analyses: int) -> None:
+    """Refuse a checkpoint whose retained plates the phases still to run need.
+
+    Which plates those are follows from the recorded phase: before the fold
+    the `.unk` plates of the columns it has not folded (and every column's
+    dense spill, which the band write reads), through the band write every
+    column's dense spill, and after it the `.ovf` plates the CSR is re-assembled
+    from. A plate the inventory never recorded is one that was not on disk when
+    its phase completed, which is ordinary -- a column can spill no off-reference
+    key at all -- so only recorded plates are checked.
+
+    With no phase recorded there is nothing to check: Pass 2 writes every plate
+    there is, over whatever the failed attempt left behind.
+    """
+    if not state.completed:
+        return
+    require_intact_plates(state.path, _plate_names(state, n_analyses))
+
+
+def _plate_names(state: CheckpointState, n_analyses: int) -> list[str]:
+    """The plates the phases after the recorded one will read."""
+    dense = [f"{col}.npz" for col in range(n_analyses)]
+    if state.has("fold"):
+        overflow = [f"{col}.ovf.npz" for col in range(n_analyses)]
+        return overflow if state.has("dense_bands") else [*dense, *overflow]
+    unknown: list[str] = []
+    for col in _pending_columns(state, n_analyses):
+        unknown.extend((f"{col}.unk.npz", f"{col}.unk.raw"))
+    return [*dense, *unknown]
+
+
+def _pending_columns(state: CheckpointState, n_analyses: int) -> list[int]:
+    """The columns an interrupted fold has still to fold."""
+    folded = _folded_columns(state)
+    return [col for col in range(n_analyses) if col not in folded]
+
+
+def _require_unchanged_inputs(params: Mapping[str, Any]) -> None:
+    """Refuse a checkpoint whose recorded inputs are no longer what they were.
+
+    A resume's *parameters* come from the record, so there is nothing to compare
+    them against -- but its inputs are still the operator's files, and a manifest
+    edited or a reference rewritten between the two runs would have the resumed
+    phases finish a store the first run's measured values no longer describe.
+    """
+    for name, identity in sorted(params.get("inputs", {}).items()):
+        if input_identity(identity["path"]) != identity:
+            raise ValueError(
+                f"The checkpoint at {params['output_path']} was built from a different "
+                f"{name} ({identity['path']}), which has changed since. Resume it only "
+                f"over the inputs it was built from, or start again with --checkpoint."
+            )
+
+
+def _require_clear_checkpoint(out: Path, overwrite: bool) -> None:
+    """Refuse to build for a destination whose checkpoint is still there.
+
+    Called by *every* build, checkpointed or not: a checkpoint is a release's
+    only copy of a Dense Component it had already written -- hundreds of
+    gigabytes at release scale -- so a build that is not the resume of it is
+    either an explicit ``--overwrite`` or a refusal naming the function that
+    continues it. Without a checkpoint directory this says nothing, so a plain
+    build with nothing to resume behaves exactly as it always did.
+    """
+    require_fresh_destination(out, checkpoint_dir_for(out), overwrite, RESUME_FUNCTION)
+
+
+def _open_checkpoint(
+    manifest_path: str | Path,
+    options: _BuildOptions,
+    defaults: _ManifestDefaults,
+    overwrite: bool,
+) -> CheckpointState:
+    """Create the checkpoint a build that opted in writes its phases into,
+    refusing a stale one first (`_require_clear_checkpoint`)."""
+    _require_clear_checkpoint(options.out, overwrite)
+    checkpoint_dir = checkpoint_dir_for(options.out)
+    checkpoint_dir.mkdir(parents=True)
+    params = _build_params(manifest_path, options, defaults, overwrite)
+    write_build_params(checkpoint_dir, params)
+    return CheckpointState(path=checkpoint_dir, params=params, completed=())
+
+
+def _build_params(
+    manifest_path: str | Path,
+    options: _BuildOptions,
+    defaults: _ManifestDefaults,
+    overwrite: bool,
+) -> dict[str, Any]:
+    """The parameters and input identities a checkpoint records.
+
+    The path of every external input, with its size, mtime and SHA-256: a
+    checkpoint describes one build of one set of inputs, and a resume against
+    an edited manifest or a rewritten reference would produce a store belonging
+    to neither.
+    """
+    def _text(value: str | Path | None) -> str | None:
+        return None if value is None else str(value)
+
+    return {
+        "manifest_path": str(Path(manifest_path)),
+        "output_path": str(options.out.resolve()),
+        "store_id": options.store_id,
+        "release_id": options.release_id,
+        "reference_panel": _text(options.reference_panel),
+        "variant_reference": _text(options.variant_reference),
+        "chain_file": _text(options.chain_file),
+        "liftover_failure_threshold": options.liftover_failure_threshold,
+        "chunk_shape": list(options.chunk_shape),
+        "dtype": options.dtype,
+        "n_workers": options.n_workers,
+        "eaf_reference": _text(options.eaf_reference),
+        "eaf_reference_ancestry": options.eaf_reference_ancestry,
+        "allow_unverified_eaf": options.allow_unverified_eaf,
+        "overwrite": bool(overwrite),
+        "source_reader_capability": defaults.source_reader_capability,
+        "source_assembly": defaults.source_assembly,
+        "inputs": input_identities(
+            {
+                "manifest": manifest_path,
+                "variant_reference": options.variant_reference,
+                "reference_panel": options.reference_panel,
+                "chain_file": options.chain_file,
+                "eaf_reference": options.eaf_reference,
+            }
+        ),
+    }
+
+
+def _options_from_params(params: Mapping[str, Any], n_workers: int | None) -> _BuildOptions:
+    """Rebuild the build options a checkpoint recorded.
+
+    ``n_workers`` comes from the caller: it is the one parameter a resume may
+    change (ADR 0023).
+    """
+    return _BuildOptions(
+        out=Path(params["output_path"]),
+        reference_panel=params["reference_panel"],
+        variant_reference=params["variant_reference"],
+        store_id=params["store_id"],
+        release_id=params["release_id"],
+        chain_file=params["chain_file"],
+        liftover_failure_threshold=params["liftover_failure_threshold"],
+        chunk_shape=tuple(params["chunk_shape"]),
+        dtype=params["dtype"],
+        n_workers=params["n_workers"] if n_workers is None else n_workers,
+        eaf_reference=params["eaf_reference"],
+        eaf_reference_ancestry=params["eaf_reference_ancestry"],
+        allow_unverified_eaf=params["allow_unverified_eaf"],
+    )
+
+
+def _log_failed_checkpoint(state: CheckpointState | None) -> None:
+    """Name the checkpoint a failed build left and how to carry on from it.
+
+    The failure itself propagates; this line is what tells an operator that
+    hours of work are still on disk and what to type to use them.
+    """
+    if state is None:
+        return
+    log.error(
+        "Hybrid build failed; its checkpoint is at %s. Resume it with "
+        "%s(%r).",
+        state.path,
+        RESUME_FUNCTION,
+        str(state.path),
+    )
+
+
+def _report_payload(report: EafOrientationReport) -> dict[str, Any]:
+    """The orientation report, losslessly, for the checkpoint.
+
+    `provenance()` rounds each correlation for the manifest -- provenance is not
+    a computation input. A resumed run stamps every Analysis from this report,
+    so it is recorded at full precision: a rounded value would put a different
+    number in `analyses.tsv` than an uninterrupted build.
+    """
+    return {
+        "method": report.method.value,
+        "reference_id": report.reference_id,
+        "reference_checksum": report.reference_checksum,
+        "n_reference_variants": int(report.n_reference_variants),
+        "n_sites": int(report.n_sites),
+        "min_overlap": int(report.min_overlap),
+        "min_variance": float(report.min_variance),
+        "evidence": [
+            {
+                "analysis_id": item.analysis_id,
+                "outcome": item.outcome.value,
+                "n_overlap": int(item.n_overlap),
+                "r": repr(float(item.r)),
+                "stores_eaf": bool(item.stores_eaf),
+                "note": item.note,
+            }
+            for item in report.evidence
+        ],
+    }
+
+
+def _report_from_payload(payload: Mapping[str, Any]) -> EafOrientationReport:
+    """The report `_report_payload` recorded, restored exactly."""
+    return EafOrientationReport(
+        method=EafOrientationMethod(payload["method"]),
+        evidence=tuple(
+            OrientationEvidence(
+                analysis_id=item["analysis_id"],
+                outcome=EafOrientationOutcome(item["outcome"]),
+                n_overlap=int(item["n_overlap"]),
+                r=float(item["r"]),
+                note=item["note"],
+                stores_eaf=bool(item["stores_eaf"]),
+            )
+            for item in payload["evidence"]
+        ),
+        reference_id=payload["reference_id"],
+        reference_checksum=payload["reference_checksum"],
+        n_reference_variants=int(payload["n_reference_variants"]),
+        n_sites=int(payload["n_sites"]),
+        min_overlap=int(payload["min_overlap"]),
+        min_variance=float(payload["min_variance"]),
+    )
 
 
 def _write_variant_table(
@@ -2181,6 +3432,7 @@ def _write_hybrid_manifest(
     dtype: str,
     encoding: StoreEncoding,
     eaf_provenance: dict[str, Any] | None = None,
+    info_score: dict[str, Any] | None = None,
     variant_reference: str | None = None,
 ) -> None:
     provenance: dict[str, Any] = {
@@ -2204,6 +3456,8 @@ def _write_hybrid_manifest(
     }
     if eaf_provenance is not None:
         provenance["eaf_orientation"] = eaf_provenance
+    if info_score is not None:
+        provenance["info_score"] = info_score
     if variant_reference is not None:
         provenance["variant_reference"] = variant_reference
     manifest = StoreManifest(

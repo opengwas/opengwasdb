@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -12,28 +13,40 @@ from numcodecs import Blosc
 from opengwasdb.encoding import (
     EafExceptionBuilder,
     EafMeasurements,
+    OverflowCellBatches,
     OverflowCells,
     RaggedEafPlane,
     RaggedSePlane,
+    SeExceptionBuilder,
     SeMeasurements,
     StoreCodec,
     StoreEncoding,
     ZOverflowBuilder,
     ZOverflowTable,
-    eaf_baseline_from_pairs,
+    eaf_baseline_from_sorted_runs,
     fit_se,
     measure_eaf,
     positions_at,
     positions_flat,
-    write_eaf_csr,
-    write_se_csr,
+    write_eaf_baseline,
 )
+from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.manifest import StoreManifest
 
 RAGGED_ZARR_PATH = "data.zarr/ragged"
 _COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
 # Chunk size for the flat association arrays (~400 KB per chunk at float16).
 _ASSOC_CHUNK = 200_000
+#: Cells one `se_fit_batches` batch aims to carry. The batch holds the variant
+#: indices, the source and round-tripped frequencies, the gathered baseline and
+#: the Analysis indices -- about 30 bytes a cell -- so 2**24 is roughly a
+#: 500 MiB working set, whatever the plane's total cell count (issue #228).
+DEFAULT_SE_FIT_CELL_BUDGET = 1 << 24
+#: Cells one `flush` region writes at a time. The region holds the four source
+#: planes, the codes it encodes them to and the frequencies it decodes back --
+#: about 30 bytes a cell -- so 2**22 is roughly a 130 MiB working set whatever
+#: the component's cell count (issue #228).
+DEFAULT_FLUSH_REGION_CELLS = 1 << 22
 _OFFSET_CHUNK = 10_000
 
 
@@ -51,6 +64,12 @@ class RaggedCSRWriter:
     because deciding it needs the frequencies this writer is still being fed:
     a build calls `eaf_measurements()` once everything is in, runs
     `StoreEncoding.decide()` once, and flushes with the answer.
+
+    The writer also holds the one per-variant EAF baseline derived from the
+    cells it has been fed (issue #230), because every phase that codes or fits
+    a cell needs it: a Hybrid build asks for it first in the joint SE fit's
+    Analysis-aligned batches, again in that fit's chunk-aligned measurement
+    batches, and again in the CSR flush.
     """
 
     def __init__(self, n_variants: int) -> None:
@@ -60,6 +79,17 @@ class RaggedCSRWriter:
         self._ses: list[np.ndarray] = []
         self._eafs: list[np.ndarray] = []
         self._offsets: list[int] = [0]
+        #: The baseline this writer has already derived, or `None` before the
+        #: first ask. `None` can only mean "not derived": a derivation under a
+        #: residual plan always returns an array, so it is never the answer.
+        self._derived_baseline: np.ndarray | None = None
+        #: The group `write_eaf_plane` created and the plan it wrote it under,
+        #: or `None` before it has. The joint SE fit and its byte measurement
+        #: open a decoded view of the `eaf` plane from these, so neither
+        #: re-encodes a cell the write already encoded (issue #232).
+        self._eaf_root: Any = None
+        self._eaf_encoding: StoreEncoding | None = None
+        self._eaf_view: RaggedEafPlane | None = None
 
     def add_analysis(
         self,
@@ -87,6 +117,10 @@ class RaggedCSRWriter:
         else:
             self._eafs.append(np.asarray(eaf, dtype=np.float32))
         self._offsets.append(self._offsets[-1] + n)
+        # A baseline is a median over every cell at its variant, so a new cell
+        # can move one: a held baseline must never outlive the cells it came
+        # from. Only `add_analysis` changes those cells.
+        self._derived_baseline = None
 
     @property
     def n_analyses(self) -> int:
@@ -128,6 +162,185 @@ class RaggedCSRWriter:
             chunks=_ASSOC_CHUNK,
         )[1]
 
+    def se_fit_batches(
+        self, *, cell_budget: int = DEFAULT_SE_FIT_CELL_BUDGET
+    ) -> Iterator[OverflowCells]:
+        """The plane's cells, in Analysis-aligned batches.
+
+        The frequencies are read back from the written `eaf` plane -- exactly
+        what a query decodes -- rather than re-encoded from the source values,
+        so this pass derives no round trip the byte measurement derives again
+        (issue #232). Concatenated, the batches are the plane's cells in flat
+        order.
+
+        Batches never split an Analysis. The fit these feed accumulates
+        `numpy.bincount` sufficient statistics per Analysis, so an Analysis
+        confined to one batch has its sums added in the order the whole-array
+        pass would have added them -- which is what keeps the coefficients
+        bit-for-bit identical rather than merely close (issue #228). An
+        Analysis larger than the budget is its own batch: the budget bounds the
+        working set, and the plane's largest Analysis is the floor it cannot go
+        below.
+        """
+        for first, last in self._analysis_batches(max(1, int(cell_budget))):
+            lo, hi = self._offsets[first], self._offsets[last]
+            if hi == lo:
+                continue
+            se = np.concatenate(self._ses[first:last]).astype(np.float32)
+            yield OverflowCells(
+                se_values=se,
+                eaf_values=self._decoded_eaf(lo, hi),
+                analysis_indices=np.repeat(
+                    np.arange(first, last, dtype=np.int64),
+                    np.diff(np.asarray(self._offsets[first : last + 1], dtype=np.int64)),
+                ),
+                n_analyses=self.n_analyses,
+            )
+
+    def se_fit_chunk_batches(
+        self,
+        multiple: int,
+        *,
+        cell_budget: int = DEFAULT_SE_FIT_CELL_BUDGET,
+    ) -> Iterator[OverflowCells]:
+        """The same cells, in batches whose lengths are multiples of `multiple`.
+
+        What the byte measurement needs rather than what the fit needs: it
+        charges each candidate chunk by chunk and pads only the plane's final
+        edge chunk (#158), so a batch that ended anywhere but a chunk boundary
+        would have its own edge padded and change the selected range. Batches
+        here therefore cut on flat position, crossing Analyses freely -- the
+        measurement groups by the Analysis index carried per cell, not by the
+        batch it arrived in. The frequencies are read back from the `eaf`
+        plane, as in `se_fit_batches` (issue #232).
+        """
+        total = self.n_associations
+        if total == 0:
+            return
+        offsets = np.asarray(self._offsets, dtype=np.int64)
+        step = max(1, cell_budget // max(1, multiple)) * max(1, multiple)
+        for lo in range(0, total, step):
+            hi = min(lo + step, total)
+            batch = self._gather_flat(offsets, lo, hi)
+            if batch is not None:
+                yield batch
+
+    def _gather_flat(self, offsets: np.ndarray, lo: int, hi: int) -> OverflowCells | None:
+        """One flat cell range `[lo, hi)`, gathered across the Analyses it spans."""
+        errors: list[np.ndarray] = []
+        analyses: list[np.ndarray] = []
+        for analysis in self._analyses_spanning(offsets, lo, hi):
+            start = int(offsets[analysis])
+            head, tail = max(lo, start) - start, min(hi, int(offsets[analysis + 1])) - start
+            errors.append(self._ses[analysis][head:tail])
+            analyses.append(np.full(tail - head, analysis, dtype=np.int64))
+        if not errors:
+            return None
+        return OverflowCells(
+            se_values=np.concatenate(errors).astype(np.float32),
+            eaf_values=self._decoded_eaf(lo, hi),
+            analysis_indices=np.concatenate(analyses),
+            n_analyses=self.n_analyses,
+        )
+
+    def _decoded_eaf(self, lo: int, hi: int) -> np.ndarray:
+        """The frequencies a reader decodes for flat cells `[lo, hi)`.
+
+        Read from the plane `write_eaf_plane` wrote -- the same array, exception
+        table and per-variant baseline a query reads -- so the joint SE fit and
+        its byte measurement derive each cell's round trip once, at the write,
+        rather than each re-encoding the source values (issue #232). Reading a
+        region at a time keeps the footprint the batch's, not the plane's. The
+        view is opened on the first ask, so a caller that only writes (a
+        standalone Ragged `flush`) never pays to open one.
+        """
+        if self._eaf_view is None:
+            if self._eaf_root is None or self._eaf_encoding is None:
+                raise RuntimeError(
+                    "the SE fit reads frequencies back from the written eaf plane; call "
+                    "write_eaf_plane before se_fit_batches or se_fit_chunk_batches"
+                )
+            self._eaf_view = RaggedEafPlane.open(self._eaf_root, self._eaf_encoding)
+        return self._eaf_view.slice(lo, hi)
+
+    def se_fit_source(
+        self, *, cell_budget: int = DEFAULT_SE_FIT_CELL_BUDGET
+    ) -> OverflowCellBatches:
+        """This component's cells as a source the joint SE optimiser can stream.
+
+        Both batchings the optimiser needs, from one writer: Analysis-aligned
+        for the fit's per-Analysis sums, chunk-aligned for the byte measurement
+        (issue #228). Both read their frequencies back from the `eaf` plane
+        `write_eaf_plane` wrote (issue #232).
+        """
+        return OverflowCellBatches(
+            n_analyses=self.n_analyses,
+            analysis_batches=lambda: self.se_fit_batches(cell_budget=cell_budget),
+            chunk_batches=lambda multiple: self.se_fit_chunk_batches(
+                multiple, cell_budget=cell_budget
+            ),
+        )
+
+    def _analysis_batches(self, cell_budget: int) -> Iterator[tuple[int, int]]:
+        """Half-open Analysis ranges whose cells stay within `cell_budget`."""
+        first = 0
+        for analysis in range(self.n_analyses):
+            spans = self._offsets[analysis + 1] - self._offsets[first]
+            if spans > cell_budget and analysis > first:
+                yield first, analysis
+                first = analysis
+        if first < self.n_analyses:
+            yield first, self.n_analyses
+
+    def _derive_eaf_baseline(self) -> np.ndarray:
+        """One pass over the per-Analysis runs, bounded in cells (issue #226)."""
+        return eaf_baseline_from_sorted_runs(self._variant_indices, self._eafs, self._n_variants)
+
+    def _eaf_baseline(self, encoding: StoreEncoding) -> np.ndarray | None:
+        """The per-variant Effect Allele Frequency Baseline, or None.
+
+        From the per-Analysis runs rather than the concatenation: every column
+        was sorted by variant index before it was added, and the bounded path
+        keeps a billion-cell Overflow inside memory (issue #226).
+
+        Derived once and held for the writer's remaining life (issue #230).
+        The baseline is a function of the cells alone, and a Hybrid build asks
+        for it over the same cells three times -- the fit's Analysis-aligned
+        batches, the measurement's chunk-aligned batches and the flush -- so
+        deriving it per ask walks a 15-billion-cell Overflow twice more than it
+        needs to. What is held is one `float32` per variant, not per cell, and
+        each pass already held its own copy for that pass's duration, so the
+        reuse removes the passes and not a byte of peak.
+        """
+        if not encoding.eaf.is_residual:
+            return None
+        if self._derived_baseline is None:
+            self._derived_baseline = self._derive_eaf_baseline()
+        return self._derived_baseline
+
+    def _decode_round_trip(
+        self,
+        encoding: StoreEncoding,
+        eaf: np.ndarray,
+        baseline: np.ndarray | None,
+        vi: np.ndarray,
+    ) -> np.ndarray:
+        """The frequencies a reader gets back for these cells.
+
+        The SE model has to predict from what is stored, not from the source
+        (ADR 0037), so the fit and the measurement both see the round trip.
+        """
+        if encoding.eaf.is_absent:
+            return np.full(eaf.shape, np.nan, dtype=np.float32)
+        gathered = None if baseline is None else baseline[vi]
+        exceptions = EafExceptionBuilder()
+        raw = StoreCodec(encoding).encode_eaf(
+            eaf, baseline=gathered, positions=positions_flat(0), exceptions=exceptions
+        )
+        return StoreCodec(encoding, eaf_exceptions=exceptions.table()).decode_eaf(
+            raw, baseline=gathered, positions=positions_flat(0)
+        )
+
     def se_fit_inputs(self, encoding: StoreEncoding) -> OverflowCells:
         """Named `(se, decoded_eaf, analysis_index)` for a shared plan."""
         vi, eaf = self._flat()
@@ -136,9 +349,7 @@ class RaggedCSRWriter:
             if self.n_associations
             else np.empty(0, dtype=np.float32)
         )
-        baseline = (
-            eaf_baseline_from_pairs(vi, eaf, self._n_variants) if encoding.eaf.is_residual else None
-        )
+        baseline = self._eaf_baseline(encoding)
         codec = StoreCodec(encoding)
         exceptions = EafExceptionBuilder()
         raw = codec.encode_eaf(
@@ -165,48 +376,276 @@ class RaggedCSRWriter:
             n_analyses=self.n_analyses,
         )
 
-    def _write_se(
+    def _plane(self, root: Any, name: str, total: int, dtype: Any) -> Any:
+        """An empty plane at full length, to be filled region by region."""
+        if name in root:
+            del root[name]
+        return root.create_dataset(
+            name, shape=(total,), chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=dtype
+        )
+
+    def _flat_regions(self, total: int, region_cells: int) -> Iterator[tuple[int, int]]:
+        """Half-open flat cell ranges covering the component, in plane order.
+
+        Ascending, because the z overflow and both exception tables are keyed on
+        global flat position and appended as they are encountered: visiting the
+        regions in order is what keeps their rows in the order a single pass
+        over the whole plane would have produced.
+        """
+        step = max(1, int(region_cells))
+        for lo in range(0, total, step):
+            yield lo, min(lo + step, total)
+
+    def _gather_region(
+        self, offsets: np.ndarray, lo: int, hi: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """The four source planes for flat cells `[lo, hi)`, across the
+        Analyses that range spans."""
+        indices: list[np.ndarray] = []
+        scores: list[np.ndarray] = []
+        errors: list[np.ndarray] = []
+        frequencies: list[np.ndarray] = []
+        for analysis in self._analyses_spanning(offsets, lo, hi):
+            start = int(offsets[analysis])
+            head, tail = max(lo, start) - start, min(hi, int(offsets[analysis + 1])) - start
+            indices.append(self._variant_indices[analysis][head:tail])
+            scores.append(self._zscores[analysis][head:tail])
+            errors.append(self._ses[analysis][head:tail])
+            frequencies.append(self._eafs[analysis][head:tail])
+        if not indices:
+            empty = np.empty(0, dtype=np.float32)
+            return np.empty(0, dtype=np.int32), empty, empty, empty
+        return (
+            np.concatenate(indices).astype(np.int32),
+            np.concatenate(scores).astype(np.float32),
+            np.concatenate(errors).astype(np.float32),
+            np.concatenate(frequencies).astype(np.float32),
+        )
+
+    def _analyses_spanning(self, offsets: np.ndarray, lo: int, hi: int) -> Iterator[int]:
+        """Each Analysis contributing a cell to flat range `[lo, hi)`."""
+        first = int(np.searchsorted(offsets, lo, side="right")) - 1
+        for analysis in range(max(first, 0), self.n_analyses):
+            start, stop = int(offsets[analysis]), int(offsets[analysis + 1])
+            if start >= hi:
+                return
+            if min(hi, stop) > max(lo, start):
+                yield analysis
+
+    def _region_analysis_indices(self, offsets: np.ndarray, lo: int, hi: int) -> np.ndarray:
+        """The Analysis each cell of flat range `[lo, hi)` belongs to."""
+        parts = [
+            np.full(
+                min(hi, int(offsets[analysis + 1])) - max(lo, int(offsets[analysis])),
+                analysis,
+                dtype=np.int64,
+            )
+            for analysis in self._analyses_spanning(offsets, lo, hi)
+        ]
+        return np.concatenate(parts) if parts else np.empty(0, dtype=np.int64)
+
+    def _write_se_streamed(
         self,
         root: Any,
         codec: StoreCodec,
         encoding: StoreEncoding,
-        se_arr: np.ndarray,
-        offsets_arr: np.ndarray,
+        offsets: np.ndarray,
         se_coefficients: np.ndarray | None,
+        total: int,
+        region_cells: int,
     ) -> None:
-        """Encode `se` against the EAF plane just written, not the source's.
+        """Encode `se` against the EAF plane just written, region by region.
+
+        The residual has to predict from the frequencies a reader will get back,
+        so this runs after the `eaf` plane is written and decodes what it wrote --
+        a region at a time, read back from the plane rather than kept from the
+        encode (issue #228). A Hybrid build supplies `se_coefficients` because
+        both components share one fit; a Ragged build has only itself to fit
+        against.
+        """
+        plane = self._plane(root, "se", total, encoding.se.dtype)
+        if not encoding.se.is_residual:
+            for lo, hi in self._flat_regions(total, region_cells):
+                plane[lo:hi] = self._gather_region(offsets, lo, hi)[2].astype(np.float16)
+            return
+        coefficients = (
+            se_coefficients
+            if se_coefficients is not None
+            else self._fit_own_coefficients(root, encoding, offsets, total)
+        )
+        decoded = RaggedEafPlane.open(root, encoding)
+        exceptions = SeExceptionBuilder()
+        for lo, hi in self._flat_regions(total, region_cells):
+            plane[lo:hi] = codec.encode_se(
+                self._gather_region(offsets, lo, hi)[2],
+                eaf=decoded.slice(lo, hi),
+                analysis_index=self._region_analysis_indices(offsets, lo, hi),
+                coefficients=coefficients,
+                positions=positions_flat(lo),
+                exceptions=exceptions,
+            )
+        write_se_coefficients(root, coefficients, compressor=_COMPRESSOR)
+        exceptions.table().write(root, compressor=_COMPRESSOR)
+
+    def _fit_own_coefficients(
+        self, root: Any, encoding: StoreEncoding, offsets: np.ndarray, total: int
+    ) -> np.ndarray:
+        """Fit this component alone, for a Ragged build with no shared plan.
+
+        Still whole-plane: a standalone Ragged store is the size of one cohort,
+        not of a Hybrid's Overflow, and the Hybrid builder never reaches here
+        because its joint fit supplies the coefficients (issue #228).
+        """
+        errors = (
+            np.concatenate(self._ses).astype(np.float32) if total else np.empty(0, dtype=np.float32)
+        )
+        return fit_se(
+            errors,
+            RaggedEafPlane.open(root, encoding).slice(0, total),
+            np.searchsorted(offsets[1:], np.arange(total), side="right"),
+            n_analyses=self.n_analyses,
+            compressor=_COMPRESSOR,
+            chunks=_ASSOC_CHUNK,
+        )[0]
+
+    def _flush_baseline(
+        self, encoding: StoreEncoding, eaf_baseline: np.ndarray | None
+    ) -> np.ndarray | None:
+        """The per-variant baseline the written `eaf` plane is coded against.
+
+        None when the plan has no residual to code. A supplied `eaf_baseline`
+        wins: Reference Completion carries its source's baselines across a
+        variant remap, because recomputing them from the decoded frequencies
+        would move every baseline by up to half a step and re-quantise every
+        cell against it (ADR 0037 §2). Otherwise this is the writer's one held
+        derivation (issue #230).
+        """
+        if not encoding.eaf.is_residual:
+            return None
+        if eaf_baseline is not None:
+            return np.asarray(eaf_baseline, dtype=np.float32)
+        return self._eaf_baseline(encoding)
+
+    def _write_frequency_regions(
+        self,
+        root: Any,
+        codec: StoreCodec,
+        encoding: StoreEncoding,
+        offsets_arr: np.ndarray,
+        baseline: np.ndarray | None,
+        region_cells: int,
+    ) -> None:
+        """Write `variant_index`, `z` and `eaf` region by region, in flat order.
+
+        A CSR cell's flat position is its ordinal in the concatenated arrays,
+        which is what its overflow and exception entries are keyed on, so
+        `positions_flat(lo)` supplies it per region and both tables come out in
+        the order a single pass over the whole plane would have appended them.
+        """
+        total = self.n_associations
+        variant_index = self._plane(root, "variant_index", total, np.int32)
+        z_plane = self._plane(root, "z", total, codec.z_dtype)
+        eaf_plane = (
+            None if encoding.eaf.is_absent else self._plane(root, "eaf", total, codec.eaf_dtype)
+        )
+        z_overflow = ZOverflowBuilder()
+        eaf_exceptions = EafExceptionBuilder()
+        for lo, hi in self._flat_regions(total, region_cells):
+            indices, scores, _errors, frequencies = self._gather_region(offsets_arr, lo, hi)
+            variant_index[lo:hi] = indices
+            z_plane[lo:hi] = codec.encode_z(
+                scores, positions=positions_flat(lo), overflow=z_overflow
+            )
+            if eaf_plane is not None:
+                eaf_plane[lo:hi] = codec.encode_eaf(
+                    frequencies,
+                    baseline=None if baseline is None else baseline[indices],
+                    positions=positions_flat(lo),
+                    exceptions=eaf_exceptions,
+                )
+        z_overflow.table().write(root)
+        if encoding.eaf.is_residual:
+            assert baseline is not None
+            write_eaf_baseline(root, baseline, compressor=_COMPRESSOR)
+            eaf_exceptions.table().write(root)
+
+    def write_eaf_plane(
+        self,
+        store_path: str | Path,
+        encoding: StoreEncoding,
+        *,
+        eaf_baseline: np.ndarray | None = None,
+        region_cells: int = DEFAULT_FLUSH_REGION_CELLS,
+    ) -> None:
+        """Create the component's zarr group and write its frequency half.
+
+        The `eaf` plane's encoding is decided before the joint SE fit runs, so
+        the plane is written here, ahead of the fit, and both the fit and its
+        byte measurement read the frequencies back from it instead of each
+        re-encoding every cell (issue #232). This creates the group, exactly
+        once; `flush_se` adds the SE half to the group this leaves rather than
+        replacing it, and a group with only this half carries no
+        `completion_state` for a later phase to mistake for a finished
+        component.
+
+        Written a region of cells at a time rather than from concatenated
+        planes, so the footprint is `region_cells` and not the component's cell
+        count: on OGS-00011's 15,078,327,210 Overflow cells the concatenating
+        write cost a measured 72.9 bytes a cell, or 1.10 TB (issue #228). What
+        is stored is unchanged -- each plane's codes are a per-cell function of
+        its value, keyed on global flat position (`positions_flat(lo)` per
+        region). `eaf_baseline` lets Reference Completion carry its source's
+        baselines across a variant remap; see `_flush_baseline`.
+        """
+        out = Path(store_path) / RAGGED_ZARR_PATH
+        root = zarr.open_group(str(out), mode="w")
+        offsets_arr = np.asarray(self._offsets, dtype=np.int64)
+        codec = StoreCodec(encoding)
+        baseline = self._flush_baseline(encoding, eaf_baseline)
+        root.create_dataset(
+            "offsets",
+            data=offsets_arr,
+            chunks=(_OFFSET_CHUNK,),
+            compressor=_COMPRESSOR,
+            dtype=np.int64,
+        )
+        self._write_frequency_regions(root, codec, encoding, offsets_arr, baseline, region_cells)
+        # Held so the joint SE fit and its byte measurement read these cells
+        # back rather than re-encoding them (issue #232). The decoded view is
+        # opened lazily, on the first ask, so a write-only caller never opens
+        # one.
+        self._eaf_root = root
+        self._eaf_encoding = encoding
+        self._eaf_view = None
+
+    def flush_se(
+        self,
+        store_path: str | Path,
+        encoding: StoreEncoding,
+        *,
+        se_coefficients: np.ndarray | None = None,
+        region_cells: int = DEFAULT_FLUSH_REGION_CELLS,
+    ) -> None:
+        """Add the SE half to the group `write_eaf_plane` created.
 
         The residual has to predict from the frequencies a reader will get
-        back, so this runs after `write_eaf_csr` and decodes what it wrote.
-        A Hybrid build supplies `se_coefficients` because both components share
-        one fit; a Ragged build has only itself to fit against.
+        back, so this encodes against the `eaf` plane already written rather
+        than re-encoding the source values (ADR 0037, issue #228). The
+        completion marker is written last, and `write_eaf_plane` deliberately
+        does not write it: a group carrying only the frequency half is one a
+        failed build left, not a finished component (issue #232).
         """
-        decoded_eaf = RaggedEafPlane.open(root, encoding).slice(0, len(se_arr))
-        ai = np.searchsorted(offsets_arr[1:], np.arange(len(se_arr)), side="right")
-        coefficients = None
-        if encoding.se.is_residual:
-            coefficients = (
-                se_coefficients
-                if se_coefficients is not None
-                else fit_se(
-                    se_arr,
-                    decoded_eaf,
-                    ai,
-                    n_analyses=self.n_analyses,
-                    compressor=_COMPRESSOR,
-                    chunks=_ASSOC_CHUNK,
-                )[0]
-            )
-        write_se_csr(
-            root,
-            codec,
-            se_arr,
-            decoded_eaf,
-            ai,
-            coefficients,
-            compressor=_COMPRESSOR,
-            chunks=(_ASSOC_CHUNK,),
+        out = Path(store_path) / RAGGED_ZARR_PATH
+        root = zarr.open_group(str(out), mode="a")
+        offsets_arr = np.asarray(self._offsets, dtype=np.int64)
+        codec = StoreCodec(encoding)
+        self._write_se_streamed(
+            root, codec, encoding, offsets_arr, se_coefficients, self.n_associations, region_cells
         )
+        root.attrs["layout"] = "ragged"
+        root.attrs["completion_state"] = "observed_only"
+        root.attrs["n_analyses"] = self.n_analyses
+        root.attrs["n_associations"] = self.n_associations
 
     def flush(
         self,
@@ -215,78 +654,21 @@ class RaggedCSRWriter:
         *,
         eaf_baseline: np.ndarray | None = None,
         se_coefficients: np.ndarray | None = None,
+        region_cells: int = DEFAULT_FLUSH_REGION_CELLS,
     ) -> None:
-        """Write CSR arrays to data.zarr/ragged/ inside store_path.
+        """Write the whole CSR: the frequency half, then the SE half.
 
-        `eaf_baseline` lets Reference Completion carry its source's baselines
-        across a variant remap instead of recomputing them from the decoded
-        frequencies -- recomputation would move every baseline by up to half a
-        step and re-quantise every cell against it (ADR 0037 §2).
+        One call for callers that hold every cell already -- the standalone
+        Ragged builders and Reference Completion's overflow rebuild -- for whom
+        splitting the write in two buys nothing. A Hybrid build calls the two
+        halves itself, because its joint SE fit sits between them (issue #232).
         """
-        out = Path(store_path) / RAGGED_ZARR_PATH
-        root = zarr.open_group(str(out), mode="w")
-
-        offsets_arr = np.asarray(self._offsets, dtype=np.int64)
-
-        codec = StoreCodec(encoding)
-        if self.n_associations > 0:
-            vi_arr = np.concatenate(self._variant_indices).astype(np.int32)
-            z_values = np.concatenate(self._zscores).astype(np.float32)
-            se_arr = np.concatenate(self._ses).astype(np.float32)
-            eaf_arr = np.concatenate(self._eafs).astype(np.float32)
-        else:
-            vi_arr = np.empty(0, dtype=np.int32)
-            z_values = np.empty(0, dtype=np.float32)
-            se_arr = np.empty(0, dtype=np.float32)
-            eaf_arr = np.empty(0, dtype=np.float32)
-        # A CSR cell's flat position is its ordinal in the concatenated array,
-        # which is what its overflow entry is keyed on.
-        overflow = ZOverflowBuilder()
-        z_arr = codec.encode_z(z_values, positions=positions_flat(0), overflow=overflow)
-        if not encoding.eaf.is_residual:
-            baseline = None
-        elif eaf_baseline is not None:
-            baseline = np.asarray(eaf_baseline, dtype=np.float32)
-        else:
-            baseline = eaf_baseline_from_pairs(vi_arr, eaf_arr, self._n_variants)
-
-        root.create_dataset(
-            "offsets",
-            data=offsets_arr,
-            chunks=(_OFFSET_CHUNK,),
-            compressor=_COMPRESSOR,
-            dtype=np.int64,
+        self.write_eaf_plane(
+            store_path, encoding, eaf_baseline=eaf_baseline, region_cells=region_cells
         )
-        root.create_dataset(
-            "variant_index",
-            data=vi_arr,
-            chunks=(_ASSOC_CHUNK,),
-            compressor=_COMPRESSOR,
-            dtype=np.int32,
+        self.flush_se(
+            store_path, encoding, se_coefficients=se_coefficients, region_cells=region_cells
         )
-        root.create_dataset(
-            "z",
-            data=z_arr,
-            chunks=(_ASSOC_CHUNK,),
-            compressor=_COMPRESSOR,
-            dtype=codec.z_dtype,
-        )
-        overflow.table().write(root)
-        if not encoding.eaf.is_absent:
-            write_eaf_csr(
-                root,
-                codec,
-                vi_arr,
-                eaf_arr,
-                baseline=baseline,
-                compressor=_COMPRESSOR,
-                chunks=(_ASSOC_CHUNK,),
-            )
-        self._write_se(root, codec, encoding, se_arr, offsets_arr, se_coefficients)
-        root.attrs["layout"] = "ragged"
-        root.attrs["completion_state"] = "observed_only"
-        root.attrs["n_analyses"] = self.n_analyses
-        root.attrs["n_associations"] = self.n_associations
 
 
 class RaggedCSRReader:

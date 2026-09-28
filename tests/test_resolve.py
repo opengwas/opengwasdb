@@ -643,6 +643,8 @@ def test_extraction_panel_bounds_the_ancestry_fit(tmp_path, panel):
 
     assert bounded.diagnostics.ancestry_sites == N_VARIANTS // 2
     assert full.diagnostics.ancestry_sites == N_VARIANTS
+    assert bounded.diagnostics.ancestry_reference_rows_matched == N_VARIANTS
+    assert full.diagnostics.ancestry_reference_rows_matched == N_VARIANTS
     assert bounded.ancestry is not None and full.ancestry is not None
     assert bounded.ancestry.af_overlap == N_VARIANTS // 2
     assert bounded.ancestry.assigned_ancestry == full.ancestry.assigned_ancestry == "EUR"
