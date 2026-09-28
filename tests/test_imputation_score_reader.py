@@ -67,10 +67,15 @@ def test_declared_score_same_on_associations_rows_and_bounded_chunks(tmp_path: P
     assert [s for chunk in chunks for s in chunk.imputation_score_status] == expected
     assert [row.imputation_score.value for row in rows[:3]] == [0.0, 0.6, 1.0]
     assert [float(v) for chunk in chunks for v in chunk.imputation_score][:3] == [0.0, 0.6, 1.0]
-    assert all(row.imputation_score.value is None for row in rows[3:])
+    # Scored rows with no number are missing/malformed/nonfinite; a finite score
+    # outside [0, 1] keeps its number and is `OUT_OF_RANGE` but still usable
+    # (stores #176).
+    assert all(row.imputation_score.value is None for row in rows[3:7])
+    assert [row.imputation_score.value for row in rows[7:]] == [-0.1, 1.01]
     assert all(
-        math.isnan(float(v)) for v in [v for chunk in chunks for v in chunk.imputation_score][3:]
+        math.isnan(float(v)) for v in [v for chunk in chunks for v in chunk.imputation_score][3:7]
     )
+    assert [float(v) for chunk in chunks for v in chunk.imputation_score][7:] == [-0.1, 1.01]
     fallback_chunks = list(metrics_chunks_from_rows(rows, chunk_rows=2))
     assert [s for chunk in fallback_chunks for s in chunk.imputation_score_status] == expected
 

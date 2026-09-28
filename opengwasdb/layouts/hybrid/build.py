@@ -47,6 +47,7 @@ from opengwasdb.build.eaf_orientation import (
 from opengwasdb.build.info_score_filter import (
     InfoScoreCounts,
     count_info_scores,
+    declared_score_state,
     retained_mask,
 )
 from opengwasdb.build.liftover import LiftoverFailureError
@@ -2052,27 +2053,6 @@ def _route_parallel(
     return info_counts
 
 
-def _require_usable_declared_scores(
-    prepared: _PreparedBuild, counts_by_id: Mapping[str, InfoScoreCounts]
-) -> None:
-    """Refuse an Analysis whose declared score had no usable value (stores #175).
-
-    The resolver's own contract, on the builder's population: an Analysis that
-    declares a score and had none usable anywhere in the source is a failure
-    naming that Analysis, never an Analysis silently built from zero scored
-    associations -- which would look exactly like one whose source has no
-    associations at all.
-    """
-    for row in prepared.manifest_rows:
-        declaration = prepared.info_score_policies[row.trait_id].imputation_score_declaration
-        if declaration is not None and counts_by_id[row.trait_id].usable == 0:
-            raise ValueError(
-                f"Analysis {row.trait_id}: declared imputation score "
-                f"{declaration.column_name!r} has no usable scores in the associations "
-                "the source yielded"
-            )
-
-
 def _route_studies(
     prepared: _PreparedBuild,
     options: _BuildOptions,
@@ -2104,7 +2084,6 @@ def _route_studies(
             options,
             pass2_start,
         )
-    _require_usable_declared_scores(prepared, info_counts)
     return _RoutedSpills(
         id_by_col=id_by_col, pass2_start=pass2_start, info_counts=info_counts
     )
@@ -2415,7 +2394,9 @@ def _info_score_provenance(
         "analyses": [
             {
                 "analysis_id": row.trait_id,
-                "info_score_state": policies[row.trait_id].state.value,
+                "info_score_state": declared_score_state(
+                    policies[row.trait_id], counts_by_id[row.trait_id].usable
+                ).value,
                 "info_score_threshold": policies[row.trait_id].info_score_threshold,
                 **_info_score_counts_fields(counts_by_id[row.trait_id]),
             }

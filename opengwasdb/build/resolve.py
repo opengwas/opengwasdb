@@ -59,6 +59,7 @@ from opengwasdb.build.eaf_orientation import site_hash
 from opengwasdb.build.info_score_filter import (
     InfoScoreCounts,
     count_info_scores,
+    declared_score_state,
     retained_mask,
 )
 from opengwasdb.build.phenotype_sd import (
@@ -453,7 +454,9 @@ def _diagnostics(request: AnalysisRequest, scan: _Scan) -> ScanDiagnostics:
         info_rows_nonfinite=scan.info_counts.nonfinite,
         info_rows_out_of_range=scan.info_counts.out_of_range,
         info_rows_usable=scan.info_counts.usable,
-        info_score_state=request.info_score_policy.state,
+        info_score_state=declared_score_state(
+            request.info_score_policy, scan.info_counts.usable
+        ),
         build_eligible_rows=scan.build_eligible_rows,
         build_eligible_rows_on_variant_reference=scan.build_eligible_rows_on_variant_reference,
         build_eligible_rows_off_variant_reference=scan.build_eligible_rows_off_variant_reference,
@@ -877,16 +880,6 @@ def resolve_analysis(
             analysis_id=request.analysis_id,
             diagnostics=_diagnostics(request, scan),
             error=f"{type(exc).__name__}: {exc}",
-        )
-    if (request.info_score_policy.imputation_score_declaration is not None
-            and scan.info_counts.usable == 0):
-        # A declared score nothing usable was found for is a controlled failure,
-        # not an Analysis resolved from zero rows (stores #175).
-        return AnalysisResolution(
-            analysis_id=request.analysis_id,
-            diagnostics=_diagnostics(request, scan),
-            error=f"Analysis {request.analysis_id}: declared imputation score has no usable scores "
-                  "in scanned canonical rows",
         )
     ancestry = assign_ancestry(scan.panel_af, reference, gates)
     return AnalysisResolution(

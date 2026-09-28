@@ -33,7 +33,13 @@ from opengwasdb.model.enums import StoredEffectScale
 
 
 class ImputationScoreStatus(StrEnum):
-    """A score's validity, independently of whether an association has an effect."""
+    """A score's validity, independently of whether an association has an effect.
+
+    `USABLE` and `OUT_OF_RANGE` both carry a finite number (stores #176): the
+    filter compares either against a threshold, so `OUT_OF_RANGE` is a recorded
+    fact about where the number sits, not a reason to drop the row. `UNDECLARED`,
+    `MISSING`, `MALFORMED` and `NONFINITE` carry no number and are retained.
+    """
 
     UNDECLARED = "undeclared"
     USABLE = "usable"
@@ -77,7 +83,14 @@ class ImputationScore:
 
 
 def parse_imputation_score(value: str | None, *, declared: bool) -> ImputationScore:
-    """Parse a declared score in [0, 1], without substituting a default."""
+    """Parse a declared score, without substituting a default (stores #176).
+
+    Any finite number is a usable score, whatever its value: a score above 1 is
+    usable and passes any threshold <= 1, and a negative score is usable and
+    falls below any positive threshold. `OUT_OF_RANGE` therefore records the
+    fact that a finite score lies outside [0, 1] -- nothing more; it is not a
+    disposition that drops the row.
+    """
     if not declared:
         return ImputationScore()
     if value is None or value.strip() in ("", ".", "NA", "NaN", "nan", "None"):
@@ -88,9 +101,9 @@ def parse_imputation_score(value: str | None, *, declared: bool) -> ImputationSc
         return ImputationScore(status=ImputationScoreStatus.MALFORMED)
     if not np.isfinite(number):
         return ImputationScore(status=ImputationScoreStatus.NONFINITE)
-    if not 0.0 <= number <= 1.0:
-        return ImputationScore(status=ImputationScoreStatus.OUT_OF_RANGE)
-    return ImputationScore(number, ImputationScoreStatus.USABLE)
+    if 0.0 <= number <= 1.0:
+        return ImputationScore(number, ImputationScoreStatus.USABLE)
+    return ImputationScore(number, ImputationScoreStatus.OUT_OF_RANGE)
 
 
 @dataclass(frozen=True)
