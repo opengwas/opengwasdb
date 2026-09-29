@@ -442,19 +442,96 @@ def _get_opengwasdb_version() -> str:
 
 
 def _get_git_hash() -> str:
+    """The commit of the `opengwasdb` code this process is running (ADR 0045).
+
+    The record's `opengwasdb_git_hash` exists to invalidate a resumed record
+    when the code that produced it changes. A `git rev-parse HEAD` run from
+    inside the package answers a *different* question whenever the package is
+    installed into another project's environment: it returns that project's
+    HEAD, so every commit there invalidates every record. That is not
+    hypothetical -- `opengwasdb-stores` pip-installs this package into
+    `.pixi/envs/.../site-packages`, and the resolver running from there reported
+    the stores' HEAD for every store commit.
+
+    A PEP 610 `direct_url.json` written by a VCS install records the package's
+    own commit and is preferred. Failing that -- an editable install, or a test
+    run from a working tree -- `git rev-parse HEAD` is used, and only when the
+    checkout's root is the directory containing this package. Anything else is
+    `""`: an unknown hash, never a plausible wrong one.
+    """
+    installed = _installed_vcs_commit()
+    if installed is not None:
+        return installed
+    return _checkout_commit()
+
+
+def _installed_vcs_commit() -> str | None:
+    """The commit a non-editable VCS install of this package records (PEP 610).
+
+    `direct_url.json`'s `vcs_info.commit_id` is the package's own revision; an
+    editable install's `dir_info.editable` says the file describes a working
+    tree instead, and a local-directory install has no VCS info at all. Both of
+    those fall through to the checkout, which is where their code actually
+    comes from.
+    """
     try:
-        res = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            cwd=Path(__file__).parent,
-        )
-        if res.returncode == 0:
-            return res.stdout.strip()
+        from importlib.metadata import distribution
+
+        recorded = distribution("opengwasdb").read_text("direct_url.json")
     except Exception:
-        pass
-    return ""
+        return None
+    if not recorded:
+        return None
+    try:
+        return _direct_url_commit(json.loads(recorded))
+    except ValueError:
+        return None
+
+
+def _direct_url_commit(direct_url: object) -> str | None:
+    """The commit a PEP 610 `direct_url.json` records, or `None`.
+
+    `None` covers every shape that does not name a revision of this package:
+    not an object, no VCS info (a local-directory install), or an editable
+    install, whose `dir_info.editable` says the file describes a working tree
+    rather than a checked-out revision.
+    """
+    if not isinstance(direct_url, dict):
+        return None
+    dir_info = direct_url.get("dir_info")
+    if isinstance(dir_info, dict) and dir_info.get("editable"):
+        return None
+    vcs_info = direct_url.get("vcs_info")
+    if not isinstance(vcs_info, dict):
+        return None
+    commit = vcs_info.get("commit_id")
+    return commit if isinstance(commit, str) and commit else None
+
+
+def _checkout_commit() -> str:
+    """`git rev-parse HEAD` for the checkout containing this package, if any.
+
+    The package directory's own repository, and not merely the nearest one: a
+    package installed as a dependency of another project sits inside *that*
+    project's working tree, and reporting its HEAD would tie this package's
+    records to an unrelated history.
+    """
+    package_dir = Path(__file__).resolve().parent.parent
+    try:
+        root = _git(["rev-parse", "--show-toplevel"], package_dir)
+        if not root or Path(root).resolve() != package_dir.parent:
+            return ""
+        return _git(["rev-parse", "HEAD"], package_dir)
+    except Exception:
+        return ""
+
+
+def _git(args: list[str], cwd: Path) -> str:
+    """One `git` invocation's stripped stdout, or `""` if it did not succeed."""
+    res = subprocess.run(["git", *args], capture_output=True, text=True, timeout=2, cwd=cwd)
+    if res.returncode != 0:
+        return ""
+    return res.stdout.strip()
 
 
 def _optional_float(val: float | None) -> float | None:
