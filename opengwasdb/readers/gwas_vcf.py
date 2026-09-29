@@ -34,6 +34,7 @@ from opengwasdb.build.vcf_source import (
 )
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
+from opengwasdb.stats import parse_af
 from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
 
 GWAS_VCF_CAPABILITY = "opengwasdb.gwas-vcf"
@@ -93,15 +94,16 @@ def _lift(liftover: object, chrom: str, pos_str: str) -> tuple[str, str] | None:
 
 
 def _parse_af(value: str) -> float | None:
-    if value in {".", ""}:
-        return None
-    try:
-        af = float(value)
-    except ValueError:
-        return None
-    if not (0.0 <= af <= 1.0):
-        return None
-    return af
+    """A usable `AF` from one bcftools `%AF` cell, by the package's one frequency rule.
+
+    Delegated to `opengwasdb.stats.parse_af` rather than re-spelled: a second
+    copy of "what is a frequency" is a second answer to it, and the copy here
+    disagreed with the shared rule about exactly `0.0` and exactly `1.0` -- the
+    values a monomorphic site reports and the placeholder a broken source
+    reports on every row (stores #176). bcftools prints a genuinely missing
+    value as `.`, which the shared rule already treats as missing.
+    """
+    return parse_af(value)
 
 
 def _parse_positive_float(value: str) -> float | None:

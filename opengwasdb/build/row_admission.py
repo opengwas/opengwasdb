@@ -6,11 +6,11 @@ record and the store a Hybrid build writes are compared to each other, so a
 divergence between the two callers would be a silent mismatch the tests exist to
 catch. `admit_rows` is that one rule: `keep = ~info_drop & ~maf_drop`.
 
-MAF is `min(af, 1 - af)` for a finite `af` in [0, 1]. A row whose `af` is
-missing, non-finite or outside [0, 1] is retained and counted `maf_missing` --
-the MAF rule has no frequency to judge it by. A row is dropped by MAF only when
-the policy is `FILTERED`, the MAF is available, and `MAF < maf_threshold`;
-equality passes.
+MAF is `min(af, 1 - af)` for a finite `af` strictly inside `(0, 1)`. A row
+whose `af` is missing, non-finite, outside `[0, 1]`, or exactly `0.0`/`1.0` is
+retained and counted `maf_missing` -- the MAF rule has no frequency to judge it
+by. A row is dropped by MAF only when the policy is `FILTERED`, the MAF is
+available, and `MAF < maf_threshold`; equality passes.
 
 When both filters would drop a row it is counted once, under INFO (INFO first):
 `maf_below_threshold` never counts a row `info` already dropped, so the two
@@ -100,7 +100,12 @@ def admit_rows(
     the other keeps too.
     """
     info_keep = retained_mask(scores, statuses, info_policy)
-    available = np.isfinite(af) & (af >= 0.0) & (af <= 1.0)
+    # Exactly 0 and exactly 1 are missing, not usable zeroes, as the reader's own
+    # `parse_af` says (stores #176): a frequency of either describes a
+    # monomorphic site and a file reporting one on every row is reporting a
+    # placeholder. Such a row is retained and counted `maf_missing`, never
+    # dropped for a MAF it does not have.
+    available = np.isfinite(af) & (af > 0.0) & (af < 1.0)
     maf_below_threshold = 0
     # A state that declared no MAF filter records no MAF dispositions, exactly as
     # an undeclared INFO policy records none; `DISABLED` still reads the column,

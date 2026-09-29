@@ -103,7 +103,12 @@ def _reference_table(tmp_path: Path, freqs: dict[str, float], name: str = "panel
     with path.open("w", encoding="utf-8", newline="") as handle:
         handle.write("alid\teaf\n")
         for alid, f in freqs.items():
-            handle.write(f"{alid}\t{f:.6f}\n")
+            # Written with every digit the double carries. Six decimals round a
+            # panel frequency of 0.9999996 -- which a Beta-shaped draw of 4,000
+            # variants produces -- to exactly 1, manufacturing a monomorphic
+            # site the panel never had, and `parse_af` reads exactly 0 or 1 as
+            # missing (stores #176).
+            handle.write(f"{alid}\t{f:.12g}\n")
     return path
 
 
@@ -429,7 +434,7 @@ def test_reference_from_an_ld_panel_directory(tmp_path, panel):
                 chrom, pos, a1, a2 = alid.split(":")
                 # EA is the second allele, so the stored A1 frequency is 1 - EAF.
                 handle.write(
-                    f"{chrom}\t{chrom}:{pos}_{a1}_{a2}\t{a1}\t{a2}\t{1.0 - f:.6f}\t{pos}\n"
+                    f"{chrom}\t{chrom}:{pos}_{a1}_{a2}\t{a1}\t{a2}\t{1.0 - f:.12g}\t{pos}\n"
                 )
 
     reference = load_eaf_reference(tmp_path / "ukb-hg38", panel.keys(), ancestry="EUR")
@@ -456,7 +461,7 @@ def test_gzipped_reference_table_reads(tmp_path, panel):
     with gzip.open(path, "wt", encoding="utf-8") as handle:
         handle.write("alid\teaf\n")
         for alid, f in panel.items():
-            handle.write(f"{alid}\t{f:.6f}\n")
+            handle.write(f"{alid}\t{f:.12g}\n")
 
     reference = load_eaf_reference(path, panel.keys())
     assert reference.n_variants == _N_VARIANTS

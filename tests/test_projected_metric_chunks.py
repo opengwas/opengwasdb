@@ -253,20 +253,21 @@ def test_palindrome_test_uses_the_verbatim_labels(tmp_path: Path) -> None:
 
 
 def test_statistic_usability_rules_match(tmp_path: Path) -> None:
-    """A frequency outside [0, 1], a non-finite beta and a non-positive SE are absent."""
+    """A frequency outside (0, 1), a non-finite beta and a non-positive SE are absent."""
     rows = [
-        ["1", "100", "A", "G", "0.1", "0.05", "1.5"],  # frequency out of range
+        ["1", "100", "A", "G", "0.1", "0.05", "1.5"],  # frequency above 1
         ["1", "200", "A", "C", "inf", "0.05", "0.2"],  # non-finite beta
         ["1", "300", "A", "C", "0.1", "0", "0.2"],  # non-positive SE
         ["1", "400", "A", "C", "0.1", "-0.05", "0.2"],  # negative SE
-        ["1", "500", "A", "C", "0.1", "0.05", "0"],  # zero is a usable frequency
+        ["1", "500", "A", "C", "0.1", "0.05", "0"],  # zero: monomorphic, missing
+        ["1", "600", "A", "C", "0.1", "0.05", "1"],  # one: monomorphic, missing
     ]
     path = _write(tmp_path / "statistics.tsv.gz", _HEADER, rows)
 
     reference = _row_wise(path)
     assert [(row[3], row[4], row[5]) for row in reference] == [
         (None, 0.1, 0.05), (0.2, None, 0.05), (0.2, 0.1, None),
-        (0.2, 0.1, None), (0.0, 0.1, 0.05),
+        (0.2, 0.1, None), (None, 0.1, 0.05), (None, 0.1, 0.05),
     ], "the fixture must exercise each usability rule before parity means anything"
     assert _blocked(path) == reference
 
