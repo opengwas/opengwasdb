@@ -192,9 +192,12 @@ which are the point of writing it down:
   `maf_missing`, exactly as it counts a NaN.
 - Ancestry accumulation ignores it, and both phenotype-SD tiers already did
   (`se_scale_samples` requires a frequency strictly inside `(0, 1)`).
-- The blocked metrics projection, GWAS-VCF's `AF` cell and the
-  reference-frequency reader apply the same rule. Three copies of "what is a
-  frequency" that disagreed about `0` and `1` were three answers to it.
+- The blocked metrics projection and GWAS-VCF's `AF` cell apply the same rule.
+  Copies of "what is a source frequency" that disagreed about `0` and `1` were
+  different answers to it.
+- A reference panel's own frequencies (the EAF-orientation table) are not
+  source frequencies and keep `0` and `1`: a site fixed in the reference is
+  real evidence for orientation, not a placeholder.
 - A store built from such a source records NaN for that cell, which Decision 1
   already defines as "no EAF for this association".
 

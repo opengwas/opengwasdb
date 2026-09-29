@@ -33,9 +33,10 @@ the end of this file.
   usable zero (stores #176).** Both describe a monomorphic site, and a file
   reporting one on every row is reporting a placeholder -- `GCST90428462` and
   `GCST90428463` carry `effect_allele_frequency = 0.0` throughout. `parse_af`
-  returns `None` for them, and the blocked metrics projection, GWAS-VCF's `AF`
-  and the reference-frequency reader apply the same rule instead of disagreeing
-  about it. MAF admission retains such a row and counts it `maf_rows_missing`;
+  returns `None` for them, and the blocked metrics projection and GWAS-VCF's
+  `AF` apply the same rule instead of disagreeing about it. A reference panel's
+  own frequencies (EAF orientation) keep `0` and `1`: a fixed reference site is
+  real evidence. MAF admission retains such a row and counts it `maf_rows_missing`;
   ancestry and phenotype-SD estimation ignore it; a built store records NaN for
   the cell. A genuinely monomorphic site's frequency is therefore no longer
   stored (ADR 0036, amendment).

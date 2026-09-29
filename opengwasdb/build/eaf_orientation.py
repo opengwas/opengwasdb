@@ -66,7 +66,6 @@ import numpy as np
 
 from opengwasdb.model.analyses import Analysis
 from opengwasdb.model.enums import EafOrientationMethod, EafOrientationOutcome
-from opengwasdb.stats import parse_af
 from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
 
 log = logging.getLogger(__name__)
@@ -488,15 +487,22 @@ def _orient_row(
 
 
 def _parse_frequency(value: str | None) -> float | None:
-    """A usable reference frequency, by the package's one frequency rule (ADR 0036).
+    """A reference table's own frequency, `0` and `1` included.
 
-    A reference table's own `eaf` is a frequency like any other, so exactly
-    `0.0` and exactly `1.0` are missing here too (stores #176): a monomorphic
-    reference site carries nothing to compare a store's frequency against, and
-    the phenotype-SD estimator already refuses both. Delegated to `parse_af`
-    rather than re-spelled, so this path cannot drift from the readers'.
+    Deliberately not `parse_af`: that rule treats exactly 0 or 1 as missing
+    because a GWAS source reporting them is almost always a placeholder (stores
+    #176), whereas a reference panel's fixed site is real evidence for
+    orientation.
     """
-    return parse_af(value)
+    if not value:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not (0.0 <= parsed <= 1.0):
+        return None
+    return parsed
 
 
 def iter_eaf_reference(
