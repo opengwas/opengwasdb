@@ -12,14 +12,17 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+from numpy.typing import DTypeLike
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.effect_source import (
     EffectSourceKind,
+    RowCells,
+    RowStatistics,
     UnsignedZScoreError,
-    derive_z_score_effect,
     resolve_effect_source,
     resolve_sample_size_column,
+    row_statistics,
 )
 from opengwasdb.readers.gwas_vcf import is_palindromic
 from opengwasdb.readers.interface import (
@@ -30,7 +33,7 @@ from opengwasdb.readers.interface import (
     SourceVariant,
     parse_imputation_score,
 )
-from opengwasdb.stats import parse_af
+from opengwasdb.stats import Z_975, inverse_normal_denominators, parse_af
 from opengwasdb.variants.normalise import (
     VALID_BASES,
     VariantNormalisationError,
@@ -115,6 +118,13 @@ class MetricsProjectionColumns:
     (issue #213), because `beta` and `odds_ratio` are two permitted spellings
     of the same thing and the file -- not the provider declaration -- says which
     one it used.
+
+    `effect_fallback`, `ci_lower`, `ci_upper` and `p_value` are the *recovery*
+    columns (stores #176): the second effect column and the precision columns a
+    row is read from when its own `beta`/`standard_error` are empty. They are
+    declared and read only by the GWAS-SSF reader — FinnGen's projection must
+    not change — and `None` means the caller has not declared that column, so
+    the projection neither reads it nor interprets anything from its presence.
     """
 
     chromosome: tuple[bytes, ...]
@@ -123,6 +133,10 @@ class MetricsProjectionColumns:
     alt: bytes
     frequency: bytes
     standard_error: bytes
+    effect_fallback: bytes | None = None
+    ci_lower: bytes | None = None
+    ci_upper: bytes | None = None
+    p_value: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +166,12 @@ class TabularMetricsRow:
     beta: float | None
     se: float | None
     imputation_score: ImputationScore = ImputationScore()
+    #: Which columns the row's own values came from (stores #176), carried here
+    #: so the blocked projection built from `metrics_chunks_from_rows` reports
+    #: the same provenance the projections themselves do.
+    effect_from_odds_ratio_fallback: bool = False
+    se_from_ci: bool = False
+    se_from_p_value: bool = False
 
 
 @dataclass(frozen=True)
@@ -408,6 +428,10 @@ class _ResolvedMetricsProjection:
     frequency: int | None
     effect: int | None
     effect_source: EffectSource | None
+    effect_fallback: int | None
+    ci_lower: int | None
+    ci_upper: int | None
+    p_value: int | None
     standard_error: int | None
     sample_size: int | None
     imputation_score: int | None
@@ -428,38 +452,102 @@ def _metrics_projection_indexes(
         return None
     indexes, (chromosome, position, ref, alt) = found
     effect_source = resolve_effect_source(header)
-    effect = (
-        None
-        if effect_source is None
-        else indexes.get(effect_source.column_name.encode("utf-8"))
-    )
-    frequency = indexes.get(columns.frequency)
-    standard_error = indexes.get(columns.standard_error)
-    # The per-row sample size is only read when a z-score derivation needs it;
-    # a beta/odds_ratio file never pays for the lookup or its ambiguity rule.
-    sample_size: int | None = None
-    if effect_source is not None and effect_source.kind is EffectSourceKind.Z_SCORE:
-        sample_size_name = resolve_sample_size_column(header)
-        if sample_size_name is not None:
-            sample_size = indexes.get(sample_size_name.encode("utf-8"))
-    score_index = resolve_imputation_score_column(header, score_column)
+    optional = _optional_metric_indexes(indexes, header, columns, effect_source, score_column)
     last_identity = max(chromosome, position, ref, alt)
-    optional = (frequency, effect, standard_error, sample_size, score_index)
-    last_selected = max([last_identity, *(index for index in optional if index is not None)])
+    last_selected = max(
+        [last_identity, *(index for index in optional.values() if index is not None)]
+    )
     return _ResolvedMetricsProjection(
         chromosome=chromosome,
         position=position,
         ref=ref,
         alt=alt,
-        frequency=frequency,
-        effect=effect,
         effect_source=effect_source,
-        standard_error=standard_error,
-        sample_size=sample_size,
-        imputation_score=score_index,
         last_identity=last_identity,
         split_limit=last_selected + (last_selected < len(header) - 1),
+        frequency=optional["frequency"],
+        effect=optional["effect"],
+        effect_fallback=optional["effect_fallback"],
+        ci_lower=optional["ci_lower"],
+        ci_upper=optional["ci_upper"],
+        p_value=optional["p_value"],
+        standard_error=optional["standard_error"],
+        sample_size=optional["sample_size"],
+        imputation_score=optional["imputation_score"],
     )
+
+
+def _optional_metric_indexes(
+    indexes: dict[bytes, int],
+    header: list[bytes],
+    columns: MetricsProjectionColumns,
+    effect_source: EffectSource | None,
+    score_column: str | None,
+) -> dict[str, int | None]:
+    """Every column this projection reads that its identity does not name.
+
+    `None` is how an absent column reaches the row-wise projection, so this is
+    where "the file does not carry it", "the caller did not declare it" and
+    "nothing needs it" become the same fact -- and it is why each of those
+    answers is written down once, here, rather than inline per column.
+    """
+    return {
+        "frequency": indexes.get(columns.frequency),
+        "effect": _primary_effect_index(indexes, effect_source),
+        "effect_fallback": _fallback_effect_index(indexes, columns, effect_source),
+        "ci_lower": _optional_index(indexes, columns.ci_lower),
+        "ci_upper": _optional_index(indexes, columns.ci_upper),
+        "p_value": _optional_index(indexes, columns.p_value),
+        "standard_error": indexes.get(columns.standard_error),
+        "sample_size": _sample_size_index(indexes, header, effect_source),
+        "imputation_score": resolve_imputation_score_column(header, score_column),
+    }
+
+
+def _primary_effect_index(
+    indexes: dict[bytes, int], effect_source: EffectSource | None
+) -> int | None:
+    """The resolved effect column's index, looked up by its verbatim spelling."""
+    if effect_source is None:
+        return None
+    return indexes.get(effect_source.column_name.encode("utf-8"))
+
+
+def _fallback_effect_index(
+    indexes: dict[bytes, int], columns: MetricsProjectionColumns, effect_source: EffectSource | None
+) -> int | None:
+    """The second effect column, when the caller declared it and the file names one.
+
+    The recovery columns are read only when the caller declared them: which
+    spelling the file uses for its second effect column is
+    `resolve_effect_source`'s answer, and a projection that declared none must
+    behave exactly as it did before stores #176.
+    """
+    if columns.effect_fallback is None or effect_source is None:
+        return None
+    if effect_source.fallback_column_name is None:
+        return None
+    return indexes.get(effect_source.fallback_column_name.encode("utf-8"))
+
+
+def _sample_size_index(
+    indexes: dict[bytes, int], header: list[bytes], effect_source: EffectSource | None
+) -> int | None:
+    """The per-row sample size, read only when a z-score derivation needs it.
+
+    A beta or odds-ratio file never pays for the lookup or its ambiguity rule.
+    """
+    if effect_source is None or effect_source.kind is not EffectSourceKind.Z_SCORE:
+        return None
+    sample_size_name = resolve_sample_size_column(header)
+    if sample_size_name is None:
+        return None
+    return indexes.get(sample_size_name.encode("utf-8"))
+
+
+def _optional_index(indexes: dict[bytes, int], name: bytes | None) -> int | None:
+    """The index of a declared optional column, or `None` when undeclared/absent."""
+    return None if name is None else indexes.get(name)
 
 
 def resolve_imputation_score_column(header: list[bytes], column_name: str | None) -> int | None:
@@ -575,7 +663,7 @@ def _project_metrics_row(
     if identity is None:
         return None
     chromosome, position, ref, alt, alid, flipped = identity
-    beta, se = _projected_effect(row, projection)
+    effect = _projected_effect(row, projection)
     return TabularMetricsRow(
         chromosome=chromosome,
         position=position,
@@ -584,8 +672,8 @@ def _project_metrics_row(
         alid=alid,
         flipped=flipped,
         af_alt=_metrics_float(_metrics_cell(row, projection.frequency), parse_af),
-        beta=beta,
-        se=se,
+        beta=effect.beta,
+        se=effect.se,
         imputation_score=(
             parse_imputation_score(
                 _metrics_cell(row, projection.imputation_score).decode("utf-8"),
@@ -594,45 +682,46 @@ def _project_metrics_row(
             if projection.imputation_score is not None
             else ImputationScore()
         ),
+        effect_from_odds_ratio_fallback=effect.effect_from_odds_ratio_fallback,
+        se_from_ci=effect.se_from_ci,
+        se_from_p_value=effect.se_from_p_value,
     )
 
 
 def _projected_effect(
     row: list[bytes], projection: _ResolvedMetricsProjection
-) -> tuple[float | None, float | None]:
-    """The row's ``(beta, se)``, deriving both from a signed z where that is the source.
+) -> RowStatistics:
+    """One row's ``(beta, se)`` and its provenance, from the row's own columns.
 
-    A z-score derivation consumes the row's own EAF and sample size and yields
-    `(None, None)` for any row it cannot honestly derive -- an EAF outside
-    `(0, 1)`, a non-positive or absent N -- exactly as an unusable beta drops
-    the row (issue #215).
+    The cells are read through the shared parsers and handed to the one
+    row-wise rule (`effect_source.row_statistics`), so this projection and the
+    full-row parser cannot answer differently about the same row (stores #176).
+    A z-score source is untouched: the rule derives both statistics from the
+    row's own EAF and sample size (issue #215).
     """
-    source = projection.effect_source
-    if source is not None and source.kind is EffectSourceKind.Z_SCORE:
-        derived = derive_z_score_effect(
-            _metrics_float(_metrics_cell(row, projection.effect), parse_finite_float),
-            _metrics_float(_metrics_cell(row, projection.frequency), parse_af),
-            _metrics_float(_metrics_cell(row, projection.sample_size), parse_positive_float),
-        )
-        return derived if derived is not None else (None, None)
-    return (
-        _effect_beta(_metrics_cell(row, projection.effect), projection.effect_kind),
-        _metrics_float(_metrics_cell(row, projection.standard_error), parse_positive_float),
+    return row_statistics(
+        projection.effect_source,
+        RowCells(
+            effect=_metrics_float(_metrics_cell(row, projection.effect), parse_finite_float),
+            odds_ratio=_metrics_float(
+                _metrics_cell(row, projection.effect_fallback), parse_finite_float
+            ),
+            standard_error=_metrics_float(
+                _metrics_cell(row, projection.standard_error), parse_finite_float
+            ),
+            ci_lower=_metrics_float(
+                _metrics_cell(row, projection.ci_lower), parse_finite_float
+            ),
+            ci_upper=_metrics_float(
+                _metrics_cell(row, projection.ci_upper), parse_finite_float
+            ),
+            p_value=_metrics_float(_metrics_cell(row, projection.p_value), parse_finite_float),
+            frequency=_metrics_float(_metrics_cell(row, projection.frequency), parse_af),
+            sample_size=_metrics_float(
+                _metrics_cell(row, projection.sample_size), parse_finite_float
+            ),
+        ),
     )
-
-
-def _effect_beta(cell: bytes, kind: EffectSourceKind | None) -> float | None:
-    """The beta the row carries, on the scale the association stream expects.
-
-    An `odds_ratio` is read as its log, and only a positive finite value has
-    one; anything else is absent, exactly as an unusable `beta` is. The
-    standard error is not touched by the transform -- GWAS-SSF reports it on
-    the log scale already (issue #213).
-    """
-    if kind is EffectSourceKind.ODDS_RATIO:
-        raw = _metrics_float(cell, parse_positive_float)
-        return math.log(raw) if raw is not None else None
-    return _metrics_float(cell, parse_finite_float)
 
 
 def _metrics_fields(line: bytes, split_limit: int) -> list[bytes]:
@@ -738,7 +827,16 @@ _MAX_POSITION = 2**63 - 1
 _PALINDROME_CODES = {"A": 1, "T": 2, "C": 3, "G": 4}
 _PALINDROME_PAIRS = ((1, 2), (2, 1), (3, 4), (4, 3))
 
-_STATISTIC_FIELDS = ("frequency", "effect", "standard_error", "sample_size")
+_STATISTIC_FIELDS = (
+    "frequency",
+    "effect",
+    "effect_fallback",
+    "ci_lower",
+    "ci_upper",
+    "p_value",
+    "standard_error",
+    "sample_size",
+)
 _PROJECTED_FIELDS = ("chromosome", "position", "ref", "alt", *_STATISTIC_FIELDS, "imputation_score")
 _MISSING_TOKENS = sorted(_MISSING)
 
@@ -780,24 +878,55 @@ class MetricsChunk:
     se: np.ndarray
     imputation_score: np.ndarray = field(default_factory=lambda: np.array([], dtype="float64"))
     imputation_score_status: np.ndarray = field(default_factory=lambda: np.array([], dtype=object))
+    #: Which column each row's effect and standard error came from (stores
+    #: #176), one flag per row: `effect_from_odds_ratio_fallback` is a row whose
+    #: `beta` was unusable and whose `odds_ratio` supplied the effect, and
+    #: `se_from_ci` / `se_from_p_value` are the two derived standard errors.
+    #: They are what the resolver's build-eligible counts report, so they cover
+    #: exactly the rows `beta`/`se` carry values for.
+    effect_from_odds_ratio_fallback: np.ndarray = field(
+        default_factory=lambda: np.array([], dtype=bool)
+    )
+    se_from_ci: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
+    se_from_p_value: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
 
     def __post_init__(self) -> None:
-        # Older blocked readers construct MetricsChunk without a score (#175).
-        if not self.imputation_score.size and len(self.alid):
-            object.__setattr__(self, "imputation_score", np.full(len(self.alid), np.nan))
-        if not self.imputation_score_status.size and len(self.alid):
-            object.__setattr__(
-                self,
-                "imputation_score_status",
-                np.full(len(self.alid), ImputationScoreStatus.UNDECLARED, dtype=object),
-            )
-        if len(self.imputation_score) != len(self.alid) or len(self.imputation_score_status) != len(
-            self.alid
-        ):
-            raise ValueError("imputation score arrays must align with MetricsChunk.alid")
+        _fill_default_arrays(self)
 
     def __len__(self) -> int:
         return int(self.alid.shape[0])
+
+
+#: Every `MetricsChunk` array a reader may leave out entirely, with the value it
+#: is filled with when absent. One list, so the default fill and the alignment
+#: check cannot cover different sets of arrays.
+_CHUNK_DEFAULTS: tuple[tuple[str, object, object], ...] = (
+    ("imputation_score", math.nan, None),
+    ("imputation_score_status", ImputationScoreStatus.UNDECLARED, object),
+    ("effect_from_odds_ratio_fallback", False, bool),
+    ("se_from_ci", False, bool),
+    ("se_from_p_value", False, bool),
+)
+
+
+def _fill_default_arrays(chunk: MetricsChunk) -> None:
+    """Fill each absent `MetricsChunk` array with its own "nothing to report" value.
+
+    A blocked reader built before a field existed leaves its array empty: the
+    score arrays (#175) and the effect/precision provenance (stores #176). What
+    fills them is an absence -- `NaN`, `UNDECLARED`, `False` -- never a
+    plausible measurement, so a reader that had nothing to say cannot be read as
+    having said something. Every array's length is checked here, because the
+    accumulation downstream indexes them against `alid`.
+    """
+    size = len(chunk.alid)
+    for name, fill, dtype in _CHUNK_DEFAULTS:
+        array = getattr(chunk, name)
+        if not array.size and size:
+            array = np.full(size, fill, dtype=dtype)
+            object.__setattr__(chunk, name, array)
+        if len(array) != size:
+            raise ValueError(f"{name} must align with MetricsChunk.alid")
 
 
 def _projected_column_names(
@@ -940,12 +1069,29 @@ def _palindromic(effect: np.ndarray, other: np.ndarray) -> np.ndarray:
     return ambiguous
 
 
+@dataclass(frozen=True)
+class _EffectArrays:
+    """One block's effect and precision arrays, and each row's provenance.
+
+    The array counterpart of `opengwasdb.readers.effect_source.RowStatistics`:
+    `beta`/`se` are the values the row-wise projection reports for the same
+    rows, and the three flags say which columns supplied them (stores #176).
+    """
+
+    beta: np.ndarray
+    se: np.ndarray
+    effect_from_odds_ratio_fallback: np.ndarray
+    se_from_ci: np.ndarray
+    se_from_p_value: np.ndarray
+
+
 def _effect_usable(effect_kind: EffectSourceKind | None) -> Callable[[np.ndarray], np.ndarray]:
     """The row-wise usability rule for the resolved effect kind, as an array rule.
 
-    `parse_positive_float` is what an `odds_ratio` is read through row-wise, so
-    the blocked path applies the same `> 0` bound before the log; a `beta` is
-    only required to be finite.
+    `effect_source._row_effect` requires an `odds_ratio` to be positive and
+    finite before taking its log and a `beta` only to be finite, so the blocked
+    path applies the same bounds here; a value that fails them is as absent here
+    as it is there.
     """
     if effect_kind is EffectSourceKind.ODDS_RATIO:
         return lambda values: np.isfinite(values) & (values > 0.0)
@@ -978,20 +1124,113 @@ def _z_score_arrays(
 
 def _projected_effect_arrays(
     frame: pd.DataFrame, names: dict[str, str], effect_source: EffectSource | None
-) -> tuple[np.ndarray, np.ndarray]:
-    """One block's ``(beta, se)`` arrays, from the resolved effect source."""
+) -> _EffectArrays:
+    """One block's ``(beta, se)`` arrays, from the resolved effect source.
+
+    The array counterpart of `opengwasdb.readers.effect_source.row_statistics`:
+    the same rules, applied a column at a time. The blocked path is what the
+    resolver counts build-eligible rows from, so a difference here and there is
+    a difference between what a build retains and what its record reports; the
+    parity tests assert the two answer identically, row for row.
+    """
     kind = None if effect_source is None else effect_source.kind
+    size = len(frame)
     if kind is EffectSourceKind.Z_SCORE:
-        return _z_score_arrays(frame, names)
+        beta, se = _z_score_arrays(frame, names)
+        absent = np.zeros(size, dtype=bool)
+        return _EffectArrays(beta, se, absent, absent, absent)
     beta = _statistic_array(frame, names.get("effect"), _effect_usable(kind))
+    odds_ratio = np.full(size, np.nan)
     if kind is EffectSourceKind.ODDS_RATIO:
         # Every value that survived `_effect_usable` is positive, so the only
         # `NaN`s entering `log` are already-absent ones, which stay absent.
+        odds_ratio = beta
         beta = np.log(beta)
-    se = _statistic_array(
+    effect_fallback = np.zeros(size, dtype=bool)
+    if kind is EffectSourceKind.BETA and "effect_fallback" in names:
+        # The second effect column, read only where the row's own beta is not:
+        # the file's `odds_ratio` beside a `beta` that is empty on every row.
+        fallback = _statistic_array(
+            frame, names["effect_fallback"], lambda v: np.isfinite(v) & (v > 0.0)
+        )
+        effect_fallback = ~np.isfinite(beta) & np.isfinite(fallback)
+        odds_ratio = np.where(effect_fallback, fallback, np.nan)
+        beta = np.where(effect_fallback, np.log(fallback), beta)
+    reported = _statistic_array(
         frame, names.get("standard_error"), lambda v: np.isfinite(v) & (v > 0.0)
     )
-    return beta, se
+    se_ci, usable_ci = _confidence_interval_arrays(frame, names, beta, odds_ratio)
+    se_p, usable_p = _p_value_arrays(frame, names, beta)
+    reported_usable = np.isfinite(reported)
+    se_from_ci = ~reported_usable & usable_ci
+    se_from_p_value = ~reported_usable & ~usable_ci & usable_p
+    se = np.where(
+        reported_usable,
+        reported,
+        np.where(se_from_ci, se_ci, np.where(se_from_p_value, se_p, np.nan)),
+    )
+    return _EffectArrays(beta, se, effect_fallback, se_from_ci, se_from_p_value)
+
+
+def _confidence_interval_arrays(
+    frame: pd.DataFrame, names: dict[str, str], beta: np.ndarray, odds_ratio: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(se, usable)`` derived from the row's 95% interval, on the row's own scale.
+
+    `_se_from_confidence_interval`'s array form. The scale is chosen per row, by
+    whether that row's effect came from an `odds_ratio` at all, so a file that
+    spells its effect two ways and uses both is read correctly in both.
+    """
+    lower = _statistic_array(frame, names.get("ci_lower"), np.isfinite)
+    upper = _statistic_array(frame, names.get("ci_upper"), np.isfinite)
+    ordered = np.isfinite(lower) & np.isfinite(upper) & (lower < upper)
+    on_log_scale = (
+        ordered
+        & np.isfinite(odds_ratio)
+        & (lower > 0.0)
+        & (odds_ratio >= lower)
+        & (odds_ratio <= upper)
+    )
+    on_linear_scale = (
+        ordered
+        & ~np.isfinite(odds_ratio)
+        & np.isfinite(beta)
+        & (beta >= lower)
+        & (beta <= upper)
+    )
+    with np.errstate(invalid="ignore", divide="ignore"):
+        # Only the selected branch's value is kept; the other is evaluated for
+        # every row, which `errstate` stops from warning about the rows whose
+        # bounds are not on that scale at all.
+        log_se = (np.log(upper) - np.log(lower)) / (2.0 * Z_975)
+        linear_se = (upper - lower) / (2.0 * Z_975)
+        se = np.where(on_log_scale, log_se, np.where(on_linear_scale, linear_se, np.nan))
+    return se, np.isfinite(se) & (se > 0.0)
+
+
+def _p_value_arrays(
+    frame: pd.DataFrame, names: dict[str, str], beta: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """``(se, usable)`` derived from the row's two-sided p-value.
+
+    `_se_from_p_value`'s array form: ``|beta| / -Φ⁻¹(p / 2)``, with `p = 1`,
+    `p = 0`, `p > 1` and an effect of exactly zero all unusable. `neg_log_10_p`
+    is deliberately never read (stores #176).
+    """
+    p_value = _statistic_array(frame, names.get("p_value"), np.isfinite)
+    usable = (
+        np.isfinite(p_value)
+        & (p_value > 0.0)
+        & (p_value < 1.0)
+        & np.isfinite(beta)
+        & (beta != 0.0)
+    )
+    with np.errstate(invalid="ignore", divide="ignore"):
+        # 0.5 is a placeholder for rows the rule already refuses; its quantile
+        # is finite, so nothing but the mask decides whether a value is kept.
+        denominator = inverse_normal_denominators(np.where(usable, p_value, 0.5))
+        se = np.abs(beta) / denominator
+    return se, usable & np.isfinite(se) & (se > 0.0)
 
 
 def _score_arrays(frame: pd.DataFrame, name: str | None) -> tuple[np.ndarray, np.ndarray]:
@@ -1017,27 +1256,30 @@ def _projected_chunk(
     chromosome, _, chromosome_ok = _category_arrays(
         frame[names["chromosome"]], normalise_chromosome
     )
-    effect, effect_base, effect_ok = _category_arrays(frame[names["alt"]], normalise_allele)
+    alt, alt_base, alt_ok = _category_arrays(frame[names["alt"]], normalise_allele)
     other, other_base, other_ok = _category_arrays(frame[names["ref"]], normalise_allele)
     position, position_ok = _position_arrays(frame[names["position"]])
 
-    keep = chromosome_ok & position_ok & effect_ok & other_ok & (effect != other)
-    lower = np.where(effect < other, effect, other)
-    upper = np.where(effect < other, other, effect)
+    keep = chromosome_ok & position_ok & alt_ok & other_ok & (alt != other)
+    first = np.where(alt < other, alt, other)
+    second = np.where(alt < other, other, alt)
     text = np.where(position_ok, position, 0).astype(str).astype(object)
-    beta, se = _projected_effect_arrays(frame, names, effect_source)
+    effect = _projected_effect_arrays(frame, names, effect_source)
     scores, statuses = _score_arrays(frame, names.get("imputation_score"))
     return MetricsChunk(
-        alid=(chromosome + ":" + text + ":" + lower + ":" + upper)[keep],
-        flipped=(effect != lower)[keep],
-        palindromic=_palindromic(effect_base, other_base)[keep],
+        alid=(chromosome + ":" + text + ":" + first + ":" + second)[keep],
+        flipped=(alt != first)[keep],
+        palindromic=_palindromic(alt_base, other_base)[keep],
         af_alt=_statistic_array(
-            frame, names.get("frequency"), lambda v: np.isfinite(v) & (v >= 0.0) & (v <= 1.0)
+            frame, names.get("frequency"), lambda v: np.isfinite(v) & (v > 0.0) & (v < 1.0)
         )[keep],
-        beta=beta[keep],
-        se=se[keep],
+        beta=effect.beta[keep],
+        se=effect.se[keep],
         imputation_score=scores[keep],
         imputation_score_status=statuses[keep],
+        effect_from_odds_ratio_fallback=effect.effect_from_odds_ratio_fallback[keep],
+        se_from_ci=effect.se_from_ci[keep],
+        se_from_p_value=effect.se_from_p_value[keep],
     )
 
 
@@ -1136,24 +1378,39 @@ def metrics_chunks_from_rows(
 
 def _score_chunk_arrays(rows: list[TabularMetricsRow]) -> tuple[np.ndarray, np.ndarray]:
     return (
-        np.array([_or_nan(row.imputation_score.value) for row in rows]),
-        np.array([row.imputation_score.status for row in rows], dtype=object),
+        _row_array(rows, lambda row: _or_nan(row.imputation_score.value), "float64"),
+        _row_array(rows, lambda row: row.imputation_score.status, object),
     )
+
+
+def _row_array(
+    rows: list[TabularMetricsRow],
+    value: Callable[[TabularMetricsRow], object],
+    dtype: DTypeLike,
+) -> np.ndarray:
+    """One chunk array, from a row-wise projection's rows, in row order."""
+    return np.array([value(row) for row in rows], dtype=dtype)
 
 
 def _chunk_of_rows(rows: list[TabularMetricsRow]) -> MetricsChunk:
     scores, statuses = _score_chunk_arrays(rows)
     return MetricsChunk(
-        alid=np.array([row.alid for row in rows], dtype=object),
-        flipped=np.array([row.flipped for row in rows], dtype=bool),
-        palindromic=np.array(
-            [is_palindromic(row.ref, row.alt) for row in rows], dtype=bool
-        ),
-        af_alt=np.array([_or_nan(row.af_alt) for row in rows], dtype="float64"),
-        beta=np.array([_or_nan(row.beta) for row in rows], dtype="float64"),
-        se=np.array([_or_nan(row.se) for row in rows], dtype="float64"),
+        alid=_row_array(rows, lambda row: row.alid, object),
+        flipped=_row_array(rows, lambda row: row.flipped, bool),
+        palindromic=_row_array(rows, lambda row: is_palindromic(row.ref, row.alt), bool),
+        af_alt=_row_array(rows, lambda row: _or_nan(row.af_alt), "float64"),
+        beta=_row_array(rows, lambda row: _or_nan(row.beta), "float64"),
+        se=_row_array(rows, lambda row: _or_nan(row.se), "float64"),
         imputation_score=scores,
         imputation_score_status=statuses,
+        # The row's own provenance travels with it, so a reader that can only
+        # yield rows still reports the resolver's counts from the same values
+        # the blocked projection would (stores #176).
+        effect_from_odds_ratio_fallback=_row_array(
+            rows, lambda row: row.effect_from_odds_ratio_fallback, bool
+        ),
+        se_from_ci=_row_array(rows, lambda row: row.se_from_ci, bool),
+        se_from_p_value=_row_array(rows, lambda row: row.se_from_p_value, bool),
     )
 
 

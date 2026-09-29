@@ -7,6 +7,23 @@ Analysis. It also reads an optional per-Analysis `maf_threshold`
 (`opengwasdb.model.maf_policy`): a finite number in [0, 0.5], or the literal
 `NaN`/an absent column meaning no MAF filter.
 
+## Effect and standard-error recovery (stores #176)
+
+The reader answers two questions about each row, and the record reports which
+columns answered them (ADR 0055):
+
+- The effect is the resolved column's own value when usable, else
+  `log(odds_ratio)` when the file carries that second column and the value is
+  positive and finite. A file naming one effect column is unaffected.
+- The standard error is the first usable of: a positive finite
+  `standard_error`; a 95% interval whose bounds are finite, ordered and around
+  the row's own effect on that row's own scale (log scale for an odds ratio,
+  linear for a beta); `|beta| / -Φ⁻¹(p / 2)` for a two-sided p in (0, 1) and a
+  non-zero beta. A derived SE must itself be positive and finite.
+
+A source frequency of exactly `0.0` or exactly `1.0` is missing rather than a
+usable zero (ADR 0036), in every path that reads one.
+
 ## Whole-stream evidence (stores #176)
 
 The ancestry bound (`--max-ancestry-sites`) stops *ancestry accumulation only*.
@@ -38,8 +55,8 @@ early physical stop at the ancestry bound.
 ## MAF semantics (stores #176)
 
 - MAF is `min(af, 1 - af)` from the reader's `effect_allele_frequency`. A row
-  whose `af` is missing, non-finite or outside [0, 1] is **retained** and counted
-  `maf_rows_missing`.
+  whose `af` is missing, non-finite, outside [0, 1], or exactly `0.0`/`1.0` is
+  **retained** and counted `maf_rows_missing`.
 - A row is dropped by MAF only when the policy is `filtered` (> 0), the MAF is
   available, and `MAF < maf_threshold` (equality passes). `0` disables.
 - When both filters would drop a row it is counted once, under
@@ -75,6 +92,15 @@ Ancestry/SD evidence and `build_eligible_rows*` see admitted rows only.
   `build_eligible_rows_on_variant_reference` and
   `build_eligible_rows_off_variant_reference` partition this eligible count;
   without it both are `null`. These counts are **rows**, not stored Dense cells.
+- `build_eligible_rows_effect_from_odds_ratio_fallback`,
+  `build_eligible_rows_se_from_ci` and `build_eligible_rows_se_from_p_value`
+  count the eligible rows whose beta came from the file's second effect column
+  (`odds_ratio`, because the row's `beta` was unusable) and whose standard error
+  was derived from the row's 95% interval or its p-value rather than read from
+  `standard_error`. Each is a subset of `build_eligible_rows`, is `0` when the
+  file carries nothing to recover, and is counted on the same basis (prefix and
+  early-stop rules included). They are plain integers, so they need no schema
+  version of their own; a reader of an older record simply does not see them.
 - `ancestry_reference_rows_matched` counts retained rows on the ancestry
   reference in the ancestry accumulation prefix. Legacy
   `variant_reference_rows_matched` remains **pre-INFO/pre-MAF** canonical rows on

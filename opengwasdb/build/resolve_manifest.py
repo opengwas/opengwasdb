@@ -540,6 +540,11 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
         "build_eligible_rows": d.build_eligible_rows,
         "build_eligible_rows_on_variant_reference": d.build_eligible_rows_on_variant_reference,
         "build_eligible_rows_off_variant_reference": d.build_eligible_rows_off_variant_reference,
+        "build_eligible_rows_effect_from_odds_ratio_fallback": (
+            d.build_eligible_rows_effect_from_odds_ratio_fallback
+        ),
+        "build_eligible_rows_se_from_ci": d.build_eligible_rows_se_from_ci,
+        "build_eligible_rows_se_from_p_value": d.build_eligible_rows_se_from_p_value,
     }
 
 

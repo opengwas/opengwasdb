@@ -8,11 +8,14 @@ from opengwasdb.readers.effect_source import (
     CaseControlZScoreError,
     EffectSource,
     EffectSourceKind,
+    RowCells,
+    RowStatistics,
     UnsignedZScoreError,
     derive_z_score_effect,
     refuse_case_control_z_score,
     resolve_effect_source,
     resolve_sample_size_column,
+    row_statistics,
 )
 from opengwasdb.readers.fake import FakeReader
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY, FinnGenR13Reader
@@ -45,6 +48,8 @@ __all__ = [
     "GwasSsfReader",
     "GwasVcfReader",
     "ReaderAssociation",
+    "RowCells",
+    "RowStatistics",
     "SiteMetrics",
     "SourceReader",
     "UnsignedZScoreError",
@@ -57,6 +62,7 @@ __all__ = [
     "resolve_effect_source",
     "resolve_reader",
     "resolve_sample_size_column",
+    "row_statistics",
     "site_metrics_arrays",
     "write_regions_file",
 ]

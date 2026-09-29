@@ -270,6 +270,14 @@ class ScanDiagnostics:
     build_eligible_rows: int = 0
     build_eligible_rows_on_variant_reference: int | None = None
     build_eligible_rows_off_variant_reference: int | None = None
+    #: Which columns supplied those eligible rows' values (stores #176). A
+    #: `beta` column empty on every row with a populated `odds_ratio`, a
+    #: precision reported as a 95% CI or as a p-value instead of a
+    #: `standard_error`: three different reasons a build's numbers move, which a
+    #: record that only said "N eligible rows" could not tell apart.
+    build_eligible_rows_effect_from_odds_ratio_fallback: int = 0
+    build_eligible_rows_se_from_ci: int = 0
+    build_eligible_rows_se_from_p_value: int = 0
 
 
 @dataclass(frozen=True)
@@ -355,6 +363,9 @@ class _Scan:
     build_eligible_rows: int = 0
     build_eligible_rows_on_variant_reference: int | None = None
     build_eligible_rows_off_variant_reference: int | None = None
+    build_eligible_rows_effect_from_odds_ratio_fallback: int = 0
+    build_eligible_rows_se_from_ci: int = 0
+    build_eligible_rows_se_from_p_value: int = 0
 
 
 @dataclass
@@ -469,6 +480,11 @@ def _diagnostics(request: AnalysisRequest, scan: _Scan) -> ScanDiagnostics:
         build_eligible_rows=scan.build_eligible_rows,
         build_eligible_rows_on_variant_reference=scan.build_eligible_rows_on_variant_reference,
         build_eligible_rows_off_variant_reference=scan.build_eligible_rows_off_variant_reference,
+        build_eligible_rows_effect_from_odds_ratio_fallback=(
+            scan.build_eligible_rows_effect_from_odds_ratio_fallback
+        ),
+        build_eligible_rows_se_from_ci=scan.build_eligible_rows_se_from_ci,
+        build_eligible_rows_se_from_p_value=scan.build_eligible_rows_se_from_p_value,
     )
 
 
@@ -583,6 +599,9 @@ def _take(chunk: MetricsChunk, indices: np.ndarray) -> MetricsChunk:
         se=chunk.se[indices],
         imputation_score=chunk.imputation_score[indices],
         imputation_score_status=chunk.imputation_score_status[indices],
+        effect_from_odds_ratio_fallback=chunk.effect_from_odds_ratio_fallback[indices],
+        se_from_ci=chunk.se_from_ci[indices],
+        se_from_p_value=chunk.se_from_p_value[indices],
     )
 
 
@@ -626,15 +645,27 @@ def _count_build_eligible(
     with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
         z = chunk.beta / chunk.se
     eligible = np.isfinite(chunk.beta) & np.isfinite(chunk.se) & (chunk.se > 0) & np.isfinite(z)
-    scan.build_eligible_rows += int(np.count_nonzero(eligible))
+    eligible_rows = int(np.count_nonzero(eligible))
+    scan.build_eligible_rows += eligible_rows
+    # The provenance flags are counted over the same eligible rows of the same
+    # block, so each count is a subset of `build_eligible_rows` and covers no
+    # row this scan did not read (stores #176).
+    scan.build_eligible_rows_effect_from_odds_ratio_fallback += int(
+        np.count_nonzero(eligible & chunk.effect_from_odds_ratio_fallback)
+    )
+    scan.build_eligible_rows_se_from_ci += int(
+        np.count_nonzero(eligible & chunk.se_from_ci)
+    )
+    scan.build_eligible_rows_se_from_p_value += int(
+        np.count_nonzero(eligible & chunk.se_from_p_value)
+    )
     if variant_reference is not None:
         on = sum(alid in variant_reference for alid in chunk.alid[eligible])
         scan.build_eligible_rows_on_variant_reference = (
             (scan.build_eligible_rows_on_variant_reference or 0) + on
         )
         scan.build_eligible_rows_off_variant_reference = (
-            (scan.build_eligible_rows_off_variant_reference or 0)
-            + int(np.count_nonzero(eligible)) - on
+            (scan.build_eligible_rows_off_variant_reference or 0) + eligible_rows - on
         )
 
 

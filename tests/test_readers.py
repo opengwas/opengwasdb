@@ -627,7 +627,9 @@ def test_gwas_ssf_variant_projection_preserves_exact_output_without_parsing_stat
         raise AssertionError(f"variant projection parsed association statistic {value!r}")
 
     monkeypatch.setattr(gwas_ssf_module, "parse_finite_float", fail_if_called)
-    monkeypatch.setattr(gwas_ssf_module, "parse_positive_float", fail_if_called)
+    # The one rule every row's effect and precision is read through (#176): the
+    # variant projection must not reach it either.
+    monkeypatch.setattr(gwas_ssf_module, "row_statistics", fail_if_called)
     monkeypatch.setattr(gwas_ssf_module, "parse_af", fail_if_called)
 
     projected = _variant_bytes(GwasSsfReader(path))
