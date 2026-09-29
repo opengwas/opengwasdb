@@ -42,6 +42,16 @@ would silently read one of two columns. A z-score source derives
 EAF and per-row N, and carries `assumes_standardised` because that formula
 assumes `var(Y) = 1`.
 
+Which column a *row* was read from is a second, per-row question (stores #176):
+a file may carry `beta` and `odds_ratio` and populate only one column, and it
+may report its precision as a 95% interval or a p-value instead of a
+`standard_error`. `effect_source.row_statistics` is that rule -- the first usable
+column wins, the effect's own scale decides the scale an interval is read on,
+and nothing is approximated -- and every GWAS-SSF reading of it (the full-row
+parser, the row-wise projection and the blocked projection) goes through it, so
+the rows a build retains and the rows its resolver record counts cannot
+disagree.
+
 `extract_at_sites` has no GWAS-VCF/bcftools equivalent to call into (issue
 #21 built that combined AF+SE lookup around bcftools -R specifically): it
 scans the file once, reading `effect_allele_frequency` where the file
@@ -56,7 +66,6 @@ from __future__ import annotations
 
 import csv
 import gzip
-import math
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,10 +74,12 @@ from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.effect_source import (
     EffectSource,
     EffectSourceKind,
-    derive_z_score_effect,
+    RowCells,
+    RowStatistics,
     refuse_case_control_z_score,
     resolve_effect_source,
     resolve_sample_size_column,
+    row_statistics,
 )
 from opengwasdb.readers.interface import (
     ImputationScoreDeclaration,
@@ -87,7 +98,6 @@ from opengwasdb.readers.tabular import (
     extract_at_sites,
     parse_af,
     parse_finite_float,
-    parse_positive_float,
     require_signed_z_score,
     resolve_imputation_score_column,
     stream_associations,
@@ -113,6 +123,14 @@ _METRICS_COLUMNS = MetricsProjectionColumns(
     alt=b"effect_allele",
     frequency=b"effect_allele_frequency",
     standard_error=b"standard_error",
+    # The recovery columns (stores #176). A harmonised file may report its
+    # effect as `odds_ratio` beside an empty `beta`, or its precision as a 95%
+    # interval or a p-value instead of a `standard_error`; declaring them here
+    # and nowhere else is what keeps the recovery GWAS-SSF's.
+    effect_fallback=b"odds_ratio",
+    ci_lower=b"ci_lower",
+    ci_upper=b"ci_upper",
+    p_value=b"p_value",
 )
 
 
@@ -132,32 +150,47 @@ def _rsid(rsid: str | None, variant_id: str | None) -> str:
     return ""
 
 
-def _row_effect(
-    row: dict[str, str], effect_source: EffectSource | None, sample_size_column: str | None
-) -> tuple[float | None, float | None]:
-    """One row's ``(beta, se)``, from whichever effect column the file resolved to.
+def _row_cells(
+    row: dict[str, str], source: EffectSource | None, sample_size_column: str | None
+) -> RowCells:
+    """One row's candidate effect and precision cells, parsed by the shared rules.
 
-    `beta = log(odds_ratio)`; a signed z derives both by the #215 formula. A
-    non-positive or unparseable `odds_ratio`/`z` is unusable in exactly the way
-    an unparseable `beta` is, so it yields `(None, None)` and the row drops from
-    the association stream. `standard_error` is read verbatim for a beta or
-    odds-ratio source -- GWAS-SSF reports it on the log scale already (#213).
+    The column names are GWAS-SSF's own: `effect_allele_frequency` is the
+    frequency of the effect allele, and `ci_lower`/`ci_upper` are the 95%
+    interval's bounds. The second effect column is looked up by the spelling
+    `resolve_effect_source` matched, padding included.
     """
-    if effect_source is None:
-        return None, parse_positive_float(row.get("standard_error"))
-    if effect_source.kind is EffectSourceKind.Z_SCORE:
-        derived = derive_z_score_effect(
-            parse_finite_float(row.get(effect_source.column_name)),
-            parse_af(row.get("effect_allele_frequency")),
-            parse_positive_float(row.get(sample_size_column)) if sample_size_column else None,
-        )
-        return derived if derived is not None else (None, None)
-    if effect_source.kind is EffectSourceKind.ODDS_RATIO:
-        raw = parse_positive_float(row.get(effect_source.column_name))
-        beta = math.log(raw) if raw is not None else None
-    else:
-        beta = parse_finite_float(row.get(effect_source.column_name))
-    return beta, parse_positive_float(row.get("standard_error"))
+    fallback_column = None if source is None else source.fallback_column_name
+    return RowCells(
+        effect=(
+            None if source is None else parse_finite_float(row.get(source.column_name))
+        ),
+        odds_ratio=(
+            parse_finite_float(row.get(fallback_column)) if fallback_column else None
+        ),
+        standard_error=parse_finite_float(row.get("standard_error")),
+        ci_lower=parse_finite_float(row.get("ci_lower")),
+        ci_upper=parse_finite_float(row.get("ci_upper")),
+        p_value=parse_finite_float(row.get("p_value")),
+        frequency=parse_af(row.get("effect_allele_frequency")),
+        sample_size=(
+            parse_finite_float(row.get(sample_size_column))
+            if sample_size_column
+            else None
+        ),
+    )
+
+
+def _row_statistics(
+    row: dict[str, str], effect_source: EffectSource | None, sample_size_column: str | None
+) -> RowStatistics:
+    """One row's ``(beta, se)`` from whichever of the row's own columns carry them.
+
+    The rule itself is `opengwasdb.readers.effect_source.row_statistics`; this
+    is only the GWAS-SSF dict-row reading of it, so the full-row parser and the
+    two projections cannot answer differently about the same row (stores #176).
+    """
+    return row_statistics(effect_source, _row_cells(row, effect_source, sample_size_column))
 
 
 def _tabular_row(
@@ -186,7 +219,7 @@ def _tabular_row(
         )
     except VariantNormalisationError:
         return None
-    beta, se = _row_effect(row, source, sample_size_column)
+    statistics = _row_statistics(row, source, sample_size_column)
     return TabularRow(
         chromosome=ori.variant.chromosome,
         position=ori.variant.position,
@@ -194,14 +227,17 @@ def _tabular_row(
         ref=other_allele,
         alt=effect_allele,
         flipped=ori.flipped,
-        beta=beta,
-        se=se,
+        beta=statistics.beta,
+        se=statistics.se,
         af_alt=parse_af(row.get("effect_allele_frequency")),
         rsid=_rsid(row.get("rsid"), row.get("variant_id")),
         imputation_score=parse_imputation_score(
             row.get(score_column) if score_column is not None else None,
             declared=score_column is not None,
         ),
+        effect_from_odds_ratio_fallback=statistics.effect_from_odds_ratio_fallback,
+        se_from_ci=statistics.se_from_ci,
+        se_from_p_value=statistics.se_from_p_value,
     )
 
 

@@ -173,3 +173,37 @@ variant rather than the association" (issue #104).
 - **No INFO.** Spec §9 pairs EAF with INFO and this decision covers only EAF.
   INFO has no reader support at all today and no demonstrated consumer; the
   `InfoScope` vocabulary stays reserved and unused.
+
+## Amendment: exactly 0 and exactly 1 are missing (stores #176)
+
+`opengwasdb.stats.parse_af` reads exactly `0.0` and exactly `1.0` as missing,
+not as usable frequencies. Both describe a monomorphic site, which carries no
+frequency information at all, and a file reporting one of them on every row is
+reporting a placeholder rather than an observation: `GCST90428462` and
+`GCST90428463` carry `effect_allele_frequency = 0.0` throughout, and their two
+Analyses were among those with no build-eligible row.
+
+This extends this ADR's rule rather than reversing it -- an out-of-range or
+absent value is *missing*, never clamped and never substituted -- and the same
+value is never replaced by 0.5 or by a panel's frequency. The consequences,
+which are the point of writing it down:
+
+- `opengwasdb.build.row_admission.admit_rows` retains such a row and counts it
+  `maf_missing`, exactly as it counts a NaN.
+- Ancestry accumulation ignores it, and both phenotype-SD tiers already did
+  (`se_scale_samples` requires a frequency strictly inside `(0, 1)`).
+- The blocked metrics projection and GWAS-VCF's `AF` cell apply the same rule.
+  Copies of "what is a source frequency" that disagreed about `0` and `1` were
+  different answers to it.
+- A reference panel's own frequencies (the EAF-orientation table) are not
+  source frequencies and keep `0` and `1`: a site fixed in the reference is
+  real evidence for orientation, not a placeholder.
+- A store built from such a source records NaN for that cell, which Decision 1
+  already defines as "no EAF for this association".
+
+**Cost, stated plainly.** A genuinely monomorphic site is no longer stored: a
+consumer can no longer distinguish "the source reported 0" from "the source
+reported nothing" for that cell, because both are NaN. Treating a reported `0`
+as a frequency was worse -- MAF admission would have computed a MAF of 0 and
+dropped the row for a filter it cannot be judged by -- but the loss is real and
+is recorded here rather than left implicit.

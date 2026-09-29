@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import gzip
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -28,8 +31,10 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
+import opengwasdb
 from opengwasdb.ancestry.mixture import Gates
 from opengwasdb.ancestry.reference import AncestryReference, load_reference
+from opengwasdb.build import resolve_manifest
 from opengwasdb.build.resolve_manifest import (
     ManifestResolutionSummary,
     compute_fingerprint_digest,
@@ -651,3 +656,154 @@ def test_cli_scan_limit_zero_reads_the_whole_source(test_setup: dict[str, Any]) 
     assert record["diagnostics"]["stop_reason"] == "eof"
     assert record["diagnostics"]["ancestry_sites"] == 50
     assert record["fingerprints"]["resolution_config"]["scan_limit"] is None
+
+
+# --- `opengwasdb_git_hash` is the package's commit, not the enclosing repo's ---
+#
+# The record's hash exists to invalidate a resumed record when the code that
+# produced it changes. A `git rev-parse HEAD` run from inside the package
+# answers a different question when the package is pip-installed into another
+# project's environment (`opengwasdb-stores` installs it into
+# `.pixi/envs/.../site-packages`): it returns *that* project's HEAD, so every
+# commit there invalidated every resolver record.
+
+
+@dataclass(frozen=True)
+class _Completed:
+    """The part of `subprocess.CompletedProcess` the hash helper reads."""
+
+    stdout: str
+    returncode: int = 0
+
+
+def _git_stub(replies: Mapping[str, str]) -> Callable[..., _Completed]:
+    """A `subprocess.run` that answers `git` from `replies`, by subcommand.
+
+    A subcommand it has no answer for fails, as an unknown `git` invocation
+    would, so a test cannot accidentally accept an unlisted call.
+    """
+    def run(args: list[str], **_kwargs: Any) -> _Completed:
+        key = " ".join(args[1:])
+        if key not in replies:
+            return _Completed("", returncode=128)
+        return _Completed(replies[key])
+
+    return run
+
+
+class _Distribution:
+    """The part of `importlib.metadata.Distribution` the hash helper reads."""
+
+    def __init__(self, recorded: str | None) -> None:
+        self._recorded = recorded
+
+    def read_text(self, name: str) -> str | None:
+        assert name == "direct_url.json"
+        return self._recorded
+
+
+def _direct_url(commit: str, *, editable: bool = False) -> str:
+    recorded: dict[str, Any] = {
+        "url": "https://github.com/opengwas/openGWASdb.git",
+        "vcs_info": {"vcs": "git", "commit_id": commit, "requested_revision": "dev"},
+    }
+    if editable:
+        recorded["dir_info"] = {"editable": True}
+    return json.dumps(recorded)
+
+
+def _installed(monkeypatch: pytest.MonkeyPatch, recorded: str | None) -> None:
+    monkeypatch.setattr(
+        "importlib.metadata.distribution", lambda name: _Distribution(recorded)
+    )
+
+
+def _checkout(monkeypatch: pytest.MonkeyPatch, toplevel: Path, head: str = "b" * 40) -> None:
+    """Point the helper at a stubbed git whose repository root is `toplevel`."""
+    monkeypatch.setattr(
+        resolve_manifest,
+        "subprocess",
+        SimpleNamespace(
+            run=_git_stub(
+                {"rev-parse --show-toplevel": str(toplevel), "rev-parse HEAD": head}
+            )
+        ),
+    )
+
+
+def _package_dir() -> Path:
+    """The directory holding the `opengwasdb` package under test."""
+    return Path(opengwasdb.__file__).resolve().parent
+
+
+def test_git_hash_prefers_the_installed_distributions_own_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-editable VCS install records the package's own revision (PEP 610)."""
+    _installed(monkeypatch, _direct_url("a" * 40))
+
+    def refuse(*_args: Any, **_kwargs: Any) -> _Completed:
+        raise AssertionError("the checkout was consulted for a VCS install")
+
+    monkeypatch.setattr(resolve_manifest, "subprocess", SimpleNamespace(run=refuse))
+
+    assert resolve_manifest._get_git_hash() == "a" * 40
+
+
+def test_git_hash_of_an_editable_install_is_the_checkout_that_holds_the_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An editable install's file describes a working tree, so git is asked."""
+    _installed(monkeypatch, _direct_url("a" * 40, editable=True))
+    _checkout(monkeypatch, _package_dir().parent)
+
+    assert resolve_manifest._get_git_hash() == "b" * 40
+
+
+def test_git_hash_is_empty_when_the_checkout_is_not_the_package_s_own_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The stores case: the nearest repository is another project's.
+
+    Reporting its HEAD is worse than reporting none -- it is a plausible wrong
+    answer, and it invalidates every record on every commit to that project.
+    """
+    _installed(monkeypatch, _direct_url("a" * 40, editable=True))
+    _checkout(monkeypatch, _package_dir().parent / "site-packages", head="c" * 40)
+
+    assert resolve_manifest._get_git_hash() == ""
+
+
+def test_git_hash_is_empty_without_git_or_a_vcs_install(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A local-directory install in a git-less environment has no commit."""
+    _installed(monkeypatch, json.dumps({"url": "file:///tmp/opengwasdb"}))
+    monkeypatch.setattr(resolve_manifest, "subprocess", SimpleNamespace(run=_git_stub({})))
+
+    assert resolve_manifest._get_git_hash() == ""
+
+
+@pytest.mark.parametrize("recorded", [None, "", "not json", "[]"])
+def test_git_hash_falls_back_to_the_checkout_for_an_unreadable_direct_url(
+    monkeypatch: pytest.MonkeyPatch, recorded: str | None
+) -> None:
+    """A missing or malformed `direct_url.json` is not an error, just no answer."""
+    _installed(monkeypatch, recorded)
+    _checkout(monkeypatch, _package_dir().parent)
+
+    assert resolve_manifest._get_git_hash() == "b" * 40
+
+
+def test_git_hash_falls_back_to_the_checkout_when_the_distribution_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A package that is not installed at all is the checkout case, not an error."""
+
+    def missing(name: str) -> Any:
+        raise PackageNotFoundError(name)
+
+    monkeypatch.setattr("importlib.metadata.distribution", missing)
+    _checkout(monkeypatch, _package_dir().parent)
+
+    assert resolve_manifest._get_git_hash() == "b" * 40

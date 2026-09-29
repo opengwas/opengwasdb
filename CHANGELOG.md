@@ -12,6 +12,34 @@ the end of this file.
 
 ### Changed
 
+- **The GWAS-SSF reader recovers a row's effect and standard error from the
+  row's own columns (stores #176).** A full OGS-00011 resolve found 476 Analyses
+  with no build-eligible row; 212 of them report both quantities in columns the
+  reader never opened. Per row: the effect is `beta` when it is finite, else
+  `log(odds_ratio)` when the file carries that second column (the `GCST004030`
+  shape, reported as `EffectSource.fallback_column_name`); the standard error is
+  the first usable of a positive finite `standard_error`, a 95% interval whose
+  bounds are finite, ordered and around the row's own effect on that row's own
+  scale, and `|beta| / -Φ⁻¹(p / 2)` for a two-sided p in (0, 1) and a non-zero
+  beta. A derived SE must be positive and finite. One rule
+  (`opengwasdb.readers.effect_source.row_statistics`) serves the full-row parser,
+  the row-wise projection and the blocked projection the resolver reads; the
+  recovery columns are declared for GWAS-SSF only, so FinnGen and GWAS-VCF are
+  unchanged. The resolver record gains
+  `build_eligible_rows_effect_from_odds_ratio_fallback`,
+  `build_eligible_rows_se_from_ci` and `build_eligible_rows_se_from_p_value`
+  (ADR 0055).
+- **A source frequency of exactly `0.0` or exactly `1.0` is missing, not a
+  usable zero (stores #176).** Both describe a monomorphic site, and a file
+  reporting one on every row is reporting a placeholder -- `GCST90428462` and
+  `GCST90428463` carry `effect_allele_frequency = 0.0` throughout. `parse_af`
+  returns `None` for them, and the blocked metrics projection and GWAS-VCF's
+  `AF` apply the same rule instead of disagreeing about it. A reference panel's
+  own frequencies (EAF orientation) keep `0` and `1`: a fixed reference site is
+  real evidence. MAF admission retains such a row and counts it `maf_rows_missing`;
+  ancestry and phenotype-SD estimation ignore it; a built store records NaN for
+  the cell. A genuinely monomorphic site's frequency is therefore no longer
+  stored (ADR 0036, amendment).
 - **A declared INFO threshold no longer drops unscored or out-of-range rows.**
   A *usable* score is any finite number, so a score above 1 passes any
   threshold <= 1, a negative score falls below any positive one, and the
@@ -33,6 +61,16 @@ the end of this file.
   build records a `provenance.maf` block (stores #176).
 
 ### Fixed
+
+- **The resolver record's `opengwasdb_git_hash` is the `opengwasdb` commit, not
+  the enclosing repository's (stores #176).** `_get_git_hash` ran
+  `git rev-parse HEAD` from inside the package, so when `opengwasdb` was
+  pip-installed into another project's environment -- `opengwasdb-stores`
+  installs it into `.pixi/envs/.../site-packages` -- it reported *that* project's
+  HEAD and every commit there invalidated every resolver record for `--resume`.
+  A non-editable VCS install's PEP 610 `direct_url.json` (`vcs_info.commit_id`)
+  is now preferred; otherwise the checkout's own `HEAD` is used, and only when
+  its root is the directory holding the package. Anything else is `""`.
 
 - **Whole-stream evidence is no longer truncated to the ancestry-prefix early
   stop (stores #174, #176).** For a case-control Analysis (`needs_sd=False`) the

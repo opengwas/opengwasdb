@@ -55,7 +55,8 @@ from opengwasdb.validation import validate_store
 # Eight variants across four Analyses. The frequencies agree closely between
 # Analyses -- which is what makes an 8-bit residual work at all -- except at
 # 1:600, where one Analysis is three orders of magnitude away and lands in the
-# exception table, and 1:700, where one is monomorphic.
+# exception table, and 1:700, where one is monomorphic and so reports no
+# frequency at all.
 _POSITIONS = [100, 200, 300, 400, 500, 600, 700, 800]
 _BASE_EAF = [0.05, 0.12, 0.30, 0.47, 0.62, 0.008, 0.21, 0.91]
 _ANALYSES = ["a1", "a2", "a3", "a4"]
@@ -77,7 +78,13 @@ for _col, _analysis in enumerate(_ANALYSES):
 # a3 disagrees wildly at 1:600 -- a founder-effect-sized difference, far
 # outside any candidate range, so it must be stored exactly.
 _EAF["a3"][600] = 0.85
-# a4 is monomorphic at 1:700: no logit, so this cell is an exception too.
+# a4 is monomorphic at 1:700. `parse_af` reads exactly 0 or 1 as *missing*
+# (stores #176), so this cell reaches no builder at all and reads back as NaN:
+# a monomorphic source frequency is a placeholder or a monomorphic site, and
+# either way the store records that it has no frequency rather than a
+# zero-confusable-with-MAF-zero. The codec's own rule -- that a stored 0 or 1
+# cannot be a residual of a logit and is therefore held exactly -- is covered
+# where it is decided, in `tests/test_eaf_encoding.py`.
 _EAF["a4"][700] = 0.0
 # a2 reports no frequency at 1:300, which must read back as NaN and not as a
 # residual of zero.
@@ -413,18 +420,22 @@ def test_a_clipped_cell_resolves_to_its_exact_value_not_to_the_baseline(
     store = dense_store if layout == "dense" else ragged_store
     root = zarr.open_group(str(store / "data.zarr"), mode="r")
     group = root["ragged"] if layout == "ragged" else root
-    assert len(group[EAF_EXCEPTION_INDEX]) >= 2  # a3 at 1:600, a4 at 1:700
+    assert len(group[EAF_EXCEPTION_INDEX]) >= 1  # a3 at 1:600
     assert _observed(store)[(600, "a3")] == pytest.approx(0.85, abs=1e-6)
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged"])
-def test_a_monomorphic_frequency_is_stored_exactly(
+def test_a_monomorphic_source_frequency_is_missing_not_zero(
     layout: str, dense_store: Path, ragged_store: Path
 ):
-    """0 has no logit, so it cannot be a residual; it is held exactly rather
-    than nudged to a representable neighbour."""
+    """A source frequency of exactly 0 has no frequency information in it.
+
+    The reader reports it as missing (stores #176), so the cell reads back as
+    NaN rather than as 0 -- which a consumer filtering on MAF would otherwise
+    read as "MAF zero" and drop, or as a real observed frequency and keep.
+    """
     store = dense_store if layout == "dense" else ragged_store
-    assert _observed(store)[(700, "a4")] == 0.0
+    assert np.isnan(_observed(store)[(700, "a4")])
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged"])

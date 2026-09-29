@@ -21,17 +21,21 @@ failure mode if it is not enforced:
 from __future__ import annotations
 
 import dataclasses
+import math
 
 import pytest
+from scipy import stats as _scipy_stats
 
 from opengwasdb.readers import (
     CaseControlZScoreError,
     EffectSource,
     EffectSourceKind,
+    RowCells,
     UnsignedZScoreError,
     derive_z_score_effect,
     resolve_effect_source,
     resolve_sample_size_column,
+    row_statistics,
 )
 
 
@@ -64,8 +68,6 @@ def test_beta_wins_over_odds_ratio_when_both_are_present():
     assert source is not None
     assert source.kind is EffectSourceKind.BETA
     assert source.column_name == "beta"
-
-
 def test_neither_effect_column_resolves_to_none():
     assert resolve_effect_source(["chromosome", "base_pair_location", "standard_error"]) is None
 
@@ -339,3 +341,179 @@ def test_duplicate_sample_size_spelling_is_a_duplicate():
 def test_z_score_error_types_are_distinguishable_value_errors():
     assert issubclass(CaseControlZScoreError, ValueError)
     assert issubclass(UnsignedZScoreError, ValueError)
+
+
+# --- the second effect column (stores #176) ---
+
+
+def test_a_file_carrying_both_beta_and_odds_ratio_records_the_fallback():
+    """`beta` is the primary column, and `odds_ratio` is named as the fallback.
+
+    `GCST004030` carries both and populates only `odds_ratio`; without the
+    fallback the primary column's empty cells are the whole file's answer.
+    """
+    source = resolve_effect_source(["chromosome", "beta", "odds_ratio", "standard_error"])
+
+    assert source == EffectSource(
+        column_name="beta",
+        kind=EffectSourceKind.BETA,
+        is_derived=False,
+        assumes_standardised=False,
+        fallback_column_name="odds_ratio",
+    )
+
+
+def test_a_file_carrying_one_effect_column_records_no_fallback():
+    beta = resolve_effect_source(["chromosome", "beta", "standard_error"])
+    odds_ratio = resolve_effect_source(["chromosome", "odds_ratio", "standard_error"])
+
+    assert beta is not None and beta.fallback_column_name is None
+    assert odds_ratio is not None and odds_ratio.fallback_column_name is None
+
+
+# --- one row's statistics, from its own columns (stores #176) ---
+
+
+def _row(**cells) -> RowCells:
+    return RowCells(**cells)
+
+
+def test_the_row_effect_falls_back_to_odds_ratio_when_beta_is_unusable():
+    source = resolve_effect_source(["beta", "odds_ratio"])
+
+    fell_back = row_statistics(source, _row(effect=None, odds_ratio=1.5, standard_error=0.2))
+    read_beta = row_statistics(source, _row(effect=0.25, odds_ratio=1.5, standard_error=0.2))
+
+    assert fell_back.beta == pytest.approx(math.log(1.5))
+    assert fell_back.effect_from_odds_ratio_fallback is True
+    assert read_beta.beta == pytest.approx(0.25)
+    assert read_beta.effect_from_odds_ratio_fallback is False
+
+
+def test_a_file_with_one_effect_column_does_not_fall_back():
+    """A header naming only `beta` behaves exactly as it did before the change."""
+    source = resolve_effect_source(["beta"])
+
+    statistics = row_statistics(source, _row(effect=None, odds_ratio=1.5, standard_error=0.2))
+
+    assert statistics.beta is None
+    assert statistics.se == pytest.approx(0.2)
+    assert statistics.effect_from_odds_ratio_fallback is False
+
+
+def test_a_confidence_interval_is_read_on_the_row_s_own_scale():
+    beta_source = resolve_effect_source(["beta"])
+    odds_ratio_source = resolve_effect_source(["odds_ratio"])
+    z = float(_scipy_stats.norm.ppf(0.975))
+
+    linear = row_statistics(beta_source, _row(effect=0.4, ci_lower=0.3, ci_upper=0.5))
+    logged = row_statistics(odds_ratio_source, _row(effect=1.5, ci_lower=1.2, ci_upper=1.9))
+
+    assert linear.se == pytest.approx((0.5 - 0.3) / (2.0 * z))
+    assert linear.se_from_ci is True
+    assert logged.se == pytest.approx((math.log(1.9) - math.log(1.2)) / (2.0 * z))
+    assert logged.se_from_ci is True
+    # The two formulas differ by an order of magnitude on these bounds, so a
+    # row read on the wrong scale could not pass both assertions above.
+    assert not logged.se == pytest.approx(linear.se)
+
+
+def test_a_confidence_interval_that_does_not_bracket_the_effect_is_refused():
+    source = resolve_effect_source(["beta"])
+
+    statistics = row_statistics(source, _row(effect=0.9, ci_lower=0.2, ci_upper=0.6))
+
+    assert statistics.beta == pytest.approx(0.9)
+    assert statistics.se is None
+    assert statistics.se_from_ci is False
+
+
+def test_an_odds_ratio_interval_needs_positive_bounds():
+    source = resolve_effect_source(["odds_ratio"])
+
+    statistics = row_statistics(source, _row(effect=1.5, ci_lower=-0.5, ci_upper=2.0))
+
+    assert statistics.se is None
+
+
+def test_a_p_value_derives_the_standard_error_the_contract_names():
+    source = resolve_effect_source(["beta"])
+
+    statistics = row_statistics(source, _row(effect=0.2, p_value=0.05))
+
+    assert statistics.se == pytest.approx(0.2 / -float(_scipy_stats.norm.ppf(0.025)))
+    assert statistics.se_from_p_value is True
+
+
+def test_a_p_value_small_enough_to_matter_does_not_round_to_infinity():
+    """`-Φ⁻¹(p / 2)`, not `Φ⁻¹(1 - p / 2)`: the latter is `inf` for a 1e-300 p."""
+    source = resolve_effect_source(["beta"])
+
+    statistics = row_statistics(source, _row(effect=0.2, p_value=1e-300))
+
+    assert statistics.se == pytest.approx(0.2 / -float(_scipy_stats.norm.ppf(5e-301)))
+    assert statistics.se is not None and math.isfinite(statistics.se)
+    assert not math.isfinite(float(_scipy_stats.norm.ppf(1.0 - 5e-301)))
+
+
+@pytest.mark.parametrize(
+    ("beta", "p_value"),
+    [(0.2, 1.0), (0.2, 0.0), (0.2, 1.5), (0.2, -0.1), (0.2, None), (0.0, 0.05), (None, 0.05)],
+)
+@pytest.mark.parametrize("source_header", [["beta"], ["beta", "odds_ratio"]])
+
+def test_unusable_p_values_derive_nothing(source_header, beta, p_value):
+    """`p = 1`, an underflowed `p = 0`, `p > 1`, and a zero effect are all unusable.
+
+    A row with no usable effect is refused with them: there is no effect size to
+    divide, so a p-value cannot stand in for one. An `odds_ratio` cell beside an
+    unusable `beta` is named here too, and there is none.
+    """
+    source = resolve_effect_source(source_header)
+
+    statistics = row_statistics(source, _row(effect=beta, p_value=p_value))
+
+    assert statistics.se is None
+    assert statistics.se_from_p_value is False
+
+
+def test_a_reported_standard_error_wins_over_an_interval_and_a_p_value():
+    source = resolve_effect_source(["beta"])
+
+    statistics = row_statistics(
+        source, _row(effect=0.2, standard_error=0.1, ci_lower=0.3, ci_upper=0.5, p_value=0.05)
+    )
+
+    assert statistics.se == pytest.approx(0.1)
+    assert (statistics.se_from_ci, statistics.se_from_p_value) == (False, False)
+
+
+def test_a_signed_z_is_derived_rather_than_recovered():
+    """The recovery columns never apply to a z source (issue #215, stores #176)."""
+    source = resolve_effect_source(["z", "effect_allele_frequency"])
+    derived = derive_z_score_effect(-2.0, 0.25, 1000)
+    assert derived is not None
+
+    statistics = row_statistics(
+        source,
+        _row(
+            effect=-2.0,
+            frequency=0.25,
+            sample_size=1000.0,
+            standard_error=0.5,
+            ci_lower=0.4,
+            ci_upper=0.6,
+            p_value=0.01,
+        ),
+    )
+
+    assert (statistics.beta, statistics.se) == derived
+    assert (statistics.se_from_ci, statistics.se_from_p_value) == (False, False)
+
+
+def test_a_row_with_no_effect_column_keeps_its_reported_standard_error():
+    """Both row-wise projections have always reported that se, and still do."""
+    statistics = row_statistics(None, _row(standard_error=0.2))
+
+    assert (statistics.beta, statistics.se) == (None, 0.2)
+    assert row_statistics(None, _row(standard_error=-0.2)).se is None

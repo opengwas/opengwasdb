@@ -487,6 +487,13 @@ def _orient_row(
 
 
 def _parse_frequency(value: str | None) -> float | None:
+    """A reference table's own frequency, `0` and `1` included.
+
+    Deliberately not `parse_af`: that rule treats exactly 0 or 1 as missing
+    because a GWAS source reporting them is almost always a placeholder (stores
+    #176), whereas a reference panel's fixed site is real evidence for
+    orientation.
+    """
     if not value:
         return None
     try:
