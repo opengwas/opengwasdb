@@ -141,22 +141,29 @@ def build_query_patterns(
 
 
 def measure_shape_rss(
-    patterns: dict[str, Callable[[], Any]],
+    build_patterns: Callable[[], dict[str, Callable[[], Any]]],
     shape: str,
     *,
     release_patterns: bool = True,
 ) -> dict[str, float]:
-    """Run one already-built shape in this interpreter and return its RSS record.
+    """Build and run one shape in this interpreter and return its RSS record.
 
-    By default `patterns` is dropped before the sampler starts: holding the
-    other shapes' closures (and the selections they captured) would charge
-    their memory to this shape's baseline. The OGS-00010 harness passes
-    `release_patterns=False` to keep its historical probe, which sampled
-    `patterns[shape]` with the complete mapping still alive and collected no
-    garbage. Its release-comparison report is a different measurement from the
-    OGS-00009/FinnGen one — normalising it is a benchmark change that needs its
-    own evidence, not a silent side effect of this refactor (issue #241).
+    `build_patterns` is called *inside* this frame so this frame owns the only
+    reference to the mapping. If a caller built the mapping itself and passed
+    it in, its own reference would survive the `del` below and keep every other
+    shape's closures — and the selections they captured — alive while
+    `sample_query` measures the baseline.
+
+    By default the mapping is then dropped and collected before sampling, so
+    `baseline_mb` reflects the store plus this shape's own inputs only. The
+    OGS-00010 harness passes `release_patterns=False` to keep its historical
+    probe, which sampled `patterns[shape]` with the complete mapping still
+    alive and collected no garbage. Its release-comparison report is a
+    different measurement from the OGS-00009/FinnGen one — normalising it is a
+    benchmark change that needs its own evidence, not a silent side effect of
+    this refactor (issue #241).
     """
+    patterns = build_patterns()
     fn = patterns[shape]
     if release_patterns:
         del patterns
@@ -207,7 +214,9 @@ def start_benchmark(
     opened; a normal run gets the parsed args, the query handle and the manifest
     back. Harnesses whose argv has no pre-store mode (the OGS-00010 and FinnGen
     benchmarks) use this directly; the ukb-b (OGS-00009) harness, which has a
-    top-hits experiment to handle first, calls the two steps itself.
+    top-hits experiment to handle first, calls the two steps itself. The
+    per-shape RSS probe is different again: it must own the only patterns
+    reference (see `measure_shape_rss`).
     """
     args = parser.parse_args()
     if emit_rss_probe(args, measure):

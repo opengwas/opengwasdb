@@ -85,11 +85,16 @@ def _analysis_index(q: Any) -> tuple[dict[int, dict[str, Any]], dict[str, int]]:
 def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]:
     q = query_store(args.store)
     analyses = q.analyses_table()
-    patterns = _query_shapes.build_query_patterns(
-        q, analyses, int(q._root["z"].shape[0]), len(analyses),
-        exposure=EXPOSURE, phewas_alid=PHEWAS_ALID, region=REGION,
+    # Pass a factory, not a mapping: measure_shape_rss must own the mapping so
+    # its drop-and-collect actually releases the shapes this probe is not
+    # measuring (see measure_shape_rss, issue #241).
+    return _query_shapes.measure_shape_rss(
+        lambda: _query_shapes.build_query_patterns(
+            q, analyses, int(q._root["z"].shape[0]), len(analyses),
+            exposure=EXPOSURE, phewas_alid=PHEWAS_ALID, region=REGION,
+        ),
+        shape,
     )
-    return _query_shapes.measure_shape_rss(patterns, shape)
 
 
 def _source_bulk_seconds(source: Path, reps: int) -> dict[str, Any]:

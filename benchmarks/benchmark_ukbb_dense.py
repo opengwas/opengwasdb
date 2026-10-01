@@ -429,8 +429,13 @@ def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]
     an = q.analyses_table()
     n_analyses = len(an)
     n_variants = int(q._root["z"].shape[0])
-    patterns = _query_patterns(q, an, n_variants, n_analyses, args.phewas_alid)
-    return _query_shapes.measure_shape_rss(patterns, shape)
+    # Pass a factory, not a mapping: measure_shape_rss must own the mapping so
+    # its drop-and-collect actually releases the shapes this probe is not
+    # measuring (see measure_shape_rss, issue #241).
+    return _query_shapes.measure_shape_rss(
+        lambda: _query_patterns(q, an, n_variants, n_analyses, args.phewas_alid),
+        shape,
+    )
 
 
 def _shape_rss_subprocess(args: argparse.Namespace, shape: str) -> dict[str, float]:
