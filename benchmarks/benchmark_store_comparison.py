@@ -221,13 +221,21 @@ def digest_array(values: np.ndarray) -> str:
 
 
 def result_digests(result: dict[str, np.ndarray]) -> dict[str, str]:
+    """Digest EVERY array the query returned, not only the expected six.
+
+    Hashing just the known contract would silently discard an array one store
+    returns and another does not, so the comparison would call two different
+    results identical. The expected six must still be present; the digest map's
+    keys are otherwise the result's own keys, so `differing_arrays` reports a
+    one-sided extra array by name.
+    """
     missing = [name for name in RESULT_ARRAY_NAMES if name not in result]
     if missing:
         raise SystemExit(
             f"query result is missing array(s) {missing}; refusing an identity check "
             "that cannot see every array it claims to compare"
         )
-    return {name: digest_array(result[name]) for name in RESULT_ARRAY_NAMES}
+    return {name: digest_array(values) for name, values in result.items()}
 
 
 def differing_arrays(reference: dict[str, str], candidate: dict[str, str]) -> list[str]:

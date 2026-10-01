@@ -81,6 +81,28 @@ def test_differing_shapes_names_the_shape_and_arrays():
     assert differing_shapes(reference, candidate) == {"bulk": ["z"]}
 
 
+def test_array_present_on_one_side_only_is_detected():
+    reference = result_digests(_result([1.0, 2.0]))
+    extra = _result([1.0, 2.0])
+    extra["future_array"] = np.array([7], dtype="int64")
+    candidate = result_digests(extra)
+
+    assert "future_array" in candidate  # every returned array is hashed
+    assert differing_arrays(reference, candidate) == ["future_array"]
+
+
+def test_differing_extra_array_is_detected():
+    reference_result = _result([1.0])
+    reference_result["future_array"] = np.array([1, 2], dtype="int64")
+    candidate_result = _result([1.0])
+    candidate_result["future_array"] = np.array([1, 3], dtype="int64")
+
+    reference = result_digests(reference_result)
+    candidate = result_digests(candidate_result)
+
+    assert differing_arrays(reference, candidate) == ["future_array"]
+
+
 def test_equal_nans_with_different_payloads_are_equal():
     # A NaN's payload bits are not its meaning; two stores may decode the same
     # missing cell to different NaN bit patterns. Only the positions must agree.
