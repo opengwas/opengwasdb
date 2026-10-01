@@ -546,100 +546,100 @@
       "timings": [
         {
           "query": "bulk",
-          "median_ms": 28649.17,
-          "p95_ms": 30328.154,
+          "median_ms": 26376.616,
+          "p95_ms": 28479.806,
           "result_count": 7578651
         },
         {
           "query": "phewas",
-          "median_ms": 5.642,
-          "p95_ms": 10.259,
+          "median_ms": 7.447,
+          "p95_ms": 10.723,
           "result_count": 1088
         },
         {
           "query": "regional",
-          "median_ms": 1474.816,
-          "p95_ms": 1514.598,
+          "median_ms": 1422.0,
+          "p95_ms": 1427.276,
           "result_count": 4241966
         },
         {
           "query": "regional_one_analysis",
-          "median_ms": 24.602,
-          "p95_ms": 58.993,
+          "median_ms": 24.394,
+          "p95_ms": 45.452,
           "result_count": 2954
         },
         {
           "query": "tophits",
-          "median_ms": 1.127,
-          "p95_ms": 1.246,
+          "median_ms": 1.148,
+          "p95_ms": 1.188,
           "result_count": 2564
         },
         {
           "query": "random_lookup_10_variants_100_analyses",
-          "median_ms": 73.186,
-          "p95_ms": 78.292,
+          "median_ms": 69.85,
+          "p95_ms": 75.292,
           "result_count": 654
         },
         {
           "query": "random_lookup_100_variants_10_analyses",
-          "median_ms": 525.729,
-          "p95_ms": 527.813,
+          "median_ms": 668.186,
+          "p95_ms": 746.098,
           "result_count": 628
         }
       ],
       "memory": [
         {
-          "baseline_mb": 182.6,
-          "peak_mb": 12041.6,
-          "delta_mb": 11858.9,
+          "baseline_mb": 183.4,
+          "peak_mb": 12042.6,
+          "delta_mb": 11859.3,
           "result_count": 7578651,
           "query": "bulk"
         },
         {
-          "baseline_mb": 187.3,
-          "peak_mb": 190.7,
-          "delta_mb": 3.4,
+          "baseline_mb": 186.9,
+          "peak_mb": 189.9,
+          "delta_mb": 3.0,
           "result_count": 1088,
           "query": "phewas"
         },
         {
-          "baseline_mb": 182.4,
-          "peak_mb": 712.2,
-          "delta_mb": 529.8,
+          "baseline_mb": 187.0,
+          "peak_mb": 720.0,
+          "delta_mb": 533.0,
           "result_count": 4241966,
           "query": "regional"
         },
         {
-          "baseline_mb": 182.4,
-          "peak_mb": 193.4,
-          "delta_mb": 11.1,
+          "baseline_mb": 183.0,
+          "peak_mb": 195.0,
+          "delta_mb": 12.0,
           "result_count": 2954,
           "query": "regional_one_analysis"
         },
         {
-          "baseline_mb": 186.8,
-          "peak_mb": 187.0,
+          "baseline_mb": 183.3,
+          "peak_mb": 183.4,
           "delta_mb": 0.1,
           "result_count": 2564,
           "query": "tophits"
         },
         {
-          "baseline_mb": 182.4,
+          "baseline_mb": 182.5,
           "peak_mb": 215.3,
-          "delta_mb": 32.9,
+          "delta_mb": 32.8,
           "result_count": 654,
           "query": "random_lookup_10_variants_100_analyses"
         },
         {
-          "baseline_mb": 182.8,
+          "baseline_mb": 182.5,
           "peak_mb": 498.9,
-          "delta_mb": 316.2,
+          "delta_mb": 316.3,
           "result_count": 628,
           "query": "random_lookup_100_variants_10_analyses"
         }
       ],
-      "load_average_1m_before": 4.91,
-      "load_average_1m_after": 16.03,
+      "load_average_1m_before": 9.34,
+      "load_average_1m_after": 5.19,
       "result_digests": {
         "bulk": {
           "variant_index": "99ee252125882fd0d40112a6a355bef916e9b02f97fa2edb6c23e68cda5d3f58",
@@ -729,11 +729,11 @@
     "numpy": "2.4.6",
     "zarr": "2.18.7",
     "numcodecs": "0.12.1",
-    "opengwasdb_commit": "7937a40",
+    "opengwasdb_commit": "9bec7c3",
     "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
     "nproc": 224,
     "cache": "warm page cache: the node holds about 1 TB of page cache and the stores are warm. A cold-cache run cannot be forced without root, so these timings are warm-cache numbers, not first-touch disk numbers."
   },
-  "commit": "7937a40",
-  "measured_at": "2026-10-01T04:17:01.617194+00:00"
+  "commit": "9bec7c3",
+  "measured_at": "2026-10-01T04:29:11.352723+00:00"
 }
