@@ -3,11 +3,21 @@
 The static scan in this module is the enforcement arm of the refactor: a new
 direct ``create_dataset``/``create_group``/creation-capable ``open_group``/
 ``Blosc(...)`` anywhere outside ``opengwasdb/store/arrays.py`` fails here rather
-than waiting for a review to notice it.  It resolves imports, so the ordinary
+than waiting for a review to notice it.  It resolves imports and simple local
 aliases (``import zarr as zr``, ``from zarr import array``,
-``from numcodecs import Blosc as Codec``) cannot slip past it.  The scanner is
-tested against synthetic sources first, because a scan that matches nothing is
-worse than no scan.
+``from numcodecs import Blosc as Codec``, ``factory = zarr.zeros``), judges
+receivers that are chained off ``self``/subscripts/call results, and flags a
+mapping write through a name bound from a Zarr group opener
+(``destination["z"] = values``).
+
+**This scan is best-effort, not a proof.**  Python can create an array by any
+number of routes a source scan cannot follow: an alias built at runtime, a
+group returned from a helper the scan cannot trace, ``setattr``, a
+``__setitem__`` on a receiver not bound from a tracked opener, a call through
+``getattr``, and so on.  The behavioural backstop is
+``tests/test_array_conformance.py``: it builds every builder's fixture store and
+checks the arrays those builders actually wrote against the seam's policy.
+Adding a route the scan misses is survivable; a wrong array is not.
 """
 
 from __future__ import annotations
@@ -99,27 +109,67 @@ def _is_numpy(module: str) -> bool:
 
 
 def _root_name(node: ast.expr) -> str | None:
-    """The leftmost identifier of an expression, e.g. ``assets.group`` -> ``assets``."""
-    while isinstance(node, ast.Attribute):
-        node = node.value
+    """The leftmost identifier of an expression.
+
+    Unwraps attributes, subscripts and calls, so ``self.group``,
+    ``group["tier"]`` and ``get_target()`` all resolve to their root name.
+    """
+    while True:
+        if isinstance(node, ast.Attribute):
+            node = node.value
+        elif isinstance(node, ast.Subscript):
+            node = node.value
+        elif isinstance(node, ast.Call):
+            node = node.func
+        else:
+            break
     return node.id if isinstance(node, ast.Name) else None
 
 
 def _looks_like_instance(node: ast.expr) -> bool:
     """Whether a receiver looks like an object, not a class or type.
 
-    ``cls``/``self`` and Capitalised-or-``_Capitalised`` names are treated as
-    types, so this package's ``ZOverflowTable.empty()`` and ``cls.empty()`` are
-    not judged by the shared-creation-method rule.
+    A bare ``cls``/``self`` and Capitalised-or-``_Capitalised`` names are treated
+    as types, so this package's ``ZOverflowTable.empty()`` and a direct
+    ``cls.empty()`` are not judged by the shared-creation-method rule.  A
+    receiver *chained* off ``self``/``cls`` (``self.group.zeros()``) is an
+    object, and is judged.
     """
+    if isinstance(node, ast.Name):
+        if node.id in {"cls", "self"}:
+            return False
+        return not node.id.lstrip("_")[:1].isupper()
     name = _root_name(node)
-    if name is None or name in {"cls", "self"}:
-        return False
+    if name is None:
+        return True
     return not name.lstrip("_")[:1].isupper()
 
 
+def _canonical_is_zarr_or_numcodecs(canonical: str) -> bool:
+    """Whether a canonical dotted path names something in zarr or numcodecs."""
+    module = canonical.rsplit(".", 1)[0] if "." in canonical else canonical
+    return _is_zarr(module) or _is_numcodecs(module)
+
+
+def _callable_canonical(
+    value: ast.expr, modules: dict[str, str], names: dict[str, str]
+) -> str | None:
+    """The canonical path of a callable expression, when it resolves to a creator.
+
+    Catches the simple alias ``factory = zarr.zeros`` (and chains of it) -- a
+    form that bypasses an import-name scan.
+    """
+    if isinstance(value, ast.Attribute):
+        path = _module_of(value, modules, names)
+        return path if path is not None and _canonical_is_zarr_or_numcodecs(path) else None
+    if isinstance(value, ast.Name):
+        canonical = names.get(value.id)
+        return canonical if canonical and _canonical_is_zarr_or_numcodecs(canonical) else None
+    return None
+
+
 def _import_aliases(tree: ast.AST) -> tuple[dict[str, str], dict[str, str]]:
-    """Resolve local names to their source: modules and ``from``-imported names."""
+    """Resolve local names to their source: modules, imports and simple aliases."""
     modules: dict[str, str] = {}
     names: dict[str, str] = {}
     for node in ast.walk(tree):
@@ -129,6 +179,16 @@ def _import_aliases(tree: ast.AST) -> tuple[dict[str, str], dict[str, str]]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             for alias in node.names:
                 names[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    # A second pass so an alias can refer to an import seen anywhere in the file.
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            canonical = _callable_canonical(node.value, modules, names)
+            if canonical is not None:
+                names[node.targets[0].id] = canonical
     return modules, names
 
 
@@ -146,6 +206,74 @@ def _module_of(node: ast.expr, modules: dict[str, str], names: dict[str, str]) -
     if isinstance(node, ast.Attribute):
         base = _module_of(node.value, modules, names)
         return None if base is None else f"{base}.{node.attr}"
+    return None
+
+
+def _call_returns_zarr_group(
+    value: ast.expr, modules: dict[str, str], names: dict[str, str]
+) -> bool:
+    """Whether a call expression produces a Zarr group handle.
+
+    Covers the module creators (``zarr.open_group``) and the seam/envelope
+    openers.  Used only to track names that a later ``name[...] = ...`` writes
+    through.
+    """
+    if not isinstance(value, ast.Call):
+        return False
+    func = value.func
+    if isinstance(func, ast.Attribute):
+        base = _module_of(func.value, modules, names)
+        if base is not None and _is_zarr(base):
+            return True
+        if base == _SEAM_MODULE and func.attr in {"open_group", "open_group_for_write"}:
+            return True
+        return func.attr in {"open_group", "open_group_for_write", "arrays"}
+    if isinstance(func, ast.Name):
+        canonical = names.get(func.id)
+        if canonical is not None and _canonical_is_zarr_or_numcodecs(canonical):
+            return True
+        return func.id in {"open_group", "open_group_for_write"}
+    return False
+
+
+def _zarr_group_handles(tree: ast.AST, modules: dict[str, str], names: dict[str, str]) -> set[str]:
+    """Local names bound from a Zarr group opener.
+
+    A mapping write through one of these (``destination["z"] = values``) creates
+    an array through ``Group.__setitem__``, so it is flagged.  A receiver not
+    bound this way cannot be typed statically and is left to the runtime
+    conformance test.
+    """
+    handles: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and _call_returns_zarr_group(node.value, modules, names)
+        ):
+            handles.add(node.targets[0].id)
+    return handles
+
+
+def _assignment_violation(
+    node: ast.Assign, modules: dict[str, str], names: dict[str, str], handles: set[str]
+) -> str | None:
+    """A mapping-assignment creation (``group[...] = values``), or `None`.
+
+    Only a *direct* subscript on a tracked group name counts: ``group["z"]``
+    goes through ``Group.__setitem__`` and creates an array, while
+    ``group.attrs["x"]`` and other chained subscripts do not.
+    """
+    for target in node.targets:
+        if not isinstance(target, ast.Subscript):
+            continue
+        receiver = target.value
+        if isinstance(receiver, ast.Name) and receiver.id in handles:
+            return f"{receiver.id}[...] ="
+        if _call_returns_zarr_group(receiver, modules, names):
+            return "zarr.group[...] ="
+    return None
     return None
 
 
@@ -206,6 +334,12 @@ def _violations(source: str, filename: str = "<source>") -> list[str]:
         token = _call_violation(node.func, modules, names)
         if token is not None:
             found.append(f"{filename}:{node.lineno}: {token}")
+    handles = _zarr_group_handles(tree, modules, names)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            token = _assignment_violation(node, modules, names, handles)
+            if token is not None:
+                found.append(f"{filename}:{node.lineno}: {token}")
     return found
 
 
@@ -378,6 +512,50 @@ def test_scanner_allows_numpy_creators_and_own_classmethods() -> None:
             "_MeasureAccumulators.zeros(2)",
             "cls.empty()",
             "self.empty()",
+        ]
+    )
+    assert _violations(source) == []
+
+
+def test_scanner_detects_receiver_and_alias_bypasses() -> None:
+    """The round-3 misses: simple aliases, chained receivers, mapping writes."""
+    cases = {
+        # A local alias of a creator is not an import name.
+        "import zarr\nfactory = zarr.zeros\nfactory((1,))": "zarr.zeros(",
+        "from numcodecs import Blosc\ncodec = Blosc\ncodec()": "numcodecs.Blosc(",
+        "import zarr\na = zarr.zeros\nb = a\nb((1,))": "zarr.zeros(",
+        # Chained off self/cls is an object, even though a direct self.empty() is not.
+        "self.group.zeros((1,))": "zeros(",
+        "cls.group.array([1])": "array(",
+        "self.assets.group.create_dataset('a')": "create_dataset(",
+        # Subscript and call-result receivers.
+        'group["tier"].array([1])': "array(",
+        "get_target().full((1,), 0)": "full(",
+        "self.groups[0].zeros((1,))": "zeros(",
+        # A mapping write through a group bound from an opener creates an array.
+        "import zarr\ng = zarr.open_group('p', mode='a')\ng['z'] = values": "g[...] =",
+        (
+            "from opengwasdb.store.arrays import open_group\n"
+            "g = open_group('p')\n"
+            "g['z'] = values"
+        ): "g[...] =",
+        "zarr.open_group('p', mode='a')['z'] = values": "group[...] =",
+    }
+    for source, token in cases.items():
+        found = _violations(source)
+        assert found, f"scanner missed {source!r}"
+        assert any(token in violation for violation in found), (source, found)
+
+
+def test_scanner_leaves_untracked_mapping_writes_alone() -> None:
+    """A mapping write on a receiver the scan cannot type is left to the runtime test."""
+    source = "\n".join(
+        [
+            "import numpy as np",
+            "scores = {}",
+            "scores['a'] = np.zeros(3)",
+            "table = build_table()",
+            "table['z'] = np.arange(3)",
         ]
     )
     assert _violations(source) == []
