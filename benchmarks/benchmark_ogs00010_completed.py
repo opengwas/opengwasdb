@@ -582,7 +582,10 @@ def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]
     random_alids, random_analyses = _resolve_source_lookup_selections(q_src, src_bench)
     q_src.close()
     patterns = _query_patterns(q, args.phewas_alid, random_alids, random_analyses)
-    return _query_shapes.measure_shape_rss(patterns, shape)
+    # This harness has always sampled with the full pattern mapping retained and
+    # no explicit collection; keep that probe semantics distinct from the
+    # OGS-00009/FinnGen one (see measure_shape_rss, issue #241).
+    return _query_shapes.measure_shape_rss(patterns, shape, release_patterns=False)
 
 
 def _shape_rss_subprocess(args: argparse.Namespace, shape: str) -> dict[str, float]:

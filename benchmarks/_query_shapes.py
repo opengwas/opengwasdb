@@ -140,16 +140,27 @@ def build_query_patterns(
     )
 
 
-def measure_shape_rss(patterns: dict[str, Callable[[], Any]], shape: str) -> dict[str, float]:
+def measure_shape_rss(
+    patterns: dict[str, Callable[[], Any]],
+    shape: str,
+    *,
+    release_patterns: bool = True,
+) -> dict[str, float]:
     """Run one already-built shape in this interpreter and return its RSS record.
 
-    `patterns` is dropped before the sampler starts: holding the other shapes'
-    closures (and the selections they captured) would charge their memory to
-    this shape's baseline.
+    By default `patterns` is dropped before the sampler starts: holding the
+    other shapes' closures (and the selections they captured) would charge
+    their memory to this shape's baseline. The OGS-00010 harness passes
+    `release_patterns=False` to keep its historical probe, which sampled
+    `patterns[shape]` with the complete mapping still alive and collected no
+    garbage. Its release-comparison report is a different measurement from the
+    OGS-00009/FinnGen one — normalising it is a benchmark change that needs its
+    own evidence, not a silent side effect of this refactor (issue #241).
     """
     fn = patterns[shape]
-    del patterns
-    gc.collect()
+    if release_patterns:
+        del patterns
+        gc.collect()
     record = sample_query(fn)
     record["query"] = shape
     return record
@@ -194,9 +205,9 @@ def start_benchmark(
 
     A probe re-invocation prints its one JSON record and exits before a store is
     opened; a normal run gets the parsed args, the query handle and the manifest
-    back. Harnesses whose argv has no pre-store mode (the OGS-00009 and FinnGen
-    benchmarks) use this directly; the ukb-b harness, which has a top-hits
-    experiment to handle first, calls the two steps itself.
+    back. Harnesses whose argv has no pre-store mode (the OGS-00010 and FinnGen
+    benchmarks) use this directly; the ukb-b (OGS-00009) harness, which has a
+    top-hits experiment to handle first, calls the two steps itself.
     """
     args = parser.parse_args()
     if emit_rss_probe(args, measure):
