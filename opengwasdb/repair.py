@@ -8,7 +8,12 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE, per_variant_chunk_size
+from opengwasdb.encoding import (
+    EAF_BASELINE,
+    EAF_REFERENCE,
+    component_variant_chunk,
+    per_variant_chunk_size,
+)
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store import open_store
@@ -62,7 +67,7 @@ def _repair_group(group: Any, label: str) -> list[EafChunkRepair]:
         if name not in group:
             continue
         array = group[name]
-        wanted = per_variant_chunk_size(group, len(array))
+        wanted = per_variant_chunk_size(component_variant_chunk(group), len(array))
         current = int(array.chunks[0])
         if current <= wanted:
             continue

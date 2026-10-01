@@ -15,12 +15,15 @@ The seam owns four things:
   the manifest and `index.sqlite` publish, so the bytes a plane is stored with
   and the bytes the manifest claims it was stored with cannot drift apart.
 * **the chunk layout**, through the role -> policy table `_LAYOUTS`.  A caller
-  names its array's `ArrayRole`; the role and the array's shape alone fix the
-  default chunks, so `chunk_layout(role, shape)` is total and the converter
-  (#245) can reproduce any array's layout without the builder that made it.  A
-  build-wide hint (the Dense `chunk_shape`, the top-hit `chunk_size`, an
-  explicit `chunks=(...)` on a CSR writer) is an override the policy honours;
-  no call site computes a chunk tuple itself.
+  names its array's `ArrayRole`; the role, the array's shape and -- for the one
+  role that depends on a sibling, `PER_VARIANT` -- the component plane's
+  variant-axis chunk fix the default chunks.  The component chunk is an
+  explicit argument (`component_chunk`), never sniffed from the destination
+  group, so the converter (#245) can reproduce any array's layout from facts it
+  already has (role, shape, the plane chunk).  A build-wide hint (the Dense
+  `chunk_shape`, the top-hit `chunk_size`, an explicit `chunks=(...)` on a CSR
+  writer) is an override the policy honours; no call site computes a chunk
+  tuple itself.
 * **chunk clipping to the array dimensions** (ADR 0021): the dense grid policy
   clips the two-dimensional hint to the array's rows and columns, and the
   length-indexed policies clip to the array's length.
@@ -60,6 +63,7 @@ __all__ = [
     "TOP_HIT_CHUNK_SIZE",
     "ArrayRole",
     "chunk_layout",
+    "component_variant_chunk",
     "compressor",
     "create_array",
     "create_group",
@@ -181,11 +185,18 @@ class ArrayRole(StrEnum):
 
 @dataclass(frozen=True)
 class _LayoutContext:
-    """Everything a layout policy is allowed to depend on."""
+    """Everything a layout policy is allowed to depend on.
+
+    `component_chunk` is the variant-axis chunk of the component plane a
+    per-variant side array serves.  It is a caller-supplied fact, not something
+    the policy sniffs from a group: the converter (#245) has the plane's chunk
+    and must be able to derive the same side-array layout the builder wrote
+    (spec §6).
+    """
 
     shape: tuple[int, ...]
     hint: Any
-    group: Any
+    component_chunk: int | None
 
 
 def _dense_grid(ctx: _LayoutContext) -> tuple[int, ...]:
@@ -222,13 +233,15 @@ def _association_offsets(ctx: _LayoutContext) -> tuple[int, ...]:
 def _per_variant(ctx: _LayoutContext) -> tuple[int, ...]:
     """A per-variant side array, following the plane it serves.
 
-    An explicit hint (the `chunk` override the writers accept) wins over the
-    sibling-derived size, clipped to the array length as before.
+    The component plane's variant-axis chunk (spec §6: the side array must be
+    no coarser than the plane) comes in as `component_chunk`.  An explicit
+    `hint` -- the `chunk` override the writers accept -- wins over it, clipped
+    to the array length as before.
     """
     length = ctx.shape[0]
     if ctx.hint is not None:
         return (max(1, min(int(ctx.hint), max(length, 1))),)
-    return (per_variant_chunk_size(ctx.group, length),)
+    return (per_variant_chunk_size(ctx.component_chunk, length),)
 
 
 def _length_clipped(ctx: _LayoutContext, default: int) -> tuple[int, ...]:
@@ -265,8 +278,9 @@ def _rho_array(ctx: _LayoutContext) -> tuple[int, ...]:
 #: The role -> physical-layout policy.  One entry per role; later tickets that
 #: change the layout (Zarr v3 sharding, #247) change this table, and the
 #: converter (#245) reads the same table so builders and converter agree.  Each
-#: policy is total over `role + shape` alone: `chunk_layout(role, shape)` is the
-#: default layout, and a caller's `hint` is an override the policy honours.
+#: policy is a function of `role + shape + component_chunk` (the last used only
+#: by `PER_VARIANT`, and `None` for every other role and for a component with no
+#: plane); a caller's `hint` is an override the policy honours.
 _LAYOUTS: Mapping[ArrayRole, Callable[[_LayoutContext], tuple[int, ...]]] = MappingProxyType(
     {
         ArrayRole.DENSE_STATISTIC_PLANE: _dense_grid,
@@ -284,19 +298,37 @@ _LAYOUTS: Mapping[ArrayRole, Callable[[_LayoutContext], tuple[int, ...]]] = Mapp
 )
 
 
-def per_variant_chunk_size(group: Any, length: int) -> int:
-    """Return the component-local chunk size for a per-variant side array.
+def per_variant_chunk_size(component_chunk: int | None, length: int) -> int:
+    """The per-variant chunk for a component plane's variant-axis chunk.
 
-    The side array must be read in the same tiles as the plane it belongs to,
-    so it follows the first variant-axis sibling the group has; a group with no
-    suitable sibling (a tiny synthetic one, or `None`) falls back to
-    `PER_VARIANT_CHUNK`.
+    A side array must be no coarser than the plane it serves (spec §6), so a
+    component chunk smaller than `PER_VARIANT_CHUNK` bounds the result; a
+    component with no plane (`component_chunk=None`, e.g. a tiny synthetic
+    group) falls back to `PER_VARIANT_CHUNK`.  The result is clipped to the
+    array's own length.
     """
-    if group is not None:
-        for sibling in ("eaf", "z", "imputed", "variant_index"):
-            if sibling in group and group[sibling].ndim:
-                return min(int(group[sibling].chunks[0]), PER_VARIANT_CHUNK, max(length, 1))
-    return min(PER_VARIANT_CHUNK, max(length, 1))
+    cap = (
+        PER_VARIANT_CHUNK
+        if component_chunk is None
+        else min(int(component_chunk), PER_VARIANT_CHUNK)
+    )
+    return min(cap, max(length, 1))
+
+
+def component_variant_chunk(group: Any) -> int | None:
+    """The variant-axis chunk of a group's component plane, or `None`.
+
+    This is the writer/validator-side read that turns a group into the explicit
+    `component_chunk` a layout is derived from.  It is deliberately *not* called
+    by `create_array` or `chunk_layout`: the converter has no builder group and
+    must be handed the plane chunk directly.
+    """
+    if group is None:
+        return None
+    for sibling in ("eaf", "z", "imputed", "variant_index"):
+        if sibling in group and group[sibling].ndim:
+            return int(group[sibling].chunks[0])
+    return None
 
 
 def chunk_layout(
@@ -304,20 +336,25 @@ def chunk_layout(
     shape: tuple[int, ...],
     *,
     hint: Any = None,
-    group: Any = None,
+    component_chunk: int | None = None,
 ) -> tuple[int, ...]:
     """The chunks `role` requires for an array of `shape`.
 
     With no `hint` this is the role's **default** physical layout, derivable
-    from `role + shape` alone -- which is what the store converter (#245) needs
-    to reproduce a layout for an array it did not create.  `hint` is the
-    caller's explicit override (the Dense `chunk_shape`, the top-hit
-    `chunk_size`, a `chunks=(...)` passed to a CSR writer); each policy decides
-    whether it clips the override or takes it whole.
+    from `role + shape`, plus -- for `PER_VARIANT` only -- the component
+    plane's `component_chunk`.  Every other role ignores `component_chunk`: the
+    one role whose layout depends on a sibling is `PER_VARIANT` (spec §6), and
+    making that dependency an argument is what lets the store converter (#245)
+    reproduce the layout without the builder's group.  `hint` is the caller's
+    explicit override (the Dense `chunk_shape`, the top-hit `chunk_size`, a
+    `chunks=(...)` passed to a CSR writer); each policy decides whether it clips
+    the override or takes it whole.
     """
     if role not in _LAYOUTS:
         raise ValueError(f"no chunk layout is registered for role {role!r}")
-    return _LAYOUTS[role](_LayoutContext(shape=shape, hint=hint, group=group))
+    return _LAYOUTS[role](
+        _LayoutContext(shape=shape, hint=hint, component_chunk=component_chunk)
+    )
 
 
 # ── creation ─────────────────────────────────────────────────────────────────
@@ -354,13 +391,13 @@ def _creation_kwargs(
     fill_value: Any,
     compressor: Any,
     hint: Any,
+    component_chunk: int | None,
     filters: Any,
     order: str,
-    group: Any,
 ) -> dict[str, Any]:
     """The `create_dataset` keyword arguments one role's array is made with."""
     kwargs: dict[str, Any] = {
-        "chunks": chunk_layout(role, shape, hint=hint, group=group),
+        "chunks": chunk_layout(role, shape, hint=hint, component_chunk=component_chunk),
         "compressor": _new_compressor() if compressor is _SEAM_COMPRESSOR else compressor,
         "order": order,
     }
@@ -388,6 +425,7 @@ def create_array(
     fill_value: Any = _NO_FILL,
     compressor: Any = _SEAM_COMPRESSOR,
     hint: Any = None,
+    component_chunk: int | None = None,
     filters: Any = None,
     order: str = "C",
     overwrite: bool = False,
@@ -402,10 +440,14 @@ def create_array(
     `fill_value` is the plane's own missing marker (spec §15).  Omit it for the
     dtype default; pass `fill_value=None` only when the metadata must literally
     say `null`.  `compressor=None` stores uncompressed; omit it for the seam's
-    compressor.  `hint` overrides the role's default layout (the Dense
-    `chunk_shape`, the top-hit `chunk_size`, a `chunks=(...)` passed to a CSR
-    writer); omit it for the default, which is a function of role and shape
-    alone.
+    compressor.
+
+    `hint` overrides the role's default layout (the Dense `chunk_shape`, the
+    top-hit `chunk_size`, a `chunks=(...)` passed to a CSR writer).
+    `component_chunk` is the variant-axis chunk of the plane a `PER_VARIANT`
+    array serves; the writer passes the chunk it read from the component, so
+    the layout never depends on sniffing `group` and the converter can supply
+    the same fact directly.
 
     `overwrite` deletes an existing array of the same name first, which the
     call sites that previously did `if name in group: del group[name]` relied
@@ -425,9 +467,9 @@ def create_array(
             fill_value=fill_value,
             compressor=compressor,
             hint=hint,
+            component_chunk=component_chunk,
             filters=filters,
             order=order,
-            group=group,
         ),
     )
 

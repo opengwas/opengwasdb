@@ -38,7 +38,7 @@ from opengwasdb.encoding.codec import (
     positions_rows_cols,
 )
 from opengwasdb.encoding.plan import EafBaselineError, StoreEncoding
-from opengwasdb.store.arrays import ArrayRole, create_array
+from opengwasdb.store.arrays import ArrayRole, component_variant_chunk, create_array
 
 SE_COEFFICIENTS = "se_coefficients"
 
@@ -693,7 +693,11 @@ def _write_per_variant_array(
     compressor: Any = None,
     chunk: int | None = None,
 ) -> None:
-    """Write (or replace) one `float32` per variant of a component's axis."""
+    """Write (or replace) one `float32` per variant of a component's axis.
+
+    The component plane's variant-axis chunk is read here and passed in as
+    `component_chunk`, so the layout policy itself never inspects `group`.
+    """
     create_array(
         group,
         name,
@@ -702,6 +706,7 @@ def _write_per_variant_array(
         dtype="float32",
         compressor=compressor,
         hint=chunk,
+        component_chunk=component_variant_chunk(group),
         overwrite=True,
     )
 

@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 import zarr
 
-from opengwasdb.encoding import StoreCodec, StoreEncoding
+from opengwasdb.encoding import StoreCodec, StoreEncoding, write_eaf_baseline
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, ZEncoding
 from opengwasdb.encoding.planes import write_eaf_csr, write_se_csr
 from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR
@@ -27,6 +27,7 @@ from opengwasdb.store.arrays import (
     COMPRESSOR_RECORD,
     ArrayRole,
     chunk_layout,
+    component_variant_chunk,
     compressor,
     open_group_for_write,
 )
@@ -37,16 +38,44 @@ SEAM = PACKAGE_ROOT / "store" / "arrays.py"
 #: The seam's own module path, whose creation helpers other modules import.
 _SEAM_MODULE = "opengwasdb.store.arrays"
 
+#: The seam's own creation/open API: the only names other modules may use.
+_SEAM_API = frozenset(
+    {"create_array", "create_group", "require_group", "open_group", "open_group_for_write"}
+)
 #: Call attribute names that create a Zarr array or group, and so must appear
 #: only in the seam.  ``open_group`` is here because it creates the group for
 #: modes ``w``/``a``/``w-``; the seam's own wrappers are recognised below.
 _FORBIDDEN_METHOD_ATTRS = frozenset(
     {"create_dataset", "create_array", "create_group", "require_group", "open_group"}
 )
-#: ``zarr.<name>`` module functions that create an array or group.
-_FORBIDDEN_ZARR_FUNCS = frozenset({"create", "zeros", "open_array", "array", "open_group"})
-#: ``numcodecs`` names whose construction is the seam's to own.
+#: Zarr array/group creators.  Matched against any ``zarr.*`` submodule too,
+#: so ``zarr.creation.array`` and ``zarr.api.create`` are caught.
+_FORBIDDEN_ZARR_FUNCS = frozenset(
+    {
+        "array",
+        "create",
+        "zeros",
+        "ones",
+        "empty",
+        "full",
+        "open_array",
+        "open_group",
+        "group",
+        "open",
+        "open_like",
+    }
+)
+#: ``numcodecs`` names whose construction is the seam's to own, matched against
+#: any ``numcodecs.*`` submodule too (``numcodecs.blosc.Blosc``).
 _FORBIDDEN_NUMCODECS = frozenset({"Blosc"})
+
+
+def _is_zarr(module: str) -> bool:
+    return module == "zarr" or module.startswith("zarr.")
+
+
+def _is_numcodecs(module: str) -> bool:
+    return module == "numcodecs" or module.startswith("numcodecs.")
 
 
 def _import_aliases(tree: ast.AST) -> tuple[dict[str, str], dict[str, str]]:
@@ -80,6 +109,41 @@ def _module_of(node: ast.expr, modules: dict[str, str], names: dict[str, str]) -
     return None
 
 
+def _call_violation(
+    func: ast.expr, modules: dict[str, str], names: dict[str, str]
+) -> str | None:
+    """The forbidden-creation token for one called function, or `None`."""
+    if isinstance(func, ast.Attribute):
+        attr = func.attr
+        base = _module_of(func.value, modules, names)
+        if base == _SEAM_MODULE and attr in _SEAM_API:
+            return None  # the seam's own API, e.g. `store_arrays.create_array(...)`
+        if base is not None and _is_zarr(base) and attr in _FORBIDDEN_ZARR_FUNCS:
+            return f"zarr.{attr}("
+        if base is not None and _is_numcodecs(base) and attr in _FORBIDDEN_NUMCODECS:
+            return f"numcodecs.{attr}("
+        if attr in _FORBIDDEN_METHOD_ATTRS:
+            return f"{attr}("
+        return None
+    if isinstance(func, ast.Name):
+        name = func.id
+        canonical = names.get(name)
+        if canonical is not None:
+            module, _, attr = canonical.rpartition(".")
+            if module == _SEAM_MODULE and attr in _SEAM_API:
+                return None
+            if _is_zarr(module) and attr in _FORBIDDEN_ZARR_FUNCS:
+                return f"zarr.{attr}("
+            if _is_numcodecs(module) and attr in _FORBIDDEN_NUMCODECS:
+                return f"numcodecs.{attr}("
+            if attr in _FORBIDDEN_METHOD_ATTRS:
+                return f"{attr}("
+            return None
+        if name in _FORBIDDEN_NUMCODECS:
+            return f"{name}("
+    return None
+
+
 def _violations(source: str, filename: str = "<source>") -> list[str]:
     """The forbidden creation calls in one source string, as `file:line: token`."""
     tree = ast.parse(source, filename=filename)
@@ -88,32 +152,7 @@ def _violations(source: str, filename: str = "<source>") -> list[str]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        func = node.func
-        token: str | None = None
-        if isinstance(func, ast.Attribute):
-            attr = func.attr
-            base = _module_of(func.value, modules, names)
-            if base == _SEAM_MODULE:
-                continue  # e.g. `arrays.create_array(...)`: the seam's own API
-            if base == "zarr" and attr in _FORBIDDEN_ZARR_FUNCS:
-                token = f"zarr.{attr}("
-            elif base == "numcodecs" and attr in _FORBIDDEN_NUMCODECS:
-                token = f"numcodecs.{attr}("
-            elif attr in _FORBIDDEN_METHOD_ATTRS:
-                token = f"{attr}("
-        elif isinstance(func, ast.Name):
-            name = func.id
-            canonical = names.get(name)
-            if canonical is not None:
-                module, _, attr = canonical.rpartition(".")
-                if module == _SEAM_MODULE:
-                    continue
-                if module == "zarr" and attr in _FORBIDDEN_ZARR_FUNCS:
-                    token = f"zarr.{attr}("
-                elif module == "numcodecs" and attr in _FORBIDDEN_NUMCODECS:
-                    token = f"numcodecs.{attr}("
-            elif name in _FORBIDDEN_NUMCODECS:
-                token = f"{name}("
+        token = _call_violation(node.func, modules, names)
         if token is not None:
             found.append(f"{filename}:{node.lineno}: {token}")
     return found
@@ -135,6 +174,8 @@ def test_scanner_detects_each_forbidden_call() -> None:
             "zarr.open_array('g')",
             "zarr.array([1])",
             "zarr.open_group('h', mode='w')",
+            "zarr.group('i')",
+            "zarr.open('j')",
             "Blosc(cname='zstd')",
         ]
     )
@@ -150,6 +191,8 @@ def test_scanner_detects_each_forbidden_call() -> None:
         "zarr.open_array(",
         "zarr.array(",
         "zarr.open_group(",
+        "zarr.group(",
+        "zarr.open(",
         "numcodecs.Blosc(",
     }
 
@@ -165,6 +208,19 @@ def test_scanner_detects_aliased_imports() -> None:
         "import zarr\nzarr.open_group('x')": "zarr.open_group(",
         "import numcodecs as nc\nnc.Blosc()": "numcodecs.Blosc(",
         "from numcodecs import Blosc as Codec\nCodec()": "numcodecs.Blosc(",
+        # Submodule paths: the constructors live under them too.
+        "import zarr.creation as zc\nzc.array([1])": "zarr.array(",
+        "from zarr import creation as zc\nzc.array([1])": "zarr.array(",
+        "import zarr\nzarr.creation.array([1])": "zarr.array(",
+        "from zarr.api import create as c\nc('x')": "zarr.create(",
+        "from zarr.creation import zeros as z\nz((1,))": "zarr.zeros(",
+        "import numcodecs.blosc as nb\nnb.Blosc()": "numcodecs.Blosc(",
+        "from numcodecs.blosc import Blosc as Codec\nCodec()": "numcodecs.Blosc(",
+        # The public group creators are creations too.
+        "import zarr\nzarr.group('x')": "zarr.group(",
+        "import zarr\nzarr.open('x')": "zarr.open(",
+        "from zarr import group as g\ng('x')": "zarr.group(",
+        "from zarr import open as o\no('x')": "zarr.open(",
     }
     for source, token in cases.items():
         found = _violations(source)
@@ -187,6 +243,10 @@ def test_scanner_allows_the_seams_own_api() -> None:
             "open_group_for_write('q', 'a')",
             "store_arrays.create_array(g, 'd', role)",
             "store_arrays.open_group_for_write('r', 'w')",
+            "from opengwasdb.store.arrays import chunk_layout",
+            "from opengwasdb.store.arrays import compressor",
+            "chunk_layout(role, shape, component_chunk=1000)",
+            "compressor()",
         ]
     )
     assert _violations(source) == []
@@ -225,30 +285,78 @@ def test_no_module_outside_the_seam_creates_arrays() -> None:
     assert offenders == [], "direct Zarr/Blosc creation outside the seam:\n" + "\n".join(offenders)
 
 
-#: One shape per role, for the default-layout coverage test below.  Kept as a
+#: One (shape, component_chunk) per role, for the default-layout coverage test
+#: below.  `component_chunk` is the variant-axis chunk of the plane a
+#: `PER_VARIANT` array serves; it is `None` for every other role.  Kept as a
 #: dict keyed by role so adding an `ArrayRole` without a case fails loudly.
-_ROLE_SHAPES: dict[ArrayRole, tuple[int, ...]] = {
-    ArrayRole.DENSE_STATISTIC_PLANE: (10_000, 100),
-    ArrayRole.DENSE_IMPUTED_MASK: (10_000, 100),
-    ArrayRole.DENSE_ON_PANEL: (10_000,),
-    ArrayRole.ASSOCIATION_SEQUENCE: (51_000,),
-    ArrayRole.ASSOCIATION_OFFSETS: (51,),
-    ArrayRole.PER_VARIANT: (51_000,),
-    ArrayRole.TOP_HIT_INDEX: (51_000,),
-    ArrayRole.TOP_HIT_ANALYSIS_OFFSETS: (51,),
-    ArrayRole.EXCEPTION_TABLE: (51_000,),
-    ArrayRole.SE_COEFFICIENTS: (51, 2),
-    ArrayRole.RHO_ARRAY: (51_000,),
+_ROLE_CASES: dict[ArrayRole, tuple[tuple[int, ...], int | None]] = {
+    ArrayRole.DENSE_STATISTIC_PLANE: ((10_000, 100), None),
+    ArrayRole.DENSE_IMPUTED_MASK: ((10_000, 100), None),
+    ArrayRole.DENSE_ON_PANEL: ((10_000,), None),
+    ArrayRole.ASSOCIATION_SEQUENCE: ((51_000,), None),
+    ArrayRole.ASSOCIATION_OFFSETS: ((51,), None),
+    ArrayRole.PER_VARIANT: ((51_000,), 1000),
+    ArrayRole.TOP_HIT_INDEX: ((51_000,), None),
+    ArrayRole.TOP_HIT_ANALYSIS_OFFSETS: ((51,), None),
+    ArrayRole.EXCEPTION_TABLE: ((51_000,), None),
+    ArrayRole.SE_COEFFICIENTS: ((51, 2), None),
+    ArrayRole.RHO_ARRAY: ((51_000,), None),
 }
 
 
-def test_every_role_has_a_default_layout_from_role_and_shape_alone() -> None:
-    """`chunk_layout(role, shape)` is total: the converter needs no other input."""
-    assert set(_ROLE_SHAPES) == set(ArrayRole)
-    for role, shape in _ROLE_SHAPES.items():
-        chunks = chunk_layout(role, shape)
+def test_every_role_has_a_default_layout_from_role_shape_and_component_chunk() -> None:
+    """`chunk_layout(role, shape, component_chunk=...)` is total.
+
+    The converter has role, shape and the component plane's chunk; it needs no
+    builder group and no other input.
+    """
+    assert set(_ROLE_CASES) == set(ArrayRole)
+    for role, (shape, component_chunk) in _ROLE_CASES.items():
+        chunks = chunk_layout(role, shape, component_chunk=component_chunk)
         assert len(chunks) == len(shape), f"{role} chunks {chunks} for shape {shape}"
         assert all(isinstance(size, int) and size > 0 for size in chunks), f"{role}: {chunks}"
+
+
+def test_per_variant_layout_follows_the_explicit_component_chunk() -> None:
+    """`PER_VARIANT` is a function of the caller's component chunk, not the group."""
+    assert chunk_layout(ArrayRole.PER_VARIANT, (10_000,), component_chunk=3) == (3,)
+    assert chunk_layout(ArrayRole.PER_VARIANT, (10_000,), component_chunk=None) == (10_000,)
+    # Never coarser than the plane (spec §6), and never coarser than the cap.
+    assert chunk_layout(ArrayRole.PER_VARIANT, (1_000_000,), component_chunk=500_000) == (200_000,)
+    # An explicit hint still wins over the component chunk, clipped to length.
+    assert chunk_layout(ArrayRole.PER_VARIANT, (10,), hint=7, component_chunk=3) == (7,)
+
+
+def test_converter_layout_matches_the_writers_for_dense_and_ragged(tmp_path: Path) -> None:
+    """A converter's `chunk_layout` and a writer's sibling-derived chunk agree.
+
+    Dense `z` is a 2-D variant x Analysis grid and Ragged `z` is a flat CSR
+    sequence, so the two components exercise different sibling chunks.  The
+    writer reads the component chunk and passes it in; the converter supplies
+    the same value directly.  They must produce the same array layout (spec §6:
+    a per-variant array is no coarser than the plane it serves).
+    """
+    baseline = np.linspace(0.1, 0.9, 10, dtype=np.float32)
+
+    dense = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w")
+    dense.create_dataset("z", shape=(10, 4), chunks=(3, 4), dtype="int16")
+    write_eaf_baseline(dense, baseline)
+    dense_component = component_variant_chunk(dense)
+    assert dense_component == dense["z"].chunks[0]
+    assert tuple(dense["eaf_baseline"].chunks) == chunk_layout(
+        ArrayRole.PER_VARIANT, (10,), component_chunk=dense_component
+    )
+    assert tuple(dense["eaf_baseline"].chunks) == (3,)
+
+    ragged = zarr.open_group(str(tmp_path / "ragged.zarr"), mode="w")
+    ragged.create_dataset("z", shape=(10,), chunks=(7,), dtype="int16")
+    write_eaf_baseline(ragged, baseline)
+    ragged_component = component_variant_chunk(ragged)
+    assert ragged_component == ragged["z"].chunks[0]
+    assert tuple(ragged["eaf_baseline"].chunks) == chunk_layout(
+        ArrayRole.PER_VARIANT, (10,), component_chunk=ragged_component
+    )
+    assert tuple(ragged["eaf_baseline"].chunks) == (7,)
 
 
 def test_role_defaults_clip_only_where_the_layout_clips() -> None:

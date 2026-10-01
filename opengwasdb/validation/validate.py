@@ -32,6 +32,7 @@ from opengwasdb.encoding import (
     StoreCodec,
     StoreEncoding,
     ZOverflowTable,
+    component_variant_chunk,
     per_variant_chunk_size,
 )
 from opengwasdb.layouts.dense.top_hits import threshold_key, z_critical
@@ -1590,7 +1591,7 @@ def _validate_per_variant_chunking(group: Any, errors: list[str], *, label: str)
         if name not in group:
             continue
         array = group[name]
-        expected = per_variant_chunk_size(group, len(array))
+        expected = per_variant_chunk_size(component_variant_chunk(group), len(array))
         if int(array.chunks[0]) > expected:
             errors.append(
                 f"{label}/{name} has chunk shape {tuple(array.chunks)}; its per-variant "
