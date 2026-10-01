@@ -39,14 +39,14 @@ from typing import Any
 import numpy as np
 from scipy.special import erfc
 
+from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
-from benchmarks._rss import run_probe, sample_query
+from benchmarks._rss import run_probe
 from benchmarks.benchmark_ukbb_dense import (
     _dir_bytes,
     _median_ms,
     _raw_vcf_bytes,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 
 STORE = Path("/data/opengwasdb/stores/OGS-00010/store.opengwasdb")
@@ -115,8 +115,6 @@ MAX_SCATTER_POINTS = 2500
 
 # Regional query window shared with the OGS-00009 benchmark (APOE/APOC, chr19).
 REGION = ("19", 44_500_000, 45_500_000)
-RANDOM_AXIS_SIZE = 100
-LOOKUP_NARROW_AXIS_SIZE = 10
 REGION_HALF_WINDOW = 500_000
 
 
@@ -529,24 +527,15 @@ def _resolve_source_lookup_selections(q_src: Any, src_bench: dict) -> tuple[list
     reproducible only while the source store exists — it is an immutable
     release, so that is acceptable.
     """
-    rng = np.random.default_rng(0)
-    random_variants = rng.choice(
-        int(src_bench["dataset"]["n_variants"]), size=RANDOM_AXIS_SIZE, replace=False
+    random_alids, random_analyses = _query_shapes.resolve_axis_selections(
+        q_src._variant_axis,
+        q_src.analyses_table(),
+        int(src_bench["dataset"]["n_variants"]),
+        int(src_bench["dataset"]["n_analyses"]),
     )
-    random_alids = [
-        record.alid
-        for record in (q_src._variant_axis.by_index(int(v)) for v in random_variants)
-        if record is not None
-    ]
-    an_src = q_src.analyses_table()
-    random_analyses = [
-        an_src[int(a)]["analysis_id"]
-        for a in rng.choice(int(src_bench["dataset"]["n_analyses"]),
-                            size=RANDOM_AXIS_SIZE, replace=False)
-    ]
-    if len(random_alids) != RANDOM_AXIS_SIZE:
+    if len(random_alids) != _query_shapes.RANDOM_AXIS_SIZE:
         raise SystemExit(
-            f"resolved {len(random_alids)} of {RANDOM_AXIS_SIZE} source-lookup "
+            f"resolved {len(random_alids)} of {_query_shapes.RANDOM_AXIS_SIZE} source-lookup "
             "variants from the source store — refusing a partial selection"
         )
     return random_alids, random_analyses
@@ -554,50 +543,46 @@ def _resolve_source_lookup_selections(q_src: Any, src_bench: dict) -> tuple[list
 
 def _query_patterns(
     q: Any,
-    analyses: dict[int, dict[str, Any]],
     phewas_alid: str,
     random_alids: list[str],
     random_analyses: list[str],
 ) -> dict[str, Any]:
     """The OGS-00009 shapes on the completed axis, plus the observed_only variants."""
-    regional_rows = q._variant_axis.range_indices(*REGION)
-    regional_alids = [
-        record.alid
-        for record in (q._variant_axis.by_index(int(row)) for row in regional_rows)
-        if record is not None
-    ]
+    common = _query_shapes.common_query_patterns(
+        q,
+        exposure=EXPOSURE,
+        phewas_alid=phewas_alid,
+        region=REGION,
+        random_alids=random_alids,
+        random_analyses=random_analyses,
+    )
     return {
-        "tophits": lambda: q.top_hits(analysis_id=EXPOSURE, threshold=5e-8),
+        "tophits": common["tophits"],
         "tophits_observed_only": lambda: q.top_hits(
-            analysis_id=EXPOSURE, threshold=5e-8, observed_only=True
+            analysis_id=EXPOSURE, threshold=_query_shapes.GENOME_WIDE, observed_only=True
         ),
-        "phewas": lambda: q.phewas(phewas_alid),
-        "regional_one_analysis": lambda: q.lookup(regional_alids, [EXPOSURE]),
-        "random_lookup_10_variants_100_analyses": lambda: q.lookup(
-            random_alids[:LOOKUP_NARROW_AXIS_SIZE], random_analyses
-        ),
-        "random_lookup_100_variants_10_analyses": lambda: q.lookup(
-            random_alids, random_analyses[:LOOKUP_NARROW_AXIS_SIZE]
-        ),
-        "regional": lambda: q.range_phewas(*REGION),
-        "bulk": lambda: q.analysis(EXPOSURE),
+        "phewas": common["phewas"],
+        "regional_one_analysis": common["regional_one_analysis"],
+        "random_lookup_10_variants_100_analyses": common[
+            "random_lookup_10_variants_100_analyses"
+        ],
+        "random_lookup_100_variants_10_analyses": common[
+            "random_lookup_100_variants_10_analyses"
+        ],
+        "regional": common["regional"],
+        "bulk": common["bulk"],
         "bulk_observed_only": lambda: q.analysis(EXPOSURE, observed_only=True),
     }
 
 
 def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]:
     q = query_store(args.store)
-    an = q.analyses_table()
     src_bench = json.loads(args.source_benchmark.read_text())
     q_src = query_store(args.source_store)
     random_alids, random_analyses = _resolve_source_lookup_selections(q_src, src_bench)
     q_src.close()
-    patterns = _query_patterns(
-        q, an, args.phewas_alid, random_alids, random_analyses
-    )
-    record = sample_query(patterns[shape])
-    record["query"] = shape
-    return record
+    patterns = _query_patterns(q, args.phewas_alid, random_alids, random_analyses)
+    return _query_shapes.measure_shape_rss(patterns, shape)
 
 
 def _shape_rss_subprocess(args: argparse.Namespace, shape: str) -> dict[str, float]:
@@ -610,9 +595,8 @@ def _shape_rss_subprocess(args: argparse.Namespace, shape: str) -> dict[str, flo
     return run_probe(shape, extra)
 
 
-def _parse_args() -> argparse.Namespace:
+def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--store", type=Path, default=STORE)
     ap.add_argument("--source-store", type=Path, default=SOURCE_STORE)
     ap.add_argument("--records", type=Path, default=RECORDS)
@@ -622,20 +606,13 @@ def _parse_args() -> argparse.Namespace:
     ap.add_argument("--source-build-seconds", type=float, default=21298.0,
                     help="OGS-00009 build wall clock (records/build.json)")
     ap.add_argument("--output", type=Path, default=OUTPUT)
-    ap.add_argument("--skip-rss", action="store_true")
-    ap.add_argument("--rss-shape", default=None, help="internal: one-shape RSS probe")
     ap.add_argument("--phewas-alid", default=None, help="internal: parent-supplied variant")
-    return ap.parse_args()
+    _query_shapes.add_common_args(ap)
+    return ap
 
 
 def main() -> None:
-    args = _parse_args()
-    if args.rss_shape:
-        print(json.dumps(_measure_shape_rss(args, args.rss_shape)))
-        return
-
-    q = query_store(args.store)
-    plan = StoreManifest.load(args.store)
+    args, q, plan = _query_shapes.start_benchmark(_parser(), _measure_shape_rss)
     an = q.analyses_table()
     analyses_by_id = {v["analysis_id"]: k for k, v in an.items()}
     n_analyses = len(an)
@@ -683,7 +660,7 @@ def main() -> None:
 
     timings = []
     random_alids, random_analyses = _resolve_source_lookup_selections(q_source, src_bench)
-    patterns = _query_patterns(q, an, phewas_alid, random_alids, random_analyses)
+    patterns = _query_patterns(q, phewas_alid, random_alids, random_analyses)
     for name, fn in patterns.items():
         med, p95, cnt = _median_ms(fn, args.reps)
         timings.append(

@@ -29,10 +29,8 @@ from __future__ import annotations
 
 import argparse
 import csv
-import gc
 import json
 import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -40,10 +38,10 @@ import numpy as np
 import pandas as pd
 from scipy.special import erfc, log_ndtr
 
+from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
-from benchmarks._rss import run_probe, sample_query
+from benchmarks._rss import run_probe
 from benchmarks.benchmark_ukbb_dense import _clump, _dir_bytes, _median_ms
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 
 PREFIX = "finngen-r13-"
@@ -51,10 +49,7 @@ EXPOSURE = PREFIX + "T2D"
 PHEWAS_ALID = "10:112998590:C:T"  # rs7903146, TCF7L2
 # TCF7L2 (chr10:112.95-113.17 Mb, GRCh38) and 0.3 Mb either side.
 REGION = ("10", 112_500_000, 113_500_000)
-RANDOM_AXIS_SIZE = 100
-LOOKUP_NARROW_AXIS_SIZE = 10
 CLUMP_KB = 1000
-GENOME_WIDE = 5e-8
 
 # (analysis, alid, rsid, risk allele, locus, why it is expected)
 KNOWN_LOCI = [
@@ -87,53 +82,14 @@ def _analysis_index(q: Any) -> tuple[dict[int, dict[str, Any]], dict[str, int]]:
     return table, {row["analysis_id"]: index for index, row in table.items()}
 
 
-def _query_patterns(
-    q: Any, analyses: dict[int, dict[str, Any]], n_variants: int, n_analyses: int
-) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
-    regional_rows = q._variant_axis.range_indices(*REGION)
-    regional_alids = [
-        record.alid
-        for record in (q._variant_axis.by_index(int(row)) for row in regional_rows)
-        if record is not None
-    ]
-    rng = np.random.default_rng(0)
-    random_alids = [
-        record.alid
-        for record in (
-            q._variant_axis.by_index(int(v))
-            for v in rng.choice(n_variants, size=RANDOM_AXIS_SIZE, replace=False)
-        )
-        if record is not None
-    ]
-    random_analyses = [
-        analyses[int(a)]["analysis_id"]
-        for a in rng.choice(n_analyses, size=RANDOM_AXIS_SIZE, replace=False)
-    ]
-    return {
-        "bulk": lambda: q.analysis(EXPOSURE),
-        "phewas": lambda: q.phewas(PHEWAS_ALID),
-        "regional": lambda: q.range_phewas(*REGION),
-        "regional_one_analysis": lambda: q.lookup(regional_alids, [EXPOSURE]),
-        "tophits": lambda: q.top_hits(analysis_id=EXPOSURE, threshold=GENOME_WIDE),
-        "random_lookup_10_variants_100_analyses": lambda: q.lookup(
-            random_alids[:LOOKUP_NARROW_AXIS_SIZE], random_analyses
-        ),
-        "random_lookup_100_variants_10_analyses": lambda: q.lookup(
-            random_alids, random_analyses[:LOOKUP_NARROW_AXIS_SIZE]
-        ),
-    }
-
-
 def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]:
     q = query_store(args.store)
     analyses = q.analyses_table()
-    patterns = _query_patterns(q, analyses, int(q._root["z"].shape[0]), len(analyses))
-    fn = patterns[shape]
-    del patterns
-    gc.collect()
-    record = sample_query(fn)
-    record["query"] = shape
-    return record
+    patterns = _query_shapes.build_query_patterns(
+        q, analyses, int(q._root["z"].shape[0]), len(analyses),
+        exposure=EXPOSURE, phewas_alid=PHEWAS_ALID, region=REGION,
+    )
+    return _query_shapes.measure_shape_rss(patterns, shape)
 
 
 def _source_bulk_seconds(source: Path, reps: int) -> dict[str, Any]:
@@ -247,7 +203,7 @@ def phewas_top(q: Any, table: dict[int, dict[str, Any]], n: int = 8) -> list[dic
 def run_mr(q: Any, by_id: dict[str, int], exposure: str, outcome: str) -> dict[str, Any]:
     """Distance-clumped IVW. Every Analysis is oriented to the store's canonical
     effect allele, so exposure and outcome betas need no harmonisation."""
-    hits = q.top_hits(analysis_id=exposure, threshold=GENOME_WIDE)
+    hits = q.top_hits(analysis_id=exposure, threshold=_query_shapes.GENOME_WIDE)
     raw = []
     for vi, z, se in zip(hits["variant_index"], hits["z"], hits["se"], strict=True):
         rec = q._variant_axis.by_index(int(vi))
@@ -299,30 +255,25 @@ def run_mr(q: Any, by_id: dict[str, int], exposure: str, outcome: str) -> dict[s
     }
 
 
-def _parse_args() -> argparse.Namespace:
+def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", type=Path, required=True)
     ap.add_argument("--source-dir", type=Path, required=True)
     ap.add_argument("--records", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
-    ap.add_argument("--reps", type=int, default=5)
-    ap.add_argument("--skip-rss", action="store_true")
-    ap.add_argument("--rss-shape", default=None, help="internal: measure one shape's RSS and exit")
-    return ap.parse_args()
+    _query_shapes.add_common_args(ap)
+    return ap
 
 
 def main() -> None:
-    args = _parse_args()
-    if args.rss_shape:
-        print(json.dumps(_measure_shape_rss(args, args.rss_shape)))
-        return
-
-    q = query_store(args.store)
-    plan = StoreManifest.load(args.store)
+    args, q, plan = _query_shapes.start_benchmark(_parser(), _measure_shape_rss)
     table, by_id = _analysis_index(q)
     n_analyses, n_variants = len(table), int(q._root["z"].shape[0])
 
-    patterns = _query_patterns(q, table, n_variants, n_analyses)
+    patterns = _query_shapes.build_query_patterns(
+        q, table, n_variants, n_analyses,
+        exposure=EXPOSURE, phewas_alid=PHEWAS_ALID, region=REGION,
+    )
     timings = []
     for name, fn in patterns.items():
         med, p95, count = _median_ms(fn, args.reps)
@@ -383,10 +334,7 @@ def main() -> None:
         "selection": {
             "exposure": EXPOSURE, "phewas_alid": PHEWAS_ALID,
             "region": {"chrom": REGION[0], "start": REGION[1], "end": REGION[2]},
-            "random_lookup_shapes": [
-                {"n_variants": LOOKUP_NARROW_AXIS_SIZE, "n_analyses": RANDOM_AXIS_SIZE},
-                {"n_variants": RANDOM_AXIS_SIZE, "n_analyses": LOOKUP_NARROW_AXIS_SIZE},
-            ],
+            "random_lookup_shapes": _query_shapes.RANDOM_LOOKUP_SHAPES,
         },
         "timings": timings,
         "memory": memory,
