@@ -1,8 +1,11 @@
 """Dense layout defaults."""
 
-from opengwasdb.store.arrays import COMPRESSOR_RECORD
+from opengwasdb.store.arrays import COMPRESSOR_RECORD, DENSE_CHUNK_SHAPE
 
-DEFAULT_CHUNK_SHAPE = (1000, 1000)
+#: The maximum Dense grid chunk hint; the seam's policy clips it to the array
+#: dimensions (ADR 0021).  One definition, imported from the seam so the
+#: converter (#245) and the Dense builders agree.
+DEFAULT_CHUNK_SHAPE = DENSE_CHUNK_SHAPE
 #: The one compressor configuration, sourced from the array-creation seam so the
 #: bytes a plane is stored with and the bytes this blob publishes cannot drift.
 DEFAULT_COMPRESSOR = COMPRESSOR_RECORD

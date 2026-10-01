@@ -27,7 +27,8 @@ from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
 
 from opengwasdb.encoding import DenseZPlane, StoreEncoding
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.arrays import ArrayRole, compressor, create_array, create_group
+from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.arrays import ArrayRole
 from opengwasdb.variants import VariantAxis
 
 RHO_METHOD = "pleiodb-cml"
@@ -280,25 +281,25 @@ def write_rho_group(
 ) -> None:
     """Write the packed strict-lower-triangle ``rho``/``n_null`` arrays plus
     provenance into ``data.zarr/rho``, replacing any existing group."""
-    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="a")
-    group = create_group(root, "rho")
-    comp = compressor()
+    root = store_arrays.open_group_for_write(Path(store_path) / "data.zarr", "a")
+    group = store_arrays.create_group(root, "rho")
+    comp = store_arrays.compressor()
 
-    create_array(
+    store_arrays.create_array(
         group,
         "rho",
         ArrayRole.RHO_ARRAY,
         data=rho_packed.astype("float16"),
         compressor=comp,
     )
-    create_array(
+    store_arrays.create_array(
         group,
         "n_null",
         ArrayRole.RHO_ARRAY,
         data=n_null_packed.astype("int32"),
         compressor=comp,
     )
-    create_array(
+    store_arrays.create_array(
         group,
         "variant_index",
         ArrayRole.RHO_ARRAY,
@@ -336,7 +337,7 @@ def build_dense_rho(
     """
     store_path = Path(store_path)
     encoding = StoreManifest.load(store_path).encoding
-    root = zarr.open_group(str(store_path / "data.zarr"), mode="r")
+    root = store_arrays.open_group(store_path / "data.zarr")
     n_analyses = int(root["z"].shape[1])
 
     variant_axis = VariantAxis(store_path)

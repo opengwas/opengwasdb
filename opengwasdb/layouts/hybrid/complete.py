@@ -39,7 +39,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import zarr
 
 from opengwasdb.encoding import (
     EAF_BASELINE,
@@ -72,6 +71,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store.arrays import open_group, open_group_for_write
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -481,7 +481,7 @@ def _shared_se_coefficients(dense_dir: Path, source_encoding: StoreEncoding) -> 
     """
     if not source_encoding.se.is_residual:
         return None
-    root = zarr.open_group(str(dense_dir / "data.zarr"), mode="r")
+    root = open_group(dense_dir / "data.zarr")
     return np.asarray(root["se_coefficients"][:], dtype=np.float32)
 
 
@@ -576,7 +576,7 @@ def _fold_panel_crossovers(
     se_vals = src_se[crossover_idx].astype(np.float32)
     eaf_vals = src_eaf[crossover_idx].astype(np.float32)
 
-    root = zarr.open_group(str(dense_dir / "data.zarr"), mode="a")
+    root = open_group_for_write(dense_dir / "data.zarr", "a")
     was_imputed = np.asarray(root["imputed"].vindex[row_idx, col_idx])
     n_reclaimed = int(was_imputed.sum())
     # Through the plane, so the Dense Component's overflow table moves with the
@@ -724,7 +724,7 @@ def _remapped_overflow_baseline(
     A variant with no overflow association after the remap keeps a NaN
     baseline: it has no cell to code against one.
     """
-    group = zarr.open_group(str(Path(source_path) / RAGGED_ZARR_PATH), mode="r")
+    group = open_group(Path(source_path) / RAGGED_ZARR_PATH)
     if EAF_BASELINE not in group:
         return None
     src_baseline = np.asarray(group[EAF_BASELINE][:], dtype=np.float32)

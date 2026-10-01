@@ -6,7 +6,10 @@ and :mod:`opengwasdb.encoding.planes` imports it; ``open`` imports
 :mod:`opengwasdb.model.manifest`, which imports :mod:`opengwasdb.encoding`.
 Importing ``open`` eagerly here would therefore close a cycle that starts at
 ``opengwasdb.encoding`` before ``StoreManifest`` exists.  Each name below is
-imported on first access instead, and behaves exactly as before.
+imported on first access instead, cached in this module's globals (so a
+second access is an ordinary attribute lookup), and ``__dir__`` lists the
+names even before the first access -- the package's introspection surface is
+the same as it was with eager imports.
 
 The seam itself is imported by its users as :mod:`opengwasdb.store.arrays`
 (``create_array``, ``ArrayRole``, ``compressor``, ...); re-exporting it here
@@ -41,5 +44,12 @@ _OPEN_EXPORTS = frozenset(__all__)
 def __getattr__(name: str) -> Any:
     """Resolve an ``open`` re-export on first use (see the module docstring)."""
     if name in _OPEN_EXPORTS:
-        return getattr(importlib.import_module("opengwasdb.store.open"), name)
+        value = getattr(importlib.import_module("opengwasdb.store.open"), name)
+        globals()[name] = value  # cache: later access is a plain attribute lookup
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """List the module's names, including the lazy ``open`` re-exports."""
+    return sorted(set(globals()) | _OPEN_EXPORTS)

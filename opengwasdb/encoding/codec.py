@@ -51,16 +51,21 @@ from opengwasdb.encoding.plan import (
     EafBaselineError,
     StoreEncoding,
 )
-from opengwasdb.store.arrays import ArrayRole, create_array
+from opengwasdb.store.arrays import (
+    EXCEPTION_TABLE_CHUNK,
+    ArrayRole,
+    create_array,
+)
 
 SE_EXCEPTION_INDEX = "se_exception_index"
 SE_EXCEPTION_VALUE = "se_exception_value"
 
 # Sparse tables can still contain millions of exact values at the accepted
 # 2% ceiling.  Keep their physical chunks bounded so both the writer and the
-# compressed-size decision can stream them instead of constructing one giant
-# codec input.
-EXACT_TABLE_CHUNK = 200_000
+# compressed-size decision can stream them.  This *is* the seam's
+# `EXCEPTION_TABLE_CHUNK` -- the `EXCEPTION_TABLE` role's default layout -- so
+# the measurement in `se.py` and the array the seam writes cannot disagree.
+EXACT_TABLE_CHUNK = EXCEPTION_TABLE_CHUNK
 
 #: Where a plane's overflow table lives, in the same zarr group as the plane.
 Z_OVERFLOW_INDEX = "z_overflow_index"

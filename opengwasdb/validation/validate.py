@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import zarr
 
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
@@ -53,6 +52,7 @@ from opengwasdb.model.enums import (
     StoredEffectScale,
 )
 from opengwasdb.stats import p_value_from_z
+from opengwasdb.store.arrays import open_group
 from opengwasdb.store.open import (
     DENSE_ENVELOPE,
     HYBRID_DENSE_COMPONENT_ENVELOPE,
@@ -566,7 +566,7 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
         return ValidationResult(errors=errors)
     try:
         ragged_path = store.data_path / "ragged"
-        root = zarr.open_group(str(ragged_path), mode="r")
+        root = open_group(ragged_path)
         csr = _validate_ragged_csr_structure(root, store.manifest.encoding, errors)
         if csr is None:
             return ValidationResult(errors=errors)
@@ -657,7 +657,7 @@ def _validate_ragged_completion(
     errors: list[str],
 ) -> None:
     """Validate the imputed mask and completion_quality table in a Reference-Completed store."""
-    root = zarr.open_group(str(ragged_path), mode="r")
+    root = open_group(ragged_path)
     if not _validate_ragged_imputed(root, store.manifest.encoding, n_assoc, errors):
         return
     with store.index_connection() as conn:
@@ -992,7 +992,7 @@ def _validate_overflow(
     """Validate the Ragged Overflow CSR: array lengths, se sign, shared-index
     bounds, and that it is observed-only (never imputed, even after completion)."""
     try:
-        root = zarr.open_group(str(ragged_path), mode="r")
+        root = open_group(ragged_path)
     except Exception as exc:  # noqa: BLE001
         errors.append(f"cannot open Ragged Overflow CSR: {exc}")
         return
@@ -1018,7 +1018,7 @@ def _validate_hybrid_invariants(
         return
 
     # Disjoint partition: no overflow variant is also a Dense Component (on-panel) row.
-    ragged_root = zarr.open_group(str(store_path / "data.zarr" / "ragged"), mode="r")
+    ragged_root = open_group(store_path / "data.zarr" / "ragged")
     overflow_vi = np.unique(ragged_root["variant_index"][:])
     on_panel = np.zeros(n_shared, dtype=bool)
     on_panel[dense_to_shared] = True

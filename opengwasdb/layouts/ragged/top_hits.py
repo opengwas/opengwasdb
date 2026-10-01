@@ -19,7 +19,7 @@ from opengwasdb.layouts.dense.top_hits import (
     z_critical,
 )
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.store.arrays import compressor, require_group
+from opengwasdb.store.arrays import compressor, open_group_for_write, require_group
 
 log = logging.getLogger(__name__)
 
@@ -227,7 +227,7 @@ def build_ragged_top_hit_indexes(
     with log_phase(log, "Ragged top-hit scan"):
         columns, abs_z, n_analyses = _collect_ragged_candidates(csr, thresholds, slice_cells)
 
-    root = zarr.open_group(str(store_path / "data.zarr"), mode="a")
+    root = open_group_for_write(store_path / "data.zarr", "a")
     top = require_group(root, "top_hits")
     comp = compressor()
     # The same parallel-array contract the dense builder writes, so both layouts

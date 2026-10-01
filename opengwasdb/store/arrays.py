@@ -15,9 +15,12 @@ The seam owns four things:
   the manifest and `index.sqlite` publish, so the bytes a plane is stored with
   and the bytes the manifest claims it was stored with cannot drift apart.
 * **the chunk layout**, through the role -> policy table `_LAYOUTS`.  A caller
-  names its array's `ArrayRole`; the role, plus (for the layouts that take one)
-  a build-wide hint such as the dense `chunk_shape`, fixes the chunks.  No call
-  site computes a chunk tuple itself.
+  names its array's `ArrayRole`; the role and the array's shape alone fix the
+  default chunks, so `chunk_layout(role, shape)` is total and the converter
+  (#245) can reproduce any array's layout without the builder that made it.  A
+  build-wide hint (the Dense `chunk_shape`, the top-hit `chunk_size`, an
+  explicit `chunks=(...)` on a CSR writer) is an override the policy honours;
+  no call site computes a chunk tuple itself.
 * **chunk clipping to the array dimensions** (ADR 0021): the dense grid policy
   clips the two-dimensional hint to the array's rows and columns, and the
   length-indexed policies clip to the array's length.
@@ -37,24 +40,31 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
 import numpy as np
+import zarr
 from numcodecs import Blosc
 
 __all__ = [
     "ASSOCIATION_OFFSETS_CHUNK",
     "ASSOCIATION_SEQUENCE_CHUNK",
     "COMPRESSOR_RECORD",
+    "DENSE_CHUNK_SHAPE",
+    "EXCEPTION_TABLE_CHUNK",
     "PER_VARIANT_CHUNK",
     "RHO_CHUNK_ROWS",
     "SE_COEFFICIENTS_ROWS",
+    "TOP_HIT_CHUNK_SIZE",
     "ArrayRole",
     "chunk_layout",
     "compressor",
     "create_array",
     "create_group",
+    "open_group",
+    "open_group_for_write",
     "per_variant_chunk_size",
     "require_group",
 ]
@@ -120,10 +130,19 @@ SE_COEFFICIENTS_ROWS = 1024
 #: Row count of a Rho Matrix array.
 RHO_CHUNK_ROWS = 1_000_000
 
-#: The chunk hint a Dense grid uses when a caller has none: `DEFAULT_CHUNK_SHAPE`
-#: from the Dense constants module.  Duplicated as a plain default here so the
-#: seam imports nothing from the encoding/layout packages.
-DEFAULT_DENSE_CHUNK_HINT = (1000, 1000)
+#: The maximum chunk hint a Dense grid uses when a caller has none.  This is
+#: `DEFAULT_CHUNK_SHAPE` in the Dense constants module, and the one definition:
+#: the Dense module imports *this* name, so the converter and the Dense builders
+#: cannot disagree about the default grid layout.
+DENSE_CHUNK_SHAPE = (1000, 1000)
+
+#: One flat array of a top-hit threshold tier, when a caller supplies no
+#: override.  `layouts/dense/top_hits.TOP_HIT_CHUNK_SIZE` is this value.
+TOP_HIT_CHUNK_SIZE = 16_384
+
+#: One half of an exact-value exception/overflow table, when a caller supplies
+#: no override.  `encoding/codec.EXACT_TABLE_CHUNK` is this value.
+EXCEPTION_TABLE_CHUNK = 200_000
 
 
 class ArrayRole(StrEnum):
@@ -171,23 +190,32 @@ class _LayoutContext:
 
 def _dense_grid(ctx: _LayoutContext) -> tuple[int, ...]:
     """A 2-D Dense grid, clipped to its own dimensions (ADR 0021)."""
-    hint = ctx.hint if ctx.hint is not None else DEFAULT_DENSE_CHUNK_HINT
+    hint = ctx.hint if ctx.hint is not None else DENSE_CHUNK_SHAPE
     return (min(int(hint[0]), ctx.shape[0]), min(int(hint[1]), ctx.shape[1]))
 
 
 def _dense_on_panel(ctx: _LayoutContext) -> tuple[int, ...]:
     """The per-variant Dense mask, on the grid's row chunk."""
-    hint = ctx.hint if ctx.hint is not None else DEFAULT_DENSE_CHUNK_HINT
+    hint = ctx.hint if ctx.hint is not None else DENSE_CHUNK_SHAPE
     return (min(int(hint[0]), ctx.shape[0]),)
 
 
 def _association_sequence(ctx: _LayoutContext) -> tuple[int, ...]:
-    """A flat CSR sequence: one fixed chunk, never clipped."""
+    """A flat CSR sequence: the declared chunk, or an explicit override.
+
+    The declared chunk is fixed, not clipped to the component's length -- a
+    short component keeps the same chunk as a long one.  A caller that passes
+    an explicit `chunks=(...)` gets exactly that, as it did before the seam.
+    """
+    if ctx.hint is not None:
+        return tuple(int(size) for size in ctx.hint)
     return (ASSOCIATION_SEQUENCE_CHUNK,)
 
 
 def _association_offsets(ctx: _LayoutContext) -> tuple[int, ...]:
-    """The CSR per-Analysis offset array."""
+    """The CSR per-Analysis offset array, or an explicit override."""
+    if ctx.hint is not None:
+        return tuple(int(size) for size in ctx.hint)
     return (ASSOCIATION_OFFSETS_CHUNK,)
 
 
@@ -203,9 +231,20 @@ def _per_variant(ctx: _LayoutContext) -> tuple[int, ...]:
     return (per_variant_chunk_size(ctx.group, length),)
 
 
-def _length_clipped(ctx: _LayoutContext) -> tuple[int, ...]:
-    """A flat array whose chunk is a hint clipped to its own length."""
-    return (max(1, min(ctx.shape[0], int(ctx.hint))),)
+def _length_clipped(ctx: _LayoutContext, default: int) -> tuple[int, ...]:
+    """A flat array whose chunk is an override (or `default`) clipped to length."""
+    hint = default if ctx.hint is None else int(ctx.hint)
+    return (max(1, min(ctx.shape[0], hint)),)
+
+
+def _top_hit_index(ctx: _LayoutContext) -> tuple[int, ...]:
+    """One top-hit tier's flat column, whole-array default clipped to its hits."""
+    return _length_clipped(ctx, TOP_HIT_CHUNK_SIZE)
+
+
+def _exception_table(ctx: _LayoutContext) -> tuple[int, ...]:
+    """One half of a plane's exception table."""
+    return _length_clipped(ctx, EXCEPTION_TABLE_CHUNK)
 
 
 def _top_hit_analysis_offsets(ctx: _LayoutContext) -> tuple[int, ...]:
@@ -225,7 +264,9 @@ def _rho_array(ctx: _LayoutContext) -> tuple[int, ...]:
 
 #: The role -> physical-layout policy.  One entry per role; later tickets that
 #: change the layout (Zarr v3 sharding, #247) change this table, and the
-#: converter (#245) reads the same table so builders and converter agree.
+#: converter (#245) reads the same table so builders and converter agree.  Each
+#: policy is total over `role + shape` alone: `chunk_layout(role, shape)` is the
+#: default layout, and a caller's `hint` is an override the policy honours.
 _LAYOUTS: Mapping[ArrayRole, Callable[[_LayoutContext], tuple[int, ...]]] = MappingProxyType(
     {
         ArrayRole.DENSE_STATISTIC_PLANE: _dense_grid,
@@ -234,9 +275,9 @@ _LAYOUTS: Mapping[ArrayRole, Callable[[_LayoutContext], tuple[int, ...]]] = Mapp
         ArrayRole.ASSOCIATION_SEQUENCE: _association_sequence,
         ArrayRole.ASSOCIATION_OFFSETS: _association_offsets,
         ArrayRole.PER_VARIANT: _per_variant,
-        ArrayRole.TOP_HIT_INDEX: _length_clipped,
+        ArrayRole.TOP_HIT_INDEX: _top_hit_index,
         ArrayRole.TOP_HIT_ANALYSIS_OFFSETS: _top_hit_analysis_offsets,
-        ArrayRole.EXCEPTION_TABLE: _length_clipped,
+        ArrayRole.EXCEPTION_TABLE: _exception_table,
         ArrayRole.SE_COEFFICIENTS: _se_coefficients,
         ArrayRole.RHO_ARRAY: _rho_array,
     }
@@ -267,9 +308,12 @@ def chunk_layout(
 ) -> tuple[int, ...]:
     """The chunks `role` requires for an array of `shape`.
 
-    `create_array` is the only writer, but this is public because the store
-    converter (#245) has to reproduce the same layout for arrays it did not
-    create, and it must read the mapping from the same table.
+    With no `hint` this is the role's **default** physical layout, derivable
+    from `role + shape` alone -- which is what the store converter (#245) needs
+    to reproduce a layout for an array it did not create.  `hint` is the
+    caller's explicit override (the Dense `chunk_shape`, the top-hit
+    `chunk_size`, a `chunks=(...)` passed to a CSR writer); each policy decides
+    whether it clips the override or takes it whole.
     """
     if role not in _LAYOUTS:
         raise ValueError(f"no chunk layout is registered for role {role!r}")
@@ -358,9 +402,10 @@ def create_array(
     `fill_value` is the plane's own missing marker (spec §15).  Omit it for the
     dtype default; pass `fill_value=None` only when the metadata must literally
     say `null`.  `compressor=None` stores uncompressed; omit it for the seam's
-    compressor.  `hint` is the build-wide chunk hint a length/clipped policy
-    consumes (the Dense `chunk_shape`, the top-hit `chunk_size`, the
-    exception-table chunk); policies that need none ignore it.
+    compressor.  `hint` overrides the role's default layout (the Dense
+    `chunk_shape`, the top-hit `chunk_size`, a `chunks=(...)` passed to a CSR
+    writer); omit it for the default, which is a function of role and shape
+    alone.
 
     `overwrite` deletes an existing array of the same name first, which the
     call sites that previously did `if name in group: del group[name]` relied
@@ -397,3 +442,38 @@ def create_group(group: Any, name: str, *, replace: bool = True) -> Any:
 def require_group(group: Any, name: str) -> Any:
     """Return the named group, creating it only when it is absent."""
     return group.require_group(name)
+
+
+#: `zarr.open_group` modes that create the group (or wipe it) when it is not
+#: there.  `r` and `r+` require it to exist and are not creation.
+CREATION_MODES = frozenset({"w", "a", "w-", "x"})
+
+
+def open_group(path: str | Path, mode: str = "r") -> Any:
+    """Open a Zarr group, read-only by default.
+
+    The one place `zarr.open_group` is called, so the seam can later pass
+    ``zarr_format`` (zarr-python 3, #244) without hunting down every opener.
+    `mode` may be a creating mode here; `open_group_for_write` is the named
+    entry point for those, and this general form exists for `r`/`r+` and for
+    the release-envelope ``arrays(mode=...)`` methods that forward their mode.
+    """
+    return zarr.open_group(str(path), mode=mode)
+
+
+def open_group_for_write(path: str | Path, mode: str) -> Any:
+    """Open a Zarr group for writing, creating it when it is absent.
+
+    `mode` must be one of ``w``/``a``/``w-``/``x`` and is **required**: ``a``
+    and ``w`` differ on a resumed build (``w`` wipes the staged group, ``a``
+    keeps it), so a silent default here would change what a resume finds.  A
+    read mode is a bug (the caller meant `open_group`) and fails loudly.  No
+    ``zarr_format`` argument yet: zarr 2.18 has none, and #244 adds the Zarr v3
+    argument here once, for every writer.
+    """
+    if mode not in CREATION_MODES:
+        raise ValueError(
+            f"open_group_for_write needs one of {sorted(CREATION_MODES)}, got {mode!r}; "
+            "use open_group for a read mode"
+        )
+    return zarr.open_group(str(path), mode=mode)

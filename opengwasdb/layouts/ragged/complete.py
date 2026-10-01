@@ -33,7 +33,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import zarr
 
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
@@ -82,12 +81,8 @@ from opengwasdb.model.analyses import (
     write_analysis_records,
 )
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.arrays import (
-    ASSOCIATION_SEQUENCE_CHUNK,
-    ArrayRole,
-    compressor,
-    create_array,
-)
+from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.arrays import ArrayRole
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -108,8 +103,8 @@ from opengwasdb.variants.normalise import (
 
 log = logging.getLogger(__name__)
 
-_COMPRESSOR = compressor()
-_ASSOC_CHUNK = ASSOCIATION_SEQUENCE_CHUNK
+_COMPRESSOR = store_arrays.compressor()
+_ASSOC_CHUNK = store_arrays.ASSOCIATION_SEQUENCE_CHUNK
 
 _LD_PANEL_ID = "eur-hg38-gpm"
 
@@ -1098,7 +1093,7 @@ def _flatten_csr(csr: _CompletedCsr) -> _FlatCsr:
 def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
     """The CSR's index planes plus z: offsets, variant_index, the fixed-point
     z plane with its overflow table (ADR 0037 §1), and the imputed mask."""
-    create_array(
+    store_arrays.create_array(
         root,
         "offsets",
         ArrayRole.ASSOCIATION_OFFSETS,
@@ -1106,7 +1101,7 @@ def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
         dtype=np.int64,
         compressor=_COMPRESSOR,
     )
-    create_array(
+    store_arrays.create_array(
         root,
         "variant_index",
         ArrayRole.ASSOCIATION_SEQUENCE,
@@ -1120,7 +1115,7 @@ def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
     # records a physical fact about this release rather than reinterpreting
     # its source's bytes.
     z_overflow = ZOverflowBuilder()
-    create_array(
+    store_arrays.create_array(
         root,
         "z",
         ArrayRole.ASSOCIATION_SEQUENCE,
@@ -1129,7 +1124,7 @@ def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
         compressor=_COMPRESSOR,
     )
     z_overflow.table().write(root)
-    create_array(
+    store_arrays.create_array(
         root,
         "imputed",
         ArrayRole.ASSOCIATION_SEQUENCE,
@@ -1197,7 +1192,7 @@ def _write_completed_zarr(
     print("Writing zarr CSR...")
     ragged_path = staged.path / RAGGED_ZARR_PATH
     ragged_path.mkdir(parents=True, exist_ok=True)
-    root = zarr.open_group(str(ragged_path), mode="w")
+    root = store_arrays.open_group_for_write(ragged_path, "w")
     flat = _flatten_csr(csr)
     _write_csr_id_arrays(root, flat, encode_plan.codec)
     _write_eaf_and_se_arrays(root, encode_plan, flat, n_analyses)
@@ -1369,7 +1364,7 @@ def _source_eaf_baseline(source_path: Path) -> np.ndarray | None:
     baseline, so a completed release would be less accurate than its source for
     no reason (ADR 0037 §2).
     """
-    group = zarr.open_group(str(Path(source_path) / RAGGED_ZARR_PATH), mode="r")
+    group = store_arrays.open_group(Path(source_path) / RAGGED_ZARR_PATH)
     if EAF_BASELINE not in group:
         return None
     return np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
