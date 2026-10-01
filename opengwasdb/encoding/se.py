@@ -34,6 +34,7 @@ from opengwasdb.encoding.plan import (
 )
 from opengwasdb.encoding.planes import DenseEafPlane, write_se_coefficients
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
+from opengwasdb.store.arrays import ArrayRole, create_array
 
 log = logging.getLogger(__name__)
 
@@ -663,26 +664,20 @@ def _empty_exception_arrays(group: Any, count: int, compressor: Any) -> tuple[An
     rewrite visits row chunks in order, so the exceptions arrive already sorted
     and can be written straight into their final slots.
     """
-    for name in (SE_EXCEPTION_INDEX, SE_EXCEPTION_VALUE):
-        if name in group:
-            del group[name]
-    chunks = (max(1, min(count, EXACT_TABLE_CHUNK)),)
-    return (
-        group.create_dataset(
-            SE_EXCEPTION_INDEX,
+
+    def one(name: str, dtype: str) -> Any:
+        return create_array(
+            group,
+            name,
+            ArrayRole.EXCEPTION_TABLE,
             shape=(count,),
-            chunks=chunks,
+            dtype=dtype,
             compressor=compressor,
-            dtype="int64",
-        ),
-        group.create_dataset(
-            SE_EXCEPTION_VALUE,
-            shape=(count,),
-            chunks=chunks,
-            compressor=compressor,
-            dtype="float32",
-        ),
-    )
+            hint=EXACT_TABLE_CHUNK,
+            overwrite=True,
+        )
+
+    return one(SE_EXCEPTION_INDEX, "int64"), one(SE_EXCEPTION_VALUE, "float32")
 
 
 @dataclass
@@ -888,13 +883,15 @@ def _rewrite_dense(
     n_rows, n_analyses = map(int, source.shape)
     row_chunk = int(source.chunks[0])
     compressor = source.compressor
-    pending = group.create_dataset(
+    pending = create_array(
+        group,
         "se_pending",
+        ArrayRole.DENSE_STATISTIC_PLANE,
         shape=source.shape,
-        chunks=source.chunks,
-        compressor=compressor,
         dtype="int8",
         fill_value=SE_MISSING,
+        compressor=compressor,
+        hint=source.chunks,
     )
     exception_index, exception_value = _empty_exception_arrays(group, exception_count, compressor)
     analysis_index = np.broadcast_to(np.arange(n_analyses, dtype=np.int64), (row_chunk, n_analyses))
@@ -1548,13 +1545,15 @@ def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> 
     n_rows = int(source.shape[0])
     row_chunk = int(source.chunks[0])
     starts = range(0, n_rows, row_chunk)
-    pending = group.create_dataset(
+    pending = create_array(
+        group,
         "se_pending",
+        ArrayRole.DENSE_STATISTIC_PLANE,
         shape=source.shape,
-        chunks=source.chunks,
-        compressor=source.compressor,
         dtype="float16",
         fill_value=np.nan,
+        compressor=source.compressor,
+        hint=source.chunks,
     )
     started = time.monotonic()
     with log_phase(log, "SE float16 narrowing"):

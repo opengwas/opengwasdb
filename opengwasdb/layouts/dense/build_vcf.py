@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from numcodecs import Blosc
 
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
@@ -90,6 +89,7 @@ from opengwasdb.model.manifest_columns import (
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.interface import SourceVariant
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromosome
@@ -107,7 +107,7 @@ log = logging.getLogger(__name__)
 
 # One compressor for every dense statistic array (z/se/eaf), so a new array
 # cannot quietly ship with different settings from the ones beside it.
-_DENSE_COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+_DENSE_COMPRESSOR = compressor()
 
 __all__ = ["build_dense_from_vcf_manifest", "LiftoverFailureError"]
 
@@ -2374,15 +2374,16 @@ def _create_eaf_array(
     for half the ALID space.
     """
     root = staged.arrays(mode="a")
-    if name in root:
-        del root[name]
-    return root.create_dataset(
+    return create_array(
+        root,
         name,
+        ArrayRole.DENSE_STATISTIC_PLANE,
         shape=(n_variants, n_analyses),
-        chunks=effective_chunks,
-        compressor=_DENSE_COMPRESSOR,
         dtype=dtype,
         fill_value=fill_value,
+        compressor=_DENSE_COMPRESSOR,
+        hint=effective_chunks,
+        overwrite=True,
     )
 
 
@@ -2405,24 +2406,34 @@ def _create_dense_zarr(
     """
     compressor = _DENSE_COMPRESSOR
     codec = StoreCodec(encoding)
-    effective_chunks = (min(chunk_shape[0], n_variants), min(chunk_shape[1], n_analyses))
     root = staged.arrays(mode="w")
-    for name, plane_dtype, fill in (
-        ("z", codec.z_dtype, codec.z_fill_value),
+    z_array = create_array(
+        root,
+        "z",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        shape=(n_variants, n_analyses),
+        dtype=codec.z_dtype,
+        fill_value=codec.z_fill_value,
+        compressor=compressor,
+        hint=chunk_shape,
+    )
+    # Chunk shape is clipped to the array dimensions (ADR 0021) by the role's
+    # layout policy; read back the effective chunks it wrote.
+    effective_chunks = (int(z_array.chunks[0]), int(z_array.chunks[1]))
+    create_array(
+        root,
+        "se",
         # Scratch in float32, as dense.complete does: the band-writer fills
         # this before the SE encoding is decided, and an exact residual
         # exception must be the source's own value, not one already rounded
         # to the dtype the plane happened to start in (spec §6a).
-        ("se", "float32", float("nan")),
-    ):
-        root.create_dataset(
-            name,
-            shape=(n_variants, n_analyses),
-            chunks=effective_chunks,
-            compressor=compressor,
-            dtype=plane_dtype,
-            fill_value=fill,
-        )
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        shape=(n_variants, n_analyses),
+        dtype="float32",
+        fill_value=float("nan"),
+        compressor=compressor,
+        hint=effective_chunks,
+    )
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"
     root.attrs["compressor"] = DEFAULT_COMPRESSOR

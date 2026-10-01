@@ -13,6 +13,7 @@ from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE, per_variant_chunk_s
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store import open_store
+from opengwasdb.store.arrays import ArrayRole, create_array
 
 
 @dataclass(frozen=True)
@@ -30,15 +31,17 @@ def _replace_with_rechunked(group: Any, name: str, chunk: int) -> None:
     for stale in (temporary, backup):
         if stale in group:
             del group[stale]
-    target = group.create_dataset(
+    target = create_array(
+        group,
         temporary,
+        ArrayRole.PER_VARIANT,
         shape=source.shape,
-        chunks=(chunk,),
         dtype=source.dtype,
         compressor=source.compressor,
         filters=source.filters,
         fill_value=source.fill_value,
         order=source.order,
+        hint=chunk,
     )
     for key, value in source.attrs.items():
         target.attrs[key] = value

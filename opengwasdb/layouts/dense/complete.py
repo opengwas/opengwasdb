@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from numcodecs import Blosc
 
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
@@ -89,6 +88,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -108,7 +108,7 @@ from opengwasdb.variants import (
 
 log = logging.getLogger(__name__)
 
-_COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+_COMPRESSOR = compressor()
 _LD_PANEL_ID = "eur-hg38-gpm"
 
 
@@ -1023,6 +1023,57 @@ def _shard_checkpoint_fills_by_band(
     return fill_shard_dir, quality_count
 
 
+def _create_completed_planes(
+    root: Any,
+    codec: StoreCodec,
+    n_variants: int,
+    n_analyses: int,
+    chunk_shape: tuple[int, int],
+    src_has_eaf: bool,
+) -> tuple[int, int]:
+    """The completed grid's planes; returns the effective clipped chunks.
+
+    z and se are missing-filled, imputed is 0-filled, and eaf appears only when
+    the observed store carried one (ADR 0036) -- completion adds panel rows, it
+    does not invent frequencies the source never reported.  Each plane gets its
+    own missing marker (spec §15).
+    """
+    grid = (n_variants, n_analyses)
+
+    def plane(name: str, role: ArrayRole, plane_dtype: Any, fill: Any, hint: Any) -> Any:
+        return create_array(
+            root,
+            name,
+            role,
+            shape=grid,
+            dtype=plane_dtype,
+            fill_value=fill,
+            compressor=_COMPRESSOR,
+            hint=hint,
+        )
+
+    z_array = plane(
+        "z", ArrayRole.DENSE_STATISTIC_PLANE, codec.z_dtype, codec.z_fill_value, chunk_shape
+    )
+    # The role's layout policy clipped the chunk shape to the array dimensions
+    # (ADR 0021); read the effective chunks back for the band writers.
+    effective_chunks = (int(z_array.chunks[0]), int(z_array.chunks[1]))
+    # Scratch in float32 so an exact residual exception is not rounded before
+    # the destination's final SE encoding is written below.  Never float16 --
+    # see `build_vcf._create_eaf_array` for why it cannot hold an EAF near 1.
+    plane("se", ArrayRole.DENSE_STATISTIC_PLANE, "float32", float("nan"), effective_chunks)
+    plane("imputed", ArrayRole.DENSE_IMPUTED_MASK, "uint8", 0, effective_chunks)
+    if src_has_eaf:
+        plane(
+            "eaf",
+            ArrayRole.DENSE_STATISTIC_PLANE,
+            codec.eaf_dtype,
+            codec.eaf_fill_value,
+            effective_chunks,
+        )
+    return effective_chunks
+
+
 def _create_completed_zarr(
     staged: StagedRelease,
     n_variants: int,
@@ -1042,37 +1093,18 @@ def _create_completed_zarr(
     The planes are created in the **source's** encoding, which completion
     preserves rather than re-stamping (ADR 0038 §4), and each is filled with
     its own missing marker (spec §15)."""
-    effective_chunks = (min(chunk_shape[0], n_variants), min(chunk_shape[1], n_analyses))
-    codec = StoreCodec(encoding)
     root = staged.arrays(mode="w")
-
-    def plane(name: str, plane_dtype: Any, fill: Any) -> None:
-        root.create_dataset(
-            name,
-            shape=(n_variants, n_analyses),
-            chunks=effective_chunks,
-            compressor=_COMPRESSOR,
-            dtype=plane_dtype,
-            fill_value=fill,
-        )
-
-    plane("z", codec.z_dtype, codec.z_fill_value)
-    # Scratch in float32 so an exact residual exception is not rounded before
-    # the destination's final SE encoding is written below.
-    plane("se", "float32", float("nan"))
-    plane("imputed", "uint8", 0)
-    if src_has_eaf:
-        # Never float16 -- see `build_vcf._create_eaf_array` for why it cannot
-        # hold an EAF near 1 (ADR 0036). Created only when the observed store
-        # had one: completion adds panel rows, it does not invent frequencies
-        # the source never reported.
-        plane("eaf", codec.eaf_dtype, codec.eaf_fill_value)
-    root.create_dataset(
+    effective_chunks = _create_completed_planes(
+        root, StoreCodec(encoding), n_variants, n_analyses, chunk_shape, src_has_eaf
+    )
+    create_array(
+        root,
         "on_panel",
+        ArrayRole.DENSE_ON_PANEL,
         data=on_panel.astype(np.uint8),
-        chunks=(effective_chunks[0],),
-        compressor=_COMPRESSOR,
         dtype="uint8",
+        compressor=_COMPRESSOR,
+        hint=effective_chunks,
     )
     if eaf_reference is not None:
         write_eaf_reference(root, eaf_reference, compressor=_COMPRESSOR)

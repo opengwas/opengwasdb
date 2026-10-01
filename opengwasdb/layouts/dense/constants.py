@@ -1,12 +1,11 @@
 """Dense layout defaults."""
 
+from opengwasdb.store.arrays import COMPRESSOR_RECORD
+
 DEFAULT_CHUNK_SHAPE = (1000, 1000)
-DEFAULT_COMPRESSOR = {
-    "library": "numcodecs.Blosc",
-    "cname": "zstd",
-    "clevel": 3,
-    "shuffle": "bitshuffle",
-}
+#: The one compressor configuration, sourced from the array-creation seam so the
+#: bytes a plane is stored with and the bytes this blob publishes cannot drift.
+DEFAULT_COMPRESSOR = COMPRESSOR_RECORD
 DEFAULT_DTYPE = "float16"
 TOP_HIT_THRESHOLDS = (5e-8, 5e-6, 5e-4)
 

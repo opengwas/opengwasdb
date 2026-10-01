@@ -34,7 +34,6 @@ from typing import Any
 
 import numpy as np
 import zarr
-from numcodecs import Blosc
 
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
@@ -83,6 +82,12 @@ from opengwasdb.model.analyses import (
     write_analysis_records,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store.arrays import (
+    ASSOCIATION_SEQUENCE_CHUNK,
+    ArrayRole,
+    compressor,
+    create_array,
+)
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -103,9 +108,8 @@ from opengwasdb.variants.normalise import (
 
 log = logging.getLogger(__name__)
 
-_COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
-_ASSOC_CHUNK = 200_000
-_OFFSET_CHUNK = 10_000
+_COMPRESSOR = compressor()
+_ASSOC_CHUNK = ASSOCIATION_SEQUENCE_CHUNK
 
 _LD_PANEL_ID = "eur-hg38-gpm"
 
@@ -1094,19 +1098,21 @@ def _flatten_csr(csr: _CompletedCsr) -> _FlatCsr:
 def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
     """The CSR's index planes plus z: offsets, variant_index, the fixed-point
     z plane with its overflow table (ADR 0037 §1), and the imputed mask."""
-    root.create_dataset(
+    create_array(
+        root,
         "offsets",
+        ArrayRole.ASSOCIATION_OFFSETS,
         data=flat.offsets,
-        chunks=(_OFFSET_CHUNK,),
-        compressor=_COMPRESSOR,
         dtype=np.int64,
-    )
-    root.create_dataset(
-        "variant_index",
-        data=flat.vi,
-        chunks=(_ASSOC_CHUNK,),
         compressor=_COMPRESSOR,
+    )
+    create_array(
+        root,
+        "variant_index",
+        ArrayRole.ASSOCIATION_SEQUENCE,
+        data=flat.vi,
         dtype=np.int32,
+        compressor=_COMPRESSOR,
     )
     # Completion writes into the source's arrays, so it encodes with the
     # source's plan (ADR 0038 §4) -- the overflow table travels with the
@@ -1114,20 +1120,22 @@ def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
     # records a physical fact about this release rather than reinterpreting
     # its source's bytes.
     z_overflow = ZOverflowBuilder()
-    root.create_dataset(
+    create_array(
+        root,
         "z",
+        ArrayRole.ASSOCIATION_SEQUENCE,
         data=codec.encode_z(flat.z, positions=positions_flat(0), overflow=z_overflow),
-        chunks=(_ASSOC_CHUNK,),
-        compressor=_COMPRESSOR,
         dtype=codec.z_dtype,
+        compressor=_COMPRESSOR,
     )
     z_overflow.table().write(root)
-    root.create_dataset(
+    create_array(
+        root,
         "imputed",
+        ArrayRole.ASSOCIATION_SEQUENCE,
         data=flat.imp,
-        chunks=(_ASSOC_CHUNK,),
-        compressor=_COMPRESSOR,
         dtype=np.uint8,
+        compressor=_COMPRESSOR,
     )
 
 
@@ -1148,7 +1156,6 @@ def _write_eaf_and_se_arrays(
             flat.eaf,
             baseline=encode_plan.out_baseline,
             compressor=_COMPRESSOR,
-            chunks=(_ASSOC_CHUNK,),
         )
     if encode_plan.eaf_reference is not None:
         write_eaf_reference(root, encode_plan.eaf_reference, compressor=_COMPRESSOR)
@@ -1176,7 +1183,6 @@ def _write_eaf_and_se_arrays(
         analysis_index,
         se_coefficients,
         compressor=_COMPRESSOR,
-        chunks=(_ASSOC_CHUNK,),
     )
     root.attrs["layout"] = "ragged"
     root.attrs["completion_state"] = "reference_completed"

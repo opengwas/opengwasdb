@@ -21,6 +21,7 @@ from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.layouts.dense.constants import TOP_HIT_THRESHOLDS
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array, create_group, require_group
 
 log = logging.getLogger(__name__)
 
@@ -146,9 +147,7 @@ def write_threshold_tier(
     array cannot be dropped from one of those steps and not the others.
     """
     key = threshold_key(threshold)
-    if key in top:
-        del top[key]
-    group = top.create_group(key)
+    group = create_group(top, key)
 
     keep = abs_z >= z_critical(threshold)
     kept = {name: values[keep] for name, values in columns.items()}
@@ -165,21 +164,23 @@ def write_threshold_tier(
         dtype=np.uint64,
         out=offsets[1:],
     )
-    chunk = max(1, min(len(kept["variant_index"]), chunk_size))
-    group.create_dataset(
+    create_array(
+        group,
         "analysis_offsets",
+        ArrayRole.TOP_HIT_ANALYSIS_OFFSETS,
         data=offsets,
-        chunks=(len(offsets),),
-        compressor=compressor,
         dtype="uint64",
+        compressor=compressor,
     )
     for name, values in kept.items():
-        group.create_dataset(
+        create_array(
+            group,
             name,
+            ArrayRole.TOP_HIT_INDEX,
             data=values,
-            chunks=(chunk,),
-            compressor=compressor,
             dtype=_TIER_DTYPES[name],
+            compressor=compressor,
+            hint=chunk_size,
         )
     group.attrs["threshold"] = threshold
     group.attrs["order"] = "analysis_index,variant_index"
@@ -222,12 +223,12 @@ def write_top_hit_indexes(
     abs_z = np.abs(columns["z"]).astype("float32")
 
     root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="a")
-    top = root.require_group("top_hits")
+    top = require_group(root, "top_hits")
     n_analyses = int(root["z"].shape[1])
-    compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+    comp = compressor()
 
     for threshold in thresholds:
-        write_threshold_tier(top, threshold, columns, abs_z, n_analyses, chunk_size, compressor)
+        write_threshold_tier(top, threshold, columns, abs_z, n_analyses, chunk_size, comp)
     top.attrs["thresholds"] = list(thresholds)
 
 

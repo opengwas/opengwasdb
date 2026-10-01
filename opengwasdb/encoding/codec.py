@@ -51,6 +51,7 @@ from opengwasdb.encoding.plan import (
     EafBaselineError,
     StoreEncoding,
 )
+from opengwasdb.store.arrays import ArrayRole, create_array
 
 SE_EXCEPTION_INDEX = "se_exception_index"
 SE_EXCEPTION_VALUE = "se_exception_value"
@@ -206,14 +207,15 @@ class SparseExactTable:
             (self.index_name, self.index, "int64"),
             (self.value_name, self.value, "float32"),
         ):
-            if name in group:
-                del group[name]
-            group.create_dataset(
+            create_array(
+                group,
                 name,
+                ArrayRole.EXCEPTION_TABLE,
                 data=np.asarray(data, dtype=dtype),
-                chunks=(max(1, min(len(self.index), EXACT_TABLE_CHUNK)),),
-                compressor=compressor,
                 dtype=dtype,
+                compressor=compressor,
+                hint=EXACT_TABLE_CHUNK,
+                overwrite=True,
             )
 
 
