@@ -543,11 +543,19 @@ def _resolve_source_lookup_selections(q_src: Any, src_bench: dict) -> tuple[list
 
 def _query_patterns(
     q: Any,
+    analyses: dict[int, dict[str, Any]],
     phewas_alid: str,
     random_alids: list[str],
     random_analyses: list[str],
 ) -> dict[str, Any]:
-    """The OGS-00009 shapes on the completed axis, plus the observed_only variants."""
+    """The OGS-00009 shapes on the completed axis, plus the observed_only variants.
+
+    `analyses` is deliberately threaded through but not read here. The
+    pre-refactor probe called `q.analyses_table()` and held the result alive
+    across `sample_query()`, and that live allocation is part of the committed
+    artifact's RSS baseline; capturing it in the factory keeps it alive for the
+    OGS-00010 probe only (issue #241).
+    """
     common = _query_shapes.common_query_patterns(
         q,
         exposure=EXPOSURE,
@@ -581,11 +589,15 @@ def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]
     q_src = query_store(args.source_store)
     random_alids, random_analyses = _resolve_source_lookup_selections(q_src, src_bench)
     q_src.close()
+    # The historical probe built the Analysis table here and kept it alive
+    # across sample_query(); holding that reference again reproduces the
+    # committed artifact's RSS baseline (see _query_patterns, issue #241).
+    an = q.analyses_table()
     # This harness has always sampled with the full pattern mapping retained and
     # no explicit collection; keep that probe semantics distinct from the
     # OGS-00009/FinnGen one (see measure_shape_rss, issue #241).
     return _query_shapes.measure_shape_rss(
-        lambda: _query_patterns(q, args.phewas_alid, random_alids, random_analyses),
+        lambda: _query_patterns(q, an, args.phewas_alid, random_alids, random_analyses),
         shape,
         release_patterns=False,
     )
@@ -666,7 +678,7 @@ def main() -> None:
 
     timings = []
     random_alids, random_analyses = _resolve_source_lookup_selections(q_source, src_bench)
-    patterns = _query_patterns(q, phewas_alid, random_alids, random_analyses)
+    patterns = _query_patterns(q, an, phewas_alid, random_alids, random_analyses)
     for name, fn in patterns.items():
         med, p95, cnt = _median_ms(fn, args.reps)
         timings.append(
