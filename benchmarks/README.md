@@ -397,6 +397,79 @@ instruments. `--skip-rss` drops the memory probes for a timings-only run.
 
 ---
 
+### `benchmark_store_comparison.py`
+
+Compares several Store Releases holding **the same data in different physical
+shapes** — the instrument epic #240 measures with. Later tickets convert one
+source release into Zarr v3 sharded copies (`[1000, 1000]`, `[1000, 128]`,
+`[1000, 64]` inner chunks) and compare them against the pre-upgrade baseline
+this script records for **OGS-00009 on zarr 2.18**. For every labelled store it
+records:
+
+1. **footprint**: total file count, `du -sb` apparent bytes and
+   `du -s --block-size=1` allocated bytes, plus a per-array breakdown of all
+   three (arrays are found by `.zarray` **or** `zarr.json`, so the same walker
+   covers the v2 baseline and the v3 sharded copies); group metadata and the
+   non-Zarr envelope (variant table, SQLite index, `.npy` indexes, manifest)
+   are totalled separately. The walked totals are checked against `du`, so a
+   footprint that disagrees with itself fails rather than being published;
+2. **the seven query shapes** of the OGS-00009/OGS-00016 reports, through the
+   shared `benchmarks/_query_shapes.py`: median and p95 time over `--reps`
+   after one warm-up, result count, and peak RSS from the fresh-interpreter
+   probe (`benchmarks/_rss.py`);
+3. **the identity check**: every store must return IDENTICAL results for every
+   shape — the same six arrays, in the same order, with the same dtype and
+   bit-equal values (NaN compared by position, not payload). Each array is
+   hashed (`sha256` of dtype, shape, order and values) rather than held. A
+   mismatch exits non-zero, naming the shape, the stores and the differing
+   arrays, and writes no artifact; results are never sorted or normalised to
+   make them agree.
+
+The **selection** — the statin-use exposure `ukb-b-17805`, the chr19
+APOE/APOC region, the PheWAS variant taken from the exposure's strongest
+genome-wide hit, and the seeded random variant/Analysis draws — is resolved
+ONCE against the first store and applied unchanged to every store, and is
+recorded in the artifact. `--skip-rss` drops the per-shape RSS probes (roughly
+halving the run); each probe re-invokes the script in a fresh interpreter with
+the same selection passed on the command line.
+
+The environment block records the zarr/numcodecs/numpy/python versions, the
+installed `opengwasdb` commit, host, `nproc`, the 1-minute load average before
+and after each store's run, and the cache condition. The node holds about 1 TB
+of page cache and a cold cache cannot be forced without root, so the artifact
+states plainly that the numbers are warm-cache numbers (`environment.cache`).
+
+**Output file written to `docs/benchmark-output/`:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_store_comparison_ogs00009_zarr2.json` | The committed OGS-00009 zarr-2.18 baseline and #240's before/after reference |
+
+**Usage** (run from the repo root, on the machine holding the stores):
+
+```bash
+# The committed baseline: OGS-00009 as it is today, read with zarr 2.18.
+pixi run -e dev python benchmarks/benchmark_store_comparison.py \
+    --store v2-c1000=/data/opengwasdb/stores/OGS-00009/store.opengwasdb \
+    --reps 5 \
+    --output docs/benchmark-output/opengwasdb_store_comparison_ogs00009_zarr2.json
+
+# Compare the v3 sharded copies against that baseline (skips the RSS probes).
+pixi run -e dev python benchmarks/benchmark_store_comparison.py \
+    --store v2-c1000=/data/opengwasdb/stores/OGS-00009/store.opengwasdb \
+    --store v3-1000x1000=/data/opengwasdb/work/epic240/246/shards/1000_1000/store.opengwasdb \
+    --store v3-1000x128=/data/opengwasdb/work/epic240/246/shards/1000_128/store.opengwasdb \
+    --reps 5 --skip-rss \
+    --output /tmp/epic240/246/comparison.json
+```
+
+Every store but the first is checked against the first, so the first store is
+the reference for both the selection and the identity check. The script
+refuses a duplicate label, a missing store directory, an exposure Analysis
+with no genome-wide hits, or a partial random selection.
+
+---
+
 ### `benchmark_finngen_dense.py`
 
 Benchmarks the full-scale FinnGen R13 Dense Store Release **OGS-00016**. It
