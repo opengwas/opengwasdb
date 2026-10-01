@@ -42,27 +42,43 @@ _SEAM_MODULE = "opengwasdb.store.arrays"
 _SEAM_API = frozenset(
     {"create_array", "create_group", "require_group", "open_group", "open_group_for_write"}
 )
-#: Call attribute names that create a Zarr array or group, and so must appear
-#: only in the seam.  ``open_group`` is here because it creates the group for
-#: modes ``w``/``a``/``w-``; the seam's own wrappers are recognised below.
-_FORBIDDEN_METHOD_ATTRS = frozenset(
-    {"create_dataset", "create_array", "create_group", "require_group", "open_group"}
-)
-#: Zarr array/group creators.  Matched against any ``zarr.*`` submodule too,
-#: so ``zarr.creation.array`` and ``zarr.api.create`` are caught.
-_FORBIDDEN_ZARR_FUNCS = frozenset(
+
+#: Creation methods that only a Zarr array/group has.  Any call to one of these
+#: on a receiver that is not the seam or numpy is a violation, whatever the
+#: receiver is named.
+_ZARR_ONLY_METHODS = frozenset(
     {
-        "array",
+        "create_dataset",
+        "require_dataset",
+        "create_array",
+        "require_array",
+        "create_group",
+        "require_group",
+        "open_group",
+        "open_array",
+    }
+)
+#: Creation methods shared with numpy (``np.zeros``, ``np.array``, ...).  These
+#: are applied only to receivers that look like an instance -- a lowercase
+#: name, or an attribute chain rooted in one -- so this package's own
+#: ``Table.empty()``/``cls.empty()`` classmethod calls are not mistaken for
+#: Zarr creators.  A receiver resolvable to numpy is never flagged.
+_SHARED_CREATION_METHODS = frozenset(
+    {
         "create",
         "zeros",
         "ones",
         "empty",
         "full",
-        "open_array",
-        "open_group",
-        "group",
-        "open",
+        "array",
         "open_like",
+        "zeros_like",
+        "ones_like",
+        "empty_like",
+        "full_like",
+        "save",
+        "save_array",
+        "save_group",
     }
 )
 #: ``numcodecs`` names whose construction is the seam's to own, matched against
@@ -76,6 +92,30 @@ def _is_zarr(module: str) -> bool:
 
 def _is_numcodecs(module: str) -> bool:
     return module == "numcodecs" or module.startswith("numcodecs.")
+
+
+def _is_numpy(module: str) -> bool:
+    return module == "numpy" or module.startswith("numpy.")
+
+
+def _root_name(node: ast.expr) -> str | None:
+    """The leftmost identifier of an expression, e.g. ``assets.group`` -> ``assets``."""
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _looks_like_instance(node: ast.expr) -> bool:
+    """Whether a receiver looks like an object, not a class or type.
+
+    ``cls``/``self`` and Capitalised-or-``_Capitalised`` names are treated as
+    types, so this package's ``ZOverflowTable.empty()`` and ``cls.empty()`` are
+    not judged by the shared-creation-method rule.
+    """
+    name = _root_name(node)
+    if name is None or name in {"cls", "self"}:
+        return False
+    return not name.lstrip("_")[:1].isupper()
 
 
 def _import_aliases(tree: ast.AST) -> tuple[dict[str, str], dict[str, str]]:
@@ -112,17 +152,32 @@ def _module_of(node: ast.expr, modules: dict[str, str], names: dict[str, str]) -
 def _call_violation(
     func: ast.expr, modules: dict[str, str], names: dict[str, str]
 ) -> str | None:
-    """The forbidden-creation token for one called function, or `None`."""
+    """The forbidden-creation token for one called function, or `None`.
+
+    Two rules, in order:
+
+    1. any call whose callee resolves into the ``zarr`` or ``numcodecs``
+       packages -- any attribute path, alias or submodule -- is a violation.
+       Type annotations and ``isinstance``/``cast`` arguments are not calls, so
+       ``zarr.Array`` and ``isinstance(x, zarr.Array)`` are untouched.
+    2. Zarr-only creation methods (``group.create_dataset`` and friends) are a
+       violation on any non-seam, non-numpy receiver; the methods Zarr shares
+       with numpy (``zeros``, ``array``, ``*_like``, ...) are a violation on a
+       receiver that looks like an instance rather than a numpy alias or a
+       class.
+    """
     if isinstance(func, ast.Attribute):
         attr = func.attr
         base = _module_of(func.value, modules, names)
         if base == _SEAM_MODULE and attr in _SEAM_API:
             return None  # the seam's own API, e.g. `store_arrays.create_array(...)`
-        if base is not None and _is_zarr(base) and attr in _FORBIDDEN_ZARR_FUNCS:
-            return f"zarr.{attr}("
-        if base is not None and _is_numcodecs(base) and attr in _FORBIDDEN_NUMCODECS:
-            return f"numcodecs.{attr}("
-        if attr in _FORBIDDEN_METHOD_ATTRS:
+        if base is not None and (_is_zarr(base) or _is_numcodecs(base)):
+            return f"{base}.{attr}("
+        if base is not None and _is_numpy(base):
+            return None
+        if attr in _ZARR_ONLY_METHODS:
+            return f"{attr}("
+        if attr in _SHARED_CREATION_METHODS and _looks_like_instance(func.value):
             return f"{attr}("
         return None
     if isinstance(func, ast.Name):
@@ -132,12 +187,8 @@ def _call_violation(
             module, _, attr = canonical.rpartition(".")
             if module == _SEAM_MODULE and attr in _SEAM_API:
                 return None
-            if _is_zarr(module) and attr in _FORBIDDEN_ZARR_FUNCS:
-                return f"zarr.{attr}("
-            if _is_numcodecs(module) and attr in _FORBIDDEN_NUMCODECS:
-                return f"numcodecs.{attr}("
-            if attr in _FORBIDDEN_METHOD_ATTRS:
-                return f"{attr}("
+            if _is_zarr(module) or _is_numcodecs(module):
+                return f"{module}.{attr}("
             return None
         if name in _FORBIDDEN_NUMCODECS:
             return f"{name}("
@@ -208,14 +259,15 @@ def test_scanner_detects_aliased_imports() -> None:
         "import zarr\nzarr.open_group('x')": "zarr.open_group(",
         "import numcodecs as nc\nnc.Blosc()": "numcodecs.Blosc(",
         "from numcodecs import Blosc as Codec\nCodec()": "numcodecs.Blosc(",
-        # Submodule paths: the constructors live under them too.
-        "import zarr.creation as zc\nzc.array([1])": "zarr.array(",
-        "from zarr import creation as zc\nzc.array([1])": "zarr.array(",
-        "import zarr\nzarr.creation.array([1])": "zarr.array(",
-        "from zarr.api import create as c\nc('x')": "zarr.create(",
-        "from zarr.creation import zeros as z\nz((1,))": "zarr.zeros(",
-        "import numcodecs.blosc as nb\nnb.Blosc()": "numcodecs.Blosc(",
-        "from numcodecs.blosc import Blosc as Codec\nCodec()": "numcodecs.Blosc(",
+        # Submodule paths: the constructors live under them too, and the token
+        # names the full resolved path so there is no ambiguity.
+        "import zarr.creation as zc\nzc.array([1])": "zarr.creation.array(",
+        "from zarr import creation as zc\nzc.array([1])": "zarr.creation.array(",
+        "import zarr\nzarr.creation.array([1])": "zarr.creation.array(",
+        "from zarr.api import create as c\nc('x')": "zarr.api.create(",
+        "from zarr.creation import zeros as z\nz((1,))": "zarr.creation.zeros(",
+        "import numcodecs.blosc as nb\nnb.Blosc()": "numcodecs.blosc.Blosc(",
+        "from numcodecs.blosc import Blosc as Codec\nCodec()": "numcodecs.blosc.Blosc(",
         # The public group creators are creations too.
         "import zarr\nzarr.group('x')": "zarr.group(",
         "import zarr\nzarr.open('x')": "zarr.open(",
@@ -253,14 +305,79 @@ def test_scanner_allows_the_seams_own_api() -> None:
 
 
 def test_scanner_ignores_calls_that_are_not_creation() -> None:
-    """A mention in a string or a read is not a creation."""
+    """A mention in a string, a read, or a numpy call is not a creation."""
     source = "\n".join(
         [
+            "import numpy as np",
             "g['z']",
             "text = \"create_dataset('a')\"",
             "g.create_dataset_meta('a')",
-            "other.zeros((1,))",
+            "np.zeros((1,))",
             "staged.arrays(mode='w')",
+        ]
+    )
+    assert _violations(source) == []
+
+
+def test_scanner_detects_the_remaining_zarr_creators() -> None:
+    """The creators the round-2 scan missed are caught by the rooted-call rule."""
+    cases = {
+        "import zarr\nzarr.zeros_like(x)": "zarr.zeros_like(",
+        "import zarr\nzarr.ones_like(x)": "zarr.ones_like(",
+        "import zarr\nzarr.save('p', x)": "zarr.save(",
+        "import zarr\nzarr.save_array('p', x)": "zarr.save_array(",
+        "import zarr\nzarr.save_group('p')": "zarr.save_group(",
+        "import zarr\nzarr.storage.DirectoryStore('p')": "zarr.storage.DirectoryStore(",
+        # Group methods on a receiver the scanner cannot type.
+        "group.create_dataset('a')": "create_dataset(",
+        "root.require_dataset('a', shape=(1,))": "require_dataset(",
+        "group.create_array('a')": "create_array(",
+        "group.require_array('a')": "require_array(",
+        "group.create_group('a')": "create_group(",
+        "group.require_group('a')": "require_group(",
+        "group.create('a')": "create(",
+        "group.zeros((1,))": "zeros(",
+        "group.ones((1,))": "ones(",
+        "group.empty(0)": "empty(",
+        "group.full((1,), 0)": "full(",
+        "group.array([1])": "array(",
+        "group.zeros_like(x)": "zeros_like(",
+        "group.empty_like(x)": "empty_like(",
+        "group.full_like(x, 1)": "full_like(",
+        "group.save('p', x)": "save(",
+        "group.open_group('a')": "open_group(",
+    }
+    for source, token in cases.items():
+        found = _violations(source)
+        assert found, f"scanner missed {source!r}"
+        assert any(token in violation for violation in found), (source, found)
+
+
+def test_scanner_allows_numpy_creators_and_own_classmethods() -> None:
+    """The instance rule must not swallow numpy, nor this package's own helpers."""
+    source = "\n".join(
+        [
+            "import numpy as np",
+            "from numpy import zeros, array, save",
+            "np.zeros((1,))",
+            "np.ones((1,))",
+            "np.empty(0)",
+            "np.full((1,), 0)",
+            "np.array([1])",
+            "np.zeros_like(x)",
+            "np.ones_like(x)",
+            "np.empty_like(x)",
+            "np.full_like(x, 1)",
+            "np.save('p', x)",
+            "zeros((1,))",
+            "array([1])",
+            "save('p', x)",
+            # This package's own classmethods are named like Zarr creators.
+            "ZOverflowTable.empty()",
+            "_ComponentCost.empty(3)",
+            "_MeasureAccumulators.zeros(2)",
+            "cls.empty()",
+            "self.empty()",
         ]
     )
     assert _violations(source) == []
@@ -394,6 +511,23 @@ def test_csr_writers_honour_an_explicit_chunks_override(tmp_path: Path) -> None:
     write_eaf_csr(group, codec, np.arange(3, dtype=np.int32), eaf, baseline=None, chunks=(1,))
     assert tuple(group["se"].chunks) == (1,)
     assert tuple(group["eaf"].chunks) == (1,)
+
+
+def test_legacy_per_variant_chunk_size_still_accepts_a_group(tmp_path: Path) -> None:
+    """The exported `encoding.per_variant_chunk_size(group, length)` contract holds.
+
+    Round 2 changed this signature; pre-existing callers pass a group and must
+    keep working.  The explicit-chunk helper has a distinct name.
+    """
+    from opengwasdb.encoding import component_chunk_size, per_variant_chunk_size
+
+    group = zarr.open_group(str(tmp_path / "group.zarr"), mode="w")
+    group.create_dataset("z", shape=(10,), chunks=(7,), dtype="int16")
+    assert per_variant_chunk_size(group, 10) == 7
+    assert per_variant_chunk_size(group, 10) == component_chunk_size(7, 10)
+    assert per_variant_chunk_size(group, 10) == chunk_layout(
+        ArrayRole.PER_VARIANT, (10,), component_chunk=component_variant_chunk(group)
+    )[0]
 
 
 def test_open_group_for_write_rejects_a_read_mode(tmp_path: Path) -> None:

@@ -86,11 +86,16 @@ from opengwasdb.encoding.se import (
     rewrite_dense_se,
 )
 from opengwasdb.store.arrays import PER_VARIANT_CHUNK as DEFAULT_PER_VARIANT_CHUNK
-from opengwasdb.store.arrays import component_variant_chunk, per_variant_chunk_size
+from opengwasdb.store.arrays import (
+    component_chunk_size,
+    component_variant_chunk,
+    per_variant_chunk_size,
+)
 
 __all__ = [
     "DEFAULT_BASELINE_CELL_BUDGET",
     "DEFAULT_PER_VARIANT_CHUNK",
+    "component_chunk_size",
     "component_variant_chunk",
     "DEFAULT_Z_SCALE",
     "ENCODING_VERSION",

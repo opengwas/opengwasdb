@@ -63,6 +63,7 @@ __all__ = [
     "TOP_HIT_CHUNK_SIZE",
     "ArrayRole",
     "chunk_layout",
+    "component_chunk_size",
     "component_variant_chunk",
     "compressor",
     "create_array",
@@ -241,7 +242,7 @@ def _per_variant(ctx: _LayoutContext) -> tuple[int, ...]:
     length = ctx.shape[0]
     if ctx.hint is not None:
         return (max(1, min(int(ctx.hint), max(length, 1))),)
-    return (per_variant_chunk_size(ctx.component_chunk, length),)
+    return (component_chunk_size(ctx.component_chunk, length),)
 
 
 def _length_clipped(ctx: _LayoutContext, default: int) -> tuple[int, ...]:
@@ -298,14 +299,15 @@ _LAYOUTS: Mapping[ArrayRole, Callable[[_LayoutContext], tuple[int, ...]]] = Mapp
 )
 
 
-def per_variant_chunk_size(component_chunk: int | None, length: int) -> int:
+def component_chunk_size(component_chunk: int | None, length: int) -> int:
     """The per-variant chunk for a component plane's variant-axis chunk.
 
-    A side array must be no coarser than the plane it serves (spec §6), so a
-    component chunk smaller than `PER_VARIANT_CHUNK` bounds the result; a
-    component with no plane (`component_chunk=None`, e.g. a tiny synthetic
-    group) falls back to `PER_VARIANT_CHUNK`.  The result is clipped to the
-    array's own length.
+    The explicit-component-chunk helper the `PER_VARIANT` policy and the
+    converter (#245) use.  A side array must be no coarser than the plane it
+    serves (spec §6), so a component chunk smaller than `PER_VARIANT_CHUNK`
+    bounds the result; a component with no plane (`component_chunk=None`, e.g. a
+    tiny synthetic group) falls back to `PER_VARIANT_CHUNK`.  The result is
+    clipped to the array's own length.
     """
     cap = (
         PER_VARIANT_CHUNK
@@ -313,6 +315,17 @@ def per_variant_chunk_size(component_chunk: int | None, length: int) -> int:
         else min(int(component_chunk), PER_VARIANT_CHUNK)
     )
     return min(cap, max(length, 1))
+
+
+def per_variant_chunk_size(group: Any, length: int) -> int:
+    """The per-variant chunk for a group's component plane (legacy signature).
+
+    Kept as the exported `opengwasdb.encoding.per_variant_chunk_size(group,
+    length)` contract: an existing caller passing a Zarr group still works.  It
+    reads the component plane's chunk and delegates to `component_chunk_size`;
+    new code that already holds the plane chunk should call that directly.
+    """
+    return component_chunk_size(component_variant_chunk(group), length)
 
 
 def component_variant_chunk(group: Any) -> int | None:
