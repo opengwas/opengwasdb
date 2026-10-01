@@ -38,22 +38,9 @@ from opengwasdb.encoding.codec import (
     positions_rows_cols,
 )
 from opengwasdb.encoding.plan import EafBaselineError, StoreEncoding
+from opengwasdb.store.arrays import ArrayRole, component_variant_chunk, create_array
 
 SE_COEFFICIENTS = "se_coefficients"
-
-# Per-variant side arrays must follow the variant-axis chunking of the planes
-# they serve.  This fallback is used only when a group has no suitable sibling
-# (principally tiny synthetic groups); real Dense and Ragged writers expose a
-# sibling whose first dimension is the variant/read axis.
-DEFAULT_PER_VARIANT_CHUNK = 200_000
-
-
-def per_variant_chunk_size(group: Any, length: int) -> int:
-    """Return the component-local chunk size for a per-variant side array."""
-    for sibling in ("eaf", "z", "imputed", "variant_index"):
-        if sibling in group and group[sibling].ndim:
-            return min(int(group[sibling].chunks[0]), DEFAULT_PER_VARIANT_CHUNK, max(length, 1))
-    return min(DEFAULT_PER_VARIANT_CHUNK, max(length, 1))
 
 
 class DenseZPlane:
@@ -706,17 +693,21 @@ def _write_per_variant_array(
     compressor: Any = None,
     chunk: int | None = None,
 ) -> None:
-    """Write (or replace) one `float32` per variant of a component's axis."""
-    data = np.asarray(values, dtype=np.float32)
-    chunk = chunk or per_variant_chunk_size(group, len(data))
-    if name in group:
-        del group[name]
-    group.create_dataset(
+    """Write (or replace) one `float32` per variant of a component's axis.
+
+    The component plane's variant-axis chunk is read here and passed in as
+    `component_chunk`, so the layout policy itself never inspects `group`.
+    """
+    create_array(
+        group,
         name,
-        data=data,
-        chunks=(min(chunk, max(len(data), 1)),),
-        compressor=compressor,
+        ArrayRole.PER_VARIANT,
+        data=np.asarray(values, dtype=np.float32),
         dtype="float32",
+        compressor=compressor,
+        hint=chunk,
+        component_chunk=component_variant_chunk(group),
+        overwrite=True,
     )
 
 
@@ -741,15 +732,14 @@ def write_eaf_reference(
 
 def write_se_coefficients(group: Any, coefficients: np.ndarray, *, compressor: Any = None) -> None:
     """Write (or replace) the two `float32` decode parameters per Analysis."""
-    data = np.asarray(coefficients, dtype=np.float32)
-    if SE_COEFFICIENTS in group:
-        del group[SE_COEFFICIENTS]
-    group.create_dataset(
+    create_array(
+        group,
         SE_COEFFICIENTS,
-        data=data,
-        chunks=(max(1, min(len(data), 1024)), 2),
-        compressor=compressor,
+        ArrayRole.SE_COEFFICIENTS,
+        data=np.asarray(coefficients, dtype=np.float32),
         dtype="float32",
+        compressor=compressor,
+        overwrite=True,
     )
 
 
@@ -760,6 +750,7 @@ def _write_se_arrays(
     coefficients: np.ndarray | None,
     exceptions: SeExceptionBuilder | None,
     *,
+    role: ArrayRole,
     compressor: Any,
     chunks: tuple[int, ...] | None,
 ) -> None:
@@ -769,10 +760,15 @@ def _write_se_arrays(
     three arrays, exactly as the `eaf` writers above treat theirs: writing them
     from one place is what stops a builder producing two of the three.
     """
-    if "se" in group:
-        del group["se"]
-    group.create_dataset(
-        "se", data=codes, chunks=chunks, compressor=compressor, dtype=codec.encoding.se.dtype
+    create_array(
+        group,
+        "se",
+        role,
+        data=codes,
+        dtype=codec.encoding.se.dtype,
+        compressor=compressor,
+        hint=chunks,
+        overwrite=True,
     )
     if not codec.encoding.se.is_residual:
         return
@@ -791,6 +787,7 @@ def _write_se_plane(
     positions: Any,
     compressor: Any,
     chunks: tuple[int, ...] | None,
+    role: ArrayRole,
 ) -> None:
     """Encode a plane and write it with both of its side arrays, or as float16.
 
@@ -801,7 +798,14 @@ def _write_se_plane(
     data = np.asarray(values, dtype=np.float32)
     if not codec.encoding.se.is_residual:
         _write_se_arrays(
-            group, codec, data.astype(np.float16), None, None, compressor=compressor, chunks=chunks
+            group,
+            codec,
+            data.astype(np.float16),
+            None,
+            None,
+            role=role,
+            compressor=compressor,
+            chunks=chunks,
         )
         return
     if coefficients is None:
@@ -816,7 +820,14 @@ def _write_se_plane(
         exceptions=exceptions,
     )
     _write_se_arrays(
-        group, codec, codes, coefficients, exceptions, compressor=compressor, chunks=chunks
+        group,
+        codec,
+        codes,
+        coefficients,
+        exceptions,
+        role=role,
+        compressor=compressor,
+        chunks=chunks,
     )
 
 
@@ -843,6 +854,7 @@ def write_se_dense(
         positions_row_band(0, n_analyses),
         compressor,
         chunks,
+        ArrayRole.DENSE_STATISTIC_PLANE,
     )
 
 
@@ -868,6 +880,7 @@ def write_se_csr(
         positions_flat(0),
         compressor,
         chunks,
+        ArrayRole.ASSOCIATION_SEQUENCE,
     )
 
 
@@ -898,10 +911,15 @@ def write_eaf_csr(
     codes = codec.encode_eaf(
         values, baseline=per_cell, positions=positions_flat(0), exceptions=exceptions
     )
-    if "eaf" in group:
-        del group["eaf"]
-    group.create_dataset(
-        "eaf", data=codes, chunks=chunks, compressor=compressor, dtype=codec.eaf_dtype
+    create_array(
+        group,
+        "eaf",
+        ArrayRole.ASSOCIATION_SEQUENCE,
+        data=codes,
+        dtype=codec.eaf_dtype,
+        compressor=compressor,
+        hint=chunks,
+        overwrite=True,
     )
     if encoding.is_residual:
         assert baseline is not None

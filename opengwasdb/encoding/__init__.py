@@ -67,13 +67,11 @@ from opengwasdb.encoding.plan import (
     ZEncoding,
 )
 from opengwasdb.encoding.planes import (
-    DEFAULT_PER_VARIANT_CHUNK,
     DenseEafPlane,
     DenseSePlane,
     DenseZPlane,
     RaggedEafPlane,
     RaggedSePlane,
-    per_variant_chunk_size,
     write_eaf_baseline,
     write_eaf_csr,
     write_eaf_reference,
@@ -87,10 +85,18 @@ from opengwasdb.encoding.se import (
     optimise_dense_se_joint,
     rewrite_dense_se,
 )
+from opengwasdb.store.arrays import PER_VARIANT_CHUNK as DEFAULT_PER_VARIANT_CHUNK
+from opengwasdb.store.arrays import (
+    component_chunk_size,
+    component_variant_chunk,
+    per_variant_chunk_size,
+)
 
 __all__ = [
     "DEFAULT_BASELINE_CELL_BUDGET",
     "DEFAULT_PER_VARIANT_CHUNK",
+    "component_chunk_size",
+    "component_variant_chunk",
     "DEFAULT_Z_SCALE",
     "ENCODING_VERSION",
     "DenseEafPlane",

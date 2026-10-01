@@ -8,7 +8,6 @@ from typing import Any, NamedTuple
 
 import numpy as np
 import zarr
-from numcodecs import Blosc
 
 from opengwasdb.encoding import (
     EafExceptionBuilder,
@@ -32,11 +31,14 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.arrays import ArrayRole
 
 RAGGED_ZARR_PATH = "data.zarr/ragged"
-_COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+_COMPRESSOR = store_arrays.compressor()
 # Chunk size for the flat association arrays (~400 KB per chunk at float16).
-_ASSOC_CHUNK = 200_000
+# Read from the seam so the SE measurement charges the bytes the seam writes.
+_ASSOC_CHUNK = store_arrays.ASSOCIATION_SEQUENCE_CHUNK
 #: Cells one `se_fit_batches` batch aims to carry. The batch holds the variant
 #: indices, the source and round-tripped frequencies, the gathered baseline and
 #: the Analysis indices -- about 30 bytes a cell -- so 2**24 is roughly a
@@ -47,7 +49,6 @@ DEFAULT_SE_FIT_CELL_BUDGET = 1 << 24
 #: about 30 bytes a cell -- so 2**22 is roughly a 130 MiB working set whatever
 #: the component's cell count (issue #228).
 DEFAULT_FLUSH_REGION_CELLS = 1 << 22
-_OFFSET_CHUNK = 10_000
 
 
 class AnalysisAssociations(NamedTuple):
@@ -378,10 +379,14 @@ class RaggedCSRWriter:
 
     def _plane(self, root: Any, name: str, total: int, dtype: Any) -> Any:
         """An empty plane at full length, to be filled region by region."""
-        if name in root:
-            del root[name]
-        return root.create_dataset(
-            name, shape=(total,), chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=dtype
+        return store_arrays.create_array(
+            root,
+            name,
+            ArrayRole.ASSOCIATION_SEQUENCE,
+            shape=(total,),
+            dtype=dtype,
+            compressor=_COMPRESSOR,
+            overwrite=True,
         )
 
     def _flat_regions(self, total: int, region_cells: int) -> Iterator[tuple[int, int]]:
@@ -598,16 +603,17 @@ class RaggedCSRWriter:
         baselines across a variant remap; see `_flush_baseline`.
         """
         out = Path(store_path) / RAGGED_ZARR_PATH
-        root = zarr.open_group(str(out), mode="w")
+        root = store_arrays.open_group_for_write(out, "w")
         offsets_arr = np.asarray(self._offsets, dtype=np.int64)
         codec = StoreCodec(encoding)
         baseline = self._flush_baseline(encoding, eaf_baseline)
-        root.create_dataset(
+        store_arrays.create_array(
+            root,
             "offsets",
+            ArrayRole.ASSOCIATION_OFFSETS,
             data=offsets_arr,
-            chunks=(_OFFSET_CHUNK,),
-            compressor=_COMPRESSOR,
             dtype=np.int64,
+            compressor=_COMPRESSOR,
         )
         self._write_frequency_regions(root, codec, encoding, offsets_arr, baseline, region_cells)
         # Held so the joint SE fit and its byte measurement read these cells
@@ -636,7 +642,7 @@ class RaggedCSRWriter:
         failed build left, not a finished component (issue #232).
         """
         out = Path(store_path) / RAGGED_ZARR_PATH
-        root = zarr.open_group(str(out), mode="a")
+        root = store_arrays.open_group_for_write(out, "a")
         offsets_arr = np.asarray(self._offsets, dtype=np.int64)
         codec = StoreCodec(encoding)
         self._write_se_streamed(
@@ -676,7 +682,7 @@ class RaggedCSRReader:
 
     def __init__(self, store_path: str | Path, encoding: StoreEncoding | None = None):
         path = Path(store_path) / RAGGED_ZARR_PATH
-        self._root = zarr.open_group(str(path), mode="r")
+        self._root = store_arrays.open_group(path)
         self._offsets: zarr.Array = self._root["offsets"]
         self._variant_index: zarr.Array = self._root["variant_index"]
         self._z: zarr.Array = self._root["z"]

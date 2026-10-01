@@ -21,10 +21,14 @@ from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.layouts.dense.constants import TOP_HIT_THRESHOLDS
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.arrays import ArrayRole
+
+#: Re-exported from the seam, which owns the role's default layout, so the
+#: writer default and the `TOP_HIT_INDEX` policy cannot disagree.
+TOP_HIT_CHUNK_SIZE = store_arrays.TOP_HIT_CHUNK_SIZE
 
 log = logging.getLogger(__name__)
-
-TOP_HIT_CHUNK_SIZE = 16_384
 
 # Positional pairing of TOP_HIT_THRESHOLDS with the analyses.tsv column each
 # tier persists to (model.analyses.TOP_HIT_COUNT_COLUMNS). A dict, not a zip
@@ -82,7 +86,7 @@ def read_top_hit_counts(
     function otherwise reads directly, so it falls back to counting the
     flat ``analysis_index`` array by hand for those.
     """
-    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="r")
+    root = store_arrays.open_group(Path(store_path) / "data.zarr")
     top = root["top_hits"]
     counts: dict[str, list[int]] = {}
     for threshold in thresholds:
@@ -146,9 +150,7 @@ def write_threshold_tier(
     array cannot be dropped from one of those steps and not the others.
     """
     key = threshold_key(threshold)
-    if key in top:
-        del top[key]
-    group = top.create_group(key)
+    group = store_arrays.create_group(top, key)
 
     keep = abs_z >= z_critical(threshold)
     kept = {name: values[keep] for name, values in columns.items()}
@@ -165,21 +167,23 @@ def write_threshold_tier(
         dtype=np.uint64,
         out=offsets[1:],
     )
-    chunk = max(1, min(len(kept["variant_index"]), chunk_size))
-    group.create_dataset(
+    store_arrays.create_array(
+        group,
         "analysis_offsets",
+        ArrayRole.TOP_HIT_ANALYSIS_OFFSETS,
         data=offsets,
-        chunks=(len(offsets),),
-        compressor=compressor,
         dtype="uint64",
+        compressor=compressor,
     )
     for name, values in kept.items():
-        group.create_dataset(
+        store_arrays.create_array(
+            group,
             name,
+            ArrayRole.TOP_HIT_INDEX,
             data=values,
-            chunks=(chunk,),
-            compressor=compressor,
             dtype=_TIER_DTYPES[name],
+            compressor=compressor,
+            hint=chunk_size,
         )
     group.attrs["threshold"] = threshold
     group.attrs["order"] = "analysis_index,variant_index"
@@ -221,13 +225,13 @@ def write_top_hit_indexes(
         columns["eaf"] = np.asarray(eaf, dtype="float32")
     abs_z = np.abs(columns["z"]).astype("float32")
 
-    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="a")
-    top = root.require_group("top_hits")
+    root = store_arrays.open_group_for_write(Path(store_path) / "data.zarr", "a")
+    top = store_arrays.require_group(root, "top_hits")
     n_analyses = int(root["z"].shape[1])
-    compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+    comp = store_arrays.compressor()
 
     for threshold in thresholds:
-        write_threshold_tier(top, threshold, columns, abs_z, n_analyses, chunk_size, compressor)
+        write_threshold_tier(top, threshold, columns, abs_z, n_analyses, chunk_size, comp)
     top.attrs["thresholds"] = list(thresholds)
 
 
@@ -385,7 +389,7 @@ def build_top_hit_indexes(
     store_path = Path(store_path)
     if encoding is None:
         encoding = StoreManifest.load(store_path).encoding
-    root = zarr.open_group(str(store_path / "data.zarr"), mode="r")
+    root = store_arrays.open_group(store_path / "data.zarr")
     z_plane = DenseZPlane.open(root, encoding)
     imputed_arr = root["imputed"] if "imputed" in root else None
     eaf_plane = DenseEafPlane.open(root, encoding)
@@ -451,7 +455,7 @@ def _collect_top_hit_eaf(
     n_workers: int = 1,
 ) -> np.ndarray | None:
     """Collect candidate EAF values in row-chunk order for an inline build."""
-    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="r")
+    root = store_arrays.open_group(Path(store_path) / "data.zarr")
     plane = DenseEafPlane.open(root, encoding)
     if not plane.can_report_frequencies:
         return None
@@ -466,7 +470,7 @@ def _collect_top_hit_se(
     n_workers: int = 1,
 ) -> np.ndarray:
     """Collect candidate SE values in row-chunk order, decoded as a query sees them."""
-    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="r")
+    root = store_arrays.open_group(Path(store_path) / "data.zarr")
     return _gather_in_row_chunks(
         root, rows, cols, DenseSePlane.open(root, encoding).band, n_workers
     )

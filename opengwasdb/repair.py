@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import zarr
 
 from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE, per_variant_chunk_size
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store import open_store
+from opengwasdb.store.arrays import ArrayRole, create_array, open_group
 
 
 @dataclass(frozen=True)
@@ -30,15 +30,17 @@ def _replace_with_rechunked(group: Any, name: str, chunk: int) -> None:
     for stale in (temporary, backup):
         if stale in group:
             del group[stale]
-    target = group.create_dataset(
+    target = create_array(
+        group,
         temporary,
+        ArrayRole.PER_VARIANT,
         shape=source.shape,
-        chunks=(chunk,),
         dtype=source.dtype,
         compressor=source.compressor,
         filters=source.filters,
         fill_value=source.fill_value,
         order=source.order,
+        hint=chunk,
     )
     for key, value in source.attrs.items():
         target.attrs[key] = value
@@ -81,11 +83,11 @@ def repair_eaf_chunks(store_path: str | Path) -> list[EafChunkRepair]:
     if layout is PrimaryStorageLayout.DENSE:
         repaired.extend(_repair_group(store.arrays(mode="r+"), "data.zarr"))
     elif layout is PrimaryStorageLayout.RAGGED:
-        group = zarr.open_group(str(store.data_path / "ragged"), mode="r+")
+        group = open_group(store.data_path / "ragged", "r+")
         repaired.extend(_repair_group(group, "data.zarr/ragged"))
     else:
         dense = open_store(dense_component_path(store.path))
         repaired.extend(_repair_group(dense.arrays(mode="r+"), "dense/data.zarr"))
-        group = zarr.open_group(str(store.data_path / "ragged"), mode="r+")
+        group = open_group(store.data_path / "ragged", "r+")
         repaired.extend(_repair_group(group, "data.zarr/ragged"))
     return repaired

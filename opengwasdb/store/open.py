@@ -27,6 +27,7 @@ import zarr
 
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store.arrays import open_group
 
 if TYPE_CHECKING:
     from opengwasdb.query.facade import StoreQuery
@@ -500,7 +501,7 @@ class OpenGWASDBStore(_ReleasePaths):
 
     def arrays(self, mode: str = "r") -> zarr.Group:
         """Open this release's ``data.zarr`` group."""
-        return zarr.open_group(str(self.data_path), mode=mode)
+        return open_group(self.data_path, mode)
 
     def index_connection(self) -> sqlite3.Connection:
         """Open a connection to this release's ``index.sqlite``."""
@@ -611,7 +612,7 @@ class StagedRelease(_ReleasePaths):
         object.__setattr__(self, "_paths", _release_paths(self.path))
 
     def arrays(self, mode: str = "w") -> zarr.Group:
-        return zarr.open_group(str(self.data_path), mode=mode)
+        return open_group(self.data_path, mode)
 
     def index_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.index_path))

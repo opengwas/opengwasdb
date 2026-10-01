@@ -83,6 +83,7 @@ from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shar
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.query.resolve import resolve_rows
+from opengwasdb.store.arrays import open_group
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.variants import VariantAxis
 
@@ -604,7 +605,7 @@ class RaggedStoreQuery:
         self._imputed: zarr.Array | None = None
         if self._is_completed:
             try:
-                _root = zarr.open_group(str(ragged_path), mode="r")
+                _root = open_group(ragged_path)
                 if "imputed" in _root:
                     self._imputed = _root["imputed"]
             except Exception:  # noqa: BLE001

@@ -23,12 +23,12 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import zarr
 from scipy.cluster.hierarchy import leaves_list, linkage  # type: ignore[import-untyped]
 from scipy.spatial.distance import squareform  # type: ignore[import-untyped]
 
 from opengwasdb.layouts.dense.rho import DenseRhoReader
 from opengwasdb.model.analyses import ANCESTRY_PROP_PREFIX, AnalysesTable
+from opengwasdb.store.arrays import open_group
 
 _STYLE = """
 :root {
@@ -461,7 +461,7 @@ def _load_rho_group(output_path: Path) -> Any | None:
     fail to render (issue #23 AC3 applies here too).
     """
     try:
-        root = zarr.open_group(str(output_path / "data.zarr"), mode="r")
+        root = open_group(output_path / "data.zarr")
     except Exception:  # noqa: BLE001
         return None
     return root["rho"] if "rho" in root else None
