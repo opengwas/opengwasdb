@@ -397,6 +397,102 @@ instruments. `--skip-rss` drops the memory probes for a timings-only run.
 
 ---
 
+### `benchmark_finngen_dense.py`
+
+Benchmarks the full-scale FinnGen R13 Dense Store Release **OGS-00016**. It
+measures the same seven query shapes on the same fresh-interpreter RSS probe as
+`benchmark_ukbb_dense.py` (`benchmarks/_query_shapes.py` holds the shared shape
+construction and probe contract, issue #241), so the two full-scale reports are
+comparable, and adds the checks a FinnGen release can be held to that a UK
+Biobank one cannot:
+
+1. storage against the source `.gz` files, by store component, plus the build's
+   own step records (build / top-hits / overview / validate);
+2. the bulk shape against the shape the source is laid out for, a single
+   `pd.read_csv` of the same Analysis's file;
+3. known-locus checks: the lead variants of well-established associations must
+   be recovered with the published risk allele and genome-wide significance;
+4. a PheWAS of two pleiotropic variants across all Analyses; and
+5. three IVW Mendelian randomisation pairs run end to end through the store.
+
+Cell-by-cell agreement with the source files is a separate, heavier harness:
+`validate_finngen_source_fidelity.py` below. The benchmark refuses to report a
+compression ratio when any source file is missing, rather than dividing by a
+partial total.
+
+**Output files written to `docs/benchmark-output/`:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_ogs00016_finngen_benchmark.json` | Query timings + memory + storage + known loci + MR |
+| `opengwasdb_ogs00016_finngen_benchmark.qmd` / `.html` | Rendered report. **Not** linked from `docs/index.html`: #237 holds the `[1000, 1000]` report back until the rechunked store is benchmarked. |
+
+**Usage** (run from the repo root, on the machine holding the store):
+
+```bash
+pixi run -e dev python benchmarks/benchmark_finngen_dense.py \
+    --reps 5 \
+    --store /data/opengwasdb/stores/OGS-00016/store.opengwasdb \
+    --source-dir /data/opengwasdb/raw/finngen-r13/releases/r13-full/source \
+    --records /data/opengwasdb/stores/OGS-00016/records \
+    --output docs/benchmark-output/opengwasdb_ogs00016_finngen_benchmark.json
+```
+
+`--skip-rss` drops the memory probes for a timings-only run. One Analysis's
+bulk shape on OGS-00016 takes roughly a minute and peaks around 23 GB RSS, so a
+full run is long and is usually started in the background with its log in
+`/tmp`.
+
+---
+
+### `validate_finngen_source_fidelity.py`
+
+Compares a FinnGen R13 Dense Store Release cell by cell against the source files
+it was built from. `opengwasdb validate` checks a store's internal consistency;
+it never opens a source file, so this harness closes that loop: for each sampled
+Analysis it parses the whole source `.gz`, matches every row to the store's
+variant axis with its own allele-pair matcher (deliberately not the builder's),
+decodes the store's cells through the public query API, and compares `z` against
+`beta / sebeta`, `se` against `sebeta`, and `eaf` against `af_alt` (or
+`1 - af_alt` when the orientation is flipped). It reports source rows with no
+cell, store cells with no source row, and disagreements about missingness.
+
+The gates come from the encoding the store declares in its manifest (ADR 0037):
+`z` within half a step of its int16 fixed-point scale, `se` within the ADR's 1%
+ordinary-cell bound, and `eaf` within the half-step of its int8 residual code. A
+store that fails any gate exits non-zero after writing the record, so a partial
+pass cannot be mistaken for a clean one.
+
+The sample is fixed by the harness: six named anchors (the two
+inverse-rank-normalised quantitative traits, the flagship endpoints, an endpoint
+and its `_WIDE` twin, and the smallest case count), `--n-random` further random
+Analyses drawn with `--seed`, or an explicit `--analyses` list. Each source's
+SHA-256 is checked against the build manifest unless `--no-checksum` is passed.
+
+**Output file written to `docs/benchmark-output/`:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_ogs00016_source_fidelity.json` | Per-Analysis cell counts, gate errors and verdicts |
+
+**Usage** (run from the repo root, on the machine holding the store and sources):
+
+```bash
+pixi run -e dev python benchmarks/validate_finngen_source_fidelity.py \
+    --store /data/opengwasdb/stores/OGS-00016/store.opengwasdb \
+    --source-dir /data/opengwasdb/raw/finngen-r13/releases/r13-full/source \
+    --manifest /data/opengwasdb/stores/OGS-00016/work/analyses.tsv \
+    --output docs/benchmark-output/opengwasdb_ogs00016_source_fidelity.json
+```
+
+A shorter run is possible by narrowing the sample, e.g. `--analyses
+finngen-r13-BMI_IRN` (or `--n-random 0`), which is the form used to check the
+harness still runs after a change. The full sampled run reads one whole source
+file per Analysis plus the 21-million-row variant axis, so it is slow and
+memory-hungry.
+
+---
+
 ### `benchmark_se_residual_queries.py`
 
 Compares physical-SE query latency between the format-2.0 `float16` release

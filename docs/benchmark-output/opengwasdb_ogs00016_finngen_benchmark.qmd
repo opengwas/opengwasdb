@@ -1,0 +1,521 @@
+---
+title: "OpenGWASDB at full scale — OGS-00016"
+subtitle: "The FinnGen R13 public summary statistics in one Dense Store Release · 58.5 billion associations · validated against the source files"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+HERE = Path(".")
+b = json.loads((HERE / "opengwasdb_ogs00016_finngen_benchmark.json").read_text())
+f = json.loads((HERE / "opengwasdb_ogs00016_source_fidelity.json").read_text())
+
+dataset, storage, build = b["dataset"], b["storage"], b["build"]
+summary = b["analyses"]
+n_cells = dataset["n_associations"]
+timings = {row["query"]: row for row in b["timings"]}
+memory = {row["query"]: row for row in b["memory"]}
+fid = f["analyses"]
+gates = f["gates"]
+loci = b["known_loci"]
+mr = b["mr"]
+
+
+def md_table(headers, rows):
+    separator = "|" + "|".join(["---"] * len(headers)) + "|"
+    heading = "| " + " | ".join(headers) + " |"
+    body = "\n".join("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
+    return f"{heading}\n{separator}\n{body}"
+
+
+def fmt_ms(value):
+    return f"{value:,.2f} ms" if value < 1_000 else f"{value / 1_000:,.2f} s"
+
+
+def fmt_mb(value):
+    return f"{value:,.1f} MB" if value < 1_024 else f"{value / 1_024:,.2f} GB"
+
+
+def fmt_hours(seconds):
+    return f"{seconds / 3600:,.2f} h"
+
+
+ORDER = [
+    ("tophits", "Top hits for one Analysis (p < 5e-8)"),
+    ("phewas", "PheWAS: one variant, all Analyses"),
+    ("regional_one_analysis", "Region restricted to one Analysis"),
+    ("random_lookup_10_variants_100_analyses", "Random lookup: 10 variants x 100 Analyses"),
+    ("random_lookup_100_variants_10_analyses", "Random lookup: 100 variants x 10 Analyses"),
+    ("regional", "Region across all Analyses"),
+    ("bulk", "One Analysis, genome-wide"),
+]
+
+all_fid_pass = all(all(r["passed"].values()) for r in fid)
+n_cells_compared = sum(r["cells_compared"] for r in fid)
+GENOME_WIDE_LOGP = -np.log10(5e-8)
+
+
+def locus_passes(r):
+    return r["z_risk_allele"] > 0 and (
+        r["neglog10_p"] > GENOME_WIDE_LOGP or not r["expected_genome_wide"]
+    )
+
+
+loci_ok = all(locus_passes(r) for r in loci)
+mr_ok = all(r["ivw_beta"] > 0 and r["ivw_pval"] < 0.05 for r in mr)
+```
+
+::: {.callout-important}
+## What this measures
+
+Every public FinnGen R13 endpoint — **2,754 Analyses, 21,230,615 variants,
+58.5 billion associations** — built into a single Dense Store Release, then
+checked two ways: **against the 2,754 source files it was built from**, and
+against **what is already known about human genetics**. The same query shapes
+and memory probe as the [OGS-00009 report](opengwasdb_ogs00009_dense_benchmark.html)
+are measured for comparison.
+
+```{python}
+#| echo: false
+#| output: asis
+print(f"""
+* **{storage['store_gb']:,.1f} GB** on disk against **{storage['source_gb'] / 1000:,.2f} TB** of
+  source `.gz` across {storage['n_source_files']:,} files — a **{storage['compression_ratio']:.1f}x**
+  reduction, **{storage['bytes_per_association']:.2f} bytes per association**.
+* **{n_cells_compared / 1e6:,.0f} million cells** from {len(fid)} sampled Analyses compared against
+  their source rows: z is within {max(r['z_abs_error']['max'] for r in fid):.2e} of
+  `beta / sebeta`, standard error within
+  {100 * max(r['se_rel_error']['max'] for r in fid):.2f}%, allele frequency within
+  {100 * max(r['eaf_rel_error']['max'] for r in fid):.2f}%. **{'Every gate passes.' if all_fid_pass else 'A GATE FAILED.'}**
+* An indexed top-hits query returns in **{timings['tophits']['median_ms']:.2f} ms**; a PheWAS across
+  all {dataset['n_analyses']:,} endpoints in **{timings['phewas']['median_ms']:.2f} ms**.
+* Built in **{fmt_hours(build['build']['elapsed_seconds'])}**, plus
+  {fmt_hours(build['top-hits']['elapsed_seconds'])} for the top-hit index.
+""")
+```
+
+One property of the FinnGen source is *not* preserved and is documented
+under [Findings](#findings): about 0.9% of source rows share a variant
+identity with another row and end up in one cell.
+:::
+
+## Scope
+
+```{python}
+#| echo: false
+#| output: asis
+enc = dataset["encoding"]
+scales = ", ".join(f"{n:,} `{k}`" for k, n in summary["stored_effect_scale"].items())
+print(md_table(
+    ["Property", "Value"],
+    [
+        ["Store Release", "OGS-00016 (`finngen-r13-full`)"],
+        ["Completion state", dataset["completion_state"].replace("_", "-")],
+        ["Analyses", f"{dataset['n_analyses']:,} ({summary['n_wide_definition']:,} of them `_WIDE` endpoint definitions)"],
+        ["Stored effect scale", scales],
+        ["Cases per binary endpoint", f"{summary['n_cases']['min']:,.0f} – {summary['n_cases']['max']:,.0f} (median {summary['n_cases']['median']:,.0f})"],
+        ["Genome-wide hits per Analysis", f"median {summary['n_hits_5e8']['median']:,.0f}, max {summary['n_hits_5e8']['max']:,.0f}, {summary['n_hits_5e8']['zero']:,} with none"],
+        ["Variants", f"{dataset['n_variants']:,}"],
+        ["Associations", f"{n_cells:,}"],
+        ["Reference assembly", dataset["reference_assembly"]],
+        ["Encoding", f"z `{enc['z']['kind']}`, se `{enc['se']['kind']}`, eaf `{enc['eaf']['kind']}` (format {dataset['format_version']}, encoding v{enc['version']})"],
+        ["Built by opengwasdb", f"`{build['build']['opengwasdb_rev'][:7]}`"],
+        ["Measured at", f"{b['measured_at']} (`{b['commit']}`)"],
+    ],
+))
+```
+
+Timings are the median of 5 repetitions after a warm-up call, under a warm
+operating-system cache. Memory is measured separately — see
+[Memory footprint](#memory-footprint).
+
+# Validation
+
+`opengwasdb validate` passed on this release — but it checks the store's
+internal consistency and never opens a source file. Everything below does.
+
+## Source fidelity
+
+Each sampled Analysis's whole source file is parsed and every row matched to
+the store's variant axis by an independent allele-pair matcher (not the
+builder's). The store's cells are then decoded through the public query API and
+compared with `beta / sebeta`, `sebeta` and `af_alt`, after negating the
+source's ALT-oriented effect where the store's canonical effect allele is the
+source REF. Before anything is compared, each source file's SHA-256 is checked
+against the build manifest's, so the files read here are the files that were
+built from.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Gate", "Bound", "Where it comes from"],
+    [
+        ["z", f"abs error ≤ {gates['z_abs']:.2e}", "half a step of the int16 fixed-point code (scale 1,024); |z| ≥ 32 is stored exactly"],
+        ["se", f"relative error ≤ {gates['se_rel']:.0%}", "ADR 0037's ordinary-cell bound for the int8 residual code"],
+        ["eaf", f"relative error ≤ {gates['eaf_rel']:.3%}", "half a logit step at the store's chosen range, plus float32 rounding"],
+        ["missingness", "exact", "an unusable source row has no cell; a usable one has one, unless it collapses (below)"],
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+def short(a):
+    return a.removeprefix("finngen-r13-")
+
+print(md_table(
+    ["Analysis", "Cells compared", "max abs z err", "max rel se err", "max rel eaf err", "Sign disagreements", "|z|≥32 exact", "Result"],
+    [
+        [
+            f"`{short(r['analysis_id'])}`",
+            f"{r['cells_compared']:,}",
+            f"{r['z_abs_error']['max']:.2e}",
+            f"{r['se_rel_error']['max']:.2%}",
+            f"{r['eaf_rel_error']['max']:.3%}",
+            r["sign_disagreements"],
+            f"{r['overflow_cells_exact']} / {r['overflow_cells']}",
+            "pass" if all(r["passed"].values()) else "**FAIL**",
+        ]
+        for r in fid
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+flipped = sum(r["orientation_flipped"] for r in fid) / sum(r["cells_compared"] for r in fid)
+worst_p = max(r["logp_abs_error"]["max"] for r in fid)
+rows_total = sum(r["source_rows"] for r in fid)
+print(f"""
+Across the {len(fid)} Analyses — a quantitative pair (`BMI_IRN`, `HEIGHT_IRN`),
+the flagship endpoints, an endpoint and its `_WIDE` twin, the endpoint with the
+fewest cases, and {len(f['selection']['random'])} drawn at random (seed {f['seed']}) — that is
+**{n_cells_compared:,} cells** from {rows_total:,} source rows.
+
+* **Orientation.** {flipped:.1%} of cells are stored on the opposite allele to
+  the source's ALT, and none of them disagree in sign
+  ({sum(r['sign_disagreements'] for r in fid)} sign disagreements across all
+  {len(fid)}).
+* **Precision.** The largest z error is
+  {max(r['z_abs_error']['max'] for r in fid):.2e} against a bound of
+  {gates['z_abs']:.2e}: the store is as accurate as its code allows and no more
+  wrong than that. The {sum(r['overflow_cells'] for r in fid)} cells with
+  |z| ≥ 32 lie outside the fixed-point range and round-trip
+  {'exactly' if all(r['overflow_cells'] == r['overflow_cells_exact'] for r in fid) else 'INEXACTLY'}
+  through the exception table.
+* **P-values.** `-log10 p` recomputed from the stored z agrees with the source
+  `pval` to within {worst_p:.4f} (for p < 0.01).
+* **Missingness.** {sum(r['rows_unusable'] for r in fid)} source rows were unusable (non-finite
+  effect or non-positive SE) and {sum(r['unusable_rows_with_a_store_cell'] for r in fid)} of them
+  have a store cell; {sum(r['usable_rows_without_a_store_cell'] for r in fid)} usable rows are
+  missing from the store outside the collapsed pairs below; and
+  {sum(r['store_cells_without_a_source_row'] for r in fid)} store cells lack a source row. Every source row
+  matched a store variant ({sum(r['rows_not_on_axis'] for r in fid)} did not).
+* **Statuses.** Every cell is `observed`; this is an observed-only release.
+* **Allele frequency near 1.** A relative bound on `1 - eaf` is unresolvable in
+  `float32` once EAF is within 0.2% of 1, so on
+  {np.mean([r['eaf_cells_beyond_float32_minor_side'] / r['cells_compared'] for r in fid]):.1%}
+  of cells only the EAF side is checked.
+""")
+```
+
+## Known loci {#known-loci}
+
+A store can reproduce its source perfectly and still be wrong if the source
+were mis-oriented on the way in. So the lead variants of well-established
+associations are looked up and their effect expressed on the **published risk
+allele** — independent of how the store chose its canonical allele.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Locus", "Variant", "Endpoint", "Risk allele", "Risk-allele freq.", "z (risk allele)", "Effect (log-OR or SD)", "-log10 p", "Result"],
+    [
+        [
+            r["gene"], f"{r['rsid']}", f"`{r['analysis_id'].removeprefix('finngen-r13-')}`",
+            r["risk_allele"], f"{r['risk_allele_frequency']:.3f}",
+            f"{r['z_risk_allele']:+.1f}", f"{r['beta_risk_allele']:+.3f}",
+            f"{r['neglog10_p']:.0f}",
+            "pass" if locus_passes(r) else "**FAIL**",
+        ]
+        for r in loci
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(f"""
+{'All ' + str(len(loci)) + ' loci' if loci_ok else 'NOT ALL loci'} recover the published risk allele with a positive
+effect; {sum(r['neglog10_p'] > GENOME_WIDE_LOGP for r in loci)} of {len(loci)} reach genome-wide significance
+(`rs1801282` is a modest-effect variant and is held to the sign only). The variants whose canonical effect allele is
+the *non*-risk allele (`rs7903146`, `rs2075650`, `rs4977574`) are the ones that exercise the store's orientation
+logic: their stored z is negative, and the table flips it.
+""")
+```
+
+## PheWAS of two pleiotropic variants
+
+One variant, looked up across all 2,754 endpoints. If the store's variant and
+Analysis axes were misaligned, the strongest endpoints would not make sense.
+
+```{python}
+#| echo: false
+#| output: asis
+for p in b["phewas_top"]:
+    print(f"**{p['gene']} — {p['rsid']}** (`{p['alid']}`): {p['n_genome_wide']:,} of {p['n_analyses']:,} endpoints reach |z| > 5.45.\n")
+    print(md_table(
+        ["Endpoint", "Label", "|z|"],
+        [[f"`{t['analysis_id'].removeprefix('finngen-r13-')}`", t["label"], f"{abs(t['z']):.1f}"] for t in p["top"]],
+    ))
+    print()
+```
+
+## Mendelian randomisation
+
+Three IVW pairs run end to end through the store: top hits → distance
+clumping → lookup of exposure and outcome at the same variants → estimate.
+Because the store orients every Analysis to one effect allele, no
+harmonisation step is needed; if orientation were wrong for even a fraction of
+variants the estimates below would be pulled towards the null.
+
+```{python}
+#| echo: false
+#| output: asis
+labels = b["labels"]
+print(md_table(
+    ["Exposure → outcome", "Instruments", "Median F", "Sign-concordant", "IVW beta", "IVW se", "p", "Cochran Q / df"],
+    [
+        [
+            f"`{r['exposure_id'].removeprefix('finngen-r13-')}` → `{r['outcome_id'].removeprefix('finngen-r13-')}`",
+            f"{r['n_instruments']:,} (of {r['n_instruments_raw']:,} hits)",
+            f"{r['median_instrument_F']:.0f}",
+            f"{r['sign_concordant_fraction']:.0%}",
+            f"**{r['ivw_beta']:.3f}**", f"{r['ivw_se']:.3f}", f"{r['ivw_pval']:.1e}",
+            f"{r['cochran_q']:.0f} / {r['q_df']}",
+        ]
+        for r in mr
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| fig-width: 10.5
+#| fig-height: 3.4
+fig, axes = plt.subplots(1, len(mr), figsize=(10.5, 3.4))
+for ax, r in zip(axes, mr):
+    ins = r["instruments"]
+    be = np.array([i["beta_exp"] for i in ins])
+    bo = np.array([i["beta_out"] for i in ins])
+    so = np.array([i["se_out"] for i in ins])
+    sign = np.sign(be)
+    ax.errorbar(np.abs(be), bo * sign, yerr=so, fmt="o", ms=2.5, lw=0.5, alpha=0.4, color="#2b6cb0")
+    xs = np.linspace(0, np.abs(be).max(), 2)
+    ax.plot(xs, r["ivw_beta"] * xs, color="#c53030", lw=1.5)
+    ax.axhline(0, color="0.7", lw=0.6)
+    ax.set_title(f"{r['exposure_id'].removeprefix('finngen-r13-')} → {r['outcome_id'].removeprefix('finngen-r13-')}", fontsize=10)
+    ax.set_xlabel("exposure effect (aligned positive)")
+    ax.set_ylabel("outcome effect (log-OR)")
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(f"""
+{'All three estimates are positive and nominally significant' if mr_ok else 'NOT ALL estimates are positive and significant'},
+as the literature expects for each pair. Each instrument is one point; the
+red line is the IVW slope through the origin.
+""")
+```
+
+::: {.callout-warning}
+## A pipeline check, not a causal result
+
+Exposure and outcome are drawn from **the same cohort**, so sample overlap
+biases every estimate towards the observational association, and `BMI_IRN` is
+measured in a subset of FinnGen. Instruments are distance-clumped at
+`{python} f"{mr[0]['clump_kb']:,}"` kb, not LD-clumped. Q well above its
+degrees of freedom is expected and is absorbed by scaling the standard error
+by √(Q/df). What this establishes is that instruments are found, effect signs
+survive orientation, and standard errors propagate — the same purpose the MR
+serves in the OGS-00009 report.
+:::
+
+# Findings {#findings}
+
+## Insertion and deletion rows that share one identity are stored in one cell
+
+```{python}
+#| echo: false
+#| output: asis
+cells = np.mean([r["collapsed_cells"] for r in fid])
+rows = np.mean([r["collapsed_rows"] / r["source_rows"] for r in fid])
+later = sum(r["collapsed_later_row_wins"] for r in fid)
+groups = sum(r["collapsed_cells"] for r in fid)
+ambiguous = sum(r["collapsed_indistinguishable"] for r in fid)
+lost = sum(r["collapsed_neither"] for r in fid)
+earlier = sum(r["collapsed_earlier_row_wins"] for r in fid)
+snv = sum(r["collapsed_snv_rows"] for r in fid)
+first, second = fid[0]["collapsed_example"]
+print(f"""
+In every sampled Analysis, **{cells:,.0f} pairs of source rows** — {rows:.2%} of the
+file — resolve to the same store cell. Each pair is an insertion and a deletion at
+one site. For example, chr{first['chrom']}:{first['pos']:,} carries both
+`{first['ref'][:12]}>{first['alt'][:12]}` and `{second['ref'][:12]}>{second['alt'][:12]}`
+in the source, with different effects. They are different variants, but the
+store identifies a variant by its site plus the *unordered* allele pair (the
+alphabetically first allele is the effect allele), so both map to one ALID.
+
+* Across all {len(fid)} Analyses the store's cell carries the **later** source row in
+  {later:,} of {groups:,} pairs. In the other {ambiguous:,} the two rows agree to within the store's
+  precision, so which was kept cannot be told. The earlier row alone is kept in {earlier:,} pairs
+  and neither is kept in {lost:,}.
+* The loss is structural: nearly the same pairs collapse in every Analysis, so the
+  variant axis has one entry where FinnGen has two.
+* It is silent. A lookup by that ALID returns the later row's statistics whichever
+  of the two variants was meant, and `opengwasdb validate` passes because the axis
+  is internally consistent.
+* It affects indels only: {snv:,} of the collapsed rows are SNVs.
+
+This is a property of the store's variant identity (`orient_to_canonical` in
+`opengwasdb/variants/normalise.py`), surfaced here rather than introduced by
+this build. The other 99.1% of source rows are stored one-to-one.
+""")
+```
+
+# Storage
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Measure", "Value"],
+    [
+        ["Store Release", f"{storage['store_gb']:,.2f} GB"],
+        ["Source `.gz`", f"{storage['source_gb']:,.1f} GB across {storage['n_source_files']:,} files"],
+        ["Compression ratio", f"**{storage['compression_ratio']:.1f}x**"],
+        ["Bytes per association", f"{storage['bytes_per_association']:.3f} B"],
+    ],
+))
+```
+
+The sources are already gzip-compressed text, so this is a reduction against
+compressed input. It comes from storing z and standard error as fixed-point and
+residual codes rather than text floats, and from sharing one variant axis across
+all 2,754 Analyses rather than repeating position, alleles, rsID and gene name
+in every file.
+
+```{python}
+#| echo: false
+#| output: asis
+comps = sorted(storage["components"], key=lambda c: -c["bytes"])
+total = storage["store_bytes"]
+print(md_table(
+    ["Component", "Size", "Share"],
+    [[f"`{c['component']}`", f"{c['bytes'] / 1e9:,.2f} GB" if c["bytes"] >= 1e8 else f"{c['bytes'] / 1e6:,.1f} MB", f"{c['bytes'] / total:.1%}"] for c in comps if c["bytes"] / total >= 0.001],
+))
+```
+
+# Build
+
+```{python}
+#| echo: false
+#| output: asis
+steps = [("build", "Build (`build-dense-vcf`)"), ("top-hits", "Top-hit index"), ("overview", "Overview page"), ("validate", "`opengwasdb validate`")]
+print(md_table(
+    ["Step", "Wall clock"],
+    [[label, f"{fmt_hours(build[k]['elapsed_seconds'])} ({build[k]['elapsed_seconds']:,.0f} s)"] for k, label in steps],
+))
+print(f"""
+The build ran {build['build']['n_workers']} workers, for
+**{n_cells / build['build']['elapsed_seconds'] / 1e6:,.2f} million associations/s** — from
+{storage['source_gb'] / 1000:,.2f} TB of source text.
+""")
+```
+
+# Query performance
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Query", "Median", "p95", "Results"],
+    [
+        [label, f"**{fmt_ms(timings[key]['median_ms'])}**", fmt_ms(timings[key]["p95_ms"]), f"{timings[key]['result_count']:,}"]
+        for key, label in ORDER
+    ],
+))
+sb = b["source_bulk"]
+print(f"""
+The endpoint is `T2D`; the region is chr10:112.5–113.5 Mb around *TCF7L2*; the
+PheWAS variant is rs7903146.
+
+**Bulk against the source.** Reading one whole Analysis is the shape the source
+files are laid out for, and it is where the store does *worst*. Parsing
+`{sb['file']}` ({sb['bytes'] / 1e6:,.0f} MB) into z, se and allele frequency took
+**{sb['median_s']:.1f} s** (median of {sb['repetitions']}); the store's genome-wide
+read of the same Analysis takes **{fmt_ms(timings['bulk']['median_ms'])}**, which is
+{timings['bulk']['median_ms'] / 1000 / sb['median_s']:.1f}x {'slower' if timings['bulk']['median_ms'] / 1000 > sb['median_s'] else 'faster'}.
+The reason is the chunk shape: each chunk spans {dataset['chunk_shape'][1]:,} Analyses, so
+reading one column decompresses about {dataset['chunk_shape'][1]:,}x the values it returns. That
+is the price of the cheap PheWAS and region reads above, and it is a trade
+the format makes deliberately; a consumer that mostly reads whole Analyses
+should keep the source files or use a different layout.
+""")
+```
+
+# Memory footprint
+
+Each query shape runs in a fresh interpreter. `Baseline` is resident memory
+with the store open but before the query runs; `Peak` is sampled on a
+background thread *during* the query.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Query", "Baseline", "Peak", "Query cost", "Results"],
+    [
+        [label, fmt_mb(memory[key]["baseline_mb"]), fmt_mb(memory[key]["peak_mb"]), f"**{fmt_mb(memory[key]['delta_mb'])}**", f"{memory[key]['result_count']:,}"]
+        for key, label in ORDER
+    ],
+))
+print(f"""
+Baseline is **~{memory['tophits']['baseline_mb']:.0f} MB** whichever shape follows, and does not scale with
+the store. Query cost tracks result size, from {fmt_mb(memory['tophits']['delta_mb'])}
+for top hits to {fmt_mb(memory['bulk']['delta_mb'])} for a genome-wide Analysis read.
+""")
+```
+
+# Limitations
+
+- **Observed-only.** Missing associations are absent, not imputed.
+- **Sampled fidelity.** The cell-by-cell comparison covers
+  `{python} len(fid)` of 2,754 Analyses. The build manifest records a SHA-256 for
+  every source file; only the sampled files were re-hashed for this report. The
+  sample is named anchors plus a seeded random draw, so it can be regenerated.
+- **Single ancestry.** FinnGen is a Finnish cohort; allele frequencies and LD
+  are population-specific.
+- **Warm cache, one machine.** Timings follow a warm-up call on one host.
+- **The MR is a smoke test**, for the reasons above.

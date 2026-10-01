@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import gc
 import json
 import re
 import subprocess
@@ -28,10 +27,10 @@ from typing import Any
 import numpy as np
 import zarr
 
+from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
-from benchmarks._rss import run_probe, sample_query
+from benchmarks._rss import run_probe
 from opengwasdb.layouts.dense.top_hits import threshold_key, write_top_hit_indexes
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 
 STORE = Path("/local-scratch/data/opengwas/opengwasdb/ukb-b.opengwasdb")
@@ -59,8 +58,6 @@ CLUMP_KB = 1000  # greedy distance-based pruning window (approx. independence)
 
 # Regional query window: chr19 44.5-45.5 Mb spans the APOE/APOC cluster.
 REGION = ("19", 44_500_000, 45_500_000)
-RANDOM_AXIS_SIZE = 100
-LOOKUP_NARROW_AXIS_SIZE = 10
 
 PRE_EAF_TOP_HIT_MS = 1.17
 EAF_REGRESSION_TOP_HIT_MS = 86.6
@@ -432,14 +429,13 @@ def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]
     an = q.analyses_table()
     n_analyses = len(an)
     n_variants = int(q._root["z"].shape[0])
-    patterns = _query_patterns(q, an, n_variants, n_analyses, args.phewas_alid)
-    fn = patterns[shape]
-    del patterns
-
-    gc.collect()
-    record = sample_query(fn)
-    record["query"] = shape
-    return record
+    # Pass a factory, not a mapping: measure_shape_rss must own the mapping so
+    # its drop-and-collect actually releases the shapes this probe is not
+    # measuring (see measure_shape_rss, issue #241).
+    return _query_shapes.measure_shape_rss(
+        lambda: _query_patterns(q, an, n_variants, n_analyses, args.phewas_alid),
+        shape,
+    )
 
 
 def _shape_rss_subprocess(args: argparse.Namespace, shape: str) -> dict[str, float]:
@@ -447,23 +443,19 @@ def _shape_rss_subprocess(args: argparse.Namespace, shape: str) -> dict[str, flo
     return run_probe(shape, ["--store", str(args.store), "--phewas-alid", args.phewas_alid])
 
 
-def _parse_args() -> argparse.Namespace:
+def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--store", type=Path, default=STORE)
     ap.add_argument("--output", type=Path, default=OUTPUT)
     ap.add_argument("--manifest", type=Path, default=MANIFEST)
     ap.add_argument("--build-log", type=Path, default=BUILD_LOG)
     ap.add_argument("--top-hits-experiment", action="store_true")
-    ap.add_argument("--rss-shape", default=None,
-                    help="internal: measure one query shape's RSS and exit")
     ap.add_argument("--phewas-alid", default=None,
                     help="internal: instrument variant supplied by the parent")
-    ap.add_argument("--skip-rss", action="store_true",
-                    help="skip the per-shape RSS probes")
     ap.add_argument("--build-seconds", type=float, default=None,
                     help="build wall-clock when no parsable build log exists")
-    return ap.parse_args()
+    _query_shapes.add_common_args(ap)
+    return ap
 
 
 def _query_patterns(
@@ -474,54 +466,24 @@ def _query_patterns(
     phewas_alid: str,
 ) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
     """The repeatable query shapes timed for both encoding plans."""
-    regional_rows = q._variant_axis.range_indices(*REGION)
-    regional_alids = [
-        record.alid
-        for record in (q._variant_axis.by_index(int(row)) for row in regional_rows)
-        if record is not None
-    ]
-
-    rng = np.random.default_rng(0)
-    random_variants = rng.choice(n_variants, size=RANDOM_AXIS_SIZE, replace=False)
-    random_alids = [
-        record.alid
-        for record in (q._variant_axis.by_index(int(variant)) for variant in random_variants)
-        if record is not None
-    ]
-    random_analysis_indices = rng.choice(
-        n_analyses, size=RANDOM_AXIS_SIZE, replace=False
+    return _query_shapes.build_query_patterns(
+        q, analyses, n_variants, n_analyses,
+        exposure=EXPOSURE, phewas_alid=phewas_alid, region=REGION,
     )
-    random_analyses = [
-        analyses[int(analysis)]["analysis_id"] for analysis in random_analysis_indices
-    ]
-    return {
-        "bulk": lambda: q.analysis(EXPOSURE),
-        "phewas": lambda: q.phewas(phewas_alid),
-        "regional": lambda: q.range_phewas(*REGION),
-        "regional_one_analysis": lambda: q.lookup(regional_alids, [EXPOSURE]),
-        "tophits": lambda: q.top_hits(analysis_id=EXPOSURE, threshold=5e-8),
-        "random_lookup_10_variants_100_analyses": lambda: q.lookup(
-            random_alids[:LOOKUP_NARROW_AXIS_SIZE], random_analyses
-        ),
-        "random_lookup_100_variants_10_analyses": lambda: q.lookup(
-            random_alids, random_analyses[:LOOKUP_NARROW_AXIS_SIZE]
-        ),
-    }
 
 
 def main() -> None:
-    args = _parse_args()
+    args = _parser().parse_args()
 
     if args.top_hits_experiment:
         run_top_hit_experiment(args.store, args.output, args.reps)
         return
 
-    if args.rss_shape:
-        print(json.dumps(_measure_shape_rss(args, args.rss_shape)))
+    if _query_shapes.emit_rss_probe(args, _measure_shape_rss):
         return
 
-    q = query_store(args.store)
-    plan = StoreManifest.load(args.store)  # the artifact must name the format it timed
+    # The artifact must name the format it timed.
+    q, plan = _query_shapes.open_benchmark_store(args.store)
     an = q.analyses_table()
     analyses_by_id = {v["analysis_id"]: k for k, v in an.items()}
     n_analyses = len(an)
@@ -577,10 +539,7 @@ def main() -> None:
             "bulk_analysis_id": EXPOSURE, "phewas_alid": phewas_alid,
             "region": {"chrom": REGION[0], "start": REGION[1], "end": REGION[2]},
             "regional_analysis_id": EXPOSURE,
-            "random_lookup_shapes": [
-                {"n_variants": LOOKUP_NARROW_AXIS_SIZE, "n_analyses": RANDOM_AXIS_SIZE},
-                {"n_variants": RANDOM_AXIS_SIZE, "n_analyses": LOOKUP_NARROW_AXIS_SIZE},
-            ],
+            "random_lookup_shapes": _query_shapes.RANDOM_LOOKUP_SHAPES,
         },
         "timings": timings,
         "memory": memory,
