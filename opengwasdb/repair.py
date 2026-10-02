@@ -12,7 +12,14 @@ from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE, per_variant_chunk_s
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store import open_store
-from opengwasdb.store.arrays import ArrayRole, create_array, open_group
+from opengwasdb.store.arrays import (
+    ArrayRole,
+    array_length,
+    compressor_of,
+    create_array,
+    move_in_group,
+    open_group,
+)
 
 
 @dataclass(frozen=True)
@@ -36,7 +43,7 @@ def _replace_with_rechunked(group: Any, name: str, chunk: int) -> None:
         ArrayRole.PER_VARIANT,
         shape=source.shape,
         dtype=source.dtype,
-        compressor=source.compressor,
+        compressor=compressor_of(source),
         filters=source.filters,
         fill_value=source.fill_value,
         order=source.order,
@@ -44,14 +51,14 @@ def _replace_with_rechunked(group: Any, name: str, chunk: int) -> None:
     )
     for key, value in source.attrs.items():
         target.attrs[key] = value
-    for start in range(0, len(source), chunk):
-        stop = min(start + chunk, len(source))
+    for start in range(0, array_length(source), chunk):
+        stop = min(start + chunk, array_length(source))
         target[start:stop] = np.asarray(source[start:stop])
-    group.move(name, backup)
+    move_in_group(group, name, backup)
     try:
-        group.move(temporary, name)
+        move_in_group(group, temporary, name)
     except Exception:
-        group.move(backup, name)
+        move_in_group(group, backup, name)
         raise
     del group[backup]
 
@@ -62,7 +69,7 @@ def _repair_group(group: Any, label: str) -> list[EafChunkRepair]:
         if name not in group:
             continue
         array = group[name]
-        wanted = per_variant_chunk_size(group, len(array))
+        wanted = per_variant_chunk_size(group, array_length(array))
         current = int(array.chunks[0])
         if current <= wanted:
             continue

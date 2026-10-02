@@ -22,6 +22,7 @@ comparison; each one fails against the pre-#158 streamed accounting.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -37,19 +38,22 @@ from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
 
 
 def _stored_bytes(group: Any, name: str) -> int:
-    """Compressed chunk bytes one array of a live store physically occupies."""
-    prefix = f"{name}/"
+    """Compressed chunk bytes one array of a live store physically occupies.
+
+    zarr 3's ``LocalStore`` has no mapping ``keys()``/``__getitem__``; the
+    store is a directory, so the chunk files are summed on disk.  Metadata
+    files (``.zarray``/``.zattrs``) are excluded, as they are not chunks.
+    """
+    directory = Path(group.store.root) / group.path / name
     return sum(
-        len(group.store[k])
-        for k in group.store.keys()
-        if k.startswith(prefix) and not k.endswith((".zarray", ".zattrs"))
+        file.stat().st_size for file in directory.iterdir() if not file.name.startswith(".")
     )
 
 
 def _dense_group(path, n_rows: int, n_cols: int) -> tuple[Any, np.ndarray]:
     """A float32 Dense scratch plane that fits the MAF model cleanly, partial
     in both dimensions when `n_rows` and `n_cols` do not divide the chunk."""
-    group = zarr.open_group(str(path), mode="w")
+    group = zarr.open_group(str(path), mode="w", zarr_format=2)
     frequencies = np.linspace(0.05, 0.95, n_rows, dtype=np.float32)[:, None]
     eaf = np.repeat(frequencies, n_cols, axis=1)
     intercepts = np.linspace(-3.0, -2.4, n_cols, dtype=np.float32)
@@ -59,16 +63,20 @@ def _dense_group(path, n_rows: int, n_cols: int) -> tuple[Any, np.ndarray]:
         + slopes[None, :] * np.log(2 * eaf * (1 - eaf))
         + 0.03 * np.sin(np.arange(n_rows)[:, None] * 0.05)
     ).astype(np.float32)
-    group.create_dataset("eaf", data=eaf, chunks=(100, 2), compressor=_COMPRESSOR, dtype="float32")
-    group.create_dataset(
-        "se", data=se, chunks=(100, 2), compressor=_COMPRESSOR, dtype="float32"
+    group.create_array(
+        "eaf", data=np.asarray(eaf, dtype="float32"), chunks=(100, 2), compressors=_COMPRESSOR
     )
-    group.create_dataset(
-        "z",
-        data=np.ones_like(se, dtype=np.float16),
+    group.create_array(
+        "se",
+        data=np.asarray(se, dtype="float32"),
         chunks=(100, 2),
-        compressor=_COMPRESSOR,
-        dtype="float16",
+        compressors=_COMPRESSOR,
+    )
+    group.create_array(
+        "z",
+        data=np.asarray(np.ones_like(se, dtype=np.float16), dtype="float16"),
+        chunks=(100, 2),
+        compressors=_COMPRESSOR,
     )
     return group, se
 

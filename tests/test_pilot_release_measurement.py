@@ -75,9 +75,9 @@ def test_dense_release_measurement_records_cells_encoding_bytes_and_validation(
 def test_csr_cells_count_stored_associations_not_grid_cells(tmp_path):
     """A Ragged CSR component counts its offsets rows, so a sparse store is not
     charged for the empty grid cells a Dense layout would have filled."""
-    group = zarr.open_group(str(tmp_path / "data.zarr" / "ragged"), mode="w")
-    group.create_dataset("offsets", data=[0, 2, 5], dtype="int64")
-    group.create_dataset("z", data=np.zeros(5, dtype=np.int16), chunks=(3,))
+    group = zarr.open_group(str(tmp_path / "data.zarr" / "ragged"), mode="w", zarr_format=2)
+    group.create_array("offsets", data=np.asarray([0, 2, 5], dtype="int64"))
+    group.create_array("z", data=np.zeros(5, dtype=np.int16), chunks=(3,))
 
     component = _csr_cells(
         store_path=tmp_path,

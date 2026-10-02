@@ -40,6 +40,7 @@ one rather than a call site that passes `chunks=` by hand.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -50,6 +51,17 @@ from typing import Any
 import numpy as np
 import zarr
 from numcodecs import Blosc
+
+#: zarr 2 wrote every chunk, including one that is entirely the fill value: its
+#: ``write_empty_chunks`` default was True.  zarr-python 3 defaults it to False,
+#: which would silently drop those chunk files from a built store and change
+#: the file set a release holds.  The setting is *runtime* config, not stored
+#: metadata, so pinning it per array only covers the object `create_array`
+#: returns -- every ``group[name]`` reopens with the default.  It is therefore
+#: set once, here, the module that owns the Store's physical layout; every
+#: array this package creates or reopens then writes empty chunks as zarr 2
+#: did.  #247 must revisit this when builders move to Zarr v3 shards.
+zarr.config.set({"array.write_empty_chunks": True})
 
 __all__ = [
     "ASSOCIATION_OFFSETS_CHUNK",
@@ -62,12 +74,15 @@ __all__ = [
     "SE_COEFFICIENTS_ROWS",
     "TOP_HIT_CHUNK_SIZE",
     "ArrayRole",
+    "array_length",
     "chunk_layout",
     "component_chunk_size",
     "component_variant_chunk",
     "compressor",
+    "compressor_of",
     "create_array",
     "create_group",
+    "move_in_group",
     "open_group",
     "open_group_for_write",
     "per_variant_chunk_size",
@@ -107,6 +122,34 @@ def compressor() -> Blosc:
         clevel=COMPRESSOR_RECORD["clevel"],
         shuffle=_SHUFFLE_CODES[COMPRESSOR_RECORD["shuffle"]],
     )
+
+
+def array_length(array: Any) -> int:
+    """The leading dimension of an array -- what zarr 2's ``len(array)`` meant.
+
+    zarr-python 3 removed ``Array.__len__``, so ``len(array)`` now raises
+    ``TypeError``; the leading axis is the length every call site wanted.  A
+    2-D top-hit tier reads the same way as a 1-D CSR plane.
+    """
+    return int(array.shape[0])
+
+
+def compressor_of(array: Any) -> Any:
+    """The codec an existing Store array is stored with.
+
+    zarr-python 3 moved this from ``Array.compressor`` (deprecated) to the
+    ``Array.compressors`` tuple; the v2 format has exactly one.  Reading it
+    through this helper keeps the deprecation out of the writers and refuses a
+    layout the Store format does not define rather than taking the first codec
+    of several.
+    """
+    codecs = tuple(array.compressors)
+    if len(codecs) != 1:
+        raise ValueError(
+            f"array {array.name!r} is stored with {len(codecs)} codecs; "
+            "a Store Release array has exactly one"
+        )
+    return codecs[0]
 
 
 #: `create_array`'s `compressor=` parameter would otherwise shadow the function
@@ -408,18 +451,40 @@ def _creation_kwargs(
     filters: Any,
     order: str,
 ) -> dict[str, Any]:
-    """The `create_dataset` keyword arguments one role's array is made with."""
+    """The `create_array` keyword arguments one role's array is made with.
+
+    ``compressors`` (plural, a v3 spelling) is what zarr-python 3's
+    ``create_array`` takes; on a Zarr v2-format group it accepts a single
+    numcodecs codec and writes the same ``.zarray`` ``create_dataset`` wrote
+    in zarr 2.18.  ``create_dataset`` itself no longer exists in zarr 3.4, so
+    this is the only compatible call.
+
+    Two behaviours that zarr 2.18 had implicitly are now explicit:
+
+    * ``write_empty_chunks``: zarr 2's ``create`` defaulted it to True, so a
+      chunk that is entirely the fill value was still written as a file.  zarr
+      3 defaults it to False, which would silently drop those chunk files and
+      change a built store's file set.  The module sets the process-wide
+      default back to True (see the comment at the import); the flag is *not*
+      stored in array metadata, so a per-array value would be lost the moment
+      a caller reopened the array.
+    * ``dtype`` is inferred from `data` here, because zarr 3's ``create_array``
+      refuses ``data`` and ``dtype`` together.  zarr 2's whole-array write went
+      through ``zarr.array(data, dtype=...)``, i.e. create-then-assign; the
+      caller's `data` is assigned after creation in `create_array` so a dtype
+      the data does not already carry still casts, exactly as it did.
+    """
     kwargs: dict[str, Any] = {
         "chunks": chunk_layout(role, shape, hint=hint, component_chunk=component_chunk),
-        "compressor": _new_compressor() if compressor is _SEAM_COMPRESSOR else compressor,
+        "compressors": _new_compressor() if compressor is _SEAM_COMPRESSOR else compressor,
         "order": order,
+        "shape": shape,
     }
-    if dtype is not None:
-        kwargs["dtype"] = dtype
-    if data is not None:
-        kwargs["data"] = data
-    else:
-        kwargs["shape"] = shape
+    resolved_dtype = dtype
+    if resolved_dtype is None and data is not None:
+        resolved_dtype = np.asanyarray(data).dtype
+    if resolved_dtype is not None:
+        kwargs["dtype"] = resolved_dtype
     if fill_value is not _NO_FILL:
         kwargs["fill_value"] = fill_value
     if filters is not None:
@@ -470,9 +535,10 @@ def create_array(
     shape = _resolve_shape(name, data, shape)
     if overwrite and name in group:
         del group[name]
-    return group.create_dataset(
+    return _create_and_fill(
+        group,
         name,
-        **_creation_kwargs(
+        _creation_kwargs(
             role,
             shape,
             data=data,
@@ -484,7 +550,21 @@ def create_array(
             filters=filters,
             order=order,
         ),
+        data,
     )
+
+
+def _create_and_fill(group: Any, name: str, kwargs: dict[str, Any], data: Any) -> Any:
+    """Create the array, then assign `data` into it when it is a whole-array write.
+
+    zarr 2's ``create_dataset(data=...)`` was create-then-assign; the assign is
+    what casts `data` to the caller's ``dtype`` when the two differ, and zarr 3
+    refuses ``data`` and ``dtype`` together, so the cast has to happen here.
+    """
+    array = group.create_array(name, **kwargs)
+    if data is not None:
+        array[...] = data
+    return array
 
 
 def create_group(group: Any, name: str, *, replace: bool = True) -> Any:
@@ -499,21 +579,85 @@ def require_group(group: Any, name: str) -> Any:
     return group.require_group(name)
 
 
+#: Zarr entries whose bytes live in a directory of their own, which is what a
+#: filesystem rename moves as a unit.
+_LOCAL_STORE_ATTR = "root"
+
+
+def _local_group_directory(group: Any) -> Path | None:
+    """The on-disk directory a LocalStore-backed group lives in, or `None`.
+
+    zarr 3's ``LocalStore`` exposes its root as a ``Path``; the group's own
+    location inside it is ``group.path``.  Any other store returns `None` and
+    the caller refuses rather than guessing.
+    """
+    root = getattr(group.store, _LOCAL_STORE_ATTR, None)
+    if not isinstance(root, (str, Path)):
+        return None
+    location = group.path
+    return Path(root) / location if location else Path(root)
+
+
+def move_in_group(group: Any, source: str, dest: str) -> None:
+    """Rename the entry `source` to `dest` inside `group`.
+
+    zarr-python 3.4's ``Group.move`` raises ``NotImplementedError``, but the
+    package relies on a real rename in two places: the SE float16 fallback
+    swaps its staged plane into place, and `repair` swaps a rechunked array in
+    (and restores the original if the swap fails).  zarr 2 renamed the entry in
+    the store; every Store Release is a local directory, so this is the same
+    ``os.replace`` of the array directory -- atomic, and byte-preserving, which
+    a copy-through-zarr would not be for Blosc (its default thread count makes
+    recompression non-reproducible, see #243).
+
+    A store that is not a local directory fails loudly: silently degrading to a
+    copy would change the bytes and could leave a half-swapped store behind.
+    """
+    local = _local_group_directory(group)
+    if local is None:
+        raise NotImplementedError(
+            f"move_in_group({source!r} -> {dest!r}) needs a local directory store; "
+            f"{type(group.store).__name__} cannot rename an entry. Open the release "
+            "from a path rather than an in-memory store."
+        )
+    os.replace(local / source, local / dest)
+
+
 #: `zarr.open_group` modes that create the group (or wipe it) when it is not
 #: there.  `r` and `r+` require it to exist and are not creation.
 CREATION_MODES = frozenset({"w", "a", "w-", "x"})
+
+#: The Zarr on-disk format every *created* array and group is written in until
+#: #247 moves the builders to Zarr v3 (ADR 0041).  Passing it explicitly on
+#: every creation-mode open is the whole point: zarr-python 3's
+#: ``open_group(..., mode="w")`` defaults to ``zarr_format=None``, which
+#: *creates a Zarr v3 group* -- a silent Store format change.  Read-mode opens
+#: pass ``zarr_format=None`` so a converted v3 store (#245) still opens; zarr 3
+#: auto-detects the format from the existing metadata.
+STORE_ZARR_FORMAT = 2
+
+
+def _open_group_format(mode: str) -> int | None:
+    """The ``zarr_format`` an open in `mode` must use.
+
+    A creating mode must declare v2; a read mode must not declare anything, so
+    the existing metadata decides (which is how zarr 3 reads a v2 store and how
+    #245's v3 store will read).
+    """
+    return STORE_ZARR_FORMAT if mode in CREATION_MODES else None
 
 
 def open_group(path: str | Path, mode: str = "r") -> Any:
     """Open a Zarr group, read-only by default.
 
-    The one place `zarr.open_group` is called, so the seam can later pass
-    ``zarr_format`` (zarr-python 3, #244) without hunting down every opener.
-    `mode` may be a creating mode here; `open_group_for_write` is the named
-    entry point for those, and this general form exists for `r`/`r+` and for
-    the release-envelope ``arrays(mode=...)`` methods that forward their mode.
+    The one place `zarr.open_group` is called, so the Store format is declared
+    once.  `mode` may be a creating mode here; `open_group_for_write` is the
+    named entry point for those, and this general form exists for `r`/`r+` and
+    for the release-envelope ``arrays(mode=...)`` methods that forward their
+    mode.  A creating mode is pinned to `STORE_ZARR_FORMAT`; a read mode leaves
+    the format to the stored metadata.
     """
-    return zarr.open_group(str(path), mode=mode)
+    return zarr.open_group(str(path), mode=mode, zarr_format=_open_group_format(mode))
 
 
 def open_group_for_write(path: str | Path, mode: str) -> Any:
@@ -522,13 +666,15 @@ def open_group_for_write(path: str | Path, mode: str) -> Any:
     `mode` must be one of ``w``/``a``/``w-``/``x`` and is **required**: ``a``
     and ``w`` differ on a resumed build (``w`` wipes the staged group, ``a``
     keeps it), so a silent default here would change what a resume finds.  A
-    read mode is a bug (the caller meant `open_group`) and fails loudly.  No
-    ``zarr_format`` argument yet: zarr 2.18 has none, and #244 adds the Zarr v3
-    argument here once, for every writer.
+    read mode is a bug (the caller meant `open_group`) and fails loudly.
+
+    The group is created in `STORE_ZARR_FORMAT` (Zarr v2 until #247).  Without
+    the explicit format zarr-python 3 would create a Zarr v3 group and silently
+    change the Store format; that is why every write-mode open routes here.
     """
     if mode not in CREATION_MODES:
         raise ValueError(
             f"open_group_for_write needs one of {sorted(CREATION_MODES)}, got {mode!r}; "
             "use open_group for a read mode"
         )
-    return zarr.open_group(str(path), mode=mode)
+    return zarr.open_group(str(path), mode=mode, zarr_format=STORE_ZARR_FORMAT)

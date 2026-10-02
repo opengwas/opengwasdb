@@ -135,14 +135,14 @@ def test_decision_chooses_smallest_candidate_only_when_all_gates_pass() -> None:
 
 
 def test_dense_plane_writer_exposes_only_physical_se(tmp_path) -> None:
-    group = zarr.open_group(str(tmp_path / "data.zarr"), mode="w")
+    group = zarr.open_group(str(tmp_path / "data.zarr"), mode="w", zarr_format=2)
     eaf = np.array([[0.1, 0.2], [0.3, 0.4], [0.45, 0.49]], dtype=np.float32)
     coefficients = np.array([[-3.0, -0.5], [-2.5, -0.45]], dtype=np.float32)
     x = np.log(2 * eaf * (1 - eaf))
     se = np.exp(coefficients[None, :, 0] + coefficients[None, :, 1] * x).astype(np.float32)
     se[1, 1] = 0.0
-    group.create_dataset("eaf", data=eaf, chunks=(2, 2), dtype="float32")
-    group.create_dataset("z", data=np.ones_like(eaf), chunks=(2, 2), dtype="float16")
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=(2, 2))
+    group.create_array("z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=(2, 2))
     plan = _plan(1.0)
     write_se_dense(group, StoreCodec(plan), se, eaf, coefficients, chunks=(2, 2))
 
@@ -158,16 +158,16 @@ def test_dense_plane_writer_exposes_only_physical_se(tmp_path) -> None:
 
 
 def test_ragged_plane_uses_csr_ordinals_for_exact_exceptions(tmp_path) -> None:
-    group = zarr.open_group(str(tmp_path / "ragged.zarr"), mode="w")
+    group = zarr.open_group(str(tmp_path / "ragged.zarr"), mode="w", zarr_format=2)
     eaf = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32)
     ai = np.array([0, 0, 1, 1], dtype=np.int64)
     coefficients = np.array([[-3.0, -0.5], [-2.5, -0.45]], dtype=np.float32)
     se = np.exp(coefficients[ai, 0] + coefficients[ai, 1] * np.log(2 * eaf * (1 - eaf)))
     se = se.astype(np.float32)
     se[2] = 0.0
-    group.create_dataset("offsets", data=np.array([0, 2, 4]), dtype="int64")
-    group.create_dataset("variant_index", data=np.arange(4), dtype="int32")
-    group.create_dataset("eaf", data=eaf, dtype="float32")
+    group.create_array("offsets", data=np.asarray(np.array([0, 2, 4]), dtype="int64"))
+    group.create_array("variant_index", data=np.asarray(np.arange(4), dtype="int32"))
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"))
     write_se_csr(group, StoreCodec(_plan(1.0)), se, eaf, ai, coefficients)
 
     plane = RaggedSePlane.open(group, _plan(1.0))
@@ -208,7 +208,7 @@ def test_validation_rejects_malformed_residual_se_side_arrays(tmp_path) -> None:
     def malformed(name):
         path = tmp_path / f"{name}.opengwasdb"
         shutil.copytree(store, path)
-        return path, zarr.open_group(str(path / "data.zarr"), mode="a")
+        return path, zarr.open_group(str(path / "data.zarr"), mode="a", zarr_format=2)
 
     path, group = malformed("missing-table")
     del group["se_exception_value"]
@@ -221,27 +221,27 @@ def test_validation_rejects_malformed_residual_se_side_arrays(tmp_path) -> None:
     path, group = malformed("stray-exception")
     del group["se_exception_index"]
     del group["se_exception_value"]
-    group.create_dataset("se_exception_index", data=np.array([0], dtype=np.int64))
-    group.create_dataset("se_exception_value", data=np.array([0.1], dtype=np.float32))
+    group.create_array("se_exception_index", data=np.array([0], dtype=np.int64))
+    group.create_array("se_exception_value", data=np.array([0.1], dtype=np.float32))
     assert any("not marked" in error for error in validate_store(path).errors)
 
     path, group = malformed("duplicate-exception")
     del group["se_exception_index"]
     del group["se_exception_value"]
-    group.create_dataset("se_exception_index", data=np.array([1, 1], dtype=np.int64))
-    group.create_dataset("se_exception_value", data=np.array([0.1, 0.1], dtype=np.float32))
+    group.create_array("se_exception_index", data=np.array([1, 1], dtype=np.int64))
+    group.create_array("se_exception_value", data=np.array([0.1, 0.1], dtype=np.float32))
     assert any("duplicates" in error for error in validate_store(path).errors)
 
     path, group = malformed("dtype-disagreement")
     raw = np.asarray(group["se"][:], dtype=np.float16)
     chunks = group["se"].chunks
     del group["se"]
-    group.create_dataset("se", data=raw, chunks=chunks, dtype="float16")
+    group.create_array("se", data=np.asarray(raw, dtype="float16"), chunks=chunks)
     assert any("dtype float16" in error for error in validate_store(path).errors)
 
 
 def test_hybrid_joint_selection_streams_dense_and_uses_one_fit(tmp_path) -> None:
-    group = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w")
+    group = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w", zarr_format=2)
     eaf = np.linspace(0.05, 0.95, 600, dtype=np.float32)[:, None]
     eaf = np.repeat(eaf, 2, axis=1)
     ai = np.broadcast_to(np.arange(2), eaf.shape)
@@ -251,9 +251,9 @@ def test_hybrid_joint_selection_streams_dense_and_uses_one_fit(tmp_path) -> None
         + coefficients[None, :, 1] * np.log(2 * eaf * (1 - eaf))
         + 0.1 * np.sin(np.arange(len(eaf))[:, None] * 0.1)
     ).astype(np.float32)
-    group.create_dataset("eaf", data=eaf, chunks=(100, 2), dtype="float32")
-    group.create_dataset("se", data=dense_se, chunks=(100, 2), dtype="float16")
-    group.create_dataset("z", data=np.ones_like(eaf), chunks=(100, 2), dtype="float16")
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=(100, 2))
+    group.create_array("se", data=np.asarray(dense_se, dtype="float16"), chunks=(100, 2))
+    group.create_array("z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=(100, 2))
     preliminary = StoreEncoding(
         z=ZEncoding("float16"),
         se=SeEncoding("float16"),
@@ -291,12 +291,12 @@ def _single_analysis_dense_group(tmp_path):
     The shared scaffold of the joint-selection fixtures: a `float16` plane the
     coding can beat, plus the EAF and `z` planes it needs around it.
     """
-    group = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w")
+    group = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w", zarr_format=2)
     eaf = np.linspace(0.05, 0.95, 600, dtype=np.float32)[:, None]
     dense_se = np.exp(-3.0 - 0.5 * np.log(2 * eaf * (1 - eaf))).astype(np.float32)
-    group.create_dataset("eaf", data=eaf, chunks=(100, 1), dtype="float32")
-    group.create_dataset("se", data=dense_se, chunks=(100, 1), dtype="float16")
-    group.create_dataset("z", data=np.ones_like(eaf), chunks=(100, 1), dtype="float16")
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=(100, 1))
+    group.create_array("se", data=np.asarray(dense_se, dtype="float16"), chunks=(100, 1))
+    group.create_array("z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=(100, 1))
     preliminary = StoreEncoding(
         z=ZEncoding("float16"),
         se=SeEncoding("float16"),
@@ -562,7 +562,9 @@ def test_validation_catches_a_top_hit_index_left_behind_by_a_migration(tmp_path)
     store, expected = _build_residual_dense_store(tmp_path)
     assert validate_store(store).ok
 
-    top = zarr.open_group(str(store / "data.zarr" / "top_hits"), mode="a")[threshold_key(5e-8)]
+    top = zarr.open_group(
+        str(store / "data.zarr" / "top_hits"), mode="a", zarr_format=2
+    )[threshold_key(5e-8)]
     rows = top["variant_index"][:].astype(np.int64)
     cols = top["analysis_index"][:].astype(np.int64)
     stale = np.array(

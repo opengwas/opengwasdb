@@ -237,7 +237,7 @@ def test_the_plane_is_int8_with_a_baseline_and_an_exception_table(
     root = zarr.open_group(str(store / "data.zarr"), mode="r")
     group = root["ragged"] if layout == "ragged" else root
     assert str(group["eaf"].dtype) == "int8"
-    assert len(group[EAF_BASELINE]) == len(_POSITIONS)
+    assert group[EAF_BASELINE].shape[0] == len(_POSITIONS)
     # Written even when empty, so "residual-coded" and "has a table" are the
     # same statement (ADR 0037 §1, applied to eaf).
     assert EAF_EXCEPTION_INDEX in group
@@ -292,7 +292,7 @@ def test_ragged_top_hits_index_agrees_with_the_plane_it_was_built_from(ragged_st
     assert len(indexed) > 0, "fixture produced no top hits; the comparison would be vacuous"
     assert np.isfinite(indexed).any(), "fixture carries no frequencies to compare"
 
-    root = zarr.open_group(str(ragged_store / "data.zarr"), mode="a")
+    root = zarr.open_group(str(ragged_store / "data.zarr"), mode="a", zarr_format=2)
     del root[f"top_hits/{threshold_key(1.0)}"]["eaf"]
     with query_store(ragged_store) as query:
         fallback = query.top_hits(threshold=1.0)["eaf"]
@@ -310,12 +310,12 @@ def test_fresh_dense_build_chunks_baseline_like_variant_axis(tmp_path: Path):
     )
     root = open_store(out).arrays(mode="r")
     assert root[EAF_BASELINE].chunks == (3,)
-    assert root[EAF_BASELINE].chunks[0] < len(root[EAF_BASELINE])
+    assert root[EAF_BASELINE].chunks[0] < root[EAF_BASELINE].shape[0]
 
 
 def test_reference_array_uses_same_per_variant_chunking(tmp_path: Path):
-    root = zarr.open_group(str(tmp_path / "arrays.zarr"), mode="w")
-    root.create_dataset("z", shape=(10, 2), chunks=(3, 2), dtype="float32")
+    root = zarr.open_group(str(tmp_path / "arrays.zarr"), mode="w", zarr_format=2)
+    root.create_array("z", shape=(10, 2), chunks=(3, 2), dtype="float32")
     write_eaf_reference(root, np.linspace(0.1, 0.9, 10, dtype=np.float32))
     assert root[EAF_REFERENCE].chunks == (3,)
 
@@ -332,11 +332,11 @@ def test_existing_store_can_be_repaired_without_changing_values(
     manifest_before = (out / "manifest.json").read_bytes()
     root = open_store(out).arrays(mode="r+")
     baseline = root[EAF_BASELINE][:]
-    compressor = root[EAF_BASELINE].compressor
+    compressor = root[EAF_BASELINE].compressors[0]
     del root[EAF_BASELINE]
-    root.create_dataset(
-        EAF_BASELINE, data=baseline, chunks=(len(baseline),),
-        compressor=compressor, dtype="float32",
+    root.create_array(
+        EAF_BASELINE, data=np.asarray(baseline, dtype="float32"), chunks=(len(baseline),),
+        compressors=compressor,
     )
 
     invalid = validate_store(out)
@@ -420,7 +420,7 @@ def test_a_clipped_cell_resolves_to_its_exact_value_not_to_the_baseline(
     store = dense_store if layout == "dense" else ragged_store
     root = zarr.open_group(str(store / "data.zarr"), mode="r")
     group = root["ragged"] if layout == "ragged" else root
-    assert len(group[EAF_EXCEPTION_INDEX]) >= 1  # a3 at 1:600
+    assert group[EAF_EXCEPTION_INDEX].shape[0] >= 1  # a3 at 1:600
     assert _observed(store)[(600, "a3")] == pytest.approx(0.85, abs=1e-6)
 
 
@@ -502,7 +502,7 @@ def test_a_release_declaring_an_unknown_eaf_kind_is_refused(dense_store: Path):
 def test_a_residual_plane_with_no_baseline_is_rejected(dense_store: Path):
     """An `int8` residual plane is meaningless without its baseline -- and
     "meaningless" must not decode to a plausible frequency."""
-    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a")
+    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=2)
     del root[EAF_BASELINE]
 
     result = validate_store(dense_store)
@@ -518,13 +518,13 @@ def test_a_missized_eaf_baseline_is_rejected(dense_store: Path):
     The array is rewritten rather than resized so its chunk stays per-variant
     and the chunking rule does not fire first.
     """
-    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a")
-    n = len(root[EAF_BASELINE])
+    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=2)
+    n = root[EAF_BASELINE].shape[0]
     assert n > 1
     values = root[EAF_BASELINE][: n - 1]
     dtype = root[EAF_BASELINE].dtype
     del root[EAF_BASELINE]
-    root.create_dataset(EAF_BASELINE, data=values, chunks=(1,), dtype=dtype)
+    root.create_array(EAF_BASELINE, data=np.asarray(values, dtype=dtype), chunks=(1,))
 
     result = validate_store(dense_store)
 
@@ -538,7 +538,7 @@ def test_a_missized_eaf_baseline_is_rejected(dense_store: Path):
 def test_an_exception_table_that_lost_a_cell_is_rejected(dense_store: Path):
     """The lost value is the frequency furthest from its baseline -- the rare
     variant a user is filtering on."""
-    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a")
+    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=2)
     kept_index = np.asarray(root[EAF_EXCEPTION_INDEX][:])[1:]
     kept_value = np.asarray(root[EAF_EXCEPTION_VALUE][:])[1:]
     for name, data, dtype in (
@@ -546,7 +546,7 @@ def test_an_exception_table_that_lost_a_cell_is_rejected(dense_store: Path):
         (EAF_EXCEPTION_VALUE, kept_value, "float32"),
     ):
         del root[name]
-        root.create_dataset(name, data=data, chunks=(max(1, len(data)),), dtype=dtype)
+        root.create_array(name, data=np.asarray(data, dtype=dtype), chunks=(max(1, len(data)),))
 
     result = validate_store(dense_store)
     assert not result.ok
@@ -618,7 +618,7 @@ def test_a_completed_release_declares_and_carries_reference_eaf(completed_store:
     assert manifest["encoding"]["eaf"]["reference"] is True
     root = zarr.open_group(str(completed_store / "data.zarr"), mode="r")
     assert EAF_REFERENCE in root
-    assert len(root[EAF_REFERENCE]) == root["eaf"].shape[0]
+    assert root[EAF_REFERENCE].shape[0] == root["eaf"].shape[0]
 
 
 def test_imputed_cells_read_the_panel_frequency(completed_store: Path):
@@ -1050,8 +1050,8 @@ def test_hybrid_components_share_one_plan_and_size_their_own_baselines(
     # The Dense Component's baseline is panel-sized; the Ragged Overflow's
     # covers the shared union. They are different lengths, and a component
     # holding the other's would decode to plausible nonsense.
-    assert len(dense_root[EAF_BASELINE]) == len(_ON_PANEL)
-    assert len(root["ragged"][EAF_BASELINE]) == len(_POSITIONS)
+    assert dense_root[EAF_BASELINE].shape[0] == len(_ON_PANEL)
+    assert root["ragged"][EAF_BASELINE].shape[0] == len(_POSITIONS)
 
 
 def test_hybrid_round_trips_frequencies_in_both_components(hybrid_store: Path):
@@ -1212,7 +1212,7 @@ def test_a_release_that_stores_no_frequencies_still_validates(dense_store: Path)
     manifest = json.loads(manifest_path.read_text())
     manifest["encoding"]["eaf"] = {"kind": "absent"}
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a")
+    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=2)
     for name in ("eaf", EAF_BASELINE, "eaf_exception_index", "eaf_exception_value"):
         if name in root:
             del root[name]

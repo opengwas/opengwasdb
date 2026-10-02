@@ -32,7 +32,7 @@ from opengwasdb.encoding import (
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import ArrayRole
+from opengwasdb.store.arrays import ArrayRole, array_length
 
 RAGGED_ZARR_PATH = "data.zarr/ragged"
 _COMPRESSOR = store_arrays.compressor()
@@ -706,11 +706,11 @@ class RaggedCSRReader:
 
     @property
     def n_analyses(self) -> int:
-        return int(self._root.attrs.get("n_analyses", len(self._offsets) - 1))
+        return int(self._root.attrs.get("n_analyses", array_length(self._offsets) - 1))
 
     @property
     def n_associations(self) -> int:
-        return int(self._root.attrs.get("n_associations", len(self._variant_index)))
+        return int(self._root.attrs.get("n_associations", array_length(self._variant_index)))
 
     def _span(self, analysis_index: int) -> tuple[int, int]:
         """The `[start, end)` slice of the flat arrays one Analysis occupies."""
@@ -762,7 +762,7 @@ class RaggedCSRReader:
 
     def z_all(self) -> np.ndarray:
         """Every decoded z, in flat CSR order."""
-        return self.z_slice(0, int(len(self._z)))
+        return self.z_slice(0, array_length(self._z))
 
     def se_slice(self, start: int, end: int, analysis_index: int | None = None) -> np.ndarray:
         """Decoded `se[start:end]`; callers may supply a known Analysis."""
@@ -776,7 +776,7 @@ class RaggedCSRReader:
         return self._se_plane.at(positions, analysis_index=analyses)
 
     def se_all(self) -> np.ndarray:
-        return self.se_slice(0, int(len(self._se)))
+        return self.se_slice(0, array_length(self._se))
 
     @property
     def has_eaf(self) -> bool:

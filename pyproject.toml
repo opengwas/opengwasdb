@@ -7,15 +7,18 @@ name = "opengwasdb"
 version = "0.3.0"
 description = "Standalone storage and query engine for OpenGWAS-scale summary statistic stores"
 readme = "README.md"
-requires-python = ">=3.11"
+# zarr-python 3.4 (the version #244 moves to) requires Python >=3.12 and
+# numpy >=2.  The old floor of 3.11 cannot resolve it, so the floor moves with
+# the dependency; see CHANGELOG.md.
+requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [
   { name = "OpenGWASDB contributors" }
 ]
 dependencies = [
   "numpy>=1.26,<2.5",
-  "zarr>=2.18,<3",
-  "numcodecs>=0.12,<0.13",
+  "zarr>=3.4,<4",
+  "numcodecs>=0.14",
   "pysam>=0.22",
   "typer>=0.12",
   "scipy>=1.11",
@@ -57,12 +60,29 @@ force-exclude = true
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
+# zarr-python 3.4 uses PEP 695 type-parameter syntax, which mypy cannot parse
+# under a 3.11 target; the floor is Python 3.12 with the zarr 3.4 pin (#244).
 python_version = "3.11"
 strict = true
 
 [[tool.mypy.overrides]]
 module = ["numcodecs", "pandas", "pysam", "zarr"]
 ignore_missing_imports = true
+
+# zarr 2.18 shipped no `py.typed`, so mypy treated every `zarr.Array`/
+# `zarr.Group` as `Any` and the package's baseline (39 findings) was measured
+# that way.  zarr 3.4 *is* typed, and `Group.__getitem__` returns
+# `Array | Group`, which turns ~160 existing accesses into `union-attr` /
+# `arg-type` / `index` errors -- a typing refactor of the read paths, well
+# outside a dependency-bump ticket.  `follow_imports = "skip"` keeps zarr
+# untyped exactly as before, so the baseline stays a real pre-upgrade
+# comparison rather than being raised by the pin change.  #245/#247 can adopt
+# zarr's types deliberately, with the fixes that need.  Scoped to zarr alone:
+# skipping pysam would make its existing `# type: ignore[call-arg]` comments
+# unused and *add* findings.
+[[tool.mypy.overrides]]
+module = ["zarr"]
+follow_imports = "skip"
 
 # -----------------------------------------------------------------------------
 # Pixi (environment + native tool management; see opengwasdb-stores' pixi.toml
@@ -82,10 +102,12 @@ platforms = ["linux-64"]
 opengwasdb = { path = ".", editable = true }
 
 [tool.pixi.dependencies]
-python = "3.11.*"
+# zarr 3.4 requires python >=3.12 and numpy >=2; the numpy range below already
+# admits numpy 2, so it is unchanged (#244).
+python = "3.12.*"
 numpy = ">=1.26,<2.5"
-zarr = ">=2.18,<3"
-numcodecs = ">=0.12,<0.13"
+zarr = ">=3.4,<4"
+numcodecs = ">=0.14"
 typer = ">=0.12"
 scipy = ">=1.11"
 pandas = ">=2.0"

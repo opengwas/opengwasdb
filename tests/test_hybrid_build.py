@@ -399,10 +399,10 @@ def test_top_hits_match_with_legacy_component_indexes(hybrid_store, drop_dense, 
 
     key = threshold_key(5e-4)
     if drop_dense:
-        root = zarr.open_group(str(hybrid_store / "dense" / "data.zarr"), mode="a")
+        root = zarr.open_group(str(hybrid_store / "dense" / "data.zarr"), mode="a", zarr_format=2)
         del root[f"top_hits/{key}"]["eaf"]
     if drop_overflow:
-        root = zarr.open_group(str(hybrid_store / "data.zarr"), mode="a")
+        root = zarr.open_group(str(hybrid_store / "data.zarr"), mode="a", zarr_format=2)
         del root[f"top_hits/{key}"]["eaf"]
 
     q = query_store(hybrid_store)
@@ -452,7 +452,7 @@ def test_validate_catches_imputed_overflow(hybrid_store):
     """An imputed array on the overflow must fail — the overflow is never imputed."""
     root = open_store(hybrid_store).arrays(mode="a")["ragged"]
     n = int(root["offsets"][:][-1])
-    root.create_dataset("imputed", data=np.zeros(max(n, 1), dtype="uint8"))
+    root.create_array("imputed", data=np.zeros(max(n, 1), dtype="uint8"))
     result = validate_store(hybrid_store)
     assert not result.ok
     assert any("overflow" in e.lower() and "imputed" in e.lower() for e in result.errors)

@@ -12,6 +12,23 @@ the end of this file.
 
 ### Changed
 
+- **The package runs on zarr-python 3 (#244).** `zarr>=3.4,<4` and
+  `numcodecs>=0.14` replace `zarr>=2.18,<3` and `numcodecs>=0.12,<0.13` in both
+  the `[project]` and pixi dependency tables. The Store format is **not**
+  changed: every array and group is still created in Zarr **v2** format with the
+  same Blosc zstd / clevel 3 / bitshuffle codec, and every build still stamps
+  `format_version` 0.1.0 (the compatibility table is unchanged). Because zarr
+  3.4 requires Python 3.12 and numpy 2, `requires-python` moves from `>=3.11`
+  to `>=3.12`; the numpy range already admitted 2.x and is unchanged. All
+  array/group creation already went through `opengwasdb.store.arrays` (#243),
+  and the one new rule there is that a creating open must state
+  `zarr_format=2` -- zarr 3's unqualified `open_group(mode="w")` would create
+  a Zarr v3 group and silently change the format. The static creation scan now
+  fails a write-mode `open_group` outside the seam. A store built before and
+  after the upgrade decodes identically and holds byte-identical chunk files;
+  only metadata serialisation differs (zarr 3's JSON layout, an explicit
+  default `dimension_separator`, and empty `.zattrs` files).
+
 - **The GWAS-SSF reader recovers a row's effect and standard error from the
   row's own columns (stores #176).** A full OGS-00011 resolve found 476 Analyses
   with no build-eligible row; 212 of them report both quantities in columns the

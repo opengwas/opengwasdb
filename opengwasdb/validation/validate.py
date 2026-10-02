@@ -52,7 +52,7 @@ from opengwasdb.model.enums import (
     StoredEffectScale,
 )
 from opengwasdb.stats import p_value_from_z
-from opengwasdb.store.arrays import open_group
+from opengwasdb.store.arrays import array_length, open_group
 from opengwasdb.store.open import (
     DENSE_ENVELOPE,
     HYBRID_DENSE_COMPONENT_ENVELOPE,
@@ -442,9 +442,9 @@ def _missing_csr_arrays(root: Any, errors: list[str]) -> bool:
 def _csr_parallel_length_errors(root: Any, n_assoc: int, errors: list[str]) -> None:
     """Record each parallel CSR array whose length disagrees with ``offsets``."""
     for name in ("variant_index", "z", "se"):
-        if len(root[name]) != n_assoc:
+        if array_length(root[name]) != n_assoc:
             errors.append(
-                f"data.zarr/ragged/{name} has {len(root[name])} entries "
+                f"data.zarr/ragged/{name} has {array_length(root[name])} entries "
                 f"but offsets imply {n_assoc}"
             )
 
@@ -500,9 +500,9 @@ def _validate_ragged_csr_values(
     # `eaf` is optional (ADR 0036); when present it is a fourth parallel
     # CSR array and must line up with the other three.
     if "eaf" in root:
-        if len(root["eaf"]) != n_assoc:
+        if array_length(root["eaf"]) != n_assoc:
             errors.append(
-                f"data.zarr/ragged/eaf has {len(root['eaf'])} entries "
+                f"data.zarr/ragged/eaf has {array_length(root['eaf'])} entries "
                 f"but offsets imply {n_assoc}"
             )
         else:
@@ -768,8 +768,8 @@ def _validate_ragged_top_hits(
             == len(ais)
             == len(zs)
             == len(abs_zs)
-            == len(group["se"])
-            == len(group["p_value"])
+            == array_length(group["se"])
+            == array_length(group["p_value"])
             and (imputed is None or len(imputed) == len(vis))
             and (eaf is None or len(eaf) == len(vis))
         ):
@@ -1590,7 +1590,7 @@ def _validate_per_variant_chunking(group: Any, errors: list[str], *, label: str)
         if name not in group:
             continue
         array = group[name]
-        expected = per_variant_chunk_size(group, len(array))
+        expected = per_variant_chunk_size(group, array_length(array))
         if int(array.chunks[0]) > expected:
             errors.append(
                 f"{label}/{name} has chunk shape {tuple(array.chunks)}; its per-variant "
@@ -1606,7 +1606,9 @@ def _se_coefficients_errors(group: Any, label: str) -> list[str]:
     """`se_coefficients` is `float32`, `(n_analyses, 2)`, and wholly finite."""
     coefficients = group["se_coefficients"]
     n_analyses = (
-        int(group["se"].shape[1]) if group["se"].ndim == 2 else int(len(group["offsets"]) - 1)
+        int(group["se"].shape[1])
+        if group["se"].ndim == 2
+        else array_length(group["offsets"]) - 1
     )
     if str(coefficients.dtype) != "float32" or tuple(coefficients.shape) != (n_analyses, 2):
         return [f"{label}/se_coefficients must have float32 shape ({n_analyses}, 2)"]
@@ -1617,7 +1619,12 @@ def _se_coefficients_errors(group: Any, label: str) -> list[str]:
 
 def _se_table_shape_errors(index: Any, value: Any, label: str) -> list[str]:
     """The two side arrays are parallel, one-dimensional and correctly typed."""
-    if index.ndim != 1 or value.ndim != 1 or len(index) != len(value):
+    if (
+        index.ndim != 1
+        or value.ndim != 1
+        # zarr 3 removed ``len(Array)``; the leading axis is the length.
+        or int(index.shape[0]) != int(value.shape[0])
+    ):
         return [f"{label} se exception arrays must be parallel one-dimensional arrays"]
     if str(index.dtype) != "int64" or str(value.dtype) != "float32":
         return [f"{label} se exception arrays must use int64 positions and float32 values"]
@@ -1967,14 +1974,14 @@ def _dense_eaf_side_lengths(root: Any, n_variants: int, errors: list[str]) -> No
     and a mis-sized one there would hand every imputed cell the frequency of
     some other variant (issue #113).
     """
-    if EAF_BASELINE in root and len(root[EAF_BASELINE]) != n_variants:
+    if EAF_BASELINE in root and array_length(root[EAF_BASELINE]) != n_variants:
         errors.append(
-            f"{EAF_BASELINE} has {len(root[EAF_BASELINE])} entries but the variant axis "
+            f"{EAF_BASELINE} has {array_length(root[EAF_BASELINE])} entries but the variant axis "
             f"has {n_variants}"
         )
-    if EAF_REFERENCE in root and len(root[EAF_REFERENCE]) != n_variants:
+    if EAF_REFERENCE in root and array_length(root[EAF_REFERENCE]) != n_variants:
         errors.append(
-            f"{EAF_REFERENCE} has {len(root[EAF_REFERENCE])} entries but the variant axis "
+            f"{EAF_REFERENCE} has {array_length(root[EAF_REFERENCE])} entries but the variant axis "
             f"has {n_variants}"
         )
 
@@ -2262,9 +2269,19 @@ def _top_hit_lengths_ok(a: dict[str, Any], group: Any) -> bool:
     """Whether every parallel array in the tier is the same length."""
     n = len(a["rows"])
     optional = [x for x in (a["imputed_values"], a["eaf_values"]) if x is not None]
+    # `a`'s entries are numpy arrays, `group["se"]`/`group["p_value"]` are Zarr
+    # arrays; zarr 3 removed ``len(Array)``, so every length is the leading
+    # axis (which is what ``len`` meant for the numpy ones too).
     return all(
-        len(x) == n
-        for x in [a["cols"], a["z_values"], a["abs_z"], group["se"], group["p_value"], *optional]
+        int(x.shape[0]) == n
+        for x in [
+            a["cols"],
+            a["z_values"],
+            a["abs_z"],
+            group["se"],
+            group["p_value"],
+            *optional,
+        ]
     )
 
 
@@ -2537,9 +2554,9 @@ def _validate_rho(root: Any, n_analyses: int, errors: list[str]) -> None:
 
     n_variants_used = int(group.attrs["n_variants_used"])
     variant_index = group["variant_index"]
-    if len(variant_index) != n_variants_used:
+    if array_length(variant_index) != n_variants_used:
         errors.append(
-            f"rho variant_index has {len(variant_index)} entries but "
+            f"rho variant_index has {array_length(variant_index)} entries but "
             f"n_variants_used attr says {n_variants_used}"
         )
 

@@ -91,12 +91,13 @@ def _flush_store(
     writer.flush(out, encoding)
     if imputed:
         rng = np.random.default_rng(seed)
-        group = zarr.open_group(str(out / "data.zarr" / "ragged"), mode="a")
-        group.create_dataset(
+        group = zarr.open_group(str(out / "data.zarr" / "ragged"), mode="a", zarr_format=2)
+        group.create_array(
             "imputed",
-            data=(rng.random(writer.n_associations) < 0.3).astype(np.uint8),
+            data=np.asarray(
+                (rng.random(writer.n_associations) < 0.3).astype(np.uint8), dtype="uint8"
+            ),
             chunks=(200_000,),
-            dtype="uint8",
         )
     return out
 
@@ -109,7 +110,7 @@ def _reference_tiers(
 ) -> tuple[zarr.Group, int]:
     """The materialising pre-streaming path, written to a scratch group."""
     columns, abs_z, n_analyses = _read_ragged_columns(store, encoding)
-    root = zarr.open_group(str(scratch), mode="w")
+    root = zarr.open_group(str(scratch), mode="w", zarr_format=2)
     compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
     for threshold in thresholds:
         write_threshold_tier(
@@ -229,12 +230,11 @@ def test_reference_completed_imputed_tiers_match_materialising(tmp_path: Path):
     store = _flush_store(tmp_path, "store", writer, encoding)
 
     rng = np.random.default_rng(3)
-    group = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="a")
-    group.create_dataset(
+    group = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="a", zarr_format=2)
+    group.create_array(
         "imputed",
-        data=(rng.random(writer.n_associations) < 0.3).astype(np.uint8),
+        data=np.asarray((rng.random(writer.n_associations) < 0.3).astype(np.uint8), dtype="uint8"),
         chunks=(200_000,),
-        dtype="uint8",
     )
     write_eaf_reference(group, rng.uniform(0.05, 0.95, _N_VARIANTS).astype(np.float32))
 

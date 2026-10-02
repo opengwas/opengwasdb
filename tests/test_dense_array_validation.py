@@ -44,7 +44,7 @@ def _band_state(n_analyses: int = 2) -> _DenseBandState:
 
 def test_required_planes_names_every_missing_plane():
     root = zarr.group()
-    root.create_dataset("z", data=np.zeros((3, 2), dtype="float16"))
+    root.create_array("z", data=np.zeros((3, 2), dtype="float16"))
     errors: list[str] = []
 
     planes = _dense_required_planes(root, errors)
@@ -65,8 +65,8 @@ def test_required_planes_reports_z_before_se_and_stops_the_pass():
 
 def test_required_planes_hands_back_present_planes():
     root = zarr.group()
-    z = root.create_dataset("z", data=np.zeros((3, 2), dtype="float16"))
-    se = root.create_dataset("se", data=np.zeros((3, 2), dtype="float16"))
+    z = root.create_array("z", data=np.zeros((3, 2), dtype="float16"))
+    se = root.create_array("se", data=np.zeros((3, 2), dtype="float16"))
 
     planes = _dense_required_planes(root, [])
 
@@ -78,9 +78,9 @@ def test_required_planes_hands_back_present_planes():
 
 def test_plane_shape_errors_record_every_misshaped_plane_in_order():
     root = zarr.group()
-    z = root.create_dataset("z", data=np.zeros((3, 2), dtype="int16"))
-    se = root.create_dataset("se", data=np.zeros((2, 2), dtype="float16"))
-    root.create_dataset("eaf", data=np.zeros((2, 2), dtype="float32"))
+    z = root.create_array("z", data=np.zeros((3, 2), dtype="int16"))
+    se = root.create_array("se", data=np.zeros((2, 2), dtype="float16"))
+    root.create_array("eaf", data=np.zeros((2, 2), dtype="float32"))
     errors: list[str] = []
 
     eaf_arr = _dense_plane_shape_errors(root, z, se, 3, 2, errors)
@@ -94,9 +94,9 @@ def test_plane_shape_errors_record_every_misshaped_plane_in_order():
 
 def test_plane_shape_errors_keep_an_aligned_eaf_plane():
     root = zarr.group()
-    z = root.create_dataset("z", data=np.zeros((3, 2), dtype="int16"))
-    se = root.create_dataset("se", data=np.zeros((3, 2), dtype="float16"))
-    eaf = root.create_dataset("eaf", data=np.zeros((3, 2), dtype="float32"))
+    z = root.create_array("z", data=np.zeros((3, 2), dtype="int16"))
+    se = root.create_array("se", data=np.zeros((3, 2), dtype="float16"))
+    eaf = root.create_array("eaf", data=np.zeros((3, 2), dtype="float32"))
 
     eaf_arr = _dense_plane_shape_errors(root, z, se, 3, 2, [])
 
@@ -106,8 +106,8 @@ def test_plane_shape_errors_keep_an_aligned_eaf_plane():
 
 def test_eaf_side_lengths_reject_short_per_variant_side_arrays():
     root = zarr.group()
-    root.create_dataset(EAF_BASELINE, data=np.zeros(4, dtype="float32"))
-    root.create_dataset(EAF_REFERENCE, data=np.zeros(5, dtype="float32"))
+    root.create_array(EAF_BASELINE, data=np.zeros(4, dtype="float32"))
+    root.create_array(EAF_REFERENCE, data=np.zeros(5, dtype="float32"))
     errors: list[str] = []
 
     _dense_eaf_side_lengths(root, 6, errors)

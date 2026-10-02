@@ -21,7 +21,7 @@ def _preliminary() -> StoreEncoding:
 
 def _dense_group(tmp_path, *, name: str, well_fitted: bool):
     """A Dense scratch plane whose SE either follows the MAF model or defies it."""
-    group = zarr.open_group(str(tmp_path / name), mode="w")
+    group = zarr.open_group(str(tmp_path / name), mode="w", zarr_format=2)
     eaf = np.linspace(0.05, 0.95, 600, dtype=np.float32)[:, None]
     predictor = np.log(2 * eaf * (1 - eaf))
     if well_fitted:
@@ -30,9 +30,11 @@ def _dense_group(tmp_path, *, name: str, well_fitted: bool):
         # Residuals far outside +-2, so every cell is an exception and the
         # coding cannot earn its bytes.
         se = np.exp(-3.0 - 0.5 * predictor + 6.0 * np.sin(np.arange(len(eaf))[:, None]))
-    group.create_dataset("eaf", data=eaf, chunks=(100, 1), dtype="float32")
-    group.create_dataset("se", data=se.astype(np.float32), chunks=(100, 1), dtype="float32")
-    group.create_dataset("z", data=np.ones_like(eaf), chunks=(100, 1), dtype="float16")
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=(100, 1))
+    group.create_array(
+        "se", data=np.asarray(se.astype(np.float32), dtype="float32"), chunks=(100, 1)
+    )
+    group.create_array("z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=(100, 1))
     return group
 
 

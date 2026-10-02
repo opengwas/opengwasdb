@@ -1064,7 +1064,8 @@ def positions_rows_cols(
 
     def resolve(mask: np.ndarray) -> np.ndarray:
         i, j = np.divmod(np.flatnonzero(mask).astype(np.int64), len(col_idx))
-        return row_idx[i] * n_analyses + col_idx[j]
+        positions: np.ndarray = row_idx[i] * n_analyses + col_idx[j]
+        return positions
 
     return resolve
 

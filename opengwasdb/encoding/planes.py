@@ -38,7 +38,12 @@ from opengwasdb.encoding.codec import (
     positions_rows_cols,
 )
 from opengwasdb.encoding.plan import EafBaselineError, StoreEncoding
-from opengwasdb.store.arrays import ArrayRole, component_variant_chunk, create_array
+from opengwasdb.store.arrays import (
+    ArrayRole,
+    component_variant_chunk,
+    compressor_of,
+    create_array,
+)
 
 SE_COEFFICIENTS = "se_coefficients"
 
@@ -295,7 +300,7 @@ class DenseSePlane:
         added = builder.table()
         merged.add(added.index, added.value)
         table = merged.table()
-        table.write(self._group, compressor=self._array.compressor)
+        table.write(self._group, compressor=compressor_of(self._array))
         self._codec = StoreCodec(self._codec.encoding, se_exceptions=table)
 
 

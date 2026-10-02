@@ -462,12 +462,12 @@ class TestValidation:
         # (not just resize it, which would leave an over-wide chunk and trip
         # the chunking rule first).
         root = open_store(completed_store).arrays(mode="a")
-        n = len(root["eaf_reference"])
+        n = root["eaf_reference"].shape[0]
         assert n > 1  # the fixture really has a per-variant reference to shrink
         values = root["eaf_reference"][: n - 1]
         dtype = root["eaf_reference"].dtype
         del root["eaf_reference"]
-        root.create_dataset("eaf_reference", data=values, chunks=(1,), dtype=dtype)
+        root.create_array("eaf_reference", data=np.asarray(values, dtype=dtype), chunks=(1,))
 
         result = validate_store(completed_store)
 

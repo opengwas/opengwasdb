@@ -403,12 +403,19 @@ def test_every_built_array_matches_the_seam_policy(conformance_stores: list[_Bui
                 assert tuple(int(size) for size in array.chunks) == expected_chunks, (
                     f"{where}: {role} chunks {tuple(array.chunks)} != seam layout {expected_chunks}"
                 )
-                actual_compressor = array.compressor.get_config() if array.compressor else None
+                # zarr 3 spells the v2 "single compressor" as a tuple and
+                # always returns a tuple of filters; the assertions below keep
+                # rejecting a second codec or any filter.
+                codecs = tuple(array.compressors or ())
+                actual_compressor = codecs[0].get_config() if len(codecs) == 1 else None
                 expected_compressor = _expected_compressor(path.rsplit("/", 1)[-1], seam)
+                assert len(codecs) <= 1, f"{where}: {role} has {len(codecs)} compressors"
                 assert actual_compressor == expected_compressor, (
                     f"{where}: {role} compressor {actual_compressor} != {expected_compressor}"
                 )
-                assert array.filters in (None, []), f"{where}: filters {array.filters}"
+                assert len(tuple(array.filters or ())) == 0, (
+                    f"{where}: filters {array.filters}"
+                )
                 if role is ArrayRole.DENSE_STATISTIC_PLANE:
                     expected_fill = (
                         array.dtype.type(0)

@@ -214,9 +214,9 @@ def test_top_hit_index_schema(tmp_path):
         group = root["top_hits"][key]
         for name in ("variant_index", "analysis_index", "abs_z", "z", "se", "p_value"):
             assert name in group, f"missing {name} in {key}"
-        n = len(group["variant_index"])
+        n = group["variant_index"].shape[0]
         for name in ("analysis_index", "abs_z", "z", "se", "p_value"):
-            assert len(group[name]) == n
+            assert group[name].shape[0] == n
         assert "threshold" in group.attrs
 
 
