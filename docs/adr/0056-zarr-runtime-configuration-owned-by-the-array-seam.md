@@ -27,7 +27,10 @@ Three causes were behind most of it:
 1. **Blosc ran single-threaded.** `import zarr` runs `numcodecs.blosc.use_threads = False`
    for the whole process (`zarr/codecs/blosc.py`). zarr 3 also decodes on worker threads,
    where numcodecs' adaptive default would say no anyway. A `[1000, 1000]` int16 chunk
-   decodes in about 4.5 ms single-threaded and about 1.1 ms threaded.
+   decodes in about 4.5 ms single-threaded and about 0.6 ms with Blosc's 8 threads.
+   That is from two runs on 4 Oct 2026, 4,440–4,490 µs against 596–602 µs. #244 first
+   quoted about 1.1 ms threaded from a run whose output was not kept, and threaded
+   decodes varied 2× between processes there.
 2. **The default `BatchedCodecPipeline`** schedules each chunk's fetch and decode as
    separate event-loop tasks. The opt-in `FusedCodecPipeline` (zarr ≥ 3.3) fetches, decodes
    and scatters a selection in one hop to a worker thread.
@@ -195,15 +198,23 @@ The reasoning for each setting is in the messages of commits `bd0b52d` (Blosc th
 measurements are in #244's Stage A re-run comment. The fork hang has a standalone
 reproducer in zarr-developers/zarr-python#4478.
 
-**The measurement scripts are not in this repository.** They are ad hoc scripts, run during
-#244, and they and their raw output are in `/tmp/epic240/244/levers/` on the IEU compute
-node. That is not a durable location:
+The measurements, and the scripts that made them, are in this repository. The outputs are in
+`docs/benchmark-output/opengwasdb_zarr3_read_levers/`, committed as produced; its
+`PROVENANCE.md` gives each output's script, commit and time. The scripts are in
+`benchmarks/`, documented in `benchmarks/README.md`:
 
-- `attribution/` and `scripts/run_attribution.sh`: the table above;
-- `decide_mw.out`: the worker count;
-- `fork_probe.out`, `fork_paths-*.log` and `observed-failing-fork-guard.log`: the fork hang;
-- `rss-pair-*.json`: peak memory;
-- `slice/cost_model.out`: the per-chunk fit.
+- the attribution table: `attribution/attribution.jsonl`, from `zarr3_attribution.py`, and
+  tabulated by `zarr3_lever_tables.py attribution`;
+- the decode times: `blosc_decode_{1,2}.json`, from `zarr3_blosc_decode.py`;
+- the worker count: `decide_mw.out`, from `zarr3_attribution.py`'s child;
+- the fork hang: `fork_probe.out`, `fork_paths-*.log`, `repro_pool_fork_min.out` and
+  `observed-failing-fork-guard.log`, from `zarr3_fork_probe.py`, `zarr3_fork_paths.py`,
+  `zarr3_pool_fork_repro.py` and the fork test;
+- write cost and compressed sizes: `encode_scope.out`, from `zarr3_encode_scope.py`;
+- peak memory: `rss-pair-*.json` and `rss-step1-head.json`, from the #242 harness;
+- the per-read and per-chunk costs: `slice/harness_geometry.json` and
+  `slice/cost_model.json`, from `shape_harness_geometry.py` and `shape_screen.py`.
 
-Until #246's harness re-measures under this configuration, treat these numbers as measured
-once, at #244, on zarr-python 3.4.0 and numcodecs 0.17.0.
+Apart from the decode times, these were measured once, at #244, on zarr-python 3.4.0 and
+numcodecs 0.17.0, and not re-run. Treat them that way until #246's harness re-measures under
+this configuration.

@@ -30,8 +30,9 @@ the end of this file.
   default `dimension_separator`, and empty `.zattrs` files).
 - **Blosc decodes with its internal threads again under zarr 3 (#244).**
   `import zarr` (3.x) sets `numcodecs.blosc.use_threads = False` for the whole
-  process, so every chunk decoded single-threaded: ~4.5 ms instead of ~1.1 ms
-  for a `[1000, 1000]` int16 chunk of OGS-00009. `opengwasdb.store.arrays`
+  process, so every chunk decoded single-threaded: ~4.5 ms instead of ~0.6 ms
+  with Blosc's 8 threads, for a `[1000, 1000]` int16 chunk of OGS-00009
+  (`benchmarks/zarr3_blosc_decode.py`). `opengwasdb.store.arrays`
   turns them back on for the process, as zarr 2.18 effectively had them on the
   main thread. Forked build workers stay single-threaded (numcodecs checks the
   pid), and every fork-pool build path still completes with `n_workers > 1`.
@@ -215,6 +216,25 @@ the end of this file.
   conflicting case-folded reference keys (stores #174).
 
 ### Added
+
+- **The measurements behind ADR 0056 and #244's read levers are in the
+  repository (#244).**
+  - The scripts are in `benchmarks/` and documented in `benchmarks/README.md`:
+    - the attribution of each lever (`zarr3_attribution.py`);
+    - fork safety (`zarr3_fork_probe.py`, `zarr3_fork_paths.py`, and
+      `zarr3_pool_fork_repro.py` for zarr-python#4478);
+    - build-output identity (`zarr3_fixture_trees.py`, `zarr3_compare_trees.py`,
+      `zarr3_encode_scope.py`, `zarr3_se_plan.py`) and answer identity
+      (`zarr3_spot_queries.py`);
+    - the 0.2.0 shape screen (`shape_slice.py`, `shape_harness_geometry.py`,
+      `shape_screen.py`);
+    - the duplicate EAF read (`eaf_read_split.py`, `eaf_semantics_check.py`, #253).
+  - The outputs are committed as produced under
+    `docs/benchmark-output/opengwasdb_zarr3_read_levers/`, with a `PROVENANCE.md`
+    giving each output's script, commit and time.
+  - `zarr3_lever_tables.py` regenerates every table #244, #246 and #253 quote.
+  - The one re-run, `zarr3_blosc_decode.py`, puts the threaded decode of a
+    `[1000, 1000]` chunk at ~0.6 ms, not the ~1.1 ms first quoted.
 
 - **One shared row-admission rule for the resolver and the Hybrid builder**
   (`opengwasdb.build.row_admission.admit_rows`, `keep = ~info_drop & ~maf_drop`),

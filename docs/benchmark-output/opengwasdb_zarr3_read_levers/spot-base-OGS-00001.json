@@ -1,0 +1,63 @@
+{
+  "analysis": {
+    "arrays": {
+      "analysis_index": "c145c5e7e4c42397",
+      "association_status": "22e6493c22f39738",
+      "eaf": "031f64889f7b5821",
+      "se": "d3921aa818e07c9e",
+      "variant_index": "52a376a01fd0a25c",
+      "z": "e556144d3e580a92"
+    },
+    "n_rows": 7449
+  },
+  "exposure": "ENSG00000164308::whole_blood",
+  "exposure_n_hits_5e8": 3358,
+  "identifier": "1:108353865:A:G",
+  "lookup": {
+    "arrays": {
+      "analysis_index": "15c68b8d78c21cb9",
+      "association_status": "fef295831c9a80b4",
+      "eaf": "c0f1088f4c8e1d01",
+      "se": "7e283c03e23494e0",
+      "variant_index": "349ec62966086377",
+      "z": "d375465a888ed459"
+    },
+    "n_rows": 1
+  },
+  "n_analyses": 10,
+  "n_variants": 86376,
+  "phewas": {
+    "arrays": {
+      "analysis_index": "15c68b8d78c21cb9",
+      "association_status": "fef295831c9a80b4",
+      "eaf": "c0f1088f4c8e1d01",
+      "se": "7e283c03e23494e0",
+      "variant_index": "349ec62966086377",
+      "z": "d375465a888ed459"
+    },
+    "n_rows": 1
+  },
+  "regional": {
+    "arrays": {
+      "analysis_index": "01433def80d89a6d",
+      "association_status": "404be7d8de7ec778",
+      "eaf": "ab568e7dbc2424c7",
+      "se": "f32668918600f0ed",
+      "variant_index": "ce08b4ea878c5cd2",
+      "z": "ebb204eb7c29ecbd"
+    },
+    "n_rows": 139
+  },
+  "store": "/data/opengwasdb/stores/OGS-00001/store.opengwasdb",
+  "top_hits": {
+    "arrays": {
+      "analysis_index": "64405f9fe123a96f",
+      "association_status": "7fabbe40bbe04e1d",
+      "eaf": "0cda4152a70689ed",
+      "se": "ca43861ef71fda49",
+      "variant_index": "9e62f0845fbfaccb",
+      "z": "634a2036d68102d5"
+    },
+    "n_rows": 3358
+  }
+}

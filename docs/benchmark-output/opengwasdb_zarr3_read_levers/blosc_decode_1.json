@@ -1,0 +1,23 @@
+{
+  "commit": "9b0be2c",
+  "measured_at": "2026-10-04T22:18:56.605990+00:00",
+  "chunk": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb/data.zarr/z/6543.1",
+  "reps": 300,
+  "numcodecs": "0.17.0",
+  "blosc_version": "1.21.7.dev",
+  "compressed_bytes": 1207974,
+  "uncompressed_bytes": 2000000,
+  "nthreads_default": 8,
+  "use_threads_default": null,
+  "cpu_count": 224,
+  "load_1m_before": 2.14,
+  "BLOSC_NTHREADS": null,
+  "default_us": 604.8,
+  "use_threads=False,nthreads=1_us": 4489.6,
+  "use_threads=False,nthreads=4_us": 2380.5,
+  "use_threads=False,nthreads=8_us": 2348.2,
+  "use_threads=True,nthreads=1_us": 2358.6,
+  "use_threads=True,nthreads=4_us": 1214.7,
+  "use_threads=True,nthreads=8_us": 601.6,
+  "load_1m_after": 2.69
+}

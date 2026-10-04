@@ -88,8 +88,9 @@ zarr.config.set({"array.write_empty_chunks": True})
 #: Blosc's internal threads, back on (#244).  ``import zarr`` runs
 #: ``numcodecs.blosc.use_threads = False`` for the whole process, and zarr 3
 #: decodes on worker threads where numcodecs' adaptive default would say no
-#: anyway, so every chunk decoded single-threaded: ~4.5 ms against ~1.1 ms for a
-#: ``[1000, 1000]`` int16 chunk of OGS-00009.  zarr 2.18 decoded on the main
+#: anyway, so every chunk decoded single-threaded: ~4.5 ms against ~0.6 ms with
+#: Blosc's 8 threads, for a ``[1000, 1000]`` int16 chunk of OGS-00009
+#: (``benchmarks/zarr3_blosc_decode.py``).  zarr 2.18 decoded on the main
 #: thread with 8 Blosc threads; this restores that.
 #:
 #: On its own, under zarr's default pipeline, it is not a speed-up: decodes

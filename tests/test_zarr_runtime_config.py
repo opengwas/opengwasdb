@@ -5,8 +5,9 @@ otherwise leave against us:
 
 * Blosc's internal threads.  ``import zarr`` sets
   ``numcodecs.blosc.use_threads = False`` for the whole process, which makes
-  every chunk decode single-threaded (~4.5 ms against ~1.1 ms for a
-  ``[1000, 1000]`` int16 chunk on OGS-00009).  The seam turns them back on.
+  every chunk decode single-threaded (~4.5 ms against ~0.6 ms with Blosc's 8
+  threads, for a ``[1000, 1000]`` int16 chunk on OGS-00009;
+  ``benchmarks/zarr3_blosc_decode.py``).  The seam turns them back on.
 * ``FusedCodecPipeline`` for every array the package opens, with one worker.
   With more than one, the pipeline keeps a module-level thread pool that zarr
   3.4's after-fork reset does not clear (zarr-developers/zarr-python#4478).  A

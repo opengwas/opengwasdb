@@ -1,0 +1,38 @@
+{
+ "phewas": {
+  "total_ms": 22.2,
+  "eaf_in_se_decode_ms": 4.18,
+  "eaf_for_result_ms": 5.86,
+  "result_eaf_share": 0.264
+ },
+ "regional_one_analysis": {
+  "total_ms": 51.84,
+  "eaf_in_se_decode_ms": 9.56,
+  "eaf_for_result_ms": 8.58,
+  "result_eaf_share": 0.165
+ },
+ "random_10x100": {
+  "total_ms": 90.77,
+  "eaf_in_se_decode_ms": 20.59,
+  "eaf_for_result_ms": 20.2,
+  "result_eaf_share": 0.223
+ },
+ "random_100x10": {
+  "total_ms": 569.44,
+  "eaf_in_se_decode_ms": 121.9,
+  "eaf_for_result_ms": 122.22,
+  "result_eaf_share": 0.215
+ },
+ "regional": {
+  "total_ms": 1719.93,
+  "eaf_in_se_decode_ms": 784.42,
+  "eaf_for_result_ms": 244.2,
+  "result_eaf_share": 0.142
+ },
+ "bulk": {
+  "total_ms": 22255.23,
+  "eaf_in_se_decode_ms": 5081.65,
+  "eaf_for_result_ms": 4825.84,
+  "result_eaf_share": 0.217
+ }
+}

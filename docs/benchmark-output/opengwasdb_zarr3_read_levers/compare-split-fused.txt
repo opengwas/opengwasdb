@@ -1,0 +1,4 @@
+base-stores vs trees-fused-n1: {'data_zarr_dirs': 14, 'chunk_files': 332, 'chunk_files_differing': 0, 'metadata_files': 546, 'metadata_bytes_differing': 546, 'metadata_json_differing': 398, 'files_not_in_both_excluding_empty_zattrs': 0}
+head-stores vs trees-fused-n1: {'data_zarr_dirs': 14, 'chunk_files': 332, 'chunk_files_differing': 0, 'metadata_files': 950, 'metadata_bytes_differing': 0, 'metadata_json_differing': 0, 'files_not_in_both_excluding_empty_zattrs': 0}
+base-stores vs trees-fused-default: {'data_zarr_dirs': 14, 'chunk_files': 332, 'chunk_files_differing': 20, 'metadata_files': 546, 'metadata_bytes_differing': 546, 'metadata_json_differing': 398, 'files_not_in_both_excluding_empty_zattrs': 0}
+head-stores vs trees-fused-default: {'data_zarr_dirs': 14, 'chunk_files': 332, 'chunk_files_differing': 20, 'metadata_files': 950, 'metadata_bytes_differing': 0, 'metadata_json_differing': 0, 'files_not_in_both_excluding_empty_zattrs': 0}

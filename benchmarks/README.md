@@ -638,6 +638,109 @@ misrepresent what was measured.
 
 ---
 
+### #244: zarr-python 3's read levers, and the 0.2.0 shape screen
+
+#244 moved the package to zarr-python 3.4. These scripts measured what that
+cost, which runtime settings recovered it (ADR 0056), and whether the move is
+safe for builds. They also screened chunk shapes for format 0.2.0 (#246), and
+measured the duplicate EAF read (#253). Their outputs are committed under
+`docs/benchmark-output/opengwasdb_zarr3_read_levers/`.
+`PROVENANCE.md` in that directory says, for each output, which script made it,
+which commit it measured and when. Most were measured once at #244 and not
+re-run.
+
+`_zarr3_levers.py` holds what the scripts share: the pipeline labels, the order
+the shapes were timed in, and the readers for the attribution and harness
+outputs. The shapes themselves are `_query_shapes.common_query_patterns`.
+
+| Script | Measures | Output (in the directory above) |
+|---|---|---|
+| `zarr3_attribution.py` | the query shapes per zarr configuration, each in a fresh process under the checkout and environment it measures, configurations interleaved per round | `attribution/attribution.jsonl`, `decide_mw.out` |
+| `zarr3_lever_tables.py` | the tables #244, #240, #246 and #253 quote, from those outputs | stdout |
+| `zarr3_blosc_decode.py` | one real `[1000, 1000]` chunk's decode time, Blosc threads off and on | `blosc_decode_{1,2}.json` |
+| `zarr3_fork_probe.py` | whether forked workers finish their read under each lever | `fork_probe.out` |
+| `zarr3_pool_fork_repro.py` | the standalone reproducer for zarr-developers/zarr-python#4478 | `repro_pool_fork_min.out` |
+| `zarr3_fork_paths.py` | every fork-pool build path at `n_workers=2`, after the parent used the levers | `fork_paths-*.log` |
+| `zarr3_fixture_trees.py` | one fixture store per builder path, with a given checkout's code | (trees, not committed) |
+| `zarr3_compare_trees.py` | two such trees: chunk bytes apart from metadata, and whether differing chunks decode equal | `compare-split-*.txt`, `chunk-diff-decode-fused-default.json` |
+| `zarr3_encode_scope.py` | compressed tile sizes and band-write time per lever, on real OGS-00009 | `encode_scope.out` |
+| `zarr3_se_plan.py` | the SE encoding plan chosen on a real OGS-00009 slice, per lever and worker count | `se_plan_check*.out` |
+| `zarr3_spot_queries.py` | spot queries with every returned array hashed, and the comparison of two records | `spot-*.json`, `spot-step1-compare.txt` |
+| `shape_slice.py` | a 100,000-variant slice of OGS-00009 `z` in candidate shapes; its raw reads; per-plane decode times | `slice/slice_read_*.jsonl`, `slice/round1/`, `slice/decode_by_plane.jsonl`, `slice_build.out` |
+| `shape_harness_geometry.py` | the arrays and chunks each harness shape reads, re-expressed per candidate chunk | `slice/harness_geometry.json` |
+| `shape_screen.py` | the read cost model, the shape screen, the expected 0.2.0 times, the model's rank check, the slice table | `slice/{cost_model,screen,expected_020,screen_rank_check}.{json,out}` |
+| `eaf_read_split.py` | each query's time inside the EAF reads, split by caller (#253) | `eaf/eaf_split_{1,2}.json` |
+| `eaf_semantics_check.py` | which EAF residual SE decodes against on a Reference-Completed release (#253) | `eaf/eaf_semantics_check.json` |
+
+The #242 harness made the paired 2.18 / zarr 3 runs (`stage-a*`) and the
+peak-memory runs (`rss-*`), each environment running its own checkout's copy:
+
+```bash
+(cd /path/to/base && pixi run -e dev python benchmarks/benchmark_store_comparison.py \
+    --store zarr2=/data/opengwasdb/stores/OGS-00009/store.opengwasdb \
+    --reps 3 --skip-rss --output /tmp/stage-a-step1-base.json)
+pixi run -e dev python benchmarks/benchmark_store_comparison.py \
+    --store zarr3=/data/opengwasdb/stores/OGS-00009/store.opengwasdb \
+    --reps 3 --skip-rss --output /tmp/stage-a-step1-head.json
+# Peak memory: the same with --reps 1 and without --skip-rss.
+```
+
+**Usage.** OGS-00009 is `/data/opengwasdb/stores/OGS-00009/store.opengwasdb` on
+the IEU compute node. The query selection is the one the committed #242
+baseline recorded. Start a timing run only when the 1-minute load is below 3.
+
+```bash
+# The attribution: five configurations, three rounds. The checkouts are the
+# zarr 2.18 base (745796c, with its own environment), 708d179 from before the
+# levers, and the head.
+pixi run -e dev python benchmarks/zarr3_attribution.py \
+    --store $OGS9 \
+    --selection docs/benchmark-output/opengwasdb_store_comparison_ogs00009_zarr2.json \
+    --config base_218=default:$BASE:$BASE/.pixi/envs/dev/bin/python \
+    --config i_none=default:$C708:$HEAD_PY \
+    --config ii_bt=default+bt:$C708:$HEAD_PY \
+    --config iii_bt_fused=fused_mw1+bt:$C708:$HEAD_PY \
+    --config iv_head=asis:.:$HEAD_PY \
+    --rounds 3 --reps 7 --with-bulk --output-dir /tmp/attribution
+pixi run -e dev python benchmarks/zarr3_lever_tables.py attribution   # or pairs, memory, ...
+
+# Fork safety. A hang is the failure looked for: the probe prints HANG and exits 3.
+pixi run -e dev python benchmarks/zarr3_fork_probe.py fused_mw1+bt --scratch /tmp/probe
+pixi run -e dev python benchmarks/zarr3_pool_fork_repro.py --max-workers 1
+timeout 600 pixi run -e dev python benchmarks/zarr3_fork_paths.py --out /tmp/fork-paths \
+    --store $OGS9
+
+# Build output: build the trees under each checkout with BLOSC_NTHREADS=1, then compare.
+BLOSC_NTHREADS=1 pixi run -e dev python benchmarks/zarr3_fixture_trees.py --repo . \
+    --out /tmp/trees-head
+pixi run -e dev python benchmarks/zarr3_compare_trees.py split /tmp/trees-base /tmp/trees-head
+pixi run -e dev python benchmarks/zarr3_encode_scope.py fused_mw1+bt --store $OGS9 \
+    --scratch /tmp/enc
+pixi run -e dev python benchmarks/zarr3_se_plan.py asis 4 --store $OGS9 --scratch /tmp/se
+
+# The 0.2.0 screen: build the slice, read it (shape_slice.py's docstring has the
+# three-round loop), then run the analysis steps in order.
+pixi run -e dev python benchmarks/shape_slice.py build --source $OGS9 --out /tmp/slice
+pixi run -e dev python benchmarks/shape_slice.py decode --source $OGS9 >> decode_by_plane.jsonl
+pixi run -e dev python benchmarks/shape_harness_geometry.py --store $OGS9 \
+    --output harness_geometry.json
+S="pixi run -e dev python benchmarks/shape_screen.py"   # each step reads the one before
+$S cost-model --outputs $OUT --json $OUT/slice/cost_model.json
+$S screen --outputs $OUT --json $OUT/slice/screen.json
+$S expected --outputs $OUT --json $OUT/slice/expected_020.json
+$S rank-check --outputs $OUT --json $OUT/slice/screen_rank_check.json
+```
+
+The analysis scripts (`zarr3_lever_tables.py`, `shape_screen.py`) read the
+committed directory by default, so they reproduce the committed tables and
+JSON without a store. Every table #244, #246 and #253 quotes is byte-identical
+to their output. `shape_screen.py cost-model` matches the committed
+`cost_model.json` except in the last digits of its floats, and so does the
+original script re-run: the least-squares fit is not bit-reproducible run to
+run.
+
+---
+
 ## Comparison document
 
 After all JSONs are present in `docs/benchmark-output/`, render the comparison report:
