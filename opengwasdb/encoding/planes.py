@@ -17,6 +17,7 @@ frequencies that are wrong and plausible (issue #99, issue #106).
 from __future__ import annotations
 
 from collections.abc import Sequence
+from functools import cached_property
 from typing import Any
 
 import numpy as np
@@ -443,6 +444,13 @@ class DenseEafPlane(_EafPlaneBase):
         for candidate in (self._array, self._imputed):
             if candidate is not None:
                 return int(candidate.shape[1])
+        return self._sibling_width
+
+    @cached_property
+    def _sibling_width(self) -> int:
+        """The `z` plane's width, opened once: under zarr 3 every
+        ``name in group`` and ``group[name]`` reads metadata from the store, and
+        a regional query asks for the width on every call (#244)."""
         if self._group is not None and "z" in self._group:
             return int(self._group["z"].shape[1])
         raise EafBaselineError(

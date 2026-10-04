@@ -51,6 +51,15 @@ the end of this file.
   chunk would wait forever on threads that exist only in the parent. Built
   stores are unchanged: fixture chunk files stay byte-identical under
   `BLOSC_NTHREADS=1`.
+- **A query facade opens each top-hit array once, not on every query (#244).**
+  zarr 3 reads an array's metadata from the store on every `group[name]` and
+  `name in group` (~1 ms each), and the top-hit path reopened the tier group
+  and every field on every call: repeating a tier query and a per-Analysis
+  query read 63 (Dense), 65 (Ragged) and 134 (Hybrid) metadata keys on the
+  test fixtures, and now reads none. `DenseTopHitReader` keeps the arrays it opens, and a new `TopHitTiers`
+  keeps one reader per threshold for the facade's lifetime. A Dense release
+  with no `eaf` plane also stops reopening `z` for the grid width on every
+  regional query. Answers are unchanged.
 
 - **The GWAS-SSF reader recovers a row's effect and standard error from the
   row's own columns (stores #176).** A full OGS-00011 resolve found 476 Analyses
