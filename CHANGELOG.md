@@ -40,13 +40,17 @@ the end of this file.
   of two or more Blosc blocks (every `[1000, 1000]` Dense chunk) compressed in
   the build's parent process is no longer byte-reproducible run to run: its
   decoded values and compressed size are, so the SE encoding plan is
-  unaffected. Byte-for-byte store comparisons need `BLOSC_NTHREADS=1`.
+  unaffected. Byte-for-byte store comparisons need `BLOSC_NTHREADS=1`. On its
+  own, under zarr's default pipeline, this is not a speed-up (decodes from
+  zarr's thread pool queue on numcodecs' lock); it pays off with the next
+  entry.
 - **Every Store array reads and writes through zarr's `FusedCodecPipeline`,
   with one worker (#244).** `opengwasdb.store.arrays` sets
   `codec_pipeline.path` and `codec_pipeline.max_workers = 1` on import. With
-  Blosc threads on, one Analysis genome-wide on OGS-00009 went from 37.5 s to
-  ~26 s (zarr 2.18: 29.7 s). One worker is measured faster than the pipeline's
-  default pool, and it is what keeps fork pools working: zarr 3.4 does not
+  Blosc threads on, one Analysis genome-wide on OGS-00009 went from 88 s to
+  24 s (zarr 2.18: 26 s; medians of three fresh processes). One worker is
+  measured faster than the pipeline's default pool, and it is what keeps fork
+  pools working: zarr 3.4 does not
   reset that pool in a forked process, so a build worker reading more than one
   chunk would wait forever on threads that exist only in the parent. Built
   stores are unchanged: fixture chunk files stay byte-identical under
@@ -56,10 +60,12 @@ the end of this file.
   `name in group` (~1 ms each), and the top-hit path reopened the tier group
   and every field on every call: repeating a tier query and a per-Analysis
   query read 63 (Dense), 65 (Ragged) and 134 (Hybrid) metadata keys on the
-  test fixtures, and now reads none. `DenseTopHitReader` keeps the arrays it opens, and a new `TopHitTiers`
-  keeps one reader per threshold for the facade's lifetime. A Dense release
-  with no `eaf` plane also stops reopening `z` for the grid width on every
-  regional query. Answers are unchanged.
+  test fixtures, and now reads none. On OGS-00009 a per-Analysis top-hit
+  query went from 21 ms to 7 ms (zarr 2.18: 1.1 ms). `DenseTopHitReader` keeps
+  the arrays it opens, and a new `TopHitTiers` keeps one reader per threshold
+  for the facade's lifetime. A Dense release with no `eaf` plane also stops
+  reopening `z` for the grid width on every regional query. Answers are
+  unchanged.
 
 - **The GWAS-SSF reader recovers a row's effect and standard error from the
   row's own columns (stores #176).** A full OGS-00011 resolve found 476 Analyses

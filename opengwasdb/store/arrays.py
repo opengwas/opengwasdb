@@ -88,9 +88,15 @@ zarr.config.set({"array.write_empty_chunks": True})
 #: ``numcodecs.blosc.use_threads = False`` for the whole process, and zarr 3
 #: decodes on worker threads where numcodecs' adaptive default would say no
 #: anyway, so every chunk decoded single-threaded: ~4.5 ms against ~1.1 ms for a
-#: ``[1000, 1000]`` int16 chunk of OGS-00009, and 52 s against 37 s for one
-#: Analysis genome-wide.  zarr 2.18 decoded on the main thread with 8 Blosc
-#: threads; this restores that.
+#: ``[1000, 1000]`` int16 chunk of OGS-00009.  zarr 2.18 decoded on the main
+#: thread with 8 Blosc threads; this restores that.
+#:
+#: On its own, under zarr's default pipeline, it is not a speed-up: decodes
+#: issued concurrently from zarr's pool queue on numcodecs' lock (below), so
+#: one Analysis genome-wide went from 76 s to 88 s and random lookups slowed by
+#: 21-41%, while phewas went from 50 ms to 34 ms (medians of three fresh
+#: processes).  It pays off with the one-worker fused pipeline below, which
+#: decodes one chunk at a time with all of Blosc's threads.
 #:
 #: It is safe, from numcodecs 0.17 (the pinned floor) and its c-blosc 1.21.7:
 #:
@@ -126,7 +132,9 @@ numcodecs.blosc.use_threads = True
 #: schedules each chunk's fetch and decode as separate event-loop tasks; the
 #: fused one fetches, decodes and scatters a whole selection in one hop to a
 #: worker thread.  On OGS-00009 with Blosc threads on it took one Analysis
-#: genome-wide from 37.5 s to 25.7-26.5 s (zarr 2.18: 29.7 s).
+#: genome-wide from 88 s to 24 s (zarr 2.18: 26 s), random lookups from 186 ms
+#: and 1,051 ms to 103 ms and 575 ms, and phewas from 34 ms to 23 ms (medians
+#: of three fresh processes each).
 #:
 #: ``max_workers = 1`` is the measured choice, and the fork-safe one:
 #:
