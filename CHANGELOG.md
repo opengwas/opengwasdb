@@ -28,6 +28,19 @@ the end of this file.
   after the upgrade decodes identically and holds byte-identical chunk files;
   only metadata serialisation differs (zarr 3's JSON layout, an explicit
   default `dimension_separator`, and empty `.zattrs` files).
+- **Blosc decodes with its internal threads again under zarr 3 (#244).**
+  `import zarr` (3.x) sets `numcodecs.blosc.use_threads = False` for the whole
+  process, so every chunk decoded single-threaded: ~4.5 ms instead of ~1.1 ms
+  for a `[1000, 1000]` int16 chunk of OGS-00009. `opengwasdb.store.arrays`
+  turns them back on for the process, as zarr 2.18 effectively had them on the
+  main thread. Forked build workers stay single-threaded (numcodecs checks the
+  pid), and every fork-pool build path still completes with `n_workers > 1`.
+  The floor moves to `numcodecs>=0.17`, the first release that locks Blosc's
+  global context on decompress as well as compress. As under zarr 2.18, a chunk
+  of two or more Blosc blocks (every `[1000, 1000]` Dense chunk) compressed in
+  the build's parent process is no longer byte-reproducible run to run: its
+  decoded values and compressed size are, so the SE encoding plan is
+  unaffected. Byte-for-byte store comparisons need `BLOSC_NTHREADS=1`.
 
 - **The GWAS-SSF reader recovers a row's effect and standard error from the
   row's own columns (stores #176).** A full OGS-00011 resolve found 476 Analyses

@@ -8,7 +8,7 @@ change it -- the switch to Zarr v3 sharding (#247) and the converter that has
 to reproduce the same layout (#245) -- cannot disagree about how an array is
 laid out.
 
-The seam owns four things:
+The seam owns five things:
 
 * **the compressor**, `compressor()`, one Blosc zstd / clevel 3 / bitshuffle
   configuration described by `COMPRESSOR_RECORD`.  The record is the same dict
@@ -32,6 +32,11 @@ The seam owns four things:
   seam is the only code that hands it to Zarr.  Omitting `fill_value` means
   "the dtype's default", which is *not* the same as `fill_value=None` and is
   what several whole-array writes rely on.
+* **zarr's process-wide runtime configuration** (the section after the
+  imports): chunks that are all fill value are still written, and Blosc
+  decodes with its internal threads.  zarr-python 3 holds these in runtime
+  config rather than array metadata, so they are set once, when this module is
+  imported (#244).
 
 The role -> layout policy is one table in this module (`_LAYOUTS`) and nothing
 else chooses chunks.  A role that does not fit an existing entry gets a new
@@ -40,6 +45,7 @@ one rather than a call site that passes `chunks=` by hand.
 
 from __future__ import annotations
 
+import importlib
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -48,9 +54,23 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+import numcodecs
 import numpy as np
 import zarr
 from numcodecs import Blosc
+
+# The module whose import switches Blosc's threads off.  ``import zarr`` loads
+# it today; importing it by name makes sure it has run before the setting below
+# turns them back on, should zarr ever load it lazily.  (`importlib` rather than
+# an import statement so mypy does not follow into zarr's sources.)
+importlib.import_module("zarr.codecs.blosc")
+
+# ── zarr runtime configuration ───────────────────────────────────────────────
+#
+# zarr-python 3 keeps three behaviours in process-wide runtime config rather
+# than in array metadata.  They are set here, once, in the module every Store
+# array is created and opened through, so every array the package touches gets
+# them and none can be opened without them.
 
 #: zarr 2 wrote every chunk, including one that is entirely the fill value: its
 #: ``write_empty_chunks`` default was True.  zarr-python 3 defaults it to False,
@@ -62,6 +82,43 @@ from numcodecs import Blosc
 #: array this package creates or reopens then writes empty chunks as zarr 2
 #: did.  #247 must revisit this when builders move to Zarr v3 shards.
 zarr.config.set({"array.write_empty_chunks": True})
+
+#: Blosc's internal threads, back on (#244).  ``import zarr`` runs
+#: ``numcodecs.blosc.use_threads = False`` for the whole process, and zarr 3
+#: decodes on worker threads where numcodecs' adaptive default would say no
+#: anyway, so every chunk decoded single-threaded: ~4.5 ms against ~1.1 ms for a
+#: ``[1000, 1000]`` int16 chunk of OGS-00009, and 52 s against 37 s for one
+#: Analysis genome-wide.  zarr 2.18 decoded on the main thread with 8 Blosc
+#: threads; this restores that.
+#:
+#: It is safe, from numcodecs 0.17 (the pinned floor) and its c-blosc 1.21.7:
+#:
+#: * threads: a threaded call uses Blosc's one global context, and numcodecs
+#:   serialises every such call -- compress and decompress -- under a module
+#:   ``threading.Lock``, with the GIL released inside it.  Concurrent decodes
+#:   queue rather than race.  (0.16 did not take the lock on decompress.)
+#: * forks: a forked process never uses the global context, because numcodecs
+#:   compares the pid with the importing process's and runs single-threaded
+#:   context functions in a child whatever ``use_threads`` says; it also
+#:   re-creates its lock in the child, and c-blosc discards the inherited global
+#:   context in its own ``pthread_atfork`` child handler.
+#:
+#: It is global because the flag is: numcodecs has no per-call or per-thread
+#: form, so a "query-only" switch could only mean "on from the first query
+#: onwards", a mode that depends on what a process did earlier.  The cost
+#: falls on builds, and it is the one zarr 2.18 already had: a chunk of at
+#: least two Blosc blocks (256 KiB uncompressed at zstd clevel 3, so every
+#: ``[1000, 1000]`` Dense chunk) compressed in the parent writes its blocks in
+#: completion order, so its bytes differ run to run while its decoded values
+#: and its compressed size do not.  Compare built stores byte for byte under
+#: ``BLOSC_NTHREADS=1``, as #243 did.  The SE plan reads compressed sizes only,
+#: and forked workers stay single-threaded.
+if not hasattr(numcodecs.blosc, "use_threads"):
+    raise ImportError(
+        "numcodecs.blosc no longer has `use_threads`; the seam cannot restore threaded "
+        "Blosc decoding, and setting the old name would silently do nothing (#244)"
+    )
+numcodecs.blosc.use_threads = True
 
 __all__ = [
     "ASSOCIATION_OFFSETS_CHUNK",
