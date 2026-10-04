@@ -33,9 +33,10 @@ The seam owns five things:
   "the dtype's default", which is *not* the same as `fill_value=None` and is
   what several whole-array writes rely on.
 * **zarr's process-wide runtime configuration** (the section after the
-  imports): chunks that are all fill value are still written, and Blosc
-  decodes with its internal threads.  zarr-python 3 holds these in runtime
-  config rather than array metadata, so they are set once, when this module is
+  imports): chunks that are all fill value are still written, Blosc decodes
+  with its internal threads, and every array goes through zarr's fused codec
+  pipeline with one worker.  zarr-python 3 holds these in runtime config
+  rather than array metadata, so they are set once, when this module is
   imported (#244).
 
 The role -> layout policy is one table in this module (`_LAYOUTS`) and nothing
@@ -119,6 +120,37 @@ if not hasattr(numcodecs.blosc, "use_threads"):
         "Blosc decoding, and setting the old name would silently do nothing (#244)"
     )
 numcodecs.blosc.use_threads = True
+
+#: Every array reads and writes through zarr's ``FusedCodecPipeline`` (opt-in
+#: from zarr 3.3), with one worker (#244).  The default ``BatchedCodecPipeline``
+#: schedules each chunk's fetch and decode as separate event-loop tasks; the
+#: fused one fetches, decodes and scatters a whole selection in one hop to a
+#: worker thread.  On OGS-00009 with Blosc threads on it took one Analysis
+#: genome-wide from 37.5 s to 25.7-26.5 s (zarr 2.18: 29.7 s).
+#:
+#: ``max_workers = 1`` is the measured choice, and the fork-safe one:
+#:
+#: * With Blosc threads on, chunk decodes queue on numcodecs' lock anyway, so a
+#:   pool of workers adds contention, not decode throughput: with its default
+#:   pool (one worker per core) the same read took 41-45 s, and random lookups
+#:   were 23-42% slower; only a 4.2M-row regional read gained, by ~7%.
+#: * With more than one worker the pipeline keeps a module-level
+#:   ``ThreadPoolExecutor``, and zarr 3.4's after-fork reset clears its event
+#:   loop and executor but not that pool.  A forked build worker reading more
+#:   than one chunk then hands the work to threads that exist only in the
+#:   parent and never returns -- reproduced with the package's own
+#:   ``ordered_map``.  With one worker the pool is never created.
+#:
+#: Writes take the same path: a band write encodes its chunks one at a time
+#: (multi-threaded inside Blosc), as zarr 2.18 did.  A forked worker decodes
+#: single-threaded and now also one chunk at a time.
+_FUSED_PIPELINE = "zarr.core.codec_pipeline.FusedCodecPipeline"
+if not hasattr(importlib.import_module("zarr.core.codec_pipeline"), "FusedCodecPipeline"):
+    raise ImportError(
+        f"{_FUSED_PIPELINE} is gone; the seam's read path and its fork guard were "
+        "written for it (#244)"
+    )
+zarr.config.set({"codec_pipeline.path": _FUSED_PIPELINE, "codec_pipeline.max_workers": 1})
 
 __all__ = [
     "ASSOCIATION_OFFSETS_CHUNK",
