@@ -71,7 +71,8 @@ importlib.import_module("zarr.codecs.blosc")
 # zarr-python 3 keeps three behaviours in process-wide runtime config rather
 # than in array metadata.  They are set here, once, in the module every Store
 # array is created and opened through, so every array the package touches gets
-# them and none can be opened without them.
+# them and none can be opened without them.  ADR 0056 records why each is set,
+# what was rejected and what it costs.
 
 #: zarr 2 wrote every chunk, including one that is entirely the fill value: its
 #: ``write_empty_chunks`` default was True.  zarr-python 3 defaults it to False,
@@ -140,14 +141,19 @@ numcodecs.blosc.use_threads = True
 #:
 #: * With Blosc threads on, chunk decodes queue on numcodecs' lock anyway, so a
 #:   pool of workers adds contention, not decode throughput: with its default
-#:   pool (one worker per core) the same read took 41-45 s, and random lookups
-#:   were 23-42% slower; only a 4.2M-row regional read gained, by ~7%.
+#:   pool (224 workers here) the same read took 41-46 s, and random lookups
+#:   were 23-42% slower; only the one-window read (4,241,966 associations)
+#:   gained, by ~7%.
 #: * With more than one worker the pipeline keeps a module-level
 #:   ``ThreadPoolExecutor``, and zarr 3.4's after-fork reset clears its event
-#:   loop and executor but not that pool.  A forked build worker reading more
-#:   than one chunk then hands the work to threads that exist only in the
-#:   parent and never returns -- reproduced with the package's own
-#:   ``ordered_map``.  With one worker the pool is never created.
+#:   loop and executor but not that pool (zarr-developers/zarr-python#4478).
+#:   A forked build worker inherits the pool without its threads.  A read there
+#:   of more than one chunk, but of no more chunks than the idle permits the
+#:   parent's pool left, queues work that nothing runs and never returns --
+#:   reproduced with the package's own ``ordered_map`` and on OGS-00009's
+#:   top-hit gather.  A single-chunk read never uses the pool, so one-chunk
+#:   fixtures cannot show it.  With one worker the pool is never created; do
+#:   not raise ``max_workers`` (ADR 0056).
 #:
 #: Writes take the same path: a band write encodes its chunks one at a time
 #: (multi-threaded inside Blosc), as zarr 2.18 did.  A forked worker decodes

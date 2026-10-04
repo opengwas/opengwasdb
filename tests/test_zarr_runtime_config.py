@@ -9,9 +9,15 @@ otherwise leave against us:
   ``[1000, 1000]`` int16 chunk on OGS-00009).  The seam turns them back on.
 * ``FusedCodecPipeline`` for every array the package opens, with one worker.
   With more than one, the pipeline keeps a module-level thread pool that zarr
-  3.4's after-fork reset does not clear, so a forked build worker that reads
-  more than one chunk hands work to threads that exist only in the parent and
-  never returns.
+  3.4's after-fork reset does not clear (zarr-developers/zarr-python#4478).  A
+  forked build worker inherits it without its threads: a read there of more
+  than one chunk, but of no more chunks than the idle permits the parent's pool
+  left, queues work that nothing runs and never returns.  A single-chunk read
+  never uses the pool, so the fork test reads several chunks, in the parent
+  and in each worker.
+
+A timeout in the fork test means ADR 0056's constraint was broken, not that the
+test is slow; do not raise ``_TIMEOUT_S`` to make it pass.
 
 Each case runs in a fresh interpreter.  The settings are process-global and
 depend on import order, so asserting them inside the pytest process would pass

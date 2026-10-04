@@ -50,11 +50,16 @@ the end of this file.
   Blosc threads on, one Analysis genome-wide on OGS-00009 went from 88 s to
   24 s (zarr 2.18: 26 s; medians of three fresh processes). One worker is
   measured faster than the pipeline's default pool, and it is what keeps fork
-  pools working: zarr 3.4 does not
-  reset that pool in a forked process, so a build worker reading more than one
-  chunk would wait forever on threads that exist only in the parent. Built
+  pools working: zarr 3.4 does not reset that pool in a forked process
+  (zarr-developers/zarr-python#4478), so a build worker whose read spans more
+  than one chunk, but no more chunks than the idle permits the parent's pool
+  left, would wait forever on threads that exist only in the parent. Built
   stores are unchanged: fixture chunk files stay byte-identical under
   `BLOSC_NTHREADS=1`.
+- **ADR 0056 records the zarr runtime configuration the array seam owns
+  (#244):** `write_empty_chunks`, Blosc threads, the fused pipeline and its one
+  worker, with the options rejected and their costs. `max_workers` must stay at
+  1 until zarr resets the pipeline's pool after `fork`.
 - **A query facade opens each top-hit array once, not on every query (#244).**
   zarr 3 reads an array's metadata from the store on every `group[name]` and
   `name in group` (~1 ms each), and the top-hit path reopened the tier group
