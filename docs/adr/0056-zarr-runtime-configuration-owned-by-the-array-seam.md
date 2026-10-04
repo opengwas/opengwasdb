@@ -66,6 +66,16 @@ configuration, not stored metadata, so a per-array value is lost the moment an a
 reopened. It is set process-wide (`708d179`). #247 revisits it when builders write Zarr v3
 shards.
 
+**Enforced by** the files builds write, not by the setting:
+
+- `tests/test_array_conformance.py` requires every chunk of every array in every
+  fixture build to exist as a file. The fixtures write 358 chunk files, some of them
+  entirely fill, and the test asserts that some are.
+- `tests/test_zarr_runtime_config.py` writes all-fill arrays whole and band by band, in
+  the parent and in fork-pool workers, and counts the files.
+- Both fail with the setting removed. The same conformance module also requires every
+  build to write Zarr v2 metadata under a manifest declaring 0.1.0.
+
 ### 2. Blosc's internal threads on, process-wide
 
 `numcodecs.blosc.use_threads = True` is set after importing `zarr.codecs.blosc` by name. That
@@ -131,6 +141,29 @@ behind `max_workers > 1`.
 **A timeout in that last test means this constraint was broken, not that the test is
 slow.** Do not raise its timeout to make it pass.
 
+### 4. Writes refuse a group that consolidated metadata describes
+
+zarr 3's `open_group` reads consolidated metadata in place of the live array metadata
+whenever a record exists. A record is a v2 `.zmetadata`, or a v3 `consolidated_metadata`
+block in `zarr.json`. zarr 2.18's `open_group` ignored it.
+
+Nothing the package writes updates such a record, whether it creates, deletes or moves an
+array. A write beneath one therefore leaves a release whose next open reads stale shapes
+and chunks. The #244 review reproduced this: an EAF repair moved a rechunked
+`eaf_baseline` into place, and the release then reopened with its old `(8,)` chunks and
+failed to reshape.
+
+The package never consolidates, and no registered Store Release carries a record (checked
+5 Oct 2026). So the seam refuses, before changing anything, when a record describes the
+group:
+
+- every open in a mode other than `r`, checking the group's own directory and every
+  enclosing group's (`mode="w"` deletes the group's own record, so only enclosing ones
+  count);
+- `move_in_group`, as a backstop for a handle opened before a record appeared.
+
+Read opens are unaffected. **Enforced by** `tests/test_consolidated_metadata.py`.
+
 ### What these settings do not remove
 
 The remaining gap to zarr 2.18 is a fixed cost per **read call**, not per chunk:
@@ -190,6 +223,14 @@ sharding adds about 0.8 ms more to each read.
   the process did earlier. `opengwasdb validate` and the builders' own reads would stay
   single-threaded.
 - **Keeping `numcodecs>=0.14`.** Releases before 0.17 do not lock threaded decompress.
+- **Opening with `use_consolidated=False`, as zarr 2.18 effectively did.** The package
+  would then read live metadata, but any other reader of the release would still get the
+  stale record a package write left. It would also decide, ahead of #245 and #246, that
+  Zarr v3 releases never use consolidated metadata, which is a read-latency lever.
+- **Re-consolidating after each write.** The record must be rewritten after the whole
+  write, not after each step, and at every enclosing consolidated root. A repair that dies
+  midway would leave it stale anyway. Refusing is the answer that cannot return stale
+  arrays.
 
 ## Evidence
 

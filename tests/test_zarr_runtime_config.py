@@ -35,6 +35,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -131,6 +132,63 @@ def test_store_arrays_read_through_the_fused_pipeline(tmp_path: Path) -> None:
         """,
     )
     assert result == {"pipeline": "FusedCodecPipeline"}
+
+
+def test_all_fill_chunks_are_files_from_the_parent_and_from_fork_workers(tmp_path: Path) -> None:
+    """A chunk that is entirely the fill value is still written as a file.
+
+    zarr 2.18 wrote it; zarr 3 drops it unless ``array.write_empty_chunks`` is
+    on, which would silently change the file set a build writes (#244 review,
+    finding 2). The seam turns it on process-wide. It is runtime state, not
+    array metadata, so this checks the writes themselves: a whole-array write
+    and a band-by-band write, in the parent and in fork-pool workers, which
+    inherit the setting. No builder writes from a worker today (workers compute,
+    the parent writes); the worker case keeps a future worker-side writer honest.
+    """
+    result = _run(
+        tmp_path,
+        """
+        import os
+
+        import zarr
+
+        from opengwasdb.build.ordered_pool import ordered_map
+
+        def write(task):
+            name, how = task
+            group = arrays.open_group_for_write(TMP / name, "w")
+            blank = np.zeros((40, 40), dtype=np.int16)  # the fill value everywhere
+            if how == "whole":
+                arrays.create_array(
+                    group, "z", ArrayRole.DENSE_STATISTIC_PLANE, data=blank, hint=(10, 10)
+                )
+            else:
+                plane = arrays.create_array(
+                    group, "z", ArrayRole.DENSE_STATISTIC_PLANE,
+                    shape=blank.shape, dtype=blank.dtype, hint=(10, 10),
+                )
+                plane[:, :20] = blank[:, :20]
+                plane[:, 20:] = blank[:, 20:]
+            files = [p for p in (TMP / name / "z").iterdir() if not p.name.startswith(".")]
+            return {
+                "files": len(files),
+                "flag": zarr.config.get("array.write_empty_chunks"),
+                "pid": os.getpid(),
+            }
+
+        parent = [write(("parent-whole", "whole")), write(("parent-bands", "bands"))]
+        tasks = [("worker-whole", "whole"), ("worker-bands", "bands")]
+        workers = list(ordered_map(write, tasks, n_workers=2))
+        print(json.dumps({"parent": parent, "workers": workers, "parent_pid": os.getpid()}))
+        """,
+    )
+    parent: Any = result["parent"]
+    workers: Any = result["workers"]
+    # Meaningful only if the worker writes really ran in other processes.
+    assert all(w["pid"] != result["parent_pid"] for w in workers)
+    assert [{"files": r["files"], "flag": r["flag"]} for r in [*parent, *workers]] == [
+        {"files": 16, "flag": True}
+    ] * 4
 
 
 #: What the probe's `read_block` returns for rows 0-19 and 20-39 of its grid.

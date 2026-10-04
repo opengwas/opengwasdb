@@ -62,9 +62,11 @@ force-exclude = true
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
-# zarr-python 3.4 uses PEP 695 type-parameter syntax, which mypy cannot parse
-# under a 3.11 target; the floor is Python 3.12 with the zarr 3.4 pin (#244).
-python_version = "3.11"
+# The floor is Python 3.12 with the zarr 3.4 pin (#244), and zarr-python 3.4 uses
+# PEP 695 type-parameter syntax, which mypy cannot parse under a 3.11 target.
+# Moving the target from 3.11 changed no finding: the 39 are the same, line for
+# line.
+python_version = "3.12"
 strict = true
 
 [[tool.mypy.overrides]]
@@ -72,16 +74,28 @@ module = ["numcodecs", "pandas", "pysam", "zarr"]
 ignore_missing_imports = true
 
 # zarr 2.18 shipped no `py.typed`, so mypy treated every `zarr.Array`/
-# `zarr.Group` as `Any` and the package's baseline (39 findings) was measured
+# `zarr.Group` as `Any`, and the package's baseline (39 findings) was measured
 # that way.  zarr 3.4 *is* typed, and `Group.__getitem__` returns
-# `Array | Group`, which turns ~160 existing accesses into `union-attr` /
-# `arg-type` / `index` errors -- a typing refactor of the read paths, well
-# outside a dependency-bump ticket.  `follow_imports = "skip"` keeps zarr
-# untyped exactly as before, so the baseline stays a real pre-upgrade
-# comparison rather than being raised by the pin change.  #245/#247 can adopt
-# zarr's types deliberately, with the fixes that need.  Scoped to zarr alone:
-# skipping pysam would make its existing `# type: ignore[call-arg]` comments
-# unused and *add* findings.
+# `Array | Group`.  Following zarr's types gives 192 findings, 153 more than
+# the baseline, measured 5 Oct 2026 at python_version 3.12:
+# - 111 of them are in opengwasdb/query/facade.py;
+# - most are `union-attr`, `arg-type` and `index`.
+# That is a typing refactor of the read paths, outside a dependency-bump ticket.
+#
+# Decision (#244 review, finding 4): keep `follow_imports = "skip"` for zarr,
+# so the baseline stays a real pre-upgrade comparison.
+# - What it costs: mypy sees zarr as `Any` and passes a misspelt or removed
+#   zarr call.
+# - Bounded where zarr meets the Store format: tests/test_seam_types.py
+#   type-checks opengwasdb/store/arrays.py with zarr's types followed and
+#   requires zero findings.  Its first run found the seam accepting mode "x",
+#   which zarr 3 rejects.
+# - Tracked: #245 and #247 rewrite the read and write paths for Zarr v3, and
+#   adopt zarr's types there with the fixes that need.  Lift the skip when the
+#   followed count is within the baseline.
+#
+# Scoped to zarr alone: skipping pysam would make its existing
+# `# type: ignore[call-arg]` comments unused and *add* findings.
 [[tool.mypy.overrides]]
 module = ["zarr"]
 follow_imports = "skip"

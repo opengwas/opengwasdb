@@ -30,6 +30,8 @@ seconds, so this needs no slow marker.
 
 from __future__ import annotations
 
+import itertools
+import json
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -67,6 +69,13 @@ _EXCEPTION_TABLE_NAMES = _UNCOMPRESSED_TABLE_NAMES | frozenset(
 #: The dense statistic grid planes, the one role whose fill value is a per-plane
 #: missing marker (spec §15) rather than the dtype default.
 _DENSE_GRID_NAMES = frozenset({"z", "se", "eaf"})
+
+#: The Store format every build writes until #247 moves the builders to Zarr v3
+#: (ADR 0041): Zarr v2 groups and arrays, under a manifest declaring 0.1.0. These
+#: are spelled out rather than imported, so a build that changes either fails here
+#: even if the constant it reads changed with it (#244 review, finding 2).
+_STORE_ZARR_FORMAT = 2
+_STORE_FORMAT_VERSION = "0.1.0"
 
 
 @dataclass(frozen=True)
@@ -311,6 +320,17 @@ def conformance_stores(tmp_path_factory: pytest.TempPathFactory) -> list[_BuiltS
     return _build_stores(root)
 
 
+def _data_zarr_roots(stores: list[_BuiltStore]) -> Iterator[tuple[_BuiltStore, Path]]:
+    """Every ``data.zarr`` root the builders wrote, with the store that built it.
+
+    The release that owns a root is its parent directory, so a Hybrid store's
+    nested Dense Component is a root of its own under its own manifest.
+    """
+    for built in stores:
+        for data_zarr in sorted(built.path.rglob("data.zarr")):
+            yield built, data_zarr
+
+
 def _iter_arrays(group: Any, prefix: str = "") -> Iterator[tuple[str, Any, Any]]:
     """Every array in a Zarr group tree, with its dotted path and parent group."""
     for name in sorted(group.array_keys()):
@@ -386,49 +406,116 @@ def test_every_built_array_matches_the_seam_policy(conformance_stores: list[_Bui
     """Every array a builder wrote obeys the seam: role, layout, compressor, fill."""
     seam = compressor().get_config()
     checked = 0
-    for built in conformance_stores:
-        for data_zarr in sorted(built.path.rglob("data.zarr")):
-            # The release that owns this data.zarr is its parent directory, so a
-            # Hybrid store's nested Dense Component reads its own manifest.
-            encoding = StoreManifest.load(data_zarr.parent).encoding
-            root = open_group(data_zarr)
-            for path, array, group in _iter_arrays(root):
-                where = f"{built.label}:{path}"
-                role = _role_for(path, group)
-                expected_chunks = chunk_layout(
-                    role,
-                    tuple(int(size) for size in array.shape),
-                    component_chunk=component_variant_chunk(group),
+    for built, data_zarr in _data_zarr_roots(conformance_stores):
+        encoding = StoreManifest.load(data_zarr.parent).encoding
+        root = open_group(data_zarr)
+        for path, array, group in _iter_arrays(root):
+            where = f"{built.label}:{path}"
+            role = _role_for(path, group)
+            expected_chunks = chunk_layout(
+                role,
+                tuple(int(size) for size in array.shape),
+                component_chunk=component_variant_chunk(group),
+            )
+            assert tuple(int(size) for size in array.chunks) == expected_chunks, (
+                f"{where}: {role} chunks {tuple(array.chunks)} != seam layout {expected_chunks}"
+            )
+            # zarr 3 spells the v2 "single compressor" as a tuple and always
+            # returns a tuple of filters; the assertions below keep rejecting a
+            # second codec or any filter.
+            codecs = tuple(array.compressors or ())
+            actual_compressor = codecs[0].get_config() if len(codecs) == 1 else None
+            expected_compressor = _expected_compressor(path.rsplit("/", 1)[-1], seam)
+            assert len(codecs) <= 1, f"{where}: {role} has {len(codecs)} compressors"
+            assert actual_compressor == expected_compressor, (
+                f"{where}: {role} compressor {actual_compressor} != {expected_compressor}"
+            )
+            assert len(tuple(array.filters or ())) == 0, f"{where}: filters {array.filters}"
+            if role is ArrayRole.DENSE_STATISTIC_PLANE:
+                expected_fill = (
+                    array.dtype.type(0)
+                    if built.dense_planes_whole
+                    else _dense_missing_marker(path.rsplit("/", 1)[-1], encoding)
                 )
-                assert tuple(int(size) for size in array.chunks) == expected_chunks, (
-                    f"{where}: {role} chunks {tuple(array.chunks)} != seam layout {expected_chunks}"
-                )
-                # zarr 3 spells the v2 "single compressor" as a tuple and
-                # always returns a tuple of filters; the assertions below keep
-                # rejecting a second codec or any filter.
-                codecs = tuple(array.compressors or ())
-                actual_compressor = codecs[0].get_config() if len(codecs) == 1 else None
-                expected_compressor = _expected_compressor(path.rsplit("/", 1)[-1], seam)
-                assert len(codecs) <= 1, f"{where}: {role} has {len(codecs)} compressors"
-                assert actual_compressor == expected_compressor, (
-                    f"{where}: {role} compressor {actual_compressor} != {expected_compressor}"
-                )
-                assert len(tuple(array.filters or ())) == 0, (
-                    f"{where}: filters {array.filters}"
-                )
-                if role is ArrayRole.DENSE_STATISTIC_PLANE:
-                    expected_fill = (
-                        array.dtype.type(0)
-                        if built.dense_planes_whole
-                        else _dense_missing_marker(path.rsplit("/", 1)[-1], encoding)
-                    )
-                else:
-                    expected_fill = 0
-                assert _fills_equal(array.fill_value, expected_fill), (
-                    f"{where}: {role} fill {array.fill_value!r} != expected {expected_fill!r}"
-                )
-                checked += 1
+            else:
+                expected_fill = 0
+            assert _fills_equal(array.fill_value, expected_fill), (
+                f"{where}: {role} fill {array.fill_value!r} != expected {expected_fill!r}"
+            )
+            checked += 1
     # Assert the fixture is meaningful before trusting a clean walk: these
     # twelve stores have far more than a handful of arrays between them.
     assert checked > 100, f"only {checked} arrays checked; the fixture set is wrong"
     assert np is not None
+
+
+def test_every_built_root_is_zarr_v2_under_a_0_1_0_manifest(
+    conformance_stores: list[_BuiltStore],
+) -> None:
+    """The Store format #244 must not change: v2 metadata only, format_version 0.1.0.
+
+    zarr-python 3 creates a Zarr v3 group whenever an open does not pin the
+    format, and nothing else in a build would notice. This reads the files the
+    builders wrote, not what zarr reports, so it holds whatever the seam does.
+    """
+    roots = metadata_files = 0
+    for built, data_zarr in _data_zarr_roots(conformance_stores):
+        where = f"{built.label}:{data_zarr.relative_to(built.path)}"
+        manifest = json.loads((data_zarr.parent / "manifest.json").read_text())
+        assert manifest["format_version"] == _STORE_FORMAT_VERSION, (
+            f"{where}: manifest declares {manifest['format_version']!r}"
+        )
+        v3 = sorted(data_zarr.rglob("zarr.json"))
+        assert not v3, f"{where}: Zarr v3 metadata {v3[:3]}"
+        assert (data_zarr / ".zgroup").is_file(), f"{where}: no v2 .zgroup at the root"
+        for meta in sorted([*data_zarr.rglob(".zgroup"), *data_zarr.rglob(".zarray")]):
+            declared = json.loads(meta.read_text())["zarr_format"]
+            assert declared == _STORE_ZARR_FORMAT, f"{where}: {meta.name} declares {declared}"
+            metadata_files += 1
+        roots += 1
+    # Twelve stores; the completed and Hybrid ones hold more than one root each.
+    assert roots >= 14, f"only {roots} data.zarr roots; the fixture set is wrong"
+    assert metadata_files > 100, f"only {metadata_files} metadata files checked"
+
+
+def _chunk_keys(meta: dict[str, Any]) -> Iterator[tuple[str, tuple[slice, ...]]]:
+    """Every chunk of a v2 array: its file name and the region it covers."""
+    shape, chunks = meta["shape"], meta["chunks"]
+    separator = meta.get("dimension_separator") or "."
+    grid = [range(math.ceil(size / chunk)) for size, chunk in zip(shape, chunks, strict=True)]
+    for index in itertools.product(*grid):
+        region = tuple(
+            slice(i * chunk, min((i + 1) * chunk, size))
+            for i, chunk, size in zip(index, chunks, shape, strict=True)
+        )
+        yield (separator.join(str(i) for i in index) or "0"), region
+
+
+def _is_all_fill(block: np.ndarray, fill: Any) -> bool:
+    if fill is not None and isinstance(fill, float) and math.isnan(fill):
+        return bool(np.isnan(block).all())
+    return bool((block == fill).all())
+
+
+def test_every_chunk_of_every_built_array_is_a_file(
+    conformance_stores: list[_BuiltStore],
+) -> None:
+    """A chunk that is entirely the fill value is written, as zarr 2.18 wrote it.
+
+    zarr 3 drops such a chunk unless ``array.write_empty_chunks`` is on. The
+    values read back the same either way, but the file set of a release changes.
+    This rule fails loudly on that change.
+    """
+    chunk_files = all_fill = 0
+    for built, data_zarr in _data_zarr_roots(conformance_stores):
+        for meta_path in sorted(data_zarr.rglob(".zarray")):
+            meta = json.loads(meta_path.read_text())
+            array = open_group(meta_path.parent.parent)[meta_path.parent.name]
+            for key, region in _chunk_keys(meta):
+                where = f"{built.label}:{meta_path.parent.relative_to(built.path)}/{key}"
+                assert (meta_path.parent / key).is_file(), f"{where}: chunk file missing"
+                chunk_files += 1
+                all_fill += _is_all_fill(np.asarray(array[region]), array.fill_value)
+    # Meaningful only if the fixtures write all-fill chunks for the rule to keep.
+    assert chunk_files > 300, f"only {chunk_files} chunk files checked"
+    assert all_fill > 0, "no all-fill chunk in any fixture; dropping them could not fail here"

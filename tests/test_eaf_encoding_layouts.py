@@ -320,16 +320,17 @@ def test_reference_array_uses_same_per_variant_chunking(tmp_path: Path):
     assert root[EAF_REFERENCE].chunks == (3,)
 
 
-def test_existing_store_can_be_repaired_without_changing_values(
-    tmp_path: Path,
-):
+def make_store_needing_eaf_repair(tmp_path: Path) -> Path:
+    """A Dense release whose `eaf_baseline` is one whole-length chunk.
+
+    Releases built before the EAF chunking fix look like this, and
+    `repair_eaf_chunks` must rechunk the array to the variant axis's chunk (8 -> 3).
+    """
     out = tmp_path / "repair-dense.opengwasdb"
     build_dense_from_vcf_manifest(
         _vcf_manifest(tmp_path), out, store_id="eafenc", release_id="v1",
         chunk_shape=(3, 2), allow_unverified_eaf=True,
     )
-    before = _observed(out)
-    manifest_before = (out / "manifest.json").read_bytes()
     root = open_store(out).arrays(mode="r+")
     baseline = root[EAF_BASELINE][:]
     compressor = root[EAF_BASELINE].compressors[0]
@@ -338,6 +339,15 @@ def test_existing_store_can_be_repaired_without_changing_values(
         EAF_BASELINE, data=np.asarray(baseline, dtype="float32"), chunks=(len(baseline),),
         compressors=compressor,
     )
+    return out
+
+
+def test_existing_store_can_be_repaired_without_changing_values(
+    tmp_path: Path,
+):
+    out = make_store_needing_eaf_repair(tmp_path)
+    before = _observed(out)
+    manifest_before = (out / "manifest.json").read_bytes()
 
     invalid = validate_store(out)
     assert not invalid.ok

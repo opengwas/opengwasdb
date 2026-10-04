@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ from opengwasdb.store.arrays import (
     open_group,
 )
 
+log = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class EafChunkRepair:
@@ -29,14 +32,62 @@ class EafChunkRepair:
     new_chunk: int
 
 
+def _swap_names(name: str) -> tuple[str, str]:
+    """The rechunked copy's name and the original's name while they are swapped."""
+    return f".{name}.rechunking", f".{name}.old"
+
+
+def _recover_interrupted_swap(group: Any, name: str, label: str) -> None:
+    """Put `name` back in one piece after a repair that died mid-swap.
+
+    Each rename in the swap is atomic but the pair is not, and an exception
+    handler cannot roll back a process that died. Each death leaves one state,
+    and each state has one safe reading:
+
+    * the copy only: died while writing it; the original is untouched, so the
+      copy is dropped;
+    * the backup without `name`: died between the renames; the backup is the
+      complete original, so it is restored, and the repair runs again;
+    * the backup beside `name`: died after the swap; `name` is the complete
+      rechunked copy, so the backup is dropped.
+
+    All three together cannot come from one death, so nothing is touched.
+    """
+    temporary, backup = _swap_names(name)
+    present = {entry for entry in (name, temporary, backup) if entry in group}
+    if present == {name, temporary, backup}:
+        raise RuntimeError(
+            f"{label}/{name}: {temporary} and {backup} both exist beside it; the repair "
+            "cannot tell which is the original. Inspect them and remove the stale one."
+        )
+    if backup in present:
+        _settle_backup(group, name, label, present)
+    elif temporary in present:
+        del group[temporary]
+        log.warning("%s/%s: removed the unfinished copy %s", label, name, temporary)
+
+
+def _settle_backup(group: Any, name: str, label: str, present: set[str]) -> None:
+    """A backup is left: restore it if `name` is gone, else drop it (see above)."""
+    temporary, backup = _swap_names(name)
+    if name in present:
+        del group[backup]
+        log.warning("%s/%s: removed %s left after a completed swap", label, name, backup)
+        return
+    if temporary in present:
+        del group[temporary]
+    move_in_group(group, backup, name)
+    log.warning("%s/%s: restored the original from %s (a dead repair)", label, name, backup)
+
+
 def _replace_with_rechunked(group: Any, name: str, chunk: int) -> None:
-    """Replace one Zarr array, keeping its bytes and metadata unchanged."""
+    """Replace one Zarr array, keeping its bytes and metadata unchanged.
+
+    The swap is two renames; a death between them is recovered by the next
+    run's `_recover_interrupted_swap`.
+    """
     source = group[name]
-    temporary = f".{name}.rechunking"
-    backup = f".{name}.old"
-    for stale in (temporary, backup):
-        if stale in group:
-            del group[stale]
+    temporary, backup = _swap_names(name)
     target = create_array(
         group,
         temporary,
@@ -66,6 +117,7 @@ def _replace_with_rechunked(group: Any, name: str, chunk: int) -> None:
 def _repair_group(group: Any, label: str) -> list[EafChunkRepair]:
     repaired: list[EafChunkRepair] = []
     for name in (EAF_BASELINE, EAF_REFERENCE):
+        _recover_interrupted_swap(group, name, label)
         if name not in group:
             continue
         array = group[name]

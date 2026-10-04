@@ -47,13 +47,14 @@ one rather than a call site that passes `chunks=` by hand.
 from __future__ import annotations
 
 import importlib
+import json
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Final, Literal
 
 import numcodecs
 import numpy as np
@@ -683,6 +684,63 @@ def require_group(group: Any, name: str) -> Any:
     return group.require_group(name)
 
 
+class ConsolidatedMetadataError(RuntimeError):
+    """A write under consolidated metadata the package cannot keep up to date."""
+
+
+def _is_zarr_group_directory(directory: Path) -> bool:
+    return (directory / ".zgroup").is_file() or (directory / "zarr.json").is_file()
+
+
+def consolidated_metadata_records(directory: Path) -> list[Path]:
+    """Every consolidated-metadata record that describes the group at `directory`.
+
+    A record describes a group when it sits in the group's own directory or in an
+    enclosing directory that is still part of the same Zarr hierarchy: a
+    consolidated root lists every array beneath it. Zarr v2 keeps the record in
+    ``.zmetadata``; Zarr v3 keeps it under ``consolidated_metadata`` in the group's
+    ``zarr.json``.
+    """
+    records: list[Path] = []
+    current = directory
+    while True:
+        v2 = current / ".zmetadata"
+        if v2.is_file():
+            records.append(v2)
+        v3 = current / "zarr.json"
+        if v3.is_file() and json.loads(v3.read_text()).get("consolidated_metadata"):
+            records.append(v3)
+        parent = current.parent
+        if parent == current or not _is_zarr_group_directory(parent):
+            return records
+        current = parent
+
+
+def refuse_under_consolidated_metadata(
+    directory: Path, action: str, *, wiped: bool = False
+) -> None:
+    """Fail before a write that would leave consolidated metadata stale.
+
+    zarr-python 3 opens a group from its consolidated metadata whenever a record
+    exists (zarr 2.18 did not), and nothing the package writes updates one:
+    creating, deleting or moving an array under a record leaves it describing
+    arrays that are gone or changed, and the next open reads that instead (#244
+    review). The package never consolidates, so a record came from elsewhere;
+    refusing loudly is the only answer that cannot return stale arrays.
+    `wiped` is for ``mode="w"``, which deletes the group's own record with it.
+    """
+    records = consolidated_metadata_records(directory)
+    if wiped:
+        records = [record for record in records if record.parent != directory]
+    if records:
+        listed = ", ".join(str(record) for record in records)
+        raise ConsolidatedMetadataError(
+            f"{action} {directory}: consolidated metadata in {listed} describes this group. "
+            "zarr 3 reads that record in place of the live metadata, and this write would not "
+            "update it. Remove the record, write, and consolidate again if it is wanted."
+        )
+
+
 #: Zarr entries whose bytes live in a directory of their own, which is what a
 #: filesystem rename moves as a unit.
 _LOCAL_STORE_ATTR = "root"
@@ -710,12 +768,20 @@ def move_in_group(group: Any, source: str, dest: str) -> None:
     swaps its staged plane into place, and `repair` swaps a rechunked array in
     (and restores the original if the swap fails).  zarr 2 renamed the entry in
     the store; every Store Release is a local directory, so this is the same
-    ``os.replace`` of the array directory -- atomic, and byte-preserving, which
-    a copy-through-zarr would not be for Blosc (its default thread count makes
+    ``os.replace`` of the array directory: byte-preserving, which a
+    copy-through-zarr would not be for Blosc (its default thread count makes
     recompression non-reproducible, see #243).
 
+    Each move is atomic; a swap built from two moves is not.  A process that
+    dies between them leaves neither name in place, and no exception handler
+    runs to roll back.  The SE fallback swaps only inside a staged release,
+    which a failed build discards.  `repair` swaps inside a published release,
+    so its next run recovers whatever state a death left (#244 review).
+
     A store that is not a local directory fails loudly: silently degrading to a
-    copy would change the bytes and could leave a half-swapped store behind.
+    copy would change the bytes and could leave a half-swapped store behind. So
+    does a group that consolidated metadata describes, which a move would leave
+    stale (`refuse_under_consolidated_metadata`).
     """
     local = _local_group_directory(group)
     if local is None:
@@ -724,12 +790,30 @@ def move_in_group(group: Any, source: str, dest: str) -> None:
             f"{type(group.store).__name__} cannot rename an entry. Open the release "
             "from a path rather than an in-memory store."
         )
+    refuse_under_consolidated_metadata(local, f"moving {source!r} to {dest!r} in")
     os.replace(local / source, local / dest)
 
 
+#: The modes zarr-python 3's `zarr.open_group` accepts, by name.  A lookup table
+#: rather than a cast, so the seam passes zarr a `Literal` it has checked.
+ZarrMode = Literal["r", "r+", "a", "w", "w-"]
+_ZARR_MODES: Mapping[str, ZarrMode] = MappingProxyType(
+    {"r": "r", "r+": "r+", "a": "a", "w": "w", "w-": "w-"}
+)
+
 #: `zarr.open_group` modes that create the group (or wipe it) when it is not
-#: there.  `r` and `r+` require it to exist and are not creation.
-CREATION_MODES = frozenset({"w", "a", "w-", "x"})
+#: there.  `r` and `r+` require it to exist and are not creation.  zarr 2's
+#: ``x`` is gone: zarr 3 rejects it with a bare ``AssertionError``.
+CREATION_MODES = frozenset({"w", "a", "w-"})
+
+
+def _zarr_mode(mode: str) -> ZarrMode:
+    """`mode` as the `Literal` zarr 3 takes, or a `ValueError` naming the valid ones."""
+    try:
+        return _ZARR_MODES[mode]
+    except KeyError:
+        allowed = sorted(_ZARR_MODES)
+        raise ValueError(f"zarr 3 opens a group in one of {allowed}, not {mode!r}") from None
 
 #: The Zarr on-disk format every *created* array and group is written in until
 #: #247 moves the builders to Zarr v3 (ADR 0041).  Passing it explicitly on
@@ -738,10 +822,10 @@ CREATION_MODES = frozenset({"w", "a", "w-", "x"})
 #: *creates a Zarr v3 group* -- a silent Store format change.  Read-mode opens
 #: pass ``zarr_format=None`` so a converted v3 store (#245) still opens; zarr 3
 #: auto-detects the format from the existing metadata.
-STORE_ZARR_FORMAT = 2
+STORE_ZARR_FORMAT: Final = 2
 
 
-def _open_group_format(mode: str) -> int | None:
+def _open_group_format(mode: str) -> Literal[2] | None:
     """The ``zarr_format`` an open in `mode` must use.
 
     A creating mode must declare v2; a read mode must not declare anything, so
@@ -759,15 +843,21 @@ def open_group(path: str | Path, mode: str = "r") -> Any:
     named entry point for those, and this general form exists for `r`/`r+` and
     for the release-envelope ``arrays(mode=...)`` methods that forward their
     mode.  A creating mode is pinned to `STORE_ZARR_FORMAT`; a read mode leaves
-    the format to the stored metadata.
+    the format to the stored metadata.  Any mode but ``r`` refuses a group that
+    consolidated metadata describes (`refuse_under_consolidated_metadata`).
     """
-    return zarr.open_group(str(path), mode=mode, zarr_format=_open_group_format(mode))
+    zarr_mode = _zarr_mode(mode)
+    if zarr_mode != "r":
+        refuse_under_consolidated_metadata(
+            Path(path), f"opening in mode {mode!r}", wiped=zarr_mode == "w"
+        )
+    return zarr.open_group(str(path), mode=zarr_mode, zarr_format=_open_group_format(mode))
 
 
 def open_group_for_write(path: str | Path, mode: str) -> Any:
     """Open a Zarr group for writing, creating it when it is absent.
 
-    `mode` must be one of ``w``/``a``/``w-``/``x`` and is **required**: ``a``
+    `mode` must be one of ``w``/``a``/``w-`` and is **required**: ``a``
     and ``w`` differ on a resumed build (``w`` wipes the staged group, ``a``
     keeps it), so a silent default here would change what a resume finds.  A
     read mode is a bug (the caller meant `open_group`) and fails loudly.
@@ -781,4 +871,5 @@ def open_group_for_write(path: str | Path, mode: str) -> Any:
             f"open_group_for_write needs one of {sorted(CREATION_MODES)}, got {mode!r}; "
             "use open_group for a read mode"
         )
-    return zarr.open_group(str(path), mode=mode, zarr_format=STORE_ZARR_FORMAT)
+    refuse_under_consolidated_metadata(Path(path), f"opening in mode {mode!r}", wiped=mode == "w")
+    return zarr.open_group(str(path), mode=_zarr_mode(mode), zarr_format=STORE_ZARR_FORMAT)

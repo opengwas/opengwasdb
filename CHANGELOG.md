@@ -123,6 +123,33 @@ the end of this file.
 
 ### Fixed
 
+- **Writes refuse a Zarr group that consolidated metadata describes (#244
+  review).** zarr 3's `open_group` reads a `.zmetadata` record (or a v3
+  `consolidated_metadata` block) in place of the live metadata; zarr 2.18 did
+  not. No package write updates such a record, so a write under one left a
+  release that reopened with stale shapes. An EAF repair, for one, reopened its
+  rechunked `eaf_baseline` with the old `(8,)` chunks and failed to reshape.
+  - Any open in a mode other than `r` now raises `ConsolidatedMetadataError`
+    before changing anything when a record covers the group or an enclosing
+    group. So does `move_in_group`.
+  - Reads are unchanged. The package never consolidates, and no registered
+    Store Release carries a record.
+  - ADR 0056 §4 records the decision and the alternatives rejected.
+- **`repair-eaf-chunks` recovers from a run that died mid-swap (#244 review).**
+  The repair swaps the rechunked copy in with two renames. Each rename is
+  atomic, but the pair is not. A process killed between them left the
+  published release without `eaf_baseline`, and the next run skipped it as
+  absent, reported nothing repaired and left the release broken.
+  - The next run now restores the original from its backup and repairs again,
+    or drops a backup left after a completed swap.
+  - It refuses, touching nothing, a state no single death can leave.
+- **An unknown or zarr-2-only group mode fails with a message, not a bare
+  `AssertionError` (#244 review).** The seam listed `x` as a creation mode,
+  which zarr 3 rejects. Modes are now checked against the five zarr 3 accepts.
+  `opengwasdb/store/arrays.py` is also type-checked against zarr's own types
+  (`tests/test_seam_types.py`); that check is what found `x`. mypy's target is
+  now Python 3.12, the package floor.
+
 - **The resolver record's `opengwasdb_git_hash` is the `opengwasdb` commit, not
   the enclosing repository's (stores #176).** `_get_git_hash` ran
   `git rev-parse HEAD` from inside the package, so when `opengwasdb` was
