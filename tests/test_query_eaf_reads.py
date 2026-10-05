@@ -26,6 +26,7 @@ variants live in ticket #253's report as diffs, not here.
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +34,10 @@ import pytest
 import zarr
 from residual_fixtures import residual_eligible_records
 from store_reads import chunk_reads, duplicate_chunk_keys, old_index_without_fields
+from test_hybrid_completion import (
+    _residual_hybrid_crossover_source,
+    _residual_ld_panel_with_crossover,
+)
 from test_hybrid_shared_se_plan_e2e import (
     N_OFF_PANEL,
     N_PANEL,
@@ -42,12 +47,16 @@ from test_hybrid_shared_se_plan_e2e import (
     overflow_alid,
     panel_alid,
 )
-from test_ragged_residual_completion import RaggedResidualScenario
+from test_ragged_residual_completion import _TRAIT_BP, RaggedResidualScenario
 from test_se_residual_encoding import _residual_source_and_panel
 
 from opengwasdb.encoding.codec import EAF_ABSENT
+from opengwasdb.encoding.planes import DenseZPlane
 from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.complete import complete_dense_store
+from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, threshold_key
+from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 
@@ -130,6 +139,84 @@ def dense_observed_missing(tmp_path_factory: pytest.TempPathFactory) -> Path:
         chunk_shape=(100, 2),
     )
     return store
+
+
+#: Where `ragged_single_trait` moves analysis `b`'s Trait position to.
+_RELOCATED_TRAIT_BP = 2_000_000
+
+
+def _relocate_trait_bp(store: Path, analysis_id: str, bp: int) -> None:
+    """Move one Analysis's Trait position in a built store's analyses.tsv.
+
+    `range_by_analysis` selects Analyses by `trait_chr`/`trait_bp`, and the
+    Ragged residual fixture puts both of them at the same position. Relocating
+    one lets the read-count test select a single Analysis: without that, a CSR
+    chunk shared by two Analyses is legitimately read once per Analysis, and a
+    duplicate-key assertion could not tell that from the twice-per-Analysis
+    defect #253 removes (review round 1).
+    """
+    path = store / "analyses.tsv"
+    rows = list(csv.reader(path.read_text(encoding="utf-8").splitlines(), delimiter="\t"))
+    header = rows[0]
+    bp_col, id_col = header.index("trait_bp"), header.index("analysis_id")
+    moved = 0
+    for row in rows[1:]:
+        if row[id_col] == analysis_id:
+            row[bp_col] = str(bp)
+            moved += 1
+    assert moved == 1, f"{analysis_id} must appear exactly once in analyses.tsv"
+    path.write_text("\n".join("\t".join(row) for row in rows) + "\n", encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def ragged_single_trait(tmp_path_factory: pytest.TempPathFactory) -> RaggedResidualScenario:
+    """The completed Ragged fixture with analysis `b` relocated off `a`'s trait."""
+    scenario = RaggedResidualScenario(tmp_path_factory)
+    _relocate_trait_bp(scenario.completed, "b", _RELOCATED_TRAIT_BP)
+    return scenario
+
+
+@pytest.fixture(scope="module")
+def hybrid_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A Reference-Completed Hybrid with residual SE and imputed Dense cells.
+
+    The residual in both components is what makes SE decoding read the EAF
+    plane at all; the imputed Dense cells are what make an `observed_only`
+    check non-vacuous (the simple Hybrid fixture is observed-only and has no
+    `imputed` array).
+    """
+    tmp = tmp_path_factory.mktemp("eaf_reads_hybrid_completed")
+    src, crossover_alid, _crossover_se, crossover_eaf = _residual_hybrid_crossover_source(tmp)
+    ld = _residual_ld_panel_with_crossover(tmp, crossover_alid, crossover_eaf)
+    dst = tmp / "comp.opengwasdb"
+    complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    return dst
+
+
+@pytest.fixture(scope="module")
+def dense_completed_imputed_hit(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[Path, np.ndarray, np.ndarray]:
+    """The Dense trap fixture, with one imputed cell made a decisive top hit.
+
+    The residual Dense fixture's imputed cells are all low-|z|, so a top-hit
+    query never returned one and `observed_only` had nothing to filter. Patching
+    one imputed cell's `z` to 8 and rebuilding the tier from the store's own
+    plane puts an imputed row in the index the older-index fallback decodes.
+    """
+    store, observed, panel = _dense_completed_fixture(tmp_path_factory.mktemp("eaf_reads_hit"))
+    encoding = StoreManifest.load(store).encoding
+    root = zarr.open_group(str(store / "data.zarr"), mode="r+", zarr_format=2)
+    imputed = np.asarray(root["imputed"][:], dtype=bool)
+    rows, cols = np.where(imputed)
+    assert len(rows) > 0, "the fixture must have an imputed cell to promote"
+    DenseZPlane.open(root, encoding).patch(
+        rows[:1].astype("int64"), cols[:1].astype("int64"), np.array([8.0], dtype=np.float32)
+    )
+    build_top_hit_indexes(store)
+    tier = zarr.open_group(str(store / "data.zarr"), mode="r")["top_hits"][threshold_key(5e-8)]
+    assert int(np.asarray(tier["imputed"][:]).sum()) > 0, "the promoted cell must be a top hit"
+    return store, observed, panel
 
 
 # ── fixture meaningfulness ──────────────────────────────────────────────────
@@ -268,12 +355,63 @@ def test_hybrid_analysis_reads_each_eaf_array_once(
     assert reads["eaf"], "Hybrid analysis must read eaf for this to mean anything"
 
 
+def test_ragged_range_by_analysis_reads_each_eaf_array_once(
+    ragged_single_trait: RaggedResidualScenario, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`range_by_analysis` decodes one Analysis at a time and reads once."""
+    with query_store(ragged_single_trait.completed) as query:
+        selected = query._analysis_indices_in_range("1", _TRAIT_BP, _TRAIT_BP)
+        assert selected == [0], "the relocated fixture must select exactly one Analysis"
+        with chunk_reads(monkeypatch, _EAF_ARRAYS) as reads:
+            result = query.range_by_analysis("1", _TRAIT_BP, _TRAIT_BP)
+    assert len(result["z"]) > 0, "the selected Analysis must return rows"
+    duplicates = duplicate_chunk_keys(reads)
+    assert duplicates == {}, f"range_by_analysis re-read EAF chunks: {duplicates}"
+    assert reads["eaf"] and reads["eaf_baseline"] and reads["imputed"], (
+        "range_by_analysis must read all three arrays for this to mean anything"
+    )
+
+
+def test_ragged_get_analysis_reads_each_eaf_array_once(
+    ragged_completed: RaggedResidualScenario, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`RaggedCSRReader.get_analysis` reads one slice's EAF once, not twice."""
+    reader = RaggedCSRReader(ragged_completed.completed)
+    with chunk_reads(monkeypatch, _EAF_ARRAYS) as reads:
+        row = reader.get_analysis(0)
+    assert len(row.z) > 0, "the Analysis must return rows for this to mean anything"
+    duplicates = duplicate_chunk_keys(reads)
+    assert duplicates == {}, f"get_analysis re-read EAF chunks: {duplicates}"
+    assert reads["eaf"] and reads["eaf_baseline"] and reads["imputed"], (
+        "get_analysis must read all three arrays for this to mean anything"
+    )
+
+
 # ── no answer changes (the trap tests) ──────────────────────────────────────
 
 
 def _status_split(result: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
     status = np.asarray(result["association_status"])
     return status == "observed", status == "imputed"
+
+
+def _assert_observed_only_lockstep(
+    full: dict[str, np.ndarray], filtered: dict[str, np.ndarray], label: str
+) -> None:
+    """`observed_only` drops the imputed rows from every returned array.
+
+    The complement (`association_status == "missing"`) is kept: the Dense
+    facade never returns a non-finite cell, the Ragged facade returns missing
+    cells under `observed_only` too, and the filter is on the imputed mask, not
+    on finiteness.
+    """
+    keep = np.asarray(full["association_status"]) != "imputed"
+    assert keep.any() and not keep.all(), f"{label} must have both observed and imputed cells"
+    assert len(filtered["z"]) == int(keep.sum()), label
+    for key in ("variant_index", "analysis_index", "z", "se", "eaf", "association_status"):
+        np.testing.assert_array_equal(
+            np.asarray(full[key])[keep], filtered[key], err_msg=f"{label}:{key}"
+        )
 
 
 def _check_dense_cells(
@@ -394,6 +532,57 @@ def test_dense_observed_only_filters_the_shared_eaf_column(
                 np.testing.assert_array_equal(
                     np.asarray(full[key])[keep], filtered[key], err_msg=f"{name}:{key}"
                 )
+
+
+def test_ragged_observed_only_keeps_arrays_in_lockstep(
+    ragged_completed: RaggedResidualScenario,
+) -> None:
+    """The Ragged parallel arrays stay aligned under `observed_only`."""
+    with query_store(ragged_completed.completed) as query:
+        variants = query.variants_table()
+        full_a = query.analysis("a")
+        full_b = query.analysis("b")
+        filtered_a = query.analysis("a", observed_only=True)
+        filtered_b = query.analysis("b", observed_only=True)
+        imputed_b = np.asarray(full_b["association_status"]) == "imputed"
+        assert imputed_b.any(), "analysis b must have imputed cells for this to mean anything"
+        # A variant analysis `a` observed and `b` had imputed: a panel-only
+        # variant is imputed for both, and a lookup of one would have no
+        # observed cell left to keep.
+        observed_a = {
+            int(v)
+            for v, status in zip(full_a["variant_index"], full_a["association_status"], strict=True)
+            if status == "observed"
+        }
+        shared = [int(v) for v in full_b["variant_index"][imputed_b] if int(v) in observed_a]
+        assert shared, "the fixture must impute a variant the other Analysis observed"
+        lookup_alid = str(variants[shared[0]]["alid"])
+        full_lookup = query.lookup([lookup_alid], ["a", "b"])
+        filtered_lookup = query.lookup([lookup_alid], ["a", "b"], observed_only=True)
+    _assert_observed_only_lockstep(full_a, filtered_a, "analysis a")
+    _assert_observed_only_lockstep(full_b, filtered_b, "analysis b")
+    _assert_observed_only_lockstep(full_lookup, filtered_lookup, "lookup")
+
+
+def test_hybrid_completed_observed_only_keeps_arrays_in_lockstep(hybrid_completed: Path) -> None:
+    """A completed Hybrid's Dense imputed cells drop in lockstep."""
+    with query_store(hybrid_completed) as query:
+        full = query.analysis("trait_b")
+        filtered = query.analysis("trait_b", observed_only=True)
+    _assert_observed_only_lockstep(full, filtered, "hybrid analysis")
+
+
+def test_dense_old_index_top_hits_observed_only_keeps_arrays_in_lockstep(
+    dense_completed_imputed_hit: tuple[Path, np.ndarray, np.ndarray],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The older-index top-hit fallback drops an imputed hit in lockstep."""
+    store, observed, panel = dense_completed_imputed_hit
+    with query_store(store) as query, old_index_without_fields(monkeypatch, _EAF_ARRAYS):
+        full = query.top_hits(threshold=5e-8, analysis_id="b")
+        filtered = query.top_hits(threshold=5e-8, analysis_id="b", observed_only=True)
+    _assert_observed_only_lockstep(full, filtered, "old-index top_hits")
+    _check_dense_cells(full, observed, panel, lambda row: 8.0 if row % 50 == 0 else 1.0)
 
 
 def test_dense_finite_mask_indexes_the_shared_eaf_column(

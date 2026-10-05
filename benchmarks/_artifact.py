@@ -8,6 +8,7 @@ in one place is what stops two artifacts disagreeing about what a field means.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from datetime import UTC, datetime
@@ -25,10 +26,43 @@ def commit() -> str:
     ).stdout.strip()
 
 
+def tree_fingerprint(root: str | Path) -> str:
+    """A sha256 over an `opengwasdb` package's Python sources, in path order.
+
+    `commit()` reads the worktree's `HEAD`, which is not the code a run
+    imported when another tree is injected ahead of it on `sys.path`: #253's
+    base harness record said `328f536` while it ran `5cf7f78`. The fingerprint
+    names the code itself, so an artifact cannot claim a revision it did not
+    run. It is stable under a re-run and changes with any source edit, in a
+    checkout or not.
+    """
+    package = Path(root) / "opengwasdb"
+    digest = hashlib.sha256()
+    for path in sorted(package.rglob("*.py")):
+        digest.update(str(path.relative_to(package)).encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def package_fingerprint() -> tuple[str, str]:
+    """(the path of the `opengwasdb` actually imported, a fingerprint of it)."""
+    import opengwasdb
+
+    package = Path(opengwasdb.__file__).resolve().parent
+    return str(package), tree_fingerprint(package.parent)
+
+
 def provenance() -> dict[str, str]:
     """The measured commit and wall-clock time an artifact records, so an older
-    JSON cannot be mistaken for a current measurement."""
-    return {"commit": commit(), "measured_at": datetime.now(UTC).isoformat()}
+    JSON cannot be mistaken for a current measurement, plus the path and
+    fingerprint of the `opengwasdb` this process actually imported."""
+    path, fingerprint = package_fingerprint()
+    return {
+        "commit": commit(),
+        "measured_at": datetime.now(UTC).isoformat(),
+        "opengwasdb_path": path,
+        "opengwasdb_fingerprint": fingerprint,
+    }
 
 
 def reflink_copy(source: Path, destination: Path) -> None:
