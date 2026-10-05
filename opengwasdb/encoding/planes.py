@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import cached_property
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -47,6 +47,22 @@ from opengwasdb.store.arrays import (
 )
 
 SE_COEFFICIENTS = "se_coefficients"
+
+
+class EafRead(NamedTuple):
+    """One region's decoded frequencies, and the imputed mask read with them.
+
+    `imputed` is None when the component holds no imputed mask; when it is not
+    None it is the mask the panel substitution was applied with, so a caller
+    that needs it for Association Status does not read the array a second
+    time. Both arrays are the region the caller asked for -- a whole column, a
+    row band, a rows x analyses block -- so a shared read can be indexed with
+    the same finite/observed mask for SE decoding and for the result column
+    (#253).
+    """
+
+    values: np.ndarray
+    imputed: np.ndarray | None
 
 
 class DenseZPlane:
@@ -227,55 +243,95 @@ class DenseSePlane:
             positions=positions,
         )
 
-    def band(self, r0: int, r1: int) -> np.ndarray:
+    def band(self, r0: int, r1: int, *, eaf: np.ndarray | None = None) -> np.ndarray:
+        """Rows `[r0:r1)`, all analyses.
+
+        `eaf` is a pre-read decoded block of exactly these cells (#253): the
+        query facade reads a region's frequencies once and hands the same array
+        to SE decoding and to the result's `eaf` column. When it is omitted the
+        plane reads its own, as every other caller does.
+        """
         raw = np.asarray(self._array[r0:r1])
         ai = np.broadcast_to(np.arange(self.n_analyses), raw.shape)
-        eaf = self._eaf.band(r0, r1) if self._eaf is not None else np.empty(raw.shape)
-        return self._decode(raw, eaf, ai, positions_row_band(r0, self.n_analyses))
+        if eaf is None:
+            eaf = (
+                self._eaf.band(r0, r1)
+                if self._eaf is not None
+                else np.empty(raw.shape, dtype=np.float32)
+            )
+        return self._decode(
+            raw, np.asarray(eaf, dtype=np.float32), ai, positions_row_band(r0, self.n_analyses)
+        )
 
-    def column(self, col: int) -> np.ndarray:
+    def column(self, col: int, *, eaf: np.ndarray | None = None) -> np.ndarray:
+        """One analysis, every variant. `eaf` is the pre-read block of these cells."""
         raw = np.asarray(self._array[:, col])
         rows = np.arange(len(raw), dtype=np.int64)
-        eaf = (
-            self._eaf.points(rows, np.full(len(raw), col))
-            if self._eaf is not None
-            else np.empty(raw.shape)
-        )
+        if eaf is None:
+            eaf = (
+                self._eaf.points(rows, np.full(len(raw), col))
+                if self._eaf is not None
+                else np.empty(raw.shape, dtype=np.float32)
+            )
         return self._decode(
             raw,
-            eaf,
+            np.asarray(eaf, dtype=np.float32),
             np.full(len(raw), col),
             positions_pairs(rows, np.full(len(raw), col), self.n_analyses),
         )
 
-    def row(self, row: int) -> np.ndarray:
-        return np.asarray(self.band(row, row + 1)[0], dtype=np.float32)
+    def row(self, row: int, *, eaf: np.ndarray | None = None) -> np.ndarray:
+        """One variant, every analysis. `eaf` is the pre-read block of these cells."""
+        block = self.band(row, row + 1, eaf=None if eaf is None else np.asarray(eaf)[None, :])
+        return np.asarray(block[0], dtype=np.float32)
 
-    def rows(self, rows: np.ndarray) -> np.ndarray:
+    def rows(self, rows: np.ndarray, *, eaf: np.ndarray | None = None) -> np.ndarray:
+        """A set of variants, every analysis. `eaf` is the pre-read block of these cells."""
         rows = np.asarray(rows, dtype=np.int64)
         if len(rows) == 0:
             return np.empty((0, self.n_analyses), dtype=np.float32)
-        return self.block(rows, np.arange(self.n_analyses))
+        return self.block(rows, np.arange(self.n_analyses), eaf=eaf)
 
     def block(
-        self, rows: Sequence[int] | np.ndarray, cols: Sequence[int] | np.ndarray
+        self,
+        rows: Sequence[int] | np.ndarray,
+        cols: Sequence[int] | np.ndarray,
+        *,
+        eaf: np.ndarray | None = None,
     ) -> np.ndarray:
+        """The cross product `rows x cols` (zarr orthogonal indexing)."""
         r, c = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
         raw = np.asarray(self._array.oindex[r, c])
         ai = np.broadcast_to(c, raw.shape)
-        er, ec = np.meshgrid(r, c, indexing="ij")
-        eaf = (
-            self._eaf.points(er.ravel(), ec.ravel()).reshape(raw.shape)
-            if self._eaf is not None
-            else np.empty(raw.shape)
+        if eaf is None:
+            er, ec = np.meshgrid(r, c, indexing="ij")
+            eaf = (
+                self._eaf.points(er.ravel(), ec.ravel()).reshape(raw.shape)
+                if self._eaf is not None
+                else np.empty(raw.shape, dtype=np.float32)
+            )
+        return self._decode(
+            raw, np.asarray(eaf, dtype=np.float32), ai, positions_rows_cols(r, c, self.n_analyses)
         )
-        return self._decode(raw, eaf, ai, positions_rows_cols(r, c, self.n_analyses))
 
-    def points(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+    def points(
+        self, rows: np.ndarray, cols: np.ndarray, *, eaf: np.ndarray | None = None
+    ) -> np.ndarray:
+        """Elementwise cells `(rows[i], cols[i])` (zarr coordinate indexing)."""
         rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
         raw = np.asarray(self._array.vindex[rows, cols])
-        eaf = self._eaf.points(rows, cols) if self._eaf is not None else np.empty(raw.shape)
-        return self._decode(raw, eaf, cols, positions_pairs(rows, cols, self.n_analyses))
+        if eaf is None:
+            eaf = (
+                self._eaf.points(rows, cols)
+                if self._eaf is not None
+                else np.empty(raw.shape, dtype=np.float32)
+            )
+        return self._decode(
+            raw,
+            np.asarray(eaf, dtype=np.float32),
+            cols,
+            positions_pairs(rows, cols, self.n_analyses),
+        )
 
     def patch(self, rows: np.ndarray, cols: np.ndarray, values: np.ndarray) -> None:
         """Patch physical SE cells and keep their exact-exception table aligned."""
@@ -376,6 +432,19 @@ class _EafPlaneBase:
     def _missing(shape: int | tuple[int, ...]) -> np.ndarray:
         return np.full(shape, np.nan, dtype=np.float32)
 
+    def _read_imputed_mask(self, want: bool) -> bool:
+        """Whether a read must fetch the imputed mask.
+
+        The panel substitution needs it whenever the plan declares reference
+        EAF; Association Status needs it on any release that has the array, so
+        `want` lets the query facade ask for it without a second read.
+        """
+        return self._imputed is not None and (self.carries_reference or want)
+
+    def _empty_read(self, shape: int | tuple[int, ...], want_imputed: bool) -> EafRead:
+        mask = np.empty(shape, dtype=np.uint8) if self._read_imputed_mask(want_imputed) else None
+        return EafRead(self._missing(shape), mask)
+
     def _no_plane(
         self,
         shape: int | tuple[int, ...],
@@ -457,39 +526,151 @@ class DenseEafPlane(_EafPlaneBase):
             "this component has no eaf plane and no sibling plane to take its width from"
         )
 
-    def points(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
-        """Elementwise cells `(rows[i], cols[i])`."""
+    @property
+    def n_variants(self) -> int:
+        """The grid's height -- from whichever plane carries the variant axis."""
+        for candidate in (self._array, self._imputed, self._reference, self._baseline):
+            if candidate is not None:
+                return int(candidate.shape[0])
+        return self._sibling_height
+
+    @cached_property
+    def _sibling_height(self) -> int:
+        """The `z` plane's height, for a component holding no axis-bearing array."""
+        if self._group is not None and "z" in self._group:
+            return int(self._group["z"].shape[0])
+        raise EafBaselineError(
+            "this component has no eaf plane and no sibling plane to take its height from"
+        )
+
+    def read_points(
+        self, rows: np.ndarray, cols: np.ndarray, *, want_imputed: bool = False
+    ) -> EafRead:
+        """Elementwise cells `(rows[i], cols[i])`, with the imputed mask."""
         rows = np.asarray(rows, dtype=np.int64)
         cols = np.asarray(cols, dtype=np.int64)
         if len(rows) == 0:
-            return self._missing(0)
-        imputed = self._imputed.vindex[rows, cols].astype(bool) if self.carries_reference else None
+            return self._empty_read(0, want_imputed)
+        imputed = (
+            self._imputed.vindex[rows, cols].astype(np.uint8)
+            if self._read_imputed_mask(want_imputed)
+            else None
+        )
         reference = self._gather(self._reference, rows)
         if self._array is None:
-            return self._no_plane(len(rows), imputed=imputed, reference=reference)
-        return self._codec.decode_eaf(
-            self._array.vindex[rows, cols],
-            baseline=self._gather(self._baseline, rows),
-            positions=positions_pairs(rows, cols, self.n_analyses),
-            imputed=imputed,
-            reference=reference,
+            values = self._no_plane(len(rows), imputed=imputed, reference=reference)
+        else:
+            values = self._codec.decode_eaf(
+                self._array.vindex[rows, cols],
+                baseline=self._gather(self._baseline, rows),
+                positions=positions_pairs(rows, cols, self.n_analyses),
+                imputed=imputed,
+                reference=reference,
+            )
+        return EafRead(values, imputed)
+
+    def points(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+        """Elementwise cells `(rows[i], cols[i])`."""
+        return self.read_points(rows, cols).values
+
+    def read_band(self, r0: int, r1: int, *, want_imputed: bool = False) -> EafRead:
+        """Rows `[r0:r1)`, all analyses, with the imputed mask."""
+        n_analyses = self.n_analyses
+        imputed = (
+            self._imputed[r0:r1].astype(np.uint8)
+            if self._read_imputed_mask(want_imputed)
+            else None
         )
+        reference = self._reference_band(r0, r1, n_analyses)
+        if self._array is None:
+            values = self._no_plane((r1 - r0, n_analyses), imputed=imputed, reference=reference)
+        else:
+            per_row = self._gather(self._baseline, np.arange(r0, r1, dtype=np.int64))
+            values = self._codec.decode_eaf(
+                self._array[r0:r1],
+                baseline=None if per_row is None else per_row[:, None].repeat(n_analyses, axis=1),
+                positions=positions_row_band(r0, n_analyses),
+                imputed=imputed,
+                reference=reference,
+            )
+        return EafRead(values, imputed)
 
     def band(self, r0: int, r1: int) -> np.ndarray:
         """Rows `[r0:r1)`, all analyses."""
-        n_analyses = self.n_analyses
-        imputed = self._imputed[r0:r1].astype(bool) if self.carries_reference else None
-        reference = self._reference_band(r0, r1, n_analyses)
-        if self._array is None:
-            return self._no_plane((r1 - r0, n_analyses), imputed=imputed, reference=reference)
-        per_row = self._gather(self._baseline, np.arange(r0, r1, dtype=np.int64))
-        return self._codec.decode_eaf(
-            self._array[r0:r1],
-            baseline=None if per_row is None else per_row[:, None].repeat(n_analyses, axis=1),
-            positions=positions_row_band(r0, n_analyses),
-            imputed=imputed,
-            reference=reference,
+        return self.read_band(r0, r1).values
+
+    def read_row(self, row: int, *, want_imputed: bool = False) -> EafRead:
+        """One variant, every analysis, with the imputed mask."""
+        block = self.read_band(row, row + 1, want_imputed=want_imputed)
+        return EafRead(block.values[0], None if block.imputed is None else block.imputed[0])
+
+    def read_rows(self, row_indices: np.ndarray, *, want_imputed: bool = False) -> EafRead:
+        """A set of variants, every analysis; contiguous runs read as a band."""
+        rows = np.asarray(row_indices, dtype=np.int64)
+        if len(rows) == 0:
+            return self._empty_read((0, self.n_analyses), want_imputed)
+        start, stop = int(rows[0]), int(rows[-1]) + 1
+        contiguous = stop - start == len(rows) and np.array_equal(
+            rows, np.arange(start, stop, dtype=rows.dtype)
         )
+        if contiguous:
+            return self.read_band(start, stop, want_imputed=want_imputed)
+        return self.read_block(rows, np.arange(self.n_analyses), want_imputed=want_imputed)
+
+    def read_block(
+        self,
+        rows: Sequence[int] | np.ndarray,
+        cols: Sequence[int] | np.ndarray,
+        *,
+        want_imputed: bool = False,
+    ) -> EafRead:
+        """The cross product `rows x cols` (zarr orthogonal indexing)."""
+        r = np.asarray(rows, dtype=np.int64)
+        c = np.asarray(cols, dtype=np.int64)
+        if len(r) == 0 or len(c) == 0:
+            return self._empty_read((len(r), len(c)), want_imputed)
+        imputed = (
+            self._imputed.oindex[r, c].astype(np.uint8)
+            if self._read_imputed_mask(want_imputed)
+            else None
+        )
+        per_row = self._gather(self._baseline, r)
+        baseline = None if per_row is None else per_row[:, None].repeat(len(c), axis=1)
+        reference = self._reference_block(r, c)
+        if self._array is None:
+            values = self._no_plane((len(r), len(c)), imputed=imputed, reference=reference)
+        else:
+            values = self._codec.decode_eaf(
+                self._array.oindex[r, c],
+                baseline=baseline,
+                positions=positions_rows_cols(r, c, self.n_analyses),
+                imputed=imputed,
+                reference=reference,
+            )
+        return EafRead(values, imputed)
+
+    def read_column(self, col: int, *, want_imputed: bool = False) -> EafRead:
+        """One analysis, every variant, with the imputed mask."""
+        n_variants = self.n_variants
+        rows = np.arange(n_variants, dtype=np.int64)
+        cols = np.full(n_variants, int(col), dtype=np.int64)
+        imputed = (
+            self._imputed[:, col].astype(np.uint8)
+            if self._read_imputed_mask(want_imputed)
+            else None
+        )
+        reference = self._gather(self._reference, rows)
+        if self._array is None:
+            values = self._no_plane(n_variants, imputed=imputed, reference=reference)
+        else:
+            values = self._codec.decode_eaf(
+                self._array[:, col],
+                baseline=self._gather(self._baseline, rows),
+                positions=positions_pairs(rows, cols, self.n_analyses),
+                imputed=imputed,
+                reference=reference,
+            )
+        return EafRead(values, imputed)
 
     def patch(self, rows: np.ndarray, cols: np.ndarray, values: np.ndarray) -> None:
         """Overwrite the cells `(rows[i], cols[i])` with the frequencies
@@ -539,6 +720,12 @@ class DenseEafPlane(_EafPlaneBase):
             return None
         return per_row[:, None].repeat(n_analyses, axis=1)
 
+    def _reference_block(self, rows: np.ndarray, cols: np.ndarray) -> np.ndarray | None:
+        per_row = self._gather(self._reference, rows)
+        if per_row is None:
+            return None
+        return per_row[:, None].repeat(len(cols), axis=1)
+
 
 class RaggedEafPlane(_EafPlaneBase):
     """The flat CSR frequency sequence, decoded on read.
@@ -576,48 +763,61 @@ class RaggedEafPlane(_EafPlaneBase):
             group=group,
         )
 
-    def slice(self, start: int, end: int) -> np.ndarray:
-        """`eaf[start:end]` in flat CSR order."""
+    def read_slice(self, start: int, end: int, *, want_imputed: bool = False) -> EafRead:
+        """`eaf[start:end]` in flat CSR order, with the imputed mask."""
         start, end = int(start), int(end)
         if end <= start:
-            return self._missing(0)
+            return self._empty_read(end - start, want_imputed)
         rows = np.asarray(self._variant_index[start:end], dtype=np.int64)
         imputed = (
-            np.asarray(self._imputed[start:end], dtype=bool) if self.carries_reference else None
+            np.asarray(self._imputed[start:end], dtype=np.uint8)
+            if self._read_imputed_mask(want_imputed)
+            else None
         )
         reference = self._gather(self._reference, rows)
         if self._array is None:
-            return self._no_plane(end - start, imputed=imputed, reference=reference)
-        return self._codec.decode_eaf(
-            self._array[start:end],
-            baseline=self._gather(self._baseline, rows),
-            positions=positions_flat(start),
-            imputed=imputed,
-            reference=reference,
+            values = self._no_plane(end - start, imputed=imputed, reference=reference)
+        else:
+            values = self._codec.decode_eaf(
+                self._array[start:end],
+                baseline=self._gather(self._baseline, rows),
+                positions=positions_flat(start),
+                imputed=imputed,
+                reference=reference,
+            )
+        return EafRead(values, imputed)
+
+    def slice(self, start: int, end: int) -> np.ndarray:
+        """`eaf[start:end]` in flat CSR order."""
+        return self.read_slice(start, end).values
+
+    def read_at(self, positions: np.ndarray, *, want_imputed: bool = False) -> EafRead:
+        """Frequencies at arbitrary flat CSR positions, with the imputed mask."""
+        positions = np.asarray(positions, dtype=np.int64)
+        if len(positions) == 0:
+            return self._empty_read(0, want_imputed)
+        rows = np.asarray(self._variant_index.oindex[positions], dtype=np.int64)
+        imputed = (
+            np.asarray(self._imputed.oindex[positions], dtype=np.uint8)
+            if self._read_imputed_mask(want_imputed)
+            else None
         )
+        reference = self._gather(self._reference, rows)
+        if self._array is None:
+            values = self._no_plane(len(positions), imputed=imputed, reference=reference)
+        else:
+            values = self._codec.decode_eaf(
+                np.asarray(self._array.oindex[positions]),
+                baseline=self._gather(self._baseline, rows),
+                positions=positions_at(positions),
+                imputed=imputed,
+                reference=reference,
+            )
+        return EafRead(values, imputed)
 
     def at(self, positions: np.ndarray) -> np.ndarray:
         """Frequencies at arbitrary flat CSR positions."""
-        positions = np.asarray(positions, dtype=np.int64)
-        if len(positions) == 0:
-            return self._missing(0)
-        rows = np.asarray(self._variant_index.oindex[positions], dtype=np.int64)
-        imputed = self._imputed_at(positions)
-        reference = self._gather(self._reference, rows)
-        if self._array is None:
-            return self._no_plane(len(positions), imputed=imputed, reference=reference)
-        return self._codec.decode_eaf(
-            np.asarray(self._array.oindex[positions]),
-            baseline=self._gather(self._baseline, rows),
-            positions=positions_at(positions),
-            imputed=imputed,
-            reference=reference,
-        )
-
-    def _imputed_at(self, positions: np.ndarray) -> np.ndarray | None:
-        if not self.carries_reference:
-            return None
-        return np.asarray(self._imputed.oindex[positions], dtype=bool)
+        return self.read_at(positions).values
 
 
 class RaggedSePlane:
@@ -654,7 +854,15 @@ class RaggedSePlane:
         offsets = np.asarray(self._offsets[:], dtype=np.int64)
         return np.searchsorted(offsets[1:], positions, side="right").astype(np.int64)
 
-    def slice(self, start: int, end: int, *, analysis_index: int | None = None) -> np.ndarray:
+    def slice(
+        self,
+        start: int,
+        end: int,
+        *,
+        analysis_index: int | None = None,
+        eaf: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Decoded `se[start:end]`; `eaf` is a pre-read block of these cells (#253)."""
         raw = np.asarray(self._array[start:end])
         ai = (
             np.full(len(raw), analysis_index, dtype=np.int64)
@@ -666,24 +874,31 @@ class RaggedSePlane:
             if self._coefficients is not None
             else np.empty((0, 2))
         )
+        if eaf is None:
+            eaf = self._eaf.slice(start, end)
         return self._codec.decode_se(
             raw,
-            eaf=self._eaf.slice(start, end),
+            eaf=np.asarray(eaf, dtype=np.float32),
             analysis_index=ai,
             coefficients=coef,
             positions=positions_flat(start),
         )
 
-    def at(self, positions: np.ndarray, *, analysis_index: np.ndarray) -> np.ndarray:
+    def at(
+        self, positions: np.ndarray, *, analysis_index: np.ndarray, eaf: np.ndarray | None = None
+    ) -> np.ndarray:
+        """Decoded SE at CSR ordinals; `eaf` is a pre-read block of these cells (#253)."""
         positions = np.asarray(positions, dtype=np.int64)
         coef = (
             np.asarray(self._coefficients[:], dtype=np.float32)
             if self._coefficients is not None
             else np.empty((0, 2))
         )
+        if eaf is None:
+            eaf = self._eaf.at(positions)
         return self._codec.decode_se(
             np.asarray(self._array.oindex[positions]),
-            eaf=self._eaf.at(positions),
+            eaf=np.asarray(eaf, dtype=np.float32),
             analysis_index=analysis_index,
             coefficients=coef,
             positions=positions_at(positions),

@@ -12,6 +12,7 @@ import zarr
 from opengwasdb.encoding import (
     EafExceptionBuilder,
     EafMeasurements,
+    EafRead,
     OverflowCellBatches,
     OverflowCells,
     RaggedEafPlane,
@@ -727,11 +728,17 @@ class RaggedCSRReader:
                 se=np.empty(0, dtype=np.float32),
                 eaf=np.empty(0, dtype=np.float32),
             )
+        # One read of the frequency region, shared by SE decoding and the
+        # returned `eaf` column (#253), rather than `se_slice` reading the
+        # plane and `eaf_slice` reading it again.
+        eaf_read = self._eaf_plane.read_slice(start, end)
         return AnalysisAssociations(
             variant_index=self._variant_index[start:end],
             z=self.z_slice(start, end),
-            se=self._se_plane.slice(start, end, analysis_index=analysis_index),
-            eaf=self.eaf_slice(start, end),
+            se=self._se_plane.slice(
+                start, end, analysis_index=analysis_index, eaf=eaf_read.values
+            ),
+            eaf=eaf_read.values,
         )
 
     def variant_indices(self, analysis_index: int) -> np.ndarray:
@@ -764,16 +771,24 @@ class RaggedCSRReader:
         """Every decoded z, in flat CSR order."""
         return self.z_slice(0, array_length(self._z))
 
-    def se_slice(self, start: int, end: int, analysis_index: int | None = None) -> np.ndarray:
-        """Decoded `se[start:end]`; callers may supply a known Analysis."""
-        return self._se_plane.slice(start, end, analysis_index=analysis_index)
+    def se_slice(
+        self,
+        start: int,
+        end: int,
+        *,
+        eaf: np.ndarray | None = None,
+        analysis_index: int | None = None,
+    ) -> np.ndarray:
+        """Decoded `se[start:end]`; callers may supply a pre-read frequency
+        block and a known Analysis (#253)."""
+        return self._se_plane.slice(start, end, analysis_index=analysis_index, eaf=eaf)
 
-    def se_at(self, positions: np.ndarray) -> np.ndarray:
+    def se_at(self, positions: np.ndarray, *, eaf: np.ndarray | None = None) -> np.ndarray:
         """Decoded SE at arbitrary CSR ordinals."""
         positions = np.asarray(positions, dtype=np.int64)
         offsets = np.asarray(self._offsets[:], dtype=np.int64)
         analyses = np.searchsorted(offsets[1:], positions, side="right").astype(np.int64)
-        return self._se_plane.at(positions, analysis_index=analyses)
+        return self._se_plane.at(positions, analysis_index=analyses, eaf=eaf)
 
     def se_all(self) -> np.ndarray:
         return self.se_slice(0, array_length(self._se))
@@ -783,9 +798,13 @@ class RaggedCSRReader:
         """Whether this component stores EAF at all (ADR 0036)."""
         return self._eaf_plane.has_values
 
+    def eaf_slice_read(self, start: int, end: int, *, want_imputed: bool = False) -> EafRead:
+        """`eaf[start:end]` and the imputed mask, in one read (#253)."""
+        return self._eaf_plane.read_slice(start, end, want_imputed=want_imputed)
+
     def eaf_slice(self, start: int, end: int) -> np.ndarray:
         """Decoded `eaf[start:end]`, or all-NaN when this store carries none."""
-        return self._eaf_plane.slice(start, end)
+        return self.eaf_slice_read(start, end).values
 
     def eaf_at(self, positions: np.ndarray) -> np.ndarray:
         """EAF at arbitrary flat CSR positions; all-NaN when there is no array.

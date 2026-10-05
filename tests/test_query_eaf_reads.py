@@ -26,15 +26,13 @@ variants live in ticket #253's report as diffs, not here.
 
 from __future__ import annotations
 
-from collections import Counter
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
 import zarr
+from residual_fixtures import residual_eligible_records
+from store_reads import chunk_reads, duplicate_chunk_keys, old_index_without_fields
 from test_hybrid_shared_se_plan_e2e import (
     N_OFF_PANEL,
     N_PANEL,
@@ -46,96 +44,20 @@ from test_hybrid_shared_se_plan_e2e import (
 )
 from test_ragged_residual_completion import RaggedResidualScenario
 from test_se_residual_encoding import _residual_source_and_panel
-from zarr.storage import LocalStore
 
 from opengwasdb.encoding.codec import EAF_ABSENT
+from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.complete import complete_dense_store
-from opengwasdb.layouts.dense.top_hits import DenseTopHitReader
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 
 #: The arrays whose duplicate reads #253 removes.
 _EAF_ARRAYS = ("eaf", "eaf_baseline", "imputed")
 
-#: Zarr keys that hold metadata, not chunk bytes; a metadata read is not a read
-#: of the array's data and is counted separately by `test_query_metadata_reads`.
-_METADATA_SUFFIXES = (".zarray", ".zattrs", ".zgroup", ".zmetadata", "zarr.json")
-
 #: The panel frequency shift the Dense trap fixture applies, so an observed
 #: cell's own frequency differs from the panel's and an unmasked substitution is
 #: visible. Well inside the residual coding's range and the panel's [0, 1].
 _PANEL_SHIFT = 0.15
-
-
-def _array_of(key: object) -> str | None:
-    """Which of the three arrays a store key holds a chunk of, or None."""
-    text = str(key)
-    if text.endswith(_METADATA_SUFFIXES):
-        return None
-    for name in _EAF_ARRAYS:
-        if name in text.split("/"):
-            return name
-    return None
-
-
-@contextmanager
-def _chunk_reads(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, list[str]]]:
-    """Record every chunk read of `eaf`, `eaf_baseline` and `imputed`.
-
-    zarr 3 routes a synchronous read through `LocalStore.get_sync` and an
-    asynchronous one through `LocalStore.get`; both are counted, so a read via
-    either path is seen. The wrapper returns whatever the original returns, so
-    the same code covers the sync method and the coroutine one.
-    """
-    reads: dict[str, list[str]] = {name: [] for name in _EAF_ARRAYS}
-    for method in ("get", "get_sync"):
-        original = getattr(LocalStore, method)
-
-        def wrapper(
-            self: LocalStore,
-            key: str,
-            *args: Any,
-            _original: Callable[..., Any] = original,
-            **kwargs: Any,
-        ) -> Any:
-            name = _array_of(key)
-            if name is not None:
-                reads[name].append(str(key))
-            return _original(self, key, *args, **kwargs)
-
-        monkeypatch.setattr(LocalStore, method, wrapper)
-    yield reads
-    monkeypatch.undo()
-
-
-def _duplicate_chunk_keys(reads: dict[str, list[str]]) -> dict[str, list[str]]:
-    out: dict[str, list[str]] = {}
-    for name, keys in reads.items():
-        duplicates = sorted(key for key, count in Counter(keys).items() if count > 1)
-        if duplicates:
-            out[name] = duplicates
-    return out
-
-
-@contextmanager
-def _old_index(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Make the top-hit reader look like an index built before it carried fields.
-
-    A current tier stores decoded `z`, `se`, `eaf` and `imputed`, so a top-hit
-    query reads no plane at all and the shared read is not exercised. The
-    `_top_hits` path #253 is about is the fallback for an index that predates
-    those fields, so the reader is told it has none and the facade derives them
-    from the planes -- which is where the duplicate EAF read lives.
-    """
-    original = DenseTopHitReader.has
-
-    def has(self: DenseTopHitReader, name: str) -> bool:
-        if name in _EAF_ARRAYS or name == "se":
-            return False
-        return original(self, name)
-
-    monkeypatch.setattr(DenseTopHitReader, "has", has)
-    yield
 
 
 # ── fixtures ────────────────────────────────────────────────────────────────
@@ -165,7 +87,9 @@ def _dense_completed_fixture(tmp_path: Path) -> tuple[Path, np.ndarray, np.ndarr
 
 
 @pytest.fixture(scope="module")
-def dense_completed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, np.ndarray, np.ndarray]:
+def dense_completed(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[Path, np.ndarray, np.ndarray]:
     return _dense_completed_fixture(tmp_path_factory.mktemp("eaf_reads_dense"))
 
 
@@ -177,6 +101,35 @@ def ragged_completed(tmp_path_factory: pytest.TempPathFactory) -> RaggedResidual
 @pytest.fixture(scope="module")
 def hybrid_residual(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return _build_hybrid(tmp_path_factory.mktemp("eaf_reads_hybrid"), "reads", [dict(), dict()])
+
+
+#: The variant `dense_observed_missing` leaves one Analysis unobserved at, in
+#: the middle of the axis so that a contiguous (mask-free) slice of the shared
+#: array cannot coincide with the finite mask.
+_MISSING_VARIANT = 300
+
+
+@pytest.fixture(scope="module")
+def dense_observed_missing(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A residual Dense observed release with one genuinely missing cell."""
+    tmp = tmp_path_factory.mktemp("eaf_reads_missing")
+    records, _expected = residual_eligible_records(600)
+    kept = [
+        r
+        for r in records
+        if not (r.analysis_id == "b" and r.variant.position == _MISSING_VARIANT)
+    ]
+    assert len(kept) == len(records) - 1, "the fixture must drop exactly one cell"
+    store = tmp / "obs.opengwasdb"
+    build_dense_observed_store(
+        kept,
+        store,
+        store_id="s",
+        release_id="obs",
+        reference_assembly="GRCh38",
+        chunk_shape=(100, 2),
+    )
+    return store
 
 
 # ── fixture meaningfulness ──────────────────────────────────────────────────
@@ -232,7 +185,7 @@ def test_hybrid_fixture_is_residual_in_both_components(hybrid_residual: Path) ->
 # ── read once ───────────────────────────────────────────────────────────────
 
 
-_DENSE_SHAPES: dict[str, Callable[[Any], dict[str, np.ndarray]]] = {
+_DENSE_SHAPES = {
     "analysis": lambda q: q.analysis("b"),
     "phewas": lambda q: q.phewas("1:197000:A:G"),
     "range_phewas": lambda q: q.range_phewas("1", 0, 10_000_000),
@@ -248,9 +201,9 @@ def test_dense_query_reads_each_eaf_array_once(
 ) -> None:
     """Every in-scope Dense shape reads each of the three arrays once."""
     store, _observed, _panel = dense_completed
-    with query_store(store) as query, _chunk_reads(monkeypatch) as reads:
+    with query_store(store) as query, chunk_reads(monkeypatch, _EAF_ARRAYS) as reads:
         _DENSE_SHAPES[shape](query)
-    duplicates = _duplicate_chunk_keys(reads)
+    duplicates = duplicate_chunk_keys(reads)
     assert duplicates == {}, f"{shape} re-read EAF chunks: {duplicates}"
     assert reads["eaf"] and reads["eaf_baseline"] and reads["imputed"], (
         f"{shape} must read all three arrays for this to mean anything"
@@ -263,9 +216,13 @@ def test_dense_old_index_top_hits_reads_each_eaf_array_once(
 ) -> None:
     """The older-index top-hit fallback reads the plane once, not twice."""
     store, _observed, _panel = dense_completed
-    with query_store(store) as query, _old_index(monkeypatch), _chunk_reads(monkeypatch) as reads:
+    with (
+        query_store(store) as query,
+        old_index_without_fields(monkeypatch, _EAF_ARRAYS),
+        chunk_reads(monkeypatch, _EAF_ARRAYS) as reads,
+    ):
         query.top_hits(threshold=5e-8, analysis_id="a")
-    duplicates = _duplicate_chunk_keys(reads)
+    duplicates = duplicate_chunk_keys(reads)
     assert duplicates == {}, f"older-index top_hits re-read EAF chunks: {duplicates}"
     assert reads["eaf"] and reads["eaf_baseline"] and reads["imputed"]
 
@@ -274,28 +231,41 @@ def test_ragged_analysis_and_lookup_read_each_eaf_array_once(
     ragged_completed: RaggedResidualScenario, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The Analysis-side Ragged reads share one decoded EAF per query."""
-    shapes: dict[str, Callable[[Any], dict[str, np.ndarray]]] = {
-        "analysis": lambda q: q.analysis("b"),
-        "lookup": lambda q: q.lookup(["1:1000:A:G"], ["a", "b"]),
-    }
+    # A lookup identifier that resolves on this store's own axis; the Ragged
+    # fixture's variants are not at the Dense fixture's positions.
     with query_store(ragged_completed.completed) as query:
+        identifier = str(next(iter(query.variants_table().values()))["alid"])
+        shapes = {
+            "analysis": lambda q: q.analysis("b"),
+            # One Analysis: `lookup` calls `analysis` per requested Analysis, so
+            # a request for two Analyses of one CSR legitimately reads the same
+            # chunk twice -- once as each Analysis's own rows. The duplicate
+            # this test is about is the second read *of one Analysis*, which
+            # `analysis` would make on its own.
+            "lookup": lambda q: q.lookup([identifier], ["a"]),
+        }
         for name, call in shapes.items():
-            with _chunk_reads(monkeypatch) as reads:
+            with chunk_reads(monkeypatch, _EAF_ARRAYS) as reads:
                 call(query)
-            duplicates = _duplicate_chunk_keys(reads)
+            duplicates = duplicate_chunk_keys(reads)
             assert duplicates == {}, f"Ragged {name} re-read EAF chunks: {duplicates}"
-            assert reads["eaf"] and reads["eaf_baseline"] and reads["imputed"]
+            # The fixture's eaf plane is `float32` (a sparse store writes no
+            # baseline), so `eaf` itself is the array this test guarantees is
+            # read; the imputed mask is read because the plan carries reference
+            # EAF, and reading it once is what the duplicate check pins.
+            assert reads["eaf"], f"Ragged {name} must read eaf for this to mean anything"
+            assert reads["imputed"], f"Ragged {name} must read the imputed mask"
 
 
 def test_hybrid_analysis_reads_each_eaf_array_once(
     hybrid_residual: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The Hybrid one-Analysis read shares each component's EAF read."""
-    with query_store(hybrid_residual) as query, _chunk_reads(monkeypatch) as reads:
+    with query_store(hybrid_residual) as query, chunk_reads(monkeypatch, _EAF_ARRAYS) as reads:
         query.analysis("trait_0")
-    duplicates = _duplicate_chunk_keys(reads)
+    duplicates = duplicate_chunk_keys(reads)
     assert duplicates == {}, f"Hybrid analysis re-read EAF chunks: {duplicates}"
-    assert reads["eaf"] and reads["eaf_baseline"]
+    assert reads["eaf"], "Hybrid analysis must read eaf for this to mean anything"
 
 
 # ── no answer changes (the trap tests) ──────────────────────────────────────
@@ -307,7 +277,10 @@ def _status_split(result: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray
 
 
 def _check_dense_cells(
-    result: dict[str, np.ndarray], observed: np.ndarray, panel: np.ndarray, z_at: Callable[[int], float]
+    result: dict[str, np.ndarray],
+    observed: np.ndarray,
+    panel: np.ndarray,
+    z_at,
 ) -> None:
     """Every returned Dense cell decodes to the source or the panel value."""
     rows = np.asarray(result["variant_index"], dtype=np.int64)
@@ -340,7 +313,7 @@ def test_dense_query_answers_match_the_source_and_panel(
         return 8.0 if row % 50 == 0 else 1.0
 
     with query_store(store) as query:
-        shapes: dict[str, Callable[[], dict[str, np.ndarray]]] = {
+        shapes = {
             "analysis_a": lambda: query.analysis("a"),
             "analysis_b": lambda: query.analysis("b"),
             "phewas_observed": lambda: query.phewas("1:1000:A:G"),
@@ -372,10 +345,75 @@ def test_dense_old_index_top_hits_answers_match_the_source(
     def z_at(row: int) -> float:
         return 8.0 if row % 50 == 0 else 1.0
 
-    with query_store(store) as query, _old_index(monkeypatch):
+    with query_store(store) as query, old_index_without_fields(monkeypatch, _EAF_ARRAYS):
         result = query.top_hits(threshold=5e-8, analysis_id="a")
     assert len(result["z"]) > 0
     _check_dense_cells(result, observed, panel, z_at)
+
+
+def test_dense_observed_only_filters_the_shared_eaf_column(
+    dense_completed: tuple[Path, np.ndarray, np.ndarray],
+) -> None:
+    """`observed_only` must cut the shared eaf column in lockstep with z/se.
+
+    The shared region is read once and indexed by the query's masks; if the
+    result column is cut with a different mask from SE decoding, an observed
+    cell gets a neighbouring or imputed cell's frequency. Every array is
+    compared cell for cell against the unfiltered result restricted to its
+    observed rows.
+    """
+    store, _observed, _panel = dense_completed
+    with query_store(store) as query:
+        pairs = {
+            "analysis_b": (
+                lambda: query.analysis("b"),
+                lambda: query.analysis("b", observed_only=True),
+            ),
+            "phewas_imputed": (
+                lambda: query.phewas("1:197000:A:G"),
+                lambda: query.phewas("1:197000:A:G", observed_only=True),
+            ),
+            "range": (
+                lambda: query.range_phewas("1", 0, 10_000_000),
+                lambda: query.range_phewas("1", 0, 10_000_000, observed_only=True),
+            ),
+            "lookup": (
+                lambda: query.lookup(["1:1000:A:G", "1:197000:A:G"], ["a", "b"]),
+                lambda: query.lookup(
+                    ["1:1000:A:G", "1:197000:A:G"], ["a", "b"], observed_only=True
+                ),
+            ),
+        }
+        for name, (full_call, filtered_call) in pairs.items():
+            full = full_call()
+            filtered = filtered_call()
+            keep = _status_split(full)[0]
+            assert keep.any() and not keep.all(), f"{name} must have both kinds of cell"
+            assert len(filtered["z"]) == int(keep.sum()), name
+            for key in ("variant_index", "analysis_index", "z", "se", "eaf", "association_status"):
+                np.testing.assert_array_equal(
+                    np.asarray(full[key])[keep], filtered[key], err_msg=f"{name}:{key}"
+                )
+
+
+def test_dense_finite_mask_indexes_the_shared_eaf_column(
+    dense_observed_missing: Path,
+) -> None:
+    """A missing Dense cell drops from the shared read, not shifts it.
+
+    The shared frequency region is the whole column, a superset of the finite
+    cells. Indexing it with a contiguous slice instead of the finite mask would
+    give every cell after the missing one its neighbour's frequency -- wrong,
+    plausible, and silent, which is #253's alignment trap on the finite mask.
+    """
+    frequencies = np.linspace(0.05, 0.95, 600, dtype=np.float32)
+    with query_store(dense_observed_missing) as query:
+        result = query.analysis("b")
+    returned = set(int(v) for v in result["variant_index"])
+    assert _MISSING_VARIANT - 1 not in returned, "the missing cell must stay absent"
+    assert len(returned) == 599
+    for vi, eaf in zip(result["variant_index"], result["eaf"], strict=True):
+        np.testing.assert_allclose(eaf, frequencies[int(vi)], rtol=0.02)
 
 
 def test_ragged_query_answers_match_the_source_and_panel(
