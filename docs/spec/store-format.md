@@ -846,6 +846,64 @@ In Observed-Only Dense stores:
 
 Recommended compression for initial implementation is Zarr with Zstandard and bitshuffle, using benchmarked chunking appropriate for mixed range, variant, PheWAS, and full-analysis extraction workloads.
 
+## 10a. `data.zarr` physical layout in format 0.2.0
+
+Format 0.2.0 stores every array as **Zarr v3 with the sharding codec**. The
+arrays, dtypes, fill values and encodings are exactly those of 0.1.0 (§10); only
+the physical layout changes. A 0.2.0 release exists because the unit a query
+reads — the **inner chunk** — is decoupled from the unit stored as a file — the
+**shard** — so the Dense Analysis-axis inner chunk can narrow without
+multiplying the file count (ADR 0057, ADR 0021).
+
+```text
+format_version 0.1.0   Zarr v2   .zarray / .zgroup, one file per chunk
+format_version 0.2.0   Zarr v3   zarr.json, one file per shard
+```
+
+**Shards are bounded on both axes.** The Dense VCF builder writes `[all variants
+× band]` column bands, so a shard spanning every Analysis is never written whole
+(ADR 0057). A Dense shard is `[V_s × A_s]`, with `A_s` a whole multiple of the
+Analysis-axis inner chunk. The proposed defaults, which a conversion takes as
+parameters and #246 benchmarks, are:
+
+| array role | inner chunk | shard |
+|---|---|---|
+| Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask | `[1000, A_c]` (`A_c` the analysis-axis chunk) | `[100_000, 1024]` rows × Analyses |
+| per-variant side arrays (`eaf_baseline`, `eaf_reference`), flat CSR sequences, flat Rho arrays | per §6 / the role policy | about 1,000,000 elements |
+| top-hit index columns | 16,384 (as 0.1.0) | about 64 inner chunks |
+| top-hit per-Analysis offsets, exception/overflow tables, SE coefficients, CSR offsets | whole array | one shard holding the array |
+
+The inner chunk is the role policy of `opengwasdb.store.arrays` (`chunk_layout`)
+and the shard its companion `shard_layout`; a shard MUST be a whole multiple of
+the inner chunk on every axis, and a layout that is not is invalid rather than
+clipped.
+
+The codec chain is Blosc Zstandard / clevel 3 / bitshuffle inside the
+`sharding_indexed` codec — the v3 spelling of the 0.1.0 compressor. An array
+written uncompressed in 0.1.0 (the `z`/`eaf` exception and overflow tables)
+stays uncompressed inside its shard. Every shard carries the codec's own
+`crc32c` index codec.
+
+**Where the layout is recorded.** A 0.2.0 release records the Dense planes'
+inner chunk and shard in three places, all of which MUST agree with the arrays:
+
+- `manifest.json` `provenance.dense.chunk_shape`, `.shard_shape` and
+  `.compressor` (with `.zarr_format`), plus the per-array layout in
+  `provenance.zarr_v3_conversion.layouts` for a converted release;
+- the `dense` metadata blob in `index.sqlite`
+  (`chunk_shape`, `shard_shape`, `compressor`, `zarr_format`);
+- the `data.zarr` root attributes (`chunk_shape`, `shard_shape`, `compressor`,
+  `zarr_format`).
+
+For 0.1.0 the same three places record the inner chunk alone (there is no shard)
+and a `chunk_shape` is a *hint* the role policy clips to the array's dimensions;
+the recorded-layout rule (§20) clips it the same way before comparing, so a small
+store's build-wide hint is not a disagreement.
+
+The per-variant chunking rule (§6) applies to the **inner chunk** of a sharded
+array. In zarr-python 3 `Array.chunks` is the inner chunk and `Array.shards` the
+outer shard; every read-unit rule MUST use `chunks`.
+
 ## 11. Ragged layout
 
 Ragged layout stores Analysis-specific association sequences referencing the Store Variant Table.
@@ -1137,6 +1195,9 @@ Validators MUST check at least:
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
+- the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2.0 release has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
+- the recorded layout matches the arrays: the Dense planes' `chunk_shape` and `shard_shape` in `manifest.json` `provenance.dense`, in the `index.sqlite` `dense` blob and in the `data.zarr` root attributes each clip to the plane's dimensions to equal the plane's actual **inner** chunk, and name its actual shard, and the three compressors agree. A manifest that describes one shape over arrays of another is a silent failure class (§10a);
+- the per-variant chunking rule applies to the **inner** chunk of a sharded array, not to the shard (§6, §10a);
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
 
 ### 20.1 Validation and inspection CLI interface
@@ -1231,7 +1292,7 @@ For a release at `M.m.p`, a reader that fully understands that release series up
 
 Accepting a newer remainder follows from the definition of a compatible change: if an older reader could not read it correctly, the change was incompatible and was classified wrong. The warning is what makes such a misclassification visible instead of silently returning partial data.
 
-This build reads exactly one series, `0.1` — one format, one decoder, one contract to test (ADR 0041).
+This build reads two series, `0.1` (Zarr v2, every builder's output) and `0.2` (Zarr v3 with sharding, §10a). `0.2.0` is the only 0.2 release and `0.1.0` the only 0.1 release; a second remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
 
 A reader meeting a feature it does not implement — an encoding kind, an index type — MUST reject the release rather than guess or fall back.
 
@@ -1241,12 +1302,14 @@ Future format versions may add fields, arrays, or indexes, but MUST preserve exp
 
 A build writes exactly one `format_version` and reads every series it implements. There is no facility for writing an older format: a store that needs to be in an older format already exists in that format.
 
+**During the interim until builders move to 0.2.0**, this build writes `0.1.0` from every builder and `0.2.0` only from the converter (§21.4). That is a deliberate split, not two build paths that may drift: the converter's output is validated and bit-exact against its source, and no package version is cut until the builders write 0.2.0 (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a converter-produced 0.2.0 release cannot be Reference-Completed by a build that does not write 0.2.0 — completion refuses it, and the store is completed before conversion or after the builders switch.
+
 ### 21.4 I have an old store — now what?
 
 Store Releases are immutable. Reference Completion, re-indexing and migration all produce a **new release**, with one narrow exception: a **Provenance Amendment** may fold additional facts into an existing release's `provenance` dict in place, including a format migration recording what it did to that release. Anything that changes association data or Analytical Metadata is outside the exception.
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
-2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issue #245) derives a new `0.2.0` release from a **Dense Observed-Only** `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It refuses every other layout by name (Ragged, Hybrid and Dense Reference-Completed arrive in the other-layouts ticket), refuses a source that is already 0.2.0, never writes its source, and like every derived release mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block, regenerates `overview.html`, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
 3. **Rejected** — a store whose series this build does not implement cannot be read, and no amount of validation makes it readable. Every pre-reset release is in this category, and says so by name.
 
 There is no support window for older remainders: a known series reads every remainder within it.
