@@ -3,7 +3,10 @@
 The static scan in this module is the enforcement arm of the refactor: a new
 direct ``create_dataset``/``create_group``/creation-capable ``open_group``/
 ``Blosc(...)`` anywhere outside ``opengwasdb/store/arrays.py`` fails here rather
-than waiting for a review to notice it.  It resolves imports and simple local
+than waiting for a review to notice it.  Since #244 a write-mode ``open_group``
+is a violation too -- a creating open must be an explicit
+``open_group_for_write``, because under zarr-python 3 the unqualified
+``open_group(mode="w")`` silently creates a Zarr v3 group.  It resolves imports and simple local
 aliases (``import zarr as zr``, ``from zarr import array``,
 ``from numcodecs import Blosc as Codec``, ``factory = zarr.zeros``), judges
 receivers that are chained off ``self``/subscripts/call results, and flags a
@@ -323,6 +326,57 @@ def _call_violation(
     return None
 
 
+def _seam_open_group_call(
+    node: ast.Call, modules: dict[str, str], names: dict[str, str]
+) -> bool:
+    """Whether a call expression invokes the seam's ``open_group``."""
+    func = node.func
+    if isinstance(func, ast.Name):
+        return names.get(func.id) == f"{_SEAM_MODULE}.open_group"
+    if isinstance(func, ast.Attribute):
+        return _module_of(func.value, modules, names) == _SEAM_MODULE and func.attr == "open_group"
+    return False
+
+
+def _literal_mode(node: ast.Call) -> str | None:
+    """The literal access mode a call passes, if it passes one positionally or by keyword."""
+    if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+        value = node.args[1].value
+        return value if isinstance(value, str) else None
+    for keyword in node.keywords:
+        if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant):
+            value = keyword.value.value
+            return value if isinstance(value, str) else None
+    return None
+
+
+#: ``open_group`` modes that create a group.  A creating open must be an
+#: explicit ``open_group_for_write`` so the caller cannot forget which format
+#: the group is created in (#244); ``open_group`` with one of these is a
+#: violation even though the seam's own read opener is allowed anywhere.
+_WRITE_MODES = frozenset({"w", "a", "w-", "x"})
+
+
+def _write_mode_open_violation(
+    node: ast.Call, modules: dict[str, str], names: dict[str, str]
+) -> str | None:
+    """A write-mode call to the seam's read opener, or `None`.
+
+    `open_group` auto-detects the format of an existing group, but a creating
+    open has to *choose* one; under zarr-python 3 the unqualified choice is a
+    Zarr v3 group.  Only `open_group_for_write` pins `STORE_ZARR_FORMAT`, so a
+    creating `open_group` is a violation.  A mode the scan cannot resolve to a
+    literal is left to review -- the seam itself is the only remaining caller
+    and forwards its mode from the envelope's `arrays(mode=...)`.
+    """
+    if not _seam_open_group_call(node, modules, names):
+        return None
+    mode = _literal_mode(node)
+    if mode in _WRITE_MODES:
+        return f"open_group(mode={mode!r})"
+    return None
+
+
 def _violations(source: str, filename: str = "<source>") -> list[str]:
     """The forbidden creation calls in one source string, as `file:line: token`."""
     tree = ast.parse(source, filename=filename)
@@ -332,6 +386,8 @@ def _violations(source: str, filename: str = "<source>") -> list[str]:
         if not isinstance(node, ast.Call):
             continue
         token = _call_violation(node.func, modules, names)
+        if token is None:
+            token = _write_mode_open_violation(node, modules, names)
         if token is not None:
             found.append(f"{filename}:{node.lineno}: {token}")
     handles = _zarr_group_handles(tree, modules, names)
@@ -436,6 +492,47 @@ def test_scanner_allows_the_seams_own_api() -> None:
         ]
     )
     assert _violations(source) == []
+
+
+def test_scanner_rejects_a_write_mode_open_group() -> None:
+    """A creating open must name `open_group_for_write`, not `open_group`.
+
+    The seam's read opener auto-detects an existing group's format, but a
+    creating open has to choose one; only `open_group_for_write` pins the Store
+    format (#244).
+    """
+    cases = {
+        (
+            "from opengwasdb.store.arrays import open_group\nopen_group('p', 'w')"
+        ): "open_group(mode='w')",
+        (
+            "from opengwasdb.store.arrays import open_group\nopen_group('p', mode='a')"
+        ): "open_group(mode='a')",
+        (
+            "from opengwasdb.store import arrays as store_arrays\n"
+            "store_arrays.open_group('p', mode='w-')"
+        ): "open_group(mode='w-')",
+        (
+            "from opengwasdb.store.arrays import open_group as og\nog('p', 'x')"
+        ): "open_group(mode='x')",
+    }
+    for source, token in cases.items():
+        found = _violations(source)
+        assert found, f"scanner missed {source!r}"
+        assert any(token in violation for violation in found), (source, found)
+    # A read open stays allowed wherever it is, including `r+`; the named write
+    # opener is allowed too.
+    allowed = "\n".join(
+        [
+            "from opengwasdb.store.arrays import open_group, open_group_for_write",
+            "open_group('p')",
+            "open_group('p', 'r')",
+            "open_group('p', mode='r+')",
+            "open_group_for_write('p', 'w')",
+            "open_group_for_write('p', mode='a')",
+        ]
+    )
+    assert _violations(allowed) == []
 
 
 def test_scanner_ignores_calls_that_are_not_creation() -> None:
@@ -633,8 +730,8 @@ def test_converter_layout_matches_the_writers_for_dense_and_ragged(tmp_path: Pat
     """
     baseline = np.linspace(0.1, 0.9, 10, dtype=np.float32)
 
-    dense = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w")
-    dense.create_dataset("z", shape=(10, 4), chunks=(3, 4), dtype="int16")
+    dense = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w", zarr_format=2)
+    dense.create_array("z", shape=(10, 4), chunks=(3, 4), dtype="int16")
     write_eaf_baseline(dense, baseline)
     dense_component = component_variant_chunk(dense)
     assert dense_component == dense["z"].chunks[0]
@@ -643,8 +740,8 @@ def test_converter_layout_matches_the_writers_for_dense_and_ragged(tmp_path: Pat
     )
     assert tuple(dense["eaf_baseline"].chunks) == (3,)
 
-    ragged = zarr.open_group(str(tmp_path / "ragged.zarr"), mode="w")
-    ragged.create_dataset("z", shape=(10,), chunks=(7,), dtype="int16")
+    ragged = zarr.open_group(str(tmp_path / "ragged.zarr"), mode="w", zarr_format=2)
+    ragged.create_array("z", shape=(10,), chunks=(7,), dtype="int16")
     write_eaf_baseline(ragged, baseline)
     ragged_component = component_variant_chunk(ragged)
     assert ragged_component == ragged["z"].chunks[0]
@@ -677,7 +774,7 @@ def test_explicit_overrides_still_win() -> None:
 
 def test_csr_writers_honour_an_explicit_chunks_override(tmp_path: Path) -> None:
     """`write_se_csr`/`write_eaf_csr` must forward `chunks=` to the array."""
-    group = zarr.open_group(str(tmp_path / "ragged.zarr"), mode="w")
+    group = zarr.open_group(str(tmp_path / "ragged.zarr"), mode="w", zarr_format=2)
     plan = StoreEncoding(
         z=ZEncoding("float16"), se=SeEncoding("float16"), eaf=EafEncoding("float32")
     )
@@ -699,8 +796,8 @@ def test_legacy_per_variant_chunk_size_still_accepts_a_group(tmp_path: Path) -> 
     """
     from opengwasdb.encoding import component_chunk_size, per_variant_chunk_size
 
-    group = zarr.open_group(str(tmp_path / "group.zarr"), mode="w")
-    group.create_dataset("z", shape=(10,), chunks=(7,), dtype="int16")
+    group = zarr.open_group(str(tmp_path / "group.zarr"), mode="w", zarr_format=2)
+    group.create_array("z", shape=(10,), chunks=(7,), dtype="int16")
     assert per_variant_chunk_size(group, 10) == 7
     assert per_variant_chunk_size(group, 10) == component_chunk_size(7, 10)
     assert per_variant_chunk_size(group, 10) == chunk_layout(

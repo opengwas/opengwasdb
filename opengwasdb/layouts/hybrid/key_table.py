@@ -262,7 +262,7 @@ class AlidIndex:
             raise UnknownKeyEncodingError(f"ALID {alids[0]!r} is absent from an empty axis")
         queries = _string_hashes(alids)
         clipped = np.minimum(np.searchsorted(self._hashes, queries), len(self._hashes) - 1)
-        positions = self._positions[clipped]
+        positions: np.ndarray = self._positions[clipped]
         if len(self._shared_hashes):
             self._resolve_buckets(alids, queries, positions)
         found = self._axis[positions] == np.asarray(alids, dtype=object)

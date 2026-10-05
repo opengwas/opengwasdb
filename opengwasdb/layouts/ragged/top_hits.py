@@ -19,7 +19,12 @@ from opengwasdb.layouts.dense.top_hits import (
     z_critical,
 )
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
-from opengwasdb.store.arrays import compressor, open_group_for_write, require_group
+from opengwasdb.store.arrays import (
+    array_length,
+    compressor,
+    open_group_for_write,
+    require_group,
+)
 
 log = logging.getLogger(__name__)
 
@@ -159,7 +164,7 @@ def _collect_ragged_candidates(
     with an ``imputed`` column keep exactly the columns the materialising loader
     produced.
     """
-    total = int(len(csr._variant_index))
+    total = array_length(csr._variant_index)
     offsets = np.asarray(csr._offsets[:], dtype=np.int64)
     n_analyses = len(offsets) - 1
     loosest = z_critical(max(thresholds))

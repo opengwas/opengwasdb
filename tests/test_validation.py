@@ -94,7 +94,7 @@ def test_validator_rejects_misshaped_z_plane(dense_store_path):
     # against that axis, and the guard must say so before any band is decoded.
     root = open_store(dense_store_path).arrays(mode="a")
     n_variants, n_analyses = root["z"].shape
-    root["z"].resize(n_variants - 1, n_analyses)
+    root["z"].resize((n_variants - 1, n_analyses))
 
     result = validate_store(dense_store_path)
 
@@ -242,7 +242,7 @@ def test_validator_rejects_missing_ragged_csr_array(ragged_store_path):
     result = validate_store(ragged_store_path)
     assert result.ok, result.errors
     ragged = open_store(ragged_store_path).arrays(mode="a")["ragged"]
-    assert "se" in ragged and len(ragged["se"]) == int(ragged["offsets"][-1])  # fixture sanity
+    assert "se" in ragged and ragged["se"].shape[0] == int(ragged["offsets"][-1])  # fixture sanity
     del ragged["se"]
 
     result = validate_store(ragged_store_path)
@@ -257,11 +257,11 @@ def test_validator_rejects_ragged_csr_array_length_mismatch(ragged_store_path):
     ragged = open_store(ragged_store_path).arrays(mode="r")["ragged"]
     n_assoc = int(ragged["offsets"][-1])
     assert n_assoc > 1  # fixture sanity: the truncation must actually shorten z
-    assert len(ragged["z"]) == n_assoc
+    assert ragged["z"].shape[0] == n_assoc
     ragged = open_store(ragged_store_path).arrays(mode="a")["ragged"]
     z = ragged["z"][:]
     del ragged["z"]
-    ragged.create_dataset("z", data=z[:-1])
+    ragged.create_array("z", data=z[:-1])
 
     result = validate_store(ragged_store_path)
 
@@ -281,7 +281,7 @@ def test_validator_rejects_ragged_csr_array_outside_declared_plan(ragged_store_p
     ragged = open_store(ragged_store_path).arrays(mode="a")["ragged"]
     z = ragged["z"][:]
     del ragged["z"]
-    ragged.create_dataset("z", data=z.astype(np.float32))
+    ragged.create_array("z", data=z.astype(np.float32))
 
     result = validate_store(ragged_store_path)
 
@@ -588,7 +588,7 @@ def test_validator_rejects_rho_wrong_packed_length(dense_store_path):
     _build_fixture_rho(dense_store_path)
     root = open_store(dense_store_path).arrays(mode="a")
     del root["rho"]["rho"]
-    root["rho"].create_dataset("rho", data=np.array([0.1, 0.2], dtype="float16"))
+    root["rho"].create_array("rho", data=np.array([0.1, 0.2], dtype="float16"))
 
     result = validate_store(dense_store_path)
 

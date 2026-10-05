@@ -8,7 +8,7 @@ change it -- the switch to Zarr v3 sharding (#247) and the converter that has
 to reproduce the same layout (#245) -- cannot disagree about how an array is
 laid out.
 
-The seam owns four things:
+The seam owns five things:
 
 * **the compressor**, `compressor()`, one Blosc zstd / clevel 3 / bitshuffle
   configuration described by `COMPRESSOR_RECORD`.  The record is the same dict
@@ -32,6 +32,12 @@ The seam owns four things:
   seam is the only code that hands it to Zarr.  Omitting `fill_value` means
   "the dtype's default", which is *not* the same as `fill_value=None` and is
   what several whole-array writes rely on.
+* **zarr's process-wide runtime configuration** (the section after the
+  imports): chunks that are all fill value are still written, Blosc decodes
+  with its internal threads, and every array goes through zarr's fused codec
+  pipeline with one worker.  zarr-python 3 holds these in runtime config
+  rather than array metadata, so they are set once, when this module is
+  imported (#244).
 
 The role -> layout policy is one table in this module (`_LAYOUTS`) and nothing
 else chooses chunks.  A role that does not fit an existing entry gets a new
@@ -40,16 +46,130 @@ one rather than a call site that passes `chunks=` by hand.
 
 from __future__ import annotations
 
+import importlib
+import json
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Final, Literal
 
+import numcodecs
 import numpy as np
 import zarr
 from numcodecs import Blosc
+from zarr.core.buffer import Buffer
+from zarr.core.sync import sync as zarr_sync
+from zarr.storage import LocalStore
+
+# The module whose import switches Blosc's threads off.  ``import zarr`` loads
+# it today; importing it by name makes sure it has run before the setting below
+# turns them back on, should zarr ever load it lazily.  (`importlib` rather than
+# an import statement so mypy does not follow into zarr's sources.)
+importlib.import_module("zarr.codecs.blosc")
+
+# ── zarr runtime configuration ───────────────────────────────────────────────
+#
+# zarr-python 3 keeps three behaviours in process-wide runtime config rather
+# than in array metadata.  They are set here, once, in the module every Store
+# array is created and opened through, so every array the package touches gets
+# them and none can be opened without them.  ADR 0056 records why each is set,
+# what was rejected and what it costs.
+
+#: zarr 2 wrote every chunk, including one that is entirely the fill value: its
+#: ``write_empty_chunks`` default was True.  zarr-python 3 defaults it to False,
+#: which would silently drop those chunk files from a built store and change
+#: the file set a release holds.  The setting is *runtime* config, not stored
+#: metadata, so pinning it per array only covers the object `create_array`
+#: returns -- every ``group[name]`` reopens with the default.  It is therefore
+#: set once, here, the module that owns the Store's physical layout; every
+#: array this package creates or reopens then writes empty chunks as zarr 2
+#: did.  #247 must revisit this when builders move to Zarr v3 shards.
+zarr.config.set({"array.write_empty_chunks": True})
+
+#: Blosc's internal threads, back on (#244).  ``import zarr`` runs
+#: ``numcodecs.blosc.use_threads = False`` for the whole process, and zarr 3
+#: decodes on worker threads where numcodecs' adaptive default would say no
+#: anyway, so every chunk decoded single-threaded: ~4.5 ms against ~0.6 ms with
+#: Blosc's 8 threads, for a ``[1000, 1000]`` int16 chunk of OGS-00009
+#: (``benchmarks/zarr3_blosc_decode.py``).  zarr 2.18 decoded on the main
+#: thread with 8 Blosc threads; this restores that.
+#:
+#: On its own, under zarr's default pipeline, it is not a speed-up: decodes
+#: issued concurrently from zarr's pool queue on numcodecs' lock (below), so
+#: one Analysis genome-wide went from 76 s to 88 s and random lookups slowed by
+#: 21-41%, while phewas went from 50 ms to 34 ms (medians of three fresh
+#: processes).  It pays off with the one-worker fused pipeline below, which
+#: decodes one chunk at a time with all of Blosc's threads.
+#:
+#: It is safe, from numcodecs 0.17 (the pinned floor) and its c-blosc 1.21.7:
+#:
+#: * threads: a threaded call uses Blosc's one global context, and numcodecs
+#:   serialises every such call -- compress and decompress -- under a module
+#:   ``threading.Lock``, with the GIL released inside it.  Concurrent decodes
+#:   queue rather than race.  (0.16 did not take the lock on decompress.)
+#: * forks: a forked process never uses the global context, because numcodecs
+#:   compares the pid with the importing process's and runs single-threaded
+#:   context functions in a child whatever ``use_threads`` says; it also
+#:   re-creates its lock in the child, and c-blosc discards the inherited global
+#:   context in its own ``pthread_atfork`` child handler.
+#:
+#: It is global because the flag is: numcodecs has no per-call or per-thread
+#: form, so a "query-only" switch could only mean "on from the first query
+#: onwards", a mode that depends on what a process did earlier.  The cost
+#: falls on builds, and it is the one zarr 2.18 already had: a chunk of at
+#: least two Blosc blocks (256 KiB uncompressed at zstd clevel 3, so every
+#: ``[1000, 1000]`` Dense chunk) compressed in the parent writes its blocks in
+#: completion order, so its bytes differ run to run while its decoded values
+#: and its compressed size do not.  Compare built stores byte for byte under
+#: ``BLOSC_NTHREADS=1``, as #243 did.  The SE plan reads compressed sizes only,
+#: and forked workers stay single-threaded.
+if not hasattr(numcodecs.blosc, "use_threads"):
+    raise ImportError(
+        "numcodecs.blosc no longer has `use_threads`; the seam cannot restore threaded "
+        "Blosc decoding, and setting the old name would silently do nothing (#244)"
+    )
+numcodecs.blosc.use_threads = True
+
+#: Every array reads and writes through zarr's ``FusedCodecPipeline`` (opt-in
+#: from zarr 3.3), with one worker (#244).  The default ``BatchedCodecPipeline``
+#: schedules each chunk's fetch and decode as separate event-loop tasks; the
+#: fused one fetches, decodes and scatters a whole selection in one hop to a
+#: worker thread.  On OGS-00009 with Blosc threads on it took one Analysis
+#: genome-wide from 88 s to 24 s (zarr 2.18: 26 s), random lookups from 186 ms
+#: and 1,051 ms to 103 ms and 575 ms, and phewas from 34 ms to 23 ms (medians
+#: of three fresh processes each).
+#:
+#: ``max_workers = 1`` is the measured choice, and the fork-safe one:
+#:
+#: * With Blosc threads on, chunk decodes queue on numcodecs' lock anyway, so a
+#:   pool of workers adds contention, not decode throughput: with its default
+#:   pool (224 workers here) the same read took 41-46 s, and random lookups
+#:   were 23-42% slower; only the one-window read (4,241,966 associations)
+#:   gained, by ~7%.
+#: * With more than one worker the pipeline keeps a module-level
+#:   ``ThreadPoolExecutor``, and zarr 3.4's after-fork reset clears its event
+#:   loop and executor but not that pool (zarr-developers/zarr-python#4478).
+#:   A forked build worker inherits the pool without its threads.  A read there
+#:   of more than one chunk, but of no more chunks than the idle permits the
+#:   parent's pool left, queues work that nothing runs and never returns --
+#:   reproduced with the package's own ``ordered_map`` and on OGS-00009's
+#:   top-hit gather.  A single-chunk read never uses the pool, so one-chunk
+#:   fixtures cannot show it.  With one worker the pool is never created; do
+#:   not raise ``max_workers`` (ADR 0056).
+#:
+#: Writes take the same path: a band write encodes its chunks one at a time
+#: (multi-threaded inside Blosc), as zarr 2.18 did.  A forked worker decodes
+#: single-threaded and now also one chunk at a time.
+_FUSED_PIPELINE = "zarr.core.codec_pipeline.FusedCodecPipeline"
+if not hasattr(importlib.import_module("zarr.core.codec_pipeline"), "FusedCodecPipeline"):
+    raise ImportError(
+        f"{_FUSED_PIPELINE} is gone; the seam's read path and its fork guard were "
+        "written for it (#244)"
+    )
+zarr.config.set({"codec_pipeline.path": _FUSED_PIPELINE, "codec_pipeline.max_workers": 1})
 
 __all__ = [
     "ASSOCIATION_OFFSETS_CHUNK",
@@ -62,12 +182,15 @@ __all__ = [
     "SE_COEFFICIENTS_ROWS",
     "TOP_HIT_CHUNK_SIZE",
     "ArrayRole",
+    "array_length",
     "chunk_layout",
     "component_chunk_size",
     "component_variant_chunk",
     "compressor",
+    "compressor_of",
     "create_array",
     "create_group",
+    "move_in_group",
     "open_group",
     "open_group_for_write",
     "per_variant_chunk_size",
@@ -107,6 +230,34 @@ def compressor() -> Blosc:
         clevel=COMPRESSOR_RECORD["clevel"],
         shuffle=_SHUFFLE_CODES[COMPRESSOR_RECORD["shuffle"]],
     )
+
+
+def array_length(array: Any) -> int:
+    """The leading dimension of an array -- what zarr 2's ``len(array)`` meant.
+
+    zarr-python 3 removed ``Array.__len__``, so ``len(array)`` now raises
+    ``TypeError``; the leading axis is the length every call site wanted.  A
+    2-D top-hit tier reads the same way as a 1-D CSR plane.
+    """
+    return int(array.shape[0])
+
+
+def compressor_of(array: Any) -> Any:
+    """The codec an existing Store array is stored with.
+
+    zarr-python 3 moved this from ``Array.compressor`` (deprecated) to the
+    ``Array.compressors`` tuple; the v2 format has exactly one.  Reading it
+    through this helper keeps the deprecation out of the writers and refuses a
+    layout the Store format does not define rather than taking the first codec
+    of several.
+    """
+    codecs = tuple(array.compressors)
+    if len(codecs) != 1:
+        raise ValueError(
+            f"array {array.name!r} is stored with {len(codecs)} codecs; "
+            "a Store Release array has exactly one"
+        )
+    return codecs[0]
 
 
 #: `create_array`'s `compressor=` parameter would otherwise shadow the function
@@ -408,18 +559,40 @@ def _creation_kwargs(
     filters: Any,
     order: str,
 ) -> dict[str, Any]:
-    """The `create_dataset` keyword arguments one role's array is made with."""
+    """The `create_array` keyword arguments one role's array is made with.
+
+    ``compressors`` (plural, a v3 spelling) is what zarr-python 3's
+    ``create_array`` takes; on a Zarr v2-format group it accepts a single
+    numcodecs codec and writes the same ``.zarray`` ``create_dataset`` wrote
+    in zarr 2.18.  ``create_dataset`` itself no longer exists in zarr 3.4, so
+    this is the only compatible call.
+
+    Two behaviours that zarr 2.18 had implicitly are now explicit:
+
+    * ``write_empty_chunks``: zarr 2's ``create`` defaulted it to True, so a
+      chunk that is entirely the fill value was still written as a file.  zarr
+      3 defaults it to False, which would silently drop those chunk files and
+      change a built store's file set.  The module sets the process-wide
+      default back to True (see the comment at the import); the flag is *not*
+      stored in array metadata, so a per-array value would be lost the moment
+      a caller reopened the array.
+    * ``dtype`` is inferred from `data` here, because zarr 3's ``create_array``
+      refuses ``data`` and ``dtype`` together.  zarr 2's whole-array write went
+      through ``zarr.array(data, dtype=...)``, i.e. create-then-assign; the
+      caller's `data` is assigned after creation in `create_array` so a dtype
+      the data does not already carry still casts, exactly as it did.
+    """
     kwargs: dict[str, Any] = {
         "chunks": chunk_layout(role, shape, hint=hint, component_chunk=component_chunk),
-        "compressor": _new_compressor() if compressor is _SEAM_COMPRESSOR else compressor,
+        "compressors": _new_compressor() if compressor is _SEAM_COMPRESSOR else compressor,
         "order": order,
+        "shape": shape,
     }
-    if dtype is not None:
-        kwargs["dtype"] = dtype
-    if data is not None:
-        kwargs["data"] = data
-    else:
-        kwargs["shape"] = shape
+    resolved_dtype = dtype
+    if resolved_dtype is None and data is not None:
+        resolved_dtype = np.asanyarray(data).dtype
+    if resolved_dtype is not None:
+        kwargs["dtype"] = resolved_dtype
     if fill_value is not _NO_FILL:
         kwargs["fill_value"] = fill_value
     if filters is not None:
@@ -470,9 +643,10 @@ def create_array(
     shape = _resolve_shape(name, data, shape)
     if overwrite and name in group:
         del group[name]
-    return group.create_dataset(
+    return _create_and_fill(
+        group,
         name,
-        **_creation_kwargs(
+        _creation_kwargs(
             role,
             shape,
             data=data,
@@ -484,7 +658,21 @@ def create_array(
             filters=filters,
             order=order,
         ),
+        data,
     )
+
+
+def _create_and_fill(group: Any, name: str, kwargs: dict[str, Any], data: Any) -> Any:
+    """Create the array, then assign `data` into it when it is a whole-array write.
+
+    zarr 2's ``create_dataset(data=...)`` was create-then-assign; the assign is
+    what casts `data` to the caller's ``dtype`` when the two differ, and zarr 3
+    refuses ``data`` and ``dtype`` together, so the cast has to happen here.
+    """
+    array = group.create_array(name, **kwargs)
+    if data is not None:
+        array[...] = data
+    return array
 
 
 def create_group(group: Any, name: str, *, replace: bool = True) -> Any:
@@ -499,36 +687,278 @@ def require_group(group: Any, name: str) -> Any:
     return group.require_group(name)
 
 
+class ConsolidatedMetadataError(RuntimeError):
+    """A write under consolidated metadata the package cannot keep up to date."""
+
+
+def _is_zarr_group_directory(directory: Path) -> bool:
+    return (directory / ".zgroup").is_file() or (directory / "zarr.json").is_file()
+
+
+def consolidated_metadata_records(directory: Path) -> list[Path]:
+    """Every consolidated-metadata record that describes the group at `directory`.
+
+    A record describes a group when it sits in the group's own directory or in an
+    enclosing directory that is still part of the same Zarr hierarchy: a
+    consolidated root lists every array beneath it. Zarr v2 keeps the record in
+    ``.zmetadata``; Zarr v3 keeps it under ``consolidated_metadata`` in the group's
+    ``zarr.json``.
+    """
+    records: list[Path] = []
+    current = directory
+    while True:
+        v2 = current / ".zmetadata"
+        if v2.is_file():
+            records.append(v2)
+        v3 = current / "zarr.json"
+        if v3.is_file() and json.loads(v3.read_text()).get("consolidated_metadata"):
+            records.append(v3)
+        parent = current.parent
+        if parent == current or not _is_zarr_group_directory(parent):
+            return records
+        current = parent
+
+
+def refuse_under_consolidated_metadata(
+    directory: Path, action: str, *, wiped: bool = False
+) -> None:
+    """Fail before a write that would leave consolidated metadata stale.
+
+    zarr-python 3 opens a group from its consolidated metadata whenever a record
+    exists (zarr 2.18 did not), and nothing the package writes updates one:
+    creating, deleting or moving an array under a record leaves it describing
+    arrays that are gone or changed, and the next open reads that instead (#244
+    review). The package never consolidates, so a record came from elsewhere;
+    refusing loudly is the only answer that cannot return stale arrays.
+    `wiped` is for ``mode="w"``, which deletes the group's own record with it.
+    """
+    records = consolidated_metadata_records(directory)
+    if wiped:
+        records = [record for record in records if record.parent != directory]
+    if records:
+        listed = ", ".join(str(record) for record in records)
+        raise ConsolidatedMetadataError(
+            f"{action} {directory}: consolidated metadata in {listed} describes this group. "
+            "zarr 3 reads that record in place of the live metadata, and this write would not "
+            "update it. Remove the record, write, and consolidate again if it is wanted."
+        )
+
+
+#: The files a consolidated record copies: changing or deleting one stales it.
+#: Chunk files are not recorded, so a chunk write needs no check.
+_RECORDED_METADATA = frozenset({".zarray", ".zgroup", ".zattrs", "zarr.json"})
+
+
+class _GuardedLocalStore(LocalStore):
+    """The local store every Store group is opened on.
+
+    It refuses a metadata write or a delete that consolidated metadata describes.
+    The check at `open_group` cannot see a record that appears after a handle was
+    opened. Nor can it see every route a write takes: `create_array`,
+    `create_group` and `require_group` go through the seam, but attribute writes
+    and ``del group[name]`` go through zarr's own API. Every one of them reaches
+    the store, so the store is where the check is repeated (#244 review round 2).
+    Deleting a directory takes any record inside it along, so only records
+    enclosing it count, as for ``mode="w"``.
+    """
+
+    def _check_write(self, key: str) -> None:
+        if key.rsplit("/", 1)[-1] in _RECORDED_METADATA:
+            refuse_under_consolidated_metadata((self.root / key).parent, f"writing {key!r} in")
+
+    def _check_delete(self, key: str) -> None:
+        """Refuse any delete beneath a record, chunk files included.
+
+        A delete must be refused before the first destructive step, and zarr does
+        not always change metadata first: a shrinking ``resize`` deletes the
+        chunks beyond the new shape before it writes the new shape, so the
+        metadata write would be refused only after chunks were gone (#244 review
+        round 3). With ``write_empty_chunks`` on, an ordinary write never deletes
+        a chunk, so this costs nothing on the build path.
+        """
+        target = self.root / key
+        if target.is_dir():
+            refuse_under_consolidated_metadata(target, f"deleting {key!r} in", wiped=True)
+        else:
+            refuse_under_consolidated_metadata(target.parent, f"deleting {key!r} in")
+
+    async def set(self, key: str, value: Buffer) -> None:
+        self._check_write(key)
+        await super().set(key, value)
+
+    async def set_if_not_exists(self, key: str, value: Buffer) -> None:
+        self._check_write(key)
+        await super().set_if_not_exists(key, value)
+
+    def set_sync(self, key: str, value: Buffer) -> None:
+        self._check_write(key)
+        super().set_sync(key, value)
+
+    async def delete(self, key: str) -> None:
+        self._check_delete(key)
+        await super().delete(key)
+
+    def delete_sync(self, key: str) -> None:
+        self._check_delete(key)
+        super().delete_sync(key)
+
+    async def delete_dir(self, prefix: str) -> None:
+        self._check_delete(prefix)
+        await super().delete_dir(prefix)
+
+    async def clear(self) -> None:
+        self._check_delete("")
+        await super().clear()
+
+    async def move(self, dest_root: Path | str) -> None:
+        self._check_delete("")
+        await super().move(dest_root)
+
+
+def _open_local_store(path: str | Path, mode: ZarrMode) -> _GuardedLocalStore:
+    """The store zarr would open for a local `path` in `mode`, guarded.
+
+    This is the same `LocalStore.open` call zarr's own path handling makes, so the
+    mode means exactly what it did: `r` and `r+` require the directory, the others
+    create it.
+    """
+    opening = _GuardedLocalStore.open(root=Path(path), mode=mode, read_only=mode == "r")
+    store: _GuardedLocalStore = zarr_sync(opening)
+    return store
+
+
+#: Zarr entries whose bytes live in a directory of their own, which is what a
+#: filesystem rename moves as a unit.
+_LOCAL_STORE_ATTR = "root"
+
+
+def _local_group_directory(group: Any) -> Path | None:
+    """The on-disk directory a LocalStore-backed group lives in, or `None`.
+
+    zarr 3's ``LocalStore`` exposes its root as a ``Path``; the group's own
+    location inside it is ``group.path``.  Any other store returns `None` and
+    the caller refuses rather than guessing.
+    """
+    root = getattr(group.store, _LOCAL_STORE_ATTR, None)
+    if not isinstance(root, (str, Path)):
+        return None
+    location = group.path
+    return Path(root) / location if location else Path(root)
+
+
+def move_in_group(group: Any, source: str, dest: str) -> None:
+    """Rename the entry `source` to `dest` inside `group`.
+
+    zarr-python 3.4's ``Group.move`` raises ``NotImplementedError``, but the
+    package relies on a real rename in two places: the SE float16 fallback
+    swaps its staged plane into place, and `repair` swaps a rechunked array in
+    (and restores the original if the swap fails).  zarr 2 renamed the entry in
+    the store; every Store Release is a local directory, so this is the same
+    ``os.replace`` of the array directory: byte-preserving, which a
+    copy-through-zarr would not be for Blosc (its default thread count makes
+    recompression non-reproducible, see #243).
+
+    Each move is atomic; a swap built from two moves is not.  A process that
+    dies between them leaves neither name in place, and no exception handler
+    runs to roll back.  The SE fallback swaps only inside a staged release,
+    which a failed build discards.  `repair` swaps inside a published release,
+    so its next run recovers whatever state a death left (#244 review).
+
+    A store that is not a local directory fails loudly: silently degrading to a
+    copy would change the bytes and could leave a half-swapped store behind. So
+    does a group that consolidated metadata describes, which a move would leave
+    stale (`refuse_under_consolidated_metadata`).
+    """
+    local = _local_group_directory(group)
+    if local is None:
+        raise NotImplementedError(
+            f"move_in_group({source!r} -> {dest!r}) needs a local directory store; "
+            f"{type(group.store).__name__} cannot rename an entry. Open the release "
+            "from a path rather than an in-memory store."
+        )
+    refuse_under_consolidated_metadata(local, f"moving {source!r} to {dest!r} in")
+    os.replace(local / source, local / dest)
+
+
+#: The modes zarr-python 3's `zarr.open_group` accepts, by name.  A lookup table
+#: rather than a cast, so the seam passes zarr a `Literal` it has checked.
+ZarrMode = Literal["r", "r+", "a", "w", "w-"]
+_ZARR_MODES: Mapping[str, ZarrMode] = MappingProxyType(
+    {"r": "r", "r+": "r+", "a": "a", "w": "w", "w-": "w-"}
+)
+
 #: `zarr.open_group` modes that create the group (or wipe it) when it is not
-#: there.  `r` and `r+` require it to exist and are not creation.
-CREATION_MODES = frozenset({"w", "a", "w-", "x"})
+#: there.  `r` and `r+` require it to exist and are not creation.  zarr 2's
+#: ``x`` is gone: zarr 3 rejects it with a bare ``AssertionError``.
+CREATION_MODES = frozenset({"w", "a", "w-"})
+
+
+def _zarr_mode(mode: str) -> ZarrMode:
+    """`mode` as the `Literal` zarr 3 takes, or a `ValueError` naming the valid ones."""
+    try:
+        return _ZARR_MODES[mode]
+    except KeyError:
+        allowed = sorted(_ZARR_MODES)
+        raise ValueError(f"zarr 3 opens a group in one of {allowed}, not {mode!r}") from None
+
+#: The Zarr on-disk format every *created* array and group is written in until
+#: #247 moves the builders to Zarr v3 (ADR 0041).  Passing it explicitly on
+#: every creation-mode open is the whole point: zarr-python 3's
+#: ``open_group(..., mode="w")`` defaults to ``zarr_format=None``, which
+#: *creates a Zarr v3 group* -- a silent Store format change.  Read-mode opens
+#: pass ``zarr_format=None`` so a converted v3 store (#245) still opens; zarr 3
+#: auto-detects the format from the existing metadata.
+STORE_ZARR_FORMAT: Final = 2
+
+
+def _open_group_format(mode: str) -> Literal[2] | None:
+    """The ``zarr_format`` an open in `mode` must use.
+
+    A creating mode must declare v2; a read mode must not declare anything, so
+    the existing metadata decides (which is how zarr 3 reads a v2 store and how
+    #245's v3 store will read).
+    """
+    return STORE_ZARR_FORMAT if mode in CREATION_MODES else None
 
 
 def open_group(path: str | Path, mode: str = "r") -> Any:
     """Open a Zarr group, read-only by default.
 
-    The one place `zarr.open_group` is called, so the seam can later pass
-    ``zarr_format`` (zarr-python 3, #244) without hunting down every opener.
-    `mode` may be a creating mode here; `open_group_for_write` is the named
-    entry point for those, and this general form exists for `r`/`r+` and for
-    the release-envelope ``arrays(mode=...)`` methods that forward their mode.
+    The one place `zarr.open_group` is called, so the Store format is declared
+    once.  `mode` may be a creating mode here; `open_group_for_write` is the
+    named entry point for those, and this general form exists for `r`/`r+` and
+    for the release-envelope ``arrays(mode=...)`` methods that forward their
+    mode.  A creating mode is pinned to `STORE_ZARR_FORMAT`; a read mode leaves
+    the format to the stored metadata.  Any mode but ``r`` refuses a group that
+    consolidated metadata describes (`refuse_under_consolidated_metadata`).
     """
-    return zarr.open_group(str(path), mode=mode)
+    zarr_mode = _zarr_mode(mode)
+    if zarr_mode != "r":
+        refuse_under_consolidated_metadata(
+            Path(path), f"opening in mode {mode!r}", wiped=zarr_mode == "w"
+        )
+    store = _open_local_store(path, zarr_mode)
+    return zarr.open_group(store, mode=zarr_mode, zarr_format=_open_group_format(mode))
 
 
 def open_group_for_write(path: str | Path, mode: str) -> Any:
     """Open a Zarr group for writing, creating it when it is absent.
 
-    `mode` must be one of ``w``/``a``/``w-``/``x`` and is **required**: ``a``
+    `mode` must be one of ``w``/``a``/``w-`` and is **required**: ``a``
     and ``w`` differ on a resumed build (``w`` wipes the staged group, ``a``
     keeps it), so a silent default here would change what a resume finds.  A
-    read mode is a bug (the caller meant `open_group`) and fails loudly.  No
-    ``zarr_format`` argument yet: zarr 2.18 has none, and #244 adds the Zarr v3
-    argument here once, for every writer.
+    read mode is a bug (the caller meant `open_group`) and fails loudly.
+
+    The group is created in `STORE_ZARR_FORMAT` (Zarr v2 until #247).  Without
+    the explicit format zarr-python 3 would create a Zarr v3 group and silently
+    change the Store format; that is why every write-mode open routes here.
     """
     if mode not in CREATION_MODES:
         raise ValueError(
             f"open_group_for_write needs one of {sorted(CREATION_MODES)}, got {mode!r}; "
             "use open_group for a read mode"
         )
-    return zarr.open_group(str(path), mode=mode)
+    refuse_under_consolidated_metadata(Path(path), f"opening in mode {mode!r}", wiped=mode == "w")
+    zarr_mode = _zarr_mode(mode)
+    store = _open_local_store(path, zarr_mode)
+    return zarr.open_group(store, mode=zarr_mode, zarr_format=STORE_ZARR_FORMAT)

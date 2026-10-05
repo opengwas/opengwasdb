@@ -35,16 +35,16 @@ def _dense_group_with_exceptions(tmp_path):
     coefficient cost amortised so the coding clears the byte gate against
     `float16`.
     """
-    group = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w")
+    group = zarr.open_group(str(tmp_path / "dense.zarr"), mode="w", zarr_format=2)
     eaf = np.linspace(0.05, 0.95, 6000, dtype=np.float32)[:, None]
     predictor = np.log(2 * eaf * (1 - eaf))
     se = np.exp(-3.0 - 0.5 * predictor).astype(np.float32)
     se[2500:2510, 0] = np.exp(-3.0 - 0.5 * predictor[2500:2510, 0] + np.float64(8.0)).astype(
         np.float32
     )
-    group.create_dataset("eaf", data=eaf, chunks=(1000, 1), dtype="float32")
-    group.create_dataset("se", data=se, chunks=(1000, 1), dtype="float32")
-    group.create_dataset("z", data=np.ones_like(eaf), chunks=(1000, 1), dtype="float16")
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=(1000, 1))
+    group.create_array("se", data=np.asarray(se, dtype="float32"), chunks=(1000, 1))
+    group.create_array("z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=(1000, 1))
     return group, se
 
 
@@ -57,7 +57,7 @@ def test_rewrite_sizes_its_table_from_its_own_count(tmp_path) -> None:
     selected, _ = optimise_dense_se_joint(group, _preliminary())
 
     assert selected.se.is_residual, "fixture is meaningful only if the coding is chosen"
-    assert len(group["se_exception_index"]) == 10
+    assert group["se_exception_index"].shape[0] == 10
     decoded = DenseSePlane.open(group, selected).band(0, int(group["se"].shape[0]))
     np.testing.assert_array_equal(decoded[_EXCEPTION_SLICE, 0], source_se[_EXCEPTION_SLICE, 0])
 
@@ -83,4 +83,4 @@ def test_rewrite_ignores_a_measurement_that_saw_no_exceptions(tmp_path, monkeypa
     selected, _ = optimise_dense_se_joint(group, _preliminary())
 
     assert selected.se.is_residual
-    assert len(group["se_exception_index"]) == 10
+    assert group["se_exception_index"].shape[0] == 10

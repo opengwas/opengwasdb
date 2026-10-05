@@ -510,9 +510,11 @@ def test_completed_store_follows_the_ragged_layout_contract(scenario) -> None:
     assert root.attrs["completion_state"] == "reference_completed"
     assert root.attrs["n_analyses"] == 2
     assert root["se"].dtype == np.dtype("int8")
-    flat_length = len(root["se"])
-    assert all(len(root[name]) == flat_length for name in ("z", "eaf", "imputed", "variant_index"))
-    assert len(root["offsets"]) == root.attrs["n_analyses"] + 1
+    flat_length = root["se"].shape[0]
+    assert all(
+        root[name].shape[0] == flat_length for name in ("z", "eaf", "imputed", "variant_index")
+    )
+    assert root["offsets"].shape[0] == root.attrs["n_analyses"] + 1
     imp = root["imputed"][:]
     assert np.all((imp == 0) | (imp == 1))
 

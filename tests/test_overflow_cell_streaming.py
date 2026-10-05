@@ -97,7 +97,7 @@ def test_streamed_batches_reconstruct_the_materialised_cells(tmp_path, cell_budg
 def _dense_group(path, n_analyses=2, n_rows=600):
     """A Dense Component whose SE really does follow the log model, so the
     joint selection has a residual plane worth choosing."""
-    group = zarr.open_group(str(path), mode="w")
+    group = zarr.open_group(str(path), mode="w", zarr_format=2)
     eaf = np.repeat(np.linspace(0.05, 0.95, n_rows, dtype=np.float32)[:, None], n_analyses, axis=1)
     coefficients = np.array([[-3.0, -0.5], [-2.7, -0.45]], dtype=np.float32)[:n_analyses]
     se = np.exp(
@@ -105,9 +105,11 @@ def _dense_group(path, n_analyses=2, n_rows=600):
         + coefficients[None, :, 1] * np.log(2 * eaf * (1 - eaf))
         + 0.1 * np.sin(np.arange(n_rows)[:, None] * 0.1)
     ).astype(np.float32)
-    group.create_dataset("eaf", data=eaf, chunks=(100, n_analyses), dtype="float32")
-    group.create_dataset("se", data=se, chunks=(100, n_analyses), dtype="float16")
-    group.create_dataset("z", data=np.ones_like(eaf), chunks=(100, n_analyses), dtype="float16")
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=(100, n_analyses))
+    group.create_array("se", data=np.asarray(se, dtype="float16"), chunks=(100, n_analyses))
+    group.create_array(
+        "z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=(100, n_analyses)
+    )
     return group, eaf, se
 
 

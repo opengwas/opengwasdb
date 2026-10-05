@@ -17,6 +17,9 @@ edge padding fails the comparison.
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 import numpy as np
 import pytest
 import zarr
@@ -32,25 +35,31 @@ def _real_zarr_bytes(
 ) -> int:
     """Sum of the compressed chunk bytes zarr actually stores for `data`.
 
-    Mirrors the builders' `create_dataset(data=..., chunks=..., compressor=...)`
-    call, with the fill value stated explicitly so the test controls the padding
-    content. An array whose extent is not a multiple of its chunk therefore
-    includes one padded edge chunk, exactly as on a real store.
+    Mirrors the builders' `create_array(data=..., chunks=...,
+    compressors=...)` call, with the fill value stated explicitly so the test
+    controls the padding content. An array whose extent is not a multiple of
+    its chunk therefore includes one padded edge chunk, exactly as on a real
+    store.
+
+    zarr 2's `zarr.TempStore` is gone in zarr 3, so this writes a real
+    temporary v2-format directory -- the same thing the builders write -- and
+    sums the chunk files.  `write_empty_chunks` is pinned True to match the
+    seam, so a chunk that is entirely the fill value is still charged.
     """
-    with zarr.TempStore() as store:
-        group = zarr.open_group(store, mode="w")
-        group.create_dataset(
+    with tempfile.TemporaryDirectory() as tmp:
+        group = zarr.open_group(tmp, mode="w", zarr_format=2)
+        group.create_array(
             "measured",
-            data=data,
+            data=np.asarray(data, dtype=dtype),
             chunks=chunks,
-            compressor=_COMPRESSOR,
-            dtype=dtype,
+            compressors=_COMPRESSOR,
             fill_value=fill_value,
+            config={"write_empty_chunks": True},
         )
         return sum(
-            len(store[k])
-            for k in store.keys()
-            if k.startswith("measured/") and not k.endswith((".zarray", ".zattrs"))
+            file.stat().st_size
+            for file in (Path(tmp) / "measured").iterdir()
+            if file.is_file() and not file.name.startswith(".")
         )
 
 

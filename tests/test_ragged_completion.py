@@ -308,7 +308,7 @@ class TestCompletionFiles:
 
     def test_imputed_array_aligned_with_z(self, completed_store):
         root = open_store(completed_store).arrays(mode="r")["ragged"]
-        assert len(root["imputed"]) == len(root["z"])
+        assert root["imputed"].shape[0] == root["z"].shape[0]
 
     def test_imputed_values_are_0_or_1(self, completed_store):
         root = open_store(completed_store).arrays(mode="r")["ragged"]

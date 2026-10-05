@@ -34,7 +34,7 @@ from opengwasdb.encoding.plan import (
 )
 from opengwasdb.encoding.planes import DenseEafPlane, write_se_coefficients
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
-from opengwasdb.store.arrays import ArrayRole, create_array
+from opengwasdb.store.arrays import ArrayRole, compressor_of, create_array, move_in_group
 
 log = logging.getLogger(__name__)
 
@@ -485,7 +485,7 @@ def _measure_dense(
     global _MEASURE
     n_rows, n_analyses = map(int, source.shape)
     row_chunk, col_chunk = map(int, source.chunks)
-    compressor = source.compressor
+    compressor = compressor_of(source)
     # The planes this decision writes declare their own fills: the int8 codes
     # plane `_rewrite_dense` produces is created with `SE_MISSING` as its fill,
     # and a float32 scratch plane is narrowed to `float16` with NaN. A source
@@ -853,7 +853,7 @@ def _finish_rewrite(
             f"SE codes-only pass counted {exception_count} exceptions but rewrite produced {cursor}"
         )
     del group["se"]
-    group.move("se_pending", "se")
+    move_in_group(group, "se_pending", "se")
     write_se_coefficients(group, coefficients, compressor=compressor)
 
 
@@ -882,7 +882,7 @@ def _rewrite_dense(
     source = group["se"]
     n_rows, n_analyses = map(int, source.shape)
     row_chunk = int(source.chunks[0])
-    compressor = source.compressor
+    compressor = compressor_of(source)
     pending = create_array(
         group,
         "se_pending",
@@ -1333,7 +1333,7 @@ def _measure_candidates(
     preliminary to an eligibility verdict (issue #229).
     """
     n_analyses = int(source.shape[1])
-    compressor = source.compressor
+    compressor = compressor_of(source)
     dense = _measure_dense(source, eaf_plane, coefficients, timer, n_workers)
     overflow_cost, overflow_coefficient_bytes = _measure_overflow_component(
         overflow,
@@ -1552,7 +1552,7 @@ def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> 
         shape=source.shape,
         dtype="float16",
         fill_value=np.nan,
-        compressor=source.compressor,
+        compressor=compressor_of(source),
         hint=source.chunks,
     )
     started = time.monotonic()
@@ -1570,7 +1570,7 @@ def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> 
                     every=max(1, len(starts) // 20),
                 )
     del group["se"]
-    group.move("se_pending", "se")
+    move_in_group(group, "se_pending", "se")
 
 
 def optimise_dense_se(group: Any, encoding: StoreEncoding, n_workers: int = 1) -> StoreEncoding:

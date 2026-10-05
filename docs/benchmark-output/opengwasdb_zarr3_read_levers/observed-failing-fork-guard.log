@@ -1,0 +1,8 @@
+0
+E           Failed: probe did not finish within 120s: a fork-pool worker hung
+
+tests/test_zarr_runtime_config.py:88: Failed
+=========================== short test summary info ============================
+FAILED tests/test_zarr_runtime_config.py::test_fork_pools_finish_after_the_parent_read_through_the_pipeline
+1 failed in 120.29s (0:02:00)
+leftover probe processes: 0

@@ -1,0 +1,16 @@
+reverted to HEAD: opengwasdb/query/facade.py opengwasdb/layouts/dense/top_hits.py opengwasdb/encoding/planes.py
+E           AssertionError: assert ['get:z/.zarr....zattrs', ...] == []
+E             Left contains 69 more items, first extra item: 'get:z/.zarray'
+E           AssertionError: assert ['get:top_hit....zattrs', ...] == []
+E             Left contains 134 more items, first extra item: 'get:top_hits/p_5e_04/.zarray'
+E           AssertionError: assert ['get:zarr.js....zgroup', ...] == []
+E             Left contains 65 more items, first extra item: 'get:zarr.json'
+FAILED tests/test_query_metadata_reads.py::test_a_repeated_query_reads_no_metadata[dense]
+FAILED tests/test_query_metadata_reads.py::test_a_repeated_query_reads_no_metadata[hybrid]
+FAILED tests/test_query_metadata_reads.py::test_a_repeated_query_reads_no_metadata[ragged]
+3 failed in 5.09s
+reverted to HEAD: opengwasdb/encoding/planes.py
+E           AssertionError: assert ['get:z/.zarr...et:z/.zattrs'] == []
+E             Left contains 6 more items, first extra item: 'get:z/.zarray'
+FAILED tests/test_query_metadata_reads.py::test_a_repeated_query_reads_no_metadata[dense]
+1 failed, 2 passed in 4.94s

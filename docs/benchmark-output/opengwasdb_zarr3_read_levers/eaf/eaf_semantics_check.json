@@ -1,0 +1,38 @@
+{
+ "store": "/data/opengwasdb/stores/OGS-00010/store.opengwasdb",
+ "encoding": {
+  "version": 3,
+  "z": {
+   "kind": "int16_fixed",
+   "scale": 1024
+  },
+  "se": {
+   "kind": "int8_residual",
+   "residual_range": 0.5
+  },
+  "eaf": {
+   "kind": "int8_residual",
+   "residual_range": 0.5,
+   "reference": true
+  }
+ },
+ "column": 0,
+ "n_imputed_in_column": 7479577,
+ "imputed": {
+  "cells": 20000,
+  "se_eaf_equals_result_eaf": true,
+  "raw_eaf_nan_fraction": 1.0,
+  "raw_eaf_equals_result_eaf": false,
+  "cells_with_se": 20000,
+  "se_decode_with_raw_eaf": "ValueError: residual SE cannot be decoded without a finite EAF for every cell carrying a standard error"
+ },
+ "observed": {
+  "cells": 20000,
+  "se_eaf_equals_result_eaf": true,
+  "raw_eaf_nan_fraction": 0.0,
+  "raw_eaf_equals_result_eaf": true,
+  "cells_with_se": 20000,
+  "se_decode_with_raw_eaf": "ok",
+  "se_from_raw_equals_se": true
+ }
+}

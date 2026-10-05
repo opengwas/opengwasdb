@@ -1,0 +1,4 @@
+base start:  11:30:33 up 3 days,  5:24,  7 users,  load average: 2.83, 4.54, 5.40
+base exit=0 end:  11:32:42 up 3 days,  5:27,  7 users,  load average: 3.87, 4.39, 5.24
+head start:  11:32:42 up 3 days,  5:27,  7 users,  load average: 3.87, 4.39, 5.24
+head exit=0 end:  11:34:53 up 3 days,  5:29,  7 users,  load average: 2.67, 3.79, 4.90

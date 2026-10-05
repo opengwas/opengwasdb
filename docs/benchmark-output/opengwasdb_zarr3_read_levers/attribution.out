@@ -1,0 +1,17 @@
+start:  11:35:07 up 3 days,  5:29,  7 users,  load average: 2.40, 3.70, 4.85
+base_218 round 1 done (load 2.40 -> 6.54)
+i_none round 1 done (load 6.54 -> 6.05)
+ii_bt round 1 done (load 6.05 -> 3.51)
+iii_bt_fused round 1 done (load 3.51 -> 2.91)
+iv_head round 1 done (load 2.91 -> 2.82)
+base_218 round 2 done (load 2.82 -> 3.49)
+i_none round 2 done (load 3.49 -> 4.98)
+ii_bt round 2 done (load 4.98 -> 4.40)
+iii_bt_fused round 2 done (load 4.40 -> 3.20)
+iv_head round 2 done (load 3.20 -> 2.72)
+base_218 round 3 done (load 2.72 -> 3.17)
+i_none round 3 done (load 3.17 -> 5.08)
+ii_bt round 3 done (load 5.08 -> 4.56)
+iii_bt_fused round 3 done (load 4.56 -> 3.54)
+iv_head round 3 done (load 3.54 -> 2.88)
+end:  12:17:35 up 3 days,  6:11,  5 users,  load average: 2.88, 3.82, 4.23

@@ -12,6 +12,67 @@ the end of this file.
 
 ### Changed
 
+- **The package runs on zarr-python 3 (#244).** `zarr>=3.4,<4` and
+  `numcodecs>=0.17` replace `zarr>=2.18,<3` and `numcodecs>=0.12,<0.13` in both
+  the `[project]` and pixi dependency tables. The Store format is **not**
+  changed: every array and group is still created in Zarr **v2** format with the
+  same Blosc zstd / clevel 3 / bitshuffle codec, and every build still stamps
+  `format_version` 0.1.0 (the compatibility table is unchanged). Because zarr
+  3.4 requires Python 3.12 and numpy 2, `requires-python` moves from `>=3.11`
+  to `>=3.12`; the numpy range already admitted 2.x and is unchanged. All
+  array/group creation already went through `opengwasdb.store.arrays` (#243),
+  and the one new rule there is that a creating open must state
+  `zarr_format=2` -- zarr 3's unqualified `open_group(mode="w")` would create
+  a Zarr v3 group and silently change the format. The static creation scan now
+  fails a write-mode `open_group` outside the seam. A store built before and
+  after the upgrade decodes identically and holds byte-identical chunk files;
+  only metadata serialisation differs (zarr 3's JSON layout, an explicit
+  default `dimension_separator`, and empty `.zattrs` files).
+- **Blosc decodes with its internal threads again under zarr 3 (#244).**
+  `import zarr` (3.x) sets `numcodecs.blosc.use_threads = False` for the whole
+  process, so every chunk decoded single-threaded: ~4.5 ms instead of ~0.6 ms
+  with Blosc's 8 threads, for a `[1000, 1000]` int16 chunk of OGS-00009
+  (`benchmarks/zarr3_blosc_decode.py`). `opengwasdb.store.arrays`
+  turns them back on for the process, as zarr 2.18 effectively had them on the
+  main thread. Forked build workers stay single-threaded (numcodecs checks the
+  pid), and every fork-pool build path still completes with `n_workers > 1`.
+  The floor moves to `numcodecs>=0.17`, the first release that locks Blosc's
+  global context on decompress as well as compress. As under zarr 2.18, a chunk
+  of two or more Blosc blocks (every `[1000, 1000]` Dense chunk) compressed in
+  the build's parent process is no longer byte-reproducible run to run: its
+  decoded values and compressed size are, so the SE encoding plan is
+  unaffected. Byte-for-byte store comparisons need `BLOSC_NTHREADS=1`. On its
+  own, under zarr's default pipeline, this is not a speed-up (decodes from
+  zarr's thread pool queue on numcodecs' lock); it pays off with the next
+  entry.
+- **Every Store array reads and writes through zarr's `FusedCodecPipeline`,
+  with one worker (#244).** `opengwasdb.store.arrays` sets
+  `codec_pipeline.path` and `codec_pipeline.max_workers = 1` on import. With
+  Blosc threads on, one Analysis genome-wide on OGS-00009 went from 88 s to
+  24 s (zarr 2.18: 26 s; medians of three fresh processes). One worker is
+  measured faster than the pipeline's default pool, and it is what keeps fork
+  pools working: zarr 3.4 does not reset that pool in a forked process
+  (zarr-developers/zarr-python#4478), so a build worker whose read spans more
+  than one chunk, but no more chunks than the idle permits the parent's pool
+  left, would wait forever on threads that exist only in the parent. Built
+  stores are unchanged: fixture chunk files stay byte-identical under
+  `BLOSC_NTHREADS=1`.
+- **ADR 0056 records the zarr runtime configuration the array seam owns
+  (#244):** `write_empty_chunks`, Blosc threads, the fused pipeline and its one
+  worker, with the options rejected and their costs. `max_workers` must stay at
+  1 until zarr resets the pipeline's pool after `fork`.
+- **A query facade opens each top-hit array once, not on every query (#244).**
+  zarr 3 reads an array's metadata from the store on every `group[name]` and
+  `name in group` (~1 ms each), and the top-hit path reopened the tier group
+  and every field on every call: repeating a tier query and a per-Analysis
+  query read 63 (Dense), 65 (Ragged) and 134 (Hybrid) metadata keys on the
+  test fixtures, and now reads none. On OGS-00009 a per-Analysis top-hit
+  query went from 21 ms to 7 ms (zarr 2.18: 1.1 ms). `DenseTopHitReader` keeps
+  the arrays it opens, and a new `TopHitTiers` keeps one reader per threshold
+  for the facade's lifetime. A Dense release with no `eaf` plane also stops
+  reopening `z` for the grid width on every regional query. Answers are
+  unchanged.
+
 - **The GWAS-SSF reader recovers a row's effect and standard error from the
   row's own columns (stores #176).** A full OGS-00011 resolve found 476 Analyses
   with no build-eligible row; 212 of them report both quantities in columns the
@@ -61,6 +122,47 @@ the end of this file.
   build records a `provenance.maf` block (stores #176).
 
 ### Fixed
+
+- **Writes refuse a Zarr group that consolidated metadata describes (#244
+  review).** zarr 3's `open_group` reads a `.zmetadata` record (or a v3
+  `consolidated_metadata` block) in place of the live metadata; zarr 2.18 did
+  not. No package write updates such a record, so a write under one left a
+  release that reopened with stale shapes. An EAF repair, for one, reopened its
+  rechunked `eaf_baseline` with the old `(8,)` chunks and failed to reshape.
+  - Any open in a mode other than `r` now raises `ConsolidatedMetadataError`
+    before changing anything when a record covers the group or an enclosing
+    group. So does `move_in_group`.
+  - So does every metadata write and every delete through a handle the seam
+    opened, including one opened before the record appeared. This covers the
+    seam's `create_array`, `create_group` and `require_group`, attribute writes,
+    `del`, and a shrinking `resize`. The seam opens every group on its own
+    `LocalStore` subclass, which checks there.
+  - Deletes are refused even for chunk files, because a shrinking `resize`
+    deletes chunks before it writes the new shape. With only the metadata write
+    checked, the refusal came after the chunks were gone, and a fresh read
+    returned zeros under the old shape. Chunk writes are not checked: the record
+    holds no chunk data, and with `write_empty_chunks` on an ordinary write
+    never deletes a chunk.
+  - Reads are unchanged. The package never consolidates, and no registered
+    Store Release carries a record.
+  - ADR 0056 §4 records the decision and the alternatives rejected.
+- **`repair-eaf-chunks` recovers from a run that died mid-swap (#244 review).**
+  The repair swaps the rechunked copy in with two renames. Each rename is
+  atomic, but the pair is not. A process killed between them left the
+  published release without `eaf_baseline`, and the next run skipped it as
+  absent, reported nothing repaired and left the release broken.
+  - The next run now settles each state an interruption can leave: it drops
+    an unfinished copy, restores the original from its backup and repairs
+    again, or drops a backup left after a completed swap.
+  - It refuses, touching nothing, the three states no single interruption
+    leaves: the copy alone, the backup alone, and all three together. Before
+    this, a lone copy was deleted, though it could be the only baseline left.
+- **An unknown or zarr-2-only group mode fails with a message, not a bare
+  `AssertionError` (#244 review).** The seam listed `x` as a creation mode,
+  which zarr 3 rejects. Modes are now checked against the five zarr 3 accepts.
+  `opengwasdb/store/arrays.py` is also type-checked against zarr's own types
+  (`tests/test_seam_types.py`); that check is what found `x`. mypy's target is
+  now Python 3.12, the package floor.
 
 - **The resolver record's `opengwasdb_git_hash` is the `opengwasdb` commit, not
   the enclosing repository's (stores #176).** `_get_git_hash` ran
@@ -155,6 +257,38 @@ the end of this file.
   conflicting case-folded reference keys (stores #174).
 
 ### Added
+
+- **OGS-00009 on zarr-python 3 meets set L (#244, Stage B).** The #242 harness
+  ran back to back, zarr 2.18 at `745796c` then zarr 3 at `83b8b23`, with
+  `--reps 5` and the peak-memory probes. Each run started below a 1-minute load
+  of 3.
+  - Every query meets its typical-time, slow-time and memory budget. One whole
+    Analysis takes 21.9 s against 27.6 s on 2.18 (0.79×, guard 1.25×), with a
+    peak of 1.14 GB against 12.04 GB.
+  - Top hits are 6.53 ms against a 50 ms budget. No result is within 30% of a
+    limit.
+  - Answers are identical across the two environments for all seven queries.
+  - Committed: `docs/benchmark-output/opengwasdb_store_comparison_ogs00009_zarr3.json`,
+    the pair's 2.18 run beside it, and the set-L table generated from them by
+    `benchmarks/zarr3_lever_tables.py stage-b`.
+- **The measurements behind ADR 0056 and #244's read levers are in the
+  repository (#244).**
+  - The scripts are in `benchmarks/` and documented in `benchmarks/README.md`:
+    - the attribution of each lever (`zarr3_attribution.py`);
+    - fork safety (`zarr3_fork_probe.py`, `zarr3_fork_paths.py`, and
+      `zarr3_pool_fork_repro.py` for zarr-python#4478);
+    - build-output identity (`zarr3_fixture_trees.py`, `zarr3_compare_trees.py`,
+      `zarr3_encode_scope.py`, `zarr3_se_plan.py`) and answer identity
+      (`zarr3_spot_queries.py`);
+    - the 0.2.0 shape screen (`shape_slice.py`, `shape_harness_geometry.py`,
+      `shape_screen.py`);
+    - the duplicate EAF read (`eaf_read_split.py`, `eaf_semantics_check.py`, #253).
+  - The outputs are committed as produced under
+    `docs/benchmark-output/opengwasdb_zarr3_read_levers/`, with a `PROVENANCE.md`
+    giving each output's script, commit and time.
+  - `zarr3_lever_tables.py` regenerates every table #244, #246 and #253 quote.
+  - The one re-run, `zarr3_blosc_decode.py`, puts the threaded decode of a
+    `[1000, 1000]` chunk at ~0.6 ms, not the ~1.1 ms first quoted.
 
 - **One shared row-admission rule for the resolver and the Hybrid builder**
   (`opengwasdb.build.row_admission.admit_rows`, `keep = ~info_drop & ~maf_drop`),

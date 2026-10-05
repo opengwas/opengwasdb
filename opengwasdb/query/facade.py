@@ -74,11 +74,7 @@ import zarr
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.index import AnalysesIndex
 from opengwasdb.layouts.dense.rho import DenseRhoReader
-from opengwasdb.layouts.dense.top_hits import (
-    DenseTopHitReader,
-    threshold_key,
-    z_critical,
-)
+from opengwasdb.layouts.dense.top_hits import TopHitTiers, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
@@ -221,6 +217,7 @@ class StoreQuery:
         self._rho_reader: DenseRhoReader | None = (
             DenseRhoReader(self._root["rho"], self._z.n_analyses) if "rho" in self._root else None
         )
+        self._top_hits = TopHitTiers(self._root)
 
     @property
     def _eaf(self) -> DenseEafPlane:
@@ -441,18 +438,15 @@ class StoreQuery:
         observed_only: bool = False,
     ) -> dict[str, np.ndarray]:
         """Return genomic-order top hits, optionally for one analysis."""
-        key = threshold_key(threshold)
-        path = f"top_hits/{key}"
-        if path not in self._root:
+        reader = self._top_hits.reader(threshold)
+        if reader is None:
             return _empty_result()
-        group = self._root[path]
         analysis_index: int | None = None
         if analysis_id is not None:
             analysis = self._analyses.by_id(analysis_id)
-            if analysis is None or "analysis_offsets" not in group:
+            if analysis is None or not reader.has("analysis_offsets"):
                 return _empty_result()
             analysis_index = int(analysis["analysis_index"])
-        reader = DenseTopHitReader(group)
         bounds = reader.bounds(analysis_index)
         variant_indices = reader.read("variant_index", bounds, "int32")
         analysis_indices = reader.read("analysis_index", bounds, "int32")
@@ -599,6 +593,7 @@ class RaggedStoreQuery:
         self._csr = RaggedCSRReader(store.path)
         self._variant_axis = VariantAxis(store.path)
         self._analyses = AnalysesIndex(store.path)
+        self._top_hits = TopHitTiers(store.arrays(mode="r"))
         self._is_completed = store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
         # Load imputed mask when present (reference-completed stores).
         ragged_path = store.data_path / "ragged"
@@ -852,17 +847,13 @@ class RaggedStoreQuery:
         falls back to a full CSR scan otherwise. The two paths return the
         same shape of answer for the same call.
         """
-        key = threshold_key(threshold)
-        root = self.store.arrays(mode="r")
-        path = f"top_hits/{key}"
-        if path in root:
-            group = root[path]
+        reader = self._top_hits.reader(threshold)
+        if reader is not None:
             analysis_index = None
             if analysis_id is not None:
                 analysis_index = self._resolve_analysis_id(analysis_id)
-                if analysis_index is None or "analysis_offsets" not in group:
+                if analysis_index is None or not reader.has("analysis_offsets"):
                     return _empty_result()
-            reader = DenseTopHitReader(group)
             bounds = reader.bounds(analysis_index)
             vi = reader.read("variant_index", bounds, "int32")
             ai = reader.read("analysis_index", bounds, "int32")
@@ -1018,6 +1009,7 @@ class HybridStoreQuery:
         self._dense = StoreQuery(self._dense_store)
         self._dense_to_shared = np.load(dense_to_shared_path(store.path)).astype("int32")
         self._csr = RaggedCSRReader(store.path)  # overflow at store/data.zarr/ragged
+        self._top_hits = TopHitTiers(store.arrays(mode="r"))  # overflow's own tiers
         self._connection = store.index_connection()
         self._analyses = AnalysesIndex(store.path)  # shared analyses.tsv
         self._variant_axis = VariantAxis(store.path, self._connection)  # shared union table
@@ -1197,15 +1189,11 @@ class HybridStoreQuery:
     def _overflow_top_hits(
         self, threshold: float, analysis_index: int | None = None
     ) -> dict[str, np.ndarray]:
-        key = threshold_key(threshold)
-        root = self.store.arrays(mode="r")
-        path = f"top_hits/{key}"
-        if path not in root:
+        reader = self._top_hits.reader(threshold)
+        if reader is None:
             return _empty_result()
-        group = root[path]
-        if analysis_index is not None and "analysis_offsets" not in group:
+        if analysis_index is not None and not reader.has("analysis_offsets"):
             return _empty_result()
-        reader = DenseTopHitReader(group)
         bounds = reader.bounds(analysis_index)
         vi = reader.read("variant_index", bounds, "int32")
         ai = reader.read("analysis_index", bounds, "int32")

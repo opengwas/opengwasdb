@@ -38,15 +38,44 @@ _THRESHOLD_COLUMNS = dict(zip(TOP_HIT_THRESHOLDS, TOP_HIT_COUNT_COLUMNS, strict=
 
 
 class DenseTopHitReader:
-    """Address one threshold tier without exposing its physical arrays."""
+    """Address one threshold tier without exposing its physical arrays.
+
+    Each of the tier's arrays is opened at most once per reader (#244).
+    zarr-python 3 reads an array's metadata from the store on every
+    ``group[name]`` and every ``name in group`` -- about 1 ms each on a local
+    store -- and one top-hit query touches up to seven arrays, so a reader that
+    reopened them per field spent more time on metadata than on hits (OGS-00009:
+    21 ms as it was, 5.8 ms opened once).  A Store Release does not change while
+    it is queried, so an opened array stays valid for the reader's lifetime.
+    """
 
     def __init__(self, group: zarr.Group):
         self.group = group
+        self._arrays: dict[str, zarr.Array | None] = {}
+
+    def _array(self, name: str) -> zarr.Array | None:
+        """The tier's array `name`, or None when this index predates it."""
+        if name not in self._arrays:
+            try:
+                self._arrays[name] = self.group[name]
+            except KeyError:
+                self._arrays[name] = None
+        return self._arrays[name]
+
+    def _required(self, name: str) -> zarr.Array:
+        array = self._array(name)
+        if array is None:
+            raise KeyError(f"top-hit tier {self.group.path!r} has no {name!r} array")
+        return array
+
+    def has(self, name: str) -> bool:
+        """Whether this tier's index carries the array `name`."""
+        return self._array(name) is not None
 
     def bounds(self, analysis_index: int | None) -> tuple[int, int]:
         if analysis_index is None:
-            return 0, int(self.group["z"].shape[0])
-        offsets = self.group["analysis_offsets"]
+            return 0, int(self._required("z").shape[0])
+        offsets = self._required("analysis_offsets")
         if analysis_index < 0 or analysis_index + 1 >= int(offsets.shape[0]):
             return 0, 0
         pair = offsets[analysis_index : analysis_index + 2]
@@ -54,7 +83,7 @@ class DenseTopHitReader:
 
     def read(self, name: str, bounds: tuple[int, int], dtype: str) -> np.ndarray:
         start, stop = bounds
-        return np.asarray(self.group[name][start:stop], dtype=dtype)
+        return np.asarray(self._required(name)[start:stop], dtype=dtype)
 
     def read_or(
         self,
@@ -64,9 +93,32 @@ class DenseTopHitReader:
         fallback: Callable[[], np.ndarray],
     ) -> np.ndarray:
         """Read an indexed result field, or derive it for an older index."""
-        if name in self.group:
+        if self.has(name):
             return self.read(name, bounds, dtype)
         return np.asarray(fallback(), dtype=dtype)
+
+
+class TopHitTiers:
+    """A store's top-hit threshold tiers, each opened once and kept (#244).
+
+    A query facade holds one, so a repeated top-hit query reuses the tier group
+    and the arrays its `DenseTopHitReader` already opened instead of reading
+    their metadata from the store again.
+    """
+
+    def __init__(self, root: zarr.Group):
+        self._root = root
+        self._readers: dict[str, DenseTopHitReader | None] = {}
+
+    def reader(self, threshold: float) -> DenseTopHitReader | None:
+        """The tier for `threshold`, or None when the store has no such tier."""
+        key = threshold_key(threshold)
+        if key not in self._readers:
+            try:
+                self._readers[key] = DenseTopHitReader(self._root[f"top_hits/{key}"])
+            except KeyError:
+                self._readers[key] = None
+        return self._readers[key]
 
 
 def read_top_hit_counts(
