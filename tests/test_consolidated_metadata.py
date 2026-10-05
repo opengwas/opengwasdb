@@ -12,11 +12,20 @@ with its old `(8,)` chunks and failing to reshape.
 So every writable open, and every move, refuses before changing anything when a
 consolidated record describes the group, its own or an enclosing group's. Read
 opens are unaffected.
+
+A handle opened before the record appeared must refuse too (#244 review round 2,
+finding 1). The reviewer replaced an 8-element array with a 3-element one through
+such a handle; the record kept shape 8, and a fresh open silently returned
+``[0, 1, 2, 0, 0, 0, 0, 0]``. So every metadata write and every delete through a
+seam-opened store checks again, whatever API made it: the seam's `create_array`,
+`create_group` and `require_group`, zarr's own attribute writes, and ``del``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -30,9 +39,11 @@ from opengwasdb.store.arrays import (
     ArrayRole,
     ConsolidatedMetadataError,
     create_array,
+    create_group,
     move_in_group,
     open_group,
     open_group_for_write,
+    require_group,
 )
 
 
@@ -43,18 +54,31 @@ def _tree(root: Path) -> dict[str, bytes]:
     }
 
 
-def _consolidate(group_path: Path) -> None:
-    zarr.consolidate_metadata(str(group_path), zarr_format=2)
-    assert (group_path / ".zmetadata").is_file(), "consolidation wrote no .zmetadata"
+def _consolidate(group_path: Path, zarr_format: int = 2) -> None:
+    zarr.consolidate_metadata(str(group_path), zarr_format=zarr_format)
+    if zarr_format == 2:
+        assert (group_path / ".zmetadata").is_file(), "consolidation wrote no .zmetadata"
     assert zarr.open_group(str(group_path), mode="r").metadata.consolidated_metadata is not None
 
 
-def _group_with_subgroup(path: Path) -> Path:
-    """A v2 group holding one array and one subgroup with an array of its own."""
-    root = open_group_for_write(path, "w")
-    create_array(root, "a", ArrayRole.PER_VARIANT, data=np.arange(8, dtype="float32"), hint=2)
+def _group_with_subgroup(path: Path, zarr_format: int = 2) -> Path:
+    """A group holding one array and one subgroup with an array of its own.
+
+    Zarr v2 through the seam, as every build writes it; Zarr v3 through zarr, as
+    #245's converter will, uncompressed because the seam's codec is v2-only.
+    """
+    if zarr_format == 2:
+        root = open_group_for_write(path, "w")
+    else:
+        root = zarr.open_group(str(path), mode="w", zarr_format=3)
+    kwargs = {"compressor": None} if zarr_format == 3 else {}
+    create_array(
+        root, "a", ArrayRole.PER_VARIANT, data=np.arange(8, dtype="float32"), hint=2, **kwargs
+    )
     sub = root.create_group("sub")
-    create_array(sub, "b", ArrayRole.PER_VARIANT, data=np.arange(4, dtype="float32"), hint=2)
+    create_array(
+        sub, "b", ArrayRole.PER_VARIANT, data=np.arange(4, dtype="float32"), hint=2, **kwargs
+    )
     return path
 
 
@@ -133,3 +157,76 @@ def test_reads_and_a_wipe_of_the_consolidated_group_itself_still_work(tmp_path: 
     # mode="w" deletes the group and its own record with it, so nothing goes stale.
     open_group_for_write(path, "w")
     assert not (path / ".zmetadata").exists()
+
+
+# ── handles opened before the record appeared (round 2) ──────────────────────
+
+
+def _codec(zarr_format: int) -> dict[str, Any]:
+    return {"compressor": None} if zarr_format == 3 else {}
+
+
+#: Every way the package changes metadata through a handle it already holds.
+STALE_HANDLE_WRITES: dict[str, Callable[[Any, int], object]] = {
+    # The review's reproduction: 8 elements replaced by 3.
+    "create_array overwrite": lambda g, f: create_array(
+        g,
+        "a",
+        ArrayRole.PER_VARIANT,
+        data=np.arange(3, dtype="float32"),
+        hint=2,
+        overwrite=True,
+        **_codec(f),
+    ),
+    "create_array new": lambda g, f: create_array(
+        g, "new", ArrayRole.PER_VARIANT, data=np.arange(3, dtype="float32"), hint=2, **_codec(f)
+    ),
+    "create_array in a subgroup": lambda g, f: create_array(
+        g["sub"],
+        "new",
+        ArrayRole.PER_VARIANT,
+        data=np.arange(3, dtype="float32"),
+        hint=2,
+        **_codec(f),
+    ),
+    "create_group": lambda g, f: create_group(g, "fresh"),
+    "create_group replacing": lambda g, f: create_group(g, "sub"),
+    "require_group new": lambda g, f: require_group(g, "fresh"),
+    "group attribute": lambda g, f: g.attrs.__setitem__("note", "stale"),
+    "array attribute": lambda g, f: g["a"].attrs.__setitem__("note", "stale"),
+    "delete array": lambda g, f: g.__delitem__("a"),
+    "delete subgroup": lambda g, f: g.__delitem__("sub"),
+}
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
+@pytest.mark.parametrize("write", sorted(STALE_HANDLE_WRITES))
+def test_a_handle_opened_before_consolidation_cannot_change_metadata(
+    tmp_path: Path, zarr_format: int, write: str
+) -> None:
+    path = _group_with_subgroup(tmp_path / "g.zarr", zarr_format)
+    group = open_group(path, "r+")
+    _consolidate(path, zarr_format)
+    before = _tree(path)
+
+    with pytest.raises(ConsolidatedMetadataError):
+        STALE_HANDLE_WRITES[write](group, zarr_format)
+
+    assert _tree(path) == before
+    # The record still describes the release, so a fresh open reads the truth.
+    reopened = open_group(path)
+    np.testing.assert_array_equal(reopened["a"][:], np.arange(8, dtype="float32"))
+    assert sorted(reopened.array_keys()) == ["a"] and sorted(reopened.group_keys()) == ["sub"]
+
+
+@pytest.mark.parametrize("zarr_format", [2, 3])
+def test_a_stale_handle_still_writes_chunk_data_and_reads(tmp_path: Path, zarr_format: int) -> None:
+    """Chunk data is not in the record, so values written in place stay readable."""
+    path = _group_with_subgroup(tmp_path / "g.zarr", zarr_format)
+    group = open_group(path, "r+")
+    _consolidate(path, zarr_format)
+
+    group["a"][:2] = np.array([10, 11], dtype="float32")
+
+    expected = np.array([10, 11, 2, 3, 4, 5, 6, 7], dtype="float32")
+    np.testing.assert_array_equal(open_group(path)["a"][:], expected)

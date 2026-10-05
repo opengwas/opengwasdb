@@ -13,7 +13,7 @@ the end of this file.
 ### Changed
 
 - **The package runs on zarr-python 3 (#244).** `zarr>=3.4,<4` and
-  `numcodecs>=0.14` replace `zarr>=2.18,<3` and `numcodecs>=0.12,<0.13` in both
+  `numcodecs>=0.17` replace `zarr>=2.18,<3` and `numcodecs>=0.12,<0.13` in both
   the `[project]` and pixi dependency tables. The Store format is **not**
   changed: every array and group is still created in Zarr **v2** format with the
   same Blosc zstd / clevel 3 / bitshuffle codec, and every build still stamps
@@ -132,6 +132,12 @@ the end of this file.
   - Any open in a mode other than `r` now raises `ConsolidatedMetadataError`
     before changing anything when a record covers the group or an enclosing
     group. So does `move_in_group`.
+  - So does every metadata write and every delete through a handle the seam
+    opened, including one opened before the record appeared. This covers the
+    seam's `create_array`, `create_group` and `require_group`, attribute writes
+    and `del`. The seam opens every group on its own `LocalStore` subclass,
+    which checks there. Chunk writes are not checked: the record holds no chunk
+    data.
   - Reads are unchanged. The package never consolidates, and no registered
     Store Release carries a record.
   - ADR 0056 §4 records the decision and the alternatives rejected.
@@ -140,9 +146,12 @@ the end of this file.
   atomic, but the pair is not. A process killed between them left the
   published release without `eaf_baseline`, and the next run skipped it as
   absent, reported nothing repaired and left the release broken.
-  - The next run now restores the original from its backup and repairs again,
-    or drops a backup left after a completed swap.
-  - It refuses, touching nothing, a state no single death can leave.
+  - The next run now settles each state an interruption can leave: it drops
+    an unfinished copy, restores the original from its backup and repairs
+    again, or drops a backup left after a completed swap.
+  - It refuses, touching nothing, the three states no single interruption
+    leaves: the copy alone, the backup alone, and all three together. Before
+    this, a lone copy was deleted, though it could be the only baseline left.
 - **An unknown or zarr-2-only group mode fails with a message, not a bare
   `AssertionError` (#244 review).** The seam listed `x` as a creation mode,
   which zarr 3 rejects. Modes are now checked against the five zarr 3 accepts.

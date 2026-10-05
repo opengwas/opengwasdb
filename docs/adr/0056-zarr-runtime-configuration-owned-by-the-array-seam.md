@@ -160,9 +160,29 @@ group:
 - every open in a mode other than `r`, checking the group's own directory and every
   enclosing group's (`mode="w"` deletes the group's own record, so only enclosing ones
   count);
-- `move_in_group`, as a backstop for a handle opened before a record appeared.
+- every metadata write and every delete, at the store, through any handle the seam
+  opened;
+- `move_in_group`, which renames directories outside zarr.
 
-Read opens are unaffected. **Enforced by** `tests/test_consolidated_metadata.py`.
+The second point closes a gap round 2 of the review found. A handle opened before a record
+appeared passed the open-time check. The review replaced an 8-element array with a
+3-element one through such a handle; the record kept shape 8, and a fresh open silently
+returned `[0, 1, 2, 0, 0, 0, 0, 0]`.
+
+Writes take routes no single seam function sees: `create_array`, `create_group` and
+`require_group` go through the seam, but attribute writes and `del group[name]` go
+through zarr's own API. So the seam opens every group on its own `LocalStore` subclass,
+through the same `LocalStore.open` call zarr makes for a path:
+
+- **Metadata writes.** Any write of `.zarray`, `.zgroup`, `.zattrs` or `zarr.json` is
+  checked against the records that describe its directory.
+- **Deletes.** A deleted directory is checked against the records enclosing it. Records
+  inside it go with it.
+- **Chunk writes** are not checked. A record holds no chunk data, so band writes cost
+  nothing extra.
+
+Read opens are unaffected. **Enforced by** `tests/test_consolidated_metadata.py`, for Zarr
+v2 and v3 records alike: ten kinds of write through a handle opened before consolidation.
 
 ### What these settings do not remove
 

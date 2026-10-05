@@ -60,6 +60,9 @@ import numcodecs
 import numpy as np
 import zarr
 from numcodecs import Blosc
+from zarr.core.buffer import Buffer
+from zarr.core.sync import sync as zarr_sync
+from zarr.storage import LocalStore
 
 # The module whose import switches Blosc's threads off.  ``import zarr`` loads
 # it today; importing it by name makes sure it has run before the setting below
@@ -741,6 +744,80 @@ def refuse_under_consolidated_metadata(
         )
 
 
+#: The files a consolidated record copies: changing or deleting one stales it.
+#: Chunk files are not recorded, so a chunk write needs no check.
+_RECORDED_METADATA = frozenset({".zarray", ".zgroup", ".zattrs", "zarr.json"})
+
+
+class _GuardedLocalStore(LocalStore):
+    """The local store every Store group is opened on.
+
+    It refuses a metadata write or a delete that consolidated metadata describes.
+    The check at `open_group` cannot see a record that appears after a handle was
+    opened. Nor can it see every route a write takes: `create_array`,
+    `create_group` and `require_group` go through the seam, but attribute writes
+    and ``del group[name]`` go through zarr's own API. Every one of them reaches
+    the store, so the store is where the check is repeated (#244 review round 2).
+    Deleting a directory takes any record inside it along, so only records
+    enclosing it count, as for ``mode="w"``.
+    """
+
+    def _check_write(self, key: str) -> None:
+        if key.rsplit("/", 1)[-1] in _RECORDED_METADATA:
+            refuse_under_consolidated_metadata((self.root / key).parent, f"writing {key!r} in")
+
+    def _check_delete(self, key: str) -> None:
+        target = self.root / key
+        if target.is_dir():
+            refuse_under_consolidated_metadata(target, f"deleting {key!r} in", wiped=True)
+        elif target.name in _RECORDED_METADATA:
+            refuse_under_consolidated_metadata(target.parent, f"deleting {key!r} in")
+
+    async def set(self, key: str, value: Buffer) -> None:
+        self._check_write(key)
+        await super().set(key, value)
+
+    async def set_if_not_exists(self, key: str, value: Buffer) -> None:
+        self._check_write(key)
+        await super().set_if_not_exists(key, value)
+
+    def set_sync(self, key: str, value: Buffer) -> None:
+        self._check_write(key)
+        super().set_sync(key, value)
+
+    async def delete(self, key: str) -> None:
+        self._check_delete(key)
+        await super().delete(key)
+
+    def delete_sync(self, key: str) -> None:
+        self._check_delete(key)
+        super().delete_sync(key)
+
+    async def delete_dir(self, prefix: str) -> None:
+        self._check_delete(prefix)
+        await super().delete_dir(prefix)
+
+    async def clear(self) -> None:
+        self._check_delete("")
+        await super().clear()
+
+    async def move(self, dest_root: Path | str) -> None:
+        self._check_delete("")
+        await super().move(dest_root)
+
+
+def _open_local_store(path: str | Path, mode: ZarrMode) -> _GuardedLocalStore:
+    """The store zarr would open for a local `path` in `mode`, guarded.
+
+    This is the same `LocalStore.open` call zarr's own path handling makes, so the
+    mode means exactly what it did: `r` and `r+` require the directory, the others
+    create it.
+    """
+    opening = _GuardedLocalStore.open(root=Path(path), mode=mode, read_only=mode == "r")
+    store: _GuardedLocalStore = zarr_sync(opening)
+    return store
+
+
 #: Zarr entries whose bytes live in a directory of their own, which is what a
 #: filesystem rename moves as a unit.
 _LOCAL_STORE_ATTR = "root"
@@ -851,7 +928,8 @@ def open_group(path: str | Path, mode: str = "r") -> Any:
         refuse_under_consolidated_metadata(
             Path(path), f"opening in mode {mode!r}", wiped=zarr_mode == "w"
         )
-    return zarr.open_group(str(path), mode=zarr_mode, zarr_format=_open_group_format(mode))
+    store = _open_local_store(path, zarr_mode)
+    return zarr.open_group(store, mode=zarr_mode, zarr_format=_open_group_format(mode))
 
 
 def open_group_for_write(path: str | Path, mode: str) -> Any:
@@ -872,4 +950,6 @@ def open_group_for_write(path: str | Path, mode: str) -> Any:
             "use open_group for a read mode"
         )
     refuse_under_consolidated_metadata(Path(path), f"opening in mode {mode!r}", wiped=mode == "w")
-    return zarr.open_group(str(path), mode=_zarr_mode(mode), zarr_format=STORE_ZARR_FORMAT)
+    zarr_mode = _zarr_mode(mode)
+    store = _open_local_store(path, zarr_mode)
+    return zarr.open_group(store, mode=zarr_mode, zarr_format=STORE_ZARR_FORMAT)

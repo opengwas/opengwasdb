@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -37,47 +39,73 @@ def _swap_names(name: str) -> tuple[str, str]:
     return f".{name}.rechunking", f".{name}.old"
 
 
-def _recover_interrupted_swap(group: Any, name: str, label: str) -> None:
-    """Put `name` back in one piece after a repair that died mid-swap.
+def _drop_copy(group: Any, name: str, label: str) -> None:
+    """Died while writing the copy: the original is untouched, so drop the copy."""
+    temporary, _ = _swap_names(name)
+    del group[temporary]
+    log.warning("%s/%s: removed the unfinished copy %s", label, name, temporary)
 
-    Each rename in the swap is atomic but the pair is not, and an exception
-    handler cannot roll back a process that died. Each death leaves one state,
-    and each state has one safe reading:
 
-    * the copy only: died while writing it; the original is untouched, so the
-      copy is dropped;
-    * the backup without `name`: died between the renames; the backup is the
-      complete original, so it is restored, and the repair runs again;
-    * the backup beside `name`: died after the swap; `name` is the complete
-      rechunked copy, so the backup is dropped.
+def _restore_backup(group: Any, name: str, label: str) -> None:
+    """Died between the renames: the backup is the whole original, so put it back.
 
-    All three together cannot come from one death, so nothing is touched.
+    The move comes first, so a death between the two steps leaves the array and
+    its copy, a state the next run drops the copy from.
     """
     temporary, backup = _swap_names(name)
-    present = {entry for entry in (name, temporary, backup) if entry in group}
-    if present == {name, temporary, backup}:
-        raise RuntimeError(
-            f"{label}/{name}: {temporary} and {backup} both exist beside it; the repair "
-            "cannot tell which is the original. Inspect them and remove the stale one."
-        )
-    if backup in present:
-        _settle_backup(group, name, label, present)
-    elif temporary in present:
-        del group[temporary]
-        log.warning("%s/%s: removed the unfinished copy %s", label, name, temporary)
-
-
-def _settle_backup(group: Any, name: str, label: str, present: set[str]) -> None:
-    """A backup is left: restore it if `name` is gone, else drop it (see above)."""
-    temporary, backup = _swap_names(name)
-    if name in present:
-        del group[backup]
-        log.warning("%s/%s: removed %s left after a completed swap", label, name, backup)
-        return
-    if temporary in present:
-        del group[temporary]
     move_in_group(group, backup, name)
+    del group[temporary]
     log.warning("%s/%s: restored the original from %s (a dead repair)", label, name, backup)
+
+
+def _drop_backup(group: Any, name: str, label: str) -> None:
+    """Died after the swap: `name` is the whole rechunked copy, so drop the backup."""
+    _, backup = _swap_names(name)
+    del group[backup]
+    log.warning("%s/%s: removed %s left after a completed swap", label, name, backup)
+
+
+def _nothing_left(group: Any, name: str, label: str) -> None:
+    """No leftover: the array is absent, or present on its own."""
+
+
+#: Every state a single interrupted repair can leave, keyed by which of the
+#: array, its rechunked copy and its backup are present, mapped to the step that
+#: settles it. The swap is: write the copy, rename the array to the backup, rename
+#: the copy to the array, delete the backup. Each step is a state below. Of the
+#: eight possible states, the other three (the copy alone, the backup alone, and
+#: all three together) cannot come from one interruption, and are refused.
+_RECOVERY: Mapping[frozenset[str], Callable[[Any, str, str], None]] = MappingProxyType(
+    {
+        frozenset(): _nothing_left,
+        frozenset({"array"}): _nothing_left,
+        frozenset({"array", "copy"}): _drop_copy,
+        frozenset({"copy", "backup"}): _restore_backup,
+        frozenset({"array", "backup"}): _drop_backup,
+    }
+)
+
+
+def _recover_interrupted_swap(group: Any, name: str, label: str) -> None:
+    """Put `name` back in one piece after a repair that was interrupted mid-swap.
+
+    Each rename in the swap is atomic but the pair is not, and an exception
+    handler cannot roll back a process that died. `_RECOVERY` names the one safe
+    reading of each state a death leaves. Any other state is refused with
+    nothing touched: guessing which entry is the original could delete the only
+    copy of it.
+    """
+    temporary, backup = _swap_names(name)
+    roles = {"array": name, "copy": temporary, "backup": backup}
+    present = frozenset(role for role, entry in roles.items() if entry in group)
+    settle = _RECOVERY.get(present)
+    if settle is None:
+        found = ", ".join(roles[role] for role in sorted(present))
+        raise RuntimeError(
+            f"{label}/{name}: found {found}, a state no single interrupted repair leaves; "
+            "the repair cannot tell which is the original. Inspect them and remove the stale ones."
+        )
+    settle(group, name, label)
 
 
 def _replace_with_rechunked(group: Any, name: str, chunk: int) -> None:

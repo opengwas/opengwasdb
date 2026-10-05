@@ -96,14 +96,30 @@ def test_a_death_after_the_swap_leaves_a_backup_the_next_run_removes(tmp_path: P
     assert validate_store(store).ok
 
 
-def test_a_state_no_single_death_leaves_is_refused_untouched(tmp_path: Path) -> None:
+#: The leftover states a single death cannot leave, as the names present. Each
+#: is built from the canonical array, and the repair must refuse it untouched.
+#: The copy alone is the review's case (round 2): the old recovery deleted it,
+#: the only remaining baseline, and returned [].
+IMPOSSIBLE_STATES = {
+    "copy only": (TEMPORARY,),
+    "backup only": (BACKUP,),
+    "array, copy and backup": (EAF_BASELINE, TEMPORARY, BACKUP),
+}
+
+
+@pytest.mark.parametrize("state", sorted(IMPOSSIBLE_STATES))
+def test_a_state_no_single_death_leaves_is_refused_untouched(tmp_path: Path, state: str) -> None:
     store = make_store_needing_eaf_repair(tmp_path)
     data = store / "data.zarr"
-    for leftover in (BACKUP, TEMPORARY):
-        shutil.copytree(data / EAF_BASELINE, data / leftover)
+    names = IMPOSSIBLE_STATES[state]
+    for extra in names[1:]:
+        shutil.copytree(data / EAF_BASELINE, data / extra)
+    if names[0] != EAF_BASELINE:
+        (data / EAF_BASELINE).rename(data / names[0])
+    assert {EAF_BASELINE, TEMPORARY, BACKUP} & _entries(store) == set(names)
     before = {p: p.read_bytes() for p in sorted(data.rglob("*")) if p.is_file()}
 
-    with pytest.raises(RuntimeError, match="cannot tell"):
+    with pytest.raises(RuntimeError, match="no single interrupted repair leaves"):
         repair_eaf_chunks(store)
 
     assert {p: p.read_bytes() for p in sorted(data.rglob("*")) if p.is_file()} == before
