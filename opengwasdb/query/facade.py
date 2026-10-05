@@ -71,10 +71,10 @@ from pathlib import Path
 import numpy as np
 import zarr
 
-from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, EafRead
 from opengwasdb.index import AnalysesIndex
 from opengwasdb.layouts.dense.rho import DenseRhoReader
-from opengwasdb.layouts.dense.top_hits import TopHitTiers, z_critical
+from opengwasdb.layouts.dense.top_hits import DenseTopHitReader, TopHitTiers, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
@@ -243,26 +243,39 @@ class StoreQuery:
         """
         return self._eaf.points(rows, cols)
 
-    @staticmethod
-    def _contiguous_row_slice(row_indices: np.ndarray) -> slice | None:
-        if len(row_indices) == 0:
-            return None
-        start = int(row_indices[0])
-        stop = int(row_indices[-1]) + 1
-        if stop - start != len(row_indices):
-            return None
-        if not np.array_equal(row_indices, np.arange(start, stop, dtype=row_indices.dtype)):
-            return None
-        return slice(start, stop)
+    def _shared_cell_result(
+        self,
+        rows: np.ndarray,
+        cols: np.ndarray,
+        z_vals: np.ndarray,
+        se_vals: np.ndarray,
+        eaf_read: EafRead,
+        mask: np.ndarray,
+        *,
+        observed_only: bool,
+    ) -> dict[str, np.ndarray]:
+        """The finite cells of a shared EAF read, and the finished result.
 
-    @classmethod
-    def _read_row_block(
-        cls, array: zarr.Array, row_indices: np.ndarray, dtype: str | np.dtype
-    ) -> np.ndarray:
-        row_slice = cls._contiguous_row_slice(row_indices)
-        if row_slice is not None:
-            return array[row_slice, :].astype(dtype)
-        return array.oindex[row_indices, :].astype(dtype)
+        The one place a shared region is cut. Indexing the decoded frequencies
+        with the query's own finite mask is what #253's alignment trap is about:
+        a mask that did not match the region would return a neighbouring cell's
+        frequency, plausibly and silently. SE decoding was handed the same
+        unmasked array, so both consumers agree cell for cell.
+        """
+        eaf_vals = np.asarray(eaf_read.values)[mask]
+        if eaf_read.imputed is None:
+            imputed = np.zeros(len(eaf_vals), dtype=np.uint8)
+        else:
+            imputed = np.asarray(eaf_read.imputed, dtype=np.uint8)[mask]
+        return self._cell_result(
+            rows,
+            cols,
+            z_vals,
+            se_vals,
+            observed_only=observed_only,
+            eaf_vals=eaf_vals,
+            imputed=imputed,
+        )
 
     def close(self) -> None:
         self._variant_axis.close()
@@ -343,13 +356,14 @@ class StoreQuery:
             return _empty_result()
         col = int(analysis["analysis_index"])
         z_col = self._z.column(col)
-        se_col = self._se.column(col)
+        eaf_read = self._eaf.read_column(col, want_imputed=True)
+        se_col = self._se.column(col, eaf=eaf_read.values)
         mask = np.isfinite(z_col) & np.isfinite(se_col)
         rows = np.where(mask)[0].astype("int32")
         cols = np.full(len(rows), col, dtype="int32")
-        z_vals = z_col[mask]
-        se_vals = se_col[mask]
-        return self._cell_result(rows, cols, z_vals, se_vals, observed_only=observed_only)
+        return self._shared_cell_result(
+            rows, cols, z_col[mask], se_col[mask], eaf_read, mask, observed_only=observed_only
+        )
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
         """Return one variant across all analyses."""
@@ -358,13 +372,14 @@ class StoreQuery:
             return _empty_result()
         row = variant.variant_index
         z_row = self._z.row(row)
-        se_row = self._se.row(row)
+        eaf_read = self._eaf.read_row(row, want_imputed=True)
+        se_row = self._se.row(row, eaf=eaf_read.values)
         mask = np.isfinite(z_row) & np.isfinite(se_row)
         cols = np.where(mask)[0].astype("int32")
         rows = np.full(len(cols), row, dtype="int32")
-        z_vals = z_row[mask]
-        se_vals = se_row[mask]
-        return self._cell_result(rows, cols, z_vals, se_vals, observed_only=observed_only)
+        return self._shared_cell_result(
+            rows, cols, z_row[mask], se_row[mask], eaf_read, mask, observed_only=observed_only
+        )
 
     def range_phewas(
         self, chromosome: str, start: int, end: int, *, observed_only: bool = False
@@ -374,31 +389,14 @@ class StoreQuery:
         if len(row_indices) == 0:
             return _empty_result()
         z_block = self._z.rows(row_indices)
-        se_block = self._se.rows(row_indices)
+        eaf_read = self._eaf.read_rows(row_indices, want_imputed=True)
+        se_block = self._se.rows(row_indices, eaf=eaf_read.values)
         mask = np.isfinite(z_block) & np.isfinite(se_block)
         rows_rel, cols = np.where(mask)
         rows = row_indices[rows_rel].astype("int32")
         cols = cols.astype("int32")
-        z_vals = z_block[mask]
-        se_vals = se_block[mask]
-        row_slice = self._contiguous_row_slice(row_indices)
-        if row_slice is not None:
-            eaf_vals = self._eaf.band(row_slice.start, row_slice.stop)[mask]
-        else:
-            eaf_vals = self._eaf_pairs(rows, cols)
-        if self._imputed is None:
-            imp = np.zeros(len(z_vals), dtype=np.uint8)
-        else:
-            imp_block = self._read_row_block(self._imputed, row_indices, np.uint8)
-            imp = imp_block[mask]
-        return self._cell_result(
-            rows,
-            cols,
-            z_vals,
-            se_vals,
-            observed_only=observed_only,
-            eaf_vals=eaf_vals,
-            imputed=imp,
+        return self._shared_cell_result(
+            rows, cols, z_block[mask], se_block[mask], eaf_read, mask, observed_only=observed_only
         )
 
     def lookup(
@@ -420,14 +418,15 @@ class StoreQuery:
         # requested rows × cols, not the full analysis width per row. Under a
         # narrow analysis chunk this reads far fewer chunks (issue 052).
         z_block = self._z.block(row_indices, col_indices)
-        se_block = self._se.block(row_indices, col_indices)
+        eaf_read = self._eaf.read_block(row_indices, col_indices, want_imputed=True)
+        se_block = self._se.block(row_indices, col_indices, eaf=eaf_read.values)
         mask = np.isfinite(z_block) & np.isfinite(se_block)
         rows_rel, cols_rel = np.where(mask)
         rows = np.array([row_indices[r] for r in rows_rel], dtype="int32")
         cols = np.array([col_indices[c] for c in cols_rel], dtype="int32")
-        z_vals = z_block[mask]
-        se_vals = se_block[mask]
-        return self._cell_result(rows, cols, z_vals, se_vals, observed_only=observed_only)
+        return self._shared_cell_result(
+            rows, cols, z_block[mask], se_block[mask], eaf_read, mask, observed_only=observed_only
+        )
 
     def top_hits(
         self,
@@ -451,25 +450,8 @@ class StoreQuery:
         variant_indices = reader.read("variant_index", bounds, "int32")
         analysis_indices = reader.read("analysis_index", bounds, "int32")
         z_values = reader.read("z", bounds, "float32")
-        se_values = reader.read_or(
-            "se",
-            bounds,
-            "float32",
-            lambda: self._se.points(
-                variant_indices.astype("int64"), analysis_indices.astype("int64")
-            ),
-        )
-        imp = reader.read_or(
-            "imputed",
-            bounds,
-            "uint8",
-            lambda: self._imputed_pairs(variant_indices, analysis_indices),
-        )
-        eaf = reader.read_or(
-            "eaf",
-            bounds,
-            "float32",
-            lambda: self._eaf_pairs(variant_indices, analysis_indices),
+        se_values, eaf, imp = self._top_hit_fields(
+            reader, bounds, variant_indices, analysis_indices
         )
         return _top_hits_result(
             variant_indices,
@@ -481,6 +463,50 @@ class StoreQuery:
             observed_only=observed_only,
             limit=limit,
         )
+
+    def _top_hit_fields(
+        self,
+        reader: DenseTopHitReader,
+        bounds: tuple[int, int],
+        variant_indices: np.ndarray,
+        analysis_indices: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """`se`, `eaf` and `imputed` for the indexed top hits, each read once.
+
+        A current index carries all three decoded. An older one carries none,
+        so SE decoding and the result's `eaf` column derive them from the
+        planes; the one region read is shared between them (#253), where the
+        two fallbacks used to read it twice.
+        """
+        has_se = reader.has("se")
+        has_eaf = reader.has("eaf")
+        has_imputed = reader.has("imputed")
+        eaf_read = (
+            self._eaf.read_points(
+                variant_indices.astype("int64"),
+                analysis_indices.astype("int64"),
+                want_imputed=not has_imputed,
+            )
+            if not (has_se and has_eaf)
+            else None
+        )
+        if has_se:
+            se_values = reader.read("se", bounds, "float32")
+        else:
+            assert eaf_read is not None
+            se_values = self._se.points(
+                variant_indices.astype("int64"),
+                analysis_indices.astype("int64"),
+                eaf=eaf_read.values,
+            )
+        eaf = reader.read("eaf", bounds, "float32") if has_eaf else eaf_read.values
+        if has_imputed:
+            imp = reader.read("imputed", bounds, "uint8")
+        elif eaf_read is not None and eaf_read.imputed is not None:
+            imp = np.asarray(eaf_read.imputed, dtype="uint8")
+        else:
+            imp = self._imputed_pairs(variant_indices, analysis_indices)
+        return se_values, eaf, imp
 
     def rho(self, *ids: str) -> dict[str, np.ndarray]:
         """Long-format pairwise Rho for a set of Analysis IDs (positional, or a
@@ -619,6 +645,25 @@ class RaggedStoreQuery:
         row = self._analyses.by_id(analysis_id)
         return None if row is None else int(row["analysis_index"])
 
+    def _decoded_slice(
+        self, start: int, end: int, analysis_index: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """`(z, se, eaf, imputed)` for one Analysis's CSR slice.
+
+        The one read of the slice's frequencies is shared by SE decoding and
+        the returned `eaf` column (#253); `imputed` is the mask that read
+        carried, or zeros when the component holds none.
+        """
+        z = self._csr.z_slice(start, end)
+        eaf_read = self._csr.eaf_slice_read(start, end, want_imputed=True)
+        se = self._csr.se_slice(start, end, analysis_index=analysis_index, eaf=eaf_read.values)
+        imputed = (
+            eaf_read.imputed
+            if eaf_read.imputed is not None
+            else np.zeros(len(z), dtype=np.uint8)
+        )
+        return z, se, eaf_read.values, imputed
+
     def variants_table(self) -> dict[int, dict]:
         """Return all variants keyed by variant_index."""
         return _variants_table(self._variant_axis)
@@ -642,12 +687,6 @@ class RaggedStoreQuery:
             self._analyses, self._variant_axis, result, include_variant_info=include_variant_info
         )
 
-    def _get_imputed_slice(self, start: int, end: int) -> np.ndarray:
-        """Return imputed mask slice [start:end]; all-zeros if not a completed store."""
-        if self._imputed is not None:
-            return self._imputed[start:end].astype(np.uint8)
-        return np.zeros(end - start, dtype=np.uint8)
-
     def analysis(self, analysis_id: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
         """All associations for one analysis (analysis_id lookup)."""
         idx = self._resolve_analysis_id(analysis_id)
@@ -658,10 +697,10 @@ class RaggedStoreQuery:
         if start == end:
             return _empty_result()
         vi = self._csr._variant_index[start:end].astype("int32")
-        z = self._csr.z_slice(start, end)
-        se = self._csr.se_slice(start, end, idx)
-        eaf = self._csr.eaf_slice(start, end)
-        imp = self._get_imputed_slice(start, end)
+        # One frequency read for the whole Analysis, shared by SE decoding and
+        # the result's `eaf` column (#253) -- the plane used to be read once by
+        # `se_slice` and again by `eaf_slice`.
+        z, se, eaf, imp = self._decoded_slice(start, end, idx)
         if observed_only:
             mask = imp == 0
             vi, z, se, eaf, imp = vi[mask], z[mask], se[mask], eaf[mask], imp[mask]
@@ -782,10 +821,7 @@ class RaggedStoreQuery:
             if s == e:
                 continue
             vi = self._csr._variant_index[s:e].astype("int32")
-            z = self._csr.z_slice(s, e)
-            se = self._csr.se_slice(s, e, ai)
-            eaf = self._csr.eaf_slice(s, e)
-            imp = self._get_imputed_slice(s, e)
+            z, se, eaf, imp = self._decoded_slice(s, e, ai)
             if observed_only:
                 keep = imp == 0
                 vi, z, se, eaf, imp = vi[keep], z[keep], se[keep], eaf[keep], imp[keep]
@@ -1090,13 +1126,14 @@ class HybridStoreQuery:
             return _empty_result()
         vi = self._csr._variant_index[s:e].astype("int32")
         z = self._csr.z_slice(s, e)
-        se = self._csr.se_slice(s, e, col)
+        eaf_read = self._csr.eaf_slice_read(s, e)
+        se = self._csr.se_slice(s, e, analysis_index=col, eaf=eaf_read.values)
         return {
             "variant_index": vi,
             "analysis_index": np.full(len(z), col, dtype="int32"),
             "z": z,
             "se": se,
-            "eaf": self._csr.eaf_slice(s, e),
+            "eaf": eaf_read.values,
             "association_status": _status_array(np.zeros(len(z), dtype=np.uint8), z, se),
         }
 
