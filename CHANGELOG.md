@@ -258,6 +258,19 @@ the end of this file.
 
 ### Added
 
+- **OGS-00009 on zarr-python 3 meets set L (#244, Stage B).** The #242 harness
+  ran back to back, zarr 2.18 at `745796c` then zarr 3 at `83b8b23`, with
+  `--reps 5` and the peak-memory probes. Each run started below a 1-minute load
+  of 3.
+  - Every query meets its typical-time, slow-time and memory budget. One whole
+    Analysis takes 21.9 s against 27.6 s on 2.18 (0.79×, guard 1.25×), with a
+    peak of 1.14 GB against 12.04 GB.
+  - Top hits are 6.53 ms against a 50 ms budget. No result is within 30% of a
+    limit.
+  - Answers are identical across the two environments for all seven queries.
+  - Committed: `docs/benchmark-output/opengwasdb_store_comparison_ogs00009_zarr3.json`,
+    the pair's 2.18 run beside it, and the set-L table generated from them by
+    `benchmarks/zarr3_lever_tables.py stage-b`.
 - **The measurements behind ADR 0056 and #244's read levers are in the
   repository (#244).**
   - The scripts are in `benchmarks/` and documented in `benchmarks/README.md`:
