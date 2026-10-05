@@ -333,7 +333,6 @@ def _layout_block(q: Any) -> dict[str, Any]:
         for tier in sorted(q._root["top_hits"].group_keys()):
             if "z" in q._root["top_hits"][tier]:
                 layout[f"top_hits/{tier}/z"] = shape_of(q._root["top_hits"][tier]["z"])
-                break
     return layout
 
 

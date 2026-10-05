@@ -54,7 +54,7 @@ release on zarr-python 2.18, in one quiet window, back to back:
 ```{python}
 #| label: runs
 rows = []
-for store, artifact in [(BASE_STORE, BASE)] + list(STORES.items()):
+for store, artifact in [(BASE_STORE, BASE)] + [(s, HEAD) for s in STORES.values()]:
     env = artifact["environment"]
     rows.append(
         {
@@ -303,7 +303,10 @@ and `[500, 256]`.
 
 ```{python}
 #| label: screening-summary
-screening = json.loads((HERE / "screening" / "screen.json").read_text())
+# The cost model is #244's committed output: it already carries both screened
+# candidates, because `shape_harness_geometry.py` has always enumerated them.
+LEVERS_DIR = HERE.parent / "opengwasdb_zarr3_read_levers"
+screening = json.loads((LEVERS_DIR / "slice" / "screen.json").read_text())
 rows = []
 for name in ("1000x64", "1000x128", "1000x256", "500x256", "1000x1000"):
     entry = {
@@ -320,6 +323,37 @@ for name in ("1000x64", "1000x128", "1000x256", "500x256", "1000x1000"):
     }
     rows.append(entry)
 pd.DataFrame(rows).set_index("candidate")
+```
+
+```{python}
+#| label: screening-slice-reads
+# The raw slice reads, all four arrays timed in ONE process so the comparisons
+# are within-process (`slice_read_step1_246.jsonl`).
+slice_reads = [
+    json.loads(line)
+    for line in (HERE / "screening" / "slice_read_step1_246.jsonl")
+    .read_text(encoding="utf-8")
+    .splitlines()
+    if line.strip()
+]
+assert len(slice_reads) == 1, "expected one slice-read process in the #246 file"
+sliced = slice_reads[0]["arrays"]
+rows = []
+for name in ("v3_c1000_s", "v3_c64_s", "v3_r1000c256_s", "v3_r500c256_s"):
+    reads = sliced[name]["reads"]
+    rows.append(
+        {
+            "slice array": name,
+            "inner chunk": " x ".join(str(x) for x in sliced[name]["chunk"]),
+            "one row (ms)": reads["row"]["ms"],
+            "one cell (ms)": reads["cell"]["ms"],
+            "10 x 100 (ms)": reads["oindex_10x100"]["ms"],
+            "100 x 10 (ms)": reads["oindex_100x10"]["ms"],
+            "2,000-row band (ms)": reads["band_2000"]["ms"],
+            "100,000-variant column (ms)": reads["fullcol_100k"]["ms"],
+        }
+    )
+pd.DataFrame(rows).set_index("slice array")
 ```
 
 ```{python}

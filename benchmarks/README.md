@@ -780,6 +780,27 @@ to their output. `shape_screen.py cost-model` matches the committed
 original script re-run: the least-squares fit is not bit-reproducible run to
 run.
 
+**#246's screening beyond the four converted shapes.** The cost model already
+enumerates `[1000, 256]` and `[500, 256]` (`shape_harness_geometry.py`'s
+`CANDIDATES`), so `screen.json` carries them; `shape_slice.py` now builds and
+reads them too (`v3_r1000c256_s`, `v3_r500c256_s`). To keep #244's committed
+round files intact, that read is a separate file each `shape_screen.py` step
+picks up if present:
+
+```bash
+OUT=/tmp/epic240/246/levers           # a copy of the committed levers directory
+pixi run -e dev python benchmarks/shape_slice.py build --source $OGS9 --out /tmp/epic240/246/slice
+pixi run -e dev python benchmarks/shape_slice.py read /tmp/epic240/246/slice step1 \
+  v2_c1000,v3_c1000_s,v3_c128_s,v3_c64_s,v3_r2000c128_s,v3_r4000c256_s,v3_r250c512_s,\
+  v3_r1000c256_s,v3_r500c256_s > $OUT/slice/slice_read_step1_246.jsonl
+S="pixi run -e dev python benchmarks/shape_screen.py"
+$S rank-check --outputs $OUT --json $OUT/slice/screen_rank_check.json
+```
+
+The #242 harness needs one more piece of care: `v3-c64-topshard1` is the same
+conversion as `v3-c64` with `--top-hit-shard-chunks 1`, so the artifact's
+`dataset.layout` says which top-hit shard each store holds.
+
 ---
 
 ## Comparison document
