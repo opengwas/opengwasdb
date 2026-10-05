@@ -871,14 +871,24 @@ parameters and #246 benchmarks, are:
 | array role | inner chunk | shard |
 |---|---|---|
 | Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask | `[1000, A_c]`, `A_c` the analysis-axis chunk, clipped to the array | `[100_000, 1024]` (rows × Analyses), a whole multiple of the inner chunk, clipped to cover the array |
-| per-variant side arrays (`eaf_baseline`, `eaf_reference`) | per §6: the serving plane's variant-axis chunk, capped at 200,000, clipped to the array | about 1,000,000 elements |
-| flat CSR association sequences | 200,000, or an explicit `chunks=(...)` | about 1,000,000 elements |
+| Dense per-variant side arrays (`eaf_baseline`, `eaf_reference`) | per §6: the serving plane's variant-axis chunk, capped at 200,000, clipped to the array | about 1,000,000 elements |
+| Ragged association sequences (`ragged/z`, `se`, `variant_index`, `eaf`, `imputed`) | 200,000, or an explicit `chunks=(...)` | 50,000,000 elements, clipped to a whole number of inner chunks |
+| Ragged per-variant side arrays (`ragged/eaf_baseline`, `ragged/eaf_reference`) | per §6 | 10,000,000 elements |
+| Ragged exception / overflow tables (`ragged/z_overflow_*`, `ragged/eaf_exception_*`, `ragged/se_exception_*`) | the role policy's 200,000, clipped to the array length | 10,000,000 elements |
 | flat Rho arrays | 1,000,000, clipped to the array | about 1,000,000 elements |
 | top-hit index columns | 16,384 (as 0.1.0), clipped to the array | about 64 inner chunks |
 | top-hit per-Analysis offsets | whole array | one shard holding the array |
-| exception / overflow tables (Z, EAF and SE) | the role policy's 200,000, clipped to the array length (a shorter table is one inner chunk) | one shard holding the array |
+| Dense exception / overflow tables (Z, EAF and SE) | the role policy's 200,000, clipped to the array length (a shorter table is one inner chunk) | one shard holding the array |
 | SE coefficients | `(min(n_analyses, 1024), 2)` | one shard holding the array |
 | CSR per-Analysis offsets | 10,000 | one shard holding the array |
+
+The Ragged shards are fixed, not conversion parameters: they are chosen so
+OGS-00011's overflow sequences (3,085,080,783 entries) become 62 files of
+tens to low hundreds of MB per array rather than one multi-GB file, and its
+Ragged `eaf_exception_index` (180,396,687 entries) becomes 19 files rather than
+one 1.4 GB file.  The sequence shard is bounded by cells, not by one Analysis's
+run, so a future variant-side index can be added beside the Analysis-sorted
+arrays without re-sharding them.
 
 `clipped to cover the array` means the smallest whole number of inner chunks
 that spans the dimension, so a small array gets one shard of one inner chunk and
@@ -908,6 +918,15 @@ inner chunk and shard in three places, all of which MUST agree with the arrays:
   (`chunk_shape`, `shard_shape`, `compressor`, `zarr_format`);
 - the `data.zarr` root attributes (`chunk_shape`, `shard_shape`, `compressor`,
   `zarr_format`).
+
+A **Hybrid** release's nested Dense Component is a Store Release with its own
+manifest, its own `index.sqlite` and its own root attributes, so it records the
+same three places itself: its `provenance.dense` MUST carry `chunk_shape`,
+`shard_shape`, `compressor` and `zarr_format`, and the outer release's
+`provenance.hybrid` MUST agree with them.  Leaving the layout only in the outer
+`provenance.hybrid` leaves the component undescribed — the gap #248 closes.  A
+component root that holds no Dense plane (a Ragged or Hybrid outer root) carries
+no Dense layout attributes at all.
 
 For 0.1.0 the same three places record the inner chunk alone (there is no shard)
 and a `chunk_shape` is a *hint* the role policy clips to the array's dimensions;
@@ -1323,7 +1342,7 @@ A build writes exactly one `format_version` and reads every series it implements
 Store Releases are immutable. Reference Completion, re-indexing and migration all produce a **new release**, with one narrow exception: a **Provenance Amendment** may fold additional facts into an existing release's `provenance` dict in place, including a format migration recording what it did to that release. Anything that changes association data or Analytical Metadata is outside the exception.
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
-2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issue #245) derives a new `0.2.0` release from a **Dense Observed-Only** `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It refuses every other layout by name (Ragged, Hybrid and Dense Reference-Completed arrive in the other-layouts ticket), refuses a source that is already 0.2.0, never writes its source, and like every derived release mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block, regenerates `overview.html`, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), and a Hybrid without its nested Dense Component. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
 3. **Rejected** — a store whose series this build does not implement cannot be read, and no amount of validation makes it readable. Every pre-reset release is in this category, and says so by name.
 
 There is no support window for older remainders: a known series reads every remainder within it.

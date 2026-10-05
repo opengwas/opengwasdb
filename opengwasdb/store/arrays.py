@@ -180,6 +180,8 @@ __all__ = [
     "DENSE_SHARD_SHAPE",
     "EXCEPTION_TABLE_CHUNK",
     "PER_VARIANT_CHUNK",
+    "RAGGED_SEQUENCE_SHARD_ELEMENTS",
+    "RAGGED_SIDE_SHARD_ELEMENTS",
     "RHO_CHUNK_ROWS",
     "SE_COEFFICIENTS_ROWS",
     "SHARDED_COMPRESSOR_RECORD",
@@ -343,6 +345,17 @@ class ArrayRole(StrEnum):
     ASSOCIATION_OFFSETS = "association_offsets"
     #: A 1-D per-variant side array: `eaf_baseline`, `eaf_reference`.
     PER_VARIANT = "per_variant"
+    #: A Ragged group's 1-D per-variant side array (`ragged/eaf_baseline`,
+    #: `ragged/eaf_reference`).  The same plane as `PER_VARIANT` but a distinct
+    #: role because #248 sizes a Ragged side array's *shard* differently from a
+    #: Dense one, and #246 owns the Dense decision.
+    RAGGED_PER_VARIANT = "ragged_per_variant"
+    #: A Ragged group's exact-value exception/overflow table
+    #: (`ragged/z_overflow_index`, `ragged/eaf_exception_index`, ...).  Distinct
+    #: from the Dense `EXCEPTION_TABLE` for the same reason as
+    #: `RAGGED_PER_VARIANT`: #248 bounds its shard so a Ragged overflow table is
+    #: not one multi-hundred-MB file, without changing #246's Dense shapes.
+    RAGGED_EXCEPTION_TABLE = "ragged_exception_table"
     #: One flat array of a top-hit threshold tier (`variant_index`, `abs_z`,
     #: `z`, `se`, `p_value`, `imputed`, `eaf`).
     TOP_HIT_INDEX = "top_hit_index"
@@ -462,6 +475,8 @@ _LAYOUTS: Mapping[ArrayRole, Callable[[_LayoutContext], tuple[int, ...]]] = Mapp
         ArrayRole.ASSOCIATION_SEQUENCE: _association_sequence,
         ArrayRole.ASSOCIATION_OFFSETS: _association_offsets,
         ArrayRole.PER_VARIANT: _per_variant,
+        ArrayRole.RAGGED_PER_VARIANT: _per_variant,
+        ArrayRole.RAGGED_EXCEPTION_TABLE: _exception_table,
         ArrayRole.TOP_HIT_INDEX: _top_hit_index,
         ArrayRole.TOP_HIT_ANALYSIS_OFFSETS: _top_hit_analysis_offsets,
         ArrayRole.EXCEPTION_TABLE: _exception_table,
@@ -569,6 +584,27 @@ DENSE_SHARD_SHAPE = (100_000, 1_024)
 #: are 1-D, so a shard of about a million elements is about 4 MB per dtype.
 SHARD_ELEMENT_CAP = 1_000_000
 
+#: One shard of a Ragged association sequence (`ragged/z`, `se`,
+#: `variant_index`, `eaf`, `imputed`), in *elements* (#248).  50,000,000 is 250
+#: inner chunks of the sequence policy (200,000), so on OGS-00011's overflow
+#: sequences (3,085,080,783 entries) it is 62 shard files per array instead of
+#: 3,086 at the old one-million cap.  The widest sequence dtype is 4 bytes
+#: (`variant_index`, a residual `eaf`), so one shard is at most about 200 MB
+#: uncompressed -- the same per-worker ceiling the Dense plane shard
+#: (`100000 x 1024` int16, 205 MB) sets.  Every shard is a whole multiple of
+#: the inner chunk, so a reader still decodes only the chunks it selects.
+RAGGED_SEQUENCE_SHARD_ELEMENTS = 50_000_000
+
+#: One shard of a Ragged 1-D side array, in *elements* (#248): a
+#: `RAGGED_PER_VARIANT` frequency or a `RAGGED_EXCEPTION_TABLE`.  These are
+#: read whole or at a single position rather than streamed by Analysis, so the
+#: shard exists only to bound the file and the converter worker's block: ten
+#: million elements is 80 MB for an `int64` exception index and 40 MB for a
+#: `float32` value, and 19 files for OGS-00011's 180,396,687-entry Ragged
+#: `eaf_exception_index` -- tens of MB each rather than one 1.4 GB file the
+#: whole-array policy would have produced.
+RAGGED_SIDE_SHARD_ELEMENTS = 10_000_000
+
 #: A top-hit tier's flat column keeps today's 16,384 inner chunk and shards 64
 #: of them (about a million elements), the seed of a bounded point read.
 TOP_HIT_SHARD_CHUNKS = 64
@@ -657,6 +693,25 @@ def _shard_element_cap(ctx: _ShardContext) -> tuple[int, ...]:
     return (_clip_shard_to_multiple(SHARD_ELEMENT_CAP, inner, ctx.shape[0]),)
 
 
+def _shard_ragged_sequence(ctx: _ShardContext) -> tuple[int, ...]:
+    """One shard of a Ragged association sequence (#248).
+
+    A fixed element count, a whole number of inner chunks: the sequence is
+    Analysis-sorted but its cells are not Analysis-aligned, so a shard bounded
+    by cells (rather than by one Analysis's run) is the shape a future
+    per-variant index beside it can be added to without re-sharding.  See
+    `RAGGED_SEQUENCE_SHARD_ELEMENTS`.
+    """
+    inner = ctx.inner_chunk[0]
+    return (_clip_shard_to_multiple(RAGGED_SEQUENCE_SHARD_ELEMENTS, inner, ctx.shape[0]),)
+
+
+def _shard_ragged_side(ctx: _ShardContext) -> tuple[int, ...]:
+    """One shard of a Ragged 1-D side array (#248), bounded by elements."""
+    inner = ctx.inner_chunk[0]
+    return (_clip_shard_to_multiple(RAGGED_SIDE_SHARD_ELEMENTS, inner, ctx.shape[0]),)
+
+
 def _shard_inner_chunks(count: int) -> Callable[[_ShardContext], tuple[int, ...]]:
     """A shard of `count` inner chunks, axis by axis (used by 1-D tiers)."""
 
@@ -690,9 +745,11 @@ _SHARD_LAYOUTS: Mapping[ArrayRole, Callable[[_ShardContext], tuple[int, ...]]] =
             ArrayRole.DENSE_STATISTIC_PLANE: _shard_dense_grid,
             ArrayRole.DENSE_IMPUTED_MASK: _shard_dense_grid,
             ArrayRole.DENSE_ON_PANEL: _shard_element_cap,
-            ArrayRole.ASSOCIATION_SEQUENCE: _shard_element_cap,
+            ArrayRole.ASSOCIATION_SEQUENCE: _shard_ragged_sequence,
             ArrayRole.ASSOCIATION_OFFSETS: _shard_whole_array,
             ArrayRole.PER_VARIANT: _shard_element_cap,
+            ArrayRole.RAGGED_PER_VARIANT: _shard_ragged_side,
+            ArrayRole.RAGGED_EXCEPTION_TABLE: _shard_ragged_side,
             ArrayRole.TOP_HIT_INDEX: _shard_inner_chunks(TOP_HIT_SHARD_CHUNKS),
             ArrayRole.TOP_HIT_ANALYSIS_OFFSETS: _shard_whole_array,
             ArrayRole.EXCEPTION_TABLE: _shard_whole_array,
@@ -789,44 +846,82 @@ _DENSE_ROLES_BY_NAME: Mapping[str, ArrayRole] = MappingProxyType(
 )
 
 
+#: The Ragged CSR group's arrays, by their leaf name under `ragged/` (#248).
+#: `z`, `se`, `variant_index`, `eaf` and `imputed` are the CSR's parallel
+#: sequences; `offsets` indexes them by Analysis; `eaf_baseline` and
+#: `eaf_reference` are per-variant side arrays; the `*_exception_*` and
+#: `z_overflow_*` tables are the exact-value tables.  The roles are the Ragged
+#: ones so their shards follow #248's element caps, not #246's Dense shapes.
+_RAGGED_ROLES_BY_NAME: Mapping[str, ArrayRole] = MappingProxyType(
+    {
+        "z": ArrayRole.ASSOCIATION_SEQUENCE,
+        "se": ArrayRole.ASSOCIATION_SEQUENCE,
+        "variant_index": ArrayRole.ASSOCIATION_SEQUENCE,
+        "eaf": ArrayRole.ASSOCIATION_SEQUENCE,
+        "imputed": ArrayRole.ASSOCIATION_SEQUENCE,
+        "offsets": ArrayRole.ASSOCIATION_OFFSETS,
+        "eaf_baseline": ArrayRole.RAGGED_PER_VARIANT,
+        "eaf_reference": ArrayRole.RAGGED_PER_VARIANT,
+        "se_coefficients": ArrayRole.SE_COEFFICIENTS,
+        "se_exception_index": ArrayRole.RAGGED_EXCEPTION_TABLE,
+        "se_exception_value": ArrayRole.RAGGED_EXCEPTION_TABLE,
+        "z_overflow_index": ArrayRole.RAGGED_EXCEPTION_TABLE,
+        "z_overflow_value": ArrayRole.RAGGED_EXCEPTION_TABLE,
+        "eaf_exception_index": ArrayRole.RAGGED_EXCEPTION_TABLE,
+        "eaf_exception_value": ArrayRole.RAGGED_EXCEPTION_TABLE,
+    }
+)
+
+
 def role_for_array_path(path: str) -> ArrayRole | None:
-    """The `ArrayRole` a Dense `data.zarr` array's path maps to, or `None`.
+    """The `ArrayRole` a `data.zarr` array's path maps to, or `None`.
 
     The one path -> role mapping a 0.2.0 conversion is allowed to use.  A
     converter must never guess a layout: an array this returns `None` for fails
     the conversion loudly rather than being copied with some default shard.
     Top-hit tiers are `top_hits/<tier>/...`: the per-Analysis `analysis_offsets`
     is its own role, every other column is `TOP_HIT_INDEX`.  Rho is `rho/...`.
+    The Ragged CSR group is `ragged/...` (#248); its sequences, per-variant
+    side arrays and exception tables have their own roles so their shards are
+    decided independently of the Dense shapes #246 owns.
     """
     name = path.strip("/")
     if not name:
         return None
     head, _, rest = name.partition("/")
-    if head == "top_hits" and rest:
-        return (
-            ArrayRole.TOP_HIT_ANALYSIS_OFFSETS
-            if rest.endswith("analysis_offsets")
-            else ArrayRole.TOP_HIT_INDEX
-        )
-    if head == "rho" and rest:
-        return ArrayRole.RHO_ARRAY
+    if rest:
+        return _grouped_role(head, rest)
     return _DENSE_ROLES_BY_NAME.get(name)
+
+
+def _grouped_role(head: str, rest: str) -> ArrayRole | None:
+    """The role of an array under a group: `top_hits`, `rho` or `ragged`."""
+    if head == "top_hits":
+        if rest.endswith("analysis_offsets"):
+            return ArrayRole.TOP_HIT_ANALYSIS_OFFSETS
+        return ArrayRole.TOP_HIT_INDEX
+    if head == "rho":
+        return ArrayRole.RHO_ARRAY
+    if head == "ragged":
+        return _RAGGED_ROLES_BY_NAME.get(rest)
+    return None
 
 
 #: The Dense `data.zarr` group paths a conversion may carry over.  A group is a
 #: container, not an array, so `role_for_array_path` cannot judge it; an *empty*
 #: unknown group would otherwise be recreated unnoticed.  `top_hits/<tier>` is
 #: exactly one segment below `top_hits`, so a deeper unknown group is refused.
-_RECORDED_GROUP_NAMES = frozenset({"top_hits", "rho"})
+#: `ragged` is the Ragged CSR group (#248).
+_RECORDED_GROUP_NAMES = frozenset({"top_hits", "ragged", "rho"})
 
 
 def is_recorded_group_path(path: str) -> bool:
-    """Whether a Dense `data.zarr` group path is one the format defines.
+    """Whether a `data.zarr` group path is one the format defines.
 
     Used by the converter (#245) to refuse an unknown group rather than
     recreating it: the brief's rule is that an unmapped array **or group** fails
-    the conversion.  `top_hits` and `rho` are the two Dense groups; a tier is
-    exactly `top_hits/<name>`.
+    the conversion.  `top_hits`, `rho` and the Ragged CSR `ragged` (#248) are
+    the groups; a tier is exactly `top_hits/<name>`.
     """
     name = path.strip("/")
     if name in _RECORDED_GROUP_NAMES:

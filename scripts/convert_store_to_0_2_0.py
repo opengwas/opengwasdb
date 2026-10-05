@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Convert a Dense Observed-Only Store Release to format 0.2.0 (Zarr v3, sharded).
+"""Convert a Store Release to format 0.2.0 (Zarr v3, sharded).
 
 The logic lives in `opengwasdb.store.convert` so tests and later tickets can
 reuse it; this is the thin CLI beside `scripts/restamp_store_to_0_1_0.py`.  It
-derives a **new** release: a fresh `release_id` and `created_at`, a
-`zarr_v3_conversion` provenance block, a regenerated `overview.html`, and a
-`data.zarr` whose every array is Zarr v3 with the sharding codec.  The source is
-never written; an existing destination is refused; the result is staged,
-verified bit-exact against the source, validated with no errors, and published
-by rename.
+derives a **new** release: one fresh `release_id` and `created_at`, a
+`zarr_v3_conversion` provenance block per component, a regenerated
+`overview.html` where the layout carries one, and `data.zarr` trees whose every
+array is Zarr v3 with the sharding codec.  The source is never written; an
+existing destination is refused; the result is staged, verified bit-exact
+against the source, validated with no errors, and published by rename.
+
+Every layout the seam can name a role for its arrays is accepted: Dense
+Observed-Only and Reference-Completed, Ragged Observed-Only and
+Reference-Completed, and Hybrid (whose outer release and nested Dense Component
+are both converted, so a half-converted Hybrid is impossible).
 
 See ADR 0057 for what 0.2.0 is and why conversion (rather than a rebuild) is the
 migration route.
@@ -26,7 +31,7 @@ import sys
 from pathlib import Path
 
 from opengwasdb.store.arrays import DENSE_SHARD_SHAPE
-from opengwasdb.store.convert import ConversionError, convert_dense_release
+from opengwasdb.store.convert import ConversionError, convert_release
 
 
 def _parse_shard(text: str) -> tuple[int, int]:
@@ -45,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "store",
         type=Path,
-        help="the Dense Observed-Only 0.1.0 release to convert; never modified",
+        help="the 0.1.0 release to convert (Dense, Ragged or Hybrid); never modified",
     )
     parser.add_argument(
         "--into",
@@ -79,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        destination = convert_dense_release(
+        destination = convert_release(
             args.store,
             args.into,
             dense_analysis_chunk=args.dense_analysis_chunk,

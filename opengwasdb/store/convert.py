@@ -1,4 +1,4 @@
-"""Convert a Dense Observed-Only Store Release to format 0.2.0 (Zarr v3, sharded).
+"""Convert a Store Release to format 0.2.0 (Zarr v3, sharded).
 
 Format 0.1.0 is Zarr v2 with one chunk per file; 0.2.0 is Zarr v3 with the
 sharding codec, so the unit a query reads (the *inner chunk*) is decoupled from
@@ -10,12 +10,16 @@ values under the new physical layout.
 
 Design rules, all of them deliberately narrow:
 
-* **Dense Observed-Only only.**  Ragged, Hybrid and Dense Reference-Completed
-  releases are refused *by name*, saying #248 adds them.  A 0.2.0 source is
-  refused as already converted.  Nothing is guessed.
+* **Every layout whose arrays the seam can name a role for.**  Dense
+  Observed-Only and Reference-Completed, Ragged Observed-Only and
+  Reference-Completed, and Hybrid (its outer release, its nested Dense
+  Component and its Ragged Overflow) are converted.  A 0.2.0 source is refused
+  as already converted; any other format is refused as not a general migration.
+  Nothing is guessed.
 * **Every array is mapped to an `ArrayRole` by its path** (`role_for_array_path`,
-  the seam's path -> role table).  An array with no role fails the conversion;
-  it is never copied with a default layout.
+  the seam's path -> role table).  An array -- or a group, empty ones included
+  -- with no role fails the conversion; it is never copied with a default
+  layout.
 * **Inner chunk and shard come from the seam.**  `chunk_layout` gives the inner
   chunk, `shard_layout` the shard; the converter keeps no private copy of either
   policy, so #247's builders and this tool cannot disagree.
@@ -26,8 +30,15 @@ Design rules, all of them deliberately narrow:
   against the source before the staged release is validated and published.  A
   mismatch raises, the staging directory is discarded, and nothing is published.
 * **The source is never written**, a destination that exists is refused, and the
-  result is a new release: fresh `release_id` and `created_at`, `store_id` kept,
-  a `zarr_v3_conversion` provenance block, and `overview.html` regenerated.
+  result is a new release: one fresh `release_id` and `created_at` for every
+  manifest, `store_id` kept, a `zarr_v3_conversion` provenance block per
+  component, and `overview.html` regenerated for the layouts that carry one.
+
+A Hybrid release is two Zarr trees and two manifests: the outer release and its
+nested Dense Component (spec §16).  Both are converted, and a half-converted
+Hybrid -- one manifest's arrays rewritten, the other's not -- is the failure the
+format rule exists to catch, so the converter refuses to leave one behind and
+`verify_conversion` checks both.
 
 The module is the logic; ``scripts/convert_store_to_0_2_0.py`` is the thin CLI.
 """
@@ -49,7 +60,7 @@ from typing import Any
 
 import numpy as np
 
-from opengwasdb.index.sqlite import get_metadata, set_metadata
+from opengwasdb.index.sqlite import connect, get_metadata, set_metadata
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.store.arrays import (
@@ -72,12 +83,12 @@ from opengwasdb.store.open import (
     CURRENT_FORMAT_VERSION,
     SHARDED_FORMAT_VERSION,
     OpenGWASDBStore,
-    StagedRelease,
 )
 from opengwasdb.validation import validate_store
 
-#: The only layout the converter understands until #248.
-DENSE_OBSERVED_ONLY = "dense"
+#: The layouts the converter understands (#248).  Every other value is refused
+#: by manifest, before a byte is copied.
+SUPPORTED_LAYOUTS = frozenset({"dense", "ragged", "hybrid"})
 
 #: The `ArrayRole`s whose inner chunk narrows on the Analysis axis and whose
 #: shard is the conversion's `(V_s, A_s)` parameter.  The manifest's recorded
@@ -90,12 +101,16 @@ _DENSE_GRID_ROLES = frozenset({ArrayRole.DENSE_STATISTIC_PLANE, ArrayRole.DENSE_
 _REWRITTEN_ROOT_ATTRS = frozenset({"chunk_shape", "shard_shape", "compressor", "zarr_format"})
 
 #: Verification block, in rows and columns.  One block per read keeps the
-#: verifier's memory bounded on a 40 GB plane.
+#: verifier's memory bounded on a 40 GB plane or a 3.09-billion-row sequence.
 _VERIFY_ROWS = 50_000
 _VERIFY_COLS = 1_024
 
 #: numcodecs Blosc shuffle codes -> the v3 codec's spelling.
 _SHUFFLE_NAMES = {0: "noshuffle", 1: "shuffle", 2: "bitshuffle"}
+
+#: The layouts whose release carries an `overview.html` to regenerate.  A Ragged
+#: release never has one (spec §11), so the converter must not create one.
+_OVERVIEW_LAYOUTS = frozenset({"dense", "hybrid"})
 
 
 class ConversionError(Exception):
@@ -112,6 +127,23 @@ class ConversionVerificationError(ConversionError):
 
 
 @dataclass(frozen=True)
+class _Component:
+    """One Zarr tree in a release, and the manifest that describes it.
+
+    A standalone release has one; a Hybrid has two -- its outer release and its
+    nested Dense Component (spec §16).  `kind` says which provenance block the
+    component's recorded layout belongs in: `dense` for a Dense release or a
+    nested Dense Component, `hybrid` for a Hybrid release's outer manifest,
+    `ragged` for a standalone Ragged release (whose manifest records no Dense
+    chunk at all).
+    """
+
+    zarr_rel: str
+    manifest_rel: str
+    kind: str
+
+
+@dataclass(frozen=True)
 class _ArrayPlan:
     """One source array, and the 0.2.0 layout it is converted into.
 
@@ -121,6 +153,7 @@ class _ArrayPlan:
     uncompressed (the Z/EAF exception tables are deliberately uncompressed).
     """
 
+    zarr_rel: str
     path: str
     role: ArrayRole
     shape: tuple[int, ...]
@@ -136,52 +169,75 @@ def _manifest_data(release: Path) -> dict[str, Any]:
     return data
 
 
-def _refuse_unconvertible(source: Path) -> dict[str, Any]:
-    """Fail against the *source* manifest, before any bytes are copied.
+def _manifest_paths(release: Path) -> list[Path]:
+    """A release's known manifests, outermost first.
 
-    The converter is a migration for one thing: a Dense Observed-Only release in
-    0.1.0.  Everything else is refused by name, because a wrong conversion of a
-    layout this tool does not understand would produce a plausible store.
+    A Hybrid release nests a Dense Component with a manifest of its own, and
+    both declare `format_version`; the converter must see both before it starts.
+    Deliberately not an `rglob`: that would walk every chunk file in a
+    119,000-file `data.zarr` to find two files that sit at known paths.
     """
-    manifest_path = source / "manifest.json"
-    if not manifest_path.exists():
+    paths = [release / "manifest.json"]
+    nested = release / "dense" / "manifest.json"
+    if nested.exists():
+        paths.append(nested)
+    return paths
+
+
+def _components(layout: str) -> list[_Component]:
+    """The Zarr trees and manifests a release of `layout` carries."""
+    if layout == "hybrid":
+        return [
+            _Component("data.zarr", "manifest.json", "hybrid"),
+            _Component("dense/data.zarr", "dense/manifest.json", "dense"),
+        ]
+    if layout == "ragged":
+        return [_Component("data.zarr", "manifest.json", "ragged")]
+    return [_Component("data.zarr", "manifest.json", "dense")]
+
+
+def _refuse_unconvertible(source: Path) -> list[_Component]:
+    """Fail against the *source* manifests, before any bytes are copied.
+
+    The converter is a migration for one thing: a 0.1.0 release whose layout it
+    fully understands.  A 0.2.0 manifest -- on any component -- means the
+    release is already converted (or half-converted); any other format is not
+    this tool's business.  A layout it does not know is refused by name, because
+    a wrong conversion of an unknown layout would produce a plausible store.
+    """
+    manifests = _manifest_paths(source)
+    if not manifests:
         raise ConversionError(f"{source}: no manifest.json; this is not a Store Release")
-    data = _manifest_data(source)
-    version = str(data.get("format_version"))
-    if version == SHARDED_FORMAT_VERSION:
+    for path in manifests:
+        version = str(json.loads(path.read_text(encoding="utf-8")).get("format_version"))
+        if version == SHARDED_FORMAT_VERSION:
+            raise ConversionError(
+                f"{path}: format_version is already {SHARDED_FORMAT_VERSION!r}; this "
+                "release is already converted (issue #245)"
+            )
+        if version != CURRENT_FORMAT_VERSION:
+            raise ConversionError(
+                f"{path}: format_version is {version!r}, not "
+                f"{CURRENT_FORMAT_VERSION!r}. The converter derives a "
+                f"{SHARDED_FORMAT_VERSION} release from a {CURRENT_FORMAT_VERSION} one and "
+                "is not a general migration tool; every other format is rebuilt (ADR 0041, "
+                "spec §21.4)."
+            )
+    top = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
+    layout = str(top.get("primary_layout"))
+    if layout not in SUPPORTED_LAYOUTS:
         raise ConversionError(
-            f"{manifest_path}: format_version is already {SHARDED_FORMAT_VERSION!r}; this "
-            "release is already converted (issue #245)"
+            f"{source}/manifest.json: primary_layout is {layout!r}; this converter accepts "
+            f"{sorted(SUPPORTED_LAYOUTS)}. Add the layout's arrays to the seam's path table "
+            "(issue #248)."
         )
-    if version != CURRENT_FORMAT_VERSION:
+    if layout == "hybrid" and not (source / "dense" / "manifest.json").exists():
         raise ConversionError(
-            f"{manifest_path}: format_version is {version!r}, not "
-            f"{CURRENT_FORMAT_VERSION!r}. The converter derives a "
-            f"{SHARDED_FORMAT_VERSION} release from a {CURRENT_FORMAT_VERSION} one and is "
-            "not a general migration tool; every other format is rebuilt (ADR 0041, "
-            "spec §21.4)."
+            f"{source}: primary_layout is 'hybrid' but there is no nested Dense Component "
+            "manifest at dense/manifest.json; a Hybrid release is two Store Releases and "
+            "converting half of one would be refused one directory down (spec §16)."
         )
-    layout = str(data.get("primary_layout"))
-    if layout != DENSE_OBSERVED_ONLY:
-        raise ConversionError(
-            f"{manifest_path}: primary_layout is {layout!r}; this converter accepts only a "
-            "Dense release. Converting the remaining layouts (Ragged, Hybrid) adds them: "
-            "see opengwas/opengwasdb#248."
-        )
-    completion = str(data.get("completion_state"))
-    if completion != "observed_only":
-        raise ConversionError(
-            f"{manifest_path}: completion_state is {completion!r}; this converter accepts "
-            "only a Dense Observed-Only release. Converting Dense Reference-Completed "
-            "releases adds them: see opengwas/opengwasdb#248."
-        )
-    if (source / "dense" / "manifest.json").exists():
-        raise ConversionError(
-            f"{source}: carries a nested component manifest (a Hybrid Dense Component); "
-            "this converter accepts only a standalone Dense Observed-Only release. "
-            "Converting Hybrid releases adds them: see opengwas/opengwasdb#248."
-        )
-    return data
+    return _components(layout)
 
 
 def _array_paths(root: Any, prefix: str = "") -> Iterator[str]:
@@ -240,45 +296,96 @@ def _v3_codec(source_array: Any) -> tuple[str, int, str] | None:
     return observed
 
 
-def _plan_arrays(
-    source_root: Any, *, dense_analysis_chunk: int, dense_shard: tuple[int, int]
-) -> list[_ArrayPlan]:
-    """Map every source array to a role and its 0.2.0 inner chunk and shard.
+def _group_component_chunk(group: Any, *, dense_analysis_chunk: int) -> int | None:
+    """The variant-axis chunk a group's per-variant arrays must follow (spec §6).
 
-    The Dense plane's variant-axis inner chunk comes from `chunk_layout` (the
-    fixed 1,000 rows the epic keeps); only the Analysis axis narrows.  The
-    `PER_VARIANT` side arrays then follow that plane's variant chunk through the
-    same policy, so they are never coarser than the plane they serve (issue
-    #135, spec §6).
+    Derived from the group's own principal plane, with the *new* layout the
+    conversion writes: a Dense grid's variant chunk (fixed at 1,000) for a group
+    holding `z`/`se`/`eaf`, or a Ragged association sequence's chunk for the
+    `ragged` group.  `None` for a group with neither (e.g. `top_hits`), whose
+    arrays are never `PER_VARIANT`.
     """
-    if "z" not in source_root:
-        raise ConversionError(
-            "data.zarr has no 'z' array; a Dense release must carry one, and this "
-            "converter uses its variant-axis chunk to lay out the per-variant arrays"
-        )
-    _refuse_unknown_groups(source_root)
-    z_shape = tuple(int(size) for size in source_root["z"].shape)
-    plane_inner = chunk_layout(
+    dense = _dense_group_chunk(group, dense_analysis_chunk=dense_analysis_chunk)
+    if dense is not None:
+        return dense
+    return _sequence_group_chunk(group)
+
+
+def _dense_group_chunk(group: Any, *, dense_analysis_chunk: int) -> int | None:
+    """The variant chunk of a group holding a 2-D Dense grid plane, or `None`."""
+    if "z" not in group:
+        return None
+    dense = group["z"]
+    if getattr(dense, "ndim", 0) != 2:
+        return None
+    shape = tuple(int(size) for size in dense.shape)
+    return chunk_layout(
         ArrayRole.DENSE_STATISTIC_PLANE,
-        z_shape,
+        shape,
         hint=(DENSE_CHUNK_SHAPE[0], dense_analysis_chunk),
+    )[0]
+
+
+def _sequence_group_chunk(group: Any) -> int | None:
+    """The chunk of a group's first 1-D Ragged association sequence, or `None`."""
+    for name in ("variant_index", "z", "imputed", "eaf"):
+        if name not in group:
+            continue
+        candidate = group[name]
+        if getattr(candidate, "ndim", 0) == 1:
+            shape = tuple(int(size) for size in candidate.shape)
+            return chunk_layout(ArrayRole.ASSOCIATION_SEQUENCE, shape)[0]
+    return None
+
+
+def _component_chunks(source_root: Any, *, dense_analysis_chunk: int) -> dict[str, int | None]:
+    """The per-variant component chunk for every group in one Zarr tree."""
+    chunks: dict[str, int | None] = {
+        "": _group_component_chunk(source_root, dense_analysis_chunk=dense_analysis_chunk)
+    }
+    for group_path in _group_paths(source_root):
+        chunks[group_path] = _group_component_chunk(
+            source_root[group_path], dense_analysis_chunk=dense_analysis_chunk
+        )
+    return chunks
+
+
+def _plan_component(
+    source_root: Any,
+    component: _Component,
+    *,
+    dense_analysis_chunk: int,
+    dense_shard: tuple[int, int],
+) -> list[_ArrayPlan]:
+    """Map every array in one Zarr tree to its role and 0.2.0 layout.
+
+    The Dense plane's variant-axis inner chunk stays the fixed 1,000 rows the
+    epic keeps; only the Analysis axis narrows.  The `PER_VARIANT` side arrays
+    follow the variant chunk of the plane in their own group through the same
+    policy, so they are never coarser than the plane they serve (issue #135,
+    spec §6).
+    """
+    _refuse_unknown_groups(source_root, component)
+    component_chunks = _component_chunks(
+        source_root, dense_analysis_chunk=dense_analysis_chunk
     )
     plans = [
         _plan_one_array(
             source_root,
             path,
+            component=component,
+            component_chunk=component_chunks[path.rpartition("/")[0]],
             dense_analysis_chunk=dense_analysis_chunk,
             dense_shard=dense_shard,
-            component_chunk=plane_inner[0],
         )
         for path in _array_paths(source_root)
     ]
     if not plans:
-        raise ConversionError("data.zarr holds no arrays; nothing to convert")
+        raise ConversionError(f"{component.zarr_rel} holds no arrays; nothing to convert")
     return plans
 
 
-def _refuse_unknown_groups(source_root: Any) -> None:
+def _refuse_unknown_groups(source_root: Any, component: _Component) -> None:
     """Fail on a `data.zarr` group the format does not define.
 
     Only arrays go through `role_for_array_path`; an empty unknown group has no
@@ -288,9 +395,9 @@ def _refuse_unknown_groups(source_root: Any) -> None:
     for group_path in _group_paths(source_root):
         if not is_recorded_group_path(group_path):
             raise ConversionError(
-                f"data.zarr/{group_path}: this group is not part of the Dense format. "
+                f"{component.zarr_rel}/{group_path}: this group is not part of the format. "
                 "A conversion never recreates an unknown group; known groups are "
-                "top_hits, top_hits/<tier> and rho (issue #245)."
+                "top_hits, top_hits/<tier>, rho and ragged (issue #245, #248)."
             )
 
 
@@ -298,19 +405,22 @@ def _plan_one_array(
     source_root: Any,
     path: str,
     *,
+    component: _Component,
+    component_chunk: int | None,
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
-    component_chunk: int,
 ) -> _ArrayPlan:
     """One source array's role, inner chunk and shard; an unknown path refuses."""
     role = role_for_array_path(path)
     if role is None:
         raise ConversionError(
-            f"data.zarr/{path}: no ArrayRole is registered for this path. A conversion "
-            "never guesses a layout; known Dense arrays: z, se, eaf, eaf_baseline, "
-            "eaf_reference, imputed, on_panel, se_coefficients, the z/se/eaf exception "
-            "and overflow tables, top_hits/<tier>/*, rho/*. Add the role to the seam's "
-            "path table (issue #245)."
+            f"{component.zarr_rel}/{path}: no ArrayRole is registered for this path. A "
+            "conversion never guesses a layout; known arrays: the Dense planes and side "
+            "arrays (z, se, eaf, eaf_baseline, eaf_reference, imputed, on_panel, "
+            "se_coefficients, the z/se/eaf exception and overflow tables), the Ragged CSR "
+            "group (ragged/z, se, eaf, variant_index, offsets, imputed, eaf_baseline, "
+            "eaf_reference, the exception and overflow tables), top_hits/<tier>/* and "
+            "rho/*. Add the role to the seam's path table (issue #248)."
         )
     array = source_root[path]
     shape = tuple(int(size) for size in array.shape)
@@ -328,6 +438,7 @@ def _plan_one_array(
         dense_shard=dense_shard if is_grid else None,
     )
     return _ArrayPlan(
+        zarr_rel=component.zarr_rel,
         path=path,
         role=role,
         shape=shape,
@@ -347,7 +458,7 @@ def _codec_object(codec: tuple[str, int, str] | None) -> Any:
 def _create_destination_arrays(
     destination_root: Any, source_root: Any, plans: list[_ArrayPlan]
 ) -> None:
-    """Create every group and array in the destination v3 tree.
+    """Create every group and array in one destination v3 tree.
 
     Creation happens once, in the parent, before any forked shard writer: a
     worker only ever writes chunks into an array that already exists, so two
@@ -410,17 +521,17 @@ def _root(path: str, mode: str) -> Any:
 
 
 def _write_shard(
-    source_data: str, destination_data: str, plan: _ArrayPlan, starts: tuple[int, ...]
+    source_release: str, destination_release: str, plan: _ArrayPlan, starts: tuple[int, ...]
 ) -> None:
     """Read one source block and write exactly one destination shard."""
-    source_array = _root(source_data, "r")[plan.path]
-    destination_array = _root(destination_data, "r+")[plan.path]
+    source_array = _root(str(Path(source_release) / plan.zarr_rel), "r")[plan.path]
+    destination_array = _root(str(Path(destination_release) / plan.zarr_rel), "r+")[plan.path]
     block = _slice_for(starts, plan.shape, plan.shard_shape)
     destination_array[block] = source_array[block]
 
 
 def _write_shards(
-    source_data: Path, destination_data: Path, plans: list[_ArrayPlan], *, workers: int
+    source: Path, destination: Path, plans: list[_ArrayPlan], *, workers: int
 ) -> None:
     """Write every shard of every array, over `workers` processes.
 
@@ -436,11 +547,11 @@ def _write_shards(
     print(f"  writing {len(tasks)} shards over {max(workers, 1)} worker(s)", flush=True)
     if workers <= 1:
         for plan, starts in tasks:
-            _write_shard(str(source_data), str(destination_data), plan, starts)
+            _write_shard(str(source), str(destination), plan, starts)
         return
     with ProcessPoolExecutor(max_workers=workers) as pool:
         futures = [
-            pool.submit(_write_shard, str(source_data), str(destination_data), plan, starts)
+            pool.submit(_write_shard, str(source), str(destination), plan, starts)
             for plan, starts in tasks
         ]
         for future in futures:
@@ -459,58 +570,70 @@ def _recorded_layouts(plans: list[_ArrayPlan]) -> dict[str, dict[str, Any]]:
     return recorded
 
 
+def _dense_plane(plans: list[_ArrayPlan]) -> _ArrayPlan | None:
+    """The Dense statistic plane a component records its layout from, or `None`."""
+    for plan in plans:
+        if plan.role is ArrayRole.DENSE_STATISTIC_PLANE:
+            return plan
+    return None
+
+
 def _rewrite_manifest(
     staged_path: Path,
+    component: _Component,
     *,
     plans: list[_ArrayPlan],
+    dense_plane: _ArrayPlan | None,
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
+    release_id: str,
     now: str,
     source_release_id: str,
-) -> str:
-    """Restamp the manifest as a new 0.2.0 release and record the new layout.
+) -> None:
+    """Restamp one manifest as part of a new 0.2.0 release and record the layout.
 
-    Returns the fresh `release_id`.  The Dense `chunk_shape` moves to the new
-    inner chunk and the compressor to the v3 record; `shard_shape` and the
-    per-array layout are added, so a later reader can tell what the arrays are
-    without opening them.
+    Every manifest in the release gets the same fresh `release_id` and
+    `created_at`, so a Hybrid's nested Dense Component still names the release
+    that nests it.  The recorded layout goes where this component's manifest
+    already keeps it: `provenance.dense` for a Dense release or a nested Dense
+    Component (closing the gap #245's report named), `provenance.hybrid` for a
+    Hybrid release's outer manifest.  A Ragged release records no Dense chunk.
     """
-    path = staged_path / "manifest.json"
+    path = staged_path / component.manifest_rel
     data = json.loads(path.read_text(encoding="utf-8"))
-    release_id = str(uuid.uuid4())
     data["release_id"] = release_id
     data["created_at"] = now
     data["format_version"] = SHARDED_FORMAT_VERSION
-    dense = dict(data.get("provenance", {}).get("dense", {}))
-    plane = next(plan for plan in plans if plan.role is ArrayRole.DENSE_STATISTIC_PLANE)
-    dense["chunk_shape"] = list(plane.inner_chunk)
-    dense["shard_shape"] = list(plane.shard_shape)
-    dense["compressor"] = SHARDED_COMPRESSOR_RECORD
-    dense["zarr_format"] = 3
-    data["provenance"] = {
-        **data.get("provenance", {}),
-        "dense": dense,
-        "zarr_v3_conversion": {
-            "source_release_id": source_release_id,
-            "from_format_version": CURRENT_FORMAT_VERSION,
-            "to_format_version": SHARDED_FORMAT_VERSION,
-            "source_zarr_format": 2,
-            "target_zarr_format": 3,
-            "tool": "scripts/convert_store_to_0_2_0.py",
-            "at": now,
-            "opengwasdb_git_hash": _installed_commit(),
-            "dense_analysis_chunk": dense_analysis_chunk,
-            "dense_shard": list(dense_shard),
-            "layouts": _recorded_layouts(plans),
-            "note": (
-                "Derived by scripts/convert_store_to_0_2_0.py: every array was re-written "
-                "as Zarr v3 with the sharding codec, holding the same stored codes as the "
-                "source. The source release was not modified."
-            ),
-        },
+    provenance = {**data.get("provenance", {})}
+    if component.kind in {"dense", "hybrid"} and dense_plane is not None:
+        key = "dense" if component.kind == "dense" else "hybrid"
+        block = dict(provenance.get(key, {}))
+        block["chunk_shape"] = list(dense_plane.inner_chunk)
+        block["shard_shape"] = list(dense_plane.shard_shape)
+        block["compressor"] = SHARDED_COMPRESSOR_RECORD
+        block["zarr_format"] = 3
+        provenance[key] = block
+    provenance["zarr_v3_conversion"] = {
+        "source_release_id": source_release_id,
+        "from_format_version": CURRENT_FORMAT_VERSION,
+        "to_format_version": SHARDED_FORMAT_VERSION,
+        "source_zarr_format": 2,
+        "target_zarr_format": 3,
+        "tool": "scripts/convert_store_to_0_2_0.py",
+        "at": now,
+        "opengwasdb_git_hash": _installed_commit(),
+        "dense_analysis_chunk": dense_analysis_chunk,
+        "dense_shard": list(dense_shard),
+        "component": component.zarr_rel,
+        "layouts": _recorded_layouts(plans),
+        "note": (
+            "Derived by scripts/convert_store_to_0_2_0.py: every array was re-written "
+            "as Zarr v3 with the sharding codec, holding the same stored codes as the "
+            "source. The source release was not modified."
+        ),
     }
+    data["provenance"] = provenance
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return release_id
 
 
 def _installed_commit() -> str:
@@ -525,15 +648,21 @@ def _installed_commit() -> str:
     return _get_git_hash()
 
 
-def _rewrite_dense_index(staged_path: Path, plans: list[_ArrayPlan]) -> None:
-    """Re-point the `index.sqlite` `dense` blob at the new arrays."""
-    plane = next(plan for plan in plans if plan.role is ArrayRole.DENSE_STATISTIC_PLANE)
-    connection = StagedRelease(staged_path).index_connection()
+def _rewrite_dense_index(staged_path: Path, component: _Component, plane: _ArrayPlan) -> None:
+    """Re-point a component's `index.sqlite` `dense` blob at the new arrays.
+
+    Every Dense component -- a standalone release and a Hybrid's nested one --
+    carries its own `index.sqlite` beside its manifest.  A Hybrid's *outer*
+    index also holds a `dense` blob describing the nested component, so it is
+    updated with the same plane even though this component is not Dense itself.
+    """
+    index_path = (staged_path / component.manifest_rel).parent / "index.sqlite"
+    connection = connect(index_path)
     with connection:
         blob = get_metadata(connection, "dense", default={})
         if not isinstance(blob, dict):
             raise ConversionError(
-                f"{staged_path}/index.sqlite: 'dense' metadata is not an object"
+                f"{component.manifest_rel}: 'dense' metadata is not an object"
             )
         blob = dict(blob)
         blob["chunk_shape"] = list(plane.inner_chunk)
@@ -543,14 +672,21 @@ def _rewrite_dense_index(staged_path: Path, plans: list[_ArrayPlan]) -> None:
         set_metadata(connection, "dense", blob)
 
 
-def _write_root_attrs(destination_root: Any, source_root: Any, plans: list[_ArrayPlan]) -> None:
-    """Copy the source root attrs and rewrite the ones describing the layout."""
+def _write_root_attrs(
+    destination_root: Any, source_root: Any, plane: _ArrayPlan | None
+) -> None:
+    """Copy the source root attrs and rewrite the ones describing the layout.
+
+    Only a root that actually holds Dense planes gets the Dense layout keys; a
+    Ragged or Hybrid outer root has none, and adding them would be a recording
+    that describes nothing.
+    """
     attrs = dict(source_root.attrs)
-    plane = next(plan for plan in plans if plan.role is ArrayRole.DENSE_STATISTIC_PLANE)
-    attrs["chunk_shape"] = list(plane.inner_chunk)
-    attrs["shard_shape"] = list(plane.shard_shape)
-    attrs["compressor"] = SHARDED_COMPRESSOR_RECORD
-    attrs["zarr_format"] = 3
+    if plane is not None:
+        attrs["chunk_shape"] = list(plane.inner_chunk)
+        attrs["shard_shape"] = list(plane.shard_shape)
+        attrs["compressor"] = SHARDED_COMPRESSOR_RECORD
+        attrs["zarr_format"] = 3
     destination_root.attrs.update(attrs)
 
 
@@ -638,6 +774,20 @@ def _verify_root_layout(destination_root: Any) -> None:
         raise ConversionVerificationError("data.zarr root attr 'zarr_format' does not say 3")
 
 
+def _verify_component(source_root: Any, destination_root: Any) -> None:
+    """Verify one Zarr tree, source against destination, bit for bit."""
+    _require_same_paths(
+        "array", set(_array_paths(source_root)), set(_array_paths(destination_root))
+    )
+    _require_same_paths(
+        "group", set(_group_paths(source_root)), set(_group_paths(destination_root))
+    )
+    _verify_array_headers(source_root, destination_root)
+    _verify_group_attrs(source_root, destination_root)
+    if "z" in source_root:
+        _verify_root_layout(destination_root)
+
+
 def verify_conversion(source: str | Path, destination: str | Path) -> None:
     """Fail unless `destination` is a bit-exact 0.2.0 copy of `source`.
 
@@ -647,20 +797,24 @@ def verify_conversion(source: str | Path, destination: str | Path) -> None:
     the destination's real inner chunk, shard and compressor.  Raises
     `ConversionVerificationError` on any difference.
 
-    Separately callable so a test can corrupt one destination shard and watch it
-    fail, and so the CLI can run it before publishing.
+    A Hybrid release has two Zarr trees; both are verified, so a half-converted
+    Hybrid cannot pass.  Separately callable so a test can corrupt one
+    destination shard and watch it fail, and so the CLI can run it before
+    publishing.
     """
-    source_root = open_group(Path(source) / "data.zarr", "r")
-    destination_root = open_group(Path(destination) / "data.zarr", "r")
-    _require_same_paths(
-        "array", set(_array_paths(source_root)), set(_array_paths(destination_root))
-    )
-    _require_same_paths(
-        "group", set(_group_paths(source_root)), set(_group_paths(destination_root))
-    )
-    _verify_array_headers(source_root, destination_root)
-    _verify_group_attrs(source_root, destination_root)
-    _verify_root_layout(destination_root)
+    for zarr_rel in _component_zarr_rels(Path(source)):
+        _verify_component(
+            open_group(Path(source) / zarr_rel, "r"),
+            open_group(Path(destination) / zarr_rel, "r"),
+        )
+
+
+def _component_zarr_rels(release: Path) -> list[str]:
+    """Every Zarr tree in a release, from the manifests it actually carries."""
+    rels = ["data.zarr"]
+    if (release / "dense" / "manifest.json").exists():
+        rels.append("dense/data.zarr")
+    return rels
 
 
 def _require_same_paths(kind: str, source: set[str], destination: set[str]) -> None:
@@ -730,22 +884,56 @@ def _verify_group_attrs(source_root: Any, destination_root: Any) -> None:
         raise ConversionVerificationError(f"data.zarr: {difference}")
 
 
-def _reflink_copy(source: Path, destination: Path) -> None:
-    """Copy every top-level entry of `source` except `data.zarr` into `destination`.
+def _reflink_copy(source: Path, destination: Path, zarr_rels: list[str]) -> None:
+    """Copy every top-level entry of `source` except the Zarr trees.
 
     Reflink where the filesystem can, so the side files cost no space until one
-    side is written.  `data.zarr` is deliberately left out: the destination gets
-    a fresh v3 tree, and copying 119,118 v2 chunk files into a release that never
-    reads them is work for nothing.
+    side is written.  Each `data.zarr` is deliberately left out -- top-level and
+    a Hybrid's nested `dense/data.zarr` -- because the destination gets fresh v3
+    trees, and copying 119,118 v2 chunk files into a release that never reads
+    them is work for nothing.
     """
     destination.mkdir(parents=True, exist_ok=True)
+    top_zarr = _top_level_zarr_rels(zarr_rels)
     for entry in sorted(source.iterdir()):
-        if entry.name == "data.zarr":
+        if entry.name in top_zarr:
             continue
-        subprocess.run(
-            ["cp", "-a", "--reflink=auto", str(entry), str(destination / entry.name)],
-            check=True,
-        )
+        nested = _nested_zarr_rels(zarr_rels, entry.name)
+        if nested and entry.is_dir():
+            _copy_directory_without(entry, destination / entry.name, _nested_children(nested))
+        else:
+            _copy_path(entry, destination / entry.name)
+
+
+def _top_level_zarr_rels(zarr_rels: list[str]) -> set[str]:
+    """The component Zarr roots that sit directly under the release."""
+    return {rel for rel in zarr_rels if "/" not in rel}
+
+
+def _nested_zarr_rels(zarr_rels: list[str], name: str) -> list[str]:
+    """The component Zarr roots nested under the top-level entry `name`."""
+    return [rel for rel in zarr_rels if rel.startswith(name + "/")]
+
+
+def _nested_children(nested: list[str]) -> set[str]:
+    """The entry names to omit when copying a directory that nests a Zarr root."""
+    return {"/".join(rel.split("/")[1:]) for rel in nested}
+
+
+def _copy_directory_without(source: Path, destination: Path, skip: set[str]) -> None:
+    """Copy `source`'s entries into `destination`, omitting the named ones."""
+    destination.mkdir(parents=True, exist_ok=True)
+    for entry in sorted(source.iterdir()):
+        if entry.name in skip:
+            continue
+        _copy_path(entry, destination / entry.name)
+
+
+def _copy_path(source: Path, destination: Path) -> None:
+    """Reflink-copy one path, falling back to a full copy where it cannot."""
+    subprocess.run(
+        ["cp", "-a", "--reflink=auto", str(source), str(destination)], check=True
+    )
 
 
 def _require_valid_staged_release(staged_path: Path, destination: Path) -> None:
@@ -761,7 +949,7 @@ def _require_valid_staged_release(staged_path: Path, destination: Path) -> None:
         )
 
 
-def convert_dense_release(
+def convert_release(
     source: str | Path,
     destination: str | Path,
     *,
@@ -769,7 +957,7 @@ def convert_dense_release(
     dense_shard: tuple[int, int] = DENSE_SHARD_SHAPE,
     workers: int = 1,
 ) -> Path:
-    """Derive a 0.2.0 release at `destination` from a Dense 0.1.0 one at `source`."""
+    """Derive a 0.2.0 release at `destination` from a 0.1.0 one at `source`."""
     source = Path(source).resolve()
     destination = Path(destination).resolve()
     if source == destination:
@@ -785,10 +973,11 @@ def convert_dense_release(
     if int(dense_analysis_chunk) < 1:
         raise ConversionError("--dense-analysis-chunk must be at least 1")
     dense_shard = (int(dense_shard[0]), int(dense_shard[1]))
-    _refuse_unconvertible(source)
+    components = _refuse_unconvertible(source)
     _stage_and_convert(
         source,
         destination,
+        components,
         dense_analysis_chunk=int(dense_analysis_chunk),
         dense_shard=dense_shard,
         workers=int(workers),
@@ -797,9 +986,15 @@ def convert_dense_release(
     return destination
 
 
+#: The #245 entry point's old name.  Kept so an existing caller does not break;
+#: the function itself now accepts every layout #248 adds.
+convert_dense_release = convert_release
+
+
 def _stage_and_convert(
     source: Path,
     destination: Path,
+    components: list[_Component],
     *,
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
@@ -807,63 +1002,146 @@ def _stage_and_convert(
 ) -> None:
     """Build, verify and validate the converted release in staging.
 
-    Split out of `convert_dense_release` so the refusal checks and this,
-    the long-running half, are one function each.  Staging publishes by rename
-    on clean exit and discards everything on any exception.
+    Split out of `convert_release` so the refusal checks and this, the
+    long-running half, are one function each.  Staging publishes by rename on
+    clean exit and discards everything on any exception.
     """
     with OpenGWASDBStore.staging(destination) as staged:
         started = time.perf_counter()
-        _reflink_copy(source, staged.path)
+        _reflink_copy(source, staged.path, [component.zarr_rel for component in components])
         _log_phase("copied the release envelope", started)
         started = time.perf_counter()
-        source_root = open_group(source / "data.zarr", "r")
-        plans = _plan_arrays(
-            source_root,
+        plans_by_component, source_roots = _create_components(
+            source,
+            staged.path,
+            components,
             dense_analysis_chunk=dense_analysis_chunk,
             dense_shard=dense_shard,
         )
-        print(f"  {len(plans)} arrays to convert", flush=True)
-        destination_root = open_group_for_write(staged.data_path, "w", zarr_format=3)
-        _create_destination_arrays(destination_root, source_root, plans)
-        destination_root = None  # drop the write handle before forked writers run
         _log_phase("created the destination arrays", started)
         started = time.perf_counter()
-        _write_shards(source / "data.zarr", staged.data_path, plans, workers=workers)
+        all_plans = [plan for plans in plans_by_component.values() for plan in plans]
+        _write_shards(source, staged.path, all_plans, workers=workers)
         _log_phase(f"wrote every shard over {workers} worker(s)", started)
         started = time.perf_counter()
         _rewrite_staged_metadata(
-            source, staged.path, plans, dense_analysis_chunk, dense_shard, source_root
+            source,
+            staged.path,
+            components,
+            plans_by_component,
+            source_roots,
+            dense_analysis_chunk,
+            dense_shard,
+            str(uuid.uuid4()),
+            datetime.now(UTC).isoformat(),
         )
-        _log_phase("rewrote the manifest, index blob and root attrs", started)
+        _log_phase("rewrote the manifests, index blobs and root attrs", started)
         started = time.perf_counter()
         verify_conversion(source, staged.path)
         _log_phase("verified the conversion bit-exact", started)
         started = time.perf_counter()
-        write_overview_html(staged.path, read_analyses(staged.path / "analyses.tsv"))
+        _refresh_overviews(source, staged.path, components)
         _require_valid_staged_release(staged.path, destination)
         _log_phase("regenerated overview.html and validated the release", started)
+
+
+def _create_components(
+    source: Path,
+    staged_path: Path,
+    components: list[_Component],
+    *,
+    dense_analysis_chunk: int,
+    dense_shard: tuple[int, int],
+) -> tuple[dict[str, list[_ArrayPlan]], dict[str, Any]]:
+    """Create every destination Zarr tree, one component at a time.
+
+    Returns the plans and the source roots, which the metadata rewrite and the
+    verification need.  Each component's write handle is dropped when the loop
+    moves on, so no handle survives into the forked shard writers.
+    """
+    plans_by_component: dict[str, list[_ArrayPlan]] = {}
+    source_roots: dict[str, Any] = {}
+    for component in components:
+        source_root = open_group(source / component.zarr_rel, "r")
+        source_roots[component.zarr_rel] = source_root
+        plans = _plan_component(
+            source_root,
+            component,
+            dense_analysis_chunk=dense_analysis_chunk,
+            dense_shard=dense_shard,
+        )
+        plans_by_component[component.zarr_rel] = plans
+        print(f"  {component.zarr_rel}: {len(plans)} arrays to convert", flush=True)
+        destination_root = open_group_for_write(
+            staged_path / component.zarr_rel, "w", zarr_format=3
+        )
+        _create_destination_arrays(destination_root, source_root, plans)
+    return plans_by_component, source_roots
 
 
 def _rewrite_staged_metadata(
     source: Path,
     staged_path: Path,
-    plans: list[_ArrayPlan],
+    components: list[_Component],
+    plans_by_component: dict[str, list[_ArrayPlan]],
+    source_roots: dict[str, Any],
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
-    source_root: Any,
+    release_id: str,
+    now: str,
 ) -> None:
-    """Restamp the manifest, re-point the index blob and rewrite the root attrs."""
-    _rewrite_manifest(
-        staged_path,
-        plans=plans,
-        dense_analysis_chunk=dense_analysis_chunk,
-        dense_shard=dense_shard,
-        now=datetime.now(UTC).isoformat(),
-        source_release_id=str(_manifest_data(source)["release_id"]),
+    """Restamp every manifest, re-point every index blob and rewrite root attrs."""
+    dense_component = next(
+        (component for component in components if component.kind == "dense"), None
     )
-    _rewrite_dense_index(staged_path, plans)
-    reopened = open_group(staged_path / "data.zarr", "r+")
-    _write_root_attrs(reopened, source_root, plans)
+    dense_plane = (
+        None
+        if dense_component is None
+        else _dense_plane(plans_by_component[dense_component.zarr_rel])
+    )
+    for component in components:
+        plans = plans_by_component[component.zarr_rel]
+        source_manifest = json.loads(
+            (source / component.manifest_rel).read_text(encoding="utf-8")
+        )
+        _rewrite_manifest(
+            staged_path,
+            component,
+            plans=plans,
+            dense_plane=dense_plane,
+            dense_analysis_chunk=dense_analysis_chunk,
+            dense_shard=dense_shard,
+            release_id=release_id,
+            now=now,
+            source_release_id=str(source_manifest["release_id"]),
+        )
+        plane = _dense_plane(plans)
+        if plane is not None:
+            _rewrite_dense_index(staged_path, component, plane)
+        elif component.kind == "hybrid" and dense_plane is not None:
+            # A Hybrid release's outer index also records the nested Dense
+            # Component's layout; leaving it on the v2 chunk would be a stale
+            # recording of arrays this conversion moved.
+            _rewrite_dense_index(staged_path, component, dense_plane)
+        reopened = open_group(staged_path / component.zarr_rel, "r+")
+        _write_root_attrs(reopened, source_roots[component.zarr_rel], plane)
+
+
+def _refresh_overviews(source: Path, staged_path: Path, components: list[_Component]) -> None:
+    """Regenerate `overview.html` wherever the source release carried one.
+
+    Its header embeds the release identity (ADR 0032), so a page left over from
+    the copy would name the source release.  A Ragged release has no page
+    (spec §11); a Hybrid has one at the top and another on its nested Dense
+    Component.
+    """
+    for component in components:
+        if component.kind not in _OVERVIEW_LAYOUTS:
+            continue
+        page = (staged_path / component.zarr_rel).parent / "overview.html"
+        if not page.exists():
+            continue
+        write_overview_html(page.parent, read_analyses(page.parent / "analyses.tsv"))
 
 
 def _log_phase(label: str, started: float) -> None:
@@ -875,5 +1153,6 @@ __all__ = [
     "ConversionError",
     "ConversionVerificationError",
     "convert_dense_release",
+    "convert_release",
     "verify_conversion",
 ]
