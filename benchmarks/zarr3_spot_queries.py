@@ -18,6 +18,12 @@ OGS-00001 (Ragged) and OGS-00004 (Hybrid) under zarr 2.18 and zarr 3:
 
 `record` imports nothing from `benchmarks`, so it runs under any checkout's
 environment; `opengwasdb` is whichever that environment installs.
+
+`--shapes` limits the record to named queries. A Ragged or Hybrid store's
+phewas, regional and top-hit-scan shapes run through #252's variant-side paths,
+so its identity record names only the Analysis-side shapes (`--shapes analysis
+lookup` for Ragged, `--shapes analysis` for Hybrid) rather than paying an O(n)
+scan for an answer #253 does not change.
 """
 
 from __future__ import annotations
@@ -61,9 +67,10 @@ def _hits(analyses: dict[int, dict[str, Any]], index: int) -> int:
         return 0
 
 
-def record(store_path: Path, out_path: Path) -> None:
+def record(store_path: Path, out_path: Path, shapes: list[str] | None = None) -> None:
     from opengwasdb.query import query_store
 
+    shapes = SHAPES if shapes is None else shapes
     rec: dict[str, object] = {"store": str(store_path)}
     with query_store(store_path) as q:
         analyses = q.analyses_table()
@@ -91,7 +98,7 @@ def record(store_path: Path, out_path: Path) -> None:
             "lookup": lambda: q.lookup([identifier], [exposure, *others]),
             "top_hits": lambda: q.top_hits(analysis_id=exposure, threshold=5e-8),
         }
-        for name in SHAPES:
+        for name in shapes:
             rec[name] = _hash_result(queries[name]())
     text = json.dumps(rec, indent=2, sort_keys=True)
     out_path.write_text(text + "\n", encoding="utf-8")
@@ -101,15 +108,16 @@ def record(store_path: Path, out_path: Path) -> None:
 def compare(base_path: Path, head_path: Path) -> int:
     base = json.loads(base_path.read_text())
     head = json.loads(head_path.read_text())
-    if not all(base[s]["n_rows"] > 0 for s in SHAPES if s != "lookup"):
+    shapes = [name for name in SHAPES if name in base]
+    if not all(base[name]["n_rows"] > 0 for name in shapes if name != "lookup"):
         raise SystemExit("the base record has an empty shape; identity would prove nothing")
     differ = sorted(k for k in set(base) | set(head) if base.get(k) != head.get(k))
     summary = {
         "store": base["store"],
         "identical": not differ,
         "differing_keys": differ,
-        "rows": {s: base[s]["n_rows"] for s in SHAPES},
-        "arrays_per_shape": {s: len(base[s]["arrays"]) for s in SHAPES},
+        "rows": {name: base[name]["n_rows"] for name in shapes},
+        "arrays_per_shape": {name: len(base[name]["arrays"]) for name in shapes},
     }
     print(json.dumps(summary))
     return 0 if not differ else 1
@@ -121,12 +129,20 @@ def main() -> int:
     rec = sub.add_parser("record")
     rec.add_argument("store", type=Path)
     rec.add_argument("output", type=Path)
+    rec.add_argument(
+        "--shapes",
+        nargs="+",
+        choices=SHAPES,
+        default=SHAPES,
+        help="which spot queries to run; a Ragged or Hybrid store's variant-side "
+        "shapes are #252's, so its identity record names only the Analysis-side ones",
+    )
     cmp_ = sub.add_parser("compare")
     cmp_.add_argument("base", type=Path)
     cmp_.add_argument("head", type=Path)
     args = ap.parse_args()
     if args.command == "record":
-        record(args.store, args.output)
+        record(args.store, args.output, args.shapes)
         return 0
     return compare(args.base, args.head)
 
