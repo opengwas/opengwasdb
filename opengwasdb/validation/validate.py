@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -34,6 +36,7 @@ from opengwasdb.encoding import (
     ZOverflowTable,
     per_variant_chunk_size,
 )
+from opengwasdb.index.sqlite import get_metadata
 from opengwasdb.layouts.dense.top_hits import threshold_key, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -52,7 +55,15 @@ from opengwasdb.model.enums import (
     StoredEffectScale,
 )
 from opengwasdb.stats import p_value_from_z
-from opengwasdb.store.arrays import array_length, open_group
+from opengwasdb.store.arrays import (
+    COMPRESSOR_RECORD,
+    SHARDED_COMPRESSOR_RECORD,
+    ArrayRole,
+    array_length,
+    inner_chunk_of,
+    open_group,
+    shard_layout,
+)
 from opengwasdb.store.open import (
     DENSE_ENVELOPE,
     HYBRID_DENSE_COMPONENT_ENVELOPE,
@@ -61,6 +72,7 @@ from opengwasdb.store.open import (
     OpenGWASDBStore,
     UnsupportedFormatVersion,
     open_store,
+    split_format_version,
 )
 from opengwasdb.variants import (
     VariantAxis,
@@ -96,17 +108,13 @@ def validate_store(
     source_assembly: str | None = None,
     chain_file: str | Path | None = None,
 ) -> ValidationResult:
-    """Validate a v0.1 Store Release directory.
+    """Validate a Store Release directory.
 
-    Internal (structural) validation is always run. When ``source`` is given —
-    the original dataset the store was built from (a manifest TSV with
-    ``trait_id``/``file_path`` columns, or one/many self-describing source
-    files) — a **source-fidelity** check is also run for dense stores: it draws
-    a random sample of source associations and confirms the store holds the same
-    z/se, orienting the join through the stored source-ALID provenance (or, for
-    lifted stores that predate that column, via liftover). ``source_assembly``
-    names the source coordinate build (default: the store's own assembly, i.e.
-    no liftover); ``chain_file`` overrides the liftover chain for the fallback.
+    Internal (structural) validation is always run.  When ``source`` is given —
+    the original dataset the store was built from — a **source-fidelity** check
+    is also run for dense stores: a random sample of source associations is
+    compared against the store, orienting through the stored source-ALID
+    provenance (or, for lifted stores, via liftover).
     """
 
     store_path = Path(path)
@@ -116,6 +124,9 @@ def validate_store(
     if store is None:
         return ValidationResult(errors=errors)
     manifest = store.manifest
+    _validate_zarr_format(
+        store.data_path, manifest.format_version, errors, label="data.zarr"
+    )
 
     if manifest.primary_layout is PrimaryStorageLayout.RAGGED:
         _validate_ragged_store(store, errors)
@@ -125,6 +136,7 @@ def validate_store(
         return ValidationResult(errors=errors, warnings=warnings)
 
     if manifest.primary_layout is PrimaryStorageLayout.HYBRID:
+        _validate_nested_component_format(store_path, errors)
         _validate_hybrid_store(store, errors)
         _validate_eaf_orientation(store, errors, warnings)
         if source is not None:
@@ -144,6 +156,22 @@ def validate_store(
             chain_file=chain_file,
         )
     return ValidationResult(errors=errors, warnings=warnings)
+
+
+def _validate_nested_component_format(store_path: Path, errors: list[str]) -> None:
+    """A Hybrid release's nested Dense Component must match its own manifest."""
+    component_manifest = store_path / "dense" / "manifest.json"
+    if not component_manifest.exists():
+        return
+    component_version = str(
+        json.loads(component_manifest.read_text(encoding="utf-8")).get("format_version")
+    )
+    _validate_zarr_format(
+        store_path / "dense" / "data.zarr",
+        component_version,
+        errors,
+        label="dense/data.zarr",
+    )
 
 
 def _validate_closed_envelope(store_path: Path, allowed: frozenset[str], errors: list[str]) -> None:
@@ -205,6 +233,315 @@ def _validate_dense_envelope(
     return len(errors) == before
 
 
+#: Zarr metadata files that name one node, keyed by the Zarr format they belong
+#: to.  A node carries exactly one of these; two is a half-converted store.
+_V2_NODE_METADATA = (".zarray", ".zgroup")
+_V3_NODE_METADATA = "zarr.json"
+
+
+def _zarr_nodes(directory: Path) -> Iterator[tuple[Path, set[str]]]:
+    """Every Zarr node directory under `directory`, with its metadata filenames.
+
+    Read from the filesystem, not through zarr: the check is precisely that the
+    stored metadata and the manifest agree, and asking zarr would let it hide a
+    node behind a consolidated record or an auto-detected format.
+    """
+    for dirpath, _dirnames, filenames in os.walk(directory):
+        present = {name for name in filenames if name in (*_V2_NODE_METADATA, _V3_NODE_METADATA)}
+        if present:
+            yield Path(dirpath), present
+
+
+def _validate_zarr_format(
+    directory: Path, format_version: str, errors: list[str], *, label: str
+) -> None:
+    """The Zarr on-disk format must be the one `format_version` names.
+
+    0.1.0 is Zarr v2: every group has a `.zgroup` and every array a `.zarray`,
+    each declaring ``zarr_format: 2``, and no v3 `zarr.json` exists.  0.2.0 is
+    Zarr v3 with sharding: nothing carries v2 metadata, every node has a
+    `zarr.json` declaring ``zarr_format: 3``, and every array uses the
+    ``sharding_indexed`` codec.  A half-converted release -- one manifest, two
+    formats under it -- is the failure this rule exists to catch, and it is
+    invisible to any check that opens the store through zarr (issue #245).
+    """
+    if not directory.is_dir():
+        return
+    series, _remainder = split_format_version(format_version)
+    expected_v3 = series == (0, 2)
+    nodes = 0
+    for node_path, present in _zarr_nodes(directory):
+        nodes += 1
+        relative = f"{label}/{node_path.relative_to(directory)}"
+        if expected_v3:
+            errors.extend(_zarr_v3_node_errors(relative, node_path, present, format_version))
+        else:
+            errors.extend(_zarr_v2_node_errors(relative, node_path, present, format_version))
+    if nodes == 0:
+        errors.append(f"{label}: no Zarr metadata found; the array tree is missing")
+
+
+def _zarr_v2_node_errors(
+    relative: str, node_path: Path, present: set[str], format_version: str
+) -> list[str]:
+    """One node's errors under a 0.1.0 (Zarr v2) manifest."""
+    if _V3_NODE_METADATA in present:
+        return [
+            f"{relative}: Zarr v3 metadata under format_version {format_version}; a "
+            f"{format_version} release is Zarr v2 (issue #245)"
+        ]
+    if len(present) > 1:
+        return [
+            f"{relative}: carries {sorted(present)}; a Zarr node has exactly one metadata "
+            "file"
+        ]
+    metadata = next(iter(present))
+    declared = json.loads((node_path / metadata).read_text(encoding="utf-8")).get(
+        "zarr_format"
+    )
+    if declared != 2:
+        return [
+            f"{relative}/{metadata}: zarr_format is {declared!r}, not 2, but the release "
+            f"declares format_version {format_version}"
+        ]
+    return []
+
+
+def _zarr_v3_node_errors(
+    relative: str, node_path: Path, present: set[str], format_version: str
+) -> list[str]:
+    """One node's errors under a 0.2.0 (Zarr v3, sharded) manifest."""
+    v2_metadata = sorted(present & set(_V2_NODE_METADATA))
+    if v2_metadata:
+        return [
+            f"{relative}: Zarr v2 metadata {v2_metadata} under format_version "
+            f"{format_version}; a {format_version} release is Zarr v3, and a "
+            "half-converted release is invalid (issue #245)"
+        ]
+    metadata = json.loads((node_path / _V3_NODE_METADATA).read_text(encoding="utf-8"))
+    errors: list[str] = []
+    if metadata.get("zarr_format") != 3:
+        errors.append(
+            f"{relative}/zarr.json: zarr_format is {metadata.get('zarr_format')!r}, not 3, "
+            f"but the release declares format_version {format_version}"
+        )
+    if metadata.get("node_type") == "array":
+        names = [
+            codec.get("name")
+            for codec in metadata.get("codecs", [])
+            if isinstance(codec, dict)
+        ]
+        if "sharding_indexed" not in names:
+            errors.append(
+                f"{relative}/zarr.json: a {format_version} array must use the sharding "
+                f"codec; its codecs are {names}"
+            )
+    return errors
+
+
+def _recorded_layouts(
+    manifest: Any, connection: sqlite3.Connection, root: Any
+) -> list[tuple[str, Any, Any, Any]]:
+    """The three places a Dense release records its chunk shape, as (label, ...).
+
+    Returns `(label, chunk_shape, shard_shape, compressor)` for the manifest
+    provenance, the `index.sqlite` `dense` blob and the `data.zarr` root attrs.
+    All three are written by the Dense builders and by the converter (#245) and
+    none is derived from the arrays themselves, so they are the copies a
+    disagreeing manifest hides behind.
+    """
+    recorded: list[tuple[str, Any, Any, Any]] = []
+    provenance = manifest.provenance if isinstance(manifest.provenance, dict) else {}
+    for key in ("dense", "hybrid"):
+        block = provenance.get(key)
+        if isinstance(block, dict) and "chunk_shape" in block:
+            recorded.append(
+                (
+                    f"manifest.json provenance.{key}",
+                    block.get("chunk_shape"),
+                    block.get("shard_shape"),
+                    block.get("compressor"),
+                )
+            )
+            break
+    # A recording that does not name a shape cannot disagree with the arrays, so
+    # it is only judged when present.  A standalone Dense release always records
+    # one under `provenance.dense`; a Hybrid release's nested Dense Component
+    # records `chunk_shape` in its *outer* manifest's `provenance.hybrid`, which
+    # the component validator does not see -- a gap #248 closes.
+    blob = get_metadata(connection, "dense", default=None)
+    if isinstance(blob, dict):
+        recorded.append(
+            (
+                "index.sqlite dense metadata",
+                blob.get("chunk_shape"),
+                blob.get("shard_shape"),
+                blob.get("compressor"),
+            )
+        )
+    # An absent `dense` blob is not a disagreement -- none of the Dense
+    # Reference-Completion path writes one -- so only a present blob is judged.
+    # The manifest's `provenance.dense` is the recording every Dense release
+    # carries, and that one is required.
+    attrs = dict(root.attrs)
+    recorded.append(
+        (
+            "data.zarr root attrs",
+            attrs.get("chunk_shape"),
+            attrs.get("shard_shape"),
+            attrs.get("compressor"),
+        )
+    )
+    return recorded
+
+
+def _validate_recorded_layout(
+    manifest: Any, connection: sqlite3.Connection, root: Any, errors: list[str]
+) -> None:
+    """Every recorded chunk and shard shape must describe the arrays present.
+
+    A manifest that describes one shape over arrays of another is a silent
+    failure class: a reader sizing its reads from the manifest would decode the
+    wrong blocks.  Each of the three recordings is clipped to the plane's own
+    dimensions exactly as the seam's role policy clips it (so a small store's
+    build-wide hint is not a disagreement), then compared with the Dense
+    plane's actual **inner** chunk and, for a sharded 0.2.0 release, its shard
+    (issue #245).
+    """
+    if "z" not in root:
+        return
+    plane = root["z"]
+    shape = tuple(int(size) for size in plane.shape)
+    actual_inner = inner_chunk_of(plane)
+    actual_shard = None if getattr(plane, "shards", None) is None else tuple(
+        int(size) for size in plane.shards
+    )
+    recorded = _recorded_layouts(manifest, connection, root)
+    for label, chunk_shape, shard_shape, _compressor in recorded:
+        expected_inner = _recorded_chunk_errors(label, chunk_shape, shape, actual_inner, errors)
+        if expected_inner is not None:
+            errors.extend(
+                _recorded_shard_errors(label, shard_shape, shape, expected_inner, actual_shard)
+            )
+    errors.extend(_recorded_compressor_errors(recorded, actual_shard))
+
+
+def _recorded_chunk_errors(
+    label: str,
+    chunk_shape: Any,
+    shape: tuple[int, ...],
+    actual_inner: tuple[int, ...],
+    errors: list[str],
+) -> tuple[int, ...] | None:
+    """One recording's chunk shape against the plane's inner chunk.
+
+    Returns the clipped inner chunk for the shard check that follows, or `None`
+    when the recording cannot describe this plane at all.
+    """
+    if chunk_shape is None:
+        errors.append(
+            f"{label}: no chunk_shape recorded, so the release does not describe its own "
+            "Dense plane layout (issue #245)"
+        )
+        return None
+    if len(chunk_shape) != len(shape):
+        errors.append(
+            f"{label} records chunk_shape {list(chunk_shape)} for a {len(shape)}-D plane "
+            "(issue #245)"
+        )
+        return None
+    expected_inner = tuple(
+        min(int(size), dim) for size, dim in zip(chunk_shape, shape, strict=True)
+    )
+    if expected_inner != actual_inner:
+        errors.append(
+            f"{label} records chunk_shape {list(chunk_shape)}, which describes "
+            f"{list(expected_inner)} for a {shape} plane, but data.zarr/z is chunked "
+            f"{list(actual_inner)}; a manifest and arrays that disagree are a silent "
+            "failure class (issue #245)"
+        )
+    return expected_inner
+
+
+def _recorded_shard_errors(
+    label: str,
+    shard_shape: Any,
+    shape: tuple[int, ...],
+    expected_inner: tuple[int, ...],
+    actual_shard: tuple[int, ...] | None,
+) -> list[str]:
+    """One recording's shard shape against the plane's shard, or nothing for v2."""
+    if actual_shard is None:
+        return []
+    if shard_shape is None:
+        return [
+            f"{label}: data.zarr/z is sharded ({list(actual_shard)}) but no shard_shape "
+            "is recorded (issue #245)"
+        ]
+    if len(shard_shape) != len(shape):
+        return [
+            f"{label} records shard_shape {list(shard_shape)} for a {len(shape)}-D Dense "
+            "plane (issue #245)"
+        ]
+    recorded_shard = tuple(int(size) for size in shard_shape)
+    try:
+        expected_shard = shard_layout(
+            ArrayRole.DENSE_STATISTIC_PLANE,
+            shape,
+            inner_chunk=expected_inner,
+            dense_shard=(recorded_shard[0], recorded_shard[1]),
+        )
+    except ValueError as exc:
+        return [
+            f"{label} records shard_shape {list(shard_shape)}, which cannot describe a "
+            f"{shape} plane chunked {list(expected_inner)}: {exc}"
+        ]
+    if expected_shard != actual_shard:
+        return [
+            f"{label} records shard_shape {list(shard_shape)}, which describes "
+            f"{list(expected_shard)} for this plane, but data.zarr/z is sharded "
+            f"{list(actual_shard)} (issue #245)"
+        ]
+    return []
+
+
+def _recorded_compressor_errors(
+    recorded: list[tuple[str, Any, Any, Any]], actual_shard: tuple[int, ...] | None
+) -> list[str]:
+    """The three recordings' compressors agree, and name the format present."""
+    expected = SHARDED_COMPRESSOR_RECORD if actual_shard is not None else COMPRESSOR_RECORD
+    kind = "Zarr v3 sharded" if actual_shard is not None else "Zarr v2"
+    return _compressor_consistency_errors(recorded) + _compressor_record_errors(
+        recorded, expected, kind
+    )
+
+
+def _compressor_consistency_errors(recorded: list[tuple[str, Any, Any, Any]]) -> list[str]:
+    """The recordings must not contradict each other about the compressor."""
+    present = [entry[3] for entry in recorded if entry[3] is not None]
+    if len(present) <= 1 or all(entry == present[0] for entry in present):
+        return []
+    return [
+        "manifest provenance, index.sqlite dense metadata and data.zarr root attrs "
+        f"record different compressors ({present}); they describe the same arrays and "
+        "must agree (issue #245)"
+    ]
+
+
+def _compressor_record_errors(
+    recorded: list[tuple[str, Any, Any, Any]], expected: dict[str, Any], kind: str
+) -> list[str]:
+    """Each present recording must name the format's one compressor."""
+    errors: list[str] = []
+    for label, _chunk, _shard, compressor in recorded:
+        if compressor is not None and compressor != expected:
+            errors.append(
+                f"{label} records compressor {compressor!r}, not the {kind} record "
+                f"{expected!r} (issue #245)"
+            )
+    return errors
+
+
 def _validate_dense_store(
     store: OpenGWASDBStore, errors: list[str], *, envelope: frozenset[str] = DENSE_ENVELOPE
 ) -> ValidationResult:
@@ -233,6 +570,7 @@ def _validate_dense_store(
                     root, connection, store.analyses_path, n_variants, n_analyses, errors
                 )
             _validate_encoding_plan(root, manifest.encoding, errors, label="data.zarr")
+            _validate_recorded_layout(manifest, connection, root, errors)
             if not errors:
                 _validate_dense_arrays(
                     root,
@@ -1591,11 +1929,14 @@ def _validate_per_variant_chunking(group: Any, errors: list[str], *, label: str)
             continue
         array = group[name]
         expected = per_variant_chunk_size(group, array_length(array))
-        if int(array.chunks[0]) > expected:
+        actual = inner_chunk_of(array)[0]
+        if actual > expected:
             errors.append(
-                f"{label}/{name} has chunk shape {tuple(array.chunks)}; its per-variant "
-                f"chunk must be no larger than {expected}, matching this component's "
-                "variant/read axis rather than spanning the whole array"
+                f"{label}/{name} has inner chunk shape {inner_chunk_of(array)}; its "
+                f"per-variant chunk must be no larger than {expected}, matching this "
+                "component's variant/read axis rather than spanning the whole array. "
+                "(A sharded array's *inner* chunk is the unit a query reads; the shard "
+                "is not judged here.)"
             )
 
 
