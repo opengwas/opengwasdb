@@ -194,6 +194,7 @@ __all__ = [
     "create_array",
     "create_group",
     "inner_chunk_of",
+    "is_recorded_group_path",
     "move_in_group",
     "open_group",
     "open_group_for_write",
@@ -810,6 +811,28 @@ def role_for_array_path(path: str) -> ArrayRole | None:
     if head == "rho" and rest:
         return ArrayRole.RHO_ARRAY
     return _DENSE_ROLES_BY_NAME.get(name)
+
+
+#: The Dense `data.zarr` group paths a conversion may carry over.  A group is a
+#: container, not an array, so `role_for_array_path` cannot judge it; an *empty*
+#: unknown group would otherwise be recreated unnoticed.  `top_hits/<tier>` is
+#: exactly one segment below `top_hits`, so a deeper unknown group is refused.
+_RECORDED_GROUP_NAMES = frozenset({"top_hits", "rho"})
+
+
+def is_recorded_group_path(path: str) -> bool:
+    """Whether a Dense `data.zarr` group path is one the format defines.
+
+    Used by the converter (#245) to refuse an unknown group rather than
+    recreating it: the brief's rule is that an unmapped array **or group** fails
+    the conversion.  `top_hits` and `rho` are the two Dense groups; a tier is
+    exactly `top_hits/<name>`.
+    """
+    name = path.strip("/")
+    if name in _RECORDED_GROUP_NAMES:
+        return True
+    head, _, rest = name.partition("/")
+    return head == "top_hits" and bool(rest) and "/" not in rest
 
 
 # ── creation ─────────────────────────────────────────────────────────────────

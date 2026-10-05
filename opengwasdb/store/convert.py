@@ -60,6 +60,7 @@ from opengwasdb.store.arrays import (
     ArrayRole,
     chunk_layout,
     create_array,
+    is_recorded_group_path,
     open_group,
     open_group_for_write,
     require_group,
@@ -255,6 +256,7 @@ def _plan_arrays(
             "data.zarr has no 'z' array; a Dense release must carry one, and this "
             "converter uses its variant-axis chunk to lay out the per-variant arrays"
         )
+    _refuse_unknown_groups(source_root)
     z_shape = tuple(int(size) for size in source_root["z"].shape)
     plane_inner = chunk_layout(
         ArrayRole.DENSE_STATISTIC_PLANE,
@@ -274,6 +276,22 @@ def _plan_arrays(
     if not plans:
         raise ConversionError("data.zarr holds no arrays; nothing to convert")
     return plans
+
+
+def _refuse_unknown_groups(source_root: Any) -> None:
+    """Fail on a `data.zarr` group the format does not define.
+
+    Only arrays go through `role_for_array_path`; an empty unknown group has no
+    array to name a role for, and would otherwise be recreated unnoticed.  The
+    brief is explicit that an unmapped array **or group** fails conversion.
+    """
+    for group_path in _group_paths(source_root):
+        if not is_recorded_group_path(group_path):
+            raise ConversionError(
+                f"data.zarr/{group_path}: this group is not part of the Dense format. "
+                "A conversion never recreates an unknown group; known groups are "
+                "top_hits, top_hits/<tier> and rho (issue #245)."
+            )
 
 
 def _plan_one_array(
@@ -573,14 +591,29 @@ def _verify_array_values(source_array: Any, destination_array: Any) -> None:
 def _attrs_differ_only_where_expected(
     source_attrs: dict[str, Any], destination_attrs: dict[str, Any], *, root: bool
 ) -> str | None:
-    """A message when the two attr sets differ beyond the rewritten keys."""
+    """A message when the two attr sets differ beyond the rewritten keys.
+
+    Key **membership** is compared before values: a source attribute whose value
+    is `None` and a destination that does not carry the key are not the same
+    thing, and `dict.get` makes them look equal.
+    """
     for key in sorted(set(source_attrs) | set(destination_attrs)):
         if root and key in _REWRITTEN_ROOT_ATTRS:
             continue
-        if source_attrs.get(key) != destination_attrs.get(key):
+        if key not in source_attrs:
             return (
-                f"group attribute {key!r} differs: source {source_attrs.get(key)!r} vs "
-                f"destination {destination_attrs.get(key)!r}"
+                f"group attribute {key!r} is present only on the destination "
+                f"(value {destination_attrs[key]!r})"
+            )
+        if key not in destination_attrs:
+            return (
+                f"group attribute {key!r} is missing from the destination "
+                f"(source value {source_attrs[key]!r})"
+            )
+        if source_attrs[key] != destination_attrs[key]:
+            return (
+                f"group attribute {key!r} differs: source {source_attrs[key]!r} vs "
+                f"destination {destination_attrs[key]!r}"
             )
     return None
 
@@ -650,22 +683,36 @@ def _verify_array_headers(source_root: Any, destination_root: Any) -> None:
         for what, source_value, destination_value in (
             ("shape", tuple(source_array.shape), tuple(destination_array.shape)),
             ("dtype", str(source_array.dtype), str(destination_array.dtype)),
-            (
-                "fill value",
-                source_array.fill_value,
-                destination_array.fill_value,
-            ),
         ):
             if source_value != destination_value:
                 raise ConversionVerificationError(
                     f"data.zarr/{path}: {what} {destination_value!r} != source {source_value!r}"
                 )
+        if _fill_bytes(source_array) != _fill_bytes(destination_array):
+            raise ConversionVerificationError(
+                f"data.zarr/{path}: fill value {destination_array.fill_value!r} != source "
+                f"{source_array.fill_value!r}"
+            )
         if getattr(destination_array, "shards", None) is None:
             raise ConversionVerificationError(
                 f"data.zarr/{path}: destination is not sharded; a 0.2.0 release stores "
                 "every array with the sharding codec"
             )
         _verify_array_values(source_array, destination_array)
+
+
+def _fill_bytes(array: Any) -> bytes | None:
+    """An array's fill value as raw bytes in its own dtype, or `None`.
+
+    `fill_value` is compared bitwise, not with `==`: a float fill may be NaN, and
+    `NaN != NaN` would reject a faithful conversion of a valid store.  Narrowing
+    to the array's dtype first keeps the comparison per-dtype, and `tobytes`
+    keeps the NaN payload -- two different NaN bit patterns are a real
+    difference, as they are for stored values.
+    """
+    if array.fill_value is None:
+        return None
+    return np.asarray(array.fill_value, dtype=array.dtype).tobytes()
 
 
 def _verify_group_attrs(source_root: Any, destination_root: Any) -> None:

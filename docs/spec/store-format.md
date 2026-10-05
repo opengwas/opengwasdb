@@ -1,16 +1,18 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `0.1.0`  
-Also readable: nothing else (§21)
+Format version described: `0.1.0` (Zarr v2, what every builder writes) and `0.2.0` (§10a)  
+Also readable: `0.2.0` (§10a) and `0.1.0`; nothing else (§21)
 
 This document defines the contract for valid OpenGWASDB Store Releases. It
-describes `format_version` **0.1.0**, the only version this build reads or
-writes: statistic planes carry a declared encoding (§6a), `z` is `int16` fixed
-point rather than `float16`, `eaf` is a per-variant baseline plus a per-cell
-`int8` logit residual rather than a `float32` plane, and `se` is either
-`float16` or — when the build measures the fit and the saving — an `int8`
-residual from its EAF-predicted value.
+describes `format_version` **0.1.0** (Zarr v2, what every builder writes) and
+**0.2.0** (§10a: Zarr v3 with the sharding codec, written by the converter until
+#247 moves the builders); a reader reads both. Everything below that is not
+about the physical layout holds for both versions: statistic planes carry a
+declared encoding (§6a), `z` is `int16` fixed point rather than `float16`, `eaf`
+is a per-variant baseline plus a per-cell `int8` logit residual rather than a
+`float32` plane, and `se` is either `float16` or — when the build measures the
+fit and the saving — an `int8` residual from its EAF-predicted value.
 
 **`0.1.0` is a reset, not a fifth version** (ADR 0041, issue #143). The format
 carried `0.1`, then `1.0`, `2.0` and `3.0` through a single pre-release cycle,
@@ -868,10 +870,22 @@ parameters and #246 benchmarks, are:
 
 | array role | inner chunk | shard |
 |---|---|---|
-| Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask | `[1000, A_c]` (`A_c` the analysis-axis chunk) | `[100_000, 1024]` rows × Analyses |
-| per-variant side arrays (`eaf_baseline`, `eaf_reference`), flat CSR sequences, flat Rho arrays | per §6 / the role policy | about 1,000,000 elements |
-| top-hit index columns | 16,384 (as 0.1.0) | about 64 inner chunks |
-| top-hit per-Analysis offsets, exception/overflow tables, SE coefficients, CSR offsets | whole array | one shard holding the array |
+| Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask | `[1000, A_c]`, `A_c` the analysis-axis chunk, clipped to the array | `[100_000, 1024]` (rows × Analyses), a whole multiple of the inner chunk, clipped to cover the array |
+| per-variant side arrays (`eaf_baseline`, `eaf_reference`) | per §6: the serving plane's variant-axis chunk, capped at 200,000, clipped to the array | about 1,000,000 elements |
+| flat CSR association sequences | 200,000, or an explicit `chunks=(...)` | about 1,000,000 elements |
+| flat Rho arrays | 1,000,000, clipped to the array | about 1,000,000 elements |
+| top-hit index columns | 16,384 (as 0.1.0), clipped to the array | about 64 inner chunks |
+| top-hit per-Analysis offsets | whole array | one shard holding the array |
+| exception / overflow tables (Z, EAF and SE) | the role policy's 200,000, clipped to the array length (a shorter table is one inner chunk) | one shard holding the array |
+| SE coefficients | `(min(n_analyses, 1024), 2)` | one shard holding the array |
+| CSR per-Analysis offsets | 10,000 | one shard holding the array |
+
+`clipped to cover the array` means the smallest whole number of inner chunks
+that spans the dimension, so a small array gets one shard of one inner chunk and
+the declared shard is always a whole multiple of the inner chunk.  The inner
+chunk is `chunk_layout(role, shape, …)`; the shard is `shard_layout(role, shape,
+inner_chunk=…)` — one role → layout table in `opengwasdb.store.arrays`, so the
+converter and #247's builders cannot disagree.
 
 The inner chunk is the role policy of `opengwasdb.store.arrays` (`chunk_layout`)
 and the shard its companion `shard_layout`; a shard MUST be a whole multiple of

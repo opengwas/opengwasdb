@@ -410,20 +410,46 @@ def _validate_recorded_layout(
     """
     if "z" not in root:
         return
-    plane = root["z"]
-    shape = tuple(int(size) for size in plane.shape)
-    actual_inner = inner_chunk_of(plane)
-    actual_shard = None if getattr(plane, "shards", None) is None else tuple(
-        int(size) for size in plane.shards
-    )
     recorded = _recorded_layouts(manifest, connection, root)
-    for label, chunk_shape, shard_shape, _compressor in recorded:
-        expected_inner = _recorded_chunk_errors(label, chunk_shape, shape, actual_inner, errors)
-        if expected_inner is not None:
-            errors.extend(
-                _recorded_shard_errors(label, shard_shape, shape, expected_inner, actual_shard)
+    planes = _recorded_dense_planes(root)
+    for name, shape, actual_inner, actual_shard in planes:
+        for label, chunk_shape, shard_shape, _compressor in recorded:
+            plane_label = f"{label} (data.zarr/{name})"
+            expected_inner = _recorded_chunk_errors(
+                plane_label, chunk_shape, shape, actual_inner, errors
             )
-    errors.extend(_recorded_compressor_errors(recorded, actual_shard))
+            if expected_inner is not None:
+                errors.extend(
+                    _recorded_shard_errors(
+                        plane_label, shard_shape, shape, expected_inner, actual_shard
+                    )
+                )
+    errors.extend(_recorded_compressor_errors(recorded, planes[0][3]))
+
+
+def _recorded_dense_planes(
+    root: Any,
+) -> list[tuple[str, tuple[int, ...], tuple[int, ...], tuple[int, ...] | None]]:
+    """Every present Dense statistic plane as (name, shape, inner chunk, shard).
+
+    The recorded layout is one grid, but the rule must hold it against **every**
+    plane that uses it: checking only `z` would let `se`, `eaf` or the imputed
+    mask disagree with the manifest and still validate (issue #245 review).
+    The imputed mask is present only in a Reference-Completed release.
+    """
+    planes: list[tuple[str, tuple[int, ...], tuple[int, ...], tuple[int, ...] | None]] = []
+    for name in ("z", "se", "eaf", "imputed"):
+        if name not in root:
+            continue
+        plane = root[name]
+        shape = tuple(int(size) for size in plane.shape)
+        shard = (
+            None
+            if getattr(plane, "shards", None) is None
+            else tuple(int(size) for size in plane.shards)
+        )
+        planes.append((name, shape, inner_chunk_of(plane), shard))
+    return planes
 
 
 def _recorded_chunk_errors(

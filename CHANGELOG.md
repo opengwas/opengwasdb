@@ -286,8 +286,10 @@ the end of this file.
   `index.sqlite` `dense` blob and the `data.zarr` root attrs, and
   `overview.html` regenerated. It is verified **bit-identical** to the source
   (every array's path, shape, dtype, fill value, then the values block by block
-  as raw bytes, so NaN payloads count) and validates with no errors before it is
-  published by rename.
+  as raw bytes, so NaN payloads count — a fill of NaN is compared bitwise, so a
+  valid float16 `se` with a NaN fill converts), group attributes must have the
+  same key set, and an unmapped array **or group** fails the conversion. The
+  staged release must validate with no errors before it is published by rename.
 - **Format 0.2.0 is readable (#245).** `SUPPORTED_FORMAT_VERSIONS` gains the
   `(0, 2)` series, alongside `0.1`. `CURRENT_FORMAT_VERSION` stays `0.1.0`: the
   builders keep writing it until #247, the converter is the only 0.2.0 writer in
@@ -299,7 +301,8 @@ the end of this file.
   on-disk format must match `format_version`: 0.1.0 is v2 everywhere, 0.2.0 is v3
   everywhere with every array sharded, and a half-converted release is invalid.
   (2) The Dense planes' recorded `chunk_shape`/`shard_shape` must agree with the
-  arrays in all three places they are recorded (`manifest.json`
+  arrays — each present statistic plane (`z`, `se`, `eaf` and the imputed mask),
+  not only `z` — in all three places they are recorded (`manifest.json`
   `provenance.dense`, the `index.sqlite` `dense` blob, the `data.zarr` root
   attrs); each hint is clipped to the plane the way the role policy clips it.
   (3) The per-variant chunking rule (issue #135) is applied to the **inner**

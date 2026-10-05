@@ -32,14 +32,18 @@ from opengwasdb.query import query_store
 from opengwasdb.store import open as store_open
 from opengwasdb.store.arrays import (
     ArrayRole,
+    compressor,
     create_array,
+    create_group,
     inner_chunk_of,
     open_group,
     shard_layout,
+    sharded_compressor,
 )
 from opengwasdb.store.convert import (
     ConversionError,
     ConversionVerificationError,
+    _attrs_differ_only_where_expected,
     convert_dense_release,
     verify_conversion,
 )
@@ -135,6 +139,59 @@ def _copy_release(source: Path, destination: Path) -> Path:
     return destination
 
 
+#: Rows each deterministic query shape must return from the fixture.  A shape
+#: whose query silently returned nothing would still "match" its converted
+#: store; these make the identity check non-vacuous (CONTRIBUTING.md).
+MEANINGFUL_ROWS = {
+    "bulk": N_VARIANTS,
+    "phewas": N_ANALYSES,
+    "regional": N_VARIANTS * N_ANALYSES,
+    "regional_one_analysis": N_VARIANTS,
+    "random_lookup_10_variants_100_analyses": 10 * 100,
+    "random_lookup_100_variants_10_analyses": 100 * 10,
+}
+
+
+def _assert_meaningful(shape: str, result: dict[str, Any]) -> None:
+    """The source result must have rows, and the expected count where fixed."""
+    rows = len(result["z"])
+    assert rows > 0, f"{shape} returned no rows; the identity check would be vacuous"
+    expected = MEANINGFUL_ROWS.get(shape)
+    if expected is not None:
+        assert rows == expected, f"{shape} returned {rows} rows, expected {expected}"
+
+
+@pytest.fixture(scope="session")
+def nan_fill_source(dense_source: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A copy of the fixture whose `se` is float16 with a **NaN** fill.
+
+    `opengwasdb.encoding.se` writes a float16 `se` with `fill_value=nan` on its
+    marginal-saving path; the main fixture's float16 `se` has fill 0.0, so
+    without this the fill comparison would never meet a NaN.  `NaN != NaN`, so
+    an ordinary equality check rejects a faithful conversion of a valid store.
+    """
+    root = tmp_path_factory.mktemp("convert-dense-nan")
+    source = Path(shutil.copytree(dense_source, root / "source.opengwasdb"))
+    group = open_group(source / "data.zarr", "r+")
+    se = group["se"]
+    assert str(se.dtype) == "float16"
+    assert se.fill_value == 0.0, se.fill_value
+    values = np.asarray(se[:])
+    create_array(
+        group,
+        "se",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        data=values,
+        dtype="float16",
+        fill_value=np.nan,
+        compressor=compressor(),
+        hint=tuple(int(size) for size in se.chunks),
+        overwrite=True,
+    )
+    assert np.isnan(group["se"].fill_value)
+    return source
+
+
 # ── the fixture is meaningful before anything is asserted about it ───────────
 
 
@@ -203,7 +260,11 @@ def test_every_query_shape_returns_identical_results(
     converted_patterns = _patterns(converted_dense_store)
     assert set(source_patterns) == set(converted_patterns)
     assert len(source_patterns) == 7
-    source_results = {name: result_digests(fn()) for name, fn in source_patterns.items()}
+    source_results: dict[str, dict[str, str]] = {}
+    for name, pattern in source_patterns.items():
+        result = pattern()
+        _assert_meaningful(name, result)
+        source_results[name] = result_digests(result)
     converted_results = {
         name: result_digests(fn()) for name, fn in converted_patterns.items()
     }
@@ -211,6 +272,45 @@ def test_every_query_shape_returns_identical_results(
 
 
 # ── the verifier ─────────────────────────────────────────────────────────────
+
+
+def test_a_float16_se_with_a_nan_fill_converts(
+    nan_fill_source: Path, tmp_path: Path
+):
+    """A NaN fill value must survive conversion; `NaN != NaN` must not reject it."""
+    converted = tmp_path / "converted.opengwasdb"
+    convert_dense_release(
+        nan_fill_source,
+        converted,
+        dense_analysis_chunk=DENSE_ANALYSIS_CHUNK,
+        dense_shard=DENSE_SHARD,
+        workers=2,
+    )
+    verify_conversion(nan_fill_source, converted)
+    converted_se = open_group(converted / "data.zarr", "r")["se"]
+    assert str(converted_se.dtype) == "float16"
+    assert np.isnan(converted_se.fill_value)
+    assert validate_store(converted).ok
+
+
+def test_attribute_key_sets_are_compared_before_values():
+    """A source `None` and a destination with no key are not the same thing."""
+    assert _attrs_differ_only_where_expected({}, {"a": None}, root=False) is not None
+    assert _attrs_differ_only_where_expected({"a": None}, {}, root=False) is not None
+    assert _attrs_differ_only_where_expected({"a": None}, {"a": None}, root=False) is None
+    # A rewritten root key may legitimately be absent from either side.
+    assert _attrs_differ_only_where_expected({}, {"chunk_shape": [1]}, root=True) is None
+
+
+def test_a_none_valued_attribute_only_on_the_destination_fails_the_verifier(
+    dense_source: Path, converted_dense_store: Path, tmp_path: Path
+):
+    corrupted = _copy_release(converted_dense_store, tmp_path / "attrs.opengwasdb")
+    root = open_group(corrupted / "data.zarr", "r+")
+    root["top_hits"].attrs["none_marker"] = None
+
+    with pytest.raises(ConversionVerificationError, match="only on the destination"):
+        verify_conversion(dense_source, corrupted)
 
 
 def test_the_verifier_accepts_a_faithful_conversion(
@@ -307,6 +407,23 @@ def test_an_unknown_array_fails_the_conversion(
     )
 
     with pytest.raises(ConversionError, match="mystery_plane"):
+        convert_dense_release(source, tmp_path / "out.opengwasdb")
+
+
+def test_an_unknown_empty_group_fails_the_conversion(
+    dense_source: Path, tmp_path: Path
+):
+    """A group the format does not define is refused, even when it is empty.
+
+    An empty group has no array for `role_for_array_path` to reject, so without
+    the group check it would be recreated in the 0.2.0 tree unnoticed.
+    """
+    source = _copy_release(dense_source, tmp_path / "source.opengwasdb")
+    root = open_group(source / "data.zarr", "r+")
+    create_group(root, "mystery_empty_group")
+    assert "mystery_empty_group" in root
+
+    with pytest.raises(ConversionError, match="mystery_empty_group"):
         convert_dense_release(source, tmp_path / "out.opengwasdb")
 
 
@@ -411,6 +528,40 @@ def test_root_attrs_that_name_the_actual_layout_pass(converted_dense_store: Path
     assert root.attrs["chunk_shape"] == list(inner_chunk_of(plane))
     assert root.attrs["shard_shape"] == list(int(size) for size in plane.shards)
     assert validate_store(converted_dense_store).ok
+
+
+def test_a_non_z_plane_with_a_disagreeing_layout_is_invalid(
+    converted_dense_store: Path, tmp_path: Path
+):
+    """Every present Dense plane is judged, not only `z`.
+
+    `se` is re-written with an inner chunk half the recorded 1000, so the
+    manifest describes a layout `se` does not have while `z` still matches.
+    """
+    store = _copy_release(converted_dense_store, tmp_path / "wrong-se.opengwasdb")
+    root = open_group(store / "data.zarr", "r+")
+    se = root["se"]
+    values = np.asarray(se[:])
+    assert inner_chunk_of(se) != (500, DENSE_ANALYSIS_CHUNK)
+    create_array(
+        root,
+        "se",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        data=values,
+        dtype=str(se.dtype),
+        fill_value=se.fill_value,
+        compressor=sharded_compressor(),
+        inner_chunk=(500, DENSE_ANALYSIS_CHUNK),
+        shards=(1000, DENSE_SHARD[1]),
+        overwrite=True,
+    )
+
+    result = validate_store(store)
+
+    assert not result.ok
+    assert any(
+        "data.zarr/se" in error and "chunk_shape" in error for error in result.errors
+    ), result.errors
 
 
 # ── validation: the per-variant rule applies to the inner chunk ──────────────
