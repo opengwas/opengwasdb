@@ -115,6 +115,32 @@ def dense_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="session")
+def small_dense_observed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A Dense store with 1,005 variants and 9 Analyses.
+
+    Nine Analyses is deliberate: `--dense-analysis-chunk 64` clips to 9, and the
+    default Dense shard's 1,024 Analyses is then not a whole multiple of the
+    actual inner chunk.  That is the geometry that broke the first OGS-00004
+    conversion.
+    """
+    root = tmp_path_factory.mktemp("small-dense")
+    lines = [SOURCE_HEADER]
+    for a in range(9):
+        for v in range(1005):
+            lines.append(
+                f"a{a + 1:03d}\tp{a + 1:03d}\tTrait {a + 1}\tTrait {a + 1} primary\t1\t"
+                f"{100_000 + v * 137}\tA\tG\t{1.0 + 0.01 * (v % 11):.6f}\t0.1\trs{v}\tsd"
+            )
+    source = root / "associations.tsv"
+    source.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    store = root / "small-dense.opengwasdb"
+    build_dense_observed_from_sources(
+        [source], store, store_id="small-dense", release_id="v1", reference_assembly="GRCh37"
+    )
+    return store
+
+
+@pytest.fixture(scope="session")
 def hybrid_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("hybrid")
     vcf1 = _make_vcf(
@@ -212,6 +238,32 @@ def _assert_identity(source: Path, converted: Path) -> None:
     converted_results = _shaped_results(converted)
     assert set(source_results) == set(converted_results)
     assert_identical("source", source_results, "converted", converted_results)
+
+
+def test_a_dense_store_with_fewer_analyses_than_the_chunk_converts(
+    small_dense_observed: Path, tmp_path: Path
+):
+    """The default Dense shard must work when the Analysis axis clips the chunk.
+
+    OGS-00004's Dense Component has nine Analyses, so `--dense-analysis-chunk 64`
+    clips to 9 and the default shard of 1,024 Analyses is not a whole multiple of
+    the inner chunk.  The converter reconciles the hint with the array's actual
+    inner chunk (the whole nine-Analysis axis) rather than refusing a valid
+    source.
+    """
+    converted = tmp_path / "small-dense-0.2.0.opengwasdb"
+    convert_release(small_dense_observed, converted, dense_analysis_chunk=64)
+    plane = open_group(converted / "data.zarr", "r")["z"]
+    inner = tuple(int(size) for size in plane.chunks)
+    shard = tuple(int(size) for size in plane.shards)
+    assert inner == (1000, 9), inner
+    for outer, inner_axis in zip(shard, inner, strict=True):
+        assert outer % inner_axis == 0, (shard, inner)
+    manifest = json.loads((converted / "manifest.json").read_text())
+    assert manifest["provenance"]["dense"]["shard_shape"] == list(shard)
+    assert manifest["provenance"]["dense"]["chunk_shape"] == list(inner)
+    assert validate_store(converted).ok
+    assert verify_conversion(small_dense_observed, converted) is None
 
 
 def test_dense_reference_completed_identity(dense_completed: Path, tmp_path: Path):

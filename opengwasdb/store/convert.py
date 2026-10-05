@@ -401,6 +401,26 @@ def _refuse_unknown_groups(source_root: Any, component: _Component) -> None:
             )
 
 
+def _dense_shard_for(
+    request: tuple[int, int], inner: tuple[int, ...]
+) -> tuple[int, ...]:
+    """The Dense shard hint, reconciled with the array's actual inner chunk.
+
+    `--dense-shard` is a hint like the chunk shape, and an array's own size can
+    clip the inner chunk below it: OGS-00004's Dense Component has nine Analyses,
+    so the requested Analysis-axis inner chunk of 64 clips to 9, and a shard of
+    1,024 is then not a whole multiple of it.  A shard MUST be one, so each axis
+    is rounded down to the largest whole number of *actual* inner chunks that
+    does not exceed the request (at least one).  With the standard shapes this is
+    a no-op; the clip to the array that follows then gives the nine-Analysis
+    component a shard of the whole axis.
+    """
+    return tuple(
+        max(int(inner_axis), (int(want) // int(inner_axis)) * int(inner_axis))
+        for want, inner_axis in zip(request, inner, strict=True)
+    )
+
+
 def _plan_one_array(
     source_root: Any,
     path: str,
@@ -435,7 +455,7 @@ def _plan_one_array(
         role,
         shape,
         inner_chunk=inner,
-        dense_shard=dense_shard if is_grid else None,
+        dense_shard=_dense_shard_for(dense_shard, inner) if is_grid else None,
     )
     return _ArrayPlan(
         zarr_rel=component.zarr_rel,
