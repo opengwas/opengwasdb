@@ -38,6 +38,7 @@ import itertools
 import json
 import os
 import subprocess
+import time
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
@@ -414,6 +415,7 @@ def _write_shards(
         for plan in plans
         for starts in _shard_starts(plan.shape, plan.shard_shape)
     ]
+    print(f"  writing {len(tasks)} shards over {max(workers, 1)} worker(s)", flush=True)
     if workers <= 1:
         for plan, starts in tasks:
             _write_shard(str(source_data), str(destination_data), plan, starts)
@@ -642,6 +644,7 @@ def _require_same_paths(kind: str, source: set[str], destination: set[str]) -> N
 def _verify_array_headers(source_root: Any, destination_root: Any) -> None:
     """Every array's shape, dtype, fill value, sharding and stored values match."""
     for path in sorted(_array_paths(source_root)):
+        print(f"  verifying {path}", flush=True)
         source_array = source_root[path]
         destination_array = destination_root[path]
         for what, source_value, destination_value in (
@@ -736,36 +739,89 @@ def convert_dense_release(
         raise ConversionError("--dense-analysis-chunk must be at least 1")
     dense_shard = (int(dense_shard[0]), int(dense_shard[1]))
     _refuse_unconvertible(source)
+    _stage_and_convert(
+        source,
+        destination,
+        dense_analysis_chunk=int(dense_analysis_chunk),
+        dense_shard=dense_shard,
+        workers=int(workers),
+    )
+    print(f"Published {destination} as {SHARDED_FORMAT_VERSION}", flush=True)
+    return destination
 
+
+def _stage_and_convert(
+    source: Path,
+    destination: Path,
+    *,
+    dense_analysis_chunk: int,
+    dense_shard: tuple[int, int],
+    workers: int,
+) -> None:
+    """Build, verify and validate the converted release in staging.
+
+    Split out of `convert_dense_release` so the refusal checks and this,
+    the long-running half, are one function each.  Staging publishes by rename
+    on clean exit and discards everything on any exception.
+    """
     with OpenGWASDBStore.staging(destination) as staged:
+        started = time.perf_counter()
         _reflink_copy(source, staged.path)
+        _log_phase("copied the release envelope", started)
+        started = time.perf_counter()
         source_root = open_group(source / "data.zarr", "r")
         plans = _plan_arrays(
             source_root,
-            dense_analysis_chunk=int(dense_analysis_chunk),
+            dense_analysis_chunk=dense_analysis_chunk,
             dense_shard=dense_shard,
         )
+        print(f"  {len(plans)} arrays to convert", flush=True)
         destination_root = open_group_for_write(staged.data_path, "w", zarr_format=3)
         _create_destination_arrays(destination_root, source_root, plans)
         destination_root = None  # drop the write handle before forked writers run
-        _write_shards(source / "data.zarr", staged.data_path, plans, workers=int(workers))
-        _rewrite_manifest(
-            staged.path,
-            plans=plans,
-            dense_analysis_chunk=int(dense_analysis_chunk),
-            dense_shard=dense_shard,
-            now=datetime.now(UTC).isoformat(),
-            source_release_id=str(_manifest_data(source)["release_id"]),
+        _log_phase("created the destination arrays", started)
+        started = time.perf_counter()
+        _write_shards(source / "data.zarr", staged.data_path, plans, workers=workers)
+        _log_phase(f"wrote every shard over {workers} worker(s)", started)
+        started = time.perf_counter()
+        _rewrite_staged_metadata(
+            source, staged.path, plans, dense_analysis_chunk, dense_shard, source_root
         )
-        _rewrite_dense_index(staged.path, plans)
-        reopened = open_group(staged.data_path, "r+")
-        _write_root_attrs(reopened, source_root, plans)
-        reopened = None
+        _log_phase("rewrote the manifest, index blob and root attrs", started)
+        started = time.perf_counter()
         verify_conversion(source, staged.path)
+        _log_phase("verified the conversion bit-exact", started)
+        started = time.perf_counter()
         write_overview_html(staged.path, read_analyses(staged.path / "analyses.tsv"))
         _require_valid_staged_release(staged.path, destination)
+        _log_phase("regenerated overview.html and validated the release", started)
 
-    return destination
+
+def _rewrite_staged_metadata(
+    source: Path,
+    staged_path: Path,
+    plans: list[_ArrayPlan],
+    dense_analysis_chunk: int,
+    dense_shard: tuple[int, int],
+    source_root: Any,
+) -> None:
+    """Restamp the manifest, re-point the index blob and rewrite the root attrs."""
+    _rewrite_manifest(
+        staged_path,
+        plans=plans,
+        dense_analysis_chunk=dense_analysis_chunk,
+        dense_shard=dense_shard,
+        now=datetime.now(UTC).isoformat(),
+        source_release_id=str(_manifest_data(source)["release_id"]),
+    )
+    _rewrite_dense_index(staged_path, plans)
+    reopened = open_group(staged_path / "data.zarr", "r+")
+    _write_root_attrs(reopened, source_root, plans)
+
+
+def _log_phase(label: str, started: float) -> None:
+    """Print a phase's wall time, so a long conversion can be projected."""
+    print(f"  {label}: {time.perf_counter() - started:.1f}s", flush=True)
 
 
 __all__ = [
