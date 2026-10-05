@@ -176,13 +176,21 @@ through the same `LocalStore.open` call zarr makes for a path:
 
 - **Metadata writes.** Any write of `.zarray`, `.zgroup`, `.zattrs` or `zarr.json` is
   checked against the records that describe its directory.
-- **Deletes.** A deleted directory is checked against the records enclosing it. Records
-  inside it go with it.
+- **Deletes.** Every delete is checked, a chunk file's included. A deleted directory is
+  checked against the records enclosing it, and records inside it go with it.
 - **Chunk writes** are not checked. A record holds no chunk data, so band writes cost
   nothing extra.
 
+Chunk deletes are checked because a refusal must come before the first destructive step,
+and zarr does not always write metadata first. A shrinking `resize` deletes the chunks
+beyond the new shape before it writes the new shape. Round 3 of the review saw that
+metadata write refused only after the chunks were gone: a fresh read then returned
+`[0, 1, 2, 3, 0, 0, 0, 0]` under the recorded shape 8. With `write_empty_chunks` on, an
+ordinary write never deletes a chunk, so the check costs builds nothing.
+
 Read opens are unaffected. **Enforced by** `tests/test_consolidated_metadata.py`, for Zarr
-v2 and v3 records alike: ten kinds of write through a handle opened before consolidation.
+v2 and v3 records alike: eleven kinds of write through a handle opened before
+consolidation, a shrinking `resize` among them. Each must leave every file byte-identical.
 
 ### What these settings do not remove
 

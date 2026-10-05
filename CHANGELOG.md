@@ -134,10 +134,15 @@ the end of this file.
     group. So does `move_in_group`.
   - So does every metadata write and every delete through a handle the seam
     opened, including one opened before the record appeared. This covers the
-    seam's `create_array`, `create_group` and `require_group`, attribute writes
-    and `del`. The seam opens every group on its own `LocalStore` subclass,
-    which checks there. Chunk writes are not checked: the record holds no chunk
-    data.
+    seam's `create_array`, `create_group` and `require_group`, attribute writes,
+    `del`, and a shrinking `resize`. The seam opens every group on its own
+    `LocalStore` subclass, which checks there.
+  - Deletes are refused even for chunk files, because a shrinking `resize`
+    deletes chunks before it writes the new shape. With only the metadata write
+    checked, the refusal came after the chunks were gone, and a fresh read
+    returned zeros under the old shape. Chunk writes are not checked: the record
+    holds no chunk data, and with `write_empty_chunks` on an ordinary write
+    never deletes a chunk.
   - Reads are unchanged. The package never consolidates, and no registered
     Store Release carries a record.
   - ADR 0056 §4 records the decision and the alternatives rejected.

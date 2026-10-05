@@ -56,6 +56,34 @@ def _die_on_second_move(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(repair, "move_in_group", move)
 
 
+def _die_after_the_first_step(monkeypatch: pytest.MonkeyPatch, store: Path) -> list[str]:
+    """Kill the run as soon as one move or one delete has completed.
+
+    Applied to a run that starts from the state between the renames, the first
+    step is the recovery's own first step, whichever it is: moving the backup
+    back, or dropping the copy. Deletes are caught on the class of the group the
+    repair opens. Returns the steps that completed.
+    """
+    steps: list[str] = []
+    real_move = repair.move_in_group
+    group_class = type(open_store(store).arrays())
+    real_delete = group_class.__delitem__
+
+    def move(group: Any, source: str, dest: str) -> None:
+        real_move(group, source, dest)
+        steps.append(f"move {source} -> {dest}")
+        raise _ProcessDeath(f"killed after moving {source} -> {dest}")
+
+    def delete(group: Any, key: str) -> None:
+        real_delete(group, key)
+        steps.append(f"delete {key}")
+        raise _ProcessDeath(f"killed after deleting {key}")
+
+    monkeypatch.setattr(repair, "move_in_group", move)
+    monkeypatch.setattr(group_class, "__delitem__", delete)
+    return steps
+
+
 def test_a_death_between_the_renames_is_recovered_on_the_next_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -70,6 +98,39 @@ def test_a_death_between_the_renames_is_recovered_on_the_next_run(
     # The state a death leaves: no canonical array, the original under its backup name.
     entries = _entries(store)
     assert EAF_BASELINE not in entries and BACKUP in entries and TEMPORARY in entries
+
+    repaired = repair_eaf_chunks(store)
+
+    assert [(item.old_chunk, item.new_chunk) for item in repaired] == [(8, 3)]
+    assert not _entries(store) & {BACKUP, TEMPORARY}
+    np.testing.assert_array_equal(_baseline(store), original)
+    assert validate_store(store).ok
+
+
+def test_a_death_inside_the_recovery_leaves_a_state_the_next_run_settles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The restore moves the backup back before it drops the copy (#244 review round 3).
+
+    A death between those two steps then leaves the array and its copy, which
+    the next run settles. Dropping the copy first would leave the backup alone,
+    a state the repair refuses.
+    """
+    store = make_store_needing_eaf_repair(tmp_path)
+    original = _baseline(store)
+    with monkeypatch.context() as patch:
+        _die_on_second_move(patch)
+        with pytest.raises(_ProcessDeath):
+            repair_eaf_chunks(store)
+    names = {EAF_BASELINE, TEMPORARY, BACKUP}
+    assert names & _entries(store) == {TEMPORARY, BACKUP}, "the run must stop between renames"
+
+    with monkeypatch.context() as patch:
+        steps = _die_after_the_first_step(patch, store)
+        with pytest.raises(_ProcessDeath):
+            repair_eaf_chunks(store)
+    assert names & _entries(store) == {EAF_BASELINE, TEMPORARY}
+    assert steps == [f"move {BACKUP} -> {EAF_BASELINE}"]
 
     repaired = repair_eaf_chunks(store)
 

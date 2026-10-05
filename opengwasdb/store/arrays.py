@@ -767,10 +767,19 @@ class _GuardedLocalStore(LocalStore):
             refuse_under_consolidated_metadata((self.root / key).parent, f"writing {key!r} in")
 
     def _check_delete(self, key: str) -> None:
+        """Refuse any delete beneath a record, chunk files included.
+
+        A delete must be refused before the first destructive step, and zarr does
+        not always change metadata first: a shrinking ``resize`` deletes the
+        chunks beyond the new shape before it writes the new shape, so the
+        metadata write would be refused only after chunks were gone (#244 review
+        round 3). With ``write_empty_chunks`` on, an ordinary write never deletes
+        a chunk, so this costs nothing on the build path.
+        """
         target = self.root / key
         if target.is_dir():
             refuse_under_consolidated_metadata(target, f"deleting {key!r} in", wiped=True)
-        elif target.name in _RECORDED_METADATA:
+        else:
             refuse_under_consolidated_metadata(target.parent, f"deleting {key!r} in")
 
     async def set(self, key: str, value: Buffer) -> None:

@@ -196,6 +196,10 @@ STALE_HANDLE_WRITES: dict[str, Callable[[Any, int], object]] = {
     "array attribute": lambda g, f: g["a"].attrs.__setitem__("note", "stale"),
     "delete array": lambda g, f: g.__delitem__("a"),
     "delete subgroup": lambda g, f: g.__delitem__("sub"),
+    # Round 3: zarr deletes the chunks beyond the new shape *before* it writes the
+    # new metadata, so a check on the metadata write alone fires too late. The
+    # review saw [0, 1, 2, 3, 0, 0, 0, 0] read back under the old shape 8.
+    "resize shrink": lambda g, f: g["a"].resize((3,)),
 }
 
 
@@ -206,6 +210,8 @@ def test_a_handle_opened_before_consolidation_cannot_change_metadata(
 ) -> None:
     path = _group_with_subgroup(tmp_path / "g.zarr", zarr_format)
     group = open_group(path, "r+")
+    # Four chunk files, so a shrink to 3 has whole chunks to delete.
+    assert group["a"].shape == (8,) and group["a"].chunks == (2,)
     _consolidate(path, zarr_format)
     before = _tree(path)
 
