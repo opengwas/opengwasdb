@@ -38,18 +38,31 @@ if TYPE_CHECKING:
 #: because the compatible axis is defined as one an older reader still reads
 #: correctly.
 #:
-#: One entry, and that is the point of the reset (issue #143): there is one
-#: format, one decoder, and one contract to test. The four pre-reset versions
-#: are not in it and are not readable -- see `PRE_RESET_FORMAT_VERSIONS`.
+#: Two entries since #245: `0.1` (Zarr v2, what every builder still writes) and
+#: `0.2` (Zarr v3 with sharding, written only by the converter until #247 moves
+#: the builders). The four pre-reset versions are not in it and are not readable
+#: -- see `PRE_RESET_FORMAT_VERSIONS`.
 SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingProxyType(
-    {(0, 1): (0,)}
+    {(0, 1): (0,), (0, 2): (0,)}
 )
 
 #: format_version stamped on releases written by this build. A build writes
 #: exactly one version and reads every one in `SUPPORTED_FORMAT_VERSIONS`
 #: (ADR 0041 §3): supporting the *writing* of historical formats would mean
 #: keeping every retired encoder alive and tested, for a use case nobody has.
+#:
+#: **This stays `0.1.0` until #247** moves the builders to Zarr v3. Until then
+#: the converter is the only 0.2.0 writer, and no version is cut in the
+#: interim (ADR 0057).
 CURRENT_FORMAT_VERSION = "0.1.0"
+
+#: The version the Dense converter writes (issue #245). 0.2.0 is Zarr v3 with
+#: the sharding codec: `zarr.json` replaces `.zarray`/`.zgroup`, and a shard is
+#: the unit stored as a file while the inner chunk is the unit a query reads.
+#: It is deliberately *not* `CURRENT_FORMAT_VERSION`: builders keep writing
+#: 0.1.0 until #247 switches them, so `check_writable_format_version` refuses to
+#: complete a 0.2.0 source (ADR 0038 §4) -- convert first, or wait for #247.
+SHARDED_FORMAT_VERSION = "0.2.0"
 
 #: The versions the format carried before the reset, and what each one was.
 #: Every one is two-component, so the parser rejects it on shape alone; naming
@@ -182,12 +195,10 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
     lies about its own encoding, which is the failure class this project exists
     to avoid.
 
-    Unreachable while this build reads exactly one format (issue #143): every
-    readable version is the one it writes. It is kept because the invariant is
-    about the *next* format rather than this one -- the moment a second
-    readable version exists, completion writing into arrays it cannot encode is
-    live again, and that is not a check to be remembering to add at the time
-    (issue #112).
+    It is live since #245: this build reads `0.2.0` (Zarr v3 with sharding, the
+    converter's output) but writes `0.1.0`, so completing a converted release
+    is refused here. The refusal is the intended interim behaviour until #247
+    makes 0.2.0 current; convert and complete in the other order, or wait.
     """
     check_format_version(version, source=source)
     if version != CURRENT_FORMAT_VERSION:

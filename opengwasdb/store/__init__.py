@@ -24,6 +24,7 @@ from typing import Any
 __all__ = [
     "CURRENT_FORMAT_VERSION",
     "PRE_RESET_FORMAT_VERSIONS",
+    "SHARDED_FORMAT_VERSION",
     "SUPPORTED_FORMAT_VERSIONS",
     "MalformedFormatVersion",
     "OpenGWASDBStore",

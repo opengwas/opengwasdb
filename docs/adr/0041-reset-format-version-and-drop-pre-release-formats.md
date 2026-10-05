@@ -143,6 +143,12 @@ unreachable today, since this build reads exactly the one version it writes; it
 is kept because the state it guards arrives with the second version, and a
 guard added at that moment is a guard nobody tested before it mattered.
 
+**Amended by ADR 0057 (#245):** the second version has arrived. This build reads
+`0.1.0` and `0.2.0` and still writes only `0.1.0` until #247, so
+`check_writable_format_version` is now live: it refuses to complete a converted
+`0.2.0` release, which is the intended interim behaviour. `CURRENT_FORMAT_VERSION`
+moves to `0.2.0` only when the builders do.
+
 ## Consequences
 
 - **One format, one decoder, one contract to test.** The branch count in the
