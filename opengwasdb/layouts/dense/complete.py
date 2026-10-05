@@ -759,7 +759,31 @@ def _write_completed_manifest(
             n_missing_imputation_failed=arrays.n_missing_imputation_failed,
         ),
     )
-    staged.write_manifest(completed_manifest)
+    staged.write_manifest(_record_effective_dense_chunk_shape(completed_manifest, staged))
+
+
+def _record_effective_dense_chunk_shape(
+    manifest: StoreManifest, staged: StagedRelease
+) -> StoreManifest:
+    """State the chunk shape the completed Dense planes actually have.
+
+    Completion writes the completed grid at `DEFAULT_CHUNK_SHAPE`, clipped to
+    the array dimensions -- not at the source's build-wide hint.  A completed
+    release therefore inherits a `provenance.dense.chunk_shape` describing the
+    source's *intended* layout, which is not the completed arrays' layout
+    whenever the two differ.  A manifest that describes one shape over arrays
+    of another is the silent failure class #245's recorded-layout rule exists
+    to catch, so completion records what it wrote (the root attrs already carry
+    it; this makes the manifest agree).
+    """
+    dense = dict(manifest.provenance.get("dense", {}))
+    if not dense:
+        return manifest
+    effective = staged.arrays(mode="r").attrs.get("chunk_shape")
+    if effective is None:
+        return manifest
+    dense["chunk_shape"] = [int(size) for size in effective]
+    return replace(manifest, provenance={**manifest.provenance, "dense": dense})
 
 
 def _completed_analysis_rows(

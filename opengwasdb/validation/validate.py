@@ -570,7 +570,6 @@ def _validate_dense_store(
                     root, connection, store.analyses_path, n_variants, n_analyses, errors
                 )
             _validate_encoding_plan(root, manifest.encoding, errors, label="data.zarr")
-            _validate_recorded_layout(manifest, connection, root, errors)
             if not errors:
                 _validate_dense_arrays(
                     root,
@@ -586,6 +585,9 @@ def _validate_dense_store(
                 _validate_top_hits(root, errors, manifest.encoding)
             if not errors:
                 _validate_rho(root, n_analyses, errors)
+            # After the shape seam, so a plane that does not span the axis is
+            # named as such rather than only as a layout disagreement (#245).
+            _validate_recorded_layout(manifest, connection, root, errors)
     except Exception as exc:  # noqa: BLE001 - validators should report actionable failures
         errors.append(f"validation failed: {exc}")
     return ValidationResult(errors=errors)

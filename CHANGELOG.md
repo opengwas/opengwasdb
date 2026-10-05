@@ -123,6 +123,17 @@ the end of this file.
 
 ### Fixed
 
+- **A Reference-Completed Dense release records the chunk shape its arrays
+  actually have (#245).** Completion writes the completed grid at
+  `DEFAULT_CHUNK_SHAPE` clipped to the array dimensions, not at the source's
+  build-wide hint, but it inherited the source manifest's
+  `provenance.dense.chunk_shape` unchanged. A source built with a different
+  hint therefore produced a completed release whose manifest described arrays
+  it did not hold -- the silent failure class #245's recorded-layout rule
+  catches. `complete_dense_store` now records the effective completed chunk in
+  the manifest, matching the root attrs and the arrays. The rule itself is new,
+  and a completed release whose manifest disagrees with its arrays is now
+  invalid rather than quietly readable.
 - **Writes refuse a Zarr group that consolidated metadata describes (#244
   review).** zarr 3's `open_group` reads a `.zmetadata` record (or a v3
   `consolidated_metadata` block) in place of the live metadata; zarr 2.18 did

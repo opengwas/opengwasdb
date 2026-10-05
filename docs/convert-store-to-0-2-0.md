@@ -3,9 +3,9 @@
 Format 0.2.0 is Zarr v3 with the sharding codec: the unit a query reads (the
 *inner chunk*) is decoupled from the unit stored as a file (the *shard*), so the
 Dense Analysis-axis inner chunk can narrow without multiplying the file count.
-[ADR 0057](../docs/adr/0057-store-format-0-2-0-zarr-v3-with-sharding.md) records
+[ADR 0057](adr/0057-store-format-0-2-0-zarr-v3-with-sharding.md) records
 what 0.2.0 is and why conversion—not a rebuild—is the migration route;
-[spec §10a](../docs/spec/store-format.md) describes the physical layout.
+[spec §10a](spec/store-format.md) describes the physical layout.
 
 ## Running the converter
 
