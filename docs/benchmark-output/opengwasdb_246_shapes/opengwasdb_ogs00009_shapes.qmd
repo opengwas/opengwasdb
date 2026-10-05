@@ -1,0 +1,371 @@
+---
+title: "OGS-00009 across chunk and shard shapes (#246)"
+subtitle: "The epic #240 go/no-go: format 0.2.0 on zarr 3 against 0.1.0 on zarr 2.18"
+format:
+  html:
+    embed-resources: true
+    toc: true
+    code-fold: true
+    code-summary: "Show the code that generated this table"
+jupyter: python3
+---
+
+Every number below is read from a committed artifact at render time. Nothing is
+typed by hand. Render this document from its own directory, so the relative
+paths resolve:
+
+```bash
+cd docs/benchmark-output/opengwasdb_246_shapes
+pixi run -e report quarto render opengwasdb_ogs00009_shapes.qmd
+```
+
+```{python}
+#| label: setup
+import json
+import re
+from pathlib import Path
+
+import pandas as pd
+
+HERE = Path.cwd()
+if not (HERE / "opengwasdb_store_comparison_ogs00009_shapes.json").exists():
+    raise SystemExit(
+        "render from docs/benchmark-output/opengwasdb_246_shapes so the artifacts resolve"
+    )
+
+
+def load(name: str) -> dict:
+    return json.loads((HERE / name).read_text(encoding="utf-8"))
+
+
+HEAD = load("opengwasdb_store_comparison_ogs00009_shapes.json")
+BASE = load("opengwasdb_store_comparison_ogs00009_zarr2.json")
+STORES = {store["label"]: store for store in HEAD["stores"]}
+BASE_STORE = BASE["stores"][0]
+```
+
+# What was measured
+
+The release under measurement is **OGS-00009** (`ukb-b-full-observed`), Dense
+Observed-Only, 9,847,701 variants × 2,024 Analyses. The comparison is the
+**format 0.2.0** candidates on zarr-python 3 against the **format 0.1.0**
+release on zarr-python 2.18, in one quiet window, back to back:
+
+```{python}
+#| label: runs
+rows = []
+for store, artifact in [(BASE_STORE, BASE)] + list(STORES.items()):
+    env = artifact["environment"]
+    rows.append(
+        {
+            "store label": store["label"],
+            "commit": env["opengwasdb_commit"],
+            "zarr": env["zarr"],
+            "numcodecs": env["numcodecs"],
+            "effective reader": json.dumps(
+                store.get("effective_reader") or env.get("effective_reader"),
+                sort_keys=True,
+            ),
+            "1-min load before": store["load_average_1m_before"],
+            "1-min load after": store["load_average_1m_after"],
+        }
+    )
+pd.DataFrame(rows).set_index("store label")
+```
+
+```{python}
+#| label: identity
+# The head run checks every zarr-3-readable store against its first in-process.
+# The 2.18 run is a separate process (a different environment), so its digests
+# are compared here: a bit-equal answer across format 0.1.0 on zarr 2.18 and
+# every 0.2.0 shape is what makes the timings a comparison of one query.
+assert BASE_STORE["result_digests"] == STORES["v2-c1000"]["result_digests"], (
+    "the 2.18 and zarr 3 runs of v2-c1000 returned different results"
+)
+print(
+    f"identity holds across {1 + len(STORES)} configurations, "
+    f"{len(STORES['v2-c1000']['result_digests'])} shapes and "
+    f"{len(HEAD['identity']['arrays_per_shape'])} arrays per shape"
+)
+```
+
+```{python}
+#| label: pinned-reader
+print("Pinned reader configuration, read back from the measuring processes:")
+print(json.dumps(HEAD["environment"]["effective_reader"], indent=2, sort_keys=True))
+print()
+print("imported package fingerprint (from #253's provenance change):")
+print(HEAD["opengwasdb_fingerprint"])
+```
+
+# Configurations: files and footprint
+
+```{python}
+#| label: configurations
+rows = []
+for label, store in STORES.items():
+    dense = store["dataset"]
+    footprint = store["footprint"]
+    layout = dense["layout"]
+    assert layout.get("z"), f"{label}: no Dense layout was recorded; refusing a blank table"
+    z = layout["z"]
+    tophit = layout.get("top_hits/p_5e_08/z")
+    rows.append(
+        {
+            "label": label,
+            "format_version": dense["format_version"],
+            "`z` inner chunk": " x ".join(str(x) for x in z["chunk_shape"]),
+            "`z` shard": (
+                "unsharded" if z["shard_shape"] is None else " x ".join(str(x) for x in z["shard_shape"])
+            ),
+            "top-hit shard (inner chunks)": (
+                "unsharded"
+                if tophit is None or tophit["shard_shape"] is None
+                else tophit["shard_shape"][0] // tophit["chunk_shape"][0]
+            ),
+            "files": footprint["n_files"],
+            "apparent GB": round(footprint["apparent_bytes"] / 1e9, 2),
+            "allocated GB": round(footprint["allocated_bytes"] / 1e9, 2),
+        }
+    )
+pd.DataFrame(rows).set_index("label")
+```
+
+The reference release on 0.1.0 as built, for comparison: **119,118 files**.
+
+## Per-array breakdown
+
+```{python}
+#| label: per-array
+frames = []
+for label, store in STORES.items():
+    for row in store["footprint"]["arrays"]:
+        frames.append(
+            {
+                "configuration": label,
+                "array": row["node"].replace("data.zarr/", ""),
+                "files": row["n_files"],
+                "apparent MB": round(row["apparent_bytes"] / 1e6, 1),
+                "allocated MB": round(row["allocated_bytes"] / 1e6, 1),
+                "largest file MB": round(row["largest_file_bytes"] / 1e6, 1),
+            }
+        )
+pd.set_option("display.max_rows", 400)
+pd.DataFrame(frames).sort_values(["configuration", "array"])
+```
+
+# Conversion cost
+
+Each conversion ran under `/usr/bin/time -v`; its log is committed beside this
+document. The phases are the converter's own (`#245`).
+
+```{python}
+#| label: conversions
+def parse_time_log(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    out: dict = {"log": path.name}
+    elapsed = re.search(r"Elapsed \(wall clock\) time.*?\): ([\d:.]+)", text)
+    if elapsed:
+        out["wall clock"] = elapsed.group(1)
+    rss = re.search(r"Maximum resident set size \(kbytes\): (\d+)", text)
+    if rss:
+        out["peak RSS GB"] = round(int(rss.group(1)) / 1e6, 2)
+    for phase, seconds in re.findall(r"^  (.+?): ([\d.]+)s$", text, re.MULTILINE):
+        out[phase] = f"{float(seconds):.0f} s"
+    return out
+
+
+logs = sorted((HERE / "conversions").glob("*.log"))
+pd.DataFrame([parse_time_log(path) for path in logs])
+```
+
+# Set L: time and peak memory per query
+
+The generated table (`opengwasdb_store_comparison_ogs00009_shapes_set_l.md`) is
+reproduced here exactly as the script wrote it. `✓` meets the limit, `✗` misses
+it, `≈` marks a result within 30% of a limit, either side, which needs a second
+back-to-back pair before it counts.
+
+```{python}
+#| label: set-l
+from IPython.display import Markdown
+
+Markdown((HERE / "opengwasdb_store_comparison_ogs00009_shapes_set_l.md").read_text())
+```
+
+# Whole-Analysis peak memory
+
+The whole-Analysis peak is the budget whose outcome was unknown before this
+run. #244 measured **1.14 GB** on zarr 3 and **12.04 GB** on zarr 2.18 for the
+same Analysis of the same release (`opengwasdb_zarr3_read_levers/rss-step1-head.json`
+and `rss-pair-base.json`); this run measures it for every 0.2.0 candidate.
+
+```{python}
+#| label: bulk-memory
+LEVERS = HERE.parent / "opengwasdb_zarr3_read_levers"
+historical_218 = json.loads((LEVERS / "rss-pair-base.json").read_text())["stores"][0]
+historical_z3 = json.loads((LEVERS / "rss-step1-head.json").read_text())["stores"][0]
+
+
+def bulk_peak(store: dict) -> float:
+    return next(row["peak_mb"] for row in store["memory"] if row["query"] == "bulk")
+
+
+rows = [
+    {
+        "configuration": "#244 zarr 2.18 (historical)",
+        "whole-Analysis peak GB": round(bulk_peak(historical_218) / 1000, 2),
+        "vs 1.14 GB": f"{bulk_peak(historical_218) / 1142:.1f}×",
+        "vs 12.04 GB": "1.00×",
+    },
+    {
+        "configuration": "#244 zarr 3 (historical)",
+        "whole-Analysis peak GB": round(bulk_peak(historical_z3) / 1000, 2),
+        "vs 1.14 GB": "1.00×",
+        "vs 12.04 GB": f"{bulk_peak(historical_z3) / 12041.9:.2f}×",
+    },
+]
+for label, store in STORES.items():
+    peak = bulk_peak(store)
+    rows.append(
+        {
+            "configuration": label,
+            "whole-Analysis peak GB": round(peak / 1000, 2),
+            "vs 1.14 GB": f"{peak / 1142:.2f}×",
+            "vs 12.04 GB": f"{peak / 12041.9:.2f}×",
+        }
+    )
+pd.DataFrame(rows)
+```
+
+# Shard file sizes
+
+The largest file of a 0.2.0 array is its largest shard (`zarr.json` is bytes).
+This is the unit a store copy, a host or an HTTP range request moves.
+
+```{python}
+#| label: shard-sizes
+rows = []
+for label, store in STORES.items():
+    for row in store["footprint"]["arrays"]:
+        node = row["node"].replace("data.zarr/", "")
+        if node in ("z", "se", "eaf", "top_hits/p_5e_08/z"):
+            rows.append(
+                {
+                    "configuration": label,
+                    "array": node,
+                    "shards": row["n_files"] - 1,
+                    "largest shard MB": round(row["largest_file_bytes"] / 1e6, 1),
+                    "mean shard MB": round(
+                        (row["apparent_bytes"] - row["largest_file_bytes"])
+                        / max(row["n_files"] - 2, 1)
+                        / 1e6,
+                        1,
+                    ),
+                }
+            )
+pd.DataFrame(rows)
+```
+
+# Builder memory
+
+The Dense VCF band writer holds `n_variants × shard Analysis width × itemsize`
+of `float32` `se` scratch (`#240`). The two stores a builder will meet:
+
+```{python}
+#| label: builder-memory
+ukb = STORES["v3-c64"]["dataset"]["n_variants"]
+finngen = json.loads(
+    (HERE.parent / "opengwasdb_ogs00016_finngen_benchmark.json").read_text()
+)["dataset"]["n_variants"]
+widths = [64, 128, 256, 512, 1024, 2000, 100000]
+rows = []
+for width in widths:
+    rows.append(
+        {
+            "shard Analysis width": width,
+            "ukb-b (9.85 M variants), GB": round(ukb * width * 4 / 1e9, 2),
+            "FinnGen (21.23 M variants), GB": round(finngen * width * 4 / 1e9, 2),
+        }
+    )
+pd.DataFrame(rows)
+```
+
+The Dense shards under measurement are `100000 x 2000` (`v3-c1000`) and
+`100000 x 1024` (`v3-c128`, `v3-c64`). Nothing was built for this table.
+
+# Screening beyond 64 and 128
+
+Converting the whole of OGS-00009 into a shape costs hours, so any shape other
+than the four measured above is screened from the 100,000-variant slice first
+(`shape_slice.py`, `shape_screen.py`). The two screened here are `[1000, 256]`
+and `[500, 256]`.
+
+```{python}
+#| label: screening-summary
+screening = json.loads((HERE / "screening" / "screen.json").read_text())
+rows = []
+for name in ("1000x64", "1000x128", "1000x256", "500x256", "1000x1000"):
+    entry = {
+        "candidate": name,
+        "one whole Analysis (modelled s)": round(
+            screening["shapes"]["bulk"]["candidates"][name]["e2e_mid_ms"] / 1000, 1
+        ),
+        "one variant, all Analyses (modelled ms)": round(
+            screening["shapes"]["phewas"]["candidates"][name]["e2e_mid_ms"], 2
+        ),
+        "10 variants x 100 Analyses (modelled ms)": round(
+            screening["shapes"]["rand_10x100"]["candidates"][name]["e2e_mid_ms"], 1
+        ),
+    }
+    rows.append(entry)
+pd.DataFrame(rows).set_index("candidate")
+```
+
+```{python}
+#| label: screening-rank
+rank = json.loads((HERE / "screening" / "screen_rank_check.json").read_text())
+rows = []
+for shape in ("bulk", "phewas", "rand_10x100", "rand_100x10"):
+    for candidate in ("1000x64", "1000x128", "1000x256", "500x256"):
+        entry = rank[shape][candidate]
+        rows.append(
+            {
+                "query": shape,
+                "candidate": candidate,
+                "model A ratio": round(entry["model_A"], 3),
+                "model B ratio": round(entry["model_B"], 3),
+                "slice measured ratio": (
+                    None
+                    if entry["slice_measured"] is None
+                    else round(entry["slice_measured"], 3)
+                ),
+            }
+        )
+pd.DataFrame(rows)
+```
+
+# The top-hit index, sharded and effectively unsharded
+
+Sharding a top-hit tier adds a codec hop per read, and a top-hit query makes six
+reads (ADR 0056). `v3-c64-topshard1` is the same conversion as `v3-c64` with
+`--top-hit-shard-chunks 1`: every top-hit shard holds one inner chunk,
+"effectively unsharded", while the array is still a v3 sharded array.
+
+```{python}
+#| label: tophits
+rows = []
+for label in ("v3-c64", "v3-c64-topshard1"):
+    store = STORES[label]
+    timing = next(row for row in store["timings"] if row["query"] == "tophits")
+    memory = next(row for row in store["memory"] if row["query"] == "tophits")
+    rows.append(
+        {
+            "configuration": label,
+            "top-hits median ms": timing["median_ms"],
+            "top-hits p95 ms": timing["p95_ms"],
+            "top-hits peak MB": memory["peak_mb"],
+        }
+    )
+pd.DataFrame(rows).set_index("configuration")
+```

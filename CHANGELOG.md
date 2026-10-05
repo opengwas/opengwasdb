@@ -292,6 +292,16 @@ the end of this file.
 
 ### Added
 
+- **The top-hit shard width is a conversion parameter (#246).**
+  `convert_dense_release(..., top_hit_shard_chunks=N)` and
+  `scripts/convert_store_to_0_2_0.py --top-hit-shard-chunks N` set how many
+  top-hit inner chunks one shard holds, defaulting to the seam's 64. `N=1`
+  gives every top-hit shard one inner chunk — the "effectively unsharded"
+  variant #246 measures the top-hit query against — while the array stays a
+  Zarr v3 sharded array, so format 0.2.0's "every array is sharded" rule is not
+  relaxed. `shard_layout(..., top_hit_shard_chunks=…)` is the seam-level form
+  and applies to `TOP_HIT_INDEX` alone; the value is rejected if it is below 1,
+  and recorded in the `zarr_v3_conversion` provenance block.
 - **A Dense Store Release can be converted to format 0.2.0 (Zarr v3, sharded)
   (#245).** `opengwasdb/store/convert.py` and its CLI
   `scripts/convert_store_to_0_2_0.py STORE --into DEST [--dense-analysis-chunk N]

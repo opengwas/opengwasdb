@@ -31,12 +31,14 @@ from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.query import query_store
 from opengwasdb.store import open as store_open
 from opengwasdb.store.arrays import (
+    TOP_HIT_SHARD_CHUNKS,
     ArrayRole,
     compressor,
     create_array,
     create_group,
     inner_chunk_of,
     open_group,
+    open_group_for_write,
     shard_layout,
     sharded_compressor,
 )
@@ -44,6 +46,7 @@ from opengwasdb.store.convert import (
     ConversionError,
     ConversionVerificationError,
     _attrs_differ_only_where_expected,
+    _plan_arrays,
     convert_dense_release,
     verify_conversion,
 )
@@ -227,6 +230,84 @@ def test_the_fixture_source_is_zarr_v2_and_the_conversion_is_zarr_v3(
         ]
         == 3
     )
+
+
+# ── the top-hit shard width is a parameter (#246) ────────────────────────────
+
+#: A top-hit tier with more than one shard's worth of hits: 2,000,000 hits is
+#: 123 inner chunks of 16,384, so the default 64-chunk shard and the one-chunk
+#: shard are observably different.  The fixture store's own tiers are one inner
+#: chunk each (a 1005 x 120 grid has far fewer hits), which is why the planning
+#: input is built here.
+TOP_HIT_TIER_HITS = 2_000_000
+
+
+def test_shard_layout_takes_a_top_hit_shard_width_override():
+    """The seam's top-hit policy honours `top_hit_shard_chunks`; `1` is one chunk."""
+    default = shard_layout(
+        ArrayRole.TOP_HIT_INDEX, (TOP_HIT_TIER_HITS,), inner_chunk=(16_384,)
+    )
+    one = shard_layout(
+        ArrayRole.TOP_HIT_INDEX,
+        (TOP_HIT_TIER_HITS,),
+        inner_chunk=(16_384,),
+        top_hit_shard_chunks=1,
+    )
+    assert default == (TOP_HIT_SHARD_CHUNKS * 16_384,)
+    assert one == (16_384,)
+    with pytest.raises(ValueError, match="at least one inner chunk"):
+        shard_layout(
+            ArrayRole.TOP_HIT_INDEX,
+            (TOP_HIT_TIER_HITS,),
+            inner_chunk=(16_384,),
+            top_hit_shard_chunks=0,
+        )
+
+
+def test_the_converter_plans_top_hit_shards_at_the_width_it_is_asked_for(tmp_path: Path):
+    """`--top-hit-shard-chunks` reaches every top-hit array and nothing else.
+
+    A real end-to-end conversion cannot show this on a unit-test fixture: a
+    store large enough to have a multi-shard top-hit tier is the 33 GB
+    OGS-00009, which is what #246 converts and measures.  This drives the
+    converter's own planning seam instead, so the parameter's route to
+    `shard_layout` is tested without one.
+    """
+    root = open_group_for_write(tmp_path / "data.zarr", "w", zarr_format=2)
+    create_array(
+        root,
+        "z",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        shape=(2000, 8),
+        dtype="int16",
+        fill_value=-1,
+    )
+    create_group(root, "top_hits")
+    create_group(root["top_hits"], "p_5e_04")
+    create_array(
+        root["top_hits"]["p_5e_04"],
+        "z",
+        ArrayRole.TOP_HIT_INDEX,
+        shape=(TOP_HIT_TIER_HITS,),
+        dtype="float32",
+        fill_value=0.0,
+    )
+
+    def planned(**kwargs: int) -> dict[str, Any]:
+        return {
+            plan.path: plan
+            for plan in _plan_arrays(
+                root, dense_analysis_chunk=4, dense_shard=(1000, 8), **kwargs
+            )
+        }
+
+    wide = planned()
+    narrow = planned(top_hit_shard_chunks=1)
+    assert wide["top_hits/p_5e_04/z"].inner_chunk == (16_384,)
+    assert wide["top_hits/p_5e_04/z"].shard_shape == (64 * 16_384,)
+    assert narrow["top_hits/p_5e_04/z"].shard_shape == (16_384,)
+    # The Dense plane's own shard is untouched by the top-hit parameter.
+    assert wide["z"].shard_shape == narrow["z"].shard_shape == (1000, 8)
 
 
 # ── every query shape returns identical results ──────────────────────────────

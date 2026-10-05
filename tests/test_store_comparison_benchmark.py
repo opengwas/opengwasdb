@@ -20,9 +20,11 @@ from benchmarks.benchmark_store_comparison import (
     differing_arrays,
     differing_shapes,
     digest_array,
+    effective_reader_settings,
     footprint,
     result_digests,
 )
+from opengwasdb.store.arrays import ArrayRole, create_array, open_group_for_write
 
 
 def _result(
@@ -142,6 +144,9 @@ def test_footprint_separates_v2_arrays_from_the_envelope(tmp_path):
     nodes = {row["node"]: row for row in result["arrays"]}
     assert nodes["data.zarr/z"]["n_files"] == 2  # .zarray plus one chunk
     assert nodes["data.zarr/z"]["apparent_bytes"] >= 1000
+    # The largest file is the chunk, not the 2-byte .zarray: this is the shard
+    # size #246 reports, and an average over the array could hide a large one.
+    assert nodes["data.zarr/z"]["largest_file_bytes"] == 1000
     assert result["zarr_metadata"]["n_files"] == 1  # data.zarr/.zgroup
     assert result["apparent_bytes"] == sum(
         row["apparent_bytes"] for row in result["arrays"]
@@ -163,9 +168,32 @@ def test_footprint_reads_zarr_v3_node_types(tmp_path):
     nodes = {row["node"]: row for row in result["arrays"]}
     assert list(nodes) == ["data.zarr/z"]
     assert nodes["data.zarr/z"]["n_files"] == 2  # array zarr.json plus inner shard
+    assert nodes["data.zarr/z"]["largest_file_bytes"] == 1000  # the shard, not zarr.json
     assert [row["path"] for row in result["envelope"]["files"]] == ["manifest.json"]
     # The group's own zarr.json is Zarr metadata, not envelope.
     assert result["zarr_metadata"]["n_files"] == 1
+
+
+def test_effective_reader_settings_reports_the_pinned_configuration(tmp_path):
+    """The artifact must record what ran, not what the code intended.
+
+    A benchmark under any other reader configuration is not comparable (#244,
+    #253), so the values are asserted, not merely present.
+    """
+    root = open_group_for_write(tmp_path / "data.zarr", "w")
+    create_array(
+        root,
+        "z",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        shape=(4, 4),
+        dtype="int16",
+        fill_value=-1,
+    )
+    assert effective_reader_settings(root) == {
+        "use_threads": True,
+        "pipeline": "FusedCodecPipeline",
+        "max_workers": 1,
+    }
 
 
 def test_store_arg_requires_a_label_and_a_path():

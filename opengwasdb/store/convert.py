@@ -57,6 +57,7 @@ from opengwasdb.store.arrays import (
     DENSE_CHUNK_SHAPE,
     DENSE_SHARD_SHAPE,
     SHARDED_COMPRESSOR_RECORD,
+    TOP_HIT_SHARD_CHUNKS,
     ArrayRole,
     chunk_layout,
     create_array,
@@ -241,7 +242,11 @@ def _v3_codec(source_array: Any) -> tuple[str, int, str] | None:
 
 
 def _plan_arrays(
-    source_root: Any, *, dense_analysis_chunk: int, dense_shard: tuple[int, int]
+    source_root: Any,
+    *,
+    dense_analysis_chunk: int,
+    dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int = TOP_HIT_SHARD_CHUNKS,
 ) -> list[_ArrayPlan]:
     """Map every source array to a role and its 0.2.0 inner chunk and shard.
 
@@ -250,6 +255,10 @@ def _plan_arrays(
     `PER_VARIANT` side arrays then follow that plane's variant chunk through the
     same policy, so they are never coarser than the plane they serve (issue
     #135, spec §6).
+
+    `top_hit_shard_chunks` is passed through to the seam for the top-hit arrays
+    alone (#246).  Its default is the seam's own default, so a conversion that
+    does not ask for anything else writes exactly what #245 wrote.
     """
     if "z" not in source_root:
         raise ConversionError(
@@ -270,6 +279,7 @@ def _plan_arrays(
             dense_analysis_chunk=dense_analysis_chunk,
             dense_shard=dense_shard,
             component_chunk=plane_inner[0],
+            top_hit_shard_chunks=top_hit_shard_chunks,
         )
         for path in _array_paths(source_root)
     ]
@@ -301,6 +311,7 @@ def _plan_one_array(
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
     component_chunk: int,
+    top_hit_shard_chunks: int = TOP_HIT_SHARD_CHUNKS,
 ) -> _ArrayPlan:
     """One source array's role, inner chunk and shard; an unknown path refuses."""
     role = role_for_array_path(path)
@@ -326,6 +337,9 @@ def _plan_one_array(
         shape,
         inner_chunk=inner,
         dense_shard=dense_shard if is_grid else None,
+        top_hit_shard_chunks=(
+            top_hit_shard_chunks if role is ArrayRole.TOP_HIT_INDEX else None
+        ),
     )
     return _ArrayPlan(
         path=path,
@@ -465,6 +479,7 @@ def _rewrite_manifest(
     plans: list[_ArrayPlan],
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int,
     now: str,
     source_release_id: str,
 ) -> str:
@@ -501,6 +516,7 @@ def _rewrite_manifest(
             "opengwasdb_git_hash": _installed_commit(),
             "dense_analysis_chunk": dense_analysis_chunk,
             "dense_shard": list(dense_shard),
+            "top_hit_shard_chunks": top_hit_shard_chunks,
             "layouts": _recorded_layouts(plans),
             "note": (
                 "Derived by scripts/convert_store_to_0_2_0.py: every array was re-written "
@@ -767,6 +783,7 @@ def convert_dense_release(
     *,
     dense_analysis_chunk: int = 64,
     dense_shard: tuple[int, int] = DENSE_SHARD_SHAPE,
+    top_hit_shard_chunks: int = TOP_HIT_SHARD_CHUNKS,
     workers: int = 1,
 ) -> Path:
     """Derive a 0.2.0 release at `destination` from a Dense 0.1.0 one at `source`."""
@@ -784,6 +801,8 @@ def convert_dense_release(
         )
     if int(dense_analysis_chunk) < 1:
         raise ConversionError("--dense-analysis-chunk must be at least 1")
+    if int(top_hit_shard_chunks) < 1:
+        raise ConversionError("--top-hit-shard-chunks must be at least 1")
     dense_shard = (int(dense_shard[0]), int(dense_shard[1]))
     _refuse_unconvertible(source)
     _stage_and_convert(
@@ -791,6 +810,7 @@ def convert_dense_release(
         destination,
         dense_analysis_chunk=int(dense_analysis_chunk),
         dense_shard=dense_shard,
+        top_hit_shard_chunks=int(top_hit_shard_chunks),
         workers=int(workers),
     )
     print(f"Published {destination} as {SHARDED_FORMAT_VERSION}", flush=True)
@@ -803,6 +823,7 @@ def _stage_and_convert(
     *,
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int,
     workers: int,
 ) -> None:
     """Build, verify and validate the converted release in staging.
@@ -821,6 +842,7 @@ def _stage_and_convert(
             source_root,
             dense_analysis_chunk=dense_analysis_chunk,
             dense_shard=dense_shard,
+            top_hit_shard_chunks=top_hit_shard_chunks,
         )
         print(f"  {len(plans)} arrays to convert", flush=True)
         destination_root = open_group_for_write(staged.data_path, "w", zarr_format=3)
@@ -832,7 +854,13 @@ def _stage_and_convert(
         _log_phase(f"wrote every shard over {workers} worker(s)", started)
         started = time.perf_counter()
         _rewrite_staged_metadata(
-            source, staged.path, plans, dense_analysis_chunk, dense_shard, source_root
+            source,
+            staged.path,
+            plans,
+            dense_analysis_chunk,
+            dense_shard,
+            top_hit_shard_chunks,
+            source_root,
         )
         _log_phase("rewrote the manifest, index blob and root attrs", started)
         started = time.perf_counter()
@@ -850,6 +878,7 @@ def _rewrite_staged_metadata(
     plans: list[_ArrayPlan],
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int,
     source_root: Any,
 ) -> None:
     """Restamp the manifest, re-point the index blob and rewrite the root attrs."""
@@ -858,6 +887,7 @@ def _rewrite_staged_metadata(
         plans=plans,
         dense_analysis_chunk=dense_analysis_chunk,
         dense_shard=dense_shard,
+        top_hit_shard_chunks=top_hit_shard_chunks,
         now=datetime.now(UTC).isoformat(),
         source_release_id=str(_manifest_data(source)["release_id"]),
     )

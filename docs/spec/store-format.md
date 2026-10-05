@@ -874,7 +874,7 @@ parameters and #246 benchmarks, are:
 | per-variant side arrays (`eaf_baseline`, `eaf_reference`) | per §6: the serving plane's variant-axis chunk, capped at 200,000, clipped to the array | about 1,000,000 elements |
 | flat CSR association sequences | 200,000, or an explicit `chunks=(...)` | about 1,000,000 elements |
 | flat Rho arrays | 1,000,000, clipped to the array | about 1,000,000 elements |
-| top-hit index columns | 16,384 (as 0.1.0), clipped to the array | about 64 inner chunks |
+| top-hit index columns | 16,384 (as 0.1.0), clipped to the array | `--top-hit-shard-chunks` inner chunks (default 64), clipped to cover the array. The converter may set it to 1, one inner chunk per shard, which #246 measures the top-hit query against; the array is a sharded v3 array either way |
 | top-hit per-Analysis offsets | whole array | one shard holding the array |
 | exception / overflow tables (Z, EAF and SE) | the role policy's 200,000, clipped to the array length (a shorter table is one inner chunk) | one shard holding the array |
 | SE coefficients | `(min(n_analyses, 1024), 2)` | one shard holding the array |
@@ -885,7 +885,9 @@ that spans the dimension, so a small array gets one shard of one inner chunk and
 the declared shard is always a whole multiple of the inner chunk.  The inner
 chunk is `chunk_layout(role, shape, …)`; the shard is `shard_layout(role, shape,
 inner_chunk=…)` — one role → layout table in `opengwasdb.store.arrays`, so the
-converter and #247's builders cannot disagree.
+converter and #247's builders cannot disagree. The top-hit shard width is the
+one override a caller passes to `shard_layout` (`top_hit_shard_chunks`); it
+applies to `TOP_HIT_INDEX` alone and defaults to the policy's 64.
 
 The inner chunk is the role policy of `opengwasdb.store.arrays` (`chunk_layout`)
 and the shard its companion `shard_layout`; a shard MUST be a whole multiple of

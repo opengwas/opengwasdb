@@ -602,11 +602,20 @@ def sharded_compressor() -> BloscCodec:
 
 @dataclass(frozen=True)
 class _ShardContext:
-    """Everything a shard policy may depend on: role, shape, inner chunk, params."""
+    """Everything a shard policy may depend on: role, shape, inner chunk, params.
+
+    `top_hit_shard_chunks` is the converter's `--top-hit-shard-chunks` (#246):
+    how many top-hit inner chunks one shard holds.  It applies to
+    `TOP_HIT_INDEX` alone.  `None` means the default, `TOP_HIT_SHARD_CHUNKS`;
+    `1` makes the shard one inner chunk, the "effectively unsharded" variant
+    #246 measures the top-hit query against.  The array is still a v3 sharded
+    array either way -- it is never written without the sharding codec.
+    """
 
     shape: tuple[int, ...]
     inner_chunk: tuple[int, ...]
     dense_shard: tuple[int, int] | None
+    top_hit_shard_chunks: int | None = None
 
 
 def _covering_shard(inner: int, dim: int) -> int:
@@ -657,16 +666,27 @@ def _shard_element_cap(ctx: _ShardContext) -> tuple[int, ...]:
     return (_clip_shard_to_multiple(SHARD_ELEMENT_CAP, inner, ctx.shape[0]),)
 
 
-def _shard_inner_chunks(count: int) -> Callable[[_ShardContext], tuple[int, ...]]:
-    """A shard of `count` inner chunks, axis by axis (used by 1-D tiers)."""
+def _shard_top_hit_index(ctx: _ShardContext) -> tuple[int, ...]:
+    """A top-hit tier's flat column: its `top_hit_shard_chunks` inner chunks.
 
-    def policy(ctx: _ShardContext) -> tuple[int, ...]:
-        return tuple(
-            _clip_shard_to_multiple(count * inner, inner, dim)
-            for inner, dim in zip(ctx.inner_chunk, ctx.shape, strict=True)
+    The default is the seam's `TOP_HIT_SHARD_CHUNKS`.  The converter passes an
+    override for #246's "sharded against effectively unsharded" measurement;
+    the override is validated here rather than left to zarr, so a bad value
+    fails with the role in the message.
+    """
+    count = (
+        TOP_HIT_SHARD_CHUNKS
+        if ctx.top_hit_shard_chunks is None
+        else int(ctx.top_hit_shard_chunks)
+    )
+    if count < 1:
+        raise ValueError(
+            f"top-hit shard must hold at least one inner chunk, got {count}"
         )
-
-    return policy
+    return tuple(
+        _clip_shard_to_multiple(count * inner, inner, dim)
+        for inner, dim in zip(ctx.inner_chunk, ctx.shape, strict=True)
+    )
 
 
 def _shard_whole_array(ctx: _ShardContext) -> tuple[int, ...]:
@@ -693,7 +713,7 @@ _SHARD_LAYOUTS: Mapping[ArrayRole, Callable[[_ShardContext], tuple[int, ...]]] =
             ArrayRole.ASSOCIATION_SEQUENCE: _shard_element_cap,
             ArrayRole.ASSOCIATION_OFFSETS: _shard_whole_array,
             ArrayRole.PER_VARIANT: _shard_element_cap,
-            ArrayRole.TOP_HIT_INDEX: _shard_inner_chunks(TOP_HIT_SHARD_CHUNKS),
+            ArrayRole.TOP_HIT_INDEX: _shard_top_hit_index,
             ArrayRole.TOP_HIT_ANALYSIS_OFFSETS: _shard_whole_array,
             ArrayRole.EXCEPTION_TABLE: _shard_whole_array,
             ArrayRole.SE_COEFFICIENTS: _shard_whole_array,
@@ -727,6 +747,7 @@ def shard_layout(
     inner_chunk: tuple[int, ...] | None = None,
     dense_shard: tuple[int, int] | None = None,
     component_chunk: int | None = None,
+    top_hit_shard_chunks: int | None = None,
 ) -> tuple[int, ...]:
     """The shard shape `role` requires for an array of `shape`.
 
@@ -734,7 +755,8 @@ def shard_layout(
     omitted it is derived from `role + shape` (with `component_chunk` for
     `PER_VARIANT`).  `dense_shard` is the `(V_s, A_s)` conversion parameter and
     applies only to the Dense grid roles; every other role's shard is fixed by
-    its policy.
+    its policy.  `top_hit_shard_chunks` is the converter's override for
+    `TOP_HIT_INDEX` (#246); it is ignored by every other role.
 
     The result is always a whole multiple of `inner_chunk` -- the presence of a
     shard that is not is a corrupt layout, so this refuses rather than passing
@@ -758,6 +780,7 @@ def shard_layout(
             dense_shard=(
                 None if dense_shard is None else (int(dense_shard[0]), int(dense_shard[1]))
             ),
+            top_hit_shard_chunks=top_hit_shard_chunks,
         )
     )
     _require_shard_multiple(role, resolved, shard)

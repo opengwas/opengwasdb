@@ -55,6 +55,7 @@ from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import run_probe
 from benchmarks.benchmark_ukbb_dense import _median_ms
 from opengwasdb.query.facade import _empty_result
+from opengwasdb.store.arrays import inner_chunk_of
 
 # Selection anchors, matching the OGS-00009 report (benchmark_ukbb_dense.py):
 # the statin-use exposure Analysis, the chr19 APOE/APOC region, and the seeded
@@ -306,6 +307,36 @@ def _timed_shape(
     return median_ms, p95_ms, count, digests
 
 
+def _layout_block(q: Any) -> dict[str, Any]:
+    """The physical layout each Dense plane reads at, and one top-hit tier's.
+
+    #246 compares shapes, so the artifact must say which shape each store is,
+    read back from the arrays rather than from the manifest: a 0.1.0 plane has
+    no shard, and a converted one has the shard the conversion wrote.  The
+    inner chunk is zarr's `chunks` (the read unit), the shard `shards` (the
+    file unit).
+    """
+
+    def shape_of(array: Any) -> dict[str, Any]:
+        shards = getattr(array, "shards", None)
+        return {
+            "chunk_shape": list(inner_chunk_of(array)),
+            "shard_shape": None if shards is None else [int(size) for size in shards],
+            "dtype": str(array.dtype),
+        }
+
+    layout: dict[str, Any] = {}
+    for name in ("z", "se", "eaf"):
+        if name in q._root:
+            layout[name] = shape_of(q._root[name])
+    if "top_hits" in q._root:
+        for tier in sorted(q._root["top_hits"].group_keys()):
+            if "z" in q._root["top_hits"][tier]:
+                layout[f"top_hits/{tier}/z"] = shape_of(q._root["top_hits"][tier]["z"])
+                break
+    return layout
+
+
 def _dataset_block(q: Any, plan: Any) -> dict[str, Any]:
     return {
         "release_id": plan.release_id,
@@ -316,6 +347,7 @@ def _dataset_block(q: Any, plan: Any) -> dict[str, Any]:
         "reference_assembly": getattr(plan, "reference_assembly", None),
         "format_version": plan.format_version,
         "encoding": plan.encoding.to_manifest(),
+        "layout": _layout_block(q),
     }
 
 
@@ -327,6 +359,7 @@ def _measure_store(
     q, plan = _query_shapes.open_benchmark_store(spec.path)
     try:
         dataset = _dataset_block(q, plan)
+        effective_reader = effective_reader_settings(q._root)
         patterns = _patterns_for_store(q, selection)
         timings: list[dict[str, Any]] = []
         digests: dict[str, dict[str, str]] = {}
@@ -359,6 +392,7 @@ def _measure_store(
         "footprint": footprint(spec.path),
         "timings": timings,
         "memory": memory,
+        "effective_reader": effective_reader,
         "load_average_1m_before": round(load_before, 2),
         "load_average_1m_after": round(load_after, 2),
     }
@@ -439,7 +473,16 @@ def _bucket_for(
 
 
 def _empty_bucket() -> dict[str, Any]:
-    return {"n_files": 0, "apparent_bytes": 0, "allocated_bytes": 0}
+    # `largest_file_bytes` is the shard size a 0.2.0 array actually stores: a v3
+    # array's files are its shards plus one `zarr.json`, so the largest file is
+    # its largest shard.  #246 reports shard file sizes for copying, hosting and
+    # HTTP range requests; a v2 array's largest file is its largest chunk.
+    return {
+        "n_files": 0,
+        "apparent_bytes": 0,
+        "allocated_bytes": 0,
+        "largest_file_bytes": 0,
+    }
 
 
 def _du_bytes(path: Path, *flags: str) -> int:
@@ -478,6 +521,7 @@ def footprint(root: Path) -> dict[str, Any]:
         bucket["allocated_bytes"] += allocated
         if not is_dir:
             bucket["n_files"] += 1
+            bucket["largest_file_bytes"] = max(bucket["largest_file_bytes"], apparent)
             if kind == "envelope":
                 envelope["files"].append(
                     {
@@ -510,7 +554,26 @@ def footprint(root: Path) -> dict[str, Any]:
     }
 
 
-def _environment_block() -> dict[str, Any]:
+def effective_reader_settings(root: Any) -> dict[str, Any]:
+    """The reader configuration actually in force, read back from the process.
+
+    The pinned configuration (#244's Blosc threads and one-worker fused
+    pipeline, #253's single EAF read) is what makes two runs comparable, so the
+    artifact records what ran rather than what the code was meant to set.  The
+    thread flag and the worker count are process-wide `zarr.config`/numcodecs
+    state; the pipeline is per-array, so its class is read from the plane a
+    query actually reads.  `provenance()` separately records the commit and the
+    fingerprint of the `opengwasdb` this process imported (#253).
+    """
+    plane = root["z"]
+    return {
+        "use_threads": bool(numcodecs.blosc.use_threads),
+        "pipeline": type(plane._async_array.codec_pipeline).__name__,
+        "max_workers": zarr.config.get("codec_pipeline.max_workers", None),
+    }
+
+
+def _environment_block(effective_reader: dict[str, Any]) -> dict[str, Any]:
     return {
         "python": platform.python_version(),
         "numpy": np.__version__,
@@ -520,6 +583,7 @@ def _environment_block() -> dict[str, Any]:
         "hostname": socket.gethostname(),
         "nproc": os.cpu_count(),
         "cache": CACHE_NOTE,
+        "effective_reader": effective_reader,
     }
 
 
@@ -607,7 +671,7 @@ def main() -> None:
             "arrays_per_shape": list(RESULT_ARRAY_NAMES),
             "identical": True,
         },
-        "environment": _environment_block(),
+        "environment": _environment_block(records[0]["effective_reader"]),
         **provenance(),
     }
     write_artifact(args.output, result)

@@ -142,10 +142,31 @@ def attribution_medians(path: Path, config: str) -> dict[str, float]:
     return {shape: statistics.median(r["ms"][shape] for r in runs) for shape in runs[0]["ms"]}
 
 
-def harness_rows(path: Path) -> dict[str, dict[str, dict[str, Any]]]:
-    """A #242 harness artifact's first store: timings and memory by short name."""
+def harness_store(path: Path, label: str | None = None) -> dict[str, Any]:
+    """One store's record in a #242 harness artifact, by label (default the first).
+
+    #246's run puts every zarr-3-readable configuration in one artifact, so a
+    "table that reports several shapes has to select a store by label; the #244
+    table commands keep reading the first.
+    """
+    stores = json.loads(path.read_text())["stores"]
+    if label is None:
+        return stores[0]
+    for store in stores:
+        if store["label"] == label:
+            return store
+    raise SystemExit(
+        f"{path}: no store labelled {label!r}; it holds "
+        f"{[store['label'] for store in stores]}"
+    )
+
+
+def harness_rows(
+    path: Path, label: str | None = None
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """One store's timings and memory from a #242 harness artifact, by short name."""
     short = {v: k for k, v in HARNESS_NAME.items()}
-    store = json.loads(path.read_text())["stores"][0]
+    store = harness_store(path, label)
     return {
         "time": {short.get(t["query"], t["query"]): t for t in store["timings"]},
         "mem": {short.get(m["query"], m["query"]): m for m in store.get("memory", [])},
