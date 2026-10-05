@@ -100,15 +100,16 @@ def test_the_version_this_build_writes_is_one_it_can_read():
     assert store_open.SUPPORTED_FORMAT_VERSIONS[series] >= remainder
 
 
-def test_there_is_exactly_one_readable_format():
-    """The point of the reset (issue #143): one format, one decoder, one
-    contract to test. A second entry here is a decision, not an accident."""
-    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,)}
+def test_the_readable_formats_are_the_two_the_epic_carries():
+    """Format 0.2.0 is readable since #245 (Zarr v3 with sharding, the
+    converter's output), alongside 0.1.0 which every builder still writes.  A
+    third entry is a decision, not an accident."""
+    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (0,)}
 
 
 def test_an_unknown_series_is_rejected():
-    """A breaking change moves the series, and this build reads one series."""
-    for version in ("0.2.0", "1.0.0", "9.9.9"):
+    """A breaking change moves the series, and this build reads two of them."""
+    for version in ("0.3.0", "1.0.0", "9.9.9"):
         with pytest.raises(store_open.UnsupportedFormatVersion, match="release series"):
             store_open.check_format_version(version)
 
@@ -139,7 +140,7 @@ def test_open_store_refuses_a_pre_reset_release(dense_store_path):
 
 
 def test_open_store_rejects_an_unknown_series(dense_store_path):
-    _set_version(dense_store_path, "0.2.0")
+    _set_version(dense_store_path, "1.0.0")
 
     with pytest.raises(store_open.UnsupportedFormatVersion):
         store_open.open_store(dense_store_path)
@@ -161,6 +162,17 @@ def test_validation_reports_a_pre_reset_release_as_an_error_not_a_crash(dense_st
 def test_the_current_version_is_writable():
     writable = store_open.check_writable_format_version(CURRENT_FORMAT_VERSION)
     assert writable == CURRENT_FORMAT_VERSION
+
+
+def test_the_converter_version_is_readable_but_not_writable():
+    """The intended interim behaviour of #245: a converted 0.2.0 release can be
+    read, but this build still writes 0.1.0, so completion -- which writes into
+    the source's arrays and keeps its format -- refuses it until #247."""
+    store_open.check_format_version(store_open.SHARDED_FORMAT_VERSION)
+    with pytest.raises(store_open.UnsupportedFormatVersion, match="reads but cannot write"):
+        store_open.check_writable_format_version(
+            store_open.SHARDED_FORMAT_VERSION, source="converted release X"
+        )
 
 
 def test_a_readable_but_unwritable_version_is_refused(monkeypatch):

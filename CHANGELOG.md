@@ -258,6 +258,43 @@ the end of this file.
 
 ### Added
 
+- **A Dense Store Release can be converted to format 0.2.0 (Zarr v3, sharded)
+  (#245).** `opengwasdb/store/convert.py` and its CLI
+  `scripts/convert_store_to_0_2_0.py STORE --into DEST [--dense-analysis-chunk N]
+  [--dense-shard ROWSxCOLS] [--workers N]` derive a new 0.2.0 release from a
+  **Dense Observed-Only 0.1.0** one. Every array is re-written as Zarr v3 with
+  the sharding codec holding the same stored codes, so no value is re-encoded;
+  inner chunk and shard come from the array seam's one role policy
+  (`chunk_layout`/`shard_layout`), so #247's builders cannot disagree with it.
+  The source is never written, an existing destination is refused, Ragged,
+  Hybrid and Reference-Completed sources are refused by name (#248 adds them),
+  and the result is a new release: fresh `release_id`/`created_at`, `store_id`
+  kept, a `zarr_v3_conversion` provenance block with the source release, the
+  installed commit, the Zarr formats and the per-array layout, the Dense
+  `chunk_shape`/`shard_shape`/`compressor` rewritten in `manifest.json`, the
+  `index.sqlite` `dense` blob and the `data.zarr` root attrs, and
+  `overview.html` regenerated. It is verified **bit-identical** to the source
+  (every array's path, shape, dtype, fill value, then the values block by block
+  as raw bytes, so NaN payloads count) and validates with no errors before it is
+  published by rename.
+- **Format 0.2.0 is readable (#245).** `SUPPORTED_FORMAT_VERSIONS` gains the
+  `(0, 2)` series, alongside `0.1`. `CURRENT_FORMAT_VERSION` stays `0.1.0`: the
+  builders keep writing it until #247, the converter is the only 0.2.0 writer in
+  the interim, and no package version is cut in between. As a direct
+  consequence `check_writable_format_version` (ADR 0038 §4) now refuses to
+  Reference-Complete a 0.2.0 source — completion writes into its source's arrays
+  and keeps its format — which is the intended interim behaviour until #247.
+- **Three new validation rules for the Zarr layout (#245).** (1) The Zarr
+  on-disk format must match `format_version`: 0.1.0 is v2 everywhere, 0.2.0 is v3
+  everywhere with every array sharded, and a half-converted release is invalid.
+  (2) The Dense planes' recorded `chunk_shape`/`shard_shape` must agree with the
+  arrays in all three places they are recorded (`manifest.json`
+  `provenance.dense`, the `index.sqlite` `dense` blob, the `data.zarr` root
+  attrs); each hint is clipped to the plane the way the role policy clips it.
+  (3) The per-variant chunking rule (issue #135) is applied to the **inner**
+  chunk of a sharded array — the unit a query reads — not to the shard. ADR
+  0057 records what 0.2.0 is, the conversion route, the shard policy and the
+  rejected options; spec §10a describes `data.zarr` in 0.2.0.
 - **OGS-00009 on zarr-python 3 meets set L (#244, Stage B).** The #242 harness
   ran back to back, zarr 2.18 at `745796c` then zarr 3 at `83b8b23`, with
   `--reps 5` and the peak-memory probes. Each run started below a 1-minute load
@@ -1814,12 +1851,18 @@ it can read.
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
 | 0.3.0 | 0.1.0 | 0.1.0 only |
+| Unreleased (next) | 0.1.0 from every builder, 0.2.0 from the converter only | 0.1.0, 0.2.0 |
 
 The two `format_version` values in that table are different formats despite
 reading alike: `0.1` is the pre-release format 0.2.0 wrote, and `0.1.0` is the
 reset (#143, ADR 0041). Nothing on `dev` reads `0.1`, and the shapes cannot be
 confused by a reader — only by a person reading this table, which is why it
 says so here.
+
+The `Unreleased` row is the interim of ADR 0057: builders and converter write
+different formats until #247 moves the builders to 0.2.0, and no package version
+is cut while that holds. A 0.2.0 release reads and queries exactly as its 0.1.0
+source did; only its physical layout differs.
 
 [Unreleased]: https://github.com/opengwas/opengwasdb/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/opengwas/opengwasdb/compare/v0.2.0...v0.3.0
