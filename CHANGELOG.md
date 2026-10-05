@@ -31,7 +31,10 @@ the end of this file.
   OGS-00004. On OGS-00009 one whole Analysis went 23.4 s to 20.1 s and the 1 Mb
   window 1.73 s to 0.89 s, with every shape inside #244's set-L time and
   memory budgets; the artifact is
-  `docs/benchmark-output/opengwasdb_store_comparison_ogs00009_eaf_once.json`.
+  `docs/benchmark-output/opengwasdb_store_comparison_ogs00009_eaf_once.json`, and
+  an interleaved base-vs-head A/B (each side's imported code revision and
+  fingerprint, the commands, the round order and every sample) is
+  `docs/benchmark-output/opengwasdb_eaf_read_once_ab.json`.
 - **The package runs on zarr-python 3 (#244).** `zarr>=3.4,<4` and
   `numcodecs>=0.17` replace `zarr>=2.18,<3` and `numcodecs>=0.12,<0.13` in both
   the `[project]` and pixi dependency tables. The Store format is **not**
