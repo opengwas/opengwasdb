@@ -89,9 +89,11 @@ attributes.
 
 ## Consequences
 
-- **Every existing Store Release the seam can describe is convertible.** OGS-00001,
-  OGS-00002, OGS-00004, OGS-00005 and OGS-00010 were converted under #248;
-  OGS-00011 follows in #250 once #252's format-free fixes land.
+- **Every existing Store Release the seam can describe is convertible.** The
+  #248 pilots are OGS-00001 and OGS-00002 (Ragged), OGS-00004 and OGS-00005
+  (Hybrid) and OGS-00010 (Dense Reference-Completed); OGS-00011 follows in #250
+  once #252's format-free fixes land. #248's worker report records the numbers
+  and any pilot that could not be converted.
 - **The Dense shapes stay #246's decision.** The Ragged roles are distinct from
   the Dense ones precisely so a Ragged shard can be sized here without moving the
   Dense numbers #246 is benchmarking.
