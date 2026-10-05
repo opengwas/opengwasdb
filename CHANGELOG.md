@@ -12,6 +12,26 @@ the end of this file.
 
 ### Changed
 
+- **A query reads each Analysis's `eaf` once and shares it between SE decoding
+  and the result's `eaf` column (#253).** On a release whose `se` is
+  `int8_residual`, decoding a residual predicts it from the frequency, so the
+  `eaf` plane, its `eaf_baseline` and -- on a Reference-Completed release -- the
+  `imputed` mask were each read twice: once inside SE decoding and once for the
+  result column. The in-scope Dense paths (`analysis`, `phewas`,
+  `range_phewas`, `lookup`, older-index `top_hits`) and the Analysis-side
+  Ragged and Overflow reads now read the region once (`EafRead`,
+  `encoding/planes.py`), hand the same decoded array to SE decoding, and cut
+  the result column out of it with the query's own finite/observed mask, so
+  both consumers agree cell for cell and the panel substitution still runs once
+  and only under its mask (ADR 0037 §3-§4). `range_phewas` and `lookup` also
+  replace the SE side's coordinate read over a rectangular block with the
+  orthogonal form. Answers are unchanged: every returned array hashes
+  identically before and after on OGS-00009, OGS-00010 (Reference-Completed,
+  the only real store exercising the substitution traps), OGS-00006 and
+  OGS-00004. On OGS-00009 one whole Analysis went 23.4 s to 20.1 s and the 1 Mb
+  window 1.73 s to 0.89 s, with every shape inside #244's set-L time and
+  memory budgets; the artifact is
+  `docs/benchmark-output/opengwasdb_store_comparison_ogs00009_eaf_once.json`.
 - **The package runs on zarr-python 3 (#244).** `zarr>=3.4,<4` and
   `numcodecs>=0.17` replace `zarr>=2.18,<3` and `numcodecs>=0.12,<0.13` in both
   the `[project]` and pixi dependency tables. The Store format is **not**
