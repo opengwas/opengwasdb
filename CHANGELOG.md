@@ -29,11 +29,11 @@ the end of this file.
   bounded by a window rather than by N; z, se and eaf are read at the hit
   positions (`oindex`/`positions_at`) with one EAF read shared by SE decoding
   and the `eaf` column under #253's rules; `lookup` and the Hybrid overflow
-  lookup binary-search each requested Analysis's segment -- which every
-  builder sorts by `variant_index`, now asserted in
-  `RaggedCSRWriter.add_analysis` rather than assumed -- so they cost the
-  request and not the store; and the on-axis test is one vectorised
-  `searchsorted`. Answers are unchanged: every variant-side shape
+  lookup binary-search each requested Analysis's sorted segment -- O(log)
+  chunk reads, not a scan of the Analysis -- which every builder sorts by
+  `variant_index`, now asserted in `RaggedCSRWriter.add_analysis` rather than
+  assumed, so they cost the request and not the store; and the on-axis test is
+  one vectorised `searchsorted`. Answers are unchanged: every variant-side shape
   (`phewas`, `range_phewas`, `lookup`, and the off-panel Hybrid paths) returns
   arrays identical to the Analysis-side decode, with and without
   `observed_only`, on a completed Ragged release with residual SE and imputed

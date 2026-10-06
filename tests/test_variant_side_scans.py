@@ -49,6 +49,7 @@ from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.query.facade import _concat_results
+from opengwasdb.store import arrays as store_arrays
 
 
 @pytest.fixture(scope="module")
@@ -268,12 +269,10 @@ def test_hybrid_off_panel_shapes_match_the_overflow_side(hybrid_residual: Path) 
 
 
 def _off_by_one_using(original):
-    """A search for the variant one *below* the target: plausible, wrong."""
+    """A scan for the variant one *below* the target: plausible, wrong."""
 
-    def search(self, wanted, *, analysis_index=None):
-        return original(
-            self, np.asarray(wanted, dtype=np.int32) - 1, analysis_index=analysis_index
-        )
+    def search(self, wanted, **kwargs):
+        return original(self, np.asarray(wanted, dtype=np.int32) - 1, **kwargs)
 
     return search
 
@@ -403,6 +402,27 @@ def _write_wide_ssf(path: Path, *, offset: int) -> None:
             )
 
 
+def _write_store_manifest(path: Path) -> None:
+    """The two-Analysis overview manifest the chunked fixtures share."""
+    path.write_text(
+        "analysis_index\tanalysis_id\ttrait_id\ttrait_chr\ttrait_bp\tn\tfiltered_file\n"
+        "0\ta\tT0\t1\t1000\t1000\ta.tsv.gz\n"
+        "1\tb\tT1\t1\t2000\t1000\tb.tsv.gz\n",
+        encoding="utf-8",
+    )
+
+
+def _prepare_wide_sources(root: Path) -> tuple[Path, Path]:
+    """Write both Analyses' filtered SSF and the shared manifest under `root`."""
+    filtered = root / "filtered"
+    filtered.mkdir()
+    _write_wide_ssf(filtered / "a.tsv.gz", offset=0)
+    _write_wide_ssf(filtered / "b.tsv.gz", offset=50)
+    manifest = root / "manifest.tsv"
+    _write_store_manifest(manifest)
+    return filtered, manifest
+
+
 @pytest.fixture(scope="module")
 def wide_ragged(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A Ragged store whose association arrays hold two chunks (chunk = 200,000).
@@ -412,17 +432,7 @@ def wide_ragged(tmp_path_factory: pytest.TempPathFactory) -> Path:
     plane" are the same read.
     """
     root = tmp_path_factory.mktemp("variant_side_wide")
-    filtered = root / "filtered"
-    filtered.mkdir()
-    _write_wide_ssf(filtered / "a.tsv.gz", offset=0)
-    _write_wide_ssf(filtered / "b.tsv.gz", offset=50)
-    manifest = root / "manifest.tsv"
-    manifest.write_text(
-        "analysis_index\tanalysis_id\ttrait_id\ttrait_chr\ttrait_bp\tn\tfiltered_file\n"
-        "0\ta\tT0\t1\t1000\t1000\ta.tsv.gz\n"
-        "1\tb\tT1\t1\t2000\t1000\tb.tsv.gz\n",
-        encoding="utf-8",
-    )
+    filtered, manifest = _prepare_wide_sources(root)
     out = root / "wide.opengwasdb"
     build_ragged_from_ssf(
         manifest, filtered, out, store_id="wide", release_id="wide", allow_unverified_eaf=True
@@ -463,11 +473,112 @@ def test_phewas_reads_only_the_hit_chunk(
         assert touched == 1, f"{name}: expected one chunk read, got {touched} of {total_chunks}"
 
 
+# ── a lookup binary-searches a wide Analysis instead of scanning it ─────────
+
+#: A small association inner chunk, so an ordinary fixture's Analysis spans
+#: many chunks and a scan of one is visibly different from a search of it. The
+#: chunk is a per-role seam policy, so it is overridden for the fixture's build
+#: and the built arrays carry it from then on.
+_SMALL_CHUNK = 1_000
+
+
+@pytest.fixture(scope="module")
+def wide_small_chunks(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The same two-Analysis store with 1,000-element association chunks."""
+    root = tmp_path_factory.mktemp("variant_side_small_chunks")
+    filtered, manifest = _prepare_wide_sources(root)
+    out = root / "small.opengwasdb"
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(store_arrays, "ASSOCIATION_SEQUENCE_CHUNK", _SMALL_CHUNK)
+        build_ragged_from_ssf(
+            manifest, filtered, out, store_id="small", release_id="small",
+            allow_unverified_eaf=True,
+        )
+    return out
+
+
+def _segment_fixture(store: Path, analysis_index: int) -> tuple[zarr.Group, int, int, np.ndarray]:
+    root = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="r")
+    offsets = np.asarray(root["offsets"][:], dtype=np.int64)
+    start, end = int(offsets[analysis_index]), int(offsets[analysis_index + 1])
+    vi = np.asarray(root["variant_index"][start:end], dtype=np.int32)
+    return root, start, end, vi
+
+
+def test_lookup_binary_searches_a_wide_analysis(
+    wide_small_chunks: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lookup reads O(log) chunks of the requested Analysis, not all of it.
+
+    A genuine segment binary search touches only the chunks the halving visits;
+    a windowed scan of the same segment reads every chunk. Three variants in an
+    Analysis of ~100 chunks therefore separate the two decisively.
+    """
+    with query_store(wide_small_chunks) as query:
+        root, start, end, vi = _segment_fixture(wide_small_chunks, 1)
+        chunk = int(root["variant_index"].chunks[0])
+        total_chunks = int(np.ceil((end - start) / chunk))
+        assert total_chunks >= 50, "the requested Analysis must be wide to mean anything"
+        analysis_id = str(query.analyses_table()[1]["analysis_id"])
+        picks = np.linspace(0, len(vi) - 1, 3).astype(int)
+        alids = [query._variant_axis.by_index(int(vi[p])).alid for p in picks]
+        assert len(set(alids)) == 3, "the picks must be distinct"
+        with chunk_reads(monkeypatch, ("variant_index",)) as reads:
+            result = query.lookup(alids, [analysis_id])
+    assert len(result["z"]) == 3, "the three requested variants must be found"
+    touched = len(set(reads["variant_index"]))
+    assert touched <= 40, f"a scan would read all {total_chunks} chunks; read {touched}"
+    assert touched < total_chunks
+
+
+def _off_by_one_lower_bound(self, lo, hi, target, cache, total):
+    """`<=` on the segment tail: a chunk whose last row equals the target is
+    skipped to the next chunk, and the boundary row is then missed."""
+    size = self.association_chunk
+    low, high = lo // size, (hi - 1) // size
+    while low < high:
+        mid = (low + high) // 2
+        tail = self._segment_tail(mid, lo, hi, cache, total)
+        if tail <= target:
+            low = mid + 1
+        else:
+            high = mid
+    return low
+
+
+def test_lookup_finds_a_variant_at_a_chunk_boundary(
+    wide_small_chunks: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A chunk's first and last rows resolve; an off-by-one drops the last one."""
+    with query_store(wide_small_chunks) as query:
+        root, _start, _end, vi = _segment_fixture(wide_small_chunks, 1)
+        chunk = int(root["variant_index"].chunks[0])
+        analysis_id = str(query.analyses_table()[1]["analysis_id"])
+        last_of_chunk = 2 * chunk - 1
+        assert last_of_chunk < len(vi)
+        assert vi[last_of_chunk] != vi[last_of_chunk + 1], "boundary rows must be distinct"
+        boundary_alids = [
+            query._variant_axis.by_index(int(vi[position])).alid
+            for position in (last_of_chunk, 2 * chunk)
+        ]
+        for alid, position in zip(boundary_alids, (last_of_chunk, 2 * chunk), strict=True):
+            found = query.lookup([alid], [analysis_id])
+            assert found["variant_index"].tolist() == [int(vi[position])], (
+                f"the row at flat position {position} (a chunk boundary) must resolve"
+            )
+    monkeypatch.setattr(RaggedCSRReader, "_chunk_lower_bound", _off_by_one_lower_bound)
+    with query_store(wide_small_chunks) as query:
+        missed = query.lookup([boundary_alids[0]], [analysis_id])
+    assert len(missed["variant_index"]) == 0, (
+        "the <=-on-the-chunk-tail off-by-one must miss the chunk's last row"
+    )
+
+
 # ── the builder guarantee the search relies on ──────────────────────────────
 
 
 def test_writer_refuses_an_unsorted_analysis() -> None:
-    """`variant_positions` binary-searches a sorted segment, so it is asserted."""
+    """`segment_positions` binary-searches a sorted segment, so it is asserted."""
     writer = RaggedCSRWriter(100)
     with pytest.raises(ValueError, match="sorted ascending by variant_index"):
         writer.add_analysis(

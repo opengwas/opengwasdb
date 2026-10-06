@@ -987,13 +987,12 @@ class RaggedStoreQuery:
     ) -> dict[str, np.ndarray]:
         """Associations for a specific variant × analysis set.
 
-        Each requested Analysis's segment is searched for the wanted variants --
-        its rows are sorted by variant_index, so `variant_positions` binary-
-        searches the segment instead of decoding the Analysis whole and
-        `np.isin`-ing it. The cost is proportional to the requested Analyses'
-        segments plus the answer, not to the store (#252). Requested Analysis
-        order and duplicates carry through; a request that resolves nothing
-        yields the empty result.
+        Each requested Analysis's sorted segment is binary-searched for the
+        wanted variants (`segment_positions`, O(log) chunk reads), rather than
+        the Analysis being decoded whole and `np.isin`-ed. The cost is the
+        requested variants and Analyses, not the store and not the requested
+        Analyses' sizes (#252). Requested Analysis order and duplicates carry
+        through; a request that resolves nothing yields the empty result.
         """
         variants = [
             v for id_ in identifiers if (v := self._variant_axis.by_identifier(id_)) is not None
@@ -1007,7 +1006,7 @@ class RaggedStoreQuery:
             idx = self._resolve_analysis_id(aid)
             if idx is None:
                 continue
-            positions = self._csr.variant_positions(wanted, analysis_index=idx)
+            positions = self._csr.segment_positions(wanted, analysis_index=idx)
             if len(positions) == 0:
                 continue
             parts.append(
@@ -1124,21 +1123,31 @@ class HybridStoreQuery:
     def _on_panel_mask(self, shared_indices: np.ndarray) -> np.ndarray:
         """Which shared variant indices are rows of the Dense Component's panel.
 
-        One vectorised `searchsorted` over the panel map. The per-variant Python
-        form cast the whole 13.4 M-entry `int32` map on every call: measured
-        on OGS-00011 at 22.6 ms per call against 0.004 ms for an `int32` scalar,
-        and `range_phewas` made one call per shared variant -- 58,006 of them
-        for a 1 Mb TCF7L2 window, about 22 minutes of a 630 s query (#252).
+        One vectorised `searchsorted` over the panel map, with the needles cast
+        to the map's own dtype. The per-variant Python form cast the whole
+        13.4 M-entry `int32` map on every call (22.6 ms against 0.004 ms for an
+        `int32` scalar on OGS-00011), and `range_phewas` made one call per
+        shared variant -- 58,006 of them for a 1 Mb TCF7L2 window (#252).
+        Searching that map with `int64` needles still promoted and copied it on
+        every call (review round 1), so the needles are narrowed instead; a
+        needle outside the map's range cannot be a panel row and is masked out
+        before the cast, so narrowing cannot wrap it into range.
         """
-        shared_indices = np.asarray(shared_indices, dtype=np.int64)
-        if len(shared_indices) == 0:
-            return np.zeros(0, dtype=bool)
-        if len(self._dense_to_shared) == 0:
-            return np.zeros(len(shared_indices), dtype=bool)
-        pos = np.searchsorted(self._dense_to_shared, shared_indices)
-        in_bounds = pos < len(self._dense_to_shared)
-        safe = np.minimum(pos, len(self._dense_to_shared) - 1)
-        return np.asarray(in_bounds & (self._dense_to_shared[safe] == shared_indices), dtype=bool)
+        shared_indices = np.asarray(shared_indices)
+        if shared_indices.size == 0:
+            return np.zeros(shared_indices.shape, dtype=bool)
+        panel = self._dense_to_shared
+        if panel.size == 0:
+            return np.zeros(shared_indices.shape, dtype=bool)
+        low, high = int(panel[0]), int(panel[-1])
+        result = np.zeros(shared_indices.shape, dtype=bool)
+        in_range = (shared_indices >= low) & (shared_indices <= high)
+        if in_range.any():
+            needles = shared_indices[in_range].astype(panel.dtype, copy=False)
+            pos = np.searchsorted(panel, needles)
+            safe = np.minimum(pos, panel.size - 1)
+            result[in_range] = panel[safe] == needles
+        return result
 
     def _shared_is_on_panel(self, shared_idx: int) -> bool:
         return bool(self._on_panel_mask(np.array([shared_idx], dtype=np.int64))[0])
@@ -1193,12 +1202,13 @@ class HybridStoreQuery:
         """All overflow associations whose (off-panel) variant is in the set.
 
         With `wanted_analyses` given, each requested Analysis's sorted segment
-        is searched for the wanted variants -- its rows are sorted by
-        variant_index, so no new index is needed to locate a (variant,
-        Analysis) pair, and a lookup costs its requested Analyses and not the
-        store (#252). Without it, where every Analysis may hold the variant, a
-        whole-store windowed scan is used instead: one zarr read per scan
-        window is much cheaper than one per Analysis segment, and neither
+        is **binary-searched** for the wanted variants (`segment_positions`, O(log)
+        chunk reads): its rows are sorted by variant_index, so no new index is
+        needed to locate a (variant, Analysis) pair, and a lookup costs its
+        requested variants and Analyses and not the requested Analyses' sizes
+        or the store (#252). Without it, where every Analysis may hold the
+        variant, a whole-store windowed scan is used instead: one zarr read per
+        scan window is much cheaper than one per Analysis segment, and neither
         holds the array whole.
 
         Either route returns flat CSR order (Analysis ascending, variant
@@ -1213,7 +1223,7 @@ class HybridStoreQuery:
             return self._overflow_rows(positions)
         parts: list[dict[str, np.ndarray]] = []
         for col in sorted(wanted_analyses):
-            positions = self._csr.variant_positions(wanted, analysis_index=int(col))
+            positions = self._csr.segment_positions(wanted, analysis_index=int(col))
             if len(positions) == 0:
                 continue
             parts.append(self._overflow_rows(positions))

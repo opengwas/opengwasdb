@@ -845,30 +845,20 @@ class RaggedCSRReader:
             return np.empty(0, dtype=np.int32)
         return np.asarray(self._variant_index.oindex[positions], dtype=np.int32)
 
-    def variant_positions(
-        self, wanted: np.ndarray, *, analysis_index: int | None = None
-    ) -> np.ndarray:
+    def variant_positions(self, wanted: np.ndarray) -> np.ndarray:
         """Flat CSR positions whose variant is in `wanted`, ascending.
 
-        Each Analysis's segment is sorted by variant_index (asserted at
-        `RaggedCSRWriter.add_analysis`), so a segment can be searched rather
-        than scanned: no new on-disk index is needed to locate a
-        (variant, Analysis) pair (#252). The segment is read in chunk-sized
-        windows, so peak memory is a window, not the component, and the
-        returned positions are in flat CSR order -- the order the analysis-major
-        scan they replace produced.
-
-        `analysis_index=None` searches every Analysis's segment; a lookup that
-        knows its Analyses passes one so the read covers the requested segments
-        and not the store.
+        A windowed scan of every Analysis's segment, used where every Analysis
+        may hold the variant and there is no index (#252). The window is a few
+        inner chunks, so peak memory is a window and not the component. A
+        lookup that knows its Analyses must use `segment_positions` instead,
+        which searches the requested segment in O(log) chunk reads rather than
+        scanning it.
         """
         wanted = np.unique(np.asarray(wanted, dtype=np.int32))
         if len(wanted) == 0:
             return np.empty(0, dtype=np.int64)
-        if analysis_index is None:
-            lo, hi = 0, self.n_associations
-        else:
-            lo, hi = self._span(analysis_index)
+        lo, hi = 0, self.n_associations
         window = self.scan_window
         parts: list[np.ndarray] = []
         single = int(wanted[0]) if len(wanted) == 1 else None
@@ -886,6 +876,116 @@ class RaggedCSRReader:
                 hit[in_bounds] = wanted[pos[in_bounds]] == vi[in_bounds]
             if hit.any():
                 parts.append(np.where(hit)[0].astype(np.int64) + start)
+        if not parts:
+            return np.empty(0, dtype=np.int64)
+        return np.concatenate(parts)
+
+    def _scan_chunk(self, chunk: int, cache: dict[int, np.ndarray], total: int) -> np.ndarray:
+        """One inner chunk of `variant_index`, read once and kept for the search.
+
+        A chunk read decompresses the whole inner chunk whatever the element
+        asked for, so caching it is what makes a binary search cost O(log)
+        chunk reads rather than O(log) re-reads.
+        """
+        cached = cache.get(chunk)
+        if cached is None:
+            size = self.association_chunk
+            start = chunk * size
+            cached = np.asarray(
+                self._variant_index[start : min(start + size, total)], dtype=np.int32
+            )
+            cache[chunk] = cached
+        return cached
+
+    def _segment_tail(
+        self, chunk: int, lo: int, hi: int, cache: dict[int, np.ndarray], total: int
+    ) -> int:
+        """The last row of `chunk` that belongs to the segment `[lo, hi)`."""
+        data = self._scan_chunk(chunk, cache, total)
+        size = self.association_chunk
+        offset = min(hi, (chunk + 1) * size) - 1 - chunk * size
+        return int(data[offset])
+
+    def _chunk_lower_bound(
+        self, lo: int, hi: int, target: int, cache: dict[int, np.ndarray], total: int
+    ) -> int:
+        """First chunk in the segment whose last segment row is >= `target`.
+
+        The halving touches O(log) chunks, which is the whole point of the
+        search: the segment is never read whole.
+        """
+        size = self.association_chunk
+        low, high = lo // size, (hi - 1) // size
+        while low < high:
+            mid = (low + high) // 2
+            if self._segment_tail(mid, lo, hi, cache, total) < target:
+                low = mid + 1
+            else:
+                high = mid
+        return low
+
+    def _run_end(
+        self, start: int, hi: int, target: int, cache: dict[int, np.ndarray], total: int
+    ) -> int:
+        """End of the run of `target` starting at `start`, across chunk boundaries."""
+        size = self.association_chunk
+        end = start
+        while end < hi:
+            here = end // size
+            here_data = self._scan_chunk(here, cache, total)
+            here_off = end - here * size
+            limit = min(hi - here * size, len(here_data))
+            run_end = here_off + int(
+                np.searchsorted(here_data[here_off:limit], target, side="right")
+            )
+            end = here * size + run_end
+            if run_end < limit:
+                break
+        return end
+
+    def segment_positions(self, wanted: np.ndarray, *, analysis_index: int) -> np.ndarray:
+        """Flat CSR positions in one Analysis whose variant is in `wanted`.
+
+        A genuine bounded binary search over the Analysis's sorted segment
+        (#252). `_chunk_lower_bound` finds the chunk whose last *segment* row
+        first reaches the target -- O(log) chunk reads -- and the target is
+        located inside it with `searchsorted` on that chunk's segment part. A
+        lookup is therefore proportional to the number of requested variants
+        and not to the requested Analysis's size. The chunk's tail is taken
+        from the segment, never from the chunk's full extent: the tail of a
+        chunk may hold the next Analysis's rows, whose variant indices are
+        unrelated.
+
+        A duplicate variant (the writer accepts a non-decreasing sequence) is
+        found by walking the equal run forward (`_run_end`); every chunk it
+        spans is read at most once through the cache. The returned positions
+        are ascending and in segment order, matching `analysis()` row for row.
+        """
+        wanted = np.unique(np.asarray(wanted, dtype=np.int32))
+        if len(wanted) == 0:
+            return np.empty(0, dtype=np.int64)
+        lo, hi = self._span(analysis_index)
+        if lo >= hi:
+            return np.empty(0, dtype=np.int64)
+        size = self.association_chunk
+        total = array_length(self._variant_index)
+        cache: dict[int, np.ndarray] = {}
+        parts: list[np.ndarray] = []
+        for value in wanted:
+            target = int(value)
+            base = self._chunk_lower_bound(lo, hi, target, cache, total) * size
+            data = self._scan_chunk(base // size, cache, total)
+            window_lo = max(lo - base, 0)
+            window_hi = min(hi - base, len(data))
+            offset = window_lo + int(
+                np.searchsorted(data[window_lo:window_hi], target, side="left")
+            )
+            if offset >= window_hi or int(data[offset]) != target:
+                continue
+            start = base + offset
+            parts.append(
+                np.arange(start, self._run_end(start, hi, target, cache, total), dtype=np.int64)
+            )
         if not parts:
             return np.empty(0, dtype=np.int64)
         return np.concatenate(parts)
