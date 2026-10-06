@@ -1,0 +1,206 @@
+{
+  "note": "Spot identity on the real stores: the same public query surface and the same selection run against the pre-fix tree (branch base f168ef1) and this HEAD, hashed with sha256 over variant_index/analysis_index/z/se/eaf and association_status, order included. OGS-00001 and OGS-00007-class pilots, OGS-00006 (Ragged, residual SE and EAF) and OGS-00004 (Hybrid). The OGS-00011 variant-side shapes are hashed in the interleaved A/B artifact. Not a quiet-node measurement.",
+  "stores": {
+    "OGS-00001": {
+      "hybrid": false,
+      "n_variants": 86376,
+      "n_analyses": 10,
+      "queries": {
+        "phewas_first": {
+          "before": {
+            "sha256": "292afe895b8443bad17f45dd1ff0f5108287e1e31603c74d848ba10d79817a84",
+            "rows": 1
+          },
+          "after": {
+            "sha256": "292afe895b8443bad17f45dd1ff0f5108287e1e31603c74d848ba10d79817a84",
+            "rows": 1
+          },
+          "identical": true
+        },
+        "phewas_off_panel": {
+          "before": {
+            "sha256": "292afe895b8443bad17f45dd1ff0f5108287e1e31603c74d848ba10d79817a84",
+            "rows": 1
+          },
+          "after": {
+            "sha256": "292afe895b8443bad17f45dd1ff0f5108287e1e31603c74d848ba10d79817a84",
+            "rows": 1
+          },
+          "identical": true
+        },
+        "range_small": {
+          "before": {
+            "sha256": "a9057d7c73567b2628c9c085a0c86f1bc1931892d8b93700bee8fe11114ae358",
+            "rows": 116
+          },
+          "after": {
+            "sha256": "a9057d7c73567b2628c9c085a0c86f1bc1931892d8b93700bee8fe11114ae358",
+            "rows": 116
+          },
+          "identical": true
+        },
+        "lookup_off_panel": {
+          "before": {
+            "sha256": "292afe895b8443bad17f45dd1ff0f5108287e1e31603c74d848ba10d79817a84",
+            "rows": 1
+          },
+          "after": {
+            "sha256": "292afe895b8443bad17f45dd1ff0f5108287e1e31603c74d848ba10d79817a84",
+            "rows": 1
+          },
+          "identical": true
+        },
+        "lookup_small": {
+          "before": {
+            "sha256": "eda62546c75f0743b4aff6ce9e59fa5abe6cae5ad2247c530311aa23274a2f6d",
+            "rows": 3
+          },
+          "after": {
+            "sha256": "eda62546c75f0743b4aff6ce9e59fa5abe6cae5ad2247c530311aa23274a2f6d",
+            "rows": 3
+          },
+          "identical": true
+        }
+      }
+    },
+    "OGS-00006": {
+      "hybrid": false,
+      "n_variants": 12086463,
+      "n_analyses": 1400,
+      "queries": {
+        "phewas_first": {
+          "before": {
+            "sha256": "0998e9aac41f857cd3b9fe60a7d096d660f60fa770f625cd361c260762a11b30",
+            "rows": 1
+          },
+          "after": {
+            "sha256": "0998e9aac41f857cd3b9fe60a7d096d660f60fa770f625cd361c260762a11b30",
+            "rows": 1
+          },
+          "identical": true
+        },
+        "phewas_off_panel": {
+          "before": {
+            "sha256": "0998e9aac41f857cd3b9fe60a7d096d660f60fa770f625cd361c260762a11b30",
+            "rows": 1
+          },
+          "after": {
+            "sha256": "0998e9aac41f857cd3b9fe60a7d096d660f60fa770f625cd361c260762a11b30",
+            "rows": 1
+          },
+          "identical": true
+        },
+        "range_small": {
+          "before": {
+            "sha256": "0998e9aac41f857cd3b9fe60a7d096d660f60fa770f625cd361c260762a11b30",
+            "rows": 1
+          },
+          "after": {
+            "sha256": "0998e9aac41f857cd3b9fe60a7d096d660f60fa770f625cd361c260762a11b30",
+            "rows": 1
+          },
+          "identical": true
+        },
+        "lookup_off_panel": {
+          "before": {
+            "sha256": "0c8930f0b47caaa662ce118b9339827b9119a88ce507d3de3fe590779c0bccd9",
+            "rows": 0
+          },
+          "after": {
+            "sha256": "0c8930f0b47caaa662ce118b9339827b9119a88ce507d3de3fe590779c0bccd9",
+            "rows": 0
+          },
+          "identical": true
+        },
+        "lookup_small": {
+          "before": {
+            "sha256": "0c8930f0b47caaa662ce118b9339827b9119a88ce507d3de3fe590779c0bccd9",
+            "rows": 0
+          },
+          "after": {
+            "sha256": "0c8930f0b47caaa662ce118b9339827b9119a88ce507d3de3fe590779c0bccd9",
+            "rows": 0
+          },
+          "identical": true
+        }
+      }
+    },
+    "OGS-00004": {
+      "hybrid": true,
+      "n_variants": 20373380,
+      "n_analyses": 9,
+      "queries": {
+        "phewas_first": {
+          "before": {
+            "sha256": "d125d3b4dbb3d1283e0cc4b8c5e95c7d6633171a6f34239579a84f097ea96c3d",
+            "rows": 1
+          },
+          "after": {
+            "sha256": "d125d3b4dbb3d1283e0cc4b8c5e95c7d6633171a6f34239579a84f097ea96c3d",
+            "rows": 1
+          },
+          "identical": true
+        },
+        "phewas_off_panel": {
+          "before": {
+            "sha256": "d125d3b4dbb3d1283e0cc4b8c5e95c7d6633171a6f34239579a84f097ea96c3d",
+            "rows": 1
+          },
+          "after": {
+            "sha256": "d125d3b4dbb3d1283e0cc4b8c5e95c7d6633171a6f34239579a84f097ea96c3d",
+            "rows": 1
+          },
+          "identical": true
+        },
+        "range_small": {
+          "before": {
+            "sha256": "908cc6456b83294bde48f63a41885473d98cc5a96936a17158a806dd630ee63e",
+            "rows": 85
+          },
+          "after": {
+            "sha256": "908cc6456b83294bde48f63a41885473d98cc5a96936a17158a806dd630ee63e",
+            "rows": 85
+          },
+          "identical": true
+        },
+        "lookup_off_panel": {
+          "before": {
+            "sha256": "d125d3b4dbb3d1283e0cc4b8c5e95c7d6633171a6f34239579a84f097ea96c3d",
+            "rows": 1
+          },
+          "after": {
+            "sha256": "d125d3b4dbb3d1283e0cc4b8c5e95c7d6633171a6f34239579a84f097ea96c3d",
+            "rows": 1
+          },
+          "identical": true
+        },
+        "lookup_small": {
+          "before": {
+            "sha256": "8cab58badbe8afb40e2933d42eff642813068ff243644afdfa5bb524bf85eaf7",
+            "rows": 4
+          },
+          "after": {
+            "sha256": "8cab58badbe8afb40e2933d42eff642813068ff243644afdfa5bb524bf85eaf7",
+            "rows": 4
+          },
+          "identical": true
+        }
+      }
+    }
+  },
+  "all_identical": true,
+  "provenance": {
+    "before": {
+      "commit": "f168ef1",
+      "measured_at": "2026-10-06T21:07:20.462694+00:00",
+      "opengwasdb_path": "/tmp/epic240/252/before/opengwasdb",
+      "opengwasdb_fingerprint": "86106fce1940635a7a710f2c578436452610e0b682892797405d99b72c42558d"
+    },
+    "after": {
+      "commit": "e24ff49",
+      "measured_at": "2026-10-06T21:07:21.562145+00:00",
+      "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-side-scans/opengwasdb",
+      "opengwasdb_fingerprint": "0899cd1e3ea9221c18d10832f2d5e16d00d7c016fe0a8497380d857f653c3c91"
+    }
+  }
+}
