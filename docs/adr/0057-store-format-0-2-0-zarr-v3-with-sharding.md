@@ -84,7 +84,7 @@ wrong. So:
   publishes by rename only after the staged copy is bit-exact against the source
   **and** validates with no errors.
 
-  > **Superseded by [ADR 0058](0058-convert-remaining-layouts-and-ragged-shards.md) (#248).**
+  > **Superseded by [ADR 0059](0059-convert-remaining-layouts-and-ragged-shards.md) (#248).**
   > The converter now accepts every layout the role table can name — Dense
   > Reference-Completed, Ragged (Observed-Only and Reference-Completed) and Hybrid
   > as well as Dense Observed-Only — and refuses only an unmapped array or group,

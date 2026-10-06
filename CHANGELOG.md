@@ -314,7 +314,7 @@ the end of this file.
   Ragged per-variant or exception table, so OGS-00011's 3,085,080,783-entry
   overflow sequences become 62 files per array and its 180,396,687-entry
   Ragged `eaf_exception_index` 19 files, rather than thousands of tiny files or
-  one 1.4 GB file. ADR 0058 records the decision; spec §10a gains the Ragged
+  one 1.4 GB file. ADR 0059 records the decision; spec §10a gains the Ragged
   roles and the Hybrid component recording.
 - **A Dense Store Release can be converted to format 0.2.0 (Zarr v3, sharded)
   (#245).** `opengwasdb/store/convert.py` and its CLI
