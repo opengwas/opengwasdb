@@ -27,8 +27,8 @@ Usage:
 
 from __future__ import annotations
 
+# The FinnGen R13 Dense harness; shares its report helpers with OGS-00011's.
 import argparse
-import csv
 import json
 import time
 from pathlib import Path
@@ -36,8 +36,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy.special import erfc, log_ndtr
+from scipy.special import erfc
 
+from benchmarks import _hybrid_report as _report
 from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import run_probe
@@ -141,27 +142,19 @@ def _build_records(records: Path) -> dict[str, Any]:
 
 
 def _analysis_summary(store: Path) -> dict[str, Any]:
-    with open(store / "analyses.tsv", newline="") as fh:
-        rows = list(csv.DictReader(fh, delimiter="\t"))
-
-    def numbers(column: str) -> np.ndarray:
-        return np.array([float(r[column]) for r in rows if r[column] != ""])
-
-    scales: dict[str, int] = {}
-    for row in rows:
-        scales[row["stored_effect_scale"]] = scales.get(row["stored_effect_scale"], 0) + 1
-    hits = numbers("n_hits_5e8")
-    cases = numbers("n_cases")
+    rows = _report.analysis_rows(store)
+    scales = _report.tally(rows, "stored_effect_scale")
+    hits = _report.numeric_column(rows, "n_hits_5e8")
+    cases = _report.numeric_column(rows, "n_cases")
+    sizes = _report.numeric_column(rows, "sample_size")
     return {
         "n_analyses": len(rows),
         "stored_effect_scale": scales,
         "n_wide_definition": sum(r["analysis_id"].endswith("_WIDE") for r in rows),
         "n_cases": {"min": float(cases.min()), "median": float(np.median(cases)),
                     "max": float(cases.max())},
-        "n_hits_5e8": {"median": float(np.median(hits)), "max": float(hits.max()),
-                       "zero": int((hits == 0).sum()), "total": float(hits.sum())},
-        "sample_size": {"min": float(numbers("sample_size").min()),
-                        "max": float(numbers("sample_size").max())},
+        "n_hits_5e8": _report.hits_summary(hits),
+        "sample_size": {"min": float(sizes.min()), "max": float(sizes.max())},
     }
 
 
@@ -170,39 +163,19 @@ def known_loci(q: Any, by_id: dict[str, int], table: dict[int, dict[str, Any]]) 
     out = []
     for analysis, alid, rsid, risk, gene, note in KNOWN_LOCI:
         analysis_id = PREFIX + analysis
-        look = q.lookup([alid], [analysis_id])
-        record = q._variant_axis.by_index(int(look["variant_index"][0]))
-        z, se, eaf = float(look["z"][0]), float(look["se"][0]), float(look["eaf"][0])
-        sign = 1.0 if record.effect_allele == risk else -1.0
-        risk_freq = eaf if record.effect_allele == risk else 1.0 - eaf
-        neglog10_p = float(-(log_ndtr(-abs(z)) + np.log(2.0)) / np.log(10.0))
+        oriented = _report.oriented_locus(q, alid, analysis_id, risk)
+        assert oriented is not None, f"{analysis_id}:{alid} must be in the release"
         out.append({
-            "analysis_id": analysis_id, "label": table[by_id[analysis_id]]["analysis_label"],
-            "alid": alid, "rsid": record.rsid, "expected_rsid": rsid, "gene": gene, "note": note,
-            "risk_allele": risk, "effect_allele": record.effect_allele,
-            "z": z, "se": se, "beta_risk_allele": sign * z * se, "z_risk_allele": sign * z,
-            "risk_allele_frequency": risk_freq, "neglog10_p": neglog10_p,
+            "label": table[by_id[analysis_id]]["analysis_label"],
+            "expected_rsid": rsid, "gene": gene, "note": note, "risk_allele": risk,
             "expected_genome_wide": rsid not in MODEST,
+            **oriented,
         })
     return out
 
 
 def phewas_top(q: Any, table: dict[int, dict[str, Any]], n: int = 8) -> list[dict]:
-    out = []
-    for alid, rsid, gene in PHEWAS_VARIANTS:
-        res = q.phewas(alid)
-        order = np.argsort(-np.abs(res["z"]))[:n]
-        out.append({
-            "alid": alid, "rsid": rsid, "gene": gene, "n_analyses": int(len(res["z"])),
-            "n_genome_wide": int((np.abs(res["z"]) > 5.4520).sum()),
-            "top": [
-                {"analysis_id": table[int(res["analysis_index"][i])]["analysis_id"],
-                 "label": table[int(res["analysis_index"][i])]["analysis_label"],
-                 "z": float(res["z"][i])}
-                for i in order
-            ],
-        })
-    return out
+    return _report.phewas_top(q, table, PHEWAS_VARIANTS, n)
 
 
 def run_mr(q: Any, by_id: dict[str, int], exposure: str, outcome: str) -> dict[str, Any]:
@@ -327,20 +300,16 @@ def main() -> None:
                 "dense"]["chunk_shape"],
         },
         "analyses": _analysis_summary(args.store),
-        "storage": {
-            "store_bytes": store_bytes, "store_gb": round(store_bytes / 1e9, 2),
-            "source_bytes": raw_bytes, "source_gb": round(raw_bytes / 1e9, 2),
-            "n_source_files": len(sources),
-            "compression_ratio": round(raw_bytes / store_bytes, 2),
-            "bytes_per_association": store_bytes / n_cells,
-            "components": _components(args.store),
-        },
+        "storage": _report.storage_summary(
+            store_bytes=store_bytes, source_bytes=raw_bytes, n_source_files=len(sources),
+            components=_components(args.store),
+            extra={"bytes_per_association": store_bytes / n_cells},
+        ),
         "build": _build_records(args.records),
-        "selection": {
-            "exposure": EXPOSURE, "phewas_alid": PHEWAS_ALID,
-            "region": {"chrom": REGION[0], "start": REGION[1], "end": REGION[2]},
-            "random_lookup_shapes": _query_shapes.RANDOM_LOOKUP_SHAPES,
-        },
+        "selection": _report.selection_summary(
+            exposure=EXPOSURE, phewas_alid=PHEWAS_ALID, region=REGION,
+            random_lookup_shapes=_query_shapes.RANDOM_LOOKUP_SHAPES,
+        ),
         "timings": timings,
         "memory": memory,
         "source_bulk": source_bulk,
