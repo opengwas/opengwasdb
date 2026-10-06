@@ -57,6 +57,7 @@ from opengwasdb.store.arrays import (
     DENSE_CHUNK_SHAPE,
     DENSE_SHARD_SHAPE,
     SHARDED_COMPRESSOR_RECORD,
+    SHARDED_STORE_ZARR_FORMAT,
     TOP_HIT_SHARD_CHUNKS,
     ArrayRole,
     chunk_layout,
@@ -71,7 +72,6 @@ from opengwasdb.store.arrays import (
 )
 from opengwasdb.store.open import (
     CURRENT_FORMAT_VERSION,
-    SHARDED_FORMAT_VERSION,
     OpenGWASDBStore,
     StagedRelease,
 )
@@ -79,6 +79,12 @@ from opengwasdb.validation import validate_store
 
 #: The only layout the converter understands until #248.
 DENSE_OBSERVED_ONLY = "dense"
+
+#: The `format_version` the converter reads: Zarr v2, one chunk per file.  It is
+#: deliberately *not* `CURRENT_FORMAT_VERSION` (0.2.0 since #247): the converter
+#: derives the current format from this one, and once `0.1.0` stops being
+#: readable this is the constant that says so.
+SOURCE_FORMAT_VERSION = "0.1.0"
 
 #: The `ArrayRole`s whose inner chunk narrows on the Analysis axis and whose
 #: shard is the conversion's `(V_s, A_s)` parameter.  The manifest's recorded
@@ -149,16 +155,16 @@ def _refuse_unconvertible(source: Path) -> dict[str, Any]:
         raise ConversionError(f"{source}: no manifest.json; this is not a Store Release")
     data = _manifest_data(source)
     version = str(data.get("format_version"))
-    if version == SHARDED_FORMAT_VERSION:
+    if version == CURRENT_FORMAT_VERSION:
         raise ConversionError(
-            f"{manifest_path}: format_version is already {SHARDED_FORMAT_VERSION!r}; this "
+            f"{manifest_path}: format_version is already {CURRENT_FORMAT_VERSION!r}; this "
             "release is already converted (issue #245)"
         )
-    if version != CURRENT_FORMAT_VERSION:
+    if version != SOURCE_FORMAT_VERSION:
         raise ConversionError(
             f"{manifest_path}: format_version is {version!r}, not "
-            f"{CURRENT_FORMAT_VERSION!r}. The converter derives a "
-            f"{SHARDED_FORMAT_VERSION} release from a {CURRENT_FORMAT_VERSION} one and is "
+            f"{SOURCE_FORMAT_VERSION!r}. The converter derives a "
+            f"{CURRENT_FORMAT_VERSION} release from a {SOURCE_FORMAT_VERSION} one and is "
             "not a general migration tool; every other format is rebuilt (ADR 0041, "
             "spec §21.4)."
         )
@@ -495,7 +501,7 @@ def _rewrite_manifest(
     release_id = str(uuid.uuid4())
     data["release_id"] = release_id
     data["created_at"] = now
-    data["format_version"] = SHARDED_FORMAT_VERSION
+    data["format_version"] = CURRENT_FORMAT_VERSION
     dense = dict(data.get("provenance", {}).get("dense", {}))
     plane = next(plan for plan in plans if plan.role is ArrayRole.DENSE_STATISTIC_PLANE)
     dense["chunk_shape"] = list(plane.inner_chunk)
@@ -507,8 +513,8 @@ def _rewrite_manifest(
         "dense": dense,
         "zarr_v3_conversion": {
             "source_release_id": source_release_id,
-            "from_format_version": CURRENT_FORMAT_VERSION,
-            "to_format_version": SHARDED_FORMAT_VERSION,
+            "from_format_version": SOURCE_FORMAT_VERSION,
+            "to_format_version": CURRENT_FORMAT_VERSION,
             "source_zarr_format": 2,
             "target_zarr_format": 3,
             "tool": "scripts/convert_store_to_0_2_0.py",
@@ -813,7 +819,7 @@ def convert_dense_release(
         top_hit_shard_chunks=int(top_hit_shard_chunks),
         workers=int(workers),
     )
-    print(f"Published {destination} as {SHARDED_FORMAT_VERSION}", flush=True)
+    print(f"Published {destination} as {CURRENT_FORMAT_VERSION}", flush=True)
     return destination
 
 
@@ -845,7 +851,9 @@ def _stage_and_convert(
             top_hit_shard_chunks=top_hit_shard_chunks,
         )
         print(f"  {len(plans)} arrays to convert", flush=True)
-        destination_root = open_group_for_write(staged.data_path, "w", zarr_format=3)
+        destination_root = open_group_for_write(
+            staged.data_path, "w", zarr_format=SHARDED_STORE_ZARR_FORMAT
+        )
         _create_destination_arrays(destination_root, source_root, plans)
         destination_root = None  # drop the write handle before forked writers run
         _log_phase("created the destination arrays", started)

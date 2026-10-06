@@ -27,9 +27,9 @@ from opengwasdb.encoding import (
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
-    DEFAULT_COMPRESSOR,
     DEFAULT_DTYPE,
     dense_index_metadata,
+    dense_layout_records,
 )
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, read_top_hit_counts
@@ -131,6 +131,7 @@ def build_dense_observed_store(
             release_id,
             reference_assembly,
             records,
+            (len(variants), len(analyses)),
             chunk_shape,
             dtype,
             encoding,
@@ -299,6 +300,7 @@ def _write_manifest(
     release_id: str,
     reference_assembly: str,
     records: list[NormalisedAssociation],
+    shape: tuple[int, int],
     chunk_shape: tuple[int, int],
     dtype: str,
     encoding: StoreEncoding,
@@ -331,8 +333,7 @@ def _write_manifest(
             "dense": {
                 "statistic_arrays": ["z", "se"],
                 "se_dtype": encoding.se.dtype,
-                "chunk_shape": list(chunk_shape),
-                "compressor": DEFAULT_COMPRESSOR,
+                **dense_layout_records(shape, hint=chunk_shape),
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
                 "variant_axis": {
                     "format": VARIANT_AXIS_FORMAT,
@@ -362,7 +363,8 @@ def _write_index(
             connection,
             "dense",
             dense_index_metadata(
-                chunk_shape,
+                (len(variants), len(analyses)),
+                hint=chunk_shape,
                 variant_axis={
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,
@@ -477,5 +479,4 @@ def _write_zarr(
     overflow.table().write(root)
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"
-    root.attrs["compressor"] = DEFAULT_COMPRESSOR
-    root.attrs["chunk_shape"] = list(effective_chunks)
+    root.attrs.update(dense_layout_records(z.shape, hint=chunk_shape))

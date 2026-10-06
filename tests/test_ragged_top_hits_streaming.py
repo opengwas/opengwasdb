@@ -91,7 +91,7 @@ def _flush_store(
     writer.flush(out, encoding)
     if imputed:
         rng = np.random.default_rng(seed)
-        group = zarr.open_group(str(out / "data.zarr" / "ragged"), mode="a", zarr_format=2)
+        group = zarr.open_group(str(out / "data.zarr" / "ragged"), mode="a", zarr_format=3)
         group.create_array(
             "imputed",
             data=np.asarray(
@@ -230,7 +230,7 @@ def test_reference_completed_imputed_tiers_match_materialising(tmp_path: Path):
     store = _flush_store(tmp_path, "store", writer, encoding)
 
     rng = np.random.default_rng(3)
-    group = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="a", zarr_format=2)
+    group = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="a", zarr_format=3)
     group.create_array(
         "imputed",
         data=np.asarray((rng.random(writer.n_associations) < 0.3).astype(np.uint8), dtype="uint8"),

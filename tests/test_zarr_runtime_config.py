@@ -135,15 +135,18 @@ def test_store_arrays_read_through_the_fused_pipeline(tmp_path: Path) -> None:
 
 
 def test_all_fill_chunks_are_files_from_the_parent_and_from_fork_workers(tmp_path: Path) -> None:
-    """A chunk that is entirely the fill value is still written as a file.
+    """A shard that holds only the fill value is still written as a file.
 
-    zarr 2.18 wrote it; zarr 3 drops it unless ``array.write_empty_chunks`` is
-    on, which would silently change the file set a build writes (#244 review,
-    finding 2). The seam turns it on process-wide. It is runtime state, not
-    array metadata, so this checks the writes themselves: a whole-array write
-    and a band-by-band write, in the parent and in fork-pool workers, which
-    inherit the setting. No builder writes from a worker today (workers compute,
-    the parent writes); the worker case keeps a future worker-side writer honest.
+    zarr 2.18 wrote every chunk, including an all-fill one; zarr 3 drops such a
+    shard unless ``array.write_empty_chunks`` is on, which would silently change
+    the file set a build writes (#244 review, finding 2).  The seam turns it on
+    process-wide.  It is runtime state, not array metadata, so this checks the
+    writes themselves: a whole-array write and a band-by-band write, in the
+    parent and in fork-pool workers, which inherit the setting.  In 0.2.0 the
+    unit stored as a file is the **shard** (ADR 0057), so the shard is pinned to
+    one inner chunk to give the fixture 16 of them.  No builder writes from a
+    worker today (workers compute, the parent writes); the worker case keeps a
+    future worker-side writer honest.
     """
     result = _run(
         tmp_path,
@@ -160,16 +163,20 @@ def test_all_fill_chunks_are_files_from_the_parent_and_from_fork_workers(tmp_pat
             blank = np.zeros((40, 40), dtype=np.int16)  # the fill value everywhere
             if how == "whole":
                 arrays.create_array(
-                    group, "z", ArrayRole.DENSE_STATISTIC_PLANE, data=blank, hint=(10, 10)
+                    group, "z", ArrayRole.DENSE_STATISTIC_PLANE, data=blank,
+                    hint=(10, 10), shards=(10, 10),
                 )
             else:
                 plane = arrays.create_array(
                     group, "z", ArrayRole.DENSE_STATISTIC_PLANE,
-                    shape=blank.shape, dtype=blank.dtype, hint=(10, 10),
+                    shape=blank.shape, dtype=blank.dtype, hint=(10, 10), shards=(10, 10),
                 )
                 plane[:, :20] = blank[:, :20]
                 plane[:, 20:] = blank[:, 20:]
-            files = [p for p in (TMP / name / "z").iterdir() if not p.name.startswith(".")]
+            files = [
+                p for p in (TMP / name / "z" / "c").rglob("*")
+                if p.is_file()
+            ]
             return {
                 "files": len(files),
                 "flag": zarr.config.get("array.write_empty_chunks"),

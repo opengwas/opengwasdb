@@ -51,18 +51,26 @@ def _stamp(store: Path, version: str, *, encoding_version: int | None = None) ->
 
 
 @pytest.fixture
-def pre_reset_store(dense_store_path: Path) -> Path:
+def pre_reset_store(dense_store_path: Path, tmp_path: Path) -> Path:
     """A release stamped `3.0`: what every store on disk is, until restamped.
+
+    Its arrays must be the **v2** bytes a `3.0`/`0.1.0` release holds, or the
+    restamp's central claim -- that a stamp is all that is needed -- is not what
+    is being tested.  The builders write 0.2.0 from #247, so the fixture is
+    re-laid out as v2 (`legacy_fixtures.relayout_dense_as_0_1_0`).
 
     Meaningful only if it is genuinely unreadable to this build, which is
     asserted here rather than assumed -- a fixture this build could open would
     make every assertion below vacuous.
     """
-    assert validate_store(dense_store_path).ok
-    _stamp(dense_store_path, "3.0")
+    from legacy_fixtures import relayout_dense_as_0_1_0
+
+    store = relayout_dense_as_0_1_0(dense_store_path, tmp_path / "pre-reset.opengwasdb")
+    assert validate_store(store).ok
+    _stamp(store, "3.0")
     with pytest.raises(UnsupportedFormatVersion):
-        open_store(dense_store_path)
-    return dense_store_path
+        open_store(store)
+    return store
 
 
 def _fingerprint(path: Path, *, exclude: tuple[str, ...] = ()) -> dict[str, bytes]:

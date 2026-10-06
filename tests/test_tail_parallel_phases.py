@@ -68,7 +68,7 @@ def _se_snapshot(group) -> dict[str, np.ndarray]:
 def _small_store(tmp_path: Path, name: str) -> Path:
     """A two-chunk-per-axis dense store with a handful of strong candidates."""
     store = tmp_path / name
-    root = zarr.open_group(str(store / "data.zarr"), mode="w", zarr_format=2)
+    root = zarr.open_group(str(store / "data.zarr"), mode="w", zarr_format=3)
     rng = np.random.default_rng(20250924)
     n_rows, n_analyses = 100, 3
     z = rng.normal(0, 1, (n_rows, n_analyses)).astype(np.float16)

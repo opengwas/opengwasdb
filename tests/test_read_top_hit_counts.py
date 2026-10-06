@@ -14,7 +14,7 @@ from opengwasdb.layouts.dense.top_hits import read_top_hit_counts, threshold_key
 
 
 def _write_group(store_path, threshold, analysis_index, *, with_offsets: bool, n_analyses: int):
-    root = zarr.open_group(str(store_path / "data.zarr"), mode="a", zarr_format=2)
+    root = zarr.open_group(str(store_path / "data.zarr"), mode="a", zarr_format=3)
     top = root.require_group("top_hits")
     group = top.require_group(threshold_key(threshold))
     analysis_index = np.asarray(analysis_index, dtype="uint32")

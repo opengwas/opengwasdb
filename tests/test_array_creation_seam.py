@@ -38,6 +38,7 @@ from opengwasdb.encoding.planes import write_eaf_csr, write_se_csr
 from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR
 from opengwasdb.store.arrays import (
     COMPRESSOR_RECORD,
+    SHARDED_COMPRESSOR_RECORD,
     ArrayRole,
     chunk_layout,
     component_variant_chunk,
@@ -812,8 +813,16 @@ def test_open_group_for_write_rejects_a_read_mode(tmp_path: Path) -> None:
 
 
 def test_compressor_record_is_the_published_blob() -> None:
-    """The bytes written and the compressor the manifest publishes share one record."""
-    assert DEFAULT_COMPRESSOR == COMPRESSOR_RECORD
+    """The bytes written and the compressor the manifest publishes share one record.
+
+    Since #247 a Dense release is format 0.2.0, so the published record is the
+    v3 sharded one; the v2 record remains the seam's `compressor()` spelling and
+    the two must describe the same Blosc configuration.
+    """
+    assert DEFAULT_COMPRESSOR == SHARDED_COMPRESSOR_RECORD
+    assert COMPRESSOR_RECORD["cname"] == SHARDED_COMPRESSOR_RECORD["cname"]
+    assert COMPRESSOR_RECORD["clevel"] == SHARDED_COMPRESSOR_RECORD["clevel"]
+    assert COMPRESSOR_RECORD["shuffle"] == SHARDED_COMPRESSOR_RECORD["shuffle"]
     config = compressor().get_config()
     assert config["cname"] == COMPRESSOR_RECORD["cname"]
     assert config["clevel"] == COMPRESSOR_RECORD["clevel"]

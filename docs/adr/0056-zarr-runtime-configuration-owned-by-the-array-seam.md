@@ -63,13 +63,15 @@ these settings**, in each of two runs, with identical answers.
 zarr 2 wrote a chunk even when it was entirely the fill value; zarr 3 defaults to dropping
 it. Dropping it would silently change the file set a release holds. The flag is runtime
 configuration, not stored metadata, so a per-array value is lost the moment an array is
-reopened. It is set process-wide (`708d179`). #247 revisits it when builders write Zarr v3
-shards.
+reopened. It is set process-wide (`708d179`). #247 revisited it when the builders moved to
+Zarr v3 shards and **kept it on**: the unit stored as a file is now the shard, and an
+all-fill shard that zarr dropped would still change the file set a release holds.
 
 **Enforced by** the files builds write, not by the setting:
 
-- `tests/test_array_conformance.py` requires every chunk of every array in every
-  fixture build to exist as a file. The fixtures write 358 chunk files, some of them
+- `tests/test_array_conformance.py` requires every **shard** of every array in every
+  fixture build to exist as a file (the 0.2.0 spelling of the rule below; before #247 it
+  walked the v2 chunk files). The fixtures write hundreds of shards, some of them
   entirely fill, and the test asserts that some are.
 - `tests/test_zarr_runtime_config.py` writes all-fill arrays whole and band by band, in
   the parent and in fork-pool workers, and counts the files.

@@ -78,8 +78,8 @@ from opengwasdb.layouts.dense.build_vcf import (
 )
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
-    DEFAULT_COMPRESSOR,
     DEFAULT_DTYPE,
+    dense_layout_records,
 )
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.hybrid.checkpoint import (
@@ -3504,8 +3504,7 @@ def _write_hybrid_manifest(
             "n_off_panel": n_off_panel,
             "n_overflow_associations": n_overflow,
             "se_dtype": encoding.se.dtype,
-            "chunk_shape": list(chunk_shape),
-            "compressor": DEFAULT_COMPRESSOR,
+            **dense_layout_records((n_panel, n_analyses), hint=chunk_shape),
         },
     }
     if eaf_provenance is not None:

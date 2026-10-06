@@ -12,6 +12,35 @@ the end of this file.
 
 ### Changed
 
+- **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**
+  `CURRENT_FORMAT_VERSION` becomes `0.2.0`, and the converter's
+  `SHARDED_FORMAT_VERSION` is now the same constant rather than a second one, so
+  a built release and a converted release declare the same format and carry the
+  same physical layout. A Dense release's inner chunk is the ADR 0058 decision,
+  `[1000, 64]`, and every array is sharded through the seam's role table
+  (`DENSE_SHARD_SHAPE`, `TOP_HIT_SHARD_CHUNKS`); the builder default Dense
+  Analysis chunk narrows from 1,000 to 64 as #237 asked. The Dense VCF band
+  writer's band width is now the **shard** Analysis width (1,024, or the shard
+  clipped to the array) rather than the inner chunk, so each band write covers
+  whole shards: on a full `ukb-b` store that is 40.3 GB of float32 scratch, the
+  cost ADR 0058 accepted, and 2.5 GB on the 10-Analysis pilot. The EAF row
+  block encode, the SE rewrite (residual and float16-narrowing), Dense Reference
+  Completion and the Hybrid Dense Component's row blocks are whole shards
+  (100,000 rows) too. A test-time hook
+  (`opengwasdb.store.arrays.require_whole_shard_writes`, also enabled by
+  `OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES=1`) fails a write that covers part of
+  a shard, so a later writer cannot regress to a silent read-modify-write; the
+  real-data pilot runs with it on. The CLI's `--chunk-variants` /
+  `--chunk-analyses` now name the **inner chunk** (default `[1000, 64]`), and the
+  shard shape is deliberately not exposed on a build: it is the format's decided
+  layout, and a build-time knob would let a release carry a shard the converter
+  cannot reproduce. **Completing a 0.1.0 source is now refused**, naming
+  `scripts/convert_store_to_0_2_0.py`: completion writes into its source's
+  arrays and keeps its format, and this build writes only 0.2.0 (ADR 0038 §4).
+  `scripts/restamp_store_to_0_1_0.py` keeps its own `0.1.0` target rather than
+  following `CURRENT_FORMAT_VERSION`. The spec (§10a, §21.3) and the
+  compatibility table below record that this package writes 0.2.0 and reads
+  0.1.0 and 0.2.0.
 - **A query reads each Analysis's `eaf` once and shares it between SE decoding
   and the result's `eaf` column (#253).** On a release whose `se` is
   `int8_residual`, decoding a residual predicts it from the frequency, so the
@@ -1909,7 +1938,7 @@ it can read.
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
 | 0.3.0 | 0.1.0 | 0.1.0 only |
-| Unreleased (next) | 0.1.0 from every builder, 0.2.0 from the converter only | 0.1.0, 0.2.0 |
+| Unreleased (next) | 0.2.0 from every builder and the converter | 0.1.0, 0.2.0 |
 
 The two `format_version` values in that table are different formats despite
 reading alike: `0.1` is the pre-release format 0.2.0 wrote, and `0.1.0` is the
@@ -1917,10 +1946,12 @@ reset (#143, ADR 0041). Nothing on `dev` reads `0.1`, and the shapes cannot be
 confused by a reader — only by a person reading this table, which is why it
 says so here.
 
-The `Unreleased` row is the interim of ADR 0057: builders and converter write
-different formats until #247 moves the builders to 0.2.0, and no package version
-is cut while that holds. A 0.2.0 release reads and queries exactly as its 0.1.0
-source did; only its physical layout differs.
+The `Unreleased` row is the state #247 leaves: every builder writes 0.2.0 (Zarr
+v3 with sharding, the shapes ADR 0058 decided) and the converter writes the same
+format from a 0.1.0 source, so a build and a conversion of the same release
+carry the same layout. `0.1.0` (Zarr v2) stays readable; a 0.1.0 source is no
+longer writable, which is why completion refuses it and names the converter.
+Deleting the v2 reader is a later decision (ADR 0057).
 
 [Unreleased]: https://github.com/opengwas/opengwasdb/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/opengwas/opengwasdb/compare/v0.2.0...v0.3.0
