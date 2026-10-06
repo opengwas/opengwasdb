@@ -56,28 +56,38 @@ def digest(result: dict[str, np.ndarray]) -> dict[str, str]:
     return out
 
 
+def build_patterns(query: Any, selection: dict[str, Any]) -> dict[str, Any]:
+    """The shared #242 query shapes, pinned to a once-resolved selection.
+
+    Every A/B child builds its shapes this way, so the store-comparison A/B and
+    the code-comparison A/B query the same thing.
+    """
+    from benchmarks import _query_shapes
+
+    region = (
+        str(selection["region"]["chrom"]),
+        int(selection["region"]["start"]),
+        int(selection["region"]["end"]),
+    )
+    return _query_shapes.common_query_patterns(
+        query,
+        exposure=selection["exposure_analysis_id"],
+        phewas_alid=selection["phewas_alid"],
+        region=region,
+        random_alids=selection["random_alids"],
+        random_analyses=selection["random_analyses"],
+    )
+
+
 def time_shapes(
     store: str | Path, selection: dict[str, Any], shapes: list[str], reps: int
 ) -> dict[str, Any]:
     """Time each of `shapes` on `store` in this interpreter, with a digest each."""
-    from benchmarks import _query_shapes
     from opengwasdb.query import query_store
 
-    region = (
-        selection["region"]["chrom"],
-        int(selection["region"]["start"]),
-        int(selection["region"]["end"]),
-    )
     measured: dict[str, Any] = {}
     with query_store(store) as query:
-        patterns = _query_shapes.common_query_patterns(
-            query,
-            exposure=selection["exposure_analysis_id"],
-            phewas_alid=selection["phewas_alid"],
-            region=region,
-            random_alids=selection["random_alids"],
-            random_analyses=selection["random_analyses"],
-        )
+        patterns = build_patterns(query, selection)
         for name in shapes:
             fn = patterns[name]
             warm = fn()
@@ -215,11 +225,11 @@ def environment_block() -> dict[str, Any]:
 
 
 def round_block(
-    samples: dict[str, dict[str, list[float]]], rounds: list[dict[str, Any]]
+    samples: Samples, rounds: Rounds, round_order: list[str]
 ) -> dict[str, Any]:
     """The artifact's round record: the order, every child record, every sample."""
     return {
-        "round_order": [record["order"] for record in rounds],
+        "round_order": round_order,
         "rounds": rounds,
         "samples_ms": {
             side: {name: values for name, values in shapes.items()}
@@ -229,20 +239,19 @@ def round_block(
 
 
 def measurement_block(
-    selection: dict[str, Any],
-    shapes: list[str],
-    reps: int,
-    rounds_requested: int,
-    samples: Samples,
-    rounds: Rounds,
+    selection: dict[str, Any], args: Any, samples: Samples, rounds: Rounds
 ) -> dict[str, Any]:
-    """The artifact's request and round record, shared by both A/B runners."""
+    """The artifact's request and round record, shared by both A/B runners.
+
+    Both runners carry `args.shapes`, `args.reps` and `args.rounds`, and record a
+    per-round `order`; this is the one place those become artifact fields.
+    """
     return {
         "selection": selection,
-        "shapes": list(shapes),
-        "reps": reps,
-        "rounds_requested": rounds_requested,
-        **round_block(samples, rounds),
+        "shapes": list(args.shapes),
+        "reps": args.reps,
+        "rounds_requested": args.rounds,
+        **round_block(samples, rounds, [record["order"] for record in rounds]),
     }
 
 

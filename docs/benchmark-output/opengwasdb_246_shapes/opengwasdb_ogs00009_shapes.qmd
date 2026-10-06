@@ -433,7 +433,7 @@ pd.DataFrame(rows).set_index("configuration")
 print("round order:", ab["round_order"])
 for shape, ratio in ab["ratio_reference_over_other"].items():
     print(
-        f"{shape}: sharded / effectivly unsharded = {ratio:.2f}x; "
+        f"{shape}: sharded / effectively unsharded = {ratio:.2f}x; "
         f"sharding cost per read = {ab['per_read_ms'][shape]:.2f} ms "
         "(six reads per Top-Hit Query)"
     )

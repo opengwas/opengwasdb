@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         "sides": sides,
         "commands": commands,
         "store": str(args.store),
-        **ab.measurement_block(selection, args.shapes, args.reps, args.rounds, samples, rounds),
+        **ab.measurement_block(selection, args, samples, rounds),
         "medians_ms": side_medians,
         "head_saving_fraction": savings,
         "identity": ab.identity_block(differing),
