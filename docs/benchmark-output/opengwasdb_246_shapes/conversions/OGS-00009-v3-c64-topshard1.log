@@ -1,0 +1,68 @@
+  copied the release envelope: 0.0s
+  35 arrays to convert
+  created the destination arrays: 0.4s
+  writing 21173 shards over 1 worker(s)
+  wrote every shard over 1 worker(s): 1137.7s
+  rewrote the manifest, index blob and root attrs: 0.1s
+  verifying eaf
+  verifying eaf_baseline
+  verifying eaf_exception_index
+  verifying eaf_exception_value
+  verifying se
+  verifying se_coefficients
+  verifying se_exception_index
+  verifying se_exception_value
+  verifying top_hits/p_5e_04/abs_z
+  verifying top_hits/p_5e_04/analysis_index
+  verifying top_hits/p_5e_04/analysis_offsets
+  verifying top_hits/p_5e_04/eaf
+  verifying top_hits/p_5e_04/p_value
+  verifying top_hits/p_5e_04/se
+  verifying top_hits/p_5e_04/variant_index
+  verifying top_hits/p_5e_04/z
+  verifying top_hits/p_5e_06/abs_z
+  verifying top_hits/p_5e_06/analysis_index
+  verifying top_hits/p_5e_06/analysis_offsets
+  verifying top_hits/p_5e_06/eaf
+  verifying top_hits/p_5e_06/p_value
+  verifying top_hits/p_5e_06/se
+  verifying top_hits/p_5e_06/variant_index
+  verifying top_hits/p_5e_06/z
+  verifying top_hits/p_5e_08/abs_z
+  verifying top_hits/p_5e_08/analysis_index
+  verifying top_hits/p_5e_08/analysis_offsets
+  verifying top_hits/p_5e_08/eaf
+  verifying top_hits/p_5e_08/p_value
+  verifying top_hits/p_5e_08/se
+  verifying top_hits/p_5e_08/variant_index
+  verifying top_hits/p_5e_08/z
+  verifying z
+  verifying z_overflow_index
+  verifying z_overflow_value
+  verified the conversion bit-exact: 499.0s
+  regenerated overview.html and validated the release: 5632.3s
+Published /data/opengwasdb/work/epic240/246/OGS-00009-v3-c64-topshard1 as 0.2.0
+Converted /data/opengwasdb/stores/OGS-00009/store.opengwasdb -> /data/opengwasdb/work/epic240/246/OGS-00009-v3-c64-topshard1
+	Command being timed: "pixi run -e dev python scripts/convert_store_to_0_2_0.py /data/opengwasdb/stores/OGS-00009/store.opengwasdb --into /data/opengwasdb/work/epic240/246/OGS-00009-v3-c64-topshard1 --dense-analysis-chunk 64 --dense-shard 100000x1024 --top-hit-shard-chunks 1 --workers 1"
+	User time (seconds): 6083.89
+	System time (seconds): 1772.52
+	Percent of CPU this job got: 108%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:01:12
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 36219412
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 113
+	Minor (reclaiming a frame) page faults: 31365233
+	Voluntary context switches: 4951645
+	Involuntary context switches: 9907
+	Swaps: 0
+	File system inputs: 1137776
+	File system outputs: 67041256
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

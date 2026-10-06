@@ -21,7 +21,8 @@ migration route.
 Usage:
 
     convert_store_to_0_2_0.py STORE --into DEST
-        [--dense-analysis-chunk N] [--dense-shard ROWSxCOLS] [--workers N]
+        [--dense-analysis-chunk N] [--dense-shard ROWSxCOLS]
+        [--top-hit-shard-chunks N] [--workers N]
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from opengwasdb.store.arrays import DENSE_SHARD_SHAPE
+from opengwasdb.store.arrays import DENSE_SHARD_SHAPE, TOP_HIT_SHARD_CHUNKS
 from opengwasdb.store.convert import ConversionError, convert_release
 
 
@@ -45,7 +46,8 @@ def _parse_shard(text: str) -> tuple[int, int]:
     return (int(parts[0]), int(parts[1]))
 
 
-def main(argv: list[str] | None = None) -> int:
+def _parser() -> argparse.ArgumentParser:
+    """The CLI's one parser, kept out of `main` so neither outgrows the gate."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "store",
@@ -75,13 +77,28 @@ def main(argv: list[str] | None = None) -> int:
         f"(default {DENSE_SHARD_SHAPE[0]}x{DENSE_SHARD_SHAPE[1]})",
     )
     parser.add_argument(
+        "--top-hit-shard-chunks",
+        type=int,
+        default=TOP_HIT_SHARD_CHUNKS,
+        metavar="N",
+        help=f"how many top-hit inner chunks one top-hit shard holds (default "
+        f"{TOP_HIT_SHARD_CHUNKS}, the seam's policy). 1 makes every top-hit shard one "
+        f"inner chunk -- 'effectively unsharded' for #246's measurement -- while the "
+        f"array stays a Zarr v3 sharded array, so the 0.2.0 rule that every array is "
+        f"sharded still holds",
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
         help="processes writing destination shards (default 1). Every worker owns whole "
         "shards, so more workers only bound throughput, never correctness",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
 
     try:
         destination = convert_release(
@@ -89,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             args.into,
             dense_analysis_chunk=args.dense_analysis_chunk,
             dense_shard=args.dense_shard,
+            top_hit_shard_chunks=args.top_hit_shard_chunks,
             workers=args.workers,
         )
     except ConversionError as exc:

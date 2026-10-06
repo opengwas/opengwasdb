@@ -1,5 +1,15 @@
 # ADR-0021: Clip zarr chunk shape to actual array dimensions at write time
 
+> **Superseded by [ADR 0058](./0058-dense-chunk-and-shard-shapes.md) for format
+> 0.2.0.** The clipping rule below is unchanged and still holds; what ADR 0058
+> supersedes is the default it clips. For **format 0.2.0** a Dense statistic
+> plane is written with `[1000, 64]` inner chunks and a `[100000, 1024]` shard;
+> the converter takes those as its defaults. The **0.1.0** builders
+> (`build_dense_store`, `build_dense_from_vcf`) still default to
+> `DEFAULT_CHUNK_SHAPE = (1000, 1000)` on this branch, deliberately, until
+> #247 moves them to 0.2.0 -- so this ADR remains the statement of the hint
+> those builders pass. Read ADR 0058 for the measured shapes.
+
 ## Status
 
 Accepted

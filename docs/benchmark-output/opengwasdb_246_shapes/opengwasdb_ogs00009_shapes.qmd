@@ -1,0 +1,548 @@
+---
+title: "OGS-00009 across chunk and shard shapes (#246)"
+subtitle: "The epic #240 go/no-go: format 0.2.0 on zarr 3 against 0.1.0 on zarr 2.18"
+format:
+  html:
+    embed-resources: true
+    toc: true
+    code-fold: true
+    code-summary: "Show the code that generated this table"
+jupyter: python3
+---
+
+Every number below is read from a committed artifact at render time. Nothing is
+typed by hand. Render this document from its own directory, so the relative
+paths resolve:
+
+```bash
+cd docs/benchmark-output/opengwasdb_246_shapes
+pixi run -e report quarto render opengwasdb_ogs00009_shapes.qmd
+```
+
+```{python}
+#| label: setup
+import json
+import re
+from pathlib import Path
+
+import pandas as pd
+
+HERE = Path.cwd()
+if not (HERE / "opengwasdb_store_comparison_ogs00009_shapes.json").exists():
+    raise SystemExit(
+        "render from docs/benchmark-output/opengwasdb_246_shapes so the artifacts resolve"
+    )
+
+
+def load(name: str) -> dict:
+    return json.loads((HERE / name).read_text(encoding="utf-8"))
+
+
+HEAD = load("opengwasdb_store_comparison_ogs00009_shapes.json")
+BASE = load("opengwasdb_store_comparison_ogs00009_zarr2.json")
+STORES = {store["label"]: store for store in HEAD["stores"]}
+BASE_STORE = BASE["stores"][0]
+S256 = load("opengwasdb_store_comparison_ogs00009_shapes_s256.json")
+S256_STORES = {store["label"]: store for store in S256["stores"]}
+
+# #244's committed whole-Analysis peak-memory pair, for the historical comparison.
+LEVERS = HERE.parent / "opengwasdb_zarr3_read_levers"
+HISTORICAL_218 = json.loads((LEVERS / "rss-pair-base.json").read_text())["stores"][0]
+HISTORICAL_Z3 = json.loads((LEVERS / "rss-step1-head.json").read_text())["stores"][0]
+
+
+def bulk_peak(store: dict) -> float:
+    return next(row["peak_mb"] for row in store["memory"] if row["query"] == "bulk")
+
+
+def shard_sentence(stores: dict) -> str:
+    return ", ".join(
+        " x ".join(str(size) for size in store["dataset"]["layout"]["z"]["shard_shape"])
+        + f" (`{label}`)"
+        for label, store in stores.items()
+        if store["dataset"]["format_version"] == "0.2.0"
+    )
+
+
+SHARD_SENTENCE = shard_sentence(STORES)
+S256_SHARD_SENTENCE = shard_sentence(S256_STORES)
+```
+
+# What was measured
+
+The release under measurement is **OGS-00009**, Dense Observed-Only,
+`{python} f"{STORES['v3-c64']['dataset']['n_variants']:,}"` variants ×
+`{python} f"{STORES['v3-c64']['dataset']['n_analyses']:,}"` Analyses. The
+comparison is the **format 0.2.0** candidates on zarr-python 3 against the
+**format 0.1.0** release on zarr-python 2.18, back to back. Each run's own
+recorded 1-minute load is printed in the generated set-L tables, and a run that
+began at or above 3 is named there; the s256 confirmation pair's zarr 3 half is
+one such run.
+
+```{python}
+#| label: runs
+rows = []
+for store, artifact in [(BASE_STORE, BASE)] + [(s, HEAD) for s in STORES.values()]:
+    env = artifact["environment"]
+    rows.append(
+        {
+            "store label": store["label"],
+            "commit": env["opengwasdb_commit"],
+            "zarr": env["zarr"],
+            "numcodecs": env["numcodecs"],
+            "effective reader": json.dumps(
+                store.get("effective_reader") or env.get("effective_reader"),
+                sort_keys=True,
+            ),
+            "1-min load before": store["load_average_1m_before"],
+            "1-min load after": store["load_average_1m_after"],
+        }
+    )
+pd.DataFrame(rows).set_index("store label")
+```
+
+```{python}
+#| label: identity
+# The head run checks every zarr-3-readable store against its first in-process.
+# The 2.18 run is a separate process (a different environment), so its digests
+# are compared here: a bit-equal answer across format 0.1.0 on zarr 2.18 and
+# every 0.2.0 shape is what makes the timings a comparison of one query.
+assert BASE_STORE["result_digests"] == STORES["v2-c1000"]["result_digests"], (
+    "the 2.18 and zarr 3 runs of v2-c1000 returned different results"
+)
+print(
+    f"identity holds across {1 + len(STORES)} configurations, "
+    f"{len(STORES['v2-c1000']['result_digests'])} shapes and "
+    f"{len(HEAD['identity']['arrays_per_shape'])} arrays per shape"
+)
+```
+
+```{python}
+#| label: pinned-reader
+print("Pinned reader configuration, read back from the measuring processes:")
+print(json.dumps(HEAD["environment"]["effective_reader"], indent=2, sort_keys=True))
+print()
+print("imported package fingerprint (from #253's provenance change):")
+print(HEAD["opengwasdb_fingerprint"])
+```
+
+# Configurations: files and footprint
+
+```{python}
+#| label: configurations
+rows = []
+for label, store in STORES.items():
+    dense = store["dataset"]
+    footprint = store["footprint"]
+    layout = dense["layout"]
+    assert layout.get("z"), f"{label}: no Dense layout was recorded; refusing a blank table"
+    z = layout["z"]
+    tophit = layout.get("top_hits/p_5e_08/z")
+    rows.append(
+        {
+            "label": label,
+            "format_version": dense["format_version"],
+            "`z` inner chunk": " x ".join(str(x) for x in z["chunk_shape"]),
+            "`z` shard": (
+                "unsharded" if z["shard_shape"] is None else " x ".join(str(x) for x in z["shard_shape"])
+            ),
+            "top-hit shard (inner chunks)": (
+                "unsharded"
+                if tophit is None or tophit["shard_shape"] is None
+                else tophit["shard_shape"][0] // tophit["chunk_shape"][0]
+            ),
+            "files": footprint["n_files"],
+            "apparent GB": round(footprint["apparent_bytes"] / 1e9, 2),
+            "allocated GB": round(footprint["allocated_bytes"] / 1e9, 2),
+        }
+    )
+pd.DataFrame(rows).set_index("label")
+```
+
+The reference release on 0.1.0 as built, for comparison:
+`{python} f"{BASE_STORE['footprint']['n_files']:,}"` files.
+
+## Per-array breakdown
+
+```{python}
+#| label: per-array
+frames = []
+for label, store in STORES.items():
+    for row in store["footprint"]["arrays"]:
+        frames.append(
+            {
+                "configuration": label,
+                "array": row["node"].replace("data.zarr/", ""),
+                "files": row["n_files"],
+                "apparent MB": round(row["apparent_bytes"] / 1e6, 1),
+                "allocated MB": round(row["allocated_bytes"] / 1e6, 1),
+                "largest file MB": round(row["largest_file_bytes"] / 1e6, 1),
+            }
+        )
+pd.set_option("display.max_rows", 400)
+pd.DataFrame(frames).sort_values(["configuration", "array"])
+```
+
+# Conversion cost
+
+Each conversion ran under `/usr/bin/time -v`; its log is committed beside this
+document. The phases are the converter's own (`#245`).
+
+```{python}
+#| label: conversions
+def parse_time_log(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    out: dict = {"log": path.name}
+    elapsed = re.search(r"Elapsed \(wall clock\) time.*?\): ([\d:.]+)", text)
+    if elapsed:
+        out["wall clock"] = elapsed.group(1)
+    rss = re.search(r"Maximum resident set size \(kbytes\): (\d+)", text)
+    if rss:
+        out["peak RSS GB"] = round(int(rss.group(1)) / 1e6, 2)
+    for phase, seconds in re.findall(r"^  (.+?): ([\d.]+)s$", text, re.MULTILINE):
+        out[phase] = f"{float(seconds):.0f} s"
+    return out
+
+
+logs = sorted((HERE / "conversions").glob("*.log"))
+pd.DataFrame([parse_time_log(path) for path in logs])
+```
+
+# Set L: time and peak memory per query
+
+The generated table (`opengwasdb_store_comparison_ogs00009_shapes_set_l.md`) is
+reproduced here exactly as the script wrote it. `✓` meets the limit, `✗` misses
+it, `≈` marks a result within 30% of a limit, either side, which needs a second
+back-to-back pair before it counts.
+
+```{python}
+#| label: set-l
+from IPython.display import Markdown
+
+Markdown((HERE / "opengwasdb_store_comparison_ogs00009_shapes_set_l.md").read_text())
+```
+
+# The second back-to-back pair
+
+The 30%-of-a-limit rule: a result within 30% of a budget, either side, is
+confirmed with a second back-to-back pair before it counts. The first pair
+flagged four memory peaks near the 300 MB cap, so a second pair was run.
+
+```{python}
+#| label: set-l-pair2
+Markdown(
+    (HERE / "opengwasdb_store_comparison_ogs00009_shapes_set_l_pair2.md").read_text()
+)
+```
+
+# Whole-Analysis peak memory
+
+The whole-Analysis peak is the budget whose outcome was unknown before this
+run. #244 measured
+`{python} f"{bulk_peak(HISTORICAL_Z3) / 1000:.2f} GB"` on zarr 3 and
+`{python} f"{bulk_peak(HISTORICAL_218) / 1000:.2f} GB"` on zarr 2.18 for the
+same Analysis of the same release
+(`opengwasdb_zarr3_read_levers/rss-step1-head.json` and `rss-pair-base.json`);
+this run measures it for every 0.2.0 candidate (`bulk-memory` and
+`set-l-adopted` read every value from the committed artifacts).
+
+```{python}
+#| label: bulk-memory
+# The two reference peaks and every ratio and label below are derived from the
+# committed artifacts; no measured value is typed here.
+reference_z3 = bulk_peak(HISTORICAL_Z3)
+reference_218 = bulk_peak(HISTORICAL_218)
+
+
+def memory_row(name: str, peak: float) -> dict:
+    return {
+        "configuration": name,
+        "whole-Analysis peak GB": round(peak / 1000, 2),
+        f"vs zarr 3 ({reference_z3 / 1000:.2f} GB)": f"{peak / reference_z3:.2f}×",
+        f"vs 2.18 ({reference_218 / 1000:.2f} GB)": f"{peak / reference_218:.2f}×",
+    }
+
+
+rows = [
+    memory_row("#244 zarr 2.18 (historical)", reference_218),
+    memory_row("#244 zarr 3 (historical)", reference_z3),
+]
+for label, store in STORES.items():
+    rows.append(memory_row(label, bulk_peak(store)))
+pd.DataFrame(rows)
+```
+
+# Shard file sizes
+
+The largest file of a 0.2.0 array is its largest shard (`zarr.json` is bytes).
+This is the unit a store copy, a host or an HTTP range request moves.
+
+```{python}
+#| label: shard-sizes
+rows = []
+for label, store in STORES.items():
+    for row in store["footprint"]["arrays"]:
+        node = row["node"].replace("data.zarr/", "")
+        if node in ("z", "se", "eaf", "top_hits/p_5e_08/z"):
+            rows.append(
+                {
+                    "configuration": label,
+                    "array": node,
+                    "shards": row["n_files"] - 1,
+                    "largest shard MB": round(row["largest_file_bytes"] / 1e6, 1),
+                    "mean shard MB": round(
+                        (row["apparent_bytes"] - row["largest_file_bytes"])
+                        / max(row["n_files"] - 2, 1)
+                        / 1e6,
+                        1,
+                    ),
+                }
+            )
+pd.DataFrame(rows)
+```
+
+# Builder memory
+
+The Dense VCF band writer holds `n_variants × shard Analysis width × itemsize`
+of `float32` `se` scratch (`#240`). The two stores a builder will meet:
+
+```{python}
+#| label: builder-memory
+ukb = STORES["v3-c64"]["dataset"]["n_variants"]
+finngen = json.loads(
+    (HERE.parent / "opengwasdb_ogs00016_finngen_benchmark.json").read_text()
+)["dataset"]["n_variants"]
+widths = [64, 128, 256, 512, 1024, 2000]
+# The variant counts in the column labels are read from the artifacts, not typed.
+rows = [
+    {
+        "shard Analysis width": width,
+        f"ukb-b ({ukb / 1e6:.2f} M variants), GB": round(ukb * width * 4 / 1e9, 2),
+        f"FinnGen ({finngen / 1e6:.2f} M variants), GB": round(
+            finngen * width * 4 / 1e9, 2
+        ),
+    }
+    for width in widths
+]
+pd.DataFrame(rows)
+```
+
+The Dense shards under measurement are `{python} SHARD_SENTENCE` and
+`{python} S256_SHARD_SENTENCE`. Nothing was built for this table.
+
+# The 256-wide Dense shard (`v3-c64-s256`)
+
+A second back-to-back pair re-measures `v2-c1000` on zarr 2.18 and, in one zarr 3
+process, `v2-c1000`, `v3-c64` (shard 1024) and `v3-c64-s256` (shard 256, same
+Dense inner chunk `[1000, 64]`). It answers whether a narrower shard changes a
+query, and what it costs in files.
+
+The pair again put results within 30% of a limit (10 × 100's typical time and its
+memory), so a second back-to-back pair confirms them.
+
+```{python}
+#| label: s256-set-l
+Markdown(
+    (
+        HERE / "opengwasdb_store_comparison_ogs00009_shapes_s256_set_l.md"
+    ).read_text()
+)
+```
+
+```{python}
+#| label: s256-set-l-pair2
+Markdown(
+    (
+        HERE / "opengwasdb_store_comparison_ogs00009_shapes_s256_set_l_pair2.md"
+    ).read_text()
+)
+```
+
+```{python}
+#| label: s256-files
+def plane_shards(store: dict, plane: str) -> dict:
+    row = next(r for r in store["footprint"]["arrays"] if r["node"] == f"data.zarr/{plane}")
+    return {
+        "shards": row["n_files"] - 1,
+        "largest shard MB": round(row["largest_file_bytes"] / 1e6, 1),
+    }
+
+
+rows = []
+for label, store in S256_STORES.items():
+    if store["dataset"]["format_version"] == "0.1.0":
+        continue
+    z = store["dataset"]["layout"]["z"]
+    row = {
+        "configuration": label,
+        "files": store["footprint"]["n_files"],
+        "`z` shard": " x ".join(str(x) for x in z["shard_shape"]),
+    }
+    for plane in ("z", "se", "eaf"):
+        info = plane_shards(store, plane)
+        row[f"{plane} shards"] = info["shards"]
+        row[f"{plane} largest shard MB"] = info["largest shard MB"]
+    rows.append(row)
+pd.DataFrame(rows).set_index("configuration")
+```
+
+## s256 against s1024, per query
+
+The difference is s256 minus s1024, so a positive number is s256 slower, taken
+from the same back-to-back pair.
+
+```{python}
+#| label: s256-diff
+rows = []
+for query in [t["query"] for t in S256_STORES["v3-c64"]["timings"]]:
+    a = next(t for t in S256_STORES["v3-c64"]["timings"] if t["query"] == query)
+    b = next(t for t in S256_STORES["v3-c64-s256"]["timings"] if t["query"] == query)
+    am = next(m for m in S256_STORES["v3-c64"]["memory"] if m["query"] == query)
+    bm = next(m for m in S256_STORES["v3-c64-s256"]["memory"] if m["query"] == query)
+    rows.append(
+        {
+            "query": query.replace("random_lookup_10_variants_100_analyses", "10 variants x 100 Analyses")
+            .replace("random_lookup_100_variants_10_analyses", "100 variants x 10 Analyses"),
+            "s1024 median ms": a["median_ms"],
+            "s256 median ms": b["median_ms"],
+            "median difference ms": round(b["median_ms"] - a["median_ms"], 3),
+            "s1024 p95 ms": a["p95_ms"],
+            "s256 p95 ms": b["p95_ms"],
+            "s1024 peak MB": am["peak_mb"],
+            "s256 peak MB": bm["peak_mb"],
+        }
+    )
+pd.DataFrame(rows).set_index("query")
+```
+
+# Screening beyond 64 and 128
+
+Converting the whole of OGS-00009 into a shape costs hours, so any shape other
+than the four measured above is screened from the 100,000-variant slice first
+(`shape_slice.py`, `shape_screen.py`). The two screened here are `[1000, 256]`
+and `[500, 256]`.
+
+```{python}
+#| label: screening-summary
+# The cost model is #244's committed output: it already carries both screened
+# candidates, because `shape_harness_geometry.py` has always enumerated them.
+LEVERS_DIR = HERE.parent / "opengwasdb_zarr3_read_levers"
+screening = json.loads((LEVERS_DIR / "slice" / "screen.json").read_text())
+rows = []
+for name in ("1000x64", "1000x128", "1000x256", "500x256", "1000x1000"):
+    entry = {
+        "candidate": name,
+        "one whole Analysis (modelled s)": round(
+            screening["shapes"]["bulk"]["candidates"][name]["e2e_mid_ms"] / 1000, 1
+        ),
+        "one variant, all Analyses (modelled ms)": round(
+            screening["shapes"]["phewas"]["candidates"][name]["e2e_mid_ms"], 2
+        ),
+        "10 variants x 100 Analyses (modelled ms)": round(
+            screening["shapes"]["rand_10x100"]["candidates"][name]["e2e_mid_ms"], 1
+        ),
+    }
+    rows.append(entry)
+pd.DataFrame(rows).set_index("candidate")
+```
+
+```{python}
+#| label: screening-slice-reads
+# The raw slice reads, all four arrays timed in ONE process so the comparisons
+# are within-process (`slice_read_step1_246.jsonl`).
+slice_reads = [
+    json.loads(line)
+    for line in (HERE / "screening" / "slice_read_step1_246.jsonl")
+    .read_text(encoding="utf-8")
+    .splitlines()
+    if line.strip()
+]
+assert len(slice_reads) == 1, "expected one slice-read process in the #246 file"
+sliced = slice_reads[0]["arrays"]
+rows = []
+for name in ("v3_c1000_s", "v3_c64_s", "v3_r1000c256_s", "v3_r500c256_s"):
+    reads = sliced[name]["reads"]
+    rows.append(
+        {
+            "slice array": name,
+            "inner chunk": " x ".join(str(x) for x in sliced[name]["chunk"]),
+            "one row (ms)": reads["row"]["ms"],
+            "one cell (ms)": reads["cell"]["ms"],
+            "10 x 100 (ms)": reads["oindex_10x100"]["ms"],
+            "100 x 10 (ms)": reads["oindex_100x10"]["ms"],
+            "2,000-row band (ms)": reads["band_2000"]["ms"],
+            "100,000-variant column (ms)": reads["fullcol_100k"]["ms"],
+        }
+    )
+pd.DataFrame(rows).set_index("slice array")
+```
+
+```{python}
+#| label: screening-rank
+rank = json.loads((HERE / "screening" / "screen_rank_check.json").read_text())
+rows = []
+for shape in ("bulk", "phewas", "rand_10x100", "rand_100x10"):
+    for candidate in ("1000x64", "1000x128", "1000x256", "500x256"):
+        entry = rank[shape][candidate]
+        rows.append(
+            {
+                "query": shape,
+                "candidate": candidate,
+                "model A ratio": round(entry["model_A"], 3),
+                "model B ratio": round(entry["model_B"], 3),
+                "slice measured ratio": (
+                    None
+                    if entry["slice_measured"] is None
+                    else round(entry["slice_measured"], 3)
+                ),
+            }
+        )
+pd.DataFrame(rows)
+```
+
+# The top-hit index, sharded and effectively unsharded
+
+Sharding a top-hit tier adds a codec hop per read, and a top-hit query makes six
+reads (ADR 0056). `v3-c64-topshard1` is the same conversion as `v3-c64` with
+`--top-hit-shard-chunks 1`: every top-hit shard holds one inner chunk,
+"effectively unsharded", while the array is still a v3 sharded array.
+
+A conversion was running in the same window, so this is an **interleaved A/B**
+(`benchmarks/top_hit_shard_ab.py`): the two stores alternate round by round,
+every sample is kept, and the result digests are compared between them every
+round. It is not an absolute harness run.
+
+```{python}
+#| label: tophits
+ab = json.loads((HERE / "opengwasdb_top_hit_shard_ab.json").read_text())
+rows = []
+for config, cfg in ab["configs"].items():
+    rows.append(
+        {
+            "configuration": config,
+            "top-hit inner chunk": cfg["top_hit_layout"]["chunk_shape"][0],
+            "top-hit shard (inner chunks)": (
+                None
+                if cfg["top_hit_layout"]["shard_shape"] is None
+                else cfg["top_hit_layout"]["shard_shape"][0]
+                // cfg["top_hit_layout"]["chunk_shape"][0]
+            ),
+            "store files": cfg["footprint"]["n_files"],
+            "median top-hits ms": ab["medians_ms"][config]["tophits"],
+            "samples": len(ab["samples_ms"][config]["tophits"]),
+            "result identical": ab["identity"]["identical"],
+        }
+    )
+pd.DataFrame(rows).set_index("configuration")
+```
+
+```{python}
+#| label: tophits-ratio
+print("round order:", ab["round_order"])
+for shape, ratio in ab["ratio_reference_over_other"].items():
+    print(
+        f"{shape}: sharded / effectively unsharded = {ratio:.2f}x; "
+        f"sharding cost per read = {ab['per_read_ms'][shape]:.2f} ms "
+        "(six reads per Top-Hit Query)"
+    )
+```

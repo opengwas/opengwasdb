@@ -68,6 +68,7 @@ from opengwasdb.store.arrays import (
     DENSE_CHUNK_SHAPE,
     DENSE_SHARD_SHAPE,
     SHARDED_COMPRESSOR_RECORD,
+    TOP_HIT_SHARD_CHUNKS,
     ArrayRole,
     chunk_layout,
     create_array,
@@ -356,6 +357,7 @@ def _plan_component(
     *,
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int = TOP_HIT_SHARD_CHUNKS,
 ) -> list[_ArrayPlan]:
     """Map every array in one Zarr tree to its role and 0.2.0 layout.
 
@@ -364,6 +366,9 @@ def _plan_component(
     follow the variant chunk of the plane in their own group through the same
     policy, so they are never coarser than the plane they serve (issue #135,
     spec §6).
+
+    `top_hit_shard_chunks` is #246's top-hit shard override, passed to the seam
+    for `TOP_HIT_INDEX` alone; the default is the seam's own default.
     """
     _refuse_unknown_groups(source_root, component)
     component_chunks = _component_chunks(
@@ -377,12 +382,34 @@ def _plan_component(
             component_chunk=component_chunks[path.rpartition("/")[0]],
             dense_analysis_chunk=dense_analysis_chunk,
             dense_shard=dense_shard,
+            top_hit_shard_chunks=top_hit_shard_chunks,
         )
         for path in _array_paths(source_root)
     ]
     if not plans:
         raise ConversionError(f"{component.zarr_rel} holds no arrays; nothing to convert")
     return plans
+
+
+def _plan_arrays(
+    source_root: Any,
+    *,
+    dense_analysis_chunk: int,
+    dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int = TOP_HIT_SHARD_CHUNKS,
+) -> list[_ArrayPlan]:
+    """Plan one Dense `data.zarr` tree (#245's entry point; #246's plan test).
+
+    The layout-aware converter plans per component through `_plan_component`;
+    this is the single-Dense-tree form its own tests drive directly.
+    """
+    return _plan_component(
+        source_root,
+        _Component("data.zarr", "manifest.json", "dense"),
+        dense_analysis_chunk=dense_analysis_chunk,
+        dense_shard=dense_shard,
+        top_hit_shard_chunks=top_hit_shard_chunks,
+    )
 
 
 def _refuse_unknown_groups(source_root: Any, component: _Component) -> None:
@@ -429,6 +456,7 @@ def _plan_one_array(
     component_chunk: int | None,
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int = TOP_HIT_SHARD_CHUNKS,
 ) -> _ArrayPlan:
     """One source array's role, inner chunk and shard; an unknown path refuses."""
     role = role_for_array_path(path)
@@ -456,6 +484,9 @@ def _plan_one_array(
         shape,
         inner_chunk=inner,
         dense_shard=_dense_shard_for(dense_shard, inner) if is_grid else None,
+        top_hit_shard_chunks=(
+            top_hit_shard_chunks if role is ArrayRole.TOP_HIT_INDEX else None
+        ),
     )
     return _ArrayPlan(
         zarr_rel=component.zarr_rel,
@@ -606,6 +637,7 @@ def _rewrite_manifest(
     dense_plane: _ArrayPlan | None,
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int,
     release_id: str,
     now: str,
     source_release_id: str,
@@ -644,6 +676,7 @@ def _rewrite_manifest(
         "opengwasdb_git_hash": _installed_commit(),
         "dense_analysis_chunk": dense_analysis_chunk,
         "dense_shard": list(dense_shard),
+        "top_hit_shard_chunks": top_hit_shard_chunks,
         "component": component.zarr_rel,
         "layouts": _recorded_layouts(plans),
         "note": (
@@ -975,6 +1008,7 @@ def convert_release(
     *,
     dense_analysis_chunk: int = 64,
     dense_shard: tuple[int, int] = DENSE_SHARD_SHAPE,
+    top_hit_shard_chunks: int = TOP_HIT_SHARD_CHUNKS,
     workers: int = 1,
 ) -> Path:
     """Derive a 0.2.0 release at `destination` from a 0.1.0 one at `source`."""
@@ -992,6 +1026,8 @@ def convert_release(
         )
     if int(dense_analysis_chunk) < 1:
         raise ConversionError("--dense-analysis-chunk must be at least 1")
+    if int(top_hit_shard_chunks) < 1:
+        raise ConversionError("--top-hit-shard-chunks must be at least 1")
     dense_shard = (int(dense_shard[0]), int(dense_shard[1]))
     components = _refuse_unconvertible(source)
     _stage_and_convert(
@@ -1000,6 +1036,7 @@ def convert_release(
         components,
         dense_analysis_chunk=int(dense_analysis_chunk),
         dense_shard=dense_shard,
+        top_hit_shard_chunks=int(top_hit_shard_chunks),
         workers=int(workers),
     )
     print(f"Published {destination} as {SHARDED_FORMAT_VERSION}", flush=True)
@@ -1018,6 +1055,7 @@ def _stage_and_convert(
     *,
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int,
     workers: int,
 ) -> None:
     """Build, verify and validate the converted release in staging.
@@ -1037,6 +1075,7 @@ def _stage_and_convert(
             components,
             dense_analysis_chunk=dense_analysis_chunk,
             dense_shard=dense_shard,
+            top_hit_shard_chunks=top_hit_shard_chunks,
         )
         _log_phase("created the destination arrays", started)
         started = time.perf_counter()
@@ -1052,6 +1091,7 @@ def _stage_and_convert(
             source_roots,
             dense_analysis_chunk,
             dense_shard,
+            top_hit_shard_chunks,
             str(uuid.uuid4()),
             datetime.now(UTC).isoformat(),
         )
@@ -1072,6 +1112,7 @@ def _create_components(
     *,
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int,
 ) -> tuple[dict[str, list[_ArrayPlan]], dict[str, Any]]:
     """Create every destination Zarr tree, one component at a time.
 
@@ -1089,6 +1130,7 @@ def _create_components(
             component,
             dense_analysis_chunk=dense_analysis_chunk,
             dense_shard=dense_shard,
+            top_hit_shard_chunks=top_hit_shard_chunks,
         )
         plans_by_component[component.zarr_rel] = plans
         print(f"  {component.zarr_rel}: {len(plans)} arrays to convert", flush=True)
@@ -1107,6 +1149,7 @@ def _rewrite_staged_metadata(
     source_roots: dict[str, Any],
     dense_analysis_chunk: int,
     dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int,
     release_id: str,
     now: str,
 ) -> None:
@@ -1131,6 +1174,7 @@ def _rewrite_staged_metadata(
             dense_plane=dense_plane,
             dense_analysis_chunk=dense_analysis_chunk,
             dense_shard=dense_shard,
+            top_hit_shard_chunks=top_hit_shard_chunks,
             release_id=release_id,
             now=now,
             source_release_id=str(source_manifest["release_id"]),

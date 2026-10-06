@@ -57,6 +57,11 @@ SHAPES: dict[str, tuple[tuple[int, int], tuple[int, int] | None]] = {
     "v3_r2000c128_s": ((2000, 128), (100_000, 1024)),
     "v3_r4000c256_s": ((4000, 256), (100_000, 1024)),
     "v3_r250c512_s": ((250, 512), (100_000, 1024)),
+    # #246 screens these two at slice scale; both are also cost-model
+    # candidates in `shape_screen.py`.  The shard is the spec default, a whole
+    # multiple of each inner chunk.
+    "v3_r1000c256_s": ((1000, 256), (100_000, 1024)),
+    "v3_r500c256_s": ((500, 256), (100_000, 1024)),
 }
 
 #: Candidate inner chunks `decode` measures, in the order the committed output lists them.

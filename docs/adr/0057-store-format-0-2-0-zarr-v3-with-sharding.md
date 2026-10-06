@@ -102,11 +102,15 @@ therefore `[V_s × A_s]` with `A_s` the band width. Completion and the SE rewrit
 write row blocks, which is compatible.
 
 The converter takes the inner Analysis-axis chunk (`--dense-analysis-chunk`,
-default 64) and the Dense shard (`--dense-shard`, default
-`100000x1024`) as parameters. **#246 benchmarks the shapes and decides the
-defaults**; #245 only fixes the mechanism and proposes the defaults. The inner
-chunk and shard are the array seam's role policies (`chunk_layout`,
-`shard_layout`), one authority #247's builders also read.
+default 64), the Dense shard (`--dense-shard`, default `100000x1024`) and the
+top-hit shard width (`--top-hit-shard-chunks`, default 64 inner chunks) as
+parameters. **#246 benchmarks the shapes and decides the defaults**; #245 only
+fixes the mechanism and proposes the defaults. The inner chunk and shard are the
+array seam's role policies (`chunk_layout`, `shard_layout`), one authority
+#247's builders also read. `--top-hit-shard-chunks 1` gives a top-hit shard of
+one inner chunk, the "effectively unsharded" variant #246 measures the top-hit
+query against; it is still a v3 sharded array, so the "every array sharded" rule
+is not relaxed.
 
 ### 5. The layout is recorded in three places and validated
 

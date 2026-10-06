@@ -865,18 +865,18 @@ format_version 0.2.0   Zarr v3   zarr.json, one file per shard
 **Shards are bounded on both axes.** The Dense VCF builder writes `[all variants
 × band]` column bands, so a shard spanning every Analysis is never written whole
 (ADR 0057). A Dense shard is `[V_s × A_s]`, with `A_s` a whole multiple of the
-Analysis-axis inner chunk. The proposed defaults, which a conversion takes as
-parameters and #246 benchmarks, are:
+Analysis-axis inner chunk. The decided shapes (#246, ADR 0058), which a
+conversion takes as parameters, are:
 
 | array role | inner chunk | shard |
 |---|---|---|
-| Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask | `[1000, A_c]`, `A_c` the analysis-axis chunk, clipped to the array | `[100_000, 1024]` (rows × Analyses), a whole multiple of the inner chunk, clipped to cover the array |
+| Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask | `[1000, A_c]`, `A_c` the analysis-axis chunk (**decided 64**), clipped to the array | `[100_000, 1024]` (rows × Analyses), a whole multiple of the inner chunk, clipped to cover the array |
 | Dense per-variant side arrays (`eaf_baseline`, `eaf_reference`) | per §6: the serving plane's variant-axis chunk, capped at 200,000, clipped to the array | about 1,000,000 elements |
 | Ragged association sequences (`ragged/z`, `se`, `variant_index`, `eaf`, `imputed`) | 200,000, or an explicit `chunks=(...)` | 50,000,000 elements, clipped to a whole number of inner chunks |
 | Ragged per-variant side arrays (`ragged/eaf_baseline`, `ragged/eaf_reference`) | per §6 | 10,000,000 elements |
 | Ragged exception / overflow tables (`ragged/z_overflow_*`, `ragged/eaf_exception_*`, `ragged/se_exception_*`) | the role policy's 200,000, clipped to the array length | 10,000,000 elements |
 | flat Rho arrays | 1,000,000, clipped to the array | about 1,000,000 elements |
-| top-hit index columns | 16,384 (as 0.1.0), clipped to the array | about 64 inner chunks |
+| top-hit index columns | 16,384 (as 0.1.0), clipped to the array | `--top-hit-shard-chunks` inner chunks (**decided 64**), clipped to cover the array. The converter may set it to 1, one inner chunk per shard, the "effectively unsharded" variant #246 measured the top-hit query against; the array is a sharded v3 array either way |
 | top-hit per-Analysis offsets | whole array | one shard holding the array |
 | Dense exception / overflow tables (Z, EAF and SE) | the role policy's 200,000, clipped to the array length (a shorter table is one inner chunk) | one shard holding the array |
 | SE coefficients | `(min(n_analyses, 1024), 2)` | one shard holding the array |
@@ -895,7 +895,9 @@ that spans the dimension, so a small array gets one shard of one inner chunk and
 the declared shard is always a whole multiple of the inner chunk.  The inner
 chunk is `chunk_layout(role, shape, …)`; the shard is `shard_layout(role, shape,
 inner_chunk=…)` — one role → layout table in `opengwasdb.store.arrays`, so the
-converter and #247's builders cannot disagree.
+converter and #247's builders cannot disagree. The top-hit shard width is the
+one override a caller passes to `shard_layout` (`top_hit_shard_chunks`); it
+applies to `TOP_HIT_INDEX` alone and defaults to the policy's 64.
 
 The inner chunk is the role policy of `opengwasdb.store.arrays` (`chunk_layout`)
 and the shard its companion `shard_layout`; a shard MUST be a whole multiple of
