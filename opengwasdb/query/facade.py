@@ -79,7 +79,6 @@ from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shar
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.query.resolve import resolve_rows
-from opengwasdb.store.arrays import open_group
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.variants import VariantAxis
 
@@ -584,35 +583,41 @@ class StoreQuery:
         }
 
 
-def _csr_hit_positions(
-    z_f32: np.ndarray,
-    threshold: float,
-    offsets: np.ndarray,
-    n_assoc: int,
-    analysis_index: int | None,
-) -> np.ndarray:
-    """CSR positions clearing `threshold`, already in the index's own order.
+def _chunk_windows(lo: int, hi: int, chunk: int) -> Iterator[tuple[int, int]]:
+    """Half-open windows of `chunk` covering `[lo, hi)`.
 
-    The cutoff is `z_critical`, the one the index is built with, so a scan and
-    an index agree on the boundary rather than each deriving it separately.
-
-    CSR segments are analysis-major and variant_index-ascending within each
-    analysis -- a build-time invariant (build_besd.py, build_ssf.py and
-    complete.py all re-sort each analysis's segment by variant_index) -- so
-    `np.where` already yields "analysis_index,variant_index" order with no
-    re-sort: the same ordering contract the top-hit index is built in.
+    The variant-side scans read in these windows so peak memory is a window,
+    not the association count (#252): at OGS-00011's 3,085,080,783-cell Overflow
+    a whole-array decode held 12.3 GB of `variant_index` and 3.1 GB of mask at
+    once. The window is the association arrays' own inner chunk, so no chunk is
+    read twice.
     """
-    mask = np.abs(z_f32) >= z_critical(threshold)
-    if analysis_index is not None:
-        start, stop = int(offsets[analysis_index]), int(offsets[analysis_index + 1])
-        segment_mask = np.zeros(n_assoc, dtype=bool)
-        segment_mask[start:stop] = True
-        mask &= segment_mask
-    return np.asarray(np.where(mask)[0])
+    start = int(lo)
+    stop = int(hi)
+    step = max(1, int(chunk))
+    while start < stop:
+        yield start, min(start + step, stop)
+        start += step
+
+
+def _eaf_at_positions(
+    reader: RaggedCSRReader, positions: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """One frequency read at flat CSR positions: `(values, imputed mask)` (#252).
+
+    The values carry the panel substitution on imputed cells and the mask they
+    were substituted under comes back with them, so SE decoding and Association
+    Status cannot be aligned to different reads (#253).
+    """
+    read = reader.eaf_at_read(positions, want_imputed=True)
+    values = np.asarray(read.values, dtype=np.float32)
+    if read.imputed is None:
+        return values, np.zeros(len(positions), dtype=np.uint8)
+    return values, np.asarray(read.imputed, dtype=np.uint8)
 
 
 class RaggedStoreQuery:
-    """Public query object that hides the physical store layout — Ragged stores."""
+    """Public query object that hides the physical store layout — Ragged stores."""""
 
     def __init__(self, store: OpenGWASDBStore):
         self.store = store
@@ -620,17 +625,6 @@ class RaggedStoreQuery:
         self._variant_axis = VariantAxis(store.path)
         self._analyses = AnalysesIndex(store.path)
         self._top_hits = TopHitTiers(store.arrays(mode="r"))
-        self._is_completed = store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
-        # Load imputed mask when present (reference-completed stores).
-        ragged_path = store.data_path / "ragged"
-        self._imputed: zarr.Array | None = None
-        if self._is_completed:
-            try:
-                _root = open_group(ragged_path)
-                if "imputed" in _root:
-                    self._imputed = _root["imputed"]
-            except Exception:  # noqa: BLE001
-                pass
 
     def close(self) -> None:
         self._variant_axis.close()
@@ -723,15 +717,18 @@ class RaggedStoreQuery:
         observed_only: bool = False,
     ) -> dict[str, np.ndarray]:
         """All associations where the variant falls in [start, end] (regional PheWAS)."""
-        variant_set = set(self._variant_axis.range_indices(chromosome, start, end).tolist())
-        if not variant_set:
+        variant_indices = self._variant_axis.range_indices(chromosome, start, end)
+        if len(variant_indices) == 0:
             return _empty_result()
 
-        vi_all = self._csr._variant_index[:]
-        hit_positions = np.where(np.isin(vi_all, np.array(sorted(variant_set), dtype=np.int32)))[0]
+        # Search each Analysis's sorted segment for the window's variants rather
+        # than decoding every `variant_index` (4N bytes) and `np.isin`-ing it
+        # (#252). The search reads in chunk-sized windows, so peak memory is a
+        # window, not the store.
+        hit_positions = self._csr.variant_positions(np.asarray(variant_indices, dtype=np.int32))
         return self._hit_rows_result(
             hit_positions,
-            vi_all[hit_positions].astype("int32"),
+            self._csr.variant_index_at(hit_positions),
             observed_only=observed_only,
         )
 
@@ -741,6 +738,7 @@ class RaggedStoreQuery:
         variant_indexes: np.ndarray,
         *,
         observed_only: bool,
+        limit: int | None = None,
     ) -> dict[str, np.ndarray]:
         """Decode flat CSR hit positions into the six-array result shape.
 
@@ -757,30 +755,36 @@ class RaggedStoreQuery:
         """
         if len(hit_positions) == 0:
             return _empty_result()
-        offsets = self._csr._offsets[:]
+        hit_positions = np.asarray(hit_positions, dtype=np.int64)
+        # The full `offsets` array is one int64 per Analysis (not per
+        # association), so this is the one array the scan may hold whole.
+        offsets = np.asarray(self._csr._offsets[:], dtype=np.int64)
         analysis_indices = np.searchsorted(offsets[1:], hit_positions, side="right").astype("int32")
-        imp = (
-            self._imputed[hit_positions].astype(np.uint8)
-            if self._imputed is not None
-            else np.zeros(len(hit_positions), dtype=np.uint8)
-        )
+        # One frequency read at the hit positions -- not `z_all()`/`se_all()`,
+        # which decoded the whole z and se planes (and, through residual SE, the
+        # whole eaf plane) to keep a handful of rows (#252). The same decoded
+        # EAF feeds SE decoding and the `eaf` column through `_top_hits_result`.
+        eaf_values, imp = _eaf_at_positions(self._csr, hit_positions)
         if observed_only:
             keep = imp == 0
             hit_positions = hit_positions[keep]
             analysis_indices = analysis_indices[keep]
             variant_indexes = variant_indexes[keep]
             imp = imp[keep]
+            eaf_values = eaf_values[keep]
 
-        z_out = self._csr.z_all()[hit_positions].astype("float32")
-        se_out = self._csr.se_all()[hit_positions].astype("float32")
-        return {
-            "variant_index": variant_indexes,
-            "analysis_index": analysis_indices,
-            "z": z_out,
-            "se": se_out,
-            "eaf": self._csr.eaf_at(hit_positions),
-            "association_status": _status_array(imp, z_out, se_out),
-        }
+        z_out = self._csr.z_at(hit_positions)
+        se_out = self._csr.se_at(hit_positions, eaf=eaf_values)
+        return _top_hits_result(
+            variant_indexes,
+            analysis_indices,
+            z_out,
+            se_out,
+            eaf_values,
+            imp,
+            observed_only=observed_only,
+            limit=limit,
+        )
 
     def _analysis_indices_in_range(self, chromosome: str, start: int, end: int) -> list[int]:
         """Analysis indices whose Trait position falls in [start, end] --
@@ -848,16 +852,21 @@ class RaggedStoreQuery:
     def phewas(self, identifier: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
         """All analyses that have an association for a given variant identifier.
 
-        O(n_total_associations) scan — acceptable for exploratory use; add a
-        variant-centric CSR index (issue deferred) for production phewas.
+        O(n_total_associations) in time until the variant-centric index lands
+        (step 4), but the scan reads in chunk-sized windows and decodes z/se/eaf
+        only at the hits, so peak memory is a window rather than the store
+        (#252).
         """
         variant = self._variant_axis.by_identifier(identifier)
         if variant is None:
             return _empty_result()
         target_vi = np.int32(variant.variant_index)
 
-        vi_all = self._csr._variant_index[:]
-        hit_positions = np.where(vi_all == target_vi)[0]
+        # The scan is O(total associations) and stays so until the
+        # variant-centric index lands (step 4), but it now reads in chunk-sized
+        # windows, so peak memory is a window rather than 4N bytes of
+        # `variant_index` (#252).
+        hit_positions = self._csr.variant_positions(np.array([target_vi], dtype=np.int32))
         return self._hit_rows_result(
             hit_positions,
             np.full(len(hit_positions), target_vi, dtype="int32"),
@@ -910,6 +919,25 @@ class RaggedStoreQuery:
             observed_only=observed_only,
         )
 
+    def _scan_threshold_hits(self, lo: int, hi: int, threshold: float) -> np.ndarray:
+        """Flat CSR positions in `[lo, hi)` clearing `threshold`.
+
+        The scan reads z in chunk-sized windows and keeps only what clears the
+        cutoff, so the whole-plane `z_all()` decode (plus the whole
+        `variant_index` and `imputed` arrays) is never held (#252). The cutoff
+        is `z_critical`, the one the index is built with, so a scan and an
+        index agree on the boundary.
+        """
+        cutoff = z_critical(threshold)
+        windows: list[np.ndarray] = []
+        for start, stop in _chunk_windows(lo, hi, self._csr.association_chunk):
+            mask = np.abs(self._csr.z_slice(start, stop)) >= cutoff
+            if mask.any():
+                windows.append(np.where(mask)[0].astype(np.int64) + start)
+        if not windows:
+            return np.empty(0, dtype=np.int64)
+        return np.concatenate(windows)
+
     def _top_hits_by_scan(
         self,
         *,
@@ -924,51 +952,31 @@ class RaggedStoreQuery:
         `observed_only` before `limit` exactly as that path does. `analysis_id`
         is resolved here too -- the indexed path resolves it via `bounds()` --
         so a caller passing one gets a filtered result on both paths rather
-        than an unfiltered store-wide scan on this one.
+        than an unfiltered store-wide scan on this one. The hits are then
+        decoded by `_hit_rows_result`, the same finalizer `phewas` and
+        `range_phewas` use.
         """
-        analysis_index = None
         if analysis_id is not None:
             analysis_index = self._resolve_analysis_id(analysis_id)
             if analysis_index is None:
                 return _empty_result()
+        else:
+            analysis_index = None
 
-        offsets = self._csr._offsets[:]
-        vi_all = self._csr._variant_index[:]
-        z_all = self._csr.z_all()
-        se_all = self._csr.se_all()
-
-        z_f32 = z_all.astype("float32")
-        hit_positions = _csr_hit_positions(z_f32, threshold, offsets, len(vi_all), analysis_index)
+        offsets = np.asarray(self._csr._offsets[:], dtype=np.int64)
+        if analysis_index is None:
+            lo, hi = 0, self._csr.n_associations
+        else:
+            lo, hi = int(offsets[analysis_index]), int(offsets[analysis_index + 1])
+        hit_positions = self._scan_threshold_hits(lo, hi, threshold)
         if len(hit_positions) == 0:
             return _empty_result()
-
-        analysis_indices = np.searchsorted(offsets[1:], hit_positions, side="right").astype("int32")
-        imp_all = (
-            self._imputed[:].astype(np.uint8)
-            if self._imputed is not None
-            else np.zeros(len(vi_all), dtype=np.uint8)
+        return self._hit_rows_result(
+            hit_positions,
+            self._csr.variant_index_at(hit_positions),
+            observed_only=observed_only,
+            limit=limit,
         )
-        imp_hits = imp_all[hit_positions]
-        if observed_only:
-            keep = imp_hits == 0
-            hit_positions = hit_positions[keep]
-            analysis_indices = analysis_indices[keep]
-            imp_hits = imp_hits[keep]
-        if limit is not None:
-            hit_positions = hit_positions[:limit]
-            analysis_indices = analysis_indices[:limit]
-            imp_hits = imp_hits[:limit]
-
-        z_out = z_f32[hit_positions]
-        se_out = se_all[hit_positions].astype("float32")
-        return {
-            "variant_index": vi_all[hit_positions].astype("int32"),
-            "analysis_index": analysis_indices,
-            "z": z_out,
-            "se": se_out,
-            "eaf": self._csr.eaf_at(hit_positions),
-            "association_status": _status_array(imp_hits, z_out, se_out),
-        }
 
     def lookup(
         self,
@@ -979,10 +987,11 @@ class RaggedStoreQuery:
     ) -> dict[str, np.ndarray]:
         """Associations for a specific variant × analysis set.
 
-        Resolves the wanted Variant Index set once, then selects each
-        requested Analysis's rows from the same per-Analysis projection
-        ``analysis`` serves, so the decode, missing-row and status semantics
-        are shared rather than hand-rolled per segment. Requested Analysis
+        Each requested Analysis's segment is searched for the wanted variants --
+        its rows are sorted by variant_index, so `variant_positions` binary-
+        searches the segment instead of decoding the Analysis whole and
+        `np.isin`-ing it. The cost is proportional to the requested Analyses'
+        segments plus the answer, not to the store (#252). Requested Analysis
         order and duplicates carry through; a request that resolves nothing
         yields the empty result.
         """
@@ -995,21 +1004,18 @@ class RaggedStoreQuery:
         wanted = np.array(sorted({v.variant_index for v in variants}), dtype=np.int32)
         parts = []
         for aid in analysis_ids:
-            part = self.analysis(aid, observed_only=observed_only)
-            if len(part["z"]) == 0:
+            idx = self._resolve_analysis_id(aid)
+            if idx is None:
                 continue
-            keep = np.isin(part["variant_index"], wanted)
-            if not keep.any():
+            positions = self._csr.variant_positions(wanted, analysis_index=idx)
+            if len(positions) == 0:
                 continue
             parts.append(
-                {
-                    "variant_index": part["variant_index"][keep],
-                    "analysis_index": part["analysis_index"][keep],
-                    "z": part["z"][keep],
-                    "se": part["se"][keep],
-                    "eaf": part["eaf"][keep],
-                    "association_status": part["association_status"][keep],
-                }
+                self._hit_rows_result(
+                    positions,
+                    self._csr.variant_index_at(positions),
+                    observed_only=observed_only,
+                )
             )
         return _concat_results(parts)
 
@@ -1115,9 +1121,27 @@ class HybridStoreQuery:
             ].astype("int32")
         return result
 
+    def _on_panel_mask(self, shared_indices: np.ndarray) -> np.ndarray:
+        """Which shared variant indices are rows of the Dense Component's panel.
+
+        One vectorised `searchsorted` over the panel map. The per-variant Python
+        form cast the whole 13.4 M-entry `int32` map on every call: measured
+        on OGS-00011 at 22.6 ms per call against 0.004 ms for an `int32` scalar,
+        and `range_phewas` made one call per shared variant -- 58,006 of them
+        for a 1 Mb TCF7L2 window, about 22 minutes of a 630 s query (#252).
+        """
+        shared_indices = np.asarray(shared_indices, dtype=np.int64)
+        if len(shared_indices) == 0:
+            return np.zeros(0, dtype=bool)
+        if len(self._dense_to_shared) == 0:
+            return np.zeros(len(shared_indices), dtype=bool)
+        pos = np.searchsorted(self._dense_to_shared, shared_indices)
+        in_bounds = pos < len(self._dense_to_shared)
+        safe = np.minimum(pos, len(self._dense_to_shared) - 1)
+        return np.asarray(in_bounds & (self._dense_to_shared[safe] == shared_indices), dtype=bool)
+
     def _shared_is_on_panel(self, shared_idx: int) -> bool:
-        pos = int(np.searchsorted(self._dense_to_shared, shared_idx))
-        return pos < len(self._dense_to_shared) and int(self._dense_to_shared[pos]) == shared_idx
+        return bool(self._on_panel_mask(np.array([shared_idx], dtype=np.int64))[0])
 
     def _overflow_for_analysis(self, col: int) -> dict[str, np.ndarray]:
         offsets = self._csr._offsets[col : col + 2]
@@ -1137,29 +1161,58 @@ class HybridStoreQuery:
             "association_status": _status_array(np.zeros(len(z), dtype=np.uint8), z, se),
         }
 
-    def _overflow_by_variants(self, shared_indices: set[int]) -> dict[str, np.ndarray]:
-        """All overflow associations whose (off-panel) variant is in the set."""
-        if not shared_indices:
+    def _overflow_rows(self, positions: np.ndarray) -> dict[str, np.ndarray]:
+        """The six arrays for Overflow cells at flat CSR positions.
+
+        The Overflow is always observed (ADR 0026), so Association Status is
+        `observed`/`missing` from z and se alone. The frequency is read once at
+        the hit positions and handed to SE decoding as well as returned (#252):
+        `z_at`/`se_at`/`eaf_at` each used to read the plane, and `se_at` read it
+        again to predict a residual.
+        """
+        positions = np.asarray(positions, dtype=np.int64)
+        if len(positions) == 0:
             return _empty_result()
-        offsets = self._csr._offsets[:]
-        vi_all = self._csr._variant_index[:]
-        wanted = np.fromiter(shared_indices, dtype=np.int32, count=len(shared_indices))
-        mask = np.isin(vi_all, wanted)
-        hits = np.where(mask)[0]
-        if len(hits) == 0:
-            return _empty_result()
-        analysis_indices = np.searchsorted(offsets[1:], hits, side="right").astype("int32")
-        z = self._csr.z_at(hits)
-        se = self._csr.se_at(hits)
-        eaf = self._csr.eaf_at(hits)
+        offsets = np.asarray(self._csr._offsets[:], dtype=np.int64)
+        analysis_indices = np.searchsorted(offsets[1:], positions, side="right").astype("int32")
+        eaf_values = np.asarray(self._csr.eaf_at(positions), dtype=np.float32)
+        z = self._csr.z_at(positions)
+        se = self._csr.se_at(positions, eaf=eaf_values)
         return {
-            "variant_index": vi_all[hits].astype("int32"),
+            "variant_index": self._csr.variant_index_at(positions),
             "analysis_index": analysis_indices,
             "z": z,
             "se": se,
-            "eaf": eaf,
-            "association_status": _status_array(np.zeros(len(hits), dtype=np.uint8), z, se),
+            "eaf": eaf_values,
+            "association_status": _status_array(np.zeros(len(positions), dtype=np.uint8), z, se),
         }
+
+    def _overflow_by_variants(
+        self, shared_indices: set[int], wanted_analyses: set[int] | None = None
+    ) -> dict[str, np.ndarray]:
+        """All overflow associations whose (off-panel) variant is in the set.
+
+        Each Analysis's segment is searched for the wanted variants -- its rows
+        are sorted by variant_index, so no new index is needed to locate a
+        (variant, Analysis) pair (#252). With `wanted_analyses` given, only
+        those segments are read, so a lookup costs its requested Analyses and
+        not the store. The result is in flat CSR order (Analysis ascending,
+        variant ascending within each), the order the whole-store scan this
+        replaces produced, so answers are identical.
+        """
+        if not shared_indices:
+            return _empty_result()
+        wanted = np.array(sorted(shared_indices), dtype=np.int32)
+        columns = (
+            range(self._csr.n_analyses) if wanted_analyses is None else sorted(wanted_analyses)
+        )
+        parts: list[dict[str, np.ndarray]] = []
+        for col in columns:
+            positions = self._csr.variant_positions(wanted, analysis_index=int(col))
+            if len(positions) == 0:
+                continue
+            parts.append(self._overflow_rows(positions))
+        return _concat_results(parts)
 
     # ── public query surface ─────────────────────────────────────────────────
     def analysis(self, analysis_id: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
@@ -1187,7 +1240,8 @@ class HybridStoreQuery:
             self._dense.range_phewas(chromosome, start, end, observed_only=observed_only)
         )
         shared_idx = self._variant_axis.range_indices(chromosome, start, end)
-        off_panel = {int(i) for i in shared_idx.tolist() if not self._shared_is_on_panel(int(i))}
+        on_panel = self._on_panel_mask(shared_idx)
+        off_panel = {int(i) for i in np.asarray(shared_idx)[~on_panel].tolist()}
         overflow = self._overflow_by_variants(off_panel)
         return _concat_results([dense, overflow])
 
@@ -1202,25 +1256,21 @@ class HybridStoreQuery:
             self._dense.lookup(identifiers, analysis_ids, observed_only=observed_only)
         )
         # Off-panel identifiers: resolve on the shared table, keep off-panel ones.
+        records = [
+            rec for id_ in identifiers if (rec := self._variant_axis.by_identifier(id_)) is not None
+        ]
         off_shared: set[int] = set()
-        for id_ in identifiers:
-            rec = self._variant_axis.by_identifier(id_)
-            if rec is not None and not self._shared_is_on_panel(rec.variant_index):
-                off_shared.add(int(rec.variant_index))
+        if records:
+            shared = np.array([r.variant_index for r in records], dtype=np.int64)
+            for rec, off in zip(records, ~self._on_panel_mask(shared), strict=True):
+                if off:
+                    off_shared.add(int(rec.variant_index))
         wanted_cols = {
             int(a["analysis_index"])
             for aid in analysis_ids
             if (a := self._analyses.by_id(aid)) is not None
         }
-        overflow = self._overflow_by_variants(off_shared)
-        if len(overflow["z"]) and wanted_cols:
-            keep = np.isin(
-                overflow["analysis_index"],
-                np.fromiter(wanted_cols, dtype="int32", count=len(wanted_cols)),
-            )
-            overflow = {k: v[keep] for k, v in overflow.items()}
-        elif not wanted_cols:
-            overflow = _empty_result()
+        overflow = self._overflow_by_variants(off_shared, wanted_cols)
         return _concat_results([dense, overflow])
 
     def _overflow_top_hits(

@@ -109,7 +109,22 @@ class RaggedCSRWriter:
         store looks exactly as it did before EAF existed.
         """
         n = len(variant_index)
-        self._variant_indices.append(np.asarray(variant_index, dtype=np.int32))
+        vi = np.asarray(variant_index, dtype=np.int32)
+        # Every builder sorts an Analysis's associations by variant_index before
+        # adding them (build_besd, build_ssf, Hybrid's `_assemble_overflow_column`
+        # and completion's `_remapped_analysis_arrays` all argsort). The variant-
+        # side queries rely on it: `lookup` and the Hybrid overflow lookup
+        # binary-search each Analysis's segment instead of scanning the store
+        # (#252). An unsorted segment would make those searches return a
+        # plausible, wrong row, so it is refused here rather than assumed.
+        if vi.size > 1 and bool(np.any(vi[1:] < vi[:-1])):
+            offset = int(np.argmax(vi[1:] < vi[:-1])) + 1
+            raise ValueError(
+                "an Analysis's associations must be sorted ascending by variant_index "
+                f"(decrease at offset {offset}); the variant-side queries binary-search "
+                "each Analysis's CSR segment and cannot be correct on unsorted rows (#252)"
+            )
+        self._variant_indices.append(vi)
         # Held as float32 and quantised once, by the codec, at flush -- never
         # pre-rounded into a stored dtype here.
         self._zscores.append(np.asarray(z, dtype=np.float32))
@@ -759,12 +774,19 @@ class RaggedCSRReader:
         return self._codec.decode_z(self._z[start:end], positions=positions_flat(int(start)))
 
     def z_at(self, positions: np.ndarray) -> np.ndarray:
-        """Decoded z at arbitrary flat CSR positions."""
+        """Decoded z at arbitrary flat CSR positions.
+
+        Read through `oindex[positions]`, so the chunks a hit touches bound the
+        work. Slicing the whole plane first (`self._z[:]`) decoded and held every
+        z in the component -- about 6.2 GB on OGS-00011's Overflow -- for a
+        handful of rows, on every off-axis PheWAS, lookup and region query
+        (`HybridStoreQuery._overflow_by_variants`, #252).
+        """
         positions = np.asarray(positions, dtype=np.int64)
         if len(positions) == 0:
             return np.empty(0, dtype=np.float32)
         return self._codec.decode_z(
-            np.asarray(self._z[:])[positions], positions=positions_at(positions)
+            np.asarray(self._z.oindex[positions]), positions=positions_at(positions)
         )
 
     def z_all(self) -> np.ndarray:
@@ -794,6 +816,63 @@ class RaggedCSRReader:
         return self.se_slice(0, array_length(self._se))
 
     @property
+    def association_chunk(self) -> int:
+        """Length of the association arrays' own inner chunk.
+
+        The scan paths read in windows of this length, so a window never reads
+        a chunk twice and peak memory is one window whatever the component's
+        cell count (#252). Read from the array rather than restated, so a
+        sharded 0.2.0 array's inner chunk is honoured too.
+        """
+        return max(1, int(self._variant_index.chunks[0]))
+
+    def variant_index_at(self, positions: np.ndarray) -> np.ndarray:
+        """Variant indices at arbitrary flat CSR positions."""
+        positions = np.asarray(positions, dtype=np.int64)
+        if len(positions) == 0:
+            return np.empty(0, dtype=np.int32)
+        return np.asarray(self._variant_index.oindex[positions], dtype=np.int32)
+
+    def variant_positions(
+        self, wanted: np.ndarray, *, analysis_index: int | None = None
+    ) -> np.ndarray:
+        """Flat CSR positions whose variant is in `wanted`, ascending.
+
+        Each Analysis's segment is sorted by variant_index (asserted at
+        `RaggedCSRWriter.add_analysis`), so a segment can be searched rather
+        than scanned: no new on-disk index is needed to locate a
+        (variant, Analysis) pair (#252). The segment is read in chunk-sized
+        windows, so peak memory is a window, not the component, and the
+        returned positions are in flat CSR order -- the order the analysis-major
+        scan they replace produced.
+
+        `analysis_index=None` searches every Analysis's segment; a lookup that
+        knows its Analyses passes one so the read covers the requested segments
+        and not the store.
+        """
+        wanted = np.unique(np.asarray(wanted, dtype=np.int32))
+        if len(wanted) == 0:
+            return np.empty(0, dtype=np.int64)
+        if analysis_index is None:
+            lo, hi = 0, self.n_associations
+        else:
+            lo, hi = self._span(analysis_index)
+        window = self.association_chunk
+        parts: list[np.ndarray] = []
+        for start in range(lo, hi, window):
+            stop = min(start + window, hi)
+            vi = np.asarray(self._variant_index[start:stop], dtype=np.int32)
+            pos = np.searchsorted(wanted, vi)
+            in_bounds = pos < len(wanted)
+            hit = np.zeros(len(vi), dtype=bool)
+            hit[in_bounds] = wanted[pos[in_bounds]] == vi[in_bounds]
+            if hit.any():
+                parts.append(np.where(hit)[0].astype(np.int64) + start)
+        if not parts:
+            return np.empty(0, dtype=np.int64)
+        return np.concatenate(parts)
+
+    @property
     def has_eaf(self) -> bool:
         """Whether this component stores EAF at all (ADR 0036)."""
         return self._eaf_plane.has_values
@@ -814,6 +893,17 @@ class RaggedCSRReader:
         per-Analysis searchsorted to recover what they already know.
         """
         return self._eaf_plane.at(positions)
+
+    def eaf_at_read(self, positions: np.ndarray, *, want_imputed: bool = False) -> EafRead:
+        """`eaf` and the imputed mask at flat CSR positions, in one read (#252).
+
+        The variant-side scan paths read the frequency once and hand the same
+        decoded array to SE decoding and to the result's `eaf` column, with
+        #253's correctness rules: the decoded EAF carries the panel substitution
+        on imputed cells, and the mask it was substituted under comes back with
+        it so Association Status cannot be derived from a different alignment.
+        """
+        return self._eaf_plane.read_at(positions, want_imputed=want_imputed)
 
     def eaf_pairs(self, variant_index: np.ndarray, analysis_index: np.ndarray) -> np.ndarray:
         """EAF for elementwise (variant, analysis) pairs (ADR 0036).

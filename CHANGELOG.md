@@ -12,6 +12,34 @@ the end of this file.
 
 ### Changed
 
+- **Variant-side Ragged and Hybrid Overflow scans read at their hits, in
+  bounded windows, and `lookup` searches each Analysis's sorted segment
+  (#252).** Every query that reached a Ragged store or a Hybrid's Overflow by
+  variant was O(total associations) in both time and memory: `phewas` and
+  `range_phewas` decoded the whole `variant_index` (4N bytes) and
+  `np.isin`-ed it; `_hit_rows_result` and `_top_hits_by_scan` called
+  `z_all()`/`se_all()`, decoding every z and se in the component (and, through
+  residual SE, every `eaf`); `z_at` sliced the whole `z` plane before indexing
+  it; `lookup` decoded each requested Analysis whole; and
+  `HybridStoreQuery._shared_is_on_panel` ran a per-variant Python
+  `searchsorted` that cast the whole panel map every call. The scan paths now
+  read in windows of the association arrays' own inner chunk, so peak memory
+  is bounded by a chunk rather than by N; z, se and eaf are read at the hit
+  positions (`oindex`/`positions_at`) with one EAF read shared by SE decoding
+  and the `eaf` column under #253's rules; `lookup` and the Hybrid overflow
+  lookup binary-search each requested Analysis's segment -- which every
+  builder sorts by `variant_index`, now asserted in
+  `RaggedCSRWriter.add_analysis` rather than assumed -- so they cost the
+  request and not the store; and the on-axis test is one vectorised
+  `searchsorted`. Answers are unchanged: every variant-side shape
+  (`phewas`, `range_phewas`, `lookup`, and the off-panel Hybrid paths) returns
+  arrays identical to the Analysis-side decode, with and without
+  `observed_only`, on a completed Ragged release with residual SE and imputed
+  cells and on a Hybrid with residual SE in both components. Without a new
+  index this leaves off-axis `phewas` and region queries O(N) in time; the
+  variant-centric index that makes them proportional to the answer is decided
+  in a separate ADR.
+
 - **A query reads each Analysis's `eaf` once and shares it between SE decoding
   and the result's `eaf` column (#253).** On a release whose `se` is
   `int8_residual`, decoding a residual predicts it from the frequency, so the
