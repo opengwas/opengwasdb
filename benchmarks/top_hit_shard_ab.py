@@ -13,9 +13,10 @@ six reads. #246 measures how much that costs, on OGS-00009, by comparing two
 It is not an absolute harness run. A conversion was running in the same window,
 so the honest measurement is a paired one: the two sides alternate round by
 round (`A, B` then `B, A`), every sample is kept, and the artifact records the
-top-hit layout of each store, the once-resolved selection, the round order, the
-effective reader configuration, and a per-array result digest compared between
-the sides every round -- a sharding change may not change an answer.
+top-hit layout and footprint of each store, the once-resolved selection, the
+round order, the effective reader configuration, and a per-array result digest
+compared between the sides every round -- a sharding change may not change an
+answer.
 
 The child is this same file (`--child`); it prints one `SHARD_AB_RESULT <json>`
 line. Run the parent with the heavy-job lock; it queries a 33 GB store.
@@ -33,38 +34,35 @@ from __future__ import annotations
 
 import argparse
 import json
-import statistics
-import subprocess
-import sys
 import tempfile
-import time
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
+from benchmarks import _query_ab as ab
 from benchmarks._artifact import provenance, tree_fingerprint, write_artifact
 from benchmarks.benchmark_store_comparison import footprint
-
-# The digest contract is #253's; one definition keeps two A/B artifacts
-# comparable about what "identical results" means.
-from benchmarks.eaf_read_once_ab import _digest
 
 #: The shape under test. A Top-Hit Query is the only reader of the top-hit
 #: index, so nothing else needs timing.
 SHAPES = ("tophits",)
 
+#: The top-hit tier whose layout distinguishes the two sides; every tier is laid
+#: out the same way, so naming one is enough to tell them apart.
+TIER = "top_hits/p_5e_08/z"
 
-def _store_layout(store: Path, tier: str = "top_hits/p_5e_08/z") -> dict[str, Any]:
+#: A Top-Hit Query makes six reads (ADR 0056), so the sharding cost per read is
+#: the median difference over six.
+READS_PER_TOP_HIT_QUERY = 6
+
+
+def _store_layout(store: Path) -> dict[str, Any]:
     """The top-hit array's inner chunk and shard, read back from the store."""
     from opengwasdb.store.arrays import open_group
 
-    root = open_group(store / "data.zarr", "r")
-    array = root[tier]
+    array = open_group(store / "data.zarr", "r")[TIER]
     shards = getattr(array, "shards", None)
     return {
-        "array": tier,
+        "array": TIER,
         "chunk_shape": [int(size) for size in array.chunks],
         "shard_shape": None if shards is None else [int(size) for size in shards],
         "dtype": str(array.dtype),
@@ -87,41 +85,11 @@ def _effective_reader(store: Path) -> dict[str, Any]:
 
 
 def _child_main(args: argparse.Namespace) -> int:
-    from benchmarks import _query_shapes
-    from opengwasdb.query import query_store
-
     selection = json.loads(Path(args.selection).read_text(encoding="utf-8"))
-    region = (
-        selection["region"]["chrom"],
-        int(selection["region"]["start"]),
-        int(selection["region"]["end"]),
-    )
-    out: dict[str, Any] = {"store": str(args.store), "shapes": {}}
-    with query_store(args.store) as query:
-        patterns = _query_shapes.common_query_patterns(
-            query,
-            exposure=selection["exposure_analysis_id"],
-            phewas_alid=selection["phewas_alid"],
-            region=region,
-            random_alids=selection["random_alids"],
-            random_analyses=selection["random_analyses"],
-        )
-        for name in args.shapes:
-            fn = patterns[name]
-            warm = fn()
-            digest = _digest(warm)
-            n_rows = len(warm["z"])
-            samples: list[float] = []
-            for _ in range(args.reps):
-                t0 = time.perf_counter()
-                result = fn()
-                samples.append(round((time.perf_counter() - t0) * 1000, 4))
-                if len(result["z"]) != n_rows:
-                    raise SystemExit(
-                        f"{name}: returned {len(result['z'])} rows after {n_rows}; "
-                        "a shape whose size changes cannot be timed"
-                    )
-            out["shapes"][name] = {"samples_ms": samples, "digest": digest, "n_rows": n_rows}
+    out: dict[str, Any] = {
+        "store": str(args.store),
+        "shapes": ab.time_shapes(args.store, selection, args.shapes, args.reps),
+    }
     print("SHARD_AB_RESULT " + json.dumps(out), flush=True)
     return 0
 
@@ -143,33 +111,7 @@ def _resolve_selection(store: Path, path: Path) -> dict[str, Any]:
 
 
 def _child_command(args: argparse.Namespace, store: Path, selection: Path) -> list[str]:
-    return [
-        sys.executable,
-        str(Path(__file__).resolve()),
-        "--child",
-        "--store",
-        str(store),
-        "--selection",
-        str(selection),
-        "--shapes",
-        *args.shapes,
-        "--reps",
-        str(args.reps),
-    ]
-
-
-def _run_child(args: argparse.Namespace, store: Path, selection: Path) -> dict[str, Any]:
-    proc = subprocess.run(_child_command(args, store, selection), capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise SystemExit(f"A/B child failed ({proc.returncode}):\n{proc.stderr[-4000:]}")
-    lines = [line for line in proc.stdout.splitlines() if line.startswith("SHARD_AB_RESULT ")]
-    if len(lines) != 1:
-        raise SystemExit(f"A/B child printed {len(lines)} result lines:\n{proc.stdout[-4000:]}")
-    return json.loads(lines[0][len("SHARD_AB_RESULT ") :])
-
-
-def _median(values: list[float]) -> float:
-    return round(statistics.median(values), 3)
+    return ab.child_argv(store, selection, args.shapes, args.reps)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -226,54 +168,41 @@ def main(argv: list[str] | None = None) -> int:
         selection = _resolve_selection(stores[labels[0]], selection_path)
 
     layouts = {label: _store_layout(path) for label, path in stores.items()}
+    if len({json.dumps(layout, sort_keys=True) for layout in layouts.values()}) != 2:
+        raise SystemExit(
+            f"the two sides have the same top-hit layout {layouts}; there is nothing to compare"
+        )
     readers = {label: _effective_reader(path) for label, path in stores.items()}
     # The file count is half the decision: one inner chunk per shard makes the
     # top-hit index a file per 16,384 hits. The walker is the #242 harness's, so
     # these totals are the same measurement the shape comparison publishes.
     footprints = {label: footprint(path) for label, path in stores.items()}
-    if len({json.dumps(layout, sort_keys=True) for layout in layouts.values()}) != 2:
-        raise SystemExit(
-            f"the two sides have the same top-hit layout {layouts}; there is nothing to compare"
+
+    script = Path(__file__).resolve()
+
+    def run_side(label: str, _index: int) -> dict[str, Any]:
+        return ab.run_child(
+            script, _child_command(args, stores[label], selection_path), "SHARD_AB_RESULT"
         )
 
-    samples: dict[str, dict[str, list[float]]] = {label: defaultdict(list) for label in labels}
-    digests: dict[str, dict[str, dict[str, str]]] = {label: {} for label in labels}
-    rounds: list[dict[str, Any]] = []
-    for index in range(args.rounds):
-        order = list(labels) if index % 2 == 0 else list(reversed(labels))
-        record: dict[str, Any] = {"round": index, "order": order, "results": {}}
-        for label in order:
-            child = _run_child(args, stores[label], selection_path)
-            record["results"][label] = child
-            for name, rec in child["shapes"].items():
-                samples[label][name].extend(rec["samples_ms"])
-                digests[label].setdefault(name, {})[str(index)] = rec["digest"]
-            print(
-                f"round {index} {label}: "
-                f"{json.dumps({n: rec['n_rows'] for n, rec in child['shapes'].items()})}",
-                flush=True,
-            )
-        rounds.append(record)
-
-    differing = sorted(
-        name for name in samples[labels[0]] if digests[labels[0]][name] != digests[labels[1]][name]
-    )
-    medians = {
-        label: {name: _median(values) for name, values in samples[label].items()}
-        for label in labels
-    }
+    samples, digests, rounds = ab.interleave(labels, run_side, args.rounds)
+    side_medians = ab.medians(samples)
+    reference, other = labels
     ratio = {
-        name: round(medians[labels[0]][name] / medians[labels[1]][name], 4)
-        for name in samples[labels[0]]
+        name: round(side_medians[reference][name] / side_medians[other][name], 4)
+        for name in samples[reference]
     }
-    # A Top-Hit Query makes six reads (ADR 0056), so the sharding cost per read
-    # is the median difference over six.
     per_read = {
-        name: round((medians[labels[0]][name] - medians[labels[1]][name]) / 6, 4)
-        for name in samples[labels[0]]
+        name: round(
+            (side_medians[reference][name] - side_medians[other][name]) / READS_PER_TOP_HIT_QUERY,
+            4,
+        )
+        for name in samples[reference]
     }
+    differing = ab.differing_shapes(labels, digests)
     artifact = {
         "harness": "top_hit_shard_ab",
+        "reference_side": reference,
         "configs": {
             label: {
                 "path": str(stores[label]),
@@ -287,39 +216,20 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "label": label,
                 "revision": provenance()["commit"],
-                "opengwasdb_fingerprint": tree_fingerprint(Path(__file__).resolve().parents[1]),
+                "opengwasdb_fingerprint": tree_fingerprint(script.parents[1]),
             }
             for label in labels
         ],
-        "selection": selection,
-        "shapes": list(args.shapes),
-        "reps": args.reps,
-        "rounds_requested": args.rounds,
-        "round_order": [record["order"] for record in rounds],
-        "rounds": rounds,
-        "samples_ms": {
-            label: {name: values for name, values in samples[label].items()} for label in labels
-        },
-        "medians_ms": medians,
+        **ab.measurement_block(selection, args.shapes, args.reps, args.rounds, samples, rounds),
+        "medians_ms": side_medians,
         "ratio_reference_over_other": ratio,
         "per_read_ms": per_read,
-        "identity": {
-            "identical": not differing,
-            "differing_shapes": differing,
-            "note": "sha256 per returned array, compared between the two sides every round",
-        },
-        "environment": {
-            "python": sys.version.split()[0],
-            "numpy": np.__version__,
-            "hostname": __import__("socket").gethostname(),
-        },
+        "identity": ab.identity_block(differing),
+        "environment": ab.environment_block(),
         **provenance(),
     }
     write_artifact(args.output, artifact)
-    if differing:
-        print(f"IDENTITY FAILED for {differing}", flush=True)
-        return 1
-    return 0
+    return ab.identity_verdict(differing)
 
 
 if __name__ == "__main__":

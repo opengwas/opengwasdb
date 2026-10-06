@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.top_hit_shard_ab import _median, _parse_config, main
+from benchmarks._query_ab import medians
+from benchmarks.top_hit_shard_ab import _parse_config, main
 
 
 def test_parse_config_requires_a_label_and_a_path():
@@ -24,10 +25,10 @@ def test_parse_config_requires_a_label_and_a_path():
             _parse_config(bad)
 
 
-def test_median_is_the_middle_of_every_sample():
-    assert _median([3.0, 1.0, 2.0]) == 2.0
-    assert _median([4.0, 1.0, 3.0, 2.0]) == 2.5
-    assert _median([7.5]) == 7.5
+def test_medians_are_the_middle_of_every_sample_per_side():
+    assert medians({"a": {"tophits": [3.0, 1.0, 2.0]}}) == {"a": {"tophits": 2.0}}
+    assert medians({"a": {"tophits": [4.0, 1.0, 3.0, 2.0]}}) == {"a": {"tophits": 2.5}}
+    assert medians({"a": {"tophits": [7.5]}}) == {"a": {"tophits": 7.5}}
 
 
 def test_a_path_that_is_not_a_store_release_is_refused(tmp_path: Path):
