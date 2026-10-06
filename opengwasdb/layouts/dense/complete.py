@@ -784,10 +784,15 @@ def _record_effective_dense_chunk_shape(
         return manifest
     # Record the whole layout, not only the inner chunk: a completed release
     # that inherited the source's `shard_shape` or compressor but wrote arrays
-    # with another is the same silent-failure class (issue #245, #247).
+    # with another is the same silent-failure class (issue #245, #247).  The
+    # `index.sqlite` `dense` blob is the third recording 0.2.0 requires (#248),
+    # and completion is the writer that produces it for a completed release.
     for key in ("chunk_shape", "shard_shape", "compressor", "zarr_format"):
         if key in attrs:
             dense[key] = attrs[key]
+    with staged.index_connection() as connection:
+        set_metadata(connection, "dense", dict(dense))
+        connection.commit()
     return replace(manifest, provenance={**manifest.provenance, "dense": dense})
 
 

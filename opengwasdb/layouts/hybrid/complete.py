@@ -403,7 +403,13 @@ def _write_shared_tables_and_overflow(
     completed_against; writing it back at the shared root is the one place
     Analysis metadata is written, not a second provenance carry.
     """
-    _write_index(staged, axis.alids, analyses, _chunk_shape(src_manifest))
+    dense_layout = _dense_component_layout(staged.path)
+    _write_index(
+        staged,
+        axis.alids,
+        analyses,
+        tuple(int(size) for size in dense_layout.get("chunk_shape", _chunk_shape(src_manifest))),
+    )
     source_by_alid = {a: overflow.source_alid_by_alid.get(a) for a in axis.alids}
     _write_variant_table(staged.path, axis.alids, source_by_alid, overflow.rsid_by_alid)
     dense_to_shared = np.array([axis.index[a] for a in axis.dense_alids], dtype=np.int32)
@@ -690,6 +696,7 @@ def _write_completed_manifest(
                 "n_panel": n_panel,
                 "n_off_panel": n_off_panel,
                 "n_overflow_associations": n_overflow,
+                **_dense_component_layout(staged.path),
             },
             "n_variants": n_variants,
             "n_analyses": n_analyses,
@@ -709,6 +716,23 @@ def _write_completed_manifest(
         },
     )
     staged.write_manifest(manifest)
+
+
+def _dense_component_layout(staged_path: Path) -> dict[str, Any]:
+    """The completed Dense Component's real layout, from its own root attrs.
+
+    The source's `provenance.hybrid` records the **observed** component's chunk
+    and shard; completion changes the axis, so re-recording the observed shapes
+    would describe arrays the completed component does not have -- the
+    recorded-layout rule (issue #245, #248) rejects that, and a reader sizing
+    reads from it would decode the wrong blocks.
+    """
+    attrs = dict(open_group(dense_component_path(staged_path) / "data.zarr", "r").attrs)
+    return {
+        key: attrs[key]
+        for key in ("chunk_shape", "shard_shape", "compressor", "zarr_format")
+        if key in attrs
+    }
 
 
 def _remapped_overflow_baseline(

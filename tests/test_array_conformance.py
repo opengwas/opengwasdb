@@ -356,6 +356,19 @@ def _role_for(path: str, group: Any) -> ArrayRole:
         return ArrayRole.TOP_HIT_INDEX
     if "rho" in parts:
         return ArrayRole.RHO_ARRAY
+    if "ragged" in parts:
+        # A Ragged CSR component's shared names take #248's Ragged roles, whose
+        # shards are sized independently of the Dense ones (ADR 0059).
+        if name == "offsets":
+            return ArrayRole.ASSOCIATION_OFFSETS
+        if name in {"variant_index", "z", "se", "eaf", "imputed"}:
+            return ArrayRole.ASSOCIATION_SEQUENCE
+        if name in _EXCEPTION_TABLE_NAMES:
+            return ArrayRole.RAGGED_EXCEPTION_TABLE
+        if name in {"eaf_baseline", "eaf_reference"}:
+            return ArrayRole.RAGGED_PER_VARIANT
+        if name == "se_coefficients":
+            return ArrayRole.SE_COEFFICIENTS
     if "offsets" in group:  # a Ragged CSR component
         if name == "offsets":
             return ArrayRole.ASSOCIATION_OFFSETS

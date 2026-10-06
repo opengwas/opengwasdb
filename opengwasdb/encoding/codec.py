@@ -55,6 +55,7 @@ from opengwasdb.store.arrays import (
     EXCEPTION_TABLE_CHUNK,
     ArrayRole,
     create_array,
+    role_in_group,
 )
 
 SE_EXCEPTION_INDEX = "se_exception_index"
@@ -215,7 +216,7 @@ class SparseExactTable:
             create_array(
                 group,
                 name,
-                ArrayRole.EXCEPTION_TABLE,
+                role_in_group(group, ArrayRole.EXCEPTION_TABLE),
                 data=np.asarray(data, dtype=dtype),
                 dtype=dtype,
                 compressor=compressor,

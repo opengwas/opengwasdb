@@ -48,6 +48,7 @@ from opengwasdb.store.convert import (
     _attrs_differ_only_where_expected,
     _plan_arrays,
     convert_dense_release,
+    convert_release,
     verify_conversion,
 )
 from opengwasdb.validation import validate_store
@@ -133,7 +134,7 @@ def dense_conversion(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Pa
     source_store = root / "source.opengwasdb"
     relayout_dense_as_0_1_0(built, source_store)
     converted = root / "converted.opengwasdb"
-    convert_dense_release(
+    convert_release(
         source_store,
         converted,
         dense_analysis_chunk=DENSE_ANALYSIS_CHUNK,
@@ -418,7 +419,7 @@ def test_a_float16_se_with_a_nan_fill_converts(
 ):
     """A NaN fill value must survive conversion; `NaN != NaN` must not reject it."""
     converted = tmp_path / "converted.opengwasdb"
-    convert_dense_release(
+    convert_release(
         nan_fill_source,
         converted,
         dense_analysis_chunk=DENSE_ANALYSIS_CHUNK,
@@ -495,39 +496,44 @@ def _fake_release(root: Path, **manifest: object) -> Path:
 
 def test_source_and_destination_may_not_be_the_same_path(dense_source: Path):
     with pytest.raises(ConversionError, match="same path"):
-        convert_dense_release(dense_source, dense_source)
+        convert_release(dense_source, dense_source)
 
 
 def test_an_existing_destination_is_refused(
     dense_source: Path, converted_dense_store: Path
 ):
     with pytest.raises(ConversionError, match="already exists"):
-        convert_dense_release(dense_source, converted_dense_store)
+        convert_release(dense_source, converted_dense_store)
 
 
-@pytest.mark.parametrize("layout", ["ragged", "hybrid"])
-def test_a_non_dense_layout_is_refused_by_name(layout: str, tmp_path: Path):
-    source = _fake_release(tmp_path, primary_layout=layout)
-    with pytest.raises(ConversionError, match="opengwas/opengwasdb#248"):
-        convert_dense_release(source, tmp_path / "out.opengwasdb")
+def test_an_unknown_layout_is_refused_by_name(tmp_path: Path):
+    """#248 converts Ragged and Hybrid; an unknown layout is still refused.
+
+    The fake release has only a manifest, so the point is the *manifest-level*
+    refusal rather than a crash opening an array tree the layout does not have.
+    """
+    source = _fake_release(tmp_path, primary_layout="mystery")
+    with pytest.raises(ConversionError, match="primary_layout is 'mystery'"):
+        convert_release(source, tmp_path / "out.opengwasdb")
 
 
-def test_a_reference_completed_source_is_refused_by_name(tmp_path: Path):
-    source = _fake_release(tmp_path, completion_state="reference_completed")
-    with pytest.raises(ConversionError, match="Reference-Completed"):
-        convert_dense_release(source, tmp_path / "out.opengwasdb")
+def test_a_hybrid_without_its_nested_component_is_refused(tmp_path: Path):
+    """A Hybrid is two Store Releases; half of one cannot be converted."""
+    source = _fake_release(tmp_path, primary_layout="hybrid")
+    with pytest.raises(ConversionError, match="nested Dense Component"):
+        convert_release(source, tmp_path / "out.opengwasdb")
 
 
 def test_an_already_converted_source_is_refused(tmp_path: Path):
     source = _fake_release(tmp_path, format_version="0.2.0")
     with pytest.raises(ConversionError, match="already converted"):
-        convert_dense_release(source, tmp_path / "out.opengwasdb")
+        convert_release(source, tmp_path / "out.opengwasdb")
 
 
 def test_a_source_of_another_format_is_refused(tmp_path: Path):
     source = _fake_release(tmp_path, format_version="0.1.5")
     with pytest.raises(ConversionError, match="not a general migration tool"):
-        convert_dense_release(source, tmp_path / "out.opengwasdb")
+        convert_release(source, tmp_path / "out.opengwasdb")
 
 
 def test_an_unknown_array_fails_the_conversion(
@@ -546,7 +552,7 @@ def test_an_unknown_array_fails_the_conversion(
     )
 
     with pytest.raises(ConversionError, match="mystery_plane"):
-        convert_dense_release(source, tmp_path / "out.opengwasdb")
+        convert_release(source, tmp_path / "out.opengwasdb")
 
 
 def test_an_unknown_empty_group_fails_the_conversion(
@@ -563,7 +569,7 @@ def test_an_unknown_empty_group_fails_the_conversion(
     assert "mystery_empty_group" in root
 
     with pytest.raises(ConversionError, match="mystery_empty_group"):
-        convert_dense_release(source, tmp_path / "out.opengwasdb")
+        convert_release(source, tmp_path / "out.opengwasdb")
 
 
 # ── validation: the Zarr format matches format_version ───────────────────────

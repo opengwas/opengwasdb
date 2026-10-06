@@ -61,3 +61,25 @@ def dense_index_metadata(
     blob cannot describe a layout the arrays do not have (issue #245, #247).
     """
     return {**dense_layout_records(shape, hint=hint), **extra}
+
+
+def dense_provenance_block(
+    shape: tuple[int, int],
+    *,
+    hint: tuple[int, int] = DEFAULT_CHUNK_SHAPE,
+    se_dtype: str | None = None,
+) -> dict[str, object]:
+    """The `manifest.json` `provenance.dense` block the Dense writers share.
+
+    One helper so the Dense VCF builder, the in-memory builder and the Hybrid
+    Dense Component cannot record different layouts for the same arrays: the
+    chunk, shard and compressor all come from `dense_layout_records`, and
+    `se_dtype` is added only when the caller has measured it.
+    """
+    block: dict[str, object] = {
+        "statistic_arrays": ["z", "se"],
+        **dense_layout_records(shape, hint=hint),
+    }
+    if se_dtype is not None:
+        block["se_dtype"] = se_dtype
+    return block

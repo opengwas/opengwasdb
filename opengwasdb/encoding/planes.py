@@ -44,6 +44,7 @@ from opengwasdb.store.arrays import (
     component_variant_chunk,
     compressor_of,
     create_array,
+    role_in_group,
 )
 
 SE_COEFFICIENTS = "se_coefficients"
@@ -929,7 +930,7 @@ def _write_per_variant_array(
     create_array(
         group,
         name,
-        ArrayRole.PER_VARIANT,
+        role_in_group(group, ArrayRole.PER_VARIANT),
         data=np.asarray(values, dtype=np.float32),
         dtype="float32",
         compressor=compressor,

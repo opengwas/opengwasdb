@@ -64,6 +64,7 @@ from opengwasdb.layouts.dense.constants import (
     TOP_HIT_THRESHOLDS,
     dense_index_metadata,
     dense_layout_records,
+    dense_provenance_block,
 )
 from opengwasdb.layouts.dense.top_hits import (
     write_top_hit_indexes_for_store,
@@ -3010,9 +3011,9 @@ def _write_manifest(
             "n_variants": n_variants,
             "n_analyses": n_analyses,
             "dense": {
-                "statistic_arrays": ["z", "se"],
-                "se_dtype": encoding.se.dtype,
-                **dense_layout_records((n_variants, n_analyses), hint=chunk_shape),
+                **dense_provenance_block(
+                    (n_variants, n_analyses), hint=chunk_shape, se_dtype=encoding.se.dtype
+                ),
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
             },
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),

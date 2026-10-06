@@ -89,6 +89,15 @@ wrong. So:
   publishes by rename only after the staged copy is bit-exact against the source
   **and** validates with no errors.
 
+  > **Superseded by [ADR 0059](0059-convert-remaining-layouts-and-ragged-shards.md) (#248).**
+  > The converter now accepts every layout the role table can name — Dense
+  > Reference-Completed, Ragged (Observed-Only and Reference-Completed) and Hybrid
+  > as well as Dense Observed-Only — and refuses only an unmapped array or group,
+  > a source already at 0.2.0, and an unknown layout. The rest of the passage
+  > (source never written, destination refused, fresh identity, per-component
+  > provenance, staged/validated/renamed publication) still holds. This ADR's
+  > Dense Observed-Only scope is the state at #245.
+
 ### 4. Shards are bounded on both axes, and the shape is a parameter
 
 #239 suggested a shard spanning a variant row block across every Analysis. That
