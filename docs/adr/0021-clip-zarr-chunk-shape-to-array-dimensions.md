@@ -1,5 +1,13 @@
 # ADR-0021: Clip zarr chunk shape to actual array dimensions at write time
 
+> **Superseded by [ADR 0058](./0058-dense-chunk-and-shard-shapes.md) as the
+> statement of a Dense grid's chunk.** The clipping rule below is unchanged and
+> still holds; what changed is the hint it clips. `DEFAULT_CHUNK_SHAPE =
+> (1000, 1000)` is no longer the Analysis-axis width a Dense plane is written
+> with: ADR 0058 (#246) decided `[1000, 64]` inner chunks with a
+> `[100000, 1024]` shard. Read ADR 0058 for the shapes and the measurements
+> behind them.
+
 ## Status
 
 Accepted

@@ -292,6 +292,17 @@ the end of this file.
 
 ### Added
 
+- **The Dense chunk and shard shapes are decided (#246, ADR 0058).** Format 0.2.0
+  is adopted: Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask use
+  `[1000, 64]` inner chunks with a `[100000, 1024]` Dense shard, and the top-hit
+  index is sharded at 64 inner chunks per shard. On OGS-00009 that turns 119,118
+  files into 994 and the whole-Analysis read from 27.7 s to 6.5 s (zarr 2.18 →
+  zarr 3), with every query inside its set-L budget. The converter's defaults
+  were already these shapes and are now pinned by a test; ADR 0058 records the
+  measurements and the rejected candidates (128-wide chunks, the screened
+  `[1000, 256]` and `[500, 256]`, a 256-wide shard, and an unsharded top-hit
+  index). ADR 0021's `DEFAULT_CHUNK_SHAPE` is superseded as the statement of a
+  Dense grid's chunk.
 - **The top-hit shard width is a conversion parameter (#246).**
   `convert_dense_release(..., top_hit_shard_chunks=N)` and
   `scripts/convert_store_to_0_2_0.py --top-hit-shard-chunks N` set how many

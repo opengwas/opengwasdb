@@ -865,16 +865,16 @@ format_version 0.2.0   Zarr v3   zarr.json, one file per shard
 **Shards are bounded on both axes.** The Dense VCF builder writes `[all variants
 × band]` column bands, so a shard spanning every Analysis is never written whole
 (ADR 0057). A Dense shard is `[V_s × A_s]`, with `A_s` a whole multiple of the
-Analysis-axis inner chunk. The proposed defaults, which a conversion takes as
-parameters and #246 benchmarks, are:
+Analysis-axis inner chunk. The decided shapes (#246, ADR 0058), which a
+conversion takes as parameters, are:
 
 | array role | inner chunk | shard |
 |---|---|---|
-| Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask | `[1000, A_c]`, `A_c` the analysis-axis chunk, clipped to the array | `[100_000, 1024]` (rows × Analyses), a whole multiple of the inner chunk, clipped to cover the array |
+| Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask | `[1000, A_c]`, `A_c` the analysis-axis chunk (**decided 64**), clipped to the array | `[100_000, 1024]` (rows × Analyses), a whole multiple of the inner chunk, clipped to cover the array |
 | per-variant side arrays (`eaf_baseline`, `eaf_reference`) | per §6: the serving plane's variant-axis chunk, capped at 200,000, clipped to the array | about 1,000,000 elements |
 | flat CSR association sequences | 200,000, or an explicit `chunks=(...)` | about 1,000,000 elements |
 | flat Rho arrays | 1,000,000, clipped to the array | about 1,000,000 elements |
-| top-hit index columns | 16,384 (as 0.1.0), clipped to the array | `--top-hit-shard-chunks` inner chunks (default 64), clipped to cover the array. The converter may set it to 1, one inner chunk per shard, which #246 measures the top-hit query against; the array is a sharded v3 array either way |
+| top-hit index columns | 16,384 (as 0.1.0), clipped to the array | `--top-hit-shard-chunks` inner chunks (**decided 64**), clipped to cover the array. The converter may set it to 1, one inner chunk per shard, the "effectively unsharded" variant #246 measured the top-hit query against; the array is a sharded v3 array either way |
 | top-hit per-Analysis offsets | whole array | one shard holding the array |
 | exception / overflow tables (Z, EAF and SE) | the role policy's 200,000, clipped to the array length (a shorter table is one inner chunk) | one shard holding the array |
 | SE coefficients | `(min(n_analyses, 1024), 2)` | one shard holding the array |
