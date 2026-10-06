@@ -117,3 +117,11 @@ pixi run -e dev python benchmarks/zarr3_lever_tables.py shapes \
   --head $D/opengwasdb_store_comparison_ogs00009_shapes_s256.json \
   > $D/opengwasdb_store_comparison_ogs00009_shapes_s256_set_l.md
 ```
+
+Both s256 runs started at a 1-minute load below 3 (2.96 / 2.75 in the first
+pair, 2.15 / 2.86 in the second). In the second pair the machine spiked inside
+the load window between the check and the head run's first store, which recorded
+12.88; the load had fallen to 3.5 and 2.72 by the two stores under comparison,
+and the 2.18 half of that pair started at 2.15. The first pair's head run is
+therefore the quiet measurement and the second confirms it; the two agree on
+every direction reported.
