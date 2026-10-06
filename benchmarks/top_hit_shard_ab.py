@@ -45,6 +45,7 @@ from typing import Any
 import numpy as np
 
 from benchmarks._artifact import provenance, tree_fingerprint, write_artifact
+from benchmarks.benchmark_store_comparison import footprint
 
 # The digest contract is #253's; one definition keeps two A/B artifacts
 # comparable about what "identical results" means.
@@ -226,6 +227,10 @@ def main(argv: list[str] | None = None) -> int:
 
     layouts = {label: _store_layout(path) for label, path in stores.items()}
     readers = {label: _effective_reader(path) for label, path in stores.items()}
+    # The file count is half the decision: one inner chunk per shard makes the
+    # top-hit index a file per 16,384 hits. The walker is the #242 harness's, so
+    # these totals are the same measurement the shape comparison publishes.
+    footprints = {label: footprint(path) for label, path in stores.items()}
     if len({json.dumps(layout, sort_keys=True) for layout in layouts.values()}) != 2:
         raise SystemExit(
             f"the two sides have the same top-hit layout {layouts}; there is nothing to compare"
@@ -274,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
                 "path": str(stores[label]),
                 "top_hit_layout": layouts[label],
                 "effective_reader": readers[label],
+                "footprint": footprints[label],
             }
             for label in labels
         },

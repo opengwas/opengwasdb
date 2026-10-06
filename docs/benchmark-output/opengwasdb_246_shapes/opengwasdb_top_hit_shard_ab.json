@@ -1,0 +1,1720 @@
+{
+  "harness": "top_hit_shard_ab",
+  "configs": {
+    "sharded": {
+      "path": "/data/opengwasdb/work/epic240/245/OGS-00009-v3-c64",
+      "top_hit_layout": {
+        "array": "top_hits/p_5e_08/z",
+        "chunk_shape": [
+          16384
+        ],
+        "shard_shape": [
+          1048576
+        ],
+        "dtype": "float32"
+      },
+      "effective_reader": {
+        "use_threads": true,
+        "pipeline": "FusedCodecPipeline",
+        "max_workers": 1
+      },
+      "footprint": {
+        "n_files": 994,
+        "apparent_bytes": 35173613377,
+        "allocated_bytes": 35175653376,
+        "du_apparent_bytes": 35173613377,
+        "du_allocated_bytes": 35175653376,
+        "arrays": [
+          {
+            "node": "data.zarr/eaf",
+            "n_files": 199,
+            "apparent_bytes": 4447686742,
+            "allocated_bytes": 4448088064,
+            "largest_file_bytes": 23975371
+          },
+          {
+            "node": "data.zarr/eaf_baseline",
+            "n_files": 11,
+            "apparent_bytes": 33783783,
+            "allocated_bytes": 33812480,
+            "largest_file_bytes": 3433164
+          },
+          {
+            "node": "data.zarr/eaf_exception_index",
+            "n_files": 2,
+            "apparent_bytes": 69683,
+            "allocated_bytes": 73728,
+            "largest_file_bytes": 68660
+          },
+          {
+            "node": "data.zarr/eaf_exception_value",
+            "n_files": 2,
+            "apparent_bytes": 35367,
+            "allocated_bytes": 40960,
+            "largest_file_bytes": 34340
+          },
+          {
+            "node": "data.zarr/se",
+            "n_files": 199,
+            "apparent_bytes": 3829644093,
+            "allocated_bytes": 3830042624,
+            "largest_file_bytes": 21294060
+          },
+          {
+            "node": "data.zarr/se_coefficients",
+            "n_files": 2,
+            "apparent_bytes": 14175,
+            "allocated_bytes": 20480,
+            "largest_file_bytes": 12840
+          },
+          {
+            "node": "data.zarr/se_exception_index",
+            "n_files": 2,
+            "apparent_bytes": 739273,
+            "allocated_bytes": 745472,
+            "largest_file_bytes": 737988
+          },
+          {
+            "node": "data.zarr/se_exception_value",
+            "n_files": 2,
+            "apparent_bytes": 2337522,
+            "allocated_bytes": 2342912,
+            "largest_file_bytes": 2336233
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/abs_z",
+            "n_files": 34,
+            "apparent_bytes": 50080595,
+            "allocated_bytes": 50147328,
+            "largest_file_bytes": 1576593
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/analysis_index",
+            "n_files": 34,
+            "apparent_bytes": 194557,
+            "allocated_bytes": 278528,
+            "largest_file_bytes": 6686
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 6079,
+            "allocated_bytes": 12288,
+            "largest_file_bytes": 4801
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/eaf",
+            "n_files": 34,
+            "apparent_bytes": 109455107,
+            "allocated_bytes": 109518848,
+            "largest_file_bytes": 3344775
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/p_value",
+            "n_files": 34,
+            "apparent_bytes": 243942859,
+            "allocated_bytes": 244015104,
+            "largest_file_bytes": 7464437
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/se",
+            "n_files": 34,
+            "apparent_bytes": 97180547,
+            "allocated_bytes": 97243136,
+            "largest_file_bytes": 3023095
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/variant_index",
+            "n_files": 34,
+            "apparent_bytes": 40738727,
+            "allocated_bytes": 40816640,
+            "largest_file_bytes": 1486691
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/z",
+            "n_files": 34,
+            "apparent_bytes": 54487153,
+            "allocated_bytes": 54575104,
+            "largest_file_bytes": 1710164
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/abs_z",
+            "n_files": 10,
+            "apparent_bytes": 13171648,
+            "allocated_bytes": 13193216,
+            "largest_file_bytes": 1571306
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/analysis_index",
+            "n_files": 10,
+            "apparent_bytes": 61328,
+            "allocated_bytes": 81920,
+            "largest_file_bytes": 8272
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 5011,
+            "allocated_bytes": 8192,
+            "largest_file_bytes": 3733
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/eaf",
+            "n_files": 10,
+            "apparent_bytes": 28339367,
+            "allocated_bytes": 28356608,
+            "largest_file_bytes": 3302173
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/p_value",
+            "n_files": 10,
+            "apparent_bytes": 64754709,
+            "allocated_bytes": 64770048,
+            "largest_file_bytes": 7535935
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/se",
+            "n_files": 10,
+            "apparent_bytes": 24664834,
+            "allocated_bytes": 24686592,
+            "largest_file_bytes": 2912080
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/variant_index",
+            "n_files": 10,
+            "apparent_bytes": 9540475,
+            "allocated_bytes": 9560064,
+            "largest_file_bytes": 1150587
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/z",
+            "n_files": 10,
+            "apparent_bytes": 14324781,
+            "allocated_bytes": 14348288,
+            "largest_file_bytes": 1704754
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/abs_z",
+            "n_files": 6,
+            "apparent_bytes": 6821060,
+            "allocated_bytes": 6832128,
+            "largest_file_bytes": 1620619
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/analysis_index",
+            "n_files": 6,
+            "apparent_bytes": 32007,
+            "allocated_bytes": 40960,
+            "largest_file_bytes": 7789
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 3465,
+            "allocated_bytes": 8192,
+            "largest_file_bytes": 2187
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/eaf",
+            "n_files": 6,
+            "apparent_bytes": 13916546,
+            "allocated_bytes": 13930496,
+            "largest_file_bytes": 3282557
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/p_value",
+            "n_files": 6,
+            "apparent_bytes": 32275484,
+            "allocated_bytes": 32292864,
+            "largest_file_bytes": 7583160
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/se",
+            "n_files": 6,
+            "apparent_bytes": 12028083,
+            "allocated_bytes": 12046336,
+            "largest_file_bytes": 2855294
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/variant_index",
+            "n_files": 6,
+            "apparent_bytes": 4612251,
+            "allocated_bytes": 4628480,
+            "largest_file_bytes": 1090045
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/z",
+            "n_files": 6,
+            "apparent_bytes": 7390447,
+            "allocated_bytes": 7405568,
+            "largest_file_bytes": 1754250
+          },
+          {
+            "node": "data.zarr/z",
+            "n_files": 199,
+            "apparent_bytes": 25131652658,
+            "allocated_bytes": 25132019712,
+            "largest_file_bytes": 134477668
+          },
+          {
+            "node": "data.zarr/z_overflow_index",
+            "n_files": 2,
+            "apparent_bytes": 45443,
+            "allocated_bytes": 49152,
+            "largest_file_bytes": 44420
+          },
+          {
+            "node": "data.zarr/z_overflow_value",
+            "n_files": 2,
+            "apparent_bytes": 23247,
+            "allocated_bytes": 28672,
+            "largest_file_bytes": 22220
+          }
+        ],
+        "zarr_metadata": {
+          "n_files": 5,
+          "apparent_bytes": 5728,
+          "allocated_bytes": 24576,
+          "largest_file_bytes": 434
+        },
+        "envelope": {
+          "n_files": 11,
+          "apparent_bytes": 899548543,
+          "allocated_bytes": 899567616,
+          "largest_file_bytes": 315126560,
+          "files": [
+            {
+              "path": "analyses.tsv",
+              "apparent_bytes": 550442,
+              "allocated_bytes": 552960
+            },
+            {
+              "path": "index.sqlite",
+              "apparent_bytes": 20480,
+              "allocated_bytes": 20480
+            },
+            {
+              "path": "manifest.json",
+              "apparent_bytes": 401573,
+              "allocated_bytes": 405504
+            },
+            {
+              "path": "overview.html",
+              "apparent_bytes": 1841614,
+              "allocated_bytes": 1843200
+            },
+            {
+              "path": "variant_alid_bytes.npy",
+              "apparent_bytes": 315126560,
+              "allocated_bytes": 315129856
+            },
+            {
+              "path": "variant_alid_rows.npy",
+              "apparent_bytes": 39390932,
+              "allocated_bytes": 39391232
+            },
+            {
+              "path": "variant_offsets.npy",
+              "apparent_bytes": 78781736,
+              "allocated_bytes": 78782464
+            },
+            {
+              "path": "variant_rsid_bytes.npy",
+              "apparent_bytes": 236296040,
+              "allocated_bytes": 236298240
+            },
+            {
+              "path": "variant_rsid_rows.npy",
+              "apparent_bytes": 39382780,
+              "allocated_bytes": 39383040
+            },
+            {
+              "path": "variants.tsv.gz",
+              "apparent_bytes": 186238696,
+              "allocated_bytes": 186241024
+            },
+            {
+              "path": "variants.tsv.gz.tbi",
+              "apparent_bytes": 1513594,
+              "allocated_bytes": 1515520
+            }
+          ]
+        }
+      }
+    },
+    "unsharded": {
+      "path": "/data/opengwasdb/work/epic240/246/OGS-00009-v3-c64-topshard1",
+      "top_hit_layout": {
+        "array": "top_hits/p_5e_08/z",
+        "chunk_shape": [
+          16384
+        ],
+        "shard_shape": [
+          16384
+        ],
+        "dtype": "float32"
+      },
+      "effective_reader": {
+        "use_threads": true,
+        "pipeline": "FusedCodecPipeline",
+        "max_workers": 1
+      },
+      "footprint": {
+        "n_files": 21224,
+        "apparent_bytes": 35174057616,
+        "allocated_bytes": 35222806528,
+        "du_apparent_bytes": 35174057616,
+        "du_allocated_bytes": 35222806528,
+        "arrays": [
+          {
+            "node": "data.zarr/eaf",
+            "n_files": 199,
+            "apparent_bytes": 4447686742,
+            "allocated_bytes": 4448088064,
+            "largest_file_bytes": 23975371
+          },
+          {
+            "node": "data.zarr/eaf_baseline",
+            "n_files": 11,
+            "apparent_bytes": 33783783,
+            "allocated_bytes": 33812480,
+            "largest_file_bytes": 3433164
+          },
+          {
+            "node": "data.zarr/eaf_exception_index",
+            "n_files": 2,
+            "apparent_bytes": 69683,
+            "allocated_bytes": 73728,
+            "largest_file_bytes": 68660
+          },
+          {
+            "node": "data.zarr/eaf_exception_value",
+            "n_files": 2,
+            "apparent_bytes": 35367,
+            "allocated_bytes": 40960,
+            "largest_file_bytes": 34340
+          },
+          {
+            "node": "data.zarr/se",
+            "n_files": 199,
+            "apparent_bytes": 3829644093,
+            "allocated_bytes": 3830042624,
+            "largest_file_bytes": 21294060
+          },
+          {
+            "node": "data.zarr/se_coefficients",
+            "n_files": 2,
+            "apparent_bytes": 14175,
+            "allocated_bytes": 20480,
+            "largest_file_bytes": 12840
+          },
+          {
+            "node": "data.zarr/se_exception_index",
+            "n_files": 2,
+            "apparent_bytes": 739273,
+            "allocated_bytes": 745472,
+            "largest_file_bytes": 737988
+          },
+          {
+            "node": "data.zarr/se_exception_value",
+            "n_files": 2,
+            "apparent_bytes": 2337522,
+            "allocated_bytes": 2342912,
+            "largest_file_bytes": 2336233
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/abs_z",
+            "n_files": 2112,
+            "apparent_bytes": 50121657,
+            "allocated_bytes": 54063104,
+            "largest_file_bytes": 32582
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/analysis_index",
+            "n_files": 2112,
+            "apparent_bytes": 235619,
+            "allocated_bytes": 8728576,
+            "largest_file_bytes": 1217
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 6079,
+            "allocated_bytes": 12288,
+            "largest_file_bytes": 4801
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/eaf",
+            "n_files": 2112,
+            "apparent_bytes": 109496169,
+            "allocated_bytes": 112594944,
+            "largest_file_bytes": 53959
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/p_value",
+            "n_files": 2112,
+            "apparent_bytes": 243983921,
+            "allocated_bytes": 248086528,
+            "largest_file_bytes": 122582
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/se",
+            "n_files": 2112,
+            "apparent_bytes": 97221609,
+            "allocated_bytes": 101769216,
+            "largest_file_bytes": 51686
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/variant_index",
+            "n_files": 2112,
+            "apparent_bytes": 40779789,
+            "allocated_bytes": 45502464,
+            "largest_file_bytes": 27723
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/z",
+            "n_files": 2112,
+            "apparent_bytes": 54528215,
+            "allocated_bytes": 59256832,
+            "largest_file_bytes": 34688
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/abs_z",
+            "n_files": 554,
+            "apparent_bytes": 13185615,
+            "allocated_bytes": 14139392,
+            "largest_file_bytes": 33655
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/analysis_index",
+            "n_files": 554,
+            "apparent_bytes": 75295,
+            "allocated_bytes": 2297856,
+            "largest_file_bytes": 1216
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 5011,
+            "allocated_bytes": 8192,
+            "largest_file_bytes": 3733
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/eaf",
+            "n_files": 554,
+            "apparent_bytes": 28353334,
+            "allocated_bytes": 29425664,
+            "largest_file_bytes": 53744
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/p_value",
+            "n_files": 554,
+            "apparent_bytes": 64768676,
+            "allocated_bytes": 65847296,
+            "largest_file_bytes": 122889
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/se",
+            "n_files": 554,
+            "apparent_bytes": 24678801,
+            "allocated_bytes": 25853952,
+            "largest_file_bytes": 50985
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/variant_index",
+            "n_files": 554,
+            "apparent_bytes": 9554442,
+            "allocated_bytes": 10981376,
+            "largest_file_bytes": 24733
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/z",
+            "n_files": 554,
+            "apparent_bytes": 14338748,
+            "allocated_bytes": 15683584,
+            "largest_file_bytes": 35740
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/abs_z",
+            "n_files": 274,
+            "apparent_bytes": 6829495,
+            "allocated_bytes": 7385088,
+            "largest_file_bytes": 34450
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/analysis_index",
+            "n_files": 274,
+            "apparent_bytes": 40442,
+            "allocated_bytes": 1134592,
+            "largest_file_bytes": 1216
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 3465,
+            "allocated_bytes": 8192,
+            "largest_file_bytes": 2187
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/eaf",
+            "n_files": 274,
+            "apparent_bytes": 13924981,
+            "allocated_bytes": 14495744,
+            "largest_file_bytes": 53521
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/p_value",
+            "n_files": 274,
+            "apparent_bytes": 32283919,
+            "allocated_bytes": 32813056,
+            "largest_file_bytes": 124095
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/se",
+            "n_files": 274,
+            "apparent_bytes": 12036518,
+            "allocated_bytes": 12566528,
+            "largest_file_bytes": 50865
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/variant_index",
+            "n_files": 274,
+            "apparent_bytes": 4620686,
+            "allocated_bytes": 5316608,
+            "largest_file_bytes": 20068
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/z",
+            "n_files": 274,
+            "apparent_bytes": 7398882,
+            "allocated_bytes": 7979008,
+            "largest_file_bytes": 36535
+          },
+          {
+            "node": "data.zarr/z",
+            "n_files": 199,
+            "apparent_bytes": 25131652658,
+            "allocated_bytes": 25132019712,
+            "largest_file_bytes": 134477668
+          },
+          {
+            "node": "data.zarr/z_overflow_index",
+            "n_files": 2,
+            "apparent_bytes": 45443,
+            "allocated_bytes": 49152,
+            "largest_file_bytes": 44420
+          },
+          {
+            "node": "data.zarr/z_overflow_value",
+            "n_files": 2,
+            "apparent_bytes": 23247,
+            "allocated_bytes": 28672,
+            "largest_file_bytes": 22220
+          }
+        ],
+        "zarr_metadata": {
+          "n_files": 5,
+          "apparent_bytes": 5728,
+          "allocated_bytes": 24576,
+          "largest_file_bytes": 434
+        },
+        "envelope": {
+          "n_files": 11,
+          "apparent_bytes": 899548534,
+          "allocated_bytes": 899567616,
+          "largest_file_bytes": 315126560,
+          "files": [
+            {
+              "path": "analyses.tsv",
+              "apparent_bytes": 550442,
+              "allocated_bytes": 552960
+            },
+            {
+              "path": "index.sqlite",
+              "apparent_bytes": 20480,
+              "allocated_bytes": 20480
+            },
+            {
+              "path": "manifest.json",
+              "apparent_bytes": 401564,
+              "allocated_bytes": 405504
+            },
+            {
+              "path": "overview.html",
+              "apparent_bytes": 1841614,
+              "allocated_bytes": 1843200
+            },
+            {
+              "path": "variant_alid_bytes.npy",
+              "apparent_bytes": 315126560,
+              "allocated_bytes": 315129856
+            },
+            {
+              "path": "variant_alid_rows.npy",
+              "apparent_bytes": 39390932,
+              "allocated_bytes": 39391232
+            },
+            {
+              "path": "variant_offsets.npy",
+              "apparent_bytes": 78781736,
+              "allocated_bytes": 78782464
+            },
+            {
+              "path": "variant_rsid_bytes.npy",
+              "apparent_bytes": 236296040,
+              "allocated_bytes": 236298240
+            },
+            {
+              "path": "variant_rsid_rows.npy",
+              "apparent_bytes": 39382780,
+              "allocated_bytes": 39383040
+            },
+            {
+              "path": "variants.tsv.gz",
+              "apparent_bytes": 186238696,
+              "allocated_bytes": 186241024
+            },
+            {
+              "path": "variants.tsv.gz.tbi",
+              "apparent_bytes": 1513594,
+              "allocated_bytes": 1515520
+            }
+          ]
+        }
+      }
+    }
+  },
+  "sides": [
+    {
+      "label": "sharded",
+      "revision": "f54eb9d",
+      "opengwasdb_fingerprint": "86106fce1940635a7a710f2c578436452610e0b682892797405d99b72c42558d"
+    },
+    {
+      "label": "unsharded",
+      "revision": "f54eb9d",
+      "opengwasdb_fingerprint": "86106fce1940635a7a710f2c578436452610e0b682892797405d99b72c42558d"
+    }
+  ],
+  "selection": {
+    "exposure_analysis_id": "ukb-b-17805",
+    "phewas_alid": "19:44908822:C:T",
+    "region": {
+      "chrom": "19",
+      "start": 44500000,
+      "end": 45500000
+    },
+    "random_lookup_shapes": [
+      {
+        "n_variants": 10,
+        "n_analyses": 100
+      },
+      {
+        "n_variants": 100,
+        "n_analyses": 10
+      }
+    ],
+    "random_alids": [
+      "4:76695022:C:T",
+      "1:65739979:C:T",
+      "5:88619663:G:T",
+      "12:62023811:G:T",
+      "2:31082970:A:G",
+      "8:68064526:A:G",
+      "1:98986502:G:T",
+      "13:71030053:C:T",
+      "14:104693875:C:T",
+      "7:116047321:A:T",
+      "6:42187873:G:T",
+      "20:59542457:C:T",
+      "18:41325803:C:T",
+      "10:106818585:C:T",
+      "1:83724305:A:C",
+      "9:91206063:A:G",
+      "10:132106707:G:T",
+      "12:45263491:C:T",
+      "8:121703088:G:T",
+      "2:134191668:A:G",
+      "8:115201732:C:T",
+      "21:33398052:A:G",
+      "8:84364577:C:T",
+      "11:69328516:A:G",
+      "9:71887767:C:T",
+      "14:83880452:A:T",
+      "4:52749123:C:T",
+      "4:59380843:C:T",
+      "6:8514462:A:G",
+      "3:30948509:G:T",
+      "8:11063114:C:T",
+      "10:49362054:A:G",
+      "6:19214877:C:T",
+      "3:180824816:A:T",
+      "2:6925869:C:T",
+      "19:57530335:C:T",
+      "6:130758283:A:G",
+      "9:133165599:C:T",
+      "16:6572096:C:T",
+      "16:69906458:A:G",
+      "9:14151039:C:T",
+      "16:16990730:C:G",
+      "15:76943950:A:C",
+      "9:2891054:C:T",
+      "11:102384953:C:T",
+      "10:93256155:A:G",
+      "12:92045996:A:G",
+      "5:143598114:C:G",
+      "4:114407453:C:G",
+      "8:25406115:C:T",
+      "22:45460548:C:G",
+      "11:3475368:C:T",
+      "2:166436663:C:G",
+      "16:53920140:A:C",
+      "6:49460205:A:G",
+      "11:62552255:A:T",
+      "7:51981192:G:T",
+      "1:22707709:G:T",
+      "4:174761106:A:G",
+      "5:58263268:A:G",
+      "12:60084093:A:G",
+      "8:13059461:C:G",
+      "1:170046491:A:G",
+      "4:93223661:C:G",
+      "17:54676924:G:T",
+      "13:69145141:G:T",
+      "13:60245088:C:T",
+      "15:97272733:A:G",
+      "7:130750293:A:C",
+      "6:35642037:C:T",
+      "15:27096333:C:T",
+      "17:3082989:C:T",
+      "1:15114998:A:G",
+      "8:68824373:A:T",
+      "1:243769312:C:T",
+      "5:7898878:A:G",
+      "12:91618424:C:T",
+      "6:12938109:C:T",
+      "2:16279633:A:G",
+      "11:61893232:A:G",
+      "5:2551993:A:G",
+      "12:17357276:C:T",
+      "19:16520336:A:G",
+      "11:5565088:C:T",
+      "12:68004338:C:T",
+      "10:68798957:C:T",
+      "6:130165368:A:G",
+      "17:52525302:C:T",
+      "10:22828313:G:T",
+      "6:28886492:A:G",
+      "16:7852026:C:T",
+      "11:110674775:G:T",
+      "1:119571311:C:T",
+      "1:49192650:C:T",
+      "5:37853894:C:T",
+      "1:238139788:C:T",
+      "1:7359867:C:T",
+      "3:32030512:C:T",
+      "19:14077362:A:C",
+      "6:74759504:A:C"
+    ],
+    "random_analyses": [
+      "ukb-b-8379",
+      "ukb-b-527",
+      "ukb-b-8374",
+      "ukb-b-6448",
+      "ukb-b-20386",
+      "ukb-b-15625",
+      "ukb-b-13583",
+      "ukb-b-17965",
+      "ukb-b-3376",
+      "ukb-b-17446",
+      "ukb-b-7748",
+      "ukb-b-7710",
+      "ukb-b-16451",
+      "ukb-b-9019",
+      "ukb-b-847",
+      "ukb-b-19759",
+      "ukb-b-4522",
+      "ukb-b-15228",
+      "ukb-b-5427",
+      "ukb-b-19845",
+      "ukb-b-1997",
+      "ukb-b-9043",
+      "ukb-b-328",
+      "ukb-b-9029",
+      "ukb-b-3957",
+      "ukb-b-13998",
+      "ukb-b-13932",
+      "ukb-b-3229",
+      "ukb-b-20218",
+      "ukb-b-15666",
+      "ukb-b-1666",
+      "ukb-b-14238",
+      "ukb-b-16943",
+      "ukb-b-4514",
+      "ukb-b-15230",
+      "ukb-b-8196",
+      "ukb-b-223",
+      "ukb-b-1668",
+      "ukb-b-16671",
+      "ukb-b-5421",
+      "ukb-b-4150",
+      "ukb-b-19722",
+      "ukb-b-7212",
+      "ukb-b-18541",
+      "ukb-b-7118",
+      "ukb-b-6415",
+      "ukb-b-2769",
+      "ukb-b-7236",
+      "ukb-b-17241",
+      "ukb-b-19921",
+      "ukb-b-4507",
+      "ukb-b-730",
+      "ukb-b-7869",
+      "ukb-b-9930",
+      "ukb-b-3713",
+      "ukb-b-7589",
+      "ukb-b-7217",
+      "ukb-b-9333",
+      "ukb-b-918",
+      "ukb-b-5911",
+      "ukb-b-16868",
+      "ukb-b-2024",
+      "ukb-b-14303",
+      "ukb-b-7587",
+      "ukb-b-4323",
+      "ukb-b-4921",
+      "ukb-b-6230",
+      "ukb-b-16056",
+      "ukb-b-6772",
+      "ukb-b-8024",
+      "ukb-b-6092",
+      "ukb-b-13745",
+      "ukb-b-3969",
+      "ukb-b-14294",
+      "ukb-b-2209",
+      "ukb-b-2416",
+      "ukb-b-19088",
+      "ukb-b-14639",
+      "ukb-b-217",
+      "ukb-b-16698",
+      "ukb-b-8061",
+      "ukb-b-17708",
+      "ukb-b-18137",
+      "ukb-b-14017",
+      "ukb-b-6888",
+      "ukb-b-14518",
+      "ukb-b-16585",
+      "ukb-b-6740",
+      "ukb-b-3923",
+      "ukb-b-8621",
+      "ukb-b-15555",
+      "ukb-b-17681",
+      "ukb-b-13775",
+      "ukb-b-15445",
+      "ukb-b-17277",
+      "ukb-b-17348",
+      "ukb-b-8846",
+      "ukb-b-6666",
+      "ukb-b-19769",
+      "ukb-b-9882"
+    ],
+    "resolved_from": {
+      "label": "ab",
+      "path": "/data/opengwasdb/work/epic240/245/OGS-00009-v3-c64",
+      "n_variants": 9847701,
+      "n_analyses": 2024
+    }
+  },
+  "shapes": [
+    "tophits"
+  ],
+  "reps": 25,
+  "rounds_requested": 5,
+  "round_order": [
+    [
+      "sharded",
+      "unsharded"
+    ],
+    [
+      "unsharded",
+      "sharded"
+    ],
+    [
+      "sharded",
+      "unsharded"
+    ],
+    [
+      "unsharded",
+      "sharded"
+    ],
+    [
+      "sharded",
+      "unsharded"
+    ]
+  ],
+  "rounds": [
+    {
+      "round": 0,
+      "order": [
+        "sharded",
+        "unsharded"
+      ],
+      "results": {
+        "sharded": {
+          "store": "/data/opengwasdb/work/epic240/245/OGS-00009-v3-c64",
+          "shapes": {
+            "tophits": {
+              "samples_ms": [
+                18.4091,
+                18.8548,
+                17.9465,
+                18.1802,
+                16.7425,
+                17.5228,
+                17.543,
+                15.6035,
+                17.6299,
+                17.68,
+                16.7172,
+                17.6201,
+                17.8294,
+                17.9428,
+                17.9839,
+                17.9435,
+                18.1266,
+                17.1569,
+                14.3757,
+                16.3868,
+                16.3744,
+                16.6518,
+                16.3331,
+                14.5053,
+                16.3201
+              ],
+              "digest": {
+                "analysis_index": "6851b0ecbde1a5c9a60b6523fdea688ed3336ec13164c6e9b2feb1baac39c8ea",
+                "association_status": "44ffc9d25bf848303361424eaed8bb5f0145c789a12b7602b021995439b30081",
+                "eaf": "56d2892ecb2758c9dbb2212dcf1df8e6a905b62664380917d4d21f9644165d3e",
+                "se": "290648a9655c5ba024289eaf1b38fbc8b4419901227ea90049a886f72b13e62a",
+                "variant_index": "766a16db229015ec498c0cba6532732f5e5487c72e797af328257891ebacdf30",
+                "z": "d8d8477d8c210a282a8132b8a8e22e3c506f1fbe7e434c4462835ce4dddc8512"
+              },
+              "n_rows": 2564
+            }
+          }
+        },
+        "unsharded": {
+          "store": "/data/opengwasdb/work/epic240/246/OGS-00009-v3-c64-topshard1",
+          "shapes": {
+            "tophits": {
+              "samples_ms": [
+                9.4682,
+                9.2424,
+                9.2788,
+                8.6643,
+                8.5388,
+                8.4034,
+                8.3793,
+                8.8084,
+                8.3867,
+                8.4263,
+                8.4218,
+                8.2855,
+                8.4254,
+                8.5181,
+                8.3284,
+                8.6424,
+                8.4692,
+                8.4017,
+                8.594,
+                8.4319,
+                8.4562,
+                8.3701,
+                8.4607,
+                8.4504,
+                8.3943
+              ],
+              "digest": {
+                "analysis_index": "6851b0ecbde1a5c9a60b6523fdea688ed3336ec13164c6e9b2feb1baac39c8ea",
+                "association_status": "44ffc9d25bf848303361424eaed8bb5f0145c789a12b7602b021995439b30081",
+                "eaf": "56d2892ecb2758c9dbb2212dcf1df8e6a905b62664380917d4d21f9644165d3e",
+                "se": "290648a9655c5ba024289eaf1b38fbc8b4419901227ea90049a886f72b13e62a",
+                "variant_index": "766a16db229015ec498c0cba6532732f5e5487c72e797af328257891ebacdf30",
+                "z": "d8d8477d8c210a282a8132b8a8e22e3c506f1fbe7e434c4462835ce4dddc8512"
+              },
+              "n_rows": 2564
+            }
+          }
+        }
+      }
+    },
+    {
+      "round": 1,
+      "order": [
+        "unsharded",
+        "sharded"
+      ],
+      "results": {
+        "unsharded": {
+          "store": "/data/opengwasdb/work/epic240/246/OGS-00009-v3-c64-topshard1",
+          "shapes": {
+            "tophits": {
+              "samples_ms": [
+                9.5491,
+                9.6719,
+                8.7099,
+                6.3645,
+                5.872,
+                5.6878,
+                5.6125,
+                5.472,
+                5.356,
+                5.2643,
+                5.2234,
+                5.1644,
+                5.1544,
+                5.2588,
+                5.1932,
+                5.2327,
+                5.268,
+                5.2212,
+                5.3918,
+                5.2145,
+                5.2821,
+                5.1202,
+                5.1154,
+                5.2594,
+                5.1329
+              ],
+              "digest": {
+                "analysis_index": "6851b0ecbde1a5c9a60b6523fdea688ed3336ec13164c6e9b2feb1baac39c8ea",
+                "association_status": "44ffc9d25bf848303361424eaed8bb5f0145c789a12b7602b021995439b30081",
+                "eaf": "56d2892ecb2758c9dbb2212dcf1df8e6a905b62664380917d4d21f9644165d3e",
+                "se": "290648a9655c5ba024289eaf1b38fbc8b4419901227ea90049a886f72b13e62a",
+                "variant_index": "766a16db229015ec498c0cba6532732f5e5487c72e797af328257891ebacdf30",
+                "z": "d8d8477d8c210a282a8132b8a8e22e3c506f1fbe7e434c4462835ce4dddc8512"
+              },
+              "n_rows": 2564
+            }
+          }
+        },
+        "sharded": {
+          "store": "/data/opengwasdb/work/epic240/245/OGS-00009-v3-c64",
+          "shapes": {
+            "tophits": {
+              "samples_ms": [
+                19.5634,
+                17.8971,
+                15.4999,
+                14.9106,
+                14.7397,
+                13.8332,
+                15.1502,
+                16.2567,
+                12.7386,
+                14.4576,
+                15.1146,
+                15.8753,
+                16.1481,
+                13.4112,
+                13.1562,
+                15.6129,
+                15.8934,
+                14.5603,
+                15.5332,
+                12.3849,
+                11.219,
+                11.933,
+                13.0544,
+                12.6573,
+                13.5235
+              ],
+              "digest": {
+                "analysis_index": "6851b0ecbde1a5c9a60b6523fdea688ed3336ec13164c6e9b2feb1baac39c8ea",
+                "association_status": "44ffc9d25bf848303361424eaed8bb5f0145c789a12b7602b021995439b30081",
+                "eaf": "56d2892ecb2758c9dbb2212dcf1df8e6a905b62664380917d4d21f9644165d3e",
+                "se": "290648a9655c5ba024289eaf1b38fbc8b4419901227ea90049a886f72b13e62a",
+                "variant_index": "766a16db229015ec498c0cba6532732f5e5487c72e797af328257891ebacdf30",
+                "z": "d8d8477d8c210a282a8132b8a8e22e3c506f1fbe7e434c4462835ce4dddc8512"
+              },
+              "n_rows": 2564
+            }
+          }
+        }
+      }
+    },
+    {
+      "round": 2,
+      "order": [
+        "sharded",
+        "unsharded"
+      ],
+      "results": {
+        "sharded": {
+          "store": "/data/opengwasdb/work/epic240/245/OGS-00009-v3-c64",
+          "shapes": {
+            "tophits": {
+              "samples_ms": [
+                10.5425,
+                10.9363,
+                10.4091,
+                9.9527,
+                9.7078,
+                9.7006,
+                9.6637,
+                9.6092,
+                9.5137,
+                9.3932,
+                9.5726,
+                9.2716,
+                9.8353,
+                9.453,
+                9.2663,
+                9.4294,
+                9.3961,
+                9.5778,
+                9.33,
+                9.4874,
+                9.555,
+                9.7368,
+                9.5631,
+                9.6914,
+                9.3662
+              ],
+              "digest": {
+                "analysis_index": "6851b0ecbde1a5c9a60b6523fdea688ed3336ec13164c6e9b2feb1baac39c8ea",
+                "association_status": "44ffc9d25bf848303361424eaed8bb5f0145c789a12b7602b021995439b30081",
+                "eaf": "56d2892ecb2758c9dbb2212dcf1df8e6a905b62664380917d4d21f9644165d3e",
+                "se": "290648a9655c5ba024289eaf1b38fbc8b4419901227ea90049a886f72b13e62a",
+                "variant_index": "766a16db229015ec498c0cba6532732f5e5487c72e797af328257891ebacdf30",
+                "z": "d8d8477d8c210a282a8132b8a8e22e3c506f1fbe7e434c4462835ce4dddc8512"
+              },
+              "n_rows": 2564
+            }
+          }
+        },
+        "unsharded": {
+          "store": "/data/opengwasdb/work/epic240/246/OGS-00009-v3-c64-topshard1",
+          "shapes": {
+            "tophits": {
+              "samples_ms": [
+                14.5736,
+                13.5438,
+                13.7918,
+                12.97,
+                14.1653,
+                12.8877,
+                13.4015,
+                10.5443,
+                9.3518,
+                9.2891,
+                9.2433,
+                8.484,
+                9.5383,
+                9.3018,
+                9.2002,
+                10.2141,
+                10.5775,
+                10.2719,
+                9.4399,
+                12.0088,
+                14.179,
+                13.6469,
+                10.7677,
+                9.4187,
+                13.1515
+              ],
+              "digest": {
+                "analysis_index": "6851b0ecbde1a5c9a60b6523fdea688ed3336ec13164c6e9b2feb1baac39c8ea",
+                "association_status": "44ffc9d25bf848303361424eaed8bb5f0145c789a12b7602b021995439b30081",
+                "eaf": "56d2892ecb2758c9dbb2212dcf1df8e6a905b62664380917d4d21f9644165d3e",
+                "se": "290648a9655c5ba024289eaf1b38fbc8b4419901227ea90049a886f72b13e62a",
+                "variant_index": "766a16db229015ec498c0cba6532732f5e5487c72e797af328257891ebacdf30",
+                "z": "d8d8477d8c210a282a8132b8a8e22e3c506f1fbe7e434c4462835ce4dddc8512"
+              },
+              "n_rows": 2564
+            }
+          }
+        }
+      }
+    },
+    {
+      "round": 3,
+      "order": [
+        "unsharded",
+        "sharded"
+      ],
+      "results": {
+        "unsharded": {
+          "store": "/data/opengwasdb/work/epic240/246/OGS-00009-v3-c64-topshard1",
+          "shapes": {
+            "tophits": {
+              "samples_ms": [
+                9.6551,
+                9.6641,
+                9.3322,
+                8.6646,
+                8.9524,
+                8.1152,
+                7.9959,
+                8.6973,
+                8.5961,
+                8.3768,
+                8.3873,
+                8.3198,
+                8.4855,
+                8.6076,
+                8.3364,
+                8.4109,
+                8.3251,
+                8.4501,
+                8.5651,
+                8.4608,
+                8.7416,
+                8.4835,
+                8.4549,
+                8.426,
+                8.9361
+              ],
+              "digest": {
+                "analysis_index": "6851b0ecbde1a5c9a60b6523fdea688ed3336ec13164c6e9b2feb1baac39c8ea",
+                "association_status": "44ffc9d25bf848303361424eaed8bb5f0145c789a12b7602b021995439b30081",
+                "eaf": "56d2892ecb2758c9dbb2212dcf1df8e6a905b62664380917d4d21f9644165d3e",
+                "se": "290648a9655c5ba024289eaf1b38fbc8b4419901227ea90049a886f72b13e62a",
+                "variant_index": "766a16db229015ec498c0cba6532732f5e5487c72e797af328257891ebacdf30",
+                "z": "d8d8477d8c210a282a8132b8a8e22e3c506f1fbe7e434c4462835ce4dddc8512"
+              },
+              "n_rows": 2564
+            }
+          }
+        },
+        "sharded": {
+          "store": "/data/opengwasdb/work/epic240/245/OGS-00009-v3-c64",
+          "shapes": {
+            "tophits": {
+              "samples_ms": [
+                20.3399,
+                20.6015,
+                19.9056,
+                20.064,
+                18.8761,
+                19.0778,
+                14.7921,
+                19.3177,
+                19.386,
+                19.59,
+                19.2576,
+                19.947,
+                19.6544,
+                19.796,
+                19.0091,
+                19.2431,
+                19.7701,
+                19.5968,
+                19.5445,
+                19.6961,
+                18.4805,
+                18.9029,
+                19.5477,
+                19.6384,
+                19.7955
+              ],
+              "digest": {
+                "analysis_index": "6851b0ecbde1a5c9a60b6523fdea688ed3336ec13164c6e9b2feb1baac39c8ea",
+                "association_status": "44ffc9d25bf848303361424eaed8bb5f0145c789a12b7602b021995439b30081",
+                "eaf": "56d2892ecb2758c9dbb2212dcf1df8e6a905b62664380917d4d21f9644165d3e",
+                "se": "290648a9655c5ba024289eaf1b38fbc8b4419901227ea90049a886f72b13e62a",
+                "variant_index": "766a16db229015ec498c0cba6532732f5e5487c72e797af328257891ebacdf30",
+                "z": "d8d8477d8c210a282a8132b8a8e22e3c506f1fbe7e434c4462835ce4dddc8512"
+              },
+              "n_rows": 2564
+            }
+          }
+        }
+      }
+    },
+    {
+      "round": 4,
+      "order": [
+        "sharded",
+        "unsharded"
+      ],
+      "results": {
+        "sharded": {
+          "store": "/data/opengwasdb/work/epic240/245/OGS-00009-v3-c64",
+          "shapes": {
+            "tophits": {
+              "samples_ms": [
+                19.7424,
+                20.7483,
+                19.7225,
+                18.7745,
+                19.4051,
+                18.7883,
+                19.6312,
+                19.8055,
+                19.5314,
+                18.946,
+                19.0654,
+                19.2764,
+                19.3781,
+                19.7418,
+                19.6601,
+                19.5566,
+                19.6496,
+                19.628,
+                18.9788,
+                18.1649,
+                18.1718,
+                19.5386,
+                18.97,
+                18.9274,
+                19.6565
+              ],
+              "digest": {
+                "analysis_index": "6851b0ecbde1a5c9a60b6523fdea688ed3336ec13164c6e9b2feb1baac39c8ea",
+                "association_status": "44ffc9d25bf848303361424eaed8bb5f0145c789a12b7602b021995439b30081",
+                "eaf": "56d2892ecb2758c9dbb2212dcf1df8e6a905b62664380917d4d21f9644165d3e",
+                "se": "290648a9655c5ba024289eaf1b38fbc8b4419901227ea90049a886f72b13e62a",
+                "variant_index": "766a16db229015ec498c0cba6532732f5e5487c72e797af328257891ebacdf30",
+                "z": "d8d8477d8c210a282a8132b8a8e22e3c506f1fbe7e434c4462835ce4dddc8512"
+              },
+              "n_rows": 2564
+            }
+          }
+        },
+        "unsharded": {
+          "store": "/data/opengwasdb/work/epic240/246/OGS-00009-v3-c64-topshard1",
+          "shapes": {
+            "tophits": {
+              "samples_ms": [
+                18.9835,
+                18.8122,
+                19.1035,
+                17.8258,
+                18.1776,
+                14.8826,
+                14.5577,
+                14.1259,
+                14.3,
+                14.3124,
+                12.6416,
+                14.568,
+                14.3097,
+                14.34,
+                14.4832,
+                14.8913,
+                14.6338,
+                14.3228,
+                14.5693,
+                13.8747,
+                14.1486,
+                14.368,
+                14.3119,
+                14.2439,
+                14.4422
+              ],
+              "digest": {
+                "analysis_index": "6851b0ecbde1a5c9a60b6523fdea688ed3336ec13164c6e9b2feb1baac39c8ea",
+                "association_status": "44ffc9d25bf848303361424eaed8bb5f0145c789a12b7602b021995439b30081",
+                "eaf": "56d2892ecb2758c9dbb2212dcf1df8e6a905b62664380917d4d21f9644165d3e",
+                "se": "290648a9655c5ba024289eaf1b38fbc8b4419901227ea90049a886f72b13e62a",
+                "variant_index": "766a16db229015ec498c0cba6532732f5e5487c72e797af328257891ebacdf30",
+                "z": "d8d8477d8c210a282a8132b8a8e22e3c506f1fbe7e434c4462835ce4dddc8512"
+              },
+              "n_rows": 2564
+            }
+          }
+        }
+      }
+    }
+  ],
+  "samples_ms": {
+    "sharded": {
+      "tophits": [
+        18.4091,
+        18.8548,
+        17.9465,
+        18.1802,
+        16.7425,
+        17.5228,
+        17.543,
+        15.6035,
+        17.6299,
+        17.68,
+        16.7172,
+        17.6201,
+        17.8294,
+        17.9428,
+        17.9839,
+        17.9435,
+        18.1266,
+        17.1569,
+        14.3757,
+        16.3868,
+        16.3744,
+        16.6518,
+        16.3331,
+        14.5053,
+        16.3201,
+        19.5634,
+        17.8971,
+        15.4999,
+        14.9106,
+        14.7397,
+        13.8332,
+        15.1502,
+        16.2567,
+        12.7386,
+        14.4576,
+        15.1146,
+        15.8753,
+        16.1481,
+        13.4112,
+        13.1562,
+        15.6129,
+        15.8934,
+        14.5603,
+        15.5332,
+        12.3849,
+        11.219,
+        11.933,
+        13.0544,
+        12.6573,
+        13.5235,
+        10.5425,
+        10.9363,
+        10.4091,
+        9.9527,
+        9.7078,
+        9.7006,
+        9.6637,
+        9.6092,
+        9.5137,
+        9.3932,
+        9.5726,
+        9.2716,
+        9.8353,
+        9.453,
+        9.2663,
+        9.4294,
+        9.3961,
+        9.5778,
+        9.33,
+        9.4874,
+        9.555,
+        9.7368,
+        9.5631,
+        9.6914,
+        9.3662,
+        20.3399,
+        20.6015,
+        19.9056,
+        20.064,
+        18.8761,
+        19.0778,
+        14.7921,
+        19.3177,
+        19.386,
+        19.59,
+        19.2576,
+        19.947,
+        19.6544,
+        19.796,
+        19.0091,
+        19.2431,
+        19.7701,
+        19.5968,
+        19.5445,
+        19.6961,
+        18.4805,
+        18.9029,
+        19.5477,
+        19.6384,
+        19.7955,
+        19.7424,
+        20.7483,
+        19.7225,
+        18.7745,
+        19.4051,
+        18.7883,
+        19.6312,
+        19.8055,
+        19.5314,
+        18.946,
+        19.0654,
+        19.2764,
+        19.3781,
+        19.7418,
+        19.6601,
+        19.5566,
+        19.6496,
+        19.628,
+        18.9788,
+        18.1649,
+        18.1718,
+        19.5386,
+        18.97,
+        18.9274,
+        19.6565
+      ]
+    },
+    "unsharded": {
+      "tophits": [
+        9.4682,
+        9.2424,
+        9.2788,
+        8.6643,
+        8.5388,
+        8.4034,
+        8.3793,
+        8.8084,
+        8.3867,
+        8.4263,
+        8.4218,
+        8.2855,
+        8.4254,
+        8.5181,
+        8.3284,
+        8.6424,
+        8.4692,
+        8.4017,
+        8.594,
+        8.4319,
+        8.4562,
+        8.3701,
+        8.4607,
+        8.4504,
+        8.3943,
+        9.5491,
+        9.6719,
+        8.7099,
+        6.3645,
+        5.872,
+        5.6878,
+        5.6125,
+        5.472,
+        5.356,
+        5.2643,
+        5.2234,
+        5.1644,
+        5.1544,
+        5.2588,
+        5.1932,
+        5.2327,
+        5.268,
+        5.2212,
+        5.3918,
+        5.2145,
+        5.2821,
+        5.1202,
+        5.1154,
+        5.2594,
+        5.1329,
+        14.5736,
+        13.5438,
+        13.7918,
+        12.97,
+        14.1653,
+        12.8877,
+        13.4015,
+        10.5443,
+        9.3518,
+        9.2891,
+        9.2433,
+        8.484,
+        9.5383,
+        9.3018,
+        9.2002,
+        10.2141,
+        10.5775,
+        10.2719,
+        9.4399,
+        12.0088,
+        14.179,
+        13.6469,
+        10.7677,
+        9.4187,
+        13.1515,
+        9.6551,
+        9.6641,
+        9.3322,
+        8.6646,
+        8.9524,
+        8.1152,
+        7.9959,
+        8.6973,
+        8.5961,
+        8.3768,
+        8.3873,
+        8.3198,
+        8.4855,
+        8.6076,
+        8.3364,
+        8.4109,
+        8.3251,
+        8.4501,
+        8.5651,
+        8.4608,
+        8.7416,
+        8.4835,
+        8.4549,
+        8.426,
+        8.9361,
+        18.9835,
+        18.8122,
+        19.1035,
+        17.8258,
+        18.1776,
+        14.8826,
+        14.5577,
+        14.1259,
+        14.3,
+        14.3124,
+        12.6416,
+        14.568,
+        14.3097,
+        14.34,
+        14.4832,
+        14.8913,
+        14.6338,
+        14.3228,
+        14.5693,
+        13.8747,
+        14.1486,
+        14.368,
+        14.3119,
+        14.2439,
+        14.4422
+      ]
+    }
+  },
+  "medians_ms": {
+    "sharded": {
+      "tophits": 17.62
+    },
+    "unsharded": {
+      "tophits": 8.697
+    }
+  },
+  "ratio_reference_over_other": {
+    "tophits": 2.026
+  },
+  "per_read_ms": {
+    "tophits": 1.4872
+  },
+  "identity": {
+    "identical": true,
+    "differing_shapes": [],
+    "note": "sha256 per returned array, compared between the two sides every round"
+  },
+  "environment": {
+    "python": "3.12.14",
+    "numpy": "2.3.5",
+    "hostname": "app-dc3-ogws-p0.services.bris.ac.uk"
+  },
+  "commit": "f54eb9d",
+  "measured_at": "2026-10-06T04:25:32.991732+00:00",
+  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/246-benchmark-shapes/opengwasdb",
+  "opengwasdb_fingerprint": "86106fce1940635a7a710f2c578436452610e0b682892797405d99b72c42558d"
+}

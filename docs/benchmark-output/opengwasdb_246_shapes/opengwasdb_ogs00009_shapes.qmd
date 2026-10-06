@@ -193,6 +193,19 @@ from IPython.display import Markdown
 Markdown((HERE / "opengwasdb_store_comparison_ogs00009_shapes_set_l.md").read_text())
 ```
 
+# The second back-to-back pair
+
+The 30%-of-a-limit rule: a result within 30% of a budget, either side, is
+confirmed with a second back-to-back pair before it counts. The first pair
+flagged four memory peaks near the 300 MB cap, so a second pair was run.
+
+```{python}
+#| label: set-l-pair2
+Markdown(
+    (HERE / "opengwasdb_store_comparison_ogs00009_shapes_set_l_pair2.md").read_text()
+)
+```
+
 # Whole-Analysis peak memory
 
 The whole-Analysis peak is the budget whose outcome was unknown before this
@@ -386,20 +399,42 @@ reads (ADR 0056). `v3-c64-topshard1` is the same conversion as `v3-c64` with
 `--top-hit-shard-chunks 1`: every top-hit shard holds one inner chunk,
 "effectively unsharded", while the array is still a v3 sharded array.
 
+A conversion was running in the same window, so this is an **interleaved A/B**
+(`benchmarks/top_hit_shard_ab.py`): the two stores alternate round by round,
+every sample is kept, and the result digests are compared between them every
+round. It is not an absolute harness run.
+
 ```{python}
 #| label: tophits
+ab = json.loads((HERE / "opengwasdb_top_hit_shard_ab.json").read_text())
 rows = []
-for label in ("v3-c64", "v3-c64-topshard1"):
-    store = STORES[label]
-    timing = next(row for row in store["timings"] if row["query"] == "tophits")
-    memory = next(row for row in store["memory"] if row["query"] == "tophits")
+for config, cfg in ab["configs"].items():
     rows.append(
         {
-            "configuration": label,
-            "top-hits median ms": timing["median_ms"],
-            "top-hits p95 ms": timing["p95_ms"],
-            "top-hits peak MB": memory["peak_mb"],
+            "configuration": config,
+            "top-hit inner chunk": cfg["top_hit_layout"]["chunk_shape"][0],
+            "top-hit shard (inner chunks)": (
+                None
+                if cfg["top_hit_layout"]["shard_shape"] is None
+                else cfg["top_hit_layout"]["shard_shape"][0]
+                // cfg["top_hit_layout"]["chunk_shape"][0]
+            ),
+            "store files": cfg["footprint"]["n_files"],
+            "median top-hits ms": ab["medians_ms"][config]["tophits"],
+            "samples": len(ab["samples_ms"][config]["tophits"]),
+            "result identical": ab["identity"]["identical"],
         }
     )
 pd.DataFrame(rows).set_index("configuration")
+```
+
+```{python}
+#| label: tophits-ratio
+print("round order:", ab["round_order"])
+for shape, ratio in ab["ratio_reference_over_other"].items():
+    print(
+        f"{shape}: sharded / effectivly unsharded = {ratio:.2f}x; "
+        f"sharding cost per read = {ab['per_read_ms'][shape]:.2f} ms "
+        "(six reads per Top-Hit Query)"
+    )
 ```
