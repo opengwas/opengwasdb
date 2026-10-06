@@ -558,6 +558,78 @@ def test_a_hybrid_with_the_outer_compressor_removed_is_invalid(
     ), result.errors
 
 
+# ── a 0.2.0 Dense component MUST carry all three recordings ──────────────────
+
+
+def _drop_manifest_dense_provenance(store: Path) -> None:
+    path = store / "manifest.json"
+    data = json.loads(path.read_text())
+    data["provenance"].pop("dense", None)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _drop_index_dense_blob(store: Path) -> None:
+    connection = open_store(store).index_connection()
+    with connection:
+        connection.execute("DELETE FROM metadata WHERE key = 'dense'")
+        connection.commit()
+
+
+def _set_manifest_dense_zarr_format(store: Path, value: Any) -> None:
+    path = store / "manifest.json"
+    data = json.loads(path.read_text())
+    data["provenance"]["dense"]["zarr_format"] = value
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def test_a_0_2_0_dense_component_without_its_manifest_recording_is_invalid(
+    dense_completed: Path, tmp_path: Path
+):
+    """`provenance.dense` is required for 0.2.0, not skipped when absent."""
+    converted = _convert(dense_completed, tmp_path / "dense-rc-0.2.0.opengwasdb")
+    assert validate_store(converted).ok
+    _drop_manifest_dense_provenance(converted)
+
+    result = validate_store(converted)
+
+    assert not result.ok
+    assert any(
+        "provenance.dense" in error and "no chunk_shape" in error for error in result.errors
+    ), result.errors
+
+
+def test_a_0_2_0_dense_component_without_its_index_blob_is_invalid(
+    dense_completed: Path, tmp_path: Path
+):
+    """The `index.sqlite` dense blob is required for 0.2.0, not skipped when absent."""
+    converted = _convert(dense_completed, tmp_path / "dense-rc-0.2.0.opengwasdb")
+    assert validate_store(converted).ok
+    _drop_index_dense_blob(converted)
+
+    result = validate_store(converted)
+
+    assert not result.ok
+    assert any(
+        "index.sqlite dense metadata" in error and "no dense blob" in error
+        for error in result.errors
+    ), result.errors
+
+
+@pytest.mark.parametrize("bad", ["3", 3.5, "bogus", True])
+def test_a_bad_zarr_format_value_is_a_validation_error_not_an_exception(
+    dense_completed: Path, bad: Any, tmp_path: Path
+):
+    """Only the integers 2 and 3 are valid; no lossy `int(...)` coercion."""
+    converted = _convert(dense_completed, tmp_path / "dense-rc-0.2.0.opengwasdb")
+    assert validate_store(converted).ok
+    _set_manifest_dense_zarr_format(converted, bad)
+
+    result = validate_store(converted)  # must not raise
+
+    assert not result.ok
+    assert any("zarr_format" in error for error in result.errors), result.errors
+
+
 # ── external completion data survives the conversion ─────────────────────────
 
 

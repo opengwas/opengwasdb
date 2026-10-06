@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import numbers
 import os
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
@@ -375,7 +376,12 @@ def _recorded_from_index(
 
 
 def _recorded_layouts(
-    manifest: Any, connection: sqlite3.Connection, root: Any
+    manifest: Any,
+    connection: sqlite3.Connection,
+    root: Any,
+    errors: list[str],
+    *,
+    require_all: bool,
 ) -> list[tuple[str, Any, Any, Any, Any]]:
     """The three places a Dense release records its chunk shape, as (label, ...).
 
@@ -384,17 +390,33 @@ def _recorded_layouts(
     attrs.  All three are written by the Dense builders and by the converter
     (#245) and none is derived from the arrays themselves, so they are the copies
     a disagreeing manifest hides behind.
+
+    `require_all` is set for a 0.2.0 release, where spec §10a mandates all three:
+    an absent `provenance.dense` or `dense` blob is then an error, not a skipped
+    comparison (issue #248 review round 3).  A 0.1.0 release is only judged on
+    the recordings it carries -- the completion path writes no `dense` blob.
     """
     recorded: list[tuple[str, Any, Any, Any, Any]] = []
     provenance = manifest.provenance if isinstance(manifest.provenance, dict) else {}
+    block = None
     for key in ("dense", "hybrid"):
         block = _recorded_from_block(f"manifest.json provenance.{key}", provenance.get(key))
         if block is not None:
             recorded.append(block)
             break
+    if block is None and require_all:
+        errors.append(
+            "manifest.json provenance.dense: no chunk_shape recorded, so the release "
+            "does not describe its Dense planes' layout (spec §10a)"
+        )
     index = _recorded_from_index(connection)
     if index is not None:
         recorded.append(index)
+    elif require_all:
+        errors.append(
+            "index.sqlite dense metadata: no dense blob recorded, so the release does "
+            "not describe its Dense planes' layout (spec §10a)"
+        )
     attrs = dict(root.attrs)
     recorded.append(
         (
@@ -452,14 +474,15 @@ def _validate_recorded_layout(
     """
     if "z" not in root:
         return
-    recorded = _recorded_layouts(manifest, connection, root)
     planes = _recorded_dense_planes(root)
+    sharded = planes[0][3] is not None
+    recorded = _recorded_layouts(manifest, connection, root, errors, require_all=sharded)
     _recorded_layout_mismatches(
         recorded,
         planes,
         errors,
         zarr_label="data.zarr",
-        require_compressor=planes[0][3] is not None,
+        require_compressor=sharded,
     )
 
 
@@ -635,26 +658,43 @@ def _recorded_zarr_format_errors(
     no shard and does not record a format, but a 0.2.0 one must, and a recording
     that names the wrong format is the same silent failure class as a wrong chunk
     (issue #248 review round 2).
+
+    The value must be the **integer** 2 or 3, compared without coercion: a JSON
+    string `"3"`, a float `3.0`/`3.5` and `true` are all validation errors rather
+    than being `int(...)`-ed into a passing value or raising (issue #248 review
+    round 3).
     """
     errors: list[str] = []
     for label, _chunk, _shard, _compressor, zarr_format in recorded:
+        value = _zarr_format_int(zarr_format)
         if actual_shard is not None:
-            if zarr_format is None:
+            if value is None:
                 errors.append(
-                    f"{label}: no zarr_format recorded, so the release does not name "
-                    "its Zarr format (spec §10a)"
+                    f"{label}: zarr_format {zarr_format!r} is not the integer 3, which a "
+                    "Zarr v3 sharded release MUST record (spec §10a)"
                 )
-            elif int(zarr_format) != 3:
+            elif value != 3:
                 errors.append(
                     f"{label} records zarr_format {zarr_format!r}, not 3; the arrays "
                     "are Zarr v3 sharded (spec §10a)"
                 )
-        elif zarr_format is not None and int(zarr_format) != 2:
+        elif zarr_format is not None and value != 2:
             errors.append(
-                f"{label} records zarr_format {zarr_format!r}, not 2; the arrays are "
-                "Zarr v2 (spec §10a)"
+                f"{label} records zarr_format {zarr_format!r}, not the integer 2; the "
+                "arrays are Zarr v2 (spec §10a)"
             )
     return errors
+
+
+def _zarr_format_int(value: Any) -> int | None:
+    """`value` as a Zarr format integer, or `None` when it is not one.
+
+    Only a true integer counts.  `bool` is excluded although it is an `int`
+    subclass, and strings, floats and `None` are refused without coercion.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+        return None
+    return int(value)
 
 
 def _validate_hybrid_recordings(store: Any, dense_store: Any, errors: list[str]) -> None:
