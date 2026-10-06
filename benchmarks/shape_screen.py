@@ -62,9 +62,12 @@ SLICE_V3 = [
     "v3_r250c512_s",
 ]
 #: Candidate shapes built on the slice, by the candidate name the screen uses.
+#: #246 adds the two it screens at slice scale beyond the four it converts.
 BUILT = {
     "1000x128": "v3_c128_s",
     "1000x64": "v3_c64_s",
+    "1000x256": "v3_r1000c256_s",
+    "500x256": "v3_r500c256_s",
     "2000x128": "v3_r2000c128_s",
     "4000x256": "v3_r4000c256_s",
     "250x512": "v3_r250c512_s",
@@ -424,10 +427,20 @@ def screen(outputs: Path) -> dict[str, Any]:
 
 
 def slice_runs(slice_dir: Path, label: str) -> list[dict[str, Any]]:
-    """Every slice-read process of one label: round 1, then the later rounds."""
-    return levers.read_jsonl(
+    """Every slice-read process of one label: round 1, the later rounds, #246's.
+
+    #246's extra process carries the two shapes it screens beyond the four it
+    converts (`v3_r1000c256_s`, `v3_r500c256_s`).  It is a separate file so
+    #244's committed round files are not rewritten; when it is absent the
+    function reads exactly what it read before.
+    """
+    runs = levers.read_jsonl(
         slice_dir / "round1" / f"slice_read_{label}.jsonl"
     ) + levers.read_jsonl(slice_dir / f"slice_read_{label}.jsonl")
+    extra = slice_dir / f"slice_read_{label}_246.jsonl"
+    if extra.exists():
+        runs += levers.read_jsonl(extra)
+    return runs
 
 
 def _expected_row(
@@ -536,11 +549,15 @@ def rank_check(outputs: Path) -> dict[str, Any]:
             ma, mb = r["read_A_ms"] / ref["read_A_ms"], r["read_B_ms"] / ref["read_B_ms"]
             meas = None
             if cand in BUILT:
+                # A shape #246 added is absent from #244's committed rounds, so
+                # the run must be skipped *before* its array is indexed; a guard
+                # on the read alone raises KeyError on the array itself.
                 vals = [
                     run["arrays"][BUILT[cand]]["reads"][analogue]["ms"]
                     / run["arrays"]["v3_c1000_s"]["reads"][analogue]["ms"]
                     for run in runs
-                    if analogue in run["arrays"][BUILT[cand]]["reads"]
+                    if BUILT[cand] in run["arrays"]
+                    and analogue in run["arrays"][BUILT[cand]]["reads"]
                 ]
                 meas = statistics.median(vals) if vals else None
                 if meas:

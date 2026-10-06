@@ -30,19 +30,15 @@ The child is this same file (`--child`); it prints one `AB_RESULT <json>` line.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shutil
-import statistics
 import subprocess
 import sys
 import tempfile
-import time
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import numpy as np
+from benchmarks import _query_ab as ab
 
 #: The seven #242 shapes, in a stable order. `bulk` is excluded by default: a
 #: whole-Analysis read is ~20 s a sample, which starves the small shapes the
@@ -55,27 +51,6 @@ AB_SHAPES = (
     "random_lookup_100_variants_10_analyses",
 )
 DEFAULT_BASE_REV = "5cf7f78"
-
-
-def _digest(result: dict[str, np.ndarray]) -> dict[str, str]:
-    """sha256 per returned array (dtype, shape, values; NaN positions kept)."""
-    out: dict[str, str] = {}
-    for key, values in sorted(result.items()):
-        values = np.asarray(values)
-        digest = hashlib.sha256()
-        digest.update(str(values.dtype).encode())
-        digest.update(str(values.shape).encode())
-        if values.dtype.kind == "f":
-            missing = np.isnan(values)
-            digest.update(b"nan\x1f")
-            digest.update(np.packbits(missing).tobytes())
-            digest.update(values[~missing].tobytes())
-        elif values.dtype.kind in "OUSV":
-            digest.update(repr(values.tolist()).encode())
-        else:
-            digest.update(np.ascontiguousarray(values).tobytes())
-        out[key] = digest.hexdigest()
-    return out
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -103,41 +78,12 @@ def _child_main(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(args.repo_root))
     sys.path.insert(0, str(args.module_path))
     import opengwasdb
-    from benchmarks import _query_shapes
-    from opengwasdb.query import query_store
 
     selection = json.loads(Path(args.selection).read_text(encoding="utf-8"))
-    region = (
-        selection["region"]["chrom"],
-        int(selection["region"]["start"]),
-        int(selection["region"]["end"]),
-    )
-    out: dict[str, Any] = {"module": str(opengwasdb.__file__), "shapes": {}}
-    with query_store(args.store) as query:
-        patterns = _query_shapes.common_query_patterns(
-            query,
-            exposure=selection["exposure_analysis_id"],
-            phewas_alid=selection["phewas_alid"],
-            region=region,
-            random_alids=selection["random_alids"],
-            random_analyses=selection["random_analyses"],
-        )
-        for name in args.shapes:
-            fn = patterns[name]
-            warm = fn()
-            digest = _digest(warm)
-            n_rows = len(warm["z"])
-            samples: list[float] = []
-            for _ in range(args.reps):
-                t0 = time.perf_counter()
-                result = fn()
-                samples.append(round((time.perf_counter() - t0) * 1000, 4))
-                if len(result["z"]) != n_rows:
-                    raise SystemExit(
-                        f"{name}: returned {len(result['z'])} rows after {n_rows}; "
-                        "a shape whose size changes cannot be timed"
-                    )
-            out["shapes"][name] = {"samples_ms": samples, "digest": digest, "n_rows": n_rows}
+    out: dict[str, Any] = {
+        "module": str(opengwasdb.__file__),
+        "shapes": ab.time_shapes(args.store, selection, args.shapes, args.reps),
+    }
     print("AB_RESULT " + json.dumps(out), flush=True)
     return 0
 
@@ -164,35 +110,21 @@ def _child_command(args: argparse.Namespace, module_path: Path, selection: Path)
     return [
         sys.executable,
         str(Path(__file__).resolve()),
-        "--child",
-        "--module-path",
-        str(module_path),
-        "--repo-root",
-        str(args.repo_root),
-        "--store",
-        str(args.store),
-        "--selection",
-        str(selection),
-        "--shapes",
-        *args.shapes,
-        "--reps",
-        str(args.reps),
+        *ab.child_argv(
+            args.store,
+            selection,
+            args.shapes,
+            args.reps,
+            module_path=module_path,
+            repo_root=args.repo_root,
+        ),
     ]
 
 
 def _run_child(args: argparse.Namespace, module_path: Path, selection: Path) -> dict[str, Any]:
     command = _child_command(args, module_path, selection)
-    proc = subprocess.run(command, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise SystemExit(f"A/B child failed ({proc.returncode}):\n{proc.stderr[-4000:]}")
-    lines = [line for line in proc.stdout.splitlines() if line.startswith("AB_RESULT ")]
-    if len(lines) != 1:
-        raise SystemExit(f"A/B child printed {len(lines)} result lines:\n{proc.stdout[-4000:]}")
-    return json.loads(lines[0][len("AB_RESULT ") :])
-
-
-def _median(values: list[float]) -> float:
-    return round(statistics.median(values), 3)
+    # `command` is the full argv for the record; `run_child` builds it itself.
+    return ab.run_child(Path(__file__).resolve(), command[2:], "AB_RESULT")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -252,42 +184,22 @@ def main(argv: list[str] | None = None) -> int:
         for side in sides
     }
 
-    samples: dict[str, dict[str, list[float]]] = {side: defaultdict(list) for side in sides}
-    digests: dict[str, dict[str, dict[str, str]]] = {side: {} for side in sides}
-    rounds: list[dict[str, Any]] = []
-    for index in range(args.rounds):
-        order = ["base", "head"] if index % 2 == 0 else ["head", "base"]
-        record: dict[str, Any] = {"round": index, "order": order, "results": {}}
-        for side in order:
-            module_path = base_dir if side == "base" else repo
-            child = _run_child(args, module_path, selection_path)
-            expected_root = str(module_path / "opengwasdb")
-            if not child["module"].startswith(expected_root):
-                raise SystemExit(
-                    f"{side} child imported {child['module']}, not {expected_root}; "
-                    "the module path did not decide the import"
-                )
-            record["results"][side] = child
-            for name, rec in child["shapes"].items():
-                samples[side][name].extend(rec["samples_ms"])
-                digests[side].setdefault(name, {})[str(index)] = rec["digest"]
-            print(
-                f"round {index} {side}: "
-                f"{json.dumps({n: rec['n_rows'] for n, rec in child['shapes'].items()})}",
-                flush=True,
+    def run_side(side: str, _index: int) -> dict[str, Any]:
+        module_path = base_dir if side == "base" else repo
+        child = _run_child(args, module_path, selection_path)
+        expected_root = str(module_path / "opengwasdb")
+        if not child["module"].startswith(expected_root):
+            raise SystemExit(
+                f"{side} child imported {child['module']}, not {expected_root}; "
+                "the module path did not decide the import"
             )
-        rounds.append(record)
+        return child
 
-    differing = sorted(
-        name
-        for name in samples["base"]
-        if digests["base"][name] != digests["head"][name]
-    )
-    medians = {
-        side: {name: _median(values) for name, values in samples[side].items()} for side in sides
-    }
+    samples, digests, rounds = ab.interleave(list(sides), run_side, args.rounds)
+    differing = ab.differing_shapes(list(sides), digests)
+    side_medians = ab.medians(samples)
     savings = {
-        name: round(1.0 - medians["head"][name] / medians["base"][name], 4)
+        name: round(1.0 - side_medians["head"][name] / side_medians["base"][name], 4)
         for name in samples["base"]
     }
     artifact = {
@@ -296,35 +208,16 @@ def main(argv: list[str] | None = None) -> int:
         "sides": sides,
         "commands": commands,
         "store": str(args.store),
-        "selection": selection,
-        "shapes": list(args.shapes),
-        "reps": args.reps,
-        "rounds_requested": args.rounds,
-        "round_order": [record["order"] for record in rounds],
-        "rounds": rounds,
-        "samples_ms": {
-            side: {name: values for name, values in samples[side].items()} for side in sides
-        },
-        "medians_ms": medians,
+        **ab.measurement_block(selection, args, samples, rounds),
+        "medians_ms": side_medians,
         "head_saving_fraction": savings,
-        "identity": {
-            "identical": not differing,
-            "differing_shapes": differing,
-            "note": "sha256 per returned array, compared between the two sides every round",
-        },
-        "environment": {
-            "python": sys.version.split()[0],
-            "numpy": np.__version__,
-            "hostname": __import__("socket").gethostname(),
-        },
+        "identity": ab.identity_block(differing),
+        "environment": ab.environment_block(),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Wrote {args.output}", flush=True)
-    if differing:
-        print(f"IDENTITY FAILED for {differing}", flush=True)
-        return 1
-    return 0
+    return ab.identity_verdict(differing)
 
 
 if __name__ == "__main__":

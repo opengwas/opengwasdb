@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from benchmarks._artifact import tree_fingerprint
-from benchmarks.eaf_read_once_ab import _digest
+from benchmarks._query_ab import digest as _digest
 
 
 def _tree(root: Path, **modules: str) -> Path:
