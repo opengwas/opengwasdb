@@ -23,8 +23,10 @@ the end of this file.
   it; `lookup` decoded each requested Analysis whole; and
   `HybridStoreQuery._shared_is_on_panel` ran a per-variant Python
   `searchsorted` that cast the whole panel map every call. The scan paths now
-  read in windows of the association arrays' own inner chunk, so peak memory
-  is bounded by a chunk rather than by N; z, se and eaf are read at the hit
+  read in windows of a few association inner chunks -- large enough to keep
+  zarr's batched read efficient (a one-chunk window measured 132.9 s against
+  27.3 s for off-axis PheWAS on OGS-00011, so it is eight), so peak memory is
+  bounded by a window rather than by N; z, se and eaf are read at the hit
   positions (`oindex`/`positions_at`) with one EAF read shared by SE decoding
   and the `eaf` column under #253's rules; `lookup` and the Hybrid overflow
   lookup binary-search each requested Analysis's segment -- which every

@@ -930,7 +930,7 @@ class RaggedStoreQuery:
         """
         cutoff = z_critical(threshold)
         windows: list[np.ndarray] = []
-        for start, stop in _chunk_windows(lo, hi, self._csr.association_chunk):
+        for start, stop in _chunk_windows(lo, hi, self._csr.scan_window):
             mask = np.abs(self._csr.z_slice(start, stop)) >= cutoff
             if mask.any():
                 windows.append(np.where(mask)[0].astype(np.int64) + start)
@@ -1192,22 +1192,27 @@ class HybridStoreQuery:
     ) -> dict[str, np.ndarray]:
         """All overflow associations whose (off-panel) variant is in the set.
 
-        Each Analysis's segment is searched for the wanted variants -- its rows
-        are sorted by variant_index, so no new index is needed to locate a
-        (variant, Analysis) pair (#252). With `wanted_analyses` given, only
-        those segments are read, so a lookup costs its requested Analyses and
-        not the store. The result is in flat CSR order (Analysis ascending,
-        variant ascending within each), the order the whole-store scan this
-        replaces produced, so answers are identical.
+        With `wanted_analyses` given, each requested Analysis's sorted segment
+        is searched for the wanted variants -- its rows are sorted by
+        variant_index, so no new index is needed to locate a (variant,
+        Analysis) pair, and a lookup costs its requested Analyses and not the
+        store (#252). Without it, where every Analysis may hold the variant, a
+        whole-store windowed scan is used instead: one zarr read per scan
+        window is much cheaper than one per Analysis segment, and neither
+        holds the array whole.
+
+        Either route returns flat CSR order (Analysis ascending, variant
+        ascending within each), the order the whole-store scan this replaces
+        produced, so answers are identical.
         """
         if not shared_indices:
             return _empty_result()
         wanted = np.array(sorted(shared_indices), dtype=np.int32)
-        columns = (
-            range(self._csr.n_analyses) if wanted_analyses is None else sorted(wanted_analyses)
-        )
+        if wanted_analyses is None:
+            positions = self._csr.variant_positions(wanted)
+            return self._overflow_rows(positions)
         parts: list[dict[str, np.ndarray]] = []
-        for col in columns:
+        for col in sorted(wanted_analyses):
             positions = self._csr.variant_positions(wanted, analysis_index=int(col))
             if len(positions) == 0:
                 continue

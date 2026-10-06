@@ -45,6 +45,13 @@ _ASSOC_CHUNK = store_arrays.ASSOCIATION_SEQUENCE_CHUNK
 #: the Analysis indices -- about 30 bytes a cell -- so 2**24 is roughly a
 #: 500 MiB working set, whatever the plane's total cell count (issue #228).
 DEFAULT_SE_FIT_CELL_BUDGET = 1 << 24
+#: Association-array chunks one scan window spans. A window of a single chunk
+#: makes a whole-store scan issue one zarr read per chunk, which measured ~5x
+#: slower than the batched whole-array read it replaces on OGS-00011's
+#: Overflow (132.9 s against 27.3 s for off-axis PheWAS, #252); a handful of
+#: chunks amortises the per-read overhead while peak memory stays bounded by
+#: the window (8 x 200,000 int32 = 6.4 MB) and not by the array.
+SCAN_WINDOW_CHUNKS = 8
 #: Cells one `flush` region writes at a time. The region holds the four source
 #: planes, the codes it encodes them to and the frequencies it decodes back --
 #: about 30 bytes a cell -- so 2**22 is roughly a 130 MiB working set whatever
@@ -819,12 +826,17 @@ class RaggedCSRReader:
     def association_chunk(self) -> int:
         """Length of the association arrays' own inner chunk.
 
-        The scan paths read in windows of this length, so a window never reads
+        The scan paths read in windows built from this, so a window never reads
         a chunk twice and peak memory is one window whatever the component's
         cell count (#252). Read from the array rather than restated, so a
         sharded 0.2.0 array's inner chunk is honoured too.
         """
         return max(1, int(self._variant_index.chunks[0]))
+
+    @property
+    def scan_window(self) -> int:
+        """Elements one scan window spans: `SCAN_WINDOW_CHUNKS` inner chunks."""
+        return self.association_chunk * SCAN_WINDOW_CHUNKS
 
     def variant_index_at(self, positions: np.ndarray) -> np.ndarray:
         """Variant indices at arbitrary flat CSR positions."""
@@ -857,15 +869,21 @@ class RaggedCSRReader:
             lo, hi = 0, self.n_associations
         else:
             lo, hi = self._span(analysis_index)
-        window = self.association_chunk
+        window = self.scan_window
         parts: list[np.ndarray] = []
+        single = int(wanted[0]) if len(wanted) == 1 else None
         for start in range(lo, hi, window):
             stop = min(start + window, hi)
             vi = np.asarray(self._variant_index[start:stop], dtype=np.int32)
-            pos = np.searchsorted(wanted, vi)
-            in_bounds = pos < len(wanted)
-            hit = np.zeros(len(vi), dtype=bool)
-            hit[in_bounds] = wanted[pos[in_bounds]] == vi[in_bounds]
+            if single is not None:
+                # One wanted variant is the common off-axis PheWAS case, and a
+                # direct compare is 16x fewer operations than a searchsorted.
+                hit = vi == single
+            else:
+                pos = np.searchsorted(wanted, vi)
+                in_bounds = pos < len(wanted)
+                hit = np.zeros(len(vi), dtype=bool)
+                hit[in_bounds] = wanted[pos[in_bounds]] == vi[in_bounds]
             if hit.any():
                 parts.append(np.where(hit)[0].astype(np.int64) + start)
         if not parts:
