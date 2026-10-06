@@ -248,33 +248,27 @@ this run measures it for every 0.2.0 candidate (`bulk-memory` and
 
 ```{python}
 #| label: bulk-memory
-historical_218 = HISTORICAL_218
-historical_z3 = HISTORICAL_Z3
+# The two reference peaks and every ratio and label below are derived from the
+# committed artifacts; no measured value is typed here.
+reference_z3 = bulk_peak(HISTORICAL_Z3)
+reference_218 = bulk_peak(HISTORICAL_218)
+
+
+def memory_row(name: str, peak: float) -> dict:
+    return {
+        "configuration": name,
+        "whole-Analysis peak GB": round(peak / 1000, 2),
+        f"vs zarr 3 ({reference_z3 / 1000:.2f} GB)": f"{peak / reference_z3:.2f}×",
+        f"vs 2.18 ({reference_218 / 1000:.2f} GB)": f"{peak / reference_218:.2f}×",
+    }
+
 
 rows = [
-    {
-        "configuration": "#244 zarr 2.18 (historical)",
-        "whole-Analysis peak GB": round(bulk_peak(historical_218) / 1000, 2),
-        "vs 1.14 GB": f"{bulk_peak(historical_218) / 1142:.1f}×",
-        "vs 12.04 GB": "1.00×",
-    },
-    {
-        "configuration": "#244 zarr 3 (historical)",
-        "whole-Analysis peak GB": round(bulk_peak(historical_z3) / 1000, 2),
-        "vs 1.14 GB": "1.00×",
-        "vs 12.04 GB": f"{bulk_peak(historical_z3) / 12041.9:.2f}×",
-    },
+    memory_row("#244 zarr 2.18 (historical)", reference_218),
+    memory_row("#244 zarr 3 (historical)", reference_z3),
 ]
 for label, store in STORES.items():
-    peak = bulk_peak(store)
-    rows.append(
-        {
-            "configuration": label,
-            "whole-Analysis peak GB": round(peak / 1000, 2),
-            "vs 1.14 GB": f"{peak / 1142:.2f}×",
-            "vs 12.04 GB": f"{peak / 12041.9:.2f}×",
-        }
-    )
+    rows.append(memory_row(label, bulk_peak(store)))
 pd.DataFrame(rows)
 ```
 
@@ -318,16 +312,18 @@ ukb = STORES["v3-c64"]["dataset"]["n_variants"]
 finngen = json.loads(
     (HERE.parent / "opengwasdb_ogs00016_finngen_benchmark.json").read_text()
 )["dataset"]["n_variants"]
-widths = [64, 128, 256, 512, 1024, 2000, 100000]
-rows = []
-for width in widths:
-    rows.append(
-        {
-            "shard Analysis width": width,
-            "ukb-b (9.85 M variants), GB": round(ukb * width * 4 / 1e9, 2),
-            "FinnGen (21.23 M variants), GB": round(finngen * width * 4 / 1e9, 2),
-        }
-    )
+widths = [64, 128, 256, 512, 1024, 2000]
+# The variant counts in the column labels are read from the artifacts, not typed.
+rows = [
+    {
+        "shard Analysis width": width,
+        f"ukb-b ({ukb / 1e6:.2f} M variants), GB": round(ukb * width * 4 / 1e9, 2),
+        f"FinnGen ({finngen / 1e6:.2f} M variants), GB": round(
+            finngen * width * 4 / 1e9, 2
+        ),
+    }
+    for width in widths
+]
 pd.DataFrame(rows)
 ```
 

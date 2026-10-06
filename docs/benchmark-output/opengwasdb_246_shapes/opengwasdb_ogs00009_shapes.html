@@ -4498,34 +4498,28 @@ imported package fingerprint (from #253&#39;s provenance change):
 <div id="cell-bulk-memory" class="cell" data-execution_count="10">
 <details class="code-fold">
 <summary>Show the code that generated this table</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>historical_218 <span class="op">=</span> HISTORICAL_218</span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>historical_z3 <span class="op">=</span> HISTORICAL_Z3</span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>rows <span class="op">=</span> [</span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;configuration&quot;</span>: <span class="st">&quot;#244 zarr 2.18 (historical)&quot;</span>,</span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;whole-Analysis peak GB&quot;</span>: <span class="bu">round</span>(bulk_peak(historical_218) <span class="op">/</span> <span class="dv">1000</span>, <span class="dv">2</span>),</span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;vs 1.14 GB&quot;</span>: <span class="ss">f&quot;</span><span class="sc">{</span>bulk_peak(historical_218) <span class="op">/</span> <span class="dv">1142</span><span class="sc">:.1f}</span><span class="ss">×&quot;</span>,</span>
-<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;vs 12.04 GB&quot;</span>: <span class="st">&quot;1.00×&quot;</span>,</span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>    },</span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;configuration&quot;</span>: <span class="st">&quot;#244 zarr 3 (historical)&quot;</span>,</span>
-<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;whole-Analysis peak GB&quot;</span>: <span class="bu">round</span>(bulk_peak(historical_z3) <span class="op">/</span> <span class="dv">1000</span>, <span class="dv">2</span>),</span>
-<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;vs 1.14 GB&quot;</span>: <span class="st">&quot;1.00×&quot;</span>,</span>
-<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;vs 12.04 GB&quot;</span>: <span class="ss">f&quot;</span><span class="sc">{</span>bulk_peak(historical_z3) <span class="op">/</span> <span class="fl">12041.9</span><span class="sc">:.2f}</span><span class="ss">×&quot;</span>,</span>
-<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>    },</span>
-<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>]</span>
-<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> label, store <span class="kw">in</span> STORES.items():</span>
-<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>    peak <span class="op">=</span> bulk_peak(store)</span>
-<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a>    rows.append(</span>
-<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>        {</span>
-<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;configuration&quot;</span>: label,</span>
-<span id="cb13-23"><a href="#cb13-23" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;whole-Analysis peak GB&quot;</span>: <span class="bu">round</span>(peak <span class="op">/</span> <span class="dv">1000</span>, <span class="dv">2</span>),</span>
-<span id="cb13-24"><a href="#cb13-24" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;vs 1.14 GB&quot;</span>: <span class="ss">f&quot;</span><span class="sc">{</span>peak <span class="op">/</span> <span class="dv">1142</span><span class="sc">:.2f}</span><span class="ss">×&quot;</span>,</span>
-<span id="cb13-25"><a href="#cb13-25" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;vs 12.04 GB&quot;</span>: <span class="ss">f&quot;</span><span class="sc">{</span>peak <span class="op">/</span> <span class="fl">12041.9</span><span class="sc">:.2f}</span><span class="ss">×&quot;</span>,</span>
-<span id="cb13-26"><a href="#cb13-26" aria-hidden="true" tabindex="-1"></a>        }</span>
-<span id="cb13-27"><a href="#cb13-27" aria-hidden="true" tabindex="-1"></a>    )</span>
-<span id="cb13-28"><a href="#cb13-28" aria-hidden="true" tabindex="-1"></a>pd.DataFrame(rows)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co"># The two reference peaks and every ratio and label below are derived from the</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="co"># committed artifacts; no measured value is typed here.</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>reference_z3 <span class="op">=</span> bulk_peak(HISTORICAL_Z3)</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>reference_218 <span class="op">=</span> bulk_peak(HISTORICAL_218)</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> memory_row(name: <span class="bu">str</span>, peak: <span class="bu">float</span>) <span class="op">-&gt;</span> <span class="bu">dict</span>:</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> {</span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;configuration&quot;</span>: name,</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;whole-Analysis peak GB&quot;</span>: <span class="bu">round</span>(peak <span class="op">/</span> <span class="dv">1000</span>, <span class="dv">2</span>),</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>        <span class="ss">f&quot;vs zarr 3 (</span><span class="sc">{</span>reference_z3 <span class="op">/</span> <span class="dv">1000</span><span class="sc">:.2f}</span><span class="ss"> GB)&quot;</span>: <span class="ss">f&quot;</span><span class="sc">{</span>peak <span class="op">/</span> reference_z3<span class="sc">:.2f}</span><span class="ss">×&quot;</span>,</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>        <span class="ss">f&quot;vs 2.18 (</span><span class="sc">{</span>reference_218 <span class="op">/</span> <span class="dv">1000</span><span class="sc">:.2f}</span><span class="ss"> GB)&quot;</span>: <span class="ss">f&quot;</span><span class="sc">{</span>peak <span class="op">/</span> reference_218<span class="sc">:.2f}</span><span class="ss">×&quot;</span>,</span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>rows <span class="op">=</span> [</span>
+<span id="cb13-17"><a href="#cb13-17" aria-hidden="true" tabindex="-1"></a>    memory_row(<span class="st">&quot;#244 zarr 2.18 (historical)&quot;</span>, reference_218),</span>
+<span id="cb13-18"><a href="#cb13-18" aria-hidden="true" tabindex="-1"></a>    memory_row(<span class="st">&quot;#244 zarr 3 (historical)&quot;</span>, reference_z3),</span>
+<span id="cb13-19"><a href="#cb13-19" aria-hidden="true" tabindex="-1"></a>]</span>
+<span id="cb13-20"><a href="#cb13-20" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> label, store <span class="kw">in</span> STORES.items():</span>
+<span id="cb13-21"><a href="#cb13-21" aria-hidden="true" tabindex="-1"></a>    rows.append(memory_row(label, bulk_peak(store)))</span>
+<span id="cb13-22"><a href="#cb13-22" aria-hidden="true" tabindex="-1"></a>pd.DataFrame(rows)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div id="bulk-memory" class="cell-output cell-output-display" data-execution_count="10">
 <div>
@@ -4537,8 +4531,8 @@ imported package fingerprint (from #253&#39;s provenance change):
 <th data-quarto-table-cell-role="th"></th>
 <th data-quarto-table-cell-role="th">configuration</th>
 <th data-quarto-table-cell-role="th">whole-Analysis peak GB</th>
-<th data-quarto-table-cell-role="th">vs 1.14 GB</th>
-<th data-quarto-table-cell-role="th">vs 12.04 GB</th>
+<th data-quarto-table-cell-role="th">vs zarr 3 (1.14 GB)</th>
+<th data-quarto-table-cell-role="th">vs 2.18 (12.04 GB)</th>
 </tr>
 </thead>
 <tbody>
@@ -4546,7 +4540,7 @@ imported package fingerprint (from #253&#39;s provenance change):
 <th data-quarto-table-cell-role="th">0</th>
 <td>#244 zarr 2.18 (historical)</td>
 <td>12.04</td>
-<td>10.5×</td>
+<td>10.54×</td>
 <td>1.00×</td>
 </tr>
 <tr class="even">
@@ -4779,17 +4773,19 @@ imported package fingerprint (from #253&#39;s provenance change):
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>finngen <span class="op">=</span> json.loads(</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    (HERE.parent <span class="op">/</span> <span class="st">&quot;opengwasdb_ogs00016_finngen_benchmark.json&quot;</span>).read_text()</span>
 <span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>)[<span class="st">&quot;dataset&quot;</span>][<span class="st">&quot;n_variants&quot;</span>]</span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>widths <span class="op">=</span> [<span class="dv">64</span>, <span class="dv">128</span>, <span class="dv">256</span>, <span class="dv">512</span>, <span class="dv">1024</span>, <span class="dv">2000</span>, <span class="dv">100000</span>]</span>
-<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>rows <span class="op">=</span> []</span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> width <span class="kw">in</span> widths:</span>
-<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    rows.append(</span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>        {</span>
-<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;shard Analysis width&quot;</span>: width,</span>
-<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;ukb-b (9.85 M variants), GB&quot;</span>: <span class="bu">round</span>(ukb <span class="op">*</span> width <span class="op">*</span> <span class="dv">4</span> <span class="op">/</span> <span class="fl">1e9</span>, <span class="dv">2</span>),</span>
-<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>            <span class="st">&quot;FinnGen (21.23 M variants), GB&quot;</span>: <span class="bu">round</span>(finngen <span class="op">*</span> width <span class="op">*</span> <span class="dv">4</span> <span class="op">/</span> <span class="fl">1e9</span>, <span class="dv">2</span>),</span>
-<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>        }</span>
-<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>    )</span>
-<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>pd.DataFrame(rows)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>widths <span class="op">=</span> [<span class="dv">64</span>, <span class="dv">128</span>, <span class="dv">256</span>, <span class="dv">512</span>, <span class="dv">1024</span>, <span class="dv">2000</span>]</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="co"># The variant counts in the column labels are read from the artifacts, not typed.</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>rows <span class="op">=</span> [</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    {</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>        <span class="st">&quot;shard Analysis width&quot;</span>: width,</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>        <span class="ss">f&quot;ukb-b (</span><span class="sc">{</span>ukb <span class="op">/</span> <span class="fl">1e6</span><span class="sc">:.2f}</span><span class="ss"> M variants), GB&quot;</span>: <span class="bu">round</span>(ukb <span class="op">*</span> width <span class="op">*</span> <span class="dv">4</span> <span class="op">/</span> <span class="fl">1e9</span>, <span class="dv">2</span>),</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>        <span class="ss">f&quot;FinnGen (</span><span class="sc">{</span>finngen <span class="op">/</span> <span class="fl">1e6</span><span class="sc">:.2f}</span><span class="ss"> M variants), GB&quot;</span>: <span class="bu">round</span>(</span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>            finngen <span class="op">*</span> width <span class="op">*</span> <span class="dv">4</span> <span class="op">/</span> <span class="fl">1e9</span>, <span class="dv">2</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>        ),</span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>    }</span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>    <span class="cf">for</span> width <span class="kw">in</span> widths</span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>]</span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>pd.DataFrame(rows)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div id="builder-memory" class="cell-output cell-output-display" data-execution_count="12">
 <div>
@@ -4840,12 +4836,6 @@ imported package fingerprint (from #253&#39;s provenance change):
 <td>2000</td>
 <td>78.78</td>
 <td>169.84</td>
-</tr>
-<tr class="odd">
-<th data-quarto-table-cell-role="th">6</th>
-<td>100000</td>
-<td>3939.08</td>
-<td>8492.25</td>
 </tr>
 </tbody>
 </table>
