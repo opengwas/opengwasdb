@@ -679,8 +679,9 @@ def test_no_module_outside_the_seam_creates_arrays() -> None:
 
 #: One (shape, component_chunk) per role, for the default-layout coverage test
 #: below.  `component_chunk` is the variant-axis chunk of the plane a
-#: `PER_VARIANT` array serves; it is `None` for every other role.  Kept as a
-#: dict keyed by role so adding an `ArrayRole` without a case fails loudly.
+#: `PER_VARIANT` or `RAGGED_PER_VARIANT` array serves; it is `None` for every
+#: other role.  Kept as a dict keyed by role so adding an `ArrayRole` without a
+#: case fails loudly.
 _ROLE_CASES: dict[ArrayRole, tuple[tuple[int, ...], int | None]] = {
     ArrayRole.DENSE_STATISTIC_PLANE: ((10_000, 100), None),
     ArrayRole.DENSE_IMPUTED_MASK: ((10_000, 100), None),
@@ -688,9 +689,11 @@ _ROLE_CASES: dict[ArrayRole, tuple[tuple[int, ...], int | None]] = {
     ArrayRole.ASSOCIATION_SEQUENCE: ((51_000,), None),
     ArrayRole.ASSOCIATION_OFFSETS: ((51,), None),
     ArrayRole.PER_VARIANT: ((51_000,), 1000),
+    ArrayRole.RAGGED_PER_VARIANT: ((51_000,), 200_000),
     ArrayRole.TOP_HIT_INDEX: ((51_000,), None),
     ArrayRole.TOP_HIT_ANALYSIS_OFFSETS: ((51,), None),
     ArrayRole.EXCEPTION_TABLE: ((51_000,), None),
+    ArrayRole.RAGGED_EXCEPTION_TABLE: ((51_000,), None),
     ArrayRole.SE_COEFFICIENTS: ((51, 2), None),
     ArrayRole.RHO_ARRAY: ((51_000,), None),
 }

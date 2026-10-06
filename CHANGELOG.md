@@ -313,6 +313,30 @@ the end of this file.
   relaxed. `shard_layout(..., top_hit_shard_chunks=…)` is the seam-level form
   and applies to `TOP_HIT_INDEX` alone; the value is rejected if it is below 1,
   and recorded in the `zarr_v3_conversion` provenance block.
+- **The remaining layouts convert to format 0.2.0 (#248).**
+  `opengwasdb/store/convert.py` and `scripts/convert_store_to_0_2_0.py` now
+  accept every layout the array seam can name a role for: Dense
+  Reference-Completed (the imputed mask, `on_panel`, `eaf_reference` and the
+  SE/EAF side tables; completion-quality data in `index.sqlite` is copied
+  unchanged), Ragged Observed-Only and Reference-Completed (the `ragged/` CSR
+  group and all its tables), and Hybrid — whose **outer release and nested
+  Dense Component are both converted**, one fresh `release_id` across both
+  manifests, both Zarr trees rewritten, both `index.sqlite` `dense` blobs
+  re-pointed, and both verified, so a half-converted Hybrid cannot be
+  published. `rho/*` is converted where present. The refusals that remain are
+  the ones that stop a conversion being a guess: an array or group the role
+  table cannot name, a source already at 0.2.0 on any manifest, and an unknown
+  layout. A true Hybrid's nested Dense Component now records its own
+  `chunk_shape`/`shard_shape`/`compressor`/`zarr_format` in `provenance.dense`
+  (the gap #245's report named), with the outer `provenance.hybrid` kept in
+  step, so the recorded-layout rule covers components. The Ragged and Overflow
+  shards are fixed by the seam's role table, not left to the Dense parameters:
+  50,000,000 elements for a Ragged association sequence and 10,000,000 for a
+  Ragged per-variant or exception table, so OGS-00011's 3,085,080,783-entry
+  overflow sequences become 62 files per array and its 180,396,687-entry
+  Ragged `eaf_exception_index` 19 files, rather than thousands of tiny files or
+  one 1.4 GB file. ADR 0059 records the decision; spec §10a gains the Ragged
+  roles and the Hybrid component recording.
 - **A Dense Store Release can be converted to format 0.2.0 (Zarr v3, sharded)
   (#245).** `opengwasdb/store/convert.py` and its CLI
   `scripts/convert_store_to_0_2_0.py STORE --into DEST [--dense-analysis-chunk N]
@@ -322,8 +346,8 @@ the end of this file.
   inner chunk and shard come from the array seam's one role policy
   (`chunk_layout`/`shard_layout`), so #247's builders cannot disagree with it.
   The source is never written, an existing destination is refused, Ragged,
-  Hybrid and Reference-Completed sources are refused by name (#248 adds them),
-  and the result is a new release: fresh `release_id`/`created_at`, `store_id`
+  Hybrid and Reference-Completed sources are refused by name (#248 adds them,
+  above), and the result is a new release: fresh `release_id`/`created_at`, `store_id`
   kept, a `zarr_v3_conversion` provenance block with the source release, the
   installed commit, the Zarr formats and the per-array layout, the Dense
   `chunk_shape`/`shard_shape`/`compressor` rewritten in `manifest.json`, the
