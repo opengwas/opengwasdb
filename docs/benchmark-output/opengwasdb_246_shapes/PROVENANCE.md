@@ -86,3 +86,34 @@ pixi run -e dev python benchmarks/top_hit_shard_ab.py \
 # the report
 cd $D && pixi run -e report quarto render opengwasdb_ogs00009_shapes.qmd
 ```
+
+## Addendum: the 256-wide Dense shard (`v3-c64-s256`)
+
+Added after the human asked to try a 256-wide Dense shard before deciding.
+
+| file | made by | code | when (UTC) |
+|---|---|---|---|
+| `opengwasdb_store_comparison_ogs00009_zarr2_s256.json` | `benchmark_store_comparison.py --reps 5` in the zarr 2.18 environment, store `v2-c1000` | `745796c` | 2026-10-06T09:04 |
+| `opengwasdb_store_comparison_ogs00009_shapes_s256.json` | one zarr 3 process: `v2-c1000`, `v3-c64` (shard 1024), `v3-c64-s256` (shard 256) | `7774928` | 2026-10-06T09:10 |
+| `opengwasdb_store_comparison_ogs00009_zarr2_s256_pair2.json` | the zarr 2.18 half of the confirming second pair | `745796c` | 2026-10-06T09:17 |
+| `opengwasdb_store_comparison_ogs00009_shapes_s256_pair2.json` | the zarr 3 half of the second pair | `7774928` | 2026-10-06T09:23 |
+| `opengwasdb_store_comparison_ogs00009_shapes_s256_set_l.md` / `..._set_l_pair2.md` | `zarr3_lever_tables.py shapes` | analysis of the pairs | — |
+| `conversions/OGS-00009-v3-c64-s256.log` | `/usr/bin/time -v` around the conversion | see the log | 2026-10-06T09:56 |
+
+`v3-c64-s256` is `--dense-analysis-chunk 64 --dense-shard 100000x256
+--top-hit-shard-chunks 64`, wall clock 2:00:20, peak RSS 35.85 GB, writing
+1407.6 s, verifying 457.4 s, validating 5352.0 s; bit-exact and validated clean,
+published at `/data/opengwasdb/work/epic240/246/OGS-00009-v3-c64-s256`. The
+first pair put two results within 30% of a limit (10 × 100's typical time and
+its memory), so the second pair was run; both pass set L and the
+whole-Analysis guard.
+
+Regenerate the s256 tables with:
+
+```bash
+D=docs/benchmark-output/opengwasdb_246_shapes
+pixi run -e dev python benchmarks/zarr3_lever_tables.py shapes \
+  --base $D/opengwasdb_store_comparison_ogs00009_zarr2_s256.json \
+  --head $D/opengwasdb_store_comparison_ogs00009_shapes_s256.json \
+  > $D/opengwasdb_store_comparison_ogs00009_shapes_s256_set_l.md
+```

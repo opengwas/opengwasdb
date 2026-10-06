@@ -304,8 +304,98 @@ for width in widths:
 pd.DataFrame(rows)
 ```
 
-The Dense shards under measurement are `100000 x 2000` (`v3-c1000`) and
-`100000 x 1024` (`v3-c128`, `v3-c64`). Nothing was built for this table.
+The Dense shards under measurement are `100000 x 2000` (`v3-c1000`),
+`100000 x 1024` (`v3-c128`, `v3-c64`) and `100000 x 256` (`v3-c64-s256`).
+Nothing was built for this table.
+
+# The 256-wide Dense shard (`v3-c64-s256`)
+
+A second back-to-back pair re-measures `v2-c1000` on zarr 2.18 and, in one zarr 3
+process, `v2-c1000`, `v3-c64` (shard 1024) and `v3-c64-s256` (shard 256, same
+Dense inner chunk `[1000, 64]`). It answers whether a narrower shard changes a
+query, and what it costs in files.
+
+The pair again put results within 30% of a limit (10 × 100's typical time and its
+memory), so a second back-to-back pair confirms them.
+
+```{python}
+#| label: s256-set-l
+Markdown(
+    (
+        HERE / "opengwasdb_store_comparison_ogs00009_shapes_s256_set_l.md"
+    ).read_text()
+)
+```
+
+```{python}
+#| label: s256-set-l-pair2
+Markdown(
+    (
+        HERE / "opengwasdb_store_comparison_ogs00009_shapes_s256_set_l_pair2.md"
+    ).read_text()
+)
+```
+
+```{python}
+#| label: s256-files
+S256 = json.loads((HERE / "opengwasdb_store_comparison_ogs00009_shapes_s256.json").read_text())
+S256_STORES = {store["label"]: store for store in S256["stores"]}
+
+
+def plane_shards(store: dict, plane: str) -> dict:
+    row = next(r for r in store["footprint"]["arrays"] if r["node"] == f"data.zarr/{plane}")
+    return {
+        "shards": row["n_files"] - 1,
+        "largest shard MB": round(row["largest_file_bytes"] / 1e6, 1),
+    }
+
+
+rows = []
+for label, store in S256_STORES.items():
+    if store["dataset"]["format_version"] == "0.1.0":
+        continue
+    z = store["dataset"]["layout"]["z"]
+    row = {
+        "configuration": label,
+        "files": store["footprint"]["n_files"],
+        "`z` shard": " x ".join(str(x) for x in z["shard_shape"]),
+    }
+    for plane in ("z", "se", "eaf"):
+        info = plane_shards(store, plane)
+        row[f"{plane} shards"] = info["shards"]
+        row[f"{plane} largest shard MB"] = info["largest shard MB"]
+    rows.append(row)
+pd.DataFrame(rows).set_index("configuration")
+```
+
+## s256 against s1024, per query
+
+The difference is s256 minus s1024, so a positive number is s256 slower, taken
+from the same back-to-back pair.
+
+```{python}
+#| label: s256-diff
+rows = []
+for query in [t["query"] for t in S256_STORES["v3-c64"]["timings"]]:
+    a = next(t for t in S256_STORES["v3-c64"]["timings"] if t["query"] == query)
+    b = next(t for t in S256_STORES["v3-c64-s256"]["timings"] if t["query"] == query)
+    am = next(m for m in S256_STORES["v3-c64"]["memory"] if m["query"] == query)
+    bm = next(m for m in S256_STORES["v3-c64-s256"]["memory"] if m["query"] == query)
+    rows.append(
+        {
+            "query": query.replace("random_lookup_10_variants_100_analyses", "10 variants x 100 Analyses")
+            .replace("random_lookup_100_variants_10_analyses", "100 variants x 10 Analyses"),
+            "s1024 median ms": a["median_ms"],
+            "s256 median ms": b["median_ms"],
+            "median difference ms": round(b["median_ms"] - a["median_ms"], 3),
+            "s1024 p95 ms": a["p95_ms"],
+            "s256 p95 ms": b["p95_ms"],
+            "s1024 peak MB": am["peak_mb"],
+            "s256 peak MB": bm["peak_mb"],
+        }
+    )
+pd.DataFrame(rows).set_index("query")
+```
 
 # Screening beyond 64 and 128
 
