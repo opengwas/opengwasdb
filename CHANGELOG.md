@@ -13,10 +13,10 @@ the end of this file.
 ### Changed
 
 - **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**
-  `CURRENT_FORMAT_VERSION` becomes `0.2.0`, and the converter's
-  `SHARDED_FORMAT_VERSION` is now the same constant rather than a second one, so
-  a built release and a converted release declare the same format and carry the
-  same physical layout. A Dense release's inner chunk is the ADR 0058 decision,
+  `CURRENT_FORMAT_VERSION` becomes `0.2.0`, and the converter's target is that
+  same constant rather than a second one (`SHARDED_FORMAT_VERSION` is gone; the
+  converter reads `SOURCE_FORMAT_VERSION = "0.1.0"`), so a built release and a
+  converted release declare the same format and carry the same physical layout. A Dense release's inner chunk is the ADR 0058 decision,
   `[1000, 64]`, and every array is sharded through the seam's role table
   (`DENSE_SHARD_SHAPE`, `TOP_HIT_SHARD_CHUNKS`); the builder default Dense
   Analysis chunk narrows from 1,000 to 64 as #237 asked. The Dense VCF band

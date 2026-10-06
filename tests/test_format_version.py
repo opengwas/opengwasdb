@@ -164,15 +164,18 @@ def test_the_current_version_is_writable():
     assert writable == CURRENT_FORMAT_VERSION
 
 
-def test_the_converter_version_is_the_current_version():
-    """#247 made the converter's 0.2.0 the builders' version too: one constant.
+def test_the_converter_writes_the_current_version_and_reads_0_1_0():
+    """#247 made the converter's target the builders' version: one constant.
 
-    Anything else would let a built store and a converted store declare
-    different formats while both carry Zarr v3 sharding, which is exactly the
-    identity #249 checks.
+    The converter reads `SOURCE_FORMAT_VERSION` (0.1.0, Zarr v2) and writes
+    `CURRENT_FORMAT_VERSION` (0.2.0).  Anything else would let a built store and
+    a converted store declare different formats while both carry Zarr v3
+    sharding, which is exactly the identity #249 checks.
     """
-    assert store_open.SHARDED_FORMAT_VERSION == store_open.CURRENT_FORMAT_VERSION
-    assert store_open.CURRENT_FORMAT_VERSION == "0.2.0"
+    from opengwasdb.store import convert
+
+    assert convert.CURRENT_FORMAT_VERSION == store_open.CURRENT_FORMAT_VERSION == "0.2.0"
+    assert convert.SOURCE_FORMAT_VERSION == "0.1.0"
 
 
 def test_0_1_0_is_readable_but_not_writable():

@@ -53,16 +53,10 @@ SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingPr
 #:
 #: `0.2.0` since #247: Zarr v3 with the sharding codec (ADR 0057), at the Dense
 #: inner chunk and shard shapes ADR 0058 decided. The builders write it through
-#: `opengwasdb.store.arrays`, and `0.1.0` stays readable until a later decision
-#: deletes the v2 reader (ADR 0057).
+#: `opengwasdb.store.arrays`, and the converter writes it from a `0.1.0` source
+#: (`opengwasdb.store.convert.SOURCE_FORMAT_VERSION`); `0.1.0` stays readable
+#: until a later decision deletes the v2 reader (ADR 0057).
 CURRENT_FORMAT_VERSION = "0.2.0"
-
-#: The version the Dense converter writes (issue #245), and the one the builders
-#: now write too. It is the *same* constant as `CURRENT_FORMAT_VERSION`: the
-#: converter's output and a build's output are the same format, and #249 checks
-#: that a built store and a converted one are identical. Kept as a name because
-#: the converter's refusals read more clearly against it.
-SHARDED_FORMAT_VERSION = CURRENT_FORMAT_VERSION
 
 #: The versions the format carried before the reset, and what each one was.
 #: Every one is two-component, so the parser rejects it on shape alone; naming

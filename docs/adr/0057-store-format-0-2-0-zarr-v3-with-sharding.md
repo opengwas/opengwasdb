@@ -183,13 +183,13 @@ that is the unit a query reads.
 Decision 2 above held `CURRENT_FORMAT_VERSION` at `0.1.0` "until #247". This
 addendum records what #247 did, and one decision the ticket left open.
 
-**One version constant.** `CURRENT_FORMAT_VERSION` is `0.2.0`; the converter's
-`SHARDED_FORMAT_VERSION` is that same constant, and the converter's *source*
-version is its own `SOURCE_FORMAT_VERSION = "0.1.0"`. A built release and a
-converted release therefore declare the same format and carry the same physical
-layout, which is what #249 checks. The interim of decision 2 — builders and
-converter writing different formats — is over, and no package version was cut
-inside it.
+**One version constant.** `CURRENT_FORMAT_VERSION` is `0.2.0` and is what the
+converter *writes*; the converter's source version is its own
+`SOURCE_FORMAT_VERSION = "0.1.0"`.  There is no second target constant.  A
+built release and a converted release therefore declare the same format and
+carry the same physical layout, which is what #249 checks.  The interim of
+decision 2 — builders and converter writing different formats — is over, and no
+package version was cut inside it.
 
 **The builders take the shapes from the seam.** A Dense release's inner chunk is
 `DENSE_CHUNK_SHAPE`, the ADR 0058 decision `[1000, 64]`; its shard is
