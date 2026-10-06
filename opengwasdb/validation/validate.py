@@ -339,14 +339,24 @@ def _zarr_v3_node_errors(
     return errors
 
 
-def _recorded_from_block(label: str, block: Any) -> tuple[str, Any, Any, Any] | None:
+def _recorded_from_block(
+    label: str, block: Any
+) -> tuple[str, Any, Any, Any, Any] | None:
     """One manifest provenance block as a recording, or `None` when it names no shape."""
     if isinstance(block, dict) and "chunk_shape" in block:
-        return (label, block.get("chunk_shape"), block.get("shard_shape"), block.get("compressor"))
+        return (
+            label,
+            block.get("chunk_shape"),
+            block.get("shard_shape"),
+            block.get("compressor"),
+            block.get("zarr_format"),
+        )
     return None
 
 
-def _recorded_from_index(connection: sqlite3.Connection) -> tuple[str, Any, Any, Any] | None:
+def _recorded_from_index(
+    connection: sqlite3.Connection,
+) -> tuple[str, Any, Any, Any, Any] | None:
     """The `index.sqlite` `dense` blob as a recording, or `None` when absent.
 
     An absent `dense` blob is not a disagreement -- none of the Dense
@@ -359,22 +369,23 @@ def _recorded_from_index(connection: sqlite3.Connection) -> tuple[str, Any, Any,
             blob.get("chunk_shape"),
             blob.get("shard_shape"),
             blob.get("compressor"),
+            blob.get("zarr_format"),
         )
     return None
 
 
 def _recorded_layouts(
     manifest: Any, connection: sqlite3.Connection, root: Any
-) -> list[tuple[str, Any, Any, Any]]:
+) -> list[tuple[str, Any, Any, Any, Any]]:
     """The three places a Dense release records its chunk shape, as (label, ...).
 
-    Returns `(label, chunk_shape, shard_shape, compressor)` for the manifest
-    provenance, the `index.sqlite` `dense` blob and the `data.zarr` root attrs.
-    All three are written by the Dense builders and by the converter (#245) and
-    none is derived from the arrays themselves, so they are the copies a
-    disagreeing manifest hides behind.
+    Returns `(label, chunk_shape, shard_shape, compressor, zarr_format)` for the
+    manifest provenance, the `index.sqlite` `dense` blob and the `data.zarr` root
+    attrs.  All three are written by the Dense builders and by the converter
+    (#245) and none is derived from the arrays themselves, so they are the copies
+    a disagreeing manifest hides behind.
     """
-    recorded: list[tuple[str, Any, Any, Any]] = []
+    recorded: list[tuple[str, Any, Any, Any, Any]] = []
     provenance = manifest.provenance if isinstance(manifest.provenance, dict) else {}
     for key in ("dense", "hybrid"):
         block = _recorded_from_block(f"manifest.json provenance.{key}", provenance.get(key))
@@ -391,21 +402,23 @@ def _recorded_layouts(
             attrs.get("chunk_shape"),
             attrs.get("shard_shape"),
             attrs.get("compressor"),
+            attrs.get("zarr_format"),
         )
     )
     return recorded
 
 
 def _recorded_layout_mismatches(
-    recorded: list[tuple[str, Any, Any, Any]],
+    recorded: list[tuple[str, Any, Any, Any, Any]],
     planes: list[tuple[str, tuple[int, ...], tuple[int, ...], tuple[int, ...] | None]],
     errors: list[str],
     *,
     zarr_label: str,
+    require_compressor: bool,
 ) -> None:
     """Hold every recording against every present plane of one Zarr tree."""
     for name, shape, actual_inner, actual_shard in planes:
-        for label, chunk_shape, shard_shape, _compressor in recorded:
+        for label, chunk_shape, shard_shape, _compressor, _zarr_format in recorded:
             plane_label = f"{label} ({zarr_label}/{name})"
             expected_inner = _recorded_chunk_errors(
                 plane_label, chunk_shape, shape, actual_inner, errors
@@ -416,7 +429,12 @@ def _recorded_layout_mismatches(
                         plane_label, shard_shape, shape, expected_inner, actual_shard
                     )
                 )
-    errors.extend(_recorded_compressor_errors(recorded, planes[0][3]))
+    errors.extend(
+        _recorded_compressor_errors(
+            recorded, planes[0][3], require=require_compressor
+        )
+    )
+    errors.extend(_recorded_zarr_format_errors(recorded, planes[0][3]))
 
 
 def _validate_recorded_layout(
@@ -435,8 +453,13 @@ def _validate_recorded_layout(
     if "z" not in root:
         return
     recorded = _recorded_layouts(manifest, connection, root)
+    planes = _recorded_dense_planes(root)
     _recorded_layout_mismatches(
-        recorded, _recorded_dense_planes(root), errors, zarr_label="data.zarr"
+        recorded,
+        planes,
+        errors,
+        zarr_label="data.zarr",
+        require_compressor=planes[0][3] is not None,
     )
 
 
@@ -545,17 +568,29 @@ def _recorded_shard_errors(
 
 
 def _recorded_compressor_errors(
-    recorded: list[tuple[str, Any, Any, Any]], actual_shard: tuple[int, ...] | None
+    recorded: list[tuple[str, Any, Any, Any, Any]],
+    actual_shard: tuple[int, ...] | None,
+    *,
+    require: bool,
 ) -> list[str]:
-    """The three recordings' compressors agree, and name the format present."""
+    """The three recordings' compressors agree, and name the format present.
+
+    `require` is set where spec §10a mandates the compressor: the Hybrid outer
+    recording always, and any sharded (0.2.0) recording.  A 0.1.0 nested Dense
+    Component's `provenance.dense` predates the completion writing one, so a v2
+    recording is only judged when it carries a compressor -- the builder gap is
+    reported, not silently accepted or turned into a false failure.
+    """
     expected = SHARDED_COMPRESSOR_RECORD if actual_shard is not None else COMPRESSOR_RECORD
     kind = "Zarr v3 sharded" if actual_shard is not None else "Zarr v2"
     return _compressor_consistency_errors(recorded) + _compressor_record_errors(
-        recorded, expected, kind
+        recorded, expected, kind, require=require
     )
 
 
-def _compressor_consistency_errors(recorded: list[tuple[str, Any, Any, Any]]) -> list[str]:
+def _compressor_consistency_errors(
+    recorded: list[tuple[str, Any, Any, Any, Any]],
+) -> list[str]:
     """The recordings must not contradict each other about the compressor."""
     present = [entry[3] for entry in recorded if entry[3] is not None]
     if len(present) <= 1 or all(entry == present[0] for entry in present):
@@ -568,15 +603,56 @@ def _compressor_consistency_errors(recorded: list[tuple[str, Any, Any, Any]]) ->
 
 
 def _compressor_record_errors(
-    recorded: list[tuple[str, Any, Any, Any]], expected: dict[str, Any], kind: str
+    recorded: list[tuple[str, Any, Any, Any, Any]],
+    expected: dict[str, Any],
+    kind: str,
+    *,
+    require: bool,
 ) -> list[str]:
-    """Each present recording must name the format's one compressor."""
+    """Every recording MUST name the format's one compressor when `require`."""
     errors: list[str] = []
-    for label, _chunk, _shard, compressor in recorded:
-        if compressor is not None and compressor != expected:
+    for label, _chunk, _shard, compressor, _zarr_format in recorded:
+        if compressor is None:
+            if require:
+                errors.append(
+                    f"{label}: no compressor recorded, so the release does not "
+                    "describe the codec its arrays are stored with (spec §10a)"
+                )
+        elif compressor != expected:
             errors.append(
                 f"{label} records compressor {compressor!r}, not the {kind} record "
                 f"{expected!r} (issue #245)"
+            )
+    return errors
+
+
+def _recorded_zarr_format_errors(
+    recorded: list[tuple[str, Any, Any, Any, Any]], actual_shard: tuple[int, ...] | None
+) -> list[str]:
+    """A sharded (0.2.0) recording MUST name Zarr format 3; a v2 one must not claim otherwise.
+
+    Spec §10a records `zarr_format` alongside the compressor.  A 0.1.0 release has
+    no shard and does not record a format, but a 0.2.0 one must, and a recording
+    that names the wrong format is the same silent failure class as a wrong chunk
+    (issue #248 review round 2).
+    """
+    errors: list[str] = []
+    for label, _chunk, _shard, _compressor, zarr_format in recorded:
+        if actual_shard is not None:
+            if zarr_format is None:
+                errors.append(
+                    f"{label}: no zarr_format recorded, so the release does not name "
+                    "its Zarr format (spec §10a)"
+                )
+            elif int(zarr_format) != 3:
+                errors.append(
+                    f"{label} records zarr_format {zarr_format!r}, not 3; the arrays "
+                    "are Zarr v3 sharded (spec §10a)"
+                )
+        elif zarr_format is not None and int(zarr_format) != 2:
+            errors.append(
+                f"{label} records zarr_format {zarr_format!r}, not 2; the arrays are "
+                "Zarr v2 (spec §10a)"
             )
     return errors
 
@@ -600,19 +676,20 @@ def _validate_hybrid_recordings(store: Any, dense_store: Any, errors: list[str])
         planes,
         errors,
         zarr_label="dense/data.zarr",
+        require_compressor=True,
     )
 
 
 def _hybrid_outer_recordings(
     store: Any, errors: list[str]
-) -> list[tuple[str, Any, Any, Any]]:
+) -> list[tuple[str, Any, Any, Any, Any]]:
     """The outer `provenance.hybrid` and index blob, as recordings.
 
     The outer manifest MUST carry `chunk_shape` (spec §10a); a missing one is an
     error rather than a silently skipped comparison.  The outer `dense` blob is
     judged only when present, as for a standalone release.
     """
-    recorded: list[tuple[str, Any, Any, Any]] = []
+    recorded: list[tuple[str, Any, Any, Any, Any]] = []
     provenance = store.manifest.provenance if isinstance(store.manifest.provenance, dict) else {}
     block = _recorded_from_block(
         "manifest.json provenance.hybrid", provenance.get("hybrid")

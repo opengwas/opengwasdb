@@ -515,6 +515,49 @@ def test_a_hybrid_with_a_stale_outer_index_blob_is_invalid(
     assert any("index.sqlite dense metadata" in error for error in result.errors), result.errors
 
 
+def _edit_outer_hybrid(store: Path, mutate: Callable[[dict], None]) -> None:
+    path = store / "manifest.json"
+    data = json.loads(path.read_text())
+    mutate(data["provenance"]["hybrid"])
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def test_a_hybrid_with_a_stale_outer_zarr_format_is_invalid(
+    hybrid_source: Path, tmp_path: Path
+):
+    """The outer recording's `zarr_format` must agree with the nested component."""
+    converted = _convert(
+        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
+    )
+    assert validate_store(converted).ok
+    _edit_outer_hybrid(converted, lambda block: block.__setitem__("zarr_format", 2))
+
+    result = validate_store(converted)
+
+    assert not result.ok
+    assert any(
+        "provenance.hybrid" in error and "zarr_format" in error for error in result.errors
+    ), result.errors
+
+
+def test_a_hybrid_with_the_outer_compressor_removed_is_invalid(
+    hybrid_source: Path, tmp_path: Path
+):
+    """`provenance.hybrid.compressor` is required by spec §10a, not optional."""
+    converted = _convert(
+        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
+    )
+    assert validate_store(converted).ok
+    _edit_outer_hybrid(converted, lambda block: block.pop("compressor"))
+
+    result = validate_store(converted)
+
+    assert not result.ok
+    assert any(
+        "provenance.hybrid" in error and "compressor" in error for error in result.errors
+    ), result.errors
+
+
 # ── external completion data survives the conversion ─────────────────────────
 
 
