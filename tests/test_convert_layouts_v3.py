@@ -48,15 +48,18 @@ from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
+from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
 from opengwasdb.store.arrays import (
     ArrayRole,
     create_array,
     create_group,
     open_group,
+    role_for_array_path,
     shard_layout,
 )
 from opengwasdb.store.convert import ConversionError, convert_release, verify_conversion
+from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 
 DENSE_ANALYSIS_CHUNK = 4
@@ -389,6 +392,174 @@ def test_a_nested_component_with_a_disagreeing_layout_is_invalid(
 
     assert not result.ok
     assert any("manifest.json provenance.dense" in error for error in result.errors), result.errors
+
+
+def test_an_unknown_top_hit_leaf_fails_the_conversion(
+    ragged_observed: Path, tmp_path: Path
+):
+    """Only the leaves the format defines are accepted under `top_hits/<tier>`.
+
+    Before #248 review round 1, every leaf became `TOP_HIT_INDEX`, so an
+    unrecognised member was copied with a guessed role.
+    """
+    source = _copy(ragged_observed, tmp_path / "source.opengwasdb")
+    _add_unknown_array(open_group(source / "data.zarr", "r+"), "top_hits/p_5e_04")
+
+    with pytest.raises(ConversionError, match="mystery_plane"):
+        convert_release(source, tmp_path / "out.opengwasdb")
+
+
+def test_an_unknown_top_hit_leaf_in_the_nested_component_fails(
+    hybrid_source: Path, tmp_path: Path
+):
+    source = _copy(hybrid_source, tmp_path / "source.opengwasdb")
+    _add_unknown_array(
+        open_group(source / "dense" / "data.zarr", "r+"), "top_hits/p_5e_04"
+    )
+
+    with pytest.raises(ConversionError, match="mystery_plane"):
+        convert_release(source, tmp_path / "out.opengwasdb")
+
+
+def test_an_unknown_rho_leaf_fails_the_conversion(dense_completed: Path, tmp_path: Path):
+    """Only `rho`, `n_null` and `variant_index` are accepted under `rho/`."""
+    source = _copy(dense_completed, tmp_path / "source.opengwasdb")
+    root = open_group(source / "data.zarr", "r+")
+    create_array(
+        create_group(root, "rho"),
+        "mystery_plane",
+        ArrayRole.RHO_ARRAY,
+        shape=(4,),
+        dtype="float32",
+        fill_value=0.0,
+    )
+
+    with pytest.raises(ConversionError, match="mystery_plane"):
+        convert_release(source, tmp_path / "out.opengwasdb")
+
+
+def test_the_group_leaf_maps_accept_the_defined_members_and_refuse_the_rest():
+    """`top_hits/<tier>/<leaf>` and `rho/<leaf>` are explicit allow-lists."""
+    assert role_for_array_path("top_hits/p_5e_04/analysis_offsets") is (
+        ArrayRole.TOP_HIT_ANALYSIS_OFFSETS
+    )
+    for leaf in (
+        "variant_index",
+        "analysis_index",
+        "abs_z",
+        "z",
+        "se",
+        "p_value",
+        "eaf",
+        "imputed",
+    ):
+        assert role_for_array_path(f"top_hits/p_5e_04/{leaf}") is ArrayRole.TOP_HIT_INDEX
+    for leaf in ("rho", "n_null", "variant_index"):
+        assert role_for_array_path(f"rho/{leaf}") is ArrayRole.RHO_ARRAY
+    # An unknown leaf, and a tier that is not exactly one segment, are refused.
+    assert role_for_array_path("top_hits/p_5e_04/mystery_plane") is None
+    assert role_for_array_path("top_hits/p_5e_04/extra/leaf") is None
+    assert role_for_array_path("rho/mystery_plane") is None
+
+
+# ── the outer Hybrid recordings must agree with the nested component ─────────
+
+
+def _stale_outer_manifest_chunk_shape(store: Path) -> None:
+    path = store / "manifest.json"
+    data = json.loads(path.read_text())
+    data["provenance"]["hybrid"]["chunk_shape"] = [1, 1]
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def test_a_hybrid_with_a_stale_outer_manifest_layout_is_invalid(
+    hybrid_source: Path, tmp_path: Path
+):
+    """The outer `provenance.hybrid` must describe the nested component's arrays."""
+    converted = _convert(
+        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
+    )
+    assert validate_store(converted).ok
+    _stale_outer_manifest_chunk_shape(converted)
+
+    result = validate_store(converted)
+
+    assert not result.ok
+    assert any(
+        "provenance.hybrid" in error and "dense/data.zarr" in error for error in result.errors
+    ), result.errors
+
+
+def test_a_hybrid_with_a_stale_outer_index_blob_is_invalid(
+    hybrid_source: Path, tmp_path: Path
+):
+    """The outer `index.sqlite` dense blob must describe the nested arrays too."""
+    converted = _convert(
+        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
+    )
+    connection = open_store(converted).index_connection()
+    with connection:
+        blob = json.loads(
+            connection.execute("SELECT value FROM metadata WHERE key = 'dense'").fetchone()["value"]
+        )
+        blob["chunk_shape"] = [1, 1]
+        connection.execute(
+            "INSERT OR REPLACE INTO metadata(key, value) VALUES ('dense', ?)",
+            (json.dumps(blob),),
+        )
+        connection.commit()
+
+    result = validate_store(converted)
+
+    assert not result.ok
+    assert any("index.sqlite dense metadata" in error for error in result.errors), result.errors
+
+
+# ── external completion data survives the conversion ─────────────────────────
+
+
+def _completion_quality(store: Path) -> list[tuple[Any, ...]]:
+    connection = open_store(store).index_connection()
+    try:
+        return [tuple(row) for row in connection.execute("SELECT * FROM completion_quality")]
+    finally:
+        connection.close()
+
+
+def _completion_rollups(store: Path) -> dict[str, list[str]]:
+    rows = read_analyses(store / "analyses.tsv").rows
+    columns = (
+        "completion_median_pearson_r",
+        "completion_n_imputed_total",
+        "completion_n_missing_total",
+        "completed_against",
+    )
+    return {column: [str(row.get(column, "")) for row in rows] for column in columns}
+
+
+@pytest.mark.parametrize("fixture", ["dense_completed", "ragged_completed"])
+def test_completion_quality_and_rollups_survive_the_conversion(
+    fixture: str, request: pytest.FixtureRequest, tmp_path: Path
+):
+    """External completion data is walked, not only the Zarr arrays.
+
+    `verify_conversion` compares only `data.zarr`; a converter that rewrote a
+    valid-looking `completion_quality` value or an `analyses.tsv` rollup would
+    pass it.  The source is asserted to carry the data first, so the equality is
+    not vacuous.
+    """
+    source = request.getfixturevalue(fixture)
+    source_quality = _completion_quality(source)
+    source_rollups = _completion_rollups(source)
+    assert source_quality, "fixture has no completion_quality rows"
+    assert any(any(value != "" for value in column) for column in source_rollups.values()), (
+        "fixture has no completion rollups"
+    )
+
+    converted = _convert(source, tmp_path / "converted.opengwasdb")
+
+    assert _completion_quality(converted) == source_quality
+    assert _completion_rollups(converted) == source_rollups
 
 
 # ── a half-converted Hybrid is invalid ───────────────────────────────────────

@@ -894,14 +894,53 @@ def role_for_array_path(path: str) -> ArrayRole | None:
     return _DENSE_ROLES_BY_NAME.get(name)
 
 
+#: The top-hit tier's arrays, by leaf name (#248).  `analysis_offsets` is its
+#: own role; every column the tier stores with the same flat layout is
+#: `TOP_HIT_INDEX`.  `eaf` (ADR 0040) and `imputed` (a Reference-Completed
+#: release) are optional members, present only on some tiers, so a leaf outside
+#: this map is an unknown format member and is refused rather than given the
+#: generic role.
+_TOP_HIT_ROLES_BY_LEAF: Mapping[str, ArrayRole] = MappingProxyType(
+    {
+        "analysis_offsets": ArrayRole.TOP_HIT_ANALYSIS_OFFSETS,
+        "variant_index": ArrayRole.TOP_HIT_INDEX,
+        "analysis_index": ArrayRole.TOP_HIT_INDEX,
+        "abs_z": ArrayRole.TOP_HIT_INDEX,
+        "z": ArrayRole.TOP_HIT_INDEX,
+        "se": ArrayRole.TOP_HIT_INDEX,
+        "p_value": ArrayRole.TOP_HIT_INDEX,
+        "eaf": ArrayRole.TOP_HIT_INDEX,
+        "imputed": ArrayRole.TOP_HIT_INDEX,
+    }
+)
+
+#: The Rho Matrix group's arrays, by leaf name (#248): `rho`, `n_null` and
+#: `variant_index`.  An unknown leaf is refused, not given `RHO_ARRAY`.
+_RHO_ROLES_BY_LEAF: Mapping[str, ArrayRole] = MappingProxyType(
+    {
+        "rho": ArrayRole.RHO_ARRAY,
+        "n_null": ArrayRole.RHO_ARRAY,
+        "variant_index": ArrayRole.RHO_ARRAY,
+    }
+)
+
+
 def _grouped_role(head: str, rest: str) -> ArrayRole | None:
-    """The role of an array under a group: `top_hits`, `rho` or `ragged`."""
+    """The role of an array under a group: `top_hits`, `rho` or `ragged`.
+
+    Each group has an explicit allowed-leaf map (#248): a leaf the format does
+    not define returns `None`, so a conversion refuses it rather than copying an
+    unknown member under a guessed role.  `top_hits/<tier>` is exactly one
+    segment, so a deeper path is refused here as it is by
+    `is_recorded_group_path` for the group itself.
+    """
     if head == "top_hits":
-        if rest.endswith("analysis_offsets"):
-            return ArrayRole.TOP_HIT_ANALYSIS_OFFSETS
-        return ArrayRole.TOP_HIT_INDEX
+        tier, separator, leaf = rest.partition("/")
+        if not tier or not separator or not leaf or "/" in leaf:
+            return None
+        return _TOP_HIT_ROLES_BY_LEAF.get(leaf)
     if head == "rho":
-        return ArrayRole.RHO_ARRAY
+        return _RHO_ROLES_BY_LEAF.get(rest)
     if head == "ragged":
         return _RAGGED_ROLES_BY_NAME.get(rest)
     return None
