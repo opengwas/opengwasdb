@@ -23,7 +23,8 @@ the end of this file.
   writer's band width is now the **shard** Analysis width (1,024, or the shard
   clipped to the array) rather than the inner chunk, so each band write covers
   whole shards: on a full `ukb-b` store that is 40.3 GB of float32 scratch, the
-  cost ADR 0058 accepted, and 2.5 GB on the 10-Analysis pilot. The EAF row
+  cost ADR 0058 accepted, and about 0.4 GB on the 10-Analysis pilot, where the
+  shard's Analysis axis clips to the 10 Analyses. The EAF row
   block encode, the SE rewrite (residual and float16-narrowing), Dense Reference
   Completion and the Hybrid Dense Component's row blocks are whole shards
   (100,000 rows) too. A test-time hook
