@@ -678,7 +678,8 @@ outputs. The shapes themselves are `_query_shapes.common_query_patterns`.
 | Script | Measures | Output (in the directory above) |
 |---|---|---|
 | `zarr3_attribution.py` | the query shapes per zarr configuration, each in a fresh process under the checkout and environment it measures, configurations interleaved per round | `attribution/attribution.jsonl`, `decide_mw.out` |
-| `zarr3_lever_tables.py` | the tables #244, #240, #246 and #253 quote, from those outputs | stdout |
+| `zarr3_lever_tables.py` | the tables #244, #240, #246 and #253 quote, from those outputs, plus `decision` -- #246's configurations, conversion costs, set-L medians, whole-Analysis guard and memory, builder memory, files and shard sizes, the s256 difference, the top-hit A/B and the slice screen, all from the committed `docs/benchmark-output/opengwasdb_246_shapes/` artifacts -- for the ADR and the issue comments to paste verbatim | stdout |
+| `top_hit_shard_ab.py` | #246's top-hit index, sharded against effectively unsharded: an interleaved A/B (both stores in one process, sides alternating sample by sample, every sample kept, result digests compared) | `docs/benchmark-output/opengwasdb_246_shapes/opengwasdb_top_hit_shard_ab.json` |
 | `zarr3_blosc_decode.py` | one real `[1000, 1000]` chunk's decode time, Blosc threads off and on | `blosc_decode_{1,2}.json` |
 | `zarr3_fork_probe.py` | whether forked workers finish their read under each lever | `fork_probe.out` |
 | `zarr3_pool_fork_repro.py` | the standalone reproducer for zarr-developers/zarr-python#4478 | `repro_pool_fork_min.out` |

@@ -42,14 +42,42 @@ HEAD = load("opengwasdb_store_comparison_ogs00009_shapes.json")
 BASE = load("opengwasdb_store_comparison_ogs00009_zarr2.json")
 STORES = {store["label"]: store for store in HEAD["stores"]}
 BASE_STORE = BASE["stores"][0]
+S256 = load("opengwasdb_store_comparison_ogs00009_shapes_s256.json")
+S256_STORES = {store["label"]: store for store in S256["stores"]}
+
+# #244's committed whole-Analysis peak-memory pair, for the historical comparison.
+LEVERS = HERE.parent / "opengwasdb_zarr3_read_levers"
+HISTORICAL_218 = json.loads((LEVERS / "rss-pair-base.json").read_text())["stores"][0]
+HISTORICAL_Z3 = json.loads((LEVERS / "rss-step1-head.json").read_text())["stores"][0]
+
+
+def bulk_peak(store: dict) -> float:
+    return next(row["peak_mb"] for row in store["memory"] if row["query"] == "bulk")
+
+
+def shard_sentence(stores: dict) -> str:
+    return ", ".join(
+        " x ".join(str(size) for size in store["dataset"]["layout"]["z"]["shard_shape"])
+        + f" (`{label}`)"
+        for label, store in stores.items()
+        if store["dataset"]["format_version"] == "0.2.0"
+    )
+
+
+SHARD_SENTENCE = shard_sentence(STORES)
+S256_SHARD_SENTENCE = shard_sentence(S256_STORES)
 ```
 
 # What was measured
 
-The release under measurement is **OGS-00009** (`ukb-b-full-observed`), Dense
-Observed-Only, 9,847,701 variants × 2,024 Analyses. The comparison is the
-**format 0.2.0** candidates on zarr-python 3 against the **format 0.1.0**
-release on zarr-python 2.18, in one quiet window, back to back:
+The release under measurement is **OGS-00009**, Dense Observed-Only,
+`{python} f"{STORES['v3-c64']['dataset']['n_variants']:,}"` variants ×
+`{python} f"{STORES['v3-c64']['dataset']['n_analyses']:,}"` Analyses. The
+comparison is the **format 0.2.0** candidates on zarr-python 3 against the
+**format 0.1.0** release on zarr-python 2.18, back to back. Each run's own
+recorded 1-minute load is printed in the generated set-L tables, and a run that
+began at or above 3 is named there; the s256 confirmation pair's zarr 3 half is
+one such run.
 
 ```{python}
 #| label: runs
@@ -131,7 +159,8 @@ for label, store in STORES.items():
 pd.DataFrame(rows).set_index("label")
 ```
 
-The reference release on 0.1.0 as built, for comparison: **119,118 files**.
+The reference release on 0.1.0 as built, for comparison:
+`{python} f"{BASE_STORE['footprint']['n_files']:,}"` files.
 
 ## Per-array breakdown
 
@@ -209,20 +238,18 @@ Markdown(
 # Whole-Analysis peak memory
 
 The whole-Analysis peak is the budget whose outcome was unknown before this
-run. #244 measured **1.14 GB** on zarr 3 and **12.04 GB** on zarr 2.18 for the
-same Analysis of the same release (`opengwasdb_zarr3_read_levers/rss-step1-head.json`
-and `rss-pair-base.json`); this run measures it for every 0.2.0 candidate.
+run. #244 measured
+`{python} f"{bulk_peak(HISTORICAL_Z3) / 1000:.2f} GB"` on zarr 3 and
+`{python} f"{bulk_peak(HISTORICAL_218) / 1000:.2f} GB"` on zarr 2.18 for the
+same Analysis of the same release
+(`opengwasdb_zarr3_read_levers/rss-step1-head.json` and `rss-pair-base.json`);
+this run measures it for every 0.2.0 candidate (`bulk-memory` and
+`set-l-adopted` read every value from the committed artifacts).
 
 ```{python}
 #| label: bulk-memory
-LEVERS = HERE.parent / "opengwasdb_zarr3_read_levers"
-historical_218 = json.loads((LEVERS / "rss-pair-base.json").read_text())["stores"][0]
-historical_z3 = json.loads((LEVERS / "rss-step1-head.json").read_text())["stores"][0]
-
-
-def bulk_peak(store: dict) -> float:
-    return next(row["peak_mb"] for row in store["memory"] if row["query"] == "bulk")
-
+historical_218 = HISTORICAL_218
+historical_z3 = HISTORICAL_Z3
 
 rows = [
     {
@@ -304,9 +331,8 @@ for width in widths:
 pd.DataFrame(rows)
 ```
 
-The Dense shards under measurement are `100000 x 2000` (`v3-c1000`),
-`100000 x 1024` (`v3-c128`, `v3-c64`) and `100000 x 256` (`v3-c64-s256`).
-Nothing was built for this table.
+The Dense shards under measurement are `{python} SHARD_SENTENCE` and
+`{python} S256_SHARD_SENTENCE`. Nothing was built for this table.
 
 # The 256-wide Dense shard (`v3-c64-s256`)
 
@@ -338,10 +364,6 @@ Markdown(
 
 ```{python}
 #| label: s256-files
-S256 = json.loads((HERE / "opengwasdb_store_comparison_ogs00009_shapes_s256.json").read_text())
-S256_STORES = {store["label"]: store for store in S256["stores"]}
-
-
 def plane_shards(store: dict, plane: str) -> dict:
     row = next(r for r in store["footprint"]["arrays"] if r["node"] == f"data.zarr/{plane}")
     return {

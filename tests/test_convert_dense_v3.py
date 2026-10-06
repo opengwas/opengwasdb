@@ -264,6 +264,37 @@ def test_shard_layout_takes_a_top_hit_shard_width_override():
         )
 
 
+def test_a_conversion_records_the_requested_top_hit_shard_chunks(
+    dense_source: Path, converted_dense_store: Path, tmp_path: Path
+):
+    """The manifest must say which top-hit width the release was written with.
+
+    The session fixture is the default path, and a fresh conversion asks for 1;
+    both must land in `provenance.zarr_v3_conversion`, together with the width
+    the seam's policy would use.  A release whose recorded width is missing or
+    wrong is the silent failure this pins.
+    """
+    default_manifest = json.loads(
+        (converted_dense_store / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert (
+        default_manifest["provenance"]["zarr_v3_conversion"]["top_hit_shard_chunks"]
+        == TOP_HIT_SHARD_CHUNKS
+    )
+
+    converted = tmp_path / "tops.opengwasdb"
+    convert_dense_release(
+        dense_source,
+        converted,
+        dense_analysis_chunk=DENSE_ANALYSIS_CHUNK,
+        dense_shard=DENSE_SHARD,
+        top_hit_shard_chunks=1,
+        workers=2,
+    )
+    manifest = json.loads((converted / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["provenance"]["zarr_v3_conversion"]["top_hit_shard_chunks"] == 1
+
+
 def test_the_converter_plans_top_hit_shards_at_the_width_it_is_asked_for(tmp_path: Path):
     """`--top-hit-shard-chunks` reaches every top-hit array and nothing else.
 
