@@ -404,12 +404,8 @@ def _write_shared_tables_and_overflow(
     Analysis metadata is written, not a second provenance carry.
     """
     dense_layout = _dense_component_layout(staged.path)
-    _write_index(
-        staged,
-        axis.alids,
-        analyses,
-        tuple(int(size) for size in dense_layout.get("chunk_shape", _chunk_shape(src_manifest))),
-    )
+    chunk = tuple(int(size) for size in dense_layout.get("chunk_shape", _chunk_shape(src_manifest)))
+    _write_index(staged, axis.alids, analyses, (chunk[0], chunk[1]))
     source_by_alid = {a: overflow.source_alid_by_alid.get(a) for a in axis.alids}
     _write_variant_table(staged.path, axis.alids, source_by_alid, overflow.rsid_by_alid)
     dense_to_shared = np.array([axis.index[a] for a in axis.dense_alids], dtype=np.int32)
