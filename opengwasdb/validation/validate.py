@@ -998,6 +998,71 @@ def _csr_parallel_length_errors(root: Any, n_assoc: int, errors: list[str]) -> N
             )
 
 
+#: Cells one `variant_index` ordering window holds. The rule must never
+#: materialise the array -- validation memory is already a problem (#254) -- so
+#: it reads this many int32 at once (4 MB) and carries one previous value
+#: across windows. Peak memory is the window, its comparison bool and the
+#: per-Analysis offsets (8 bytes each), independent of the association count.
+_ORDER_WINDOW = 1_000_000
+
+
+def _segment_first_decrease(variant_index: Any, start: int, end: int) -> tuple[int | None, int]:
+    """First row in `[start, end)` below its predecessor, and rows read to find it.
+
+    Bounded: `_ORDER_WINDOW` cells at a time, the preceding cell carried across
+    a window boundary. Returns `(failure offset or None, entries read)` so a
+    caller can report what was actually checked rather than what the offsets
+    imply.
+    """
+    previous: int | None = None
+    read = 0
+    for lo in range(start, end, _ORDER_WINDOW):
+        hi = min(lo + _ORDER_WINDOW, end)
+        window = np.asarray(variant_index[lo:hi], dtype=np.int32)
+        read += len(window)
+        if previous is not None and int(window[0]) < previous:
+            return lo, read
+        decreasing = window[1:] < window[:-1]
+        if decreasing.any():
+            return lo + int(np.argmax(decreasing)) + 1, read
+        previous = int(window[-1])
+    return None, read
+
+
+def _segment_order_errors(
+    root: Any, offsets: np.ndarray, n_assoc: int, errors: list[str], label: str
+) -> int:
+    """Require `variant_index` non-decreasing within every Analysis's segment.
+
+    The variant-side binary search (`RaggedCSRReader.segment_positions`) is
+    correct only on a non-decreasing segment, so the invariant is checked on
+    every release, not only on the ones this build wrote. The read is bounded:
+    `_ORDER_WINDOW` cells at a time, the preceding cell carried across a
+    window boundary, the comparison reset at each Analysis boundary. Returns
+    the number of entries actually read, so an evidence runner can report a
+    counted total and not an offset-implied one.
+    """
+    if array_length(root["variant_index"]) != n_assoc:
+        return 0  # the parallel-length rule reports this
+    variant_index = root["variant_index"]
+    checked = 0
+    for analysis in range(len(offsets) - 1):
+        start, end = int(offsets[analysis]), int(offsets[analysis + 1])
+        if end <= start:
+            continue
+        failure, read = _segment_first_decrease(variant_index, start, end)
+        checked += read
+        if failure is not None:
+            errors.append(
+                f"{label}/variant_index is not non-decreasing within Analysis "
+                f"{analysis}'s segment: offset {failure} holds "
+                f"{int(variant_index[failure])} after "
+                f"{int(variant_index[failure - 1])}"
+            )
+            return checked
+    return checked
+
+
 def _validate_ragged_csr_structure(
     root: Any, encoding: StoreEncoding, errors: list[str]
 ) -> tuple[int, int] | None:
@@ -1014,9 +1079,10 @@ def _validate_ragged_csr_structure(
     _validate_encoding_plan(root, encoding, errors, label="data.zarr/ragged")
     if errors:
         return None
-    offsets = root["offsets"][:]
+    offsets = np.asarray(root["offsets"][:], dtype=np.int64)
     n_assoc = int(offsets[-1])
     _csr_parallel_length_errors(root, n_assoc, errors)
+    _segment_order_errors(root, offsets, n_assoc, errors, "data.zarr/ragged")
     return n_assoc, len(offsets) - 1
 
 
@@ -1497,6 +1563,10 @@ def _validate_overflow_structure(
         return None
     n_assoc = int(root["offsets"][:][-1])
     _csr_parallel_length_errors(root, n_assoc, errors)
+    _segment_order_errors(
+        root, np.asarray(root["offsets"][:], dtype=np.int64), n_assoc, errors,
+        "data.zarr/ragged",
+    )
     if "imputed" in root:
         errors.append(
             "Ragged Overflow has an imputed array — the overflow is off-panel and "

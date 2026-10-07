@@ -46,6 +46,53 @@ the end of this file.
   following `CURRENT_FORMAT_VERSION`. The spec (§10a, §21.3) and the
   compatibility table below record that this package writes 0.2.0 and reads
   0.1.0 and 0.2.0.
+
+- **`variant_index` is non-decreasing within every Analysis's CSR segment, and
+  validation checks it on every release (#252 review round 2).** The
+  variant-side binary search (`RaggedCSRReader.segment_positions`) is correct
+  only on a sorted segment, and `RaggedCSRWriter.add_analysis` refusing a
+  decrease protects only writes through that class -- an already-built or
+  damaged Store Release could have answered a plausible, wrong row. The
+  ordering is now an explicit store-format invariant (spec §11) and a
+  validation rule for standalone Ragged and Hybrid Overflow CSRs (spec §20).
+  The rule is bounded: it reads `variant_index` in 1,000,000-cell (4 MB)
+  windows, carries the preceding cell across a window boundary and resets at
+  each Analysis boundary, so peak memory is the window, its comparison bool and
+  the per-Analysis offsets (`O(n_analyses)`), independent of the association
+  count -- it never
+  materialises the array. A store whose persisted segment is out of order now
+  fails `validate`.
+
+- **Variant-side Ragged and Hybrid Overflow scans read at their hits, in
+  bounded windows, and `lookup` searches each Analysis's sorted segment
+  (#252).** Every query that reached a Ragged store or a Hybrid's Overflow by
+  variant was O(total associations) in both time and memory: `phewas` and
+  `range_phewas` decoded the whole `variant_index` (4N bytes) and
+  `np.isin`-ed it; `_hit_rows_result` and `_top_hits_by_scan` called
+  `z_all()`/`se_all()`, decoding every z and se in the component (and, through
+  residual SE, every `eaf`); `z_at` sliced the whole `z` plane before indexing
+  it; `lookup` decoded each requested Analysis whole; and
+  `HybridStoreQuery._shared_is_on_panel` ran a per-variant Python
+  `searchsorted` that cast the whole panel map every call. The scan paths now
+  read in windows of a few association inner chunks -- large enough to keep
+  zarr's batched read efficient (a one-chunk window measured 132.9 s against
+  27.3 s for off-axis PheWAS on OGS-00011, so it is eight), so peak memory is
+  bounded by a window rather than by N; z, se and eaf are read at the hit
+  positions (`oindex`/`positions_at`) with one EAF read shared by SE decoding
+  and the `eaf` column under #253's rules; `lookup` and the Hybrid overflow
+  lookup binary-search each requested Analysis's sorted segment -- O(log)
+  chunk reads, not a scan of the Analysis -- which every builder sorts by
+  `variant_index`, now asserted in `RaggedCSRWriter.add_analysis` rather than
+  assumed, so they cost the request and not the store; and the on-axis test is
+  one vectorised `searchsorted`. Answers are unchanged: every variant-side shape
+  (`phewas`, `range_phewas`, `lookup`, and the off-panel Hybrid paths) returns
+  arrays identical to the Analysis-side decode, with and without
+  `observed_only`, on a completed Ragged release with residual SE and imputed
+  cells and on a Hybrid with residual SE in both components. Without a new
+  index this leaves off-axis `phewas` and region queries O(N) in time; the
+  variant-centric index that makes them proportional to the answer is decided
+  in a separate ADR.
+
 - **A query reads each Analysis's `eaf` once and shares it between SE decoding
   and the result's `eaf` column (#253).** On a release whose `se` is
   `int8_residual`, decoding a residual predicts it from the frequency, so the
