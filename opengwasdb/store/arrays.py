@@ -1022,32 +1022,37 @@ def write_shard_cells(array: Any, rows: Any, cols: Any, values: Any) -> None:
         array[r0:r1, c0:c1] = band
 
 
-def _block_selection_to_elements(array: Any, selection: Any) -> tuple[Any, ...] | None:
+def _block_selection_to_elements(array: Any, selection: Any) -> tuple[Any, ...]:
     """A `set_block_selection` selection, as the element selection it covers.
 
-    `array.blocks` indexes the **chunk** grid, so a block index maps to
-    `[i * chunk : (i + 1) * chunk]`.  Translating it lets the whole-shard rule
-    apply to `array.blocks[...]` exactly as it does to an element selection.
-    Returns `None` for a block selection with a step, which is not a contiguous
-    range and is refused by the caller rather than guessed at.
+    `array.blocks` indexes the **outer block grid**: on a v3 sharded array that
+    is the shard shape (`array.shards`, the metadata chunk grid), not the
+    sharding codec's inner chunk (`array.chunks`).  Every block is therefore a
+    whole shard, so any block selection -- a stepped one included -- covers whole
+    shards; the returned selection spans the outer blocks it addresses.  (For an
+    unsharded array the block grid is the chunk grid, but the whole-shard rule
+    does not apply there.)
     """
+    block_shape = array.shards if getattr(array, "shards", None) is not None else array.chunks
     shape = tuple(int(size) for size in array.shape)
-    chunks = tuple(int(size) for size in array.chunks)
+    blocks = tuple(int(size) for size in block_shape)
     axes: list[Any] = []
-    for entry, chunk, dim in zip(
-        _normalise_selection(shape, selection), chunks, shape, strict=True
+    for entry, block, dim in zip(
+        _normalise_selection(shape, selection), blocks, shape, strict=True
     ):
-        n_blocks = max(1, -(-dim // chunk))
+        n_blocks = max(1, -(-dim // block))
         if isinstance(entry, slice):
-            start, stop, step = entry.indices(n_blocks)
-            if step != 1:
-                return None
-            axes.append(slice(start * chunk, min(stop * chunk, dim)))
+            start, stop, _step = entry.indices(n_blocks)
+            # The selected blocks are all whole shards, so the covering
+            # contiguous range is whole-shard aligned even when the block
+            # selection is stepped (the gaps are not written, but they are not
+            # partial shards either).
+            axes.append(slice(start * block, min(stop * block, dim)))
         else:
             index = int(entry)
             if index < 0:
                 index += n_blocks
-            axes.append(slice(index * chunk, min((index + 1) * chunk, dim)))
+            axes.append(slice(index * block, min((index + 1) * block, dim)))
     return tuple(axes)
 
 
@@ -1099,14 +1104,10 @@ def _guarded_set_coordinate_selection(
 def _guarded_set_block_selection(
     self: Any, selection: Any, value: Any, *args: Any, **kwargs: Any
 ) -> None:
-    elements = _block_selection_to_elements(self, selection)
-    if elements is None:
-        raise PartialShardWriteError(
-            f"array {getattr(self, 'path', '?')!r}: a `blocks` write selecting "
-            f"{selection!r} steps through the block grid and cannot cover whole "
-            "shards; write whole shards (issue #247)"
-        )
-    require_whole_shard_write(self, elements)
+    # `array.blocks` addresses whole outer blocks, i.e. whole shards on a sharded
+    # array, so this is aligned by construction; the translation also makes a
+    # changed block-grid definition fail the check rather than pass silently.
+    require_whole_shard_write(self, _block_selection_to_elements(self, selection))
     _ORIGINAL_SET_BLOCK(self, selection, value, *args, **kwargs)
 
 

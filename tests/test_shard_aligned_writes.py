@@ -35,9 +35,11 @@ from opengwasdb.layouts.dense.complete import _completion_band_rows
 from opengwasdb.store.arrays import (
     ArrayRole,
     PartialShardWriteError,
+    _block_selection_to_elements,
     create_array,
     open_group,
     open_group_for_write,
+    require_whole_shard_write,
     require_whole_shard_writes,
     sharded_compressor,
     write_shard_cells,
@@ -79,12 +81,13 @@ def test_an_aligned_band_write_passes_the_guard(plane: tuple[object, object]) ->
 
 
 def test_the_guard_covers_every_write_api(plane: tuple[object, object]) -> None:
-    """Every Zarr write route is refused for a sub-shard selection (#247 r1).
+    """Every Zarr write route is refused for a sub-shard selection (#247 r1/r3).
 
-    `__setitem__`, `oindex` and `vindex` all delegate to one of the four
-    `set_*_selection` methods, so patching those covers the API; this pins each
-    entry point separately, because the earlier guard saw only `__setitem__` and
-    a `vindex` cell patch (Hybrid completion) slipped through.
+    `__setitem__`, `oindex`, `vindex` and `blocks` all delegate to one of the
+    `set_*_selection` methods, so patching those covers the sync API, and
+    `AsyncArray.setitem` covers the async one.  A whole-shard `blocks` write is
+    aligned by construction (`array.blocks` indexes the **shard** grid); a
+    sub-shard element selection through any route still raises.
     """
     array, band = plane
     whole = (slice(None), slice(0, SHARD[1]))
@@ -92,10 +95,17 @@ def test_the_guard_covers_every_write_api(plane: tuple[object, object]) -> None:
     one = (np.array([0]), np.array([0]))
     with require_whole_shard_writes():
         array[whole] = band  # aligned, must pass
-        # A whole-shard block selection (2 x 2 chunks = 20 x 8 elements) and an
-        # aligned async write also pass.
-        array.blocks[(slice(0, 2), slice(0, 2))] = np.zeros(SHAPE, dtype="float32")
-        asyncio.run(array.async_array.setitem(whole, band))
+        asyncio.run(array.async_array.setitem(whole, band))  # aligned async
+        # `array.blocks[0, 0]` is exactly one whole shard (the block grid is the
+        # shard grid: `(20, 8)`), the minimal aligned block write.
+        array.blocks[0, 0] = 1.0
+        # A stepped block selection addresses disjoint whole shards, so the guard
+        # must not reject it for being non-contiguous.  zarr 3.4's block indexing
+        # itself refuses `step != 1`, so the translation is checked directly.
+        stepped = _block_selection_to_elements(
+            array, (slice(None), slice(None, None, 2))
+        )
+        require_whole_shard_write(array, stepped)
         for write in (
             lambda: array.__setitem__(partial, band[:, : INNER[1]]),
             lambda: array.set_basic_selection(partial, band[:, : INNER[1]]),
@@ -104,10 +114,6 @@ def test_the_guard_covers_every_write_api(plane: tuple[object, object]) -> None:
             lambda: array.set_coordinate_selection(one, np.array([1.0])),
             lambda: array.oindex.__setitem__(one, np.array([1.0])),
             lambda: array.vindex.__setitem__(one, np.array([1.0])),
-            # `array.blocks[...] = ...` goes through `set_block_selection`; the
-            # block grid is the chunk grid, so one block column is element
-            # columns 0..4 -- part of the 8-wide Analysis shard.
-            lambda: array.blocks.__setitem__((slice(None), slice(0, 1)), 1.0),
             # The async route: `AsyncArray.setitem`.
             lambda: asyncio.run(
                 array.async_array.setitem((slice(None), slice(0, INNER[1])), 1.0)
