@@ -1,5 +1,19 @@
 {
-  "note": "Spot identity for #252 review round 1: the same public query surface and selection run against each tree through the committed benchmarks/ogs00011_ab.py --identity, hashed with sha256 over variant_index/analysis_index/z/se/eaf and association_status, order included. Not a quiet-node measurement.",
+  "note": "Spot identity for #252: the same public query surface and selection run against each tree through the committed benchmarks/ogs00011_ab.py --identity, hashed with sha256 over variant_index/analysis_index/z/se/eaf and association_status, order included. Not a quiet-node measurement.",
+  "provenance": {
+    "before": {
+      "commit": "f168ef1",
+      "measured_at": "2026-10-07T12:40:37.876895+00:00",
+      "opengwasdb_path": "/tmp/epic240/252/before2/opengwasdb",
+      "opengwasdb_fingerprint": "86106fce1940635a7a710f2c578436452610e0b682892797405d99b72c42558d"
+    },
+    "after": {
+      "commit": "1a2196b",
+      "measured_at": "2026-10-07T12:40:39.661064+00:00",
+      "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-side-scans/opengwasdb",
+      "opengwasdb_fingerprint": "be31ce61947f7247020e54a8e0c3c0df23faeb9ce9a4cd1e836f5defe93aea96"
+    }
+  },
   "trees": {
     "before": "/tmp/epic240/252/before2",
     "after": "/home/gh13047/repo/opengwasdb-wt/252-variant-side-scans"
@@ -192,19 +206,5 @@
       }
     }
   },
-  "all_identical": true,
-  "provenance": {
-    "before": {
-      "commit": "f168ef1",
-      "measured_at": "2026-10-07T08:13:15.667050+00:00",
-      "opengwasdb_path": "/tmp/epic240/252/before2/opengwasdb",
-      "opengwasdb_fingerprint": "86106fce1940635a7a710f2c578436452610e0b682892797405d99b72c42558d"
-    },
-    "after": {
-      "commit": "9d2bda3",
-      "measured_at": "2026-10-07T08:13:17.503186+00:00",
-      "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-side-scans/opengwasdb",
-      "opengwasdb_fingerprint": "4e5a4001a174b5aa9e346c132ca71fe8e710ff86e8c884fd07946aada68b6373"
-    }
-  }
+  "all_identical": true
 }
