@@ -24,10 +24,9 @@ cannot pass by running nothing.
 from __future__ import annotations
 
 import argparse
-import json
-import time
 from collections.abc import Callable
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import numpy as np
@@ -136,11 +135,11 @@ def measure(label: str, path: str, *, reference: bool) -> tuple[dict, dict, dict
         counts: dict[str, int] = {}
         skipped: dict[str, str] = {}
         for name, run_shape in shapes.items():
-            started = time.perf_counter()
+            started = perf_counter()
             result = run_shape()
             counts[name] = int(len(result["z"]))
             print(
-                f"  {label} {name:46s} {time.perf_counter() - started:8.1f}s "
+                f"  {label} {name:46s} {perf_counter() - started:8.1f}s "
                 f"rows={counts[name]}",
                 flush=True,
             )
@@ -216,7 +215,8 @@ def main() -> int:
     args = _parser().parse_args()
     payload = run(args.store)
     write_artifact(args.output, payload)
-    print(json.dumps({"shapes_skipped": payload["shapes_skipped"]}, sort_keys=True))
+    skipped = payload["shapes_skipped"]
+    print(f"shapes skipped: {sorted(skipped) if skipped else 'none'}")
     return 0
 
 

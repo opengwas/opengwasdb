@@ -965,6 +965,18 @@ def _shard_covers_whole_array(array: Any) -> bool:
     return all(shard >= dim for shard, dim in zip(shards, shape, strict=True))
 
 
+def _may_be_written_incrementally(array: Any) -> bool:
+    """A 1-D array whose one shard already spans it is out of the guard's scope.
+
+    The arrays that policy exists for are filled incrementally by design -- the
+    Dense SE rewrite preallocates its exception table to the exact count the
+    codes-only pass produced and fills it in row-block order
+    (`encoding/se.py`).  Its shard is the whole array and it is read whole, so a
+    partial write is not the streamed-shard amplification #249 fixes.
+    """
+    return len(array.shape) == 1 and _shard_covers_whole_array(array)
+
+
 def require_whole_shard_write(array: Any, selection: Any) -> None:
     """Fail loudly unless `selection` covers whole shards of a sharded array.
 
@@ -986,9 +998,7 @@ def require_whole_shard_write(array: Any, selection: Any) -> None:
     are not judged either -- the rule is about shards.
     """
     shards = getattr(array, "shards", None)
-    if shards is None:
-        return
-    if len(array.shape) == 1 and _shard_covers_whole_array(array):
+    if shards is None or _may_be_written_incrementally(array):
         return
     axes = _normalise_selection(tuple(int(size) for size in array.shape), selection)
     if not axes:
