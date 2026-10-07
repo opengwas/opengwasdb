@@ -56,8 +56,10 @@ Ragged arrays and not with #246's Dense shapes.
 | `by_variant/z` | the component's `z` dtype (int16) | the same codes, re-keyed | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
 | `by_variant/se` | the component's `se` dtype (float16) | the same codes | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
 | `by_variant/eaf` | the component's `eaf` dtype (int8 residual) | the same codes, re-keyed; the per-variant `eaf_baseline` is **shared** with the Analysis-sorted plane, not duplicated | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
+| `by_variant/imputed` | uint8 | the imputed mask, **when the component has one** (a completed standalone Ragged release) | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
 | `by_variant/z_overflow_index` / `_value` | int64 / float32 | the re-keyed `z` overflow table | `RAGGED_EXCEPTION_TABLE` | 200,000 | 10,000,000 elements |
 | `by_variant/eaf_exception_index` / `_value` | int64 / float32 | the re-keyed EAF exception table | `RAGGED_EXCEPTION_TABLE` | 200,000 | 10,000,000 elements |
+| `by_variant/se_exception_index` / `_value` | int64 / float32 | the re-keyed SE exception table, **when the plan codes `se` as `int8_residual`** | `RAGGED_EXCEPTION_TABLE` | 200,000 | 10,000,000 elements |
 
 `RAGGED_PER_VARIANT` applies `_per_variant` with a **1,000-element override**:
 the offset array is read at a single variant, so one 8 KB inner chunk per
@@ -67,6 +69,26 @@ row's variant is implied by the offsets, the Analysis is not. The per-variant
 `eaf_baseline`, `se_coefficients` and (if the plan has one) `eaf_reference` are
 per-variant or per-Analysis artifacts of the component and are **shared, not
 duplicated**; only arrays keyed on the flat cell position are re-keyed.
+
+Three cell-keyed parts of the Ragged contract move with the rows and cannot be
+recovered from the Analysis-sorted component, because the by-variant rows do
+not preserve their original CSR ordinal:
+
+- **`imputed`** (a completed standalone Ragged release) drives Association
+  Status, `observed_only` and the reference-EAF substitution, so it is
+  duplicated as a flat `uint8` sequence exactly as the Analysis-sorted one is.
+- **`se_exception_index` / `se_exception_value`** are keyed by CSR ordinal
+  (`docs/spec/store-format.md` §6a), so under `int8_residual` they are re-keyed
+  to the by-variant ordinals like the Z overflow and EAF exceptions; a
+  duplicate without them cannot reconstruct an exact SE.
+- **`z_overflow_index` / `_value`** and **`eaf_exception_index` / `_value`** are
+  already in the table and are re-keyed the same way.
+
+A parity test on an indexed fixture must therefore compare `imputed` and exact
+SE cells, not only `z`/`se`/`eaf` values: a duplicate that dropped the mask
+would answer `observed` where the store holds `imputed` (silently), and one
+that dropped SE exceptions would return the coded value instead of the exact
+one.
 
 The `ASSOCIATION_SEQUENCE` shard is a fixed **50 M elements** whatever the
 dtype, so `analysis_index`'s shard is 200 MB where `z`'s is 100 MB and `se`'s
@@ -95,8 +117,14 @@ required additions are:
   | leaf under `ragged/by_variant/` | role |
   |---|---|
   | `offsets` | `RAGGED_PER_VARIANT` (with the 1,000-element inner-chunk hint recorded alongside) |
-  | `analysis_index`, `z`, `se`, `eaf` | `ASSOCIATION_SEQUENCE` |
-  | `z_overflow_index`, `z_overflow_value`, `eaf_exception_index`, `eaf_exception_value` | `RAGGED_EXCEPTION_TABLE` |
+  | `analysis_index`, `z`, `se`, `eaf`, `imputed` | `ASSOCIATION_SEQUENCE` |
+  | `z_overflow_index`, `z_overflow_value`, `eaf_exception_index`, `eaf_exception_value`, `se_exception_index`, `se_exception_value` | `RAGGED_EXCEPTION_TABLE` |
+
+  `imputed` and the `se_exception_*` pair are present only when the component
+  has them (`imputed` on a completed standalone Ragged release; the SE exception
+  table only under `int8_residual`). A release whose Analysis-sorted component
+  carries one of them but whose `by_variant/` group does not is invalid, and so
+  is the reverse.
 
   An unknown leaf under `by_variant/` must keep returning `None` (refused), as
   the other groups' leaf maps do.
@@ -179,13 +207,26 @@ exception table (2.17 GB) and a small re-keyed `z` overflow table: about
 **31.3 GB**, and at the Overflow's own measured 1.7× **about +18 GB on disk —
 close to doubling the 18 GB Overflow**, matching #252's original estimate.
 
+OGS-00011's Overflow is observed-only and codes `se` as `float16`, so neither
+`imputed` nor an SE exception table is duplicated there and the estimate above
+stands. A **completed standalone Ragged** component adds `by_variant/imputed`
+(uint8, 3.085 GB raw at this scale) and a component whose plan selects
+`int8_residual` adds a re-keyed `se_exception_index` / `_value` pair, whose raw
+size is the Analysis-sorted table's own (2 × entries, 12 bytes each before
+compression); both are proportional to the cells the component already stores.
+The general accounting is therefore
+`n_axis + 1` int64 offsets + one int32 and one `z` cell per association + one
+`se` cell + one `eaf` cell + (one uint8 `imputed` cell when completed) + the
+re-keyed overflow and exception tables.
+
 ### Build cost
 
 No comparison sort is needed. The Overflow is analysis-major, so the build is a
 counting sort by variant: one pass to count rows per variant over the shared
 axis (`np.bincount(variant_index, minlength=n_shared)`, 164 M int64 = 1.31 GB),
 a prefix sum to `offsets`, and one pass to scatter each cell into its variant's
-block while copying the codes and re-keying the overflow and exception tables.
+block while copying the codes and re-keying the overflow and exception tables
+(and the `imputed` mask and SE exceptions where the component carries them).
 Two passes over ~30 GB of values; **estimated 30–60 min** on this node,
 parallelisable by variant band because the destination offsets are known after
 the counting pass. The streamed Overflow writers (#228/#233) are the model: the
