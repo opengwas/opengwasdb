@@ -198,7 +198,14 @@ is part of the contract (issue #255):
   Pass 1's own liftover would have chosen a different ALID, the reference wins
   and the disagreement is logged. When the reference carries its own rsids (a
   full `*.variant-ref.tsv.gz` artifact or a Store Variant Table), it is the axis
-  authority and its names are used as given.
+  authority and its names are used as given; a variant the reference does not
+  name is then written with no rsid, even when a source names it, and the build
+  warns with counts of the rows it leaves blank (the reference's own unnamed
+  rows and the fold-discovered Overflow rows separately). A reference that
+  already names rsids therefore predates this contract, and no rule below is
+  claimed for that path — an artifact extracted from the same sources names
+  every one of them, which is the supported way to keep a reference-named
+  axis and the sources' identifiers together.
 - For a store whose reference names no rsids, the resulting names are identical
   to the two-pass build's **for every variant both axes carry**. The axes
   themselves need not be identical, and one difference is expected: the
@@ -207,16 +214,18 @@ is part of the contract (issue #255):
   source variant that has no usable association anywhere. Such a variant is
   absent from the single-pass release rather than present under a wrong name,
   and both releases answer alike every query the two axes share.
-- A build MUST fail rather than publish a variant table that disagrees with the
-  rsids the sources named. Two checks run before publication: the resolved
-  ALID → rsid map is compared exactly with an independently computed
-  expectation — the harvest's candidates walked over the *same final combined*
-  routing, first non-empty per ALID — so a wrong value, a missing entry or an
-  extra one fails;
+- A build that harvests (that is, a build whose reference names none of its
+  variants, or a two-pass build) MUST fail rather than publish a variant table
+  that disagrees with the rsids the sources named. Two checks run before
+  publication: the resolved ALID → rsid map is compared exactly with an
+  independently computed expectation — the raw harvest candidates walked
+  through the build's own key function over the *same final combined* routing,
+  first non-empty per ALID — so a wrong value, a missing entry, a key-
+  normalisation collapse that keeps the wrong name, or an extra entry fails;
   and the written table is read back row for row against that map, so a stale
-  map or a table lost in the write fails too. A release whose sources genuinely
-  name no variants is valid, and builds normally — neither check can fire for
-  it.
+  map or a table lost in the write fails too. Neither check runs on the
+  reference-named path above. A release whose sources genuinely name no variants
+  is valid, and builds normally — neither check can fire for it.
 
 Every Store Release assigns compact Store-local Variant Indices. Variant Indices MUST NOT be assumed stable across releases or stores.
 

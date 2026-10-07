@@ -96,6 +96,7 @@ from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromos
 from opengwasdb.variants.reference import (
     SourceKey,
     VariantReference,
+    expected_rsids_by_routed_key,
     expected_rsids_by_routing,
     read_variant_reference,
     require_rsids_match_expected,
@@ -1198,13 +1199,18 @@ def _materialize_manifest_lookup(
     it actually uses, which is not always Pass 1's lift (issue #255).
     """
     tuples_by_assembly, rsid_by_site = _materialize_site_union(window_shards)
-    source_lookup, rsid_by_alid = _resolve_manifest_variants_to_alids(
+    source_lookup, rsid_by_alid, ambiguous = _resolve_manifest_variants_to_alids(
         tuples_by_assembly,
         rsid_by_site,
         chain_file=chain_file,
         liftover_failure_threshold=liftover_failure_threshold,
     )
-    return source_lookup, rsid_by_site, rsid_by_alid
+    # The candidates a single-pass build rekeys must exclude the same raw tuples
+    # the lift just dropped: a tuple declared under both assemblies is two loci,
+    # and naming the lifted one from the other's row would attach an rsid to a
+    # variant a different association owns (issue #255 round 4).
+    candidates = {site: rsid for site, rsid in rsid_by_site.items() if site not in ambiguous}
+    return source_lookup, candidates, rsid_by_alid
 
 
 @contextmanager
@@ -1374,8 +1380,10 @@ def _resolve_manifest_variants_to_alids(
     *,
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
-) -> tuple[dict[tuple[str, int, str, str], str], dict[str, str]]:
-    """Lift the union to hg38 ALIDs and re-key the rsids onto them (issues #85, #109)."""
+) -> tuple[
+    dict[tuple[str, int, str, str], str], dict[str, str], set[tuple[str, int, str, str]]
+]:
+    """Lift the union to hg38 ALIDs, re-key the rsids, and return the both-assembly tuples."""
     finalise_start = time.monotonic()
     passthrough_lookup: dict[tuple[str, int, str, str], str] = {}
     passthrough = tuples_by_assembly.pop("hg38", set())
@@ -1423,7 +1431,7 @@ def _resolve_manifest_variants_to_alids(
         len(set(source_lookup.values())),
         _fmt_duration(time.monotonic() - finalise_start),
     )
-    return source_lookup, rsid_by_alid
+    return source_lookup, rsid_by_alid, ambiguous
 
 
 #: A candidate or routing key: the raw source tuple, or the string form the
@@ -1716,14 +1724,37 @@ SiteKeyFn = Callable[[SourceKey], str]
 
 
 def _candidates_by_routing_key(
-    rsid_by_site: Mapping[SourceKey, str], key: SiteKeyFn
+    rsid_by_site: Mapping[SourceKey, str], key: SiteKeyFn, *, label: str
 ) -> dict[str, str]:
     """The harvest's candidates keyed as the build routes them, order kept.
 
-    The comprehension preserves `rsid_by_site`'s `(rank, site)` order, which is
-    what makes the rekey take the first candidate in that order.
+    A key function need not be injective -- a Hybrid routing case-folds -- and
+    two raw sites that collapse onto one key are one stored variant, so the
+    first non-empty rsid in `(rank, site)` order wins. Two *different* non-empty
+    names for one key cannot be resolved honestly: the two-pass build refuses
+    such an input (its routing index sees conflicting targets), so this refuses
+    too rather than pick one (issue #255 round 4).
     """
-    return {key(site): rsid for site, rsid in rsid_by_site.items()}
+    candidates: dict[str, str] = {}
+    first_site: dict[str, SourceKey] = {}
+    for site, rsid in rsid_by_site.items():
+        folded = key(site)
+        if folded not in candidates:
+            candidates[folded] = rsid
+            first_site[folded] = site
+            continue
+        existing = candidates[folded]
+        if rsid and existing and rsid != existing:
+            raise ValueError(
+                f"{label}: two source variants case-fold to one routing key "
+                f"{folded!r} with different rsids: {first_site[folded]!r} names "
+                f"{existing!r} but {site!r} names {rsid!r}; both associations route "
+                "to one stored variant, so refusing to choose a name -- a wrong "
+                "answer indistinguishable from a right one"
+            )
+        if not existing:
+            candidates[folded] = rsid
+    return candidates
 
 
 def _routing_lookup(
@@ -1748,10 +1779,15 @@ def _log_routing_disagreements(
     """
     if pass1_lookup is None:
         return
+    # Only a site the reference actually routes can disagree with Pass 1: a site
+    # it does not route is off-reference and is dropped (Dense) or resolved by
+    # the fold (Hybrid), which is the documented behaviour, not a disagreement.
     disagreed = sum(
         1
         for site, pass1_alid in pass1_lookup.items()
-        if key(site) in candidates and routing.get(key(site)) != pass1_alid
+        if key(site) in candidates
+        and (routed := routing.get(key(site))) is not None
+        and routed != pass1_alid
     )
     if disagreed:
         log.warning(
@@ -1764,7 +1800,7 @@ def _log_routing_disagreements(
 
 
 def _rekey_and_verify(
-    candidates: Mapping[str, str],
+    rsid_by_site: Mapping[SourceKey, str],
     routing: Mapping[str, str],
     pass1_lookup: Mapping[SourceKey, str] | None = None,
     *,
@@ -1778,10 +1814,18 @@ def _rekey_and_verify(
     off-reference resolution. One rekey in the candidates' `(rank, site)` order
     and one global oracle comparison, so no partition can win a name the global
     first-candidate rule would not give it (issue #255).
+
+    The oracle walks the **raw** ``rsid_by_site`` through ``key`` itself rather
+    than reading the keyed candidates, so the key preparation is checked: a
+    collapse that keeps the wrong name disagrees with the raw walk and fails
+    (issue #255 round 4).
     """
+    candidates = _candidates_by_routing_key(rsid_by_site, key, label=label)
     _log_routing_disagreements(candidates, routing, pass1_lookup, key, label=label)
     resolved = _rekey_rsids_to_alids(routing, candidates)
-    require_rsids_match_expected(resolved, expected_rsids_by_routing(candidates, routing))
+    require_rsids_match_expected(
+        resolved, expected_rsids_by_routed_key(rsid_by_site, routing, key)
+    )
     return resolved
 
 
@@ -1813,7 +1857,7 @@ def _reference_axis_rsids(
         n_workers=n_workers,
     )
     resolved = _rekey_and_verify(
-        _candidates_by_routing_key(rsid_by_site, _source_site_key),
+        rsid_by_site,
         _routing_lookup(reference.source_lookup, _source_site_key),
         pass1_lookup,
         key=_source_site_key,

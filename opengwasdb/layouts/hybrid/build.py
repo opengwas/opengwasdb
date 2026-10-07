@@ -832,12 +832,13 @@ class _SourceAxis:
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
     rsid_by_alid: dict[str, str]
-    #: The harvest's candidates and their on-reference routing, keyed exactly as
-    #: this build's routing keys an association (`_routed_site_key`) and empty
-    #: unless the reference named no rsids and the fold still has off-reference
-    #: variants to route (issue #255).
-    rsid_by_site: dict[str, str]
+    #: The harvest's raw candidates and their on-reference routing, keyed
+    #: exactly as this build's routing keys an association (`_routed_site_key`)
+    #: and empty unless the reference named no rsids and the fold still has
+    #: off-reference variants to route (issue #255).
+    rsid_by_site: dict[SourceKey, str]
     candidate_routing: dict[str, str]
+    reference_named_rsids: bool
     keys_sorted: np.ndarray
     targets_sorted: np.ndarray
     ispanel_sorted: np.ndarray
@@ -860,11 +861,14 @@ class _PreparedBuild:
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
     rsid_by_alid: dict[str, str]
-    #: The single-pass harvest's candidates and their on-reference routing, when
-    #: the reference named no rsids and the fold still has off-reference variants
-    #: to route; empty on every other path (issue #255).
-    rsid_by_site: dict[str, str]
+    #: The single-pass harvest's raw candidates and their on-reference routing,
+    #: when the reference named no rsids and the fold still has off-reference
+    #: variants to route; empty on every other path (issue #255).
+    #: `reference_named_rsids` says the reference supplied its own names and the
+    #: sources were not read, so the build only warns about what it leaves blank.
+    rsid_by_site: dict[SourceKey, str]
     candidate_routing: dict[str, str]
+    reference_named_rsids: bool
     dense_to_shared: np.ndarray
     spill_dir: Path
     keys_sorted: np.ndarray
@@ -1122,8 +1126,9 @@ def _axis_source(
     dict[tuple[str, int, str, str], str],
     dict[str, str],
     set[str],
+    dict[SourceKey, str],
     dict[str, str],
-    dict[str, str],
+    bool,
 ]:
     """Open the Dense staging dir and resolve the source-coordinate routing.
 
@@ -1140,7 +1145,7 @@ def _axis_source(
     if options.variant_reference is not None:
         reference = read_variant_reference(options.variant_reference)
         panel_alids = _resolve_reference_panel(options, reference)
-        candidates, candidate_routing, rsid_by_alid = _single_pass_rsids(
+        candidates, candidate_routing, rsid_by_alid, reference_named = _single_pass_rsids(
             reference, manifest_rows, options
         )
         log.info(
@@ -1157,6 +1162,7 @@ def _axis_source(
             panel_alids,
             candidates,
             candidate_routing,
+            reference_named,
         )
     panel_alids = _panel_alids(options)
     source_lookup, rsid_by_alid = _lift_manifest_variants(
@@ -1165,33 +1171,39 @@ def _axis_source(
         liftover_failure_threshold=options.liftover_failure_threshold,
         n_workers=options.n_workers,
     )
-    return dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids, {}, {}
+    return dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids, {}, {}, False
 
 
 def _single_pass_rsids(
     reference: VariantReference, manifest_rows: list[_ManifestRow], options: _BuildOptions
-) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+) -> tuple[dict[SourceKey, str], dict[str, str], dict[str, str], bool]:
     """The on-reference rsids the Dense skeleton needs, and what the fold will
     finish rekeying (issue #255).
 
     A reference that carries rsids is its own authority and nothing is read.
     Otherwise the build runs Pass 1's harvest for the candidate rows and their
-    ``(rank, site)`` order, keys them exactly as this build's routing keys an
-    association (`_routed_site_key`), and rekeys the on-reference subset once
-    for the Dense skeleton. Returns ``(candidates, candidate_routing,
-    on_reference_rsids)``: the candidates and their on-reference routing travel
-    on so the final map can be rekeyed once against the combined routing, in
-    global candidate order, after the fold has resolved the rest.
+    ``(rank, site)`` order and rekeys the on-reference subset once for the Dense
+    skeleton. Returns ``(rsid_by_site, candidate_routing, on_reference_rsids,
+    reference_named_rsids)``. The raw candidates travel on -- not a keyed copy --
+    so the global oracle can walk them through the build's key function itself
+    after the fold; the last flag says the reference already named rsids and the
+    sources were not read, which is out of #255's scope and only warned about.
     """
     if reference.rsid_by_alid:
-        return {}, {}, dict(reference.rsid_by_alid)
+        # A reference that names rsids is used as-is (out of #255's scope); warn
+        # about the axis rows it leaves blank, split by where they came from
+        # (issue #255 round 4, finding 3).
+        _warn_reference_left_rows_blank(reference)
+        return {}, {}, dict(reference.rsid_by_alid), True
     pass1_lookup, rsid_by_site, _ = _harvest_manifest_variants(
         manifest_rows,
         chain_file=options.chain_file,
         liftover_failure_threshold=options.liftover_failure_threshold,
         n_workers=options.n_workers,
     )
-    candidates = _candidates_by_routing_key(rsid_by_site, _routed_site_key)
+    candidates = _candidates_by_routing_key(
+        rsid_by_site, _routed_site_key, label="Hybrid single-pass build"
+    )
     reference_routing = _routing_lookup(reference.source_lookup, _routed_site_key)
     candidate_routing = {
         site: alid for site, alid in reference_routing.items() if site in candidates
@@ -1209,7 +1221,28 @@ def _single_pass_rsids(
         "on-reference rsid(s)",
         len(on_reference),
     )
-    return candidates, candidate_routing, on_reference
+    return rsid_by_site, candidate_routing, on_reference, False
+
+
+def _warn_reference_left_rows_blank(reference: VariantReference) -> None:
+    """Warn that a reference naming some rsids leaves its other rows blank.
+
+    Out of #255's scope: a reference that already names rsids is used as-is, so
+    a variant it does not name stays blank even when a source names it, and no
+    source read is spent to find out. There is simply no #255 rule on this path,
+    so the build says so with counts rather than leaving it to be discovered.
+    """
+    unnamed = len(reference.alids) - len(reference.rsid_by_alid)
+    if not unnamed:
+        return
+    log.warning(
+        "variant reference names %d of its %d ALIDs and leaves %d blank; this build "
+        "uses the reference as given and does not harvest the sources, so a variant "
+        "only a source names is stored with no rsid (issue #255 finding 3)",
+        len(reference.rsid_by_alid),
+        len(reference.alids),
+        unnamed,
+    )
 
 
 def _lift_and_partition(
@@ -1233,6 +1266,7 @@ def _lift_and_partition(
         panel_alids,
         candidates,
         candidate_routing,
+        reference_named,
     ) = _axis_source(staged, manifest_rows, options)
     partition = _partition_variants(
         source_lookup,
@@ -1258,6 +1292,7 @@ def _lift_and_partition(
         rsid_by_alid=rsid_by_alid,
         rsid_by_site=candidates,
         candidate_routing=candidate_routing,
+        reference_named_rsids=reference_named,
         keys_sorted=keys_sorted,
         targets_sorted=targets_sorted,
         ispanel_sorted=ispanel_sorted,
@@ -1953,26 +1988,28 @@ def _fold_routing_for_candidates(
     }
     routing: dict[str, str] = {}
     for site in prepared.rsid_by_site:
-        if site in prepared.candidate_routing:
+        key = _routed_site_key(site)
+        if key in prepared.candidate_routing:
             continue
-        alid = alid_by_encoded.get(encode_key(site))
+        alid = alid_by_encoded.get(encode_key(key))
         if alid is not None:
-            routing[site] = alid
+            routing[key] = alid
     return routing
 
 
 def _merge_off_reference_rsids(
     prepared: _PreparedBuild, fold: _FoldInputs | None
 ) -> _PreparedBuild:
-    """Rekey the harvested candidates once, over the final combined routing.
+    """Rekey the raw harvested candidates once, over the final combined routing.
 
-    The candidates are keyed exactly as this build routes an association
-    (`_routed_site_key`), so the rekey and its oracle see the same keys the
-    associations do. The routing is the reference's for on-reference sites plus
-    the fold's resolution for off-reference ones -- ONE map, ONE rekey in global
-    `(rank, site)` order, ONE exact oracle over the merged result. That is what
-    keeps a fold-routed name that sorts earlier from losing to a reference-
-    routed one that sorts later (issue #255).
+    The candidates are keyed by `_rekey_and_verify` with exactly the function
+    this build routes an association by (`_routed_site_key`), and its oracle
+    walks the raw candidates through that function itself. The routing is the
+    reference's for on-reference sites plus the fold's resolution for
+    off-reference ones -- ONE map, ONE rekey in global `(rank, site)` order, ONE
+    exact oracle over the merged result. That is what keeps a fold-routed name
+    that sorts earlier from losing to a reference-routed one that sorts later
+    (issue #255).
 
     A named off-reference row with no usable association anywhere is never
     folded, so its name is dropped with its variant: the single-pass axis is
@@ -1981,6 +2018,7 @@ def _merge_off_reference_rsids(
     axes carry (spec §4).
     """
     if not prepared.rsid_by_site:
+        _warn_fold_left_rows_blank(prepared, fold)
         return prepared
     combined = {**prepared.candidate_routing, **_fold_routing_for_candidates(prepared, fold)}
     merged = _rekey_and_verify(
@@ -1995,6 +2033,30 @@ def _merge_off_reference_rsids(
     )
     _rewrite_dense_table_if_needed(prepared, merged)
     return replace(prepared, rsid_by_alid=merged)
+
+
+def _warn_fold_left_rows_blank(
+    prepared: _PreparedBuild, fold: _FoldInputs | None
+) -> None:
+    """Warn about fold-discovered overflow rows a named reference cannot name.
+
+    The other half of `_warn_reference_left_rows_blank`: a reference-based
+    single-pass build whose reference already carries rsids does not harvest, so
+    each variant the fold discovers off the reference is stored with no rsid
+    even when its source names one. Out of #255's scope; logged with a count.
+    """
+    if not prepared.reference_named_rsids or fold is None:
+        return
+    discovered = set(fold.off_panel) - set(prepared.partition.off_panel_alids)
+    unnamed = sum(1 for alid in discovered if not prepared.rsid_by_alid.get(alid))
+    if not unnamed:
+        return
+    log.warning(
+        "%d off-reference (Overflow) variant(s) this build discovered are not named by "
+        "the reference and are stored with no rsid; the reference is used as given and "
+        "the sources are not harvested (issue #255 finding 3)",
+        unnamed,
+    )
 
 
 def _rewrite_dense_table_if_needed(
@@ -2767,6 +2829,7 @@ def _prepare_build(
         rsid_by_alid=axis.rsid_by_alid,
         rsid_by_site=axis.rsid_by_site,
         candidate_routing=axis.candidate_routing,
+        reference_named_rsids=axis.reference_named_rsids,
         dense_to_shared=dense_to_shared,
         spill_dir=spill_dir,
         keys_sorted=axis.keys_sorted,
@@ -3393,6 +3456,7 @@ def _recorded_prepared(
         # re-entered on this path, so no candidates travel with it (issue #255).
         rsid_by_site={},
         candidate_routing={},
+        reference_named_rsids=False,
         dense_to_shared=dense_to_shared,
         spill_dir=state.spill_dir,
         keys_sorted=_NO_ROUTING[0],

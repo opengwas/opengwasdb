@@ -59,6 +59,7 @@ log = logging.getLogger(__name__)
 __all__ = [
     "VariantReference",
     "VariantReferenceExtraction",
+    "expected_rsids_by_routed_key",
     "expected_rsids_by_routing",
     "extract_variant_reference",
     "read_variant_reference",
@@ -409,6 +410,30 @@ def read_variant_reference(path: str | Path) -> VariantReference:
 #: A candidate or routing key: the raw source tuple, or the string form a
 #: routing index keys it by (`_source_site_key`/`_routed_site_key`).
 _SiteKeyT = TypeVar("_SiteKeyT")
+
+
+def expected_rsids_by_routed_key(
+    rsid_by_site: Mapping[_SiteKeyT, str],
+    routing: Mapping[str, str],
+    key: Callable[[_SiteKeyT], str],
+) -> dict[str, str]:
+    """The oracle for a *raw* candidate map routed through a build's key function.
+
+    It walks the raw candidates in their own `(rank, site)` order and applies
+    ``key`` itself to each before looking the site up, rather than reading a map
+    that was already keyed: a preparation that collapses two raw sites onto one
+    key and keeps the wrong name therefore disagrees here, which an oracle
+    sharing that preparation by construction could not see (issue #255 round 4).
+
+    Takes the first non-empty rsid per routed ALID, exactly as
+    `expected_rsids_by_routing` does for an already-keyed map.
+    """
+    expected: dict[str, str] = {}
+    for site, rsid in rsid_by_site.items():
+        alid = routing.get(key(site))
+        if alid and rsid and alid not in expected:
+            expected[alid] = rsid
+    return expected
 
 
 def expected_rsids_by_routing(

@@ -2173,6 +2173,132 @@ class TestVariantReferenceRsids:
         assert validate_store(two_pass).ok
         assert validate_store(single_pass).ok
 
+    def test_cross_assembly_tuple_is_not_named_from_the_other_locus(self, tmp_path):
+        """Issue #255, round 4: a raw tuple declared under both assemblies is two
+        physical loci, and the two-pass build drops it from both. The harvest's
+        candidates must drop it too, or an hg38 row's name lands on the ALID the
+        hg19 row's association was lifted to."""
+        hg38 = _make_vcf(
+            tmp_path,
+            "hg38_named",
+            [
+                "1\t100000\trsPANEL\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                # hg38 1:1000000 C/T is named but has no usable association.
+                "1\t1000000\trsHG38_LOCUS\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0\n",
+            ],
+        )
+        hg19 = _make_vcf(
+            tmp_path,
+            "hg19_unnamed",
+            # The same raw tuple, lifted to a different locus and unnamed.
+            ["1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("a38", hg38, "A hg38", "hg38"), ("b19", hg19, "B hg19", "hg19")]
+        )
+        panel = tmp_path / "cross-panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
+        two_pass = tmp_path / "cross-two.opengwasdb"
+        single_pass = tmp_path / "cross-one.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+        )
+        build_hybrid_from_vcf_manifest(
+            manifest, single_pass, variant_reference=panel, store_id="s", release_id="r"
+        )
+
+        assert "rsHG38_LOCUS" not in _hybrid_axis_rsids(two_pass).values()
+        assert "rsHG38_LOCUS" not in _hybrid_axis_rsids(single_pass).values()
+        # The hg19 row's association is stored, but unnamed -- never the other
+        # locus's name.
+        assert _hybrid_axis_rsids(single_pass).get("1:1064620:C:T", "") == ""
+        assert validate_store(two_pass).ok
+        assert validate_store(single_pass).ok
+
+    @pytest.mark.parametrize("assembly", ["hg38", "hg19"], ids=["reference", "fold"])
+    def test_mixed_case_conflicting_names_refuse_the_build(self, tmp_path, assembly):
+        """Issue #255, round 4: two raw sites that case-fold to one routing key
+        but name it differently cannot be resolved honestly. The two-pass build
+        refuses such an input; the single-pass build must too, on the reference
+        path (hg38) and the fold path (hg19) alike -- not silently keep one."""
+        first = _make_vcf(
+            tmp_path, "first", ["1\t1000000\trsUPPER\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"]
+        )
+        second = _make_vcf(
+            tmp_path, "second", ["1\t1000000\trslower\tc\tt\t.\tPASS\t.\tES:SE\t0.9:0.3\n"]
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("first", first, "First", assembly), ("second", second, "Second", assembly)]
+        )
+        panel = tmp_path / "case-panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="case.?fold"):
+            build_hybrid_from_vcf_manifest(
+                manifest, tmp_path / "case.opengwasdb", reference_panel=panel,
+                store_id="s", release_id="r",
+            )
+        with pytest.raises(ValueError, match="case.?fold"):
+            build_hybrid_from_vcf_manifest(
+                manifest, tmp_path / "case-one.opengwasdb", variant_reference=panel,
+                store_id="s", release_id="r",
+            )
+
+    def test_named_reference_leaves_unnamed_variants_blank(self, tmp_path, caplog):
+        """Issue #255, round 4 finding 3, a scope ruling rather than a fix: a
+        reference that already names rsids is used as-is, so a variant it does
+        not name stays blank even when a source names it -- its own unnamed
+        rows and the fold-discovered Overflow rows alike. The build warns with
+        counts on both; the two-pass build names them."""
+        import logging
+
+        from opengwasdb.variants.reference import write_variant_reference
+
+        vcf = _make_vcf(
+            tmp_path,
+            "named",
+            [
+                "1\t100000\trsPANEL\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                "1\t1564620\trsUNNAMED_REF\tA\tG\t.\tPASS\t.\tES:SE\t0.7:0.2\n",
+                "1\t2000000\trsOFF\tC\tT\t.\tPASS\t.\tES:SE\t0.9:0.4\n",
+            ],
+        )
+        manifest = _manifest_with_source_assembly(tmp_path, [("named", vcf, "Named", "hg38")])
+        panel = tmp_path / "named-panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
+        reference = tmp_path / "named.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference,
+            [HG38_ALID_1, HG38_ALID_3],
+            {("1", 100000, "A", "G"): HG38_ALID_1, ("1", 1564620, "A", "G"): HG38_ALID_3},
+            {HG38_ALID_1: "rsPANEL"},
+        )
+        two_pass = tmp_path / "named-two.opengwasdb"
+        single_pass = tmp_path / "named-one.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+        )
+        with caplog.at_level(logging.WARNING):
+            result = build_hybrid_from_vcf_manifest(
+                manifest, single_pass, variant_reference=reference, reference_panel=panel,
+                store_id="s", release_id="r",
+            )
+
+        assert _hybrid_axis_rsids(two_pass) == {
+            HG38_ALID_1: "rsPANEL",
+            HG38_ALID_3: "rsUNNAMED_REF",
+            HG38_ALID_4: "rsOFF",
+        }
+        assert _hybrid_axis_rsids(single_pass) == {
+            HG38_ALID_1: "rsPANEL",
+            HG38_ALID_3: "",
+            HG38_ALID_4: "",
+        }
+        assert result.n_overflow == 1
+        assert validate_store(single_pass).ok
+        assert "names 1 of its 2 ALIDs and leaves 1 blank" in caplog.text
+        assert "off-reference (Overflow) variant(s)" in caplog.text
+
     def test_admission_rejected_row_still_names_its_variant(self, tmp_path):
         """Hybrid admission (a MAF threshold here) runs inside Pass 2, after the
         reader. A row it drops still names its variant, so the harvest -- taken

@@ -115,13 +115,15 @@ _VARIANT_REFERENCE_HELP = (
     "Build against a precomputed variant axis instead of running Pass 1: a "
     "*.variant-ref.tsv.gz artifact, a plain ALID list, or a store variants.tsv.gz. "
     "Source variants absent from the reference are dropped; reference variants "
-    "no study observes are stored as NaN. A reference that carries rsids is the "
-    "axis authority for them; one that names none runs Pass 1's rsid harvest and "
-    "rekeys it through this build's routing, so those names are identical to the "
-    "two-pass build's for every variant both axes carry. The axes are not "
-    "identical: a named off-reference source variant with no usable association "
-    "is absent here and kept by a two-pass reference-panel build. The build "
-    "fails rather than publish an rsid the sources did not name for its variant."
+    "no study observes are stored as NaN. A reference that names no rsids runs "
+    "Pass 1's rsid harvest and rekeys it through this build's routing, so those "
+    "names are identical to the two-pass build's for every variant both axes "
+    "carry, and the build fails rather than publish an rsid the sources did not "
+    "name for its variant. A reference that already names rsids is used as given: "
+    "a variant it does not name is stored with no rsid even when a source names "
+    "it, and the build warns with counts. The axes are not identical: a named "
+    "off-reference source variant with no usable association is absent here and "
+    "kept by a two-pass reference-panel build."
 )
 
 
