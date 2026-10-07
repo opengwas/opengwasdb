@@ -33,6 +33,13 @@ from opengwasdb.store.arrays import array_length, open_group
 from opengwasdb.validation.validate import _segment_order_errors
 
 
+def _loads() -> list[float]:
+    """The 1/5/15-minute loads, so a shared-machine run records its contention."""
+    with open("/proc/loadavg") as fh:
+        parts = fh.read().split()
+    return [float(parts[0]), float(parts[1]), float(parts[2])]
+
+
 def _discover(root: Path) -> list[tuple[str, str]]:
     """Every `(name, layout)` under `root` whose layout has a Ragged CSR.
 
@@ -132,6 +139,7 @@ def main() -> None:
             "when the array length matches the offsets."
         ),
         "stores": {},
+        "load_start": _loads(),
     }
     for name, layout in _discover(args.root):
         store = args.root / name / "store.opengwasdb"
@@ -148,6 +156,7 @@ def main() -> None:
     artifact["all_ok"] = all(
         store.get("ok", True) for store in artifact["stores"].values()
     )
+    artifact["load_end"] = _loads()
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
