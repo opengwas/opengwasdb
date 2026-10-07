@@ -12,6 +12,21 @@ the end of this file.
 
 ### Changed
 
+- **`variant_index` is non-decreasing within every Analysis's CSR segment, and
+  validation checks it on every release (#252 review round 2).** The
+  variant-side binary search (`RaggedCSRReader.segment_positions`) is correct
+  only on a sorted segment, and `RaggedCSRWriter.add_analysis` refusing a
+  decrease protects only writes through that class -- an already-built or
+  damaged Store Release could have answered a plausible, wrong row. The
+  ordering is now an explicit store-format invariant (spec §11) and a
+  validation rule for standalone Ragged and Hybrid Overflow CSRs (spec §20).
+  The rule is bounded: it reads `variant_index` in 1,000,000-cell (4 MB)
+  windows, carries the preceding cell across a window boundary and resets at
+  each Analysis boundary, so peak memory is the window, its comparison bool and
+  the per-Analysis offsets, independent of the association count -- it never
+  materialises the array. A store whose persisted segment is out of order now
+  fails `validate`.
+
 - **Variant-side Ragged and Hybrid Overflow scans read at their hits, in
   bounded windows, and `lookup` searches each Analysis's sorted segment
   (#252).** Every query that reached a Ragged store or a Hybrid's Overflow by

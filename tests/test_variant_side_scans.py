@@ -50,6 +50,7 @@ from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.query.facade import _concat_results
 from opengwasdb.store import arrays as store_arrays
+from opengwasdb.validation import validate_store
 
 
 @pytest.fixture(scope="module")
@@ -596,3 +597,53 @@ def test_writer_accepts_a_sorted_analysis() -> None:
         np.ones(3, dtype=np.float32),
     )
     assert writer.n_associations == 3
+
+
+# ── the ordering invariant is validated on a persisted store ────────────────
+
+
+def _tiny_ragged(tmp_path: Path) -> Path:
+    filtered = tmp_path / "filtered"
+    filtered.mkdir()
+    header = "chromosome\tbase_pair_location\teffect_allele\tother_allele\tbeta\tstandard_error\n"
+    for name, offset in (("a", 0), ("b", 50)):
+        with gzip.open(filtered / f"{name}.tsv.gz", "wt", encoding="utf-8") as fh:
+            fh.write(header)
+            for row in range(20):
+                bp = 1_000 + row * 100 + offset
+                fh.write(f"1\t{bp}\tA\tG\t0.3\t0.3\n")
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "analysis_index\tanalysis_id\ttrait_id\ttrait_chr\ttrait_bp\tn\tfiltered_file\n"
+        "0\ta\tT0\t1\t1000\t1000\ta.tsv.gz\n"
+        "1\tb\tT1\t1\t2000\t1000\tb.tsv.gz\n",
+        encoding="utf-8",
+    )
+    store = tmp_path / "tiny.opengwasdb"
+    build_ragged_from_ssf(
+        manifest, filtered, store, store_id="tiny", release_id="tiny",
+        allow_unverified_eaf=True,
+    )
+    return store
+
+
+def test_validation_rejects_an_unsorted_persisted_segment(tmp_path: Path) -> None:
+    """A persisted segment out of order must fail validation, not answer wrongly."""
+    store = _tiny_ragged(tmp_path)
+    result = validate_store(store)
+    assert result.ok, result.errors
+
+    group = zarr.open_group(str(store / "data.zarr" / "ragged"), mode="r+", zarr_format=2)
+    offsets = np.asarray(group["offsets"][:], dtype=np.int64)
+    start, end = int(offsets[1]), int(offsets[2])
+    assert end - start >= 2, "the second Analysis must hold at least two rows"
+    original = np.asarray(group["variant_index"][start:end], dtype=np.int32)
+    swapped = original.copy()
+    swapped[0], swapped[1] = swapped[1], swapped[0]
+    assert swapped[0] > swapped[1], "the swap must actually decrease the first row"
+    group["variant_index"][start:end] = swapped
+
+    mutated = validate_store(store)
+    assert not mutated.ok, "an unsorted persisted segment must fail validation"
+    assert any("non-decreasing" in error for error in mutated.errors), mutated.errors
+    assert any("Analysis 1's segment" in error for error in mutated.errors), mutated.errors
