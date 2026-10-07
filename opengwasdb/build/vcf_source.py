@@ -20,18 +20,6 @@ from opengwasdb.variants.normalise import normalise_chromosome
 log = logging.getLogger(__name__)
 
 
-def normalise_rsid(id_field: str) -> str:
-    """The rsid a VCF's ``ID`` field carries, or ``""`` when it names none.
-
-    GWAS-VCF's ID column is free-form and a non-rs value there is not an rsid a
-    user could look the variant up by (issue #109). The variant stream
-    (:func:`stream_vcf_variants`) and the association stream
-    (:func:`stream_vcf_associations`) both read ID, so the rule lives here once
-    rather than once per stream (issue #255).
-    """
-    return id_field if id_field.startswith("rs") else ""
-
-
 def _require_bcftools() -> str:
     path = shutil.which("bcftools")
     if path is None:
@@ -64,9 +52,8 @@ def stream_vcf_variants(path: str | Path) -> Iterator[tuple[str, int, str, str, 
             chrom_raw, pos_str, ref, alt, id_field = line.split("\t")
             if "," in alt:
                 continue
-            yield normalise_chromosome(chrom_raw), int(pos_str), ref, alt, normalise_rsid(
-                id_field
-            )
+            rsid = id_field if id_field.startswith("rs") else ""
+            yield normalise_chromosome(chrom_raw), int(pos_str), ref, alt, rsid
     finally:
         proc.stdout.close()  # type: ignore[union-attr]
         proc.wait()
@@ -93,17 +80,14 @@ def has_format_tag(path: str | Path, tag: str) -> bool:
 
 def stream_vcf_associations(
     path: str | Path,
-) -> Iterator[tuple[str, int, str, str, float, float, float | None, str]]:
-    """Yield (bare_chrom, pos, ref, alt, z, se, eaf, rsid) per biallelic record.
+) -> Iterator[tuple[str, int, str, str, float, float, float | None]]:
+    """Yield (bare_chrom, pos, ref, alt, z, se, eaf) for each biallelic record.
 
     z is oriented to canonical ALID convention: A1 = min(ref, alt).  When the
     VCF effect allele (ALT) is not A1, z is negated.  SE is always positive.
     `eaf` follows z: it is FORMAT/AF re-expressed for the *stored* effect
     allele, so a negated z carries ``1 - AF`` (ADR 0036). None when the file
-    declares no AF tag, or reports none for this record.  `rsid` is the record's
-    ID, normalised by :func:`normalise_rsid` -- the same rule
-    :func:`stream_vcf_variants` applies, so a build's two streams agree on a
-    variant's identifier (issue #255).
+    declares no AF tag, or reports none for this record.
 
     Records with SE ≤ 0, non-finite z, or all EZ/ES/SE missing are skipped.
 
@@ -117,11 +101,11 @@ def stream_vcf_associations(
     """
     bcftools = _require_bcftools()
     with_af = has_format_tag(path, "AF")
-    fields = "%CHROM\t%POS\t%REF\t%ALT\t%ID\t[%EZ]\t[%ES]\t[%SE]"
-    n_fields = 8
+    fields = "%CHROM\t%POS\t%REF\t%ALT\t[%EZ]\t[%ES]\t[%SE]"
+    n_fields = 7
     if with_af:
         fields += "\t[%AF]"
-        n_fields = 9
+        n_fields = 8
     proc = subprocess.Popen(
         [bcftools, "query", "-f", fields + "\n", str(path)],
         stdout=subprocess.PIPE,
@@ -135,8 +119,8 @@ def stream_vcf_associations(
             parts = line.split("\t")
             if len(parts) != n_fields:
                 continue
-            chrom_raw, pos_str, ref, alt, id_field, ez_str, es_str, se_str = parts[:8]
-            af = parse_af(parts[8]) if with_af else None
+            chrom_raw, pos_str, ref, alt, ez_str, es_str, se_str = parts[:7]
+            af = parse_af(parts[7]) if with_af else None
             if "," in alt:
                 continue
 
@@ -155,16 +139,7 @@ def stream_vcf_associations(
                 # stored effect allele is REF here and AF must follow (ADR 0036).
                 eaf = None if af is None else 1.0 - af
 
-            yield (
-                normalise_chromosome(chrom_raw),
-                int(pos_str),
-                ref,
-                alt,
-                z,
-                se,
-                eaf,
-                normalise_rsid(id_field),
-            )
+            yield normalise_chromosome(chrom_raw), int(pos_str), ref, alt, z, se, eaf
     finally:
         proc.stdout.close()  # type: ignore[union-attr]
         proc.wait()

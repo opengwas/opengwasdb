@@ -13,6 +13,7 @@ Off-panel (→ Ragged Overflow):
 from __future__ import annotations
 
 import gzip
+import json
 import weakref
 from pathlib import Path
 from types import SimpleNamespace
@@ -1389,6 +1390,10 @@ class TestVariantReference:
         assert validate_store(store).ok
 
     def test_logs_single_pass(self, tmp_path, caplog):
+        """A reference that names no rsids still logs the single-pass axis, and
+        logs the Pass 1 harvest it runs for identifiers (issue #255); a
+        reference that carries rsids is used as-is (covered by
+        ``TestVariantReferenceRsids.test_reference_that_names_rsids_skips_the_harvest``)."""
         import logging
 
         manifest = _hybrid_manifest(tmp_path)
@@ -1401,7 +1406,9 @@ class TestVariantReference:
             )
 
         assert "Single-pass build: variant axis loaded from" in caplog.text
-        assert "Pass 1: collecting source variants" not in caplog.text
+        # The fixture's VCF IDs are '.', so the artifact carries no rsids and
+        # the harvest runs.
+        assert "reference names no rsids; Pass 1 harvest resolved" in caplog.text
 
     def test_off_reference_variant_that_fails_liftover_is_dropped(self, tmp_path):
         """A failed off-reference lift is dropped under the threshold -- it must
@@ -1924,37 +1931,60 @@ def test_hashed_raw_read_refuses_a_side_file_that_no_longer_matches(tmp_path):
         hybrid_build._column_hashed_raw((tmp_path, 0, value, right + np.uint64(1)))
 
 
-# ── rsids collected in the single-pass path (issue #255) ─────────────────────
+
+# ── rsids for a single-pass variant-reference build (issue #255) ─────────────
+#
+# The single-pass path equals the two-pass path by construction: when the
+# reference names no rsids it runs Pass 1's own harvest -- the same
+# `stream_variants` superset, the same `(rank, site)` ordering -- so a row the
+# association stream never sees, or Hybrid admission rejects, still names its
+# variant.
 
 #: A fourth, off-panel site only one source observes.
 HG38_ALID_4 = "1:2000000:C:T"
 
 
-def _rsid_hybrid_manifest(tmp_path: Path) -> Path:
+def _rsid_hybrid_manifest(tmp_path: Path, *, maf_threshold: str | None = None) -> Path:
     """Two hg38 sources naming rsids, disagreeing on one variant, leaving one
     blank, with two off-panel (Overflow) variants between them."""
     first = _make_vcf(
         tmp_path,
         "rsid_first",
         [
-            "1\t100000\trs1\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",    # ALID_1, panel
-            "1\t1064620\trs2\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",   # ALID_2, overflow
-            "1\t1564620\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n",     # ALID_3, panel, blank
+            "1\t100000\trs1\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",    # ALID_1 panel
+            "1\t1064620\trs2\tC\tT\t.\tPASS\t.\tES:SE:AF\t1.5:0.3:0.3\n",   # ALID_2 overflow
+            "1\t1564620\t.\tG\tA\t.\tPASS\t.\tES:SE:AF\t0.6:0.2:0.4\n",     # ALID_3 blank
         ],
     )
     second = _make_vcf(
         tmp_path,
         "rsid_second",
         [
-            "1\t100000\trsX\tA\tG\t.\tPASS\t.\tES:SE\t6.0:0.5\n",    # conflict, first wins
-            "1\t1564620\trs3\tG\tA\t.\tPASS\t.\tES:SE\t1.2:0.3\n",   # ALID_3 gets rs3
-            "1\t2000000\trs4\tC\tT\t.\tPASS\t.\tES:SE\t0.9:0.4\n",   # ALID_4, overflow
+            "1\t100000\trsX\tA\tG\t.\tPASS\t.\tES:SE:AF\t6.0:0.5:0.25\n",   # conflict
+            "1\t1564620\trs3\tG\tA\t.\tPASS\t.\tES:SE:AF\t1.2:0.3:0.995\n",
+            "1\t2000000\trs4\tC\tT\t.\tPASS\t.\tES:SE:AF\t0.9:0.4:0.49\n",  # ALID_4 overflow
         ],
     )
-    return _manifest_with_source_assembly(
-        tmp_path,
-        [("rsid_first", first, "First", "hg38"), ("rsid_second", second, "Second", "hg38")],
+    headers = "\tsource_assembly"
+    extra = "\thg38"
+    if maf_threshold is not None:
+        headers += "\tmaf_threshold"
+        extra += f"\t{maf_threshold}"
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
+        "\toriginal_sd_method\toriginal_sd" + headers + "\n"
+        f"rsid_first\t{first}\tFirst\t1000\tsd\tdeclared_standardised\t{extra}\n"
+        f"rsid_second\t{second}\tSecond\t1000\tsd\tdeclared_standardised\t{extra}\n",
+        encoding="utf-8",
     )
+    return manifest
+
+
+def _panel_file(tmp_path: Path, name: str = "panel.txt") -> Path:
+    panel = tmp_path / name
+    panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
+    return panel
 
 
 def _hybrid_axis_rsids(store: Path) -> dict[str, str]:
@@ -1966,29 +1996,24 @@ def _hybrid_axis_rsids(store: Path) -> dict[str, str]:
 class TestVariantReferenceRsids:
     def test_plain_alid_panel_keeps_the_same_rsids_as_the_two_pass_panel(self, tmp_path):
         """Issue #255: ``--variant-reference <plain ALID list>`` must write the
-        same rsids as ``--reference-panel`` on the same sources, for panel and
-        Overflow variants alike -- not blank the column."""
+        same rsids as ``--reference-panel``, for panel and Overflow variants
+        alike -- not blank the column."""
         manifest = _rsid_hybrid_manifest(tmp_path)
-        panel = tmp_path / "panel.txt"
-        panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
-
+        panel = _panel_file(tmp_path)
         two_pass = tmp_path / "two-pass.opengwasdb"
+        single_pass = tmp_path / "single-pass.opengwasdb"
         build_hybrid_from_vcf_manifest(
             manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
         )
-        single_pass = tmp_path / "single-pass.opengwasdb"
         result = build_hybrid_from_vcf_manifest(
             manifest, single_pass, variant_reference=panel, store_id="s", release_id="r",
             n_workers=2,
         )
 
-        # Assert the fixture is meaningful before the equality: the sources
-        # really named rsids, one row named none, two sources disagreed, and
-        # two variants are off-panel.
         expected = {
-            HG38_ALID_1: "rs1",
-            HG38_ALID_2: "rs2",
-            HG38_ALID_3: "rs3",
+            HG38_ALID_1: "rs1",   # first source in manifest order wins
+            HG38_ALID_2: "rs2",   # off-panel, only named in the Overflow
+            HG38_ALID_3: "rs3",   # first source blank, the second names it
             HG38_ALID_4: "rs4",
         }
         assert _hybrid_axis_rsids(two_pass) == expected
@@ -1997,13 +2022,13 @@ class TestVariantReferenceRsids:
         assert validate_store(single_pass).ok
         _assert_hybrid_stores_match(two_pass, single_pass)
 
-    def test_conflicting_source_rsids_resolve_identically_on_both_paths(self, tmp_path):
-        """The two-pass policy, reproduced: the first source in manifest order
-        names the variant, and a later source's different name never replaces
-        the first non-empty one."""
-        manifest = _rsid_hybrid_manifest(tmp_path)
-        panel = tmp_path / "panel.txt"
-        panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
+    def test_admission_rejected_row_still_names_its_variant(self, tmp_path):
+        """Hybrid admission (a MAF threshold here) runs inside Pass 2, after the
+        reader. A row it drops still names its variant, so the harvest -- taken
+        from the variant stream -- keeps the identifier the two-pass build
+        keeps."""
+        manifest = _rsid_hybrid_manifest(tmp_path, maf_threshold="0.02")
+        panel = _panel_file(tmp_path)
         two_pass = tmp_path / "two-pass.opengwasdb"
         single_pass = tmp_path / "single-pass.opengwasdb"
         build_hybrid_from_vcf_manifest(
@@ -2013,21 +2038,86 @@ class TestVariantReferenceRsids:
             manifest, single_pass, variant_reference=panel, store_id="s", release_id="r"
         )
 
-        assert _hybrid_axis_rsids(two_pass)[HG38_ALID_1] == "rs1"   # not rsX
-        assert _hybrid_axis_rsids(single_pass)[HG38_ALID_1] == "rs1"
+        # Asserted meaningful first: the 0.02 MAF threshold really drops the
+        # second source's EAF 0.995 row (MAF 0.005) for panel variant ALID_3 --
+        # yet the variant keeps the name that row's source gave it.
+        stats = json.loads((single_pass / "manifest.json").read_text())["provenance"]
+        assert sum(
+            entry["associations_below_threshold"] for entry in stats["maf"]["analyses"]
+        ) > 0
+        assert _hybrid_axis_rsids(single_pass) == _hybrid_axis_rsids(two_pass)
+        assert "" not in _hybrid_axis_rsids(single_pass).values()
 
-    def test_lost_rsid_collection_fails_the_build(self, tmp_path, monkeypatch):
-        """The build-time rule (issue #255): dropping the harvested map must
-        fail the build rather than publish a table with no identifiers."""
+    def test_off_reference_partial_loss_fails_the_build(self, tmp_path, monkeypatch):
+        """The rule cannot miss an Overflow-only loss: the independent count of
+        named axis variants includes off-reference ones, so a rekey that drops
+        just an off-reference ALID fails the build."""
+        import opengwasdb.layouts.dense.build_vcf as build_vcf
+
         manifest = _rsid_hybrid_manifest(tmp_path)
-        panel = tmp_path / "panel.txt"
-        panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
-        monkeypatch.setattr(hybrid_build, "_read_hybrid_column_rsids", lambda _path: {})
+        panel = _panel_file(tmp_path)
+        real_rekey = build_vcf._rekey_rsids_to_alids
+
+        def _drop_the_overflow_entry(source_lookup, rsid_by_site):
+            rekeyed = real_rekey(source_lookup, rsid_by_site)
+            rekeyed.pop(HG38_ALID_2)  # an off-panel (Overflow) variant's name
+            return rekeyed
+
+        monkeypatch.setattr(build_vcf, "_rekey_rsids_to_alids", _drop_the_overflow_entry)
         with pytest.raises(ValueError, match="silently disappeared"):
             build_hybrid_from_vcf_manifest(
-                manifest, tmp_path / "broken.opengwasdb", variant_reference=panel,
+                manifest, tmp_path / "lost.opengwasdb", variant_reference=panel,
                 store_id="s", release_id="r",
             )
+
+    def test_written_shared_table_disagreeing_with_the_map_fails_the_build(
+        self, tmp_path, monkeypatch
+    ):
+        """The read-back rule: writing the root table from a map that is not the
+        resolved one fails before publication, on the bytes."""
+        manifest = _rsid_hybrid_manifest(tmp_path)
+        panel = _panel_file(tmp_path)
+        real_write = hybrid_build._write_variant_table
+
+        def _blank_rsids(store_path, alids, hg38_to_source, rsid_by_alid):
+            real_write(store_path, alids, hg38_to_source, {})
+
+        monkeypatch.setattr(hybrid_build, "_write_variant_table", _blank_rsids)
+        with pytest.raises(ValueError, match="carries rsid"):
+            build_hybrid_from_vcf_manifest(
+                manifest, tmp_path / "blanked.opengwasdb", variant_reference=panel,
+                store_id="s", release_id="r",
+            )
+
+    def test_reference_that_names_rsids_skips_the_harvest(self, tmp_path, caplog):
+        """A reference carrying its own rsids is used as-is: no source read is
+        spent, and the reference's names are what the table carries."""
+        import logging
+
+        from opengwasdb.variants.reference import write_variant_reference
+
+        first = _make_vcf(
+            tmp_path, "named",
+            ["1\t100000\trsSOURCE\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("named", first, "Named", "hg38")]
+        )
+        reference = tmp_path / "named.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference,
+            [HG38_ALID_1],
+            {("1", 100000, "A", "G"): HG38_ALID_1},
+            {HG38_ALID_1: "rsCURATED"},
+        )
+        store = tmp_path / "named.opengwasdb"
+        with caplog.at_level(logging.INFO):
+            build_hybrid_from_vcf_manifest(
+                manifest, store, variant_reference=reference, store_id="s", release_id="r"
+            )
+
+        assert _hybrid_axis_rsids(store) == {HG38_ALID_1: "rsCURATED"}
+        assert "Pass 1 harvest resolved" not in caplog.text
 
     def test_sources_with_no_rsids_still_build(self, tmp_path):
         """The rule cannot fire falsely: a source that names no rsids builds a

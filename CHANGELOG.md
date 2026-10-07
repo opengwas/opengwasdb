@@ -65,19 +65,24 @@ the end of this file.
 - **A single-pass build from a plain-ALID `--variant-reference` no longer
   writes a Store with no rsids (#255).** `--variant-reference` bypassed Pass 1,
   which was the two-pass build's only source of `rsid` values, so a plain ALID
-  list — and a Store Variant Table whose `rsid` column is `.` — produced a
-  variant table with a blank `rsid` on every row, and `validate` passed it. The
-  two single-pass builders now collect each source's first non-empty rsid while
-  Pass 2 streams the associations it already reads (`ReaderAssociation.rsid`,
-  carried by the GWAS-VCF, GWAS-SSF and FinnGen readers), keyed to the axis by
-  the two-pass path's own first-in-manifest-order rule: a source's name wins,
-  the reference's rsids fill variants no source observed, and the build refuses
-  to publish if a source-named rsid for an axis variant does not reach the
-  table (100% retention — a threshold that cannot fire on a source that names
-  none). On the one-Analysis OGS-00005 fixture the plain-ALID build now writes
-  the same rsids as `--reference-panel`; the Ragged and completion builders
-  already read their identifiers from the same rows they store and are
-  unchanged.
+  list — and a Store Variant Table whose `rsid` column is `.`, like OGS-00004's
+  EUR panel — produced a variant table with a blank `rsid` on every row, which
+  `validate` passed. Rather than re-implement the policy against a narrower
+  stream, a reference that names no rsids now runs Pass 1's own harvest — the
+  same `stream_variants` candidate rows, the same `(rank, site)` ordering and
+  the same `_rekey_rsids_to_alids` — so the two paths agree by construction,
+  including variants named only by a row with an unusable effect or dropped by
+  Hybrid admission. A reference that carries rsids (a full artifact or a
+  curated Store Variant Table) is used as-is. Two rules guard the result: an
+  independent count of the axis variants the sources named is compared with the
+  resolved map, and the written variant tables (root and Dense Component, read
+  back row for row) must equal that map — so a partial loss, an off-reference
+  row lost in the write, or a stale map all fail the build, while a source that
+  genuinely names no variants builds normally. On the one-Analysis OGS-00005
+  fixture the plain-ALID build now writes the same rsids as `--reference-panel`;
+  on the #247 Hybrid pilot the two builds' variant tables, arrays and top-hit
+  tiers are identical. The Ragged and completion builders already read their
+  identifiers from the same rows they store and are unchanged.
 
 - **The resolver record's `opengwasdb_git_hash` is the `opengwasdb` commit, not
   the enclosing repository's (stores #176).** `_get_git_hash` ran

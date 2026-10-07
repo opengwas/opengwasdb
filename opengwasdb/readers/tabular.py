@@ -1452,7 +1452,6 @@ def stream_associations(
             stored_effect_scale=stored_effect_scale,
             eaf=eaf,
             imputation_score=row.imputation_score,
-            rsid=row.rsid,
         )
 
 

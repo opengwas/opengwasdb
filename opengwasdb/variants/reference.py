@@ -30,7 +30,7 @@ import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -61,7 +61,8 @@ __all__ = [
     "VariantReferenceExtraction",
     "extract_variant_reference",
     "read_variant_reference",
-    "require_source_rsids_retained",
+    "require_rsid_map_covers",
+    "require_written_rsids_match",
     "write_variant_reference",
 ]
 
@@ -404,38 +405,78 @@ def read_variant_reference(path: str | Path) -> VariantReference:
     )
 
 
-def require_source_rsids_retained(
-    source_by_alid: Mapping[str, str], written_by_alid: Mapping[str, str]
+def require_rsid_map_covers(
+    named_axis_alids: Collection[str], rsid_by_alid: Mapping[str, str]
 ) -> None:
-    """Refuse to publish a variant table that lost a source-named rsid.
+    """Refuse a resolved rsid map that lost a variant its sources named.
 
-    The rule against this ticket's silent-failure class (issue #255), and its
-    threshold: **every** rsid a source named for a variant on the written axis
-    must be in the table, value for value -- 100% retention, never a
-    percentage. It provably cannot fire falsely: a build whose sources carry no
-    rsids collects nothing and passes, and the merge is a plain union, so a
-    legitimate build retains every collected entry by construction. It fires
-    only when the harvest or the rekeying silently dropped identifiers -- the
-    defect this rule exists for.
+    The rule against this ticket's silent-failure class (issue #255), stated so
+    it can actually fail on partial loss: after the axis is resolved, every
+    variant the harvest saw a source name must be in the map with that name.
+    ``named_axis_alids`` is counted independently of the map -- a plain set
+    built from the named source sites and the resolved site->ALID lookup, not
+    from the rekeying that produced the map -- so a rekey or merge that drops
+    an entry (all of them, or one) fails here rather than blanking a row.
 
-    Shared by both single-pass builders so the two cannot drift into two
-    answers to "is this table missing identifiers the sources named?"
+    It cannot fire falsely: a source that names nothing contributes nothing,
+    sites that resolve nowhere are excluded before the call, and an ALID
+    several source sites name needs only one entry. A *source* read that
+    silently omits a variant is a different failure, caught only by reading the
+    written table back (`require_written_rsids_match`), which is why both run.
     """
-    lost = [
-        (alid, rsid)
-        for alid, rsid in source_by_alid.items()
-        if written_by_alid.get(alid) != rsid
-    ]
-    if not lost:
+    missing = sorted(alid for alid in named_axis_alids if not rsid_by_alid.get(alid))
+    if not missing:
         return
-    alid, rsid = lost[0]
     raise ValueError(
-        f"variant table would lose {len(lost)} rsid(s) the sources named for variants "
-        f"on the axis (e.g. {alid!r} -> {rsid!r}, written as "
-        f"{written_by_alid.get(alid)!r}); refusing to publish a store whose source "
+        f"the resolved rsid map covers {len(rsid_by_alid)} variant(s) but the sources "
+        f"named {len(named_axis_alids)} on the axis; {len(missing)} are absent "
+        f"(e.g. {missing[0]!r}); refusing to publish a variant table whose source "
         "identifiers silently disappeared -- a wrong answer indistinguishable from "
         "a source that named none"
     )
+
+
+def require_written_rsids_match(
+    store_path: str | Path,
+    alids: Sequence[str],
+    rsid_by_alid: Mapping[str, str],
+) -> None:
+    """Refuse to publish a Store Variant Table that disagrees with its rsid map.
+
+    The sound half of the issue #255 rule: after the axis is resolved and the
+    table written, the table is read back and compared row for row against the
+    resolved map -- a partial loss, a merge that drops off-reference rows, or a
+    table written from a stale map all fail here, on the bytes a query will
+    read, rather than being trusted from the map that produced them.
+
+    A source that names nothing writes `.` (read back as ``""``) and passes: the
+    expected map is built with ``""`` for an absent name, so "the sources name
+    none" and "this row has no name" stay the same answer.
+    """
+    from opengwasdb.variants.axis import iter_variant_records, variant_table_path
+
+    expected = {alid: rsid_by_alid.get(alid, "") for alid in alids}
+    seen = 0
+    for record in iter_variant_records(variant_table_path(store_path)):
+        seen += 1
+        wanted = expected.get(record.alid)
+        written = record.rsid or ""
+        if wanted is None:
+            raise ValueError(
+                f"{store_path} variant table holds {record.alid!r}, which the resolved "
+                "axis does not -- the written table and the rsid map disagree"
+            )
+        if written != wanted:
+            raise ValueError(
+                f"{store_path} variant table row {record.alid!r} carries rsid {written!r} "
+                f"but the resolved map says {wanted!r}; refusing to publish a variant "
+                "table that disagrees with the identifiers the build resolved"
+            )
+    if seen != len(alids):
+        raise ValueError(
+            f"{store_path} variant table has {seen} row(s) but the resolved axis has "
+            f"{len(alids)}; refusing to publish a variant table that lost rows"
+        )
 
 
 def write_variant_reference(

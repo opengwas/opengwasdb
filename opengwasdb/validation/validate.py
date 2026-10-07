@@ -2625,7 +2625,7 @@ def _stream_unit(
             return  # a VCF carries no analysis_id; it needs a manifest trait_id
         # `_eaf` is unused here: this check compares stored z/se against the
         # source, and EAF plays no part in that (ADR 0036).
-        for chrom, pos, ref, alt, z, se, _eaf, _rsid in stream_vcf_associations(path):
+        for chrom, pos, ref, alt, z, se, _eaf in stream_vcf_associations(path):
             a1, a2 = sorted((ref, alt))
             yield (analysis_id, chrom, int(pos), a1, a2, float(z), float(se))
     else:

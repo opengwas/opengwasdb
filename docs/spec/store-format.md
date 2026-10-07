@@ -177,24 +177,26 @@ Where a build obtains the `rsid` column, and what wins when inputs disagree,
 is part of the contract (issue #255):
 
 - A build that reads its sources (a two-pass build, or a single-pass build
-  collecting identifiers during its association pass) takes the **first
-  non-empty** rsid a source names for a variant, in manifest order — the first
-  Analysis listed that names the variant. A later source's different name for
-  the same variant does not replace it, and a `.` or empty cell names nothing
-  and never clears an earlier name.
-- A single-pass build given `--variant-reference` harvests those source
-  identifiers itself; it MUST NOT write a `rsid` column blank simply because
-  the reference it was given is a plain ALID list. Where the reference carries
-  its own rsids (a full `*.variant-ref.tsv.gz` artifact or a Store Variant
-  Table), a source's name still wins for a variant the sources observed, and
-  the reference's name fills variants no source observed. A
-  `--variant-reference` build of the same sources therefore records the same
-  rsids as the equivalent `--reference-panel` build, whatever the reference
-  carries.
+  whose reference names no variants) takes the **first non-empty** rsid a
+  source names for a variant, in `(rank, site)` order — Pass 1's manifest-order
+  reduction, so the first Analysis listed that names the variant. A later
+  source's different name for the same variant does not replace it, and a `.`
+  or empty cell names nothing and never clears an earlier name. Several source
+  coordinates that canonicalise to one ALID therefore take the answer of the
+  one that sorts first, not of the one that appears first in a file.
+- A single-pass build given `--variant-reference` MUST NOT write a `rsid`
+  column blank simply because the reference it was given is a plain ALID list.
+  When the reference names none of its variants, the build runs the same Pass 1
+  harvest the two-pass build runs and keeps its map, so the two agree by
+  construction. When the reference carries its own rsids (a full
+  `*.variant-ref.tsv.gz` artifact or a Store Variant Table), it is the axis
+  authority and its names are used as given.
 - A build MUST fail rather than publish a variant table that lost an rsid a
-  source named for a variant on its axis. A release whose sources genuinely
-  name no variants is valid, and builds normally — the rule cannot fire for
-  it.
+  source named, or that disagrees with the map the build resolved. The check is
+  on the written table, read back row for row against that map, so partial loss
+  and a table written from a stale map both fail. A release whose sources
+  genuinely name no variants is valid, and builds normally — neither rule can
+  fire for it.
 
 Every Store Release assigns compact Store-local Variant Indices. Variant Indices MUST NOT be assumed stable across releases or stores.
 

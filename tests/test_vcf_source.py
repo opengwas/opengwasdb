@@ -87,7 +87,7 @@ def test_stream_vcf_associations_uses_ez_when_present(tmp_path):
     assocs = list(stream_vcf_associations(vcf))
 
     assert len(assocs) == 1
-    chrom, pos, ref, alt, z, se, eaf, _rsid = assocs[0]
+    chrom, pos, ref, alt, z, se, eaf = assocs[0]
     assert z == pytest.approx(-5.0, rel=1e-4)
 
 
@@ -133,22 +133,6 @@ def test_stream_vcf_associations_se_unchanged_after_flip(tmp_path):
     assert se == pytest.approx(0.25, rel=1e-4)
 
 
-def test_stream_vcf_associations_carries_the_id_as_an_rsid(tmp_path):
-    """Issue #255: the association stream reports the record's ID under the
-    same rule as the variant stream -- an rs-prefixed ID is an rsid, anything
-    else (or no ID) is blank, never a fabricated identifier."""
-    vcf = tmp_path / "test.vcf"
-    _write_vcf(
-        vcf,
-        "1\t100\trs123\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n"
-        "1\t200\tNOT_AN_RSID\tC\tT\t.\tPASS\t.\tES:SE\t0.5:0.1\n",
-    )
-
-    assocs = list(stream_vcf_associations(vcf))
-
-    assert [assoc[7] for assoc in assocs] == ["rs123", ""]
-
-
 def test_stream_vcf_associations_skips_zero_se(tmp_path):
     vcf = tmp_path / "test.vcf"
     _write_vcf(
@@ -162,21 +146,18 @@ def test_stream_vcf_associations_skips_zero_se(tmp_path):
     assert assocs[0][1] == 200
 
 
-def test_stream_vcf_associations_yields_eight_element_tuples(tmp_path):
+def test_stream_vcf_associations_yields_seven_element_tuples(tmp_path):
     """No effect-scale element (issue #17): the tuple is exactly
-    (chrom, pos, ref, alt, z, se, eaf, rsid), regardless of the header's
-    StudyType. `eaf` joined it in ADR 0036 and is None for a file declaring no
-    AF tag; `rsid` joined it in issue #255 so the association stream can carry
-    the identifier the variant stream already reported."""
+    (chrom, pos, ref, alt, z, se, eaf), regardless of the header's StudyType.
+    `eaf` joined it in ADR 0036 and is None for a file declaring no AF tag."""
     vcf = tmp_path / "test.vcf"
     _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.5\n", study_type="Unknown")
 
     assocs = list(stream_vcf_associations(vcf))
 
     assert len(assocs) == 1
-    assert len(assocs[0]) == 8
+    assert len(assocs[0]) == 7
     assert assocs[0][6] is None
-    assert assocs[0][7] == ""  # ID is '.', which names no rsid
 
 
 def test_all_functions_raise_when_bcftools_not_on_path(tmp_path):
