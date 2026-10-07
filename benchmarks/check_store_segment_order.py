@@ -29,28 +29,39 @@ import numpy as np
 from benchmarks._rss import RssSampler, rss_mb
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.arrays import open_group
+from opengwasdb.store.arrays import array_length, open_group
 from opengwasdb.validation.validate import _segment_order_errors
 
 
-def _layouts(root: Path) -> list[tuple[str, str]]:
-    """Every `(name, layout)` under `root` whose layout has a Ragged CSR."""
+def _discover(root: Path) -> list[tuple[str, str]]:
+    """Every `(name, layout)` under `root` whose layout has a Ragged CSR.
+
+    An `OGS-*` directory without a readable Store fails the run rather than
+    being skipped: a registered Ragged or Hybrid release that this runner
+    cannot open is exactly the one whose ordering would go unchecked. An empty
+    discovery is also a failure -- a wrong root must not report success.
+    """
     found: list[tuple[str, str]] = []
     for store_root in sorted(root.glob("OGS-*")):
         store = store_root / "store.opengwasdb"
         if not store.is_dir():
-            continue
-        # A manifest this build cannot read is a failure, not a store to skip:
-        # an unreadable Ragged or Hybrid release would otherwise go unchecked.
+            raise SystemExit(f"{store_root}: no store.opengwasdb")
         manifest = StoreManifest.load(store)
         layout = manifest.primary_layout
         if layout in (PrimaryStorageLayout.RAGGED, PrimaryStorageLayout.HYBRID):
             found.append((store_root.name, layout.value))
+    if not found:
+        raise SystemExit(f"no Ragged or Hybrid Store found under {root}")
     return found
 
 
 def _check_one(store: Path) -> dict[str, object]:
-    """Run the ordering rule on one store's Ragged CSR; return its record."""
+    """Run the ordering rule on one store's Ragged CSR; return its record.
+
+    A length/offset mismatch is reported before the ordering rule, and the
+    checked total is the count the scan actually read, not the offset-implied
+    one -- the rule deliberately reads nothing when the lengths disagree.
+    """
     group_path = store / "data.zarr" / "ragged"
     baseline_mb = rss_mb()
     with RssSampler(interval=0.02) as sampler:
@@ -59,11 +70,20 @@ def _check_one(store: Path) -> dict[str, object]:
         offsets = np.asarray(root["offsets"][:], dtype=np.int64)
         n_assoc = int(offsets[-1]) if len(offsets) else 0
         errors: list[str] = []
-        _segment_order_errors(root, offsets, n_assoc, errors, "data.zarr/ragged")
+        length = array_length(root["variant_index"])
+        if length != n_assoc:
+            errors.append(
+                f"data.zarr/ragged/variant_index has {length} entries but offsets "
+                f"imply {n_assoc}"
+            )
+            checked = 0
+        else:
+            checked = _segment_order_errors(root, offsets, n_assoc, errors, "data.zarr/ragged")
         elapsed = time.perf_counter() - started
     return {
         "segments_checked": max(len(offsets) - 1, 0),
-        "entries_read": n_assoc,
+        "entries_expected": n_assoc,
+        "entries_checked": checked,
         "wall_s": round(elapsed, 3),
         "baseline_mb": round(baseline_mb, 1),
         "peak_mb": round(sampler.peak_mb, 1),
@@ -107,18 +127,21 @@ def main() -> None:
             "Runs only the segment-ordering rule, not the whole of validate_store. "
             "Peak RSS is the process peak while the rule ran, including opening the "
             "store's offsets; the array is read in 1,000,000-cell windows and never "
-            "materialised."
+            "materialised. `entries_checked` is the count the scan actually read; "
+            "`entries_expected` is the offset-implied total, and the two agree only "
+            "when the array length matches the offsets."
         ),
         "stores": {},
     }
-    for name, layout in _layouts(args.root):
+    for name, layout in _discover(args.root):
         store = args.root / name / "store.opengwasdb"
         record = _run_one(store)
         record["layout"] = layout
         artifact["stores"][name] = record
         print(
             f"{name:12s} {layout:7s} segments={record['segments_checked']:>8} "
-            f"entries={record['entries_read']:>12,} wall={record['wall_s']:8.3f}s "
+            f"entries={record['entries_checked']:>12,}/"
+            f"{record['entries_expected']:>12,} wall={record['wall_s']:8.3f}s "
             f"peak={record['peak_mb']:9.1f}MB ok={record['ok']}",
             flush=True,
         )

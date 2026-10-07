@@ -50,6 +50,7 @@ from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.query.facade import _concat_results
 from opengwasdb.store import arrays as store_arrays
+from opengwasdb.validation import validate as validate_module
 from opengwasdb.validation import validate_store
 
 
@@ -647,3 +648,24 @@ def test_validation_rejects_an_unsorted_persisted_segment(tmp_path: Path) -> Non
     assert not mutated.ok, "an unsorted persisted segment must fail validation"
     assert any("non-decreasing" in error for error in mutated.errors), mutated.errors
     assert any("Analysis 1's segment" in error for error in mutated.errors), mutated.errors
+
+
+def test_segment_first_decrease_detects_a_cross_window_decrease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decrease at the start of a window is caught by the carried value."""
+    monkeypatch.setattr(validate_module, "_ORDER_WINDOW", 3)
+    values = np.array([1, 2, 3, 2], dtype=np.int32)
+    failure, read = validate_module._segment_first_decrease(values, 0, 4)
+    assert failure == 3, "the first row of the second window is below the first window's last"
+    assert read == 4
+
+
+def test_segment_first_decrease_resets_at_analysis_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lower first value in the next Analysis is not a decrease."""
+    monkeypatch.setattr(validate_module, "_ORDER_WINDOW", 3)
+    values = np.array([5, 6, 1, 2], dtype=np.int32)
+    assert validate_module._segment_first_decrease(values, 0, 2) == (None, 2)
+    assert validate_module._segment_first_decrease(values, 2, 4) == (None, 2)
