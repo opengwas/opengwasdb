@@ -1922,3 +1922,129 @@ def test_hashed_raw_read_refuses_a_side_file_that_no_longer_matches(tmp_path):
     assert hybrid_build._column_hashed_raw((tmp_path, 0, value, right)) == ["1:7:CT:C"]
     with pytest.raises(UnknownKeyEncodingError, match="no longer matches"):
         hybrid_build._column_hashed_raw((tmp_path, 0, value, right + np.uint64(1)))
+
+
+# ── rsids collected in the single-pass path (issue #255) ─────────────────────
+
+#: A fourth, off-panel site only one source observes.
+HG38_ALID_4 = "1:2000000:C:T"
+
+
+def _rsid_hybrid_manifest(tmp_path: Path) -> Path:
+    """Two hg38 sources naming rsids, disagreeing on one variant, leaving one
+    blank, with two off-panel (Overflow) variants between them."""
+    first = _make_vcf(
+        tmp_path,
+        "rsid_first",
+        [
+            "1\t100000\trs1\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",    # ALID_1, panel
+            "1\t1064620\trs2\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",   # ALID_2, overflow
+            "1\t1564620\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n",     # ALID_3, panel, blank
+        ],
+    )
+    second = _make_vcf(
+        tmp_path,
+        "rsid_second",
+        [
+            "1\t100000\trsX\tA\tG\t.\tPASS\t.\tES:SE\t6.0:0.5\n",    # conflict, first wins
+            "1\t1564620\trs3\tG\tA\t.\tPASS\t.\tES:SE\t1.2:0.3\n",   # ALID_3 gets rs3
+            "1\t2000000\trs4\tC\tT\t.\tPASS\t.\tES:SE\t0.9:0.4\n",   # ALID_4, overflow
+        ],
+    )
+    return _manifest_with_source_assembly(
+        tmp_path,
+        [("rsid_first", first, "First", "hg38"), ("rsid_second", second, "Second", "hg38")],
+    )
+
+
+def _hybrid_axis_rsids(store: Path) -> dict[str, str]:
+    with gzip.open(store / "variants.tsv.gz", "rt", encoding="utf-8") as handle:
+        rows = [line.rstrip("\n").split("\t") for line in handle if not line.startswith("#")]
+    return {row[5]: ("" if row[6] == "." else row[6]) for row in rows}
+
+
+class TestVariantReferenceRsids:
+    def test_plain_alid_panel_keeps_the_same_rsids_as_the_two_pass_panel(self, tmp_path):
+        """Issue #255: ``--variant-reference <plain ALID list>`` must write the
+        same rsids as ``--reference-panel`` on the same sources, for panel and
+        Overflow variants alike -- not blank the column."""
+        manifest = _rsid_hybrid_manifest(tmp_path)
+        panel = tmp_path / "panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
+
+        two_pass = tmp_path / "two-pass.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+        )
+        single_pass = tmp_path / "single-pass.opengwasdb"
+        result = build_hybrid_from_vcf_manifest(
+            manifest, single_pass, variant_reference=panel, store_id="s", release_id="r",
+            n_workers=2,
+        )
+
+        # Assert the fixture is meaningful before the equality: the sources
+        # really named rsids, one row named none, two sources disagreed, and
+        # two variants are off-panel.
+        expected = {
+            HG38_ALID_1: "rs1",
+            HG38_ALID_2: "rs2",
+            HG38_ALID_3: "rs3",
+            HG38_ALID_4: "rs4",
+        }
+        assert _hybrid_axis_rsids(two_pass) == expected
+        assert _hybrid_axis_rsids(single_pass) == expected
+        assert (result.n_panel, result.n_off_panel) == (2, 2)
+        assert validate_store(single_pass).ok
+        _assert_hybrid_stores_match(two_pass, single_pass)
+
+    def test_conflicting_source_rsids_resolve_identically_on_both_paths(self, tmp_path):
+        """The two-pass policy, reproduced: the first source in manifest order
+        names the variant, and a later source's different name never replaces
+        the first non-empty one."""
+        manifest = _rsid_hybrid_manifest(tmp_path)
+        panel = tmp_path / "panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
+        two_pass = tmp_path / "two-pass.opengwasdb"
+        single_pass = tmp_path / "single-pass.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+        )
+        build_hybrid_from_vcf_manifest(
+            manifest, single_pass, variant_reference=panel, store_id="s", release_id="r"
+        )
+
+        assert _hybrid_axis_rsids(two_pass)[HG38_ALID_1] == "rs1"   # not rsX
+        assert _hybrid_axis_rsids(single_pass)[HG38_ALID_1] == "rs1"
+
+    def test_lost_rsid_collection_fails_the_build(self, tmp_path, monkeypatch):
+        """The build-time rule (issue #255): dropping the harvested map must
+        fail the build rather than publish a table with no identifiers."""
+        manifest = _rsid_hybrid_manifest(tmp_path)
+        panel = tmp_path / "panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
+        monkeypatch.setattr(hybrid_build, "_read_hybrid_column_rsids", lambda _path: {})
+        with pytest.raises(ValueError, match="silently disappeared"):
+            build_hybrid_from_vcf_manifest(
+                manifest, tmp_path / "broken.opengwasdb", variant_reference=panel,
+                store_id="s", release_id="r",
+            )
+
+    def test_sources_with_no_rsids_still_build(self, tmp_path):
+        """The rule cannot fire falsely: a source that names no rsids builds a
+        valid store whose table has none."""
+        vcf = _make_vcf(
+            tmp_path,
+            "unnamed",
+            ["1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("unnamed", vcf, "Unnamed", "hg38")]
+        )
+        panel = tmp_path / "unnamed-panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
+        store = tmp_path / "unnamed.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=panel, store_id="s", release_id="r"
+        )
+        assert validate_store(store).ok
+        assert set(_hybrid_axis_rsids(store).values()) == {""}

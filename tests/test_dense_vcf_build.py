@@ -673,7 +673,7 @@ def test_match_batch_handles_an_empty_lookup_without_crashing():
     on a zero-length array raised IndexError before this guard)."""
     from opengwasdb.layouts.dense.build_vcf import _match_batch
 
-    rows, z, se, eaf = _match_batch(
+    rows, z, se, eaf, rsids = _match_batch(
         ["1"], [100], ["A"], ["G"], [1.0], [0.5], [float("nan")],
         keys_sorted=np.empty(0, dtype="S1"), rows_sorted=np.empty(0, dtype=np.int32),
     )
@@ -682,6 +682,7 @@ def test_match_batch_handles_an_empty_lookup_without_crashing():
     assert len(z) == 0
     assert len(se) == 0
     assert len(eaf) == 0
+    assert len(rsids) == 0
 
 
 def test_liftover_failure_threshold_scoped_to_hg19_group_not_diluted_by_hg38_rows(tmp_path):
@@ -2353,3 +2354,150 @@ def test_cli_variant_reference_builds_single_pass(tmp_path):
     assert validate_store(store).ok
     z = open_store(store).arrays(mode="r")["z"][:]
     assert z.shape == (2, 1)
+
+
+# ── rsids collected in the single-pass path (issue #255) ─────────────────────
+
+
+def _rsid_sources_manifest(tmp_path: Path) -> Path:
+    """Two hg38 sources that name rsids, disagree on one variant, and leave one
+    blank -- the shape a plain-ALID ``--variant-reference`` must reproduce."""
+    first = _make_vcf(
+        tmp_path,
+        "rsid_first",
+        [
+            f"1\t{HG38_ALID_1.split(':')[1]}\trs1\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+            f"1\t{HG38_ALID_2.split(':')[1]}\trs2\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
+            # HG38_ALID_3's only row in this source names nothing.
+            f"1\t{HG38_ALID_3.split(':')[1]}\t.\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n",
+        ],
+    )
+    second = _make_vcf(
+        tmp_path,
+        "rsid_second",
+        [
+            # Same site as the first source's rs1, named differently: the first
+            # source in manifest order must still win.
+            f"1\t{HG38_ALID_1.split(':')[1]}\trsX\tA\tG\t.\tPASS\t.\tES:SE\t6.0:0.5\n",
+            f"1\t{HG38_ALID_3.split(':')[1]}\trs3\tG\tA\t.\tPASS\t.\tES:SE\t1.2:0.3\n",
+        ],
+    )
+    return _manifest_with_source_assembly(
+        tmp_path,
+        [("rsid_first", first, "First", "hg38"), ("rsid_second", second, "Second", "hg38")],
+    )
+
+
+def _source_union_lookup(manifest: Path) -> tuple[dict, list[str]]:
+    """The manifest's Pass 1 union lookup and its sorted ALIDs."""
+    from opengwasdb.layouts.dense.build_vcf import (
+        _lift_manifest_variants,
+        _read_manifest,
+        _sorted_alids,
+    )
+
+    rows = _read_manifest(manifest)
+    source_lookup, _ = _lift_manifest_variants(
+        rows, chain_file=None, liftover_failure_threshold=0.01
+    )
+    return source_lookup, _sorted_alids(source_lookup.values())
+
+
+def _plain_alid_list(tmp_path: Path, manifest: Path) -> Path:
+    """The manifest's own variant union as a plain ALID list (no rsids)."""
+    _lookup, alids = _source_union_lookup(manifest)
+    path = tmp_path / "plain.alids"
+    path.write_text("\n".join(alids) + "\n", encoding="utf-8")
+    return path
+
+
+def _axis_rsids(store: Path) -> dict[str, str]:
+    from opengwasdb.variants.axis import iter_variant_records
+
+    return {r.alid: (r.rsid or "") for r in iter_variant_records(store / "variants.tsv.gz")}
+
+
+class TestPlainAlidReferenceRsids:
+    def test_plain_alid_list_keeps_the_same_rsids_as_the_two_pass_build(self, tmp_path):
+        """Issue #255: a plain ALID list carries no rsids, and the single-pass
+        build must harvest them from Pass 2 rather than blank the column."""
+        manifest = _rsid_sources_manifest(tmp_path)
+        plain = _plain_alid_list(tmp_path, manifest)
+
+        two_pass = tmp_path / "two-pass.opengwasdb"
+        build_dense_from_vcf_manifest(manifest, two_pass, store_id="s", release_id="r")
+        single_pass = tmp_path / "single-pass.opengwasdb"
+        build_dense_from_vcf_manifest(
+            manifest, single_pass, store_id="s", release_id="r", variant_reference=plain,
+        )
+
+        # Fixtures asserted meaningful before the equality: the sources really
+        # named rsids, one row named none, and two sources disagree.
+        assert _axis_rsids(two_pass) == {
+            HG38_ALID_1: "rs1",
+            HG38_ALID_2: "rs2",
+            HG38_ALID_3: "rs3",
+        }
+        assert validate_store(single_pass).ok
+        _assert_dense_stores_data_identical(two_pass, single_pass)
+
+    def test_source_rsid_wins_over_a_reference_that_names_the_variant(self, tmp_path):
+        """The stated precedence: sources win where one names the variant; the
+        reference's own rsids only fill blanks (an unobserved panel variant). A
+        ``--variant-reference`` build therefore agrees with the two-pass build
+        of the same sources whatever its reference carries."""
+        manifest = _rsid_sources_manifest(tmp_path)
+        source_lookup, alids = _source_union_lookup(manifest)
+        reference = tmp_path / "curated.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference,
+            alids + ["1:9000000:C:T"],
+            source_lookup,
+            {"1:100000:A:G": "rsARTIFACT", "1:9000000:C:T": "rsUNOBSERVED"},
+        )
+        store = tmp_path / "precedence.opengwasdb"
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", variant_reference=reference,
+        )
+
+        assert _axis_rsids(store) == {
+            HG38_ALID_1: "rs1",         # the source's name, not rsARTIFACT
+            HG38_ALID_2: "rs2",
+            HG38_ALID_3: "rs3",
+            "1:9000000:C:T": "rsUNOBSERVED",  # the reference fills an unobserved row
+        }
+
+    def test_lost_rsid_collection_fails_the_build(self, tmp_path, monkeypatch):
+        """The build-time rule (issue #255): the Pass 2 reader named rsids for
+        axis variants, so dropping the harvested map must fail the build rather
+        than publish a table whose identifiers silently disappeared."""
+        import opengwasdb.layouts.dense.build_vcf as build_vcf
+
+        manifest = _rsid_sources_manifest(tmp_path)
+        plain = _plain_alid_list(tmp_path, manifest)
+        monkeypatch.setattr(build_vcf, "_read_column_rsids", lambda _path: {})
+        with pytest.raises(ValueError, match="silently disappeared"):
+            build_dense_from_vcf_manifest(
+                manifest, tmp_path / "broken.opengwasdb", store_id="s", release_id="r",
+                variant_reference=plain,
+            )
+
+    def test_sources_with_no_rsids_still_build(self, tmp_path):
+        """The rule cannot fire falsely: a source that genuinely names no rsids
+        builds a valid store whose table has none."""
+        vcf = _make_vcf(
+            tmp_path,
+            "unnamed",
+            [f"1\t{HG38_ALID_1.split(':')[1]}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"],
+        )
+        manifest = _manifest_with_source_assembly(tmp_path, [("unnamed", vcf, "Unnamed", "hg38")])
+        plain = tmp_path / "plain.alids"
+        plain.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
+        store = tmp_path / "unnamed.opengwasdb"
+
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", variant_reference=plain,
+        )
+
+        assert validate_store(store).ok
+        assert _axis_rsids(store) == {HG38_ALID_1: ""}

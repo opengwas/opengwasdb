@@ -173,6 +173,29 @@ of variants MUST return every row the rsid names, and an API whose contract is
 a single variant MUST resolve to the lowest Store-local Variant Index among
 them. Neither may silently pick an arbitrary one.
 
+Where a build obtains the `rsid` column, and what wins when inputs disagree,
+is part of the contract (issue #255):
+
+- A build that reads its sources (a two-pass build, or a single-pass build
+  collecting identifiers during its association pass) takes the **first
+  non-empty** rsid a source names for a variant, in manifest order — the first
+  Analysis listed that names the variant. A later source's different name for
+  the same variant does not replace it, and a `.` or empty cell names nothing
+  and never clears an earlier name.
+- A single-pass build given `--variant-reference` harvests those source
+  identifiers itself; it MUST NOT write a `rsid` column blank simply because
+  the reference it was given is a plain ALID list. Where the reference carries
+  its own rsids (a full `*.variant-ref.tsv.gz` artifact or a Store Variant
+  Table), a source's name still wins for a variant the sources observed, and
+  the reference's name fills variants no source observed. A
+  `--variant-reference` build of the same sources therefore records the same
+  rsids as the equivalent `--reference-panel` build, whatever the reference
+  carries.
+- A build MUST fail rather than publish a variant table that lost an rsid a
+  source named for a variant on its axis. A release whose sources genuinely
+  name no variants is valid, and builds normally — the rule cannot fire for
+  it.
+
 Every Store Release assigns compact Store-local Variant Indices. Variant Indices MUST NOT be assumed stable across releases or stores.
 
 Dense Observed-Only releases use a tabix-backed Store Variant Table:

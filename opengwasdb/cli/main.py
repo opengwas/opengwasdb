@@ -115,7 +115,10 @@ _VARIANT_REFERENCE_HELP = (
     "Build against a precomputed variant axis instead of running Pass 1: a "
     "*.variant-ref.tsv.gz artifact, a plain ALID list, or a store variants.tsv.gz. "
     "Source variants absent from the reference are dropped; reference variants "
-    "no study observes are stored as NaN."
+    "no study observes are stored as NaN. rsids are collected while the sources "
+    "are read: the first source to name a variant wins, the reference's own rsids "
+    "fill variants no source named, and a build whose sources named an axis "
+    "variant fails rather than store a blank rsid."
 )
 
 
@@ -463,7 +466,8 @@ def build_dense_vcf_command(
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
     VCF files are hg19 by default; liftover to hg38 is applied inline.
     --source-reader-capability and --source-assembly supply per-release defaults (#174).
-    --variant-reference supplies a precomputed axis, bypassing Pass 1 (#185).
+    --variant-reference supplies a precomputed axis, bypassing Pass 1 (#185);
+    its rsids are collected from the sources during Pass 2 (#255).
     """
     result = build_dense_from_vcf_manifest(
         manifest_path, output_path, store_id=store_id, release_id=release_id,
@@ -516,7 +520,9 @@ def build_hybrid_command(
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
     On-panel variants in --reference-panel fill the Dense Component; off-panel variants
     go to Ragged Overflow. --variant-reference supplies a precomputed axis and source
-    map, bypassing Pass 1 (#186). --source-reader-capability and --source-assembly
+    map, bypassing Pass 1 (#186); its rsids are collected from the sources during
+    Pass 2, for panel and Overflow variants alike (#255).
+    --source-reader-capability and --source-assembly
     supply per-release defaults (#174). --checkpoint keeps a resumable record of
     each phase (#227), and --resume continues the build for OUTPUT_PATH from one.
     """

@@ -62,6 +62,23 @@ the end of this file.
 
 ### Fixed
 
+- **A single-pass build from a plain-ALID `--variant-reference` no longer
+  writes a Store with no rsids (#255).** `--variant-reference` bypassed Pass 1,
+  which was the two-pass build's only source of `rsid` values, so a plain ALID
+  list — and a Store Variant Table whose `rsid` column is `.` — produced a
+  variant table with a blank `rsid` on every row, and `validate` passed it. The
+  two single-pass builders now collect each source's first non-empty rsid while
+  Pass 2 streams the associations it already reads (`ReaderAssociation.rsid`,
+  carried by the GWAS-VCF, GWAS-SSF and FinnGen readers), keyed to the axis by
+  the two-pass path's own first-in-manifest-order rule: a source's name wins,
+  the reference's rsids fill variants no source observed, and the build refuses
+  to publish if a source-named rsid for an axis variant does not reach the
+  table (100% retention — a threshold that cannot fire on a source that names
+  none). On the one-Analysis OGS-00005 fixture the plain-ALID build now writes
+  the same rsids as `--reference-panel`; the Ragged and completion builders
+  already read their identifiers from the same rows they store and are
+  unchanged.
+
 - **The resolver record's `opengwasdb_git_hash` is the `opengwasdb` commit, not
   the enclosing repository's (stores #176).** `_get_git_hash` ran
   `git rev-parse HEAD` from inside the package, so when `opengwasdb` was

@@ -61,6 +61,7 @@ __all__ = [
     "VariantReferenceExtraction",
     "extract_variant_reference",
     "read_variant_reference",
+    "require_source_rsids_retained",
     "write_variant_reference",
 ]
 
@@ -400,6 +401,40 @@ def read_variant_reference(path: str | Path) -> VariantReference:
     raise ValueError(
         f"variant reference {reference_path} has neither an 'alid' nor a "
         "'source_keys' column"
+    )
+
+
+def require_source_rsids_retained(
+    source_by_alid: Mapping[str, str], written_by_alid: Mapping[str, str]
+) -> None:
+    """Refuse to publish a variant table that lost a source-named rsid.
+
+    The rule against this ticket's silent-failure class (issue #255), and its
+    threshold: **every** rsid a source named for a variant on the written axis
+    must be in the table, value for value -- 100% retention, never a
+    percentage. It provably cannot fire falsely: a build whose sources carry no
+    rsids collects nothing and passes, and the merge is a plain union, so a
+    legitimate build retains every collected entry by construction. It fires
+    only when the harvest or the rekeying silently dropped identifiers -- the
+    defect this rule exists for.
+
+    Shared by both single-pass builders so the two cannot drift into two
+    answers to "is this table missing identifiers the sources named?"
+    """
+    lost = [
+        (alid, rsid)
+        for alid, rsid in source_by_alid.items()
+        if written_by_alid.get(alid) != rsid
+    ]
+    if not lost:
+        return
+    alid, rsid = lost[0]
+    raise ValueError(
+        f"variant table would lose {len(lost)} rsid(s) the sources named for variants "
+        f"on the axis (e.g. {alid!r} -> {rsid!r}, written as "
+        f"{written_by_alid.get(alid)!r}); refusing to publish a store whose source "
+        "identifiers silently disappeared -- a wrong answer indistinguishable from "
+        "a source that named none"
     )
 
 

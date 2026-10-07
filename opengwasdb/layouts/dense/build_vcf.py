@@ -88,12 +88,16 @@ from opengwasdb.model.manifest_columns import (
     resolve_manifest_columns,
 )
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
-from opengwasdb.readers.interface import SourceVariant
+from opengwasdb.readers.interface import SourceReader, SourceVariant
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromosome
-from opengwasdb.variants.reference import VariantReference, read_variant_reference
+from opengwasdb.variants.reference import (
+    VariantReference,
+    read_variant_reference,
+    require_source_rsids_retained,
+)
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
     DEFAULT_REDUCTION_BATCH_SIZE,
@@ -194,6 +198,10 @@ _SD_RESCALE_METHODS = frozenset(
 _pass2_keys_sorted: np.ndarray | None = None  # sorted object array of bytes keys
 _pass2_rows_sorted: np.ndarray | None = None  # int32 row per key, same order
 _pass2_spill_dir: Path | None = None
+# Set for a single-pass build only (issue #255): the two-pass build already
+# harvested rsids in Pass 1, and collecting them again off the filtered
+# association stream could only disagree with that, never improve it.
+_pass2_collect_rsids = False
 
 # Top hits are harvested inline during Pass 2 rather than by a post-hoc scan of
 # the full matrix (which had to reload ~200 GB of float32 and compute a p-value
@@ -288,14 +296,18 @@ def _match_batch(
     eafs: list[float],
     keys_sorted: np.ndarray,
     rows_sorted: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Resolve one batch of associations to (rows, z, se, eaf) for cells whose
-    variant is present in the panel (exact key match). Order-preserving.
-    `eaf` is NaN for associations whose source reported none (ADR 0036)."""
+    rsids: list[str] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Resolve one batch of associations to (rows, z, se, eaf, rsid) for cells
+    whose variant is present in the panel (exact key match). Order-preserving.
+    `eaf` is NaN for associations whose source reported none (ADR 0036); `rsid`
+    is the source's own identifier (``""`` when it named none), carried -- not
+    discarded -- so a single-pass build can collect it (issue #255)."""
     if len(keys_sorted) == 0:
         empty_i = np.empty(0, dtype=np.int64)
         empty_f = np.empty(0, dtype=np.float32)
-        return empty_i, empty_f, empty_f, empty_f
+        empty_o = np.empty(0, dtype=object)
+        return empty_i, empty_f, empty_f, empty_f, empty_o
     query = _encode_variant_keys(chroms, poss, refs, alts)
     idx = np.searchsorted(keys_sorted, query)
     idx_clip = np.minimum(idx, len(keys_sorted) - 1)
@@ -304,7 +316,8 @@ def _match_batch(
     z_arr = np.array(zs, dtype=np.float32)[matched]
     se_arr = np.array(ses, dtype=np.float32)[matched]
     eaf_arr = np.array(eafs, dtype=np.float32)[matched]
-    return rows, z_arr, se_arr, eaf_arr
+    rsid_arr = np.array(rsids if rsids is not None else [""] * len(zs), dtype=object)[matched]
+    return rows, z_arr, se_arr, eaf_arr, rsid_arr
 
 
 def _apply_se_divisor(se: np.ndarray, se_divisor: float) -> np.ndarray:
@@ -317,39 +330,61 @@ def _apply_se_divisor(se: np.ndarray, se_divisor: float) -> np.ndarray:
     return se / np.float32(se_divisor)
 
 
-def _resolve_column(
-    file_path: str,
+def _empty_column() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The all-empty resolution of a column that matched no variant."""
+    empty_i = np.empty(0, dtype=np.int64)
+    empty_f = np.empty(0, dtype=np.float32)
+    return empty_i, empty_f, empty_f, empty_f
+
+
+def _dedup_last_wins(
+    rows: np.ndarray, z: np.ndarray, se: np.ndarray, eaf: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Last-wins dedup by row: unique on the reversed rows returns the first
+    index in reversed order == the last occurrence in original order, so when
+    two source variants lift to one row the later stream occurrence wins and
+    the scattered matrix cell is deterministic."""
+    if not len(rows):
+        return rows, z, se, eaf
+    _, first_in_rev = np.unique(rows[::-1], return_index=True)
+    keep = np.sort(len(rows) - 1 - first_in_rev)
+    return rows[keep], z[keep], se[keep], eaf[keep]
+
+
+def _record_resolved_rsids(
+    rsid_by_row: dict[int, str] | None,
+    named_on_axis: list[int] | None,
+    rows: np.ndarray,
+    rsids: np.ndarray,
+) -> None:
+    """Fold one matched batch into the rsid harvest (issue #255).
+
+    ``rsid_by_row`` keeps each row's first non-empty source rsid, in stream
+    order. ``named_on_axis`` counts the matched associations that carried one,
+    taken from the reader's own rsids so a collection that drops them still
+    leaves the build-time rule its evidence.
+    """
+    if rsid_by_row is not None:
+        for row, rsid in zip(rows.tolist(), rsids.tolist(), strict=True):
+            if rsid and row not in rsid_by_row:
+                rsid_by_row[row] = rsid
+    if named_on_axis is not None:
+        named_on_axis[0] += int(np.count_nonzero(rsids))
+
+
+def _stream_resolved_batches(
+    reader: SourceReader,
     keys_sorted: np.ndarray,
     rows_sorted: np.ndarray,
-    se_divisor: float = 1.0,
-    *,
-    capability: str = GWAS_VCF_CAPABILITY,
-    stored_effect_scale: str = StoredEffectScale.SD.value,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Stream one source file, resolve each association's variant to a row via
-    the sorted key lookup, and return deduped
-    ``(rows int64, z f32, se f32, eaf f32)`` for the column. ``eaf`` is NaN
-    where the source reports no frequency (ADR 0036).
+    rsid_by_row: dict[int, str] | None,
+    named_on_axis: list[int] | None,
+) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
+    """Match one reader's association stream to axis rows, batch by batch.
 
-    The stream is processed in ``_RESOLVE_BATCH``-sized batches (vectorised
-    searchsorted per batch), so worker peak memory is bounded by one batch rather
-    than the whole file. Batches are matched in stream order and concatenated, so
-    the final last-wins dedup by row is identical to processing the whole file at
-    once: when two source variants lift to the same row, the later stream
-    occurrence wins, making the scattered matrix cell deterministic.
-
-    ``capability`` resolves a ``SourceReader`` (issue #20) rather than this
-    module streaming a VCF itself -- ``stored_effect_scale`` is required to
-    construct one but unused past construction here (it is a Pass-2 concern
-    only for readers that attach it to each yielded association).
-
-    ``se_divisor`` divides the returned ``se`` (continuous-trait phenotype-SD
-    standardisation, issue #18: ``stored_se = original_se / sd``). ``z`` is left
-    untouched -- ``z = beta/se`` is invariant to dividing both by the same
-    constant, so only ``se`` needs rescaling. Defaults to 1.0 (no-op) for
-    binary-trait analyses and callers that pre-date issue #18.
+    Batches are ``_RESOLVE_BATCH``-sized, so peak memory is one batch rather
+    than the whole file, and are matched in stream order -- which is what makes
+    the caller's last-wins dedup identical to processing the file at once.
     """
-    reader = resolve_reader(capability, file_path, StoredEffectScale(stored_effect_scale))
     rows_parts: list[np.ndarray] = []
     z_parts: list[np.ndarray] = []
     se_parts: list[np.ndarray] = []
@@ -361,24 +396,21 @@ def _resolve_column(
     zs: list[float] = []
     ses: list[float] = []
     eafs: list[float] = []
+    batch_rsids: list[str] = []
 
     def _flush() -> None:
         if not zs:
             return
-        r, z, se, eaf = _match_batch(
-            chroms, poss, refs, alts, zs, ses, eafs, keys_sorted, rows_sorted
+        matched = _match_batch(
+            chroms, poss, refs, alts, zs, ses, eafs, keys_sorted, rows_sorted, batch_rsids
         )
-        rows_parts.append(r)
-        z_parts.append(z)
-        se_parts.append(se)
-        eaf_parts.append(eaf)
-        chroms.clear()
-        poss.clear()
-        refs.clear()
-        alts.clear()
-        zs.clear()
-        ses.clear()
-        eafs.clear()
+        _record_resolved_rsids(rsid_by_row, named_on_axis, matched[0], matched[4])
+        rows_parts.append(matched[0])
+        z_parts.append(matched[1])
+        se_parts.append(matched[2])
+        eaf_parts.append(matched[3])
+        for buffer in (chroms, poss, refs, alts, zs, ses, eafs, batch_rsids):
+            buffer.clear()
 
     for assoc in reader.stream_associations():
         chroms.append(assoc.chromosome)
@@ -388,26 +420,52 @@ def _resolve_column(
         zs.append(assoc.z)
         ses.append(assoc.se)
         eafs.append(float("nan") if assoc.eaf is None else assoc.eaf)
+        batch_rsids.append(assoc.rsid)
         if len(zs) >= _RESOLVE_BATCH:
             _flush()
     _flush()
+    return rows_parts, z_parts, se_parts, eaf_parts
 
-    if not rows_parts:
-        empty_i = np.empty(0, dtype=np.int64)
-        empty_f = np.empty(0, dtype=np.float32)
-        return empty_i, empty_f, empty_f, empty_f
 
-    rows = np.concatenate(rows_parts)
-    z_arr = np.concatenate(z_parts)
-    se_arr = np.concatenate(se_parts)
-    eaf_arr = np.concatenate(eaf_parts)
+def _resolve_column(
+    file_path: str,
+    keys_sorted: np.ndarray,
+    rows_sorted: np.ndarray,
+    se_divisor: float = 1.0,
+    *,
+    capability: str = GWAS_VCF_CAPABILITY,
+    stored_effect_scale: str = StoredEffectScale.SD.value,
+    rsid_by_row: dict[int, str] | None = None,
+    named_on_axis: list[int] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Stream one source file, resolve each association's variant to a row via
+    the sorted key lookup, and return deduped
+    ``(rows int64, z f32, se f32, eaf f32)`` for the column. ``eaf`` is NaN
+    where the source reports no frequency (ADR 0036).
 
-    if len(rows):
-        # last-wins dedup by row: unique on the reversed rows returns the first
-        # index in reversed order == the last occurrence in original order.
-        _, first_in_rev = np.unique(rows[::-1], return_index=True)
-        keep = np.sort(len(rows) - 1 - first_in_rev)
-        rows, z_arr, se_arr, eaf_arr = rows[keep], z_arr[keep], se_arr[keep], eaf_arr[keep]
+    ``capability`` resolves a ``SourceReader`` (issue #20) rather than this
+    module streaming a VCF itself -- ``stored_effect_scale`` is required to
+    construct one but unused past construction here (it is a Pass-2 concern
+    only for readers that attach it to each yielded association).
+
+    ``se_divisor`` divides the returned ``se`` (continuous-trait phenotype-SD
+    standardisation, issue #18: ``stored_se = original_se / sd``). ``z`` is left
+    untouched -- ``z = beta/se`` is invariant to dividing both by the same
+    constant, so only ``se`` needs rescaling. Defaults to 1.0 (no-op) for
+    binary-trait analyses and callers that pre-date issue #18.
+
+    ``rsid_by_row``/``named_on_axis`` are the single-pass build's identifier
+    harvest (issue #255), described with ``_record_resolved_rsids``.
+    """
+    reader = resolve_reader(capability, file_path, StoredEffectScale(stored_effect_scale))
+    parts = _stream_resolved_batches(reader, keys_sorted, rows_sorted, rsid_by_row, named_on_axis)
+    if not parts[0]:
+        return _empty_column()
+    rows = np.concatenate(parts[0])
+    z_arr = np.concatenate(parts[1])
+    se_arr = np.concatenate(parts[2])
+    eaf_arr = np.concatenate(parts[3])
+    rows, z_arr, se_arr, eaf_arr = _dedup_last_wins(rows, z_arr, se_arr, eaf_arr)
     se_arr = _apply_se_divisor(se_arr, se_divisor)
     return rows, z_arr, se_arr, eaf_arr
 
@@ -433,23 +491,165 @@ def _spill_column(
     tmp.replace(final)
 
 
-def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
+def _spill_column_rsids(
+    spill_dir: Path, col_idx: int, rsid_by_row: dict[int, str]
+) -> None:
+    """Spill one column's ``{dense row: first source rsid}`` to disk (issue #255).
+
+    A side file rather than a return value: a genome-wide column names millions
+    of variants, and no large object may cross the fork pool's pipe (the rule
+    the matrix spills already keep). Rows are integers and rsids are short, so
+    the file is small next to the column's own ``.npz``. Written only when the
+    column named something, so a source with no rsids leaves no file -- and the
+    merge reads absence as "named none", never as "collection broke".
+    """
+    if not rsid_by_row:
+        return
+    final = spill_dir / f"{col_idx}.rsid.tsv"
+    tmp = spill_dir / f"{col_idx}.rsid.tmp.tsv"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        for row, rsid in rsid_by_row.items():
+            handle.write(f"{row}\t{rsid}\n")
+    tmp.replace(final)
+
+
+def _read_column_rsids(path: Path) -> dict[int, str]:
+    """One column's ``{dense row: rsid}`` side file, or ``{}`` when absent."""
+    if not path.exists():
+        return {}
+    with open(path, encoding="utf-8") as handle:
+        return {
+            int(row): rsid
+            for row, rsid in (line.rstrip("\n").split("\t", 1) for line in handle if line.strip())
+        }
+
+
+def _merge_pass2_rsids(
+    spill_dir: Path,
+    manifest_rows: Sequence[_ManifestRow],
+    analysis_index: Mapping[str, int],
+    alids: Sequence[str],
+    reference_rsids: Mapping[str, str],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Rekey Pass 2's harvested source rsids onto the axis (issue #255).
+
+    Columns are read in manifest order and rows within a column in the order
+    the source streamed them, so the first non-empty rsid per row wins --
+    exactly the order Pass 1's ``(rank, site)`` reduction gives. The reference's
+    own rsids fill axis rows no source named (an unobserved reference variant);
+    a source's name always wins where one exists, so a ``--variant-reference``
+    build of the same sources agrees with the two-pass build whether the
+    reference carries identifiers or not.
+
+    Returns ``(merged_by_alid, source_by_alid)``: the map the table is written
+    from, and the subset the sources supplied, which the build-time rule checks
+    actually reached it.
+    """
+    by_row: dict[int, str] = {}
+    for row in manifest_rows:
+        col = analysis_index[row.trait_id]
+        for dense_row, rsid in _read_column_rsids(spill_dir / f"{col}.rsid.tsv").items():
+            if rsid and dense_row not in by_row:
+                by_row[dense_row] = rsid
+    source_by_alid: dict[str, str] = {}
+    for dense_row, rsid in by_row.items():
+        if not 0 <= dense_row < len(alids):
+            raise ValueError(
+                f"Pass 2 spilled an rsid for dense row {dense_row}, outside the "
+                f"axis of {len(alids)} variants"
+            )
+        source_by_alid[alids[dense_row]] = rsid
+    return {**reference_rsids, **source_by_alid}, source_by_alid
+
+
+def _rewrite_variant_axis(
+    staged: StagedRelease,
+    axis: _AxisMetadata,
+    rsid_by_alid: Mapping[str, str],
+    source_alids: Sequence[str | None],
+) -> None:
+    """Rewrite the variant table and its sidecars with the merged rsids.
+
+    The axis is written before Pass 2 (its lookup arrays are what Pass 2
+    routes with) and Pass 2's harvested identifiers only exist after it, so the
+    one table write is followed by this one. Only the variant axis is rewritten;
+    the SQLite index does not carry rsids.
+    """
+    write_variant_axis(
+        staged.path, _canonical_variants(axis.alids), rsid_by_alid, list(source_alids)
+    )
+
+
+def _column_rsid_collectors(
+    collect: bool,
+) -> tuple[dict[int, str] | None, list[int] | None]:
+    """The single-pass build's two rsid collectors, or ``(None, None)``.
+
+    Created together because they are one harvest (issue #255): a worker that
+    keeps the ``{row: first rsid}`` map also keeps the independent count the
+    build-time rule checks the map against.
+    """
+    if not collect:
+        return None, None
+    return {}, [0]
+
+
+def _resolve_and_spill_column(
+    spill_dir: Path,
+    col_idx: int,
+    file_path: str,
+    keys_sorted: np.ndarray,
+    rows_sorted: np.ndarray,
+    se_divisor: float,
+    capability: str,
+    stored_effect_scale: str,
+    collect_rsids: bool,
+) -> int:
+    """Resolve one Analysis's column, spill its values and its rsid harvest.
+
+    Returns the count of on-axis associations that named an rsid -- small, so
+    it can cross the fork pool's pipe while the matrices stay on disk.
+    """
+    rsid_by_row, named_on_axis = _column_rsid_collectors(collect_rsids)
+    rows, z, se, eaf = _resolve_column(
+        file_path,
+        keys_sorted,
+        rows_sorted,
+        se_divisor,
+        capability=capability,
+        stored_effect_scale=stored_effect_scale,
+        rsid_by_row=rsid_by_row,
+        named_on_axis=named_on_axis,
+    )
+    _spill_column(spill_dir, col_idx, rows, z, se, eaf)
+    if rsid_by_row is not None:
+        _spill_column_rsids(spill_dir, col_idx, rsid_by_row)
+    return named_on_axis[0] if named_on_axis is not None else 0
+
+
+def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, int]:
     """Resolve one column against the fork-inherited numpy lookup and spill it.
-    Returns col_idx only — the compact result stays on disk, never in a pipe."""
+    Returns col_idx and the count of on-axis associations that named an rsid —
+    small ints, so the compact result still stays on disk, never in a pipe.
+    The count is the build-time rule's independent signal (issue #255): it is
+    taken from the reader's own rsids, so a collection that drops them still
+    leaves the evidence that the sources named some."""
     assert _pass2_keys_sorted is not None
     assert _pass2_rows_sorted is not None
     assert _pass2_spill_dir is not None
     col_idx, file_path, se_divisor, capability, stored_effect_scale = task
-    rows, z, se, eaf = _resolve_column(
+    named = _resolve_and_spill_column(
+        _pass2_spill_dir,
+        col_idx,
         file_path,
         _pass2_keys_sorted,
         _pass2_rows_sorted,
         se_divisor,
-        capability=capability,
-        stored_effect_scale=stored_effect_scale,
+        capability,
+        stored_effect_scale,
+        _pass2_collect_rsids,
     )
-    _spill_column(_pass2_spill_dir, col_idx, rows, z, se, eaf)
-    return col_idx
+    return col_idx, named
 
 
 def _pass2_worker_tasks(
@@ -1404,8 +1604,8 @@ def build_dense_from_vcf_manifest(
     hg19→hg38 lift (issue #85); ``eaf_reference``/``eaf_reference_ancestry``/
     ``allow_unverified_eaf`` with EAF orientation verification (issue #115, ADR 0037 §6).
     ``variant_reference`` (issue #185) supplies a precomputed axis
-    (``*.variant-ref.tsv.gz``, an ALID list, or a store ``variants.tsv.gz``);
-    Pass 1 and liftover are then bypassed.
+    (``*.variant-ref.tsv.gz``, an ALID list, or a store ``variants.tsv.gz``),
+    bypassing Pass 1 and liftover; Pass 2 re-harvests rsids (#255).
     """
     manifest_rows = _read_manifest(
         manifest_path,
@@ -1495,6 +1695,12 @@ class _PreparedBuild:
     #: the inline two-pass build. Recorded in the store manifest's provenance
     #: so the axis's origin is auditable (issue #185).
     variant_reference: str | None = None
+    #: The axis's initial rsid map (a reference's own, or Pass 1's) and the
+    #: per-row ``source_alid`` provenance, kept so a single-pass build can
+    #: rewrite the variant table once Pass 2 has harvested the sources' rsids
+    #: (issue #255). Empty/null for the two-pass build, which needs neither.
+    reference_rsids: dict[str, str] = field(default_factory=dict)
+    source_alids: list[str | None] = field(default_factory=list)
 
 
 def _axis_metadata(
@@ -1551,32 +1757,41 @@ def _source_alids_by_alid(
     return [hg38_to_source.get(alid) for alid in hg38_alids]
 
 
-def _write_axis_and_index(
-    staged: StagedRelease,
-    source_lookup: Mapping[tuple[str, int, str, str], str],
-    axis: _AxisMetadata,
-    rsid_by_alid: Mapping[str, str],
-    chunk_shape: tuple[int, int],
-) -> None:
-    """Write the SQLite index and the tabix variant axis.
-
-    The variant axis carries one canonical variant per stored row with its
-    rsid (first named wins) and the source-build provenance each row resolved
-    from (``_source_alids_by_alid`` -- collisions stay blank, never guessed).
-    """
-    _write_index(staged, axis.alids, axis.analyses, chunk_shape)
-    canonical_variants = [
+def _canonical_variants(alids: Sequence[str]) -> list[CanonicalVariant]:
+    """The ``CanonicalVariant`` rows of an ALID axis, in axis order."""
+    return [
         CanonicalVariant(
             chromosome=chrom,
             position=int(pos_str),
             effect_allele=a1,
             other_allele=a2,
         )
-        for alid in axis.alids
+        for alid in alids
         for chrom, pos_str, a1, a2 in [alid.split(":")]
     ]
+
+
+def _write_axis_and_index(
+    staged: StagedRelease,
+    source_lookup: Mapping[tuple[str, int, str, str], str],
+    axis: _AxisMetadata,
+    rsid_by_alid: Mapping[str, str],
+    chunk_shape: tuple[int, int],
+) -> list[str | None]:
+    """Write the SQLite index and the tabix variant axis.
+
+    The variant axis carries one canonical variant per stored row with its
+    rsid (first named wins) and the source-build provenance each row resolved
+    from (``_source_alids_by_alid`` -- collisions stay blank, never guessed).
+    The provenance list is returned so a single-pass build can rewrite the axis
+    with Pass 2's harvested rsids without recomputing it (issue #255).
+    """
+    _write_index(staged, axis.alids, axis.analyses, chunk_shape)
     source_alids = _source_alids_by_alid(source_lookup, axis.alids)
-    write_variant_axis(staged.path, canonical_variants, rsid_by_alid, source_alids)
+    write_variant_axis(
+        staged.path, _canonical_variants(axis.alids), rsid_by_alid, source_alids
+    )
+    return source_alids
 
 
 def _build_pass2_lookup(
@@ -1683,13 +1898,21 @@ def _prepare_axis(
         manifest_rows, chain_file, liftover_failure_threshold, n_workers, variant_reference,
     )
     axis, variant_index = _axis_metadata(source_lookup, manifest_rows, alids=alids)
-    _write_axis_and_index(staged, source_lookup, axis, rsid_by_alid, chunk_shape)
+    source_alids = _write_axis_and_index(
+        staged, source_lookup, axis, rsid_by_alid, chunk_shape
+    )
     keys_sorted, rows_sorted = _build_pass2_lookup(source_lookup, variant_index)
+    single_pass = variant_reference is not None
     return _PreparedBuild(
         axis=axis,
         keys_sorted=keys_sorted,
         rows_sorted=rows_sorted,
-        variant_reference=str(variant_reference) if variant_reference is not None else None,
+        variant_reference=str(variant_reference) if single_pass else None,
+        # Only a single-pass build rewrites the axis after Pass 2; a two-pass
+        # build's Pass 1 rsids are already final, so it keeps neither the
+        # initial map nor the provenance list alive through Pass 2.
+        reference_rsids=dict(rsid_by_alid) if single_pass else {},
+        source_alids=source_alids if single_pass else [],
     )
 
 
@@ -1701,28 +1924,35 @@ def _spill_columns_serial(
     rows_sorted: np.ndarray,
     axis: _AxisMetadata,
     pass2_start: float,
-) -> None:
+    collect_rsids: bool = False,
+) -> int:
     """Pass 2 for ``n_workers <= 1``: resolve and spill each column in this
-    process, one Analysis at a time, so peak memory is one resolved column."""
+    process, one Analysis at a time, so peak memory is one resolved column.
+    ``collect_rsids`` is the single-pass build's identifier harvest (issue #255).
+    Returns the count of on-axis associations that named an rsid."""
     log.info(
         "Pass 2: resolving %d analyses × %d variants (n_workers=1)",
         len(axis.analyses),
         len(axis.alids),
     )
+    named_on_axis = 0
     for i, row in enumerate(manifest_rows):
         col_idx = analysis_index[row.trait_id]
-        rows, z, se, eaf = _resolve_column(
+        named_on_axis += _resolve_and_spill_column(
+            spill_dir,
+            col_idx,
             row.file_path,
             keys_sorted,
             rows_sorted,
             row.se_divisor,
-            capability=row.source_reader_capability,
-            stored_effect_scale=row.stored_effect_scale,
+            row.source_reader_capability,
+            row.stored_effect_scale,
+            collect_rsids,
         )
-        _spill_column(spill_dir, col_idx, rows, z, se, eaf)
         _log_progress(
             "Pass 2", i + 1, len(axis.analyses), pass2_start, f"last: {row.trait_id}", every=25
         )
+    return named_on_axis
 
 
 def _spill_columns_parallel(
@@ -1734,13 +1964,15 @@ def _spill_columns_parallel(
     axis: _AxisMetadata,
     n_workers: int,
     pass2_start: float,
-) -> None:
+    collect_rsids: bool = False,
+) -> int:
     """Pass 2 for ``n_workers > 1``: resolve each column in a fork pool.
 
     Workers inherit the numpy lookup arrays at fork (see the module note on
     ``_pass2_keys_sorted``) and write only their own ``.npz``, so nothing large
     crosses the pipe; the parent waits on completion. The globals are reset
-    whether or not every task succeeded.
+    whether or not every task succeeded. ``collect_rsids`` is the single-pass
+    build's identifier harvest (issue #255).
     """
     log.info(
         "Pass 2: resolving %d analyses × %d variants (n_workers=%d)",
@@ -1748,17 +1980,20 @@ def _spill_columns_parallel(
         len(axis.alids),
         n_workers,
     )
-    global _pass2_keys_sorted, _pass2_rows_sorted, _pass2_spill_dir
+    global _pass2_keys_sorted, _pass2_rows_sorted, _pass2_spill_dir, _pass2_collect_rsids
     _pass2_keys_sorted = keys_sorted
     _pass2_rows_sorted = rows_sorted
     _pass2_spill_dir = spill_dir
+    _pass2_collect_rsids = collect_rsids
+    named_on_axis = 0
     try:
         with _fork_pool(n_workers) as pool:
             id_by_col = {analysis_index[row.trait_id]: row.trait_id for row in manifest_rows}
             tasks = _pass2_worker_tasks(manifest_rows, analysis_index)
             futures = [pool.submit(_pass2_worker, t) for t in tasks]
             for i, fut in enumerate(as_completed(futures)):
-                col_idx = fut.result()
+                col_idx, named = fut.result()
+                named_on_axis += named
                 _log_progress(
                     "Pass 2",
                     i + 1,
@@ -1771,6 +2006,48 @@ def _spill_columns_parallel(
         _pass2_keys_sorted = None
         _pass2_rows_sorted = None
         _pass2_spill_dir = None
+        _pass2_collect_rsids = False
+    return named_on_axis
+
+
+def _finalise_pass2_rsids(
+    staged: StagedRelease,
+    spill_dir: Path,
+    manifest_rows: Sequence[_ManifestRow],
+    prepared: _PreparedBuild,
+    named_on_axis: int,
+) -> None:
+    """Merge Pass 2's harvested rsids into the written variant axis (issue #255).
+
+    A single-pass build writes the axis from the reference alone (its rsids
+    blank when the reference is a plain ALID list), so the source identifiers
+    Pass 2 collected are folded in here, before any array is written. The
+    build-time rule fires first: `named_on_axis` is the reader's own count of
+    on-axis associations that carried an rsid, so a source-named identifier
+    that never reached the table is a build failure, not a blank cell. The
+    table is then rewritten only if the harvest added or changed one.
+    """
+    merged, collected = _merge_pass2_rsids(
+        spill_dir,
+        manifest_rows,
+        prepared.axis.analysis_index,
+        prepared.axis.alids,
+        prepared.reference_rsids,
+    )
+    require_source_rsids_retained(collected, merged)
+    if named_on_axis and not collected:
+        raise ValueError(
+            f"{named_on_axis} association(s) on the variant axis named an rsid, but the "
+            "build harvested none of them; refusing to publish a store whose source "
+            "identifiers silently disappeared -- a wrong answer indistinguishable from "
+            "a source that named none"
+        )
+    if merged != prepared.reference_rsids:
+        log.info(
+            "Single-pass build: %d source rsid(s) collected for the variant axis",
+            len(collected),
+        )
+        _rewrite_variant_axis(staged, prepared.axis, merged, prepared.source_alids)
 
 
 def _survey_and_verify_eaf(
@@ -1858,6 +2135,38 @@ def _write_encoded_bands(
     )
 
 
+def _spill_all_columns(
+    staged: StagedRelease,
+    spill_dir: Path,
+    manifest_rows: Sequence[_ManifestRow],
+    prepared: _PreparedBuild,
+    n_workers: int,
+    pass2_start: float,
+) -> None:
+    """Pass 2 for one build: spill every column, then harvest rsids if asked.
+
+    The single-pass build's identifier harvest runs immediately after the
+    spills exist and before any array is written, so its build-time rule can
+    refuse the build while the release is still empty (issue #255).
+    """
+    collect_rsids = prepared.variant_reference is not None
+    if n_workers <= 1:
+        named_on_axis = _spill_columns_serial(
+            manifest_rows, prepared.axis.analysis_index, spill_dir,
+            prepared.keys_sorted, prepared.rows_sorted, prepared.axis, pass2_start,
+            collect_rsids=collect_rsids,
+        )
+    else:
+        named_on_axis = _spill_columns_parallel(
+            manifest_rows, prepared.axis.analysis_index, spill_dir,
+            prepared.keys_sorted, prepared.rows_sorted,
+            prepared.axis, n_workers, pass2_start,
+            collect_rsids=collect_rsids,
+        )
+    if collect_rsids:
+        _finalise_pass2_rsids(staged, spill_dir, manifest_rows, prepared, named_on_axis)
+
+
 def _spill_verify_and_encode(
     staged: StagedRelease,
     out: Path,
@@ -1883,17 +2192,7 @@ def _spill_verify_and_encode(
     )
     try:
         pass2_start = time.monotonic()
-        if n_workers <= 1:
-            _spill_columns_serial(
-                manifest_rows, prepared.axis.analysis_index, spill_dir,
-                prepared.keys_sorted, prepared.rows_sorted, prepared.axis, pass2_start,
-            )
-        else:
-            _spill_columns_parallel(
-                manifest_rows, prepared.axis.analysis_index, spill_dir,
-                prepared.keys_sorted, prepared.rows_sorted,
-                prepared.axis, n_workers, pass2_start,
-            )
+        _spill_all_columns(staged, spill_dir, manifest_rows, prepared, n_workers, pass2_start)
         eaf_survey, eaf_report = _survey_and_verify_eaf(
             spill_dir,
             manifest_rows,

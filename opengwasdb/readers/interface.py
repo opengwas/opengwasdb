@@ -134,6 +134,12 @@ class ReaderAssociation:
     eaf: float | None = None
     # Present only with an independent provider-backed declaration (#175).
     imputation_score: ImputationScore = ImputationScore()
+    #: The source's own identifier for this row, exactly as
+    #: :meth:`SourceReader.stream_variants` reports it -- blank when the source
+    #: records none, never fabricated. It rides on the association stream so a
+    #: single-pass build can collect identifiers from rows it already reads
+    #: (issue #255) rather than re-reading every source for them.
+    rsid: str = ""
 
     def __post_init__(self) -> None:
         if self.se < 0:

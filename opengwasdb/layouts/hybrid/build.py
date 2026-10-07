@@ -146,6 +146,7 @@ from opengwasdb.layouts.hybrid.layout import (
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     check_hash,
+    encode_key,
     encode_keys,
     is_hashed,
     placed_hashed_values,
@@ -172,7 +173,11 @@ from opengwasdb.readers.interface import ImputationScoreStatus
 from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
-from opengwasdb.variants.reference import VariantReference, read_variant_reference
+from opengwasdb.variants.reference import (
+    VariantReference,
+    read_variant_reference,
+    require_source_rsids_retained,
+)
 
 log = logging.getLogger(__name__)
 
@@ -255,6 +260,15 @@ _pass2_info_policies: Mapping[int, InfoScorePolicy] | None = None
 # Column index -> that Analysis's declared MAF policy (stores #176), carried the
 # same way as the INFO policy above.
 _pass2_maf_policies: Mapping[int, MafPolicy] | None = None
+# The pre-fold dense and shared ALID lists, fork-inherited, so a worker's rsid
+# harvest can key on-axis associations by ALID rather than pre-fold index
+# (issue #255). Only set for a single-pass build.
+_pass2_panel_alids: list[str] | None = None
+_pass2_shared_alids: list[str] | None = None
+# Whether this Pass 2 harvests source rsids at all (issue #255): a two-pass
+# build already has them from Pass 1, and collecting them again off the
+# filtered association stream could only disagree with that.
+_pass2_collect_rsids = False
 
 
 def _build_routing_index(
@@ -341,10 +355,11 @@ def _match_hybrid_batch(
     zs: list[float],
     ses: list[float],
     eafs: list[float],
+    rsids: list[str] | None = None,
 ) -> tuple[
-    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
 ]:
     """Resolve one batch to ``(dense, overflow, off_reference)`` arrays.
 
@@ -352,16 +367,21 @@ def _match_hybrid_batch(
     off-reference entry -- a source coordinate the routing index does not hold
     -- carries its raw ``chrom:pos:ref:alt`` key instead: the reference never
     named it, so its shared index is only assigned after Pass 2. Order
-    preserving within each result.
+    preserving within each result. Each result's last array is the source's own
+    rsid (``""`` when it named none), masked exactly like the statistics, so a
+    single-pass build can collect identifiers off the rows it already reads
+    (issue #255).
     """
     z_arr = np.array(zs, dtype=np.float32)
     se_arr = np.array(ses, dtype=np.float32)
     eaf_arr = np.array(eafs, dtype=np.float32)
+    rsid_arr = np.array(rsids if rsids is not None else [""] * len(zs), dtype=object)
     empty = (
         np.empty(0, dtype=np.int64),
         np.empty(0, dtype=np.float32),
         np.empty(0, dtype=np.float32),
         np.empty(0, dtype=np.float32),
+        np.empty(0, dtype=object),
     )
     if len(keys_sorted) == 0:
         keys = np.array(
@@ -371,7 +391,7 @@ def _match_hybrid_batch(
             ],
             dtype=object,
         )
-        return empty, empty, (keys, z_arr, se_arr, eaf_arr)
+        return empty, empty, (keys, z_arr, se_arr, eaf_arr, rsid_arr)
     query = _encode_variant_keys(
         chroms, poss, [ref.upper() for ref in refs], [alt.upper() for alt in alts]
     )
@@ -381,6 +401,7 @@ def _match_hybrid_batch(
     panel = ispanel_sorted[idx_clip[matched]]
     tgt = targets_sorted[idx_clip[matched]]
     z_m, se_m, eaf_m = z_arr[matched], se_arr[matched], eaf_arr[matched]
+    rsid_m = rsid_arr[matched]
     unmatched = ~matched
     keys = np.array(
         [
@@ -390,10 +411,76 @@ def _match_hybrid_batch(
         dtype=object,
     )
     return (
-        (tgt[panel], z_m[panel], se_m[panel], eaf_m[panel]),
-        (tgt[~panel], z_m[~panel], se_m[~panel], eaf_m[~panel]),
-        (keys, z_arr[unmatched], se_arr[unmatched], eaf_arr[unmatched]),
+        (tgt[panel], z_m[panel], se_m[panel], eaf_m[panel], rsid_m[panel]),
+        (tgt[~panel], z_m[~panel], se_m[~panel], eaf_m[~panel], rsid_m[~panel]),
+        (keys, z_arr[unmatched], se_arr[unmatched], eaf_arr[unmatched], rsid_arr[unmatched]),
     )
+
+
+def _collect_axis_rsids(
+    dense: tuple[np.ndarray, ...],
+    overflow: tuple[np.ndarray, ...],
+    rsid_by_alid: dict[str, str] | None,
+    panel_alids: list[str] | None,
+    shared_alids: list[str] | None,
+) -> None:
+    """Collect one batch's on-axis source rsids by ALID (issue #255).
+
+    Keyed by ALID, never by pre-fold index: the fold appends off-reference
+    variants and renumbers the shared axis, but the ALIDs it does not touch
+    stay valid, so a dense row's panel ALID and a known overflow's shared ALID
+    survive it. First non-empty wins within a source, in stream order; the
+    caller's column order supplies the manifest-order tie-break.
+    """
+    if rsid_by_alid is None:
+        return
+    if panel_alids is None or shared_alids is None:
+        raise ValueError("rsid collection needs the panel and shared ALID lists")
+    for target, rsid in zip(dense[0].tolist(), dense[4].tolist(), strict=True):
+        if rsid:
+            rsid_by_alid.setdefault(panel_alids[target], rsid)
+    for target, rsid in zip(overflow[0].tolist(), overflow[4].tolist(), strict=True):
+        if rsid:
+            rsid_by_alid.setdefault(shared_alids[target], rsid)
+
+
+def _collect_off_reference_rsids(
+    unknown: tuple[np.ndarray, ...], rsid_by_key: dict[str, str] | None
+) -> None:
+    """Collect one batch's off-reference rsids by raw source key.
+
+    The key is the ``chrom:pos:REF:ALT`` string the fold will resolve, so it is
+    the only handle that exists until resolution (issue #255).
+    """
+    if rsid_by_key is None:
+        return
+    for key, rsid in zip(unknown[0].tolist(), unknown[4].tolist(), strict=True):
+        if rsid:
+            rsid_by_key.setdefault(str(key), rsid)
+
+
+def _collect_batch_rsids(
+    dense: tuple[np.ndarray, ...],
+    overflow: tuple[np.ndarray, ...],
+    unknown: tuple[np.ndarray, ...],
+    rsid_by_alid: dict[str, str] | None,
+    rsid_by_key: dict[str, str] | None,
+    panel_alids: list[str] | None,
+    shared_alids: list[str] | None,
+    named_on_axis: list[int] | None = None,
+) -> None:
+    """Fold one matched batch into the rsid collectors (issue #255).
+
+    ``named_on_axis`` counts the on-axis associations that carried an rsid,
+    taken from the reader's own values so a collection that drops the maps
+    still leaves the build-time rule its evidence.
+    """
+    _collect_axis_rsids(dense, overflow, rsid_by_alid, panel_alids, shared_alids)
+    _collect_off_reference_rsids(unknown, rsid_by_key)
+    if named_on_axis is not None:
+        named_on_axis[0] += int(np.count_nonzero(dense[4])) + int(
+            np.count_nonzero(overflow[4])
+        )
 
 
 def _extend(accumulators: tuple[list[np.ndarray], ...], parts: tuple[np.ndarray, ...]) -> None:
@@ -444,6 +531,11 @@ def _resolve_column_hybrid(
     stored_effect_scale: str = StoredEffectScale.SD.value,
     info_score_policy: InfoScorePolicy | None = None,
     maf_policy: MafPolicy | None = None,
+    rsid_by_alid: dict[str, str] | None = None,
+    rsid_by_key: dict[str, str] | None = None,
+    panel_alids: list[str] | None = None,
+    shared_alids: list[str] | None = None,
+    named_on_axis: list[int] | None = None,
 ) -> tuple[
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
@@ -473,6 +565,14 @@ def _resolve_column_hybrid(
     reaches neither component, the EAF survey nor the top-hit counts.
     ``counts`` reports the dispositions behind that filter: the associations
     this reader yielded, not canonical source rows.
+
+    ``rsid_by_alid``/``rsid_by_key``, when given, collect each association's
+    first non-empty source rsid -- on-axis targets by ALID, off-reference ones
+    by their raw source key -- so a single-pass build harvests identifiers from
+    the rows it already reads (issue #255). ``panel_alids``/``shared_alids``
+    resolve the pre-fold dense and shared target indices those collections are
+    keyed by; the shared ALIDs survive the fold (it only appends off-reference
+    variants), so keying by ALID rather than index keeps the map valid.
     """
     info_score_policy = info_score_policy or InfoScorePolicy()
     maf_policy = maf_policy or MafPolicy()
@@ -504,6 +604,7 @@ def _resolve_column_hybrid(
     eafs: list[float] = []
     scores: list[float | None] = []
     statuses: list[ImputationScoreStatus] = []
+    batch_rsids: list[str] = []
     counts = AdmissionCounts()
 
     def _flush() -> None:
@@ -524,7 +625,7 @@ def _resolve_column_hybrid(
         )
         counts += admission.counts
         _retain_rows(
-            (chroms, poss, refs, alts, zs, ses, eafs),
+            (chroms, poss, refs, alts, zs, ses, eafs, batch_rsids),
             admission.keep,
         )
         try:
@@ -541,14 +642,25 @@ def _resolve_column_hybrid(
                 zs,
                 ses,
                 eafs,
+                batch_rsids,
             )
-            _extend((d_idx, d_z, d_se, d_eaf), dense)
-            _extend((o_idx, o_z, o_se, o_eaf), overflow)
+            _collect_batch_rsids(
+                dense,
+                overflow,
+                unknown,
+                rsid_by_alid,
+                rsid_by_key,
+                panel_alids,
+                shared_alids,
+                named_on_axis,
+            )
+            _extend((d_idx, d_z, d_se, d_eaf), dense[:4])
+            _extend((o_idx, o_z, o_se, o_eaf), overflow[:4])
             if len(unknown[0]):
                 u_keys.extend(str(key) for key in unknown[0])
-                _extend((u_z, u_se, u_eaf), unknown[1:])
+                _extend((u_z, u_se, u_eaf), unknown[1:4])
         finally:
-            for lst in (chroms, poss, refs, alts, zs, ses, eafs):
+            for lst in (chroms, poss, refs, alts, zs, ses, eafs, batch_rsids):
                 lst.clear()
 
     for assoc in reader.stream_associations():
@@ -561,6 +673,7 @@ def _resolve_column_hybrid(
         eafs.append(float("nan") if assoc.eaf is None else assoc.eaf)
         scores.append(assoc.imputation_score.value)
         statuses.append(assoc.imputation_score.status)
+        batch_rsids.append(assoc.rsid)
         if len(zs) >= _RESOLVE_BATCH:
             _flush()
     _flush()
@@ -614,12 +727,47 @@ def _resolve_column_hybrid(
     )
 
 
+def _write_rsid_side_file(path: Path, rsid_by_key: Mapping[str, str]) -> None:
+    """Write a column's ``{key: first source rsid}`` side file (issue #255).
+
+    A side file rather than a return value, for the reason every other Pass 2
+    product is: a genome-wide column names millions of variants and no large
+    object may cross the fork pool's pipe. ``key`` is an ALID for an on-axis
+    association and a raw ``chrom:pos:REF:ALT`` for an off-reference one -- both
+    tab-free, so one line each. Absent when the column named nothing, so the
+    merge reads absence as "named none", never as "collection broke".
+    """
+    if not rsid_by_key:
+        return
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as handle:
+        for key, rsid in rsid_by_key.items():
+            handle.write(f"{key}\t{rsid}\n")
+    tmp.replace(path)
+
+
+def _read_hybrid_column_rsids(path: Path) -> dict[str, str]:
+    """One column's rsid side file, or ``{}`` when the column named none."""
+    if not path.exists():
+        return {}
+    with open(path, encoding="utf-8") as handle:
+        return {
+            key: rsid
+            for key, rsid in (
+                line.rstrip("\n").split("\t", 1) for line in handle if line.strip()
+            )
+        }
+
+
 def _spill_hybrid_column(
     spill_dir: Path,
     col_idx: int,
     dense: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     overflow: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     off_reference: _OffReferenceSpill,
+    *,
+    rsid_by_alid: Mapping[str, str] | None = None,
+    rsid_by_key: Mapping[str, str] | None = None,
 ) -> None:
     """Spill one resolved study column: dense rows to ``{col}.npz`` (the layout the
     dense band-writer consumes), overflow to ``{col}.ovf.npz``, and off-reference
@@ -646,9 +794,13 @@ def _spill_hybrid_column(
         tmp.replace(final)
         if len(u_hashed_index):
             _write_unknown_side_file(spill_dir, col_idx, u_hashed_raw)
+    if rsid_by_alid:
+        _write_rsid_side_file(spill_dir / f"{col_idx}.rsid.tsv", rsid_by_alid)
+    if rsid_by_key:
+        _write_rsid_side_file(spill_dir / f"{col_idx}.rsid.off.tsv", rsid_by_key)
 
 
-def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, AdmissionCounts]:
+def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, AdmissionCounts, int]:
     assert _pass2_keys_sorted is not None
     assert _pass2_targets_sorted is not None
     assert _pass2_ispanel_sorted is not None
@@ -656,6 +808,9 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, Admissio
     assert _pass2_info_policies is not None
     assert _pass2_maf_policies is not None
     col_idx, file_path, se_divisor, capability, stored_effect_scale = task
+    rsid_by_alid: dict[str, str] | None = {} if _pass2_collect_rsids else None
+    rsid_by_key: dict[str, str] | None = {} if _pass2_collect_rsids else None
+    named: list[int] | None = [0] if _pass2_collect_rsids else None
     dense, overflow, off_reference, counts = _resolve_column_hybrid(
         file_path,
         _pass2_keys_sorted,
@@ -666,9 +821,22 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, Admissio
         stored_effect_scale=stored_effect_scale,
         info_score_policy=_pass2_info_policies[col_idx],
         maf_policy=_pass2_maf_policies[col_idx],
+        rsid_by_alid=rsid_by_alid,
+        rsid_by_key=rsid_by_key,
+        panel_alids=_pass2_panel_alids,
+        shared_alids=_pass2_shared_alids,
+        named_on_axis=named,
     )
-    _spill_hybrid_column(_pass2_spill_dir, col_idx, dense, overflow, off_reference)
-    return col_idx, counts
+    _spill_hybrid_column(
+        _pass2_spill_dir,
+        col_idx,
+        dense,
+        overflow,
+        off_reference,
+        rsid_by_alid=rsid_by_alid,
+        rsid_by_key=rsid_by_key,
+    )
+    return col_idx, counts, (named[0] if named is not None else 0)
 
 
 @dataclass(frozen=True)
@@ -855,6 +1023,11 @@ class _RoutedSpills:
     id_by_col: dict[int, str]
     pass2_start: float
     info_counts: Mapping[str, AdmissionCounts] = field(default_factory=dict)
+    #: How many on-axis associations named an rsid (issue #255). The build-time
+    #: rule's independent signal, deliberately counted from the reader's rsids
+    #: rather than the harvested map so a collection that drops them still
+    #: leaves the evidence they existed.
+    named_on_axis: int = 0
 
 
 @dataclass(frozen=True)
@@ -1797,8 +1970,109 @@ def _build_shared_key_table(
     return table, old_to_new, index, off_panel, shared_sorted
 
 
+def _merge_first_named_by_column(
+    prepared: _PreparedBuild, suffix: str
+) -> dict[str, str]:
+    """One side-file family's harvest, first non-empty per key in column order.
+
+    Columns are the manifest's Analyses in order and their entries are in
+    stream order, so a key named by two sources takes the first source's rsid
+    -- the two-pass policy (issue #255).
+    """
+    merged: dict[str, str] = {}
+    for column in range(len(prepared.manifest_rows)):
+        for key, rsid in _read_hybrid_column_rsids(
+            prepared.spill_dir / f"{column}.rsid{suffix}.tsv"
+        ).items():
+            if rsid and key not in merged:
+                merged[key] = rsid
+    return merged
+
+
+def _rekey_off_reference_rsids(
+    off_reference: Mapping[str, str],
+    fold: _FoldInputs | None,
+    shared_sorted: Sequence[str],
+) -> dict[str, str]:
+    """Map raw off-reference source keys onto the ALIDs the fold resolved.
+
+    The fold already resolved every off-reference key to its shared index;
+    ALID-keying it here (rather than re-resolving) is what makes the raw source
+    keys collected in Pass 2 mappable without a second read (issue #255).
+    """
+    alid_by_encoded: dict[int, str] = {}
+    if fold is not None and len(fold.table.keys):
+        for value, shared_index in zip(
+            fold.table.keys.tolist(), fold.table.shared_index.tolist(), strict=True
+        ):
+            alid_by_encoded[int(value)] = shared_sorted[int(shared_index)]
+    rekeyed: dict[str, str] = {}
+    for key, rsid in off_reference.items():
+        resolved_alid = alid_by_encoded.get(encode_key(key))
+        if resolved_alid is not None and resolved_alid not in rekeyed:
+            rekeyed[resolved_alid] = rsid
+    return rekeyed
+
+
+def _merge_hybrid_rsids(
+    prepared: _PreparedBuild,
+    fold: _FoldInputs | None,
+    options: _BuildOptions,
+    named_on_axis: int = 0,
+) -> _PreparedBuild:
+    """Fold Pass 2's harvested source rsids into the axis (issue #255).
+
+    On-axis associations were keyed by ALID (stable across the fold);
+    off-reference ones by their raw source key, which only becomes an ALID once
+    the fold has resolved the key table. Both are merged with the reference's
+    own identifiers exactly as the dense builder merges them: a source's name
+    wins where one exists, the reference fills the rest, and the shared rule
+    refuses to publish if any source-named rsid did not reach the map.
+
+    The Dense Component's variant table was written before Pass 2 (its row map
+    is the axis's), so it is rewritten here when the harvest added anything;
+    the shared table has not been written yet and picks the merged map up
+    unchanged.
+    """
+    if options.variant_reference is None:
+        return prepared
+    known = _merge_first_named_by_column(prepared, "")
+    shared_sorted = (
+        fold.shared_sorted if fold is not None else prepared.partition.shared_sorted
+    )
+    off_rekeyed = _rekey_off_reference_rsids(
+        _merge_first_named_by_column(prepared, ".off"), fold, shared_sorted
+    )
+    source_by_alid = {**off_rekeyed, **known}
+    merged = {**prepared.rsid_by_alid, **source_by_alid}
+    require_source_rsids_retained(source_by_alid, merged)
+    if named_on_axis and not source_by_alid:
+        raise ValueError(
+            f"{named_on_axis} association(s) on the variant axis named an rsid, but the "
+            "build harvested none of them; refusing to publish a store whose source "
+            "identifiers silently disappeared -- a wrong answer indistinguishable from "
+            "a source that named none"
+        )
+    if merged == prepared.rsid_by_alid:
+        return prepared
+    log.info(
+        "Single-pass build: %d source rsid(s) collected for the variant axis",
+        len(source_by_alid),
+    )
+    _write_variant_table(
+        prepared.dense_dir,
+        prepared.partition.panel_sorted,
+        prepared.hg38_to_source,
+        merged,
+    )
+    return replace(prepared, rsid_by_alid=merged)
+
+
 def _finalise_reference_partition(
-    prepared: _PreparedBuild, options: _BuildOptions, state: CheckpointState | None = None
+    prepared: _PreparedBuild,
+    options: _BuildOptions,
+    state: CheckpointState | None = None,
+    named_on_axis: int = 0,
 ) -> _PreparedBuild:
     """Add Pass 2-discovered off-reference variants to the shared axis.
 
@@ -1822,6 +2096,7 @@ def _finalise_reference_partition(
     if recorded is not None:
         return _fold_recorded_axis(prepared, options, state, recorded)
     fold = _off_reference_fold_inputs(prepared, options)
+    prepared = _merge_hybrid_rsids(prepared, fold, options, named_on_axis)
     _record_axis(state, prepared, fold)
     if fold is None:
         return prepared
@@ -2015,12 +2290,19 @@ def _route_serial(
     analysis_index: dict[str, int],
     n_analyses: int,
     pass2_start: float,
-) -> dict[str, AdmissionCounts]:
+    collect_rsids: bool = False,
+) -> tuple[dict[str, AdmissionCounts], int]:
     """Route each study once, in this process, spilling the dense rows and the
     overflow associations it resolves (last-wins dedup per target index).
-    Returns each Analysis's admitted-row dispositions (stores #175, #176)."""
+    Returns each Analysis's admitted-row dispositions (stores #175, #176) and
+    the count of on-axis associations that named an rsid (issue #255).
+    ``collect_rsids`` is the single-pass build's identifier harvest (#255)."""
     info_counts: dict[str, AdmissionCounts] = {}
+    named_on_axis = 0
     for i, row in enumerate(prepared.manifest_rows):
+        rsid_by_alid: dict[str, str] | None = {} if collect_rsids else None
+        rsid_by_key: dict[str, str] | None = {} if collect_rsids else None
+        named: list[int] | None = [0] if collect_rsids else None
         dense, overflow, off_reference, counts = _resolve_column_hybrid(
             row.file_path,
             prepared.keys_sorted,
@@ -2031,13 +2313,22 @@ def _route_serial(
             stored_effect_scale=row.stored_effect_scale,
             info_score_policy=prepared.info_score_policies[row.trait_id],
             maf_policy=prepared.maf_policies[row.trait_id],
+            rsid_by_alid=rsid_by_alid,
+            rsid_by_key=rsid_by_key,
+            panel_alids=prepared.partition.panel_sorted,
+            shared_alids=prepared.partition.shared_sorted,
+            named_on_axis=named,
         )
+        if named is not None:
+            named_on_axis += named[0]
         info_counts[row.trait_id] = counts
         _spill_hybrid_column(
-            prepared.spill_dir, analysis_index[row.trait_id], dense, overflow, off_reference
+            prepared.spill_dir, analysis_index[row.trait_id], dense, overflow, off_reference,
+            rsid_by_alid=rsid_by_alid,
+            rsid_by_key=rsid_by_key,
         )
         _log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {row.trait_id}", every=25)
-    return info_counts
+    return info_counts, named_on_axis
 
 
 def _route_parallel(
@@ -2047,7 +2338,7 @@ def _route_parallel(
     n_analyses: int,
     options: _BuildOptions,
     pass2_start: float,
-) -> dict[str, AdmissionCounts]:
+) -> tuple[dict[str, AdmissionCounts], int]:
     """Route each study through the fork pool. Workers read the routing arrays
     through the module-level globals below rather than as arguments: they are
     inherited by fork, which is what keeps a genome-scale lookup out of the
@@ -2057,6 +2348,10 @@ def _route_parallel(
     manifest."""
     global _pass2_keys_sorted, _pass2_targets_sorted, _pass2_ispanel_sorted
     global _pass2_spill_dir, _pass2_info_policies, _pass2_maf_policies
+    global _pass2_panel_alids, _pass2_shared_alids, _pass2_collect_rsids
+    _pass2_panel_alids = prepared.partition.panel_sorted
+    _pass2_shared_alids = prepared.partition.shared_sorted
+    _pass2_collect_rsids = options.variant_reference is not None
     _pass2_keys_sorted = prepared.keys_sorted
     _pass2_targets_sorted = prepared.targets_sorted
     _pass2_ispanel_sorted = prepared.ispanel_sorted
@@ -2070,12 +2365,14 @@ def _route_parallel(
         for column, row in enumerate(prepared.manifest_rows)
     }
     info_counts: dict[str, AdmissionCounts] = {}
+    named_on_axis = 0
     try:
         with _fork_pool(options.n_workers) as pool:
             tasks = _pass2_worker_tasks(prepared.manifest_rows, analysis_index)
             futures = [pool.submit(_pass2_worker, task) for task in tasks]
             for i, future in enumerate(as_completed(futures)):
-                col, counts = future.result()
+                col, counts, named = future.result()
+                named_on_axis += named
                 info_counts[id_by_col[col]] = counts
                 _log_progress(
                     "Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25
@@ -2087,7 +2384,10 @@ def _route_parallel(
         _pass2_spill_dir = None
         _pass2_info_policies = None
         _pass2_maf_policies = None
-    return info_counts
+        _pass2_panel_alids = None
+        _pass2_shared_alids = None
+        _pass2_collect_rsids = False
+    return info_counts, named_on_axis
 
 
 def _route_studies(
@@ -2106,14 +2406,15 @@ def _route_studies(
     log.info("Pass 2: routing %d analyses (n_workers=%d)", n_analyses, options.n_workers)
     pass2_start = time.monotonic()
     if options.n_workers <= 1:
-        info_counts = _route_serial(
+        info_counts, named_on_axis = _route_serial(
             prepared,
             analysis_index,
             n_analyses,
             pass2_start,
+            collect_rsids=options.variant_reference is not None,
         )
     else:
-        info_counts = _route_parallel(
+        info_counts, named_on_axis = _route_parallel(
             prepared,
             analysis_index,
             id_by_col,
@@ -2122,7 +2423,10 @@ def _route_studies(
             pass2_start,
         )
     return _RoutedSpills(
-        id_by_col=id_by_col, pass2_start=pass2_start, info_counts=info_counts
+        id_by_col=id_by_col,
+        pass2_start=pass2_start,
+        info_counts=info_counts,
+        named_on_axis=named_on_axis,
     )
 
 
@@ -2629,7 +2933,7 @@ def _run_build_phases(
     every phase is computed, which is the build this seam has always run.
     """
     routed = _pass2_phase(prepared, options, state)
-    prepared = _fold_phase(prepared, options, state)
+    prepared = _fold_phase(prepared, routed, options, state)
     evidence = _orientation_phase(prepared, routed, options, state)
     plan = _plan_phase(prepared, evidence, options, state)
     dense = _dense_bands_phase(prepared, plan, routed, options, state)
@@ -2679,7 +2983,11 @@ def _record_pass2_product(
         {
             row.trait_id: routed.info_counts[row.trait_id].as_dict()
             for row in prepared.manifest_rows
-        },
+        }
+        # Reserved key, not an Analysis: the rsid rule's independent signal
+        # (issue #255), so a run resumed before the fold still fails loudly if
+        # the harvest lost identifiers rather than skipping the check.
+        | {"__named_on_axis__": routed.named_on_axis},
     )
     record_plates(state.path, (path.name for path in state.spill_dir.iterdir()))
     mark_phase(state.path, "pass2")
@@ -2695,11 +3003,15 @@ def _recorded_routing(prepared: _PreparedBuild, state: CheckpointState) -> _Rout
             row.trait_id: AdmissionCounts.from_dict(recorded[row.trait_id])
             for row in prepared.manifest_rows
         },
+        named_on_axis=int(recorded.get("__named_on_axis__", 0)),
     )
 
 
 def _fold_phase(
-    prepared: _PreparedBuild, options: _BuildOptions, state: CheckpointState | None
+    prepared: _PreparedBuild,
+    routed: _RoutedSpills,
+    options: _BuildOptions,
+    state: CheckpointState | None,
 ) -> _PreparedBuild:
     """Phase - the off-reference fold, or the axis a completed fold left.
 
@@ -2710,10 +3022,12 @@ def _fold_phase(
     writing one, and under a freshly resolved one otherwise.
     """
     if state is None:
-        return _finalise_reference_partition(prepared, options)
+        return _finalise_reference_partition(prepared, options, named_on_axis=routed.named_on_axis)
     if state.has("fold"):
         return prepared
-    prepared = _finalise_reference_partition(prepared, options, state)
+    prepared = _finalise_reference_partition(
+        prepared, options, state, named_on_axis=routed.named_on_axis
+    )
     record_plates(
         state.path,
         [
@@ -2942,16 +3256,16 @@ def build_hybrid_from_vcf_manifest(
     the reference's source-coordinate map routes on-reference associations to
     the Dense Component and off-reference ones to the Ragged Overflow during
     Pass 2. With only ``reference_panel``, the legacy two-pass build reads every
-    source once and lifts hg19 rows. Rows are assumed hg19 and lifted inline
-    unless the manifest declares ``source_assembly=hg38`` (issue #85);
+    source once and lifts hg19 rows; a single-pass build re-harvests identifiers
+    during Pass 2 (`_merge_hybrid_rsids`, issue #255). Rows are assumed hg19 and
+    lifted inline unless the manifest declares ``source_assembly=hg38`` (#85);
     ``source_assembly`` and ``source_reader_capability`` supply per-release
     defaults (#174), and ``eaf_reference`` drives the orientation check (#115).
 
     ``checkpoint=True`` opts the build into phase-granularity resume; ``resume=True``
     continues one from the checkpoint this call's ``output_path`` implies (issue #227;
     `_run_checkpointed_build`, `_resume_requested`), and a destination whose checkpoint
-    is still there is refused unless ``overwrite=True`` discards it -- a plain build
-    included, which would otherwise orphan a released Dense Component.
+    is still there is refused unless ``overwrite=True`` discards it.
     """
     if reference_panel is None and variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
