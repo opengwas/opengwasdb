@@ -180,6 +180,25 @@ the end of this file.
 
 ### Fixed
 
+- **A Ragged association sequence is written one whole shard at a time (#249).**
+  `RaggedCSRWriter` flushed its `variant_index`/`z`/`eaf`/`se` planes in regions
+  of
+  `DEFAULT_FLUSH_REGION_CELLS` (4,194,304) cells, but #248's sequence shard is
+  `RAGGED_SEQUENCE_SHARD_ELEMENTS` (50,000,000) cells. A Zarr v3 shard is one
+  file, so every region write was a read-modify-write of the whole shard: about
+  twelve per shard, and 4,194,304 is not a multiple of the 200,000-cell inner
+  chunk either. Invisible on the registered pilots -- OGS-00001 (86,373
+  associations) and OGS-00004's overflow (27,369,974) each fit in one shard --
+  it is material at OGS-00011's 3,085,080,783 overflow associations, 62 shards
+  per sequence. `sequence_region_step` now raises the write region to the shard
+  (never lowers it), so each shard is written exactly once. On a synthetic 6
+  million-cell component the measured write amplification falls from 1.42x to
+  1.00x, and on the three real pilots every sequence shard is written once. The
+  cost is the working set: about 1.5 GB (30 bytes a cell) per region at the full
+  50,000,000-element shard, against the 130 MiB a 4,194,304-cell region used.
+  `require_whole_shard_writes` now judges 1-D arrays too, so a writer that
+  returns to a partial-shard sequence write fails loudly rather than quietly
+  getting slower.
 - **A Reference-Completed Dense release records the chunk shape its arrays
   actually have (#245).** Completion writes the completed grid at
   `DEFAULT_CHUNK_SHAPE` clipped to the array dimensions, not at the source's

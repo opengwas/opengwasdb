@@ -101,6 +101,13 @@ attributes.
   verifier checks the root's rewritten keys only where a Dense plane exists.
 - **The Ragged shard caps are not CLI flags.** They live in the seam's role
   table, one authority, so the converter and #247's builders cannot disagree.
+- **A builder writes a Ragged sequence plane one whole shard at a time (#249).**
+  The 50,000,000-element shard is one file, so flushing it in 4,194,304-cell
+  regions was a read-modify-write of the whole shard, about twelve times per
+  shard; `RaggedCSRWriter` now raises its write region to the shard.  The cost is
+  a roughly 1.5 GB working set at the full shard (about 30 bytes a cell) against
+  the 130 MiB a 4,194,304-cell region used.  The whole-shard write guard covers
+  1-D arrays too, so this cannot regress silently.
 
 ## Alternatives rejected
 

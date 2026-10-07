@@ -10,13 +10,17 @@ whole array, so nothing else in the suite can show it.
 patches every public Zarr method that writes a selection of cells -- sync
 `__setitem__`, the five `set_*_selection` methods (which `oindex`, `vindex` and
 `array.blocks[...]` delegate to), and async `AsyncArray.setitem` -- and refuses
-a write that does not start and end on a shard boundary of a 2-D Dense plane
-(the 1-D arrays whose shard policy is "one shard holds the whole array", like
-the exception tables, are written incrementally by design and are not judged).
-`resize` and attribute writes are not region writes and are not covered.
+a write that does not start and end on a shard boundary.  Every sharded array is
+judged, 1-D Ragged association sequences included (#249); the 1-D exception and
+offset tables are covered too, because their whole-array writes cover their one
+shard.  `resize` and attribute writes are not region writes and are not covered.
 Production pays nothing: the hook is entered only by tests or when
 `OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES=1`, which the real-data pilot sets so a
 genuinely multi-shard build proves its writers are aligned.
+
+`count_shard_writes` is the counting companion: it records the real bytes and
+shard key of every storage write, so a test can assert a shard is written
+**exactly once** rather than only that each write starts and ends on a boundary.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from opengwasdb.store.arrays import (
     ArrayRole,
     PartialShardWriteError,
     _block_selection_to_elements,
+    count_shard_writes,
     create_array,
     open_group,
     open_group_for_write,
@@ -485,3 +490,81 @@ def test_the_se_rewrite_row_block_falls_back_to_the_inner_chunk_without_a_shard(
     )
     assert array.shards is None
     assert _row_block_of(array) == 7
+
+
+# ── 1-D Ragged sequences (#249) ──────────────────────────────────────────────
+
+
+def test_the_guard_judges_a_one_dimensional_sequence(tmp_path: Path) -> None:
+    """A 1-D Ragged sequence is judged on the same whole-shard rule (#249).
+
+    Before #249 the guard returned early for any array that was not 2-D, so a
+    writer could rewrite a 50,000,000-element sequence shard once per region
+    with nothing objecting.  The whole shard (including the short final one) is
+    aligned; a selection inside a shard raises.
+    """
+    root = open_group_for_write(tmp_path / "data.zarr", "w", zarr_format=3)
+    array = create_array(
+        root,
+        "z",
+        ArrayRole.ASSOCIATION_SEQUENCE,
+        shape=(9,),
+        dtype="int16",
+        compressor=sharded_compressor(),
+        inner_chunk=(3,),
+        shards=(6,),
+    )
+    assert tuple(int(size) for size in array.shards) == (6,)
+    with require_whole_shard_writes():
+        array[0:6] = np.arange(6, dtype="int16")  # the whole first shard
+        array[6:9] = np.arange(3, dtype="int16")  # the whole short final shard
+    assert list(np.asarray(array[:])) == list(range(6)) + [0, 1, 2]
+    with require_whole_shard_writes(), pytest.raises(PartialShardWriteError):
+        array[0:3] = np.zeros(3, dtype="int16")  # inside the first shard
+    with require_whole_shard_writes(), pytest.raises(PartialShardWriteError):
+        array[3:6] = np.zeros(3, dtype="int16")  # the second half of the first shard
+    with require_whole_shard_writes(), pytest.raises(PartialShardWriteError):
+        array[1:9] = np.zeros(8, dtype="int16")  # starts off the shard boundary
+
+
+def test_a_ragged_sequence_shard_is_written_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Ragged flush writes each sequence shard exactly once (#249).
+
+    At the decided 50,000,000-element shard and the 4,194,304-cell region this
+    was about twelve rewrites of every shard; the fixture uses an 800,000-element
+    shard (four inner chunks) so three shards fit in a test.  The writer's cells
+    span all three.  If the region is not shard-aligned the same shard key is
+    written more than once, which is the amplification, not a correctness bug.
+    """
+    import opengwasdb.store.arrays as store_arrays
+    from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
+    from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+
+    monkeypatch.setattr(
+        store_arrays,
+        "RAGGED_SEQUENCE_SHARD_ELEMENTS",
+        4 * store_arrays.ASSOCIATION_SEQUENCE_CHUNK,
+    )
+    encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=3))
+    writer = RaggedCSRWriter(50_000)
+    rng = np.random.default_rng(0)
+    for _ in range(3):
+        writer.add_analysis(
+            np.sort(rng.integers(0, 50_000, size=700_000)).astype(np.int32),
+            rng.standard_normal(700_000).astype(np.float32),
+            np.abs(rng.standard_normal(700_000)).astype(np.float32),
+            rng.random(700_000).astype(np.float32),
+        )
+    expected_shards = 3  # 2,100,000 cells / 800,000
+    with count_shard_writes() as recorder:
+        writer.flush(tmp_path, encoding, region_cells=200_000)
+    written = recorder.chunk_writes()
+    sequences = {path: keys for path, keys in written.items() if path in ("z", "se")}
+    assert sequences, written  # the fixture actually wrote sequences
+    for path, keys in sequences.items():
+        assert len(keys) == expected_shards, (path, keys)
+        assert set(keys.values()) == {1}, (path, keys)
+    assert len(written["variant_index"]) == expected_shards
+    assert set(written["variant_index"].values()) == {1}

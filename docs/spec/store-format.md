@@ -888,7 +888,10 @@ tens to low hundreds of MB per array rather than one multi-GB file, and its
 Ragged `eaf_exception_index` (180,396,687 entries) becomes 19 files rather than
 one 1.4 GB file.  The sequence shard is bounded by cells, not by one Analysis's
 run, so a future variant-side index can be added beside the Analysis-sorted
-arrays without re-sharding them.
+arrays without re-sharding them.  A builder writes a Ragged sequence plane one
+**whole shard** at a time: a write covering part of a shard is a read-modify-write
+of the whole thing, so at a 50,000,000-element shard the flush region follows the
+shard rather than the other way around (#249).
 
 `clipped to cover the array` means the smallest whole number of inner chunks
 that spans the dimension, so an array shorter than the decided shard gets one
