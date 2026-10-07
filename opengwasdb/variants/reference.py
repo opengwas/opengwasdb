@@ -406,8 +406,13 @@ def read_variant_reference(path: str | Path) -> VariantReference:
     )
 
 
+#: A candidate or routing key: the raw source tuple, or the string form a
+#: routing index keys it by (`_source_site_key`/`_routed_site_key`).
+_SiteKeyT = TypeVar("_SiteKeyT")
+
+
 def expected_rsids_by_routing(
-    rsid_by_site: Mapping[SourceKey, str], routing: Mapping[SourceKey, str]
+    rsid_by_site: Mapping[_SiteKeyT, str], routing: Mapping[_SiteKeyT, str]
 ) -> dict[str, str]:
     """An independent oracle for the ALID -> rsid map a harvest should produce.
 

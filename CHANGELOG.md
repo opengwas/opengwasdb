@@ -68,12 +68,15 @@ the end of this file.
   list — and a Store Variant Table whose `rsid` column is `.`, like OGS-00004's
   EUR panel — produced a variant table with a blank `rsid` on every row, which
   `validate` passed. A reference that names no rsids now runs Pass 1's own
-  harvest for its candidates and their `(rank, site)` order, then rekeys them
-  through **the routing the build actually uses** — the reference's own source
-  keys, and a Hybrid build's fold for off-reference rows — so a name always
-  lands on the ALID its association lands on; where Pass 1's own liftover would
-  have chosen a different ALID the reference wins and the disagreement is
-  logged. A reference that carries rsids (a full artifact or a curated Store
+  harvest for its candidates and their `(rank, site)` order, keys them with
+  **exactly the normalisation the build's own association routing uses** (the
+  Hybrid routing upper-cases alleles, the Dense routing keeps the source's
+  spelling), and rekeys them **once** over **one combined site → ALID routing**
+  — the reference's own source keys plus a Hybrid build's fold for off-reference
+  rows — so a name always lands on the ALID its association lands on and the
+  globally first candidate wins whichever partition routed it; where Pass 1's
+  own liftover would have chosen a different ALID the reference wins and the
+  disagreement is logged. A reference that carries rsids (a full artifact or a curated Store
   Variant Table) is used as-is. The names are identical to the two-pass build's
   for every variant both axes carry — including variants named only by a row
   with an unusable effect or dropped by Hybrid admission; the axes themselves
@@ -81,7 +84,8 @@ the end of this file.
   with no usable association is absent rather than misnamed, spec §4). Two
   checks guard the result before publication: the resolved ALID → rsid map is
   compared exactly with an independent oracle built from the candidates and the
-  routing (so a wrong value, a missing entry or an extra one fails), and the
+  same final combined routing (so a wrong value, a missing entry or an extra one
+  fails), and the
   written variant tables (root and Dense Component) are read back row for row
   against that map. On the one-Analysis OGS-00005 fixture the plain-ALID build
   writes the same rsids as `--reference-panel`; on the #247 Hybrid pilot the two

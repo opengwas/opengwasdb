@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 from numcodecs import Blosc
@@ -268,7 +268,7 @@ def _build_variant_key_index(
     # objects stay at their real length, so the sort and the fork-inherited key
     # table cost memory proportional to the actual key bytes, not the maximum.
     keys_list = [
-        f"{chrom}:{pos}:{ref}:{alt}".encode()
+        _source_site_key((chrom, pos, ref, alt)).encode()
         for chrom, pos, ref, alt in zip(chroms, poss, refs, alts, strict=True)
     ]
     keys = np.array(keys_list, dtype=object)
@@ -1426,9 +1426,14 @@ def _resolve_manifest_variants_to_alids(
     return source_lookup, rsid_by_alid
 
 
+#: A candidate or routing key: the raw source tuple, or the string form the
+#: build's routing index keys it by (`_source_site_key`).
+_SiteKeyT = TypeVar("_SiteKeyT")
+
+
 def _rekey_rsids_to_alids(
-    source_lookup: Mapping[tuple[str, int, str, str], str],
-    rsid_by_site: Mapping[tuple[str, int, str, str], str],
+    source_lookup: Mapping[_SiteKeyT, str],
+    rsid_by_site: Mapping[_SiteKeyT, str],
 ) -> dict[str, str]:
     """The rsid each ALID carries: the first non-empty in ``(rank, site)`` order.
 
@@ -1692,59 +1697,91 @@ def _resolve_axis_source(
     return None, source_lookup, rsid_by_alid
 
 
-def _canonical_site(site: SourceKey) -> SourceKey:
-    """A source site keyed as the routing index keys it: alleles upper-cased,
-    order kept. SourceReaders keep the source's spelling; resolver ALIDs and
-    identity reference keys are upper-case, and case is not an orientation
-    change (`_build_routing_index`)."""
-    chrom, pos, ref, alt = site
-    return (chrom, pos, ref.upper(), alt.upper())
+def _source_site_key(site: SourceKey) -> str:
+    """A source coordinate in the exact string form the Dense routing keys it by.
 
-
-def _routing_lookup(reference: VariantReference) -> dict[SourceKey, str]:
-    """`reference.source_lookup` keyed the way the build's routing index keys it.
-
-    The same case folding `_build_routing_index` applies to the bytes it
-    searches, so the rekey looks a site up exactly as Pass 2 routes it.
+    `_build_variant_key_index` writes this key and `_match_batch` queries it, so
+    a harvested candidate looked up with this function is looked up exactly as
+    its association is routed (issue #255). The Dense routing keeps the source's
+    own spelling, an ALID reference's alleles being upper-case already; a Hybrid
+    routing case-folds and passes `hybrid.build._routed_site_key` instead.
     """
-    return {_canonical_site(site): alid for site, alid in reference.source_lookup.items()}
+    chrom, pos, ref, alt = site
+    return f"{chrom}:{pos}:{ref}:{alt}"
 
 
-def _routed_rsids(
-    rsid_by_site: Mapping[SourceKey, str],
-    routing: Mapping[SourceKey, str],
+#: One build's site-key normalisation, applied to both the routing and the
+#: harvested candidates so the two are keyed identically.
+SiteKeyFn = Callable[[SourceKey], str]
+
+
+def _candidates_by_routing_key(
+    rsid_by_site: Mapping[SourceKey, str], key: SiteKeyFn
+) -> dict[str, str]:
+    """The harvest's candidates keyed as the build routes them, order kept.
+
+    The comprehension preserves `rsid_by_site`'s `(rank, site)` order, which is
+    what makes the rekey take the first candidate in that order.
+    """
+    return {key(site): rsid for site, rsid in rsid_by_site.items()}
+
+
+def _routing_lookup(
+    source_lookup: Mapping[SourceKey, str], key: SiteKeyFn
+) -> dict[str, str]:
+    """A site -> ALID routing keyed as the build routes it (`key`)."""
+    return {key(site): alid for site, alid in source_lookup.items()}
+
+
+def _log_routing_disagreements(
+    candidates: Mapping[str, str],
+    routing: Mapping[str, str],
     pass1_lookup: Mapping[SourceKey, str] | None,
+    key: SiteKeyFn,
     *,
     label: str,
-) -> dict[str, str]:
-    """Rekey harvest candidates through the routing the build actually uses.
+) -> None:
+    """Log named sites the build's routing places differently from Pass 1's.
 
-    ``routing`` is the authority (a reference's source keys, or those plus a
-    Hybrid fold's off-reference resolution). Where Pass 1's own liftover would
-    have put a named site on a different ALID, that is logged and the routing
-    wins, so an rsid can never land on a variant a different association uses.
-    The result is compared with `expected_rsids_by_routing` before it is
-    returned -- an exact, value-sensitive oracle (issue #255).
+    The build's routing is the authority; Pass 1's lift is only a second
+    opinion, so a disagreement is reported rather than resolved.
     """
-    if pass1_lookup is not None:
-        disagreed = sum(
-            1
-            for site, pass1_alid in pass1_lookup.items()
-            if _canonical_site(site) in rsid_by_site
-            and routing.get(_canonical_site(site)) != pass1_alid
-        )
-        if disagreed:
-            log.warning(
-                "%s: %d source variant(s) that named an rsid route to a different ALID "
-                "under the reference than under Pass 1's own liftover; the reference "
-                "routing wins, so the name stays on the variant its association uses",
-                label,
-                disagreed,
-            )
-    resolved = _rekey_rsids_to_alids(routing, rsid_by_site)
-    require_rsids_match_expected(
-        resolved, expected_rsids_by_routing(rsid_by_site, routing)
+    if pass1_lookup is None:
+        return
+    disagreed = sum(
+        1
+        for site, pass1_alid in pass1_lookup.items()
+        if key(site) in candidates and routing.get(key(site)) != pass1_alid
     )
+    if disagreed:
+        log.warning(
+            "%s: %d source variant(s) that named an rsid route to a different ALID "
+            "under the reference than under Pass 1's own liftover; the reference "
+            "routing wins, so the name stays on the variant its association uses",
+            label,
+            disagreed,
+        )
+
+
+def _rekey_and_verify(
+    candidates: Mapping[str, str],
+    routing: Mapping[str, str],
+    pass1_lookup: Mapping[SourceKey, str] | None = None,
+    *,
+    key: SiteKeyFn = _source_site_key,
+    label: str = "Single-pass build",
+) -> dict[str, str]:
+    """Rekey harvested candidates ONCE through ONE routing, and verify exactly.
+
+    ``routing`` must be the build's own key form and the *final* routing -- a
+    reference's source keys combined with, for a Hybrid build, the fold's
+    off-reference resolution. One rekey in the candidates' `(rank, site)` order
+    and one global oracle comparison, so no partition can win a name the global
+    first-candidate rule would not give it (issue #255).
+    """
+    _log_routing_disagreements(candidates, routing, pass1_lookup, key, label=label)
+    resolved = _rekey_rsids_to_alids(routing, candidates)
+    require_rsids_match_expected(resolved, expected_rsids_by_routing(candidates, routing))
     return resolved
 
 
@@ -1762,10 +1799,10 @@ def _reference_axis_rsids(
     would otherwise leave the single-pass build with a blank ``rsid`` column on
     every row. The build runs Pass 1's own harvest for the candidate rows and
     their ``(rank, site)`` order, then rekeys them through the routing it
-    actually uses: the reference's source keys, never Pass 1's own liftover,
-    because the reference decides which ALID an association lands on (issue
-    #255). A reference that carries rsids is its own authority and no read is
-    spent.
+    actually uses: the reference's source keys, keyed exactly as the routing
+    index keys them, never Pass 1's own liftover -- because the reference
+    decides which ALID an association lands on (issue #255). A reference that
+    carries rsids is its own authority and no read is spent.
     """
     if reference.rsid_by_alid:
         return dict(reference.rsid_by_alid)
@@ -1775,8 +1812,11 @@ def _reference_axis_rsids(
         liftover_failure_threshold=liftover_failure_threshold,
         n_workers=n_workers,
     )
-    resolved = _routed_rsids(
-        rsid_by_site, _routing_lookup(reference), pass1_lookup, label="Single-pass build"
+    resolved = _rekey_and_verify(
+        _candidates_by_routing_key(rsid_by_site, _source_site_key),
+        _routing_lookup(reference.source_lookup, _source_site_key),
+        pass1_lookup,
+        key=_source_site_key,
     )
     log.info(
         "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "

@@ -188,12 +188,16 @@ is part of the contract (issue #255):
   column blank simply because the reference it was given is a plain ALID list.
   When the reference names none of its variants, the build runs the same Pass 1
   harvest the two-pass build runs for its candidates and their `(rank, site)`
-  order, then rekeys them through **the routing the build actually uses** — the
-  reference's own source keys, and a Hybrid build's fold for off-reference rows
-  — so a name always lands on the ALID its association lands on. Where Pass 1's
-  own liftover would have chosen a different ALID, the reference wins and the
-  disagreement is logged. When the reference carries its own rsids (a full
-  `*.variant-ref.tsv.gz` artifact or a Store Variant Table), it is the axis
+  order, keys those candidates with **exactly the key normalisation the build's
+  own association routing uses** (upper-cased alleles for a Hybrid routing,
+  the source's own spelling for a Dense one, allele order kept), and then rekeys
+  them **once** over **one combined site → ALID routing** — the reference's own
+  source keys, plus a Hybrid build's fold for off-reference rows — so a name
+  always lands on the ALID its association lands on and the global first
+  candidate in `(rank, site)` order wins, whichever partition routed it. Where
+  Pass 1's own liftover would have chosen a different ALID, the reference wins
+  and the disagreement is logged. When the reference carries its own rsids (a
+  full `*.variant-ref.tsv.gz` artifact or a Store Variant Table), it is the axis
   authority and its names are used as given.
 - For a store whose reference names no rsids, the resulting names are identical
   to the two-pass build's **for every variant both axes carry**. The axes
@@ -206,8 +210,9 @@ is part of the contract (issue #255):
 - A build MUST fail rather than publish a variant table that disagrees with the
   rsids the sources named. Two checks run before publication: the resolved
   ALID → rsid map is compared exactly with an independently computed
-  expectation — the harvest's candidates walked over the build's routing, first
-  non-empty per ALID — so a wrong value, a missing entry or an extra one fails;
+  expectation — the harvest's candidates walked over the *same final combined*
+  routing, first non-empty per ALID — so a wrong value, a missing entry or an
+  extra one fails;
   and the written table is read back row for row against that map, so a stale
   map or a table lost in the write fails too. A release whose sources genuinely
   name no variants is valid, and builds normally — neither check can fire for

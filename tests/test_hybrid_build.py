@@ -2070,6 +2070,109 @@ class TestVariantReferenceRsids:
         assert validate_store(two_pass).ok
         assert validate_store(single_pass).ok
 
+    def test_lowercase_on_reference_row_keeps_its_name(self, tmp_path):
+        """Issue #255, round 3: the Hybrid routing case-folds, so a lowercase
+        source row lands on the upper-case reference ALID. Its name must land
+        there too -- the candidates are keyed with the same `_routed_site_key`
+        the association routing keys with, so the rekey and the oracle see the
+        keys the association uses."""
+        vcf = _make_vcf(
+            tmp_path,
+            "lower_on",
+            ["1\t100000\trsLOWER\ta\tg\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("lower_on", vcf, "Lower", "hg38")]
+        )
+        panel = tmp_path / "lower-panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
+        store = tmp_path / "lower-on.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=panel, store_id="s", release_id="r"
+        )
+
+        assert validate_store(store).ok
+        assert _hybrid_axis_rsids(store) == {HG38_ALID_1: "rsLOWER"}
+        with query_store(store) as query:
+            hit = query.lookup([HG38_ALID_1], ["lower_on"])
+        assert len(hit["z"]) == 1
+        assert hit["z"][0] == pytest.approx(-5.0, rel=5e-3)
+
+    def test_lowercase_off_reference_row_keeps_its_name(self, tmp_path):
+        """The off-reference half of the same case-fold: the fold encodes an
+        unknown key upper-cased (`_routed_site_key`), so a lowercase source row
+        becomes an Overflow variant whose name must be stored with it."""
+        vcf = _make_vcf(
+            tmp_path,
+            "lower_off",
+            [
+                "1\t100000\trsPANEL\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                "1\t2000000\trsLOWER_OFF\tc\tt\t.\tPASS\t.\tES:SE\t0.9:0.4\n",
+            ],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("lower_off", vcf, "Lower off", "hg38")]
+        )
+        panel = tmp_path / "lower-off-panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
+        store = tmp_path / "lower-off.opengwasdb"
+        result = build_hybrid_from_vcf_manifest(
+            manifest, store, variant_reference=panel, store_id="s", release_id="r"
+        )
+
+        assert result.n_overflow == 1
+        assert validate_store(store).ok
+        assert _hybrid_axis_rsids(store) == {
+            HG38_ALID_1: "rsPANEL",
+            HG38_ALID_4: "rsLOWER_OFF",
+        }
+
+    def test_fold_earlier_candidate_beats_a_later_reference_one(self, tmp_path):
+        """Issue #255, round 3: the global `(rank, site)` order decides, even
+        when the two candidates reach one ALID through different routes. An
+        earlier hg19 row lifts to the off-panel ALID through the fold and a
+        later hg38 row reaches the same ALID through the (blank-rsid) reference;
+        the two-pass build writes the earlier name, so the single-pass build
+        must too -- one combined routing, one rekey, one oracle."""
+        early = _make_vcf(
+            tmp_path,
+            "early_hg19",
+            ["1\t1000000\trsEARLY\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n"],
+        )
+        late = _make_vcf(
+            tmp_path,
+            "late_hg38",
+            ["1\t1064620\trsLATE\tC\tT\t.\tPASS\t.\tES:SE\t1.2:0.3\n"],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path,
+            [("early", early, "Early", "hg19"), ("late", late, "Late", "hg38")],
+        )
+        panel = tmp_path / "prec-panel.txt"
+        panel.write_text("1:1064619:A:G\n", encoding="utf-8")
+        reference = tmp_path / "prec-axis.variant-ref.tsv.gz"
+        from opengwasdb.variants.reference import write_variant_reference
+
+        write_variant_reference(
+            reference,
+            ["1:1064619:A:G", "1:1064620:C:T"],
+            {("1", 1064620, "C", "T"): "1:1064620:C:T"},
+        )
+        two_pass = tmp_path / "prec-two.opengwasdb"
+        single_pass = tmp_path / "prec-one.opengwasdb"
+        build_hybrid_from_vcf_manifest(
+            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+        )
+        build_hybrid_from_vcf_manifest(
+            manifest, single_pass, variant_reference=reference, reference_panel=panel,
+            store_id="s", release_id="r",
+        )
+
+        assert _hybrid_axis_rsids(two_pass)["1:1064620:C:T"] == "rsEARLY"
+        assert _hybrid_axis_rsids(single_pass)["1:1064620:C:T"] == "rsEARLY"
+        assert validate_store(two_pass).ok
+        assert validate_store(single_pass).ok
+
     def test_admission_rejected_row_still_names_its_variant(self, tmp_path):
         """Hybrid admission (a MAF threshold here) runs inside Pass 2, after the
         reader. A row it drops still names its variant, so the harvest -- taken
