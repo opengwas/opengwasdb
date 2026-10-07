@@ -81,6 +81,51 @@ MIN_COUNTS = {
 #: must return exactly zero rows; a non-zero count means the selection moved.
 EMPTY_SHAPES = frozenset({"random_lookup_10_variants_100_analyses"})
 
+#: Per-store, per-query identity minima, keyed by the store directory name. A
+#: zero is an explicit allowance (that probe is known to return nothing on that
+#: store); a positive value is a floor. Every query the identity probe runs must
+#: appear here, so one non-empty query can never make an empty one pass.
+IDENTITY_MIN_COUNTS: dict[str, dict[str, int]] = {
+    "OGS-00001": {
+        "phewas_first": 1,
+        "phewas_off_panel": 1,
+        "range_small": 100,
+        "lookup_off_panel": 1,
+        "lookup_small": 3,
+    },
+    "OGS-00006": {
+        "phewas_first": 1,
+        "phewas_off_panel": 1,
+        "range_small": 1,
+        "lookup_off_panel": 0,
+        "lookup_small": 0,
+    },
+    "OGS-00004": {
+        "phewas_first": 1,
+        "phewas_off_panel": 1,
+        "range_small": 50,
+        "lookup_off_panel": 1,
+        "lookup_small": 1,
+    },
+}
+
+
+def _select_shapes(raw: str) -> list[str]:
+    """The shape names a run will measure; an empty selection is refused."""
+    selected = [name.strip() for name in raw.split(",") if name.strip()]
+    if not selected:
+        raise SystemExit("no shapes selected: an A/B run with no shapes is not evidence")
+    return selected
+
+
+def _require_floor(selected: list[str]) -> None:
+    """Refuse a run whose shapes are all in `EMPTY_SHAPES`: it proves nothing."""
+    if not any(name in MIN_COUNTS for name in selected):
+        raise SystemExit(
+            "every selected shape is in EMPTY_SHAPES; at least one shape with a "
+            "MIN_COUNTS floor is required"
+        )
+
 
 def _check_shape(name: str, record: dict) -> None:
     """Refuse a shape that timed out, is unknown, or did not return its rows."""
@@ -118,11 +163,23 @@ def _check_pair(name: str, before: dict, after: dict) -> None:
         raise SystemExit(f"{name}: before and after answers differ")
 
 
-def _check_identity_side(side: str, record: dict) -> None:
-    """Refuse an identity run that returned no rows at all."""
-    rows = sum(int(query["rows"]) for query in record["queries"].values())
-    if rows == 0:
-        raise SystemExit(f"identity on {side}: no query returned a row; not evidence")
+def _check_identity_side(side: str, record: dict, minima: dict[str, int]) -> None:
+    """Refuse an identity run whose queries are missing or below their floors.
+
+    Per query, not summed: a store with one non-empty probe and one that should
+    have returned rows but did not is not evidence (review round 3).
+    """
+    for name, result in record["queries"].items():
+        if name not in minima:
+            raise SystemExit(f"identity {name}: no expected minimum for this query")
+        if int(result["rows"]) < minima[name]:
+            raise SystemExit(
+                f"identity {name} on {side}: expected at least {minima[name]} rows, "
+                f"got {result['rows']}"
+            )
+    missing = set(minima) - set(record["queries"])
+    if missing:
+        raise SystemExit(f"identity on {side}: no result for {sorted(missing)}")
 
 
 def _check_identity_pair(name: str, before: dict, after: dict) -> None:
@@ -316,16 +373,23 @@ def _identity_aggregate(args: argparse.Namespace) -> None:
     }
     all_identical = True
     for store in args.identity_store:
+        name = Path(store).parent.name or str(store)
+        if name not in IDENTITY_MIN_COUNTS:
+            raise SystemExit(
+                f"identity for {name}: no per-query minima; add the store to "
+                "IDENTITY_MIN_COUNTS"
+            )
+        minima = IDENTITY_MIN_COUNTS[name]
         single = argparse.Namespace(**vars(args))
         single.store = store
         sides = {side: _run(trees[side], single) for side in SIDES}
         for side in SIDES:
-            _check_identity_side(side, sides[side])
-        name = Path(store).parent.name or str(store)
+            _check_identity_side(side, sides[side], minima)
         entry: dict[str, object] = {
             "hybrid": bool(sides["after"]["hybrid"]),
             "n_variants": int(sides["after"]["n_variants"]),
             "n_analyses": int(sides["after"]["n_analyses"]),
+            "minima": dict(minima),
             "queries": {},
         }
         for query in sides["after"]["queries"]:
@@ -365,7 +429,13 @@ def _driver(args: argparse.Namespace) -> None:
         }
         for side in SIDES:
             record = _run(trees[side], args)
-            _check_identity_side(side, record)
+            name = Path(args.store).parent.name or str(args.store)
+            if name not in IDENTITY_MIN_COUNTS:
+                raise SystemExit(
+                    f"identity for {name}: no per-query minima; add the store to "
+                    "IDENTITY_MIN_COUNTS"
+                )
+            _check_identity_side(side, record, IDENTITY_MIN_COUNTS[name])
             artifact["queries"][side] = record
         for query in artifact["queries"]["after"]["queries"]:
             _check_identity_pair(
@@ -394,10 +464,9 @@ def _driver(args: argparse.Namespace) -> None:
         "trees": {side: str(tree) for side, tree in trees.items()},
         "shapes": {},
     }
-    for shape in args.shapes.split(","):
-        shape = shape.strip()
-        if not shape:
-            continue
+    selected = _select_shapes(args.shapes)
+    _require_floor(selected)
+    for shape in selected:
         before = _run(trees["before"], args, shape)
         after = _run(trees["after"], args, shape)
         _check_pair(shape, before, after)

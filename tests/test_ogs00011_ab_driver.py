@@ -55,8 +55,62 @@ def test_a_hash_mismatch_between_the_sides_fails() -> None:
 def test_an_identity_run_with_no_rows_fails() -> None:
     with pytest.raises(SystemExit):
         ogs00011_ab._check_identity_side(
-            "before", {"queries": {"x": {"rows": 0, "sha256": _HASH_A}}}
+            "before", {"queries": {"x": {"rows": 0, "sha256": _HASH_A}}}, {"x": 1}
         )
+
+
+def test_an_identity_run_missing_a_query_fails() -> None:
+    with pytest.raises(SystemExit):
+        ogs00011_ab._check_identity_side(
+            "before", {"queries": {"x": {"rows": 1, "sha256": _HASH_A}}}, {"x": 1, "y": 0}
+        )
+
+
+def test_a_partially_empty_identity_record_fails() -> None:
+    """One non-empty query must not cover a known-non-empty query that is empty."""
+    record = {
+        "queries": {
+            "phewas_first": {"rows": 1, "sha256": _HASH_A},
+            "range_small": {"rows": 0, "sha256": _HASH_B},
+        }
+    }
+    with pytest.raises(SystemExit):
+        ogs00011_ab._check_identity_side(
+            "before", record, {"phewas_first": 1, "range_small": 100}
+        )
+
+
+def test_an_identity_run_with_an_allowed_zero_passes() -> None:
+    record = {
+        "queries": {
+            "phewas_first": {"rows": 1, "sha256": _HASH_A},
+            "lookup_small": {"rows": 0, "sha256": _HASH_B},
+        }
+    }
+    ogs00011_ab._check_identity_side(
+        "before", record, {"phewas_first": 1, "lookup_small": 0}
+    )
+
+
+def test_an_empty_shape_selection_fails() -> None:
+    with pytest.raises(SystemExit):
+        ogs00011_ab._select_shapes("")
+    with pytest.raises(SystemExit):
+        ogs00011_ab._select_shapes(" , ")
+
+
+def test_an_empty_only_shape_selection_fails() -> None:
+    selected = ogs00011_ab._select_shapes("random_lookup_10_variants_100_analyses")
+    assert selected == ["random_lookup_10_variants_100_analyses"]
+    with pytest.raises(SystemExit):
+        ogs00011_ab._require_floor(selected)
+
+
+def test_a_selection_with_one_floored_shape_passes_the_floor() -> None:
+    selected = ogs00011_ab._select_shapes(
+        "random_lookup_10_variants_100_analyses,phewas"
+    )
+    ogs00011_ab._require_floor(selected)
 
 
 def test_an_identity_query_that_differs_fails() -> None:

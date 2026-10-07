@@ -526,6 +526,18 @@ memory is bounded. `pixi run -e dev python
 benchmarks/check_store_segment_order.py --root /data/opengwasdb/stores` is the
 command that produced the artifact above.
 
+The repeatable command that produces the three-store identity artifact (the
+before tree is a checkout of the branch base `f168ef1`):
+
+```bash
+pixi run -e dev python benchmarks/ogs00011_ab.py --identity \
+    --before-tree /tmp/252-before --after-tree "$PWD" \
+    --identity-store /data/opengwasdb/stores/OGS-00001/store.opengwasdb \
+    --identity-store /data/opengwasdb/stores/OGS-00006/store.opengwasdb \
+    --identity-store /data/opengwasdb/stores/OGS-00004/store.opengwasdb \
+    --output docs/benchmark-output/opengwasdb_252_spot_identity.json
+```
+
 ---
 
 ### `benchmark_finngen_dense.py`
