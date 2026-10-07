@@ -191,11 +191,16 @@ the end of this file.
   associations) and OGS-00004's overflow (27,369,974) each fit in one shard --
   it is material at OGS-00011's 3,085,080,783 overflow associations, 62 shards
   per sequence. `sequence_region_step` now raises the write region to the shard
-  (never lowers it), so each shard is written exactly once. On a synthetic 6
-  million-cell component the measured write amplification falls from 1.42x to
-  1.00x, and on the three real pilots every sequence shard is written once. The
-  cost is the working set: about 1.5 GB (30 bytes a cell) per region at the full
-  50,000,000-element shard, against the 130 MiB a 4,194,304-cell region used.
+  (never lowers it), so each shard is written exactly once.  On a synthetic
+  160,000,000-cell component (four 50,000,000-element sequence shards) the
+  measured write amplification (`count_shard_writes`, the real bytes handed to
+  the storage layer) falls from 6.362x to 1.000x, the most writes to any one
+  sequence shard from 13 to 1, and the flush halves from 20.8 s to 9.7 s, with
+  peak RSS unchanged at 16.54 GiB (the held source planes dominate it, so the
+  larger region did not move it).  On the real pilots every sequence shard is
+  written once.  The theoretical cost is the region's working set: about 1.5 GB
+  (30 bytes a cell) at the full 50,000,000-element shard, against the 130 MiB a
+  4,194,304-cell region used.
   `require_whole_shard_writes` now judges multi-shard 1-D arrays too, so a
   writer that returns to a partial-shard sequence write fails loudly rather
   than quietly getting slower.  A 1-D array whose shard already spans it is
