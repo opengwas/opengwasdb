@@ -16,7 +16,11 @@ import numpy as np
 import pytest
 
 from benchmarks.benchmark_store_comparison import (
+    DEFAULT_EXPOSURE,
+    DEFAULT_REGION,
+    _parse_region,
     _parse_store,
+    _parser,
     differing_arrays,
     differing_shapes,
     digest_array,
@@ -199,3 +203,47 @@ def test_effective_reader_settings_reports_the_pinned_configuration(tmp_path):
 def test_store_arg_requires_a_label_and_a_path():
     with pytest.raises(argparse.ArgumentTypeError):
         _parse_store("/data/opengwasdb/stores/OGS-00009/store.opengwasdb")
+
+
+def test_parse_region_accepts_chrom_start_end():
+    assert _parse_region("10:112500000-113500000") == ("10", 112_500_000, 113_500_000)
+
+
+@pytest.mark.parametrize("text", ["10", "10:1", "10:abc-2", "10:5-5", "10:9-3"])
+def test_parse_region_refuses_a_malformed_or_empty_window(text):
+    """A malformed region must fail, not silently time an empty window (#250)."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        _parse_region(text)
+
+
+def test_anchors_default_to_the_ogs00009_selection():
+    """No override must reproduce the committed OGS-00009 anchors exactly."""
+    args = _parser().parse_args(
+        ["--store", "v2=/data/opengwasdb/stores/OGS-00009/store.opengwasdb"]
+    )
+    assert args.exposure == DEFAULT_EXPOSURE == "ukb-b-17805"
+    assert args.phewas_alid is None
+    assert args.region == DEFAULT_REGION == ("19", 44_500_000, 45_500_000)
+
+
+def test_parser_accepts_a_store_specific_anchor_override():
+    """OGS-00016/OGS-00011 cannot resolve the ukb-b anchors, so they override them.
+
+    Without these options the harness refuses those stores; the parser is the
+    user-facing half of that fix (#250).
+    """
+    args = _parser().parse_args(
+        [
+            "--store",
+            "v2=/data/opengwasdb/stores/OGS-00016/store.opengwasdb",
+            "--exposure",
+            "finngen-r13-T2D",
+            "--phewas-alid",
+            "10:112998590:C:T",
+            "--region",
+            "10:112500000-113500000",
+        ]
+    )
+    assert args.exposure == "finngen-r13-T2D"
+    assert args.phewas_alid == "10:112998590:C:T"
+    assert args.region == ("10", 112_500_000, 113_500_000)

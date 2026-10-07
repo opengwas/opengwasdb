@@ -55,14 +55,20 @@ from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import run_probe
 from benchmarks.benchmark_ukbb_dense import _median_ms
 from opengwasdb.query.facade import _empty_result
-from opengwasdb.store.arrays import inner_chunk_of
 
 # Selection anchors, matching the OGS-00009 report (benchmark_ukbb_dense.py):
 # the statin-use exposure Analysis, the chr19 APOE/APOC region, and the seeded
 # random draws `_query_shapes` fixes. The PheWAS variant is derived once from
 # this exposure's strongest genome-wide hit.
-EXPOSURE = "ukb-b-17805"
-REGION = ("19", 44_500_000, 45_500_000)
+#
+# These are DEFAULTS, not constants: a Store Release whose analyses do not carry
+# `ukb-b-17805` (OGS-00016's FinnGen R13, OGS-00011's GWAS Catalog Hybrid) cannot
+# resolve them, so `--exposure`, `--phewas-alid` and `--region` let the caller
+# name the anchors that store actually has. The defaults reproduce the committed
+# OGS-00009 baseline byte for byte when no override is given (#250).
+DEFAULT_EXPOSURE = "ukb-b-17805"
+DEFAULT_PHEWAS_ALID: str | None = None
+DEFAULT_REGION = ("19", 44_500_000, 45_500_000)
 DEFAULT_OUTPUT = Path("docs/benchmark-output/opengwasdb_store_comparison.json")
 
 # Every index-keyed query result carries these six parallel arrays. Read from
@@ -121,6 +127,24 @@ def _region_tuple(selection: dict[str, Any]) -> tuple[str, int, int]:
     return (str(region["chrom"]), int(region["start"]), int(region["end"]))
 
 
+def _parse_region(text: str) -> tuple[str, int, int]:
+    """``"19:44500000-45500000"`` -> ``("19", 44500000, 45500000)``.
+
+    A malformed region is a hard error: a silently empty window would make the
+    regional shape time an empty read and still agree across stores.
+    """
+    chrom, separator, span = text.partition(":")
+    start_text, dash, end_text = span.partition("-")
+    if not (chrom and separator and dash and start_text.isdigit() and end_text.isdigit()):
+        raise argparse.ArgumentTypeError(
+            f"--region must be CHROM:START-END with integer coordinates, got {text!r}"
+        )
+    start, end = int(start_text), int(end_text)
+    if end <= start:
+        raise argparse.ArgumentTypeError(f"--region end must exceed start, got {text!r}")
+    return (chrom, start, end)
+
+
 def _patterns_for_store(
     q: Any, selection: dict[str, Any]
 ) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
@@ -141,33 +165,53 @@ def _patterns_for_store(
     )
 
 
-def _resolve_selection(spec: StoreSpec) -> dict[str, Any]:
-    """Resolve the selection once, against the first store, and record it."""
+def _resolve_selection(
+    spec: StoreSpec,
+    *,
+    exposure: str = DEFAULT_EXPOSURE,
+    phewas_alid: str | None = DEFAULT_PHEWAS_ALID,
+    region: tuple[str, int, int] = DEFAULT_REGION,
+) -> dict[str, Any]:
+    """Resolve the selection once, against the first store, and record it.
+
+    `exposure` must be an Analysis the store carries; the PheWAS variant is
+    derived from that Analysis's strongest genome-wide hit unless the caller
+    pinned `phewas_alid` (a store whose top hits cannot resolve one). The region
+    is the caller's, defaulting to the OGS-00009 chr19 window.
+    """
     q, _plan = _query_shapes.open_benchmark_store(spec.path)
     try:
         analyses = q.analyses_table()
         by_id = {row["analysis_id"]: index for index, row in analyses.items()}
-        if EXPOSURE not in by_id:
+        if exposure not in by_id:
             raise SystemExit(
-                f"{spec.path}: exposure Analysis {EXPOSURE!r} is absent, so the "
-                "shared selection cannot be resolved. Refusing to guess one."
+                f"{spec.path}: exposure Analysis {exposure!r} is absent, so the "
+                "shared selection cannot be resolved. Refusing to guess one; pass "
+                "--exposure with an Analysis this store carries."
             )
-        top_hits = q.top_hits(threshold=_query_shapes.GENOME_WIDE)
-        keep = top_hits["analysis_index"] == by_id[EXPOSURE]
-        if not keep.any():
-            raise SystemExit(
-                f"{spec.path}: exposure Analysis {EXPOSURE!r} has no genome-wide "
-                "significant hits; there is no top hit to derive the PheWAS variant from."
-            )
-        hit_z = np.abs(top_hits["z"][keep])
-        strongest = int(top_hits["variant_index"][keep][int(np.argmax(hit_z))])
-        record = q._variant_axis.by_index(strongest)
-        if record is None:
-            raise SystemExit(f"{spec.path}: top-hit variant index {strongest} does not resolve")
+        if phewas_alid is not None:
+            record_alid = phewas_alid
+        else:
+            top_hits = q.top_hits(threshold=_query_shapes.GENOME_WIDE)
+            keep = top_hits["analysis_index"] == by_id[exposure]
+            if not keep.any():
+                raise SystemExit(
+                    f"{spec.path}: exposure Analysis {exposure!r} has no genome-wide "
+                    "significant hits; there is no top hit to derive the PheWAS variant "
+                    "from. Pass --phewas-alid to pin one."
+                )
+            hit_z = np.abs(top_hits["z"][keep])
+            strongest = int(top_hits["variant_index"][keep][int(np.argmax(hit_z))])
+            record = q._variant_axis.by_index(strongest)
+            if record is None:
+                raise SystemExit(
+                    f"{spec.path}: top-hit variant index {strongest} does not resolve"
+                )
+            record_alid = record.alid
         random_alids, random_analyses = _query_shapes.resolve_axis_selections(
             q._variant_axis,
             analyses,
-            int(q._root["z"].shape[0]),
+            int(q._variant_axis.n_variants),
             len(analyses),
         )
         if len(random_alids) != _query_shapes.RANDOM_AXIS_SIZE:
@@ -177,16 +221,16 @@ def _resolve_selection(spec: StoreSpec) -> dict[str, Any]:
                 "selection is not the selection the report names."
             )
         return {
-            "exposure_analysis_id": EXPOSURE,
-            "phewas_alid": record.alid,
-            "region": {"chrom": REGION[0], "start": REGION[1], "end": REGION[2]},
+            "exposure_analysis_id": exposure,
+            "phewas_alid": record_alid,
+            "region": {"chrom": region[0], "start": region[1], "end": region[2]},
             "random_lookup_shapes": _query_shapes.RANDOM_LOOKUP_SHAPES,
             "random_alids": random_alids,
             "random_analyses": random_analyses,
             "resolved_from": {
                 "label": spec.label,
                 "path": str(spec.path),
-                "n_variants": int(q._root["z"].shape[0]),
+                "n_variants": int(q._variant_axis.n_variants),
                 "n_analyses": len(analyses),
             },
         }
@@ -307,6 +351,26 @@ def _timed_shape(
     return median_ms, p95_ms, count, digests
 
 
+def _dense_plane_root(q: Any) -> Any:
+    """The Zarr root that holds the `z`/`se`/`eaf` planes for this store.
+
+    A Dense or Reference-Completed release keeps them at the release root. A
+    Hybrid release keeps them in the nested Dense Component
+    (`dense/data.zarr`); its outer root holds only `ragged` and `top_hits`, and
+    the Hybrid facade has no `_root` at all, so a plane lookup must name the
+    component explicitly (#250).
+    """
+    root = getattr(q, "_root", None)
+    if root is not None and "z" in root:
+        return root
+    dense = getattr(q, "_dense", None)
+    if dense is not None and "z" in dense._root:
+        return dense._root
+    raise SystemExit(
+        f"{type(q).__name__} exposes no Dense plane root (z/se/eaf); cannot read its layout"
+    )
+
+
 def _layout_block(q: Any) -> dict[str, Any]:
     """The physical layout each Dense plane reads at, and one top-hit tier's.
 
@@ -316,23 +380,28 @@ def _layout_block(q: Any) -> dict[str, Any]:
     inner chunk is zarr's `chunks` (the read unit), the shard `shards` (the
     file unit).
     """
+    root = _dense_plane_root(q)
 
     def shape_of(array: Any) -> dict[str, Any]:
         shards = getattr(array, "shards", None)
         return {
-            "chunk_shape": list(inner_chunk_of(array)),
+            # `Array.chunks` is the inner chunk (the read unit) for a v2 array and
+            # a v3 sharded array alike; `inner_chunk_of` is the seam's spelling of
+            # this, but inlined so the harness also runs against the 2.18 tree,
+            # which predates the seam helper (#250).
+            "chunk_shape": [int(size) for size in array.chunks],
             "shard_shape": None if shards is None else [int(size) for size in shards],
             "dtype": str(array.dtype),
         }
 
     layout: dict[str, Any] = {}
     for name in ("z", "se", "eaf"):
-        if name in q._root:
-            layout[name] = shape_of(q._root[name])
-    if "top_hits" in q._root:
-        for tier in sorted(q._root["top_hits"].group_keys()):
-            if "z" in q._root["top_hits"][tier]:
-                layout[f"top_hits/{tier}/z"] = shape_of(q._root["top_hits"][tier]["z"])
+        if name in root:
+            layout[name] = shape_of(root[name])
+    if "top_hits" in root:
+        for tier in sorted(root["top_hits"].group_keys()):
+            if "z" in root["top_hits"][tier]:
+                layout[f"top_hits/{tier}/z"] = shape_of(root["top_hits"][tier]["z"])
     return layout
 
 
@@ -340,7 +409,7 @@ def _dataset_block(q: Any, plan: Any) -> dict[str, Any]:
     return {
         "release_id": plan.release_id,
         "store_id": plan.store_id,
-        "n_variants": int(q._root["z"].shape[0]),
+        "n_variants": int(q._variant_axis.n_variants),
         "n_analyses": len(q.analyses_table()),
         "completion_state": str(plan.completion_state),
         "reference_assembly": getattr(plan, "reference_assembly", None),
@@ -358,7 +427,7 @@ def _measure_store(
     q, plan = _query_shapes.open_benchmark_store(spec.path)
     try:
         dataset = _dataset_block(q, plan)
-        effective_reader = effective_reader_settings(q._root)
+        effective_reader = effective_reader_settings(_dense_plane_root(q))
         patterns = _patterns_for_store(q, selection)
         timings: list[dict[str, Any]] = []
         digests: dict[str, dict[str, str]] = {}
@@ -565,10 +634,23 @@ def effective_reader_settings(root: Any) -> dict[str, Any]:
     fingerprint of the `opengwasdb` this process imported (#253).
     """
     plane = root["z"]
+    # zarr-python 3 dispatches every read through an async array; zarr-python 2
+    # has no such wrapper, so its `pipeline`/`max_workers` do not exist and are
+    # reported as None. The 2.18 baseline column (#250) runs this same harness
+    # under the 2.18 environment, so the absent wrapper must not crash the run.
+    async_array = getattr(plane, "_async_array", None)
+    codec_pipeline = getattr(async_array, "codec_pipeline", None)
     return {
-        "use_threads": bool(numcodecs.blosc.use_threads),
-        "pipeline": type(plane._async_array.codec_pipeline).__name__,
-        "max_workers": zarr.config.get("codec_pipeline.max_workers", None),
+        # The raw value, not `bool(...)`: numcodecs 0.12 (the 2.18 environment)
+        # uses `None` to mean "decide at decode time" (effectively threaded),
+        # and coercing that to False would record the opposite of what ran. The
+        # 2.18 baseline column (#250) therefore records `null`, and the v3
+        # environment records `true`.
+        "use_threads": numcodecs.blosc.use_threads,
+        "pipeline": None if codec_pipeline is None else type(codec_pipeline).__name__,
+        "max_workers": (
+            None if codec_pipeline is None else zarr.config.get("codec_pipeline.max_workers", None)
+        ),
     }
 
 
@@ -629,6 +711,28 @@ def _parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     ap.add_argument(
+        "--exposure",
+        default=DEFAULT_EXPOSURE,
+        metavar="ANALYSIS_ID",
+        help=f"the Analysis the shapes are anchored on (default {DEFAULT_EXPOSURE!r}, "
+        "the OGS-00009 exposure); must exist in the first store",
+    )
+    ap.add_argument(
+        "--phewas-alid",
+        default=DEFAULT_PHEWAS_ALID,
+        metavar="ALID",
+        help="pin the PheWAS variant instead of deriving it from the exposure's "
+        "strongest genome-wide top hit",
+    )
+    ap.add_argument(
+        "--region",
+        type=_parse_region,
+        default=DEFAULT_REGION,
+        metavar="CHROM:START-END",
+        help=f"the regional shape's window (default {DEFAULT_REGION[0]}:"
+        f"{DEFAULT_REGION[1]}-{DEFAULT_REGION[2]})",
+    )
+    ap.add_argument(
         "--selection-json",
         default=None,
         help="internal: the once-resolved selection an RSS probe must reuse",
@@ -643,7 +747,9 @@ def main() -> None:
         return
 
     stores = _validated_stores(args)
-    selection = _resolve_selection(stores[0])
+    selection = _resolve_selection(
+        stores[0], exposure=args.exposure, phewas_alid=args.phewas_alid, region=args.region
+    )
     print(f"selection resolved from {stores[0].label}: {json.dumps(selection, sort_keys=True)}")
 
     reference_label = stores[0].label
