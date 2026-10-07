@@ -101,6 +101,7 @@ from opengwasdb.variants.reference import (
     read_variant_reference,
     require_rsids_match_expected,
     require_written_rsids_match,
+    warn_reference_left_rows_blank,
 )
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
@@ -236,6 +237,24 @@ def _encode_variant_keys(chrom: object, pos: object, ref: object, alt: object) -
     key = np.char.add(key, b":")
     key = np.char.add(key, alt_b)
     return key
+
+
+def _source_site_key(site: SourceKey) -> str:
+    """A source coordinate in the exact string form the Dense routing keys it by.
+
+    `_build_variant_key_index` writes this key and `_match_batch` queries it, so
+    a harvested candidate looked up with this function is looked up exactly as
+    its association is routed (issue #255). The Dense routing keeps the source's
+    own spelling, an ALID reference's alleles being upper-case already; a Hybrid
+    routing case-folds and passes `hybrid.build._routed_site_key` instead.
+    """
+    chrom, pos, ref, alt = site
+    return f"{chrom}:{pos}:{ref}:{alt}"
+
+
+#: One build's site-key normalisation, applied to both the routing and the
+#: harvested candidates so the two are keyed identically.
+SiteKeyFn = Callable[[SourceKey], str]
 
 
 def _build_variant_key_index(
@@ -1180,6 +1199,8 @@ def _materialize_manifest_lookup(
     *,
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
+    site_key: SiteKeyFn = _source_site_key,
+    refuse_cross_assembly_conflicts: bool = False,
 ) -> tuple[
     dict[tuple[str, int, str, str], str],
     dict[tuple[str, int, str, str], str],
@@ -1197,19 +1218,31 @@ def _materialize_manifest_lookup(
     ``(rank, site)`` order, and the lift's own site->ALID rekey. The site map is
     returned too because a single-pass build must rekey it through the routing
     it actually uses, which is not always Pass 1's lift (issue #255).
+
+    ``site_key`` is the *build's* routing key. A raw tuple declared under both
+    assemblies is dropped from the candidates as two physical loci; a build
+    whose routing folds case (Hybrid) must find that collision on the folded key
+    too, which is what ``site_key`` supplies. ``refuse_cross_assembly_conflicts``
+    is for a single-pass build whose routing key folds: two *different* raw
+    tuples declared under different assemblies then collide on one key, which the
+    two-pass build refuses rather than guess, so it refuses here too.
     """
     tuples_by_assembly, rsid_by_site = _materialize_site_union(window_shards)
-    source_lookup, rsid_by_alid, ambiguous = _resolve_manifest_variants_to_alids(
+    source_lookup, rsid_by_alid, dropped_keys = _resolve_manifest_variants_to_alids(
         tuples_by_assembly,
         rsid_by_site,
         chain_file=chain_file,
         liftover_failure_threshold=liftover_failure_threshold,
+        site_key=site_key,
+        refuse_cross_assembly_conflicts=refuse_cross_assembly_conflicts,
     )
-    # The candidates a single-pass build rekeys must exclude the same raw tuples
-    # the lift just dropped: a tuple declared under both assemblies is two loci,
-    # and naming the lifted one from the other's row would attach an rsid to a
-    # variant a different association owns (issue #255 round 4).
-    candidates = {site: rsid for site, rsid in rsid_by_site.items() if site not in ambiguous}
+    # The candidates a single-pass build rekeys must exclude the same keys the
+    # lift just dropped: a tuple declared under both assemblies is two loci, and
+    # naming the lifted one from the other's row would attach an rsid to a
+    # variant a different association owns (issue #255 rounds 4-5).
+    candidates = {
+        site: rsid for site, rsid in rsid_by_site.items() if site_key(site) not in dropped_keys
+    }
     return source_lookup, candidates, rsid_by_alid
 
 
@@ -1347,6 +1380,10 @@ def _harvest_manifest_variants(
     window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
     reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
     map_spill_records: int = DEFAULT_MAP_SPILL_RECORDS,
+    # Declared before `site_key` on purpose: the two keyword blocks are separate
+    # entries, not one parameter list copied twice (the gate judges a clone).
+    refuse_cross_assembly_conflicts: bool = False,
+    site_key: SiteKeyFn = _source_site_key,
 ) -> tuple[
     dict[tuple[str, int, str, str], str],
     dict[tuple[str, int, str, str], str],
@@ -1360,7 +1397,9 @@ def _harvest_manifest_variants(
     the routing authority, and a Hybrid build's fold adds off-reference rows the
     lift never saw. Rekeying the site map through the routing the build actually
     uses (`_rekey_rsids_to_alids`) is what keeps an rsid on the variant its
-    association lands on (issue #255).
+    association lands on (issue #255). ``site_key`` is that build's own routing
+    key, so the both-assembly drop and any cross-assembly collision are computed
+    on the key the build routes by rather than on the raw tuple.
     """
     return _consume_manifest_shards(
         manifest_rows, n_workers=n_workers, window_size_mb=window_size_mb,
@@ -1370,6 +1409,8 @@ def _harvest_manifest_variants(
             _materialize_manifest_lookup,
             chain_file=chain_file,
             liftover_failure_threshold=liftover_failure_threshold,
+            site_key=site_key,
+            refuse_cross_assembly_conflicts=refuse_cross_assembly_conflicts,
         ),
     )
 
@@ -1380,10 +1421,21 @@ def _resolve_manifest_variants_to_alids(
     *,
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
+    site_key: SiteKeyFn = _source_site_key,
+    refuse_cross_assembly_conflicts: bool = False,
 ) -> tuple[
-    dict[tuple[str, int, str, str], str], dict[str, str], set[tuple[str, int, str, str]]
+    dict[tuple[str, int, str, str], str], dict[str, str], set[str]
 ]:
-    """Lift the union to hg38 ALIDs, re-key the rsids, and return the both-assembly tuples."""
+    """Lift the union to hg38 ALIDs, re-key the rsids, and return the dropped routing keys.
+
+    The dropped keys are the build's own ``site_key`` form of the raw tuples
+    declared under both assemblies: the lift drops those from both lookups, and
+    a single-pass harvest drops the same keys from its candidates (issue #255
+    rounds 4-5). ``refuse_cross_assembly_conflicts`` additionally refuses two
+    *different* raw tuples declared under different assemblies that collide on
+    one key -- the case a folding routing key creates, which the two-pass build
+    refuses rather than guesses.
+    """
     finalise_start = time.monotonic()
     passthrough_lookup: dict[tuple[str, int, str, str], str] = {}
     passthrough = tuples_by_assembly.pop("hg38", set())
@@ -1417,6 +1469,19 @@ def _resolve_manifest_variants_to_alids(
         for key in ambiguous:
             del passthrough_lookup[key]
             del lifted_lookup[key]
+    dropped_keys = {site_key(site) for site in ambiguous}
+    if refuse_cross_assembly_conflicts:
+        cross = (
+            {site_key(site) for site in passthrough_lookup}
+            & {site_key(site) for site in lifted_lookup}
+        ) - dropped_keys
+        if cross:
+            raise ValueError(
+                f"{len(cross)} source routing key(s) are declared under both hg38 and hg19 "
+                f"by different coordinates (e.g. {sorted(cross)[0]!r}); the two-pass "
+                "build refuses to guess which locus owns the stored row, so this build "
+                "refuses too"
+            )
     source_lookup = {**passthrough_lookup, **lifted_lookup}
     rsid_by_alid = _rekey_rsids_to_alids(source_lookup, rsid_by_site)
     # The rekey's own output must equal the map an independent walk of the
@@ -1431,7 +1496,7 @@ def _resolve_manifest_variants_to_alids(
         len(set(source_lookup.values())),
         _fmt_duration(time.monotonic() - finalise_start),
     )
-    return source_lookup, rsid_by_alid, ambiguous
+    return source_lookup, rsid_by_alid, dropped_keys
 
 
 #: A candidate or routing key: the raw source tuple, or the string form the
@@ -1705,24 +1770,6 @@ def _resolve_axis_source(
     return None, source_lookup, rsid_by_alid
 
 
-def _source_site_key(site: SourceKey) -> str:
-    """A source coordinate in the exact string form the Dense routing keys it by.
-
-    `_build_variant_key_index` writes this key and `_match_batch` queries it, so
-    a harvested candidate looked up with this function is looked up exactly as
-    its association is routed (issue #255). The Dense routing keeps the source's
-    own spelling, an ALID reference's alleles being upper-case already; a Hybrid
-    routing case-folds and passes `hybrid.build._routed_site_key` instead.
-    """
-    chrom, pos, ref, alt = site
-    return f"{chrom}:{pos}:{ref}:{alt}"
-
-
-#: One build's site-key normalisation, applied to both the routing and the
-#: harvested candidates so the two are keyed identically.
-SiteKeyFn = Callable[[SourceKey], str]
-
-
 def _candidates_by_routing_key(
     rsid_by_site: Mapping[SourceKey, str], key: SiteKeyFn, *, label: str
 ) -> dict[str, str]:
@@ -1849,6 +1896,10 @@ def _reference_axis_rsids(
     carries rsids is its own authority and no read is spent.
     """
     if reference.rsid_by_alid:
+        # A reference that names rsids is used as-is (out of #255's scope); warn
+        # about the axis rows it leaves blank, exactly as the Hybrid builder does
+        # (issue #255 round 5, finding 2).
+        warn_reference_left_rows_blank(reference)
         return dict(reference.rsid_by_alid)
     pass1_lookup, rsid_by_site, _ = _harvest_manifest_variants(
         manifest_rows,

@@ -183,6 +183,7 @@ from opengwasdb.variants.reference import (
     SourceKey,
     read_variant_reference,
     require_written_rsids_match,
+    warn_reference_left_rows_blank,
 )
 
 if TYPE_CHECKING:
@@ -1193,13 +1194,17 @@ def _single_pass_rsids(
         # A reference that names rsids is used as-is (out of #255's scope); warn
         # about the axis rows it leaves blank, split by where they came from
         # (issue #255 round 4, finding 3).
-        _warn_reference_left_rows_blank(reference)
+        warn_reference_left_rows_blank(reference)
         return {}, {}, dict(reference.rsid_by_alid), True
     pass1_lookup, rsid_by_site, _ = _harvest_manifest_variants(
         manifest_rows,
         chain_file=options.chain_file,
         liftover_failure_threshold=options.liftover_failure_threshold,
         n_workers=options.n_workers,
+        # This build routes by the case-folded key, so the both-assembly drop and
+        # any cross-assembly collision are computed on that key too.
+        site_key=_routed_site_key,
+        refuse_cross_assembly_conflicts=True,
     )
     candidates = _candidates_by_routing_key(
         rsid_by_site, _routed_site_key, label="Hybrid single-pass build"
@@ -1222,29 +1227,6 @@ def _single_pass_rsids(
         len(on_reference),
     )
     return rsid_by_site, candidate_routing, on_reference, False
-
-
-def _warn_reference_left_rows_blank(reference: VariantReference) -> None:
-    """Warn that a reference naming some rsids leaves its other rows blank.
-
-    Out of #255's scope: a reference that already names rsids is used as-is, so
-    a variant it does not name stays blank even when a source names it, and no
-    source read is spent to find out. There is simply no #255 rule on this path,
-    so the build says so with counts rather than leaving it to be discovered.
-    """
-    unnamed = len(reference.alids) - len(reference.rsid_by_alid)
-    if not unnamed:
-        return
-    log.warning(
-        "variant reference names %d of its %d ALIDs and leaves %d blank; this build "
-        "uses the reference as given and does not harvest the sources, so a variant "
-        "only a source names is stored with no rsid (issue #255 finding 3)",
-        len(reference.rsid_by_alid),
-        len(reference.alids),
-        unnamed,
-    )
-
-
 def _lift_and_partition(
     staged: StagedRelease,
     manifest_rows: list[_ManifestRow],
@@ -2040,7 +2022,7 @@ def _warn_fold_left_rows_blank(
 ) -> None:
     """Warn about fold-discovered overflow rows a named reference cannot name.
 
-    The other half of `_warn_reference_left_rows_blank`: a reference-based
+    The other half of `warn_reference_left_rows_blank`: a reference-based
     single-pass build whose reference already carries rsids does not harvest, so
     each variant the fold discovers off the reference is stored with no rsid
     even when its source names one. Out of #255's scope; logged with a count.

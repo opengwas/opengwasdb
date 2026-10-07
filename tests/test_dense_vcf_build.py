@@ -2677,6 +2677,41 @@ class TestPlainAlidReferenceRsids:
                 variant_reference=plain,
             )
 
+    def test_named_reference_warns_about_its_blank_rows(self, tmp_path, caplog):
+        """Issue #255, round 5 finding 2: the Dense builder shares the
+        `--variant-reference` help and spec, so it must warn on the
+        reference-named path too. Dense has no fold, so only the reference-rows
+        half applies; the row the reference leaves blank stays blank."""
+        import logging
+
+        vcf = _make_vcf(
+            tmp_path,
+            "named",
+            [
+                "1\t100000\trsPANEL\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                "1\t1564620\trsUNNAMED_REF\tA\tG\t.\tPASS\t.\tES:SE\t0.7:0.2\n",
+            ],
+        )
+        manifest = _manifest_with_source_assembly(tmp_path, [("named", vcf, "Named", "hg38")])
+        reference = tmp_path / "dense-named.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference,
+            [HG38_ALID_1, HG38_ALID_3],
+            {("1", 100000, "A", "G"): HG38_ALID_1, ("1", 1564620, "A", "G"): HG38_ALID_3},
+            {HG38_ALID_1: "rsPANEL"},
+        )
+        two_pass = tmp_path / "dense-named-two.opengwasdb"
+        single_pass = tmp_path / "dense-named-one.opengwasdb"
+        build_dense_from_vcf_manifest(manifest, two_pass, store_id="s", release_id="r")
+        with caplog.at_level(logging.WARNING):
+            build_dense_from_vcf_manifest(
+                manifest, single_pass, store_id="s", release_id="r", variant_reference=reference
+            )
+
+        assert _axis_rsids(two_pass) == {HG38_ALID_1: "rsPANEL", HG38_ALID_3: "rsUNNAMED_REF"}
+        assert _axis_rsids(single_pass) == {HG38_ALID_1: "rsPANEL", HG38_ALID_3: ""}
+        assert "names 1 of its 2 ALIDs and leaves 1 blank" in caplog.text
+
     def test_sources_with_no_rsids_still_build(self, tmp_path):
         """The rule cannot fire falsely: a source that genuinely names no rsids
         builds a valid store whose table has none."""

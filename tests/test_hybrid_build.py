@@ -2299,6 +2299,50 @@ class TestVariantReferenceRsids:
         assert "names 1 of its 2 ALIDs and leaves 1 blank" in caplog.text
         assert "off-reference (Overflow) variant(s)" in caplog.text
 
+    @pytest.mark.parametrize(
+        ("hg38_row", "hg19_row"),
+        [
+            (
+                "1\t1000000\trsHG38_LOCUS\tc\tt\t.\tPASS\t.\tES:SE\t1.0:0\n",
+                "1\t1000000\t.\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
+            ),
+            (
+                "1\t1000000\trsHG38_LOCUS\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0\n",
+                "1\t1000000\t.\tc\tt\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
+            ),
+        ],
+        ids=["hg38-lower", "hg19-lower"],
+    )
+    def test_case_folded_cross_assembly_collision_refuses(self, tmp_path, hg38_row, hg19_row):
+        """Issue #255, round 5: the both-assembly drop must be computed on the
+        build's routing key, and the Hybrid routing case-folds. Two *different*
+        raw tuples declared under different assemblies then collide on one key,
+        so the hg38 locus's name would land on the hg19 locus's lifted ALID.
+        The two-pass build refuses that input; this build refuses it too, in
+        both case orientations."""
+        hg38 = _make_vcf(
+            tmp_path,
+            "hg38_named",
+            ["1\t100000\trsPANEL\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n", hg38_row],
+        )
+        hg19 = _make_vcf(tmp_path, "hg19_unnamed", [hg19_row])
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("a38", hg38, "A hg38", "hg38"), ("b19", hg19, "B hg19", "hg19")]
+        )
+        panel = tmp_path / "case-cross-panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="case.?fold"):
+            build_hybrid_from_vcf_manifest(
+                manifest, tmp_path / "case-cross-two.opengwasdb", reference_panel=panel,
+                store_id="s", release_id="r",
+            )
+        with pytest.raises(ValueError, match="declared under both hg38 and hg19"):
+            build_hybrid_from_vcf_manifest(
+                manifest, tmp_path / "case-cross-one.opengwasdb", variant_reference=panel,
+                store_id="s", release_id="r",
+            )
+
     def test_admission_rejected_row_still_names_its_variant(self, tmp_path):
         """Hybrid admission (a MAF threshold here) runs inside Pass 2, after the
         reader. A row it drops still names its variant, so the harvest -- taken

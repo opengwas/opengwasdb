@@ -65,6 +65,7 @@ __all__ = [
     "read_variant_reference",
     "require_rsids_match_expected",
     "require_written_rsids_match",
+    "warn_reference_left_rows_blank",
     "write_variant_reference",
 ]
 
@@ -455,6 +456,30 @@ def expected_rsids_by_routing(
         if alid and rsid and alid not in expected:
             expected[alid] = rsid
     return expected
+
+
+def warn_reference_left_rows_blank(reference: VariantReference) -> None:
+    """Warn that a reference naming some rsids leaves its other rows blank.
+
+    `--variant-reference` accepts a reference that already names its variants,
+    and both builders then use it as-is: a variant it does not name is stored
+    with no rsid even when a source names it, and no source read is spent to
+    find out. That behaviour predates this contract and is out of issue #255's
+    scope, so the build says so with counts rather than leaving it to be
+    discovered (round-4/5 scope ruling). Shared by both builders so the help,
+    the spec and this warning cannot disagree.
+    """
+    unnamed = len(reference.alids) - len(reference.rsid_by_alid)
+    if not unnamed:
+        return
+    log.warning(
+        "variant reference names %d of its %d ALIDs and leaves %d blank; this build "
+        "uses the reference as given and does not harvest the sources, so a variant "
+        "only a source names is stored with no rsid (issue #255 finding 3)",
+        len(reference.rsid_by_alid),
+        len(reference.alids),
+        unnamed,
+    )
 
 
 def require_rsids_match_expected(
