@@ -35,7 +35,11 @@ the end of this file.
   `--chunk-analyses` now name the **inner chunk** (default `[1000, 64]`), and the
   shard shape is deliberately not exposed on a build: it is the format's decided
   layout, and a build-time knob would let a release carry a shard the converter
-  cannot reproduce. **Completing a 0.1.0 source is now refused**, naming
+  cannot reproduce.  A caller-supplied inner chunk that does not tile the
+  decided Dense shard `[100000, 1024]` is **refused**, naming the values that
+  do, rather than silently deriving a different shard such as
+  `[100000, 1000]`; an array shorter than the shard still clips it.  **Completing
+  a 0.1.0 source is now refused**, naming
   `scripts/convert_store_to_0_2_0.py`: completion writes into its source's
   arrays and keeps its format, and this build writes only 0.2.0 (ADR 0038 §4).
   `scripts/restamp_store_to_0_1_0.py` keeps its own `0.1.0` target rather than

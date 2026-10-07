@@ -202,9 +202,10 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
             f"{source} is format_version={version!r}, which this build reads but cannot "
             f"write (it writes {CURRENT_FORMAT_VERSION!r}). Completion preserves its "
             "source's format rather than re-encoding it (ADR 0038 §4), so this release "
-            "cannot be completed by this build. Convert a Dense 0.1.0 source to "
-            f"{CURRENT_FORMAT_VERSION} with scripts/convert_store_to_0_2_0.py and "
-            "complete that, or rebuild the release from source."
+            "cannot be completed by this build. The one order that works is: convert the "
+            f"0.1.0 source to {CURRENT_FORMAT_VERSION} with "
+            "scripts/convert_store_to_0_2_0.py (it accepts every converter-supported layout), "
+            "then complete the converted release; or rebuild the release from source."
         )
     return version
 

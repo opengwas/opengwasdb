@@ -783,13 +783,26 @@ def test_completion_accepts_a_0_2_0_source(converted_dense_store: Path):
 # ── the seam's shard policy is the one authority ─────────────────────────────
 
 
-def test_shard_layout_refuses_a_shard_that_is_not_a_whole_multiple_of_the_inner_chunk():
-    with pytest.raises(ValueError, match="not a whole multiple"):
+def test_shard_layout_refuses_a_dense_shard_the_inner_chunk_does_not_tile():
+    """`(1500, 8)` is not a whole multiple of the inner chunk `(1000, 4)`.
+
+    The relation is symmetric — the requested shard must be a whole multiple of
+    the inner chunk, and the inner chunk must tile the decided shard — so a
+    caller-supplied shard that is neither is refused, naming the axis.
+    """
+    with pytest.raises(ValueError, match="does not tile the decided shard axis"):
         shard_layout(
             ArrayRole.DENSE_STATISTIC_PLANE,
             (10_000, 200),
             inner_chunk=(1000, 4),
             dense_shard=(1500, 8),
+        )
+    with pytest.raises(ValueError, match="does not tile the decided shard axis"):
+        shard_layout(
+            ArrayRole.DENSE_STATISTIC_PLANE,
+            (200_000, 2_000),
+            inner_chunk=(1000, 1_000),
+            dense_shard=(100_000, 1_024),
         )
 
 

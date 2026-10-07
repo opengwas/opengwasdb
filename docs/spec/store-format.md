@@ -870,7 +870,7 @@ conversion takes as parameters, are:
 
 | array role | inner chunk | shard |
 |---|---|---|
-| Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask | `[1000, A_c]`, `A_c` the analysis-axis chunk (**decided 64**), clipped to the array | `[100_000, 1024]` (rows × Analyses), a whole multiple of the inner chunk, clipped to cover the array |
+| Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask | `[1000, A_c]`, `A_c` the analysis-axis chunk (**decided 64**), clipped to the array | `[100_000, 1024]` (rows × Analyses); the inner chunk MUST tile this shard (**`100000 % V_c == 0` and `1024 % A_c == 0`**), and the shard is clipped only when the array itself is shorter than it |
 | Dense per-variant side arrays (`eaf_baseline`, `eaf_reference`) | per §6: the serving plane's variant-axis chunk, capped at 200,000, clipped to the array | about 1,000,000 elements |
 | Ragged association sequences (`ragged/z`, `se`, `variant_index`, `eaf`, `imputed`) | 200,000, or an explicit `chunks=(...)` | 50,000,000 elements, clipped to a whole number of inner chunks |
 | Ragged per-variant side arrays (`ragged/eaf_baseline`, `ragged/eaf_reference`) | per §6 | 10,000,000 elements |
@@ -891,13 +891,23 @@ run, so a future variant-side index can be added beside the Analysis-sorted
 arrays without re-sharding them.
 
 `clipped to cover the array` means the smallest whole number of inner chunks
-that spans the dimension, so a small array gets one shard of one inner chunk and
-the declared shard is always a whole multiple of the inner chunk.  The inner
+that spans the dimension, so an array shorter than the decided shard gets one
+shard of its own extent.  The inner
 chunk is `chunk_layout(role, shape, …)`; the shard is `shard_layout(role, shape,
 inner_chunk=…)` — one role → layout table in `opengwasdb.store.arrays`, so the
 converter and the builders cannot disagree. The top-hit shard width is the
 one override a caller passes to `shard_layout` (`top_hit_shard_chunks`); it
 applies to `TOP_HIT_INDEX` alone and defaults to the policy's 64.
+
+**A Dense inner chunk MUST tile the decided shard.**  The Dense shard is
+`[100_000, 1024]`; a builder that supplied an inner chunk not dividing an axis
+of it (`1024 % A_c != 0`, say) is refused, naming the values that do, rather
+than silently writing a different shard such as `[100000, 1000]`.  That is the
+one way a build could otherwise choose its shard, and a shard the converter does
+not reproduce is a layout divergence a reader cannot see.  The one exception is
+an array **shorter** than the shard on an axis: its shard is the array's own
+extent, so divisibility is moot and it clips.  The default `[1000, 64]` tiles
+both axes.
 
 **The builders do not expose the shard shape.** `opengwasdb build-dense-vcf`,
 `build-hybrid` and `build-hybrid-from-catalogue` take `--chunk-variants` and
@@ -914,7 +924,8 @@ records it in the same three places as any Dense release.
 The inner chunk is the role policy of `opengwasdb.store.arrays` (`chunk_layout`)
 and the shard its companion `shard_layout`; a shard MUST be a whole multiple of
 the inner chunk on every axis, and a layout that is not is invalid rather than
-clipped.
+clipped.  For a Dense plane the reverse also holds: the inner chunk MUST tile
+the decided shard, or `shard_layout` refuses it (§10a).
 
 The codec chain is Blosc Zstandard / clevel 3 / bitshuffle inside the
 `sharding_indexed` codec — the v3 spelling of the 0.1.0 compressor. An array
@@ -1349,7 +1360,7 @@ Future format versions may add fields, arrays, or indexes, but MUST preserve exp
 
 A build writes exactly one `format_version` and reads every series it implements. There is no facility for writing an older format: a store that needs to be in an older format already exists in that format.
 
-**Since #247**, this build writes `0.2.0` from every builder and from the converter (§21.4), whose target is `CURRENT_FORMAT_VERSION` — the same constant the builders read — and whose source version is `SOURCE_FORMAT_VERSION = "0.1.0"`. A built release and a converted release therefore declare the same format and carry the same Zarr v3 sharded layout — which is what lets #249 check their identity. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0` source cannot be Reference-Completed by this build (a converted release is completed **before** conversion, or after it is rebuilt); completion refuses it and names the conversion tool. 0.2.0 is writable, so a converted release can be completed in place by a later build.
+**Since #247**, this build writes `0.2.0` from every builder and from the converter (§21.4), whose target is `CURRENT_FORMAT_VERSION` — the same constant the builders read — and whose source version is `SOURCE_FORMAT_VERSION = "0.1.0"`. A built release and a converted release therefore declare the same format and carry the same Zarr v3 sharded layout — which is what lets #249 check their identity. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0` source cannot be Reference-Completed by this build: **the one executable order is to convert the `0.1.0` source to `0.2.0` and then complete the converted release** (or rebuild it). Completion refuses a `0.1.0` source and names the conversion tool. A converted `0.2.0` release is writable, so it can then be completed in place.
 
 ### 21.4 I have an old store — now what?
 

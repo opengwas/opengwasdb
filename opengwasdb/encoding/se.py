@@ -679,19 +679,28 @@ def _measure_overflow(
     return _ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
 
 
-def _empty_exception_arrays(group: Any, count: int, compressor: Any) -> tuple[Any, Any]:
+def _empty_exception_arrays(
+    group: Any,
+    count: int,
+    compressor: Any,
+    *,
+    role: ArrayRole = ArrayRole.EXCEPTION_TABLE,
+) -> tuple[Any, Any]:
     """Allocate the side table the streaming rewrite fills in position order.
 
     Sized from the rewrite's codes-only count pass rather than grown: the
     rewrite visits row chunks in order, so the exceptions arrive already sorted
-    and can be written straight into their final slots.
+    and can be written straight into their final slots.  `role` names the
+    component's table policy explicitly; a Ragged CSR component opened directly
+    at `data.zarr/ragged` reports `path == ""`, so the caller that knows its
+    component must say so (#247 review round 1).
     """
 
     def one(name: str, dtype: str) -> Any:
         return create_array(
             group,
             name,
-            ArrayRole.EXCEPTION_TABLE,
+            role,
             shape=(count,),
             dtype=dtype,
             compressor=compressor,
@@ -903,7 +912,7 @@ def _rewrite_dense(
     global _REWRITE
     source = group["se"]
     n_rows, n_analyses = map(int, source.shape)
-    row_chunk = _row_block_of(source)  # whole Dense shards, not the inner chunk
+    row_chunk = _row_block_of(source)
     compressor = compressor_of(source)
     pending = create_array(
         group,

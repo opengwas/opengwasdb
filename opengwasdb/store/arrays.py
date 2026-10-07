@@ -209,9 +209,9 @@ __all__ = [
     "require_whole_shard_write",
     "require_whole_shard_writes",
     "role_for_array_path",
-    "role_in_group",
     "shard_layout",
     "sharded_compressor",
+    "write_shard_cells",
 ]
 
 # ── compressor ───────────────────────────────────────────────────────────────
@@ -684,25 +684,48 @@ def _clip_shard_to_multiple(requested: int, inner: int, dim: int) -> int:
     return chunks * inner
 
 
+def _divisors(value: int) -> list[int]:
+    """Every divisor of `value`, ascending."""
+    return [d for d in range(1, value + 1) if value % d == 0]
+
+
+def _allowed_inner_chunks(wanted: int) -> str:
+    """The inner chunks that tile a decided shard axis, for an error message."""
+    divisors = _divisors(wanted)
+    if len(divisors) <= 12:
+        return ", ".join(str(d) for d in divisors)
+    return f"any divisor of {wanted}"
+
+
 def _require_dense_shard_multiple(
     request: tuple[int, int], inner_chunk: tuple[int, ...], shape: tuple[int, ...]
 ) -> None:
-    """Refuse a *requested* Dense shard that is not a whole multiple of the chunk.
+    """Refuse a Dense inner chunk that does not tile the decided shard.
 
-    An inner chunk that covers its whole axis was clipped to the array (ADR
-    0021), so the shard is the array's own extent whatever the request: there is
-    one row-block and no caller choice to preserve.  Only where the inner chunk
-    is narrower than the axis does a non-multiple request silently round to a
-    different shard.  The *default* shard is not checked at all: it is the
-    decided shape for the decided inner chunk, and a caller that narrows the
-    inner chunk (a fixture, a test) gets it clipped to whole inner chunks.
+    A build does not choose its shard: the Dense planes are stored as the decided
+    `DENSE_SHARD_SHAPE`, clipped only when the array itself is smaller than the
+    shard (ADR 0058).  An inner chunk that does not tile the shard axis would
+    silently produce a **different** shard — e.g. `[100000, 1024]` rounded down
+    to `[100000, 1000]` for a 1,000-Analysis inner chunk — which is the layout
+    divergence #249 exists to catch but a reader cannot see.  Such an inner chunk
+    is refused here, naming the values that tile the axis.
+
+    An axis whose array is shorter than the requested shard is the one allowed
+    exception: the shard is the array's own extent (one whole-array shard), so
+    the inner chunk's divisibility is moot and the shard clips to cover the
+    array.  This applies to the *default* shard and to an explicit one alike.
     """
-    for wanted, inner, dim in zip(request, inner_chunk, shape, strict=True):
-        if inner != dim and int(wanted) % inner:
+    for axis, (wanted, inner, dim) in enumerate(zip(request, inner_chunk, shape, strict=True)):
+        wanted = int(wanted)
+        if dim < wanted:
+            continue
+        if wanted % inner:
+            axis_name = "variant" if axis == 0 else "Analysis"
             raise ValueError(
-                f"dense shard {tuple(int(size) for size in request)!r} is not a whole "
-                f"multiple of the inner chunk {inner_chunk!r} ({wanted} is not a "
-                f"multiple of {inner})"
+                f"the Dense {axis_name}-axis inner chunk {inner} does not tile the "
+                f"decided shard axis {wanted} (shard {tuple(int(size) for size in request)!r}); "
+                "a build writes the format's shard, not one it chose. Allowed "
+                f"{axis_name}-axis inner chunks: {_allowed_inner_chunks(wanted)}"
             )
 
 
@@ -714,10 +737,9 @@ def _shard_dense_grid(ctx: _ShardContext) -> tuple[int, ...]:
             f"dense shard {tuple(request)!r} does not match the {len(ctx.inner_chunk)}-D "
             f"inner chunk {ctx.inner_chunk!r}"
         )
-    if ctx.dense_shard is not None:
-        _require_dense_shard_multiple(
-            (int(request[0]), int(request[1])), ctx.inner_chunk, ctx.shape
-        )
+    _require_dense_shard_multiple(
+        (int(request[0]), int(request[1])), ctx.inner_chunk, ctx.shape
+    )
     return tuple(
         _clip_shard_to_multiple(int(wanted), inner, dim)
         for wanted, inner, dim in zip(request, ctx.inner_chunk, ctx.shape, strict=True)
@@ -963,7 +985,48 @@ def require_whole_shard_write(array: Any, selection: Any) -> None:
             )
 
 
+def write_shard_cells(array: Any, rows: Any, cols: Any, values: Any) -> None:
+    """Write `values` into `array[rows, cols]` with one whole-shard write each.
+
+    Patching individual cells of a 2-D Dense plane through `vindex`/`oindex` is a
+    read-modify-write of every shard they touch, and it is invisible to the
+    whole-shard guard (`require_whole_shard_write`).  The cells are grouped by
+    the shard they fall in; each touched shard's band is read once, patched in
+    memory and written back whole.  A 1-D or unsharded array falls back to the
+    direct write, which is what the element-capped and whole-array policies
+    expect.
+    """
+    rows = np.asarray(rows, dtype=np.int64)
+    cols = np.asarray(cols, dtype=np.int64)
+    values = np.asarray(values)
+    if rows.size == 0:
+        return
+    shards = getattr(array, "shards", None)
+    if shards is None or len(array.shape) != 2:
+        array[rows, cols] = values
+        return
+    shard_rows = max(int(shards[0]), 1)
+    shard_cols = max(int(shards[1]), 1)
+    n_col_shards = -(-int(array.shape[1]) // shard_cols)
+    keys = (rows // shard_rows) * n_col_shards + (cols // shard_cols)
+    for key in np.unique(keys):
+        mask = keys == key
+        shard_row_idx = rows[mask]
+        shard_col_idx = cols[mask]
+        r0 = int(shard_row_idx[0]) // shard_rows * shard_rows
+        c0 = int(shard_col_idx[0]) // shard_cols * shard_cols
+        r1 = min(r0 + shard_rows, int(array.shape[0]))
+        c1 = min(c0 + shard_cols, int(array.shape[1]))
+        band = np.array(array[r0:r1, c0:c1])
+        band[shard_row_idx - r0, shard_col_idx - c0] = values[mask]
+        array[r0:r1, c0:c1] = band
+
+
 _ORIGINAL_SETITEM = zarr.Array.__setitem__
+_ORIGINAL_SET_BASIC = zarr.Array.set_basic_selection
+_ORIGINAL_SET_ORTHOGONAL = zarr.Array.set_orthogonal_selection
+_ORIGINAL_SET_MASK = zarr.Array.set_mask_selection
+_ORIGINAL_SET_COORDINATE = zarr.Array.set_coordinate_selection
 _SHARD_WRITE_GUARD_INSTALLED = False
 
 
@@ -972,10 +1035,66 @@ def _guarded_setitem(self: Any, selection: Any, value: Any) -> None:
     _ORIGINAL_SETITEM(self, selection, value)
 
 
+def _guarded_set_basic_selection(
+    self: Any, selection: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    require_whole_shard_write(self, selection)
+    _ORIGINAL_SET_BASIC(self, selection, value, *args, **kwargs)
+
+
+def _guarded_set_orthogonal_selection(
+    self: Any, selection: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    # An orthogonal selection is a tuple of integer arrays: it names individual
+    # cells, never a whole shard, so it is a partial write by construction.
+    require_whole_shard_write(self, selection)
+    _ORIGINAL_SET_ORTHOGONAL(self, selection, value, *args, **kwargs)
+
+
+def _guarded_set_mask_selection(
+    self: Any, mask: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    require_whole_shard_write(self, mask)
+    _ORIGINAL_SET_MASK(self, mask, value, *args, **kwargs)
+
+
+def _guarded_set_coordinate_selection(
+    self: Any, selection: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    require_whole_shard_write(self, selection)
+    _ORIGINAL_SET_COORDINATE(self, selection, value, *args, **kwargs)
+
+
 def _install_shard_write_guard() -> None:
     global _SHARD_WRITE_GUARD_INSTALLED
+    # Every write API Zarr exposes: `__setitem__`, `oindex` and `vindex` all
+    # delegate to one of the four `set_*_selection` methods (zarr 3.4), so
+    # patching those covers them; `__setitem__` is patched too so the check runs
+    # against the caller's own selection and the error names it.
     type.__setattr__(zarr.Array, "__setitem__", _guarded_setitem)
+    type.__setattr__(zarr.Array, "set_basic_selection", _guarded_set_basic_selection)
+    type.__setattr__(
+        zarr.Array, "set_orthogonal_selection", _guarded_set_orthogonal_selection
+    )
+    type.__setattr__(zarr.Array, "set_mask_selection", _guarded_set_mask_selection)
+    type.__setattr__(
+        zarr.Array, "set_coordinate_selection", _guarded_set_coordinate_selection
+    )
     _SHARD_WRITE_GUARD_INSTALLED = True
+
+
+def _uninstall_shard_write_guard() -> None:
+    global _SHARD_WRITE_GUARD_INSTALLED
+    type.__setattr__(zarr.Array, "__setitem__", _ORIGINAL_SETITEM)
+    type.__setattr__(zarr.Array, "set_basic_selection", _ORIGINAL_SET_BASIC)
+    type.__setattr__(
+        zarr.Array, "set_orthogonal_selection", _ORIGINAL_SET_ORTHOGONAL
+    )
+    type.__setattr__(zarr.Array, "set_mask_selection", _ORIGINAL_SET_MASK)
+    type.__setattr__(
+        zarr.Array, "set_coordinate_selection", _ORIGINAL_SET_COORDINATE
+    )
+    _SHARD_WRITE_GUARD_INSTALLED = False
 
 
 @contextmanager
@@ -995,8 +1114,7 @@ def require_whole_shard_writes() -> Iterator[None]:
     try:
         yield
     finally:
-        type.__setattr__(zarr.Array, "__setitem__", _ORIGINAL_SETITEM)
-        _SHARD_WRITE_GUARD_INSTALLED = False
+        _uninstall_shard_write_guard()
 
 
 if os.environ.get(_ENFORCE_WHOLE_SHARD_WRITES_ENV) == "1":
@@ -1053,35 +1171,6 @@ _RAGGED_ROLES_BY_NAME: Mapping[str, ArrayRole] = MappingProxyType(
         "eaf_exception_value": ArrayRole.RAGGED_EXCEPTION_TABLE,
     }
 )
-
-
-def role_in_group(group: Any, role: ArrayRole) -> ArrayRole:
-    """The role a shared array takes in the group it is written into.
-
-    A few arrays are physically the same thing in a Dense grid and in a Ragged
-    CSR component -- a per-variant frequency side array, an exact-value table,
-    a flat association sequence -- but #248 sized the **Ragged** ones
-    independently (`RAGGED_PER_VARIANT`, `RAGGED_EXCEPTION_TABLE`, the
-    element-bounded `ASSOCIATION_SEQUENCE`), so the converter's path -> role
-    table assigns the Ragged role to `ragged/...`.  A builder that passed the
-    Dense role for an array under `ragged/` would write a different shard than
-    the converter, which #249's builder-vs-conversion identity would catch but
-    a reader would not.  The group's path is what tells the two apart: a Ragged
-    CSR component is the group named `ragged`.
-    """
-    if _is_ragged_group(group):
-        if role is ArrayRole.PER_VARIANT:
-            return ArrayRole.RAGGED_PER_VARIANT
-        if role is ArrayRole.EXCEPTION_TABLE:
-            return ArrayRole.RAGGED_EXCEPTION_TABLE
-    return role
-
-
-def _is_ragged_group(group: Any) -> bool:
-    """Whether `group` is a Ragged CSR component (`data.zarr/ragged`)."""
-    return bool(getattr(group, "path", "") or "") and str(group.path).strip("/").endswith(
-        "ragged"
-    )
 
 
 def role_for_array_path(path: str) -> ArrayRole | None:

@@ -104,12 +104,25 @@ _ALLOW_UNVERIFIED_HELP = (
 )
 #: The two chunk options every Dense-shaped build shares.  They name the
 #: **inner chunk** -- the unit a query reads -- not the shard: the shard is the
-#: format's decided shape (ADR 0057 addendum), so a build cannot choose it.
+#: format's decided shape, and an inner chunk that does not tile it is refused
+#: (ADR 0057 addendum, ADR 0058).
 _CHUNK_VARIANTS_OPTION = Annotated[
-    int, typer.Option(help="Zarr variant-axis inner chunk size (the unit a query reads)")
+    int,
+    typer.Option(
+        help=(
+            "Zarr variant-axis inner chunk size (the unit a query reads); must tile the "
+            "format's 100,000-row shard (smaller arrays clip)"
+        )
+    ),
 ]
 _CHUNK_ANALYSES_OPTION = Annotated[
-    int, typer.Option(help="Zarr Analysis-axis inner chunk size (the unit a query reads)")
+    int,
+    typer.Option(
+        help=(
+            "Zarr Analysis-axis inner chunk size (the unit a query reads); must tile the "
+            "format's 1,024-Analysis shard (smaller arrays clip)"
+        )
+    ),
 ]
 
 _SOURCE_READER_CAPABILITY_HELP = (

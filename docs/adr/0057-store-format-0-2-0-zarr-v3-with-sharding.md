@@ -60,7 +60,9 @@ The consequence is deliberate and tested: `check_writable_format_version`
 into its source's arrays and preserves its source's `format_version`. A converted
 store is completed **before** conversion, or after #247. The guard was written
 for exactly this state — "the moment a second readable version exists" — and
-0.2.0 is where it becomes live.
+0.2.0 is where it becomes live. (The addendum at the end corrects that order for
+the state #247 leaves: convert the `0.1.0` source to `0.2.0` first, then complete
+the converted release.)
 
 ### 3. Conversion, not rebuild, is the migration route
 
@@ -235,6 +237,8 @@ production nothing: the hook is off unless entered.
 
 **Completion of a `0.1.0` source is refused**, naming
 `scripts/convert_store_to_0_2_0.py`. Decision 2 predicted this as the guard's
-first real firing; it is now live and tested. A `0.2.0` source is writable, so a
-converter-produced release can be completed in place, and a store that should be
-completed-and-converted is completed first.
+first real firing; it is now live and tested. The one executable order for a
+converter-supported layout is: **convert the `0.1.0` source to `0.2.0`, then
+complete the converted release** (or rebuild). Completion cannot come first — a
+`0.1.0` source is not writable — and it cannot be skipped: the converted release
+is a `0.2.0` release, and this build writes it.

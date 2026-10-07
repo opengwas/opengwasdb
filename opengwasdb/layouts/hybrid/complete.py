@@ -70,7 +70,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
-from opengwasdb.store.arrays import open_group, open_group_for_write
+from opengwasdb.store.arrays import open_group, open_group_for_write, write_shard_cells
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -583,7 +583,9 @@ def _fold_panel_crossovers(
     # Through the plane, so the Dense Component's overflow table moves with the
     # cells being overwritten rather than being left describing their old values.
     DenseZPlane.open(root, encoding).patch(row_idx, col_idx, z_vals)
-    root["imputed"].vindex[row_idx, col_idx] = 0
+    write_shard_cells(
+        root["imputed"], row_idx, col_idx, np.zeros(len(row_idx), dtype=np.uint8)
+    )
     # The crossed-over cell's EAF moves with its z/se (ADR 0036) -- the whole
     # point of the fold is that this is one real observation, not two. Through
     # the plane, so the cell is coded against the Dense Component's own

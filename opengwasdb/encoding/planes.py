@@ -44,7 +44,7 @@ from opengwasdb.store.arrays import (
     component_variant_chunk,
     compressor_of,
     create_array,
-    role_in_group,
+    write_shard_cells,
 )
 
 SE_COEFFICIENTS = "se_coefficients"
@@ -174,9 +174,11 @@ class DenseZPlane:
             return
         positions = positions_pairs(rows, cols, self.n_analyses)
         builder = ZOverflowBuilder()
-        self._array.vindex[rows, cols] = self._codec.encode_z(
-            values, positions=positions, overflow=builder
-        )
+        codes = self._codec.encode_z(values, positions=positions, overflow=builder)
+        # One whole-shard write per touched shard, not a per-cell `vindex` write:
+        # the latter is a read-modify-write of the shard and is invisible to the
+        # whole-shard guard (#247 review round 1).
+        write_shard_cells(self._array, rows, cols, codes)
         if not self._codec.encoding.z.is_fixed_point:
             # A float plane has no overflow table, and must not acquire an
             # empty one just because it was written through here.
@@ -338,12 +340,12 @@ class DenseSePlane:
         """Patch physical SE cells and keep their exact-exception table aligned."""
         rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
         if not self._codec.encoding.se.is_residual:
-            self._array.vindex[rows, cols] = np.asarray(values, dtype=np.float16)
+            write_shard_cells(self._array, rows, cols, np.asarray(values, dtype=np.float16))
             return
         assert self._eaf is not None and self._coefficients is not None
         positions = positions_pairs(rows, cols, self.n_analyses)
         builder = SeExceptionBuilder()
-        self._array.vindex[rows, cols] = self._codec.encode_se(
+        codes = self._codec.encode_se(
             values,
             eaf=self._eaf.points(rows, cols),
             analysis_index=cols,
@@ -351,6 +353,7 @@ class DenseSePlane:
             positions=positions,
             exceptions=builder,
         )
+        write_shard_cells(self._array, rows, cols, codes)
         previous = self._codec.se_exceptions or SeExceptionTable.empty()
         merged = SeExceptionBuilder()
         keep = ~np.isin(previous.index, positions)
@@ -697,12 +700,13 @@ class DenseEafPlane(_EafPlaneBase):
             return
         positions = positions_pairs(rows, cols, self.n_analyses)
         builder = EafExceptionBuilder()
-        self._array.vindex[rows, cols] = self._codec.encode_eaf(
+        codes = self._codec.encode_eaf(
             values,
             baseline=self._gather(self._baseline, rows),
             positions=positions,
             exceptions=builder,
         )
+        write_shard_cells(self._array, rows, cols, codes)
         if not self._codec.encoding.eaf.is_residual:
             return
         previous = self._codec.eaf_exceptions or EafExceptionTable.empty()
@@ -921,16 +925,20 @@ def _write_per_variant_array(
     *,
     compressor: Any = None,
     chunk: int | None = None,
+    role: ArrayRole = ArrayRole.PER_VARIANT,
 ) -> None:
     """Write (or replace) one `float32` per variant of a component's axis.
 
     The component plane's variant-axis chunk is read here and passed in as
-    `component_chunk`, so the layout policy itself never inspects `group`.
+    `component_chunk`, so the layout policy itself never inspects `group`.  The
+    `role` is explicit rather than sniffed from `group.path`: a Ragged CSR
+    component opened directly at `data.zarr/ragged` reports `path == ""`, so a
+    path check cannot tell it from a Dense root (#247 review round 1).
     """
     create_array(
         group,
         name,
-        role_in_group(group, ArrayRole.PER_VARIANT),
+        role,
         data=np.asarray(values, dtype=np.float32),
         dtype="float32",
         compressor=compressor,
@@ -941,14 +949,26 @@ def _write_per_variant_array(
 
 
 def write_eaf_baseline(
-    group: Any, baseline: np.ndarray, *, compressor: Any = None, chunk: int | None = None
+    group: Any,
+    baseline: np.ndarray,
+    *,
+    compressor: Any = None,
+    chunk: int | None = None,
+    role: ArrayRole = ArrayRole.PER_VARIANT,
 ) -> None:
     """Write the per-variant `eaf_baseline` the residual coding decodes against."""
-    _write_per_variant_array(group, EAF_BASELINE, baseline, compressor=compressor, chunk=chunk)
+    _write_per_variant_array(
+        group, EAF_BASELINE, baseline, compressor=compressor, chunk=chunk, role=role
+    )
 
 
 def write_eaf_reference(
-    group: Any, reference: np.ndarray, *, compressor: Any = None, chunk: int | None = None
+    group: Any,
+    reference: np.ndarray,
+    *,
+    compressor: Any = None,
+    chunk: int | None = None,
+    role: ArrayRole = ArrayRole.PER_VARIANT,
 ) -> None:
     """Write the per-variant reference-panel frequency (ADR 0037 §4).
 
@@ -956,7 +976,9 @@ def write_eaf_reference(
     the panel's, identical for every Analysis imputed at that variant, so it is
     a per-variant constant rather than per-cell data.
     """
-    _write_per_variant_array(group, EAF_REFERENCE, reference, compressor=compressor, chunk=chunk)
+    _write_per_variant_array(
+        group, EAF_REFERENCE, reference, compressor=compressor, chunk=chunk, role=role
+    )
 
 
 def write_se_coefficients(group: Any, coefficients: np.ndarray, *, compressor: Any = None) -> None:
@@ -969,6 +991,22 @@ def write_se_coefficients(group: Any, coefficients: np.ndarray, *, compressor: A
         dtype="float32",
         compressor=compressor,
         overwrite=True,
+    )
+
+
+def _side_table_role(plane_role: ArrayRole) -> ArrayRole:
+    """The exception/overflow table role for a plane's role (#248).
+
+    A Ragged CSR component's tables have their own shard policy, so a table
+    written beside a CSR plane takes the Ragged role.  The role is derived from
+    the **plane** role the writer was already given, never from `group.path`:
+    a component opened directly at `data.zarr/ragged` reports `path == ""`, so a
+    path check cannot tell it from a Dense root (#247 review round 1).
+    """
+    return (
+        ArrayRole.RAGGED_EXCEPTION_TABLE
+        if plane_role is ArrayRole.ASSOCIATION_SEQUENCE
+        else ArrayRole.EXCEPTION_TABLE
     )
 
 
@@ -1003,7 +1041,9 @@ def _write_se_arrays(
         return
     assert coefficients is not None and exceptions is not None
     write_se_coefficients(group, coefficients, compressor=compressor)
-    exceptions.table().write(group, compressor=compressor)
+    exceptions.table().write(
+        group, compressor=compressor, role=_side_table_role(role)
+    )
 
 
 def _write_se_plane(
@@ -1152,5 +1192,9 @@ def write_eaf_csr(
     )
     if encoding.is_residual:
         assert baseline is not None
-        write_eaf_baseline(group, baseline, compressor=compressor)
-        exceptions.table().write(group)
+        write_eaf_baseline(
+            group, baseline, compressor=compressor, role=ArrayRole.RAGGED_PER_VARIANT
+        )
+        exceptions.table().write(
+            group, role=ArrayRole.RAGGED_EXCEPTION_TABLE
+        )
