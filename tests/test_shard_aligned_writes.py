@@ -7,18 +7,21 @@ invisible: the store validates either way, and a small fixture's shard is the
 whole array, so nothing else in the suite can show it.
 
 `opengwasdb.store.arrays.require_whole_shard_writes` is the test-time hook.  It
-patches every write API Zarr exposes -- `__setitem__`, `oindex`, `vindex` and the
-four `set_*_selection` methods they delegate to -- and refuses a write that does
-not start and end on a shard boundary of a 2-D Dense plane (the 1-D arrays whose
-shard policy is "one shard holds the whole array", like the exception tables,
-are written incrementally by design and are not judged).  Production pays
-nothing: the hook is entered only by tests or when
+patches every public Zarr method that writes a selection of cells -- sync
+`__setitem__`, the five `set_*_selection` methods (which `oindex`, `vindex` and
+`array.blocks[...]` delegate to), and async `AsyncArray.setitem` -- and refuses
+a write that does not start and end on a shard boundary of a 2-D Dense plane
+(the 1-D arrays whose shard policy is "one shard holds the whole array", like
+the exception tables, are written incrementally by design and are not judged).
+`resize` and attribute writes are not region writes and are not covered.
+Production pays nothing: the hook is entered only by tests or when
 `OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES=1`, which the real-data pilot sets so a
 genuinely multi-shard build proves its writers are aligned.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -89,6 +92,10 @@ def test_the_guard_covers_every_write_api(plane: tuple[object, object]) -> None:
     one = (np.array([0]), np.array([0]))
     with require_whole_shard_writes():
         array[whole] = band  # aligned, must pass
+        # A whole-shard block selection (2 x 2 chunks = 20 x 8 elements) and an
+        # aligned async write also pass.
+        array.blocks[(slice(0, 2), slice(0, 2))] = np.zeros(SHAPE, dtype="float32")
+        asyncio.run(array.async_array.setitem(whole, band))
         for write in (
             lambda: array.__setitem__(partial, band[:, : INNER[1]]),
             lambda: array.set_basic_selection(partial, band[:, : INNER[1]]),
@@ -97,6 +104,14 @@ def test_the_guard_covers_every_write_api(plane: tuple[object, object]) -> None:
             lambda: array.set_coordinate_selection(one, np.array([1.0])),
             lambda: array.oindex.__setitem__(one, np.array([1.0])),
             lambda: array.vindex.__setitem__(one, np.array([1.0])),
+            # `array.blocks[...] = ...` goes through `set_block_selection`; the
+            # block grid is the chunk grid, so one block column is element
+            # columns 0..4 -- part of the 8-wide Analysis shard.
+            lambda: array.blocks.__setitem__((slice(None), slice(0, 1)), 1.0),
+            # The async route: `AsyncArray.setitem`.
+            lambda: asyncio.run(
+                array.async_array.setitem((slice(None), slice(0, INNER[1])), 1.0)
+            ),
         ):
             with pytest.raises(PartialShardWriteError):
                 write()
@@ -283,7 +298,7 @@ def test_a_hybrid_completion_patches_whole_shards(
         import numpy as np
 
         shards = getattr(array, "shards", None)
-        shape = getattr(array, "shape")
+        shape = array.shape
         if shards is not None and len(shape) == 2:
             sr, sc = int(shards[0]), int(shards[1])
             n_col_shards = -(-int(shape[1]) // sc)

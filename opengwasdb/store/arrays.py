@@ -1017,9 +1017,38 @@ def write_shard_cells(array: Any, rows: Any, cols: Any, values: Any) -> None:
         c0 = int(shard_col_idx[0]) // shard_cols * shard_cols
         r1 = min(r0 + shard_rows, int(array.shape[0]))
         c1 = min(c0 + shard_cols, int(array.shape[1]))
-        band = np.array(array[r0:r1, c0:c1])
+        band = np.asarray(array[r0:r1, c0:c1])
         band[shard_row_idx - r0, shard_col_idx - c0] = values[mask]
         array[r0:r1, c0:c1] = band
+
+
+def _block_selection_to_elements(array: Any, selection: Any) -> tuple[Any, ...] | None:
+    """A `set_block_selection` selection, as the element selection it covers.
+
+    `array.blocks` indexes the **chunk** grid, so a block index maps to
+    `[i * chunk : (i + 1) * chunk]`.  Translating it lets the whole-shard rule
+    apply to `array.blocks[...]` exactly as it does to an element selection.
+    Returns `None` for a block selection with a step, which is not a contiguous
+    range and is refused by the caller rather than guessed at.
+    """
+    shape = tuple(int(size) for size in array.shape)
+    chunks = tuple(int(size) for size in array.chunks)
+    axes: list[Any] = []
+    for entry, chunk, dim in zip(
+        _normalise_selection(shape, selection), chunks, shape, strict=True
+    ):
+        n_blocks = max(1, -(-dim // chunk))
+        if isinstance(entry, slice):
+            start, stop, step = entry.indices(n_blocks)
+            if step != 1:
+                return None
+            axes.append(slice(start * chunk, min(stop * chunk, dim)))
+        else:
+            index = int(entry)
+            if index < 0:
+                index += n_blocks
+            axes.append(slice(index * chunk, min((index + 1) * chunk, dim)))
+    return tuple(axes)
 
 
 _ORIGINAL_SETITEM = zarr.Array.__setitem__
@@ -1027,6 +1056,8 @@ _ORIGINAL_SET_BASIC = zarr.Array.set_basic_selection
 _ORIGINAL_SET_ORTHOGONAL = zarr.Array.set_orthogonal_selection
 _ORIGINAL_SET_MASK = zarr.Array.set_mask_selection
 _ORIGINAL_SET_COORDINATE = zarr.Array.set_coordinate_selection
+_ORIGINAL_SET_BLOCK = zarr.Array.set_block_selection
+_ORIGINAL_ASYNC_SETITEM = zarr.AsyncArray.setitem
 _SHARD_WRITE_GUARD_INSTALLED = False
 
 
@@ -1065,12 +1096,41 @@ def _guarded_set_coordinate_selection(
     _ORIGINAL_SET_COORDINATE(self, selection, value, *args, **kwargs)
 
 
+def _guarded_set_block_selection(
+    self: Any, selection: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    elements = _block_selection_to_elements(self, selection)
+    if elements is None:
+        raise PartialShardWriteError(
+            f"array {getattr(self, 'path', '?')!r}: a `blocks` write selecting "
+            f"{selection!r} steps through the block grid and cannot cover whole "
+            "shards; write whole shards (issue #247)"
+        )
+    require_whole_shard_write(self, elements)
+    _ORIGINAL_SET_BLOCK(self, selection, value, *args, **kwargs)
+
+
+async def _guarded_async_setitem(
+    self: Any, selection: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    require_whole_shard_write(self, selection)
+    await _ORIGINAL_ASYNC_SETITEM(self, selection, value, *args, **kwargs)
+
+
 def _install_shard_write_guard() -> None:
     global _SHARD_WRITE_GUARD_INSTALLED
-    # Every write API Zarr exposes: `__setitem__`, `oindex` and `vindex` all
-    # delegate to one of the four `set_*_selection` methods (zarr 3.4), so
-    # patching those covers them; `__setitem__` is patched too so the check runs
-    # against the caller's own selection and the error names it.
+    # Every public Zarr method that writes a *selection of cells*, which is what
+    # a partial shard write is:
+    #
+    # * sync: `__setitem__`, the five `set_*_selection` methods, and
+    #   `set_block_selection` (what `array.blocks[...] = ...` calls).  `oindex`
+    #   and `vindex` delegate to `set_orthogonal_selection` /
+    #   `set_coordinate_selection` / `set_mask_selection`.
+    # * async: `AsyncArray.setitem` (the async `oindex`/`vindex` are read-only).
+    #
+    # `resize` changes the array's shape (a metadata and chunk-delete operation,
+    # not a region write), and attribute writes are metadata, so neither is a
+    # cell write and neither is judged here.
     type.__setattr__(zarr.Array, "__setitem__", _guarded_setitem)
     type.__setattr__(zarr.Array, "set_basic_selection", _guarded_set_basic_selection)
     type.__setattr__(
@@ -1080,6 +1140,8 @@ def _install_shard_write_guard() -> None:
     type.__setattr__(
         zarr.Array, "set_coordinate_selection", _guarded_set_coordinate_selection
     )
+    type.__setattr__(zarr.Array, "set_block_selection", _guarded_set_block_selection)
+    type.__setattr__(zarr.AsyncArray, "setitem", _guarded_async_setitem)
     _SHARD_WRITE_GUARD_INSTALLED = True
 
 
@@ -1094,6 +1156,8 @@ def _uninstall_shard_write_guard() -> None:
     type.__setattr__(
         zarr.Array, "set_coordinate_selection", _ORIGINAL_SET_COORDINATE
     )
+    type.__setattr__(zarr.Array, "set_block_selection", _ORIGINAL_SET_BLOCK)
+    type.__setattr__(zarr.AsyncArray, "setitem", _ORIGINAL_ASYNC_SETITEM)
     _SHARD_WRITE_GUARD_INSTALLED = False
 
 
@@ -1105,6 +1169,16 @@ def require_whole_shard_writes() -> Iterator[None]:
     never enters it unless ``OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES=1`` is set,
     which the real-data pilot does, so a genuine multi-shard build proves its
     writers are aligned rather than asserting it.
+
+    Covered: every public Zarr method that writes a **selection of cells** --
+    sync ``__setitem__``, ``set_basic_selection``, ``set_orthogonal_selection``,
+    ``set_mask_selection``, ``set_coordinate_selection`` and
+    ``set_block_selection`` (which ``array.blocks[...] = ...`` calls), and async
+    ``AsyncArray.setitem``.  ``oindex``/``vindex`` delegate to the orthogonal /
+    coordinate / mask setters, and the async ``oindex``/``vindex`` are read-only.
+    \"Selection\" is the test: ``resize`` changes shape (a metadata and
+    chunk-delete operation, not a region write) and attribute writes are
+    metadata, so neither is a partial shard write and neither is judged here.
     """
     global _SHARD_WRITE_GUARD_INSTALLED
     if _SHARD_WRITE_GUARD_INSTALLED:
