@@ -1,5 +1,9 @@
 {
-  "note": "Spot identity on the real stores: the same public query surface and the same selection run against the pre-fix tree (branch base f168ef1) and this HEAD, hashed with sha256 over variant_index/analysis_index/z/se/eaf and association_status, order included. OGS-00001 and OGS-00007-class pilots, OGS-00006 (Ragged, residual SE and EAF) and OGS-00004 (Hybrid). The OGS-00011 variant-side shapes are hashed in the interleaved A/B artifact. Not a quiet-node measurement.",
+  "note": "Spot identity for #252 review round 1: the same public query surface and selection run against each tree through the committed benchmarks/ogs00011_ab.py --identity, hashed with sha256 over variant_index/analysis_index/z/se/eaf and association_status, order included. Not a quiet-node measurement.",
+  "trees": {
+    "before": "/tmp/epic240/252/before2",
+    "after": "/home/gh13047/repo/opengwasdb-wt/252-variant-side-scans"
+  },
   "stores": {
     "OGS-00001": {
       "hybrid": false,
@@ -192,15 +196,15 @@
   "provenance": {
     "before": {
       "commit": "f168ef1",
-      "measured_at": "2026-10-06T21:07:20.462694+00:00",
-      "opengwasdb_path": "/tmp/epic240/252/before/opengwasdb",
+      "measured_at": "2026-10-07T08:13:15.667050+00:00",
+      "opengwasdb_path": "/tmp/epic240/252/before2/opengwasdb",
       "opengwasdb_fingerprint": "86106fce1940635a7a710f2c578436452610e0b682892797405d99b72c42558d"
     },
     "after": {
-      "commit": "e24ff49",
-      "measured_at": "2026-10-06T21:07:21.562145+00:00",
+      "commit": "9d2bda3",
+      "measured_at": "2026-10-07T08:13:17.503186+00:00",
       "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-side-scans/opengwasdb",
-      "opengwasdb_fingerprint": "0899cd1e3ea9221c18d10832f2d5e16d00d7c016fe0a8497380d857f653c3c91"
+      "opengwasdb_fingerprint": "4e5a4001a174b5aa9e346c132ca71fe8e710ff86e8c884fd07946aada68b6373"
     }
   }
 }

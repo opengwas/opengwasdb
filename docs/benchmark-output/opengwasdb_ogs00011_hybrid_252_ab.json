@@ -1,413 +1,404 @@
 {
   "store": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
-  "shape_time_limit_s": 300.0,
-  "note": "Before/after interleaved shape by shape (before then after, back to back), same harness, same selection. NOT a quiet-node measurement: the machine is shared with other epic-240 lanes. Each run's start and end 1/5/15-minute loads are recorded, so load drift hits both sides equally. The before tree is the branch base f168ef1, the after tree this branch's HEAD; `provenance` records each tree's commit and an opengwasdb source fingerprint. The seven non-region shapes ran at a 300 s per-shape limit; the two region shapes first hit that limit on the before side in a 300 s pass and were re-measured, interleaved the same way, at a 1500 s limit, so both sides could finish and their answers be hashed. Every shape's before and after sha256 are equal; no shape is reported from a timed-out run.",
+  "shape_time_limit_s": 1500.0,
+  "region_shape_time_limit_s": 1500.0,
+  "note": "Before/after interleaved shape by shape (before then after, back to back). NOT a quiet-node measurement: the machine is shared with other epic-240 lanes. Each run's start and end 1/5/15-minute loads are recorded, so load drift hits both sides equally. Both trees' commit and opengwasdb source fingerprint are recorded.",
   "provenance": {
     "before": {
       "commit": "f168ef1",
-      "measured_at": "2026-10-06T19:58:57.699805+00:00",
-      "opengwasdb_path": "/tmp/epic240/252/before/opengwasdb",
+      "measured_at": "2026-10-07T07:25:30.158551+00:00",
+      "opengwasdb_path": "/tmp/epic240/252/before2/opengwasdb",
       "opengwasdb_fingerprint": "86106fce1940635a7a710f2c578436452610e0b682892797405d99b72c42558d"
     },
     "after": {
-      "commit": "e24ff49",
-      "measured_at": "2026-10-06T19:58:59.237603+00:00",
+      "commit": "9d2bda3",
+      "measured_at": "2026-10-07T07:25:31.979495+00:00",
       "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-side-scans/opengwasdb",
-      "opengwasdb_fingerprint": "0899cd1e3ea9221c18d10832f2d5e16d00d7c016fe0a8497380d857f653c3c91"
+      "opengwasdb_fingerprint": "4e5a4001a174b5aa9e346c132ca71fe8e710ff86e8c884fd07946aada68b6373"
     }
+  },
+  "trees": {
+    "before": "/tmp/epic240/252/before2",
+    "after": "/home/gh13047/repo/opengwasdb-wt/252-variant-side-scans"
   },
   "shapes": {
     "bulk": {
       "before": {
         "shape": "bulk",
-        "elapsed_ms": 31726.562,
+        "limit_s": 1500.0,
+        "elapsed_ms": 48367.066,
         "timed_out": false,
-        "baseline_mb": 2408.1,
-        "peak_mb": 5268.1,
+        "baseline_mb": 2411.6,
+        "peak_mb": 5271.2,
         "load_start": [
+          14.18,
           7.06,
-          3.84,
-          4.86
+          3.76
         ],
         "load_end": [
-          5.47,
-          3.77,
-          4.8
+          10.66,
+          7.16,
+          3.96
         ],
         "result_count": 5052918,
-        "sha256": "de655d533bf52b40bef26e5651e5cdd9c217f800138bcd21f5e78bc5b776207a",
-        "limit_s": 300.0
+        "sha256": "de655d533bf52b40bef26e5651e5cdd9c217f800138bcd21f5e78bc5b776207a"
       },
       "after": {
         "shape": "bulk",
-        "elapsed_ms": 37455.423,
+        "limit_s": 1500.0,
+        "elapsed_ms": 30832.885,
         "timed_out": false,
-        "baseline_mb": 2406.7,
-        "peak_mb": 5265.0,
+        "baseline_mb": 2417.5,
+        "peak_mb": 5273.8,
         "load_start": [
-          4.94,
-          3.71,
-          4.77
+          9.63,
+          7.1,
+          3.99
         ],
         "load_end": [
-          3.48,
-          3.49,
-          4.65
+          8.31,
+          7.05,
+          4.08
         ],
         "result_count": 5052918,
-        "sha256": "de655d533bf52b40bef26e5651e5cdd9c217f800138bcd21f5e78bc5b776207a",
-        "limit_s": 300.0
+        "sha256": "de655d533bf52b40bef26e5651e5cdd9c217f800138bcd21f5e78bc5b776207a"
       }
     },
     "phewas": {
       "before": {
         "shape": "phewas",
-        "elapsed_ms": 1234.526,
+        "limit_s": 1500.0,
+        "elapsed_ms": 1243.355,
         "timed_out": false,
-        "baseline_mb": 2411.9,
-        "peak_mb": 4491.1,
+        "baseline_mb": 2406.3,
+        "peak_mb": 4485.2,
         "load_start": [
-          3.24,
-          3.44,
-          4.61
+          7.71,
+          6.97,
+          4.08
         ],
         "load_end": [
-          3.24,
-          3.44,
-          4.61
+          7.49,
+          6.94,
+          4.09
         ],
         "result_count": 3152,
-        "sha256": "973057e7246ef6dbb379d813b871d11f885f704875c0ad874da901114c093db2",
-        "limit_s": 300.0
+        "sha256": "973057e7246ef6dbb379d813b871d11f885f704875c0ad874da901114c093db2"
       },
       "after": {
         "shape": "phewas",
-        "elapsed_ms": 1241.279,
+        "limit_s": 1500.0,
+        "elapsed_ms": 1202.379,
         "timed_out": false,
-        "baseline_mb": 2408.2,
-        "peak_mb": 4487.6,
+        "baseline_mb": 2405.9,
+        "peak_mb": 4486.4,
         "load_start": [
-          3.2,
-          3.42,
-          4.6
+          7.58,
+          6.97,
+          4.13
         ],
         "load_end": [
-          3.2,
-          3.42,
-          4.6
+          7.58,
+          6.97,
+          4.13
         ],
         "result_count": 3152,
-        "sha256": "973057e7246ef6dbb379d813b871d11f885f704875c0ad874da901114c093db2",
-        "limit_s": 300.0
+        "sha256": "973057e7246ef6dbb379d813b871d11f885f704875c0ad874da901114c093db2"
       }
     },
     "regional": {
       "before": {
         "shape": "regional",
-        "elapsed_ms": 914545.518,
+        "limit_s": 1500.0,
+        "elapsed_ms": 964126.235,
         "timed_out": false,
-        "baseline_mb": 2413.1,
-        "peak_mb": 25650.4,
+        "baseline_mb": 2416.4,
+        "peak_mb": 25682.0,
         "load_start": [
-          1.32,
-          2.11,
-          3.09
+          7.54,
+          6.99,
+          4.18
         ],
         "load_end": [
-          2.4,
-          2.05,
-          2.36
+          26.5,
+          19.66,
+          12.43
         ],
         "result_count": 8304617,
-        "sha256": "d8aac661f649970932b75a1c5e61c663d38442ac7a3b080c17c0cb730bcf8a4b",
-        "limit_s": 1500.0
+        "sha256": "d8aac661f649970932b75a1c5e61c663d38442ac7a3b080c17c0cb730bcf8a4b"
       },
       "after": {
         "shape": "regional",
-        "elapsed_ms": 107876.532,
+        "limit_s": 1500.0,
+        "elapsed_ms": 107707.56,
         "timed_out": false,
-        "baseline_mb": 2410.2,
-        "peak_mb": 5382.8,
+        "baseline_mb": 2411.1,
+        "peak_mb": 5371.4,
         "load_start": [
-          2.49,
-          2.08,
-          2.37
+          23.66,
+          19.35,
+          12.44
         ],
         "load_end": [
-          2.5,
-          2.31,
-          2.43
+          12.88,
+          18.19,
+          12.91
         ],
         "result_count": 8304617,
-        "sha256": "d8aac661f649970932b75a1c5e61c663d38442ac7a3b080c17c0cb730bcf8a4b",
-        "limit_s": 1500.0
+        "sha256": "d8aac661f649970932b75a1c5e61c663d38442ac7a3b080c17c0cb730bcf8a4b"
       }
     },
     "regional_one_analysis": {
       "before": {
         "shape": "regional_one_analysis",
-        "elapsed_ms": 930232.324,
+        "limit_s": 1500.0,
+        "elapsed_ms": 1109361.704,
         "timed_out": false,
-        "baseline_mb": 2406.3,
-        "peak_mb": 24966.5,
+        "baseline_mb": 2408.4,
+        "peak_mb": 24967.5,
         "load_start": [
-          2.73,
-          2.37,
-          2.45
+          11.83,
+          17.69,
+          12.83
         ],
         "load_end": [
-          3.05,
-          2.3,
-          2.26
+          9.93,
+          13.28,
+          14.15
         ],
         "result_count": 1365,
-        "sha256": "45d500bd4cdb2f7abcdcf1bfb940afff7f433e5aadeaeabacdf704630c64c9aa",
-        "limit_s": 1500.0
+        "sha256": "45d500bd4cdb2f7abcdcf1bfb940afff7f433e5aadeaeabacdf704630c64c9aa"
       },
       "after": {
         "shape": "regional_one_analysis",
-        "elapsed_ms": 9208.607,
+        "limit_s": 1500.0,
+        "elapsed_ms": 9719.735,
         "timed_out": false,
-        "baseline_mb": 2407.9,
-        "peak_mb": 4500.8,
+        "baseline_mb": 2408.2,
+        "peak_mb": 4504.8,
         "load_start": [
-          3.12,
-          2.34,
-          2.27
+          12.13,
+          13.61,
+          14.24
         ],
         "load_end": [
-          3.03,
-          2.35,
-          2.27
+          11.42,
+          13.41,
+          14.17
         ],
         "result_count": 1365,
-        "sha256": "45d500bd4cdb2f7abcdcf1bfb940afff7f433e5aadeaeabacdf704630c64c9aa",
-        "limit_s": 1500.0
+        "sha256": "45d500bd4cdb2f7abcdcf1bfb940afff7f433e5aadeaeabacdf704630c64c9aa"
       }
     },
     "tophits": {
       "before": {
         "shape": "tophits",
-        "elapsed_ms": 35.401,
+        "limit_s": 1500.0,
+        "elapsed_ms": 43.622,
         "timed_out": false,
-        "baseline_mb": 2411.1,
-        "peak_mb": 2411.7,
+        "baseline_mb": 2413.4,
+        "peak_mb": 2414.4,
         "load_start": [
-          1.73,
-          2.67,
-          3.77
+          10.15,
+          13.03,
+          14.03
         ],
         "load_end": [
-          1.73,
-          2.67,
-          3.77
+          10.15,
+          13.03,
+          14.03
         ],
         "result_count": 6001,
-        "sha256": "1f1b99ecab0832b25ff836aac17bca076b38c08d4d030aafdf09305271fc1d13",
-        "limit_s": 300.0
+        "sha256": "1f1b99ecab0832b25ff836aac17bca076b38c08d4d030aafdf09305271fc1d13"
       },
       "after": {
         "shape": "tophits",
-        "elapsed_ms": 34.962,
+        "limit_s": 1500.0,
+        "elapsed_ms": 37.817,
         "timed_out": false,
-        "baseline_mb": 2410.3,
-        "peak_mb": 2412.5,
+        "baseline_mb": 2406.5,
+        "peak_mb": 2407.6,
         "load_start": [
-          1.62,
-          2.62,
-          3.74
+          9.14,
+          12.66,
+          13.9
         ],
         "load_end": [
-          1.62,
-          2.62,
-          3.74
+          9.14,
+          12.66,
+          13.9
         ],
         "result_count": 6001,
-        "sha256": "1f1b99ecab0832b25ff836aac17bca076b38c08d4d030aafdf09305271fc1d13",
-        "limit_s": 300.0
+        "sha256": "1f1b99ecab0832b25ff836aac17bca076b38c08d4d030aafdf09305271fc1d13"
       }
     },
     "random_lookup_10_variants_100_analyses": {
       "before": {
         "shape": "random_lookup_10_variants_100_analyses",
-        "elapsed_ms": 41398.335,
+        "limit_s": 1500.0,
+        "elapsed_ms": 46360.493,
         "timed_out": false,
-        "baseline_mb": 2405.8,
-        "peak_mb": 50939.4,
+        "baseline_mb": 2407.7,
+        "peak_mb": 50943.1,
         "load_start": [
-          1.68,
-          2.6,
-          3.72
+          9.05,
+          12.53,
+          13.84
         ],
         "load_end": [
-          2.14,
-          2.61,
-          3.68
+          7.51,
+          11.64,
+          13.48
         ],
         "result_count": 0,
-        "sha256": "0c8930f0b47caaa662ce118b9339827b9119a88ce507d3de3fe590779c0bccd9",
-        "limit_s": 300.0
+        "sha256": "0c8930f0b47caaa662ce118b9339827b9119a88ce507d3de3fe590779c0bccd9"
       },
       "after": {
         "shape": "random_lookup_10_variants_100_analyses",
-        "elapsed_ms": 1863.296,
+        "limit_s": 1500.0,
+        "elapsed_ms": 1267.228,
         "timed_out": false,
-        "baseline_mb": 2406.6,
-        "peak_mb": 2516.3,
+        "baseline_mb": 2409.4,
+        "peak_mb": 2455.6,
         "load_start": [
-          2.62,
-          2.7,
-          3.69
+          7.28,
+          11.4,
+          13.37
         ],
         "load_end": [
-          2.62,
-          2.7,
-          3.69
+          7.28,
+          11.4,
+          13.37
         ],
         "result_count": 0,
-        "sha256": "0c8930f0b47caaa662ce118b9339827b9119a88ce507d3de3fe590779c0bccd9",
-        "limit_s": 300.0
+        "sha256": "0c8930f0b47caaa662ce118b9339827b9119a88ce507d3de3fe590779c0bccd9"
       }
     },
     "random_lookup_100_variants_10_analyses": {
       "before": {
         "shape": "random_lookup_100_variants_10_analyses",
-        "elapsed_ms": 54217.881,
+        "limit_s": 1500.0,
+        "elapsed_ms": 59200.602,
         "timed_out": false,
-        "baseline_mb": 2413.8,
-        "peak_mb": 60311.2,
+        "baseline_mb": 2407.1,
+        "peak_mb": 60307.2,
         "load_start": [
-          2.98,
-          2.77,
-          3.7
+          6.68,
+          11.05,
+          13.22
         ],
         "load_end": [
-          2.76,
-          2.72,
-          3.63
+          4.63,
+          9.71,
+          12.62
         ],
         "result_count": 18,
-        "sha256": "6f1d8405bba628c2814a795c6f4d787fafa8d5fbf0bc34696204d60bb371a07d",
-        "limit_s": 300.0
+        "sha256": "6f1d8405bba628c2814a795c6f4d787fafa8d5fbf0bc34696204d60bb371a07d"
       },
       "after": {
         "shape": "random_lookup_100_variants_10_analyses",
-        "elapsed_ms": 1599.952,
+        "limit_s": 1500.0,
+        "elapsed_ms": 1496.391,
         "timed_out": false,
-        "baseline_mb": 2406.4,
-        "peak_mb": 4543.0,
+        "baseline_mb": 2411.0,
+        "peak_mb": 4547.8,
         "load_start": [
-          2.65,
-          2.7,
-          3.61
+          4.9,
+          9.6,
+          12.56
         ],
         "load_end": [
-          2.6,
-          2.69,
-          3.6
+          4.9,
+          9.6,
+          12.56
         ],
         "result_count": 18,
-        "sha256": "6f1d8405bba628c2814a795c6f4d787fafa8d5fbf0bc34696204d60bb371a07d",
-        "limit_s": 300.0
+        "sha256": "6f1d8405bba628c2814a795c6f4d787fafa8d5fbf0bc34696204d60bb371a07d"
       }
     },
     "phewas_off_axis": {
       "before": {
         "shape": "phewas_off_axis",
-        "elapsed_ms": 21268.98,
+        "limit_s": 1500.0,
+        "elapsed_ms": 28955.037,
         "timed_out": false,
-        "baseline_mb": 2409.6,
-        "peak_mb": 23019.1,
+        "baseline_mb": 2411.7,
+        "peak_mb": 23024.2,
         "load_start": [
-          2.63,
-          2.69,
-          3.6
+          4.76,
+          9.42,
+          12.47
         ],
         "load_end": [
-          2.39,
-          2.64,
-          3.56
+          4.0,
+          8.79,
+          12.16
         ],
         "result_count": 1,
-        "sha256": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2",
-        "limit_s": 300.0
+        "sha256": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2"
       },
       "after": {
         "shape": "phewas_off_axis",
-        "elapsed_ms": 26436.372,
+        "limit_s": 1500.0,
+        "elapsed_ms": 22624.635,
         "timed_out": false,
-        "baseline_mb": 2405.6,
-        "peak_mb": 2500.9,
+        "baseline_mb": 2407.7,
+        "peak_mb": 2427.2,
         "load_start": [
-          2.55,
-          2.66,
-          3.55
+          4.24,
+          8.68,
+          12.09
         ],
         "load_end": [
-          2.85,
-          2.72,
-          3.55
+          3.59,
+          8.16,
+          11.82
         ],
         "result_count": 1,
-        "sha256": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2",
-        "limit_s": 300.0
+        "sha256": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2"
       }
     },
     "bulk_overflow_heavy": {
       "before": {
         "shape": "bulk_overflow_heavy",
-        "elapsed_ms": 44597.659,
+        "limit_s": 1500.0,
+        "elapsed_ms": 52037.44,
         "timed_out": false,
-        "baseline_mb": 2410.8,
-        "peak_mb": 14729.6,
+        "baseline_mb": 2403.4,
+        "peak_mb": 14719.4,
         "load_start": [
-          2.64,
-          2.68,
-          3.53
+          3.74,
+          8.04,
+          11.74
         ],
         "load_end": [
-          2.57,
-          2.68,
-          3.49
+          3.89,
+          7.38,
+          11.31
         ],
         "result_count": 85226242,
-        "sha256": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76",
-        "limit_s": 300.0
+        "sha256": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76"
       },
       "after": {
         "shape": "bulk_overflow_heavy",
-        "elapsed_ms": 48280.022,
+        "limit_s": 1500.0,
+        "elapsed_ms": 54570.782,
         "timed_out": false,
-        "baseline_mb": 2408.2,
-        "peak_mb": 14390.0,
+        "baseline_mb": 2405.1,
+        "peak_mb": 14389.3,
         "load_start": [
-          2.75,
-          2.71,
-          3.47
+          4.26,
+          7.14,
+          11.1
         ],
         "load_end": [
-          3.34,
-          2.87,
-          3.49
+          5.29,
+          6.86,
+          10.77
         ],
         "result_count": 85226242,
-        "sha256": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76",
-        "limit_s": 300.0
+        "sha256": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76"
       }
     }
-  },
-  "region_shape_time_limit_s": 1500.0,
-  "selection": {
-    "region": [
-      "10",
-      112500000,
-      113500000
-    ],
-    "exposure": "GCST006867",
-    "phewas_alid": "10:112998590:C:T",
-    "overflow_heavy": "GCST90502911",
-    "off_axis_seed": 1,
-    "reps": 5,
-    "slow_shape_seconds": 60.0
   }
 }
