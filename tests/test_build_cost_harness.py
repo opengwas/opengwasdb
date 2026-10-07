@@ -67,7 +67,7 @@ def test_wait_for_quiet_load_refuses_to_start_a_busy_build() -> None:
         wait_for_quiet_load(3.0, 15.0, 0.0, load_fn=lambda: 37.9)
 
 
-def _args(tmp_path: Path, order: str = "base,head"):
+def _args(tmp_path: Path, order: str = "base,head", sides: str = "base,head", suffix: str = ""):
     class _Args:
         pass
 
@@ -79,6 +79,9 @@ def _args(tmp_path: Path, order: str = "base,head"):
     args.work = tmp_path / "work"
     args.pilot = ["ragged-besd", "hybrid"]
     args.order = order
+    args.sides = sides
+    args.sides_list = [side for side in sides.split(",") if side]
+    args.suffix = suffix
     return args
 
 
@@ -92,6 +95,20 @@ def test_build_plan_alternates_the_order_and_separates_the_stores(tmp_path: Path
         expected_cwd = tmp_path / step["side"]
         assert step["cwd"] == expected_cwd
         assert str(step["store"]) in step["command"]
+
+
+def test_build_plan_can_run_only_the_head_side_with_a_suffix(tmp_path: Path) -> None:
+    """The guard-on proof builds reuse the head argv but a separate store path."""
+    plan = build_plan(_args(tmp_path, sides="head", suffix="-guard"))
+    assert [step["side"] for step in plan] == ["head", "head"]
+    for step in plan:
+        assert str(step["store"]).endswith("-guard.opengwasdb")
+        assert "-guard" in str(step["log"])
+
+
+def test_build_plan_refuses_an_unknown_side(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="--sides"):
+        build_plan(_args(tmp_path, sides="middle"))
 
 
 def test_build_plan_uses_the_registered_hybrid_argv(tmp_path: Path) -> None:

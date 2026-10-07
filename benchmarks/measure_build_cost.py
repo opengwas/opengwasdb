@@ -244,9 +244,10 @@ def build_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
         "base": (args.base_cmd_list, args.base_cwd),
         "head": (args.head_cmd_list, args.head_cwd),
     }
-    order = args.order.split(",")
-    if sorted(order) != ["base", "head"]:
-        raise SystemExit(f"--order must name base and head once each, got {args.order!r}")
+    order = [side for side in args.order.split(",") if side in args.sides_list]
+    unknown = [side for side in args.sides_list if side not in ("base", "head")]
+    if unknown or not order:
+        raise SystemExit(f"--sides must name base and/or head once each, got {args.sides!r}")
     steps: list[dict[str, Any]] = []
     for index, pilot in enumerate(args.pilot):
         if pilot not in PILOTS:
@@ -254,8 +255,8 @@ def build_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
         pilot_order = order if index % 2 == 0 else list(reversed(order))
         for side in pilot_order:
             prefix, cwd = sides[side]
-            out = args.work / f"{pilot}-{side}.opengwasdb"
-            log_path = args.work / f"{pilot}-{side}.log"
+            out = args.work / f"{pilot}-{side}{args.suffix}.opengwasdb"
+            log_path = args.work / f"{pilot}-{side}{args.suffix}.log"
             steps.append(
                 {
                     "pilot": pilot,
@@ -278,6 +279,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--pilot", action="append", default=[])
     parser.add_argument("--order", default="base,head")
+    parser.add_argument(
+        "--sides",
+        default="base,head",
+        help="which sides to build; `head` alone runs the guard-on proof builds",
+    )
+    parser.add_argument(
+        "--suffix", default="", help="appended to each store/log name, e.g. -guard"
+    )
     parser.add_argument("--max-load", type=float, default=3.0)
     parser.add_argument("--poll-seconds", type=float, default=15.0)
     parser.add_argument("--max-wait-min", type=float, default=120.0)
@@ -291,6 +300,7 @@ def main() -> int:
     args.work.mkdir(parents=True, exist_ok=True)
     args.base_cmd_list = _side_prefix(args.base_cmd)
     args.head_cmd_list = _side_prefix(args.head_cmd)
+    args.sides_list = [side for side in args.sides.split(",") if side]
     steps = build_plan(args)
     results = [
         run_step(
