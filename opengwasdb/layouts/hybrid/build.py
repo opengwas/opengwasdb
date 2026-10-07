@@ -31,7 +31,7 @@ from concurrent.futures import as_completed
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -65,13 +65,16 @@ from opengwasdb.layouts.dense.build_vcf import (
     _create_dense_zarr,
     _encode_variant_keys,
     _fork_pool,
+    _harvest_manifest_variants,
     _lift_manifest_variants,
     _log_progress,
     _manifest_row_to_analysis,
     _ManifestRow,
     _pass2_worker_tasks,
     _read_manifest,
-    _reference_axis_rsids,
+    _rekey_rsids_to_alids,
+    _routed_rsids,
+    _routing_lookup,
     _sorted_alids,
     _write_dense_bands,
     _write_index,
@@ -147,6 +150,7 @@ from opengwasdb.layouts.hybrid.layout import (
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     check_hash,
+    encode_key,
     encode_keys,
     is_hashed,
     placed_hashed_values,
@@ -174,10 +178,15 @@ from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.reference import (
-    VariantReference,
+    SourceKey,
+    expected_rsids_by_routing,
     read_variant_reference,
+    require_rsids_match_expected,
     require_written_rsids_match,
 )
+
+if TYPE_CHECKING:
+    from opengwasdb.variants.reference import VariantReference
 
 log = logging.getLogger(__name__)
 
@@ -822,6 +831,9 @@ class _SourceAxis:
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
     rsid_by_alid: dict[str, str]
+    #: The harvest's candidate map, kept only when the reference names no rsids
+    #: and off-reference variants still need the fold to route them (issue #255).
+    rsid_by_site: dict[SourceKey, str]
     keys_sorted: np.ndarray
     targets_sorted: np.ndarray
     ispanel_sorted: np.ndarray
@@ -844,6 +856,10 @@ class _PreparedBuild:
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
     rsid_by_alid: dict[str, str]
+    #: The single-pass harvest's candidate map, when the reference named no
+    #: rsids and the fold still has off-reference variants to route; empty on
+    #: every other path (issue #255).
+    rsid_by_site: dict[SourceKey, str]
     dense_to_shared: np.ndarray
     spill_dir: Path
     keys_sorted: np.ndarray
@@ -1101,31 +1117,37 @@ def _axis_source(
     dict[tuple[str, int, str, str], str],
     dict[str, str],
     set[str],
+    dict[SourceKey, str],
 ]:
     """Open the Dense staging dir and resolve the source-coordinate routing.
 
     With ``--variant-reference`` the reference replaces Pass 1 entirely: its
     ``source_lookup`` is the routing and its ALIDs define the Dense axis. Without
     one, the legacy Pass 1 reads every source once and lifts hg19 rows.
+
+    The fifth element is the harvest's candidate map when the reference names no
+    rsids: the fold finishes rekeying it once the off-reference ALIDs exist
+    (`_merge_off_reference_rsids`, issue #255).
     """
     dense_dir, dense_staged = _open_dense_component(staged)
     if options.variant_reference is not None:
         reference = read_variant_reference(options.variant_reference)
         panel_alids = _resolve_reference_panel(options, reference)
-        rsid_by_alid = _reference_axis_rsids(
-            reference,
-            manifest_rows,
-            options.chain_file,
-            options.liftover_failure_threshold,
-            options.n_workers,
-        )
+        rsid_by_site, rsid_by_alid = _single_pass_rsids(reference, manifest_rows, options)
         log.info(
             "Single-pass build: variant axis loaded from %s (%d panel variants); "
             "Pass 1 variant discovery bypassed",
             options.variant_reference,
             len(panel_alids),
         )
-        return dense_dir, dense_staged, reference.source_lookup, rsid_by_alid, panel_alids
+        return (
+            dense_dir,
+            dense_staged,
+            reference.source_lookup,
+            rsid_by_alid,
+            panel_alids,
+            rsid_by_site,
+        )
     panel_alids = _panel_alids(options)
     source_lookup, rsid_by_alid = _lift_manifest_variants(
         manifest_rows,
@@ -1133,7 +1155,43 @@ def _axis_source(
         liftover_failure_threshold=options.liftover_failure_threshold,
         n_workers=options.n_workers,
     )
-    return dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids
+    return dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids, {}
+
+
+def _single_pass_rsids(
+    reference: VariantReference, manifest_rows: list[_ManifestRow], options: _BuildOptions
+) -> tuple[dict[SourceKey, str], dict[str, str]]:
+    """The on-reference rsids the Dense skeleton needs, and the candidates to
+    finish once the fold has run (issue #255).
+
+    A reference that carries rsids is its own authority and nothing is read.
+    Otherwise the build runs Pass 1's harvest for the candidate rows and their
+    ``(rank, site)`` order, and rekeys them through the routing the build
+    actually uses -- the reference's own source keys, which decide the ALID an
+    association lands on, never Pass 1's liftover. Off-reference sites are not
+    in that routing: their ALIDs exist only when the fold resolves them, so the
+    candidate map travels on.
+    """
+    if reference.rsid_by_alid:
+        return {}, dict(reference.rsid_by_alid)
+    pass1_lookup, rsid_by_site, _ = _harvest_manifest_variants(
+        manifest_rows,
+        chain_file=options.chain_file,
+        liftover_failure_threshold=options.liftover_failure_threshold,
+        n_workers=options.n_workers,
+    )
+    on_reference = _routed_rsids(
+        rsid_by_site,
+        _routing_lookup(reference),
+        pass1_lookup,
+        label="Hybrid single-pass build",
+    )
+    log.info(
+        "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "
+        "on-reference rsid(s)",
+        len(on_reference),
+    )
+    return rsid_by_site, on_reference
 
 
 def _lift_and_partition(
@@ -1149,7 +1207,7 @@ def _lift_and_partition(
     Source coordinates the reference does not hold are not known until Pass 2;
     ``_finalise_reference_partition`` adds them to the shared axis there.
     """
-    dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids = _axis_source(
+    dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids, rsid_by_site = _axis_source(
         staged, manifest_rows, options
     )
     partition = _partition_variants(
@@ -1174,6 +1232,7 @@ def _lift_and_partition(
         analyses=analyses,
         hg38_to_source=hg38_to_source,
         rsid_by_alid=rsid_by_alid,
+        rsid_by_site=rsid_by_site,
         keys_sorted=keys_sorted,
         targets_sorted=targets_sorted,
         ispanel_sorted=ispanel_sorted,
@@ -1828,18 +1887,66 @@ def _finalise_reference_partition(
     the fold's first column, and a resumed fold runs under exactly that record
     instead of resolving the keys again: the resolved key set comes from every
     column's spill, and the columns already folded have none left.
+
+    The single-pass harvest's candidate map is finished here too (issue #255):
+    an off-reference variant's ALID is the fold's resolution, so its rsid is
+    attached through the same routing the association uses before the axis -- and
+    the recorded rsid map -- is written.
     """
     if options.variant_reference is None:
         _record_axis(state, prepared, None)
         return prepared
     recorded = _recorded_axis(state)
+    fold = recorded if recorded is not None else _off_reference_fold_inputs(prepared, options)
+    prepared = _merge_off_reference_rsids(prepared, fold)
     if recorded is not None:
         return _fold_recorded_axis(prepared, options, state, recorded)
-    fold = _off_reference_fold_inputs(prepared, options)
     _record_axis(state, prepared, fold)
     if fold is None:
         return prepared
     return _fold_under(prepared, options, state, fold)
+
+
+def _merge_off_reference_rsids(
+    prepared: _PreparedBuild, fold: _FoldInputs | None
+) -> _PreparedBuild:
+    """Finish the single-pass rekey for the variants only the fold can route.
+
+    `_single_pass_rsids` attached the names of variants the reference routes;
+    an off-reference site's ALID exists only once the fold resolves its key, so
+    its name is attached here, through that resolution -- the routing the
+    association actually uses. A named off-reference row with no usable
+    association anywhere is never folded, so its name is dropped with its
+    variant: the single-pass axis is composed from the associations the build
+    stores, while the two-pass axis keeps every source variant. The names are
+    identical for every variant both axes carry (spec §4, issue #255).
+    """
+    if not prepared.rsid_by_site or fold is None or not len(fold.table.keys):
+        return prepared
+    shared_sorted = fold.shared_sorted
+    alid_by_encoded = {
+        int(value): shared_sorted[int(index)]
+        for value, index in zip(
+            fold.table.keys.tolist(), fold.table.shared_index.tolist(), strict=True
+        )
+    }
+    off_routing: dict[SourceKey, str] = {}
+    for site in prepared.rsid_by_site:
+        alid = alid_by_encoded.get(encode_key(f"{site[0]}:{site[1]}:{site[2]}:{site[3]}"))
+        if alid is not None:
+            off_routing[site] = alid
+    off_resolved = _rekey_rsids_to_alids(off_routing, prepared.rsid_by_site)
+    require_rsids_match_expected(
+        off_resolved, expected_rsids_by_routing(prepared.rsid_by_site, off_routing)
+    )
+    merged = {**off_resolved, **prepared.rsid_by_alid}
+    if merged == prepared.rsid_by_alid:
+        return prepared
+    log.info(
+        "Single-pass build: %d off-reference rsid(s) attached through the fold",
+        len(off_resolved),
+    )
+    return replace(prepared, rsid_by_alid=merged)
 
 
 def _fold_recorded_axis(
@@ -2589,6 +2696,7 @@ def _prepare_build(
         analyses=axis.analyses,
         hg38_to_source=axis.hg38_to_source,
         rsid_by_alid=axis.rsid_by_alid,
+        rsid_by_site=axis.rsid_by_site,
         dense_to_shared=dense_to_shared,
         spill_dir=spill_dir,
         keys_sorted=axis.keys_sorted,
@@ -2956,10 +3064,9 @@ def build_hybrid_from_vcf_manifest(
     seams (issue #130): ``_prepare_build`` (axis source, partition/routing,
     Dense skeleton), the spill-lifetime ``_build_components`` (Pass 2 routing,
     EAF verification, joint encoding, component writes) and ``_finalise_store``
-    (overflow flush, shared metadata, result). Each seam and phase helper
-    preserves the contracts its docstring names: the staging context's
-    atomicity, the collision/provenance rules, the disjoint-partition layout
-    and the one encoding both components share (ADR 0037).
+    (overflow flush, shared metadata, result). The layout contracts hold: the
+    staging context's atomicity, the collision/provenance rules, the
+    disjoint-partition layout and the one encoding both components share (ADR 0037).
 
     The Dense Component axis is exactly ``variant_reference``'s ALIDs (or, when
     both are given, the ``--reference-panel`` subset, which the reference must
@@ -2968,11 +3075,12 @@ def build_hybrid_from_vcf_manifest(
     the reference's source-coordinate map routes on-reference associations to
     the Dense Component and off-reference ones to the Ragged Overflow during
     Pass 2. With only ``reference_panel``, the legacy two-pass build reads every
-    source once and lifts hg19 rows; a reference that names no rsids runs Pass 1's
-    harvest for them (`_reference_axis_rsids`, #255). Rows are assumed hg19 and
-    lifted inline unless the manifest declares ``source_assembly=hg38`` (#85);
-    ``source_assembly`` and ``source_reader_capability`` supply per-release
-    defaults (#174), and ``eaf_reference`` drives the orientation check (#115).
+    source once and lifts hg19 rows. A reference that names no rsids runs Pass 1's
+    harvest, rekeyed through this build's routing, so its names match the two-pass
+    build's for every variant both axes carry (`_single_pass_rsids`, #255); rows
+    are assumed hg19 and lifted inline unless the manifest declares
+    ``source_assembly=hg38`` (#85); ``source_reader_capability`` supplies the
+    per-release default (#174), and ``eaf_reference`` drives the orientation check.
 
     ``checkpoint=True`` opts the build into phase-granularity resume; ``resume=True``
     continues one from the checkpoint this call's ``output_path`` implies (issue #227;
@@ -3211,6 +3319,9 @@ def _recorded_prepared(
             for alid, rsid in read_str_map(state.path / PROVENANCE_RSID).items()
             if rsid
         },
+        # The recorded map is already the routed one; the fold phase is not
+        # re-entered on this path, so no candidates travel with it (issue #255).
+        rsid_by_site={},
         dense_to_shared=dense_to_shared,
         spill_dir=state.spill_dir,
         keys_sorted=_NO_ROUTING[0],

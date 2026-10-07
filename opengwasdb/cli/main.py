@@ -116,9 +116,12 @@ _VARIANT_REFERENCE_HELP = (
     "*.variant-ref.tsv.gz artifact, a plain ALID list, or a store variants.tsv.gz. "
     "Source variants absent from the reference are dropped; reference variants "
     "no study observes are stored as NaN. A reference that carries rsids is the "
-    "axis authority for them; one that names none runs Pass 1's rsid harvest, so "
-    "the store records the same identifiers the two-pass build would, and the "
-    "build fails rather than publish a table that lost a source-named rsid."
+    "axis authority for them; one that names none runs Pass 1's rsid harvest and "
+    "rekeys it through this build's routing, so those names are identical to the "
+    "two-pass build's for every variant both axes carry. The axes are not "
+    "identical: a named off-reference source variant with no usable association "
+    "is absent here and kept by a two-pass reference-panel build. The build "
+    "fails rather than publish an rsid the sources did not name for its variant."
 )
 
 
@@ -521,8 +524,8 @@ def build_hybrid_command(
     On-panel variants in --reference-panel fill the Dense Component; off-panel variants
     go to Ragged Overflow. --variant-reference supplies a precomputed axis and source
     map, bypassing Pass 1 (#186); a reference that names no rsids runs Pass 1's
-    harvest, keeping the names the two-pass build would give panel and Overflow
-    variants alike (#255). --source-reader-capability and --source-assembly
+    harvest, keeping the names the two-pass build gives every variant both axes
+    carry (#255). --source-reader-capability and --source-assembly
     supply per-release defaults (#174). --checkpoint keeps a resumable record of
     each phase (#227), and --resume continues the build for OUTPUT_PATH from one.
     """

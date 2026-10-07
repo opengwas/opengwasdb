@@ -1993,6 +1993,23 @@ def _hybrid_axis_rsids(store: Path) -> dict[str, str]:
     return {row[5]: ("" if row[6] == "." else row[6]) for row in rows}
 
 
+def _build_two_and_single(
+    tmp_path: Path, manifest: Path, panel: Path, *, n_workers: int = 1
+) -> tuple[Path, Path]:
+    """The `--reference-panel` and plain-ALID `--variant-reference` builds of
+    one fixture, the pair the issues-#255 equality assertions compare."""
+    two_pass = tmp_path / "two-pass.opengwasdb"
+    single_pass = tmp_path / "single-pass.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
+    )
+    build_hybrid_from_vcf_manifest(
+        manifest, single_pass, variant_reference=panel, store_id="s", release_id="r",
+        n_workers=n_workers,
+    )
+    return two_pass, single_pass
+
+
 class TestVariantReferenceRsids:
     def test_plain_alid_panel_keeps_the_same_rsids_as_the_two_pass_panel(self, tmp_path):
         """Issue #255: ``--variant-reference <plain ALID list>`` must write the
@@ -2022,6 +2039,37 @@ class TestVariantReferenceRsids:
         assert validate_store(single_pass).ok
         _assert_hybrid_stores_match(two_pass, single_pass)
 
+    def test_named_off_reference_row_without_an_association_is_not_stored(self, tmp_path):
+        """The axis-composition difference, pinned (issue #255, round 2). A named
+        off-reference row with no usable association is on the two-pass axis
+        (Pass 1 sees the variant stream) and off the single-pass one (an
+        off-reference variant's ALID is discovered from the associations the
+        build stores). The variant is absent, never present under a wrong name,
+        and every query both axes can answer alike is answered alike."""
+        vcf = _make_vcf(
+            tmp_path,
+            "unusable_off",
+            [
+                "1\t100000\trsPANEL\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                # Named, off-reference, and dropped from the association stream.
+                "1\t2000000\trsDROPPED_OFF\tC\tT\t.\tPASS\t.\tES:SE\t1.0:0.0\n",
+            ],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("unusable_off", vcf, "Unusable off", "hg38")]
+        )
+        panel = tmp_path / "one-panel.txt"
+        panel.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
+        two_pass, single_pass = _build_two_and_single(tmp_path, manifest, panel)
+
+        assert _hybrid_axis_rsids(two_pass) == {
+            HG38_ALID_1: "rsPANEL",
+            HG38_ALID_4: "rsDROPPED_OFF",
+        }
+        assert _hybrid_axis_rsids(single_pass) == {HG38_ALID_1: "rsPANEL"}
+        assert validate_store(two_pass).ok
+        assert validate_store(single_pass).ok
+
     def test_admission_rejected_row_still_names_its_variant(self, tmp_path):
         """Hybrid admission (a MAF threshold here) runs inside Pass 2, after the
         reader. A row it drops still names its variant, so the harvest -- taken
@@ -2029,14 +2077,7 @@ class TestVariantReferenceRsids:
         keeps."""
         manifest = _rsid_hybrid_manifest(tmp_path, maf_threshold="0.02")
         panel = _panel_file(tmp_path)
-        two_pass = tmp_path / "two-pass.opengwasdb"
-        single_pass = tmp_path / "single-pass.opengwasdb"
-        build_hybrid_from_vcf_manifest(
-            manifest, two_pass, reference_panel=panel, store_id="s", release_id="r"
-        )
-        build_hybrid_from_vcf_manifest(
-            manifest, single_pass, variant_reference=panel, store_id="s", release_id="r"
-        )
+        two_pass, single_pass = _build_two_and_single(tmp_path, manifest, panel)
 
         # Asserted meaningful first: the 0.02 MAF threshold really drops the
         # second source's EAF 0.995 row (MAF 0.005) for panel variant ALID_3 --
@@ -2049,8 +2090,8 @@ class TestVariantReferenceRsids:
         assert "" not in _hybrid_axis_rsids(single_pass).values()
 
     def test_off_reference_partial_loss_fails_the_build(self, tmp_path, monkeypatch):
-        """The rule cannot miss an Overflow-only loss: the independent count of
-        named axis variants includes off-reference ones, so a rekey that drops
+        """The rule cannot miss an Overflow-only loss: the oracle walks every
+        routed candidate, off-reference ones included, so a rekey that drops
         just an off-reference ALID fails the build."""
         import opengwasdb.layouts.dense.build_vcf as build_vcf
 
@@ -2064,7 +2105,7 @@ class TestVariantReferenceRsids:
             return rekeyed
 
         monkeypatch.setattr(build_vcf, "_rekey_rsids_to_alids", _drop_the_overflow_entry)
-        with pytest.raises(ValueError, match="silently disappeared"):
+        with pytest.raises(ValueError, match="disagrees with the routed harvest"):
             build_hybrid_from_vcf_manifest(
                 manifest, tmp_path / "lost.opengwasdb", variant_reference=panel,
                 store_id="s", release_id="r",

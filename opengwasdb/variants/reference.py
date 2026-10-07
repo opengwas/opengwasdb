@@ -30,7 +30,7 @@ import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -59,9 +59,10 @@ log = logging.getLogger(__name__)
 __all__ = [
     "VariantReference",
     "VariantReferenceExtraction",
+    "expected_rsids_by_routing",
     "extract_variant_reference",
     "read_variant_reference",
-    "require_rsid_map_covers",
+    "require_rsids_match_expected",
     "require_written_rsids_match",
     "write_variant_reference",
 ]
@@ -405,34 +406,60 @@ def read_variant_reference(path: str | Path) -> VariantReference:
     )
 
 
-def require_rsid_map_covers(
-    named_axis_alids: Collection[str], rsid_by_alid: Mapping[str, str]
-) -> None:
-    """Refuse a resolved rsid map that lost a variant its sources named.
+def expected_rsids_by_routing(
+    rsid_by_site: Mapping[SourceKey, str], routing: Mapping[SourceKey, str]
+) -> dict[str, str]:
+    """An independent oracle for the ALID -> rsid map a harvest should produce.
 
-    The rule against this ticket's silent-failure class (issue #255), stated so
-    it can actually fail on partial loss: after the axis is resolved, every
-    variant the harvest saw a source name must be in the map with that name.
-    ``named_axis_alids`` is counted independently of the map -- a plain set
-    built from the named source sites and the resolved site->ALID lookup, not
-    from the rekeying that produced the map -- so a rekey or merge that drops
-    an entry (all of them, or one) fails here rather than blanking a row.
-
-    It cannot fire falsely: a source that names nothing contributes nothing,
-    sites that resolve nowhere are excluded before the call, and an ALID
-    several source sites name needs only one entry. A *source* read that
-    silently omits a variant is a different failure, caught only by reading the
-    written table back (`require_written_rsids_match`), which is why both run.
+    Deliberately simple and separate from `_rekey_rsids_to_alids` and from how
+    the routing was built: it walks the candidates in the mapping's own order
+    (Pass 1's `(rank, site)`, which a dict preserves), takes the first non-empty
+    rsid per *routed* ALID, and returns the exact map. Comparing the resolved
+    map against this is what makes the issue #255 check value-sensitive -- a run
+    that keeps every key but attaches the wrong name to one of them disagrees
+    here, which a set-membership check cannot see.
     """
-    missing = sorted(alid for alid in named_axis_alids if not rsid_by_alid.get(alid))
-    if not missing:
+    expected: dict[str, str] = {}
+    for site, rsid in rsid_by_site.items():
+        alid = routing.get(site)
+        if alid and rsid and alid not in expected:
+            expected[alid] = rsid
+    return expected
+
+
+def require_rsids_match_expected(
+    resolved_by_alid: Mapping[str, str], expected_by_alid: Mapping[str, str]
+) -> None:
+    """Refuse a resolved rsid map that differs from the routed expectation.
+
+    Value-sensitive, unlike a set comparison: an ALID carrying the wrong name
+    fails, as does a missing or an extra one. The caller builds
+    ``expected_by_alid`` with `expected_rsids_by_routing` from the harvest's
+    candidates and the routing the build actually uses, so a rekey or merge that
+    misplaces a name fails before publication.
+
+    It cannot catch a *source read* that omitted a variant: a table written from
+    the same omitted candidates agrees with this expectation, and so does
+    `require_written_rsids_match`. That omission is a reader-level failure and
+    only an independent second read could see it.
+
+    A source that names nothing builds an empty expectation and passes: "the
+    sources name none" and "every named variant is present" stay different
+    answers, but only the second is required.
+    """
+    wrong = sorted(
+        alid
+        for alid in sorted(set(resolved_by_alid) | set(expected_by_alid))
+        if resolved_by_alid.get(alid) != expected_by_alid.get(alid)
+    )
+    if not wrong:
         return
+    alid = wrong[0]
     raise ValueError(
-        f"the resolved rsid map covers {len(rsid_by_alid)} variant(s) but the sources "
-        f"named {len(named_axis_alids)} on the axis; {len(missing)} are absent "
-        f"(e.g. {missing[0]!r}); refusing to publish a variant table whose source "
-        "identifiers silently disappeared -- a wrong answer indistinguishable from "
-        "a source that named none"
+        f"the resolved rsid map disagrees with the routed harvest for {len(wrong)} "
+        f"variant(s) (e.g. {alid!r}: resolved {resolved_by_alid.get(alid)!r}, expected "
+        f"{expected_by_alid.get(alid)!r}); refusing to publish identifiers that are not "
+        "the ones the sources named for the variants they route to"
     )
 
 
@@ -443,11 +470,16 @@ def require_written_rsids_match(
 ) -> None:
     """Refuse to publish a Store Variant Table that disagrees with its rsid map.
 
-    The sound half of the issue #255 rule: after the axis is resolved and the
+    The second half of the issue #255 rule: after the axis is resolved and the
     table written, the table is read back and compared row for row against the
-    resolved map -- a partial loss, a merge that drops off-reference rows, or a
-    table written from a stale map all fail here, on the bytes a query will
-    read, rather than being trusted from the map that produced them.
+    resolved map, so a partial loss, an off-reference row dropped from the
+    write, or a table written from a stale map fails on the bytes a query will
+    read rather than being trusted from the map that produced them.
+
+    It complements, and does not replace, `require_rsids_match_expected`: this
+    compares the bytes with the map, that compares the map with the routed
+    candidates. A source read that omitted a variant is invisible to both, since
+    the table is written from the same omitted map.
 
     A source that names nothing writes `.` (read back as ``""``) and passes: the
     expected map is built with ``""`` for an absent name, so "the sources name

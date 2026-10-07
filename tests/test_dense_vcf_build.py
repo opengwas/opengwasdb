@@ -2483,6 +2483,23 @@ def _build_pair(tmp_path: Path, manifest: Path, plain: Path) -> tuple[Path, Path
     return two_pass, single_pass
 
 
+def _rsid_fault_target(
+    tmp_path: Path,
+) -> tuple[Path, Path, object]:
+    """A manifest, its plain-ALID reference, and the build module to wrap.
+
+    The shape the partial-loss and wrong-value fault tests share: a named
+    GWAS-VCF source whose plain ALID list makes the single-pass path harvest.
+    """
+    import opengwasdb.layouts.dense.build_vcf as build_vcf
+
+    source = _capability_manifest(tmp_path, "opengwasdb.gwas-vcf")
+    manifest = _manifest_with_capability(
+        tmp_path, [("capability", source, "Capability", "opengwasdb.gwas-vcf", "hg38")]
+    )
+    return manifest, _plain_alid_list(tmp_path, manifest), build_vcf
+
+
 class TestPlainAlidReferenceRsids:
     @pytest.mark.parametrize("capability", _DENSE_CAPABILITIES)
     def test_plain_alid_list_keeps_the_same_rsids_as_the_two_pass_build(
@@ -2554,16 +2571,11 @@ class TestPlainAlidReferenceRsids:
         assert _axis_rsids(single_pass) == {HG38_ALID_3: "rsSITE_FIRST"}
 
     def test_partial_harvest_loss_fails_the_build(self, tmp_path, monkeypatch):
-        """Issue #255's rule, on partial loss: the independent count of axis
-        variants the sources named is compared with the resolved map, so a
-        rekey that drops one entry fails the build rather than blanking a row."""
-        import opengwasdb.layouts.dense.build_vcf as build_vcf
-
-        source = _capability_manifest(tmp_path, "opengwasdb.gwas-vcf")
-        manifest = _manifest_with_capability(
-            tmp_path, [("capability", source, "Capability", "opengwasdb.gwas-vcf", "hg38")]
-        )
-        plain = _plain_alid_list(tmp_path, manifest)
+        """Issue #255's rule, on partial loss: the resolved map is compared
+        against an independent oracle built from the candidates and the routing,
+        so a rekey that drops one entry fails the build rather than blanking a
+        row."""
+        manifest, plain, build_vcf = _rsid_fault_target(tmp_path)
         real_rekey = build_vcf._rekey_rsids_to_alids
 
         def _drop_one(source_lookup, rsid_by_site):
@@ -2572,11 +2584,74 @@ class TestPlainAlidReferenceRsids:
             return rekeyed
 
         monkeypatch.setattr(build_vcf, "_rekey_rsids_to_alids", _drop_one)
-        with pytest.raises(ValueError, match="silently disappeared"):
+        with pytest.raises(ValueError, match="disagrees with the routed harvest"):
             build_dense_from_vcf_manifest(
                 manifest, tmp_path / "lost.opengwasdb", store_id="s", release_id="r",
                 variant_reference=plain,
             )
+
+    def test_wrong_nonempty_rsid_value_fails_the_build(self, tmp_path, monkeypatch):
+        """The oracle is value-sensitive (issue #255, round 2): a map that keeps
+        every key but gives one of them the wrong non-empty name disagrees with
+        the routed expectation, which a set-membership check could not see."""
+        manifest, plain, build_vcf = _rsid_fault_target(tmp_path)
+        real_rekey = build_vcf._rekey_rsids_to_alids
+
+        def _wrong_value(source_lookup, rsid_by_site):
+            rekeyed = real_rekey(source_lookup, rsid_by_site)
+            if rekeyed:
+                rekeyed[next(iter(sorted(rekeyed)))] = "rsWRONG"
+            return rekeyed
+
+        monkeypatch.setattr(build_vcf, "_rekey_rsids_to_alids", _wrong_value)
+        with pytest.raises(ValueError, match="disagrees with the routed harvest"):
+            build_dense_from_vcf_manifest(
+                manifest, tmp_path / "wrong.opengwasdb", store_id="s", release_id="r",
+                variant_reference=plain,
+            )
+
+    def test_rsid_follows_the_reference_routing_not_pass_1(self, tmp_path):
+        """An rsid must land on the ALID its association lands on (issue #255,
+        round 2). A reference may route a source key to a different ALID than
+        Pass 1's own liftover would; the reference is the authority, so the name
+        follows its routing rather than a fresh Pass 1 lift."""
+        source_alid = "1:100000:A:G"
+        routed_alid = "1:200000:C:T"
+        vcf = _make_vcf(
+            tmp_path,
+            "custom",
+            ["1\t100000\trsSOURCE\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("a", vcf, "A", "hg38")]
+        )
+        reference = tmp_path / "custom.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference,
+            [source_alid, routed_alid],
+            {
+                ("1", 100000, "A", "G"): routed_alid,
+                # An unrelated explicit source key for the first ALID, so the
+                # artifact does not add its identity key and reject the
+                # intentional disagreement.
+                ("9", 999, "A", "C"): source_alid,
+            },
+            {},
+        )
+        store = tmp_path / "custom-routing.opengwasdb"
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", variant_reference=reference
+        )
+
+        assert validate_store(store).ok
+        assert _axis_rsids(store) == {source_alid: "", routed_alid: "rsSOURCE"}
+        # And the association really is on the routed row, not the source one.
+        from opengwasdb.encoding import DenseZPlane
+
+        opened = open_store(store)
+        z = DenseZPlane.open(opened.arrays(mode="r"), opened.manifest.encoding).column(0)
+        assert np.isnan(z[0])   # the source ALID holds no association
+        assert z[1] == pytest.approx(-4.0, rel=5e-3)
 
     def test_written_table_disagreeing_with_the_map_fails_the_build(
         self, tmp_path, monkeypatch
