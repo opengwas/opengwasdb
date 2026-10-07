@@ -958,25 +958,37 @@ def _normalise_selection(shape: tuple[int, ...], selection: Any) -> tuple[Any, .
     return tuple(axes)
 
 
+def _shard_covers_whole_array(array: Any) -> bool:
+    """Whether every axis' shard already spans that axis, i.e. one shard holds it."""
+    shape = tuple(int(size) for size in array.shape)
+    shards = tuple(int(size) for size in array.shards)
+    return all(shard >= dim for shard, dim in zip(shards, shape, strict=True))
+
+
 def require_whole_shard_write(array: Any, selection: Any) -> None:
     """Fail loudly unless `selection` covers whole shards of a sharded array.
 
-    Applied to every sharded array, whatever its rank: the two-dimensional Dense
-    statistic planes, the imputed mask and the SE coefficient table, and the 1-D
+    Applied to the two-dimensional Dense statistic planes, the imputed mask and
+    the SE coefficient table, and to every **multi-shard** 1-D array -- the
     Ragged association sequences (`z`, `se`, `variant_index`, `eaf`, `imputed`),
     whose shard is 50,000,000 elements.  A write that covers part of a shard is a
     read-modify-write of the whole shard, so the writer pays to decode and
     re-encode everything the shard already held (#249); on OGS-00011's overflow
     sequences that is about twelve rewrites of every 50,000,000-element shard.
 
-    The 1-D arrays whose shard policy is "one shard holds the whole array" (the
-    offsets and the exception/overflow tables) are still judged, because their
-    whole-array writes cover that one shard; a writer that started appending to
-    one a region at a time would be refused here.  Unsharded arrays are not
-    judged -- the rule is about shards.
+    A 1-D array whose shard already spans it is **not** judged: its shard is the
+    whole array, and the arrays that policy exists for are filled incrementally
+    by design -- the Dense SE rewrite preallocates its exception table to the
+    exact count the codes-only pass produced and fills it in row-block order
+    (`encoding/se.py`), so each write covers a distinct, non-overlapping run of
+    a table that is read whole anyway.  The fix that matters is on the shards a
+    query streams, not on a table of a few thousand entries.  Unsharded arrays
+    are not judged either -- the rule is about shards.
     """
     shards = getattr(array, "shards", None)
     if shards is None:
+        return
+    if len(array.shape) == 1 and _shard_covers_whole_array(array):
         return
     axes = _normalise_selection(tuple(int(size) for size in array.shape), selection)
     if not axes:

@@ -10,10 +10,11 @@ whole array, so nothing else in the suite can show it.
 patches every public Zarr method that writes a selection of cells -- sync
 `__setitem__`, the five `set_*_selection` methods (which `oindex`, `vindex` and
 `array.blocks[...]` delegate to), and async `AsyncArray.setitem` -- and refuses
-a write that does not start and end on a shard boundary.  Every sharded array is
-judged, 1-D Ragged association sequences included (#249); the 1-D exception and
-offset tables are covered too, because their whole-array writes cover their one
-shard.  `resize` and attribute writes are not region writes and are not covered.
+a write that does not start and end on a shard boundary.  Every multi-shard
+array is judged, 1-D Ragged association sequences included (#249); a 1-D array
+whose shard already spans it (the Dense SE exception table, preallocated and
+filled band by band by the rewrite) is not, and neither is an unsharded array.
+`resize` and attribute writes are not region writes and are not covered.
 Production pays nothing: the hook is entered only by tests or when
 `OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES=1`, which the real-data pilot sets so a
 genuinely multi-shard build proves its writers are aligned.
@@ -525,6 +526,33 @@ def test_the_guard_judges_a_one_dimensional_sequence(tmp_path: Path) -> None:
         array[3:6] = np.zeros(3, dtype="int16")  # the second half of the first shard
     with require_whole_shard_writes(), pytest.raises(PartialShardWriteError):
         array[1:9] = np.zeros(8, dtype="int16")  # starts off the shard boundary
+
+
+def test_a_whole_array_shard_one_dimensional_table_may_be_filled_incrementally(
+    tmp_path: Path,
+) -> None:
+    """The Dense SE rewrite fills its exception table band by band (#249).
+
+    `se_exception_index` is a 1-D array whose shard policy is "one shard holds
+    the whole array"; `encoding/se.py` preallocates it to the exact count the
+    codes-only pass produced and writes each row band's run in order.  That is
+    by design, so the guard must allow it while still refusing a partial write
+    of a multi-shard sequence (the test above).
+    """
+    root = open_group_for_write(tmp_path / "data.zarr", "w", zarr_format=3)
+    table = create_array(
+        root,
+        "se_exception_index",
+        ArrayRole.EXCEPTION_TABLE,
+        shape=(9,),
+        dtype="int64",
+        compressor=sharded_compressor(),
+    )
+    assert int(table.shards[0]) >= 9  # one shard holds the whole table
+    with require_whole_shard_writes():
+        table[0:4] = np.arange(4, dtype="int64")
+        table[4:9] = np.arange(5, dtype="int64")
+    assert list(np.asarray(table[:])) == list(range(4)) + list(range(5))
 
 
 def test_a_ragged_sequence_shard_is_written_exactly_once(

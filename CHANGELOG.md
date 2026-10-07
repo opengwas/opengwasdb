@@ -196,9 +196,14 @@ the end of this file.
   1.00x, and on the three real pilots every sequence shard is written once. The
   cost is the working set: about 1.5 GB (30 bytes a cell) per region at the full
   50,000,000-element shard, against the 130 MiB a 4,194,304-cell region used.
-  `require_whole_shard_writes` now judges 1-D arrays too, so a writer that
-  returns to a partial-shard sequence write fails loudly rather than quietly
-  getting slower.
+  `require_whole_shard_writes` now judges multi-shard 1-D arrays too, so a
+  writer that returns to a partial-shard sequence write fails loudly rather
+  than quietly getting slower.  A 1-D array whose shard already spans it is
+  still exempt: the Dense SE rewrite preallocates `se_exception_index` to the
+  exact exception count and fills it in row-block order, which is by design and
+  has nothing to do with a streamed sequence shard (extending the guard to
+  every 1-D array found exactly that, and it is why the rule is scoped to the
+  multi-shard ones).
 - **A Reference-Completed Dense release records the chunk shape its arrays
   actually have (#245).** Completion writes the completed grid at
   `DEFAULT_CHUNK_SHAPE` clipped to the array dimensions, not at the source's

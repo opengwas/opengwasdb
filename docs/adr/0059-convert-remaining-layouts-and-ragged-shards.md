@@ -107,7 +107,9 @@ attributes.
   shard; `RaggedCSRWriter` now raises its write region to the shard.  The cost is
   a roughly 1.5 GB working set at the full shard (about 30 bytes a cell) against
   the 130 MiB a 4,194,304-cell region used.  The whole-shard write guard covers
-  1-D arrays too, so this cannot regress silently.
+  multi-shard 1-D arrays too, so this cannot regress silently; a 1-D array whose
+  shard is the whole array (the Dense SE exception table, filled band by band)
+  stays exempt.
 
 ## Alternatives rejected
 
