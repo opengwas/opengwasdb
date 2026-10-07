@@ -68,7 +68,7 @@ def _group_with_subgroup(path: Path, zarr_format: int = 2) -> Path:
     #245's converter will, uncompressed because the seam's codec is v2-only.
     """
     if zarr_format == 2:
-        root = open_group_for_write(path, "w")
+        root = open_group_for_write(path, "w", zarr_format=2)
     else:
         root = zarr.open_group(str(path), mode="w", zarr_format=3)
     kwargs = {"compressor": None} if zarr_format == 3 else {}
@@ -86,7 +86,8 @@ def _group_with_subgroup(path: Path, zarr_format: int = 2) -> Path:
 def consolidated_release(tmp_path: Path) -> Path:
     """A Dense release that needs EAF repair, with its `data.zarr` consolidated."""
     out = make_store_needing_eaf_repair(tmp_path)
-    _consolidate(out / "data.zarr")
+    # The builders write 0.2.0 from #247, so the fixture's data.zarr is v3.
+    _consolidate(out / "data.zarr", zarr_format=3)
     # A fresh open reads the record. The repair would rechunk this array, which is
     # what would stale the record.
     assert zarr.open_group(str(out / "data.zarr"), mode="r")[EAF_BASELINE].chunks == (8,)
@@ -102,7 +103,7 @@ def test_repair_refuses_a_consolidated_release_before_changing_anything(
         "the baseline must carry values for the reread to mean anything"
     )
 
-    with pytest.raises(ConsolidatedMetadataError, match=r"\.zmetadata"):
+    with pytest.raises(ConsolidatedMetadataError, match=r"(\.zmetadata|zarr\.json)"):
         repair_eaf_chunks(consolidated_release)
 
     assert _tree(consolidated_release) == before
@@ -119,7 +120,7 @@ def test_a_move_refuses_under_consolidated_metadata(tmp_path: Path) -> None:
     _consolidate(path)
     before = _tree(path)
 
-    with pytest.raises(ConsolidatedMetadataError, match=r"\.zmetadata"):
+    with pytest.raises(ConsolidatedMetadataError, match=r"(\.zmetadata|zarr\.json)"):
         move_in_group(group, "a", "moved")
 
     assert _tree(path) == before

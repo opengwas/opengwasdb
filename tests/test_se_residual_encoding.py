@@ -41,6 +41,7 @@ from opengwasdb.layouts.dense.top_hits import (
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant
 
@@ -208,7 +209,7 @@ def test_validation_rejects_malformed_residual_se_side_arrays(tmp_path) -> None:
     def malformed(name):
         path = tmp_path / f"{name}.opengwasdb"
         shutil.copytree(store, path)
-        return path, zarr.open_group(str(path / "data.zarr"), mode="a", zarr_format=2)
+        return path, zarr.open_group(str(path / "data.zarr"), mode="a", zarr_format=3)
 
     path, group = malformed("missing-table")
     del group["se_exception_value"]
@@ -221,22 +222,37 @@ def test_validation_rejects_malformed_residual_se_side_arrays(tmp_path) -> None:
     path, group = malformed("stray-exception")
     del group["se_exception_index"]
     del group["se_exception_value"]
-    group.create_array("se_exception_index", data=np.array([0], dtype=np.int64))
-    group.create_array("se_exception_value", data=np.array([0.1], dtype=np.float32))
+    create_array(
+        group, "se_exception_index", ArrayRole.EXCEPTION_TABLE,
+        data=np.array([0], dtype=np.int64), compressor=compressor(),
+    )
+    create_array(
+        group, "se_exception_value", ArrayRole.EXCEPTION_TABLE,
+        data=np.array([0.1], dtype=np.float32), compressor=compressor(),
+    )
     assert any("not marked" in error for error in validate_store(path).errors)
 
     path, group = malformed("duplicate-exception")
     del group["se_exception_index"]
     del group["se_exception_value"]
-    group.create_array("se_exception_index", data=np.array([1, 1], dtype=np.int64))
-    group.create_array("se_exception_value", data=np.array([0.1, 0.1], dtype=np.float32))
+    create_array(
+        group, "se_exception_index", ArrayRole.EXCEPTION_TABLE,
+        data=np.array([1, 1], dtype=np.int64), compressor=compressor(),
+    )
+    create_array(
+        group, "se_exception_value", ArrayRole.EXCEPTION_TABLE,
+        data=np.array([0.1, 0.1], dtype=np.float32), compressor=compressor(),
+    )
     assert any("duplicates" in error for error in validate_store(path).errors)
 
     path, group = malformed("dtype-disagreement")
     raw = np.asarray(group["se"][:], dtype=np.float16)
     chunks = group["se"].chunks
     del group["se"]
-    group.create_array("se", data=np.asarray(raw, dtype="float16"), chunks=chunks)
+    create_array(
+        group, "se", ArrayRole.DENSE_STATISTIC_PLANE,
+        data=np.asarray(raw, dtype="float16"), compressor=compressor(), inner_chunk=chunks,
+    )
     assert any("dtype float16" in error for error in validate_store(path).errors)
 
 
@@ -563,7 +579,7 @@ def test_validation_catches_a_top_hit_index_left_behind_by_a_migration(tmp_path)
     assert validate_store(store).ok
 
     top = zarr.open_group(
-        str(store / "data.zarr" / "top_hits"), mode="a", zarr_format=2
+        str(store / "data.zarr" / "top_hits"), mode="a", zarr_format=3
     )[threshold_key(5e-8)]
     rows = top["variant_index"][:].astype(np.int64)
     cols = top["analysis_index"][:].astype(np.int64)

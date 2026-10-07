@@ -62,7 +62,12 @@ def test_dense_build_writes_standard_envelope_and_metadata(dense_store_path):
         ("rs2", 1),
         ("rs3", 2),
     ]
-    assert dense_meta["chunk_shape"] == [1000, 1000]
+    # The recorded chunk is the plane's **effective** inner chunk -- clipped to
+    # the array's dimensions, as the root attrs and the converter record it --
+    # not the build-wide hint.  #247 made all three recordings one call.
+    assert dense_meta["chunk_shape"] == [3, 2]
+    assert dense_meta["shard_shape"] == [3, 2]
+    assert dense_meta["zarr_format"] == 3
     assert dense_meta["compressor"]["cname"] == "zstd"
     assert dense_meta["compressor"]["shuffle"] == "bitshuffle"
     assert dense_meta["variant_axis"]["format"] == "tabix_tsv_v1"

@@ -164,15 +164,31 @@ def test_the_current_version_is_writable():
     assert writable == CURRENT_FORMAT_VERSION
 
 
-def test_the_converter_version_is_readable_but_not_writable():
-    """The intended interim behaviour of #245: a converted 0.2.0 release can be
-    read, but this build still writes 0.1.0, so completion -- which writes into
-    the source's arrays and keeps its format -- refuses it until #247."""
-    store_open.check_format_version(store_open.SHARDED_FORMAT_VERSION)
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="reads but cannot write"):
-        store_open.check_writable_format_version(
-            store_open.SHARDED_FORMAT_VERSION, source="converted release X"
-        )
+def test_the_converter_writes_the_current_version_and_reads_0_1_0():
+    """#247 made the converter's target the builders' version: one constant.
+
+    The converter reads `SOURCE_FORMAT_VERSION` (0.1.0, Zarr v2) and writes
+    `CURRENT_FORMAT_VERSION` (0.2.0).  Anything else would let a built store and
+    a converted store declare different formats while both carry Zarr v3
+    sharding, which is exactly the identity #249 checks.
+    """
+    from opengwasdb.store import convert
+
+    assert convert.CURRENT_FORMAT_VERSION == store_open.CURRENT_FORMAT_VERSION == "0.2.0"
+    assert convert.SOURCE_FORMAT_VERSION == "0.1.0"
+
+
+def test_0_1_0_is_readable_but_not_writable():
+    """The state #247 leaves: this build reads 0.1.0 and writes only 0.2.0.
+
+    Completion writes into the source's arrays and keeps its format, so a 0.1.0
+    source is refused -- and the refusal names the conversion tool, because a
+    Dense 0.1.0 release whose values are right is converted rather than
+    rebuilt (ADR 0057 §3).
+    """
+    store_open.check_format_version("0.1.0")
+    with pytest.raises(store_open.UnsupportedFormatVersion, match="convert_store_to_0_2_0"):
+        store_open.check_writable_format_version("0.1.0", source="source release X")
 
 
 def test_a_readable_but_unwritable_version_is_refused(monkeypatch):
@@ -188,6 +204,33 @@ def test_a_readable_but_unwritable_version_is_refused(monkeypatch):
     store_open.check_format_version("0.1.0")  # still readable
     with pytest.raises(store_open.UnsupportedFormatVersion, match="reads but cannot write"):
         store_open.check_writable_format_version("0.1.0", source="source release X")
+
+
+def test_completion_refuses_a_0_1_0_source_and_names_the_converter(
+    tmp_path, dense_store_path
+):
+    """The guard ADR 0038 §4 added for exactly this moment now fires.
+
+    A 0.1.0 source (Zarr v2) is readable but not writable by a build that writes
+    0.2.0, and completion preserves its source's format rather than re-encoding
+    it.  The refusal must name `scripts/convert_store_to_0_2_0.py`, because the
+    operator's remedy is to convert first -- converting after completion is
+    impossible, since completion writes into the source's arrays.
+    """
+    _set_version(dense_store_path, "0.1.0")
+    out = tmp_path / "completed.opengwasdb"
+
+    with pytest.raises(store_open.UnsupportedFormatVersion, match="convert_store_to_0_2_0"):
+        complete_dense_store(
+            dense_store_path,
+            out,
+            # Deliberately not a usable panel: the version check must fire
+            # first, so completion never reads it.
+            ld_dir=tmp_path / "no-such-panel",
+            ancestry="EUR",
+        )
+
+    assert not out.exists()
 
 
 def test_completion_refuses_a_source_it_cannot_write_before_doing_any_work(

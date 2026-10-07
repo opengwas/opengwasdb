@@ -38,10 +38,10 @@ if TYPE_CHECKING:
 #: because the compatible axis is defined as one an older reader still reads
 #: correctly.
 #:
-#: Two entries since #245: `0.1` (Zarr v2, what every builder still writes) and
-#: `0.2` (Zarr v3 with sharding, written only by the converter until #247 moves
-#: the builders). The four pre-reset versions are not in it and are not readable
-#: -- see `PRE_RESET_FORMAT_VERSIONS`.
+#: Two entries since #245: `0.1` (Zarr v2, read but never written again) and
+#: `0.2` (Zarr v3 with sharding, what every builder writes from #247 on). The
+#: four pre-reset versions are not in it and are not readable -- see
+#: `PRE_RESET_FORMAT_VERSIONS`.
 SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingProxyType(
     {(0, 1): (0,), (0, 2): (0,)}
 )
@@ -51,18 +51,12 @@ SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingPr
 #: (ADR 0041 §3): supporting the *writing* of historical formats would mean
 #: keeping every retired encoder alive and tested, for a use case nobody has.
 #:
-#: **This stays `0.1.0` until #247** moves the builders to Zarr v3. Until then
-#: the converter is the only 0.2.0 writer, and no version is cut in the
-#: interim (ADR 0057).
-CURRENT_FORMAT_VERSION = "0.1.0"
-
-#: The version the Dense converter writes (issue #245). 0.2.0 is Zarr v3 with
-#: the sharding codec: `zarr.json` replaces `.zarray`/`.zgroup`, and a shard is
-#: the unit stored as a file while the inner chunk is the unit a query reads.
-#: It is deliberately *not* `CURRENT_FORMAT_VERSION`: builders keep writing
-#: 0.1.0 until #247 switches them, so `check_writable_format_version` refuses to
-#: complete a 0.2.0 source (ADR 0038 §4) -- convert first, or wait for #247.
-SHARDED_FORMAT_VERSION = "0.2.0"
+#: `0.2.0` since #247: Zarr v3 with the sharding codec (ADR 0057), at the Dense
+#: inner chunk and shard shapes ADR 0058 decided. The builders write it through
+#: `opengwasdb.store.arrays`, and the converter writes it from a `0.1.0` source
+#: (`opengwasdb.store.convert.SOURCE_FORMAT_VERSION`); `0.1.0` stays readable
+#: until a later decision deletes the v2 reader (ADR 0057).
+CURRENT_FORMAT_VERSION = "0.2.0"
 
 #: The versions the format carried before the reset, and what each one was.
 #: Every one is two-component, so the parser rejects it on shape alone; naming
@@ -195,10 +189,12 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
     lies about its own encoding, which is the failure class this project exists
     to avoid.
 
-    It is live since #245: this build reads `0.2.0` (Zarr v3 with sharding, the
-    converter's output) but writes `0.1.0`, so completing a converted release
-    is refused here. The refusal is the intended interim behaviour until #247
-    makes 0.2.0 current; convert and complete in the other order, or wait.
+    It is live since #247: this build writes `0.2.0` (Zarr v3 with sharding), so
+    completing a `0.1.0` source -- Zarr v2, written by every build before this
+    one -- is refused here.  The refusal names the conversion tool, because a
+    Dense 0.1.0 release whose values are right can be converted rather than
+    rebuilt (ADR 0057 §3).  Convert, then complete; converting later is not
+    possible, because completion writes into the source's arrays.
     """
     check_format_version(version, source=source)
     if version != CURRENT_FORMAT_VERSION:
@@ -206,7 +202,10 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
             f"{source} is format_version={version!r}, which this build reads but cannot "
             f"write (it writes {CURRENT_FORMAT_VERSION!r}). Completion preserves its "
             "source's format rather than re-encoding it (ADR 0038 §4), so this release "
-            "cannot be completed by this build -- rebuild it from source instead"
+            "cannot be completed by this build. The one order that works is: convert the "
+            f"0.1.0 source to {CURRENT_FORMAT_VERSION} with "
+            "scripts/convert_store_to_0_2_0.py (it accepts every converter-supported layout), "
+            "then complete the converted release; or rebuild the release from source."
         )
     return version
 

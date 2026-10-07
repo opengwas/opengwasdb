@@ -34,9 +34,27 @@ from opengwasdb.encoding.plan import (
 )
 from opengwasdb.encoding.planes import DenseEafPlane, write_se_coefficients
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
-from opengwasdb.store.arrays import ArrayRole, compressor_of, create_array, move_in_group
+from opengwasdb.store.arrays import (
+    ArrayRole,
+    compressor,
+    compressor_of,
+    create_array,
+    move_in_group,
+)
 
 log = logging.getLogger(__name__)
+
+
+def _row_block_of(array: Any) -> int:
+    """Rows per rewrite band for a Dense plane: one whole Dense shard.
+
+    The rewrite writes ``pending[r0:r1]`` across every Analysis, so its band has
+    to be a whole number of shards on the variant axis, or each write becomes a
+    read-modify-write of the shard it ends inside (issue #247).  A v2 array has
+    no shard; its inner chunk is the whole stored unit and is used as before.
+    """
+    shards = getattr(array, "shards", None)
+    return int(shards[0]) if shards is not None else int(array.chunks[0])
 
 
 def _optional_phase(timer: PhaseTimer | None, name: str) -> AbstractContextManager[None]:
@@ -485,7 +503,11 @@ def _measure_dense(
     global _MEASURE
     n_rows, n_analyses = map(int, source.shape)
     row_chunk, col_chunk = map(int, source.chunks)
-    compressor = compressor_of(source)
+    # Measurement needs a *synchronous* ``encode``: zarr 3's `BloscCodec.encode`
+    # is a coroutine, while the Store format has exactly one Blosc
+    # configuration and the v3 codec writes the same frame, so the numcodecs
+    # spelling measures what the v3 codec will store (issue #247).
+    measuring_codec = compressor()
     # The planes this decision writes declare their own fills: the int8 codes
     # plane `_rewrite_dense` produces is created with `SE_MISSING` as its fill,
     # and a float32 scratch plane is narrowed to `float16` with NaN. A source
@@ -503,7 +525,7 @@ def _measure_dense(
         np.broadcast_to(columns, (row_chunk, n_analyses)),
         row_chunk,
         col_chunk,
-        compressor,
+        measuring_codec,
         float16_fill,
         n_analyses,
         chunk_timer,
@@ -511,7 +533,7 @@ def _measure_dense(
     started = time.monotonic()
     try:
         return _run_dense_measurement(
-            _MeasureAccumulators.zeros(compressor, n_analyses),
+            _MeasureAccumulators.zeros(measuring_codec, n_analyses),
             starts,
             timer,
             chunk_timer,
@@ -657,19 +679,28 @@ def _measure_overflow(
     return _ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
 
 
-def _empty_exception_arrays(group: Any, count: int, compressor: Any) -> tuple[Any, Any]:
+def _empty_exception_arrays(
+    group: Any,
+    count: int,
+    compressor: Any,
+    *,
+    role: ArrayRole = ArrayRole.EXCEPTION_TABLE,
+) -> tuple[Any, Any]:
     """Allocate the side table the streaming rewrite fills in position order.
 
     Sized from the rewrite's codes-only count pass rather than grown: the
     rewrite visits row chunks in order, so the exceptions arrive already sorted
-    and can be written straight into their final slots.
+    and can be written straight into their final slots.  `role` names the
+    component's table policy explicitly; a Ragged CSR component opened directly
+    at `data.zarr/ragged` reports `path == ""`, so the caller that knows its
+    component must say so (#247 review round 1).
     """
 
     def one(name: str, dtype: str) -> Any:
         return create_array(
             group,
             name,
-            ArrayRole.EXCEPTION_TABLE,
+            role,
             shape=(count,),
             dtype=dtype,
             compressor=compressor,
@@ -881,7 +912,7 @@ def _rewrite_dense(
     global _REWRITE
     source = group["se"]
     n_rows, n_analyses = map(int, source.shape)
-    row_chunk = int(source.chunks[0])
+    row_chunk = _row_block_of(source)
     compressor = compressor_of(source)
     pending = create_array(
         group,
@@ -1333,12 +1364,13 @@ def _measure_candidates(
     preliminary to an eligibility verdict (issue #229).
     """
     n_analyses = int(source.shape[1])
-    compressor = compressor_of(source)
+    # Synchronous codec for the compressed-size measurement; see `_measure_dense`.
+    measuring_codec = compressor()
     dense = _measure_dense(source, eaf_plane, coefficients, timer, n_workers)
     overflow_cost, overflow_coefficient_bytes = _measure_overflow_component(
         overflow,
         coefficients,
-        overflow_compressor or compressor,
+        overflow_compressor or measuring_codec,
         overflow_chunk,
         n_analyses,
         timer,
@@ -1349,7 +1381,7 @@ def _measure_candidates(
         n_analyses,
         dense,
         overflow_cost,
-        dense_coefficient_bytes=_packed_coefficients(compressor, coefficients),
+        dense_coefficient_bytes=_packed_coefficients(measuring_codec, coefficients),
         overflow_coefficient_bytes=overflow_coefficient_bytes,
     )
 
@@ -1543,7 +1575,9 @@ def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> 
     if source.dtype == np.dtype("float16"):
         return
     n_rows = int(source.shape[0])
-    row_chunk = int(source.chunks[0])
+    # A row block of whole Dense shards, as the residual rewrite uses: a block
+    # ending inside a shard turns each write into a read-modify-write (#247).
+    row_chunk = _row_block_of(source)
     starts = range(0, n_rows, row_chunk)
     pending = create_array(
         group,

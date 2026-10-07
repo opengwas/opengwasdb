@@ -27,6 +27,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from legacy_fixtures import relayout_as_0_1_0
 from test_dense_completion import SOURCE_HEADER, SOURCE_ROWS
 from test_dense_completion import _make_ld_panel as _make_dense_ld_panel
 from test_hybrid_build import (
@@ -73,9 +74,9 @@ DENSE_SHARD = (1000, 8)
 def ragged_observed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("ragged-observed")
     manifest, filtered = _make_ragged_ssf_fixture(root)
-    store = root / "ragged-obs.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered, store, store_id="ragged-test", release_id="obs-v1")
-    return store
+    built = root / "ragged-obs-built.opengwasdb"
+    build_ragged_from_ssf(manifest, filtered, built, store_id="ragged-test", release_id="obs-v1")
+    return relayout_as_0_1_0(built, root / "ragged-obs.opengwasdb")
 
 
 @pytest.fixture(scope="session")
@@ -87,7 +88,7 @@ def ragged_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
         prefix, observed, store_id="ragged-rc", release_id="obs-v1", tissue="Blood"
     )
     panel = _make_ragged_ld_panel(root, "1", 900_000, 1_300_000)
-    completed = root / "ragged-rc.opengwasdb"
+    completed = root / "ragged-rc-built.opengwasdb"
     complete_ragged_store(
         observed,
         completed,
@@ -97,7 +98,7 @@ def ragged_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
         min_cor=0.0,
         release_id="rc-v1",
     )
-    return completed
+    return relayout_as_0_1_0(completed, root / "ragged-rc.opengwasdb")
 
 
 @pytest.fixture(scope="session")
@@ -110,11 +111,11 @@ def dense_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
         [source], observed, store_id="dense-rc", release_id="obs-v1", reference_assembly="GRCh38"
     )
     panel = _make_dense_ld_panel(root)
-    completed = root / "dense-rc.opengwasdb"
+    completed = root / "dense-rc-built.opengwasdb"
     complete_dense_store(
         observed, completed, panel, ancestry="EUR", min_cor=0.0, release_id="rc-v1"
     )
-    return completed
+    return relayout_as_0_1_0(completed, root / "dense-rc.opengwasdb")
 
 
 @pytest.fixture(scope="session")
@@ -136,11 +137,11 @@ def small_dense_observed(tmp_path_factory: pytest.TempPathFactory) -> Path:
             )
     source = root / "associations.tsv"
     source.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    store = root / "small-dense.opengwasdb"
+    store = root / "small-dense-built.opengwasdb"
     build_dense_observed_from_sources(
         [source], store, store_id="small-dense", release_id="v1", reference_assembly="GRCh37"
     )
-    return store
+    return relayout_as_0_1_0(store, root / "small-dense.opengwasdb")
 
 
 @pytest.fixture(scope="session")
@@ -164,7 +165,7 @@ def hybrid_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
         ],
     )
     manifest = _make_manifest(root, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")])
-    store = root / "hybrid.opengwasdb"
+    store = root / "hybrid-built.opengwasdb"
     build_hybrid_from_vcf_manifest(
         manifest,
         store,
@@ -173,7 +174,7 @@ def hybrid_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
         release_id="v1",
         n_workers=1,
     )
-    return store
+    return relayout_as_0_1_0(store, root / "hybrid.opengwasdb")
 
 
 def _convert(source: Path, destination: Path, *, zarr_rel: str = "data.zarr") -> Path:

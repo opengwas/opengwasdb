@@ -42,6 +42,7 @@ from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 
@@ -399,10 +400,10 @@ def test_top_hits_match_with_legacy_component_indexes(hybrid_store, drop_dense, 
 
     key = threshold_key(5e-4)
     if drop_dense:
-        root = zarr.open_group(str(hybrid_store / "dense" / "data.zarr"), mode="a", zarr_format=2)
+        root = zarr.open_group(str(hybrid_store / "dense" / "data.zarr"), mode="a", zarr_format=3)
         del root[f"top_hits/{key}"]["eaf"]
     if drop_overflow:
-        root = zarr.open_group(str(hybrid_store / "data.zarr"), mode="a", zarr_format=2)
+        root = zarr.open_group(str(hybrid_store / "data.zarr"), mode="a", zarr_format=3)
         del root[f"top_hits/{key}"]["eaf"]
 
     q = query_store(hybrid_store)
@@ -452,7 +453,13 @@ def test_validate_catches_imputed_overflow(hybrid_store):
     """An imputed array on the overflow must fail — the overflow is never imputed."""
     root = open_store(hybrid_store).arrays(mode="a")["ragged"]
     n = int(root["offsets"][:][-1])
-    root.create_array("imputed", data=np.zeros(max(n, 1), dtype="uint8"))
+    create_array(
+        root,
+        "imputed",
+        ArrayRole.ASSOCIATION_SEQUENCE,
+        data=np.zeros(max(n, 1), dtype="uint8"),
+        compressor=compressor(),
+    )
     result = validate_store(hybrid_store)
     assert not result.ok
     assert any("overflow" in e.lower() and "imputed" in e.lower() for e in result.errors)

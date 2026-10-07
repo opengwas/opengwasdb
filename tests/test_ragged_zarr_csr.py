@@ -3,8 +3,15 @@
 import numpy as np
 import pytest
 
-from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
+from opengwasdb.encoding import (
+    EafEncoding,
+    EncodingMeasurements,
+    SeEncoding,
+    StoreEncoding,
+    ZEncoding,
+)
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
+from opengwasdb.store.arrays import ArrayRole, open_group, shard_layout
 
 # These tests exercise the CSR arrays directly, in a bare directory with no
 # manifest.json, so they pass the plan explicitly where a real store's reader
@@ -143,3 +150,54 @@ def test_get_analyses_batch(tmp_path):
     for result, idx in zip(results, [0, 5, 9]):
         vi, z, se = expected[idx]
         np.testing.assert_array_equal(result.variant_index, vi)
+
+
+# The Dense and Ragged per-variant shard policies differ above 1,000,000
+# elements: `PER_VARIANT` caps a shard at 1,000,000 and `RAGGED_PER_VARIANT` at
+# 10,000,000 (ADR 0059). 2,000,000 variants is the smallest length where a
+# directly-opened `data.zarr/ragged` group (whose `path` is "") would show a
+# wrong role.
+_ROLE_N_VARIANTS = 2_000_000
+
+
+def test_the_ragged_eaf_baseline_takes_the_ragged_shard_policy(tmp_path):
+    """A big Ragged per-variant array must not get the Dense shard (#247 r1).
+
+    `RaggedCSRWriter` opens `<store>/data.zarr/ragged` as the group **root**, so
+    Zarr reports `group.path == ""`; a role inferred from the path would select
+    the Dense `PER_VARIANT` policy (shard 1,000,000) instead of
+    `RAGGED_PER_VARIANT` (shard 2,000,000), and the release would not match the
+    converter's layout.
+    """
+    encoding = StoreEncoding(
+        z=ZEncoding(kind="int16_fixed", scale=1024),
+        se=SeEncoding(kind="float16"),
+        eaf=EafEncoding(kind="int8_residual", residual_range=0.5),
+    )
+    writer = RaggedCSRWriter(_ROLE_N_VARIANTS)
+    writer.add_analysis(
+        np.array([0, 1, 2], dtype=np.int32),
+        np.array([1.0, 2.0, 3.0], dtype=np.float32),
+        np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        eaf=np.array([0.2, 0.3, 0.4], dtype=np.float32),
+    )
+    writer.flush(
+        tmp_path,
+        encoding,
+        eaf_baseline=np.zeros(_ROLE_N_VARIANTS, dtype=np.float32),
+    )
+
+    root = open_group(tmp_path / "data.zarr" / "ragged", "r")
+    baseline = root["eaf_baseline"]
+    assert tuple(int(size) for size in baseline.chunks) == (200_000,)
+    assert tuple(int(size) for size in baseline.shards) == (2_000_000,)
+    # The two policies really differ at this length, or the assertion above would
+    # hold for either role.
+    dense_policy = shard_layout(
+        ArrayRole.PER_VARIANT, (2_000_000,), inner_chunk=(200_000,)
+    )
+    ragged_policy = shard_layout(
+        ArrayRole.RAGGED_PER_VARIANT, (2_000_000,), inner_chunk=(200_000,)
+    )
+    assert dense_policy == (1_000_000,)
+    assert ragged_policy == (2_000_000,)

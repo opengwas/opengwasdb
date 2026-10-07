@@ -1,5 +1,10 @@
 # Store format 0.2.0: Zarr v3 with sharding
 
+> **Amended by the addendum at the end (#247).** Decision 2's interim —
+> `CURRENT_FORMAT_VERSION` held at `0.1.0` "until #247" — is over: the builders
+> write 0.2.0. The addendum records the one decision the ticket left open, that
+> a build does not choose its shard. Decisions 1, 3, 4 and 5 stand as written.
+
 Issues #237 and #239, epic #240, implemented by #245 (the Dense converter) and
 #247 (the builders). This ADR records what 0.2.0 is, why the migration route is
 **conversion** rather than rebuild, what it costs, and the rejected options.
@@ -55,7 +60,9 @@ The consequence is deliberate and tested: `check_writable_format_version`
 into its source's arrays and preserves its source's `format_version`. A converted
 store is completed **before** conversion, or after #247. The guard was written
 for exactly this state — "the moment a second readable version exists" — and
-0.2.0 is where it becomes live.
+0.2.0 is where it becomes live. (The addendum at the end corrects that order for
+the state #247 leaves: convert the `0.1.0` source to `0.2.0` first, then complete
+the converted release.)
 
 ### 3. Conversion, not rebuild, is the migration route
 
@@ -172,3 +179,66 @@ that is the unit a query reads.
   the format change indefinitely while the file-count problem stays. Rejected:
   the epic's point is to adopt the layout, and the interim is explicitly
   temporary.
+
+## Addendum (#247): the builders write 0.2.0, and a build cannot choose its shard
+
+Decision 2 above held `CURRENT_FORMAT_VERSION` at `0.1.0` "until #247". This
+addendum records what #247 did, and one decision the ticket left open.
+
+**One version constant.** `CURRENT_FORMAT_VERSION` is `0.2.0` and is what the
+converter *writes*; the converter's source version is its own
+`SOURCE_FORMAT_VERSION = "0.1.0"`.  There is no second target constant.  A
+built release and a converted release therefore declare the same format and
+carry the same physical layout, which is what #249 checks.  The interim of
+decision 2 — builders and converter writing different formats — is over, and no
+package version was cut inside it.
+
+**The builders take the shapes from the seam.** A Dense release's inner chunk is
+`DENSE_CHUNK_SHAPE`, the ADR 0058 decision `[1000, 64]`; its shard is
+`DENSE_SHARD_SHAPE`, `[100_000, 1024]`, clipped to the array; the top-hit index
+is sharded at `TOP_HIT_SHARD_CHUNKS`; every other role's shard comes from the
+same `_SHARD_LAYOUTS` table the converter reads. `create_array` computes the
+shard from the role whenever it creates an array in a v3 group, so a builder
+cannot write an unsharded 0.2.0 array, and the seam translates a numcodecs Blosc
+codec to its v3 spelling rather than letting the writers keep two codec names.
+
+**A build does not choose its shard.** `--chunk-variants` / `--chunk-analyses`
+name the **inner chunk** and nothing else; there is no `--shard-variants` /
+`--shard-analyses` pair. The reasons:
+
+- the shard is a property of the **format**, decided once (#246) and recorded in
+  three places that validation checks against the arrays. A build whose shard
+  differed from the converter's would produce a release the format's own
+  recorded-layout rule still accepts but #249's builder-vs-conversion identity
+  does not, which is a divergence with no reader-visible symptom;
+- a build that could set the shard could write a release the converter cannot
+  reproduce, so the epic's stated equivalence ("a built store's layout equals
+  what converting the 0.1.0 build would produce") would hold only by convention;
+- a lower shard is a **memory** knob (ADR 0058 measured 256 at 10.1 GB ukb-b
+  against 1024 at 40.3 GB), and the human accepted the 40.3 GB cost. If a build
+  ever needs the narrower scratch, the change is to `DENSE_SHARD_SHAPE` — one
+  edit in the seam, a new ADR superseding 0058, and every writer and the
+  converter move together — not a flag.
+
+The converter keeps `--dense-shard` and `--dense-analysis-chunk` because it
+reproduces a chosen layout and records the choice in
+`provenance.zarr_v3_conversion`, so a converted release says which shapes it
+used. A builder always records the format's shapes.
+
+**No build path writes a partial shard.** The Dense VCF band writer's band width
+is the shard's Analysis width, and the row-block writers (the residual EAF
+encode, the SE rewrite and its float16 narrowing, Dense Reference Completion, the
+Hybrid Dense Component) write whole multiples of the shard's row count. A
+test-time hook, `opengwasdb.store.arrays.require_whole_shard_writes` (also
+enabled by `OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES=1`, which the real-data pilot
+sets), refuses a write that covers part of a shard, so a later writer cannot
+regress to the silent read-modify-write decision 4 warns about. It costs
+production nothing: the hook is off unless entered.
+
+**Completion of a `0.1.0` source is refused**, naming
+`scripts/convert_store_to_0_2_0.py`. Decision 2 predicted this as the guard's
+first real firing; it is now live and tested. The one executable order for a
+converter-supported layout is: **convert the `0.1.0` source to `0.2.0`, then
+complete the converted release** (or rebuild). Completion cannot come first — a
+`0.1.0` source is not writable — and it cannot be skipped: the converted release
+is a `0.2.0` release, and this build writes it.

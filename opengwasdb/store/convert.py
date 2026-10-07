@@ -82,7 +82,6 @@ from opengwasdb.store.arrays import (
 )
 from opengwasdb.store.open import (
     CURRENT_FORMAT_VERSION,
-    SHARDED_FORMAT_VERSION,
     OpenGWASDBStore,
 )
 from opengwasdb.validation import validate_store
@@ -90,6 +89,12 @@ from opengwasdb.validation import validate_store
 #: The layouts the converter understands (#248).  Every other value is refused
 #: by manifest, before a byte is copied.
 SUPPORTED_LAYOUTS = frozenset({"dense", "ragged", "hybrid"})
+
+#: The `format_version` the converter reads: Zarr v2, one chunk per file.  It is
+#: deliberately *not* `CURRENT_FORMAT_VERSION` (0.2.0 since #247): the converter
+#: derives the current format from this one, and once `0.1.0` stops being
+#: readable this is the constant that says so.
+SOURCE_FORMAT_VERSION = "0.1.0"
 
 #: The `ArrayRole`s whose inner chunk narrows on the Analysis axis and whose
 #: shard is the conversion's `(V_s, A_s)` parameter.  The manifest's recorded
@@ -165,11 +170,6 @@ class _ArrayPlan:
     codec: tuple[str, int, str] | None
 
 
-def _manifest_data(release: Path) -> dict[str, Any]:
-    data: dict[str, Any] = json.loads((release / "manifest.json").read_text(encoding="utf-8"))
-    return data
-
-
 def _manifest_paths(release: Path) -> list[Path]:
     """A release's known manifests, outermost first.
 
@@ -211,16 +211,16 @@ def _refuse_unconvertible(source: Path) -> list[_Component]:
         raise ConversionError(f"{source}: no manifest.json; this is not a Store Release")
     for path in manifests:
         version = str(json.loads(path.read_text(encoding="utf-8")).get("format_version"))
-        if version == SHARDED_FORMAT_VERSION:
+        if version == CURRENT_FORMAT_VERSION:
             raise ConversionError(
-                f"{path}: format_version is already {SHARDED_FORMAT_VERSION!r}; this "
+                f"{path}: format_version is already {CURRENT_FORMAT_VERSION!r}; this "
                 "release is already converted (issue #245)"
             )
-        if version != CURRENT_FORMAT_VERSION:
+        if version != SOURCE_FORMAT_VERSION:
             raise ConversionError(
                 f"{path}: format_version is {version!r}, not "
-                f"{CURRENT_FORMAT_VERSION!r}. The converter derives a "
-                f"{SHARDED_FORMAT_VERSION} release from a {CURRENT_FORMAT_VERSION} one and "
+                f"{SOURCE_FORMAT_VERSION!r}. The converter derives a "
+                f"{CURRENT_FORMAT_VERSION} release from a {SOURCE_FORMAT_VERSION} one and "
                 "is not a general migration tool; every other format is rebuilt (ADR 0041, "
                 "spec §21.4)."
             )
@@ -655,7 +655,7 @@ def _rewrite_manifest(
     data = json.loads(path.read_text(encoding="utf-8"))
     data["release_id"] = release_id
     data["created_at"] = now
-    data["format_version"] = SHARDED_FORMAT_VERSION
+    data["format_version"] = CURRENT_FORMAT_VERSION
     provenance = {**data.get("provenance", {})}
     if component.kind in {"dense", "hybrid"} and dense_plane is not None:
         key = "dense" if component.kind == "dense" else "hybrid"
@@ -667,8 +667,8 @@ def _rewrite_manifest(
         provenance[key] = block
     provenance["zarr_v3_conversion"] = {
         "source_release_id": source_release_id,
-        "from_format_version": CURRENT_FORMAT_VERSION,
-        "to_format_version": SHARDED_FORMAT_VERSION,
+        "from_format_version": SOURCE_FORMAT_VERSION,
+        "to_format_version": CURRENT_FORMAT_VERSION,
         "source_zarr_format": 2,
         "target_zarr_format": 3,
         "tool": "scripts/convert_store_to_0_2_0.py",
@@ -1039,7 +1039,7 @@ def convert_release(
         top_hit_shard_chunks=int(top_hit_shard_chunks),
         workers=int(workers),
     )
-    print(f"Published {destination} as {SHARDED_FORMAT_VERSION}", flush=True)
+    print(f"Published {destination} as {CURRENT_FORMAT_VERSION}", flush=True)
     return destination
 
 

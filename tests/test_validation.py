@@ -9,6 +9,7 @@ from opengwasdb.layouts.dense.rho import build_dense_rho
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.model.analyses import read_analyses, write_analyses
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 
@@ -251,6 +252,20 @@ def test_validator_rejects_missing_ragged_csr_array(ragged_store_path):
     assert "missing data.zarr/ragged/se" in result.errors
 
 
+def _replace_ragged_z(store_path: object, values: np.ndarray) -> None:
+    """Rewrite a Ragged release's `z` sequence through the seam.
+
+    Through the seam, so the replacement is a shard-valid 0.2.0 array and the
+    error under test is the structural one rather than the format rule the
+    corruption would otherwise trip (#247).
+    """
+    ragged = open_store(store_path).arrays(mode="a")["ragged"]
+    del ragged["z"]
+    create_array(
+        ragged, "z", ArrayRole.ASSOCIATION_SEQUENCE, data=values, compressor=compressor()
+    )
+
+
 def test_validator_rejects_ragged_csr_array_length_mismatch(ragged_store_path):
     # A parallel array shorter than `offsets` implies is a structural error
     # that must be reported, not read as the store silently losing rows.
@@ -258,10 +273,8 @@ def test_validator_rejects_ragged_csr_array_length_mismatch(ragged_store_path):
     n_assoc = int(ragged["offsets"][-1])
     assert n_assoc > 1  # fixture sanity: the truncation must actually shorten z
     assert ragged["z"].shape[0] == n_assoc
-    ragged = open_store(ragged_store_path).arrays(mode="a")["ragged"]
-    z = ragged["z"][:]
-    del ragged["z"]
-    ragged.create_array("z", data=z[:-1])
+    z = np.asarray(ragged["z"][:])
+    _replace_ragged_z(ragged_store_path, z[:-1])
 
     result = validate_store(ragged_store_path)
 
@@ -278,10 +291,8 @@ def test_validator_rejects_ragged_csr_array_outside_declared_plan(ragged_store_p
     # not try to decode values under a plan the structure already contradicted.
     ragged = open_store(ragged_store_path).arrays(mode="r")["ragged"]
     assert str(ragged["z"].dtype) == "int16"  # fixture sanity
-    ragged = open_store(ragged_store_path).arrays(mode="a")["ragged"]
-    z = ragged["z"][:]
-    del ragged["z"]
-    ragged.create_array("z", data=z.astype(np.float32))
+    z = np.asarray(ragged["z"][:]).astype(np.float32)
+    _replace_ragged_z(ragged_store_path, z)
 
     result = validate_store(ragged_store_path)
 
@@ -588,7 +599,13 @@ def test_validator_rejects_rho_wrong_packed_length(dense_store_path):
     _build_fixture_rho(dense_store_path)
     root = open_store(dense_store_path).arrays(mode="a")
     del root["rho"]["rho"]
-    root["rho"].create_array("rho", data=np.array([0.1, 0.2], dtype="float16"))
+    create_array(
+        root["rho"],
+        "rho",
+        ArrayRole.RHO_ARRAY,
+        data=np.array([0.1, 0.2], dtype="float16"),
+        compressor=compressor(),
+    )
 
     result = validate_store(dense_store_path)
 

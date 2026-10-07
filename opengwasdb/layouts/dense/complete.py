@@ -71,8 +71,8 @@ from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
-    DEFAULT_COMPRESSOR,
     DEFAULT_DTYPE,
+    dense_layout_records,
 )
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.analyses import (
@@ -639,7 +639,7 @@ def _merge_checkpoint_fills(
         src_has_eaf=src_has_eaf,
         eaf_reference=eaf_reference,
     )
-    band_rows = _completion_band_rows(effective_chunks)
+    band_rows = _completion_band_rows(_dense_shard_rows(staged, effective_chunks))
     fill_shard_dir, quality_count = _shard_checkpoint_fills_by_band(
         blocks_dir,
         staged,
@@ -779,10 +779,20 @@ def _record_effective_dense_chunk_shape(
     dense = dict(manifest.provenance.get("dense", {}))
     if not dense:
         return manifest
-    effective = staged.arrays(mode="r").attrs.get("chunk_shape")
-    if effective is None:
+    attrs = dict(staged.arrays(mode="r").attrs)
+    if attrs.get("chunk_shape") is None:
         return manifest
-    dense["chunk_shape"] = [int(size) for size in effective]
+    # Record the whole layout, not only the inner chunk: a completed release
+    # that inherited the source's `shard_shape` or compressor but wrote arrays
+    # with another is the same silent-failure class (issue #245, #247).  The
+    # `index.sqlite` `dense` blob is the third recording 0.2.0 requires (#248),
+    # and completion is the writer that produces it for a completed release.
+    for key in ("chunk_shape", "shard_shape", "compressor", "zarr_format"):
+        if key in attrs:
+            dense[key] = attrs[key]
+    with staged.index_connection() as connection:
+        set_metadata(connection, "dense", dict(dense))
+        connection.commit()
     return replace(manifest, provenance={**manifest.provenance, "dense": dense})
 
 
@@ -913,8 +923,22 @@ _FILL_RECORD_DTYPE = np.dtype(
 _FILL_RECORD_READ_COUNT = 5_000_000
 
 
-def _completion_band_rows(effective_chunks: tuple[int, int]) -> int:
-    return max(int(effective_chunks[0]), _BAND_ROWS)
+def _completion_band_rows(shard_rows: int) -> int:
+    """Rows per completion band: whole Dense shards, about `_BAND_ROWS` of them.
+
+    The completion band writer sets ``z_arr[r0:r1]`` and the same for se,
+    imputed and eaf, so a band that ends inside a shard turns every one of those
+    writes into a read-modify-write.  The band is at least one shard, then as
+    many whole shards as fit the ~`_BAND_ROWS` memory target (issue #247).
+    """
+    rows = max(int(shard_rows), 1)
+    return max(rows, (_BAND_ROWS // rows) * rows)
+
+
+def _dense_shard_rows(staged: StagedRelease, effective_chunks: tuple[int, int]) -> int:
+    """The variant-axis height of the completed planes' shard, read from `z`."""
+    shards = getattr(staged.arrays(mode="r")["z"], "shards", None)
+    return int(shards[0]) if shards is not None else int(effective_chunks[0])
 
 
 def _fill_shard_path(fill_shard_dir: Path, band_index: int) -> Path:
@@ -1134,8 +1158,7 @@ def _create_completed_zarr(
         write_eaf_reference(root, eaf_reference, compressor=_COMPRESSOR)
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "reference_completed"
-    root.attrs["compressor"] = DEFAULT_COMPRESSOR
-    root.attrs["chunk_shape"] = list(effective_chunks)
+    root.attrs.update(dense_layout_records((n_variants, n_analyses), hint=chunk_shape))
     return effective_chunks
 
 
@@ -1459,7 +1482,7 @@ def _write_completed_bands(
     root = staged.arrays(mode="a")
     codec = StoreCodec(encoding)
     overflow = ZOverflowBuilder()
-    band_rows = _completion_band_rows(effective_chunks)
+    band_rows = _completion_band_rows(_dense_shard_rows(staged, effective_chunks))
 
     n_missing_off_panel = np.zeros(n_analyses, dtype=np.int64)
 

@@ -491,7 +491,9 @@ class RaggedCSRWriter:
                 exceptions=exceptions,
             )
         write_se_coefficients(root, coefficients, compressor=_COMPRESSOR)
-        exceptions.table().write(root, compressor=_COMPRESSOR)
+        exceptions.table().write(
+            root, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_EXCEPTION_TABLE
+        )
 
     def _fit_own_coefficients(
         self, root: Any, encoding: StoreEncoding, offsets: np.ndarray, total: int
@@ -569,11 +571,13 @@ class RaggedCSRWriter:
                     positions=positions_flat(lo),
                     exceptions=eaf_exceptions,
                 )
-        z_overflow.table().write(root)
+        z_overflow.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
         if encoding.eaf.is_residual:
             assert baseline is not None
-            write_eaf_baseline(root, baseline, compressor=_COMPRESSOR)
-            eaf_exceptions.table().write(root)
+            write_eaf_baseline(
+                root, baseline, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_PER_VARIANT
+            )
+            eaf_exceptions.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
 
     def write_eaf_plane(
         self,

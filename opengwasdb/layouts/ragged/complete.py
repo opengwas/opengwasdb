@@ -1123,7 +1123,7 @@ def _write_csr_id_arrays(root: Any, flat: _FlatCsr, codec: StoreCodec) -> None:
         dtype=codec.z_dtype,
         compressor=_COMPRESSOR,
     )
-    z_overflow.table().write(root)
+    z_overflow.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
     store_arrays.create_array(
         root,
         "imputed",
@@ -1153,7 +1153,12 @@ def _write_eaf_and_se_arrays(
             compressor=_COMPRESSOR,
         )
     if encode_plan.eaf_reference is not None:
-        write_eaf_reference(root, encode_plan.eaf_reference, compressor=_COMPRESSOR)
+        write_eaf_reference(
+            root,
+            encode_plan.eaf_reference,
+            compressor=_COMPRESSOR,
+            role=ArrayRole.RAGGED_PER_VARIANT,
+        )
     decoded_eaf = RaggedEafPlane.open(root, encode_plan.encoding, imputed=root["imputed"]).slice(
         0, len(flat.se)
     )

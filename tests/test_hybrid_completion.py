@@ -578,7 +578,7 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
     encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=1))
     codec = StoreCodec(encoding)
     dense_dir = tmp_path / "dense"
-    root = zarr.open_group(str(dense_dir / "data.zarr"), mode="w", zarr_format=2)
+    root = zarr.open_group(str(dense_dir / "data.zarr"), mode="w", zarr_format=3)
     root.create_array(
         "z", shape=(2, 2), dtype=codec.z_dtype, fill_value=codec.z_fill_value
     )

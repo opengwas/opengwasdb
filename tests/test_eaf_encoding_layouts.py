@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from store_assertions import replace_exception_table
 
 from opengwasdb.encoding import (
     EAF_ABSENT,
@@ -49,6 +50,7 @@ from opengwasdb.model.analyses import (
 from opengwasdb.model.enums import EafScope
 from opengwasdb.query import query_store
 from opengwasdb.repair import repair_eaf_chunks
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 
@@ -226,7 +228,7 @@ def test_a_build_with_frequencies_declares_the_residual_coding(
     manifest = json.loads((store / "manifest.json").read_text())
     assert manifest["encoding"]["eaf"]["kind"] == "int8_residual"
     assert manifest["encoding"]["eaf"]["residual_range"] in (0.5, 1.0, 2.0)
-    assert manifest["format_version"] == "0.1.0"
+    assert manifest["format_version"] == "0.2.0"
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged"])
@@ -292,7 +294,7 @@ def test_ragged_top_hits_index_agrees_with_the_plane_it_was_built_from(ragged_st
     assert len(indexed) > 0, "fixture produced no top hits; the comparison would be vacuous"
     assert np.isfinite(indexed).any(), "fixture carries no frequencies to compare"
 
-    root = zarr.open_group(str(ragged_store / "data.zarr"), mode="a", zarr_format=2)
+    root = zarr.open_group(str(ragged_store / "data.zarr"), mode="a", zarr_format=3)
     del root[f"top_hits/{threshold_key(1.0)}"]["eaf"]
     with query_store(ragged_store) as query:
         fallback = query.top_hits(threshold=1.0)["eaf"]
@@ -512,7 +514,7 @@ def test_a_release_declaring_an_unknown_eaf_kind_is_refused(dense_store: Path):
 def test_a_residual_plane_with_no_baseline_is_rejected(dense_store: Path):
     """An `int8` residual plane is meaningless without its baseline -- and
     "meaningless" must not decode to a plausible frequency."""
-    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=2)
+    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=3)
     del root[EAF_BASELINE]
 
     result = validate_store(dense_store)
@@ -528,13 +530,20 @@ def test_a_missized_eaf_baseline_is_rejected(dense_store: Path):
     The array is rewritten rather than resized so its chunk stays per-variant
     and the chunking rule does not fire first.
     """
-    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=2)
+    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=3)
     n = root[EAF_BASELINE].shape[0]
     assert n > 1
     values = root[EAF_BASELINE][: n - 1]
     dtype = root[EAF_BASELINE].dtype
     del root[EAF_BASELINE]
-    root.create_array(EAF_BASELINE, data=np.asarray(values, dtype=dtype), chunks=(1,))
+    create_array(
+        root,
+        EAF_BASELINE,
+        ArrayRole.PER_VARIANT,
+        data=np.asarray(values, dtype=dtype),
+        compressor=compressor(),
+        inner_chunk=(1,),
+    )
 
     result = validate_store(dense_store)
 
@@ -548,15 +557,8 @@ def test_a_missized_eaf_baseline_is_rejected(dense_store: Path):
 def test_an_exception_table_that_lost_a_cell_is_rejected(dense_store: Path):
     """The lost value is the frequency furthest from its baseline -- the rare
     variant a user is filtering on."""
-    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=2)
-    kept_index = np.asarray(root[EAF_EXCEPTION_INDEX][:])[1:]
-    kept_value = np.asarray(root[EAF_EXCEPTION_VALUE][:])[1:]
-    for name, data, dtype in (
-        (EAF_EXCEPTION_INDEX, kept_index, "int64"),
-        (EAF_EXCEPTION_VALUE, kept_value, "float32"),
-    ):
-        del root[name]
-        root.create_array(name, data=np.asarray(data, dtype=dtype), chunks=(max(1, len(data)),))
+    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=3)
+    replace_exception_table(root, EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE)
 
     result = validate_store(dense_store)
     assert not result.ok
@@ -1222,7 +1224,7 @@ def test_a_release_that_stores_no_frequencies_still_validates(dense_store: Path)
     manifest = json.loads(manifest_path.read_text())
     manifest["encoding"]["eaf"] = {"kind": "absent"}
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=2)
+    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=3)
     for name in ("eaf", EAF_BASELINE, "eaf_exception_index", "eaf_exception_value"):
         if name in root:
             del root[name]

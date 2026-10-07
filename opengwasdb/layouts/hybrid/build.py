@@ -78,8 +78,9 @@ from opengwasdb.layouts.dense.build_vcf import (
 )
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
-    DEFAULT_COMPRESSOR,
     DEFAULT_DTYPE,
+    dense_layout_records,
+    dense_provenance_block,
 )
 from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.hybrid.checkpoint import (
@@ -2365,6 +2366,7 @@ def _finish_dense_component(
         prepared.n_analyses,
         options.chain_file,
         options.dtype,
+        options.chunk_shape,
         encoding=encoding,
         eaf_orientation=eaf_provenance,
     )
@@ -3446,6 +3448,7 @@ def _write_dense_manifest(
     n_analyses: int,
     chain_file: str | Path | None,
     dtype: str,
+    chunk_shape: tuple[int, int],
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
@@ -3464,7 +3467,9 @@ def _write_dense_manifest(
             "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",
             "n_variants": n_variants,
             "n_analyses": n_analyses,
-            "dense": {"statistic_arrays": ["z", "se"], "se_dtype": encoding.se.dtype},
+            "dense": dense_provenance_block(
+                (n_variants, n_analyses), hint=chunk_shape, se_dtype=encoding.se.dtype
+            ),
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
         },
     )
@@ -3504,8 +3509,7 @@ def _write_hybrid_manifest(
             "n_off_panel": n_off_panel,
             "n_overflow_associations": n_overflow,
             "se_dtype": encoding.se.dtype,
-            "chunk_shape": list(chunk_shape),
-            "compressor": DEFAULT_COMPRESSOR,
+            **dense_layout_records((n_panel, n_analyses), hint=chunk_shape),
         },
     }
     if eaf_provenance is not None:

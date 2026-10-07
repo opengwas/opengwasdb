@@ -87,7 +87,7 @@ def _dense_completed_fixture(tmp_path: Path) -> tuple[Path, np.ndarray, np.ndarr
     complete_dense_store(
         source, completed, panel_path, ancestry="EUR", min_cor=0.0, release_id="comp"
     )
-    root = zarr.open_group(str(completed / "data.zarr"), mode="r+", zarr_format=2)
+    root = zarr.open_group(str(completed / "data.zarr"), mode="r+", zarr_format=3)
     n_variants = int(root["eaf_reference"].shape[0])
     observed = np.linspace(0.05, 0.95, n_variants, dtype=np.float32)
     panel = np.clip(observed + _PANEL_SHIFT, 0.02, 0.98).astype(np.float32)
@@ -206,7 +206,7 @@ def dense_completed_imputed_hit(
     """
     store, observed, panel = _dense_completed_fixture(tmp_path_factory.mktemp("eaf_reads_hit"))
     encoding = StoreManifest.load(store).encoding
-    root = zarr.open_group(str(store / "data.zarr"), mode="r+", zarr_format=2)
+    root = zarr.open_group(str(store / "data.zarr"), mode="r+", zarr_format=3)
     imputed = np.asarray(root["imputed"][:], dtype=bool)
     rows, cols = np.where(imputed)
     assert len(rows) > 0, "the fixture must have an imputed cell to promote"

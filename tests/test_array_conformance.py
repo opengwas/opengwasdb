@@ -12,9 +12,11 @@ Every array in every ``data.zarr`` must:
 
 * map to a known :class:`ArrayRole` -- an array the test cannot name a role for
   fails, so a new array cannot ship without one;
-* carry the seam's chunk layout for that role and shape (the role policy, with
-  the component plane's chunk supplied for ``PER_VARIANT``);
-* carry the compressor the base format writes: the seam's codec everywhere, and
+* carry the seam's inner chunk for that role and shape (the role policy, with
+  the component plane's chunk supplied for ``PER_VARIANT``) **and the seam's
+  shard**, because every 0.2.0 array is Zarr v3 with the sharding codec (ADR
+  0057);
+* carry the compressor the format writes: the seam's v3 codec everywhere, and
   ``None`` for the Z/EAF exact/overflow tables, which are deliberately written
   uncompressed (the SE exception tables use the seam's codec);
 * be filterless;
@@ -48,8 +50,9 @@ from opengwasdb.store.arrays import (
     ArrayRole,
     chunk_layout,
     component_variant_chunk,
-    compressor,
     open_group,
+    shard_layout,
+    sharded_compressor,
 )
 
 #: Array names that make up a Zarr group's exact/overflow side tables.
@@ -70,12 +73,12 @@ _EXCEPTION_TABLE_NAMES = _UNCOMPRESSED_TABLE_NAMES | frozenset(
 #: missing marker (spec §15) rather than the dtype default.
 _DENSE_GRID_NAMES = frozenset({"z", "se", "eaf"})
 
-#: The Store format every build writes until #247 moves the builders to Zarr v3
-#: (ADR 0041): Zarr v2 groups and arrays, under a manifest declaring 0.1.0. These
-#: are spelled out rather than imported, so a build that changes either fails here
-#: even if the constant it reads changed with it (#244 review, finding 2).
-_STORE_ZARR_FORMAT = 2
-_STORE_FORMAT_VERSION = "0.1.0"
+#: The Store format every build writes since #247: Zarr v3 groups and arrays,
+#: every array sharded, under a manifest declaring 0.2.0. These are spelled out
+#: rather than imported, so a build that changes either fails here even if the
+#: constant it reads changed with it (#244 review, finding 2).
+_STORE_ZARR_FORMAT = 3
+_STORE_FORMAT_VERSION = "0.2.0"
 
 
 @dataclass(frozen=True)
@@ -353,6 +356,19 @@ def _role_for(path: str, group: Any) -> ArrayRole:
         return ArrayRole.TOP_HIT_INDEX
     if "rho" in parts:
         return ArrayRole.RHO_ARRAY
+    if "ragged" in parts:
+        # A Ragged CSR component's shared names take #248's Ragged roles, whose
+        # shards are sized independently of the Dense ones (ADR 0059).
+        if name == "offsets":
+            return ArrayRole.ASSOCIATION_OFFSETS
+        if name in {"variant_index", "z", "se", "eaf", "imputed"}:
+            return ArrayRole.ASSOCIATION_SEQUENCE
+        if name in _EXCEPTION_TABLE_NAMES:
+            return ArrayRole.RAGGED_EXCEPTION_TABLE
+        if name in {"eaf_baseline", "eaf_reference"}:
+            return ArrayRole.RAGGED_PER_VARIANT
+        if name == "se_coefficients":
+            return ArrayRole.SE_COEFFICIENTS
     if "offsets" in group:  # a Ragged CSR component
         if name == "offsets":
             return ArrayRole.ASSOCIATION_OFFSETS
@@ -373,15 +389,22 @@ def _role_for(path: str, group: Any) -> ArrayRole:
     raise AssertionError(f"no ArrayRole is known for array {path!r}")
 
 
-def _expected_compressor(name: str, seam: dict[str, Any]) -> Any:
-    """The compressor the base format writes for an array of this name.
+def _blosc_triple(codec: Any) -> tuple[str, int, str]:
+    """A Blosc codec's configuration as the triple the Store format fixes."""
+    return (str(codec.cname), int(codec.clevel), str(codec.shuffle))
+
+
+def _expected_compressor(name: str) -> tuple[str, int, str] | None:
+    """The compressor the format writes for an array of this name, or `None`.
 
     The Z and EAF exact/overflow tables are written uncompressed; the SE
-    exception tables and every other array carry the seam's codec.
+    exception tables and every other array carry the seam's codec.  A 0.2.0
+    array's compressor is the v3 `BloscCodec`, so the check is the Blosc
+    configuration triple rather than a dict (`BloscCodec` has no `get_config`).
     """
     if name in _UNCOMPRESSED_TABLE_NAMES:
         return None
-    return seam
+    return _blosc_triple(sharded_compressor())
 
 
 def _dense_missing_marker(name: str, encoding: Any) -> Any:
@@ -403,8 +426,7 @@ def _fills_equal(actual: Any, expected: Any) -> bool:
 
 
 def test_every_built_array_matches_the_seam_policy(conformance_stores: list[_BuiltStore]) -> None:
-    """Every array a builder wrote obeys the seam: role, layout, compressor, fill."""
-    seam = compressor().get_config()
+    """Every array a builder wrote obeys the seam: role, chunk, shard, codec, fill."""
     checked = 0
     for built, data_zarr in _data_zarr_roots(conformance_stores):
         encoding = StoreManifest.load(data_zarr.parent).encoding
@@ -412,20 +434,33 @@ def test_every_built_array_matches_the_seam_policy(conformance_stores: list[_Bui
         for path, array, group in _iter_arrays(root):
             where = f"{built.label}:{path}"
             role = _role_for(path, group)
+            shape = tuple(int(size) for size in array.shape)
             expected_chunks = chunk_layout(
                 role,
-                tuple(int(size) for size in array.shape),
+                shape,
                 component_chunk=component_variant_chunk(group),
             )
             assert tuple(int(size) for size in array.chunks) == expected_chunks, (
                 f"{where}: {role} chunks {tuple(array.chunks)} != seam layout {expected_chunks}"
             )
+            # Every 0.2.0 array is sharded, and the shard is the seam's policy
+            # (ADR 0058) -- not a value a builder chose for itself.
+            assert array.shards is not None, f"{where}: {role} is not sharded"
+            expected_shard = shard_layout(
+                role,
+                shape,
+                inner_chunk=expected_chunks,
+                component_chunk=component_variant_chunk(group),
+            )
+            assert tuple(int(size) for size in array.shards) == expected_shard, (
+                f"{where}: {role} shards {tuple(array.shards)} != seam shard {expected_shard}"
+            )
             # zarr 3 spells the v2 "single compressor" as a tuple and always
             # returns a tuple of filters; the assertions below keep rejecting a
             # second codec or any filter.
             codecs = tuple(array.compressors or ())
-            actual_compressor = codecs[0].get_config() if len(codecs) == 1 else None
-            expected_compressor = _expected_compressor(path.rsplit("/", 1)[-1], seam)
+            actual_compressor = _blosc_triple(codecs[0]) if len(codecs) == 1 else None
+            expected_compressor = _expected_compressor(path.rsplit("/", 1)[-1])
             assert len(codecs) <= 1, f"{where}: {role} has {len(codecs)} compressors"
             assert actual_compressor == expected_compressor, (
                 f"{where}: {role} compressor {actual_compressor} != {expected_compressor}"
@@ -449,46 +484,48 @@ def test_every_built_array_matches_the_seam_policy(conformance_stores: list[_Bui
     assert np is not None
 
 
-def test_every_built_root_is_zarr_v2_under_a_0_1_0_manifest(
+def test_every_built_root_is_zarr_v3_sharded_under_a_0_2_0_manifest(
     conformance_stores: list[_BuiltStore],
 ) -> None:
-    """The Store format #244 must not change: v2 metadata only, format_version 0.1.0.
+    """Every build writes 0.2.0: v3 metadata only, no v2 file anywhere.
 
-    zarr-python 3 creates a Zarr v3 group whenever an open does not pin the
-    format, and nothing else in a build would notice. This reads the files the
-    builders wrote, not what zarr reports, so it holds whatever the seam does.
+    zarr-python 3 still creates a *v2* group when an open pins format 2, and
+    nothing else in a build would notice. This reads the files the builders
+    wrote, not what zarr reports, so it holds whatever the seam does. The
+    per-array sharding rule is asserted by
+    `test_every_built_array_matches_the_seam_policy`.
     """
-    roots = metadata_files = 0
+    roots = nodes = 0
     for built, data_zarr in _data_zarr_roots(conformance_stores):
         where = f"{built.label}:{data_zarr.relative_to(built.path)}"
         manifest = json.loads((data_zarr.parent / "manifest.json").read_text())
         assert manifest["format_version"] == _STORE_FORMAT_VERSION, (
             f"{where}: manifest declares {manifest['format_version']!r}"
         )
-        v3 = sorted(data_zarr.rglob("zarr.json"))
-        assert not v3, f"{where}: Zarr v3 metadata {v3[:3]}"
-        assert (data_zarr / ".zgroup").is_file(), f"{where}: no v2 .zgroup at the root"
-        for meta in sorted([*data_zarr.rglob(".zgroup"), *data_zarr.rglob(".zarray")]):
+        v2 = sorted([*data_zarr.rglob(".zgroup"), *data_zarr.rglob(".zarray")])
+        assert not v2, f"{where}: Zarr v2 metadata {v2[:3]}"
+        assert (data_zarr / "zarr.json").is_file(), f"{where}: no v3 zarr.json at the root"
+        for meta in sorted(data_zarr.rglob("zarr.json")):
             declared = json.loads(meta.read_text())["zarr_format"]
             assert declared == _STORE_ZARR_FORMAT, f"{where}: {meta.name} declares {declared}"
-            metadata_files += 1
+            nodes += 1
         roots += 1
     # Twelve stores; the completed and Hybrid ones hold more than one root each.
     assert roots >= 14, f"only {roots} data.zarr roots; the fixture set is wrong"
-    assert metadata_files > 100, f"only {metadata_files} metadata files checked"
+    assert nodes > 100, f"only {nodes} zarr.json nodes checked"
 
 
-def _chunk_keys(meta: dict[str, Any]) -> Iterator[tuple[str, tuple[slice, ...]]]:
-    """Every chunk of a v2 array: its file name and the region it covers."""
-    shape, chunks = meta["shape"], meta["chunks"]
-    separator = meta.get("dimension_separator") or "."
-    grid = [range(math.ceil(size / chunk)) for size, chunk in zip(shape, chunks, strict=True)]
+def _shard_keys(
+    shape: tuple[int, ...], shards: tuple[int, ...]
+) -> Iterator[tuple[str, tuple[slice, ...]]]:
+    """Every shard of a v3 array: its path suffix and the region it covers."""
+    grid = [range(math.ceil(size / shard)) for size, shard in zip(shape, shards, strict=True)]
     for index in itertools.product(*grid):
         region = tuple(
-            slice(i * chunk, min((i + 1) * chunk, size))
-            for i, chunk, size in zip(index, chunks, shape, strict=True)
+            slice(i * shard, min((i + 1) * shard, size))
+            for i, shard, size in zip(index, shards, shape, strict=True)
         )
-        yield (separator.join(str(i) for i in index) or "0"), region
+        yield "/".join(str(i) for i in index) or "0", region
 
 
 def _is_all_fill(block: np.ndarray, fill: Any) -> bool:
@@ -497,25 +534,28 @@ def _is_all_fill(block: np.ndarray, fill: Any) -> bool:
     return bool((block == fill).all())
 
 
-def test_every_chunk_of_every_built_array_is_a_file(
+def test_every_shard_of_every_built_array_is_a_file(
     conformance_stores: list[_BuiltStore],
 ) -> None:
-    """A chunk that is entirely the fill value is written, as zarr 2.18 wrote it.
+    """A shard holding only fill value is written, as zarr 2.18 wrote empty chunks.
 
-    zarr 3 drops such a chunk unless ``array.write_empty_chunks`` is on. The
+    zarr 3 drops such a shard unless ``array.write_empty_chunks`` is on. The
     values read back the same either way, but the file set of a release changes.
-    This rule fails loudly on that change.
+    This rule fails loudly on that change, on the shard -- the unit 0.2.0 stores
+    as a file (ADR 0057).
     """
-    chunk_files = all_fill = 0
+    shard_files = all_fill = 0
     for built, data_zarr in _data_zarr_roots(conformance_stores):
-        for meta_path in sorted(data_zarr.rglob(".zarray")):
-            meta = json.loads(meta_path.read_text())
-            array = open_group(meta_path.parent.parent)[meta_path.parent.name]
-            for key, region in _chunk_keys(meta):
-                where = f"{built.label}:{meta_path.parent.relative_to(built.path)}/{key}"
-                assert (meta_path.parent / key).is_file(), f"{where}: chunk file missing"
-                chunk_files += 1
+        root = open_group(data_zarr)
+        for path, array, _group in _iter_arrays(root):
+            shape = tuple(int(size) for size in array.shape)
+            shards = tuple(int(size) for size in array.shards)
+            for key, region in _shard_keys(shape, shards):
+                shard_path = data_zarr / path.strip("/") / "c" / key
+                where = f"{built.label}:{path}/{key}"
+                assert shard_path.is_file(), f"{where}: shard file missing"
+                shard_files += 1
                 all_fill += _is_all_fill(np.asarray(array[region]), array.fill_value)
-    # Meaningful only if the fixtures write all-fill chunks for the rule to keep.
-    assert chunk_files > 300, f"only {chunk_files} chunk files checked"
+    # Meaningful only if the fixtures write all-fill shards for the rule to keep.
+    assert shard_files > 300, f"only {shard_files} shard files checked"
     assert all_fill > 0, "no all-fill chunk in any fixture; dropping them could not fail here"

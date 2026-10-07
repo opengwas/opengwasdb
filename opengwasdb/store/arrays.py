@@ -49,7 +49,8 @@ from __future__ import annotations
 import importlib
 import json
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -184,7 +185,10 @@ __all__ = [
     "RAGGED_SIDE_SHARD_ELEMENTS",
     "RHO_CHUNK_ROWS",
     "SE_COEFFICIENTS_ROWS",
+    "PartialShardWriteError",
     "SHARDED_COMPRESSOR_RECORD",
+    "SHARDED_STORE_ZARR_FORMAT",
+    "STORE_ZARR_FORMAT",
     "TOP_HIT_CHUNK_SIZE",
     "ArrayRole",
     "array_length",
@@ -202,9 +206,12 @@ __all__ = [
     "open_group_for_write",
     "per_variant_chunk_size",
     "require_group",
+    "require_whole_shard_write",
+    "require_whole_shard_writes",
     "role_for_array_path",
     "shard_layout",
     "sharded_compressor",
+    "write_shard_cells",
 ]
 
 # ── compressor ───────────────────────────────────────────────────────────────
@@ -309,11 +316,13 @@ SE_COEFFICIENTS_ROWS = 1024
 #: Row count of a Rho Matrix array.
 RHO_CHUNK_ROWS = 1_000_000
 
-#: The maximum chunk hint a Dense grid uses when a caller has none.  This is
-#: `DEFAULT_CHUNK_SHAPE` in the Dense constants module, and the one definition:
-#: the Dense module imports *this* name, so the converter and the Dense builders
-#: cannot disagree about the default grid layout.
-DENSE_CHUNK_SHAPE = (1000, 1000)
+#: The default inner chunk of a Dense grid: 1,000 variant rows and 64 Analyses.
+#: This is `DEFAULT_CHUNK_SHAPE` in the Dense constants module, and the one
+#: definition: the Dense module imports *this* name, so the converter and the
+#: Dense builders cannot disagree about the default grid layout.  The Analysis
+#: axis narrowed from 1,000 to 64 in format 0.2.0, decided by #246 and recorded
+#: in ADR 0058; the 1,000-row variant axis is unchanged.
+DENSE_CHUNK_SHAPE = (1000, 64)
 
 #: One flat array of a top-hit threshold tier, when a caller supplies no
 #: override.  `layouts/dense/top_hits.TOP_HIT_CHUNK_SIZE` is this value.
@@ -571,12 +580,12 @@ def chunk_layout(
 # message rather than a bare zarr error naming only the sizes.
 
 #: The default shard for a Dense statistic grid, in (variant rows, Analyses)
-#: units.  Both are *parameters* of the conversion (#246 benchmarks and decides
-#: them); this is the proposed default.  The Analysis axis must be bounded: the
-#: Dense VCF builder writes `[all variants x band]` column bands, so a shard
-#: spanning every Analysis would never be written whole (#240, ADR 0057).
-#: `100000 x 1024` int16 is 205 MB uncompressed, the largest unit a conversion
-#: worker holds.
+#: units.  Decided by #246 and recorded in ADR 0058; the converter still takes
+#: it as a parameter and this is the value its default and the builders both
+#: use.  The Analysis axis must be bounded: the Dense VCF builder writes
+#: `[all variants x band]` column bands, so a shard spanning every Analysis
+#: would never be written whole (#240, ADR 0057).  `100000 x 1024` int16 is
+#: 205 MB uncompressed, the largest unit a conversion worker holds.
 DENSE_SHARD_SHAPE = (100_000, 1_024)
 
 #: One shard of a per-variant or flat index array, in *elements*: rounded down
@@ -675,6 +684,51 @@ def _clip_shard_to_multiple(requested: int, inner: int, dim: int) -> int:
     return chunks * inner
 
 
+def _divisors(value: int) -> list[int]:
+    """Every divisor of `value`, ascending."""
+    return [d for d in range(1, value + 1) if value % d == 0]
+
+
+def _allowed_inner_chunks(wanted: int) -> str:
+    """The inner chunks that tile a decided shard axis, for an error message."""
+    divisors = _divisors(wanted)
+    if len(divisors) <= 12:
+        return ", ".join(str(d) for d in divisors)
+    return f"any divisor of {wanted}"
+
+
+def _require_dense_shard_multiple(
+    request: tuple[int, int], inner_chunk: tuple[int, ...], shape: tuple[int, ...]
+) -> None:
+    """Refuse a Dense inner chunk that does not tile the decided shard.
+
+    A build does not choose its shard: the Dense planes are stored as the decided
+    `DENSE_SHARD_SHAPE`, clipped only when the array itself is smaller than the
+    shard (ADR 0058).  An inner chunk that does not tile the shard axis would
+    silently produce a **different** shard — e.g. `[100000, 1024]` rounded down
+    to `[100000, 1000]` for a 1,000-Analysis inner chunk — which is the layout
+    divergence #249 exists to catch but a reader cannot see.  Such an inner chunk
+    is refused here, naming the values that tile the axis.
+
+    An axis whose array is shorter than the requested shard is the one allowed
+    exception: the shard is the array's own extent (one whole-array shard), so
+    the inner chunk's divisibility is moot and the shard clips to cover the
+    array.  This applies to the *default* shard and to an explicit one alike.
+    """
+    for axis, (wanted, inner, dim) in enumerate(zip(request, inner_chunk, shape, strict=True)):
+        wanted = int(wanted)
+        if dim < wanted:
+            continue
+        if wanted % inner:
+            axis_name = "variant" if axis == 0 else "Analysis"
+            raise ValueError(
+                f"the Dense {axis_name}-axis inner chunk {inner} does not tile the "
+                f"decided shard axis {wanted} (shard {tuple(int(size) for size in request)!r}); "
+                "a build writes the format's shard, not one it chose. Allowed "
+                f"{axis_name}-axis inner chunks: {_allowed_inner_chunks(wanted)}"
+            )
+
+
 def _shard_dense_grid(ctx: _ShardContext) -> tuple[int, ...]:
     """A Dense plane's `(V_s, A_s)` shard, from the conversion parameters."""
     request = DENSE_SHARD_SHAPE if ctx.dense_shard is None else ctx.dense_shard
@@ -683,13 +737,9 @@ def _shard_dense_grid(ctx: _ShardContext) -> tuple[int, ...]:
             f"dense shard {tuple(request)!r} does not match the {len(ctx.inner_chunk)}-D "
             f"inner chunk {ctx.inner_chunk!r}"
         )
-    for wanted, inner in zip(request, ctx.inner_chunk, strict=True):
-        if int(wanted) % inner:
-            raise ValueError(
-                f"dense shard {tuple(int(size) for size in request)!r} is not a whole "
-                f"multiple of the inner chunk {ctx.inner_chunk!r} ({wanted} is not a "
-                f"multiple of {inner})"
-            )
+    _require_dense_shard_multiple(
+        (int(request[0]), int(request[1])), ctx.inner_chunk, ctx.shape
+    )
     return tuple(
         _clip_shard_to_multiple(int(wanted), inner, dim)
         for wanted, inner, dim in zip(request, ctx.inner_chunk, ctx.shape, strict=True)
@@ -842,6 +892,308 @@ def shard_layout(
     )
     _require_shard_multiple(role, resolved, shard)
     return shard
+
+
+# ── whole-shard writes ───────────────────────────────────────────────────────
+#
+# A write that covers part of a shard turns into a read-modify-write of the
+# whole shard: correct, but it loses the throughput the shard exists for.  The
+# Dense band writer and the row-block writers therefore work in whole shards,
+# and this guard is what makes a later writer that stops doing so fail loudly
+# instead of quietly getting slower.  It is off on the production path: the
+# check runs only when `require_whole_shard_writes()` has been entered, or when
+# the environment variable below is set (a real-data build opts in to prove its
+# writes are aligned).
+
+#: Set to ``1`` to check every Store write for whole-shard coverage.  Unset in
+#: production, where the guard costs an environment lookup at import and
+#: nothing per write.
+_ENFORCE_WHOLE_SHARD_WRITES_ENV = "OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES"
+
+
+class PartialShardWriteError(RuntimeError):
+    """A write covers part of a shard; the shard would become a read-modify-write."""
+
+
+def _axis_covers_whole_shard(selection: Any, shard: int, dim: int) -> bool:
+    """Whether one axis' selection starts and ends on a shard boundary.
+
+    An integer index selects a single position and never covers a shard.  A
+    slice counts as aligned when it starts at a multiple of the shard and reaches
+    either the next shard boundary or the end of the array: the final shard of
+    an array need not be full, and a write that reaches the array's end covers
+    it whole.
+    """
+    if isinstance(selection, slice):
+        start, stop, step = selection.indices(dim)
+        if step != 1:
+            return False
+        return start % shard == 0 and (stop == dim or stop % shard == 0)
+    return False
+
+
+def _normalise_selection(shape: tuple[int, ...], selection: Any) -> tuple[Any, ...]:
+    """`selection` as one entry per axis, with `Ellipsis` and padding expanded."""
+    if selection is Ellipsis:
+        return (slice(None),) * len(shape)
+    if not isinstance(selection, tuple):
+        selection = (selection,)
+    axes: list[Any] = []
+    remaining = list(shape)
+    seen_ellipsis = False
+    for entry in selection:
+        if entry is Ellipsis:
+            if seen_ellipsis:
+                return ()
+            seen_ellipsis = True
+            fill = len(shape) - (len(selection) - 1)
+            axes.extend([slice(None)] * max(fill, 0))
+            remaining = remaining[fill:]
+        else:
+            axes.append(entry)
+            if remaining:
+                remaining.pop(0)
+    axes.extend([slice(None)] * len(remaining))
+    return tuple(axes)
+
+
+def require_whole_shard_write(array: Any, selection: Any) -> None:
+    """Fail loudly unless `selection` covers whole shards of a Dense grid.
+
+    Applied to the two-dimensional sharded arrays -- the Dense statistic planes,
+    the imputed mask and the SE coefficient table -- where a partial write is a
+    read-modify-write of a shard that can be hundreds of megabytes.  The 1-D
+    arrays whose shard policy is "one shard holds the whole array" (the
+    exception tables) and the element-capped Ragged/Overflow arrays are written
+    incrementally by design and are not judged here.
+    """
+    shards = getattr(array, "shards", None)
+    if shards is None or len(array.shape) != 2:
+        return
+    axes = _normalise_selection(tuple(int(size) for size in array.shape), selection)
+    if not axes:
+        return
+    for axis, (index_selection, shard, dim) in enumerate(
+        zip(axes, (int(size) for size in shards), array.shape, strict=False)
+    ):
+        if not _axis_covers_whole_shard(index_selection, shard, int(dim)):
+            raise PartialShardWriteError(
+                f"array {getattr(array, 'path', '?')!r}: a write selecting {selection!r} "
+                f"does not cover whole shards (axis {axis}: {index_selection!r} against "
+                f"shard {shard} over {dim} rows). A partial shard write is a "
+                "read-modify-write of the shard; write whole shards (issue #247)"
+            )
+
+
+def write_shard_cells(array: Any, rows: Any, cols: Any, values: Any) -> None:
+    """Write `values` into `array[rows, cols]` with one whole-shard write each.
+
+    Patching individual cells of a 2-D Dense plane through `vindex`/`oindex` is a
+    read-modify-write of every shard they touch, and it is invisible to the
+    whole-shard guard (`require_whole_shard_write`).  The cells are grouped by
+    the shard they fall in; each touched shard's band is read once, patched in
+    memory and written back whole.  A 1-D or unsharded array falls back to the
+    direct write, which is what the element-capped and whole-array policies
+    expect.
+    """
+    rows = np.asarray(rows, dtype=np.int64)
+    cols = np.asarray(cols, dtype=np.int64)
+    values = np.asarray(values)
+    if rows.size == 0:
+        return
+    shards = getattr(array, "shards", None)
+    if shards is None or len(array.shape) != 2:
+        array[rows, cols] = values
+        return
+    shard_rows = max(int(shards[0]), 1)
+    shard_cols = max(int(shards[1]), 1)
+    n_col_shards = -(-int(array.shape[1]) // shard_cols)
+    keys = (rows // shard_rows) * n_col_shards + (cols // shard_cols)
+    for key in np.unique(keys):
+        mask = keys == key
+        shard_row_idx = rows[mask]
+        shard_col_idx = cols[mask]
+        r0 = int(shard_row_idx[0]) // shard_rows * shard_rows
+        c0 = int(shard_col_idx[0]) // shard_cols * shard_cols
+        r1 = min(r0 + shard_rows, int(array.shape[0]))
+        c1 = min(c0 + shard_cols, int(array.shape[1]))
+        band = np.asarray(array[r0:r1, c0:c1])
+        band[shard_row_idx - r0, shard_col_idx - c0] = values[mask]
+        array[r0:r1, c0:c1] = band
+
+
+def _block_selection_to_elements(array: Any, selection: Any) -> tuple[Any, ...]:
+    """A `set_block_selection` selection, as the element selection it covers.
+
+    `array.blocks` indexes the **outer block grid**: on a v3 sharded array that
+    is the shard shape (`array.shards`, the metadata chunk grid), not the
+    sharding codec's inner chunk (`array.chunks`).  Every block is therefore a
+    whole shard, so any block selection -- a stepped one included -- covers whole
+    shards; the returned selection spans the outer blocks it addresses.  (For an
+    unsharded array the block grid is the chunk grid, but the whole-shard rule
+    does not apply there.)
+    """
+    block_shape = array.shards if getattr(array, "shards", None) is not None else array.chunks
+    shape = tuple(int(size) for size in array.shape)
+    blocks = tuple(int(size) for size in block_shape)
+    axes: list[Any] = []
+    for entry, block, dim in zip(
+        _normalise_selection(shape, selection), blocks, shape, strict=True
+    ):
+        n_blocks = max(1, -(-dim // block))
+        if isinstance(entry, slice):
+            start, stop, _step = entry.indices(n_blocks)
+            # The selected blocks are all whole shards, so the covering
+            # contiguous range is whole-shard aligned even when the block
+            # selection is stepped (the gaps are not written, but they are not
+            # partial shards either).
+            axes.append(slice(start * block, min(stop * block, dim)))
+        else:
+            index = int(entry)
+            if index < 0:
+                index += n_blocks
+            axes.append(slice(index * block, min((index + 1) * block, dim)))
+    return tuple(axes)
+
+
+_ORIGINAL_SETITEM = zarr.Array.__setitem__
+_ORIGINAL_SET_BASIC = zarr.Array.set_basic_selection
+_ORIGINAL_SET_ORTHOGONAL = zarr.Array.set_orthogonal_selection
+_ORIGINAL_SET_MASK = zarr.Array.set_mask_selection
+_ORIGINAL_SET_COORDINATE = zarr.Array.set_coordinate_selection
+_ORIGINAL_SET_BLOCK = zarr.Array.set_block_selection
+_ORIGINAL_ASYNC_SETITEM = zarr.AsyncArray.setitem
+_SHARD_WRITE_GUARD_INSTALLED = False
+
+
+def _guarded_setitem(self: Any, selection: Any, value: Any) -> None:
+    require_whole_shard_write(self, selection)
+    _ORIGINAL_SETITEM(self, selection, value)
+
+
+def _guarded_set_basic_selection(
+    self: Any, selection: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    require_whole_shard_write(self, selection)
+    _ORIGINAL_SET_BASIC(self, selection, value, *args, **kwargs)
+
+
+def _guarded_set_orthogonal_selection(
+    self: Any, selection: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    # An orthogonal selection is a tuple of integer arrays: it names individual
+    # cells, never a whole shard, so it is a partial write by construction.
+    require_whole_shard_write(self, selection)
+    _ORIGINAL_SET_ORTHOGONAL(self, selection, value, *args, **kwargs)
+
+
+def _guarded_set_mask_selection(
+    self: Any, mask: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    require_whole_shard_write(self, mask)
+    _ORIGINAL_SET_MASK(self, mask, value, *args, **kwargs)
+
+
+def _guarded_set_coordinate_selection(
+    self: Any, selection: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    require_whole_shard_write(self, selection)
+    _ORIGINAL_SET_COORDINATE(self, selection, value, *args, **kwargs)
+
+
+def _guarded_set_block_selection(
+    self: Any, selection: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    # `array.blocks` addresses whole outer blocks, i.e. whole shards on a sharded
+    # array, so this is aligned by construction; the translation also makes a
+    # changed block-grid definition fail the check rather than pass silently.
+    require_whole_shard_write(self, _block_selection_to_elements(self, selection))
+    _ORIGINAL_SET_BLOCK(self, selection, value, *args, **kwargs)
+
+
+async def _guarded_async_setitem(
+    self: Any, selection: Any, value: Any, *args: Any, **kwargs: Any
+) -> None:
+    require_whole_shard_write(self, selection)
+    await _ORIGINAL_ASYNC_SETITEM(self, selection, value, *args, **kwargs)
+
+
+def _install_shard_write_guard() -> None:
+    global _SHARD_WRITE_GUARD_INSTALLED
+    # Every public Zarr method that writes a *selection of cells*, which is what
+    # a partial shard write is:
+    #
+    # * sync: `__setitem__`, the five `set_*_selection` methods, and
+    #   `set_block_selection` (what `array.blocks[...] = ...` calls).  `oindex`
+    #   and `vindex` delegate to `set_orthogonal_selection` /
+    #   `set_coordinate_selection` / `set_mask_selection`.
+    # * async: `AsyncArray.setitem` (the async `oindex`/`vindex` are read-only).
+    #
+    # `resize` changes the array's shape (a metadata and chunk-delete operation,
+    # not a region write), and attribute writes are metadata, so neither is a
+    # cell write and neither is judged here.
+    type.__setattr__(zarr.Array, "__setitem__", _guarded_setitem)
+    type.__setattr__(zarr.Array, "set_basic_selection", _guarded_set_basic_selection)
+    type.__setattr__(
+        zarr.Array, "set_orthogonal_selection", _guarded_set_orthogonal_selection
+    )
+    type.__setattr__(zarr.Array, "set_mask_selection", _guarded_set_mask_selection)
+    type.__setattr__(
+        zarr.Array, "set_coordinate_selection", _guarded_set_coordinate_selection
+    )
+    type.__setattr__(zarr.Array, "set_block_selection", _guarded_set_block_selection)
+    type.__setattr__(zarr.AsyncArray, "setitem", _guarded_async_setitem)
+    _SHARD_WRITE_GUARD_INSTALLED = True
+
+
+def _uninstall_shard_write_guard() -> None:
+    global _SHARD_WRITE_GUARD_INSTALLED
+    type.__setattr__(zarr.Array, "__setitem__", _ORIGINAL_SETITEM)
+    type.__setattr__(zarr.Array, "set_basic_selection", _ORIGINAL_SET_BASIC)
+    type.__setattr__(
+        zarr.Array, "set_orthogonal_selection", _ORIGINAL_SET_ORTHOGONAL
+    )
+    type.__setattr__(zarr.Array, "set_mask_selection", _ORIGINAL_SET_MASK)
+    type.__setattr__(
+        zarr.Array, "set_coordinate_selection", _ORIGINAL_SET_COORDINATE
+    )
+    type.__setattr__(zarr.Array, "set_block_selection", _ORIGINAL_SET_BLOCK)
+    type.__setattr__(zarr.AsyncArray, "setitem", _ORIGINAL_ASYNC_SETITEM)
+    _SHARD_WRITE_GUARD_INSTALLED = False
+
+
+@contextmanager
+def require_whole_shard_writes() -> Iterator[None]:
+    """Check every Store array write for whole-shard coverage (test-time hook).
+
+    Installed by a test that builds a store or exercises a writer; production
+    never enters it unless ``OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES=1`` is set,
+    which the real-data pilot does, so a genuine multi-shard build proves its
+    writers are aligned rather than asserting it.
+
+    Covered: every public Zarr method that writes a **selection of cells** --
+    sync ``__setitem__``, ``set_basic_selection``, ``set_orthogonal_selection``,
+    ``set_mask_selection``, ``set_coordinate_selection`` and
+    ``set_block_selection`` (which ``array.blocks[...] = ...`` calls), and async
+    ``AsyncArray.setitem``.  ``oindex``/``vindex`` delegate to the orthogonal /
+    coordinate / mask setters, and the async ``oindex``/``vindex`` are read-only.
+    \"Selection\" is the test: ``resize`` changes shape (a metadata and
+    chunk-delete operation, not a region write) and attribute writes are
+    metadata, so neither is a partial shard write and neither is judged here.
+    """
+    global _SHARD_WRITE_GUARD_INSTALLED
+    if _SHARD_WRITE_GUARD_INSTALLED:
+        yield
+        return
+    _install_shard_write_guard()
+    try:
+        yield
+    finally:
+        _uninstall_shard_write_guard()
+
+
+if os.environ.get(_ENFORCE_WHOLE_SHARD_WRITES_ENV) == "1":
+    _install_shard_write_guard()
 
 
 #: The Dense roles, by array path, for a Dense Observed-Only or
@@ -1075,6 +1427,56 @@ def _cast_kwargs(
     return kwargs
 
 
+def _group_zarr_format(group: Any) -> int:
+    """The Zarr on-disk format of the group an array is created under.
+
+    A v3 group needs a sharded array with a v3 codec; a v2 group needs the
+    numcodecs spelling and no shard.  Defaulting to 2 when the metadata cannot
+    be read keeps a synthetic/test group behaving as it did before #247 rather
+    than silently writing v3 metadata.
+    """
+    metadata = getattr(group, "metadata", None)
+    return int(getattr(metadata, "zarr_format", 2))
+
+
+def _v3_compressor(codec: Any) -> Any:
+    """A caller's codec as the v3 spelling a sharded array needs, or `None`.
+
+    The Store format defines **one** compressor configuration, published in the
+    manifest, the `index.sqlite` `dense` blob and the root attrs.  A v3 array
+    refuses a numcodecs codec (``'Blosc' object is not iterable``), so a writer
+    that names the seam's configuration in its numcodecs spelling -- as every
+    Dense builder did under 0.1.0 -- gets the v3 `BloscCodec` for it.  A codec
+    that is *not* the seam's one configuration is refused rather than silently
+    converted, because the published record would then describe bytes that are
+    not stored.  ``None`` means uncompressed and stays `None`.
+    """
+    if codec is None or isinstance(codec, BloscCodec):
+        return codec
+    if isinstance(codec, Blosc):
+        config = codec.get_config()
+        canonical = (
+            str(COMPRESSOR_RECORD["cname"]),
+            int(COMPRESSOR_RECORD["clevel"]),
+            int(_SHUFFLE_CODES[str(COMPRESSOR_RECORD["shuffle"])]),
+        )
+        observed = (
+            str(config.get("cname")),
+            int(config.get("clevel", -1)),
+            int(config.get("shuffle", -1)),
+        )
+        if observed != canonical:
+            raise ValueError(
+                f"a v3 Store array holds the format's one compressor {canonical!r}, but "
+                f"{observed!r} was requested; the manifest publishes the canonical "
+                "record, so storing another would be a false claim"
+            )
+        return sharded_compressor()
+    raise ValueError(
+        f"a v3 Store array holds the seam's BloscCodec or None, not {codec!r} (issue #247)"
+    )
+
+
 def create_array(
     group: Any,
     name: str,
@@ -1102,19 +1504,18 @@ def create_array(
     uncompressed.  `hint` overrides the role's default layout; `component_chunk`
     is the variant-axis chunk of the plane a `PER_VARIANT` array serves, passed
     in rather than sniffed from `group`; `inner_chunk` is an already-resolved
-    inner chunk (the converter's path, #245) and wins over `hint`.  `shards`
-    writes a Zarr v3 sharded array: the outer shard shape, with the inner chunk
-    inside the `sharding_indexed` codec and a v3 codec (e.g.
-    `sharded_compressor()`) as `compressor`.  The shard is checked against the
-    inner chunk here, before zarr sees it.  `overwrite` deletes an existing
-    array of the same name first; a site that expects a fresh name leaves it
-    False, so writing twice fails loudly.
+    inner chunk (the converter's path, #245) and wins over `hint`.
+
+    `_creation_layout` decides the shard and the codec from the group's Zarr
+    format (see its docstring).  `overwrite` deletes an existing array of the
+    same name first; a site that expects a fresh name leaves it False, so
+    writing twice fails loudly.
     """
     shape = _resolve_shape(name, data, shape)
     chunks = _resolve_inner_chunk(name, role, shape, hint, component_chunk, inner_chunk)
-    resolved_shards = None if shards is None else tuple(int(size) for size in shards)
-    if resolved_shards is not None:
-        _require_shard_multiple(role, chunks, resolved_shards)
+    resolved_shards, resolved_compressor = _creation_layout(
+        group, name, role, shape, chunks, component_chunk, shards, compressor
+    )
     if overwrite and name in group:
         del group[name]
     return _create_and_fill(
@@ -1126,13 +1527,53 @@ def create_array(
             data=data,
             dtype=dtype,
             fill_value=fill_value,
-            compressor=compressor,
+            compressor=resolved_compressor,
             filters=filters,
             order=order,
             shards=resolved_shards,
         ),
         data,
     )
+
+
+def _creation_layout(
+    group: Any,
+    name: str,
+    role: ArrayRole,
+    shape: tuple[int, ...],
+    chunks: tuple[int, ...],
+    component_chunk: int | None,
+    shards: tuple[int, ...] | None,
+    compressor: Any,
+) -> tuple[tuple[int, ...] | None, Any]:
+    """The `(shards, codec)` an array is created with, by the group's format.
+
+    **On a v3 group the shard comes from the seam's role policy.**  `shards`
+    overrides it (the converter's path, #245); left unset, every array a builder
+    writes is sharded, because a 0.2.0 release's every array carries the
+    `sharding_indexed` codec (ADR 0057).  The shard is checked against the inner
+    chunk here, before zarr sees it.  A `compressor` naming the seam's numcodecs
+    configuration is translated to its v3 spelling; another codec is refused.
+    On a v2 group `shards` must be unset and the compressor passes through
+    unchanged, so a 0.2.0 writer and a v2 fixture cannot be confused.
+    """
+    if _group_zarr_format(group) == 3:
+        resolved_shards = (
+            shard_layout(role, shape, inner_chunk=chunks, component_chunk=component_chunk)
+            if shards is None
+            else tuple(int(size) for size in shards)
+        )
+        _require_shard_multiple(role, chunks, resolved_shards)
+        resolved_compressor = (
+            sharded_compressor() if compressor is _SEAM_COMPRESSOR else _v3_compressor(compressor)
+        )
+        return resolved_shards, resolved_compressor
+    if shards is not None:
+        raise ValueError(
+            f"array {name!r}: a Zarr v2 array cannot be sharded (issue #247); "
+            "sharding is format 0.2.0's"
+        )
+    return None, _new_compressor() if compressor is _SEAM_COMPRESSOR else compressor
 
 
 def _resolve_inner_chunk(
@@ -1399,23 +1840,26 @@ def _zarr_mode(mode: str) -> ZarrMode:
         allowed = sorted(_ZARR_MODES)
         raise ValueError(f"zarr 3 opens a group in one of {allowed}, not {mode!r}") from None
 
-#: The Zarr on-disk format every *created* array and group is written in until
-#: #247 moves the builders to Zarr v3 (ADR 0041).  Passing it explicitly on
-#: every creation-mode open is the whole point: zarr-python 3's
-#: ``open_group(..., mode="w")`` defaults to ``zarr_format=None``, which
-#: *creates a Zarr v3 group* -- a silent Store format change.  Read-mode opens
-#: pass ``zarr_format=None`` so a converted v3 store (#245) still opens; zarr 3
-#: auto-detects the format from the existing metadata.
-STORE_ZARR_FORMAT: Final = 2
+#: The Zarr on-disk format every *created* array and group is written in.
+#: Format 0.2.0 is Zarr v3 with sharding (ADR 0057, ADR 0058), so as of #247
+#: every builder creates v3: passing the format explicitly on every creation-mode
+#: open is the whole point, because zarr-python 3's ``open_group(..., mode="w")``
+#: defaults to ``zarr_format=None``, which *creates a Zarr v3 group* -- correct
+#: now, but a silent Store format change if the constant ever drifts from
+#: ``CURRENT_FORMAT_VERSION``.  Read-mode opens pass ``zarr_format=None`` so a
+#: 0.1.0 v2 store (which is still readable) opens; zarr 3 auto-detects the format
+#: from the existing metadata.
+STORE_ZARR_FORMAT: Final = 3
 
 #: The Zarr on-disk formats zarr-python 3 can be asked to create, as the
 #: `Literal` it takes.  A lookup rather than a cast, so an unknown value is a
 #: `ValueError` here instead of something zarr refuses obscurely.
 _ZARR_FORMATS: Mapping[int, Literal[2, 3]] = MappingProxyType({2: 2, 3: 3})
 
-#: The Zarr format a 0.2.0 Store Release is written in (issue #245).  The
-#: converters and #247's shard writers pass it; builders leave the default.
-SHARDED_STORE_ZARR_FORMAT: Final = 3
+#: The Zarr format a 0.2.0 Store Release is written in (issue #245).  Kept as a
+#: name for the format 0.2.0 releases carry so a reader of the code can see the
+#: pair; it *is* `STORE_ZARR_FORMAT` now that every builder writes 0.2.0.
+SHARDED_STORE_ZARR_FORMAT: Final = STORE_ZARR_FORMAT
 
 
 def _checked_zarr_format(zarr_format: int | None) -> Literal[2, 3]:

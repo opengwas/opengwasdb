@@ -31,6 +31,7 @@ from opengwasdb.layouts.dense.complete import (
 )
 from opengwasdb.model.analyses import read_analyses, write_analyses
 from opengwasdb.query import query_store
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.validation.validate import validate_store
 from opengwasdb.variants import VariantAxis
@@ -503,7 +504,14 @@ class TestValidation:
         values = root["eaf_reference"][: n - 1]
         dtype = root["eaf_reference"].dtype
         del root["eaf_reference"]
-        root.create_array("eaf_reference", data=np.asarray(values, dtype=dtype), chunks=(1,))
+        create_array(
+            root,
+            "eaf_reference",
+            ArrayRole.PER_VARIANT,
+            data=np.asarray(values, dtype=dtype),
+            compressor=compressor(),
+            inner_chunk=(1,),
+        )
 
         result = validate_store(completed_store)
 

@@ -23,11 +23,11 @@ from typing import Any
 
 import numpy as np
 import pytest
+from legacy_fixtures import relayout_dense_as_0_1_0
 
 from benchmarks import _query_shapes
 from benchmarks.benchmark_store_comparison import assert_identical, result_digests
 from opengwasdb.build.observed import build_dense_observed_from_sources
-from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.query import query_store
 from opengwasdb.store import open as store_open
 from opengwasdb.store.arrays import (
@@ -63,14 +63,26 @@ DENSE_SHARD = (1000, 8)
 
 SOURCE_HEADER = (
     "analysis_id\tphenotype_id\tphenotype_label\tanalysis_label\tchromosome\tposition"
+    "\teffect_allele\tother_allele\tz\tse\trsid\tstored_effect_scale"
+)
+
+SOURCE_HEADER_WITH_EAF = (
+    "analysis_id\tphenotype_id\tphenotype_label\tanalysis_label\tchromosome\tposition"
     "\teffect_allele\tother_allele\tz\tse\teaf\trsid\tstored_effect_scale"
 )
 
 
-def _write_source(path: Path) -> Path:
-    """A Dense Observed-Only source with the geometry the tests need."""
+def _write_source(path: Path, *, with_eaf: bool = True) -> Path:
+    """A Dense Observed-Only source with the geometry the tests need.
+
+    `with_eaf=False` omits the frequency column, which makes every finite-SE
+    cell one with no EAF -- trigger 1 of the SE eligibility gate -- so the
+    builder's SE plan is `float16` (ADR 0037 §3, #229).  The NaN-fill fixture
+    needs that; the plan is otherwise chunk-shape dependent and cannot be
+    assumed.
+    """
     rng = np.random.default_rng(7)
-    lines = [SOURCE_HEADER]
+    lines = [SOURCE_HEADER_WITH_EAF if with_eaf else SOURCE_HEADER]
     for a in range(N_ANALYSES):
         analysis_id = f"a{a + 1:03d}"
         for v in range(N_VARIANTS):
@@ -80,25 +92,22 @@ def _write_source(path: Path) -> Path:
                 z = 5.5 + (a % 3)
             se = 0.05 + 0.001 * (v % 7)
             eaf = 0.05 + 0.9 * ((v * 7 + a) % 100) / 100.0
-            lines.append(
-                "\t".join(
-                    [
-                        analysis_id,
-                        f"p{a + 1:03d}",
-                        f"Trait {a + 1}",
-                        f"Trait {a + 1} primary",
-                        "1",
-                        str(position),
-                        "A",
-                        "G",
-                        f"{z:.6f}",
-                        f"{se:.6f}",
-                        f"{eaf:.6f}",
-                        f"rs{v}",
-                        "sd",
-                    ]
-                )
-            )
+            columns = [
+                analysis_id,
+                f"p{a + 1:03d}",
+                f"Trait {a + 1}",
+                f"Trait {a + 1} primary",
+                "1",
+                str(position),
+                "A",
+                "G",
+                f"{z:.6f}",
+                f"{se:.6f}",
+            ]
+            if with_eaf:
+                columns.append(f"{eaf:.6f}")
+            columns.extend([f"rs{v}", "sd"])
+            lines.append("\t".join(columns))
     source = path / "associations.tsv"
     source.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return source
@@ -106,17 +115,24 @@ def _write_source(path: Path) -> Path:
 
 @pytest.fixture(scope="session")
 def dense_conversion(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
-    """(source, converted) Dense releases, built once for the session."""
+    """(source, converted) Dense releases, built once for the session.
+
+    Since #247 the builders write only 0.2.0, so the 0.1.0 source is produced by
+    relaying the built release out as Zarr v2 (`tests/legacy_fixtures.py`) -- a
+    genuine 0.1.0 store, which is what the converter is defined against.
+    """
     root = tmp_path_factory.mktemp("convert-dense")
     source = _write_source(root)
-    source_store = root / "source.opengwasdb"
+    built = root / "built-0.2.0.opengwasdb"
     build_dense_observed_from_sources(
         [source],
-        source_store,
+        built,
         store_id="fixture-dense",
         release_id="source-v1",
         reference_assembly="GRCh37",
     )
+    source_store = root / "source.opengwasdb"
+    relayout_dense_as_0_1_0(built, source_store)
     converted = root / "converted.opengwasdb"
     convert_release(
         source_store,
@@ -166,20 +182,30 @@ def _assert_meaningful(shape: str, result: dict[str, Any]) -> None:
 
 
 @pytest.fixture(scope="session")
-def nan_fill_source(dense_source: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A copy of the fixture whose `se` is float16 with a **NaN** fill.
+def nan_fill_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A 0.1.0 Dense release whose `se` is float16 with a **NaN** fill.
 
-    `opengwasdb.encoding.se` writes a float16 `se` with `fill_value=nan` on its
-    marginal-saving path; the main fixture's float16 `se` has fill 0.0, so
-    without this the fill comparison would never meet a NaN.  `NaN != NaN`, so
-    an ordinary equality check rejects a faithful conversion of a valid store.
+    `NaN != NaN`, so an ordinary equality check would reject a faithful
+    conversion of a store whose fill is NaN.  The source is built without EAF,
+    which makes the SE plan `float16` deterministically (trigger 1 of the
+    eligibility gate, #229), then re-laid out as 0.1.0 and its `se` rewritten
+    with a NaN fill -- the values unchanged, so the top-hit index stays
+    consistent with the plane.
     """
     root = tmp_path_factory.mktemp("convert-dense-nan")
-    source = Path(shutil.copytree(dense_source, root / "source.opengwasdb"))
-    group = open_group(source / "data.zarr", "r+")
+    source = _write_source(root, with_eaf=False)
+    built = root / "built-0.2.0.opengwasdb"
+    build_dense_observed_from_sources(
+        [source],
+        built,
+        store_id="fixture-dense-nan",
+        release_id="source-v1",
+        reference_assembly="GRCh37",
+    )
+    legacy = relayout_dense_as_0_1_0(built, root / "source.opengwasdb")
+    group = open_group(legacy / "data.zarr", "r+")
     se = group["se"]
-    assert str(se.dtype) == "float16"
-    assert se.fill_value == 0.0, se.fill_value
+    assert str(se.dtype) == "float16", str(se.dtype)
     values = np.asarray(se[:])
     create_array(
         group,
@@ -192,8 +218,9 @@ def nan_fill_source(dense_source: Path, tmp_path_factory: pytest.TempPathFactory
         hint=tuple(int(size) for size in se.chunks),
         overwrite=True,
     )
+    assert str(group["se"].dtype) == "float16"
     assert np.isnan(group["se"].fill_value)
-    return source
+    return legacy
 
 
 # ── the fixture is meaningful before anything is asserted about it ───────────
@@ -739,29 +766,43 @@ def test_the_per_variant_rule_judges_the_inner_chunk_not_the_shard(
 # ── validation: 0.2.0 is readable but not yet writable ───────────────────────
 
 
-def test_completion_refuses_a_0_2_0_source(converted_dense_store: Path, tmp_path: Path):
-    """The intended interim behaviour of #245: 0.2.0 reads, but until #247
-    makes it current, completion -- which writes into the source's arrays and
-    keeps its format -- must refuse it."""
-    with pytest.raises(store_open.UnsupportedFormatVersion, match="reads but cannot write"):
-        complete_dense_store(
-            converted_dense_store,
-            tmp_path / "completed.opengwasdb",
-            ld_dir=tmp_path / "no-such-panel",
-            ancestry="EUR",
-        )
+def test_completion_accepts_a_0_2_0_source(converted_dense_store: Path):
+    """Since #247 the current format is writable, so the guard does not fire.
+
+    Completion preserves its source's format *and* writes into its arrays; that
+    is only honest while this build writes that format, and from #247 it writes
+    0.2.0.  Until #247 the converted release was refused here (ADR 0038 §4);
+    now a 0.1.0 source is the one refused, with the conversion tool named
+    (`tests/test_format_version.py`).
+    """
+    version = store_open.open_store(converted_dense_store).manifest.format_version
+    assert version == "0.2.0"
+    assert store_open.check_writable_format_version(version) == version
 
 
 # ── the seam's shard policy is the one authority ─────────────────────────────
 
 
-def test_shard_layout_refuses_a_shard_that_is_not_a_whole_multiple_of_the_inner_chunk():
-    with pytest.raises(ValueError, match="not a whole multiple"):
+def test_shard_layout_refuses_a_dense_shard_the_inner_chunk_does_not_tile():
+    """`(1500, 8)` is not a whole multiple of the inner chunk `(1000, 4)`.
+
+    The relation is symmetric — the requested shard must be a whole multiple of
+    the inner chunk, and the inner chunk must tile the decided shard — so a
+    caller-supplied shard that is neither is refused, naming the axis.
+    """
+    with pytest.raises(ValueError, match="does not tile the decided shard axis"):
         shard_layout(
             ArrayRole.DENSE_STATISTIC_PLANE,
             (10_000, 200),
             inner_chunk=(1000, 4),
             dense_shard=(1500, 8),
+        )
+    with pytest.raises(ValueError, match="does not tile the decided shard axis"):
+        shard_layout(
+            ArrayRole.DENSE_STATISTIC_PLANE,
+            (200_000, 2_000),
+            inner_chunk=(1000, 1_000),
+            dense_shard=(100_000, 1_024),
         )
 
 

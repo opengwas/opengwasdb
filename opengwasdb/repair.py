@@ -130,8 +130,13 @@ def _replace_with_rechunked(group: Any, name: str, chunk: int) -> None:
     )
     for key, value in source.attrs.items():
         target.attrs[key] = value
-    for start in range(0, array_length(source), chunk):
-        stop = min(start + chunk, array_length(source))
+    # Write whole shards (issue #247): a block that ends inside a shard turns
+    # every write into a read-modify-write of it.  A v2 array has no shard, so
+    # its inner chunk is the whole stored unit and is used as before.
+    shards = getattr(target, "shards", None)
+    block = int(shards[0]) if shards is not None else chunk
+    for start in range(0, array_length(source), block):
+        stop = min(start + block, array_length(source))
         target[start:stop] = np.asarray(source[start:stop])
     move_in_group(group, name, backup)
     try:

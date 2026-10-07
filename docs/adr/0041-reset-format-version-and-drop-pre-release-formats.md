@@ -149,6 +149,12 @@ guard added at that moment is a guard nobody tested before it mattered.
 `0.2.0` release, which is the intended interim behaviour. `CURRENT_FORMAT_VERSION`
 moves to `0.2.0` only when the builders do.
 
+**Amended again by ADR 0057's #247 addendum.** `CURRENT_FORMAT_VERSION` is
+`0.2.0` and every builder writes it, so the guard's live case is now the other
+one: a `0.1.0` source is readable but not writable, and completion refuses it,
+naming `scripts/convert_store_to_0_2_0.py`. The paragraph above describes the
+interim between #245 and #247.
+
 ## Consequences
 
 - **One format, one decoder, one contract to test.** The branch count in the

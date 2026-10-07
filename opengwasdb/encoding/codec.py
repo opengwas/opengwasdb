@@ -201,12 +201,17 @@ class SparseExactTable:
             value=np.asarray(group[cls.value_name][:], dtype=np.float32),
         )
 
-    def write(self, group: Any, *, compressor: Any = None) -> None:
+    def write(self, group: Any, *, compressor: Any = None, role: ArrayRole | None = None) -> None:
         """Write the table beside its plane, replacing any existing one.
 
         Written even when empty, so "this plane is integer-coded" and "this
         plane has a table" are the same statement and validation can check it
         without a special case for the common store that overflows nothing.
+
+        The `role` is explicit for the same reason as `write_eaf_baseline`'s:
+        a Ragged CSR component opened directly at `data.zarr/ragged` reports
+        `path == ""`, so the caller that knows its component names the Ragged
+        role (issue #248, #247 review round 1).  The default is the Dense one.
         """
         for name, data, dtype in (
             (self.index_name, self.index, "int64"),
@@ -215,7 +220,7 @@ class SparseExactTable:
             create_array(
                 group,
                 name,
-                ArrayRole.EXCEPTION_TABLE,
+                role if role is not None else ArrayRole.EXCEPTION_TABLE,
                 data=np.asarray(data, dtype=dtype),
                 dtype=dtype,
                 compressor=compressor,

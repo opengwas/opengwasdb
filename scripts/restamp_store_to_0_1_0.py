@@ -61,11 +61,18 @@ from pathlib import Path
 from opengwasdb.encoding import ENCODING_VERSION
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.model.analyses import read_analyses
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore
+from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.validation import validate_store
 
 #: The only version whose bytes a 0.1.0 stamp describes truthfully.
 RESTAMPABLE_FROM = "3.0"
+
+#: The version this tool stamps, and deliberately **not**
+#: `CURRENT_FORMAT_VERSION`: since #247 the current format is 0.2.0 (Zarr v3),
+#: while this tool exists to make a 3.0 release readable as 0.1.0 (Zarr v2,
+#: whose bytes it already holds).  Following `CURRENT_FORMAT_VERSION` would
+#: stamp 0.2.0 onto v2 arrays -- the false claim this whole module avoids.
+RESTAMP_TARGET = "0.1.0"
 
 
 class RestampError(Exception):
@@ -98,7 +105,7 @@ def _refuse_unless_restampable(store_path: Path) -> None:
         if version != RESTAMPABLE_FROM:
             raise SystemExit(
                 f"{path}: format_version is {version!r}, not {RESTAMPABLE_FROM!r}. Only a "
-                f"{RESTAMPABLE_FROM} release holds the bytes {CURRENT_FORMAT_VERSION} "
+                f"{RESTAMPABLE_FROM} release holds the bytes {RESTAMP_TARGET} "
                 "describes; every earlier format is a different encoding and is rebuilt, "
                 "not restamped (ADR 0041, spec §21.4)."
             )
@@ -143,12 +150,12 @@ def _restamp_manifests(staged_path: Path) -> str:
         source_release_id = data["release_id"]
         data["release_id"] = release_id
         data["created_at"] = now
-        data["format_version"] = CURRENT_FORMAT_VERSION
+        data["format_version"] = RESTAMP_TARGET
         data["provenance"] = {
             **data.get("provenance", {}),
             "format_restamp": {
                 "from": RESTAMPABLE_FROM,
-                "to": CURRENT_FORMAT_VERSION,
+                "to": RESTAMP_TARGET,
                 "source_release_id": source_release_id,
                 "tool": "scripts/restamp_store_to_0_1_0.py",
                 "at": now,
@@ -227,7 +234,7 @@ def restamp(source: Path, destination: Path) -> int:
         _refresh_overview(staged.path)
         _require_valid_staged_release(staged.path, destination)
 
-    print(f"Published {destination} as {CURRENT_FORMAT_VERSION}, release_id {release_id}")
+    print(f"Published {destination} as {RESTAMP_TARGET}, release_id {release_id}")
     return 0
 
 
