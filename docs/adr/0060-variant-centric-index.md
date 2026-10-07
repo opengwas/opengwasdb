@@ -53,13 +53,18 @@ Ragged arrays and not with #246's Dense shapes.
 |---|---|---|---|---|---|
 | `by_variant/offsets` | int64 | `n_axis + 1` row offsets, see below | `RAGGED_PER_VARIANT` | **1,000** (explicit hint) | 10,000,000 elements |
 | `by_variant/analysis_index` | int32 | the Analysis of each row | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
-| `by_variant/z` | the component's `z` dtype (int16) | the same codes, re-keyed | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
-| `by_variant/se` | the component's `se` dtype (float16) | the same codes | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
-| `by_variant/eaf` | the component's `eaf` dtype (int8 residual) | the same codes, re-keyed; the per-variant `eaf_baseline` is **shared** with the Analysis-sorted plane, not duplicated | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
+| `by_variant/z` | the component's `z` dtype (int16 at OGS-00011; `int16` or `float16` per plan) | the same codes, re-keyed | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
+| `by_variant/se` | the component's `se` dtype (float16 at OGS-00011; `float16` or `int8_residual` per plan) | the same codes | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
+| `by_variant/eaf` | the component's `eaf` dtype (int8 residual at OGS-00011; `absent`, `float32` or `int8_residual` per plan) | the same codes, re-keyed; the per-variant `eaf_baseline` is **shared** with the Analysis-sorted plane, not duplicated | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
 | `by_variant/imputed` | uint8 | the imputed mask, **when the component has one** (a completed standalone Ragged release) | `ASSOCIATION_SEQUENCE` | 200,000 | 50,000,000 elements |
 | `by_variant/z_overflow_index` / `_value` | int64 / float32 | the re-keyed `z` overflow table | `RAGGED_EXCEPTION_TABLE` | 200,000 | 10,000,000 elements |
 | `by_variant/eaf_exception_index` / `_value` | int64 / float32 | the re-keyed EAF exception table | `RAGGED_EXCEPTION_TABLE` | 200,000 | 10,000,000 elements |
 | `by_variant/se_exception_index` / `_value` | int64 / float32 | the re-keyed SE exception table, **when the plan codes `se` as `int8_residual`** | `RAGGED_EXCEPTION_TABLE` | 200,000 | 10,000,000 elements |
+
+The parenthesised dtypes are OGS-00011's; the plan decides them (`z` is `int16`
+or `float16`, `se` is `float16` or `int8_residual`, and `eaf` is `absent`,
+`float32` or `int8_residual` — §6a). `analysis_index`, `offsets` and `imputed`
+are format-fixed.
 
 `RAGGED_PER_VARIANT` applies `_per_variant` with a **1,000-element override**:
 the offset array is read at a single variant, so one 8 KB inner chunk per
@@ -212,8 +217,9 @@ OGS-00011's Overflow is observed-only and codes `se` as `float16`, so neither
 stands. A **completed standalone Ragged** component adds `by_variant/imputed`
 (uint8, 3.085 GB raw at this scale) and a component whose plan selects
 `int8_residual` adds a re-keyed `se_exception_index` / `_value` pair, whose raw
-size is the Analysis-sorted table's own (2 × entries, 12 bytes each before
-compression); both are proportional to the cells the component already stores.
+size is the Analysis-sorted table's own — **12 bytes per exception in total**
+(an int64 index plus a float32 value), before compression; both are
+proportional to the cells the component already stores.
 The general accounting is therefore
 `n_axis + 1` int64 offsets + one int32 and one `z` cell per association + one
 `se` cell + one `eaf` cell + (one uint8 `imputed` cell when completed) + the

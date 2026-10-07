@@ -23,7 +23,8 @@ the end of this file.
   The rule is bounded: it reads `variant_index` in 1,000,000-cell (4 MB)
   windows, carries the preceding cell across a window boundary and resets at
   each Analysis boundary, so peak memory is the window, its comparison bool and
-  the per-Analysis offsets, independent of the association count -- it never
+  the per-Analysis offsets (`O(n_analyses)`), independent of the association
+  count -- it never
   materialises the array. A store whose persisted segment is out of order now
   fails `validate`.
 
