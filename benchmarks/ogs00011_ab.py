@@ -60,6 +60,79 @@ SHAPES = [
 ]
 REGION_SHAPES = ("regional", "regional_one_analysis")
 
+#: The probes whose selection is known to return rows on OGS-00011, with the
+#: floor the committed artifact measured. A count below the floor is a changed
+#: selection, a changed store or an empty read, and the run must fail rather
+#: than publish it. Every shape is in exactly one of this table and
+#: `EMPTY_SHAPES`; a shape in neither is refused, so a new shape cannot be added
+#: without deciding which it is.
+MIN_COUNTS = {
+    "bulk": 5_000_000,
+    "phewas": 3_000,
+    "regional": 8_000_000,
+    "regional_one_analysis": 1_000,
+    "tophits": 6_000,
+    "random_lookup_100_variants_10_analyses": 1,
+    "phewas_off_axis": 1,
+    "bulk_overflow_heavy": 85_000_000,
+}
+
+#: The shapes whose random selection is intentionally empty on OGS-00011. They
+#: must return exactly zero rows; a non-zero count means the selection moved.
+EMPTY_SHAPES = frozenset({"random_lookup_10_variants_100_analyses"})
+
+
+def _check_shape(name: str, record: dict) -> None:
+    """Refuse a shape that timed out, is unknown, or did not return its rows."""
+    if record.get("timed_out"):
+        raise SystemExit(
+            f"{name}: hit the {record.get('limit_s')}s limit; a timed-out run is not evidence"
+        )
+    count = record.get("result_count")
+    if name in EMPTY_SHAPES:
+        if count != 0:
+            raise SystemExit(f"{name}: whitelisted as empty but returned {count} rows")
+        return
+    if name not in MIN_COUNTS:
+        raise SystemExit(
+            f"{name}: no expected count; add it to MIN_COUNTS or EMPTY_SHAPES"
+        )
+    if count is None or count < MIN_COUNTS[name]:
+        raise SystemExit(
+            f"{name}: expected at least {MIN_COUNTS[name]} rows, got {count}"
+        )
+
+
+def _check_pair(name: str, before: dict, after: dict) -> None:
+    """Refuse a before/after pair whose counts or answers differ."""
+    _check_shape(name, before)
+    _check_shape(name, after)
+    if before.get("result_count") != after.get("result_count"):
+        raise SystemExit(
+            f"{name}: before {before.get('result_count')} rows, after "
+            f"{after.get('result_count')} rows"
+        )
+    if not before.get("sha256") or not after.get("sha256"):
+        raise SystemExit(f"{name}: a side returned no answer to hash")
+    if before["sha256"] != after["sha256"]:
+        raise SystemExit(f"{name}: before and after answers differ")
+
+
+def _check_identity_side(side: str, record: dict) -> None:
+    """Refuse an identity run that returned no rows at all."""
+    rows = sum(int(query["rows"]) for query in record["queries"].values())
+    if rows == 0:
+        raise SystemExit(f"identity on {side}: no query returned a row; not evidence")
+
+
+def _check_identity_pair(name: str, before: dict, after: dict) -> None:
+    """Refuse an identity query whose count or hash differs between the trees."""
+    if before["rows"] != after["rows"] or before["sha256"] != after["sha256"]:
+        raise SystemExit(
+            f"identity {name}: before {before['rows']} rows/{before['sha256'][:12]} "
+            f"!= after {after['rows']} rows/{after['sha256'][:12]}"
+        )
+
 
 class _Timeout(Exception):
     pass
@@ -217,9 +290,68 @@ def _provenance(tree: Path) -> dict[str, str]:
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
+def _tree_provenance(trees: dict[str, Path]) -> dict[str, dict[str, str]]:
+    return {side: _provenance(tree) for side, tree in trees.items()}
+
+
+def _identity_aggregate(args: argparse.Namespace) -> None:
+    """Run the identity probe on each store against both trees; write the aggregate.
+
+    This is the committed producer of
+    `docs/benchmark-output/opengwasdb_252_spot_identity.json`: one entry per
+    store, each query with its before/after count and hash, and `all_identical`
+    true only when every one matches.
+    """
+    trees = {"before": Path(args.before_tree).resolve(), "after": Path(args.after_tree).resolve()}
+    artifact: dict[str, object] = {
+        "note": (
+            "Spot identity for #252: the same public query surface and selection run "
+            "against each tree through the committed benchmarks/ogs00011_ab.py "
+            "--identity, hashed with sha256 over variant_index/analysis_index/z/se/eaf "
+            "and association_status, order included. Not a quiet-node measurement."
+        ),
+        "provenance": _tree_provenance(trees),
+        "trees": {side: str(tree) for side, tree in trees.items()},
+        "stores": {},
+    }
+    all_identical = True
+    for store in args.identity_store:
+        single = argparse.Namespace(**vars(args))
+        single.store = store
+        sides = {side: _run(trees[side], single) for side in SIDES}
+        for side in SIDES:
+            _check_identity_side(side, sides[side])
+        name = Path(store).parent.name or str(store)
+        entry: dict[str, object] = {
+            "hybrid": bool(sides["after"]["hybrid"]),
+            "n_variants": int(sides["after"]["n_variants"]),
+            "n_analyses": int(sides["after"]["n_analyses"]),
+            "queries": {},
+        }
+        for query in sides["after"]["queries"]:
+            before, after = sides["before"]["queries"][query], sides["after"]["queries"][query]
+            _check_identity_pair(query, before, after)
+            entry["queries"][query] = {
+                "before": before, "after": after,
+                "identical": before["rows"] == after["rows"]
+                and before["sha256"] == after["sha256"],
+            }
+        artifact["stores"][name] = entry
+        print(f"{name}: {len(entry['queries'])} queries identical", flush=True)
+    artifact["all_identical"] = all_identical
+    if args.output:
+        Path(args.output).write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+        print(f"Wrote {args.output}")
+    else:
+        print(json.dumps(artifact, indent=2))
+
+
 def _driver(args: argparse.Namespace) -> None:
     trees = {"before": Path(args.before_tree).resolve(), "after": Path(args.after_tree).resolve()}
     if args.identity:
+        if args.identity_store:
+            _identity_aggregate(args)
+            return
         artifact: dict[str, object] = {
             "store": str(args.store),
             "note": (
@@ -227,12 +359,20 @@ def _driver(args: argparse.Namespace) -> None:
                 "each tree, hashed with sha256 over variant_index/analysis_index/z/se/eaf "
                 "and association_status, order included. Not a quiet-node measurement."
             ),
-            "provenance": {side: _provenance(tree) for side, tree in trees.items()},
+            "provenance": _tree_provenance(trees),
             "trees": {side: str(tree) for side, tree in trees.items()},
             "queries": {},
         }
         for side in SIDES:
-            artifact["queries"][side] = _run(trees[side], args)
+            record = _run(trees[side], args)
+            _check_identity_side(side, record)
+            artifact["queries"][side] = record
+        for query in artifact["queries"]["after"]["queries"]:
+            _check_identity_pair(
+                query,
+                artifact["queries"]["before"]["queries"][query],
+                artifact["queries"]["after"]["queries"][query],
+            )
         print(json.dumps(artifact, indent=2) + "\n")
         if args.output:
             Path(args.output).write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
@@ -250,7 +390,7 @@ def _driver(args: argparse.Namespace) -> None:
             "drift hits both sides equally. Both trees' commit and opengwasdb source "
             "fingerprint are recorded."
         ),
-        "provenance": {side: _provenance(tree) for side, tree in trees.items()},
+        "provenance": _tree_provenance(trees),
         "trees": {side: str(tree) for side, tree in trees.items()},
         "shapes": {},
     }
@@ -260,6 +400,7 @@ def _driver(args: argparse.Namespace) -> None:
             continue
         before = _run(trees["before"], args, shape)
         after = _run(trees["after"], args, shape)
+        _check_pair(shape, before, after)
         artifact["shapes"][shape] = {"before": before, "after": after}
         print(
             f"{shape:44s} before={before['elapsed_ms']:10.1f} ms "
@@ -274,7 +415,8 @@ def _driver(args: argparse.Namespace) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--store", required=True)
+    ap.add_argument("--store")
+    ap.add_argument("--identity-store", action="append", default=[])
     ap.add_argument("--before-tree")
     ap.add_argument("--after-tree")
     ap.add_argument("--limit", type=float, default=300.0)
