@@ -830,13 +830,38 @@ print()
 same_chunk = layout["v2-ogs00011"]["chunk_shape"] == layout["v3-ogs00011"]["chunk_shape"]
 scan = ("An off-panel PheWAS reads only the Overflow, and with no variant-side index it must "
         "scan every Analysis's `variant_index` for the variant. #252's windowed scan bounds "
-        "that scan's memory by reading a few inner chunks at a time (`SCAN_WINDOW_CHUNKS`), at "
-        "the cost of one read per window. The Overflow's inner chunk is "
+        "that scan's memory by reading a few inner chunks at a time (`SCAN_WINDOW_CHUNKS`), "
+        "one read per window. The Overflow's inner chunk is "
         f"{layout['v2-ogs00011']['chunk_shape'][0]:,} elements at 0.1.0 and "
         f"{layout['v3-ogs00011']['chunk_shape'][0]:,} at 0.2.0"
         + (", so the chunks did not narrow on this path; " if same_chunk else "; ")
         + "0.2.0 puts them in "
         f"{layout['v3-ogs00011']['shard_shape'][0]:,}-element shards. ")
+def which_part_of_the_code():
+    """What this run, and #252's same-reader A/B, can and cannot say about the cause."""
+    env = extras["environments"]
+    sides = ab252["shapes"]["phewas_off_axis"]
+    before, after = sides["before"], sides["after"]
+    prov = ab252["provenance"]
+    scan_was = "faster" if after["elapsed_ms"] < before["elapsed_ms"] else "slower"
+
+    def side(row, name):
+        return (f"{fmt_time(row['elapsed_ms'])} (one run, `{prov[name]['commit']}`, load "
+                f"{row['load_start'][0]:.2f})")
+    return ("**Which part of this code costs the time, this run cannot say.** The 2.18 and 0.1.0 "
+            f"columns differ in the reader (Zarr {env[A]['zarr']} against {env[B]['zarr']}), in "
+            "the scan (the pre-#252 whole-array decode against #252's windowed scan), and in "
+            f"every other change between `{env[A]['commit']}` and `{env[B]['commit']}`. #252's "
+            "committed A/B (`opengwasdb_ogs00011_hybrid_252_ab.json`) holds the reader fixed, "
+            "since both of its commits require Zarr 3. It recorded the pre-#252 decode at "
+            f"{side(before, 'before')} and the windowed scan at {side(after, 'after')}, so there "
+            f"the scan was the {scan_was}. An earlier version of the same artifact (`8c2a34f`) "
+            "recorded the scan as the slower of the two. **The scan's own time cost is therefore "
+            "unestablished.** What the scan does change is memory: "
+            f"{fmt_rss(ph[A]['peak_mib'])} peak under 2.18 against {fmt_rss(ph[B]['peak_mib'])} "
+            "here.")
+
+
 if c_vs_b:
     why = (scan + "What 0.2.0 changes is that each window becomes a partial shard read (the "
            "shard index, then byte ranges, through the sharding codec) where 0.1.0 read each "
@@ -849,31 +874,26 @@ else:
            + ("; every 0.1.0 repetition is slower than every 2.18 one), " if b_vs_a else
               " by median), ")
            + "and 0.2.0 adds nothing this run can distinguish. " + scan
-           + f"The pre-#252 code that 2.18 runs decodes the whole array in one batched read, "
-           f"at {fmt_rss(ph[A]['peak_mib'])} peak; the windowed scan holds "
-           f"{fmt_rss(ph[B]['peak_mib'])} and pays one read per window. That is #252's chosen "
-           "trade of time for bounded memory.")
+           + which_part_of_the_code())
 print(f"**Why.** {why} Read as one contiguous segment instead, the same arrays are faster at "
       f"0.2.0 (the overflow-heavy bulk, {fmt_ratio(ex['bulk_overflow_heavy'][0])} the 0.1.0 time). "
-      "The designed fix for the scan is ADR 0060's by-variant index (#252 step 5), which reads a "
-      "variant's rows directly instead of scanning; it is outside #250.")
+      "Either way, ADR 0060's by-variant index (#252 step 5) removes the scan, reading a "
+      "variant's rows directly, and it is the designed fix; it is outside #250.")
 print()
 after = ab252["shapes"]["phewas_off_axis"]["after"]
 inside = lo["b-code-0.1.0"] <= after["elapsed_ms"] <= hi["b-code-0.1.0"]
-print("**Against #252's committed number.** #252's A/B "
-      "(`opengwasdb_ogs00011_hybrid_252_ab.json`) recorded this path on 0.1.0 at "
-      f"{fmt_time(after['elapsed_ms'])} in one run at a 1-minute load of "
-      f"{after['load_start'][0]:.2f}, under commit {ab252['provenance']['after']['commit']}. "
+print("**Against #252's committed number.** The *after* side of #252's A/B, the same code "
+      f"path on 0.1.0, is {fmt_time(after['elapsed_ms'])}. "
       f"This run's {ph['b-code-0.1.0']['repetitions']} 0.1.0 repetitions span "
       f"{fmt_time(lo['b-code-0.1.0'])}–{fmt_time(hi['b-code-0.1.0'])}, which "
       + ("contains it, so the gap between the medians is the spread of a single sample against "
          "a median, not evidence of a change." if inside else
          "**does not contain it**: #252's single sample is faster than every repetition "
          "here.")
-      + " The Overflow read path is unchanged between that commit and this code (no change "
+      + f" The Overflow read path is unchanged between `{ab252['provenance']['after']['commit']}` "
+      "and this code (no change "
       "under `opengwasdb/query/`, and only writer roles in `layouts/ragged/zarr_csr.py`); "
-      "ADR 0060 quotes 26.4 s for the same path from an earlier version of #252's artifact, "
-      "so #252's own two samples of it differ by seconds.")
+      "ADR 0060 quotes the earlier version's 26.4 s for the same path.")
 print(":::")
 print()
 
