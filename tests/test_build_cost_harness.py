@@ -8,15 +8,19 @@ wrong argv or cwd.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from benchmarks.measure_build_cost import (
+    GUARD_ENV,
     PILOTS,
     _hms,
     build_plan,
+    merge_artifacts,
     parse_time_v,
+    run_step,
     wait_for_quiet_load,
 )
 
@@ -127,3 +131,60 @@ def test_every_pilot_names_a_builder_command() -> None:
         argv = argv_for(Path("/tmp/out.opengwasdb"))
         assert argv[0].startswith("build-"), (pilot, argv)
         assert str(Path("/tmp/out.opengwasdb")) in argv
+
+
+def test_run_step_records_the_guard_environment(tmp_path: Path, monkeypatch) -> None:
+    """An artifact says which guard configuration produced each number (#249 r1)."""
+    kwargs = dict(
+        side="head",
+        pilot="dense",
+        command=["true"],
+        cwd=tmp_path,
+        out=tmp_path / "out",
+        log_path=tmp_path / "log",
+        max_load=1000.0,
+        poll_seconds=0.01,
+        max_wait=5.0,
+    )
+    monkeypatch.setenv(GUARD_ENV, "1")
+    assert run_step(**kwargs)["guard_env"] == "1"
+    monkeypatch.delenv(GUARD_ENV, raising=False)
+    step = run_step(**kwargs)
+    assert step["guard_env"] is None
+    assert step["exit_code"] == 0
+
+
+def _artifact(tmp_path: Path, name: str, commit_sha: str, steps: list[dict]) -> Path:
+    payload = {
+        "artifact": "test",
+        "commit": commit_sha,
+        "measured_at": "2026-10-08T00:00:00+00:00",
+        "base_cwd": "/base",
+        "base_revision": "f168ef1",
+        "head_cwd": "/head",
+        "head_revision": "f48ab2a",
+        "load_threshold_1m": 3.0,
+        "n_workers_note": "note",
+        "steps": steps,
+    }
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_merge_artifacts_keeps_run_order_and_its_own_provenance(tmp_path: Path) -> None:
+    """The committed file is the harness's merge of the documented runs (#249 r1)."""
+    small = _artifact(tmp_path, "small.json", "f48ab2a", [{"pilot": "dense", "side": "base"}])
+    hybrid = _artifact(tmp_path, "hybrid.json", "f48ab2a", [{"pilot": "hybrid", "side": "head"}])
+    merged = merge_artifacts([small, hybrid])
+    assert [step["pilot"] for step in merged["steps"]] == ["dense", "hybrid"]
+    assert [run["n_steps"] for run in merged["runs"]] == [1, 1]
+    assert merged["commit"] == "f48ab2a"
+    assert merged["base_revision"] == "f168ef1"
+
+
+def test_merge_artifacts_refuses_two_code_versions(tmp_path: Path) -> None:
+    first = _artifact(tmp_path, "a.json", "aaaaaaa", [{"pilot": "dense", "side": "base"}])
+    second = _artifact(tmp_path, "b.json", "bbbbbbb", [{"pilot": "hybrid", "side": "head"}])
+    with pytest.raises(SystemExit, match="two code versions"):
+        merge_artifacts([first, second])

@@ -33,13 +33,20 @@ class _Record:
 
 
 class _Axis:
+    """A variant axis with gaps: every index 10 mod 20 resolves to nothing."""
+
     n_variants = 1000
 
-    def by_index(self, index: int) -> _Record:
-        return _Record(f"1:{1000 + int(index)}:A:T")
+    def by_index(self, index: int) -> _Record | None:
+        index = int(index)
+        if index % 20 == 10:
+            return None
+        return _Record(f"1:{1000 + index}:A:T")
 
     def range_indices(self, *_region: object) -> np.ndarray:
-        return np.array([0, 1, 2])
+        # Every index the window resolves to is a gap, so the window's variant
+        # list comes out empty and the shape must fall back to the PheWAS hit.
+        return np.array([10, 30, 50])
 
 
 class _FakeStore:
@@ -126,11 +133,24 @@ def test_select_shapes_builds_every_shape_and_names_it() -> None:
     assert {"analysis", "phewas", "range_phewas", "lookup", "top_hits"} <= called
 
 
-def test_towards_a_missing_variant_the_phewas_shape_still_runs() -> None:
-    """A store whose axis has gaps skips them rather than fabricating an ALID."""
+def test_a_gapped_axis_skips_missing_variants_and_falls_back_for_the_window() -> None:
+    """A store whose axis has gaps skips them rather than fabricating an ALID.
+
+    `_Axis.by_index` returns `None` for every index 10 mod 20 and the window's
+    own indices are all gaps, so this fails if the skip is removed (the random
+    shapes would ask for 100 variants) or if the empty window stops falling back
+    to the PheWAS hit (the one-window shape would ask for no variants).
+    """
     q = _FakeStore(hits=3)
     exposure, record, threshold, _reason = resolve_selection(q, ["GCST1", "GCST2"])
     shapes = select_shapes(q, exposure, record, threshold)
+    assert tuple(shapes) == SHAPE_NAMES
+    shapes["regional_one_analysis"]()
+    assert q.calls[-1] == ("lookup", (1, 1)), q.calls  # the fallback hit, one Analysis
+    shapes["random_lookup_100_variants_10_analyses"]()
+    n_variants, n_analyses = q.calls[-1][1]
+    assert n_variants == 50, q.calls  # half the indices are gaps
+    assert n_analyses == 2  # 10 asked, a two-Analysis store draws both
     result = shapes["phewas"]()
     assert len(result["z"]) >= 1
 

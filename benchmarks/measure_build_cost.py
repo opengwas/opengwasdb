@@ -22,7 +22,19 @@ not know or care how a checkout is entered:
 `--pilot` is repeatable; `--order base,head` (default: alternate per pilot)
 decides which side runs first. The output is a JSON artifact recording every
 argv, cwd, wall second, peak RSS in **KiB** (as `/usr/bin/time -v` reports it)
-and GiB, and the load window. Re-run it; never hand-edit the numbers.
+and GiB, the **guard environment** each step inherited, and the load window.
+`--merge` combines run artifacts (in run order) into one committed file, so the
+artifact is the harness's own output rather than hand-assembled. Re-run it; never
+hand-edit the numbers.
+
+The documented #249 commands:
+
+  pixi run -e dev python benchmarks/measure_build_cost.py --work W \
+      --pilot dense --pilot ragged-besd --pilot ragged-ssf --output /tmp/small.json
+  pixi run -e dev python benchmarks/measure_build_cost.py --work W \
+      --pilot hybrid --output /tmp/hybrid.json
+  pixi run -e dev python benchmarks/measure_build_cost.py --merge /tmp/small.json \
+      --merge /tmp/hybrid.json --output docs/benchmark-output/build_cost.json
 """
 
 from __future__ import annotations
@@ -44,6 +56,33 @@ from benchmarks._artifact import commit
 
 TIME_BIN = "/usr/bin/time"
 KIB_PER_GIB = 1024 * 1024
+#: The guard switch the harness inherits; recorded per step so an artifact says
+#: which configuration produced each number (unset = the production path).
+GUARD_ENV = "OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES"
+#: Constant notes every run records, so a merged artifact is reproducible from the
+#: documented commands rather than annotated by hand.
+PRODUCTION_CONFIG_NOTE = (
+    "Every build inherits this process's environment; `guard_env` on each step is "
+    f"{GUARD_ENV} at run time (null = unset = the production configuration)."
+)
+TIMING_NOTE = (
+    "Each build starts only while the 1-minute load is below `load_threshold_1m` "
+    "(`load_1m_before`); the end load can be higher from other tenants. Wall time and "
+    "peak RSS are `/usr/bin/time -v` on the CLI process: `Maximum resident set size` "
+    "is the largest single process in the pixi -> python -> forked-worker tree, not "
+    "their sum, and is reported in KiB and GiB. Re-run with "
+    "benchmarks/measure_build_cost.py; never hand-edit."
+)
+_ARTIFACT_KEYS = (
+    "artifact",
+    "commit",
+    "base_cwd",
+    "base_revision",
+    "head_cwd",
+    "head_revision",
+    "load_threshold_1m",
+    "n_workers_note",
+)
 _ELAPSED = re.compile(r"Elapsed \(wall clock\) time.*?\):\s*([0-9:.]+)")
 _MAXRSS = re.compile(r"Maximum resident set size \(kbytes\):\s*(\d+)")
 
@@ -207,6 +246,7 @@ def run_step(
         "log": str(log_path),
         "exit_code": completed.returncode,
         "started_at": started.isoformat(),
+        "guard_env": os.environ.get(GUARD_ENV),
         "load_1m_before": round(start_load, 2),
         "load_1m_after": round(end_load, 2),
         "wall_seconds": round(seconds, 2),
@@ -276,7 +316,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--head-cmd", default="pixi run -e dev opengwasdb")
     parser.add_argument("--base-cwd", type=Path, default=Path("/tmp/epic240/247/base-src"))
     parser.add_argument("--head-cwd", type=Path, default=Path.cwd())
-    parser.add_argument("--work", type=Path, required=True)
+    parser.add_argument("--work", type=Path, help="where each build's store and log go")
     parser.add_argument("--pilot", action="append", default=[])
     parser.add_argument("--order", default="base,head")
     parser.add_argument(
@@ -290,12 +330,64 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-load", type=float, default=3.0)
     parser.add_argument("--poll-seconds", type=float, default=15.0)
     parser.add_argument("--max-wait-min", type=float, default=120.0)
+    parser.add_argument(
+        "--merge",
+        type=Path,
+        action="append",
+        default=[],
+        help="merge these run artifacts, in order, into --output; builds nothing",
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
 
+def merge_artifacts(paths: list[Path]) -> dict[str, Any]:
+    """Combine run artifacts, in run order, through the harness itself.
+
+    No step is reordered or renamed: the merged artifact's step list is the runs'
+    concatenation, which is the order the documented commands run them in.  The
+    base and head revisions and the commit must agree, so a merge cannot mix two
+    code versions into one before/after table.
+    """
+    merged: dict[str, Any] | None = None
+    runs: list[dict[str, Any]] = []
+    for path in paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if merged is None:
+            merged = {key: payload[key] for key in _ARTIFACT_KEYS if key in payload}
+            merged["steps"] = []
+            merged["runs"] = []
+        for key in ("commit", "base_revision", "head_revision"):
+            if payload.get(key) != merged.get(key):
+                raise SystemExit(
+                    f"{path}: {key} is {payload.get(key)!r}, the first run's is "
+                    f"{merged.get(key)!r}; refusing to merge two code versions"
+                )
+        merged["steps"].extend(payload["steps"])
+        runs.append(
+            {
+                "path": str(path),
+                "measured_at": payload.get("measured_at"),
+                "n_steps": len(payload["steps"]),
+            }
+        )
+    if merged is None:
+        raise SystemExit("--merge needs at least one artifact")
+    merged["runs"] = runs
+    merged["measured_at"] = datetime.now(UTC).isoformat()
+    return merged
+
+
 def main() -> int:
     args = _parser().parse_args()
+    if args.merge:
+        artifact = merge_artifacts(args.merge)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+        print(f"Wrote {args.output} ({len(artifact['steps'])} steps from {len(args.merge)} runs)")
+        return 0
+    if args.work is None:
+        raise SystemExit("--work is required unless --merge is given")
     args.pilot = args.pilot or list(PILOTS)
     args.work.mkdir(parents=True, exist_ok=True)
     args.base_cmd_list = _side_prefix(args.base_cmd)
@@ -329,6 +421,8 @@ def main() -> int:
             "dense uses --n-workers 4 on both sides; ragged and hybrid use the "
             "builder's own default, which the registered OGS-00004 argv also left unset"
         ),
+        "production_config": PRODUCTION_CONFIG_NOTE,
+        "timing_note": TIMING_NOTE,
         "steps": results,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

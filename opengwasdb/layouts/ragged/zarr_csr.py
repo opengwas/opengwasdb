@@ -54,7 +54,7 @@ DEFAULT_SE_FIT_CELL_BUDGET = 1 << 24
 SCAN_WINDOW_CHUNKS = 8
 #: Cells one `flush` region writes at a time, as a *floor*.  The region holds
 #: the four source planes, the codes it encodes them to and the frequencies it
-#: decodes back -- about 30 bytes a cell -- so 2**22 is roughly a 130 MiB working
+#: decodes back -- about 30 bytes a cell -- so 2**22 is roughly a 120 MiB working
 #: set whatever the component's cell count (issue #228).  The Ragged sequence
 #: planes are written one **shard** at a time even when that is larger (issue
 #: #249), because a write covering part of a shard is a read-modify-write of the
@@ -63,13 +63,14 @@ DEFAULT_FLUSH_REGION_CELLS = 1 << 22
 
 
 def sequence_region_step(total: int, region_cells: int) -> int:
-    """The write step for a Ragged sequence plane: a whole shard, at least (#249).
+    """The write step for a Ragged sequence plane: whole shards, at least one (#249).
 
     A write covering part of a shard is a read-modify-write of the whole shard,
     so writing a 50,000,000-element shard once per 4,194,304-cell region would
-    decode and re-encode it about twelve times.  `region_cells` is therefore
-    raised to the shard, never lowered, so a caller asking for a larger working
-    set keeps it.  A module-level function so
+    decode and re-encode it about twelve times.  The step is therefore a whole
+    number of shards: `region_cells` is rounded **up** to the next whole shard
+    (never lowered below one), so a caller asking for a larger working set keeps
+    it and no region can end inside a shard.  A module-level function so
     `benchmarks/measure_write_amplification.py` can reproduce the pre-#249 step
     on the same code path; production never calls it with a different one.
     """
@@ -80,7 +81,8 @@ def sequence_region_step(total: int, region_cells: int) -> int:
             inner_chunk=(store_arrays.ASSOCIATION_SEQUENCE_CHUNK,),
         )[0]
     )
-    return max(1, int(region_cells), shard)
+    shards_per_region = max(1, -(-max(1, int(region_cells)) // shard))
+    return shards_per_region * shard
 
 
 class AnalysisAssociations(NamedTuple):
@@ -444,14 +446,15 @@ class RaggedCSRWriter:
         regions in order is what keeps their rows in the order a single pass
         over the whole plane would have produced.
 
-        The step is a whole Ragged sequence **shard**, at least.  A write that
-        covers part of a shard is a read-modify-write of the whole shard, so
-        writing a 50,000,000-element shard once per 4,194,304-cell region would
-        decode and re-encode it about twelve times -- silent write
-        amplification that the tiny pilots cannot show (#249).  `region_cells`
-        is therefore raised to the shard, never lowered, so a caller asking for
-        a larger working set keeps it; a sequence shorter than one shard is
-        still written in one region, exactly as before.
+        The step is a whole number of Ragged sequence **shards**, at least one.  A
+        write that covers part of a shard is a read-modify-write of the whole
+        shard, so writing a 50,000,000-element shard once per 4,194,304-cell region
+        would decode and re-encode it about twelve times -- silent write
+        amplification that the tiny pilots cannot show (#249).  `region_cells` is
+        therefore rounded up to a whole shard, never lowered, so a caller asking
+        for a larger working set keeps it and no region ends inside a shard; a
+        sequence shorter than one shard is still written in one region, exactly as
+        before.
         """
         step = sequence_region_step(total, region_cells)
         for lo in range(0, total, step):
@@ -659,8 +662,8 @@ class RaggedCSRWriter:
         concatenating write cost a measured 72.9 bytes a cell, or 1.10 TB (issue
         #228).  Each region is a whole Ragged sequence shard (issue #249), so
         each shard is written exactly once; on the 50,000,000-element shard that
-        is roughly a 1.5 GB working set (about 30 bytes a cell), against the
-        130 MiB a 4,194,304-cell region used before.  What is stored is
+        is roughly a 1.5 GB (1.40 GiB) working set (about 30 bytes a cell),
+        against the 120 MiB a 4,194,304-cell region used before.  What is stored is
         unchanged -- each plane's codes are a per-cell function of its value,
         keyed on global flat position (`positions_flat(lo)` per region).
         `eaf_baseline` lets Reference Completion carry its source's baselines

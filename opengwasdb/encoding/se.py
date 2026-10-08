@@ -838,19 +838,44 @@ class _RewriteSink:
     pending: Any
     exception_index: Any
     exception_value: Any
+    exception_count: int
     row_chunk: int
     n_rows: int
     n_chunks: int
     chunk_timer: PhaseTimer | None
 
 
+def _write_exception_tables(
+    sink: _RewriteSink, index_parts: list[np.ndarray], value_parts: list[np.ndarray], cursor: int
+) -> None:
+    """Write both exception tables once, as whole arrays (#249).
+
+    `se_exception_index`/`_value` have the "one shard holds the whole array"
+    policy, so a per-band write into them is a read-modify-write of the whole
+    table: about 99 of them on OGS-00008's 9.85 M rows.  The bands' runs are
+    buffered (the tables are exact-value side tables, 12 bytes an entry) and
+    each table is written once; the write covers exactly `cursor` entries, which
+    `_finish_rewrite` has already checked equals the preallocated count, so it
+    is the whole array and no shard is touched twice.
+    """
+    index = np.concatenate(index_parts) if index_parts else np.empty(0, dtype=np.int64)
+    value = np.concatenate(value_parts) if value_parts else np.empty(0, dtype=np.float32)
+    with _optional_phase(sink.chunk_timer, "rewrite.exceptions"):
+        sink.exception_index[0:cursor] = index
+        sink.exception_value[0:cursor] = value
+
+
 def _run_rewrite_bands(sink: _RewriteSink, starts: range, n_workers: int, timer: PhaseTimer) -> int:
     """Encode every band across the pool and write them back in row order.
 
-    The parent consumes ``ordered_map`` in row order, so the pending plane and
-    the exception side table are filled exactly as the serial pass fills them.
+    The parent consumes ``ordered_map`` in row order, so the pending plane is
+    filled exactly as the serial pass fills it, and the exception runs are
+    collected in that same order and written to their tables once at the end
+    (#249).
     """
     cursor = 0
+    index_parts: list[np.ndarray] = []
+    value_parts: list[np.ndarray] = []
     started = time.monotonic()
     umbrella = timer.phase("rewrite.parallel") if n_workers > 1 else nullcontext()
     with umbrella:
@@ -859,11 +884,9 @@ def _run_rewrite_bands(sink: _RewriteSink, starts: range, n_workers: int, timer:
             r1 = min(r0 + sink.row_chunk, sink.n_rows)
             with _optional_phase(sink.chunk_timer, "rewrite.write"):
                 sink.pending[r0:r1] = raw
-            with _optional_phase(sink.chunk_timer, "rewrite.exceptions"):
-                end = cursor + len(table)
-                sink.exception_index[cursor:end] = table.index
-                sink.exception_value[cursor:end] = table.value
-                cursor = end
+            index_parts.append(table.index)
+            value_parts.append(table.value)
+            cursor += len(table)
             log_progress(
                 log,
                 "SE rewrite",
@@ -872,6 +895,7 @@ def _run_rewrite_bands(sink: _RewriteSink, starts: range, n_workers: int, timer:
                 started,
                 every=max(1, sink.n_chunks // 20),
             )
+    _write_exception_tables(sink, index_parts, value_parts, cursor)
     return cursor
 
 
@@ -886,6 +910,32 @@ def _finish_rewrite(
     del group["se"]
     move_in_group(group, "se_pending", "se")
     write_se_coefficients(group, coefficients, compressor=compressor)
+
+
+def _rewrite_arrays(
+    group: Any, source: Any, exception_count: int
+) -> tuple[Any, Any, Any, Any]:
+    """The `int8` pending plane and the two exception tables the rewrite fills.
+
+    `compressor_of(source)` is the source plane's own codec, so the plane and
+    side tables that replace it are stored as the plane they replace (the
+    manifest publishes one compressor configuration).  The exception tables are
+    allocated to the exact count the codes-only pass produced, which is what lets
+    `_write_exception_tables` write each once.
+    """
+    compressor = compressor_of(source)
+    pending = create_array(
+        group,
+        "se_pending",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        shape=source.shape,
+        dtype="int8",
+        fill_value=SE_MISSING,
+        compressor=compressor,
+        hint=source.chunks,
+    )
+    exception_index, exception_value = _empty_exception_arrays(group, exception_count, compressor)
+    return pending, exception_index, exception_value, compressor
 
 
 def _rewrite_dense(
@@ -906,25 +956,16 @@ def _rewrite_dense(
     or padded table.
 
     The coding is chunk-independent and runs across ``n_workers``; the parent
-    writes each band back in row order, so the exception table is filled in the
-    same order as the serial pass and the stored plane is unchanged.
+    writes each band back in row order and fills the exception tables once, so
+    the tables and the serial path's stored plane are unchanged (#249).
     """
     global _REWRITE
     source = group["se"]
     n_rows, n_analyses = map(int, source.shape)
     row_chunk = _row_block_of(source)
-    compressor = compressor_of(source)
-    pending = create_array(
-        group,
-        "se_pending",
-        ArrayRole.DENSE_STATISTIC_PLANE,
-        shape=source.shape,
-        dtype="int8",
-        fill_value=SE_MISSING,
-        compressor=compressor,
-        hint=source.chunks,
+    pending, exception_index, exception_value, compressor = _rewrite_arrays(
+        group, source, exception_count
     )
-    exception_index, exception_value = _empty_exception_arrays(group, exception_count, compressor)
     analysis_index = np.broadcast_to(np.arange(n_analyses, dtype=np.int64), (row_chunk, n_analyses))
     starts = range(0, n_rows, row_chunk)
     chunk_timer = timer if n_workers <= 1 else None
@@ -940,7 +981,14 @@ def _rewrite_dense(
         chunk_timer,
     )
     sink = _RewriteSink(
-        pending, exception_index, exception_value, row_chunk, n_rows, len(starts), chunk_timer
+        pending,
+        exception_index,
+        exception_value,
+        exception_count,
+        row_chunk,
+        n_rows,
+        len(starts),
+        chunk_timer,
     )
     try:
         with log_phase(log, "SE rewrite"):

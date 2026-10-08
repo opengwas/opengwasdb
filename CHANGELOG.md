@@ -227,35 +227,34 @@ the end of this file.
 
 ### Fixed
 
-- **A Ragged association sequence is written one whole shard at a time (#249).**
+- **A Ragged association sequence is written one whole shard at a time, and the
+  Dense SE exception tables once each (#249).**
   `RaggedCSRWriter` flushed its `variant_index`/`z`/`eaf`/`se` planes in regions
   of
   `DEFAULT_FLUSH_REGION_CELLS` (4,194,304) cells, but #248's sequence shard is
   `RAGGED_SEQUENCE_SHARD_ELEMENTS` (50,000,000) cells. A Zarr v3 shard is one
   file, so every region write was a read-modify-write of the whole shard: about
   twelve per shard, and 4,194,304 is not a multiple of the 200,000-cell inner
-  chunk either. Invisible on the registered pilots -- OGS-00001 (86,373
-  associations) and OGS-00004's overflow (27,369,974) each fit in one shard --
-  it is material at OGS-00011's 3,085,080,783 overflow associations, 62 shards
-  per sequence. `sequence_region_step` now raises the write region to the shard
-  (never lowers it), so each shard is written exactly once.  On a synthetic
-  160,000,000-cell component (four 50,000,000-element sequence shards) the
-  measured write amplification (`count_shard_writes`, the real bytes handed to
-  the storage layer) falls from 6.362x to 1.000x, the most writes to any one
-  sequence shard from 13 to 1, and the flush halves from 20.8 s to 9.7 s, with
-  peak RSS unchanged at 16.54 GiB (the held source planes dominate it, so the
-  larger region did not move it).  On the real pilots every sequence shard is
-  written once.  The theoretical cost is the region's working set: about 1.5 GB
-  (30 bytes a cell) at the full 50,000,000-element shard, against the 130 MiB a
+  chunk either. `sequence_region_step` now rounds the write region **up** to a
+  whole number of shards (never below one), so each shard is written exactly
+  once. On a synthetic 160,000,000-cell component (four 50,000,000-element
+  sequence shards) the measured write amplification (`count_shard_writes`, the
+  real bytes handed to the storage layer) falls from 6.362x to 1.000x, the most
+  writes to any one sequence shard from 13 to 1, and the flush halves from
+  19.92 s to 10.52 s
+  (`docs/benchmark-output/opengwasdb_ragged_write_amplification_epic240_249.json`).
+  The registered pilots' sequences each fit in one shard, but the pre-#249 step
+  still rewrote OGS-00004's single 27,369,974-cell Overflow shard **7 times**,
+  OGS-00006's two shards 15 times and OGS-00011's 62 shards about 12 times each.
+  The theoretical cost is the region's working set: about 1.5 GB (1.40 GiB, 30
+  bytes a cell) at the full 50,000,000-element shard, against the 120 MiB a
   4,194,304-cell region used.
-  `require_whole_shard_writes` now judges multi-shard 1-D arrays too, so a
-  writer that returns to a partial-shard sequence write fails loudly rather
-  than quietly getting slower.  A 1-D array whose shard already spans it is
-  still exempt: the Dense SE rewrite preallocates `se_exception_index` to the
-  exact exception count and fills it in row-block order, which is by design and
-  has nothing to do with a streamed sequence shard (extending the guard to
-  every 1-D array found exactly that, and it is why the rule is scoped to the
-  multi-shard ones).
+  Extending `require_whole_shard_writes` to every sharded array -- 1-D included,
+  whatever its shard size -- found a second partial-shard writer: the Dense SE
+  rewrite (`encoding/se.py`) filled `se_exception_index`/`_value` one row band at
+  a time, which for those single-shard tables is one read-modify-write of the
+  whole table per band (about 99 on OGS-00008's 9.85 M rows). It now buffers the
+  bands' runs and writes each table once. Nothing is exempt from the guard.
 - **A Reference-Completed Dense release records the chunk shape its arrays
   actually have (#245).** Completion writes the completed grid at
   `DEFAULT_CHUNK_SHAPE` clipped to the array dimensions, not at the source's

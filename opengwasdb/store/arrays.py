@@ -958,47 +958,25 @@ def _normalise_selection(shape: tuple[int, ...], selection: Any) -> tuple[Any, .
     return tuple(axes)
 
 
-def _shard_covers_whole_array(array: Any) -> bool:
-    """Whether every axis' shard already spans that axis, i.e. one shard holds it."""
-    shape = tuple(int(size) for size in array.shape)
-    shards = tuple(int(size) for size in array.shards)
-    return all(shard >= dim for shard, dim in zip(shards, shape, strict=True))
-
-
-def _may_be_written_incrementally(array: Any) -> bool:
-    """A 1-D array whose one shard already spans it is out of the guard's scope.
-
-    The arrays that policy exists for are filled incrementally by design -- the
-    Dense SE rewrite preallocates its exception table to the exact count the
-    codes-only pass produced and fills it in row-block order
-    (`encoding/se.py`).  Its shard is the whole array and it is read whole, so a
-    partial write is not the streamed-shard amplification #249 fixes.
-    """
-    return len(array.shape) == 1 and _shard_covers_whole_array(array)
-
-
 def require_whole_shard_write(array: Any, selection: Any) -> None:
     """Fail loudly unless `selection` covers whole shards of a sharded array.
 
-    Applied to the two-dimensional Dense statistic planes, the imputed mask and
-    the SE coefficient table, and to every **multi-shard** 1-D array -- the
+    Every sharded array is judged, whatever its rank or shard size: the Dense
+    statistic planes, the imputed mask and the SE coefficient table; the 1-D
     Ragged association sequences (`z`, `se`, `variant_index`, `eaf`, `imputed`),
-    whose shard is 50,000,000 elements.  A write that covers part of a shard is a
-    read-modify-write of the whole shard, so the writer pays to decode and
-    re-encode everything the shard already held (#249); on OGS-00011's overflow
-    sequences that is about twelve rewrites of every 50,000,000-element shard.
+    whose shard is 50,000,000 elements; and a 1-D array whose one shard is the
+    whole array, such as an exception table.  A write that covers part of a
+    shard is a read-modify-write of the whole shard, so the writer pays to
+    decode and re-encode everything the shard already held (#249); on OGS-00011's
+    overflow sequences that is about twelve rewrites of every
+    50,000,000-element shard, and on a single-shard table it is one rewrite per
+    writing band.  `encoding/se.py` buffers its SE exception tables and writes
+    each once for exactly this reason.
 
-    A 1-D array whose shard already spans it is **not** judged: its shard is the
-    whole array, and the arrays that policy exists for are filled incrementally
-    by design -- the Dense SE rewrite preallocates its exception table to the
-    exact count the codes-only pass produced and fills it in row-block order
-    (`encoding/se.py`), so each write covers a distinct, non-overlapping run of
-    a table that is read whole anyway.  The fix that matters is on the shards a
-    query streams, not on a table of a few thousand entries.  Unsharded arrays
-    are not judged either -- the rule is about shards.
+    Unsharded arrays are not judged -- the rule is about shards.
     """
     shards = getattr(array, "shards", None)
-    if shards is None or _may_be_written_incrementally(array):
+    if shards is None:
         return
     axes = _normalise_selection(tuple(int(size) for size in array.shape), selection)
     if not axes:
