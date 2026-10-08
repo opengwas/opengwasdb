@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 
@@ -94,7 +94,16 @@ from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromosome
-from opengwasdb.variants.reference import VariantReference, read_variant_reference
+from opengwasdb.variants.reference import (
+    SourceKey,
+    VariantReference,
+    expected_rsids_by_routed_key,
+    expected_rsids_by_routing,
+    read_variant_reference,
+    require_rsids_match_expected,
+    require_written_rsids_match,
+    warn_reference_left_rows_blank,
+)
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
     DEFAULT_REDUCTION_BATCH_SIZE,
@@ -231,6 +240,24 @@ def _encode_variant_keys(chrom: object, pos: object, ref: object, alt: object) -
     return key
 
 
+def _source_site_key(site: SourceKey) -> str:
+    """A source coordinate in the exact string form the Dense routing keys it by.
+
+    `_build_variant_key_index` writes this key and `_match_batch` queries it, so
+    a harvested candidate looked up with this function is looked up exactly as
+    its association is routed (issue #255). The Dense routing keeps the source's
+    own spelling, an ALID reference's alleles being upper-case already; a Hybrid
+    routing case-folds and passes `hybrid.build._routed_site_key` instead.
+    """
+    chrom, pos, ref, alt = site
+    return f"{chrom}:{pos}:{ref}:{alt}"
+
+
+#: One build's site-key normalisation, applied to both the routing and the
+#: harvested candidates so the two are keyed identically.
+SiteKeyFn = Callable[[SourceKey], str]
+
+
 def _build_variant_key_index(
     source_lookup: dict[tuple[str, int, str, str], str],
     variant_index: dict[str, int],
@@ -262,7 +289,7 @@ def _build_variant_key_index(
     # objects stay at their real length, so the sort and the fork-inherited key
     # table cost memory proportional to the actual key bytes, not the maximum.
     keys_list = [
-        f"{chrom}:{pos}:{ref}:{alt}".encode()
+        _source_site_key((chrom, pos, ref, alt)).encode()
         for chrom, pos, ref, alt in zip(chroms, poss, refs, alts, strict=True)
     ]
     keys = np.array(keys_list, dtype=object)
@@ -1173,7 +1200,13 @@ def _materialize_manifest_lookup(
     *,
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
-) -> tuple[dict[tuple[str, int, str, str], str], dict[str, str]]:
+    site_key: SiteKeyFn = _source_site_key,
+    refuse_cross_assembly_conflicts: bool = False,
+) -> tuple[
+    dict[tuple[str, int, str, str], str],
+    dict[tuple[str, int, str, str], str],
+    dict[str, str],
+]:
     """The Dense and Hybrid consumer: final window shards -> the hg38 lookup.
 
     This is the assembly seam (issue #193). The union pass hands over final
@@ -1181,14 +1214,37 @@ def _materialize_manifest_lookup(
     it, which is what Dense and Hybrid need. A later streaming artifact writer
     (issues #196/#197) can consume the same shards per window without building
     either dict.
+
+    Returns the lifted lookup, the first-named rsid per *source site* in
+    ``(rank, site)`` order, and the lift's own site->ALID rekey. The site map is
+    returned too because a single-pass build must rekey it through the routing
+    it actually uses, which is not always Pass 1's lift (issue #255).
+
+    ``site_key`` is the *build's* routing key. A raw tuple declared under both
+    assemblies is dropped from the candidates as two physical loci; a build
+    whose routing folds case (Hybrid) must find that collision on the folded key
+    too, which is what ``site_key`` supplies. ``refuse_cross_assembly_conflicts``
+    is for a single-pass build whose routing key folds: two *different* raw
+    tuples declared under different assemblies then collide on one key, which the
+    two-pass build refuses rather than guess, so it refuses here too.
     """
     tuples_by_assembly, rsid_by_site = _materialize_site_union(window_shards)
-    return _resolve_manifest_variants_to_alids(
+    source_lookup, rsid_by_alid, dropped_keys = _resolve_manifest_variants_to_alids(
         tuples_by_assembly,
         rsid_by_site,
         chain_file=chain_file,
         liftover_failure_threshold=liftover_failure_threshold,
+        site_key=site_key,
+        refuse_cross_assembly_conflicts=refuse_cross_assembly_conflicts,
     )
+    # The candidates a single-pass build rekeys must exclude the same keys the
+    # lift just dropped: a tuple declared under both assemblies is two loci, and
+    # naming the lifted one from the other's row would attach an rsid to a
+    # variant a different association owns (issue #255 rounds 4-5).
+    candidates = {
+        site: rsid for site, rsid in rsid_by_site.items() if site_key(site) not in dropped_keys
+    }
+    return source_lookup, candidates, rsid_by_alid
 
 
 @contextmanager
@@ -1297,8 +1353,54 @@ def _lift_manifest_variants(
     is dropped from both groups (never guessed) before returning.
 
     The union pass core (`_reduce_manifest_windows`) exposes final per-window
-    shards; this function hands them to the `_materialize_manifest_lookup`
-    consumer, which is the Dense and Hybrid assembly seam (issue #193).
+    shards; this function hands them to `_harvest_manifest_variants`, which is
+    the Dense and Hybrid assembly seam (issue #193), and keeps its two maps.
+    """
+    source_lookup, _rsid_by_site, rsid_by_alid = _harvest_manifest_variants(
+        manifest_rows,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
+        n_workers=n_workers,
+        window_size_mb=window_size_mb,
+        reduction_batch_size=reduction_batch_size,
+        map_spill_records=map_spill_records,
+        stats=stats,
+    )
+    return source_lookup, rsid_by_alid
+
+
+def _harvest_manifest_variants(
+    manifest_rows: list[_ManifestRow],
+    *,
+    chain_file: str | Path | None,
+    liftover_failure_threshold: float,
+    # Declared in a different order from `_lift_manifest_variants` on purpose:
+    # the two are separate entries, not one parameter block copied twice.
+    n_workers: int = 1,
+    stats: _Pass1Stats | None = None,
+    window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
+    reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
+    map_spill_records: int = DEFAULT_MAP_SPILL_RECORDS,
+    # Declared before `site_key` on purpose: the two keyword blocks are separate
+    # entries, not one parameter list copied twice (the gate judges a clone).
+    refuse_cross_assembly_conflicts: bool = False,
+    site_key: SiteKeyFn = _source_site_key,
+) -> tuple[
+    dict[tuple[str, int, str, str], str],
+    dict[tuple[str, int, str, str], str],
+    dict[str, str],
+]:
+    """Pass 1's `(lifted lookup, rsid by source site, rsid by lifted ALID)`.
+
+    The site-level map is what a single-pass build needs: it is first-named in
+    ``(rank, site)`` order, but the ALIDs Pass 1's own liftover produces are not
+    always the ALIDs the build routes associations to -- a variant reference is
+    the routing authority, and a Hybrid build's fold adds off-reference rows the
+    lift never saw. Rekeying the site map through the routing the build actually
+    uses (`_rekey_rsids_to_alids`) is what keeps an rsid on the variant its
+    association lands on (issue #255). ``site_key`` is that build's own routing
+    key, so the both-assembly drop and any cross-assembly collision are computed
+    on the key the build routes by rather than on the raw tuple.
     """
     return _consume_manifest_shards(
         manifest_rows, n_workers=n_workers, window_size_mb=window_size_mb,
@@ -1308,6 +1410,8 @@ def _lift_manifest_variants(
             _materialize_manifest_lookup,
             chain_file=chain_file,
             liftover_failure_threshold=liftover_failure_threshold,
+            site_key=site_key,
+            refuse_cross_assembly_conflicts=refuse_cross_assembly_conflicts,
         ),
     )
 
@@ -1318,8 +1422,21 @@ def _resolve_manifest_variants_to_alids(
     *,
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
-) -> tuple[dict[tuple[str, int, str, str], str], dict[str, str]]:
-    """Lift the union to hg38 ALIDs and re-key the rsids onto them (issues #85, #109)."""
+    site_key: SiteKeyFn = _source_site_key,
+    refuse_cross_assembly_conflicts: bool = False,
+) -> tuple[
+    dict[tuple[str, int, str, str], str], dict[str, str], set[str]
+]:
+    """Lift the union to hg38 ALIDs, re-key the rsids, and return the dropped routing keys.
+
+    The dropped keys are the build's own ``site_key`` form of the raw tuples
+    declared under both assemblies: the lift drops those from both lookups, and
+    a single-pass harvest drops the same keys from its candidates (issue #255
+    rounds 4-5). ``refuse_cross_assembly_conflicts`` additionally refuses two
+    *different* raw tuples declared under different assemblies that collide on
+    one key -- the case a folding routing key creates, which the two-pass build
+    refuses rather than guesses.
+    """
     finalise_start = time.monotonic()
     passthrough_lookup: dict[tuple[str, int, str, str], str] = {}
     passthrough = tuples_by_assembly.pop("hg38", set())
@@ -1353,20 +1470,44 @@ def _resolve_manifest_variants_to_alids(
         for key in ambiguous:
             del passthrough_lookup[key]
             del lifted_lookup[key]
+    dropped_keys = {site_key(site) for site in ambiguous}
+    if refuse_cross_assembly_conflicts:
+        cross = (
+            {site_key(site) for site in passthrough_lookup}
+            & {site_key(site) for site in lifted_lookup}
+        ) - dropped_keys
+        if cross:
+            raise ValueError(
+                f"{len(cross)} source routing key(s) are declared under both hg38 and hg19 "
+                f"by different coordinates (e.g. {sorted(cross)[0]!r}); the two-pass "
+                "build refuses to guess which locus owns the stored row, so this build "
+                "refuses too"
+            )
     source_lookup = {**passthrough_lookup, **lifted_lookup}
     rsid_by_alid = _rekey_rsids_to_alids(source_lookup, rsid_by_site)
+    # The rekey's own output must equal the map an independent walk of the
+    # candidates over this same lookup produces, so a value the rekey attaches
+    # to the wrong ALID fails here (issue #255).
+    require_rsids_match_expected(
+        rsid_by_alid, expected_rsids_by_routing(rsid_by_site, source_lookup)
+    )
     log.info(
         "Pass 1 liftover/finalisation: %d source variants → %d hg38 ALIDs in %s",
         len(source_lookup),
         len(set(source_lookup.values())),
         _fmt_duration(time.monotonic() - finalise_start),
     )
-    return source_lookup, rsid_by_alid
+    return source_lookup, rsid_by_alid, dropped_keys
+
+
+#: A candidate or routing key: the raw source tuple, or the string form the
+#: build's routing index keys it by (`_source_site_key`).
+_SiteKeyT = TypeVar("_SiteKeyT")
 
 
 def _rekey_rsids_to_alids(
-    source_lookup: Mapping[tuple[str, int, str, str], str],
-    rsid_by_site: Mapping[tuple[str, int, str, str], str],
+    source_lookup: Mapping[_SiteKeyT, str],
+    rsid_by_site: Mapping[_SiteKeyT, str],
 ) -> dict[str, str]:
     """The rsid each ALID carries: the first non-empty in ``(rank, site)`` order.
 
@@ -1406,7 +1547,7 @@ def build_dense_from_vcf_manifest(
     ``allow_unverified_eaf`` with EAF orientation verification (issue #115, ADR 0037 §6).
     ``variant_reference`` (issue #185) supplies a precomputed axis
     (``*.variant-ref.tsv.gz``, an ALID list, or a store ``variants.tsv.gz``);
-    Pass 1 and liftover are then bypassed.
+    Pass 1 and liftover are bypassed save its rsid harvest (#255).
     """
     manifest_rows = _read_manifest(
         manifest_path,
@@ -1617,7 +1758,10 @@ def _resolve_axis_source(
     """
     if variant_reference is not None:
         reference = _load_variant_reference(variant_reference, manifest_rows)
-        return reference.alids, reference.source_lookup, reference.rsid_by_alid
+        rsid_by_alid = _reference_axis_rsids(
+            reference, manifest_rows, chain_file, liftover_failure_threshold, n_workers
+        )
+        return reference.alids, reference.source_lookup, rsid_by_alid
     source_lookup, rsid_by_alid = _lift_manifest_variants(
         manifest_rows,
         chain_file=chain_file,
@@ -1625,6 +1769,157 @@ def _resolve_axis_source(
         n_workers=n_workers,
     )
     return None, source_lookup, rsid_by_alid
+
+
+def _candidates_by_routing_key(
+    rsid_by_site: Mapping[SourceKey, str], key: SiteKeyFn, *, label: str
+) -> dict[str, str]:
+    """The harvest's candidates keyed as the build routes them, order kept.
+
+    A key function need not be injective -- a Hybrid routing case-folds -- and
+    two raw sites that collapse onto one key are one stored variant, so the
+    first non-empty rsid in `(rank, site)` order wins. Two *different* non-empty
+    names for one key cannot be resolved honestly: the two-pass build refuses
+    such an input (its routing index sees conflicting targets), so this refuses
+    too rather than pick one (issue #255 round 4).
+    """
+    candidates: dict[str, str] = {}
+    first_site: dict[str, SourceKey] = {}
+    for site, rsid in rsid_by_site.items():
+        folded = key(site)
+        if folded not in candidates:
+            candidates[folded] = rsid
+            first_site[folded] = site
+            continue
+        existing = candidates[folded]
+        if rsid and existing and rsid != existing:
+            raise ValueError(
+                f"{label}: two source variants case-fold to one routing key "
+                f"{folded!r} with different rsids: {first_site[folded]!r} names "
+                f"{existing!r} but {site!r} names {rsid!r}; both associations route "
+                "to one stored variant, so refusing to choose a name -- a wrong "
+                "answer indistinguishable from a right one"
+            )
+        if not existing:
+            candidates[folded] = rsid
+    return candidates
+
+
+def _routing_lookup(
+    source_lookup: Mapping[SourceKey, str], key: SiteKeyFn
+) -> dict[str, str]:
+    """A site -> ALID routing keyed as the build routes it (`key`)."""
+    return {key(site): alid for site, alid in source_lookup.items()}
+
+
+def _log_routing_disagreements(
+    candidates: Mapping[str, str],
+    routing: Mapping[str, str],
+    pass1_lookup: Mapping[SourceKey, str] | None,
+    key: SiteKeyFn,
+    *,
+    label: str,
+) -> None:
+    """Log named sites the build's routing places differently from Pass 1's.
+
+    The build's routing is the authority; Pass 1's lift is only a second
+    opinion, so a disagreement is reported rather than resolved.
+    """
+    if pass1_lookup is None:
+        return
+    # Only a site the reference actually routes can disagree with Pass 1: a site
+    # it does not route is off-reference and is dropped (Dense) or resolved by
+    # the fold (Hybrid), which is the documented behaviour, not a disagreement.
+    disagreed = sum(
+        1
+        for site, pass1_alid in pass1_lookup.items()
+        if key(site) in candidates
+        and (routed := routing.get(key(site))) is not None
+        and routed != pass1_alid
+    )
+    if disagreed:
+        log.warning(
+            "%s: %d source variant(s) that named an rsid route to a different ALID "
+            "under the reference than under Pass 1's own liftover; the reference "
+            "routing wins, so the name stays on the variant its association uses",
+            label,
+            disagreed,
+        )
+
+
+def _rekey_and_verify(
+    rsid_by_site: Mapping[SourceKey, str],
+    routing: Mapping[str, str],
+    pass1_lookup: Mapping[SourceKey, str] | None = None,
+    *,
+    key: SiteKeyFn = _source_site_key,
+    label: str = "Single-pass build",
+) -> dict[str, str]:
+    """Rekey harvested candidates ONCE through ONE routing, and verify exactly.
+
+    ``routing`` must be the build's own key form and the *final* routing -- a
+    reference's source keys combined with, for a Hybrid build, the fold's
+    off-reference resolution. One rekey in the candidates' `(rank, site)` order
+    and one global oracle comparison, so no partition can win a name the global
+    first-candidate rule would not give it (issue #255).
+
+    The oracle walks the **raw** ``rsid_by_site`` through ``key`` itself rather
+    than reading the keyed candidates, so the key preparation is checked: a
+    collapse that keeps the wrong name disagrees with the raw walk and fails
+    (issue #255 round 4).
+    """
+    candidates = _candidates_by_routing_key(rsid_by_site, key, label=label)
+    _log_routing_disagreements(candidates, routing, pass1_lookup, key, label=label)
+    resolved = _rekey_rsids_to_alids(routing, candidates)
+    require_rsids_match_expected(
+        resolved, expected_rsids_by_routed_key(rsid_by_site, routing, key)
+    )
+    return resolved
+
+
+def _reference_axis_rsids(
+    reference: VariantReference,
+    manifest_rows: list[_ManifestRow],
+    chain_file: str | Path | None,
+    liftover_failure_threshold: float,
+    n_workers: int,
+) -> dict[str, str]:
+    """The axis's rsids: the reference's own, or Pass 1's rekeyed through it.
+
+    A variant reference that names no rsid -- a plain ALID list, or a Store
+    Variant Table whose ``rsid`` column is ``.``, like OGS-00004's EUR panel --
+    would otherwise leave the single-pass build with a blank ``rsid`` column on
+    every row. The build runs Pass 1's own harvest for the candidate rows and
+    their ``(rank, site)`` order, then rekeys them through the routing it
+    actually uses: the reference's source keys, keyed exactly as the routing
+    index keys them, never Pass 1's own liftover -- because the reference
+    decides which ALID an association lands on (issue #255). A reference that
+    carries rsids is its own authority and no read is spent.
+    """
+    if reference.rsid_by_alid:
+        # A reference that names rsids is used as-is (out of #255's scope); warn
+        # about the axis rows it leaves blank, exactly as the Hybrid builder does
+        # (issue #255 round 5, finding 2).
+        warn_reference_left_rows_blank(reference)
+        return dict(reference.rsid_by_alid)
+    pass1_lookup, rsid_by_site, _ = _harvest_manifest_variants(
+        manifest_rows,
+        chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold,
+        n_workers=n_workers,
+    )
+    resolved = _rekey_and_verify(
+        rsid_by_site,
+        _routing_lookup(reference.source_lookup, _source_site_key),
+        pass1_lookup,
+        key=_source_site_key,
+    )
+    log.info(
+        "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "
+        "for the variant axis",
+        len(resolved),
+    )
+    return resolved
 
 
 def _load_variant_reference(
@@ -1685,6 +1980,10 @@ def _prepare_axis(
     )
     axis, variant_index = _axis_metadata(source_lookup, manifest_rows, alids=alids)
     _write_axis_and_index(staged, source_lookup, axis, rsid_by_alid, chunk_shape)
+    # The table just written must be the table the resolved map describes: a
+    # partial harvest loss, an off-reference row dropped from the write, or a
+    # table written from a stale map fails here, on the bytes (issue #255).
+    require_written_rsids_match(staged.path, axis.alids, rsid_by_alid)
     keys_sorted, rows_sorted = _build_pass2_lookup(source_lookup, variant_index)
     return _PreparedBuild(
         axis=axis,
