@@ -39,7 +39,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import zarr
 
 from opengwasdb.encoding import (
     EAF_BASELINE,
@@ -51,7 +50,6 @@ from opengwasdb.encoding import (
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import _sorted_alids, _write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
-from opengwasdb.layouts.dense.constants import DEFAULT_COMPRESSOR
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import _write_variant_table
 from opengwasdb.layouts.hybrid.layout import (
@@ -72,6 +70,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store.arrays import open_group, open_group_for_write, write_shard_cells
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -404,7 +403,9 @@ def _write_shared_tables_and_overflow(
     completed_against; writing it back at the shared root is the one place
     Analysis metadata is written, not a second provenance carry.
     """
-    _write_index(staged, axis.alids, analyses, _chunk_shape(src_manifest))
+    dense_layout = _dense_component_layout(staged.path)
+    chunk = tuple(int(size) for size in dense_layout.get("chunk_shape", _chunk_shape(src_manifest)))
+    _write_index(staged, axis.alids, analyses, (chunk[0], chunk[1]))
     source_by_alid = {a: overflow.source_alid_by_alid.get(a) for a in axis.alids}
     _write_variant_table(staged.path, axis.alids, source_by_alid, overflow.rsid_by_alid)
     dense_to_shared = np.array([axis.index[a] for a in axis.dense_alids], dtype=np.int32)
@@ -481,7 +482,7 @@ def _shared_se_coefficients(dense_dir: Path, source_encoding: StoreEncoding) -> 
     """
     if not source_encoding.se.is_residual:
         return None
-    root = zarr.open_group(str(dense_dir / "data.zarr"), mode="r")
+    root = open_group(dense_dir / "data.zarr")
     return np.asarray(root["se_coefficients"][:], dtype=np.float32)
 
 
@@ -576,13 +577,15 @@ def _fold_panel_crossovers(
     se_vals = src_se[crossover_idx].astype(np.float32)
     eaf_vals = src_eaf[crossover_idx].astype(np.float32)
 
-    root = zarr.open_group(str(dense_dir / "data.zarr"), mode="a")
+    root = open_group_for_write(dense_dir / "data.zarr", "a")
     was_imputed = np.asarray(root["imputed"].vindex[row_idx, col_idx])
     n_reclaimed = int(was_imputed.sum())
     # Through the plane, so the Dense Component's overflow table moves with the
     # cells being overwritten rather than being left describing their old values.
     DenseZPlane.open(root, encoding).patch(row_idx, col_idx, z_vals)
-    root["imputed"].vindex[row_idx, col_idx] = 0
+    write_shard_cells(
+        root["imputed"], row_idx, col_idx, np.zeros(len(row_idx), dtype=np.uint8)
+    )
     # The crossed-over cell's EAF moves with its z/se (ADR 0036) -- the whole
     # point of the fold is that this is one real observation, not two. Through
     # the plane, so the cell is coded against the Dense Component's own
@@ -691,7 +694,7 @@ def _write_completed_manifest(
                 "n_panel": n_panel,
                 "n_off_panel": n_off_panel,
                 "n_overflow_associations": n_overflow,
-                "compressor": DEFAULT_COMPRESSOR,
+                **_dense_component_layout(staged.path),
             },
             "n_variants": n_variants,
             "n_analyses": n_analyses,
@@ -713,6 +716,23 @@ def _write_completed_manifest(
     staged.write_manifest(manifest)
 
 
+def _dense_component_layout(staged_path: Path) -> dict[str, Any]:
+    """The completed Dense Component's real layout, from its own root attrs.
+
+    The source's `provenance.hybrid` records the **observed** component's chunk
+    and shard; completion changes the axis, so re-recording the observed shapes
+    would describe arrays the completed component does not have -- the
+    recorded-layout rule (issue #245, #248) rejects that, and a reader sizing
+    reads from it would decode the wrong blocks.
+    """
+    attrs = dict(open_group(dense_component_path(staged_path) / "data.zarr", "r").attrs)
+    return {
+        key: attrs[key]
+        for key in ("chunk_shape", "shard_shape", "compressor", "zarr_format")
+        if key in attrs
+    }
+
+
 def _remapped_overflow_baseline(
     source_path: Path,
     vi_to_record: Mapping[int, VariantRecord],
@@ -724,7 +744,7 @@ def _remapped_overflow_baseline(
     A variant with no overflow association after the remap keeps a NaN
     baseline: it has no cell to code against one.
     """
-    group = zarr.open_group(str(Path(source_path) / RAGGED_ZARR_PATH), mode="r")
+    group = open_group(Path(source_path) / RAGGED_ZARR_PATH)
     if EAF_BASELINE not in group:
         return None
     src_baseline = np.asarray(group[EAF_BASELINE][:], dtype=np.float32)

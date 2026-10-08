@@ -31,6 +31,7 @@ from opengwasdb.layouts.dense.complete import (
 )
 from opengwasdb.model.analyses import read_analyses, write_analyses
 from opengwasdb.query import query_store
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.validation.validate import validate_store
 from opengwasdb.variants import VariantAxis
@@ -391,6 +392,42 @@ class TestValidation:
         result = validate_store(completed_store)
         assert result.ok, result.errors
 
+    def test_a_completed_manifest_records_the_chunk_shape_the_arrays_have(
+        self, tmp_path, source_path, ld_panel
+    ):
+        """Completion writes the grid at the default chunk, not at the source's
+        build-wide hint, so its manifest must record what it wrote.
+
+        Before #245 it inherited the source's `provenance.dense.chunk_shape`, so
+        a completed release whose source used a different hint described arrays
+        it did not hold -- the silent failure class the recorded-layout rule
+        now catches.
+        """
+        import json
+
+        from opengwasdb.build.source import read_normalised_associations
+        from opengwasdb.layouts.dense import build_dense_observed_store
+
+        observed = tmp_path / "obs-small-chunk.opengwasdb"
+        build_dense_observed_store(
+            read_normalised_associations(source_path),
+            observed,
+            store_id="test",
+            release_id="obs-small",
+            reference_assembly="GRCh38",
+            chunk_shape=(2, 2),
+        )
+        source_manifest = json.loads((observed / "manifest.json").read_text())
+        assert source_manifest["provenance"]["dense"]["chunk_shape"] == [2, 2]
+
+        completed = tmp_path / "comp-small-chunk.opengwasdb"
+        complete_dense_store(observed, completed, ld_panel, ancestry="EUR", min_cor=0.0)
+        manifest = json.loads((completed / "manifest.json").read_text())
+        root = open_store(completed).arrays(mode="r")
+
+        assert manifest["provenance"]["dense"]["chunk_shape"] == list(root["z"].chunks)
+        assert validate_store(completed).ok
+
     def test_observed_store_still_passes(self, observed_store):
         result = validate_store(observed_store)
         assert result.ok, result.errors
@@ -462,12 +499,19 @@ class TestValidation:
         # (not just resize it, which would leave an over-wide chunk and trip
         # the chunking rule first).
         root = open_store(completed_store).arrays(mode="a")
-        n = len(root["eaf_reference"])
+        n = root["eaf_reference"].shape[0]
         assert n > 1  # the fixture really has a per-variant reference to shrink
         values = root["eaf_reference"][: n - 1]
         dtype = root["eaf_reference"].dtype
         del root["eaf_reference"]
-        root.create_dataset("eaf_reference", data=values, chunks=(1,), dtype=dtype)
+        create_array(
+            root,
+            "eaf_reference",
+            ArrayRole.PER_VARIANT,
+            data=np.asarray(values, dtype=dtype),
+            compressor=compressor(),
+            inner_chunk=(1,),
+        )
 
         result = validate_store(completed_store)
 

@@ -12,6 +12,8 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.store.arrays import ArrayRole, create_array
+
 #: The arrays the Dense Component band write owns. A residual `eaf` build also
 #: carries the baseline and exception tables; a `float32` or `absent` one does
 #: not, so each array is compared only where the build produced it.
@@ -34,6 +36,31 @@ def assert_same_band_arrays(before: Any, after: Any) -> None:
             assert name not in after, name
             continue
         np.testing.assert_array_equal(before[name][:], after[name][:], err_msg=name)
+
+
+def replace_exception_table(root: Any, index_name: str, value_name: str) -> None:
+    """Drop one exception table's first cell, leaving the arrays shard-valid.
+
+    Used to plant the "the table lost a cell" defect in a built store.  The
+    arrays are rewritten through the seam, so they are sharded as a 0.2.0
+    release's must be and the error under test is the lost cell, not a format
+    rule the corruption accidentally tripped (#247).  The tables are written
+    uncompressed (`compressor=None`).
+    """
+    kept_index = np.asarray(root[index_name][:])[1:]
+    kept_value = np.asarray(root[value_name][:])[1:]
+    for name, data, dtype in (
+        (index_name, kept_index, "int64"),
+        (value_name, kept_value, "float32"),
+    ):
+        del root[name]
+        create_array(
+            root,
+            name,
+            ArrayRole.EXCEPTION_TABLE,
+            data=np.asarray(data, dtype=dtype),
+            compressor=None,
+        )
 
 
 def assert_same_top_hits(before: Any, after: Any, names: tuple[str, ...]) -> None:

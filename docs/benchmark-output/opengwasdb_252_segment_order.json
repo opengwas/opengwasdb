@@ -1,0 +1,109 @@
+{
+  "rule": "variant_index is non-decreasing within every Analysis's segment (spec \u00a711, \u00a720)",
+  "root": "/data/opengwasdb/stores",
+  "note": "Runs only the segment-ordering rule, not the whole of validate_store. Peak RSS is the process peak while the rule ran, including opening the store's offsets; the array is read in 1,000,000-cell windows and never materialised. `entries_checked` is the count the scan actually read; `entries_expected` is the offset-implied total, and the two agree only when the array length matches the offsets.",
+  "stores": {
+    "OGS-00001": {
+      "segments_checked": 10,
+      "entries_expected": 86373,
+      "entries_checked": 86373,
+      "wall_s": 0.09,
+      "baseline_mb": 155.9,
+      "peak_mb": 162.1,
+      "delta_mb": 6.2,
+      "ok": true,
+      "errors": [],
+      "store": "/data/opengwasdb/stores/OGS-00001/store.opengwasdb",
+      "layout": "ragged"
+    },
+    "OGS-00002": {
+      "segments_checked": 10,
+      "entries_expected": 207761,
+      "entries_checked": 207761,
+      "wall_s": 0.03,
+      "baseline_mb": 156.2,
+      "peak_mb": 163.5,
+      "delta_mb": 7.3,
+      "ok": true,
+      "errors": [],
+      "store": "/data/opengwasdb/stores/OGS-00002/store.opengwasdb",
+      "layout": "ragged"
+    },
+    "OGS-00004": {
+      "segments_checked": 9,
+      "entries_expected": 27369974,
+      "entries_checked": 27369974,
+      "wall_s": 0.268,
+      "baseline_mb": 155.8,
+      "peak_mb": 176.7,
+      "delta_mb": 20.9,
+      "ok": true,
+      "errors": [],
+      "store": "/data/opengwasdb/stores/OGS-00004/store.opengwasdb",
+      "layout": "hybrid"
+    },
+    "OGS-00005": {
+      "segments_checked": 10,
+      "entries_expected": 6562223,
+      "entries_checked": 6562223,
+      "wall_s": 0.108,
+      "baseline_mb": 156.2,
+      "peak_mb": 175.0,
+      "delta_mb": 18.8,
+      "ok": true,
+      "errors": [],
+      "store": "/data/opengwasdb/stores/OGS-00005/store.opengwasdb",
+      "layout": "hybrid"
+    },
+    "OGS-00006": {
+      "segments_checked": 1400,
+      "entries_expected": 58054212,
+      "entries_checked": 58054212,
+      "wall_s": 3.705,
+      "baseline_mb": 160.1,
+      "peak_mb": 178.9,
+      "delta_mb": 18.8,
+      "ok": true,
+      "errors": [],
+      "store": "/data/opengwasdb/stores/OGS-00006/store.opengwasdb",
+      "layout": "ragged"
+    },
+    "OGS-00007": {
+      "segments_checked": 10,
+      "entries_expected": 202803,
+      "entries_checked": 202803,
+      "wall_s": 0.031,
+      "baseline_mb": 156.3,
+      "peak_mb": 163.7,
+      "delta_mb": 7.4,
+      "ok": true,
+      "errors": [],
+      "store": "/data/opengwasdb/stores/OGS-00007/store.opengwasdb",
+      "layout": "ragged"
+    },
+    "OGS-00011": {
+      "segments_checked": 3317,
+      "entries_expected": 3085080783,
+      "entries_checked": 3085080783,
+      "wall_s": 26.158,
+      "baseline_mb": 156.3,
+      "peak_mb": 182.6,
+      "delta_mb": 26.3,
+      "ok": true,
+      "errors": [],
+      "store": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+      "layout": "hybrid"
+    }
+  },
+  "load_start": [
+    13.34,
+    14.56,
+    7.8
+  ],
+  "all_ok": true,
+  "load_end": [
+    28.73,
+    19.74,
+    9.91
+  ]
+}

@@ -21,10 +21,14 @@ from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.layouts.dense.constants import TOP_HIT_THRESHOLDS
 from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.arrays import ArrayRole
+
+#: Re-exported from the seam, which owns the role's default layout, so the
+#: writer default and the `TOP_HIT_INDEX` policy cannot disagree.
+TOP_HIT_CHUNK_SIZE = store_arrays.TOP_HIT_CHUNK_SIZE
 
 log = logging.getLogger(__name__)
-
-TOP_HIT_CHUNK_SIZE = 16_384
 
 # Positional pairing of TOP_HIT_THRESHOLDS with the analyses.tsv column each
 # tier persists to (model.analyses.TOP_HIT_COUNT_COLUMNS). A dict, not a zip
@@ -34,15 +38,44 @@ _THRESHOLD_COLUMNS = dict(zip(TOP_HIT_THRESHOLDS, TOP_HIT_COUNT_COLUMNS, strict=
 
 
 class DenseTopHitReader:
-    """Address one threshold tier without exposing its physical arrays."""
+    """Address one threshold tier without exposing its physical arrays.
+
+    Each of the tier's arrays is opened at most once per reader (#244).
+    zarr-python 3 reads an array's metadata from the store on every
+    ``group[name]`` and every ``name in group`` -- about 1 ms each on a local
+    store -- and one top-hit query touches up to seven arrays, so a reader that
+    reopened them per field spent more time on metadata than on hits (OGS-00009:
+    21 ms as it was, 5.8 ms opened once).  A Store Release does not change while
+    it is queried, so an opened array stays valid for the reader's lifetime.
+    """
 
     def __init__(self, group: zarr.Group):
         self.group = group
+        self._arrays: dict[str, zarr.Array | None] = {}
+
+    def _array(self, name: str) -> zarr.Array | None:
+        """The tier's array `name`, or None when this index predates it."""
+        if name not in self._arrays:
+            try:
+                self._arrays[name] = self.group[name]
+            except KeyError:
+                self._arrays[name] = None
+        return self._arrays[name]
+
+    def _required(self, name: str) -> zarr.Array:
+        array = self._array(name)
+        if array is None:
+            raise KeyError(f"top-hit tier {self.group.path!r} has no {name!r} array")
+        return array
+
+    def has(self, name: str) -> bool:
+        """Whether this tier's index carries the array `name`."""
+        return self._array(name) is not None
 
     def bounds(self, analysis_index: int | None) -> tuple[int, int]:
         if analysis_index is None:
-            return 0, int(self.group["z"].shape[0])
-        offsets = self.group["analysis_offsets"]
+            return 0, int(self._required("z").shape[0])
+        offsets = self._required("analysis_offsets")
         if analysis_index < 0 or analysis_index + 1 >= int(offsets.shape[0]):
             return 0, 0
         pair = offsets[analysis_index : analysis_index + 2]
@@ -50,7 +83,7 @@ class DenseTopHitReader:
 
     def read(self, name: str, bounds: tuple[int, int], dtype: str) -> np.ndarray:
         start, stop = bounds
-        return np.asarray(self.group[name][start:stop], dtype=dtype)
+        return np.asarray(self._required(name)[start:stop], dtype=dtype)
 
     def read_or(
         self,
@@ -60,9 +93,32 @@ class DenseTopHitReader:
         fallback: Callable[[], np.ndarray],
     ) -> np.ndarray:
         """Read an indexed result field, or derive it for an older index."""
-        if name in self.group:
+        if self.has(name):
             return self.read(name, bounds, dtype)
         return np.asarray(fallback(), dtype=dtype)
+
+
+class TopHitTiers:
+    """A store's top-hit threshold tiers, each opened once and kept (#244).
+
+    A query facade holds one, so a repeated top-hit query reuses the tier group
+    and the arrays its `DenseTopHitReader` already opened instead of reading
+    their metadata from the store again.
+    """
+
+    def __init__(self, root: zarr.Group):
+        self._root = root
+        self._readers: dict[str, DenseTopHitReader | None] = {}
+
+    def reader(self, threshold: float) -> DenseTopHitReader | None:
+        """The tier for `threshold`, or None when the store has no such tier."""
+        key = threshold_key(threshold)
+        if key not in self._readers:
+            try:
+                self._readers[key] = DenseTopHitReader(self._root[f"top_hits/{key}"])
+            except KeyError:
+                self._readers[key] = None
+        return self._readers[key]
 
 
 def read_top_hit_counts(
@@ -82,7 +138,7 @@ def read_top_hit_counts(
     function otherwise reads directly, so it falls back to counting the
     flat ``analysis_index`` array by hand for those.
     """
-    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="r")
+    root = store_arrays.open_group(Path(store_path) / "data.zarr")
     top = root["top_hits"]
     counts: dict[str, list[int]] = {}
     for threshold in thresholds:
@@ -146,9 +202,7 @@ def write_threshold_tier(
     array cannot be dropped from one of those steps and not the others.
     """
     key = threshold_key(threshold)
-    if key in top:
-        del top[key]
-    group = top.create_group(key)
+    group = store_arrays.create_group(top, key)
 
     keep = abs_z >= z_critical(threshold)
     kept = {name: values[keep] for name, values in columns.items()}
@@ -165,21 +219,23 @@ def write_threshold_tier(
         dtype=np.uint64,
         out=offsets[1:],
     )
-    chunk = max(1, min(len(kept["variant_index"]), chunk_size))
-    group.create_dataset(
+    store_arrays.create_array(
+        group,
         "analysis_offsets",
+        ArrayRole.TOP_HIT_ANALYSIS_OFFSETS,
         data=offsets,
-        chunks=(len(offsets),),
-        compressor=compressor,
         dtype="uint64",
+        compressor=compressor,
     )
     for name, values in kept.items():
-        group.create_dataset(
+        store_arrays.create_array(
+            group,
             name,
+            ArrayRole.TOP_HIT_INDEX,
             data=values,
-            chunks=(chunk,),
-            compressor=compressor,
             dtype=_TIER_DTYPES[name],
+            compressor=compressor,
+            hint=chunk_size,
         )
     group.attrs["threshold"] = threshold
     group.attrs["order"] = "analysis_index,variant_index"
@@ -221,13 +277,13 @@ def write_top_hit_indexes(
         columns["eaf"] = np.asarray(eaf, dtype="float32")
     abs_z = np.abs(columns["z"]).astype("float32")
 
-    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="a")
-    top = root.require_group("top_hits")
+    root = store_arrays.open_group_for_write(Path(store_path) / "data.zarr", "a")
+    top = store_arrays.require_group(root, "top_hits")
     n_analyses = int(root["z"].shape[1])
-    compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+    comp = store_arrays.compressor()
 
     for threshold in thresholds:
-        write_threshold_tier(top, threshold, columns, abs_z, n_analyses, chunk_size, compressor)
+        write_threshold_tier(top, threshold, columns, abs_z, n_analyses, chunk_size, comp)
     top.attrs["thresholds"] = list(thresholds)
 
 
@@ -385,7 +441,7 @@ def build_top_hit_indexes(
     store_path = Path(store_path)
     if encoding is None:
         encoding = StoreManifest.load(store_path).encoding
-    root = zarr.open_group(str(store_path / "data.zarr"), mode="r")
+    root = store_arrays.open_group(store_path / "data.zarr")
     z_plane = DenseZPlane.open(root, encoding)
     imputed_arr = root["imputed"] if "imputed" in root else None
     eaf_plane = DenseEafPlane.open(root, encoding)
@@ -451,7 +507,7 @@ def _collect_top_hit_eaf(
     n_workers: int = 1,
 ) -> np.ndarray | None:
     """Collect candidate EAF values in row-chunk order for an inline build."""
-    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="r")
+    root = store_arrays.open_group(Path(store_path) / "data.zarr")
     plane = DenseEafPlane.open(root, encoding)
     if not plane.can_report_frequencies:
         return None
@@ -466,7 +522,7 @@ def _collect_top_hit_se(
     n_workers: int = 1,
 ) -> np.ndarray:
     """Collect candidate SE values in row-chunk order, decoded as a query sees them."""
-    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="r")
+    root = store_arrays.open_group(Path(store_path) / "data.zarr")
     return _gather_in_row_chunks(
         root, rows, cols, DenseSePlane.open(root, encoding).band, n_workers
     )

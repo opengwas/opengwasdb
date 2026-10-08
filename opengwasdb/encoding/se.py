@@ -34,8 +34,27 @@ from opengwasdb.encoding.plan import (
 )
 from opengwasdb.encoding.planes import DenseEafPlane, write_se_coefficients
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
+from opengwasdb.store.arrays import (
+    ArrayRole,
+    compressor,
+    compressor_of,
+    create_array,
+    move_in_group,
+)
 
 log = logging.getLogger(__name__)
+
+
+def _row_block_of(array: Any) -> int:
+    """Rows per rewrite band for a Dense plane: one whole Dense shard.
+
+    The rewrite writes ``pending[r0:r1]`` across every Analysis, so its band has
+    to be a whole number of shards on the variant axis, or each write becomes a
+    read-modify-write of the shard it ends inside (issue #247).  A v2 array has
+    no shard; its inner chunk is the whole stored unit and is used as before.
+    """
+    shards = getattr(array, "shards", None)
+    return int(shards[0]) if shards is not None else int(array.chunks[0])
 
 
 def _optional_phase(timer: PhaseTimer | None, name: str) -> AbstractContextManager[None]:
@@ -484,7 +503,11 @@ def _measure_dense(
     global _MEASURE
     n_rows, n_analyses = map(int, source.shape)
     row_chunk, col_chunk = map(int, source.chunks)
-    compressor = source.compressor
+    # Measurement needs a *synchronous* ``encode``: zarr 3's `BloscCodec.encode`
+    # is a coroutine, while the Store format has exactly one Blosc
+    # configuration and the v3 codec writes the same frame, so the numcodecs
+    # spelling measures what the v3 codec will store (issue #247).
+    measuring_codec = compressor()
     # The planes this decision writes declare their own fills: the int8 codes
     # plane `_rewrite_dense` produces is created with `SE_MISSING` as its fill,
     # and a float32 scratch plane is narrowed to `float16` with NaN. A source
@@ -502,7 +525,7 @@ def _measure_dense(
         np.broadcast_to(columns, (row_chunk, n_analyses)),
         row_chunk,
         col_chunk,
-        compressor,
+        measuring_codec,
         float16_fill,
         n_analyses,
         chunk_timer,
@@ -510,7 +533,7 @@ def _measure_dense(
     started = time.monotonic()
     try:
         return _run_dense_measurement(
-            _MeasureAccumulators.zeros(compressor, n_analyses),
+            _MeasureAccumulators.zeros(measuring_codec, n_analyses),
             starts,
             timer,
             chunk_timer,
@@ -656,33 +679,36 @@ def _measure_overflow(
     return _ComponentCost(float_bytes, finite_per_analysis, *_charged(sides, code_bytes))
 
 
-def _empty_exception_arrays(group: Any, count: int, compressor: Any) -> tuple[Any, Any]:
+def _empty_exception_arrays(
+    group: Any,
+    count: int,
+    compressor: Any,
+    *,
+    role: ArrayRole = ArrayRole.EXCEPTION_TABLE,
+) -> tuple[Any, Any]:
     """Allocate the side table the streaming rewrite fills in position order.
 
     Sized from the rewrite's codes-only count pass rather than grown: the
     rewrite visits row chunks in order, so the exceptions arrive already sorted
-    and can be written straight into their final slots.
+    and can be written straight into their final slots.  `role` names the
+    component's table policy explicitly; a Ragged CSR component opened directly
+    at `data.zarr/ragged` reports `path == ""`, so the caller that knows its
+    component must say so (#247 review round 1).
     """
-    for name in (SE_EXCEPTION_INDEX, SE_EXCEPTION_VALUE):
-        if name in group:
-            del group[name]
-    chunks = (max(1, min(count, EXACT_TABLE_CHUNK)),)
-    return (
-        group.create_dataset(
-            SE_EXCEPTION_INDEX,
+
+    def one(name: str, dtype: str) -> Any:
+        return create_array(
+            group,
+            name,
+            role,
             shape=(count,),
-            chunks=chunks,
+            dtype=dtype,
             compressor=compressor,
-            dtype="int64",
-        ),
-        group.create_dataset(
-            SE_EXCEPTION_VALUE,
-            shape=(count,),
-            chunks=chunks,
-            compressor=compressor,
-            dtype="float32",
-        ),
-    )
+            hint=EXACT_TABLE_CHUNK,
+            overwrite=True,
+        )
+
+    return one(SE_EXCEPTION_INDEX, "int64"), one(SE_EXCEPTION_VALUE, "float32")
 
 
 @dataclass
@@ -812,19 +838,49 @@ class _RewriteSink:
     pending: Any
     exception_index: Any
     exception_value: Any
+    exception_count: int
     row_chunk: int
     n_rows: int
     n_chunks: int
     chunk_timer: PhaseTimer | None
 
 
+def _write_exception_tables(
+    sink: _RewriteSink, index_parts: list[np.ndarray], value_parts: list[np.ndarray], cursor: int
+) -> None:
+    """Write both exception tables once, as whole arrays (#249).
+
+    `se_exception_index`/`_value` have the "one shard holds the whole array"
+    policy, so a per-band write into them is a read-modify-write of the whole
+    table: about 99 of them on OGS-00008's 9.85 M rows.  The bands' runs are
+    buffered (the tables are exact-value side tables, 12 bytes an entry) and
+    each table is written once.  The cursor must equal the preallocated count
+    before anything is written, so a mismatch cannot leave a short or broadcast
+    table behind; `_finish_rewrite` repeats the check after this returns.
+    """
+    if cursor != sink.exception_count:
+        raise RuntimeError(
+            f"SE codes-only pass counted {sink.exception_count} exceptions but rewrite "
+            f"produced {cursor}"
+        )
+    index = np.concatenate(index_parts) if index_parts else np.empty(0, dtype=np.int64)
+    value = np.concatenate(value_parts) if value_parts else np.empty(0, dtype=np.float32)
+    with _optional_phase(sink.chunk_timer, "rewrite.exceptions"):
+        sink.exception_index[0:cursor] = index
+        sink.exception_value[0:cursor] = value
+
+
 def _run_rewrite_bands(sink: _RewriteSink, starts: range, n_workers: int, timer: PhaseTimer) -> int:
     """Encode every band across the pool and write them back in row order.
 
-    The parent consumes ``ordered_map`` in row order, so the pending plane and
-    the exception side table are filled exactly as the serial pass fills them.
+    The parent consumes ``ordered_map`` in row order, so the pending plane is
+    filled exactly as the serial pass fills it, and the exception runs are
+    collected in that same order and written to their tables once at the end
+    (#249).
     """
     cursor = 0
+    index_parts: list[np.ndarray] = []
+    value_parts: list[np.ndarray] = []
     started = time.monotonic()
     umbrella = timer.phase("rewrite.parallel") if n_workers > 1 else nullcontext()
     with umbrella:
@@ -833,11 +889,9 @@ def _run_rewrite_bands(sink: _RewriteSink, starts: range, n_workers: int, timer:
             r1 = min(r0 + sink.row_chunk, sink.n_rows)
             with _optional_phase(sink.chunk_timer, "rewrite.write"):
                 sink.pending[r0:r1] = raw
-            with _optional_phase(sink.chunk_timer, "rewrite.exceptions"):
-                end = cursor + len(table)
-                sink.exception_index[cursor:end] = table.index
-                sink.exception_value[cursor:end] = table.value
-                cursor = end
+            index_parts.append(table.index)
+            value_parts.append(table.value)
+            cursor += len(table)
             log_progress(
                 log,
                 "SE rewrite",
@@ -846,6 +900,7 @@ def _run_rewrite_bands(sink: _RewriteSink, starts: range, n_workers: int, timer:
                 started,
                 every=max(1, sink.n_chunks // 20),
             )
+    _write_exception_tables(sink, index_parts, value_parts, cursor)
     return cursor
 
 
@@ -858,8 +913,34 @@ def _finish_rewrite(
             f"SE codes-only pass counted {exception_count} exceptions but rewrite produced {cursor}"
         )
     del group["se"]
-    group.move("se_pending", "se")
+    move_in_group(group, "se_pending", "se")
     write_se_coefficients(group, coefficients, compressor=compressor)
+
+
+def _rewrite_arrays(
+    group: Any, source: Any, exception_count: int
+) -> tuple[Any, Any, Any, Any]:
+    """The `int8` pending plane and the two exception tables the rewrite fills.
+
+    `compressor_of(source)` is the source plane's own codec, so the plane and
+    side tables that replace it are stored as the plane they replace (the
+    manifest publishes one compressor configuration).  The exception tables are
+    allocated to the exact count the codes-only pass produced, which is what lets
+    `_write_exception_tables` write each once.
+    """
+    compressor = compressor_of(source)
+    pending = create_array(
+        group,
+        "se_pending",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        shape=source.shape,
+        dtype="int8",
+        fill_value=SE_MISSING,
+        compressor=compressor,
+        hint=source.chunks,
+    )
+    exception_index, exception_value = _empty_exception_arrays(group, exception_count, compressor)
+    return pending, exception_index, exception_value, compressor
 
 
 def _rewrite_dense(
@@ -880,23 +961,16 @@ def _rewrite_dense(
     or padded table.
 
     The coding is chunk-independent and runs across ``n_workers``; the parent
-    writes each band back in row order, so the exception table is filled in the
-    same order as the serial pass and the stored plane is unchanged.
+    writes each band back in row order and fills the exception tables once, so
+    the tables and the serial path's stored plane are unchanged (#249).
     """
     global _REWRITE
     source = group["se"]
     n_rows, n_analyses = map(int, source.shape)
-    row_chunk = int(source.chunks[0])
-    compressor = source.compressor
-    pending = group.create_dataset(
-        "se_pending",
-        shape=source.shape,
-        chunks=source.chunks,
-        compressor=compressor,
-        dtype="int8",
-        fill_value=SE_MISSING,
+    row_chunk = _row_block_of(source)
+    pending, exception_index, exception_value, compressor = _rewrite_arrays(
+        group, source, exception_count
     )
-    exception_index, exception_value = _empty_exception_arrays(group, exception_count, compressor)
     analysis_index = np.broadcast_to(np.arange(n_analyses, dtype=np.int64), (row_chunk, n_analyses))
     starts = range(0, n_rows, row_chunk)
     chunk_timer = timer if n_workers <= 1 else None
@@ -912,7 +986,14 @@ def _rewrite_dense(
         chunk_timer,
     )
     sink = _RewriteSink(
-        pending, exception_index, exception_value, row_chunk, n_rows, len(starts), chunk_timer
+        pending,
+        exception_index,
+        exception_value,
+        exception_count,
+        row_chunk,
+        n_rows,
+        len(starts),
+        chunk_timer,
     )
     try:
         with log_phase(log, "SE rewrite"):
@@ -1336,12 +1417,13 @@ def _measure_candidates(
     preliminary to an eligibility verdict (issue #229).
     """
     n_analyses = int(source.shape[1])
-    compressor = source.compressor
+    # Synchronous codec for the compressed-size measurement; see `_measure_dense`.
+    measuring_codec = compressor()
     dense = _measure_dense(source, eaf_plane, coefficients, timer, n_workers)
     overflow_cost, overflow_coefficient_bytes = _measure_overflow_component(
         overflow,
         coefficients,
-        overflow_compressor or compressor,
+        overflow_compressor or measuring_codec,
         overflow_chunk,
         n_analyses,
         timer,
@@ -1352,7 +1434,7 @@ def _measure_candidates(
         n_analyses,
         dense,
         overflow_cost,
-        dense_coefficient_bytes=_packed_coefficients(compressor, coefficients),
+        dense_coefficient_bytes=_packed_coefficients(measuring_codec, coefficients),
         overflow_coefficient_bytes=overflow_coefficient_bytes,
     )
 
@@ -1546,15 +1628,19 @@ def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> 
     if source.dtype == np.dtype("float16"):
         return
     n_rows = int(source.shape[0])
-    row_chunk = int(source.chunks[0])
+    # A row block of whole Dense shards, as the residual rewrite uses: a block
+    # ending inside a shard turns each write into a read-modify-write (#247).
+    row_chunk = _row_block_of(source)
     starts = range(0, n_rows, row_chunk)
-    pending = group.create_dataset(
+    pending = create_array(
+        group,
         "se_pending",
+        ArrayRole.DENSE_STATISTIC_PLANE,
         shape=source.shape,
-        chunks=source.chunks,
-        compressor=source.compressor,
         dtype="float16",
         fill_value=np.nan,
+        compressor=compressor_of(source),
+        hint=source.chunks,
     )
     started = time.monotonic()
     with log_phase(log, "SE float16 narrowing"):
@@ -1571,7 +1657,7 @@ def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> 
                     every=max(1, len(starts) // 20),
                 )
     del group["se"]
-    group.move("se_pending", "se")
+    move_in_group(group, "se_pending", "se")
 
 
 def optimise_dense_se(group: Any, encoding: StoreEncoding, n_workers: int = 1) -> StoreEncoding:

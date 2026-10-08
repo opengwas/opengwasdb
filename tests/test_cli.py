@@ -320,7 +320,7 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
     }
     assert info_data["store_id"] == "cf"
     assert info_data["release_id"] == "ov1"
-    assert info_data["format_version"] == "0.1.0"
+    assert info_data["format_version"] == "0.2.0"
     assert info_data["primary_layout"] == "dense"
     assert info_data["association_coverage"] == "full"
     assert info_data["completion_state"] == "observed_only"

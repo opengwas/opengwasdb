@@ -354,20 +354,18 @@ def write_index(store_path: Path, variants: list[VariantRow], analyses: list[Ana
 
 def write_zarr(store_path: Path, z: np.ndarray, se: np.ndarray) -> None:
     compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
-    root = zarr.open_group(str(store_path / "data.zarr"), mode="w")
-    root.create_dataset(
+    root = zarr.open_group(str(store_path / "data.zarr"), mode="w", zarr_format=2)
+    root.create_array(
         "z",
-        data=z,
+        data=np.asarray(z, dtype="float16"),
         chunks=DEFAULT_CHUNK_SHAPE,
-        compressor=compressor,
-        dtype="float16",
+        compressors=compressor,
     )
-    root.create_dataset(
+    root.create_array(
         "se",
-        data=se,
+        data=np.asarray(se, dtype="float16"),
         chunks=DEFAULT_CHUNK_SHAPE,
-        compressor=compressor,
-        dtype="float16",
+        compressors=compressor,
     )
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"

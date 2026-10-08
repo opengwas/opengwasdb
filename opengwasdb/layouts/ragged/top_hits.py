@@ -19,6 +19,12 @@ from opengwasdb.layouts.dense.top_hits import (
     z_critical,
 )
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
+from opengwasdb.store.arrays import (
+    array_length,
+    compressor,
+    open_group_for_write,
+    require_group,
+)
 
 log = logging.getLogger(__name__)
 
@@ -158,7 +164,7 @@ def _collect_ragged_candidates(
     with an ``imputed`` column keep exactly the columns the materialising loader
     produced.
     """
-    total = int(len(csr._variant_index))
+    total = array_length(csr._variant_index)
     offsets = np.asarray(csr._offsets[:], dtype=np.int64)
     n_analyses = len(offsets) - 1
     loosest = z_critical(max(thresholds))
@@ -226,12 +232,12 @@ def build_ragged_top_hit_indexes(
     with log_phase(log, "Ragged top-hit scan"):
         columns, abs_z, n_analyses = _collect_ragged_candidates(csr, thresholds, slice_cells)
 
-    root = zarr.open_group(str(store_path / "data.zarr"), mode="a")
-    top = root.require_group("top_hits")
-    compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+    root = open_group_for_write(store_path / "data.zarr", "a")
+    top = require_group(root, "top_hits")
+    comp = compressor()
     # The same parallel-array contract the dense builder writes, so both layouts
     # produce one schema and the facade and validator keep one code path.
-    _write_ragged_tiers(top, thresholds, columns, abs_z, n_analyses, compressor)
+    _write_ragged_tiers(top, thresholds, columns, abs_z, n_analyses, comp)
     top.attrs["thresholds"] = list(thresholds)
 
 

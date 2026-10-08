@@ -1,0 +1,8 @@
+{"read_s": 0.4, "shape": [100000, 2024], "dtype": "int16"}
+{"name": "v2_c1000", "chunks": [1000, 1000], "shards": null, "write_verify_s": 1.9}
+{"name": "v3_c1000_s", "chunks": [1000, 1000], "shards": [100000, 2000], "write_verify_s": 2.0}
+{"name": "v3_c128_s", "chunks": [1000, 128], "shards": [100000, 1024], "write_verify_s": 2.6}
+{"name": "v3_c64_s", "chunks": [1000, 64], "shards": [100000, 1024], "write_verify_s": 2.5}
+{"name": "v3_r2000c128_s", "chunks": [2000, 128], "shards": [100000, 1024], "write_verify_s": 1.2}
+{"name": "v3_r4000c256_s", "chunks": [4000, 256], "shards": [100000, 1024], "write_verify_s": 1.0}
+{"name": "v3_r250c512_s", "chunks": [250, 512], "shards": [100000, 1024], "write_verify_s": 1.6}

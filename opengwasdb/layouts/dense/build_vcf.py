@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import numpy as np
-from numcodecs import Blosc
 
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
@@ -61,10 +60,11 @@ from opengwasdb.layouts.dense.build import (
 )
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
-    DEFAULT_COMPRESSOR,
     DEFAULT_DTYPE,
     TOP_HIT_THRESHOLDS,
     dense_index_metadata,
+    dense_layout_records,
+    dense_provenance_block,
 )
 from opengwasdb.layouts.dense.top_hits import (
     write_top_hit_indexes_for_store,
@@ -90,6 +90,7 @@ from opengwasdb.model.manifest_columns import (
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.interface import SourceVariant
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromosome
@@ -116,7 +117,7 @@ log = logging.getLogger(__name__)
 
 # One compressor for every dense statistic array (z/se/eaf), so a new array
 # cannot quietly ship with different settings from the ones beside it.
-_DENSE_COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+_DENSE_COMPRESSOR = compressor()
 
 __all__ = ["build_dense_from_vcf_manifest", "LiftoverFailureError"]
 
@@ -2503,7 +2504,11 @@ def _write_index(
         set_metadata(connection, "schema_version", 1)
         set_metadata(connection, "n_variants", len(hg38_alids))
         set_metadata(connection, "n_analyses", len(analyses))
-        set_metadata(connection, "dense", dense_index_metadata(chunk_shape))
+        set_metadata(
+            connection,
+            "dense",
+            dense_index_metadata((len(hg38_alids), len(analyses)), hint=chunk_shape),
+        )
         connection.commit()
 
 
@@ -2527,11 +2532,17 @@ def _apply_eaf_scope(analyses: list[Analysis], column_has_eaf: np.ndarray) -> li
     ]
 
 
-def _eaf_row_band(effective_chunks: tuple[int, int], n_analyses: int) -> int:
-    """Rows per band for the re-encode pass: whole chunk rows, ~50M cells."""
-    chunk_rows = max(int(effective_chunks[0]), 1)
+def _eaf_row_band(shard_rows: int, n_analyses: int) -> int:
+    """Rows per band for the re-encode pass: whole shard rows, ~50M cells.
+
+    A row band must be a whole number of Dense shards (issue #247): a band that
+    ends inside a shard turns that shard's write into a read-modify-write.  The
+    band is at least one shard, then as many whole shards as fit in the ~50M-cell
+    memory target.
+    """
+    rows = max(int(shard_rows), 1)
     target = max(50_000_000 // max(n_analyses, 1), 1)
-    return max(chunk_rows, (target // chunk_rows) * chunk_rows)
+    return max(rows, (target // rows) * rows)
 
 
 def _write_dense_eaf(
@@ -2621,7 +2632,7 @@ def _encode_residual_dense_eaf(
     )
     baseline = np.full(n_variants, np.nan, dtype=np.float32)
     exceptions = EafExceptionBuilder()
-    band_rows = _eaf_row_band(effective_chunks, n_analyses)
+    band_rows = _eaf_row_band(_shard_rows(encoded, effective_chunks), n_analyses)
     for r0 in range(0, n_variants, band_rows):
         r1 = min(r0 + band_rows, n_variants)
         block = np.asarray(root[_EAF_STAGING][r0:r1], dtype=np.float32)
@@ -2673,15 +2684,16 @@ def _create_eaf_array(
     for half the ALID space.
     """
     root = staged.arrays(mode="a")
-    if name in root:
-        del root[name]
-    return root.create_dataset(
+    return create_array(
+        root,
         name,
+        ArrayRole.DENSE_STATISTIC_PLANE,
         shape=(n_variants, n_analyses),
-        chunks=effective_chunks,
-        compressor=_DENSE_COMPRESSOR,
         dtype=dtype,
         fill_value=fill_value,
+        compressor=_DENSE_COMPRESSOR,
+        hint=effective_chunks,
+        overwrite=True,
     )
 
 
@@ -2704,28 +2716,37 @@ def _create_dense_zarr(
     """
     compressor = _DENSE_COMPRESSOR
     codec = StoreCodec(encoding)
-    effective_chunks = (min(chunk_shape[0], n_variants), min(chunk_shape[1], n_analyses))
     root = staged.arrays(mode="w")
-    for name, plane_dtype, fill in (
-        ("z", codec.z_dtype, codec.z_fill_value),
+    z_array = create_array(
+        root,
+        "z",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        shape=(n_variants, n_analyses),
+        dtype=codec.z_dtype,
+        fill_value=codec.z_fill_value,
+        compressor=compressor,
+        hint=chunk_shape,
+    )
+    # Chunk shape is clipped to the array dimensions (ADR 0021) by the role's
+    # layout policy; read back the effective chunks it wrote.
+    effective_chunks = (int(z_array.chunks[0]), int(z_array.chunks[1]))
+    create_array(
+        root,
+        "se",
         # Scratch in float32, as dense.complete does: the band-writer fills
         # this before the SE encoding is decided, and an exact residual
         # exception must be the source's own value, not one already rounded
         # to the dtype the plane happened to start in (spec §6a).
-        ("se", "float32", float("nan")),
-    ):
-        root.create_dataset(
-            name,
-            shape=(n_variants, n_analyses),
-            chunks=effective_chunks,
-            compressor=compressor,
-            dtype=plane_dtype,
-            fill_value=fill,
-        )
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        shape=(n_variants, n_analyses),
+        dtype="float32",
+        fill_value=float("nan"),
+        compressor=compressor,
+        hint=effective_chunks,
+    )
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"
-    root.attrs["compressor"] = DEFAULT_COMPRESSOR
-    root.attrs["chunk_shape"] = list(effective_chunks)
+    root.attrs.update(dense_layout_records((n_variants, n_analyses), hint=chunk_shape))
     return effective_chunks
 
 
@@ -3075,6 +3096,29 @@ def _flush_band(
     _log_progress(label, stop, n_analyses, pass2_start, f"cols {start}:{stop}", every=band_cols)
 
 
+def _shard_columns(arr: Any, effective_chunks: tuple[int, int]) -> int:
+    """The Analysis-axis width of a Dense plane's shard; the band width.
+
+    A band write must cover whole shards, and a shard spans the whole Analysis
+    axis of the band.  The shard is read from the array the builder just created
+    rather than restated here, so this cannot drift from the seam's policy.  A
+    v2 array (no shard) falls back to the inner chunk, which is what 0.1.0
+    builds used before #247.
+    """
+    shards = getattr(arr, "shards", None)
+    return int(shards[1]) if shards is not None else int(effective_chunks[1])
+
+
+def _shard_rows(arr: Any, effective_chunks: tuple[int, int]) -> int:
+    """The variant-axis height of a Dense plane's shard; the row-block unit.
+
+    A row block must be a whole number of shards so that each of its writes
+    covers whole shards.  Read from the array, as `_shard_columns` is.
+    """
+    shards = getattr(arr, "shards", None)
+    return int(shards[0]) if shards is not None else int(effective_chunks[0])
+
+
 def _write_dense_z_bands(
     root: Any,
     spill_dir: Path,
@@ -3207,7 +3251,7 @@ def _write_dense_bands(
     ``column_has_eaf`` survey for the index build and EAF decision.
     """
     root = staged.arrays(mode="a")
-    band_cols = effective_chunks[1]
+    band_cols = _shard_columns(root["z"], effective_chunks)
     codec = StoreCodec(encoding)
     rows_parts, cols_parts, z_parts, se_parts, column_has_eaf = _write_dense_z_bands(
         root, spill_dir, n_variants, n_analyses, band_cols, codec, dtype, pass2_start, n_workers
@@ -3266,10 +3310,9 @@ def _write_manifest(
             "n_variants": n_variants,
             "n_analyses": n_analyses,
             "dense": {
-                "statistic_arrays": ["z", "se"],
-                "se_dtype": encoding.se.dtype,
-                "chunk_shape": list(chunk_shape),
-                "compressor": DEFAULT_COMPRESSOR,
+                **dense_provenance_block(
+                    (n_variants, n_analyses), hint=chunk_shape, se_dtype=encoding.se.dtype
+                ),
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
             },
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),

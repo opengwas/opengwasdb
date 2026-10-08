@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 import zarr
 
+import opengwasdb.store.arrays as store_arrays
 from opengwasdb.encoding import EncodingMeasurements, OverflowCells, StoreEncoding
 from opengwasdb.encoding.codec import StoreCodec
 from opengwasdb.encoding.plan import EafEncoding, SeEncoding, ZEncoding
@@ -97,7 +98,7 @@ def test_streamed_batches_reconstruct_the_materialised_cells(tmp_path, cell_budg
 def _dense_group(path, n_analyses=2, n_rows=600):
     """A Dense Component whose SE really does follow the log model, so the
     joint selection has a residual plane worth choosing."""
-    group = zarr.open_group(str(path), mode="w")
+    group = zarr.open_group(str(path), mode="w", zarr_format=2)
     eaf = np.repeat(np.linspace(0.05, 0.95, n_rows, dtype=np.float32)[:, None], n_analyses, axis=1)
     coefficients = np.array([[-3.0, -0.5], [-2.7, -0.45]], dtype=np.float32)[:n_analyses]
     se = np.exp(
@@ -105,9 +106,11 @@ def _dense_group(path, n_analyses=2, n_rows=600):
         + coefficients[None, :, 1] * np.log(2 * eaf * (1 - eaf))
         + 0.1 * np.sin(np.arange(n_rows)[:, None] * 0.1)
     ).astype(np.float32)
-    group.create_dataset("eaf", data=eaf, chunks=(100, n_analyses), dtype="float32")
-    group.create_dataset("se", data=se, chunks=(100, n_analyses), dtype="float16")
-    group.create_dataset("z", data=np.ones_like(eaf), chunks=(100, n_analyses), dtype="float16")
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=(100, n_analyses))
+    group.create_array("se", data=np.asarray(se, dtype="float16"), chunks=(100, n_analyses))
+    group.create_array(
+        "z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=(100, n_analyses)
+    )
     return group, eaf, se
 
 
@@ -242,10 +245,21 @@ def _stored(path):
 
 
 @pytest.mark.parametrize("region_cells", [200, 997, 4096])
-def test_flush_writes_the_same_arrays_whatever_the_region_size(tmp_path, region_cells):
+def test_flush_writes_the_same_arrays_whatever_the_region_size(
+    tmp_path, region_cells, monkeypatch
+):
     """One region is the pre-streaming path, which the round-trip tests already
     pin as correct, so array-for-array agreement with a cut-up flush is what
-    shows the streamed write changed the footprint and nothing else."""
+    shows the streamed write changed the footprint and nothing else.
+
+    #249 raises every region to a whole shard (50,000,000 elements in
+    production), which for a fixture this size made the whole array one region
+    and left the streaming path untested.  The shard and inner chunk are
+    monkeypatched small so the cut flush really is several regions, and the
+    region count is asserted before anything is compared (#249 review round 1).
+    """
+    monkeypatch.setattr(store_arrays, "RAGGED_SEQUENCE_SHARD_ELEMENTS", 2000)
+    monkeypatch.setattr(store_arrays, "ASSOCIATION_SEQUENCE_CHUNK", 500)
     # Every Analysis carries enough cells to fit: `fit_se` declares the whole
     # plane ineligible unless every Analysis's coefficients come out finite, so
     # a one-cell Analysis would silently take the float16 branch and leave the
@@ -255,8 +269,15 @@ def test_flush_writes_the_same_arrays_whatever_the_region_size(tmp_path, region_
     writer = _model_writer(sizes)
     encoding = _residual_se_encoding(writer, len(sizes))
 
+    regions = list(writer._flat_regions(writer.n_associations, region_cells))
+    assert len(regions) > 1, regions
+
     writer.flush(tmp_path / "whole", encoding, region_cells=1 << 30)
-    writer.flush(tmp_path / "cut", encoding, region_cells=region_cells)
+    # The cut flush runs under the guard: every region must be a whole number of
+    # shards, so the round-up in `sequence_region_step` is asserted here and not
+    # only implied by equal values (#249 review round 2).
+    with store_arrays.require_whole_shard_writes():
+        writer.flush(tmp_path / "cut", encoding, region_cells=region_cells)
 
     whole, cut = _stored(tmp_path / "whole"), _stored(tmp_path / "cut")
     assert sorted(cut) == sorted(whole)
@@ -275,17 +296,26 @@ def _peak_bytes(work) -> int:
     return peak
 
 
-def test_flush_peak_memory_does_not_follow_the_cell_count(tmp_path):
+def test_flush_peak_memory_does_not_follow_the_cell_count(tmp_path, monkeypatch):
     """Four times the cells at a fixed region size must not cost four times the
     peak: that ratio is what made the OGS-00011 Overflow's flush unaffordable at
-    a measured 72.9 bytes a cell."""
-    region = 512
+    a measured 72.9 bytes a cell.
+
+    #249 raises the region to a whole shard, so a fixture shorter than a shard
+    was one region and the bounded region was not exercised.  The shard and inner
+    chunk are monkeypatched small so the step is a bounded whole shard (#249
+    review round 1).
+    """
+    monkeypatch.setattr(store_arrays, "RAGGED_SEQUENCE_SHARD_ELEMENTS", 500)
+    monkeypatch.setattr(store_arrays, "ASSOCIATION_SEQUENCE_CHUNK", 100)
+    region = 500
     small = _model_writer([500] * 4, seed=1)
     large = _model_writer([2000] * 4, seed=1)
     # One plan for both, chosen from the larger plane: the variable under test is
     # the cell count, not the encoding.
     encoding = _residual_se_encoding(large, 4)
     assert large.n_associations == 4 * small.n_associations
+    assert len(list(large._flat_regions(large.n_associations, region))) > 1
 
     peak_small = _peak_bytes(lambda: small.flush(tmp_path / "small", encoding, region_cells=region))
     peak_large = _peak_bytes(lambda: large.flush(tmp_path / "large", encoding, region_cells=region))

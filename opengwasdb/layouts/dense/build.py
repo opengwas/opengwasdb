@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
-from numcodecs import Blosc
 
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.encoding import (
@@ -27,9 +27,10 @@ from opengwasdb.encoding import (
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
-    DEFAULT_COMPRESSOR,
     DEFAULT_DTYPE,
     dense_index_metadata,
+    dense_layout_records,
+    dense_provenance_block,
 )
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, read_top_hit_counts
@@ -42,6 +43,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import (
     VARIANT_AXIS_FORMAT,
@@ -130,6 +132,7 @@ def build_dense_observed_store(
             release_id,
             reference_assembly,
             records,
+            (len(variants), len(analyses)),
             chunk_shape,
             dtype,
             encoding,
@@ -192,7 +195,7 @@ def _decide_encoding(
     coefficients, se_measured = fit_se_grid(
         se,
         decoded_eaf,
-        compressor=Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE),
+        compressor=compressor(),
         chunks=(min(chunk_shape[0], se.shape[0]), min(chunk_shape[1], se.shape[1])),
     )
     return (
@@ -298,6 +301,7 @@ def _write_manifest(
     release_id: str,
     reference_assembly: str,
     records: list[NormalisedAssociation],
+    shape: tuple[int, int],
     chunk_shape: tuple[int, int],
     dtype: str,
     encoding: StoreEncoding,
@@ -328,10 +332,7 @@ def _write_manifest(
                 ]
             },
             "dense": {
-                "statistic_arrays": ["z", "se"],
-                "se_dtype": encoding.se.dtype,
-                "chunk_shape": list(chunk_shape),
-                "compressor": DEFAULT_COMPRESSOR,
+                **dense_provenance_block(shape, hint=chunk_shape, se_dtype=encoding.se.dtype),
                 "top_hit_thresholds": [5e-8, 5e-6, 5e-4],
                 "variant_axis": {
                     "format": VARIANT_AXIS_FORMAT,
@@ -361,7 +362,8 @@ def _write_index(
             connection,
             "dense",
             dense_index_metadata(
-                chunk_shape,
+                (len(variants), len(analyses)),
+                hint=chunk_shape,
                 variant_axis={
                     "format": VARIANT_AXIS_FORMAT,
                     "table": VARIANT_TABLE_FILENAME,
@@ -395,6 +397,44 @@ def _first_rsids_by_alid(records: list[NormalisedAssociation]) -> dict[str, str]
     return rsid_by_alid
 
 
+def _write_dense_eaf(
+    root: Any,
+    codec: StoreCodec,
+    eaf: np.ndarray,
+    encoding: StoreEncoding,
+    comp: Any,
+    chunks: tuple[int, ...],
+) -> None:
+    """Encode and write the Dense `eaf` plane, baseline and exception table.
+
+    The whole block is one unit because the three arrays are one artifact: a
+    store with an `eaf` plane but no baseline for its residual coding is not
+    readable.
+    """
+    baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
+    if encoding.eaf.is_absent:
+        return
+    exceptions = EafExceptionBuilder()
+    raw = codec.encode_eaf(
+        eaf,
+        baseline=None if baseline is None else np.repeat(baseline[:, None], eaf.shape[1], axis=1),
+        positions=positions_row_band(0, eaf.shape[1]),
+        exceptions=exceptions,
+    )
+    create_array(
+        root,
+        "eaf",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        data=raw,
+        dtype=codec.eaf_dtype,
+        compressor=comp,
+        hint=chunks,
+    )
+    if baseline is not None:
+        write_eaf_baseline(root, baseline, compressor=comp)
+        exceptions.table().write(root)
+
+
 def _write_zarr(
     staged: StagedRelease,
     z: np.ndarray,
@@ -405,41 +445,26 @@ def _write_zarr(
     dtype: str,
     encoding: StoreEncoding,
 ) -> None:
-    compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
-    # Clip chunk shape to array dimensions so zarr's declared shape matches what
-    # is physically stored — oversized chunks cause zarr to allocate a large
-    # decompression buffer even when the array is narrower than chunk_shape[1].
-    effective_chunks = (min(chunk_shape[0], z.shape[0]), min(chunk_shape[1], z.shape[1]))
+    comp = compressor()
     root = staged.arrays(mode="w")
+    codec = StoreCodec(encoding)
     # Flat C-order position is exactly `flatnonzero` over the whole grid, which
     # is what the overflow table keys on.
-    codec = StoreCodec(encoding)
     overflow = ZOverflowBuilder()
     codes = codec.encode_z(z, positions=np.flatnonzero, overflow=overflow)
-    root.create_dataset(
-        "z", data=codes, chunks=effective_chunks, compressor=compressor, dtype=codec.z_dtype
+    z_array = create_array(
+        root,
+        "z",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        data=codes,
+        dtype=codec.z_dtype,
+        compressor=comp,
+        hint=chunk_shape,
     )
-    eaf_baseline = eaf_baseline_from_grid(eaf) if encoding.eaf.is_residual else None
-    if not encoding.eaf.is_absent:
-        exceptions = EafExceptionBuilder()
-        raw_eaf = codec.encode_eaf(
-            eaf,
-            baseline=None
-            if eaf_baseline is None
-            else np.repeat(eaf_baseline[:, None], eaf.shape[1], axis=1),
-            positions=positions_row_band(0, eaf.shape[1]),
-            exceptions=exceptions,
-        )
-        root.create_dataset(
-            "eaf",
-            data=raw_eaf,
-            chunks=effective_chunks,
-            compressor=compressor,
-            dtype=codec.eaf_dtype,
-        )
-        if eaf_baseline is not None:
-            write_eaf_baseline(root, eaf_baseline, compressor=compressor)
-            exceptions.table().write(root)
+    # Chunk shape is clipped to the array dimensions (ADR 0021) by the role's
+    # layout policy; read back what was written rather than clipping again.
+    effective_chunks = tuple(int(size) for size in z_array.chunks)
+    _write_dense_eaf(root, codec, eaf, encoding, comp, effective_chunks)
     physical_eaf = DenseEafPlane.open(root, encoding).band(0, eaf.shape[0])
     write_se_dense(
         root,
@@ -447,11 +472,10 @@ def _write_zarr(
         se,
         physical_eaf,
         se_coefficients,
-        compressor=compressor,
+        compressor=comp,
         chunks=effective_chunks,
     )
     overflow.table().write(root)
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "observed_only"
-    root.attrs["compressor"] = DEFAULT_COMPRESSOR
-    root.attrs["chunk_shape"] = list(effective_chunks)
+    root.attrs.update(dense_layout_records(z.shape, hint=chunk_shape))

@@ -1,0 +1,10 @@
+python 3.12.14 Linux numpy 2.4.6 numcodecs 0.17.0
+$ python repro.py
+zarr 3.4.0 | parent pool idle permits: 10
+HANG: forked workers did not return in 30 s
+exit=1
+$ python repro.py 1   # codec_pipeline.max_workers = 1
+zarr 3.4.0 | parent pool idle permits: None
+children: [37900, 37900]
+exit=0
+leftover after 1 s: 0

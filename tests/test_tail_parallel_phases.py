@@ -41,16 +41,18 @@ def _se_group(tmp_path: Path, name: str):
     Rows 10 and 2500 sit in row chunks 0 and 2; a reduction that consumed the
     chunks out of order would place their side-table rows the other way round.
     """
-    group = zarr.open_group(str(tmp_path / name), mode="w")
+    group = zarr.open_group(str(tmp_path / name), mode="w", zarr_format=2)
     n_rows = 6000
     eaf = np.linspace(0.05, 0.95, n_rows, dtype=np.float32)[:, None]
     predictor = np.log(2 * eaf * (1 - eaf))
     se = np.exp(-3.0 - 0.5 * predictor).astype(np.float32)
     for row in (10, 2500):
         se[row, 0] = np.float32(np.exp(-3.0 - 0.5 * predictor[row, 0] + 8.0))
-    group.create_dataset("eaf", data=eaf, chunks=(_ROW_CHUNK, 1), dtype="float32")
-    group.create_dataset("se", data=se, chunks=(_ROW_CHUNK, 1), dtype="float32")
-    group.create_dataset("z", data=np.ones_like(eaf), chunks=(_ROW_CHUNK, 1), dtype="float16")
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=(_ROW_CHUNK, 1))
+    group.create_array("se", data=np.asarray(se, dtype="float32"), chunks=(_ROW_CHUNK, 1))
+    group.create_array(
+        "z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=(_ROW_CHUNK, 1)
+    )
     return group
 
 
@@ -66,7 +68,7 @@ def _se_snapshot(group) -> dict[str, np.ndarray]:
 def _small_store(tmp_path: Path, name: str) -> Path:
     """A two-chunk-per-axis dense store with a handful of strong candidates."""
     store = tmp_path / name
-    root = zarr.open_group(str(store / "data.zarr"), mode="w")
+    root = zarr.open_group(str(store / "data.zarr"), mode="w", zarr_format=3)
     rng = np.random.default_rng(20250924)
     n_rows, n_analyses = 100, 3
     z = rng.normal(0, 1, (n_rows, n_analyses)).astype(np.float16)
@@ -74,9 +76,9 @@ def _small_store(tmp_path: Path, name: str) -> Path:
         z[row, col] = np.float16(6.0 if col != 1 else -7.0)
     se = np.abs(rng.normal(0.1, 0.01, (n_rows, n_analyses))).astype(np.float16)
     eaf = rng.uniform(0.05, 0.95, (n_rows, n_analyses)).astype(np.float32)
-    root.create_dataset("z", data=z, chunks=(10, n_analyses), dtype="float16")
-    root.create_dataset("se", data=se, chunks=(10, n_analyses), dtype="float16")
-    root.create_dataset("eaf", data=eaf, chunks=(10, n_analyses), dtype="float32")
+    root.create_array("z", data=np.asarray(z, dtype="float16"), chunks=(10, n_analyses))
+    root.create_array("se", data=np.asarray(se, dtype="float16"), chunks=(10, n_analyses))
+    root.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=(10, n_analyses))
     return store
 
 
@@ -176,7 +178,7 @@ def test_joint_overflow_measurement_matches_across_workers(tmp_path, caplog) -> 
 
 def _two_analysis_group(tmp_path: Path, name: str, chunks: tuple[int, int]):
     """A well-fitted two-Analysis plane, so a shared model is chosen."""
-    group = zarr.open_group(str(tmp_path / name), mode="w")
+    group = zarr.open_group(str(tmp_path / name), mode="w", zarr_format=2)
     n_rows = 6000
     eaf = np.linspace(0.05, 0.95, n_rows, dtype=np.float32)[:, None]
     eaf = np.repeat(eaf, 2, axis=1)
@@ -184,9 +186,9 @@ def _two_analysis_group(tmp_path: Path, name: str, chunks: tuple[int, int]):
     se = np.exp(-3.0 - 0.5 * predictor).astype(np.float32)
     se[10, 0] = np.float32(np.exp(-3.0 - 0.5 * predictor[10, 0] + 8.0))
     se[2500, 1] = np.float32(np.exp(-3.0 - 0.5 * predictor[2500, 1] + 8.0))
-    group.create_dataset("eaf", data=eaf, chunks=chunks, dtype="float32")
-    group.create_dataset("se", data=se, chunks=chunks, dtype="float32")
-    group.create_dataset("z", data=np.ones_like(eaf), chunks=chunks, dtype="float16")
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=chunks)
+    group.create_array("se", data=np.asarray(se, dtype="float32"), chunks=chunks)
+    group.create_array("z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=chunks)
     return group
 
 
@@ -231,16 +233,16 @@ def test_se_phases_log_start_end_and_progress(tmp_path, caplog) -> None:
 
 def _bad_fit_group(tmp_path: Path, name: str, chunks: tuple[int, int] = (200, 1)):
     """A Dense scratch plane whose SE defies the MAF model, so the coding loses."""
-    group = zarr.open_group(str(tmp_path / name), mode="w")
+    group = zarr.open_group(str(tmp_path / name), mode="w", zarr_format=2)
     n_rows = 600
     eaf = np.linspace(0.05, 0.95, n_rows, dtype=np.float32)[:, None]
     predictor = np.log(2 * eaf * (1 - eaf))
     se = np.exp(-3.0 - 0.5 * predictor + 6.0 * np.sin(np.arange(n_rows)[:, None])).astype(
         np.float32
     )
-    group.create_dataset("eaf", data=eaf, chunks=chunks, dtype="float32")
-    group.create_dataset("se", data=se, chunks=chunks, dtype="float32")
-    group.create_dataset("z", data=np.ones_like(eaf), chunks=chunks, dtype="float16")
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=chunks)
+    group.create_array("se", data=np.asarray(se, dtype="float32"), chunks=chunks)
+    group.create_array("z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=chunks)
     return group, se
 
 

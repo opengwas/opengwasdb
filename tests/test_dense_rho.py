@@ -204,7 +204,7 @@ def test_imputed_cells_are_excluded_from_null_support(rho_store_path):
     imputed = np.zeros((n_variants, n_analyses), dtype="uint8")
     imputed[::2, 0] = 1
     imputed[::2, 1] = 1
-    root.create_dataset("imputed", data=imputed, chunks=root["z"].chunks, dtype="uint8")
+    root.create_array("imputed", data=np.asarray(imputed, dtype="uint8"), chunks=root["z"].chunks)
 
     build_dense_rho(rho_store_path, window_bp=50, z_thresh=1.0, min_nulls=1, n_workers=1)
 

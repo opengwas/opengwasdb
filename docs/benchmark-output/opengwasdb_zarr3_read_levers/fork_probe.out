@@ -1,0 +1,12 @@
+{"case": "baseline", "parent": {"use_threads": false, "parent_use_threads_effective": false, "parent_pool_created": false, "pipeline": "BatchedCodecPipeline"}, "outcome": "ok", "children": [{"pid": 2387634, "sum": -1805293, "encoded": 7999668, "child_use_threads_effective": false, "pool_inherited": false, "s": 0.06}, {"pid": 2387635, "sum": -1805293, "encoded": 7999668, "child_use_threads_effective": false, "pool_inherited": false, "s": 0.058}]}
+exit=0
+{"case": "bt", "parent": {"use_threads": true, "parent_use_threads_effective": true, "parent_pool_created": false, "pipeline": "BatchedCodecPipeline"}, "outcome": "ok", "children": [{"pid": 2388322, "sum": -1805293, "encoded": 7999668, "child_use_threads_effective": false, "pool_inherited": false, "s": 0.058}, {"pid": 2388323, "sum": -1805293, "encoded": 7999668, "child_use_threads_effective": false, "pool_inherited": false, "s": 0.059}]}
+exit=0
+{"case": "fused", "parent": {"use_threads": false, "parent_use_threads_effective": false, "parent_pool_created": true, "pipeline": "FusedCodecPipeline"}, "outcome": "HANG (no result within 60s)"}
+exit=0
+{"case": "fused+bt", "parent": {"use_threads": true, "parent_use_threads_effective": true, "parent_pool_created": true, "pipeline": "FusedCodecPipeline"}, "outcome": "HANG (no result within 60s)"}
+exit=0
+{"case": "fused+bt+reset", "parent": {"use_threads": true, "parent_use_threads_effective": true, "parent_pool_created": true, "pipeline": "FusedCodecPipeline"}, "outcome": "ok", "children": [{"pid": 2391758, "sum": -1805293, "encoded": 7999668, "child_use_threads_effective": false, "pool_inherited": true, "s": 0.089}, {"pid": 2391759, "sum": -1805293, "encoded": 7999668, "child_use_threads_effective": false, "pool_inherited": true, "s": 0.091}]}
+exit=0
+{"case": "fused_mw1+bt", "parent": {"use_threads": true, "parent_use_threads_effective": true, "parent_pool_created": false, "pipeline": "FusedCodecPipeline"}, "outcome": "ok", "children": [{"pid": 2392426, "sum": -1805293, "encoded": 7999668, "child_use_threads_effective": false, "pool_inherited": false, "s": 0.081}, {"pid": 2392427, "sum": -1805293, "encoded": 7999668, "child_use_threads_effective": false, "pool_inherited": false, "s": 0.076}]}
+exit=0

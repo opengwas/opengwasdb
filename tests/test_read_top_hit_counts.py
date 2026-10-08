@@ -14,18 +14,18 @@ from opengwasdb.layouts.dense.top_hits import read_top_hit_counts, threshold_key
 
 
 def _write_group(store_path, threshold, analysis_index, *, with_offsets: bool, n_analyses: int):
-    root = zarr.open_group(str(store_path / "data.zarr"), mode="a")
+    root = zarr.open_group(str(store_path / "data.zarr"), mode="a", zarr_format=3)
     top = root.require_group("top_hits")
     group = top.require_group(threshold_key(threshold))
     analysis_index = np.asarray(analysis_index, dtype="uint32")
-    group.create_dataset("analysis_index", data=analysis_index, dtype="uint32")
+    group.create_array("analysis_index", data=np.asarray(analysis_index, dtype="uint32"))
     if with_offsets:
         order = np.argsort(analysis_index, kind="stable")
         sorted_ai = analysis_index[order]
         offsets = np.empty(n_analyses + 1, dtype="uint64")
         offsets[0] = 0
         np.cumsum(np.bincount(sorted_ai, minlength=n_analyses), dtype=np.uint64, out=offsets[1:])
-        group.create_dataset("analysis_offsets", data=offsets, dtype="uint64")
+        group.create_array("analysis_offsets", data=np.asarray(offsets, dtype="uint64"))
 
 
 def test_read_top_hit_counts_uses_analysis_offsets_when_present(tmp_path):

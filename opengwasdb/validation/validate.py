@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import numbers
+import os
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -9,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import zarr
 
 from opengwasdb.completion.schema import COMPLETION_QUALITY_COLUMNS
 from opengwasdb.encoding import (
@@ -35,6 +37,7 @@ from opengwasdb.encoding import (
     ZOverflowTable,
     per_variant_chunk_size,
 )
+from opengwasdb.index.sqlite import get_metadata
 from opengwasdb.layouts.dense.top_hits import threshold_key, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -53,6 +56,15 @@ from opengwasdb.model.enums import (
     StoredEffectScale,
 )
 from opengwasdb.stats import p_value_from_z
+from opengwasdb.store.arrays import (
+    COMPRESSOR_RECORD,
+    SHARDED_COMPRESSOR_RECORD,
+    ArrayRole,
+    array_length,
+    inner_chunk_of,
+    open_group,
+    shard_layout,
+)
 from opengwasdb.store.open import (
     DENSE_ENVELOPE,
     HYBRID_DENSE_COMPONENT_ENVELOPE,
@@ -61,6 +73,7 @@ from opengwasdb.store.open import (
     OpenGWASDBStore,
     UnsupportedFormatVersion,
     open_store,
+    split_format_version,
 )
 from opengwasdb.variants import (
     VariantAxis,
@@ -96,17 +109,13 @@ def validate_store(
     source_assembly: str | None = None,
     chain_file: str | Path | None = None,
 ) -> ValidationResult:
-    """Validate a v0.1 Store Release directory.
+    """Validate a Store Release directory.
 
-    Internal (structural) validation is always run. When ``source`` is given —
-    the original dataset the store was built from (a manifest TSV with
-    ``trait_id``/``file_path`` columns, or one/many self-describing source
-    files) — a **source-fidelity** check is also run for dense stores: it draws
-    a random sample of source associations and confirms the store holds the same
-    z/se, orienting the join through the stored source-ALID provenance (or, for
-    lifted stores that predate that column, via liftover). ``source_assembly``
-    names the source coordinate build (default: the store's own assembly, i.e.
-    no liftover); ``chain_file`` overrides the liftover chain for the fallback.
+    Internal (structural) validation is always run.  When ``source`` is given —
+    the original dataset the store was built from — a **source-fidelity** check
+    is also run for dense stores: a random sample of source associations is
+    compared against the store, orienting through the stored source-ALID
+    provenance (or, for lifted stores, via liftover).
     """
 
     store_path = Path(path)
@@ -116,6 +125,9 @@ def validate_store(
     if store is None:
         return ValidationResult(errors=errors)
     manifest = store.manifest
+    _validate_zarr_format(
+        store.data_path, manifest.format_version, errors, label="data.zarr"
+    )
 
     if manifest.primary_layout is PrimaryStorageLayout.RAGGED:
         _validate_ragged_store(store, errors)
@@ -125,6 +137,7 @@ def validate_store(
         return ValidationResult(errors=errors, warnings=warnings)
 
     if manifest.primary_layout is PrimaryStorageLayout.HYBRID:
+        _validate_nested_component_format(store_path, errors)
         _validate_hybrid_store(store, errors)
         _validate_eaf_orientation(store, errors, warnings)
         if source is not None:
@@ -144,6 +157,22 @@ def validate_store(
             chain_file=chain_file,
         )
     return ValidationResult(errors=errors, warnings=warnings)
+
+
+def _validate_nested_component_format(store_path: Path, errors: list[str]) -> None:
+    """A Hybrid release's nested Dense Component must match its own manifest."""
+    component_manifest = store_path / "dense" / "manifest.json"
+    if not component_manifest.exists():
+        return
+    component_version = str(
+        json.loads(component_manifest.read_text(encoding="utf-8")).get("format_version")
+    )
+    _validate_zarr_format(
+        store_path / "dense" / "data.zarr",
+        component_version,
+        errors,
+        label="dense/data.zarr",
+    )
 
 
 def _validate_closed_envelope(store_path: Path, allowed: frozenset[str], errors: list[str]) -> None:
@@ -205,6 +234,523 @@ def _validate_dense_envelope(
     return len(errors) == before
 
 
+#: Zarr metadata files that name one node, keyed by the Zarr format they belong
+#: to.  A node carries exactly one of these; two is a half-converted store.
+_V2_NODE_METADATA = (".zarray", ".zgroup")
+_V3_NODE_METADATA = "zarr.json"
+
+
+def _zarr_nodes(directory: Path) -> Iterator[tuple[Path, set[str]]]:
+    """Every Zarr node directory under `directory`, with its metadata filenames.
+
+    Read from the filesystem, not through zarr: the check is precisely that the
+    stored metadata and the manifest agree, and asking zarr would let it hide a
+    node behind a consolidated record or an auto-detected format.
+    """
+    for dirpath, _dirnames, filenames in os.walk(directory):
+        present = {name for name in filenames if name in (*_V2_NODE_METADATA, _V3_NODE_METADATA)}
+        if present:
+            yield Path(dirpath), present
+
+
+def _validate_zarr_format(
+    directory: Path, format_version: str, errors: list[str], *, label: str
+) -> None:
+    """The Zarr on-disk format must be the one `format_version` names.
+
+    0.1.0 is Zarr v2: every group has a `.zgroup` and every array a `.zarray`,
+    each declaring ``zarr_format: 2``, and no v3 `zarr.json` exists.  0.2.0 is
+    Zarr v3 with sharding: nothing carries v2 metadata, every node has a
+    `zarr.json` declaring ``zarr_format: 3``, and every array uses the
+    ``sharding_indexed`` codec.  A half-converted release -- one manifest, two
+    formats under it -- is the failure this rule exists to catch, and it is
+    invisible to any check that opens the store through zarr (issue #245).
+    """
+    if not directory.is_dir():
+        return
+    series, _remainder = split_format_version(format_version)
+    expected_v3 = series == (0, 2)
+    nodes = 0
+    for node_path, present in _zarr_nodes(directory):
+        nodes += 1
+        relative = f"{label}/{node_path.relative_to(directory)}"
+        if expected_v3:
+            errors.extend(_zarr_v3_node_errors(relative, node_path, present, format_version))
+        else:
+            errors.extend(_zarr_v2_node_errors(relative, node_path, present, format_version))
+    if nodes == 0:
+        errors.append(f"{label}: no Zarr metadata found; the array tree is missing")
+
+
+def _zarr_v2_node_errors(
+    relative: str, node_path: Path, present: set[str], format_version: str
+) -> list[str]:
+    """One node's errors under a 0.1.0 (Zarr v2) manifest."""
+    if _V3_NODE_METADATA in present:
+        return [
+            f"{relative}: Zarr v3 metadata under format_version {format_version}; a "
+            f"{format_version} release is Zarr v2 (issue #245)"
+        ]
+    if len(present) > 1:
+        return [
+            f"{relative}: carries {sorted(present)}; a Zarr node has exactly one metadata "
+            "file"
+        ]
+    metadata = next(iter(present))
+    declared = json.loads((node_path / metadata).read_text(encoding="utf-8")).get(
+        "zarr_format"
+    )
+    if declared != 2:
+        return [
+            f"{relative}/{metadata}: zarr_format is {declared!r}, not 2, but the release "
+            f"declares format_version {format_version}"
+        ]
+    return []
+
+
+def _zarr_v3_node_errors(
+    relative: str, node_path: Path, present: set[str], format_version: str
+) -> list[str]:
+    """One node's errors under a 0.2.0 (Zarr v3, sharded) manifest."""
+    v2_metadata = sorted(present & set(_V2_NODE_METADATA))
+    if v2_metadata:
+        return [
+            f"{relative}: Zarr v2 metadata {v2_metadata} under format_version "
+            f"{format_version}; a {format_version} release is Zarr v3, and a "
+            "half-converted release is invalid (issue #245)"
+        ]
+    metadata = json.loads((node_path / _V3_NODE_METADATA).read_text(encoding="utf-8"))
+    errors: list[str] = []
+    if metadata.get("zarr_format") != 3:
+        errors.append(
+            f"{relative}/zarr.json: zarr_format is {metadata.get('zarr_format')!r}, not 3, "
+            f"but the release declares format_version {format_version}"
+        )
+    if metadata.get("node_type") == "array":
+        names = [
+            codec.get("name")
+            for codec in metadata.get("codecs", [])
+            if isinstance(codec, dict)
+        ]
+        if "sharding_indexed" not in names:
+            errors.append(
+                f"{relative}/zarr.json: a {format_version} array must use the sharding "
+                f"codec; its codecs are {names}"
+            )
+    return errors
+
+
+def _recorded_from_block(
+    label: str, block: Any
+) -> tuple[str, Any, Any, Any, Any] | None:
+    """One manifest provenance block as a recording, or `None` when it names no shape."""
+    if isinstance(block, dict) and "chunk_shape" in block:
+        return (
+            label,
+            block.get("chunk_shape"),
+            block.get("shard_shape"),
+            block.get("compressor"),
+            block.get("zarr_format"),
+        )
+    return None
+
+
+def _recorded_from_index(
+    connection: sqlite3.Connection,
+) -> tuple[str, Any, Any, Any, Any] | None:
+    """The `index.sqlite` `dense` blob as a recording, or `None` when absent.
+
+    An absent `dense` blob is not a disagreement -- none of the Dense
+    Reference-Completion path writes one -- so only a present blob is judged.
+    """
+    blob = get_metadata(connection, "dense", default=None)
+    if isinstance(blob, dict):
+        return (
+            "index.sqlite dense metadata",
+            blob.get("chunk_shape"),
+            blob.get("shard_shape"),
+            blob.get("compressor"),
+            blob.get("zarr_format"),
+        )
+    return None
+
+
+def _recorded_layouts(
+    manifest: Any,
+    connection: sqlite3.Connection,
+    root: Any,
+    errors: list[str],
+    *,
+    require_all: bool,
+) -> list[tuple[str, Any, Any, Any, Any]]:
+    """The three places a Dense release records its chunk shape, as (label, ...).
+
+    Returns `(label, chunk_shape, shard_shape, compressor, zarr_format)` for the
+    manifest provenance, the `index.sqlite` `dense` blob and the `data.zarr` root
+    attrs.  All three are written by the Dense builders and by the converter
+    (#245) and none is derived from the arrays themselves, so they are the copies
+    a disagreeing manifest hides behind.
+
+    `require_all` is set for a 0.2.0 release, where spec §10a mandates all three:
+    an absent `provenance.dense` or `dense` blob is then an error, not a skipped
+    comparison (issue #248 review round 3).  A 0.1.0 release is only judged on
+    the recordings it carries -- the completion path writes no `dense` blob.
+    """
+    recorded: list[tuple[str, Any, Any, Any, Any]] = []
+    provenance = manifest.provenance if isinstance(manifest.provenance, dict) else {}
+    block = None
+    for key in ("dense", "hybrid"):
+        block = _recorded_from_block(f"manifest.json provenance.{key}", provenance.get(key))
+        if block is not None:
+            recorded.append(block)
+            break
+    if block is None and require_all:
+        errors.append(
+            "manifest.json provenance.dense: no chunk_shape recorded, so the release "
+            "does not describe its Dense planes' layout (spec §10a)"
+        )
+    index = _recorded_from_index(connection)
+    if index is not None:
+        recorded.append(index)
+    elif require_all:
+        errors.append(
+            "index.sqlite dense metadata: no dense blob recorded, so the release does "
+            "not describe its Dense planes' layout (spec §10a)"
+        )
+    attrs = dict(root.attrs)
+    recorded.append(
+        (
+            "data.zarr root attrs",
+            attrs.get("chunk_shape"),
+            attrs.get("shard_shape"),
+            attrs.get("compressor"),
+            attrs.get("zarr_format"),
+        )
+    )
+    return recorded
+
+
+def _recorded_layout_mismatches(
+    recorded: list[tuple[str, Any, Any, Any, Any]],
+    planes: list[tuple[str, tuple[int, ...], tuple[int, ...], tuple[int, ...] | None]],
+    errors: list[str],
+    *,
+    zarr_label: str,
+    require_compressor: bool,
+) -> None:
+    """Hold every recording against every present plane of one Zarr tree."""
+    for name, shape, actual_inner, actual_shard in planes:
+        for label, chunk_shape, shard_shape, _compressor, _zarr_format in recorded:
+            plane_label = f"{label} ({zarr_label}/{name})"
+            expected_inner = _recorded_chunk_errors(
+                plane_label, chunk_shape, shape, actual_inner, errors
+            )
+            if expected_inner is not None:
+                errors.extend(
+                    _recorded_shard_errors(
+                        plane_label, shard_shape, shape, expected_inner, actual_shard
+                    )
+                )
+    errors.extend(
+        _recorded_compressor_errors(
+            recorded, planes[0][3], require=require_compressor
+        )
+    )
+    errors.extend(_recorded_zarr_format_errors(recorded, planes[0][3]))
+
+
+def _validate_recorded_layout(
+    manifest: Any, connection: sqlite3.Connection, root: Any, errors: list[str]
+) -> None:
+    """Every recorded chunk and shard shape must describe the arrays present.
+
+    A manifest that describes one shape over arrays of another is a silent
+    failure class: a reader sizing its reads from the manifest would decode the
+    wrong blocks.  Each of the three recordings is clipped to the plane's own
+    dimensions exactly as the seam's role policy clips it (so a small store's
+    build-wide hint is not a disagreement), then compared with the Dense
+    plane's actual **inner** chunk and, for a sharded 0.2.0 release, its shard
+    (issue #245).
+    """
+    if "z" not in root:
+        return
+    planes = _recorded_dense_planes(root)
+    sharded = planes[0][3] is not None
+    recorded = _recorded_layouts(manifest, connection, root, errors, require_all=sharded)
+    _recorded_layout_mismatches(
+        recorded,
+        planes,
+        errors,
+        zarr_label="data.zarr",
+        require_compressor=sharded,
+    )
+
+
+def _recorded_dense_planes(
+    root: Any,
+) -> list[tuple[str, tuple[int, ...], tuple[int, ...], tuple[int, ...] | None]]:
+    """Every present Dense statistic plane as (name, shape, inner chunk, shard).
+
+    The recorded layout is one grid, but the rule must hold it against **every**
+    plane that uses it: checking only `z` would let `se`, `eaf` or the imputed
+    mask disagree with the manifest and still validate (issue #245 review).
+    The imputed mask is present only in a Reference-Completed release.
+    """
+    planes: list[tuple[str, tuple[int, ...], tuple[int, ...], tuple[int, ...] | None]] = []
+    for name in ("z", "se", "eaf", "imputed"):
+        if name not in root:
+            continue
+        plane = root[name]
+        shape = tuple(int(size) for size in plane.shape)
+        shard = (
+            None
+            if getattr(plane, "shards", None) is None
+            else tuple(int(size) for size in plane.shards)
+        )
+        planes.append((name, shape, inner_chunk_of(plane), shard))
+    return planes
+
+
+def _recorded_chunk_errors(
+    label: str,
+    chunk_shape: Any,
+    shape: tuple[int, ...],
+    actual_inner: tuple[int, ...],
+    errors: list[str],
+) -> tuple[int, ...] | None:
+    """One recording's chunk shape against the plane's inner chunk.
+
+    Returns the clipped inner chunk for the shard check that follows, or `None`
+    when the recording cannot describe this plane at all.
+    """
+    if chunk_shape is None:
+        errors.append(
+            f"{label}: no chunk_shape recorded, so the release does not describe its own "
+            "Dense plane layout (issue #245)"
+        )
+        return None
+    if len(chunk_shape) != len(shape):
+        errors.append(
+            f"{label} records chunk_shape {list(chunk_shape)} for a {len(shape)}-D plane "
+            "(issue #245)"
+        )
+        return None
+    expected_inner = tuple(
+        min(int(size), dim) for size, dim in zip(chunk_shape, shape, strict=True)
+    )
+    if expected_inner != actual_inner:
+        errors.append(
+            f"{label} records chunk_shape {list(chunk_shape)}, which describes "
+            f"{list(expected_inner)} for a {shape} plane, but data.zarr/z is chunked "
+            f"{list(actual_inner)}; a manifest and arrays that disagree are a silent "
+            "failure class (issue #245)"
+        )
+    return expected_inner
+
+
+def _recorded_shard_errors(
+    label: str,
+    shard_shape: Any,
+    shape: tuple[int, ...],
+    expected_inner: tuple[int, ...],
+    actual_shard: tuple[int, ...] | None,
+) -> list[str]:
+    """One recording's shard shape against the plane's shard, or nothing for v2."""
+    if actual_shard is None:
+        return []
+    if shard_shape is None:
+        return [
+            f"{label}: data.zarr/z is sharded ({list(actual_shard)}) but no shard_shape "
+            "is recorded (issue #245)"
+        ]
+    if len(shard_shape) != len(shape):
+        return [
+            f"{label} records shard_shape {list(shard_shape)} for a {len(shape)}-D Dense "
+            "plane (issue #245)"
+        ]
+    recorded_shard = tuple(int(size) for size in shard_shape)
+    try:
+        expected_shard = shard_layout(
+            ArrayRole.DENSE_STATISTIC_PLANE,
+            shape,
+            inner_chunk=expected_inner,
+            dense_shard=(recorded_shard[0], recorded_shard[1]),
+        )
+    except ValueError as exc:
+        return [
+            f"{label} records shard_shape {list(shard_shape)}, which cannot describe a "
+            f"{shape} plane chunked {list(expected_inner)}: {exc}"
+        ]
+    if expected_shard != actual_shard:
+        return [
+            f"{label} records shard_shape {list(shard_shape)}, which describes "
+            f"{list(expected_shard)} for this plane, but data.zarr/z is sharded "
+            f"{list(actual_shard)} (issue #245)"
+        ]
+    return []
+
+
+def _recorded_compressor_errors(
+    recorded: list[tuple[str, Any, Any, Any, Any]],
+    actual_shard: tuple[int, ...] | None,
+    *,
+    require: bool,
+) -> list[str]:
+    """The three recordings' compressors agree, and name the format present.
+
+    `require` is set where spec §10a mandates the compressor: the Hybrid outer
+    recording always, and any sharded (0.2.0) recording.  A 0.1.0 nested Dense
+    Component's `provenance.dense` predates the completion writing one, so a v2
+    recording is only judged when it carries a compressor -- the builder gap is
+    reported, not silently accepted or turned into a false failure.
+    """
+    expected = SHARDED_COMPRESSOR_RECORD if actual_shard is not None else COMPRESSOR_RECORD
+    kind = "Zarr v3 sharded" if actual_shard is not None else "Zarr v2"
+    return _compressor_consistency_errors(recorded) + _compressor_record_errors(
+        recorded, expected, kind, require=require
+    )
+
+
+def _compressor_consistency_errors(
+    recorded: list[tuple[str, Any, Any, Any, Any]],
+) -> list[str]:
+    """The recordings must not contradict each other about the compressor."""
+    present = [entry[3] for entry in recorded if entry[3] is not None]
+    if len(present) <= 1 or all(entry == present[0] for entry in present):
+        return []
+    return [
+        "manifest provenance, index.sqlite dense metadata and data.zarr root attrs "
+        f"record different compressors ({present}); they describe the same arrays and "
+        "must agree (issue #245)"
+    ]
+
+
+def _compressor_record_errors(
+    recorded: list[tuple[str, Any, Any, Any, Any]],
+    expected: dict[str, Any],
+    kind: str,
+    *,
+    require: bool,
+) -> list[str]:
+    """Every recording MUST name the format's one compressor when `require`."""
+    errors: list[str] = []
+    for label, _chunk, _shard, compressor, _zarr_format in recorded:
+        if compressor is None:
+            if require:
+                errors.append(
+                    f"{label}: no compressor recorded, so the release does not "
+                    "describe the codec its arrays are stored with (spec §10a)"
+                )
+        elif compressor != expected:
+            errors.append(
+                f"{label} records compressor {compressor!r}, not the {kind} record "
+                f"{expected!r} (issue #245)"
+            )
+    return errors
+
+
+def _recorded_zarr_format_errors(
+    recorded: list[tuple[str, Any, Any, Any, Any]], actual_shard: tuple[int, ...] | None
+) -> list[str]:
+    """A sharded (0.2.0) recording MUST name Zarr format 3; a v2 one must not claim otherwise.
+
+    Spec §10a records `zarr_format` alongside the compressor.  A 0.1.0 release has
+    no shard and does not record a format, but a 0.2.0 one must, and a recording
+    that names the wrong format is the same silent failure class as a wrong chunk
+    (issue #248 review round 2).
+
+    The value must be the **integer** 2 or 3, compared without coercion: a JSON
+    string `"3"`, a float `3.0`/`3.5` and `true` are all validation errors rather
+    than being `int(...)`-ed into a passing value or raising (issue #248 review
+    round 3).
+    """
+    errors: list[str] = []
+    for label, _chunk, _shard, _compressor, zarr_format in recorded:
+        value = _zarr_format_int(zarr_format)
+        if actual_shard is not None:
+            if value is None:
+                errors.append(
+                    f"{label}: zarr_format {zarr_format!r} is not the integer 3, which a "
+                    "Zarr v3 sharded release MUST record (spec §10a)"
+                )
+            elif value != 3:
+                errors.append(
+                    f"{label} records zarr_format {zarr_format!r}, not 3; the arrays "
+                    "are Zarr v3 sharded (spec §10a)"
+                )
+        elif zarr_format is not None and value != 2:
+            errors.append(
+                f"{label} records zarr_format {zarr_format!r}, not the integer 2; the "
+                "arrays are Zarr v2 (spec §10a)"
+            )
+    return errors
+
+
+def _zarr_format_int(value: Any) -> int | None:
+    """`value` as a Zarr format integer, or `None` when it is not one.
+
+    Only a true integer counts.  `bool` is excluded although it is an `int`
+    subclass, and strings, floats and `None` are refused without coercion.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+        return None
+    return int(value)
+
+
+def _validate_hybrid_recordings(store: Any, dense_store: Any, errors: list[str]) -> None:
+    """A Hybrid's outer layout recordings must agree with its nested component.
+
+    Spec §10a: the outer `provenance.hybrid` and the outer `index.sqlite` `dense`
+    blob describe the nested Dense Component's arrays and MUST agree with them,
+    just as the component's own three recordings do.  `_validate_recorded_layout`
+    never sees them -- it runs on the component's own root and returns when that
+    root has no `z` -- so without this seam a Hybrid whose outer manifest was
+    left on an older layout validates, and a reader sizing its reads from
+    `provenance.hybrid` decodes the wrong blocks (issue #248 review round 1).
+    """
+    planes = _recorded_dense_planes(dense_store.arrays(mode="r"))
+    if not planes:
+        return
+    _recorded_layout_mismatches(
+        _hybrid_outer_recordings(store, errors),
+        planes,
+        errors,
+        zarr_label="dense/data.zarr",
+        require_compressor=True,
+    )
+
+
+def _hybrid_outer_recordings(
+    store: Any, errors: list[str]
+) -> list[tuple[str, Any, Any, Any, Any]]:
+    """The outer `provenance.hybrid` and index blob, as recordings.
+
+    The outer manifest MUST carry `chunk_shape` (spec §10a); a missing one is an
+    error rather than a silently skipped comparison.  The outer `dense` blob is
+    judged only when present, as for a standalone release.
+    """
+    recorded: list[tuple[str, Any, Any, Any, Any]] = []
+    provenance = store.manifest.provenance if isinstance(store.manifest.provenance, dict) else {}
+    block = _recorded_from_block(
+        "manifest.json provenance.hybrid", provenance.get("hybrid")
+    )
+    if block is None:
+        errors.append(
+            "manifest.json provenance.hybrid: no chunk_shape recorded, so the release "
+            "does not describe its Dense Component's layout (spec §10a, issue #248)"
+        )
+    else:
+        recorded.append(block)
+    connection = store.index_connection()
+    try:
+        index = _recorded_from_index(connection)
+    finally:
+        connection.close()
+    if index is not None:
+        recorded.append(index)
+    return recorded
+
+
 def _validate_dense_store(
     store: OpenGWASDBStore, errors: list[str], *, envelope: frozenset[str] = DENSE_ENVELOPE
 ) -> ValidationResult:
@@ -248,6 +794,9 @@ def _validate_dense_store(
                 _validate_top_hits(root, errors, manifest.encoding)
             if not errors:
                 _validate_rho(root, n_analyses, errors)
+            # After the shape seam, so a plane that does not span the axis is
+            # named as such rather than only as a layout disagreement (#245).
+            _validate_recorded_layout(manifest, connection, root, errors)
     except Exception as exc:  # noqa: BLE001 - validators should report actionable failures
         errors.append(f"validation failed: {exc}")
     return ValidationResult(errors=errors)
@@ -442,11 +991,76 @@ def _missing_csr_arrays(root: Any, errors: list[str]) -> bool:
 def _csr_parallel_length_errors(root: Any, n_assoc: int, errors: list[str]) -> None:
     """Record each parallel CSR array whose length disagrees with ``offsets``."""
     for name in ("variant_index", "z", "se"):
-        if len(root[name]) != n_assoc:
+        if array_length(root[name]) != n_assoc:
             errors.append(
-                f"data.zarr/ragged/{name} has {len(root[name])} entries "
+                f"data.zarr/ragged/{name} has {array_length(root[name])} entries "
                 f"but offsets imply {n_assoc}"
             )
+
+
+#: Cells one `variant_index` ordering window holds. The rule must never
+#: materialise the array -- validation memory is already a problem (#254) -- so
+#: it reads this many int32 at once (4 MB) and carries one previous value
+#: across windows. Peak memory is the window, its comparison bool and the
+#: per-Analysis offsets (8 bytes each), independent of the association count.
+_ORDER_WINDOW = 1_000_000
+
+
+def _segment_first_decrease(variant_index: Any, start: int, end: int) -> tuple[int | None, int]:
+    """First row in `[start, end)` below its predecessor, and rows read to find it.
+
+    Bounded: `_ORDER_WINDOW` cells at a time, the preceding cell carried across
+    a window boundary. Returns `(failure offset or None, entries read)` so a
+    caller can report what was actually checked rather than what the offsets
+    imply.
+    """
+    previous: int | None = None
+    read = 0
+    for lo in range(start, end, _ORDER_WINDOW):
+        hi = min(lo + _ORDER_WINDOW, end)
+        window = np.asarray(variant_index[lo:hi], dtype=np.int32)
+        read += len(window)
+        if previous is not None and int(window[0]) < previous:
+            return lo, read
+        decreasing = window[1:] < window[:-1]
+        if decreasing.any():
+            return lo + int(np.argmax(decreasing)) + 1, read
+        previous = int(window[-1])
+    return None, read
+
+
+def _segment_order_errors(
+    root: Any, offsets: np.ndarray, n_assoc: int, errors: list[str], label: str
+) -> int:
+    """Require `variant_index` non-decreasing within every Analysis's segment.
+
+    The variant-side binary search (`RaggedCSRReader.segment_positions`) is
+    correct only on a non-decreasing segment, so the invariant is checked on
+    every release, not only on the ones this build wrote. The read is bounded:
+    `_ORDER_WINDOW` cells at a time, the preceding cell carried across a
+    window boundary, the comparison reset at each Analysis boundary. Returns
+    the number of entries actually read, so an evidence runner can report a
+    counted total and not an offset-implied one.
+    """
+    if array_length(root["variant_index"]) != n_assoc:
+        return 0  # the parallel-length rule reports this
+    variant_index = root["variant_index"]
+    checked = 0
+    for analysis in range(len(offsets) - 1):
+        start, end = int(offsets[analysis]), int(offsets[analysis + 1])
+        if end <= start:
+            continue
+        failure, read = _segment_first_decrease(variant_index, start, end)
+        checked += read
+        if failure is not None:
+            errors.append(
+                f"{label}/variant_index is not non-decreasing within Analysis "
+                f"{analysis}'s segment: offset {failure} holds "
+                f"{int(variant_index[failure])} after "
+                f"{int(variant_index[failure - 1])}"
+            )
+            return checked
+    return checked
 
 
 def _validate_ragged_csr_structure(
@@ -465,9 +1079,10 @@ def _validate_ragged_csr_structure(
     _validate_encoding_plan(root, encoding, errors, label="data.zarr/ragged")
     if errors:
         return None
-    offsets = root["offsets"][:]
+    offsets = np.asarray(root["offsets"][:], dtype=np.int64)
     n_assoc = int(offsets[-1])
     _csr_parallel_length_errors(root, n_assoc, errors)
+    _segment_order_errors(root, offsets, n_assoc, errors, "data.zarr/ragged")
     return n_assoc, len(offsets) - 1
 
 
@@ -500,9 +1115,9 @@ def _validate_ragged_csr_values(
     # `eaf` is optional (ADR 0036); when present it is a fourth parallel
     # CSR array and must line up with the other three.
     if "eaf" in root:
-        if len(root["eaf"]) != n_assoc:
+        if array_length(root["eaf"]) != n_assoc:
             errors.append(
-                f"data.zarr/ragged/eaf has {len(root['eaf'])} entries "
+                f"data.zarr/ragged/eaf has {array_length(root['eaf'])} entries "
                 f"but offsets imply {n_assoc}"
             )
         else:
@@ -566,7 +1181,7 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
         return ValidationResult(errors=errors)
     try:
         ragged_path = store.data_path / "ragged"
-        root = zarr.open_group(str(ragged_path), mode="r")
+        root = open_group(ragged_path)
         csr = _validate_ragged_csr_structure(root, store.manifest.encoding, errors)
         if csr is None:
             return ValidationResult(errors=errors)
@@ -657,7 +1272,7 @@ def _validate_ragged_completion(
     errors: list[str],
 ) -> None:
     """Validate the imputed mask and completion_quality table in a Reference-Completed store."""
-    root = zarr.open_group(str(ragged_path), mode="r")
+    root = open_group(ragged_path)
     if not _validate_ragged_imputed(root, store.manifest.encoding, n_assoc, errors):
         return
     with store.index_connection() as conn:
@@ -768,8 +1383,8 @@ def _validate_ragged_top_hits(
             == len(ais)
             == len(zs)
             == len(abs_zs)
-            == len(group["se"])
-            == len(group["p_value"])
+            == array_length(group["se"])
+            == array_length(group["p_value"])
             and (imputed is None or len(imputed) == len(vis))
             and (eaf is None or len(eaf) == len(vis))
         ):
@@ -818,6 +1433,17 @@ def _validate_ragged_top_hits(
                 errors.append(f"top-hit index {key} eaf value inconsistent with CSR")
 
 
+def _require_hybrid_full_coverage(manifest: Any, errors: list[str]) -> None:
+    """A Hybrid release partitions one Analysis's associations across two components."""
+    from opengwasdb.model.enums import AssociationCoverage
+
+    if manifest.association_coverage is not AssociationCoverage.FULL:
+        errors.append(
+            "hybrid store must have association_coverage=full "
+            f"(got {manifest.association_coverage.value})"
+        )
+
+
 def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> ValidationResult:
     """Validate a Hybrid store (ADR 0026 / issue 059).
 
@@ -825,15 +1451,9 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
     hybrid-specific invariants: the shared union table covers both components, the
     on-panel/off-panel partition is disjoint, and the overflow is observed-only.
     """
-    from opengwasdb.model.enums import AssociationCoverage
-
     store_path = store.path
     manifest = store.manifest
-    if manifest.association_coverage is not AssociationCoverage.FULL:
-        errors.append(
-            "hybrid store must have association_coverage=full "
-            f"(got {manifest.association_coverage.value})"
-        )
+    _require_hybrid_full_coverage(manifest, errors)
 
     dense_dir = dense_component_path(store_path)
     ragged_path = store_path / "data.zarr" / "ragged"
@@ -888,6 +1508,10 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
     _validate_dense_store(dense_store, errors, envelope=HYBRID_DENSE_COMPONENT_ENVELOPE)
     if len(errors) > before:
         return ValidationResult(errors=errors)
+    # 1b. The outer recordings must describe the component just validated.
+    _validate_hybrid_recordings(store, dense_store, errors)
+    if errors:
+        return ValidationResult(errors=errors)
 
     # 2. Shared union table structural checks.
     try:
@@ -939,6 +1563,10 @@ def _validate_overflow_structure(
         return None
     n_assoc = int(root["offsets"][:][-1])
     _csr_parallel_length_errors(root, n_assoc, errors)
+    _segment_order_errors(
+        root, np.asarray(root["offsets"][:], dtype=np.int64), n_assoc, errors,
+        "data.zarr/ragged",
+    )
     if "imputed" in root:
         errors.append(
             "Ragged Overflow has an imputed array — the overflow is off-panel and "
@@ -992,7 +1620,7 @@ def _validate_overflow(
     """Validate the Ragged Overflow CSR: array lengths, se sign, shared-index
     bounds, and that it is observed-only (never imputed, even after completion)."""
     try:
-        root = zarr.open_group(str(ragged_path), mode="r")
+        root = open_group(ragged_path)
     except Exception as exc:  # noqa: BLE001
         errors.append(f"cannot open Ragged Overflow CSR: {exc}")
         return
@@ -1018,7 +1646,7 @@ def _validate_hybrid_invariants(
         return
 
     # Disjoint partition: no overflow variant is also a Dense Component (on-panel) row.
-    ragged_root = zarr.open_group(str(store_path / "data.zarr" / "ragged"), mode="r")
+    ragged_root = open_group(store_path / "data.zarr" / "ragged")
     overflow_vi = np.unique(ragged_root["variant_index"][:])
     on_panel = np.zeros(n_shared, dtype=bool)
     on_panel[dense_to_shared] = True
@@ -1590,12 +2218,15 @@ def _validate_per_variant_chunking(group: Any, errors: list[str], *, label: str)
         if name not in group:
             continue
         array = group[name]
-        expected = per_variant_chunk_size(group, len(array))
-        if int(array.chunks[0]) > expected:
+        expected = per_variant_chunk_size(group, array_length(array))
+        actual = inner_chunk_of(array)[0]
+        if actual > expected:
             errors.append(
-                f"{label}/{name} has chunk shape {tuple(array.chunks)}; its per-variant "
-                f"chunk must be no larger than {expected}, matching this component's "
-                "variant/read axis rather than spanning the whole array"
+                f"{label}/{name} has inner chunk shape {inner_chunk_of(array)}; its "
+                f"per-variant chunk must be no larger than {expected}, matching this "
+                "component's variant/read axis rather than spanning the whole array. "
+                "(A sharded array's *inner* chunk is the unit a query reads; the shard "
+                "is not judged here.)"
             )
 
 
@@ -1606,7 +2237,9 @@ def _se_coefficients_errors(group: Any, label: str) -> list[str]:
     """`se_coefficients` is `float32`, `(n_analyses, 2)`, and wholly finite."""
     coefficients = group["se_coefficients"]
     n_analyses = (
-        int(group["se"].shape[1]) if group["se"].ndim == 2 else int(len(group["offsets"]) - 1)
+        int(group["se"].shape[1])
+        if group["se"].ndim == 2
+        else array_length(group["offsets"]) - 1
     )
     if str(coefficients.dtype) != "float32" or tuple(coefficients.shape) != (n_analyses, 2):
         return [f"{label}/se_coefficients must have float32 shape ({n_analyses}, 2)"]
@@ -1617,7 +2250,12 @@ def _se_coefficients_errors(group: Any, label: str) -> list[str]:
 
 def _se_table_shape_errors(index: Any, value: Any, label: str) -> list[str]:
     """The two side arrays are parallel, one-dimensional and correctly typed."""
-    if index.ndim != 1 or value.ndim != 1 or len(index) != len(value):
+    if (
+        index.ndim != 1
+        or value.ndim != 1
+        # zarr 3 removed ``len(Array)``; the leading axis is the length.
+        or int(index.shape[0]) != int(value.shape[0])
+    ):
         return [f"{label} se exception arrays must be parallel one-dimensional arrays"]
     if str(index.dtype) != "int64" or str(value.dtype) != "float32":
         return [f"{label} se exception arrays must use int64 positions and float32 values"]
@@ -1967,14 +2605,14 @@ def _dense_eaf_side_lengths(root: Any, n_variants: int, errors: list[str]) -> No
     and a mis-sized one there would hand every imputed cell the frequency of
     some other variant (issue #113).
     """
-    if EAF_BASELINE in root and len(root[EAF_BASELINE]) != n_variants:
+    if EAF_BASELINE in root and array_length(root[EAF_BASELINE]) != n_variants:
         errors.append(
-            f"{EAF_BASELINE} has {len(root[EAF_BASELINE])} entries but the variant axis "
+            f"{EAF_BASELINE} has {array_length(root[EAF_BASELINE])} entries but the variant axis "
             f"has {n_variants}"
         )
-    if EAF_REFERENCE in root and len(root[EAF_REFERENCE]) != n_variants:
+    if EAF_REFERENCE in root and array_length(root[EAF_REFERENCE]) != n_variants:
         errors.append(
-            f"{EAF_REFERENCE} has {len(root[EAF_REFERENCE])} entries but the variant axis "
+            f"{EAF_REFERENCE} has {array_length(root[EAF_REFERENCE])} entries but the variant axis "
             f"has {n_variants}"
         )
 
@@ -2262,9 +2900,19 @@ def _top_hit_lengths_ok(a: dict[str, Any], group: Any) -> bool:
     """Whether every parallel array in the tier is the same length."""
     n = len(a["rows"])
     optional = [x for x in (a["imputed_values"], a["eaf_values"]) if x is not None]
+    # `a`'s entries are numpy arrays, `group["se"]`/`group["p_value"]` are Zarr
+    # arrays; zarr 3 removed ``len(Array)``, so every length is the leading
+    # axis (which is what ``len`` meant for the numpy ones too).
     return all(
-        len(x) == n
-        for x in [a["cols"], a["z_values"], a["abs_z"], group["se"], group["p_value"], *optional]
+        int(x.shape[0]) == n
+        for x in [
+            a["cols"],
+            a["z_values"],
+            a["abs_z"],
+            group["se"],
+            group["p_value"],
+            *optional,
+        ]
     )
 
 
@@ -2537,9 +3185,9 @@ def _validate_rho(root: Any, n_analyses: int, errors: list[str]) -> None:
 
     n_variants_used = int(group.attrs["n_variants_used"])
     variant_index = group["variant_index"]
-    if len(variant_index) != n_variants_used:
+    if array_length(variant_index) != n_variants_used:
         errors.append(
-            f"rho variant_index has {len(variant_index)} entries but "
+            f"rho variant_index has {array_length(variant_index)} entries but "
             f"n_variants_used attr says {n_variants_used}"
         )
 

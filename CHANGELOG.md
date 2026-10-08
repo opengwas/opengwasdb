@@ -12,6 +12,171 @@ the end of this file.
 
 ### Changed
 
+- **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**
+  `CURRENT_FORMAT_VERSION` becomes `0.2.0`, and the converter's target is that
+  same constant rather than a second one (`SHARDED_FORMAT_VERSION` is gone; the
+  converter reads `SOURCE_FORMAT_VERSION = "0.1.0"`), so a built release and a
+  converted release declare the same format and carry the same physical layout. A Dense release's inner chunk is the ADR 0058 decision,
+  `[1000, 64]`, and every array is sharded through the seam's role table
+  (`DENSE_SHARD_SHAPE`, `TOP_HIT_SHARD_CHUNKS`); the builder default Dense
+  Analysis chunk narrows from 1,000 to 64 as #237 asked. The Dense VCF band
+  writer's band width is now the **shard** Analysis width (1,024, or the shard
+  clipped to the array) rather than the inner chunk, so each band write covers
+  whole shards: on a full `ukb-b` store that is 40.3 GB of float32 scratch, the
+  cost ADR 0058 accepted, and about 0.4 GB on the 10-Analysis pilot, where the
+  shard's Analysis axis clips to the 10 Analyses. The EAF row
+  block encode, the SE rewrite (residual and float16-narrowing), Dense Reference
+  Completion and the Hybrid Dense Component's row blocks are whole shards
+  (100,000 rows) too. A test-time hook
+  (`opengwasdb.store.arrays.require_whole_shard_writes`, also enabled by
+  `OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES=1`) fails a write that covers part of
+  a shard, so a later writer cannot regress to a silent read-modify-write; the
+  real-data pilot runs with it on. The CLI's `--chunk-variants` /
+  `--chunk-analyses` now name the **inner chunk** (default `[1000, 64]`), and the
+  shard shape is deliberately not exposed on a build: it is the format's decided
+  layout, and a build-time knob would let a release carry a shard the converter
+  cannot reproduce.  A caller-supplied inner chunk that does not tile the
+  decided Dense shard `[100000, 1024]` is **refused**, naming the values that
+  do, rather than silently deriving a different shard such as
+  `[100000, 1000]`; an array shorter than the shard still clips it.  **Completing
+  a 0.1.0 source is now refused**, naming
+  `scripts/convert_store_to_0_2_0.py`: completion writes into its source's
+  arrays and keeps its format, and this build writes only 0.2.0 (ADR 0038 §4).
+  `scripts/restamp_store_to_0_1_0.py` keeps its own `0.1.0` target rather than
+  following `CURRENT_FORMAT_VERSION`. The spec (§10a, §21.3) and the
+  compatibility table below record that this package writes 0.2.0 and reads
+  0.1.0 and 0.2.0.
+
+- **`variant_index` is non-decreasing within every Analysis's CSR segment, and
+  validation checks it on every release (#252 review round 2).** The
+  variant-side binary search (`RaggedCSRReader.segment_positions`) is correct
+  only on a sorted segment, and `RaggedCSRWriter.add_analysis` refusing a
+  decrease protects only writes through that class -- an already-built or
+  damaged Store Release could have answered a plausible, wrong row. The
+  ordering is now an explicit store-format invariant (spec §11) and a
+  validation rule for standalone Ragged and Hybrid Overflow CSRs (spec §20).
+  The rule is bounded: it reads `variant_index` in 1,000,000-cell (4 MB)
+  windows, carries the preceding cell across a window boundary and resets at
+  each Analysis boundary, so peak memory is the window, its comparison bool and
+  the per-Analysis offsets (`O(n_analyses)`), independent of the association
+  count -- it never
+  materialises the array. A store whose persisted segment is out of order now
+  fails `validate`.
+
+- **Variant-side Ragged and Hybrid Overflow scans read at their hits, in
+  bounded windows, and `lookup` searches each Analysis's sorted segment
+  (#252).** Every query that reached a Ragged store or a Hybrid's Overflow by
+  variant was O(total associations) in both time and memory: `phewas` and
+  `range_phewas` decoded the whole `variant_index` (4N bytes) and
+  `np.isin`-ed it; `_hit_rows_result` and `_top_hits_by_scan` called
+  `z_all()`/`se_all()`, decoding every z and se in the component (and, through
+  residual SE, every `eaf`); `z_at` sliced the whole `z` plane before indexing
+  it; `lookup` decoded each requested Analysis whole; and
+  `HybridStoreQuery._shared_is_on_panel` ran a per-variant Python
+  `searchsorted` that cast the whole panel map every call. The scan paths now
+  read in windows of a few association inner chunks -- large enough to keep
+  zarr's batched read efficient (a one-chunk window measured 132.9 s against
+  27.3 s for off-axis PheWAS on OGS-00011, so it is eight), so peak memory is
+  bounded by a window rather than by N; z, se and eaf are read at the hit
+  positions (`oindex`/`positions_at`) with one EAF read shared by SE decoding
+  and the `eaf` column under #253's rules; `lookup` and the Hybrid overflow
+  lookup binary-search each requested Analysis's sorted segment -- O(log)
+  chunk reads, not a scan of the Analysis -- which every builder sorts by
+  `variant_index`, now asserted in `RaggedCSRWriter.add_analysis` rather than
+  assumed, so they cost the request and not the store; and the on-axis test is
+  one vectorised `searchsorted`. Answers are unchanged: every variant-side shape
+  (`phewas`, `range_phewas`, `lookup`, and the off-panel Hybrid paths) returns
+  arrays identical to the Analysis-side decode, with and without
+  `observed_only`, on a completed Ragged release with residual SE and imputed
+  cells and on a Hybrid with residual SE in both components. Without a new
+  index this leaves off-axis `phewas` and region queries O(N) in time; the
+  variant-centric index that makes them proportional to the answer is decided
+  in a separate ADR.
+
+- **A query reads each Analysis's `eaf` once and shares it between SE decoding
+  and the result's `eaf` column (#253).** On a release whose `se` is
+  `int8_residual`, decoding a residual predicts it from the frequency, so the
+  `eaf` plane, its `eaf_baseline` and -- on a Reference-Completed release -- the
+  `imputed` mask were each read twice: once inside SE decoding and once for the
+  result column. The in-scope Dense paths (`analysis`, `phewas`,
+  `range_phewas`, `lookup`, older-index `top_hits`) and the Analysis-side
+  Ragged and Overflow reads now read the region once (`EafRead`,
+  `encoding/planes.py`), hand the same decoded array to SE decoding, and cut
+  the result column out of it with the query's own finite/observed mask, so
+  both consumers agree cell for cell and the panel substitution still runs once
+  and only under its mask (ADR 0037 §3-§4). `range_phewas` and `lookup` also
+  replace the SE side's coordinate read over a rectangular block with the
+  orthogonal form. Answers are unchanged: every returned array hashes
+  identically before and after on OGS-00009, OGS-00010 (Reference-Completed,
+  the only real store exercising the substitution traps), OGS-00006 and
+  OGS-00004. On OGS-00009 one whole Analysis went 23.4 s to 20.1 s and the 1 Mb
+  window 1.73 s to 0.89 s, with every shape inside #244's set-L time and
+  memory budgets; the artifact is
+  `docs/benchmark-output/opengwasdb_store_comparison_ogs00009_eaf_once.json`, and
+  an interleaved base-vs-head A/B (each side's imported code revision and
+  fingerprint, the commands, the round order and every sample) is
+  `docs/benchmark-output/opengwasdb_eaf_read_once_ab.json`.
+- **The package runs on zarr-python 3 (#244).** `zarr>=3.4,<4` and
+  `numcodecs>=0.17` replace `zarr>=2.18,<3` and `numcodecs>=0.12,<0.13` in both
+  the `[project]` and pixi dependency tables. The Store format is **not**
+  changed: every array and group is still created in Zarr **v2** format with the
+  same Blosc zstd / clevel 3 / bitshuffle codec, and every build still stamps
+  `format_version` 0.1.0 (the compatibility table is unchanged). Because zarr
+  3.4 requires Python 3.12 and numpy 2, `requires-python` moves from `>=3.11`
+  to `>=3.12`; the numpy range already admitted 2.x and is unchanged. All
+  array/group creation already went through `opengwasdb.store.arrays` (#243),
+  and the one new rule there is that a creating open must state
+  `zarr_format=2` -- zarr 3's unqualified `open_group(mode="w")` would create
+  a Zarr v3 group and silently change the format. The static creation scan now
+  fails a write-mode `open_group` outside the seam. A store built before and
+  after the upgrade decodes identically and holds byte-identical chunk files;
+  only metadata serialisation differs (zarr 3's JSON layout, an explicit
+  default `dimension_separator`, and empty `.zattrs` files).
+- **Blosc decodes with its internal threads again under zarr 3 (#244).**
+  `import zarr` (3.x) sets `numcodecs.blosc.use_threads = False` for the whole
+  process, so every chunk decoded single-threaded: ~4.5 ms instead of ~0.6 ms
+  with Blosc's 8 threads, for a `[1000, 1000]` int16 chunk of OGS-00009
+  (`benchmarks/zarr3_blosc_decode.py`). `opengwasdb.store.arrays`
+  turns them back on for the process, as zarr 2.18 effectively had them on the
+  main thread. Forked build workers stay single-threaded (numcodecs checks the
+  pid), and every fork-pool build path still completes with `n_workers > 1`.
+  The floor moves to `numcodecs>=0.17`, the first release that locks Blosc's
+  global context on decompress as well as compress. As under zarr 2.18, a chunk
+  of two or more Blosc blocks (every `[1000, 1000]` Dense chunk) compressed in
+  the build's parent process is no longer byte-reproducible run to run: its
+  decoded values and compressed size are, so the SE encoding plan is
+  unaffected. Byte-for-byte store comparisons need `BLOSC_NTHREADS=1`. On its
+  own, under zarr's default pipeline, this is not a speed-up (decodes from
+  zarr's thread pool queue on numcodecs' lock); it pays off with the next
+  entry.
+- **Every Store array reads and writes through zarr's `FusedCodecPipeline`,
+  with one worker (#244).** `opengwasdb.store.arrays` sets
+  `codec_pipeline.path` and `codec_pipeline.max_workers = 1` on import. With
+  Blosc threads on, one Analysis genome-wide on OGS-00009 went from 88 s to
+  24 s (zarr 2.18: 26 s; medians of three fresh processes). One worker is
+  measured faster than the pipeline's default pool, and it is what keeps fork
+  pools working: zarr 3.4 does not reset that pool in a forked process
+  (zarr-developers/zarr-python#4478), so a build worker whose read spans more
+  than one chunk, but no more chunks than the idle permits the parent's pool
+  left, would wait forever on threads that exist only in the parent. Built
+  stores are unchanged: fixture chunk files stay byte-identical under
+  `BLOSC_NTHREADS=1`.
+- **ADR 0056 records the zarr runtime configuration the array seam owns
+  (#244):** `write_empty_chunks`, Blosc threads, the fused pipeline and its one
+  worker, with the options rejected and their costs. `max_workers` must stay at
+  1 until zarr resets the pipeline's pool after `fork`.
+- **A query facade opens each top-hit array once, not on every query (#244).**
+  zarr 3 reads an array's metadata from the store on every `group[name]` and
+  `name in group` (~1 ms each), and the top-hit path reopened the tier group
+  and every field on every call: repeating a tier query and a per-Analysis
+  query read 63 (Dense), 65 (Ragged) and 134 (Hybrid) metadata keys on the
+  test fixtures, and now reads none. On OGS-00009 a per-Analysis top-hit
+  query went from 21 ms to 7 ms (zarr 2.18: 1.1 ms). `DenseTopHitReader` keeps
+  the arrays it opens, and a new `TopHitTiers` keeps one reader per threshold
+  for the facade's lifetime. A Dense release with no `eaf` plane also stops
+  reopening `z` for the grid width on every regional query. Answers are
+  unchanged.
+
 - **The GWAS-SSF reader recovers a row's effect and standard error from the
   row's own columns (stores #176).** A full OGS-00011 resolve found 476 Analyses
   with no build-eligible row; 212 of them report both quantities in columns the
@@ -61,6 +226,93 @@ the end of this file.
   build records a `provenance.maf` block (stores #176).
 
 ### Fixed
+
+- **A Ragged association sequence is written one whole shard at a time, and the
+  Dense SE exception tables once each (#249).**
+  `RaggedCSRWriter` flushed its `variant_index`/`z`/`eaf`/`se` planes in regions
+  of
+  `DEFAULT_FLUSH_REGION_CELLS` (4,194,304) cells, but #248's sequence shard is
+  `RAGGED_SEQUENCE_SHARD_ELEMENTS` (50,000,000) cells. A Zarr v3 shard is one
+  file, so every region write was a read-modify-write of the whole shard: about
+  twelve per shard, and 4,194,304 is not a multiple of the 200,000-cell inner
+  chunk either. `sequence_region_step` now rounds the write region **up** to a
+  whole number of shards (never below one), so each shard is written exactly
+  once. On a synthetic 160,000,000-cell component (four 50,000,000-element
+  sequence shards) the measured write amplification (`count_shard_writes`, the
+  real bytes handed to the storage layer) falls from 5.922x to 1.000x, the most
+  writes to any one sequence shard from 13 to 1, and the flush from 92.78 s to
+  81.82 s
+  (`docs/benchmark-output/opengwasdb_ragged_write_amplification_epic240_249.json`).
+  The registered pilots' sequences each fit in one shard, but the pre-#249 step
+  still rewrote OGS-00004's single 27,369,974-cell Overflow shard **7 times**,
+  OGS-00006's two shards **15 writes in total** (12 + 3) and OGS-00011's 62
+  shards at most 13 times each (797 shard writes per array).
+  The cost is the region's working set, measured by the same artifact at
+  **89.5 bytes a cell** over the pre-#249 4,194,304-cell region (0.37 GB) and
+  **79.0 bytes a cell** over the fixed 50,000,000-cell region (**3.95 GB,
+  3.68 GiB**). The 30-bytes-a-cell figure this replaces predated the v3
+  sharding, which encodes the whole shard per write.
+  On the four rebuild pilots the 0.2.0 builds are within noise of the 0.1.0 ones
+  (Dense 9:14 -> 8:27, Hybrid 43:53 -> 43:31, both Ragged within 2 s; peak RSS
+  within 1% on Dense and Hybrid), in
+  `docs/benchmark-output/opengwasdb_build_cost_epic240_249.json`.
+  Extending `require_whole_shard_writes` to every sharded array -- 1-D included,
+  whatever its shard size -- found a second partial-shard writer: the Dense SE
+  rewrite (`encoding/se.py`) filled `se_exception_index`/`_value` one row band at
+  a time, which for those single-shard tables is one read-modify-write of the
+  whole table per band (about 99 on OGS-00008's 9.85 M rows). It now buffers the
+  bands' runs and writes each table once. Nothing is exempt from the guard.
+- **A Reference-Completed Dense release records the chunk shape its arrays
+  actually have (#245).** Completion writes the completed grid at
+  `DEFAULT_CHUNK_SHAPE` clipped to the array dimensions, not at the source's
+  build-wide hint, but it inherited the source manifest's
+  `provenance.dense.chunk_shape` unchanged. A source built with a different
+  hint therefore produced a completed release whose manifest described arrays
+  it did not hold -- the silent failure class #245's recorded-layout rule
+  catches. `complete_dense_store` now records the effective completed chunk in
+  the manifest, matching the root attrs and the arrays. The rule itself is new,
+  and a completed release whose manifest disagrees with its arrays is now
+  invalid rather than quietly readable.
+- **Writes refuse a Zarr group that consolidated metadata describes (#244
+  review).** zarr 3's `open_group` reads a `.zmetadata` record (or a v3
+  `consolidated_metadata` block) in place of the live metadata; zarr 2.18 did
+  not. No package write updates such a record, so a write under one left a
+  release that reopened with stale shapes. An EAF repair, for one, reopened its
+  rechunked `eaf_baseline` with the old `(8,)` chunks and failed to reshape.
+  - Any open in a mode other than `r` now raises `ConsolidatedMetadataError`
+    before changing anything when a record covers the group or an enclosing
+    group. So does `move_in_group`.
+  - So does every metadata write and every delete through a handle the seam
+    opened, including one opened before the record appeared. This covers the
+    seam's `create_array`, `create_group` and `require_group`, attribute writes,
+    `del`, and a shrinking `resize`. The seam opens every group on its own
+    `LocalStore` subclass, which checks there.
+  - Deletes are refused even for chunk files, because a shrinking `resize`
+    deletes chunks before it writes the new shape. With only the metadata write
+    checked, the refusal came after the chunks were gone, and a fresh read
+    returned zeros under the old shape. Chunk writes are not checked: the record
+    holds no chunk data, and with `write_empty_chunks` on an ordinary write
+    never deletes a chunk.
+  - Reads are unchanged. The package never consolidates, and no registered
+    Store Release carries a record.
+  - ADR 0056 §4 records the decision and the alternatives rejected.
+- **`repair-eaf-chunks` recovers from a run that died mid-swap (#244 review).**
+  The repair swaps the rechunked copy in with two renames. Each rename is
+  atomic, but the pair is not. A process killed between them left the
+  published release without `eaf_baseline`, and the next run skipped it as
+  absent, reported nothing repaired and left the release broken.
+  - The next run now settles each state an interruption can leave: it drops
+    an unfinished copy, restores the original from its backup and repairs
+    again, or drops a backup left after a completed swap.
+  - It refuses, touching nothing, the three states no single interruption
+    leaves: the copy alone, the backup alone, and all three together. Before
+    this, a lone copy was deleted, though it could be the only baseline left.
+- **An unknown or zarr-2-only group mode fails with a message, not a bare
+  `AssertionError` (#244 review).** The seam listed `x` as a creation mode,
+  which zarr 3 rejects. Modes are now checked against the five zarr 3 accepts.
+  `opengwasdb/store/arrays.py` is also type-checked against zarr's own types
+  (`tests/test_seam_types.py`); that check is what found `x`. mypy's target is
+  now Python 3.12, the package floor.
 
 - **A single-pass build from a plain-ALID `--variant-reference` no longer
   writes a Store with no rsids (#255).** `--variant-reference` bypassed Pass 1,
@@ -191,6 +443,123 @@ the end of this file.
   conflicting case-folded reference keys (stores #174).
 
 ### Added
+
+- **The Dense chunk and shard shapes are decided (#246, ADR 0058).** Format 0.2.0
+  is adopted: Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask use
+  `[1000, 64]` inner chunks with a `[100000, 1024]` Dense shard, and the top-hit
+  index is sharded at 64 inner chunks per shard. On OGS-00009 that turns 119,118
+  files into 994 and the whole-Analysis read from 27.7 s to 6.5 s (zarr 2.18 →
+  zarr 3), with every query inside its set-L budget. The converter's defaults
+  were already these shapes and are now pinned by a test; ADR 0058 records the
+  measurements and the rejected candidates (128-wide chunks, the screened
+  `[1000, 256]` and `[500, 256]`, a 256-wide shard, and an unsharded top-hit
+  index). ADR 0021's `DEFAULT_CHUNK_SHAPE` is superseded as the statement of a
+  Dense grid's chunk.
+- **The top-hit shard width is a conversion parameter (#246).**
+  `convert_dense_release(..., top_hit_shard_chunks=N)` and
+  `scripts/convert_store_to_0_2_0.py --top-hit-shard-chunks N` set how many
+  top-hit inner chunks one shard holds, defaulting to the seam's 64. `N=1`
+  gives every top-hit shard one inner chunk — the "effectively unsharded"
+  variant #246 measures the top-hit query against — while the array stays a
+  Zarr v3 sharded array, so format 0.2.0's "every array is sharded" rule is not
+  relaxed. `shard_layout(..., top_hit_shard_chunks=…)` is the seam-level form
+  and applies to `TOP_HIT_INDEX` alone; the value is rejected if it is below 1,
+  and recorded in the `zarr_v3_conversion` provenance block.
+- **The remaining layouts convert to format 0.2.0 (#248).**
+  `opengwasdb/store/convert.py` and `scripts/convert_store_to_0_2_0.py` now
+  accept every layout the array seam can name a role for: Dense
+  Reference-Completed (the imputed mask, `on_panel`, `eaf_reference` and the
+  SE/EAF side tables; completion-quality data in `index.sqlite` is copied
+  unchanged), Ragged Observed-Only and Reference-Completed (the `ragged/` CSR
+  group and all its tables), and Hybrid — whose **outer release and nested
+  Dense Component are both converted**, one fresh `release_id` across both
+  manifests, both Zarr trees rewritten, both `index.sqlite` `dense` blobs
+  re-pointed, and both verified, so a half-converted Hybrid cannot be
+  published. `rho/*` is converted where present. The refusals that remain are
+  the ones that stop a conversion being a guess: an array or group the role
+  table cannot name, a source already at 0.2.0 on any manifest, and an unknown
+  layout. A true Hybrid's nested Dense Component now records its own
+  `chunk_shape`/`shard_shape`/`compressor`/`zarr_format` in `provenance.dense`
+  (the gap #245's report named), with the outer `provenance.hybrid` kept in
+  step, so the recorded-layout rule covers components. The Ragged and Overflow
+  shards are fixed by the seam's role table, not left to the Dense parameters:
+  50,000,000 elements for a Ragged association sequence and 10,000,000 for a
+  Ragged per-variant or exception table, so OGS-00011's 3,085,080,783-entry
+  overflow sequences become 62 files per array and its 180,396,687-entry
+  Ragged `eaf_exception_index` 19 files, rather than thousands of tiny files or
+  one 1.4 GB file. ADR 0059 records the decision; spec §10a gains the Ragged
+  roles and the Hybrid component recording.
+- **A Dense Store Release can be converted to format 0.2.0 (Zarr v3, sharded)
+  (#245).** `opengwasdb/store/convert.py` and its CLI
+  `scripts/convert_store_to_0_2_0.py STORE --into DEST [--dense-analysis-chunk N]
+  [--dense-shard ROWSxCOLS] [--workers N]` derive a new 0.2.0 release from a
+  **Dense Observed-Only 0.1.0** one. Every array is re-written as Zarr v3 with
+  the sharding codec holding the same stored codes, so no value is re-encoded;
+  inner chunk and shard come from the array seam's one role policy
+  (`chunk_layout`/`shard_layout`), so #247's builders cannot disagree with it.
+  The source is never written, an existing destination is refused, Ragged,
+  Hybrid and Reference-Completed sources are refused by name (#248 adds them,
+  above), and the result is a new release: fresh `release_id`/`created_at`, `store_id`
+  kept, a `zarr_v3_conversion` provenance block with the source release, the
+  installed commit, the Zarr formats and the per-array layout, the Dense
+  `chunk_shape`/`shard_shape`/`compressor` rewritten in `manifest.json`, the
+  `index.sqlite` `dense` blob and the `data.zarr` root attrs, and
+  `overview.html` regenerated. It is verified **bit-identical** to the source
+  (every array's path, shape, dtype, fill value, then the values block by block
+  as raw bytes, so NaN payloads count — a fill of NaN is compared bitwise, so a
+  valid float16 `se` with a NaN fill converts), group attributes must have the
+  same key set, and an unmapped array **or group** fails the conversion. The
+  staged release must validate with no errors before it is published by rename.
+- **Format 0.2.0 is readable (#245).** `SUPPORTED_FORMAT_VERSIONS` gains the
+  `(0, 2)` series, alongside `0.1`. `CURRENT_FORMAT_VERSION` stays `0.1.0`: the
+  builders keep writing it until #247, the converter is the only 0.2.0 writer in
+  the interim, and no package version is cut in between. As a direct
+  consequence `check_writable_format_version` (ADR 0038 §4) now refuses to
+  Reference-Complete a 0.2.0 source — completion writes into its source's arrays
+  and keeps its format — which is the intended interim behaviour until #247.
+- **Three new validation rules for the Zarr layout (#245).** (1) The Zarr
+  on-disk format must match `format_version`: 0.1.0 is v2 everywhere, 0.2.0 is v3
+  everywhere with every array sharded, and a half-converted release is invalid.
+  (2) The Dense planes' recorded `chunk_shape`/`shard_shape` must agree with the
+  arrays — each present statistic plane (`z`, `se`, `eaf` and the imputed mask),
+  not only `z` — in all three places they are recorded (`manifest.json`
+  `provenance.dense`, the `index.sqlite` `dense` blob, the `data.zarr` root
+  attrs); each hint is clipped to the plane the way the role policy clips it.
+  (3) The per-variant chunking rule (issue #135) is applied to the **inner**
+  chunk of a sharded array — the unit a query reads — not to the shard. ADR
+  0057 records what 0.2.0 is, the conversion route, the shard policy and the
+  rejected options; spec §10a describes `data.zarr` in 0.2.0.
+- **OGS-00009 on zarr-python 3 meets set L (#244, Stage B).** The #242 harness
+  ran back to back, zarr 2.18 at `745796c` then zarr 3 at `83b8b23`, with
+  `--reps 5` and the peak-memory probes. Each run started below a 1-minute load
+  of 3.
+  - Every query meets its typical-time, slow-time and memory budget. One whole
+    Analysis takes 21.9 s against 27.6 s on 2.18 (0.79×, guard 1.25×), with a
+    peak of 1.14 GB against 12.04 GB.
+  - Top hits are 6.53 ms against a 50 ms budget. No result is within 30% of a
+    limit.
+  - Answers are identical across the two environments for all seven queries.
+  - Committed: `docs/benchmark-output/opengwasdb_store_comparison_ogs00009_zarr3.json`,
+    the pair's 2.18 run beside it, and the set-L table generated from them by
+    `benchmarks/zarr3_lever_tables.py stage-b`.
+- **The measurements behind ADR 0056 and #244's read levers are in the
+  repository (#244).**
+  - The scripts are in `benchmarks/` and documented in `benchmarks/README.md`:
+    - the attribution of each lever (`zarr3_attribution.py`);
+    - fork safety (`zarr3_fork_probe.py`, `zarr3_fork_paths.py`, and
+      `zarr3_pool_fork_repro.py` for zarr-python#4478);
+    - build-output identity (`zarr3_fixture_trees.py`, `zarr3_compare_trees.py`,
+      `zarr3_encode_scope.py`, `zarr3_se_plan.py`) and answer identity
+      (`zarr3_spot_queries.py`);
+    - the 0.2.0 shape screen (`shape_slice.py`, `shape_harness_geometry.py`,
+      `shape_screen.py`);
+    - the duplicate EAF read (`eaf_read_split.py`, `eaf_semantics_check.py`, #253).
+  - The outputs are committed as produced under
+    `docs/benchmark-output/opengwasdb_zarr3_read_levers/`, with a `PROVENANCE.md`
+    giving each output's script, commit and time.
+  - `zarr3_lever_tables.py` regenerates every table #244, #246 and #253 quote.
+  - The one re-run, `zarr3_blosc_decode.py`, puts the threaded decode of a
+    `[1000, 1000]` chunk at ~0.6 ms, not the ~1.1 ms first quoted.
 
 - **One shared row-admission rule for the resolver and the Hybrid builder**
   (`opengwasdb.build.row_admission.admit_rows`, `keep = ~info_drop & ~maf_drop`),
@@ -1716,12 +2085,20 @@ it can read.
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
 | 0.3.0 | 0.1.0 | 0.1.0 only |
+| Unreleased (next) | 0.2.0 from every builder and the converter | 0.1.0, 0.2.0 |
 
 The two `format_version` values in that table are different formats despite
 reading alike: `0.1` is the pre-release format 0.2.0 wrote, and `0.1.0` is the
 reset (#143, ADR 0041). Nothing on `dev` reads `0.1`, and the shapes cannot be
 confused by a reader — only by a person reading this table, which is why it
 says so here.
+
+The `Unreleased` row is the state #247 leaves: every builder writes 0.2.0 (Zarr
+v3 with sharding, the shapes ADR 0058 decided) and the converter writes the same
+format from a 0.1.0 source, so a build and a conversion of the same release
+carry the same layout. `0.1.0` (Zarr v2) stays readable; a 0.1.0 source is no
+longer writable, which is why completion refuses it and names the converter.
+Deleting the v2 reader is a later decision (ADR 0057).
 
 [Unreleased]: https://github.com/opengwas/opengwasdb/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/opengwas/opengwasdb/compare/v0.2.0...v0.3.0

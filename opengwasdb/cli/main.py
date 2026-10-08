@@ -102,6 +102,28 @@ _ALLOW_UNVERIFIED_HELP = (
     "Accept Analyses the supplied --eaf-reference could not verify (too little "
     "overlap or frequency spread) instead of failing. Recorded in the store's provenance."
 )
+#: The two chunk options every Dense-shaped build shares.  They name the
+#: **inner chunk** -- the unit a query reads -- not the shard: the shard is the
+#: format's decided shape, and an inner chunk that does not tile it is refused
+#: (ADR 0057 addendum, ADR 0058).
+_CHUNK_VARIANTS_OPTION = Annotated[
+    int,
+    typer.Option(
+        help=(
+            "Zarr variant-axis inner chunk size (the unit a query reads); must tile the "
+            "format's 100,000-row shard (smaller arrays clip)"
+        )
+    ),
+]
+_CHUNK_ANALYSES_OPTION = Annotated[
+    int,
+    typer.Option(
+        help=(
+            "Zarr Analysis-axis inner chunk size (the unit a query reads); must tile the "
+            "format's 1,024-Analysis shard (smaller arrays clip)"
+        )
+    ),
+]
 
 _SOURCE_READER_CAPABILITY_HELP = (
     "Default Source Reader Capability for manifest rows that omit source_reader_capability "
@@ -452,8 +474,8 @@ def build_dense_vcf_command(
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
     n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 1 and Pass 2"),
-    chunk_variants: int = typer.Option(DEFAULT_CHUNK_SHAPE[0], help="Variant chunk size"),
-    chunk_analyses: int = typer.Option(DEFAULT_CHUNK_SHAPE[1], help="Analysis chunk size"),
+    chunk_variants: _CHUNK_VARIANTS_OPTION = DEFAULT_CHUNK_SHAPE[0],
+    chunk_analyses: _CHUNK_ANALYSES_OPTION = DEFAULT_CHUNK_SHAPE[1],
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
@@ -505,11 +527,11 @@ def build_hybrid_command(
     ] = False,
     resume: Annotated[bool, typer.Option("--resume", help=_RESUME_HELP)] = False,
     n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 1 and Pass 2"),
-    chunk_variants: int = typer.Option(DEFAULT_CHUNK_SHAPE[0], help="Zarr variant chunk size"),
-    chunk_analyses: int = typer.Option(DEFAULT_CHUNK_SHAPE[1], help="Zarr analysis chunk size"),
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    chunk_variants: _CHUNK_VARIANTS_OPTION = DEFAULT_CHUNK_SHAPE[0],
+    chunk_analyses: _CHUNK_ANALYSES_OPTION = DEFAULT_CHUNK_SHAPE[1],
     capability: str | None = typer.Option(
         None, "--source-reader-capability", callback=_validate_source_reader_capability,
         help=_SOURCE_READER_CAPABILITY_HELP,
@@ -580,8 +602,8 @@ def build_hybrid_from_catalogue_command(
     ),
     overwrite: bool = typer.Option(False),
     n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 2"),
-    chunk_variants: int = typer.Option(DEFAULT_CHUNK_SHAPE[0]),
-    chunk_analyses: int = typer.Option(DEFAULT_CHUNK_SHAPE[1]),
+    chunk_variants: _CHUNK_VARIANTS_OPTION = DEFAULT_CHUNK_SHAPE[0],
+    chunk_analyses: _CHUNK_ANALYSES_OPTION = DEFAULT_CHUNK_SHAPE[1],
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),

@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from numcodecs import Blosc
 
 from opengwasdb.completion.ancestry_filter import derive_impute_analysis_ids
 from opengwasdb.completion.block import REGION_CAP_BP, run_block
@@ -72,8 +71,8 @@ from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
-    DEFAULT_COMPRESSOR,
     DEFAULT_DTYPE,
+    dense_layout_records,
 )
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.model.analyses import (
@@ -89,6 +88,7 @@ from opengwasdb.model.enums import (
     PrimaryStorageLayout,
 )
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import (
     OpenGWASDBStore,
     StagedRelease,
@@ -108,7 +108,7 @@ from opengwasdb.variants import (
 
 log = logging.getLogger(__name__)
 
-_COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+_COMPRESSOR = compressor()
 _LD_PANEL_ID = "eur-hg38-gpm"
 
 
@@ -639,7 +639,7 @@ def _merge_checkpoint_fills(
         src_has_eaf=src_has_eaf,
         eaf_reference=eaf_reference,
     )
-    band_rows = _completion_band_rows(effective_chunks)
+    band_rows = _completion_band_rows(_dense_shard_rows(staged, effective_chunks))
     fill_shard_dir, quality_count = _shard_checkpoint_fills_by_band(
         blocks_dir,
         staged,
@@ -759,7 +759,41 @@ def _write_completed_manifest(
             n_missing_imputation_failed=arrays.n_missing_imputation_failed,
         ),
     )
-    staged.write_manifest(completed_manifest)
+    staged.write_manifest(_record_effective_dense_chunk_shape(completed_manifest, staged))
+
+
+def _record_effective_dense_chunk_shape(
+    manifest: StoreManifest, staged: StagedRelease
+) -> StoreManifest:
+    """State the chunk shape the completed Dense planes actually have.
+
+    Completion writes the completed grid at `DEFAULT_CHUNK_SHAPE`, clipped to
+    the array dimensions -- not at the source's build-wide hint.  A completed
+    release therefore inherits a `provenance.dense.chunk_shape` describing the
+    source's *intended* layout, which is not the completed arrays' layout
+    whenever the two differ.  A manifest that describes one shape over arrays
+    of another is the silent failure class #245's recorded-layout rule exists
+    to catch, so completion records what it wrote (the root attrs already carry
+    it; this makes the manifest agree).
+    """
+    dense = dict(manifest.provenance.get("dense", {}))
+    if not dense:
+        return manifest
+    attrs = dict(staged.arrays(mode="r").attrs)
+    if attrs.get("chunk_shape") is None:
+        return manifest
+    # Record the whole layout, not only the inner chunk: a completed release
+    # that inherited the source's `shard_shape` or compressor but wrote arrays
+    # with another is the same silent-failure class (issue #245, #247).  The
+    # `index.sqlite` `dense` blob is the third recording 0.2.0 requires (#248),
+    # and completion is the writer that produces it for a completed release.
+    for key in ("chunk_shape", "shard_shape", "compressor", "zarr_format"):
+        if key in attrs:
+            dense[key] = attrs[key]
+    with staged.index_connection() as connection:
+        set_metadata(connection, "dense", dict(dense))
+        connection.commit()
+    return replace(manifest, provenance={**manifest.provenance, "dense": dense})
 
 
 def _completed_analysis_rows(
@@ -889,8 +923,22 @@ _FILL_RECORD_DTYPE = np.dtype(
 _FILL_RECORD_READ_COUNT = 5_000_000
 
 
-def _completion_band_rows(effective_chunks: tuple[int, int]) -> int:
-    return max(int(effective_chunks[0]), _BAND_ROWS)
+def _completion_band_rows(shard_rows: int) -> int:
+    """Rows per completion band: whole Dense shards, about `_BAND_ROWS` of them.
+
+    The completion band writer sets ``z_arr[r0:r1]`` and the same for se,
+    imputed and eaf, so a band that ends inside a shard turns every one of those
+    writes into a read-modify-write.  The band is at least one shard, then as
+    many whole shards as fit the ~`_BAND_ROWS` memory target (issue #247).
+    """
+    rows = max(int(shard_rows), 1)
+    return max(rows, (_BAND_ROWS // rows) * rows)
+
+
+def _dense_shard_rows(staged: StagedRelease, effective_chunks: tuple[int, int]) -> int:
+    """The variant-axis height of the completed planes' shard, read from `z`."""
+    shards = getattr(staged.arrays(mode="r")["z"], "shards", None)
+    return int(shards[0]) if shards is not None else int(effective_chunks[0])
 
 
 def _fill_shard_path(fill_shard_dir: Path, band_index: int) -> Path:
@@ -1023,6 +1071,57 @@ def _shard_checkpoint_fills_by_band(
     return fill_shard_dir, quality_count
 
 
+def _create_completed_planes(
+    root: Any,
+    codec: StoreCodec,
+    n_variants: int,
+    n_analyses: int,
+    chunk_shape: tuple[int, int],
+    src_has_eaf: bool,
+) -> tuple[int, int]:
+    """The completed grid's planes; returns the effective clipped chunks.
+
+    z and se are missing-filled, imputed is 0-filled, and eaf appears only when
+    the observed store carried one (ADR 0036) -- completion adds panel rows, it
+    does not invent frequencies the source never reported.  Each plane gets its
+    own missing marker (spec §15).
+    """
+    grid = (n_variants, n_analyses)
+
+    def plane(name: str, role: ArrayRole, plane_dtype: Any, fill: Any, hint: Any) -> Any:
+        return create_array(
+            root,
+            name,
+            role,
+            shape=grid,
+            dtype=plane_dtype,
+            fill_value=fill,
+            compressor=_COMPRESSOR,
+            hint=hint,
+        )
+
+    z_array = plane(
+        "z", ArrayRole.DENSE_STATISTIC_PLANE, codec.z_dtype, codec.z_fill_value, chunk_shape
+    )
+    # The role's layout policy clipped the chunk shape to the array dimensions
+    # (ADR 0021); read the effective chunks back for the band writers.
+    effective_chunks = (int(z_array.chunks[0]), int(z_array.chunks[1]))
+    # Scratch in float32 so an exact residual exception is not rounded before
+    # the destination's final SE encoding is written below.  Never float16 --
+    # see `build_vcf._create_eaf_array` for why it cannot hold an EAF near 1.
+    plane("se", ArrayRole.DENSE_STATISTIC_PLANE, "float32", float("nan"), effective_chunks)
+    plane("imputed", ArrayRole.DENSE_IMPUTED_MASK, "uint8", 0, effective_chunks)
+    if src_has_eaf:
+        plane(
+            "eaf",
+            ArrayRole.DENSE_STATISTIC_PLANE,
+            codec.eaf_dtype,
+            codec.eaf_fill_value,
+            effective_chunks,
+        )
+    return effective_chunks
+
+
 def _create_completed_zarr(
     staged: StagedRelease,
     n_variants: int,
@@ -1042,44 +1141,24 @@ def _create_completed_zarr(
     The planes are created in the **source's** encoding, which completion
     preserves rather than re-stamping (ADR 0038 §4), and each is filled with
     its own missing marker (spec §15)."""
-    effective_chunks = (min(chunk_shape[0], n_variants), min(chunk_shape[1], n_analyses))
-    codec = StoreCodec(encoding)
     root = staged.arrays(mode="w")
-
-    def plane(name: str, plane_dtype: Any, fill: Any) -> None:
-        root.create_dataset(
-            name,
-            shape=(n_variants, n_analyses),
-            chunks=effective_chunks,
-            compressor=_COMPRESSOR,
-            dtype=plane_dtype,
-            fill_value=fill,
-        )
-
-    plane("z", codec.z_dtype, codec.z_fill_value)
-    # Scratch in float32 so an exact residual exception is not rounded before
-    # the destination's final SE encoding is written below.
-    plane("se", "float32", float("nan"))
-    plane("imputed", "uint8", 0)
-    if src_has_eaf:
-        # Never float16 -- see `build_vcf._create_eaf_array` for why it cannot
-        # hold an EAF near 1 (ADR 0036). Created only when the observed store
-        # had one: completion adds panel rows, it does not invent frequencies
-        # the source never reported.
-        plane("eaf", codec.eaf_dtype, codec.eaf_fill_value)
-    root.create_dataset(
+    effective_chunks = _create_completed_planes(
+        root, StoreCodec(encoding), n_variants, n_analyses, chunk_shape, src_has_eaf
+    )
+    create_array(
+        root,
         "on_panel",
+        ArrayRole.DENSE_ON_PANEL,
         data=on_panel.astype(np.uint8),
-        chunks=(effective_chunks[0],),
-        compressor=_COMPRESSOR,
         dtype="uint8",
+        compressor=_COMPRESSOR,
+        hint=effective_chunks,
     )
     if eaf_reference is not None:
         write_eaf_reference(root, eaf_reference, compressor=_COMPRESSOR)
     root.attrs["layout"] = "dense"
     root.attrs["completion_state"] = "reference_completed"
-    root.attrs["compressor"] = DEFAULT_COMPRESSOR
-    root.attrs["chunk_shape"] = list(effective_chunks)
+    root.attrs.update(dense_layout_records((n_variants, n_analyses), hint=chunk_shape))
     return effective_chunks
 
 
@@ -1403,7 +1482,7 @@ def _write_completed_bands(
     root = staged.arrays(mode="a")
     codec = StoreCodec(encoding)
     overflow = ZOverflowBuilder()
-    band_rows = _completion_band_rows(effective_chunks)
+    band_rows = _completion_band_rows(_dense_shard_rows(staged, effective_chunks))
 
     n_missing_off_panel = np.zeros(n_analyses, dtype=np.int64)
 

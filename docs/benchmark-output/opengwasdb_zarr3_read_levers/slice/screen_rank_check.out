@@ -1,0 +1,74 @@
+shape                  cand        model A  model B    slice
+bulk                   1000x1000      1.00     1.00         
+bulk                   1000x128       0.72     0.34     0.35
+bulk                   1000x64        0.55     0.21     0.21
+bulk                   2000x128       0.47     0.26     0.28
+bulk                   4000x256       0.27     0.26     0.25
+bulk                   250x512        2.77     1.30     1.38
+bulk                   2000x256       0.45     0.33         
+bulk                   4000x128       0.22     0.17         
+bulk                   8000x64        0.12     0.09         
+bulk                   1000x256       0.91     0.52         
+bulk                   500x256        1.42     0.67         
+bulk                   2000x64        0.37     0.18         
+phewas                 1000x1000      1.00     1.00         
+phewas                 1000x128       1.58     1.31     1.82
+phewas                 1000x64        1.91     1.44     1.90
+phewas                 2000x128       1.84     1.73     2.38
+phewas                 4000x256       1.40     1.76     2.10
+phewas                 250x512        0.97     0.75     0.84
+phewas                 2000x256       1.29     1.31         
+phewas                 4000x128       1.78     2.02         
+phewas                 8000x64        2.83     3.52         
+phewas                 1000x256       1.30     1.14         
+phewas                 500x256        1.17     0.94         
+phewas                 2000x64        2.42     2.09         
+regional_one_analysis  1000x1000      1.00     1.00         
+regional_one_analysis  1000x128       0.92     0.67     0.61
+regional_one_analysis  1000x64        0.87     0.60     0.42
+regional_one_analysis  2000x128       0.84     0.63     0.50
+regional_one_analysis  4000x256       0.86     0.76     0.56
+regional_one_analysis  250x512        1.48     1.11     1.11
+regional_one_analysis  2000x256       0.83     0.66         
+regional_one_analysis  4000x128       0.83     0.66         
+regional_one_analysis  8000x64        0.84     0.67         
+regional_one_analysis  1000x256       0.97     0.76         
+regional_one_analysis  500x256        1.13     0.83         
+regional_one_analysis  2000x64        0.81     0.59         
+regional               1000x1000      1.00     1.00         
+regional               1000x128       2.37     1.54     1.45
+regional               1000x64        3.17     1.77     1.54
+regional               2000x128       1.73     1.27     1.41
+regional               4000x256       1.21     1.29     1.19
+regional               250x512        2.24     1.43     1.04
+regional               2000x256       1.07     0.89         
+regional               4000x128       1.66     1.52         
+regional               8000x64        2.90     2.83         
+regional               1000x256       1.72     1.25         
+regional               500x256        2.36     1.52         
+regional               2000x64        2.41     1.58         
+rand_10x100            1000x1000      1.00     1.00         
+rand_10x100            1000x128       2.95     1.68     2.30
+rand_10x100            1000x64        3.98     1.91     2.38
+rand_10x100            2000x128       3.83     2.57     3.05
+rand_10x100            4000x256       2.41     2.68     2.38
+rand_10x100            250x512        0.94     0.51     0.61
+rand_10x100            2000x256       2.02     1.70         
+rand_10x100            4000x128       3.62     3.17         
+rand_10x100            8000x64        6.93     6.17         
+rand_10x100            1000x256       2.06     1.35         
+rand_10x100            500x256        1.62     0.90         
+rand_10x100            2000x64        5.63     3.24         
+rand_100x10            1000x1000      1.00     1.00         
+rand_100x10            1000x128       2.40     1.21     1.40
+rand_100x10            1000x64        1.92     0.81     0.88
+rand_100x10            2000x128       3.13     1.88     1.54
+rand_100x10            4000x256       3.62     3.81     1.11
+rand_100x10            250x512        1.25     0.62     0.96
+rand_100x10            2000x256       3.00     2.37         
+rand_100x10            4000x128       2.93     2.33         
+rand_100x10            8000x64        3.30     2.61         
+rand_100x10            1000x256       3.06     1.84         
+rand_100x10            500x256        2.36     1.19         
+rand_100x10            2000x64        2.74     1.39         
+{"n": 30, "inside_A_B": 14, "median_pct": 8.722684112419621, "max_pct": 242.49646056133955}

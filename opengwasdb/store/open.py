@@ -27,6 +27,7 @@ import zarr
 
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store.arrays import open_group
 
 if TYPE_CHECKING:
     from opengwasdb.query.facade import StoreQuery
@@ -37,18 +38,25 @@ if TYPE_CHECKING:
 #: because the compatible axis is defined as one an older reader still reads
 #: correctly.
 #:
-#: One entry, and that is the point of the reset (issue #143): there is one
-#: format, one decoder, and one contract to test. The four pre-reset versions
-#: are not in it and are not readable -- see `PRE_RESET_FORMAT_VERSIONS`.
+#: Two entries since #245: `0.1` (Zarr v2, read but never written again) and
+#: `0.2` (Zarr v3 with sharding, what every builder writes from #247 on). The
+#: four pre-reset versions are not in it and are not readable -- see
+#: `PRE_RESET_FORMAT_VERSIONS`.
 SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingProxyType(
-    {(0, 1): (0,)}
+    {(0, 1): (0,), (0, 2): (0,)}
 )
 
 #: format_version stamped on releases written by this build. A build writes
 #: exactly one version and reads every one in `SUPPORTED_FORMAT_VERSIONS`
 #: (ADR 0041 §3): supporting the *writing* of historical formats would mean
 #: keeping every retired encoder alive and tested, for a use case nobody has.
-CURRENT_FORMAT_VERSION = "0.1.0"
+#:
+#: `0.2.0` since #247: Zarr v3 with the sharding codec (ADR 0057), at the Dense
+#: inner chunk and shard shapes ADR 0058 decided. The builders write it through
+#: `opengwasdb.store.arrays`, and the converter writes it from a `0.1.0` source
+#: (`opengwasdb.store.convert.SOURCE_FORMAT_VERSION`); `0.1.0` stays readable
+#: until a later decision deletes the v2 reader (ADR 0057).
+CURRENT_FORMAT_VERSION = "0.2.0"
 
 #: The versions the format carried before the reset, and what each one was.
 #: Every one is two-component, so the parser rejects it on shape alone; naming
@@ -181,12 +189,12 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
     lies about its own encoding, which is the failure class this project exists
     to avoid.
 
-    Unreachable while this build reads exactly one format (issue #143): every
-    readable version is the one it writes. It is kept because the invariant is
-    about the *next* format rather than this one -- the moment a second
-    readable version exists, completion writing into arrays it cannot encode is
-    live again, and that is not a check to be remembering to add at the time
-    (issue #112).
+    It is live since #247: this build writes `0.2.0` (Zarr v3 with sharding), so
+    completing a `0.1.0` source -- Zarr v2, written by every build before this
+    one -- is refused here.  The refusal names the conversion tool, because a
+    Dense 0.1.0 release whose values are right can be converted rather than
+    rebuilt (ADR 0057 §3).  Convert, then complete; converting later is not
+    possible, because completion writes into the source's arrays.
     """
     check_format_version(version, source=source)
     if version != CURRENT_FORMAT_VERSION:
@@ -194,7 +202,10 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
             f"{source} is format_version={version!r}, which this build reads but cannot "
             f"write (it writes {CURRENT_FORMAT_VERSION!r}). Completion preserves its "
             "source's format rather than re-encoding it (ADR 0038 §4), so this release "
-            "cannot be completed by this build -- rebuild it from source instead"
+            "cannot be completed by this build. The one order that works is: convert the "
+            f"0.1.0 source to {CURRENT_FORMAT_VERSION} with "
+            "scripts/convert_store_to_0_2_0.py (it accepts every converter-supported layout), "
+            "then complete the converted release; or rebuild the release from source."
         )
     return version
 
@@ -500,7 +511,7 @@ class OpenGWASDBStore(_ReleasePaths):
 
     def arrays(self, mode: str = "r") -> zarr.Group:
         """Open this release's ``data.zarr`` group."""
-        return zarr.open_group(str(self.data_path), mode=mode)
+        return open_group(self.data_path, mode)
 
     def index_connection(self) -> sqlite3.Connection:
         """Open a connection to this release's ``index.sqlite``."""
@@ -611,7 +622,7 @@ class StagedRelease(_ReleasePaths):
         object.__setattr__(self, "_paths", _release_paths(self.path))
 
     def arrays(self, mode: str = "w") -> zarr.Group:
-        return zarr.open_group(str(self.data_path), mode=mode)
+        return open_group(self.data_path, mode)
 
     def index_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.index_path))

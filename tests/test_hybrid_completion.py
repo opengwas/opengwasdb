@@ -578,12 +578,12 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
     encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=1))
     codec = StoreCodec(encoding)
     dense_dir = tmp_path / "dense"
-    root = zarr.open_group(str(dense_dir / "data.zarr"), mode="w")
-    root.create_dataset(
+    root = zarr.open_group(str(dense_dir / "data.zarr"), mode="w", zarr_format=3)
+    root.create_array(
         "z", shape=(2, 2), dtype=codec.z_dtype, fill_value=codec.z_fill_value
     )
-    root.create_dataset("se", shape=(2, 2), dtype="float16", fill_value=np.nan)
-    root.create_dataset("imputed", shape=(2, 2), dtype="uint8", fill_value=0)
+    root.create_array("se", shape=(2, 2), dtype="float16", fill_value=np.nan)
+    root.create_array("imputed", shape=(2, 2), dtype="uint8", fill_value=0)
 
     # Row 1 / analysis column 0: dense completion already wrote an LD-imputed
     # guess here before the fold runs.

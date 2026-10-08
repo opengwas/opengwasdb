@@ -99,11 +99,13 @@ def _defective(eaf: np.ndarray, se: np.ndarray, defect: str) -> None:
 def _group(tmp_path: Path, name: str, eaf: np.ndarray, se: np.ndarray) -> Any:
     """A Dense scratch group: the `float32` plane, its EAF, and its `z`."""
     chunks = (_ROW_CHUNK, eaf.shape[1])
-    group = zarr.open_group(str(tmp_path / name), mode="w")
-    group.create_dataset("eaf", data=eaf, chunks=chunks, dtype="float32")
-    group.create_dataset("se", data=se, chunks=chunks, dtype="float32")
-    group.create_dataset(
-        "z", data=np.ones(eaf.shape, dtype=np.float16), chunks=chunks, dtype="float16"
+    group = zarr.open_group(str(tmp_path / name), mode="w", zarr_format=2)
+    group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=chunks)
+    group.create_array("se", data=np.asarray(se, dtype="float32"), chunks=chunks)
+    group.create_array(
+        "z",
+        data=np.asarray(np.ones(eaf.shape, dtype=np.float16), dtype="float16"),
+        chunks=chunks,
     )
     return group
 

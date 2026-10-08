@@ -1,0 +1,151 @@
+{
+ "decode": {
+  "serial_ms_per_MB": 2.3326171875000004,
+  "threaded_ms_fixed": 0.35348597604342163,
+  "threaded_ms_per_MB": 0.20372602002620246,
+  "n_sizes": 6,
+  "runs": 2
+ },
+ "fit_218": {
+  "k_ms": -1.2503712893896468,
+  "per_chunk_overhead_ms": 2.03094130879314,
+  "fitted_on": [
+   "v2_c1000"
+  ],
+  "note": "one chunk size: overhead and handling not separable"
+ },
+ "fit_z3_step1_sharded": {
+  "k_ms": 3.9403927911978767,
+  "per_chunk_overhead_ms": 0.07659479374051792,
+  "per_MB_handling_ms": 0.8217771388208173,
+  "fitted_on": [
+   "v3_c1000_s",
+   "v3_c64_s"
+  ],
+  "model": "B (with handling term)"
+ },
+ "fit_z3_step1_sharded_A": {
+  "k_ms": 4.961067470029167,
+  "per_chunk_overhead_ms": 0.21763728163941995,
+  "per_MB_handling_ms": 0.0,
+  "fitted_on": [
+   "v3_c1000_s",
+   "v3_c64_s"
+  ],
+  "model": "A (decode measured, no handling term)"
+ },
+ "fit_z3_step1_unsharded": {
+  "k_ms": 3.6013630754304224,
+  "per_chunk_overhead_ms": 1.0459356179770118,
+  "fitted_on": [
+   "v2_c1000"
+  ]
+ },
+ "held_out_error": {
+  "n": 28,
+  "median_abs_pct": 12.198395078247968,
+  "max_abs_pct": 27.75221177404571,
+  "within_25pct": 24,
+  "within_50pct": 28,
+  "pred_over_meas_min": 0.7224778822595429,
+  "pred_over_meas_max": 1.21671156817318
+ },
+ "held_out_error_A": {
+  "n": 28,
+  "median_abs_pct": 13.0980321037701,
+  "max_abs_pct": 54.20940770752445,
+  "within_25pct": 17,
+  "within_50pct": 25,
+  "pred_over_meas_min": 0.45790592292475557,
+  "pred_over_meas_max": 1.3454122412458855
+ },
+ "held_out_envelope": {
+  "n": 28,
+  "measured_inside_A_B_range": 7,
+  "measured_within_25pct_of_range": 23
+ },
+ "held_out_error_reads_over_5ms": {
+  "n": 26,
+  "median_abs_pct": 12.246991715714163,
+  "max_abs_pct": 27.75221177404571,
+  "within_25pct": 22,
+  "within_50pct": 26,
+  "pred_over_meas_min": 0.7224778822595429,
+  "pred_over_meas_max": 1.21671156817318
+ },
+ "in_sample_error": {
+  "n": 14,
+  "median_abs_pct": 5.868333718342853,
+  "max_abs_pct": 23.25169716176433,
+  "within_25pct": 14,
+  "within_50pct": 14,
+  "pred_over_meas_min": 0.7674830283823567,
+  "pred_over_meas_max": 1.1059738520863767
+ },
+ "in_sample_error_218": {
+  "n": 7,
+  "median_abs_pct": 2.721315757232184,
+  "max_abs_pct": 23.12885814924256,
+  "within_25pct": 7,
+  "within_50pct": 7,
+  "pred_over_meas_min": 0.7687114185075744,
+  "pred_over_meas_max": 1.1715334898515704
+ }
+}
+env          array            shape           chunks  chunkKB   meas ms             range   pred ms held
+zarr3-step1  v2_c1000         band_2000            9     2000     21.80    18.41-23.05              
+zarr3-step1  v2_c1000         cell                 1     2000      5.01     4.79-5.39               
+zarr3-step1  v2_c1000         colseg_3000          4     2000     12.71    11.10-13.02              
+zarr3-step1  v2_c1000         fullcol_100k       100     2000    171.73   167.02-172.20             
+zarr3-step1  v2_c1000         oindex_100x10      126     2000    209.49   207.01-209.68             
+zarr3-step1  v2_c1000         oindex_10x100       20     2000     43.56    38.50-44.48              
+zarr3-step1  v2_c1000         row                  3     2000      8.96     8.04-9.35               
+zarr3-step1  v3_c1000_s       band_2000            9     2000     34.23    31.80-34.29        26.27 
+zarr3-step1  v3_c1000_s       cell                 1     2000      5.97     5.32-6.15          6.42 
+zarr3-step1  v3_c1000_s       colseg_3000          4     2000     13.58    12.80-13.90        13.86 
+zarr3-step1  v3_c1000_s       fullcol_100k       100     2000    238.29   228.96-242.88      252.05 
+zarr3-step1  v3_c1000_s       oindex_100x10      126     2000    286.23   273.31-301.42      316.56 
+zarr3-step1  v3_c1000_s       oindex_10x100       20     2000     62.35    60.39-62.65        53.56 
+zarr3-step1  v3_c1000_s       row                  3     2000     10.74    10.03-10.94        11.38 
+zarr3-step1  v3_c128_s        band_2000           48      256     47.39    44.83-48.92        46.38 *
+zarr3-step1  v3_c128_s        cell                 1      256      4.29     3.14-5.06          4.82 *
+zarr3-step1  v3_c128_s        colseg_3000          4      256      9.01     5.79-9.22          7.48 *
+zarr3-step1  v3_c128_s        fullcol_100k       100      256     80.62    79.27-84.76        92.35 *
+zarr3-step1  v3_c128_s        oindex_100x10      504      256    399.67   398.99-408.93      449.54 *
+zarr3-step1  v3_c128_s        oindex_10x100      160      256    134.73   132.95-157.54      145.40 *
+zarr3-step1  v3_c128_s        row                 16      256     19.54    16.35-19.87        18.09 *
+zarr3-step1  v3_c64_s         band_2000           96      128     52.79    47.65-53.64        50.05 
+zarr3-step1  v3_c64_s         cell                 1      128      4.20     2.78-4.39          4.42 
+zarr3-step1  v3_c64_s         colseg_3000          4      128      6.94     4.21-7.30          5.86 
+zarr3-step1  v3_c64_s         fullcol_100k       100      128     48.75    47.21-49.19        51.98 
+zarr3-step1  v3_c64_s         oindex_100x10      540      128    255.08   252.54-260.82      263.33 
+zarr3-step1  v3_c64_s         oindex_10x100      300      128    145.25   138.52-146.69      148.05 
+zarr3-step1  v3_c64_s         row                 32      128     20.25    16.95-20.88        19.31 
+zarr3-step1  v3_r2000c128_s   band_2000           32      512     47.76    47.54-49.06        34.50 *
+zarr3-step1  v3_r2000c128_s   cell                 1      512      4.82     4.18-4.95          4.90 *
+zarr3-step1  v3_r2000c128_s   colseg_3000          2      512      7.00     6.85-7.56          6.33 *
+zarr3-step1  v3_r2000c128_s   fullcol_100k        50      512     69.48    66.03-75.45        51.70 *
+zarr3-step1  v3_r2000c128_s   oindex_100x10      320      512    420.83   418.85-468.93      309.58 *
+zarr3-step1  v3_r2000c128_s   oindex_10x100      144      512    189.69   185.92-194.92      141.48 *
+zarr3-step1  v3_r2000c128_s   row                 16      512     25.11    24.79-26.59        19.22 *
+zarr3-step1  v3_r250c512_s    band_2000           36      256     35.29    31.31-35.65        35.77 *
+zarr3-step1  v3_r250c512_s    cell                 1      256      5.13     2.96-5.15          4.82 *
+zarr3-step1  v3_r250c512_s    colseg_3000         13      256     15.27    12.13-15.34        15.43 *
+zarr3-step1  v3_r250c512_s    fullcol_100k       400      256    319.23   301.51-332.39      357.59 *
+zarr3-step1  v3_r250c512_s    oindex_100x10      360      256    281.40   153.66-288.93      322.22 *
+zarr3-step1  v3_r250c512_s    oindex_10x100       40      256     37.06    33.97-37.51        39.31 *
+zarr3-step1  v3_r250c512_s    row                  4      256      9.51     5.88-9.57          7.48 *
+zarr3-step1  v3_r4000c256_s   band_2000           16     2048     45.37    41.32-47.20        44.43 *
+zarr3-step1  v3_r4000c256_s   cell                 1     2048      5.86     5.42-6.26          6.47 *
+zarr3-step1  v3_r4000c256_s   colseg_3000          2     2048      8.65     7.99-9.21          9.00 *
+zarr3-step1  v3_r4000c256_s   fullcol_100k        25     2048     57.38    55.63-59.31        67.20 *
+zarr3-step1  v3_r4000c256_s   oindex_100x10      150     2048    317.30   303.68-322.81      383.49 *
+zarr3-step1  v3_r4000c256_s   oindex_10x100       72     2048    152.97   148.05-157.01      186.12 *
+zarr3-step1  v3_r4000c256_s   row                  8     2048     22.74    21.74-25.01        24.18 *
+zarr2.18     v2_c1000         band_2000            9     2000     23.24    20.49-23.91        23.88 
+zarr2.18     v2_c1000         cell                 1     2000      1.57     1.38-1.57          1.54 
+zarr2.18     v2_c1000         colseg_3000          4     2000     12.90     8.05-12.94         9.92 
+zarr2.18     v2_c1000         fullcol_100k       100     2000    275.17   180.30-279.87      277.94 
+zarr2.18     v2_c1000         oindex_100x10      126     2000    353.06   225.84-389.67      350.53 
+zarr2.18     v2_c1000         oindex_10x100       20     2000     56.80    44.18-58.08        54.59 
+zarr2.18     v2_c1000         row                  3     2000      6.08     4.79-6.19          7.13 

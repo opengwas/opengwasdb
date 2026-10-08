@@ -51,15 +51,21 @@ from opengwasdb.encoding.plan import (
     EafBaselineError,
     StoreEncoding,
 )
+from opengwasdb.store.arrays import (
+    EXCEPTION_TABLE_CHUNK,
+    ArrayRole,
+    create_array,
+)
 
 SE_EXCEPTION_INDEX = "se_exception_index"
 SE_EXCEPTION_VALUE = "se_exception_value"
 
 # Sparse tables can still contain millions of exact values at the accepted
 # 2% ceiling.  Keep their physical chunks bounded so both the writer and the
-# compressed-size decision can stream them instead of constructing one giant
-# codec input.
-EXACT_TABLE_CHUNK = 200_000
+# compressed-size decision can stream them.  This *is* the seam's
+# `EXCEPTION_TABLE_CHUNK` -- the `EXCEPTION_TABLE` role's default layout -- so
+# the measurement in `se.py` and the array the seam writes cannot disagree.
+EXACT_TABLE_CHUNK = EXCEPTION_TABLE_CHUNK
 
 #: Where a plane's overflow table lives, in the same zarr group as the plane.
 Z_OVERFLOW_INDEX = "z_overflow_index"
@@ -195,25 +201,31 @@ class SparseExactTable:
             value=np.asarray(group[cls.value_name][:], dtype=np.float32),
         )
 
-    def write(self, group: Any, *, compressor: Any = None) -> None:
+    def write(self, group: Any, *, compressor: Any = None, role: ArrayRole | None = None) -> None:
         """Write the table beside its plane, replacing any existing one.
 
         Written even when empty, so "this plane is integer-coded" and "this
         plane has a table" are the same statement and validation can check it
         without a special case for the common store that overflows nothing.
+
+        The `role` is explicit for the same reason as `write_eaf_baseline`'s:
+        a Ragged CSR component opened directly at `data.zarr/ragged` reports
+        `path == ""`, so the caller that knows its component names the Ragged
+        role (issue #248, #247 review round 1).  The default is the Dense one.
         """
         for name, data, dtype in (
             (self.index_name, self.index, "int64"),
             (self.value_name, self.value, "float32"),
         ):
-            if name in group:
-                del group[name]
-            group.create_dataset(
+            create_array(
+                group,
                 name,
+                role if role is not None else ArrayRole.EXCEPTION_TABLE,
                 data=np.asarray(data, dtype=dtype),
-                chunks=(max(1, min(len(self.index), EXACT_TABLE_CHUNK)),),
-                compressor=compressor,
                 dtype=dtype,
+                compressor=compressor,
+                hint=EXACT_TABLE_CHUNK,
+                overwrite=True,
             )
 
 
@@ -1057,7 +1069,8 @@ def positions_rows_cols(
 
     def resolve(mask: np.ndarray) -> np.ndarray:
         i, j = np.divmod(np.flatnonzero(mask).astype(np.int64), len(col_idx))
-        return row_idx[i] * n_analyses + col_idx[j]
+        positions: np.ndarray = row_idx[i] * n_analyses + col_idx[j]
+        return positions
 
     return resolve
 

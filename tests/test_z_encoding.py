@@ -169,7 +169,7 @@ def test_the_overflow_table_is_sorted_by_position_for_binary_search():
 def test_the_overflow_table_round_trips_through_zarr(tmp_path):
     import zarr
 
-    root = zarr.open_group(str(tmp_path / "data.zarr"), mode="w")
+    root = zarr.open_group(str(tmp_path / "data.zarr"), mode="w", zarr_format=2)
     builder = ZOverflowBuilder()
     builder.add(np.array([4, 1]), np.array([137.5, -47.8]))
     builder.table().write(root)
@@ -181,5 +181,5 @@ def test_the_overflow_table_round_trips_through_zarr(tmp_path):
 def test_an_absent_overflow_table_reads_as_empty(tmp_path):
     import zarr
 
-    root = zarr.open_group(str(tmp_path / "data.zarr"), mode="w")
+    root = zarr.open_group(str(tmp_path / "data.zarr"), mode="w", zarr_format=2)
     assert len(ZOverflowTable.read(root).index) == 0

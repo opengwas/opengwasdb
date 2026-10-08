@@ -1,0 +1,40 @@
+tmp_path = PosixPath('/tmp/pytest-of-gh13047/pytest-2222/test_a_repeated_top_hit_query_2')
+dense_store_path = PosixPath('/tmp/pytest-of-gh13047/pytest-2222/test_a_repeated_top_hit_query_2/store.opengwasdb')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f78e817e870>
+
+    @pytest.mark.parametrize("layout", sorted(_BUILDERS))
+    def test_a_repeated_top_hit_query_reads_no_metadata(
+        layout: str, tmp_path: Path, dense_store_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store = _BUILDERS[layout](tmp_path, dense_store_path)
+        with query_store(store) as query:
+            calls = _calls(query)
+            warm = {name: call() for name, call in calls.items()}
+            assert len(warm["tier"]["z"]) >= 2, "fixture must have top hits for this to mean anything"
+            if layout == "hybrid":
+                overflow = query._overflow_top_hits(_THRESHOLD)
+                assert len(overflow["z"]) > 0, "hybrid fixture must have overflow hits too"
+            with _metadata_reads(monkeypatch) as reads:
+                again = {name: call() for name, call in calls.items()}
+>           assert reads == []
+E           AssertionError: assert ['get:zarr.js....zgroup', ...] == []
+E             
+E             Left contains 65 more items, first extra item: 'get:zarr.json'
+E             Use -v to get more diff
+
+tests/test_top_hit_metadata_reads.py:135: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Manifest: 2 analyses
+  GENE1: 2 associations
+  GENE2: 2 associations
+Canonical variants: 3
+Writing analyses.tsv...
+Build complete: 3 variants, 2 analyses, 4 associations
+=========================== short test summary info ============================
+FAILED tests/test_zarr_runtime_config.py::test_blosc_threads_stay_on_after_zarr_reads_and_writes
+FAILED tests/test_zarr_runtime_config.py::test_store_arrays_read_through_the_fused_pipeline
+FAILED tests/test_zarr_runtime_config.py::test_fork_pools_finish_after_the_parent_read_through_the_pipeline
+FAILED tests/test_top_hit_metadata_reads.py::test_a_repeated_top_hit_query_reads_no_metadata[dense]
+FAILED tests/test_top_hit_metadata_reads.py::test_a_repeated_top_hit_query_reads_no_metadata[hybrid]
+FAILED tests/test_top_hit_metadata_reads.py::test_a_repeated_top_hit_query_reads_no_metadata[ragged]
+6 failed in 8.60s

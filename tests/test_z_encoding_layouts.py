@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from store_assertions import replace_exception_table
 
 from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.encoding import (
@@ -177,15 +178,8 @@ def test_a_z_plane_that_contradicts_the_manifest_is_rejected(dense_store):
 def test_an_overflow_table_that_lost_a_cell_is_rejected(dense_store):
     """The lost value would be the *largest* |z| in the store -- the one thing
     that must never read as something plausible instead."""
-    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a")
-    kept_index = np.asarray(root[Z_OVERFLOW_INDEX][:])[1:]
-    kept_value = np.asarray(root[Z_OVERFLOW_VALUE][:])[1:]
-    for name, data, dtype in (
-        (Z_OVERFLOW_INDEX, kept_index, "int64"),
-        (Z_OVERFLOW_VALUE, kept_value, "float32"),
-    ):
-        del root[name]
-        root.create_dataset(name, data=data, chunks=(max(1, len(data)),), dtype=dtype)
+    root = zarr.open_group(str(dense_store / "data.zarr"), mode="a", zarr_format=3)
+    replace_exception_table(root, Z_OVERFLOW_INDEX, Z_OVERFLOW_VALUE)
 
     result = validate_store(dense_store)
     assert not result.ok
@@ -244,13 +238,13 @@ def test_a_pre_reset_store_is_refused_rather_than_decoded(dense_store, tmp_path)
 
     legacy = tmp_path / "legacy.opengwasdb"
     shutil.copytree(dense_store, legacy)
-    legacy_root = zarr.open_group(str(legacy / "data.zarr"), mode="a")
+    legacy_root = zarr.open_group(str(legacy / "data.zarr"), mode="a", zarr_format=3)
     chunks = legacy_root["z"].chunks
     del legacy_root["z"]
     del legacy_root[Z_OVERFLOW_INDEX]
     del legacy_root[Z_OVERFLOW_VALUE]
-    legacy_root.create_dataset(
-        "z", data=decoded.astype(np.float16), chunks=chunks, dtype="float16"
+    legacy_root.create_array(
+        "z", data=np.asarray(decoded.astype(np.float16), dtype="float16"), chunks=chunks, dtype=None
     )
     manifest_path = legacy / "manifest.json"
     manifest = json.loads(manifest_path.read_text())

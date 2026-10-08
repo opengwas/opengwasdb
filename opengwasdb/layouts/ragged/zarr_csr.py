@@ -8,11 +8,11 @@ from typing import Any, NamedTuple
 
 import numpy as np
 import zarr
-from numcodecs import Blosc
 
 from opengwasdb.encoding import (
     EafExceptionBuilder,
     EafMeasurements,
+    EafRead,
     OverflowCellBatches,
     OverflowCells,
     RaggedEafPlane,
@@ -32,22 +32,57 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.arrays import ArrayRole, array_length
 
 RAGGED_ZARR_PATH = "data.zarr/ragged"
-_COMPRESSOR = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+_COMPRESSOR = store_arrays.compressor()
 # Chunk size for the flat association arrays (~400 KB per chunk at float16).
-_ASSOC_CHUNK = 200_000
+# Read from the seam so the SE measurement charges the bytes the seam writes.
+_ASSOC_CHUNK = store_arrays.ASSOCIATION_SEQUENCE_CHUNK
 #: Cells one `se_fit_batches` batch aims to carry. The batch holds the variant
 #: indices, the source and round-tripped frequencies, the gathered baseline and
 #: the Analysis indices -- about 30 bytes a cell -- so 2**24 is roughly a
 #: 500 MiB working set, whatever the plane's total cell count (issue #228).
 DEFAULT_SE_FIT_CELL_BUDGET = 1 << 24
-#: Cells one `flush` region writes at a time. The region holds the four source
-#: planes, the codes it encodes them to and the frequencies it decodes back --
-#: about 30 bytes a cell -- so 2**22 is roughly a 130 MiB working set whatever
-#: the component's cell count (issue #228).
+#: Association-array chunks one scan window spans. A window of a single chunk
+#: makes a whole-store scan issue one zarr read per chunk, which measured ~5x
+#: slower than the batched whole-array read it replaces on OGS-00011's
+#: Overflow (132.9 s against 27.3 s for off-axis PheWAS, #252); a handful of
+#: chunks amortises the per-read overhead while peak memory stays bounded by
+#: the window (8 x 200,000 int32 = 6.4 MB) and not by the array.
+SCAN_WINDOW_CHUNKS = 8
+#: Cells one `flush` region writes at a time, as a *floor*.  The region holds
+#: the four source planes, the codes it encodes them to and the frequencies it
+#: decodes back -- measured by the #249 artifact at 89.5 bytes a cell, so 2**22
+#: is roughly a 0.37 GB working set whatever the component's cell count (issue
+#: #228).  The Ragged sequence planes are written one **shard** at a time even
+#: when that is larger (issue #249), because a write covering part of a shard is
+#: a read-modify-write of the whole shard; see `RaggedCSRWriter._flat_regions`.
 DEFAULT_FLUSH_REGION_CELLS = 1 << 22
-_OFFSET_CHUNK = 10_000
+
+
+def sequence_region_step(total: int, region_cells: int) -> int:
+    """The write step for a Ragged sequence plane: whole shards, at least one (#249).
+
+    A write covering part of a shard is a read-modify-write of the whole shard,
+    so writing a 50,000,000-element shard once per 4,194,304-cell region would
+    decode and re-encode it about twelve times.  The step is therefore a whole
+    number of shards: `region_cells` is rounded **up** to the next whole shard
+    (never lowered below one), so a caller asking for a larger working set keeps
+    it and no region can end inside a shard.  A module-level function so
+    `benchmarks/measure_write_amplification.py` can reproduce the pre-#249 step
+    on the same code path; production never calls it with a different one.
+    """
+    shard = int(
+        store_arrays.shard_layout(
+            ArrayRole.ASSOCIATION_SEQUENCE,
+            (total,),
+            inner_chunk=(store_arrays.ASSOCIATION_SEQUENCE_CHUNK,),
+        )[0]
+    )
+    shards_per_region = max(1, -(-max(1, int(region_cells)) // shard))
+    return shards_per_region * shard
 
 
 class AnalysisAssociations(NamedTuple):
@@ -107,7 +142,22 @@ class RaggedCSRWriter:
         store looks exactly as it did before EAF existed.
         """
         n = len(variant_index)
-        self._variant_indices.append(np.asarray(variant_index, dtype=np.int32))
+        vi = np.asarray(variant_index, dtype=np.int32)
+        # Every builder sorts an Analysis's associations by variant_index before
+        # adding them (build_besd, build_ssf, Hybrid's `_assemble_overflow_column`
+        # and completion's `_remapped_analysis_arrays` all argsort). The variant-
+        # side queries rely on it: `lookup` and the Hybrid overflow lookup
+        # binary-search each Analysis's segment instead of scanning the store
+        # (#252). An unsorted segment would make those searches return a
+        # plausible, wrong row, so it is refused here rather than assumed.
+        if vi.size > 1 and bool(np.any(vi[1:] < vi[:-1])):
+            offset = int(np.argmax(vi[1:] < vi[:-1])) + 1
+            raise ValueError(
+                "an Analysis's associations must be sorted ascending by variant_index "
+                f"(decrease at offset {offset}); the variant-side queries binary-search "
+                "each Analysis's CSR segment and cannot be correct on unsorted rows (#252)"
+            )
+        self._variant_indices.append(vi)
         # Held as float32 and quantised once, by the codec, at flush -- never
         # pre-rounded into a stored dtype here.
         self._zscores.append(np.asarray(z, dtype=np.float32))
@@ -378,10 +428,14 @@ class RaggedCSRWriter:
 
     def _plane(self, root: Any, name: str, total: int, dtype: Any) -> Any:
         """An empty plane at full length, to be filled region by region."""
-        if name in root:
-            del root[name]
-        return root.create_dataset(
-            name, shape=(total,), chunks=(_ASSOC_CHUNK,), compressor=_COMPRESSOR, dtype=dtype
+        return store_arrays.create_array(
+            root,
+            name,
+            ArrayRole.ASSOCIATION_SEQUENCE,
+            shape=(total,),
+            dtype=dtype,
+            compressor=_COMPRESSOR,
+            overwrite=True,
         )
 
     def _flat_regions(self, total: int, region_cells: int) -> Iterator[tuple[int, int]]:
@@ -391,8 +445,18 @@ class RaggedCSRWriter:
         global flat position and appended as they are encountered: visiting the
         regions in order is what keeps their rows in the order a single pass
         over the whole plane would have produced.
+
+        The step is a whole number of Ragged sequence **shards**, at least one.  A
+        write that covers part of a shard is a read-modify-write of the whole
+        shard, so writing a 50,000,000-element shard once per 4,194,304-cell region
+        would decode and re-encode it about twelve times -- silent write
+        amplification that the tiny pilots cannot show (#249).  `region_cells` is
+        therefore rounded up to a whole shard, never lowered, so a caller asking
+        for a larger working set keeps it and no region ends inside a shard; a
+        sequence shorter than one shard is still written in one region, exactly as
+        before.
         """
-        step = max(1, int(region_cells))
+        step = sequence_region_step(total, region_cells)
         for lo in range(0, total, step):
             yield lo, min(lo + step, total)
 
@@ -485,7 +549,9 @@ class RaggedCSRWriter:
                 exceptions=exceptions,
             )
         write_se_coefficients(root, coefficients, compressor=_COMPRESSOR)
-        exceptions.table().write(root, compressor=_COMPRESSOR)
+        exceptions.table().write(
+            root, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_EXCEPTION_TABLE
+        )
 
     def _fit_own_coefficients(
         self, root: Any, encoding: StoreEncoding, offsets: np.ndarray, total: int
@@ -563,11 +629,13 @@ class RaggedCSRWriter:
                     positions=positions_flat(lo),
                     exceptions=eaf_exceptions,
                 )
-        z_overflow.table().write(root)
+        z_overflow.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
         if encoding.eaf.is_residual:
             assert baseline is not None
-            write_eaf_baseline(root, baseline, compressor=_COMPRESSOR)
-            eaf_exceptions.table().write(root)
+            write_eaf_baseline(
+                root, baseline, compressor=_COMPRESSOR, role=ArrayRole.RAGGED_PER_VARIANT
+            )
+            eaf_exceptions.table().write(root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
 
     def write_eaf_plane(
         self,
@@ -589,25 +657,31 @@ class RaggedCSRWriter:
         component.
 
         Written a region of cells at a time rather than from concatenated
-        planes, so the footprint is `region_cells` and not the component's cell
-        count: on OGS-00011's 15,078,327,210 Overflow cells the concatenating
-        write cost a measured 72.9 bytes a cell, or 1.10 TB (issue #228). What
-        is stored is unchanged -- each plane's codes are a per-cell function of
-        its value, keyed on global flat position (`positions_flat(lo)` per
-        region). `eaf_baseline` lets Reference Completion carry its source's
-        baselines across a variant remap; see `_flush_baseline`.
+        planes, so the footprint is bounded by the region and not the
+        component's cell count: on OGS-00011's 15,078,327,210 Overflow cells the
+        concatenating write cost a measured 72.9 bytes a cell, or 1.10 TB (issue
+        #228).  Each region is a whole Ragged sequence shard (issue #249), so
+        each shard is written exactly once; on the 50,000,000-element shard that
+        is roughly 3.68 GiB (79.0 bytes a cell, the #249 re-run artifact),
+        against 0.37 GB (89.5 bytes a cell) for the pre-#249 4,194,304-cell
+        region.  What is stored is unchanged -- each plane's codes are a per-cell
+        function of its value, keyed on global flat position (`positions_flat(lo)`
+        per region).
+        `eaf_baseline` lets Reference Completion carry its source's baselines
+        across a variant remap; see `_flush_baseline`.
         """
         out = Path(store_path) / RAGGED_ZARR_PATH
-        root = zarr.open_group(str(out), mode="w")
+        root = store_arrays.open_group_for_write(out, "w")
         offsets_arr = np.asarray(self._offsets, dtype=np.int64)
         codec = StoreCodec(encoding)
         baseline = self._flush_baseline(encoding, eaf_baseline)
-        root.create_dataset(
+        store_arrays.create_array(
+            root,
             "offsets",
+            ArrayRole.ASSOCIATION_OFFSETS,
             data=offsets_arr,
-            chunks=(_OFFSET_CHUNK,),
-            compressor=_COMPRESSOR,
             dtype=np.int64,
+            compressor=_COMPRESSOR,
         )
         self._write_frequency_regions(root, codec, encoding, offsets_arr, baseline, region_cells)
         # Held so the joint SE fit and its byte measurement read these cells
@@ -636,7 +710,7 @@ class RaggedCSRWriter:
         failed build left, not a finished component (issue #232).
         """
         out = Path(store_path) / RAGGED_ZARR_PATH
-        root = zarr.open_group(str(out), mode="a")
+        root = store_arrays.open_group_for_write(out, "a")
         offsets_arr = np.asarray(self._offsets, dtype=np.int64)
         codec = StoreCodec(encoding)
         self._write_se_streamed(
@@ -676,7 +750,7 @@ class RaggedCSRReader:
 
     def __init__(self, store_path: str | Path, encoding: StoreEncoding | None = None):
         path = Path(store_path) / RAGGED_ZARR_PATH
-        self._root = zarr.open_group(str(path), mode="r")
+        self._root = store_arrays.open_group(path)
         self._offsets: zarr.Array = self._root["offsets"]
         self._variant_index: zarr.Array = self._root["variant_index"]
         self._z: zarr.Array = self._root["z"]
@@ -700,11 +774,11 @@ class RaggedCSRReader:
 
     @property
     def n_analyses(self) -> int:
-        return int(self._root.attrs.get("n_analyses", len(self._offsets) - 1))
+        return int(self._root.attrs.get("n_analyses", array_length(self._offsets) - 1))
 
     @property
     def n_associations(self) -> int:
-        return int(self._root.attrs.get("n_associations", len(self._variant_index)))
+        return int(self._root.attrs.get("n_associations", array_length(self._variant_index)))
 
     def _span(self, analysis_index: int) -> tuple[int, int]:
         """The `[start, end)` slice of the flat arrays one Analysis occupies."""
@@ -721,11 +795,17 @@ class RaggedCSRReader:
                 se=np.empty(0, dtype=np.float32),
                 eaf=np.empty(0, dtype=np.float32),
             )
+        # One read of the frequency region, shared by SE decoding and the
+        # returned `eaf` column (#253), rather than `se_slice` reading the
+        # plane and `eaf_slice` reading it again.
+        eaf_read = self._eaf_plane.read_slice(start, end)
         return AnalysisAssociations(
             variant_index=self._variant_index[start:end],
             z=self.z_slice(start, end),
-            se=self._se_plane.slice(start, end, analysis_index=analysis_index),
-            eaf=self.eaf_slice(start, end),
+            se=self._se_plane.slice(
+                start, end, analysis_index=analysis_index, eaf=eaf_read.values
+            ),
+            eaf=eaf_read.values,
         )
 
     def variant_indices(self, analysis_index: int) -> np.ndarray:
@@ -746,40 +826,227 @@ class RaggedCSRReader:
         return self._codec.decode_z(self._z[start:end], positions=positions_flat(int(start)))
 
     def z_at(self, positions: np.ndarray) -> np.ndarray:
-        """Decoded z at arbitrary flat CSR positions."""
+        """Decoded z at arbitrary flat CSR positions.
+
+        Read through `oindex[positions]`, so the chunks a hit touches bound the
+        work. Slicing the whole plane first (`self._z[:]`) decoded and held every
+        z in the component -- about 6.2 GB on OGS-00011's Overflow -- for a
+        handful of rows, on every off-axis PheWAS, lookup and region query
+        (`HybridStoreQuery._overflow_by_variants`, #252).
+        """
         positions = np.asarray(positions, dtype=np.int64)
         if len(positions) == 0:
             return np.empty(0, dtype=np.float32)
         return self._codec.decode_z(
-            np.asarray(self._z[:])[positions], positions=positions_at(positions)
+            np.asarray(self._z.oindex[positions]), positions=positions_at(positions)
         )
 
     def z_all(self) -> np.ndarray:
         """Every decoded z, in flat CSR order."""
-        return self.z_slice(0, int(len(self._z)))
+        return self.z_slice(0, array_length(self._z))
 
-    def se_slice(self, start: int, end: int, analysis_index: int | None = None) -> np.ndarray:
-        """Decoded `se[start:end]`; callers may supply a known Analysis."""
-        return self._se_plane.slice(start, end, analysis_index=analysis_index)
+    def se_slice(
+        self,
+        start: int,
+        end: int,
+        *,
+        eaf: np.ndarray | None = None,
+        analysis_index: int | None = None,
+    ) -> np.ndarray:
+        """Decoded `se[start:end]`; callers may supply a pre-read frequency
+        block and a known Analysis (#253)."""
+        return self._se_plane.slice(start, end, analysis_index=analysis_index, eaf=eaf)
 
-    def se_at(self, positions: np.ndarray) -> np.ndarray:
+    def se_at(self, positions: np.ndarray, *, eaf: np.ndarray | None = None) -> np.ndarray:
         """Decoded SE at arbitrary CSR ordinals."""
         positions = np.asarray(positions, dtype=np.int64)
         offsets = np.asarray(self._offsets[:], dtype=np.int64)
         analyses = np.searchsorted(offsets[1:], positions, side="right").astype(np.int64)
-        return self._se_plane.at(positions, analysis_index=analyses)
+        return self._se_plane.at(positions, analysis_index=analyses, eaf=eaf)
 
     def se_all(self) -> np.ndarray:
-        return self.se_slice(0, int(len(self._se)))
+        return self.se_slice(0, array_length(self._se))
+
+    @property
+    def association_chunk(self) -> int:
+        """Length of the association arrays' own inner chunk.
+
+        The scan paths read in windows built from this, so a window never reads
+        a chunk twice and peak memory is one window whatever the component's
+        cell count (#252). Read from the array rather than restated, so a
+        sharded 0.2.0 array's inner chunk is honoured too.
+        """
+        return max(1, int(self._variant_index.chunks[0]))
+
+    @property
+    def scan_window(self) -> int:
+        """Elements one scan window spans: `SCAN_WINDOW_CHUNKS` inner chunks."""
+        return self.association_chunk * SCAN_WINDOW_CHUNKS
+
+    def variant_index_at(self, positions: np.ndarray) -> np.ndarray:
+        """Variant indices at arbitrary flat CSR positions."""
+        positions = np.asarray(positions, dtype=np.int64)
+        if len(positions) == 0:
+            return np.empty(0, dtype=np.int32)
+        return np.asarray(self._variant_index.oindex[positions], dtype=np.int32)
+
+    def variant_positions(self, wanted: np.ndarray) -> np.ndarray:
+        """Flat CSR positions whose variant is in `wanted`, ascending.
+
+        A windowed scan of every Analysis's segment, used where every Analysis
+        may hold the variant and there is no index (#252). The window is a few
+        inner chunks, so peak memory is a window and not the component. A
+        lookup that knows its Analyses must use `segment_positions` instead,
+        which searches the requested segment in O(log) chunk reads rather than
+        scanning it.
+        """
+        wanted = np.unique(np.asarray(wanted, dtype=np.int32))
+        if len(wanted) == 0:
+            return np.empty(0, dtype=np.int64)
+        lo, hi = 0, self.n_associations
+        window = self.scan_window
+        parts: list[np.ndarray] = []
+        single = int(wanted[0]) if len(wanted) == 1 else None
+        for start in range(lo, hi, window):
+            stop = min(start + window, hi)
+            vi = np.asarray(self._variant_index[start:stop], dtype=np.int32)
+            if single is not None:
+                # One wanted variant is the common off-axis PheWAS case, and a
+                # direct compare is 16x fewer operations than a searchsorted.
+                hit = vi == single
+            else:
+                pos = np.searchsorted(wanted, vi)
+                in_bounds = pos < len(wanted)
+                hit = np.zeros(len(vi), dtype=bool)
+                hit[in_bounds] = wanted[pos[in_bounds]] == vi[in_bounds]
+            if hit.any():
+                parts.append(np.where(hit)[0].astype(np.int64) + start)
+        if not parts:
+            return np.empty(0, dtype=np.int64)
+        return np.concatenate(parts)
+
+    def _scan_chunk(self, chunk: int, cache: dict[int, np.ndarray], total: int) -> np.ndarray:
+        """One inner chunk of `variant_index`, read once and kept for the search.
+
+        A chunk read decompresses the whole inner chunk whatever the element
+        asked for, so caching it is what makes a binary search cost O(log)
+        chunk reads rather than O(log) re-reads.
+        """
+        cached = cache.get(chunk)
+        if cached is None:
+            size = self.association_chunk
+            start = chunk * size
+            cached = np.asarray(
+                self._variant_index[start : min(start + size, total)], dtype=np.int32
+            )
+            cache[chunk] = cached
+        return cached
+
+    def _segment_tail(
+        self, chunk: int, lo: int, hi: int, cache: dict[int, np.ndarray], total: int
+    ) -> int:
+        """The last row of `chunk` that belongs to the segment `[lo, hi)`."""
+        data = self._scan_chunk(chunk, cache, total)
+        size = self.association_chunk
+        offset = min(hi, (chunk + 1) * size) - 1 - chunk * size
+        return int(data[offset])
+
+    def _chunk_lower_bound(
+        self, lo: int, hi: int, target: int, cache: dict[int, np.ndarray], total: int
+    ) -> int:
+        """First chunk in the segment whose last segment row is >= `target`.
+
+        The halving touches O(log) chunks, which is the whole point of the
+        search: the segment is never read whole.
+        """
+        size = self.association_chunk
+        low, high = lo // size, (hi - 1) // size
+        while low < high:
+            mid = (low + high) // 2
+            if self._segment_tail(mid, lo, hi, cache, total) < target:
+                low = mid + 1
+            else:
+                high = mid
+        return low
+
+    def _run_end(
+        self, start: int, hi: int, target: int, cache: dict[int, np.ndarray], total: int
+    ) -> int:
+        """End of the run of `target` starting at `start`, across chunk boundaries."""
+        size = self.association_chunk
+        end = start
+        while end < hi:
+            here = end // size
+            here_data = self._scan_chunk(here, cache, total)
+            here_off = end - here * size
+            limit = min(hi - here * size, len(here_data))
+            run_end = here_off + int(
+                np.searchsorted(here_data[here_off:limit], target, side="right")
+            )
+            end = here * size + run_end
+            if run_end < limit:
+                break
+        return end
+
+    def segment_positions(self, wanted: np.ndarray, *, analysis_index: int) -> np.ndarray:
+        """Flat CSR positions in one Analysis whose variant is in `wanted`.
+
+        A genuine bounded binary search over the Analysis's sorted segment
+        (#252). `_chunk_lower_bound` finds the chunk whose last *segment* row
+        first reaches the target -- O(log) chunk reads -- and the target is
+        located inside it with `searchsorted` on that chunk's segment part. A
+        lookup is therefore proportional to the number of requested variants
+        and not to the requested Analysis's size. The chunk's tail is taken
+        from the segment, never from the chunk's full extent: the tail of a
+        chunk may hold the next Analysis's rows, whose variant indices are
+        unrelated.
+
+        A duplicate variant (the writer accepts a non-decreasing sequence) is
+        found by walking the equal run forward (`_run_end`); every chunk it
+        spans is read at most once through the cache. The returned positions
+        are ascending and in segment order, matching `analysis()` row for row.
+        """
+        wanted = np.unique(np.asarray(wanted, dtype=np.int32))
+        if len(wanted) == 0:
+            return np.empty(0, dtype=np.int64)
+        lo, hi = self._span(analysis_index)
+        if lo >= hi:
+            return np.empty(0, dtype=np.int64)
+        size = self.association_chunk
+        total = array_length(self._variant_index)
+        cache: dict[int, np.ndarray] = {}
+        parts: list[np.ndarray] = []
+        for value in wanted:
+            target = int(value)
+            base = self._chunk_lower_bound(lo, hi, target, cache, total) * size
+            data = self._scan_chunk(base // size, cache, total)
+            window_lo = max(lo - base, 0)
+            window_hi = min(hi - base, len(data))
+            offset = window_lo + int(
+                np.searchsorted(data[window_lo:window_hi], target, side="left")
+            )
+            if offset >= window_hi or int(data[offset]) != target:
+                continue
+            start = base + offset
+            parts.append(
+                np.arange(start, self._run_end(start, hi, target, cache, total), dtype=np.int64)
+            )
+        if not parts:
+            return np.empty(0, dtype=np.int64)
+        return np.concatenate(parts)
 
     @property
     def has_eaf(self) -> bool:
         """Whether this component stores EAF at all (ADR 0036)."""
         return self._eaf_plane.has_values
 
+    def eaf_slice_read(self, start: int, end: int, *, want_imputed: bool = False) -> EafRead:
+        """`eaf[start:end]` and the imputed mask, in one read (#253)."""
+        return self._eaf_plane.read_slice(start, end, want_imputed=want_imputed)
+
     def eaf_slice(self, start: int, end: int) -> np.ndarray:
         """Decoded `eaf[start:end]`, or all-NaN when this store carries none."""
-        return self._eaf_plane.slice(start, end)
+        return self.eaf_slice_read(start, end).values
 
     def eaf_at(self, positions: np.ndarray) -> np.ndarray:
         """EAF at arbitrary flat CSR positions; all-NaN when there is no array.
@@ -789,6 +1056,17 @@ class RaggedCSRReader:
         per-Analysis searchsorted to recover what they already know.
         """
         return self._eaf_plane.at(positions)
+
+    def eaf_at_read(self, positions: np.ndarray, *, want_imputed: bool = False) -> EafRead:
+        """`eaf` and the imputed mask at flat CSR positions, in one read (#252).
+
+        The variant-side scan paths read the frequency once and hand the same
+        decoded array to SE decoding and to the result's `eaf` column, with
+        #253's correctness rules: the decoded EAF carries the panel substitution
+        on imputed cells, and the mask it was substituted under comes back with
+        it so Association Status cannot be derived from a different alignment.
+        """
+        return self._eaf_plane.read_at(positions, want_imputed=want_imputed)
 
     def eaf_pairs(self, variant_index: np.ndarray, analysis_index: np.ndarray) -> np.ndarray:
         """EAF for elementwise (variant, analysis) pairs (ADR 0036).

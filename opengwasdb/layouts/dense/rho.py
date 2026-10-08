@@ -21,13 +21,14 @@ from typing import Any
 
 import numpy as np
 import zarr
-from numcodecs import Blosc
 from scipy.optimize import minimize_scalar  # type: ignore[import-untyped]
 from scipy.stats import multivariate_normal  # type: ignore[import-untyped]
 from threadpoolctl import threadpool_limits  # type: ignore[import-untyped]
 
 from opengwasdb.encoding import DenseZPlane, StoreEncoding
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.arrays import ArrayRole
 from opengwasdb.variants import VariantAxis
 
 RHO_METHOD = "pleiodb-cml"
@@ -36,7 +37,6 @@ DEFAULT_RHO_WINDOW_BP = 15_000
 DEFAULT_RHO_Z_THRESH = 1.0
 DEFAULT_RHO_MIN_NULLS = 500
 _RHO_BOUNDS = (-1.0 + 1e-6, 1.0 - 1e-6)
-_RHO_CHUNK_ROWS = 1_000_000
 
 
 # ── Distance-thinned variant selection (PRD "Independent variant selection") ─
@@ -281,25 +281,30 @@ def write_rho_group(
 ) -> None:
     """Write the packed strict-lower-triangle ``rho``/``n_null`` arrays plus
     provenance into ``data.zarr/rho``, replacing any existing group."""
-    root = zarr.open_group(str(Path(store_path) / "data.zarr"), mode="a")
-    if "rho" in root:
-        del root["rho"]
-    group = root.create_group("rho")
-    compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
+    root = store_arrays.open_group_for_write(Path(store_path) / "data.zarr", "a")
+    group = store_arrays.create_group(root, "rho")
+    comp = store_arrays.compressor()
 
-    chunk = max(1, min(len(rho_packed), _RHO_CHUNK_ROWS))
-    group.create_dataset(
-        "rho", data=rho_packed.astype("float16"), chunks=(chunk,), compressor=compressor
+    store_arrays.create_array(
+        group,
+        "rho",
+        ArrayRole.RHO_ARRAY,
+        data=rho_packed.astype("float16"),
+        compressor=comp,
     )
-    group.create_dataset(
-        "n_null", data=n_null_packed.astype("int32"), chunks=(chunk,), compressor=compressor
+    store_arrays.create_array(
+        group,
+        "n_null",
+        ArrayRole.RHO_ARRAY,
+        data=n_null_packed.astype("int32"),
+        compressor=comp,
     )
-    vchunk = max(1, min(len(variant_index), _RHO_CHUNK_ROWS))
-    group.create_dataset(
+    store_arrays.create_array(
+        group,
         "variant_index",
+        ArrayRole.RHO_ARRAY,
         data=variant_index.astype("int32"),
-        chunks=(vchunk,),
-        compressor=compressor,
+        compressor=comp,
     )
     group.attrs["z_thresh"] = float(z_thresh)
     group.attrs["min_nulls"] = int(min_nulls)
@@ -332,7 +337,7 @@ def build_dense_rho(
     """
     store_path = Path(store_path)
     encoding = StoreManifest.load(store_path).encoding
-    root = zarr.open_group(str(store_path / "data.zarr"), mode="r")
+    root = store_arrays.open_group(store_path / "data.zarr")
     n_analyses = int(root["z"].shape[1])
 
     variant_axis = VariantAxis(store_path)

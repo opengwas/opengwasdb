@@ -1,0 +1,65 @@
+✨ Pixi task (test in dev): pytest -q -p no:cacheprovider
+........................................................................ [  4%]
+........................................................................ [  8%]
+........................................................................ [ 12%]
+........................................................................ [ 16%]
+........................................................................ [ 20%]
+........................................................................ [ 24%]
+........................................................................ [ 28%]
+........................................................................ [ 33%]
+........................................................................ [ 37%]
+.................................s...................................... [ 41%]
+........................................................................ [ 45%]
+........................................................................ [ 49%]
+........................................................................ [ 53%]
+........................................................................ [ 57%]
+........................................................................ [ 62%]
+........................................................................ [ 66%]
+........................................................................ [ 70%]
+........................................................................ [ 74%]
+........................................................................ [ 78%]
+........................................................................ [ 82%]
+........................................................................ [ 86%]
+........................................................................ [ 91%]
+........................................................................ [ 95%]
+........................................................................ [ 99%]
+..........                                                               [100%]
+=============================== warnings summary ===============================
+tests/test_array_conformance.py: 36 warnings
+tests/test_assign_ancestry_cli.py: 7 warnings
+tests/test_consolidation_parallel.py: 18 warnings
+tests/test_dense_completion.py: 2 warnings
+tests/test_dense_rho.py: 3 warnings
+tests/test_dense_vcf_build.py: 121 warnings
+tests/test_estimate_phenotype_sd_cli.py: 3 warnings
+tests/test_extract_variant_reference.py: 203 warnings
+tests/test_hybrid_build.py: 644 warnings
+tests/test_hybrid_checkpoint.py: 20 warnings
+tests/test_hybrid_fold.py: 4 warnings
+tests/test_info_score_hybrid_build.py: 84 warnings
+tests/test_ordered_pool.py: 9 warnings
+tests/test_ragged_completion.py: 2 warnings
+tests/test_resolve_manifest.py: 4 warnings
+tests/test_store_staging.py: 2 warnings
+tests/test_tail_parallel_phases.py: 46 warnings
+  /home/gh13047/repo/opengwasdb-wt/244-zarr-python-3/.pixi/envs/dev/lib/python3.12/multiprocessing/popen_fork.py:66: DeprecationWarning: This process (pid=3077947) is multi-threaded, use of fork() may lead to deadlocks in the child.
+    self.pid = os.fork()
+
+tests/test_array_conformance.py: 1 warning
+tests/test_dense_completion.py: 42 warnings
+tests/test_eaf_encoding_layouts.py: 23 warnings
+tests/test_ragged_completion.py: 1 warning
+tests/test_ragged_impute.py: 1 warning
+  /home/gh13047/repo/opengwasdb-wt/244-zarr-python-3/opengwasdb/completion/impute.py:79: RuntimeWarning: All-NaN slice encountered
+    m = np.nanmedian(r)
+
+tests/test_array_conformance.py: 1 warning
+tests/test_dense_completion.py: 42 warnings
+tests/test_eaf_encoding_layouts.py: 23 warnings
+tests/test_ragged_completion.py: 1 warning
+tests/test_ragged_impute.py: 1 warning
+  /home/gh13047/repo/opengwasdb-wt/244-zarr-python-3/.pixi/envs/dev/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1997: RuntimeWarning: Degrees of freedom <= 0 for slice.
+    var = nanvar(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1737 passed, 1 skipped, 1344 warnings in 1307.20s (0:21:47)

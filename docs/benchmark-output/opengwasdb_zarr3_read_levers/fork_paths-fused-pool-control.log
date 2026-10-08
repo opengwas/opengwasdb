@@ -1,0 +1,77 @@
+{"step": "parent_warm", "use_threads": true, "threaded_here": true, "chunk_bytes": 2000000, "pipeline": "FusedCodecPipeline", "max_workers": null, "fused_pool_live": true}
+[W::vcf_parse] Contig '1' is not defined in the header. (Quick workaround: index the file with tabix.)
+[W::vcf_parse] Missing headers may cause later processing to fail
+[W::vcf_parse] Contig '1' is not defined in the header. (Quick workaround: index the file with tabix.)
+[W::vcf_parse] Missing headers may cause later processing to fail
+[W::vcf_parse] Contig '1' is not defined in the header. (Quick workaround: index the file with tabix.)
+[W::vcf_parse] Missing headers may cause later processing to fail
+[W::vcf_parse] Contig '1' is not defined in the header. (Quick workaround: index the file with tabix.)
+[W::vcf_parse] Missing headers may cause later processing to fail
+{"step": "dense_vcf_n2", "ok": true, "s": 1.12, "gathers": [], "use_threads": true}
+[W::vcf_parse] Contig '1' is not defined in the header. (Quick workaround: index the file with tabix.)
+[W::vcf_parse] Missing headers may cause later processing to fail
+[W::vcf_parse] Contig '1' is not defined in the header. (Quick workaround: index the file with tabix.)
+[W::vcf_parse] Missing headers may cause later processing to fail
+[W::vcf_parse] Contig '1' is not defined in the header. (Quick workaround: index the file with tabix.)
+[W::vcf_parse] Missing headers may cause later processing to fail
+[W::vcf_parse] Contig '1' is not defined in the header. (Quick workaround: index the file with tabix.)
+[W::vcf_parse] Missing headers may cause later processing to fail
+EAF orientation unverified for analysis trait_a: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs
+EAF orientation unverified for analysis trait_b: no EAF reference supplied, and 2 analyses carry EAF -- fewer than the 3 a consensus needs
+{"step": "hybrid_n2", "ok": true, "s": 1.51, "gathers": [2], "use_threads": true}
+No assigned_ancestry on any of 2 analyses: imputing all of them against the EUR panel regardless of their true ancestry. If this store spans multiple ancestries, its imputed cells will carry EUR LD and allele frequencies. Run ancestry assignment (ADR 0028) to impute only matching analyses.
+Source store: test / obs-v1
+Source: 5 variants, 2 analyses
+Enumerating genome-wide LD blocks...
+LD panel: 2 blocks, 7 panel variants
+Union variant axis: 8 variants (3 new panel variants)
+Writing variants.tsv.gz...
+Writing index.sqlite...
+Running reference completion across 2 LD blocks (n_workers=2)...
+  0 blocks already checkpointed, 2 remaining
+/home/gh13047/repo/opengwasdb-wt/244-zarr-python-3/opengwasdb/completion/impute.py:79: RuntimeWarning: All-NaN slice encountered
+  m = np.nanmedian(r)
+/home/gh13047/repo/opengwasdb-wt/244-zarr-python-3/.pixi/envs/dev/lib/python3.12/site-packages/numpy/lib/_nanfunctions_impl.py:1997: RuntimeWarning: Degrees of freedom <= 0 for slice.
+  var = nanvar(a, axis=axis, dtype=dtype, out=out, ddof=ddof,
+Merging block results from checkpoints...
+Reference EAF: 7 of 8 variants carry a panel frequency
+Wrote 4 completion quality rows
+Writing data.zarr (band-streamed)...
+Completion done: 0 imputed, 9 imputation-failed, 1 off-panel missing
+Writing analyses.tsv...
+Building top-hit indexes...
+Reference completion complete: 8 variants, 2 analyses (0 imputed, 1 off-panel missing, 9 imputation-failed)
+{"step": "dense_completion_n2", "ok": true, "s": 1.21, "gathers": [], "use_threads": true}
+No assigned_ancestry on any of 2 analyses: imputing all of them against the EUR panel regardless of their true ancestry. If this store spans multiple ancestries, its imputed cells will carry EUR LD and allele frequencies. Run ancestry assignment (ADR 0028) to impute only matching analyses.
+Reading ESI: /tmp/claude-276801/-home-gh13047-repo-opengwasdb-wt-244-zarr-python-3/69bcd3f7-e0c8-4d91-ae46-52ec4b70be15/scratchpad/fork-pool/ragged-completion/fixture/test.esi
+Reading EPI: /tmp/claude-276801/-home-gh13047-repo-opengwasdb-wt-244-zarr-python-3/69bcd3f7-e0c8-4d91-ae46-52ec4b70be15/scratchpad/fork-pool/ragged-completion/fixture/test.epi
+Loaded 3 SNPs and 2 probes
+Canonical variants: 3 (from 3 ESI entries)
+Reading BESD: /tmp/claude-276801/-home-gh13047-repo-opengwasdb-wt-244-zarr-python-3/69bcd3f7-e0c8-4d91-ae46-52ec4b70be15/scratchpad/fork-pool/ragged-completion/fixture/test.besd
+BESD format: SPARSE_FILE_TYPE_3F
+Flushing zarr CSR (4 associations) ...
+Building top-hit indexes ...
+Writing analyses.tsv ...
+Build complete: 3 variants, 2 analyses, 4 associations
+Source store: test / obs-v1
+  completion_state: observed_only
+Source: 3 variants, 2 analyses
+Scanning for LD blocks + new panel variants (cis windows where a Trait position exists, the Analysis's own variants otherwise)...
+New LD panel variants: 1
+LD blocks touched: 1
+Merged variant table: 4 variants
+Writing variants.tsv.gz...
+Writing index.sqlite...
+Running reference completion across 1 LD blocks (n_workers=2)...
+  0 blocks already checkpointed, 1 remaining
+Merging block results from checkpoints...
+Wrote 2 completion quality rows
+Assembling completed CSR per analysis...
+Completion done: 0 imputed, 3 missing
+Reference EAF: 3 of 4 variants carry a panel frequency
+Writing zarr CSR...
+Building top-hit indexes...
+Writing analyses.tsv...
+Reference completion complete: 4 variants, 2 analyses, 7 associations (0 imputed, 3 missing)
+{"step": "ragged_completion_n2", "ok": true, "s": 1.94, "gathers": [], "use_threads": true}
+{"step": "gather_n2", "ok": true, "s": 0.13, "gathers": [2, 1], "use_threads": true}

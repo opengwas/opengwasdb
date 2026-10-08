@@ -1,16 +1,18 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `0.1.0`  
-Also readable: nothing else (§21)
+Format version described: `0.2.0` (Zarr v3 with sharding, §10a; what every builder writes)  
+Also readable: `0.1.0` (Zarr v2); nothing else (§21)
 
 This document defines the contract for valid OpenGWASDB Store Releases. It
-describes `format_version` **0.1.0**, the only version this build reads or
-writes: statistic planes carry a declared encoding (§6a), `z` is `int16` fixed
-point rather than `float16`, `eaf` is a per-variant baseline plus a per-cell
-`int8` logit residual rather than a `float32` plane, and `se` is either
-`float16` or — when the build measures the fit and the saving — an `int8`
-residual from its EAF-predicted value.
+describes `format_version` **0.2.0** (§10a: Zarr v3 with the sharding codec),
+what every builder writes since #247, and **0.1.0** (Zarr v2), which a reader
+still reads and a builder no longer writes. Everything below that is not
+about the physical layout holds for both versions: statistic planes carry a
+declared encoding (§6a), `z` is `int16` fixed point rather than `float16`, `eaf`
+is a per-variant baseline plus a per-cell `int8` logit residual rather than a
+`float32` plane, and `se` is either `float16` or — when the build measures the
+fit and the saving — an `int8` residual from its EAF-predicted value.
 
 **`0.1.0` is a reset, not a fifth version** (ADR 0041, issue #143). The format
 carried `0.1`, then `1.0`, `2.0` and `3.0` through a single pre-release cycle,
@@ -900,6 +902,123 @@ In Observed-Only Dense stores:
 
 Recommended compression for initial implementation is Zarr with Zstandard and bitshuffle, using benchmarked chunking appropriate for mixed range, variant, PheWAS, and full-analysis extraction workloads.
 
+## 10a. `data.zarr` physical layout in format 0.2.0
+
+Format 0.2.0 stores every array as **Zarr v3 with the sharding codec**. The
+arrays, dtypes, fill values and encodings are exactly those of 0.1.0 (§10); only
+the physical layout changes. A 0.2.0 release exists because the unit a query
+reads — the **inner chunk** — is decoupled from the unit stored as a file — the
+**shard** — so the Dense Analysis-axis inner chunk can narrow without
+multiplying the file count (ADR 0057, ADR 0021).
+
+```text
+format_version 0.1.0   Zarr v2   .zarray / .zgroup, one file per chunk
+format_version 0.2.0   Zarr v3   zarr.json, one file per shard
+```
+
+**Shards are bounded on both axes.** The Dense VCF builder writes `[all variants
+× band]` column bands, so a shard spanning every Analysis is never written whole
+(ADR 0057). A Dense shard is `[V_s × A_s]`, with `A_s` a whole multiple of the
+Analysis-axis inner chunk. The decided shapes (#246, ADR 0058), which a
+conversion takes as parameters, are:
+
+| array role | inner chunk | shard |
+|---|---|---|
+| Dense statistic planes (`z`, `se`, `eaf`) and the imputed mask | `[1000, A_c]`, `A_c` the analysis-axis chunk (**decided 64**), clipped to the array | `[100_000, 1024]` (rows × Analyses); the inner chunk MUST tile this shard (**`100000 % V_c == 0` and `1024 % A_c == 0`**), and the shard is clipped only when the array itself is shorter than it |
+| Dense per-variant side arrays (`eaf_baseline`, `eaf_reference`) | per §6: the serving plane's variant-axis chunk, capped at 200,000, clipped to the array | about 1,000,000 elements |
+| Ragged association sequences (`ragged/z`, `se`, `variant_index`, `eaf`, `imputed`) | 200,000, or an explicit `chunks=(...)` | 50,000,000 elements, clipped to a whole number of inner chunks |
+| Ragged per-variant side arrays (`ragged/eaf_baseline`, `ragged/eaf_reference`) | per §6 | 10,000,000 elements |
+| Ragged exception / overflow tables (`ragged/z_overflow_*`, `ragged/eaf_exception_*`, `ragged/se_exception_*`) | the role policy's 200,000, clipped to the array length | 10,000,000 elements |
+| flat Rho arrays | 1,000,000, clipped to the array | about 1,000,000 elements |
+| top-hit index columns | 16,384 (as 0.1.0), clipped to the array | `--top-hit-shard-chunks` inner chunks (**decided 64**), clipped to cover the array. The converter may set it to 1, one inner chunk per shard, the "effectively unsharded" variant #246 measured the top-hit query against; the array is a sharded v3 array either way. A builder always takes the decided 64 |
+| top-hit per-Analysis offsets | whole array | one shard holding the array |
+| Dense exception / overflow tables (Z, EAF and SE) | the role policy's 200,000, clipped to the array length (a shorter table is one inner chunk) | one shard holding the array |
+| SE coefficients | `(min(n_analyses, 1024), 2)` | one shard holding the array |
+| CSR per-Analysis offsets | 10,000 | one shard holding the array |
+
+The Ragged shards are fixed, not conversion parameters: they are chosen so
+OGS-00011's overflow sequences (3,085,080,783 entries) become 62 files of
+tens to low hundreds of MB per array rather than one multi-GB file, and its
+Ragged `eaf_exception_index` (180,396,687 entries) becomes 19 files rather than
+one 1.4 GB file.  The sequence shard is bounded by cells, not by one Analysis's
+run, so a future variant-side index can be added beside the Analysis-sorted
+arrays without re-sharding them.  A builder writes a Ragged sequence plane one
+**whole shard** at a time: a write covering part of a shard is a read-modify-write
+of the whole thing, so at a 50,000,000-element shard the flush region follows the
+shard rather than the other way around (#249).
+
+`clipped to cover the array` means the smallest whole number of inner chunks
+that spans the dimension, so an array shorter than the decided shard gets one
+shard of its own extent.  The inner
+chunk is `chunk_layout(role, shape, …)`; the shard is `shard_layout(role, shape,
+inner_chunk=…)` — one role → layout table in `opengwasdb.store.arrays`, so the
+converter and the builders cannot disagree. The top-hit shard width is the
+one override a caller passes to `shard_layout` (`top_hit_shard_chunks`); it
+applies to `TOP_HIT_INDEX` alone and defaults to the policy's 64.
+
+**A Dense inner chunk MUST tile the decided shard.**  The Dense shard is
+`[100_000, 1024]`; a builder that supplied an inner chunk not dividing an axis
+of it (`1024 % A_c != 0`, say) is refused, naming the values that do, rather
+than silently writing a different shard such as `[100000, 1000]`.  That is the
+one way a build could otherwise choose its shard, and a shard the converter does
+not reproduce is a layout divergence a reader cannot see.  The one exception is
+an array **shorter** than the shard on an axis: its shard is the array's own
+extent, so divisibility is moot and it clips.  The default `[1000, 64]` tiles
+both axes.
+
+**The builders do not expose the shard shape.** `opengwasdb build-dense-vcf`,
+`build-hybrid` and `build-hybrid-from-catalogue` take `--chunk-variants` and
+`--chunk-analyses`, and both name the **inner chunk** (the unit a query reads);
+the shard is the decided shape above and cannot be overridden on a build. That
+is deliberate: the shard is part of the format's contract, a release whose
+shard the converter cannot reproduce would break the identity #249 checks, and
+a build-time shard knob is a way to write a release whose layout nothing else
+in the release records. The converter keeps its `--dense-shard` and
+`--dense-analysis-chunk` because it reproduces a chosen layout and records it
+in `provenance.zarr_v3_conversion`; a builder chooses the format's layout and
+records it in the same three places as any Dense release.
+
+The inner chunk is the role policy of `opengwasdb.store.arrays` (`chunk_layout`)
+and the shard its companion `shard_layout`; a shard MUST be a whole multiple of
+the inner chunk on every axis, and a layout that is not is invalid rather than
+clipped.  For a Dense plane the reverse also holds: the inner chunk MUST tile
+the decided shard, or `shard_layout` refuses it (§10a).
+
+The codec chain is Blosc Zstandard / clevel 3 / bitshuffle inside the
+`sharding_indexed` codec — the v3 spelling of the 0.1.0 compressor. An array
+written uncompressed in 0.1.0 (the `z`/`eaf` exception and overflow tables)
+stays uncompressed inside its shard. Every shard carries the codec's own
+`crc32c` index codec.
+
+**Where the layout is recorded.** A 0.2.0 release records the Dense planes'
+inner chunk and shard in three places, all of which MUST agree with the arrays:
+
+- `manifest.json` `provenance.dense.chunk_shape`, `.shard_shape` and
+  `.compressor` (with `.zarr_format`), plus the per-array layout in
+  `provenance.zarr_v3_conversion.layouts` for a converted release;
+- the `dense` metadata blob in `index.sqlite`
+  (`chunk_shape`, `shard_shape`, `compressor`, `zarr_format`);
+- the `data.zarr` root attributes (`chunk_shape`, `shard_shape`, `compressor`,
+  `zarr_format`).
+
+A **Hybrid** release's nested Dense Component is a Store Release with its own
+manifest, its own `index.sqlite` and its own root attributes, so it records the
+same three places itself: its `provenance.dense` MUST carry `chunk_shape`,
+`shard_shape`, `compressor` and `zarr_format`, and the outer release's
+`provenance.hybrid` MUST agree with them.  Leaving the layout only in the outer
+`provenance.hybrid` leaves the component undescribed — the gap #248 closes.  A
+component root that holds no Dense plane (a Ragged or Hybrid outer root) carries
+no Dense layout attributes at all.
+
+For 0.1.0 the same three places record the inner chunk alone (there is no shard)
+and a `chunk_shape` is a *hint* the role policy clips to the array's dimensions;
+the recorded-layout rule (§20) clips it the same way before comparing, so a small
+store's build-wide hint is not a disagreement.
+
+The per-variant chunking rule (§6) applies to the **inner chunk** of a sharded
+array. In zarr-python 3 `Array.chunks` is the inner chunk and `Array.shards` the
+outer shard; every read-unit rule MUST use `chunks`.
+
 ## 11. Ragged layout
 
 Ragged layout stores Analysis-specific association sequences referencing the Store Variant Table.
@@ -916,6 +1035,14 @@ se
 `z` is encoded as §6a declares, with its overflow arrays
 (`data.zarr/ragged/z_overflow_index`, `…_value`) keyed by the association's
 ordinal in the concatenated CSR arrays.
+
+The CSR is analysis-major: `data.zarr/ragged/offsets` bounds one contiguous
+segment per Analysis, and within every segment `variant_index` MUST be
+**non-decreasing**. The ordering is a format invariant, not a builder
+convention: a reader locates a `(variant, Analysis)` pair by binary-searching
+that Analysis's segment, and a segment out of order would answer with a
+plausible, wrong row rather than an error. Validation therefore checks the
+ordering on every release, including ones this build did not write (§20).
 
 `eaf` (ADR 0036) is an optional fourth parallel array (`data.zarr/ragged/eaf`,
 `float32`), aligned with the CSR `z`/`se` and absent when no Analysis in the
@@ -1186,11 +1313,15 @@ Validators MUST check at least:
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
+- `variant_index` is **non-decreasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11). It is checked on every release, not only on ones this build wrote, because a stored segment out of order makes the variant-side binary search answer with a plausible, wrong row. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows (1,000,000 int32, 4 MB), carries the preceding value across a window boundary and resets at each Analysis boundary, so peak memory is the window, its comparison bool and the per-Analysis offsets (`O(n_analyses)`), independent of the association count;
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
 - the `se` plane, its `se_coefficients` and its exception table agree with the plan the manifest declares (§6a): a residual-coded plane has finite `float32` coefficients of shape `(n_analyses, 2)`, a sorted duplicate-free exception table whose positions lie inside the plane and whose entries are exactly the cells marked `-127`, and a complete `eaf` plane beside it; a `float16` plane has none of those arrays, and carrying one is a failure rather than a harmless relic;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
+- the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2.0 release has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
+- the recorded layout matches the arrays: the Dense planes' `chunk_shape` and `shard_shape` in `manifest.json` `provenance.dense`, in the `index.sqlite` `dense` blob and in the `data.zarr` root attributes each clip to the plane's dimensions to equal the plane's actual **inner** chunk, and name its actual shard, and the three compressors agree. A manifest that describes one shape over arrays of another is a silent failure class (§10a);
+- the per-variant chunking rule applies to the **inner** chunk of a sharded array, not to the shard (§6, §10a);
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
 
 ### 20.1 Validation and inspection CLI interface
@@ -1207,7 +1338,7 @@ Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide b
   {
     "store_id": "...",
     "release_id": "...",
-    "format_version": "0.1.0",
+    "format_version": "0.2.0",
     "primary_layout": "dense",
     "association_coverage": "full",
     "completion_state": "observed_only",
@@ -1285,7 +1416,7 @@ For a release at `M.m.p`, a reader that fully understands that release series up
 
 Accepting a newer remainder follows from the definition of a compatible change: if an older reader could not read it correctly, the change was incompatible and was classified wrong. The warning is what makes such a misclassification visible instead of silently returning partial data.
 
-This build reads exactly one series, `0.1` — one format, one decoder, one contract to test (ADR 0041).
+This build reads two series, `0.1` (Zarr v2, readable but no longer written) and `0.2` (Zarr v3 with sharding, §10a, what every builder writes since #247). `0.2.0` is the only 0.2 release and `0.1.0` the only 0.1 release; a second remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
 
 A reader meeting a feature it does not implement — an encoding kind, an index type — MUST reject the release rather than guess or fall back.
 
@@ -1295,14 +1426,16 @@ Future format versions may add fields, arrays, or indexes, but MUST preserve exp
 
 A build writes exactly one `format_version` and reads every series it implements. There is no facility for writing an older format: a store that needs to be in an older format already exists in that format.
 
+**Since #247**, this build writes `0.2.0` from every builder and from the converter (§21.4), whose target is `CURRENT_FORMAT_VERSION` — the same constant the builders read — and whose source version is `SOURCE_FORMAT_VERSION = "0.1.0"`. A built release and a converted release therefore declare the same format and carry the same Zarr v3 sharded layout — which is what lets #249 check their identity. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0` source cannot be Reference-Completed by this build: **the one executable order is to convert the `0.1.0` source to `0.2.0` and then complete the converted release** (or rebuild it). Completion refuses a `0.1.0` source and names the conversion tool. A converted `0.2.0` release is writable, so it can then be completed in place.
+
 ### 21.4 I have an old store — now what?
 
 Store Releases are immutable. Reference Completion, re-indexing and migration all produce a **new release**, with one narrow exception: a **Provenance Amendment** may fold additional facts into an existing release's `provenance` dict in place, including a format migration recording what it did to that release. Anything that changes association data or Analytical Metadata is outside the exception.
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
-2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), and a Hybrid without its nested Dense Component. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
 3. **Rejected** — a store whose series this build does not implement cannot be read, and no amount of validation makes it readable. Every pre-reset release is in this category, and says so by name.
 
 There is no support window for older remainders: a known series reads every remainder within it.
 
-**Reference Completion preserves its source's `format_version`**, because it writes into the source's arrays and therefore its encoding — a completed release is the same format as its source. A build that can read a source but cannot write that format MUST refuse to complete it, rather than stamp a version onto arrays it did not encode that way.
+**Reference Completion preserves its source's `format_version`**, because it writes into the source's arrays and therefore its encoding — a completed release is the same format as its source. A build that can read a source but cannot write that format MUST refuse to complete it, rather than stamp a version onto arrays it did not encode that way. Since #247 the refusal fires on a `0.1.0` source: convert a Dense 0.1.0 release to `0.2.0` with `scripts/convert_store_to_0_2_0.py` and complete that, or rebuild it; the message names the tool.
