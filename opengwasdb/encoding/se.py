@@ -854,10 +854,15 @@ def _write_exception_tables(
     policy, so a per-band write into them is a read-modify-write of the whole
     table: about 99 of them on OGS-00008's 9.85 M rows.  The bands' runs are
     buffered (the tables are exact-value side tables, 12 bytes an entry) and
-    each table is written once; the write covers exactly `cursor` entries, which
-    `_finish_rewrite` has already checked equals the preallocated count, so it
-    is the whole array and no shard is touched twice.
+    each table is written once.  The cursor must equal the preallocated count
+    before anything is written, so a mismatch cannot leave a short or broadcast
+    table behind; `_finish_rewrite` repeats the check after this returns.
     """
+    if cursor != sink.exception_count:
+        raise RuntimeError(
+            f"SE codes-only pass counted {sink.exception_count} exceptions but rewrite "
+            f"produced {cursor}"
+        )
     index = np.concatenate(index_parts) if index_parts else np.empty(0, dtype=np.int64)
     value = np.concatenate(value_parts) if value_parts else np.empty(0, dtype=np.float32)
     with _optional_phase(sink.chunk_timer, "rewrite.exceptions"):

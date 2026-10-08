@@ -42,6 +42,7 @@ import json
 import os
 import resource
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -133,29 +134,61 @@ def _array_report(name: str, counts: dict[str, int], written: int, final: int) -
     }
 
 
-def _status_kib(key: str) -> int:
-    """One `Vm*` figure from `/proc/self/status`, in KiB (`0` if absent)."""
+def _status_kib(key: str) -> int | None:
+    """One `Vm*` figure from `/proc/self/status`, in KiB, or `None` if unavailable.
+
+    `None` rather than a plausible zero: a missing `/proc` must not be recorded
+    as "the flush added 0 bytes".
+    """
     try:
-        for line in Path("/proc/self/status").read_text(encoding="utf-8").splitlines():
-            if line.startswith(f"{key}:"):
-                return int(line.split()[1])
+        text = Path("/proc/self/status").read_text(encoding="utf-8")
     except OSError:
-        pass
-    return 0
+        return None
+    for line in text.splitlines():
+        if line.startswith(f"{key}:"):
+            return int(line.split()[1])
+    return None
 
 
-def _reset_peak_rss() -> None:
-    """Reset VmHWM (`5` to `clear_refs`), so VmHWM afterwards is the flush's peak.
+def _reset_peak_rss() -> bool:
+    """Reset VmHWM (`5` to `clear_refs`); `False` if `/proc` will not take it.
 
     `ru_maxrss` is the process's lifetime high-water mark, set while the fixture
-    was generated and the plan chosen, so it cannot see the flush's own working
-    set.  After the reset, VmHWM minus the RSS before the flush is what the
-    flush itself added.
+    was generated and the plan chosen, so it cannot see a flush region's working
+    set.  After the reset, VmHWM minus the RSS before the work is what the work
+    itself added.
     """
     try:
         Path("/proc/self/clear_refs").write_text("5\n", encoding="utf-8")
     except OSError:
-        pass
+        return False
+    return True
+
+
+def _measure_region(work: Callable[[], None]) -> int | None:
+    """Run `work` and return the KiB of RSS it added, or `None` if /proc cannot say.
+
+    A failed reset or a missing VmHWM returns `None`, so an artifact can never
+    carry a wrong-but-plausible region figure.
+    """
+    before = _status_kib("VmRSS")
+    if before is None or not _reset_peak_rss():
+        work()
+        return None
+    work()
+    after = _status_kib("VmHWM")
+    return None if after is None else max(0, after - before)
+
+
+def _peak_or_none(peaks: list[int | None]) -> int | None:
+    known = [peak for peak in peaks if peak is not None]
+    return max(known) if known else None
+
+
+def _bytes_per_cell(peak_kib: int | None, cells: int) -> float | None:
+    if peak_kib is None or cells <= 0:
+        return None
+    return round(peak_kib * 1024 / cells, 1)
 
 
 def measure(args: argparse.Namespace) -> dict[str, Any]:
@@ -171,14 +204,31 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit(f"{store} exists; remove it or choose another --work")
     writer = _synthetic_writer(args.total_cells, args.n_analyses, args.n_variants, args.seed)
     encoding = _plan()
-    rss_before_kib = _status_kib("VmRSS")
-    _reset_peak_rss()
+    step_cells = int(zarr_csr.sequence_region_step(writer.n_associations, args.region_cells))
     started = time.monotonic()
     with count_shard_writes() as recorder:
-        writer.flush(args.work, encoding, region_cells=args.region_cells)
+        # The region peak has to be measured where the region *is* the peak.  The
+        # eaf half is measured as itself; the SE half is measured with the
+        # coefficients supplied, as a Hybrid build supplies them, so its peak is
+        # the region and not a whole-plane `_fit_own_coefficients` (which the
+        # review measured at 94 B/cell against the region's 66-79).
+        eaf_peak = _measure_region(
+            lambda: writer.write_eaf_plane(args.work, encoding, region_cells=args.region_cells)
+        )
+        root = writer._eaf_root
+        offsets = np.asarray(writer._offsets, dtype=np.int64)
+        coefficients = writer._fit_own_coefficients(root, encoding, offsets, writer.n_associations)
+        se_peak = _measure_region(
+            lambda: writer.flush_se(
+                args.work,
+                encoding,
+                se_coefficients=coefficients,
+                region_cells=args.region_cells,
+            )
+        )
     wall = time.monotonic() - started
     lifetime_peak_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    flush_peak_kib = max(0, _status_kib("VmHWM") - rss_before_kib)
+    flush_peak_kib = _peak_or_none([eaf_peak, se_peak])
 
     written = recorder.bytes_written_by_array()
     counts = recorder.chunk_writes()
@@ -198,13 +248,20 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
         "shard_elements": RAGGED_SEQUENCE_SHARD_ELEMENTS,
         "inner_chunk": ASSOCIATION_SEQUENCE_CHUNK,
         "region_cells": args.region_cells,
+        "region_step_cells": step_cells,
         "total_cells": args.total_cells,
         "n_analyses": args.n_analyses,
         "n_variants": args.n_variants,
+        "seed": args.seed,
         "encoding": encoding.to_manifest(),
         "wall_seconds": round(wall, 2),
+        "eaf_region_flush_peak_rss_kib": eaf_peak,
+        "se_region_flush_peak_rss_kib": se_peak,
         "flush_peak_rss_kib": flush_peak_kib,
-        "flush_peak_rss_gib": round(flush_peak_kib / (1024 * 1024), 3),
+        "flush_peak_rss_gib": (
+            None if flush_peak_kib is None else round(flush_peak_kib / (1024 * 1024), 3)
+        ),
+        "region_bytes_per_cell": _bytes_per_cell(flush_peak_kib, step_cells),
         "lifetime_peak_rss_kib": lifetime_peak_kib,
         "lifetime_peak_rss_gib": round(lifetime_peak_kib / (1024 * 1024), 2),
         "total_bytes_written": total_written,
@@ -215,12 +272,31 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
             "bytes_written counts every byte handed to the storage layer while the "
             "component flushed; final_bytes is what is on disk afterwards. A shard "
             "written once has amplification near 1; a max_writes_one_shard above 1 "
-            "is the read-modify-write this ticket fixes. `flush_peak_rss_kib` is "
-            "VmHWM after resetting it minus VmRSS before the flush, i.e. the "
-            "flush's own added peak; `lifetime_peak_rss_kib` is `ru_maxrss` and "
-            "predates the flush."
+            "is the read-modify-write this ticket fixes. `eaf_region_flush_peak_rss_kib` "
+            "and `se_region_flush_peak_rss_kib` are VmHWM after `clear_refs` minus "
+            "VmRSS before `write_eaf_plane`/`flush_se` (the SE half with the "
+            "coefficients supplied, as a Hybrid build supplies them), so the peak is "
+            "the region's and not a whole-plane fit's; null means /proc could not say. "
+            "`region_bytes_per_cell` divides the larger of the two by "
+            "`region_step_cells`. `lifetime_peak_rss_kib` is `ru_maxrss` and predates "
+            "the flush."
         ),
     }
+
+
+#: What the two runs of a before/after must agree on: same commit, same fixture,
+#: same layout. A pair that differs on any of these is two measurements, not one.
+_COMBINE_KEYS = (
+    "commit",
+    "total_cells",
+    "n_analyses",
+    "n_variants",
+    "seed",
+    "region_cells",
+    "shard_elements",
+    "inner_chunk",
+    "encoding",
+)
 
 
 def combine_artifacts(legacy_path: Path, fixed_path: Path) -> dict[str, Any]:
@@ -228,12 +304,20 @@ def combine_artifacts(legacy_path: Path, fixed_path: Path) -> dict[str, Any]:
 
     The envelope is the committed artifact, so re-running the two documented
     commands and this one reproduces the file byte for byte (apart from
-    `measured_at`); nothing is copied or annotated by hand.
+    `measured_at`); nothing is copied or annotated by hand.  The two runs must
+    be the same commit, fixture and layout -- a difference in any of
+    `_COMBINE_KEYS` is refused rather than paired silently.
     """
     legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
     fixed = json.loads(fixed_path.read_text(encoding="utf-8"))
     if legacy["legacy_step"] is not True or fixed["legacy_step"] is not False:
         raise SystemExit("--combine wants the legacy run first and the fixed run second")
+    mismatch = [key for key in _COMBINE_KEYS if legacy.get(key) != fixed.get(key)]
+    if mismatch:
+        raise SystemExit(
+            f"the runs disagree on {mismatch}: {legacy_path} and {fixed_path} are "
+            "not the same fixture, so pairing them would be a before/after of two"
+        )
     return {
         "artifact": "Ragged sequence write amplification before/after #249",
         "commit": legacy["commit"],
@@ -245,6 +329,7 @@ def combine_artifacts(legacy_path: Path, fixed_path: Path) -> dict[str, Any]:
             "total_cells": legacy["total_cells"],
             "n_analyses": legacy["n_analyses"],
             "n_variants": legacy["n_variants"],
+            "seed": legacy["seed"],
             "encoding": legacy["encoding"],
         },
         "runs": [

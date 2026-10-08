@@ -245,10 +245,13 @@ the end of this file.
   (`docs/benchmark-output/opengwasdb_ragged_write_amplification_epic240_249.json`).
   The registered pilots' sequences each fit in one shard, but the pre-#249 step
   still rewrote OGS-00004's single 27,369,974-cell Overflow shard **7 times**,
-  OGS-00006's two shards 15 times and OGS-00011's 62 shards about 12 times each.
-  The theoretical cost is the region's working set: about 1.5 GB (1.40 GiB, 30
-  bytes a cell) at the full 50,000,000-element shard, against the 120 MiB a
-  4,194,304-cell region used.
+  OGS-00006's two shards **15 writes in total** (12 + 3) and OGS-00011's 62
+  shards at most 13 times each (797 shard writes per array).
+  The cost is the region's working set, measured at **66-79 bytes a cell** (the
+  review probe; #228's whole-plane write measured 72.9): about **3.3-4.0 GB
+  (3.1-3.7 GiB)** for a 50,000,000-cell region, against about 0.3 GB for the
+  4,194,304-cell region the pre-#249 step used. The 30-bytes-a-cell figure this
+  replaces predated the v3 sharding, which encodes the whole shard per write.
   Extending `require_whole_shard_writes` to every sharded array -- 1-D included,
   whatever its shard size -- found a second partial-shard writer: the Dense SE
   rewrite (`encoding/se.py`) filled `se_exception_index`/`_value` one row band at

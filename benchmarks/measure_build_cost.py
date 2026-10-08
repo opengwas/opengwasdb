@@ -82,6 +82,8 @@ _ARTIFACT_KEYS = (
     "head_revision",
     "load_threshold_1m",
     "n_workers_note",
+    "production_config",
+    "timing_note",
 )
 _ELAPSED = re.compile(r"Elapsed \(wall clock\) time.*?\):\s*([0-9:.]+)")
 _MAXRSS = re.compile(r"Maximum resident set size \(kbytes\):\s*(\d+)")
@@ -347,7 +349,10 @@ def merge_artifacts(paths: list[Path]) -> dict[str, Any]:
     No step is reordered or renamed: the merged artifact's step list is the runs'
     concatenation, which is the order the documented commands run them in.  The
     base and head revisions and the commit must agree, so a merge cannot mix two
-    code versions into one before/after table.
+    code versions into one before/after table; the same pilot and side must not
+    appear twice, and every step must have the guard unset, because the merged
+    file is the timed, production-configuration artifact (the guard-on proof
+    builds are a separate run).
     """
     merged: dict[str, Any] | None = None
     runs: list[dict[str, Any]] = []
@@ -373,9 +378,24 @@ def merge_artifacts(paths: list[Path]) -> dict[str, Any]:
         )
     if merged is None:
         raise SystemExit("--merge needs at least one artifact")
+    _refuse_a_bad_timed_merge(merged["steps"])
     merged["runs"] = runs
     merged["measured_at"] = datetime.now(UTC).isoformat()
     return merged
+
+
+def _refuse_a_bad_timed_merge(steps: list[dict[str, Any]]) -> None:
+    """A timed before/after has one step per (pilot, side) and no guard."""
+    pairs = [(step["pilot"], step["side"]) for step in steps]
+    duplicates = sorted({pair for pair in pairs if pairs.count(pair) > 1})
+    if duplicates:
+        raise SystemExit(f"duplicate pilot/side step(s) in the merge: {duplicates}")
+    guarded = [step for step in steps if step.get("guard_env") is not None]
+    if guarded:
+        raise SystemExit(
+            f"{len(guarded)} step(s) ran with {GUARD_ENV} set; the merged artifact is "
+            "the timed production-configuration one, so the guard must be unset"
+        )
 
 
 def main() -> int:

@@ -273,8 +273,11 @@ def test_flush_writes_the_same_arrays_whatever_the_region_size(
     assert len(regions) > 1, regions
 
     writer.flush(tmp_path / "whole", encoding, region_cells=1 << 30)
-    # `region_cells` bigger than the shard must still be a whole number of shards.
-    writer.flush(tmp_path / "cut", encoding, region_cells=region_cells)
+    # The cut flush runs under the guard: every region must be a whole number of
+    # shards, so the round-up in `sequence_region_step` is asserted here and not
+    # only implied by equal values (#249 review round 2).
+    with store_arrays.require_whole_shard_writes():
+        writer.flush(tmp_path / "cut", encoding, region_cells=region_cells)
 
     whole, cut = _stored(tmp_path / "whole"), _stored(tmp_path / "cut")
     assert sorted(cut) == sorted(whole)

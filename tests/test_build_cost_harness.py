@@ -165,7 +165,9 @@ def _artifact(tmp_path: Path, name: str, commit_sha: str, steps: list[dict]) -> 
         "head_revision": "f48ab2a",
         "load_threshold_1m": 3.0,
         "n_workers_note": "note",
-        "steps": steps,
+        "production_config": "guard_env is null on every step",
+        "timing_note": "time -v on the CLI process",
+        "steps": [{"guard_env": None, **step} for step in steps],
     }
     path = tmp_path / name
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -180,7 +182,8 @@ def test_merge_artifacts_keeps_run_order_and_its_own_provenance(tmp_path: Path) 
     assert [step["pilot"] for step in merged["steps"]] == ["dense", "hybrid"]
     assert [run["n_steps"] for run in merged["runs"]] == [1, 1]
     assert merged["commit"] == "f48ab2a"
-    assert merged["base_revision"] == "f168ef1"
+    assert merged["production_config"] == "guard_env is null on every step"
+    assert merged["timing_note"] == "time -v on the CLI process"
 
 
 def test_merge_artifacts_refuses_two_code_versions(tmp_path: Path) -> None:
@@ -188,3 +191,19 @@ def test_merge_artifacts_refuses_two_code_versions(tmp_path: Path) -> None:
     second = _artifact(tmp_path, "b.json", "bbbbbbb", [{"pilot": "hybrid", "side": "head"}])
     with pytest.raises(SystemExit, match="two code versions"):
         merge_artifacts([first, second])
+
+
+def test_merge_artifacts_refuses_a_duplicate_step(tmp_path: Path) -> None:
+    """A pilot/side measured twice would make the before/after table ambiguous."""
+    first = _artifact(tmp_path, "a.json", "f48ab2a", [{"pilot": "dense", "side": "base"}])
+    second = _artifact(tmp_path, "b.json", "f48ab2a", [{"pilot": "dense", "side": "base"}])
+    with pytest.raises(SystemExit, match="duplicate pilot/side"):
+        merge_artifacts([first, second])
+
+
+def test_merge_artifacts_refuses_a_guard_on_step(tmp_path: Path) -> None:
+    """The merged file is the timed production-config one; the guard must be unset."""
+    steps = [{"pilot": "dense", "side": "head", "guard_env": "1"}]
+    guarded = _artifact(tmp_path, "guarded.json", "f48ab2a", steps)
+    with pytest.raises(SystemExit, match="guard must be unset"):
+        merge_artifacts([guarded])
