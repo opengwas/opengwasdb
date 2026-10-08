@@ -366,6 +366,20 @@ def test_augment_is_idempotent_through_the_identity_harness(tmp_path: Path) -> N
     assert any(shape["rows"] > 0 for shape in shapes.values())
 
 
+def test_scaling_harness_splits_phases_and_matches_counts(tmp_path: Path) -> None:
+    """The step-2 harness reports three phases per side with equal counts."""
+    from benchmarks.variant_side_scaling import measure
+
+    store = _build_ssf_store(tmp_path / "scaling", store_id="idx")
+    measured = measure(store, ["phewas"])
+    sides = measured["phewas"]
+    assert set(sides) == {"indexed", "scanned"}
+    for side in sides.values():
+        assert {"elapsed_s", "match_s", "read_s", "gather_s"} <= set(side)
+        assert side["result_count"] == sides["indexed"]["result_count"]
+    assert sides["indexed"]["match_s"] <= sides["scanned"]["match_s"] + 0.05
+
+
 def test_completion_rebuilds_the_index(residual: RaggedResidualScenario) -> None:
     """A completed release's index describes the completed planes (ruling Q3).
 
