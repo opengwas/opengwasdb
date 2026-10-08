@@ -26,6 +26,7 @@ cmp16_218 = json.loads((HERE / "opengwasdb_ogs00016_store_comparison_2_18.json")
 cmp16_z3 = json.loads((HERE / "opengwasdb_ogs00016_store_comparison_zarr3.json").read_text())
 cmp11_218 = json.loads((HERE / "opengwasdb_ogs00011_store_comparison_2_18.json").read_text())
 cmp11_z3 = json.loads((HERE / "opengwasdb_ogs00011_store_comparison_zarr3.json").read_text())
+extras = json.loads((HERE / "opengwasdb_ogs00011_extra_shapes_0_2_0.json").read_text())
 
 
 def md_table(headers, rows):
@@ -146,14 +147,32 @@ def three_column_identity(cmp218, cmpz3, v2_label, v3_label):
 
 
 def harness_revisions():
-    """The distinct harness digests recorded across the four Zarr 3 artifacts."""
+    """The distinct harness digests recorded across the four comparison artifacts."""
     out = set()
-    for doc in (cmp16_z3, cmp11_z3):
-        for s in doc["stores"]:
-            fp = doc.get("harness_file", {})
-            if fp.get("harness_sha256"):
-                out.add(fp["harness_sha256"][:12])
+    for doc in (cmp16_218, cmp16_z3, cmp11_218, cmp11_z3):
+        fp = doc.get("harness_file", {})
+        if fp.get("harness_sha256"):
+            out.add(fp["harness_sha256"][:12])
     return sorted(out)
+
+
+EXTRA_LABELS = {
+    "phewas_off_axis": "PheWAS of an off-panel variant",
+    "bulk_overflow_heavy": "Bulk, largest Overflow Analysis",
+}
+
+
+def extras_rows(extras):
+    rows = []
+    for shape in ("phewas_off_axis", "bulk_overflow_heavy"):
+        cells = []
+        for column in ("a-2.18-0.1.0", "b-code-0.1.0", "c-code-0.2.0"):
+            r = extras["shapes"][shape][column]
+            cells.append(f"{fmt_time(r['median_ms'])} / {fmt_time(r['p95_ms'])} · "
+                         f"{fmt_rss(r['peak_mib'])}")
+        rows.append([EXTRA_LABELS[shape], *cells,
+                     f"{extras['shapes'][shape]['c-code-0.2.0']['result_count']:,}"])
+    return rows
 
 
 def per_plane(cmpz3, v2_label, v3_label):
@@ -294,8 +313,9 @@ if not revs:
     print("Harness digests recorded in the Zarr 3 artifacts: **not recorded** (these "
           "artifacts predate the field); the harness revision is `132de8b`.")
 elif len(revs) == 1:
-    print(f"Harness digest recorded in every Zarr 3 artifact: `{revs[0]}` — one harness "
-          f"revision produced all three columns.")
+    print(f"Harness digest recorded in every re-run artifact: `{revs[0]}` — one harness "
+          "revision produced all the re-run columns (the OGS-00011 2.18 column predates "
+          "the field).")
 else:
     print(f"**The columns were produced by different harness revisions: {revs}.**")
 ```
@@ -349,6 +369,34 @@ print("0.2.0 also costs memory on the smaller OGS-00011 shapes: versus Zarr 3 on
       f"{m_c11['regional']['peak_mb'] - m_b['regional']['peak_mb']:,.0f} MiB on window × all, and "
       f"{m_c11['random_lookup_100_variants_10_analyses']['peak_mb'] - m_b['random_lookup_100_variants_10_analyses']['peak_mb']:,.0f} MiB "
       "on 100 × 10.")
+```
+
+### The two #252 Overflow shapes
+
+The seven-shape PheWAS anchor is on the reference axis, so it never exercises
+the Ragged Overflow's PheWAS path; these two shapes do. They are measured by
+`benchmarks/ogs00011_ab.py --one-shape` (the probe #252 built), three
+repetitions each.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(["shape", "2.18 · 0.1.0", "this code · 0.1.0", "this code · 0.2.0", "rows"],
+               extras_rows(extras)))
+print()
+identity = extras["identity"]
+print("Every extra shape returns the same rows and sha256 in all three columns: "
+      + ", ".join(f"`{name}` {entry['identical']}" for name, entry in identity.items()) + ".")
+loads = {
+    f"{shape} {column}": extras["shapes"][shape][column]["start_load_1m"][0]
+    for shape in ("phewas_off_axis", "bulk_overflow_heavy")
+    for column in ("a-2.18-0.1.0", "b-code-0.1.0", "c-code-0.2.0")
+}
+contended = [name for name, load in loads.items() if load >= 3]
+print("Each extra column's first-repetition start load: "
+      + ", ".join(f"{name} {load:.2f}" for name, load in loads.items()) + ". "
+      + (f"**{', '.join(contended)} began at or above 3.**" if contended
+         else "All began below 3."))
 ```
 
 ::: {.callout-note}

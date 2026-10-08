@@ -256,7 +256,7 @@
           }
         },
         "layout": {
-          "z": {
+          "dense/z": {
             "chunk_shape": [
               1000,
               1000
@@ -264,7 +264,7 @@
             "shard_shape": null,
             "dtype": "int16"
           },
-          "se": {
+          "dense/se": {
             "chunk_shape": [
               1000,
               1000
@@ -272,13 +272,69 @@
             "shard_shape": null,
             "dtype": "float16"
           },
-          "eaf": {
+          "dense/eaf": {
             "chunk_shape": [
               1000,
               1000
             ],
             "shard_shape": null,
             "dtype": "int8"
+          },
+          "dense/top_hits/p_5e_04/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": null,
+            "dtype": "float32"
+          },
+          "dense/top_hits/p_5e_06/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": null,
+            "dtype": "float32"
+          },
+          "dense/top_hits/p_5e_08/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": null,
+            "dtype": "float32"
+          },
+          "ragged/z": {
+            "chunk_shape": [
+              200000
+            ],
+            "shard_shape": null,
+            "dtype": "int16"
+          },
+          "ragged/se": {
+            "chunk_shape": [
+              200000
+            ],
+            "shard_shape": null,
+            "dtype": "float16"
+          },
+          "ragged/eaf": {
+            "chunk_shape": [
+              200000
+            ],
+            "shard_shape": null,
+            "dtype": "int8"
+          },
+          "ragged/variant_index": {
+            "chunk_shape": [
+              200000
+            ],
+            "shard_shape": null,
+            "dtype": "int32"
+          },
+          "ragged/offsets": {
+            "chunk_shape": [
+              10000
+            ],
+            "shard_shape": null,
+            "dtype": "int64"
           },
           "top_hits/p_5e_04/z": {
             "chunk_shape": [
@@ -907,114 +963,114 @@
         {
           "query": "bulk",
           "timed_out": false,
-          "median_ms": 27540.551,
-          "p95_ms": 36171.865,
-          "repetitions": 5,
-          "warmup_ms": 36539.61,
+          "median_ms": 28249.408,
+          "p95_ms": 29772.88,
+          "repetitions": 3,
+          "warmup_ms": 39273.656,
           "result_count": 5052918
         },
         {
           "query": "phewas",
           "timed_out": false,
-          "median_ms": 24.605,
-          "p95_ms": 25.815,
-          "repetitions": 5,
-          "warmup_ms": 28.821,
+          "median_ms": 26.906,
+          "p95_ms": 27.055,
+          "repetitions": 3,
+          "warmup_ms": 31.997,
           "result_count": 3152
         },
         {
           "query": "regional",
           "timed_out": false,
-          "median_ms": 96208.694,
-          "p95_ms": 96208.694,
-          "repetitions": 1,
-          "warmup_ms": 81902.127,
+          "median_ms": 98001.198,
+          "p95_ms": 100223.218,
+          "repetitions": 3,
+          "warmup_ms": 68944.169,
           "result_count": 8304617
         },
         {
           "query": "regional_one_analysis",
           "timed_out": false,
-          "median_ms": 8152.57,
-          "p95_ms": 8876.984,
-          "repetitions": 5,
-          "warmup_ms": 11797.269,
+          "median_ms": 8024.623,
+          "p95_ms": 8036.852,
+          "repetitions": 3,
+          "warmup_ms": 10090.32,
           "result_count": 1365
         },
         {
           "query": "tophits",
           "timed_out": false,
-          "median_ms": 14.138,
-          "p95_ms": 14.644,
-          "repetitions": 5,
-          "warmup_ms": 46.66,
+          "median_ms": 13.795,
+          "p95_ms": 14.028,
+          "repetitions": 3,
+          "warmup_ms": 42.778,
           "result_count": 6001
         },
         {
           "query": "random_lookup_10_variants_100_analyses",
           "timed_out": false,
-          "median_ms": 2354.164,
-          "p95_ms": 2390.089,
-          "repetitions": 5,
-          "warmup_ms": 1342.712,
+          "median_ms": 1954.866,
+          "p95_ms": 2375.783,
+          "repetitions": 3,
+          "warmup_ms": 1338.335,
           "result_count": 0
         },
         {
           "query": "random_lookup_100_variants_10_analyses",
           "timed_out": false,
-          "median_ms": 606.716,
-          "p95_ms": 608.031,
-          "repetitions": 5,
-          "warmup_ms": 621.532,
+          "median_ms": 613.069,
+          "p95_ms": 619.054,
+          "repetitions": 3,
+          "warmup_ms": 627.477,
           "result_count": 18
         }
       ],
       "memory": [
         {
-          "baseline_mb": 2396.7,
-          "peak_mb": 5256.6,
-          "delta_mb": 2859.8,
+          "baseline_mb": 2395.7,
+          "peak_mb": 5256.2,
+          "delta_mb": 2860.5,
           "result_count": 5052918,
           "query": "bulk"
         },
         {
-          "baseline_mb": 2400.7,
-          "peak_mb": 4481.0,
+          "baseline_mb": 2395.3,
+          "peak_mb": 4475.4,
           "delta_mb": 2080.2,
           "result_count": 3152,
           "query": "phewas"
         },
         {
-          "baseline_mb": 2393.5,
-          "peak_mb": 5344.1,
-          "delta_mb": 2950.6,
+          "baseline_mb": 2395.1,
+          "peak_mb": 5298.3,
+          "delta_mb": 2903.2,
           "result_count": 8304617,
           "query": "regional"
         },
         {
-          "baseline_mb": 2398.3,
-          "peak_mb": 4492.8,
-          "delta_mb": 2094.5,
+          "baseline_mb": 2397.8,
+          "peak_mb": 4491.2,
+          "delta_mb": 2093.4,
           "result_count": 1365,
           "query": "regional_one_analysis"
         },
         {
-          "baseline_mb": 2402.2,
-          "peak_mb": 2405.0,
-          "delta_mb": 2.8,
+          "baseline_mb": 2399.0,
+          "peak_mb": 2399.9,
+          "delta_mb": 0.8,
           "result_count": 6001,
           "query": "tophits"
         },
         {
-          "baseline_mb": 2396.8,
-          "peak_mb": 2443.2,
-          "delta_mb": 46.5,
+          "baseline_mb": 2395.3,
+          "peak_mb": 2439.5,
+          "delta_mb": 44.3,
           "result_count": 0,
           "query": "random_lookup_10_variants_100_analyses"
         },
         {
-          "baseline_mb": 2396.9,
-          "peak_mb": 4545.3,
-          "delta_mb": 2148.5,
+          "baseline_mb": 2396.8,
+          "peak_mb": 4543.0,
+          "delta_mb": 2146.2,
           "result_count": 18,
           "query": "random_lookup_100_variants_10_analyses"
         }
@@ -1024,8 +1080,10 @@
         "pipeline": "FusedCodecPipeline",
         "max_workers": 1
       },
-      "load_average_1m_before": 3.16,
-      "load_average_1m_after": 3.56,
+      "limit_hits": [],
+      "waited_for_load_s": 0.0,
+      "load_average_1m_before": 2.99,
+      "load_average_1m_after": 2.88,
       "result_digests": {
         "bulk": {
           "variant_index": "e6a9c86fe44b34d2f23b5422e7982d215e1079967e8be6c78f4d673585e365a3",
@@ -1111,7 +1169,7 @@
           }
         },
         "layout": {
-          "z": {
+          "dense/z": {
             "chunk_shape": [
               1000,
               64
@@ -1122,7 +1180,7 @@
             ],
             "dtype": "int16"
           },
-          "se": {
+          "dense/se": {
             "chunk_shape": [
               1000,
               64
@@ -1133,7 +1191,7 @@
             ],
             "dtype": "float16"
           },
-          "eaf": {
+          "dense/eaf": {
             "chunk_shape": [
               1000,
               64
@@ -1143,6 +1201,78 @@
               1024
             ],
             "dtype": "int8"
+          },
+          "dense/top_hits/p_5e_04/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": [
+              1048576
+            ],
+            "dtype": "float32"
+          },
+          "dense/top_hits/p_5e_06/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": [
+              1048576
+            ],
+            "dtype": "float32"
+          },
+          "dense/top_hits/p_5e_08/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": [
+              1048576
+            ],
+            "dtype": "float32"
+          },
+          "ragged/z": {
+            "chunk_shape": [
+              200000
+            ],
+            "shard_shape": [
+              50000000
+            ],
+            "dtype": "int16"
+          },
+          "ragged/se": {
+            "chunk_shape": [
+              200000
+            ],
+            "shard_shape": [
+              50000000
+            ],
+            "dtype": "float16"
+          },
+          "ragged/eaf": {
+            "chunk_shape": [
+              200000
+            ],
+            "shard_shape": [
+              50000000
+            ],
+            "dtype": "int8"
+          },
+          "ragged/variant_index": {
+            "chunk_shape": [
+              200000
+            ],
+            "shard_shape": [
+              50000000
+            ],
+            "dtype": "int32"
+          },
+          "ragged/offsets": {
+            "chunk_shape": [
+              10000
+            ],
+            "shard_shape": [
+              10000
+            ],
+            "dtype": "int64"
           },
           "top_hits/p_5e_04/z": {
             "chunk_shape": [
@@ -1777,114 +1907,114 @@
         {
           "query": "bulk",
           "timed_out": false,
-          "median_ms": 12978.351,
-          "p95_ms": 15364.648,
-          "repetitions": 5,
-          "warmup_ms": 17536.687,
+          "median_ms": 10603.801,
+          "p95_ms": 10755.385,
+          "repetitions": 3,
+          "warmup_ms": 14554.887,
           "result_count": 5052918
         },
         {
           "query": "phewas",
           "timed_out": false,
-          "median_ms": 73.437,
-          "p95_ms": 78.766,
-          "repetitions": 5,
-          "warmup_ms": 91.373,
+          "median_ms": 76.807,
+          "p95_ms": 77.995,
+          "repetitions": 3,
+          "warmup_ms": 76.992,
           "result_count": 3152
         },
         {
           "query": "regional",
           "timed_out": false,
-          "median_ms": 69942.874,
-          "p95_ms": 69942.874,
-          "repetitions": 1,
-          "warmup_ms": 71824.169,
+          "median_ms": 70051.062,
+          "p95_ms": 71295.267,
+          "repetitions": 3,
+          "warmup_ms": 71147.846,
           "result_count": 8304617
         },
         {
           "query": "regional_one_analysis",
           "timed_out": false,
-          "median_ms": 8112.894,
-          "p95_ms": 8183.122,
-          "repetitions": 5,
-          "warmup_ms": 8313.528,
+          "median_ms": 8032.563,
+          "p95_ms": 8074.011,
+          "repetitions": 3,
+          "warmup_ms": 8078.968,
           "result_count": 1365
         },
         {
           "query": "tophits",
           "timed_out": false,
-          "median_ms": 18.133,
-          "p95_ms": 18.176,
-          "repetitions": 5,
-          "warmup_ms": 46.871,
+          "median_ms": 15.896,
+          "p95_ms": 17.686,
+          "repetitions": 3,
+          "warmup_ms": 49.189,
           "result_count": 6001
         },
         {
           "query": "random_lookup_10_variants_100_analyses",
           "timed_out": false,
-          "median_ms": 2809.013,
-          "p95_ms": 2830.858,
-          "repetitions": 5,
-          "warmup_ms": 1958.011,
+          "median_ms": 2757.115,
+          "p95_ms": 2844.488,
+          "repetitions": 3,
+          "warmup_ms": 1891.563,
           "result_count": 0
         },
         {
           "query": "random_lookup_100_variants_10_analyses",
           "timed_out": false,
-          "median_ms": 718.225,
-          "p95_ms": 737.739,
-          "repetitions": 5,
-          "warmup_ms": 886.69,
+          "median_ms": 686.617,
+          "p95_ms": 695.707,
+          "repetitions": 3,
+          "warmup_ms": 715.739,
           "result_count": 18
         }
       ],
       "memory": [
         {
-          "baseline_mb": 2409.8,
-          "peak_mb": 5296.6,
-          "delta_mb": 2886.8,
+          "baseline_mb": 2407.9,
+          "peak_mb": 5285.0,
+          "delta_mb": 2877.1,
           "result_count": 5052918,
           "query": "bulk"
         },
         {
-          "baseline_mb": 2402.3,
-          "peak_mb": 4951.4,
-          "delta_mb": 2549.1,
+          "baseline_mb": 2409.8,
+          "peak_mb": 4961.7,
+          "delta_mb": 2551.9,
           "result_count": 3152,
           "query": "phewas"
         },
         {
-          "baseline_mb": 2409.5,
-          "peak_mb": 5740.0,
-          "delta_mb": 3330.5,
+          "baseline_mb": 2412.0,
+          "peak_mb": 5715.8,
+          "delta_mb": 3303.9,
           "result_count": 8304617,
           "query": "regional"
         },
         {
-          "baseline_mb": 2405.3,
-          "peak_mb": 4970.5,
-          "delta_mb": 2565.2,
+          "baseline_mb": 2413.1,
+          "peak_mb": 4978.8,
+          "delta_mb": 2565.7,
           "result_count": 1365,
           "query": "regional_one_analysis"
         },
         {
-          "baseline_mb": 2411.3,
-          "peak_mb": 2411.4,
-          "delta_mb": 0.1,
+          "baseline_mb": 2402.6,
+          "peak_mb": 2403.5,
+          "delta_mb": 0.9,
           "result_count": 6001,
           "query": "tophits"
         },
         {
-          "baseline_mb": 2407.5,
-          "peak_mb": 2452.0,
-          "delta_mb": 44.5,
+          "baseline_mb": 2404.4,
+          "peak_mb": 2452.3,
+          "delta_mb": 47.9,
           "result_count": 0,
           "query": "random_lookup_10_variants_100_analyses"
         },
         {
-          "baseline_mb": 2407.7,
-          "peak_mb": 5024.3,
-          "delta_mb": 2616.6,
+          "baseline_mb": 2407.8,
+          "peak_mb": 5019.8,
+          "delta_mb": 2612.1,
           "result_count": 18,
           "query": "random_lookup_100_variants_10_analyses"
         }
@@ -1894,8 +2024,10 @@
         "pipeline": "FusedCodecPipeline",
         "max_workers": 1
       },
-      "load_average_1m_before": 3.44,
-      "load_average_1m_after": 3.27,
+      "limit_hits": [],
+      "waited_for_load_s": 0.0,
+      "load_average_1m_before": 2.6,
+      "load_average_1m_after": 8.58,
       "result_digests": {
         "bulk": {
           "variant_index": "e6a9c86fe44b34d2f23b5422e7982d215e1079967e8be6c78f4d673585e365a3",
@@ -1987,7 +2119,7 @@
     "numpy": "2.4.6",
     "zarr": "3.4.0",
     "numcodecs": "0.17.0",
-    "opengwasdb_commit": "132de8b",
+    "opengwasdb_commit": "04e9815",
     "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
     "nproc": 224,
     "cache": "warm page cache: the node holds about 1 TB of page cache and the stores are warm. A cold-cache run cannot be forced without root, so these timings are warm-cache numbers, not first-touch disk numbers.",
@@ -1997,8 +2129,12 @@
       "max_workers": 1
     }
   },
-  "commit": "132de8b",
-  "measured_at": "2026-10-08T04:46:07.921008+00:00",
+  "harness_file": {
+    "harness_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/benchmark_store_comparison.py",
+    "harness_sha256": "8e3da43ed17f7fe2e24d8304f60dcbaf31029e2368f2d6dafffae2624febea92"
+  },
+  "commit": "04e9815",
+  "measured_at": "2026-10-08T09:27:23.323801+00:00",
   "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/opengwasdb",
   "opengwasdb_fingerprint": "49af77aedf3ff9287023310e47c91edab8189cc6775f98cfbc9f0868de583595"
 }

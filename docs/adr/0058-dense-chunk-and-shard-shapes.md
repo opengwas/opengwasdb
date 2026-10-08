@@ -336,13 +336,13 @@ The 0.1.0 -> 0.2.0 time ratios under Zarr 3 match this ADR's OGS-00009 ratios:
 
 | shape | FinnGen | OGS-00009 (this ADR) |
 |---|---:|---:|
-| phewas | 2.73x | 2.76x |
-| random lookup 10 variants 100 analyses | 3.11x | 2.80x |
-| random lookup 100 variants 10 analyses | 1.63x | 1.83x |
-| regional | 1.35x | 1.35x |
-| bulk | 0.26x | 0.35x |
+| phewas | 2.36x | 2.76x |
+| random lookup 10 variants 100 analyses | 2.47x | 2.80x |
+| random lookup 100 variants 10 analyses | 1.47x | 1.83x |
+| regional | 1.36x | 1.35x |
+| bulk | 0.37x | 0.35x |
 
-No new size or time cost appears, and the whole-Analysis guard holds (0.26x against the 1.25x limit). **The decision is not contradicted and is not corrected.** Full report: `docs/benchmark-output/opengwasdb_ogs00016_0_2_0.html`.
+No new size or time cost appears, and the whole-Analysis guard holds (0.37x against the 1.25x limit). **The decision is not contradicted and is not corrected.** Full report: `docs/benchmark-output/opengwasdb_ogs00016_0_2_0.html`.
 <!-- END GENERATED: finngen-shape-check (#250) -->
 
 ## Alternatives rejected

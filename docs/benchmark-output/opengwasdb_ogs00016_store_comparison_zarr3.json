@@ -631,114 +631,114 @@
         {
           "query": "bulk",
           "timed_out": false,
-          "median_ms": 47413.846,
-          "p95_ms": 52310.804,
-          "repetitions": 5,
-          "warmup_ms": 51434.127,
+          "median_ms": 36151.082,
+          "p95_ms": 36326.116,
+          "repetitions": 3,
+          "warmup_ms": 54806.568,
           "result_count": 21230471
         },
         {
           "query": "phewas",
           "timed_out": false,
-          "median_ms": 19.143,
-          "p95_ms": 22.412,
-          "repetitions": 5,
-          "warmup_ms": 26.519,
+          "median_ms": 23.44,
+          "p95_ms": 24.489,
+          "repetitions": 3,
+          "warmup_ms": 27.224,
           "result_count": 2754
         },
         {
           "query": "regional",
           "timed_out": false,
-          "median_ms": 2612.54,
-          "p95_ms": 2627.667,
-          "repetitions": 5,
-          "warmup_ms": 12355.338,
+          "median_ms": 2646.519,
+          "p95_ms": 2649.646,
+          "repetitions": 3,
+          "warmup_ms": 11722.736,
           "result_count": 18180899
         },
         {
           "query": "regional_one_analysis",
           "timed_out": false,
-          "median_ms": 64.125,
-          "p95_ms": 103.044,
-          "repetitions": 5,
-          "warmup_ms": 67.28,
+          "median_ms": 71.797,
+          "p95_ms": 107.315,
+          "repetitions": 3,
+          "warmup_ms": 74.015,
           "result_count": 6602
         },
         {
           "query": "tophits",
           "timed_out": false,
-          "median_ms": 12.381,
-          "p95_ms": 13.415,
-          "repetitions": 5,
-          "warmup_ms": 39.265,
+          "median_ms": 16.436,
+          "p95_ms": 16.624,
+          "repetitions": 3,
+          "warmup_ms": 44.019,
           "result_count": 25771
         },
         {
           "query": "random_lookup_10_variants_100_analyses",
           "timed_out": false,
-          "median_ms": 94.523,
-          "p95_ms": 96.158,
-          "repetitions": 5,
-          "warmup_ms": 98.148,
+          "median_ms": 128.212,
+          "p95_ms": 134.549,
+          "repetitions": 3,
+          "warmup_ms": 122.284,
           "result_count": 1000
         },
         {
           "query": "random_lookup_100_variants_10_analyses",
           "timed_out": false,
-          "median_ms": 616.322,
-          "p95_ms": 640.911,
-          "repetitions": 5,
-          "warmup_ms": 590.004,
+          "median_ms": 795.341,
+          "p95_ms": 809.404,
+          "repetitions": 3,
+          "warmup_ms": 873.149,
           "result_count": 1000
         }
       ],
       "memory": [
         {
-          "baseline_mb": 306.4,
-          "peak_mb": 2543.5,
-          "delta_mb": 2237.1,
+          "baseline_mb": 311.0,
+          "peak_mb": 2550.8,
+          "delta_mb": 2239.7,
           "result_count": 21230471,
           "query": "bulk"
         },
         {
-          "baseline_mb": 306.4,
-          "peak_mb": 328.4,
-          "delta_mb": 21.9,
+          "baseline_mb": 309.0,
+          "peak_mb": 329.3,
+          "delta_mb": 20.3,
           "result_count": 2754,
           "query": "phewas"
         },
         {
-          "baseline_mb": 307.4,
-          "peak_mb": 2498.0,
-          "delta_mb": 2190.6,
+          "baseline_mb": 306.9,
+          "peak_mb": 2496.6,
+          "delta_mb": 2189.7,
           "result_count": 18180899,
           "query": "regional"
         },
         {
-          "baseline_mb": 310.2,
-          "peak_mb": 337.6,
-          "delta_mb": 27.4,
+          "baseline_mb": 308.8,
+          "peak_mb": 334.7,
+          "delta_mb": 25.9,
           "result_count": 6602,
           "query": "regional_one_analysis"
         },
         {
-          "baseline_mb": 313.0,
-          "peak_mb": 315.1,
-          "delta_mb": 2.1,
+          "baseline_mb": 310.2,
+          "peak_mb": 312.5,
+          "delta_mb": 2.3,
           "result_count": 25771,
           "query": "tophits"
         },
         {
-          "baseline_mb": 310.9,
-          "peak_mb": 340.5,
-          "delta_mb": 29.6,
+          "baseline_mb": 309.1,
+          "peak_mb": 338.8,
+          "delta_mb": 29.7,
           "result_count": 1000,
           "query": "random_lookup_10_variants_100_analyses"
         },
         {
-          "baseline_mb": 308.9,
-          "peak_mb": 412.0,
-          "delta_mb": 103.1,
+          "baseline_mb": 308.2,
+          "peak_mb": 407.4,
+          "delta_mb": 99.2,
           "result_count": 1000,
           "query": "random_lookup_100_variants_10_analyses"
         }
@@ -748,8 +748,10 @@
         "pipeline": "FusedCodecPipeline",
         "max_workers": 1
       },
-      "load_average_1m_before": 2.09,
-      "load_average_1m_after": 4.67,
+      "limit_hits": [],
+      "waited_for_load_s": 90.0,
+      "load_average_1m_before": 2.86,
+      "load_average_1m_after": 3.34,
       "result_digests": {
         "bulk": {
           "variant_index": "591c17c3ef6fde85f546d689075bc0f04ac2bcc76ff48ad8156e627a6fffd701",
@@ -1225,114 +1227,114 @@
         {
           "query": "bulk",
           "timed_out": false,
-          "median_ms": 12134.017,
-          "p95_ms": 13121.641,
-          "repetitions": 5,
-          "warmup_ms": 23329.093,
+          "median_ms": 13519.971,
+          "p95_ms": 13924.037,
+          "repetitions": 3,
+          "warmup_ms": 23458.683,
           "result_count": 21230471
         },
         {
           "query": "phewas",
           "timed_out": false,
-          "median_ms": 52.296,
-          "p95_ms": 53.841,
-          "repetitions": 5,
-          "warmup_ms": 64.286,
+          "median_ms": 55.306,
+          "p95_ms": 57.868,
+          "repetitions": 3,
+          "warmup_ms": 61.526,
           "result_count": 2754
         },
         {
           "query": "regional",
           "timed_out": false,
-          "median_ms": 3538.85,
-          "p95_ms": 3782.61,
-          "repetitions": 5,
-          "warmup_ms": 12461.967,
+          "median_ms": 3608.445,
+          "p95_ms": 3640.156,
+          "repetitions": 3,
+          "warmup_ms": 12976.846,
           "result_count": 18180899
         },
         {
           "query": "regional_one_analysis",
           "timed_out": false,
-          "median_ms": 51.13,
-          "p95_ms": 74.521,
-          "repetitions": 5,
-          "warmup_ms": 58.149,
+          "median_ms": 47.168,
+          "p95_ms": 50.411,
+          "repetitions": 3,
+          "warmup_ms": 83.627,
           "result_count": 6602
         },
         {
           "query": "tophits",
           "timed_out": false,
-          "median_ms": 15.26,
-          "p95_ms": 16.405,
-          "repetitions": 5,
-          "warmup_ms": 41.911,
+          "median_ms": 18.552,
+          "p95_ms": 18.653,
+          "repetitions": 3,
+          "warmup_ms": 43.282,
           "result_count": 25771
         },
         {
           "query": "random_lookup_10_variants_100_analyses",
           "timed_out": false,
-          "median_ms": 293.915,
-          "p95_ms": 303.535,
-          "repetitions": 5,
-          "warmup_ms": 318.252,
+          "median_ms": 316.056,
+          "p95_ms": 348.555,
+          "repetitions": 3,
+          "warmup_ms": 351.503,
           "result_count": 1000
         },
         {
           "query": "random_lookup_100_variants_10_analyses",
           "timed_out": false,
-          "median_ms": 1004.008,
-          "p95_ms": 1016.498,
-          "repetitions": 5,
-          "warmup_ms": 942.922,
+          "median_ms": 1166.237,
+          "p95_ms": 1173.727,
+          "repetitions": 3,
+          "warmup_ms": 1176.999,
           "result_count": 1000
         }
       ],
       "memory": [
         {
-          "baseline_mb": 334.9,
-          "peak_mb": 2570.6,
-          "delta_mb": 2235.7,
+          "baseline_mb": 333.7,
+          "peak_mb": 2591.7,
+          "delta_mb": 2257.9,
           "result_count": 21230471,
           "query": "bulk"
         },
         {
-          "baseline_mb": 337.0,
-          "peak_mb": 380.7,
-          "delta_mb": 43.7,
+          "baseline_mb": 331.4,
+          "peak_mb": 372.5,
+          "delta_mb": 41.1,
           "result_count": 2754,
           "query": "phewas"
         },
         {
-          "baseline_mb": 333.3,
-          "peak_mb": 2662.0,
-          "delta_mb": 2328.7,
+          "baseline_mb": 333.1,
+          "peak_mb": 2589.8,
+          "delta_mb": 2256.6,
           "result_count": 18180899,
           "query": "regional"
         },
         {
-          "baseline_mb": 337.0,
-          "peak_mb": 382.1,
-          "delta_mb": 45.1,
+          "baseline_mb": 333.4,
+          "peak_mb": 379.3,
+          "delta_mb": 45.9,
           "result_count": 6602,
           "query": "regional_one_analysis"
         },
         {
-          "baseline_mb": 332.8,
-          "peak_mb": 335.6,
-          "delta_mb": 2.7,
+          "baseline_mb": 333.9,
+          "peak_mb": 336.5,
+          "delta_mb": 2.6,
           "result_count": 25771,
           "query": "tophits"
         },
         {
-          "baseline_mb": 341.6,
-          "peak_mb": 393.7,
-          "delta_mb": 52.2,
+          "baseline_mb": 333.3,
+          "peak_mb": 382.0,
+          "delta_mb": 48.7,
           "result_count": 1000,
           "query": "random_lookup_10_variants_100_analyses"
         },
         {
-          "baseline_mb": 333.0,
-          "peak_mb": 459.8,
-          "delta_mb": 126.8,
+          "baseline_mb": 331.3,
+          "peak_mb": 458.4,
+          "delta_mb": 127.1,
           "result_count": 1000,
           "query": "random_lookup_100_variants_10_analyses"
         }
@@ -1342,8 +1344,10 @@
         "pipeline": "FusedCodecPipeline",
         "max_workers": 1
       },
-      "load_average_1m_before": 4.49,
-      "load_average_1m_after": 3.05,
+      "limit_hits": [],
+      "waited_for_load_s": 30.0,
+      "load_average_1m_before": 2.65,
+      "load_average_1m_after": 2.99,
       "result_digests": {
         "bulk": {
           "variant_index": "591c17c3ef6fde85f546d689075bc0f04ac2bcc76ff48ad8156e627a6fffd701",
@@ -1435,7 +1439,7 @@
     "numpy": "2.4.6",
     "zarr": "3.4.0",
     "numcodecs": "0.17.0",
-    "opengwasdb_commit": "132de8b",
+    "opengwasdb_commit": "04e9815",
     "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
     "nproc": 224,
     "cache": "warm page cache: the node holds about 1 TB of page cache and the stores are warm. A cold-cache run cannot be forced without root, so these timings are warm-cache numbers, not first-touch disk numbers.",
@@ -1445,8 +1449,12 @@
       "max_workers": 1
     }
   },
-  "commit": "132de8b",
-  "measured_at": "2026-10-08T04:26:33.903824+00:00",
+  "harness_file": {
+    "harness_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/benchmark_store_comparison.py",
+    "harness_sha256": "8e3da43ed17f7fe2e24d8304f60dcbaf31029e2368f2d6dafffae2624febea92"
+  },
+  "commit": "04e9815",
+  "measured_at": "2026-10-08T09:05:37.214102+00:00",
   "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/opengwasdb",
   "opengwasdb_fingerprint": "49af77aedf3ff9287023310e47c91edab8189cc6775f98cfbc9f0868de583595"
 }

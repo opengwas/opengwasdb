@@ -631,114 +631,114 @@
         {
           "query": "bulk",
           "timed_out": false,
-          "median_ms": 55786.679,
-          "p95_ms": 60752.21,
-          "repetitions": 5,
-          "warmup_ms": 73802.535,
+          "median_ms": 60644.627,
+          "p95_ms": 65849.482,
+          "repetitions": 3,
+          "warmup_ms": 81896.925,
           "result_count": 21230471
         },
         {
           "query": "phewas",
           "timed_out": false,
-          "median_ms": 7.074,
-          "p95_ms": 9.197,
-          "repetitions": 5,
-          "warmup_ms": 24.141,
+          "median_ms": 7.535,
+          "p95_ms": 8.73,
+          "repetitions": 3,
+          "warmup_ms": 13.414,
           "result_count": 2754
         },
         {
           "query": "regional",
           "timed_out": false,
-          "median_ms": 3799.019,
-          "p95_ms": 3878.121,
-          "repetitions": 5,
-          "warmup_ms": 13089.281,
+          "median_ms": 3991.041,
+          "p95_ms": 4225.533,
+          "repetitions": 3,
+          "warmup_ms": 13107.022,
           "result_count": 18180899
         },
         {
           "query": "regional_one_analysis",
           "timed_out": false,
-          "median_ms": 38.42,
-          "p95_ms": 73.563,
-          "repetitions": 5,
-          "warmup_ms": 50.93,
+          "median_ms": 43.882,
+          "p95_ms": 66.844,
+          "repetitions": 3,
+          "warmup_ms": 49.079,
           "result_count": 6602
         },
         {
           "query": "tophits",
           "timed_out": false,
-          "median_ms": 2.474,
-          "p95_ms": 2.544,
-          "repetitions": 5,
-          "warmup_ms": 10.094,
+          "median_ms": 2.483,
+          "p95_ms": 2.537,
+          "repetitions": 3,
+          "warmup_ms": 10.778,
           "result_count": 25771
         },
         {
           "query": "random_lookup_10_variants_100_analyses",
           "timed_out": false,
-          "median_ms": 71.958,
-          "p95_ms": 73.658,
-          "repetitions": 5,
-          "warmup_ms": 158.488,
+          "median_ms": 87.482,
+          "p95_ms": 94.982,
+          "repetitions": 3,
+          "warmup_ms": 92.016,
           "result_count": 1000
         },
         {
           "query": "random_lookup_100_variants_10_analyses",
           "timed_out": false,
-          "median_ms": 616.853,
-          "p95_ms": 694.638,
-          "repetitions": 5,
-          "warmup_ms": 744.415,
+          "median_ms": 629.144,
+          "p95_ms": 655.409,
+          "repetitions": 3,
+          "warmup_ms": 687.739,
           "result_count": 1000
         }
       ],
       "memory": [
         {
-          "baseline_mb": 305.0,
-          "peak_mb": 22778.4,
-          "delta_mb": 22473.4,
+          "baseline_mb": 301.9,
+          "peak_mb": 22775.0,
+          "delta_mb": 22473.1,
           "result_count": 21230471,
           "query": "bulk"
         },
         {
-          "baseline_mb": 301.1,
-          "peak_mb": 317.3,
-          "delta_mb": 16.2,
+          "baseline_mb": 301.3,
+          "peak_mb": 317.5,
+          "delta_mb": 16.1,
           "result_count": 2754,
           "query": "phewas"
         },
         {
-          "baseline_mb": 300.9,
-          "peak_mb": 2379.4,
-          "delta_mb": 2078.5,
+          "baseline_mb": 301.7,
+          "peak_mb": 2378.5,
+          "delta_mb": 2076.9,
           "result_count": 18180899,
           "query": "regional"
         },
         {
-          "baseline_mb": 305.5,
-          "peak_mb": 329.2,
-          "delta_mb": 23.7,
+          "baseline_mb": 304.8,
+          "peak_mb": 328.7,
+          "delta_mb": 23.9,
           "result_count": 6602,
           "query": "regional_one_analysis"
         },
         {
-          "baseline_mb": 300.4,
-          "peak_mb": 301.5,
-          "delta_mb": 1.0,
+          "baseline_mb": 305.4,
+          "peak_mb": 306.6,
+          "delta_mb": 1.2,
           "result_count": 25771,
           "query": "tophits"
         },
         {
-          "baseline_mb": 305.1,
-          "peak_mb": 349.2,
-          "delta_mb": 44.1,
+          "baseline_mb": 305.5,
+          "peak_mb": 349.1,
+          "delta_mb": 43.6,
           "result_count": 1000,
           "query": "random_lookup_10_variants_100_analyses"
         },
         {
-          "baseline_mb": 301.1,
-          "peak_mb": 760.9,
-          "delta_mb": 459.8,
+          "baseline_mb": 301.3,
+          "peak_mb": 759.5,
+          "delta_mb": 458.2,
           "result_count": 1000,
           "query": "random_lookup_100_variants_10_analyses"
         }
@@ -748,8 +748,10 @@
         "pipeline": null,
         "max_workers": null
       },
-      "load_average_1m_before": 2.42,
-      "load_average_1m_after": 3.33,
+      "limit_hits": [],
+      "waited_for_load_s": 45.0,
+      "load_average_1m_before": 2.56,
+      "load_average_1m_after": 12.42,
       "result_digests": {
         "bulk": {
           "variant_index": "591c17c3ef6fde85f546d689075bc0f04ac2bcc76ff48ad8156e627a6fffd701",
@@ -850,8 +852,12 @@
       "max_workers": null
     }
   },
+  "harness_file": {
+    "harness_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/benchmark_store_comparison.py",
+    "harness_sha256": "8e3da43ed17f7fe2e24d8304f60dcbaf31029e2368f2d6dafffae2624febea92"
+  },
   "commit": "745796c",
-  "measured_at": "2026-10-08T04:16:50.611478+00:00",
+  "measured_at": "2026-10-08T08:56:39.651579+00:00",
   "opengwasdb_path": "/tmp/epic240/244/base-src/opengwasdb",
   "opengwasdb_fingerprint": "9fe19ecba575bdc1e2419cfcdff9fe69ca6e293f21279bf63ec8d10506450ac4"
 }
