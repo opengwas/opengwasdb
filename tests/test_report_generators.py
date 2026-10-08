@@ -97,3 +97,20 @@ def test_extras_row_keeps_each_repetitions_wait_in_order(monkeypatch):
     ungated = [{k: v for k, v in record.items() if k != "gate_wait_s"} for record in records]
     with pytest.raises(SystemExit, match="predates the per-repetition load gate"):
         module._row(ungated)
+
+
+def test_epic240_summary_matches_the_artifacts(monkeypatch):
+    """The epic summary is generated; a stale copy must fail, not mislead (#250)."""
+    monkeypatch.chdir(ROOT)
+    module = _load("build_epic240_summary", "scripts/build_epic240_summary.py")
+    assert module.SUMMARY.read_text() == module.build()
+
+
+def test_epic240_summary_never_prints_a_number_for_a_limit_hit(monkeypatch):
+    monkeypatch.chdir(ROOT)
+    module = _load("build_epic240_summary", "scripts/build_epic240_summary.py")
+    hit = {"ms": None, "mib": None, "reps": 1, "limit": True}
+    measured = {"ms": 2000.0, "mib": 1024.0, "reps": 3, "limit": False}
+    assert module._cell(hit) == "**limit hit**"
+    assert module._ratios(measured, hit) == "—"
+    assert module._cell(measured) == "2.00 s · 1.00 GiB"
