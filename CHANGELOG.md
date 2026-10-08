@@ -227,6 +227,41 @@ the end of this file.
 
 ### Fixed
 
+- **A Ragged association sequence is written one whole shard at a time, and the
+  Dense SE exception tables once each (#249).**
+  `RaggedCSRWriter` flushed its `variant_index`/`z`/`eaf`/`se` planes in regions
+  of
+  `DEFAULT_FLUSH_REGION_CELLS` (4,194,304) cells, but #248's sequence shard is
+  `RAGGED_SEQUENCE_SHARD_ELEMENTS` (50,000,000) cells. A Zarr v3 shard is one
+  file, so every region write was a read-modify-write of the whole shard: about
+  twelve per shard, and 4,194,304 is not a multiple of the 200,000-cell inner
+  chunk either. `sequence_region_step` now rounds the write region **up** to a
+  whole number of shards (never below one), so each shard is written exactly
+  once. On a synthetic 160,000,000-cell component (four 50,000,000-element
+  sequence shards) the measured write amplification (`count_shard_writes`, the
+  real bytes handed to the storage layer) falls from 5.922x to 1.000x, the most
+  writes to any one sequence shard from 13 to 1, and the flush from 92.78 s to
+  81.82 s
+  (`docs/benchmark-output/opengwasdb_ragged_write_amplification_epic240_249.json`).
+  The registered pilots' sequences each fit in one shard, but the pre-#249 step
+  still rewrote OGS-00004's single 27,369,974-cell Overflow shard **7 times**,
+  OGS-00006's two shards **15 writes in total** (12 + 3) and OGS-00011's 62
+  shards at most 13 times each (797 shard writes per array).
+  The cost is the region's working set, measured by the same artifact at
+  **89.5 bytes a cell** over the pre-#249 4,194,304-cell region (0.37 GB) and
+  **79.0 bytes a cell** over the fixed 50,000,000-cell region (**3.95 GB,
+  3.68 GiB**). The 30-bytes-a-cell figure this replaces predated the v3
+  sharding, which encodes the whole shard per write.
+  On the four rebuild pilots the 0.2.0 builds are within noise of the 0.1.0 ones
+  (Dense 9:14 -> 8:27, Hybrid 43:53 -> 43:31, both Ragged within 2 s; peak RSS
+  within 1% on Dense and Hybrid), in
+  `docs/benchmark-output/opengwasdb_build_cost_epic240_249.json`.
+  Extending `require_whole_shard_writes` to every sharded array -- 1-D included,
+  whatever its shard size -- found a second partial-shard writer: the Dense SE
+  rewrite (`encoding/se.py`) filled `se_exception_index`/`_value` one row band at
+  a time, which for those single-shard tables is one read-modify-write of the
+  whole table per band (about 99 on OGS-00008's 9.85 M rows). It now buffers the
+  bands' runs and writes each table once. Nothing is exempt from the guard.
 - **A Reference-Completed Dense release records the chunk shape its arrays
   actually have (#245).** Completion writes the completed grid at
   `DEFAULT_CHUNK_SHAPE` clipped to the array dimensions, not at the source's

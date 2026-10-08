@@ -10,13 +10,17 @@ whole array, so nothing else in the suite can show it.
 patches every public Zarr method that writes a selection of cells -- sync
 `__setitem__`, the five `set_*_selection` methods (which `oindex`, `vindex` and
 `array.blocks[...]` delegate to), and async `AsyncArray.setitem` -- and refuses
-a write that does not start and end on a shard boundary of a 2-D Dense plane
-(the 1-D arrays whose shard policy is "one shard holds the whole array", like
-the exception tables, are written incrementally by design and are not judged).
-`resize` and attribute writes are not region writes and are not covered.
-Production pays nothing: the hook is entered only by tests or when
-`OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES=1`, which the real-data pilot sets so a
-genuinely multi-shard build proves its writers are aligned.
+a write that does not start and end on a shard boundary, for every sharded
+array whatever its rank or shard size (#249).  A 1-D array whose one shard is
+the whole array (an exception table) is judged too, so a single-shard sequence
+written more than once is caught.  `resize` and attribute writes are not region
+writes and are not covered.  Production pays nothing: the hook is entered only
+by tests or when `OPEN_GWASDB_REQUIRE_WHOLE_SHARD_WRITES=1`, which the real-data
+pilot sets so a genuinely multi-shard build proves its writers are aligned.
+
+`count_shard_writes` is the counting companion: it records the real bytes and
+shard key of every storage write, so a test can assert a shard is written
+**exactly once** rather than only that each write starts and ends on a boundary.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from opengwasdb.store.arrays import (
     ArrayRole,
     PartialShardWriteError,
     _block_selection_to_elements,
+    count_shard_writes,
     create_array,
     open_group,
     open_group_for_write,
@@ -485,3 +490,170 @@ def test_the_se_rewrite_row_block_falls_back_to_the_inner_chunk_without_a_shard(
     )
     assert array.shards is None
     assert _row_block_of(array) == 7
+
+
+# ── 1-D Ragged sequences (#249) ──────────────────────────────────────────────
+
+
+def test_the_guard_judges_a_one_dimensional_sequence(tmp_path: Path) -> None:
+    """A 1-D Ragged sequence is judged on the same whole-shard rule (#249).
+
+    Before #249 the guard returned early for any array that was not 2-D, so a
+    writer could rewrite a 50,000,000-element sequence shard once per region
+    with nothing objecting.  The whole shard (including the short final one) is
+    aligned; a selection inside a shard raises.
+    """
+    root = open_group_for_write(tmp_path / "data.zarr", "w", zarr_format=3)
+    array = create_array(
+        root,
+        "z",
+        ArrayRole.ASSOCIATION_SEQUENCE,
+        shape=(9,),
+        dtype="int16",
+        compressor=sharded_compressor(),
+        inner_chunk=(3,),
+        shards=(6,),
+    )
+    assert tuple(int(size) for size in array.shards) == (6,)
+    with require_whole_shard_writes():
+        array[0:6] = np.arange(6, dtype="int16")  # the whole first shard
+        array[6:9] = np.arange(3, dtype="int16")  # the whole short final shard
+    assert list(np.asarray(array[:])) == list(range(6)) + [0, 1, 2]
+    with require_whole_shard_writes(), pytest.raises(PartialShardWriteError):
+        array[0:3] = np.zeros(3, dtype="int16")  # inside the first shard
+    with require_whole_shard_writes(), pytest.raises(PartialShardWriteError):
+        array[3:6] = np.zeros(3, dtype="int16")  # the second half of the first shard
+    with require_whole_shard_writes(), pytest.raises(PartialShardWriteError):
+        array[1:9] = np.zeros(8, dtype="int16")  # starts off the shard boundary
+
+
+def test_a_single_shard_one_dimensional_table_is_judged_too(tmp_path: Path) -> None:
+    """A 1-D array whose one shard is the whole array is judged, not exempt (#249).
+
+    `se_exception_index` has the "one shard holds the whole array" policy.  The
+    Dense SE rewrite used to fill it band by band -- one read-modify-write of the
+    whole table per band, about 99 on OGS-00008 -- so the guard must refuse that
+    old write.  Keying the exemption on shape (1-D and one shard) also exempted
+    every single-shard Ragged sequence; judging them means a single-shard
+    sequence written more than once is caught too.
+    """
+    root = open_group_for_write(tmp_path / "data.zarr", "w", zarr_format=3)
+    table = create_array(
+        root,
+        "se_exception_index",
+        ArrayRole.EXCEPTION_TABLE,
+        shape=(9,),
+        dtype="int64",
+        compressor=sharded_compressor(),
+    )
+    assert int(table.shards[0]) >= 9  # one shard holds the whole table
+    with require_whole_shard_writes():
+        table[:] = np.arange(9, dtype="int64")  # the one whole shard
+    with require_whole_shard_writes(), pytest.raises(PartialShardWriteError):
+        table[0:4] = np.arange(4, dtype="int64")  # the pre-#249 per-band write
+    with require_whole_shard_writes(), pytest.raises(PartialShardWriteError):
+        table[4:9] = np.arange(5, dtype="int64")
+    assert list(np.asarray(table[:])) == list(range(9))
+
+
+def _ragged_arrays(store: Path) -> dict[str, np.ndarray]:
+    """Every array of a flushed component's `ragged` group, by name."""
+    root = zarr.open_group(str(Path(store) / "data.zarr" / "ragged"), mode="r")
+    return {name: np.asarray(root[name][:]) for name in root.array_keys()}
+
+
+def test_a_ragged_sequence_shard_is_written_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Ragged flush writes each sequence shard exactly once (#249).
+
+    At the decided 50,000,000-element shard and the 4,194,304-cell region this
+    was about twelve rewrites of every shard; the fixture uses an 800,000-element
+    shard (four inner chunks) so three shards fit in a test.  The writer's cells
+    span all three.  If the region is not shard-aligned the same shard key is
+    written more than once, which is the amplification, not a correctness bug.
+
+    The multi-region flush is also compared array for array with a single-region
+    one, because a region-offset bug (reading z from `[0:tail-head]` instead of
+    `[head:tail]`) changes values while leaving the write counts alone.
+    """
+    import opengwasdb.store.arrays as store_arrays
+    from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
+    from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+
+    monkeypatch.setattr(
+        store_arrays,
+        "RAGGED_SEQUENCE_SHARD_ELEMENTS",
+        4 * store_arrays.ASSOCIATION_SEQUENCE_CHUNK,
+    )
+    encoding = StoreEncoding.decide(EncodingMeasurements(n_analyses=3))
+    writer = RaggedCSRWriter(50_000)
+    rng = np.random.default_rng(0)
+    for _ in range(3):
+        writer.add_analysis(
+            np.sort(rng.integers(0, 50_000, size=700_000)).astype(np.int32),
+            rng.standard_normal(700_000).astype(np.float32),
+            np.abs(rng.standard_normal(700_000)).astype(np.float32),
+            rng.random(700_000).astype(np.float32),
+        )
+    expected_shards = 3  # 2,100,000 cells / 800,000
+    assert len(list(writer._flat_regions(writer.n_associations, 200_000))) > 1
+    with count_shard_writes() as recorder:
+        writer.flush(tmp_path, encoding, region_cells=200_000)
+    written = recorder.chunk_writes()
+    sequences = {path: keys for path, keys in written.items() if path in ("z", "se")}
+    assert sequences, written  # the fixture actually wrote sequences
+    for path, keys in sequences.items():
+        assert len(keys) == expected_shards, (path, keys)
+        assert set(keys.values()) == {1}, (path, keys)
+    assert len(written["variant_index"]) == expected_shards
+    assert set(written["variant_index"].values()) == {1}
+
+    writer.flush(tmp_path / "single", encoding, region_cells=1 << 30)
+    multi, single = _ragged_arrays(tmp_path), _ragged_arrays(tmp_path / "single")
+    assert sorted(multi) == sorted(single), (sorted(multi), sorted(single))
+    for name in single:
+        np.testing.assert_array_equal(multi[name], single[name], err_msg=name)
+
+
+def test_the_dense_se_exception_tables_are_written_once(tmp_path: Path) -> None:
+    """The Dense SE rewrite writes each exception table in one whole-array write (#249).
+
+    `se_exception_index`/`_value` are single-shard tables. Before this fix the
+    rewrite wrote each band's exception run into them, one read-modify-write of
+    the whole table per band (about 99 on OGS-00008's 9.85 M rows). Three bands,
+    each with an exact exception, must now produce one write per table.
+    """
+    from opengwasdb.encoding.plan import EafEncoding, SeEncoding, StoreEncoding, ZEncoding
+    from opengwasdb.encoding.se import rewrite_dense_se
+
+    n_rows = 250_000
+    plan = StoreEncoding(
+        z=ZEncoding("float16"), se=SeEncoding("int8_residual", 0.5), eaf=EafEncoding("float32")
+    )
+    root = open_group_for_write(tmp_path / "data.zarr", "w", zarr_format=3)
+    eaf = np.linspace(0.1, 0.9, n_rows, dtype="float32")[:, None]
+    coefficients = np.array([[np.log(0.03), -0.5]], dtype="float32")
+    predictor = np.log(2 * eaf[:, 0] * (1 - eaf[:, 0]))
+    se = np.exp(coefficients[0, 0] + coefficients[0, 1] * predictor).astype("float32")[:, None]
+    # One exact exception (0.0) in each of the three 100,000-row shard bands.
+    se[[5, 150_000, 240_000], 0] = 0.0
+    for name, values in (("eaf", eaf), ("se", se), ("z", np.ones_like(se, dtype="float16"))):
+        array = create_array(
+            root,
+            name,
+            ArrayRole.DENSE_STATISTIC_PLANE,
+            shape=(n_rows, 1),
+            dtype=str(values.dtype),
+            compressor=sharded_compressor(),
+        )
+        array[:] = values
+    # Assert the fixture is three shard-aligned bands before counting anything.
+    assert tuple(int(size) for size in root["se"].shards) == (100_000, 1)
+    with count_shard_writes() as recorder:
+        rewrite_dense_se(root, plan, coefficients)
+    written = recorder.chunk_writes()
+    for name in ("se_exception_index", "se_exception_value"):
+        assert written.get(name), (name, written)
+        assert set(written[name].values()) == {1}, (name, written[name])
+    assert list(np.asarray(root["se_exception_index"][:])) == [5, 150_000, 240_000]

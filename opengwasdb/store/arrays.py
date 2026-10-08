@@ -197,6 +197,7 @@ __all__ = [
     "component_variant_chunk",
     "compressor",
     "compressor_of",
+    "count_shard_writes",
     "create_array",
     "create_group",
     "inner_chunk_of",
@@ -958,17 +959,24 @@ def _normalise_selection(shape: tuple[int, ...], selection: Any) -> tuple[Any, .
 
 
 def require_whole_shard_write(array: Any, selection: Any) -> None:
-    """Fail loudly unless `selection` covers whole shards of a Dense grid.
+    """Fail loudly unless `selection` covers whole shards of a sharded array.
 
-    Applied to the two-dimensional sharded arrays -- the Dense statistic planes,
-    the imputed mask and the SE coefficient table -- where a partial write is a
-    read-modify-write of a shard that can be hundreds of megabytes.  The 1-D
-    arrays whose shard policy is "one shard holds the whole array" (the
-    exception tables) and the element-capped Ragged/Overflow arrays are written
-    incrementally by design and are not judged here.
+    Every sharded array is judged, whatever its rank or shard size: the Dense
+    statistic planes, the imputed mask and the SE coefficient table; the 1-D
+    Ragged association sequences (`z`, `se`, `variant_index`, `eaf`, `imputed`),
+    whose shard is 50,000,000 elements; and a 1-D array whose one shard is the
+    whole array, such as an exception table.  A write that covers part of a
+    shard is a read-modify-write of the whole shard, so the writer pays to
+    decode and re-encode everything the shard already held (#249); on OGS-00011's
+    overflow sequences that is about twelve rewrites of every
+    50,000,000-element shard, and on a single-shard table it is one rewrite per
+    writing band.  `encoding/se.py` buffers its SE exception tables and writes
+    each once for exactly this reason.
+
+    Unsharded arrays are not judged -- the rule is about shards.
     """
     shards = getattr(array, "shards", None)
-    if shards is None or len(array.shape) != 2:
+    if shards is None:
         return
     axes = _normalise_selection(tuple(int(size) for size in array.shape), selection)
     if not axes:
@@ -1020,6 +1028,86 @@ def write_shard_cells(array: Any, rows: Any, cols: Any, values: Any) -> None:
         band = np.asarray(array[r0:r1, c0:c1])
         band[shard_row_idx - r0, shard_col_idx - c0] = values[mask]
         array[r0:r1, c0:c1] = band
+
+
+def array_key_of_store_key(key: str) -> str | None:
+    """The array path a store key belongs to, or `None` for metadata/group keys.
+
+    A Zarr v3 sharded array stores one file per shard at ``<array>/c/<coords>``
+    (coordinates joined by ``/``), and its metadata at ``<array>/zarr.json``.  A
+    key with no ``/c/`` is metadata, a group, or a v2-style chunk, and does not
+    identify an array this recorder attributes bytes to.
+    """
+    marker = key.find("/c/")
+    return None if marker < 0 else key[:marker]
+
+
+class ShardWriteRecorder:
+    """Every byte the Store hands to its storage layer, attributable to an array.
+
+    Installed by `count_shard_writes`.  It records one entry per storage write so
+    a build's write amplification -- bytes written divided by final bytes -- can
+    be computed per array, which is what tells a whole-shard writer from one that
+    rewrites every shard once per region (#249).  The bytes are the real
+    (compressed, as the codec pipeline wrote them) bytes, not the selection's
+    logical size.
+    """
+
+    def __init__(self) -> None:
+        self.writes: list[tuple[str, int]] = []
+
+    def record(self, key: str, value: Any) -> None:
+        to_bytes = getattr(value, "to_bytes", None)
+        self.writes.append((key, len(to_bytes() if callable(to_bytes) else bytes(value))))
+
+    def chunk_writes(self) -> dict[str, dict[str, int]]:
+        """`array path -> {shard key: times written}`, metadata excluded."""
+        counted: dict[str, dict[str, int]] = {}
+        for key, _size in self.writes:
+            path = array_key_of_store_key(key)
+            if path is None:
+                continue
+            counted.setdefault(path, {})
+            counted[path][key] = counted[path].get(key, 0) + 1
+        return counted
+
+    def bytes_written_by_array(self) -> dict[str, int]:
+        """Real bytes written per array path, over every chunk of every shard."""
+        totals: dict[str, int] = {}
+        for key, size in self.writes:
+            path = array_key_of_store_key(key)
+            if path is not None:
+                totals[path] = totals.get(path, 0) + size
+        return totals
+
+
+#: The active `ShardWriteRecorder`, or `None` when nothing is counting.
+_WRITE_RECORDER: ShardWriteRecorder | None = None
+
+
+@contextmanager
+def count_shard_writes() -> Iterator[ShardWriteRecorder]:
+    """Record every Store write's bytes and shard key while the block runs.
+
+    A benchmark/test hook, the counting companion of `require_whole_shard_writes`:
+    the guard answers "is this write whole-shard?" and the recorder answers "how
+    many bytes did it cost?", which is what #249's write-amplification table
+    needs.  It is off in production (a `None` check per storage write).
+    """
+    global _WRITE_RECORDER
+    if _WRITE_RECORDER is not None:
+        raise RuntimeError("a shard-write recorder is already installed")
+    recorder = ShardWriteRecorder()
+    _WRITE_RECORDER = recorder
+    try:
+        yield recorder
+    finally:
+        _WRITE_RECORDER = None
+
+
+def _count_store_write(key: str, value: Any) -> None:
+    if _WRITE_RECORDER is not None:
+        _WRITE_RECORDER.record(key, value)
 
 
 def _block_selection_to_elements(array: Any, selection: Any) -> tuple[Any, ...]:
@@ -1723,14 +1811,17 @@ class _GuardedLocalStore(LocalStore):
 
     async def set(self, key: str, value: Buffer) -> None:
         self._check_write(key)
+        _count_store_write(key, value)
         await super().set(key, value)
 
     async def set_if_not_exists(self, key: str, value: Buffer) -> None:
         self._check_write(key)
+        _count_store_write(key, value)
         await super().set_if_not_exists(key, value)
 
     def set_sync(self, key: str, value: Buffer) -> None:
         self._check_write(key)
+        _count_store_write(key, value)
         super().set_sync(key, value)
 
     async def delete(self, key: str) -> None:
