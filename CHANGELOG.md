@@ -62,6 +62,42 @@ the end of this file.
 
 ### Fixed
 
+- **A single-pass build from a plain-ALID `--variant-reference` no longer
+  writes a Store with no rsids (#255).** `--variant-reference` bypassed Pass 1,
+  which was the two-pass build's only source of `rsid` values, so a plain ALID
+  list — and a Store Variant Table whose `rsid` column is `.`, like OGS-00004's
+  EUR panel — produced a variant table with a blank `rsid` on every row, which
+  `validate` passed. A reference that names no rsids now runs Pass 1's own
+  harvest for its candidates and their `(rank, site)` order, keys them with
+  **exactly the normalisation the build's own association routing uses** (the
+  Hybrid routing upper-cases alleles, the Dense routing keeps the source's
+  spelling), and rekeys them **once** over **one combined site → ALID routing**
+  — the reference's own source keys plus a Hybrid build's fold for off-reference
+  rows — so a name always lands on the ALID its association lands on and the
+  globally first candidate wins whichever partition routed it; where Pass 1's
+  own liftover would have chosen a different ALID the reference wins and the
+  disagreement is logged. A reference that carries rsids (a full artifact or a
+  curated Store Variant Table) is used as-is on that path, which predates this
+  contract and is out of scope: a variant it does not name is stored with no
+  rsid even when a source names it, and the build now warns with counts (the
+  reference's own unnamed rows and the fold-discovered Overflow rows
+  separately); an artifact extracted from the same sources names every one of
+  them. The names are identical to the two-pass build's for every variant both
+  axes carry — including variants named only by a row with an unusable effect
+  or dropped by Hybrid admission; the axes themselves still differ in the one
+  documented way (a named off-reference source variant with no usable
+  association is absent rather than misnamed, spec §4). Two checks guard a
+  build that harvests, before publication: the resolved ALID → rsid map is
+  compared exactly with an independent oracle that walks the raw candidates
+  through the build's own key function over the same final combined routing (so
+  a wrong value, a missing entry, a key-normalisation collapse that keeps the
+  wrong name, or an extra entry fails), and the written variant tables (root and
+  Dense Component) are read back row for row against that map. On the one-Analysis OGS-00005 fixture the plain-ALID build
+  writes the same rsids as `--reference-panel`; on the #247 Hybrid pilot the two
+  builds' variant tables, arrays and top-hit tiers are identical. The Ragged and
+  completion builders already read their identifiers from the same rows they
+  store and are unchanged.
+
 - **The resolver record's `opengwasdb_git_hash` is the `opengwasdb` commit, not
   the enclosing repository's (stores #176).** `_get_git_hash` ran
   `git rev-parse HEAD` from inside the package, so when `opengwasdb` was

@@ -115,7 +115,15 @@ _VARIANT_REFERENCE_HELP = (
     "Build against a precomputed variant axis instead of running Pass 1: a "
     "*.variant-ref.tsv.gz artifact, a plain ALID list, or a store variants.tsv.gz. "
     "Source variants absent from the reference are dropped; reference variants "
-    "no study observes are stored as NaN."
+    "no study observes are stored as NaN. A reference that names no rsids runs "
+    "Pass 1's rsid harvest and rekeys it through this build's routing, so those "
+    "names are identical to the two-pass build's for every variant both axes "
+    "carry, and the build fails rather than publish an rsid the sources did not "
+    "name for its variant. A reference that already names rsids is used as given: "
+    "a variant it does not name is stored with no rsid even when a source names "
+    "it, and the build warns with counts. The axes are not identical: a named "
+    "off-reference source variant with no usable association is absent here and "
+    "kept by a two-pass reference-panel build."
 )
 
 
@@ -463,7 +471,8 @@ def build_dense_vcf_command(
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
     VCF files are hg19 by default; liftover to hg38 is applied inline.
     --source-reader-capability and --source-assembly supply per-release defaults (#174).
-    --variant-reference supplies a precomputed axis, bypassing Pass 1 (#185).
+    --variant-reference supplies a precomputed axis, bypassing Pass 1 (#185);
+    a reference that names no rsids runs Pass 1's harvest for them (#255).
     """
     result = build_dense_from_vcf_manifest(
         manifest_path, output_path, store_id=store_id, release_id=release_id,
@@ -516,7 +525,9 @@ def build_hybrid_command(
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
     On-panel variants in --reference-panel fill the Dense Component; off-panel variants
     go to Ragged Overflow. --variant-reference supplies a precomputed axis and source
-    map, bypassing Pass 1 (#186). --source-reader-capability and --source-assembly
+    map, bypassing Pass 1 (#186); a reference that names no rsids runs Pass 1's
+    harvest, keeping the names the two-pass build gives every variant both axes
+    carry (#255). --source-reader-capability and --source-assembly
     supply per-release defaults (#174). --checkpoint keeps a resumable record of
     each phase (#227), and --resume continues the build for OUTPUT_PATH from one.
     """

@@ -35,7 +35,10 @@ import pytest
 from cli_output import normalize_cli_output
 from test_hybrid_build import (
     _assert_hybrid_stores_match,
+    _hybrid_axis_rsids,
     _hybrid_manifest,
+    _panel_file,
+    _rsid_hybrid_manifest,
     _write_reference_artifact,
 )
 from test_info_score_hybrid_build import (
@@ -108,6 +111,21 @@ def _crashing_fit(monkeypatch: pytest.MonkeyPatch) -> None:
         raise RuntimeError("simulated crash in the joint SE fit")
 
     monkeypatch.setattr(hybrid_build, "_fit_joint_se", _explode)
+
+
+def _crash_second_fold_column(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the second fold column raise, leaving the axis recorded and the
+    fold incomplete -- the window a resume must re-enter correctly."""
+    calls = {"n": 0}
+    real_fold_column = hybrid_build._fold_column
+
+    def _crash(col: int) -> int:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("simulated crash mid-fold")
+        return real_fold_column(col)
+
+    monkeypatch.setattr(hybrid_build, "_fold_column", _crash)
 
 
 def _failed_checkpointed_build(
@@ -308,16 +326,7 @@ class TestCheckpointedBuild:
         _build(manifest, reference, plain)
 
         store = tmp_path / "folded.opengwasdb"
-        calls = {"n": 0}
-        real_fold_column = hybrid_build._fold_column
-
-        def _crash_second_column(col: int) -> int:
-            calls["n"] += 1
-            if calls["n"] == 2:
-                raise RuntimeError("simulated crash mid-fold")
-            return real_fold_column(col)
-
-        monkeypatch.setattr(hybrid_build, "_fold_column", _crash_second_column)
+        _crash_second_fold_column(monkeypatch)
         with pytest.raises(RuntimeError, match="simulated crash mid-fold"):
             _build(manifest, reference, store, checkpoint=True, n_workers=1)
         monkeypatch.undo()
@@ -333,6 +342,49 @@ class TestCheckpointedBuild:
         monkeypatch.undo()
 
         assert validate_store(store).ok
+        _assert_hybrid_stores_match(plain, store)
+        _assert_manifests_match(plain, store)
+
+    def test_mid_fold_crash_resumes_with_the_harvested_rsids(self, tmp_path, monkeypatch):
+        """Issue #255 round 1: the harvested rsids must survive the window after
+        the axis is recorded and before the fold completes. The reference here
+        is a plain ALID list, so Pass 1's harvest is the only source of names;
+        a resume that re-derived the axis from the reference alone (or reloaded
+        a reference-only map) would publish a store with a blank rsid column and
+        pass the old guard. The design keeps no rsid side file to inventory --
+        the map is the axis's own ``provenance_rsid.tsv`` record -- so there is
+        nothing for a resume to find missing.
+        """
+        manifest = _rsid_hybrid_manifest(tmp_path)
+        panel = _panel_file(tmp_path)  # a plain ALID list: no rsids in it
+        plain = tmp_path / "plain.opengwasdb"
+        _build(manifest, panel, plain)
+        # Asserted meaningful first: the reference names nothing, so every
+        # rsid in the uninterrupted store came from the harvest.
+        uninterrupted = _hybrid_axis_rsids(plain)
+        assert uninterrupted == {
+            "1:100000:A:G": "rs1",
+            "1:1064620:C:T": "rs2",
+            "1:1564620:A:G": "rs3",
+            "1:2000000:C:T": "rs4",
+        }
+
+        store = tmp_path / "folded.opengwasdb"
+        _crash_second_fold_column(monkeypatch)
+        with pytest.raises(RuntimeError, match="simulated crash mid-fold"):
+            _build(manifest, panel, store, checkpoint=True, n_workers=1)
+        monkeypatch.undo()
+
+        checkpoint_dir = checkpoint_dir_for(store)
+        assert (checkpoint_dir / "axis.npz").exists()
+        assert (checkpoint_dir / "provenance_rsid.tsv").exists()
+        plates = read_json(checkpoint_dir / "plates.json")["sizes"]
+        assert not [name for name in plates if ".rsid" in name]
+
+        resume_hybrid_build(checkpoint_dir)
+
+        assert validate_store(store).ok
+        assert _hybrid_axis_rsids(store) == uninterrupted
         _assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 

@@ -59,8 +59,13 @@ log = logging.getLogger(__name__)
 __all__ = [
     "VariantReference",
     "VariantReferenceExtraction",
+    "expected_rsids_by_routed_key",
+    "expected_rsids_by_routing",
     "extract_variant_reference",
     "read_variant_reference",
+    "require_rsids_match_expected",
+    "require_written_rsids_match",
+    "warn_reference_left_rows_blank",
     "write_variant_reference",
 ]
 
@@ -401,6 +406,164 @@ def read_variant_reference(path: str | Path) -> VariantReference:
         f"variant reference {reference_path} has neither an 'alid' nor a "
         "'source_keys' column"
     )
+
+
+#: A candidate or routing key: the raw source tuple, or the string form a
+#: routing index keys it by (`_source_site_key`/`_routed_site_key`).
+_SiteKeyT = TypeVar("_SiteKeyT")
+
+
+def expected_rsids_by_routed_key(
+    rsid_by_site: Mapping[_SiteKeyT, str],
+    routing: Mapping[str, str],
+    key: Callable[[_SiteKeyT], str],
+) -> dict[str, str]:
+    """The oracle for a *raw* candidate map routed through a build's key function.
+
+    It walks the raw candidates in their own `(rank, site)` order and applies
+    ``key`` itself to each before looking the site up, rather than reading a map
+    that was already keyed: a preparation that collapses two raw sites onto one
+    key and keeps the wrong name therefore disagrees here, which an oracle
+    sharing that preparation by construction could not see (issue #255 round 4).
+
+    Takes the first non-empty rsid per routed ALID, exactly as
+    `expected_rsids_by_routing` does for an already-keyed map.
+    """
+    expected: dict[str, str] = {}
+    for site, rsid in rsid_by_site.items():
+        alid = routing.get(key(site))
+        if alid and rsid and alid not in expected:
+            expected[alid] = rsid
+    return expected
+
+
+def expected_rsids_by_routing(
+    rsid_by_site: Mapping[_SiteKeyT, str], routing: Mapping[_SiteKeyT, str]
+) -> dict[str, str]:
+    """An independent oracle for the ALID -> rsid map a harvest should produce.
+
+    Deliberately simple and separate from `_rekey_rsids_to_alids` and from how
+    the routing was built: it walks the candidates in the mapping's own order
+    (Pass 1's `(rank, site)`, which a dict preserves), takes the first non-empty
+    rsid per *routed* ALID, and returns the exact map. Comparing the resolved
+    map against this is what makes the issue #255 check value-sensitive -- a run
+    that keeps every key but attaches the wrong name to one of them disagrees
+    here, which a set-membership check cannot see.
+    """
+    expected: dict[str, str] = {}
+    for site, rsid in rsid_by_site.items():
+        alid = routing.get(site)
+        if alid and rsid and alid not in expected:
+            expected[alid] = rsid
+    return expected
+
+
+def warn_reference_left_rows_blank(reference: VariantReference) -> None:
+    """Warn that a reference naming some rsids leaves its other rows blank.
+
+    `--variant-reference` accepts a reference that already names its variants,
+    and both builders then use it as-is: a variant it does not name is stored
+    with no rsid even when a source names it, and no source read is spent to
+    find out. That behaviour predates this contract and is out of issue #255's
+    scope, so the build says so with counts rather than leaving it to be
+    discovered (round-4/5 scope ruling). Shared by both builders so the help,
+    the spec and this warning cannot disagree.
+    """
+    unnamed = len(reference.alids) - len(reference.rsid_by_alid)
+    if not unnamed:
+        return
+    log.warning(
+        "variant reference names %d of its %d ALIDs and leaves %d blank; this build "
+        "uses the reference as given and does not harvest the sources, so a variant "
+        "only a source names is stored with no rsid (issue #255 finding 3)",
+        len(reference.rsid_by_alid),
+        len(reference.alids),
+        unnamed,
+    )
+
+
+def require_rsids_match_expected(
+    resolved_by_alid: Mapping[str, str], expected_by_alid: Mapping[str, str]
+) -> None:
+    """Refuse a resolved rsid map that differs from the routed expectation.
+
+    Value-sensitive, unlike a set comparison: an ALID carrying the wrong name
+    fails, as does a missing or an extra one. The caller builds
+    ``expected_by_alid`` with `expected_rsids_by_routing` from the harvest's
+    candidates and the routing the build actually uses, so a rekey or merge that
+    misplaces a name fails before publication.
+
+    It cannot catch a *source read* that omitted a variant: a table written from
+    the same omitted candidates agrees with this expectation, and so does
+    `require_written_rsids_match`. That omission is a reader-level failure and
+    only an independent second read could see it.
+
+    A source that names nothing builds an empty expectation and passes: "the
+    sources name none" and "every named variant is present" stay different
+    answers, but only the second is required.
+    """
+    wrong = sorted(
+        alid
+        for alid in sorted(set(resolved_by_alid) | set(expected_by_alid))
+        if resolved_by_alid.get(alid) != expected_by_alid.get(alid)
+    )
+    if not wrong:
+        return
+    alid = wrong[0]
+    raise ValueError(
+        f"the resolved rsid map disagrees with the routed harvest for {len(wrong)} "
+        f"variant(s) (e.g. {alid!r}: resolved {resolved_by_alid.get(alid)!r}, expected "
+        f"{expected_by_alid.get(alid)!r}); refusing to publish identifiers that are not "
+        "the ones the sources named for the variants they route to"
+    )
+
+
+def require_written_rsids_match(
+    store_path: str | Path,
+    alids: Sequence[str],
+    rsid_by_alid: Mapping[str, str],
+) -> None:
+    """Refuse to publish a Store Variant Table that disagrees with its rsid map.
+
+    The second half of the issue #255 rule: after the axis is resolved and the
+    table written, the table is read back and compared row for row against the
+    resolved map, so a partial loss, an off-reference row dropped from the
+    write, or a table written from a stale map fails on the bytes a query will
+    read rather than being trusted from the map that produced them.
+
+    It complements, and does not replace, `require_rsids_match_expected`: this
+    compares the bytes with the map, that compares the map with the routed
+    candidates. A source read that omitted a variant is invisible to both, since
+    the table is written from the same omitted map.
+
+    A source that names nothing writes `.` (read back as ``""``) and passes: the
+    expected map is built with ``""`` for an absent name, so "the sources name
+    none" and "this row has no name" stay the same answer.
+    """
+    from opengwasdb.variants.axis import iter_variant_records, variant_table_path
+
+    expected = {alid: rsid_by_alid.get(alid, "") for alid in alids}
+    seen = 0
+    for record in iter_variant_records(variant_table_path(store_path)):
+        seen += 1
+        wanted = expected.get(record.alid)
+        written = record.rsid or ""
+        if wanted is None:
+            raise ValueError(
+                f"{store_path} variant table holds {record.alid!r}, which the resolved "
+                "axis does not -- the written table and the rsid map disagree"
+            )
+        if written != wanted:
+            raise ValueError(
+                f"{store_path} variant table row {record.alid!r} carries rsid {written!r} "
+                f"but the resolved map says {wanted!r}; refusing to publish a variant "
+                "table that disagrees with the identifiers the build resolved"
+            )
+    if seen != len(alids):
+        raise ValueError(
+            f"{store_path} variant table has {seen} row(s) but the resolved axis has "
+            f"{len(alids)}; refusing to publish a variant table that lost rows"
+        )
 
 
 def write_variant_reference(

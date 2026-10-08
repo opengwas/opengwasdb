@@ -31,7 +31,7 @@ from concurrent.futures import as_completed
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -62,15 +62,21 @@ from opengwasdb.layouts.dense.build_vcf import (
     EafSpillSurvey,
     _apply_eaf_scope,
     _apply_se_divisor,
+    _candidates_by_routing_key,
     _create_dense_zarr,
     _encode_variant_keys,
     _fork_pool,
+    _harvest_manifest_variants,
     _lift_manifest_variants,
     _log_progress,
+    _log_routing_disagreements,
     _manifest_row_to_analysis,
     _ManifestRow,
     _pass2_worker_tasks,
     _read_manifest,
+    _rekey_and_verify,
+    _rekey_rsids_to_alids,
+    _routing_lookup,
     _sorted_alids,
     _write_dense_bands,
     _write_index,
@@ -146,6 +152,7 @@ from opengwasdb.layouts.hybrid.layout import (
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
     check_hash,
+    encode_key,
     encode_keys,
     is_hashed,
     placed_hashed_values,
@@ -172,7 +179,15 @@ from opengwasdb.readers.interface import ImputationScoreStatus
 from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
-from opengwasdb.variants.reference import VariantReference, read_variant_reference
+from opengwasdb.variants.reference import (
+    SourceKey,
+    read_variant_reference,
+    require_written_rsids_match,
+    warn_reference_left_rows_blank,
+)
+
+if TYPE_CHECKING:
+    from opengwasdb.variants.reference import VariantReference
 
 log = logging.getLogger(__name__)
 
@@ -257,6 +272,20 @@ _pass2_info_policies: Mapping[int, InfoScorePolicy] | None = None
 _pass2_maf_policies: Mapping[int, MafPolicy] | None = None
 
 
+def _routed_site_key(site: SourceKey) -> str:
+    """A source coordinate in the exact string form the Hybrid routing keys it by.
+
+    `_build_routing_index` writes this key, `_match_hybrid_batch` queries it,
+    and Pass 2 encodes an off-reference key the same way, so a harvested
+    candidate looked up with this function is looked up exactly as its
+    association is routed (issue #255). SourceReaders retain the source's allele
+    spelling while ALIDs are upper-case, and case is not an orientation change:
+    upper-case the alleles, keep their order.
+    """
+    chrom, pos, ref, alt = site
+    return f"{chrom}:{pos}:{ref.upper()}:{alt.upper()}"
+
+
 def _build_routing_index(
     source_lookup: dict[tuple[str, int, str, str], str],
     dense_row: dict[str, int],
@@ -269,13 +298,10 @@ def _build_routing_index(
     (dense row when on-panel, shared variant_index when off-panel), and whether
     it is on-panel. Workers binary-search this once per association.
     """
-    chroms: list[str] = []
-    poss: list[int] = []
-    refs: list[str] = []
-    alts: list[str] = []
+    keys_list: list[bytes] = []
     targets: list[int] = []
     ispanel: list[bool] = []
-    for (chrom, pos, ref, alt), alid in source_lookup.items():
+    for site, alid in source_lookup.items():
         row = dense_row.get(alid)
         if row is not None:
             targets.append(row)
@@ -286,19 +312,9 @@ def _build_routing_index(
                 continue
             targets.append(sidx)
             ispanel.append(False)
-        chroms.append(chrom)
-        poss.append(pos)
-        # SourceReaders retain the source's allele spelling, while resolver
-        # ALIDs and identity reference keys use upper-case alleles. Case is not
-        # an effect-orientation change: keep ref/alt order intact.
-        refs.append(ref.upper())
-        alts.append(alt.upper())
-    keys_list = [
-        f"{chrom}:{pos}:{ref}:{alt}".encode()
-        for chrom, pos, ref, alt in zip(chroms, poss, refs, alts, strict=True)
-    ]
+        keys_list.append(_routed_site_key(site).encode())
     keys = np.array(keys_list, dtype=object)
-    del keys_list, chroms, poss, refs, alts
+    del keys_list
     targets_arr = np.array(targets, dtype=np.int64)
     ispanel_arr = np.array(ispanel, dtype=bool)
     order = np.argsort(keys, kind="stable")
@@ -366,7 +382,7 @@ def _match_hybrid_batch(
     if len(keys_sorted) == 0:
         keys = np.array(
             [
-                f"{c}:{p}:{r.upper()}:{a.upper()}"
+                _routed_site_key((c, p, r, a))
                 for c, p, r, a in zip(chroms, poss, refs, alts, strict=True)
             ],
             dtype=object,
@@ -384,7 +400,7 @@ def _match_hybrid_batch(
     unmatched = ~matched
     keys = np.array(
         [
-            f"{chroms[j]}:{poss[j]}:{refs[j].upper()}:{alts[j].upper()}"
+            _routed_site_key((chroms[j], poss[j], refs[j], alts[j]))
             for j in np.flatnonzero(unmatched)
         ],
         dtype=object,
@@ -817,6 +833,13 @@ class _SourceAxis:
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
     rsid_by_alid: dict[str, str]
+    #: The harvest's raw candidates and their on-reference routing, keyed
+    #: exactly as this build's routing keys an association (`_routed_site_key`)
+    #: and empty unless the reference named no rsids and the fold still has
+    #: off-reference variants to route (issue #255).
+    rsid_by_site: dict[SourceKey, str]
+    candidate_routing: dict[str, str]
+    reference_named_rsids: bool
     keys_sorted: np.ndarray
     targets_sorted: np.ndarray
     ispanel_sorted: np.ndarray
@@ -839,6 +862,14 @@ class _PreparedBuild:
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
     rsid_by_alid: dict[str, str]
+    #: The single-pass harvest's raw candidates and their on-reference routing,
+    #: when the reference named no rsids and the fold still has off-reference
+    #: variants to route; empty on every other path (issue #255).
+    #: `reference_named_rsids` says the reference supplied its own names and the
+    #: sources were not read, so the build only warns about what it leaves blank.
+    rsid_by_site: dict[SourceKey, str]
+    candidate_routing: dict[str, str]
+    reference_named_rsids: bool
     dense_to_shared: np.ndarray
     spill_dir: Path
     keys_sorted: np.ndarray
@@ -1096,24 +1127,44 @@ def _axis_source(
     dict[tuple[str, int, str, str], str],
     dict[str, str],
     set[str],
+    dict[SourceKey, str],
+    dict[str, str],
+    bool,
 ]:
     """Open the Dense staging dir and resolve the source-coordinate routing.
 
     With ``--variant-reference`` the reference replaces Pass 1 entirely: its
     ``source_lookup`` is the routing and its ALIDs define the Dense axis. Without
     one, the legacy Pass 1 reads every source once and lifts hg19 rows.
+
+    The last two elements are the harvest's candidates (keyed as the routing
+    keys them) and their on-reference routing, when the reference names no
+    rsids: the fold finishes the routing and the rekey happens once, globally
+    (`_merge_off_reference_rsids`, issue #255). Empty on every other path.
     """
     dense_dir, dense_staged = _open_dense_component(staged)
     if options.variant_reference is not None:
         reference = read_variant_reference(options.variant_reference)
         panel_alids = _resolve_reference_panel(options, reference)
+        candidates, candidate_routing, rsid_by_alid, reference_named = _single_pass_rsids(
+            reference, manifest_rows, options
+        )
         log.info(
             "Single-pass build: variant axis loaded from %s (%d panel variants); "
             "Pass 1 variant discovery bypassed",
             options.variant_reference,
             len(panel_alids),
         )
-        return dense_dir, dense_staged, reference.source_lookup, reference.rsid_by_alid, panel_alids
+        return (
+            dense_dir,
+            dense_staged,
+            reference.source_lookup,
+            rsid_by_alid,
+            panel_alids,
+            candidates,
+            candidate_routing,
+            reference_named,
+        )
     panel_alids = _panel_alids(options)
     source_lookup, rsid_by_alid = _lift_manifest_variants(
         manifest_rows,
@@ -1121,9 +1172,61 @@ def _axis_source(
         liftover_failure_threshold=options.liftover_failure_threshold,
         n_workers=options.n_workers,
     )
-    return dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids
+    return dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids, {}, {}, False
 
 
+def _single_pass_rsids(
+    reference: VariantReference, manifest_rows: list[_ManifestRow], options: _BuildOptions
+) -> tuple[dict[SourceKey, str], dict[str, str], dict[str, str], bool]:
+    """The on-reference rsids the Dense skeleton needs, and what the fold will
+    finish rekeying (issue #255).
+
+    A reference that carries rsids is its own authority and nothing is read.
+    Otherwise the build runs Pass 1's harvest for the candidate rows and their
+    ``(rank, site)`` order and rekeys the on-reference subset once for the Dense
+    skeleton. Returns ``(rsid_by_site, candidate_routing, on_reference_rsids,
+    reference_named_rsids)``. The raw candidates travel on -- not a keyed copy --
+    so the global oracle can walk them through the build's key function itself
+    after the fold; the last flag says the reference already named rsids and the
+    sources were not read, which is out of #255's scope and only warned about.
+    """
+    if reference.rsid_by_alid:
+        # A reference that names rsids is used as-is (out of #255's scope); warn
+        # about the axis rows it leaves blank, split by where they came from
+        # (issue #255 round 4, finding 3).
+        warn_reference_left_rows_blank(reference)
+        return {}, {}, dict(reference.rsid_by_alid), True
+    pass1_lookup, rsid_by_site, _ = _harvest_manifest_variants(
+        manifest_rows,
+        chain_file=options.chain_file,
+        liftover_failure_threshold=options.liftover_failure_threshold,
+        n_workers=options.n_workers,
+        # This build routes by the case-folded key, so the both-assembly drop and
+        # any cross-assembly collision are computed on that key too.
+        site_key=_routed_site_key,
+        refuse_cross_assembly_conflicts=True,
+    )
+    candidates = _candidates_by_routing_key(
+        rsid_by_site, _routed_site_key, label="Hybrid single-pass build"
+    )
+    reference_routing = _routing_lookup(reference.source_lookup, _routed_site_key)
+    candidate_routing = {
+        site: alid for site, alid in reference_routing.items() if site in candidates
+    }
+    _log_routing_disagreements(
+        candidates,
+        reference_routing,
+        pass1_lookup,
+        _routed_site_key,
+        label="Hybrid single-pass build",
+    )
+    on_reference = _rekey_rsids_to_alids(candidate_routing, candidates)
+    log.info(
+        "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "
+        "on-reference rsid(s)",
+        len(on_reference),
+    )
+    return rsid_by_site, candidate_routing, on_reference, False
 def _lift_and_partition(
     staged: StagedRelease,
     manifest_rows: list[_ManifestRow],
@@ -1137,9 +1240,16 @@ def _lift_and_partition(
     Source coordinates the reference does not hold are not known until Pass 2;
     ``_finalise_reference_partition`` adds them to the shared axis there.
     """
-    dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids = _axis_source(
-        staged, manifest_rows, options
-    )
+    (
+        dense_dir,
+        dense_staged,
+        source_lookup,
+        rsid_by_alid,
+        panel_alids,
+        candidates,
+        candidate_routing,
+        reference_named,
+    ) = _axis_source(staged, manifest_rows, options)
     partition = _partition_variants(
         source_lookup,
         panel_alids,
@@ -1162,6 +1272,9 @@ def _lift_and_partition(
         analyses=analyses,
         hg38_to_source=hg38_to_source,
         rsid_by_alid=rsid_by_alid,
+        rsid_by_site=candidates,
+        candidate_routing=candidate_routing,
+        reference_named_rsids=reference_named,
         keys_sorted=keys_sorted,
         targets_sorted=targets_sorted,
         ispanel_sorted=ispanel_sorted,
@@ -1798,7 +1911,9 @@ def _build_shared_key_table(
 
 
 def _finalise_reference_partition(
-    prepared: _PreparedBuild, options: _BuildOptions, state: CheckpointState | None = None
+    prepared: _PreparedBuild,
+    options: _BuildOptions,
+    state: CheckpointState | None = None,
 ) -> _PreparedBuild:
     """Add Pass 2-discovered off-reference variants to the shared axis.
 
@@ -1814,18 +1929,137 @@ def _finalise_reference_partition(
     the fold's first column, and a resumed fold runs under exactly that record
     instead of resolving the keys again: the resolved key set comes from every
     column's spill, and the columns already folded have none left.
+
+    The single-pass harvest's candidate map is finished here too (issue #255):
+    an off-reference variant's ALID is the fold's resolution, so its rsid is
+    attached through the same routing the association uses before the axis -- and
+    the recorded rsid map -- is written.
     """
     if options.variant_reference is None:
         _record_axis(state, prepared, None)
         return prepared
     recorded = _recorded_axis(state)
+    fold = recorded if recorded is not None else _off_reference_fold_inputs(prepared, options)
+    prepared = _merge_off_reference_rsids(prepared, fold)
     if recorded is not None:
         return _fold_recorded_axis(prepared, options, state, recorded)
-    fold = _off_reference_fold_inputs(prepared, options)
     _record_axis(state, prepared, fold)
     if fold is None:
         return prepared
     return _fold_under(prepared, options, state, fold)
+
+
+def _fold_routing_for_candidates(
+    prepared: _PreparedBuild, fold: _FoldInputs | None
+) -> dict[str, str]:
+    """The ALID the fold resolved for every candidate the reference did not route.
+
+    Keyed exactly as the candidates are (`_routed_site_key`), so the combined
+    routing and the rekey speak the same key form the association routing uses.
+    A named off-reference row with no usable association is not folded at all,
+    so it has no entry and its name stays unspent (issue #255).
+    """
+    if fold is None or not len(fold.table.keys):
+        return {}
+    shared_sorted = fold.shared_sorted
+    alid_by_encoded = {
+        int(value): shared_sorted[int(index)]
+        for value, index in zip(
+            fold.table.keys.tolist(), fold.table.shared_index.tolist(), strict=True
+        )
+    }
+    routing: dict[str, str] = {}
+    for site in prepared.rsid_by_site:
+        key = _routed_site_key(site)
+        if key in prepared.candidate_routing:
+            continue
+        alid = alid_by_encoded.get(encode_key(key))
+        if alid is not None:
+            routing[key] = alid
+    return routing
+
+
+def _merge_off_reference_rsids(
+    prepared: _PreparedBuild, fold: _FoldInputs | None
+) -> _PreparedBuild:
+    """Rekey the raw harvested candidates once, over the final combined routing.
+
+    The candidates are keyed by `_rekey_and_verify` with exactly the function
+    this build routes an association by (`_routed_site_key`), and its oracle
+    walks the raw candidates through that function itself. The routing is the
+    reference's for on-reference sites plus the fold's resolution for
+    off-reference ones -- ONE map, ONE rekey in global `(rank, site)` order, ONE
+    exact oracle over the merged result. That is what keeps a fold-routed name
+    that sorts earlier from losing to a reference-routed one that sorts later
+    (issue #255).
+
+    A named off-reference row with no usable association anywhere is never
+    folded, so its name is dropped with its variant: the single-pass axis is
+    composed from the associations the build stores, while the two-pass axis
+    keeps every source variant. The names are identical for every variant both
+    axes carry (spec §4).
+    """
+    if not prepared.rsid_by_site:
+        _warn_fold_left_rows_blank(prepared, fold)
+        return prepared
+    combined = {**prepared.candidate_routing, **_fold_routing_for_candidates(prepared, fold)}
+    merged = _rekey_and_verify(
+        prepared.rsid_by_site, combined, key=_routed_site_key, label="Hybrid single-pass build"
+    )
+    if merged == prepared.rsid_by_alid:
+        return prepared
+    log.info(
+        "Single-pass build: %d named candidate(s) rekeyed against the combined "
+        "reference/fold routing",
+        len(combined),
+    )
+    _rewrite_dense_table_if_needed(prepared, merged)
+    return replace(prepared, rsid_by_alid=merged)
+
+
+def _warn_fold_left_rows_blank(
+    prepared: _PreparedBuild, fold: _FoldInputs | None
+) -> None:
+    """Warn about fold-discovered overflow rows a named reference cannot name.
+
+    The other half of `warn_reference_left_rows_blank`: a reference-based
+    single-pass build whose reference already carries rsids does not harvest, so
+    each variant the fold discovers off the reference is stored with no rsid
+    even when its source names one. Out of #255's scope; logged with a count.
+    """
+    if not prepared.reference_named_rsids or fold is None:
+        return
+    discovered = set(fold.off_panel) - set(prepared.partition.off_panel_alids)
+    unnamed = sum(1 for alid in discovered if not prepared.rsid_by_alid.get(alid))
+    if not unnamed:
+        return
+    log.warning(
+        "%d off-reference (Overflow) variant(s) this build discovered are not named by "
+        "the reference and are stored with no rsid; the reference is used as given and "
+        "the sources are not harvested (issue #255 finding 3)",
+        unnamed,
+    )
+
+
+def _rewrite_dense_table_if_needed(
+    prepared: _PreparedBuild, merged: Mapping[str, str]
+) -> None:
+    """Rewrite the Dense Component table when the global rekey moved a panel row.
+
+    The skeleton's table was written before Pass 2 from the on-reference map.
+    A fold-routed candidate that sorts earlier can only change a *panel* row if
+    its own resolution lands on a panel ALID, so the rewrite is conditional and
+    normally does not happen; without it the Dense Component would carry one
+    name and the shared table another (issue #255).
+    """
+    panel = prepared.partition.panel_sorted
+    if all(merged.get(alid, "") == prepared.rsid_by_alid.get(alid, "") for alid in panel):
+        return
+    log.warning(
+        "Single-pass build: the global rsid rekey moved a Dense Component name; "
+        "rewriting the component's variant table"
+    )
+    _write_variant_table(prepared.dense_dir, panel, prepared.hg38_to_source, dict(merged))
 
 
 def _fold_recorded_axis(
@@ -2520,6 +2754,18 @@ def _write_shared_metadata(
         prepared.hg38_to_source,
         prepared.rsid_by_alid,
     )
+    # The tables just written must be the tables the resolved map describes: a
+    # partial harvest loss, an off-reference row dropped from the write, or a
+    # table written from a stale map fails here, on the bytes a query reads,
+    # rather than being trusted from the map that produced them (issue #255).
+    # Root first, then the Dense Component -- its table was written before
+    # Pass 2 and must carry the same identifiers as the shared table.
+    require_written_rsids_match(
+        prepared.staged.path, prepared.partition.shared_sorted, prepared.rsid_by_alid
+    )
+    require_written_rsids_match(
+        prepared.dense_dir, prepared.partition.panel_sorted, prepared.rsid_by_alid
+    )
 
 
 def _prepare_build(
@@ -2563,6 +2809,9 @@ def _prepare_build(
         analyses=axis.analyses,
         hg38_to_source=axis.hg38_to_source,
         rsid_by_alid=axis.rsid_by_alid,
+        rsid_by_site=axis.rsid_by_site,
+        candidate_routing=axis.candidate_routing,
+        reference_named_rsids=axis.reference_named_rsids,
         dense_to_shared=dense_to_shared,
         spill_dir=spill_dir,
         keys_sorted=axis.keys_sorted,
@@ -2930,10 +3179,9 @@ def build_hybrid_from_vcf_manifest(
     seams (issue #130): ``_prepare_build`` (axis source, partition/routing,
     Dense skeleton), the spill-lifetime ``_build_components`` (Pass 2 routing,
     EAF verification, joint encoding, component writes) and ``_finalise_store``
-    (overflow flush, shared metadata, result). Each seam and phase helper
-    preserves the contracts its docstring names: the staging context's
-    atomicity, the collision/provenance rules, the disjoint-partition layout
-    and the one encoding both components share (ADR 0037).
+    (overflow flush, shared metadata, result). The layout contracts hold: the
+    staging context's atomicity, the collision/provenance rules, the
+    disjoint-partition layout and the one encoding both components share (ADR 0037).
 
     The Dense Component axis is exactly ``variant_reference``'s ALIDs (or, when
     both are given, the ``--reference-panel`` subset, which the reference must
@@ -2942,16 +3190,17 @@ def build_hybrid_from_vcf_manifest(
     the reference's source-coordinate map routes on-reference associations to
     the Dense Component and off-reference ones to the Ragged Overflow during
     Pass 2. With only ``reference_panel``, the legacy two-pass build reads every
-    source once and lifts hg19 rows. Rows are assumed hg19 and lifted inline
-    unless the manifest declares ``source_assembly=hg38`` (issue #85);
-    ``source_assembly`` and ``source_reader_capability`` supply per-release
-    defaults (#174), and ``eaf_reference`` drives the orientation check (#115).
+    source once and lifts hg19 rows. A reference that names no rsids runs Pass 1's
+    harvest, rekeyed through this build's routing, so its names match the two-pass
+    build's for every variant both axes carry (`_single_pass_rsids`, #255); rows
+    are assumed hg19 and lifted inline unless the manifest declares
+    ``source_assembly=hg38`` (#85); ``source_reader_capability`` supplies the
+    per-release default (#174), and ``eaf_reference`` drives the orientation check.
 
     ``checkpoint=True`` opts the build into phase-granularity resume; ``resume=True``
     continues one from the checkpoint this call's ``output_path`` implies (issue #227;
     `_run_checkpointed_build`, `_resume_requested`), and a destination whose checkpoint
-    is still there is refused unless ``overwrite=True`` discards it -- a plain build
-    included, which would otherwise orphan a released Dense Component.
+    is still there is refused unless ``overwrite=True`` discards it.
     """
     if reference_panel is None and variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
@@ -3185,6 +3434,11 @@ def _recorded_prepared(
             for alid, rsid in read_str_map(state.path / PROVENANCE_RSID).items()
             if rsid
         },
+        # The recorded map is already the routed one; the fold phase is not
+        # re-entered on this path, so no candidates travel with it (issue #255).
+        rsid_by_site={},
+        candidate_routing={},
+        reference_named_rsids=False,
         dense_to_shared=dense_to_shared,
         spill_dir=state.spill_dir,
         keys_sorted=_NO_ROUTING[0],

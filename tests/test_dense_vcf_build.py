@@ -2353,3 +2353,383 @@ def test_cli_variant_reference_builds_single_pass(tmp_path):
     assert validate_store(store).ok
     z = open_store(store).arrays(mode="r")["z"][:]
     assert z.shape == (2, 1)
+
+# ── rsids for a single-pass variant-reference build (issue #255) ─────────────
+#
+# The single-pass path must equal the two-pass path by construction: when the
+# reference carries no rsids, it runs Pass 1's own harvest -- the same
+# `stream_variants` superset, the same `(rank, site)` ordering, the same
+# `_rekey_rsids_to_alids` -- and keeps its map. These tests pin that equality,
+# including rows the association stream never sees.
+
+#: Every capability a Dense build reads, so the harvest is proven against each
+#: reader's own `stream_variants` rather than only GWAS-VCF.
+_DENSE_CAPABILITIES = [
+    pytest.param("opengwasdb.gwas-vcf", id="gwas-vcf"),
+    pytest.param("opengwasdb.gwas-ssf", id="gwas-ssf"),
+    pytest.param("opengwasdb.finngen-r13", id="finngen"),
+]
+
+
+def _manifest_with_capability(
+    tmp_path: Path,
+    entries: list[tuple[str, Path, str, str, str]],
+    *,
+    extra: str = "",
+    extra_headers: str = "",
+) -> Path:
+    """A manifest with an explicit capability and assembly per row.
+
+    ``entries`` are ``(trait_id, file_path, trait_name, capability, assembly)``;
+    ``extra_headers``/``extra`` append one optional column (a MAF threshold,
+    say) to every row.
+    """
+    manifest = tmp_path / "manifest.tsv"
+    lines = [
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
+        "\toriginal_sd_method\toriginal_sd\tsource_reader_capability\tsource_assembly"
+        + extra_headers
+    ]
+    for trait_id, file_path, trait_name, capability, assembly in entries:
+        lines.append(
+            f"{trait_id}\t{file_path}\t{trait_name}\t1000\tsd\tdeclared_standardised\t"
+            f"\t{capability}\t{assembly}{extra}"
+        )
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return manifest
+
+
+def _write_hg38_ssf(path: Path, rows: list[tuple[str, int, str, str, str, str, str]]) -> Path:
+    """A harmonised GWAS-SSF file (rsid column included), one tuple per row."""
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            "chromosome\tbase_pair_location\teffect_allele\tother_allele\tbeta"
+            "\tstandard_error\trsid\n"
+        )
+        for chrom, pos, effect, other, beta, se, rsid in rows:
+            handle.write(f"{chrom}\t{pos}\t{effect}\t{other}\t{beta}\t{se}\t{rsid}\n")
+    return path
+
+
+def _capability_manifest(tmp_path: Path, capability: str) -> Path:
+    """One hg38 source in `capability`'s format, with a named row, a blank row
+    and a row whose effect is unusable -- the shapes the harvest must carry."""
+    if capability == "opengwasdb.gwas-vcf":
+        source = _make_vcf(
+            tmp_path,
+            "capability",
+            [
+                "1\t100000\trs1\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                "1\t1064620\trs2\tC\tT\t.\tPASS\t.\tES:SE\t1.5:0.3\n",
+                # A named row with SE=0: dropped by the association stream.
+                "1\t1564620\trsDROPPED\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.0\n",
+            ],
+        )
+    elif capability == "opengwasdb.gwas-ssf":
+        source = _write_hg38_ssf(
+            tmp_path / "capability.tsv.gz",
+            [
+                ("1", 100000, "G", "A", "2.0", "0.5", "rs1"),
+                ("1", 1064620, "T", "C", "1.5", "0.3", "rs2"),
+                # A named row with no effect at all.
+                ("1", 1564620, "A", "G", "", "", "rsDROPPED"),
+            ],
+        )
+    else:
+        from opengwasdb.readers import FINNGEN_R13_CAPABILITY
+
+        assert capability == FINNGEN_R13_CAPABILITY
+        source = Path(__file__).parent / "fixtures" / "finngen_r13.tsv"
+    return source
+
+
+def _source_union_lookup(manifest: Path) -> tuple[dict, list[str]]:
+    """The manifest's Pass 1 union lookup and its sorted ALIDs."""
+    from opengwasdb.layouts.dense.build_vcf import (
+        _lift_manifest_variants,
+        _read_manifest,
+        _sorted_alids,
+    )
+
+    rows = _read_manifest(manifest)
+    source_lookup, _ = _lift_manifest_variants(
+        rows, chain_file=None, liftover_failure_threshold=0.01
+    )
+    return source_lookup, _sorted_alids(source_lookup.values())
+
+
+def _plain_alid_list(tmp_path: Path, manifest: Path, name: str = "plain.alids") -> Path:
+    """The manifest's own variant union as a plain ALID list (no rsids)."""
+    _lookup, alids = _source_union_lookup(manifest)
+    path = tmp_path / name
+    path.write_text("\n".join(alids) + "\n", encoding="utf-8")
+    return path
+
+
+def _axis_rsids(store: Path) -> dict[str, str]:
+    from opengwasdb.variants.axis import iter_variant_records
+
+    return {r.alid: (r.rsid or "") for r in iter_variant_records(store / "variants.tsv.gz")}
+
+
+def _build_pair(tmp_path: Path, manifest: Path, plain: Path) -> tuple[Path, Path]:
+    """The two-pass store and the plain-ALID single-pass store of one manifest."""
+    two_pass = tmp_path / "two-pass.opengwasdb"
+    single_pass = tmp_path / "single-pass.opengwasdb"
+    build_dense_from_vcf_manifest(manifest, two_pass, store_id="s", release_id="r")
+    build_dense_from_vcf_manifest(
+        manifest, single_pass, store_id="s", release_id="r", variant_reference=plain
+    )
+    return two_pass, single_pass
+
+
+def _rsid_fault_target(
+    tmp_path: Path,
+) -> tuple[Path, Path, object]:
+    """A manifest, its plain-ALID reference, and the build module to wrap.
+
+    The shape the partial-loss and wrong-value fault tests share: a named
+    GWAS-VCF source whose plain ALID list makes the single-pass path harvest.
+    """
+    import opengwasdb.layouts.dense.build_vcf as build_vcf
+
+    source = _capability_manifest(tmp_path, "opengwasdb.gwas-vcf")
+    manifest = _manifest_with_capability(
+        tmp_path, [("capability", source, "Capability", "opengwasdb.gwas-vcf", "hg38")]
+    )
+    return manifest, _plain_alid_list(tmp_path, manifest), build_vcf
+
+
+class TestPlainAlidReferenceRsids:
+    @pytest.mark.parametrize("capability", _DENSE_CAPABILITIES)
+    def test_plain_alid_list_keeps_the_same_rsids_as_the_two_pass_build(
+        self, tmp_path, capability
+    ):
+        """Issue #255, for every source format the builder reads: a plain ALID
+        list carries no rsids, and the single-pass build must harvest them from
+        the variant stream -- including a named row whose effect is unusable."""
+        source = _capability_manifest(tmp_path, capability)
+        manifest = _manifest_with_capability(
+            tmp_path, [("capability", source, "Capability", capability, "hg38")]
+        )
+        plain = _plain_alid_list(tmp_path, manifest)
+        two_pass, single_pass = _build_pair(tmp_path, manifest, plain)
+
+        # Fixture asserted meaningful first: the union is fully named, and for
+        # the VCF/SSF fixtures it really holds a named row the association
+        # stream drops -- the case a Pass-2-only harvest could not see.
+        two_pass_rsids = _axis_rsids(two_pass)
+        assert two_pass_rsids and all(two_pass_rsids.values())
+        if capability != "opengwasdb.finngen-r13":
+            assert "rsDROPPED" in set(two_pass_rsids.values())
+        assert _axis_rsids(single_pass) == two_pass_rsids
+        assert validate_store(single_pass).ok
+        _assert_dense_stores_data_identical(two_pass, single_pass)
+
+    def test_reference_rsids_are_kept_when_the_reference_carries_them(self, tmp_path):
+        """A reference that names its variants is its own authority: no source
+        read is spent, and the curated name is what the table carries."""
+        vcf = _make_vcf(
+            tmp_path, "curated",
+            ["1\t100000\trsSOURCE\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"],
+        )
+        manifest = _manifest_with_capability(
+            tmp_path, [("curated", vcf, "Curated", "opengwasdb.gwas-vcf", "hg38")]
+        )
+        reference = tmp_path / "curated.variant-ref.tsv.gz"
+        source_lookup = {("1", 100000, "A", "G"): HG38_ALID_1}
+        write_variant_reference(
+            reference, [HG38_ALID_1], source_lookup, {HG38_ALID_1: "rsCURATED"}
+        )
+        store = tmp_path / "curated.opengwasdb"
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", variant_reference=reference
+        )
+        assert _axis_rsids(store) == {HG38_ALID_1: "rsCURATED"}
+
+    def test_reversed_alleles_take_the_two_pass_site_order(self, tmp_path):
+        """Several raw keys can canonicalise to one ALID. The two-pass path
+        names the first in `(rank, site)` order -- here the `A/G` row, which
+        sorts before `G/A` -- not the first in file order. The single-pass path
+        must give the same answer, which is why it reuses Pass 1 rather than
+        re-implementing the rule over the association stream."""
+        vcf = _make_vcf(
+            tmp_path, "reversed",
+            [
+                # File order names rsSTREAM_FIRST first; site order does not.
+                "1\t1564620\trsSTREAM_FIRST\tG\tA\t.\tPASS\t.\tES:SE\t0.6:0.2\n",
+                "1\t1564620\trsSITE_FIRST\tA\tG\t.\tPASS\t.\tES:SE\t0.7:0.2\n",
+            ],
+        )
+        manifest = _manifest_with_capability(
+            tmp_path, [("reversed", vcf, "Reversed", "opengwasdb.gwas-vcf", "hg38")]
+        )
+        plain = _plain_alid_list(tmp_path, manifest)
+        two_pass, single_pass = _build_pair(tmp_path, manifest, plain)
+
+        assert _axis_rsids(two_pass) == {HG38_ALID_3: "rsSITE_FIRST"}
+        assert _axis_rsids(single_pass) == {HG38_ALID_3: "rsSITE_FIRST"}
+
+    def test_partial_harvest_loss_fails_the_build(self, tmp_path, monkeypatch):
+        """Issue #255's rule, on partial loss: the resolved map is compared
+        against an independent oracle built from the candidates and the routing,
+        so a rekey that drops one entry fails the build rather than blanking a
+        row."""
+        manifest, plain, build_vcf = _rsid_fault_target(tmp_path)
+        real_rekey = build_vcf._rekey_rsids_to_alids
+
+        def _drop_one(source_lookup, rsid_by_site):
+            rekeyed = real_rekey(source_lookup, rsid_by_site)
+            rekeyed.pop(next(iter(sorted(rekeyed))))
+            return rekeyed
+
+        monkeypatch.setattr(build_vcf, "_rekey_rsids_to_alids", _drop_one)
+        with pytest.raises(ValueError, match="disagrees with the routed harvest"):
+            build_dense_from_vcf_manifest(
+                manifest, tmp_path / "lost.opengwasdb", store_id="s", release_id="r",
+                variant_reference=plain,
+            )
+
+    def test_wrong_nonempty_rsid_value_fails_the_build(self, tmp_path, monkeypatch):
+        """The oracle is value-sensitive (issue #255, round 2): a map that keeps
+        every key but gives one of them the wrong non-empty name disagrees with
+        the routed expectation, which a set-membership check could not see."""
+        manifest, plain, build_vcf = _rsid_fault_target(tmp_path)
+        real_rekey = build_vcf._rekey_rsids_to_alids
+
+        def _wrong_value(source_lookup, rsid_by_site):
+            rekeyed = real_rekey(source_lookup, rsid_by_site)
+            if rekeyed:
+                rekeyed[next(iter(sorted(rekeyed)))] = "rsWRONG"
+            return rekeyed
+
+        monkeypatch.setattr(build_vcf, "_rekey_rsids_to_alids", _wrong_value)
+        with pytest.raises(ValueError, match="disagrees with the routed harvest"):
+            build_dense_from_vcf_manifest(
+                manifest, tmp_path / "wrong.opengwasdb", store_id="s", release_id="r",
+                variant_reference=plain,
+            )
+
+    def test_rsid_follows_the_reference_routing_not_pass_1(self, tmp_path):
+        """An rsid must land on the ALID its association lands on (issue #255,
+        round 2). A reference may route a source key to a different ALID than
+        Pass 1's own liftover would; the reference is the authority, so the name
+        follows its routing rather than a fresh Pass 1 lift."""
+        source_alid = "1:100000:A:G"
+        routed_alid = "1:200000:C:T"
+        vcf = _make_vcf(
+            tmp_path,
+            "custom",
+            ["1\t100000\trsSOURCE\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"],
+        )
+        manifest = _manifest_with_source_assembly(
+            tmp_path, [("a", vcf, "A", "hg38")]
+        )
+        reference = tmp_path / "custom.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference,
+            [source_alid, routed_alid],
+            {
+                ("1", 100000, "A", "G"): routed_alid,
+                # An unrelated explicit source key for the first ALID, so the
+                # artifact does not add its identity key and reject the
+                # intentional disagreement.
+                ("9", 999, "A", "C"): source_alid,
+            },
+            {},
+        )
+        store = tmp_path / "custom-routing.opengwasdb"
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", variant_reference=reference
+        )
+
+        assert validate_store(store).ok
+        assert _axis_rsids(store) == {source_alid: "", routed_alid: "rsSOURCE"}
+        # And the association really is on the routed row, not the source one.
+        from opengwasdb.encoding import DenseZPlane
+
+        opened = open_store(store)
+        z = DenseZPlane.open(opened.arrays(mode="r"), opened.manifest.encoding).column(0)
+        assert np.isnan(z[0])   # the source ALID holds no association
+        assert z[1] == pytest.approx(-4.0, rel=5e-3)
+
+    def test_written_table_disagreeing_with_the_map_fails_the_build(
+        self, tmp_path, monkeypatch
+    ):
+        """The read-back rule: if the table on disk is not the table the map
+        describes, the build refuses before it publishes."""
+        import opengwasdb.layouts.dense.build_vcf as build_vcf
+
+        source = _capability_manifest(tmp_path, "opengwasdb.gwas-vcf")
+        manifest = _manifest_with_capability(
+            tmp_path, [("capability", source, "Capability", "opengwasdb.gwas-vcf", "hg38")]
+        )
+        plain = _plain_alid_list(tmp_path, manifest)
+        real_write = build_vcf.write_variant_axis
+
+        def _blank_rsids(path, variants, rsid_by_alid, source_alids=None):
+            real_write(path, variants, {}, source_alids)
+
+        monkeypatch.setattr(build_vcf, "write_variant_axis", _blank_rsids)
+        with pytest.raises(ValueError, match="carries rsid"):
+            build_dense_from_vcf_manifest(
+                manifest, tmp_path / "blanked.opengwasdb", store_id="s", release_id="r",
+                variant_reference=plain,
+            )
+
+    def test_named_reference_warns_about_its_blank_rows(self, tmp_path, caplog):
+        """Issue #255, round 5 finding 2: the Dense builder shares the
+        `--variant-reference` help and spec, so it must warn on the
+        reference-named path too. Dense has no fold, so only the reference-rows
+        half applies; the row the reference leaves blank stays blank."""
+        import logging
+
+        vcf = _make_vcf(
+            tmp_path,
+            "named",
+            [
+                "1\t100000\trsPANEL\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n",
+                "1\t1564620\trsUNNAMED_REF\tA\tG\t.\tPASS\t.\tES:SE\t0.7:0.2\n",
+            ],
+        )
+        manifest = _manifest_with_source_assembly(tmp_path, [("named", vcf, "Named", "hg38")])
+        reference = tmp_path / "dense-named.variant-ref.tsv.gz"
+        write_variant_reference(
+            reference,
+            [HG38_ALID_1, HG38_ALID_3],
+            {("1", 100000, "A", "G"): HG38_ALID_1, ("1", 1564620, "A", "G"): HG38_ALID_3},
+            {HG38_ALID_1: "rsPANEL"},
+        )
+        two_pass = tmp_path / "dense-named-two.opengwasdb"
+        single_pass = tmp_path / "dense-named-one.opengwasdb"
+        build_dense_from_vcf_manifest(manifest, two_pass, store_id="s", release_id="r")
+        with caplog.at_level(logging.WARNING):
+            build_dense_from_vcf_manifest(
+                manifest, single_pass, store_id="s", release_id="r", variant_reference=reference
+            )
+
+        assert _axis_rsids(two_pass) == {HG38_ALID_1: "rsPANEL", HG38_ALID_3: "rsUNNAMED_REF"}
+        assert _axis_rsids(single_pass) == {HG38_ALID_1: "rsPANEL", HG38_ALID_3: ""}
+        assert "names 1 of its 2 ALIDs and leaves 1 blank" in caplog.text
+
+    def test_sources_with_no_rsids_still_build(self, tmp_path):
+        """The rule cannot fire falsely: a source that genuinely names no rsids
+        builds a valid store whose table has none."""
+        vcf = _make_vcf(
+            tmp_path,
+            "unnamed",
+            [f"1\t{HG38_ALID_1.split(':')[1]}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"],
+        )
+        manifest = _manifest_with_capability(
+            tmp_path, [("unnamed", vcf, "Unnamed", "opengwasdb.gwas-vcf", "hg38")]
+        )
+        plain = tmp_path / "plain.alids"
+        plain.write_text(f"{HG38_ALID_1}\n", encoding="utf-8")
+        store = tmp_path / "unnamed.opengwasdb"
+
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", variant_reference=plain,
+        )
+
+        assert validate_store(store).ok
+        assert _axis_rsids(store) == {HG38_ALID_1: ""}
