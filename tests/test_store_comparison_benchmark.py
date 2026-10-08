@@ -20,11 +20,15 @@ import pytest
 from benchmarks.benchmark_store_comparison import (
     DEFAULT_EXPOSURE,
     DEFAULT_REGION,
+    _check_memory_counts,
+    _common_shapes,
+    _dense_plane_root,
     _parse_region,
     _parse_store,
     _parser,
     _ShapeTimeout,
     _timed_shape,
+    _wait_for_quiet,
     differing_arrays,
     differing_shapes,
     digest_array,
@@ -312,3 +316,56 @@ def test_timed_shape_defaults_to_reps_and_digests_the_warm_up():
     assert timed["repetitions"] == 3
     assert len(calls) == 4  # one warm-up plus three timed calls
     assert timed["digests"]["z"] == digest_array(np.asarray([1.0, 2.0], dtype="float32"))
+
+
+def test_common_shapes_excludes_a_shape_one_store_did_not_measure():
+    """A timed-out shape must drop out of the identity set, not compare as equal.
+
+    This is the narrowing that lets an artifact say `identical: true` only about
+    the shapes every store actually measured (#250 review r1, minor 11).
+    """
+    common, measured = _common_shapes([{"a": {}, "b": {}}, {"a": {}, "c": {}}])
+
+    assert common == {"a"}
+    assert measured == {"a", "b", "c"}
+    assert _common_shapes([]) == (set(), set())
+
+
+def test_check_memory_counts_skips_a_timed_out_probe_but_catches_a_mismatch():
+    _check_memory_counts(
+        [{"query": "a", "timed_out": True}], [{"query": "a", "timed_out": False, "result_count": 5}]
+    )
+    with pytest.raises(SystemExit):
+        _check_memory_counts(
+            [{"query": "a", "timed_out": False, "result_count": 2}],
+            [{"query": "a", "timed_out": False, "result_count": 1}],
+        )
+
+
+def test_dense_plane_root_reads_dense_and_hybrid_and_refuses_nothing():
+    dense_root = {"z": object()}
+    assert _dense_plane_root(type("Q", (), {"_root": dense_root})()) is dense_root
+
+    inner = {"z": object()}
+    hybrid = type("H", (), {"_dense": type("D", (), {"_root": inner})()})()
+    assert _dense_plane_root(hybrid) is inner
+
+    with pytest.raises(SystemExit):
+        _dense_plane_root(type("N", (), {})())
+
+
+def test_effective_reader_settings_tolerates_a_zarr2_plane():
+    """zarr-python 2 has no `_async_array`; the 2.18 column must not crash (#250)."""
+
+    class _Zarr2Plane:
+        chunks = (1,)
+
+    record = effective_reader_settings({"z": _Zarr2Plane()})
+
+    assert record["pipeline"] is None
+    assert record["max_workers"] is None
+
+
+def test_wait_for_quiet_returns_immediately_when_disabled_or_below_the_limit():
+    assert _wait_for_quiet(0) == 0.0
+    assert _wait_for_quiet(10_000) < 1.0

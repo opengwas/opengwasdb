@@ -1,0 +1,100 @@
+  copied the release envelope: 0.1s
+  data.zarr: 34 arrays to convert
+  dense/data.zarr: 32 arrays to convert
+  created the destination arrays: 1.1s
+  writing 3350 shards over 32 worker(s)
+  wrote every shard over 32 worker(s): 128.2s
+  rewrote the manifests, index blobs and root attrs: 1.0s
+  verifying ragged/eaf
+  verifying ragged/eaf_baseline
+  verifying ragged/eaf_exception_index
+  verifying ragged/eaf_exception_value
+  verifying ragged/offsets
+  verifying ragged/se
+  verifying ragged/variant_index
+  verifying ragged/z
+  verifying ragged/z_overflow_index
+  verifying ragged/z_overflow_value
+  verifying top_hits/p_5e_04/abs_z
+  verifying top_hits/p_5e_04/analysis_index
+  verifying top_hits/p_5e_04/analysis_offsets
+  verifying top_hits/p_5e_04/eaf
+  verifying top_hits/p_5e_04/p_value
+  verifying top_hits/p_5e_04/se
+  verifying top_hits/p_5e_04/variant_index
+  verifying top_hits/p_5e_04/z
+  verifying top_hits/p_5e_06/abs_z
+  verifying top_hits/p_5e_06/analysis_index
+  verifying top_hits/p_5e_06/analysis_offsets
+  verifying top_hits/p_5e_06/eaf
+  verifying top_hits/p_5e_06/p_value
+  verifying top_hits/p_5e_06/se
+  verifying top_hits/p_5e_06/variant_index
+  verifying top_hits/p_5e_06/z
+  verifying top_hits/p_5e_08/abs_z
+  verifying top_hits/p_5e_08/analysis_index
+  verifying top_hits/p_5e_08/analysis_offsets
+  verifying top_hits/p_5e_08/eaf
+  verifying top_hits/p_5e_08/p_value
+  verifying top_hits/p_5e_08/se
+  verifying top_hits/p_5e_08/variant_index
+  verifying top_hits/p_5e_08/z
+  verifying eaf
+  verifying eaf_baseline
+  verifying eaf_exception_index
+  verifying eaf_exception_value
+  verifying se
+  verifying top_hits/p_5e_04/abs_z
+  verifying top_hits/p_5e_04/analysis_index
+  verifying top_hits/p_5e_04/analysis_offsets
+  verifying top_hits/p_5e_04/eaf
+  verifying top_hits/p_5e_04/p_value
+  verifying top_hits/p_5e_04/se
+  verifying top_hits/p_5e_04/variant_index
+  verifying top_hits/p_5e_04/z
+  verifying top_hits/p_5e_06/abs_z
+  verifying top_hits/p_5e_06/analysis_index
+  verifying top_hits/p_5e_06/analysis_offsets
+  verifying top_hits/p_5e_06/eaf
+  verifying top_hits/p_5e_06/p_value
+  verifying top_hits/p_5e_06/se
+  verifying top_hits/p_5e_06/variant_index
+  verifying top_hits/p_5e_06/z
+  verifying top_hits/p_5e_08/abs_z
+  verifying top_hits/p_5e_08/analysis_index
+  verifying top_hits/p_5e_08/analysis_offsets
+  verifying top_hits/p_5e_08/eaf
+  verifying top_hits/p_5e_08/p_value
+  verifying top_hits/p_5e_08/se
+  verifying top_hits/p_5e_08/variant_index
+  verifying top_hits/p_5e_08/z
+  verifying z
+  verifying z_overflow_index
+  verifying z_overflow_value
+  verified the conversion bit-exact: 2719.0s
+  regenerated overview.html and validated the release: 7693.0s
+Published /data/opengwasdb/work/epic240/250/OGS-00011-v3-c64 as 0.2.0
+Converted /data/opengwasdb/stores/OGS-00011/store.opengwasdb -> /data/opengwasdb/work/epic240/250/OGS-00011-v3-c64
+	Command being timed: "pixi run -e dev python scripts/convert_store_to_0_2_0.py /data/opengwasdb/stores/OGS-00011/store.opengwasdb --into /data/opengwasdb/work/epic240/250/OGS-00011-v3-c64 --workers 32"
+	User time (seconds): 13090.93
+	System time (seconds): 2714.94
+	Percent of CPU this job got: 149%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:55:45
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 201937956
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 2391
+	Minor (reclaiming a frame) page faults: 221522673
+	Voluntary context switches: 18285432
+	Involuntary context switches: 39246
+	Swaps: 0
+	File system inputs: 74330304
+	File system outputs: 234859272
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

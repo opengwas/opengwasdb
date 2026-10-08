@@ -28,10 +28,9 @@ cmp11_218 = json.loads((HERE / "opengwasdb_ogs00011_store_comparison_2_18.json")
 cmp11_z3 = json.loads((HERE / "opengwasdb_ogs00011_store_comparison_zarr3.json").read_text())
 
 
-def md_table(headers, rows, aligns=None):
-    aligns = aligns or ["---"] * len(headers)
+def md_table(headers, rows):
     head = "| " + " | ".join(headers) + " |"
-    rule = "|" + "|".join(aligns) + "|"
+    rule = "|" + "|".join(["---"] * len(headers)) + "|"
     body = "\n".join("| " + " | ".join(str(c) for c in row) + " |" for row in rows)
     return f"{head}\n{rule}\n{body}"
 
@@ -48,6 +47,10 @@ def memory(s):
     return {r["query"]: r for r in s["memory"]}
 
 
+def label_of(doc):
+    return doc["stores"][0]["label"]
+
+
 LABELS = {
     "tophits": "Top hits for one Analysis",
     "phewas": "One variant, all Analyses",
@@ -61,44 +64,135 @@ ORDER = ["tophits", "phewas", "regional_one_analysis",
          "random_lookup_10_variants_100_analyses",
          "random_lookup_100_variants_10_analyses", "regional", "bulk"]
 
+# Peak RSS is measured in MiB (`benchmarks/_rss.py` is pages × 4 KiB / 1024).
+# This report labels MiB/1024 as GiB. #237's "22.8 GB" is the same 22,778 MiB
+# figure with MB/1000, so the RSS itself is identical and the ratios are
+# unaffected; the unit is stated once here.
+def fmt_rss(mb):
+    return f"{mb / 1024:,.2f} GiB"
+
 
 def fmt_time(ms):
     return f"{ms / 1000:,.2f} s" if ms >= 1000 else f"{ms:,.1f} ms"
 
 
-def fmt_gb(mb):
-    return f"{mb / 1000:,.2f} GB"
+def time_cell(row, mem_row):
+    if row.get("timed_out"):
+        return f"**limit hit** ({row.get('limit_s'):g} s)"
+    cell = f"{fmt_time(row['median_ms'])} / {fmt_time(row['p95_ms'])} · {fmt_rss(mem_row['peak_mb'])}"
+    if row.get("repetitions") == 1:
+        cell += " (n=1)"
+    return cell
 
 
 def three_column(cmp218, cmpz3, v2_label, v3_label):
-    """(shape, time/p95/RSS) for 2.18-on-0.1.0, zarr3-on-0.1.0, zarr3-on-0.2.0, count."""
-    s218 = store(cmp218, cmp218["stores"][0]["label"])
+    s218 = store(cmp218, label_of(cmp218))
     a, b, c = timings(s218), timings(store(cmpz3, v2_label)), timings(store(cmpz3, v3_label))
     ma, mb, mc = memory(s218), memory(store(cmpz3, v2_label)), memory(store(cmpz3, v3_label))
     rows = []
     for sh in ORDER:
-        cells = []
-        for t, m in ((a, ma), (b, mb), (c, mc)):
-            r = t[sh]
-            if r.get("timed_out"):
-                cells.append("**limit hit**")
-            else:
-                cells.append(f"{fmt_time(r['median_ms'])} / {fmt_time(r['p95_ms'])} · {fmt_gb(m[sh]['peak_mb'])}")
-        rows.append([LABELS[sh], *cells, f"{a[sh]['result_count']:,}"])
+        rows.append([LABELS[sh], time_cell(a[sh], ma[sh]), time_cell(b[sh], mb[sh]),
+                     time_cell(c[sh], mc[sh]), f"{a[sh].get('result_count', 0):,}"])
     return rows
+
+
+def column_loads(cmp218, cmpz3, v2_label, v3_label):
+    """{column name: 1-minute load at that column's start}."""
+    s218 = store(cmp218, label_of(cmp218))
+    return {
+        "2.18 · 0.1.0": s218["load_average_1m_before"],
+        "this code · 0.1.0": store(cmpz3, v2_label)["load_average_1m_before"],
+        "this code · 0.2.0": store(cmpz3, v3_label)["load_average_1m_before"],
+    }
+
+
+def load_sentence(cmp218, cmpz3, v2_label, v3_label):
+    loads = column_loads(cmp218, cmpz3, v2_label, v3_label)
+    contended = [name for name, load in loads.items() if load >= 3]
+    shown = ", ".join(f"{name} {load:.2f}" for name, load in loads.items())
+    if contended:
+        return (f"1-minute load at each column's start: {shown}. "
+                f"**{', '.join(contended)} began at or above 3**; the others began below 3.")
+    return f"Every column began at a 1-minute load below 3 ({shown})."
+
+
+def cross_identity(cmp218, cmpz3, v2_label, v3_label):
+    """(shapes every column measured, shapes whose digests differ)."""
+    docs = [
+        store(cmp218, label_of(cmp218))["result_digests"],
+        store(cmpz3, v2_label)["result_digests"],
+        store(cmpz3, v3_label)["result_digests"],
+    ]
+    common = set.intersection(*(set(d) for d in docs))
+    differing = sorted(
+        sh for sh in common if not (docs[0][sh] == docs[1][sh] == docs[2][sh])
+    )
+    return sorted(common), differing
+
+
+def three_column_identity(cmp218, cmpz3, v2_label, v3_label):
+    common, differing = cross_identity(cmp218, cmpz3, v2_label, v3_label)
+    counts = {len(d["result_digests"]) for d in (
+        store(cmp218, label_of(cmp218)),
+        store(cmpz3, v2_label), store(cmpz3, v3_label))}
+    if differing:
+        state = f"**FAILED for {', '.join(differing)}**"
+    elif len(counts) != 1:
+        state = (f"**INCOMPLETE**: the columns measured different shape sets "
+                 f"({sorted(counts)}); the {len(common)} common shape(s) agree")
+    else:
+        state = f"identical in all three columns on all {len(common)} shapes"
+    return state
+
+
+def harness_revisions():
+    """The distinct harness digests recorded across the four Zarr 3 artifacts."""
+    out = set()
+    for doc in (cmp16_z3, cmp11_z3):
+        for s in doc["stores"]:
+            fp = doc.get("harness_file", {})
+            if fp.get("harness_sha256"):
+                out.add(fp["harness_sha256"][:12])
+    return sorted(out)
 
 
 def per_plane(cmpz3, v2_label, v3_label):
     v2 = {a["node"]: a for a in store(cmpz3, v2_label)["footprint"]["arrays"]}
     v3 = {a["node"]: a for a in store(cmpz3, v3_label)["footprint"]["arrays"]}
     planes = ["data.zarr/z", "data.zarr/se", "data.zarr/eaf",
-              "data.zarr/eaf_baseline", "data.zarr/top_hits/p_5e_04/z"]
-    rows = []
-    for node in planes:
-        a, b = v2[node]["apparent_bytes"], v3[node]["apparent_bytes"]
-        rows.append([node.replace("data.zarr/", ""), f"{a / 1e6:,.1f} MB",
-                     f"{b / 1e6:,.1f} MB", f"{b / a:.3f}×"])
-    return rows
+              "data.zarr/eaf_baseline",
+              "data.zarr/top_hits/p_5e_04/z"]
+    return [[node.replace("data.zarr/", ""), f"{v2[node]['apparent_bytes'] / 1e6:,.1f} MB",
+             f"{v3[node]['apparent_bytes'] / 1e6:,.1f} MB",
+             f"{v3[node]['apparent_bytes'] / v2[node]['apparent_bytes']:.3f}×"]
+            for node in planes]
+
+
+def sizes(c):
+    b, a = c["before"], c["after"]
+    return {
+        "files": f"{b['n_files']:,} → **{a['n_files']:,}**",
+        "apparent": (f"{b['apparent_bytes'] / 1e9:,.2f} → **{a['apparent_bytes'] / 1e9:,.2f} GB** "
+                     f"({(a['apparent_bytes'] / b['apparent_bytes'] - 1) * 100:+.2f} %)"),
+        "allocated": (f"{b['allocated_bytes'] / 1e9:,.2f} → {a['allocated_bytes'] / 1e9:,.2f} GB "
+                      f"({(a['allocated_bytes'] / b['allocated_bytes'] - 1) * 100:+.2f} %)"),
+    }
+
+
+def ratio(cmpz3, v2_label, v3_label, shape):
+    return (timings(store(cmpz3, v3_label))[shape]["median_ms"]
+            / timings(store(cmpz3, v2_label))[shape]["median_ms"])
+
+
+# ADR 0058's OGS-00009 ratios, quoted from the ADR; the FinnGen ratios beside
+# them are computed from this run's artifacts.
+ADR_0058_RATIOS = {
+    "phewas": 2.76, "random_lookup_10_variants_100_analyses": 2.80,
+    "random_lookup_100_variants_10_analyses": 1.83, "regional": 1.35, "bulk": 0.35,
+}
+
+s16, s11 = sizes(conv16), sizes(conv11)
+m16, m11 = conv16["monitor"], conv11["monitor"]
 ```
 
 ::: {.callout-important}
@@ -112,11 +206,16 @@ chunks)** by `scripts/convert_store_to_0_2_0.py`, then:
 
 * checked **bit-exact** against the source and validated (`validate_store`);
 * benchmarked as three columns — 2.18 on 0.1.0, this code on 0.1.0 (Zarr 3
-  reading v2), and this code on 0.2.0 — with the #242 seven-shape harness,
-  **every column returning identical result digests**;
+  reading v2), and this code on 0.2.0 — with the #242 seven-shape harness, the
+  cross-column identity computed at render time below;
 * re-run through the FinnGen benchmark and the source-fidelity harness;
 * measured per plane, to test #246's ukb-b-based shape decision on FinnGen's
   near-null, low-case-count data.
+
+Peak RSS is labelled **GiB** throughout: `benchmarks/_rss.py` measures MiB and
+this report divides by 1024. #237's "22.8 GB" is the same ~22,778 MiB figure with
+MB/1000, so the RSS compared against it is identical and the ratios are
+unaffected.
 :::
 
 ## Conversion cost
@@ -126,21 +225,24 @@ chunks)** by `scripts/convert_store_to_0_2_0.py`, then:
 #| output: asis
 rows = []
 for c in (conv16, conv11):
-    f = lambda phase: f"{c['phases_seconds'][phase]:,.1f} s"
+    ph = c["phases_seconds"]
     rows.append([
         c["store"], c["source_format_version"] + " → " + c["destination_format_version"],
         f"{c['wall_seconds'] // 3600}:{(c['wall_seconds'] % 3600) // 60:02d}:{c['wall_seconds'] % 60:02d}",
         f"{c['peak_rss_gib']:,.2f} GiB",
-        f("wrote every shard over 32 worker(s)"),
-        f("verified the conversion bit-exact"),
-        f("regenerated overview.html and validated the release"),
+        f"{ph['wrote every shard over 32 worker(s)']:,.1f} s",
+        f"{ph['verified the conversion bit-exact']:,.1f} s",
+        f"{ph['regenerated overview.html and validated the release']:,.1f} s",
     ])
-print(md_table(
-    ["Store", "format", "wall clock", "peak RSS", "write (32 workers)",
-     "bit-exact verify", "overview + validate"], rows))
+print(md_table(["Store", "format", "wall clock", "peak RSS", "write (32 workers)",
+                "bit-exact verify", "overview + validate"], rows))
 print()
-print("Both published only after the bit-exact check and `validate_store` passed, by renaming the")
-print("staging tree; peak RSS is the `/usr/bin/time -v` maximum, which is the validate phase.")
+print("Both were published only after the bit-exact check and `validate_store` passed, by renaming")
+print("the staging tree. Both ran **concurrently**, so the wall times are concurrent-machine")
+print(f"numbers: across the window in which both were running, the 1-minute load sampled "
+      f"{m16['both_running_load_1m_min']:.2f}–{m16['both_running_load_1m_max']:.2f} "
+      f"(`{m16['log']}`). The quoted peak RSS is the process-tree maximum, which is the")
+print("validate phase; the raw `/usr/bin/time -v` logs are committed beside this document.")
 ```
 
 ## Files and size
@@ -148,18 +250,9 @@ print("staging tree; peak RSS is the `/usr/bin/time -v` maximum, which is the va
 ```{python}
 #| echo: false
 #| output: asis
-rows = []
-for c in (conv16, conv11):
-    b, a = c["before"], c["after"]
-    rows.append([
-        c["store"],
-        f"{b['n_files']:,} → **{a['n_files']:,}**",
-        f"{b['apparent_bytes'] / 1e9:,.2f} → **{a['apparent_bytes'] / 1e9:,.2f} GB** "
-        f"({(a['apparent_bytes'] / b['apparent_bytes'] - 1) * 100:+.2f} %)",
-        f"{b['allocated_bytes'] / 1e9:,.2f} → {a['allocated_bytes'] / 1e9:,.2f} GB "
-        f"({(a['allocated_bytes'] / b['allocated_bytes'] - 1) * 100:+.2f} %)",
-    ])
-print(md_table(["Store", "files", "apparent bytes", "allocated bytes"], rows))
+print(md_table(["Store", "files", "apparent bytes", "allocated bytes"],
+               [[conv16["store"], s16["files"], s16["apparent"], s16["allocated"]],
+                [conv11["store"], s11["files"], s11["apparent"], s11["allocated"]]]))
 ```
 
 ### Per-plane compressed size, OGS-00016
@@ -167,36 +260,57 @@ print(md_table(["Store", "files", "apparent bytes", "allocated bytes"], rows))
 ```{python}
 #| echo: false
 #| output: asis
-print(md_table(["array", "0.1.0", "0.2.0", "0.2.0 / 0.1.0"],
-               per_plane(cmp16_z3, "v2-ogs00016", "v3-ogs00016")))
+rows = per_plane(cmp16_z3, "v2-ogs00016", "v3-ogs00016")
+print(md_table(["array", "0.1.0", "0.2.0", "0.2.0 / 0.1.0"], rows))
+se = next(r for r in rows if r[0] == "se")
+total = conv16["after"]["apparent_bytes"] / conv16["before"]["apparent_bytes"] * 100 - 100
 print()
-print("The `se` plane is the one that pays for 64-wide chunks on FinnGen "
-      f"({[r for r in per_plane(cmp16_z3, 'v2-ogs00016', 'v3-ogs00016') if r[0] == 'se'][0][3]}); "
-      "`z` and the top-hit index are flat. Total apparent size grows "
-      f"{conv16['after']['apparent_bytes'] / conv16['before']['apparent_bytes'] * 100 - 100:+.2f} %, "
-      "comparable with #245's +1.4 % on ukb-b, so **FinnGen does not contradict ADR 0058's shape decision**.")
+print(f"The `se` plane is the only material cost of 64-wide chunks on FinnGen "
+      f"({se[3].rstrip('×')}×); `z` and the top-hit index are flat. Total apparent size grows "
+      f"{total:+.2f} %, comparable with #245's +1.4 % on ukb-b, so **FinnGen does not contradict "
+      f"ADR 0058's shape decision**.")
 ```
 
 ## The three query columns
 
-Times are **median / p95**; memory is the fresh-interpreter peak RSS. Each run
-started at a 1-minute load below 3. The 2.18 column is the OGS-00016 benchmark's
-own harness environment (`745796c`); columns (b) and (c) are measured in one Zarr 3
-process against both stores, and the same harness revision produced the 2.18 column.
+Times are **median / p95**; memory is the fresh-interpreter peak RSS. Each
+*zarr 3 column* waited for the 1-minute load to fall below 3 before its timing
+began. The 2.18 column is the OGS-00016 benchmark's harness run under `745796c`'s
+package and Zarr 2.18; columns (b) and (c) run in one Zarr 3 process against both
+stores.
+
+```{python}
+#| echo: false
+#| output: asis
+print(load_sentence(cmp16_218, cmp16_z3, "v2-ogs00016", "v3-ogs00016"))
+revs = harness_revisions()
+print()
+if not revs:
+    print("Harness digests recorded in the Zarr 3 artifacts: **not recorded** (these "
+          "artifacts predate the field); the harness revision is `132de8b`.")
+elif len(revs) == 1:
+    print(f"Harness digest recorded in every Zarr 3 artifact: `{revs[0]}` — one harness "
+          f"revision produced all three columns.")
+else:
+    print(f"**The columns were produced by different harness revisions: {revs}.**")
+```
 
 ### OGS-00016
 
 ```{python}
 #| echo: false
 #| output: asis
-print(md_table(
-    ["query", "2.18 · 0.1.0", "this code · 0.1.0", "this code · 0.2.0", "rows"],
-    three_column(cmp16_218, cmp16_z3, "v2-ogs00016", "v3-ogs00016")))
+print(md_table(["query", "2.18 · 0.1.0", "this code · 0.1.0", "this code · 0.2.0", "rows"],
+               three_column(cmp16_218, cmp16_z3, "v2-ogs00016", "v3-ogs00016")))
 print()
-print("Whole-Analysis read on T2D: **55.79 s / 22.78 GB** on 2.18 (against #237's 60.5 s / "
-      "22.8 GB baseline), **47.41 s / 2.54 GB** with Zarr 3 reading the 0.1.0 store, and "
-      "**12.13 s / 2.57 GB** on the converted 0.2.0 store — **4.6× faster and 8.9× less memory** "
-      "than the 2.18 original.")
+t218 = timings(store(cmp16_218, label_of(cmp16_218)))
+b, c = t218["bulk"], timings(store(cmp16_z3, "v3-ogs00016"))["bulk"]
+m_a = memory(store(cmp16_218, label_of(cmp16_218)))["bulk"]["peak_mb"]
+m_c = memory(store(cmp16_z3, "v3-ogs00016"))["bulk"]["peak_mb"]
+print(f"Whole-Analysis read on T2D: **{fmt_time(b['median_ms'])} / {fmt_rss(m_a)}** on 2.18 "
+      f"(#237's baseline was 60.5 s / 22.8 GB), **{fmt_time(c['median_ms'])} / {fmt_rss(m_c)}** "
+      f"on the converted 0.2.0 store — **{b['median_ms'] / c['median_ms']:.2f}× faster and "
+      f"{m_a / m_c:.2f}× less memory**.")
 ```
 
 ### OGS-00011
@@ -204,24 +318,49 @@ print("Whole-Analysis read on T2D: **55.79 s / 22.78 GB** on 2.18 (against #237'
 ```{python}
 #| echo: false
 #| output: asis
-print(md_table(
-    ["query", "2.18 · 0.1.0", "this code · 0.1.0", "this code · 0.2.0", "rows"],
-    three_column(cmp11_218, cmp11_z3, "v2-ogs00011", "v3-ogs00011")))
+print(load_sentence(cmp11_218, cmp11_z3, "v2-ogs00011", "v3-ogs00011"))
 print()
-print("The slow 2.18 shapes are the variant-side Overflow scans #252 fixed: the 1 Mb region "
-      "× all Analyses is **618.47 s / 30.18 GB** on 2.18 against **69.94 s / 5.74 GB** on 0.2.0, "
-      "and a region × one Analysis is **624.57 s / 29.55 GB** against **8.11 s / 4.97 GB**. "
-      "The random lookups fall from 38–43 s / 53–60 GB to 0.7–2.8 s / 2.5–5.0 GB.")
+print(md_table(["query", "2.18 · 0.1.0", "this code · 0.1.0", "this code · 0.2.0", "rows"],
+               three_column(cmp11_218, cmp11_z3, "v2-ogs00011", "v3-ogs00011")))
+print()
+t218_11 = timings(store(cmp11_218, label_of(cmp11_218)))
+a = memory(store(cmp11_218, label_of(cmp11_218)))
+m_b = memory(store(cmp11_z3, "v2-ogs00011"))
+m_c11 = memory(store(cmp11_z3, "v3-ogs00011"))
+print("The slow 2.18 shapes are the variant-side Overflow scans #252 fixed: one window across "
+      f"all Analyses is **{fmt_time(t218_11['regional']['median_ms'])} / "
+      f"{fmt_rss(a['regional']['peak_mb'])}** on 2.18 against "
+      f"**{fmt_time(timings(store(cmp11_z3, 'v3-ogs00011'))['regional']['median_ms'])} / "
+      f"{fmt_rss(m_c11['regional']['peak_mb'])}** on 0.2.0, and region × one Analysis is "
+      f"**{fmt_time(t218_11['regional_one_analysis']['median_ms'])} / "
+      f"{fmt_rss(a['regional_one_analysis']['peak_mb'])}** against "
+      f"**{fmt_time(timings(store(cmp11_z3, 'v3-ogs00011'))['regional_one_analysis']['median_ms'])} / "
+      f"{fmt_rss(m_c11['regional_one_analysis']['peak_mb'])}**.")
+print()
+print("0.2.0 also costs memory on the smaller OGS-00011 shapes: versus Zarr 3 on 0.1.0, peak RSS "
+      f"rises by {m_c11['phewas']['peak_mb'] - m_b['phewas']['peak_mb']:,.0f} MiB on `phewas`, "
+      f"{m_c11['regional_one_analysis']['peak_mb'] - m_b['regional_one_analysis']['peak_mb']:,.0f} MiB "
+      f"on window × one Analysis, "
+      f"{m_c11['regional']['peak_mb'] - m_b['regional']['peak_mb']:,.0f} MiB on window × all, and "
+      f"{m_c11['random_lookup_100_variants_10_analyses']['peak_mb'] - m_b['random_lookup_100_variants_10_analyses']['peak_mb']:,.0f} MiB "
+      "on 100 × 10.")
 ```
 
 ::: {.callout-note}
 ## Identity
 
-Every one of the seven shapes returns **identical result digests** in all three
-columns, on both stores: 2.18 versus Zarr 3 on 0.1.0, 2.18 versus 0.2.0, and the
-in-process 0.1.0-versus-0.2.0 check the harness enforces before writing an
-artifact. A different value, order, dtype, length or NaN position would have
-failed the run instead of being reported.
+```{python}
+#| echo: false
+#| output: asis
+print("OGS-00016, 2.18 vs this code on 0.1.0 and 0.2.0: "
+      + three_column_identity(cmp16_218, cmp16_z3, "v2-ogs00016", "v3-ogs00016") + ".")
+print("OGS-00011, 2.18 vs this code on 0.1.0 and 0.2.0: "
+      + three_column_identity(cmp11_218, cmp11_z3, "v2-ogs00011", "v3-ogs00011") + ".")
+print()
+print("Each digest is a sha256 over every result array's dtype, shape, order and values, with "
+      "NaN positions canonicalised. A different value, order, dtype, length or NaN position "
+      "would show as a differing shape here rather than being averaged away.")
+```
 :::
 
 ## FinnGen benchmark on the converted store
@@ -240,9 +379,11 @@ mr = [[r["exposure_id"].replace("finngen-r13-", ""), r["outcome_id"].replace("fi
 print("### Mendelian randomisation")
 print(md_table(["exposure", "outcome", "IVW beta", "se", "p", "instruments"], mr))
 print()
-print(f"Source bulk parse of the same Analysis: **{bench['source_bulk']['median_s']:.1f} s**; "
-      f"the store's whole-Analysis read is "
-      f"{next(r for r in bench['timings'] if r['query'] == 'bulk')['median_ms'] / 1000 / bench['source_bulk']['median_s']:.1f}× the source.")
+bulk_ms = next(r for r in bench["timings"] if r["query"] == "bulk")["median_ms"]
+src_s = bench["source_bulk"]["median_s"]
+print(f"Source bulk parse of the same Analysis: **{src_s:.1f} s**. The 0.2.0 store reads the "
+      f"whole Analysis in {bulk_ms / 1000:.2f} s, **{src_s / (bulk_ms / 1000):.1f}× faster than "
+      f"parsing the source `.gz`** (the 0.1.0 original was 3.0× slower).")
 ```
 
 ## Source fidelity
@@ -252,12 +393,11 @@ print(f"Source bulk parse of the same Analysis: **{bench['source_bulk']['median_
 #| output: asis
 all_pass = all(all(r["passed"].values()) for r in fid["analyses"])
 cells = sum(r["cells_compared"] for r in fid["analyses"])
-keep = ("z_abs", "z_overflow", "se_rel", "eaf_rel")
 rows = [[r["analysis_id"].replace("finngen-r13-", ""), f"{r['cells_compared']:,}",
          "PASS" if all(r["passed"].values()) else "FAIL"] for r in fid["analyses"]]
 print(f"Cell-by-cell comparison against the source `.gz` files: **"
       f"{'PASS' if all_pass else 'FAIL'}**, {len(fid['analyses'])} Analyses, "
-      f"{cells:,} cells compared (of {fid['n_variants']:,} variants each), every gate "
+      f"{cells:,} cells compared (of {fid['n_variants']:,} variants each), gates "
       f"`{{'z_abs': {fid['gates']['z_abs']:.2e}, 'se_rel': {fid['gates']['se_rel']}, "
       f"'eaf_rel': {fid['gates']['eaf_rel']:.3e}}}`.")
 print()
@@ -266,13 +406,37 @@ print(md_table(["Analysis", "cells compared", "result"], rows))
 
 ## Summary
 
-**Format 0.2.0 is better where it was designed to be, and the cost is the one ADR 0058
-predicted.** On OGS-00016 the whole-Analysis read is 12.13 s / 2.57 GB against
-2.18's 55.79 s / 22.78 GB, the file count falls from 237,464 to 2,399, and total
-size grows 1.73 % — the `se` plane's +6.1 % is the only material per-plane cost.
-On OGS-00011 the 2.18 Overflow scans collapse (a 1 Mb region 618 s → 70 s, a
-region × one Analysis 625 s → 8 s, lookups 38–43 s → 0.7–2.8 s) and memory with
-them. The small query shapes are milliseconds slower on 0.2.0 than on 0.1.0 under
-Zarr 3, which is the fixed per-read dispatch cost #244 found; in absolute terms
-they remain milliseconds. No shape hit a time limit; no column produced a
-different answer.
+```{python}
+#| echo: false
+#| output: asis
+c16 = {sh: ratio(cmp16_z3, "v2-ogs00016", "v3-ogs00016", sh) for sh in ADR_0058_RATIOS}
+c11 = {sh: ratio(cmp11_z3, "v2-ogs00011", "v3-ogs00011", sh) for sh in ADR_0058_RATIOS}
+rows = [[LABELS[sh], f"{c16[sh]:.2f}×", f"{ADR_0058_RATIOS[sh]:.2f}×", f"{c11[sh]:.2f}×"]
+        for sh in ("phewas", "random_lookup_10_variants_100_analyses",
+                   "random_lookup_100_variants_10_analyses", "regional", "bulk")]
+print("0.2.0 versus 0.1.0, both under Zarr 3 (ratio of medians), beside ADR 0058's "
+      "OGS-00009 ratios:")
+print()
+print(md_table(["shape", "OGS-00016 (FinnGen)", "OGS-00009 (ADR 0058)", "OGS-00011"], rows))
+print()
+print("**Where 0.2.0 is better.** " + f"OGS-00016's whole-Analysis read is "
+      f"{fmt_time(timings(store(cmp16_z3, 'v3-ogs00016'))['bulk']['median_ms'])} against "
+      f"{fmt_time(timings(store(cmp16_z3, 'v2-ogs00016'))['bulk']['median_ms'])} on 0.1.0 and "
+      f"{fmt_time(t218['bulk']['median_ms'])} on 2.18; peak RSS falls "
+      f"{m_a / m_c:.2f}×; the file count falls from {conv16['before']['n_files']:,} to "
+      f"{conv16['after']['n_files']:,}. OGS-00011's Overflow scans collapse by the ratios above.")
+print()
+print("**Where 0.2.0 is worse.** Across all four FinnGen shapes that grew, the 0.1.0→0.2.0 "
+      f"ratios ({c16['phewas']:.2f}× phewas, {c16['random_lookup_10_variants_100_analyses']:.2f}× "
+      f"10×100, {c16['random_lookup_100_variants_10_analyses']:.2f}× 100×10, "
+      f"{c16['regional']:.2f}× window-all) match ADR 0058's OGS-00009 ratios "
+      f"({ADR_0058_RATIOS['phewas']:.2f}×, {ADR_0058_RATIOS['random_lookup_10_variants_100_analyses']:.2f}×, "
+      f"{ADR_0058_RATIOS['random_lookup_100_variants_10_analyses']:.2f}×, {ADR_0058_RATIOS['regional']:.2f}×), "
+      "so they are the cost the decision measured on ukb-b, not a FinnGen surprise. Size grows "
+      f"{conv16['after']['apparent_bytes'] / conv16['before']['apparent_bytes'] * 100 - 100:+.2f} % "
+      f"({conv11['after']['apparent_bytes'] / conv11['before']['apparent_bytes'] * 100 - 100:+.2f} % "
+      "on OGS-00011), the `se` plane is the largest per-plane cost, and OGS-00011's smaller shapes "
+      "use a few hundred MiB more peak memory. The rows timed once (`n=1`) are marked in the")
+print("tables; the OGS-00011 2.18 slow shapes are single samples and their ratios are inside that "
+      "run's spread.")
+```

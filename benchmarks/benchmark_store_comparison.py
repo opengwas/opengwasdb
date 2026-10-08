@@ -349,12 +349,64 @@ def _time_limit(seconds: float):
         raise _ShapeTimeout
 
     previous = signal.signal(signal.SIGALRM, _raise)
-    signal.setitimer(signal.ITIMER_REAL, float(seconds))
     try:
+        signal.setitimer(signal.ITIMER_REAL, float(seconds))
         yield
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous)
+        # Restore the handler even if arming or clearing the timer raises, so a
+        # failed `setitimer` cannot leave our handler installed for the rest of
+        # the process (#250 review r1, nit 12).
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        finally:
+            signal.signal(signal.SIGALRM, previous)
+
+
+def _wait_for_quiet(max_load: float, timeout_s: float = 3600.0, poll_s: float = 15.0) -> float:
+    """Block until the 1-minute load average is below `max_load`; return seconds waited.
+
+    Every *column* waits, not only every pair: a run that times store B after
+    store A's timings and its seven RSS probes can otherwise start contended,
+    which is what #250 review round 1 found on the 0.2.0 columns. A `max_load`
+    of 0 disables the wait; the timeout stops a permanently busy node from
+    stalling the run for ever.
+    """
+    if max_load <= 0:
+        return 0.0
+    started = time.perf_counter()
+    while os.getloadavg()[0] >= max_load:
+        if time.perf_counter() - started > timeout_s:
+            break
+        time.sleep(poll_s)
+    return time.perf_counter() - started
+
+
+def _harness_fingerprint() -> dict[str, str]:
+    """The harness file that ran, so an artifact can name it and its digest.
+
+    `opengwasdb_fingerprint` names the package; a 2.18 column runs this harness
+    under a *different* checkout, so the artifact must also say which harness
+    revision produced the numbers (#250 review r1, minor 9).
+    """
+    path = Path(__file__).resolve()
+    return {
+        "harness_path": str(path),
+        "harness_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
+def _common_shapes(
+    all_digests: list[dict[str, dict[str, str]]],
+) -> tuple[set[str], set[str]]:
+    """The shapes every store measured, and every shape any store measured.
+
+    A shape that hit the time limit on one store carries no digest and must not
+    be compared as if it were equal; the difference is what
+    `identity.shapes_not_compared` records (#250 review r1, minor 11).
+    """
+    measured = set().union(*(set(d) for d in all_digests)) if all_digests else set()
+    common = set.intersection(*(set(d) for d in all_digests)) if all_digests else set()
+    return common, measured
 
 
 def _timed_shape(
@@ -457,15 +509,16 @@ def _dense_plane_root(q: Any) -> Any:
 
 
 def _layout_block(q: Any) -> dict[str, Any]:
-    """The physical layout each Dense plane reads at, and one top-hit tier's.
+    """The physical layout of every array a query reads, by component.
 
     #246 compares shapes, so the artifact must say which shape each store is,
     read back from the arrays rather than from the manifest: a 0.1.0 plane has
-    no shard, and a converted one has the shard the conversion wrote.  The
+    no shard, and a converted one has the shard the conversion wrote. The
     inner chunk is zarr's `chunks` (the read unit), the shard `shards` (the
-    file unit).
+    file unit). A Hybrid reads *two* components, so its Dense planes are
+    prefixed `dense/` and its Overflow's `ragged/*` arrays and outer
+    `top_hits` tiers are recorded too (#250 review r1, minor 8).
     """
-    root = _dense_plane_root(q)
 
     def shape_of(array: Any) -> dict[str, Any]:
         shards = getattr(array, "shards", None)
@@ -479,14 +532,30 @@ def _layout_block(q: Any) -> dict[str, Any]:
             "dtype": str(array.dtype),
         }
 
+    def top_hit_tiers(group: Any, prefix: str, layout: dict[str, Any]) -> None:
+        if "top_hits" not in group:
+            return
+        for tier in sorted(group["top_hits"].group_keys()):
+            if "z" in group["top_hits"][tier]:
+                layout[f"{prefix}top_hits/{tier}/z"] = shape_of(group["top_hits"][tier]["z"])
+
+    outer = getattr(q, "_root", None)
+    is_hybrid = outer is None or "z" not in outer
+    dense = getattr(q, "_dense", None)._root if is_hybrid else outer
+    prefix = "dense/" if is_hybrid else ""
+
     layout: dict[str, Any] = {}
     for name in ("z", "se", "eaf"):
-        if name in root:
-            layout[name] = shape_of(root[name])
-    if "top_hits" in root:
-        for tier in sorted(root["top_hits"].group_keys()):
-            if "z" in root["top_hits"][tier]:
-                layout[f"top_hits/{tier}/z"] = shape_of(root["top_hits"][tier]["z"])
+        if name in dense:
+            layout[f"{prefix}{name}"] = shape_of(dense[name])
+    top_hit_tiers(dense, prefix, layout)
+    if is_hybrid:
+        outer = q.store.arrays(mode="r")
+        if "ragged" in outer:
+            for name in ("z", "se", "eaf", "variant_index", "offsets"):
+                if name in outer["ragged"]:
+                    layout[f"ragged/{name}"] = shape_of(outer["ragged"][name])
+        top_hit_tiers(outer, "", layout)
     return layout
 
 
@@ -508,6 +577,7 @@ def _measure_store(
     spec: StoreSpec, selection: dict[str, Any], args: argparse.Namespace
 ) -> tuple[dict[str, Any], dict[str, dict[str, str]]]:
     """Time and digest every shape for one store; run its RSS probes if asked."""
+    waited_for_load_s = _wait_for_quiet(args.max_start_load)
     load_before = os.getloadavg()[0]
     q, plan = _query_shapes.open_benchmark_store(spec.path)
     try:
@@ -516,6 +586,8 @@ def _measure_store(
         patterns = _patterns_for_store(q, selection)
         timings: list[dict[str, Any]] = []
         digests: dict[str, dict[str, str]] = {}
+        limit_hits: list[str] = []
+        after_limit_hit = False
         for name, fn in patterns.items():
             timed = _timed_shape(
                 fn,
@@ -524,6 +596,8 @@ def _measure_store(
                 slow_shape_s=args.slow_shape_s,
             )
             if timed["timed_out"]:
+                limit_hits.append(name)
+                after_limit_hit = True
                 timings.append(
                     {"query": name, "timed_out": True, "limit_s": args.shape_limit_s}
                 )
@@ -533,17 +607,21 @@ def _measure_store(
                     flush=True,
                 )
                 continue
-            timings.append(
-                {
-                    "query": name,
-                    "timed_out": False,
-                    "median_ms": round(timed["median_ms"], 3),
-                    "p95_ms": round(timed["p95_ms"], 3),
-                    "repetitions": timed["repetitions"],
-                    "warmup_ms": timed["warmup_ms"],
-                    "result_count": timed["result_count"],
-                }
-            )
+            row: dict[str, Any] = {
+                "query": name,
+                "timed_out": False,
+                "median_ms": round(timed["median_ms"], 3),
+                "p95_ms": round(timed["p95_ms"], 3),
+                "repetitions": timed["repetitions"],
+                "warmup_ms": timed["warmup_ms"],
+                "result_count": timed["result_count"],
+            }
+            if after_limit_hit:
+                # A SIGALRM abandons an in-flight Zarr 3 read on its event-loop
+                # thread; a shape timed after that shares the CPU with it
+                # (#250 review r1, nit 12).
+                row["after_limit_hit"] = True
+            timings.append(row)
             digests[name] = timed["digests"]
             print(
                 f"[{spec.label}] {name:38s} median={timed['median_ms']:9.2f} ms  "
@@ -564,6 +642,8 @@ def _measure_store(
         "timings": timings,
         "memory": memory,
         "effective_reader": effective_reader,
+        "limit_hits": limit_hits,
+        "waited_for_load_s": round(waited_for_load_s, 1),
         "load_average_1m_before": round(load_before, 2),
         "load_average_1m_after": round(load_after, 2),
     }
@@ -860,6 +940,14 @@ def _parser() -> argparse.ArgumentParser:
         f"{DEFAULT_REGION[1]}-{DEFAULT_REGION[2]})",
     )
     ap.add_argument(
+        "--max-start-load",
+        type=float,
+        default=3.0,
+        metavar="LOAD",
+        help="wait until the 1-minute load before each column's timing is below LOAD "
+        "(0 disables); every column waits, not only each pair (#250 review r1)",
+    )
+    ap.add_argument(
         "--selection-json",
         default=None,
         help="internal: the once-resolved selection an RSS probe must reuse",
@@ -908,8 +996,7 @@ def main() -> None:
     # A shape that hit the time limit on any store carries no digest, so it is
     # recorded per store but excluded from the identity comparison -- and named
     # in the artifact, so a missing shape cannot hide as "identical".
-    measured = set().union(*(set(d) for d in all_digests))
-    common = set.intersection(*(set(d) for d in all_digests)) if all_digests else set()
+    common, measured = _common_shapes(all_digests)
     if not common:
         raise SystemExit(
             "no shape was measured by every store; there is nothing to compare and "
@@ -938,6 +1025,7 @@ def main() -> None:
             "identical": True,
         },
         "environment": _environment_block(records[0]["effective_reader"]),
+        "harness_file": _harness_fingerprint(),
         **provenance(),
     }
     write_artifact(args.output, result)
