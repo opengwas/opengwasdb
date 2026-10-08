@@ -2530,7 +2530,7 @@ vertical-align: -.125em;
 </section>
 <section id="the-two-252-overflow-shapes" class="level3">
 <h3 class="anchored" data-anchor-id="the-two-252-overflow-shapes">The two #252 Overflow shapes</h3>
-<p>The seven-shape PheWAS anchor is on the reference axis, so it never exercises the Ragged Overflow’s PheWAS path; these two shapes do. They are measured by <code>benchmarks/ogs00011_extra_shapes.py</code>, the committed runner. One invocation runs one shape in one column: it waits for a 1-minute load below 3, then calls #252’s probe (<code>benchmarks.ogs00011_ab.measure_one_shape</code>) once per repetition <strong>in that one interpreter</strong>, so only repetition 1 starts in a fresh process, and peak RSS is the process’s, sampled during each call. Every record carries the interpreter, the Zarr version, the <code>opengwasdb</code> path and fingerprint, the commit, and the probe’s and runner’s sha256.</p>
+<p>The seven-shape PheWAS anchor is on the reference axis, so it never exercises the Ragged Overflow’s PheWAS path; these two shapes do. They are measured by <code>benchmarks/ogs00011_extra_shapes.py</code>, the committed runner. One invocation runs one shape in one column, calling #252’s probe (<code>benchmarks.ogs00011_ab.measure_one_shape</code>) once per repetition <strong>in that one interpreter</strong>, so only repetition 1 starts in a fresh process, and peak RSS is the process’s, sampled during each call. On every repetition the probe opens the store, the runner’s gate waits for a 1-minute load below 3, and only then is the start load sampled and the clock started. Every record carries the interpreter, the Zarr version, the <code>opengwasdb</code> path and fingerprint, the commit, and the probe’s and runner’s sha256.</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 20%">
@@ -2551,23 +2551,23 @@ vertical-align: -.125em;
 <tbody>
 <tr class="odd">
 <td>PheWAS of an off-panel variant</td>
-<td>18.99 s / 19.70 s · 26.97 GiB</td>
-<td>26.80 s / 27.37 s · 2.41 GiB</td>
-<td>33.39 s / 33.55 s · 2.60 GiB</td>
+<td>22.64 s / 26.40 s · 26.97 GiB</td>
+<td>28.20 s / 28.66 s · 2.41 GiB</td>
+<td>28.97 s / 29.88 s · 2.52 GiB</td>
 <td>1</td>
 </tr>
 <tr class="even">
 <td>Bulk, largest Overflow Analysis</td>
-<td>49.23 s / 51.34 s · 19.79 GiB</td>
-<td>43.69 s / 45.41 s · 14.10 GiB</td>
-<td>26.13 s / 27.10 s · 14.12 GiB</td>
+<td>46.57 s / 50.27 s · 19.79 GiB</td>
+<td>43.13 s / 46.45 s · 14.42 GiB</td>
+<td>26.12 s / 26.55 s · 14.05 GiB</td>
 <td>85,226,242</td>
 </tr>
 </tbody>
 </table>
 <ul>
-<li><code>phewas_off_axis</code>, every repetition: a-2.18-0.1.0 18.48 s–19.70 s; b-code-0.1.0 20.36 s–27.37 s; c-code-0.2.0 30.83 s–33.55 s</li>
-<li><code>bulk_overflow_heavy</code>, every repetition: a-2.18-0.1.0 45.83 s–51.34 s; b-code-0.1.0 41.26 s–45.41 s; c-code-0.2.0 25.40 s–27.10 s</li>
+<li><code>phewas_off_axis</code>, every repetition: a-2.18-0.1.0 19.56 s–26.40 s; b-code-0.1.0 26.42 s–28.66 s; c-code-0.2.0 27.91 s–29.88 s</li>
+<li><code>bulk_overflow_heavy</code>, every repetition: a-2.18-0.1.0 45.44 s–50.27 s; b-code-0.1.0 39.99 s–46.45 s; c-code-0.2.0 25.80 s–26.55 s</li>
 </ul>
 <p>Every extra shape returns the same rows and sha256 in all three columns: <code>phewas_off_axis</code> True, <code>bulk_overflow_heavy</code> True.</p>
 <table class="caption-top table">
@@ -2598,40 +2598,40 @@ vertical-align: -.125em;
 <td>2.18.7</td>
 <td>9fe19ecba575</td>
 <td>745796c</td>
-<td>6bf954d58344</td>
-<td>5b2e671f9053</td>
+<td>1e74a9613d07</td>
+<td>74ab9480bf34</td>
 </tr>
 <tr class="even">
 <td><code>b-code-0.1.0</code></td>
 <td><code>/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/.pixi/envs/dev/bin/python</code></td>
 <td>3.4.0</td>
 <td>49af77aedf3f</td>
-<td>6e01315</td>
-<td>6bf954d58344</td>
-<td>5b2e671f9053</td>
+<td>850b3c7</td>
+<td>1e74a9613d07</td>
+<td>74ab9480bf34</td>
 </tr>
 <tr class="odd">
 <td><code>c-code-0.2.0</code></td>
 <td><code>/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/.pixi/envs/dev/bin/python</code></td>
 <td>3.4.0</td>
 <td>49af77aedf3f</td>
-<td>6e01315</td>
-<td>6bf954d58344</td>
-<td>5b2e671f9053</td>
+<td>850b3c7</td>
+<td>1e74a9613d07</td>
+<td>74ab9480bf34</td>
 </tr>
 </tbody>
 </table>
-<p>The probe every column recorded is the committed <code>benchmarks/ogs00011_ab.py</code> (6bf954d58344). The runner they recorded (5b2e671f9053) is <strong>not</strong> the committed runner (1296605a7b81): after this run its load wait was moved into <code>benchmarks/_quiet.py</code>, which the store-comparison harness shares (the duplication gate flagged the copy), and the file as it ran was not kept. The commit is the checkout’s <code>HEAD</code>; the probe and runner were working-tree files when they ran, which is why each record carries their sha256 as well as the package fingerprint.</p>
-<p>Start load of every repetition, and the repetition the median came from:</p>
+<p>The probe every column recorded is the committed <code>benchmarks/ogs00011_ab.py</code> (1e74a9613d07). So is the runner (74ab9480bf34). The commit is the checkout’s <code>HEAD</code> when the column ran; the package fingerprint and the two digests name the code itself.</p>
+<p>Every repetition’s gate wait and start load, and the repetition the median came from:</p>
 <ul>
-<li><code>phewas_off_axis</code> a-2.18-0.1.0: waited 0 s; loads [2.98, 3.17, 3.8, 3.88, 4.13]; median from repetition 2; repetitions at or above load 3: [2, 3, 4, 5]</li>
-<li><code>phewas_off_axis</code> b-code-0.1.0: waited 45 s; loads [2.77, 3.22, 4.32, 4.99, 4.5]; median from repetition 2; repetitions at or above load 3: [2, 3, 4, 5]</li>
-<li><code>phewas_off_axis</code> c-code-0.2.0: waited 15 s; loads [2.83, 3.88, 3.65, 3.29, 2.89]; median from repetition 4; repetitions at or above load 3: [2, 3, 4]</li>
-<li><code>bulk_overflow_heavy</code> a-2.18-0.1.0: waited 0 s; loads [2.92, 3.0, 2.05, 2.45, 3.0]; median from repetition 3; repetitions at or above load 3: [2, 5]</li>
-<li><code>bulk_overflow_heavy</code> b-code-0.1.0: waited 0 s; loads [2.45, 2.65, 2.92, 2.79, 2.73]; median from repetition 2; all below 3</li>
-<li><code>bulk_overflow_heavy</code> c-code-0.2.0: waited 0 s; loads [3.54, 3.12, 2.26, 2.38, 2.5]; median from repetition 3; repetitions at or above load 3: [1, 2]</li>
+<li><code>phewas_off_axis</code> a-2.18-0.1.0: gate waits [0.0, 0.0, 0.0, 15.0, 0.0] s; start loads [1.81, 2.62, 2.63, 2.46, 2.24]; median from repetition 1; all below 3</li>
+<li><code>phewas_off_axis</code> b-code-0.1.0: gate waits [0.0, 0.0, 0.0, 15.0, 15.0] s; start loads [2.08, 2.78, 2.55, 2.59, 2.52]; median from repetition 3; all below 3</li>
+<li><code>phewas_off_axis</code> c-code-0.2.0: gate waits [0.0, 0.0, 0.0, 0.0, 0.0] s; start loads [2.89, 2.89, 2.6, 2.5, 2.72]; median from repetition 4; all below 3</li>
+<li><code>bulk_overflow_heavy</code> a-2.18-0.1.0: gate waits [0.0, 0.0, 0.0, 0.0, 0.0] s; start loads [2.42, 2.39, 2.43, 2.51, 2.92]; median from repetition 3; all below 3</li>
+<li><code>bulk_overflow_heavy</code> b-code-0.1.0: gate waits [0.0, 0.0, 0.0, 15.0, 0.0] s; start loads [2.39, 2.37, 2.14, 2.48, 2.42]; median from repetition 2; all below 3</li>
+<li><code>bulk_overflow_heavy</code> c-code-0.2.0: gate waits [0.0, 0.0, 0.0, 0.0, 0.0] s; start loads [2.76, 2.24, 2.11, 2.32, 2.02]; median from repetition 1; all below 3</li>
 </ul>
-<p>Each of the 6 runs was gated below load 3 before its first repetition and none gave up waiting; the repetitions themselves were not gated, and <strong>15 of 30 began at a 1-minute load of 3 or more</strong> (up to 4.99).</p>
+<p>Every one of the 30 repetitions was gated at a 1-minute load below 3 immediately before its clock: 4 had to wait (up to 15 s, 1 min in all), and none gave up. Every clock started below 3 (highest 2.92). A first confirming run gated each column only once, and many of its repetitions began at 3 or more; it is replaced here and kept in the git history.</p>
 <div class="callout callout-style-default callout-note callout-titled">
 <div class="callout-header d-flex align-content-center">
 <div class="callout-icon-container">
@@ -2959,19 +2959,19 @@ vertical-align: -.125em;
 <tbody>
 <tr class="odd">
 <td>PheWAS of an off-panel variant</td>
-<td>1.25×</td>
-<td>1.76×</td>
+<td>1.03×</td>
+<td>1.28×</td>
 </tr>
 <tr class="even">
 <td>Bulk, largest Overflow Analysis</td>
-<td>0.60×</td>
-<td>0.53×</td>
+<td>0.61×</td>
+<td>0.56×</td>
 </tr>
 </tbody>
 </table>
-<p><strong>The format effect (0.2.0 against this code on 0.1.0).</strong> On OGS-00016, 0.2.0 is faster on 2 of 7 shapes (One window, one Analysis (0.66×); One whole Analysis (0.37×)) and slower on 5 of 7 shapes (Top hits for one Analysis (1.13×); One variant, all Analyses (2.36×); 10 variants × 100 Analyses (2.47×); 100 variants × 10 Analyses (1.47×); One window, all Analyses (1.36×)). On OGS-00011 it is faster on 2 of 7 shapes (One window, all Analyses (0.71×); One whole Analysis (0.38×)) and slower on 5 of 7 shapes (Top hits for one Analysis (1.15×); One variant, all Analyses (2.85×); One window, one Analysis (1.00×); 10 variants × 100 Analyses (1.41×); 100 variants × 10 Analyses (1.12×)). Of the two Overflow shapes, the overflow-heavy bulk is 0.60× and the off-panel PheWAS 1.25×. Peak RSS is higher on every shape, by 24–93 MiB on OGS-00016, and higher on every shape, by 4–488 MiB on OGS-00011.</p>
+<p><strong>The format effect (0.2.0 against this code on 0.1.0).</strong> On OGS-00016, 0.2.0 is faster on 2 of 7 shapes (One window, one Analysis (0.66×); One whole Analysis (0.37×)) and slower on 5 of 7 shapes (Top hits for one Analysis (1.13×); One variant, all Analyses (2.36×); 10 variants × 100 Analyses (2.47×); 100 variants × 10 Analyses (1.47×); One window, all Analyses (1.36×)). On OGS-00011 it is faster on 2 of 7 shapes (One window, all Analyses (0.71×); One whole Analysis (0.38×)) and slower on 5 of 7 shapes (Top hits for one Analysis (1.15×); One variant, all Analyses (2.85×); One window, one Analysis (1.00×); 10 variants × 100 Analyses (1.41×); 100 variants × 10 Analyses (1.12×)). Of the two Overflow shapes, the overflow-heavy bulk is 0.61× and the off-panel PheWAS 1.03×. Peak RSS is higher on every shape, by 24–93 MiB on OGS-00016, and higher on every shape, by 4–488 MiB on OGS-00011.</p>
 <p>On the five shapes ADR 0058 timed on OGS-00009, FinnGen’s 0.1.0 → 0.2.0 ratios sit beside the decision’s own (computed from #246’s artifact): One variant, all Analyses 2.36× against 2.75×; 10 variants × 100 Analyses 2.47× against 2.80×; 100 variants × 10 Analyses 1.47× against 1.82×; One window, all Analyses 1.36× against 1.35×; One whole Analysis 0.37× against 0.35×. FinnGen’s ratio is above OGS-00009’s on One window, all Analyses, One whole Analysis, by at most 6.9 %; elsewhere it is below. ADR 0058’s generated <em>Checked on FinnGen</em> block states whether FinnGen departs materially from them.</p>
-<p><strong>The user-visible change (0.2.0 against Zarr 2.18).</strong> 0.2.0 is faster on 2 of 7 shapes (One window, all Analyses (0.90×); One whole Analysis (0.22×)) of OGS-00016 and on 5 of 7 shapes (One window, one Analysis (0.01×); 10 variants × 100 Analyses (0.07×); 100 variants × 10 Analyses (0.02×); One window, all Analyses (0.11×); One whole Analysis (0.35×)) of OGS-00011. <strong>On OGS-00016 it is slower than 2.18 on 5 of seven shapes</strong>: Top hits for one Analysis 7.47× (+16.1 ms); One variant, all Analyses 7.34× (+47.8 ms); One window, one Analysis 1.07× (+3.3 ms); 10 variants × 100 Analyses 3.61× (+228.6 ms); 100 variants × 10 Analyses 1.85× (+537.1 ms). The largest absolute gap is 537.1 ms, on 100 variants × 10 Analyses. On OGS-00011 it is slower on 2 of seven: Top hits for one Analysis 4.24× (+12.2 ms); One variant, all Analyses 2.68× (+48.2 ms). The off-panel Overflow PheWAS is slower by seconds; see the warning below.</p>
+<p><strong>The user-visible change (0.2.0 against Zarr 2.18).</strong> 0.2.0 is faster on 2 of 7 shapes (One window, all Analyses (0.90×); One whole Analysis (0.22×)) of OGS-00016 and on 5 of 7 shapes (One window, one Analysis (0.01×); 10 variants × 100 Analyses (0.07×); 100 variants × 10 Analyses (0.02×); One window, all Analyses (0.11×); One whole Analysis (0.35×)) of OGS-00011. <strong>On OGS-00016 it is slower than 2.18 on 5 of seven shapes</strong>: Top hits for one Analysis 7.47× (+16.1 ms); One variant, all Analyses 7.34× (+47.8 ms); One window, one Analysis 1.07× (+3.3 ms); 10 variants × 100 Analyses 3.61× (+228.6 ms); 100 variants × 10 Analyses 1.85× (+537.1 ms). The largest absolute gap is 537.1 ms, on 100 variants × 10 Analyses. On OGS-00011 it is slower on 2 of seven: Top hits for one Analysis 4.24× (+12.2 ms); One variant, all Analyses 2.68× (+48.2 ms). The off-panel Overflow PheWAS is slower by 6.33 s by median; see the callout below.</p>
 <p><strong>Where the big gains come from.</strong> OGS-00016’s whole-Analysis read — the shape this format exists for — takes 13.52 s on 0.2.0 against 36.15 s under this code on 0.1.0 and 60.64 s on 2.18: of the 4.49× gain over 2.18, the format’s own share is 2.67×. Its peak RSS is 2.53 GiB against 2.49 GiB on 0.1.0 and 22.24 GiB on 2.18, so the 8.79× memory gain is the Zarr 3 reader’s: 0.2.0 itself uses more than this code on 0.1.0. OGS-00011’s window across all Analyses falls from 618.47 s on 2.18 to 98.00 s under this code on 0.1.0 — #252’s fix, before any format change — and to 70.05 s on 0.2.0.</p>
 <div class="callout callout-style-default callout-warning callout-titled">
 <div class="callout-header d-flex align-content-center">
@@ -2983,10 +2983,10 @@ vertical-align: -.125em;
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>The off-panel Overflow PheWAS — the path the seven #242 shapes never touch — takes <strong>33.39 s on 0.2.0 against 26.80 s under this code on 0.1.0 and 18.99 s on 2.18</strong> (medians of 5 repetitions per column). The decided stack is <strong>1.76× slower than 2.18</strong> and 1.25× slower than this code on 0.1.0, while its peak RSS falls from 26.97 GiB to 2.60 GiB.</p>
-<p><strong>Confirmed:</strong> every 0.2.0 repetition is slower than every repetition of both other columns (a-2.18-0.1.0 18.48 s–19.70 s, b-code-0.1.0 20.36 s–27.37 s, c-code-0.2.0 30.83 s–33.55 s). Repetitions at a 1-minute load of 3 or more: a-2.18-0.1.0 4 of 5, b-code-0.1.0 4 of 5, c-code-0.2.0 3 of 5. 0.2.0 had no more of them than either other column, so load does not explain its slowdown.</p>
-<p><strong>Why.</strong> An off-panel PheWAS reads only the Overflow, and with no variant-side index it must scan every Analysis’s <code>variant_index</code> for the variant. #252’s windowed scan bounds that scan’s memory by reading a few inner chunks at a time (<code>SCAN_WINDOW_CHUNKS</code>), at the cost of one read per window. The Overflow’s inner chunk is 200,000 elements at 0.1.0 and 200,000 at 0.2.0, so the chunks did not narrow on this path; what 0.2.0 changes is that each window becomes a partial read of a 50,000,000-element shard (its index, then byte ranges, through the sharding codec) where 0.1.0 read each chunk as its own file. That per-window cost is inferred from the code and these layouts, not profiled. Read as one contiguous segment instead, the same arrays are faster at 0.2.0 (the overflow-heavy bulk, 0.60×). The designed fix is ADR 0060’s by-variant index (#252 step 5), which reads a variant’s rows directly instead of scanning; it is outside #250.</p>
-<p><strong>Against #252’s committed number.</strong> #252’s A/B (<code>opengwasdb_ogs00011_hybrid_252_ab.json</code>) recorded this path on 0.1.0 at 22.62 s in one run at a 1-minute load of 4.24, under commit 9d2bda3. This run’s 5 0.1.0 repetitions span 20.36 s–27.37 s, which contains it, so the gap between the medians is the spread of a single sample against a median, not evidence of a change. The Overflow read path is unchanged between that commit and this code (no change under <code>opengwasdb/query/</code>, and only writer roles in <code>layouts/ragged/zarr_csr.py</code>); ADR 0060 quotes 26.4 s for the same path from an earlier version of #252’s artifact.</p>
+<p>The off-panel Overflow PheWAS — the path the seven #242 shapes never touch — takes <strong>28.97 s on 0.2.0 against 28.20 s under this code on 0.1.0 and 22.64 s on 2.18</strong> (medians of 5 repetitions per column). The decided stack is <strong>1.28× the 2.18 time</strong> (+6.33 s) and 1.03× the time of this code on 0.1.0, while its peak RSS falls from 26.97 GiB to 2.52 GiB.</p>
+<p><strong>Against 2.18:</strong> confirmed: every 0.2.0 repetition is slower than every 2.18 repetition. <strong>Against this code on 0.1.0, the format effect:</strong> not distinguishable: the repetitions overlap. Every repetition: a-2.18-0.1.0 19.56 s–26.40 s, b-code-0.1.0 26.42 s–28.66 s, c-code-0.2.0 27.91 s–29.88 s. Every repetition’s clock started below load 3 (highest 2.89), so load does not explain the slowdown.</p>
+<p><strong>Why.</strong> The time cost against 2.18 is this code’s, not the format’s: it is already there under this code on 0.1.0 (28.20 s against 22.64 s; every 0.1.0 repetition is slower than every 2.18 one), and 0.2.0 adds nothing this run can distinguish. An off-panel PheWAS reads only the Overflow, and with no variant-side index it must scan every Analysis’s <code>variant_index</code> for the variant. #252’s windowed scan bounds that scan’s memory by reading a few inner chunks at a time (<code>SCAN_WINDOW_CHUNKS</code>), at the cost of one read per window. The Overflow’s inner chunk is 200,000 elements at 0.1.0 and 200,000 at 0.2.0, so the chunks did not narrow on this path; 0.2.0 puts them in 50,000,000-element shards. The pre-#252 code that 2.18 runs decodes the whole array in one batched read, at 26.97 GiB peak; the windowed scan holds 2.41 GiB and pays one read per window. That is #252’s chosen trade of time for bounded memory. Read as one contiguous segment instead, the same arrays are faster at 0.2.0 (the overflow-heavy bulk, 0.61× the 0.1.0 time). The designed fix for the scan is ADR 0060’s by-variant index (#252 step 5), which reads a variant’s rows directly instead of scanning; it is outside #250.</p>
+<p><strong>Against #252’s committed number.</strong> #252’s A/B (<code>opengwasdb_ogs00011_hybrid_252_ab.json</code>) recorded this path on 0.1.0 at 22.62 s in one run at a 1-minute load of 4.24, under commit 9d2bda3. This run’s 5 0.1.0 repetitions span 26.42 s–28.66 s, which <strong>does not contain it</strong>: #252’s single sample is faster than every repetition here. The Overflow read path is unchanged between that commit and this code (no change under <code>opengwasdb/query/</code>, and only writer roles in <code>layouts/ragged/zarr_csr.py</code>); ADR 0060 quotes 26.4 s for the same path from an earlier version of #252’s artifact, so #252’s own two samples of it differ by seconds.</p>
 </div>
 </div>
 <p><strong>Size.</strong> Total apparent size grows +1.73 % on OGS-00016 and +2.59 % on OGS-00011, against OGS-00009’s +1.41 %; the largest per-plane cost on FinnGen is <code>se</code> at 1.061×. <strong>Load.</strong> Every seven-shape column began below load 3 (highest 2.99); the extras’ loads are listed per repetition above.</p>

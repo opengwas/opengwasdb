@@ -222,23 +222,27 @@ def digest_sentence(environments):
     if runner == {runner_now}:
         return text + f"So is the runner ({runner_now[:12]})."
     return text + (
-        f"The runner they recorded ({', '.join(sorted(r[:12] for r in runner))}) is **not** the "
-        f"committed runner ({runner_now[:12]}): after this run its load wait was moved into "
-        "`benchmarks/_quiet.py`, which the store-comparison harness shares (the duplication gate "
-        "flagged the copy), and the file as it ran was not kept.")
+        f"**The runner they recorded ({', '.join(sorted(r[:12] for r in runner))}) is not the "
+        f"committed runner ({runner_now[:12]})**: this evidence came from another revision of "
+        "it, and should be re-run.")
 
 
 def extras_load_sentence():
-    """How many extra-shape repetitions began at a load of 3 or more, and the waits."""
+    """How each repetition's load gate went, and the loads the clocks started at."""
     rows = [extras["shapes"][sh][col] for sh in EXTRA_SHAPES for col in EXTRA_COLUMNS]
     loads = [load for row in rows for load in row["start_load_1m"]]
+    waits = [wait for row in rows for wait in row["gate_wait_s"]]
+    gave_up = sum(flag for row in rows for flag in row["gate_gave_up"])
     high = [load for load in loads if load >= 3]
-    gave_up = [row for row in rows if row["run"]["waited_timed_out"]]
-    return (f"Each of the {len(rows)} runs was gated below load 3 before its first repetition"
-            + (f", but **{len(gave_up)} gave up waiting**" if gave_up else
-               " and none gave up waiting")
-            + f"; the repetitions themselves were not gated, and **{len(high)} of {len(loads)} "
-            f"began at a 1-minute load of 3 or more** (up to {max(loads):.2f}).")
+    return (f"Every one of the {len(loads)} repetitions was gated at a 1-minute load below 3 "
+            f"immediately before its clock: {sum(wait > 0 for wait in waits)} had to wait "
+            f"(up to {max(waits):,.0f} s, {sum(waits) / 60:,.0f} min in all), and "
+            + (f"**{gave_up} gave up waiting and ran contended**. " if gave_up else
+               "none gave up. ")
+            + (f"**{len(high)} still began at 3 or more** (up to {max(loads):.2f})."
+               if high else f"Every clock started below 3 (highest {max(loads):.2f}).")
+            + " A first confirming run gated each column only once, and many of its "
+            "repetitions began at 3 or more; it is replaced here and kept in the git history.")
 
 
 PLANES = ["data.zarr/z", "data.zarr/se", "data.zarr/eaf", "data.zarr/eaf_baseline",
@@ -528,10 +532,12 @@ print("0.2.0 also costs memory on the smaller OGS-00011 shapes: versus Zarr 3 on
 The seven-shape PheWAS anchor is on the reference axis, so it never exercises
 the Ragged Overflow's PheWAS path; these two shapes do. They are measured by
 `benchmarks/ogs00011_extra_shapes.py`, the committed runner. One invocation
-runs one shape in one column: it waits for a 1-minute load below 3, then calls
-#252's probe (`benchmarks.ogs00011_ab.measure_one_shape`) once per repetition
-**in that one interpreter**, so only repetition 1 starts in a fresh process,
-and peak RSS is the process's, sampled during each call. Every record carries
+runs one shape in one column, calling #252's probe
+(`benchmarks.ogs00011_ab.measure_one_shape`) once per repetition **in that one
+interpreter**, so only repetition 1 starts in a fresh process, and peak RSS is
+the process's, sampled during each call. On every repetition the probe opens
+the store, the runner's gate waits for a 1-minute load below 3, and only then
+is the start load sampled and the clock started. Every record carries
 the interpreter, the Zarr version, the `opengwasdb` path and fingerprint, the
 commit, and the probe's and runner's sha256.
 
@@ -559,11 +565,10 @@ print(md_table(
      if env["recorded"] else [f"`{column}`", *["**not recorded**"] * 6]
      for column, env in environments.items()]))
 print()
-print(digest_sentence(environments) + " The commit is the checkout's `HEAD`; the probe and "
-      "runner were working-tree files when they ran, which is why each record carries their "
-      "sha256 as well as the package fingerprint.")
+print(digest_sentence(environments) + " The commit is the checkout's `HEAD` when the column "
+      "ran; the package fingerprint and the two digests name the code itself.")
 print()
-print("Start load of every repetition, and the repetition the median came from:")
+print("Every repetition's gate wait and start load, and the repetition the median came from:")
 print()
 for shape in EXTRA_SHAPES:
     for column in EXTRA_COLUMNS:
@@ -571,7 +576,7 @@ for shape in EXTRA_SHAPES:
         median_rep = row["elapsed_ms"].index(row["median_ms"]) + 1
         high = [index + 1 for index, load in enumerate(row["start_load_1m"]) if load >= 3]
         suffix = f"; repetitions at or above load 3: {high}" if high else "; all below 3"
-        print(f"- `{shape}` {column}: waited {row['run']['waited_for_load_s']:g} s; loads "
+        print(f"- `{shape}` {column}: gate waits {row['gate_wait_s']} s; start loads "
               f"{row['start_load_1m']}; median from repetition {median_rep}{suffix}")
 print()
 print(extras_load_sentence())
@@ -730,6 +735,15 @@ print()
 gaps16 = gaps_vs_218(cmp16_218, cmp16_z3, "v3-ogs00016")
 gaps11 = gaps_vs_218(cmp11_218, cmp11_z3, "v3-ogs00011")
 worst16 = max(gaps16, key=gaps16.get)
+
+
+def phewas_vs_218_sentence():
+    row = extras["shapes"]["phewas_off_axis"]
+    gap = row["c-code-0.2.0"]["median_ms"] - row["a-2.18-0.1.0"]["median_ms"]
+    if gap <= 0:
+        return "The off-panel Overflow PheWAS is not slower than 2.18."
+    return (f"The off-panel Overflow PheWAS is slower by {fmt_time(gap)} by median; see the "
+            "callout below.")
 print("**The user-visible change (0.2.0 against Zarr 2.18).** 0.2.0 is faster on "
       f"{count_of(listed(r16, LABELS, 1, False), 7)} of OGS-00016 and on "
       f"{count_of(listed(r11, LABELS, 1, False), 7)} of OGS-00011. **On OGS-00016 it is "
@@ -740,7 +754,7 @@ print("**The user-visible change (0.2.0 against Zarr 2.18).** 0.2.0 is faster on
       f"On OGS-00011 it is slower on {len(gaps11)} of seven: "
       + "; ".join(f"{LABELS[sh]} {fmt_ratio(r11[sh][1])} (+{fmt_time(gap)})"
                   for sh, gap in gaps11.items())
-      + ". The off-panel Overflow PheWAS is slower by seconds; see the warning below.")
+      + ". " + phewas_vs_218_sentence())
 print()
 
 b16, c16 = timings(store(cmp16_z3, "v2-ogs00016"))["bulk"], timings(store(cmp16_z3, "v3-ogs00016"))["bulk"]
@@ -764,49 +778,85 @@ print("**Where the big gains come from.** OGS-00016's whole-Analysis read — th
       f"{fmt_time(t11['0.2.0'])} on 0.2.0.")
 print()
 
+def load_caveat(ph, high):
+    """Whether the start loads could explain a 0.2.0 slowdown."""
+    starts = [load for col in EXTRA_COLUMNS for load in ph[col]["start_load_1m"]]
+    if not any(high.values()):
+        return (f"Every repetition's clock started below load 3 (highest {max(starts):.2f}), "
+                "so load does not explain the slowdown.")
+    counts = ", ".join(f"{col} {high[col]} of {ph[col]['repetitions']}" for col in EXTRA_COLUMNS)
+    if high["c-code-0.2.0"] <= min(high["a-2.18-0.1.0"], high["b-code-0.1.0"]):
+        return (f"Repetitions at a 1-minute load of 3 or more: {counts}. 0.2.0 had no more of "
+                "them than either other column, so load does not explain its slowdown.")
+    return (f"Repetitions at a 1-minute load of 3 or more: {counts}. **0.2.0 had more of them "
+            "than another column**, so load may contribute.")
+
+
 ph = extras["shapes"]["phewas_off_axis"]
 lo = {col: extras_range("phewas_off_axis", col)[0] for col in EXTRA_COLUMNS}
 hi = {col: extras_range("phewas_off_axis", col)[1] for col in EXTRA_COLUMNS}
-separated = lo["c-code-0.2.0"] > max(hi["a-2.18-0.1.0"], hi["b-code-0.1.0"])
+A, B, C = EXTRA_COLUMNS
+c_vs_a, c_vs_b, b_vs_a = lo[C] > hi[A], lo[C] > hi[B], lo[B] > hi[A]
+gap_a = ph[C]["median_ms"] - ph[A]["median_ms"]
+others_by_seconds = [sh for gaps in (gaps16, gaps11) for sh, g in gaps.items() if g >= 1000]
+if ex["bulk_overflow_heavy"][1] > 1:
+    others_by_seconds.append("bulk_overflow_heavy")
 reps = sorted({ph[col]["repetitions"] for col in EXTRA_COLUMNS})
 high = {col: sum(load >= 3 for load in ph[col]["start_load_1m"]) for col in EXTRA_COLUMNS}
 layout = {s["label"]: s["dataset"]["layout"]["ragged/variant_index"] for s in cmp11_z3["stores"]}
 print("::: {.callout-warning}")
-print("## The one shape slower than the status quo by seconds")
+print("## The one shape slower than the status quo by seconds"
+      if c_vs_a and gap_a >= 1000 and not others_by_seconds else
+      "## The off-panel Overflow PheWAS against the status quo")
 print(f"The off-panel Overflow PheWAS — the path the seven #242 shapes never touch — takes "
-      f"**{fmt_time(ph['c-code-0.2.0']['median_ms'])} on 0.2.0 against "
-      f"{fmt_time(ph['b-code-0.1.0']['median_ms'])} under this code on 0.1.0 and "
-      f"{fmt_time(ph['a-2.18-0.1.0']['median_ms'])} on 2.18** (medians of "
+      f"**{fmt_time(ph[C]['median_ms'])} on 0.2.0 against "
+      f"{fmt_time(ph[B]['median_ms'])} under this code on 0.1.0 and "
+      f"{fmt_time(ph[A]['median_ms'])} on 2.18** (medians of "
       f"{' / '.join(map(str, reps))} repetitions per column). The decided stack is "
-      f"**{fmt_ratio(ex['phewas_off_axis'][1])} slower than 2.18** and "
-      f"{fmt_ratio(ex['phewas_off_axis'][0])} slower than this code on 0.1.0, while its peak "
-      f"RSS falls from {fmt_rss(ph['a-2.18-0.1.0']['peak_mib'])} to "
-      f"{fmt_rss(ph['c-code-0.2.0']['peak_mib'])}.")
+      f"**{fmt_ratio(ex['phewas_off_axis'][1])} the 2.18 time** "
+      f"({'+' if gap_a >= 0 else ''}{fmt_time(gap_a)}) and "
+      f"{fmt_ratio(ex['phewas_off_axis'][0])} the time of this code on 0.1.0, while its peak "
+      f"RSS falls from {fmt_rss(ph[A]['peak_mib'])} to {fmt_rss(ph[C]['peak_mib'])}.")
 print()
 ranges = ", ".join(f"{col} {fmt_time(lo[col])}–{fmt_time(hi[col])}" for col in EXTRA_COLUMNS)
-print((f"**Confirmed:** every 0.2.0 repetition is slower than every repetition of both other "
-       f"columns ({ranges})." if separated else
-       f"**Not confirmed:** the repetitions overlap ({ranges}).")
-      + " Repetitions at a 1-minute load of 3 or more: "
-      + ", ".join(f"{col} {high[col]} of {ph[col]['repetitions']}" for col in EXTRA_COLUMNS)
-      + (". 0.2.0 had no more of them than either other column, so load does not explain its "
-         "slowdown." if high["c-code-0.2.0"] <= min(high["a-2.18-0.1.0"], high["b-code-0.1.0"])
-         else ". **0.2.0 had more of them than another column**, so load may contribute."))
+print("**Against 2.18:** "
+      + ("confirmed: every 0.2.0 repetition is slower than every 2.18 repetition. " if c_vs_a
+         else "not confirmed: the repetitions overlap. ")
+      + "**Against this code on 0.1.0, the format effect:** "
+      + ("confirmed: every 0.2.0 repetition is slower than every 0.1.0 one. " if c_vs_b
+         else "not distinguishable: the repetitions overlap. ")
+      + f"Every repetition: {ranges}. " + load_caveat(ph, high))
 print()
-print("**Why.** An off-panel PheWAS reads only the Overflow, and with no variant-side index it "
-      "must scan every Analysis's `variant_index` for the variant. #252's windowed scan bounds "
-      "that scan's memory by reading a few inner chunks at a time (`SCAN_WINDOW_CHUNKS`), at "
-      "the cost of one read per window. The Overflow's inner chunk is "
-      f"{layout['v2-ogs00011']['chunk_shape'][0]:,} elements at 0.1.0 and "
-      f"{layout['v3-ogs00011']['chunk_shape'][0]:,} at 0.2.0, so the chunks did not narrow on "
-      "this path; what 0.2.0 changes is that each window becomes a partial read of a "
-      f"{layout['v3-ogs00011']['shard_shape'][0]:,}-element shard (its index, then byte ranges, "
-      "through the sharding codec) where 0.1.0 read each chunk as its own file. That per-window "
-      "cost is inferred from the code and these layouts, not profiled. Read as one contiguous "
-      f"segment instead, the same arrays are faster at 0.2.0 (the overflow-heavy bulk, "
-      f"{fmt_ratio(ex['bulk_overflow_heavy'][0])}). The designed fix is ADR 0060's by-variant "
-      "index (#252 step 5), which reads a variant's rows directly instead of scanning; it is "
-      "outside #250.")
+same_chunk = layout["v2-ogs00011"]["chunk_shape"] == layout["v3-ogs00011"]["chunk_shape"]
+scan = ("An off-panel PheWAS reads only the Overflow, and with no variant-side index it must "
+        "scan every Analysis's `variant_index` for the variant. #252's windowed scan bounds "
+        "that scan's memory by reading a few inner chunks at a time (`SCAN_WINDOW_CHUNKS`), at "
+        "the cost of one read per window. The Overflow's inner chunk is "
+        f"{layout['v2-ogs00011']['chunk_shape'][0]:,} elements at 0.1.0 and "
+        f"{layout['v3-ogs00011']['chunk_shape'][0]:,} at 0.2.0"
+        + (", so the chunks did not narrow on this path; " if same_chunk else "; ")
+        + "0.2.0 puts them in "
+        f"{layout['v3-ogs00011']['shard_shape'][0]:,}-element shards. ")
+if c_vs_b:
+    why = (scan + "What 0.2.0 changes is that each window becomes a partial shard read (the "
+           "shard index, then byte ranges, through the sharding codec) where 0.1.0 read each "
+           "chunk as its own file; that per-window cost is inferred from the code and these "
+           "layouts, not profiled.")
+else:
+    why = ("The time cost against 2.18 is this code's, not the format's: it is already there "
+           f"under this code on 0.1.0 ({fmt_time(ph[B]['median_ms'])} against "
+           f"{fmt_time(ph[A]['median_ms'])}"
+           + ("; every 0.1.0 repetition is slower than every 2.18 one), " if b_vs_a else
+              " by median), ")
+           + "and 0.2.0 adds nothing this run can distinguish. " + scan
+           + f"The pre-#252 code that 2.18 runs decodes the whole array in one batched read, "
+           f"at {fmt_rss(ph[A]['peak_mib'])} peak; the windowed scan holds "
+           f"{fmt_rss(ph[B]['peak_mib'])} and pays one read per window. That is #252's chosen "
+           "trade of time for bounded memory.")
+print(f"**Why.** {why} Read as one contiguous segment instead, the same arrays are faster at "
+      f"0.2.0 (the overflow-heavy bulk, {fmt_ratio(ex['bulk_overflow_heavy'][0])} the 0.1.0 time). "
+      "The designed fix for the scan is ADR 0060's by-variant index (#252 step 5), which reads a "
+      "variant's rows directly instead of scanning; it is outside #250.")
 print()
 after = ab252["shapes"]["phewas_off_axis"]["after"]
 inside = lo["b-code-0.1.0"] <= after["elapsed_ms"] <= hi["b-code-0.1.0"]
@@ -818,10 +868,12 @@ print("**Against #252's committed number.** #252's A/B "
       f"{fmt_time(lo['b-code-0.1.0'])}–{fmt_time(hi['b-code-0.1.0'])}, which "
       + ("contains it, so the gap between the medians is the spread of a single sample against "
          "a median, not evidence of a change." if inside else
-         "**does not contain it**: the gap is larger than this run's spread.")
+         "**does not contain it**: #252's single sample is faster than every repetition "
+         "here.")
       + " The Overflow read path is unchanged between that commit and this code (no change "
       "under `opengwasdb/query/`, and only writer roles in `layouts/ragged/zarr_csr.py`); "
-      "ADR 0060 quotes 26.4 s for the same path from an earlier version of #252's artifact.")
+      "ADR 0060 quotes 26.4 s for the same path from an earlier version of #252's artifact, "
+      "so #252's own two samples of it differ by seconds.")
 print(":::")
 print()
 
