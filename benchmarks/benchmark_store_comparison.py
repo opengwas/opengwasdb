@@ -41,6 +41,7 @@ import platform
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 from collections import defaultdict
 from collections.abc import Callable
@@ -751,6 +752,34 @@ def _du_bytes(path: Path, *flags: str) -> int:
     return int(result.stdout.split()[0])
 
 
+def _du_counts_directory_apparent_bytes() -> bool:
+    """Whether this `du --apparent-size` adds a directory's own st_size.
+
+    GNU coreutils changed it in 9.2: 9.1 and earlier add every directory's
+    st_size (4096 on ext4, the entry bytes on xfs), 9.2 and later count a
+    directory as zero (measured on conda-forge coreutils 8.31-9.4). This node
+    runs 8.30 and CI's runner 9.4, which is how a correct walk failed its own
+    self-check on CI (#259). Allocated bytes count directory blocks in both.
+    Measured on a probe rather than read from `du --version`, so a backport or
+    a different `du` is caught by what it does; anything else fails loudly.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "probe"
+        probe.mkdir()
+        (probe / "one-byte").write_bytes(b"x")
+        directory_bytes = os.lstat(probe).st_size
+        reported = _du_bytes(probe, "-sb")
+    if directory_bytes and reported == directory_bytes + 1:
+        return True
+    if directory_bytes and reported == 1:
+        return False
+    raise SystemExit(
+        f"du -sb reported {reported} bytes for a directory of st_size {directory_bytes} "
+        "holding one 1-byte file; cannot tell how this du counts directories, so a "
+        "footprint cannot be checked against it."
+    )
+
+
 def footprint(root: Path) -> dict[str, Any]:
     """File count, apparent/allocated bytes, and a per-array breakdown.
 
@@ -760,7 +789,9 @@ def footprint(root: Path) -> dict[str, Any]:
     and the non-Zarr envelope (variant table, SQLite index, npy indexes, manifest)
     are totalled separately. The walked totals are checked against `du -sb` and
     `du -s --block-size=1`, so a footprint that disagrees with itself fails
-    rather than being published.
+    rather than being published. `apparent_bytes` includes directories' own
+    st_size; `du -sb` includes it only on GNU coreutils before 9.2, so the
+    check subtracts `directory_apparent_bytes` when this du does not count them.
     """
     entries, nodes = _walk_entries(root)
     arrays: dict[str, dict[str, Any]] = defaultdict(_empty_bucket)
@@ -791,20 +822,28 @@ def footprint(root: Path) -> dict[str, Any]:
                 )
     total_apparent = sum(entry[2] for entry in entries)
     total_allocated = sum(entry[3] for entry in entries)
+    directory_apparent = sum(entry[2] for entry in entries if entry[1])
     du_apparent = _du_bytes(root, "-sb")
     du_allocated = _du_bytes(root, "-s", "--block-size=1")
-    if (du_apparent, du_allocated) != (total_apparent, total_allocated):
+    # The walk counts directories' st_size; compare it the way this du does.
+    counts_directories = _du_counts_directory_apparent_bytes()
+    expected_du_apparent = total_apparent - (0 if counts_directories else directory_apparent)
+    if (du_apparent, du_allocated) != (expected_du_apparent, total_allocated):
         raise SystemExit(
             f"{root}: du reports {du_apparent}/{du_allocated} apparent/allocated bytes but the "
-            f"walked breakdown sums to {total_apparent}/{total_allocated}; refusing to publish "
-            "a footprint that disagrees with itself."
+            f"walked breakdown sums to {expected_du_apparent}/{total_allocated} (directories' "
+            f"{directory_apparent} apparent bytes "
+            f"{'included' if counts_directories else 'excluded'}, as this du counts them); "
+            "refusing to publish a footprint that disagrees with itself."
         )
     return {
         "n_files": sum(1 for entry in entries if not entry[1]),
         "apparent_bytes": total_apparent,
         "allocated_bytes": total_allocated,
+        "directory_apparent_bytes": directory_apparent,
         "du_apparent_bytes": du_apparent,
         "du_allocated_bytes": du_allocated,
+        "du_counts_directory_apparent_bytes": counts_directories,
         "arrays": [
             {"node": node, **arrays[node]} for node in sorted(arrays)
         ],

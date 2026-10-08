@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import time
 
 import numpy as np
 import pytest
 
+from benchmarks import benchmark_store_comparison
 from benchmarks.benchmark_store_comparison import (
     DEFAULT_EXPOSURE,
     DEFAULT_REGION,
@@ -382,3 +384,84 @@ def test_wait_for_quiet_reports_that_it_gave_up_on_a_busy_node(monkeypatch):
     waited, timed_out = _wait_for_quiet(3.0, timeout_s=60.0, poll_s=15.0)
     assert timed_out is True
     assert waited > 60.0
+
+
+def _simulated_du(*, counts_directories: bool, extra_apparent: int = 0, extra_under=None):
+    """A `du -sb` / `du -s --block-size=1` with either GNU directory semantics.
+
+    GNU coreutils 9.1 and earlier add each directory's own st_size to
+    `--apparent-size`; 9.2 and later count directories as zero (both measured
+    on conda-forge coreutils 8.31-9.4). Allocated bytes count directory blocks
+    in both. `extra_apparent`, reported for `extra_under` only, stands in for a
+    genuine disagreement on the store while du's own probe stays honest.
+    """
+    def du(path, *flags):
+        apparent = "-sb" in flags
+        total = extra_apparent if apparent and str(path) == str(extra_under) else 0
+        for dirpath, _dirnames, filenames in os.walk(path):
+            stat = os.lstat(dirpath)
+            if not apparent:
+                total += stat.st_blocks * 512
+            elif counts_directories:
+                total += stat.st_size
+            for name in filenames:
+                file_stat = os.lstat(os.path.join(dirpath, name))
+                total += file_stat.st_size if apparent else file_stat.st_blocks * 512
+        return total
+    return du
+
+
+def _small_v3_store(root):
+    array = root / "data.zarr" / "z"
+    (array / "c").mkdir(parents=True)
+    (root / "data.zarr" / "zarr.json").write_text(json.dumps({"node_type": "group"}))
+    (array / "zarr.json").write_text(json.dumps({"node_type": "array"}))
+    (array / "c" / "0.0").write_bytes(b"y" * 1000)
+    (root / "manifest.json").write_bytes(b"m" * 100)
+    return root
+
+
+@pytest.mark.parametrize("counts_directories", [True, False])
+def test_footprint_agrees_with_either_gnu_du_directory_semantics(
+    tmp_path, monkeypatch, counts_directories
+):
+    """CI's coreutils 9.4 and this node's 8.30 disagree on directories; both must pass (#259)."""
+    store = _small_v3_store(tmp_path / "store")
+    directory_bytes = sum(os.lstat(d).st_size for d, _, _ in os.walk(store))
+    assert directory_bytes > 0, "the fixture's directories must have a size for this to test it"
+    monkeypatch.setattr(
+        benchmark_store_comparison, "_du_bytes",
+        _simulated_du(counts_directories=counts_directories),
+    )
+
+    result = footprint(store)
+
+    assert result["du_counts_directory_apparent_bytes"] is counts_directories
+    assert result["directory_apparent_bytes"] == directory_bytes
+    assert result["du_apparent_bytes"] == (
+        result["apparent_bytes"] - (0 if counts_directories else directory_bytes)
+    )
+
+
+@pytest.mark.parametrize("counts_directories", [True, False])
+def test_footprint_still_refuses_a_genuine_disagreement(
+    tmp_path, monkeypatch, counts_directories
+):
+    store = _small_v3_store(tmp_path / "store")
+    monkeypatch.setattr(
+        benchmark_store_comparison, "_du_bytes",
+        _simulated_du(
+            counts_directories=counts_directories, extra_apparent=4096, extra_under=store
+        ),
+    )
+
+    with pytest.raises(SystemExit, match="disagrees with itself"):
+        footprint(store)
+
+
+def test_footprint_refuses_a_du_whose_directory_accounting_it_cannot_tell(monkeypatch):
+    # 0 can match neither semantics: a 1-byte file alone is 1, with any directory more.
+    monkeypatch.setattr(benchmark_store_comparison, "_du_bytes", lambda path, *flags: 0)
+
+    with pytest.raises(SystemExit, match="directories"):
+        benchmark_store_comparison._du_counts_directory_apparent_bytes()
