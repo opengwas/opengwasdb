@@ -38,10 +38,13 @@ import hashlib
 import json
 import os
 import platform
+import signal
 import socket
 import subprocess
+import time
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -320,14 +323,57 @@ def assert_identical(
     )
 
 
-def _timed_shape(
-    fn: Callable[[], dict[str, np.ndarray]], reps: int
-) -> tuple[float, float, int, dict[str, str]]:
-    """Time one shape over `reps` after the shared warm-up, digesting that warm-up.
+def _check_counts(counts: list[int]) -> None:
+    if len(set(counts)) != 1:
+        raise SystemExit(
+            f"a shape returned {sorted(set(counts))} rows across its runs; "
+            "a query whose result size is not stable cannot be timed or compared."
+        )
 
-    `_median_ms` runs one untimed warm-up call, then `reps` timed calls; the
-    digest and the per-rep result counts are captured on the untimed call, so
-    the identity check costs no timed run.
+
+class _ShapeTimeout(Exception):
+    """A single query call exceeded `--shape-limit-s`."""
+
+
+@contextmanager
+def _time_limit(seconds: float):
+    """Abort the enclosed call after `seconds`, or do nothing when it is 0.
+
+    #252's harness used a 1500 s SIGALRM limit for the slow variant-side shapes
+    """
+    if not seconds or seconds <= 0:
+        yield
+        return
+
+    def _raise(_signum: int, _frame: Any) -> None:
+        raise _ShapeTimeout
+
+    previous = signal.signal(signal.SIGALRM, _raise)
+    signal.setitimer(signal.ITIMER_REAL, float(seconds))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def _timed_shape(
+    fn: Callable[[], dict[str, np.ndarray]],
+    reps: int,
+    *,
+    limit_s: float = 0.0,
+    slow_shape_s: float = 0.0,
+) -> dict[str, Any]:
+    """Time one shape after a shared warm-up, digesting that warm-up.
+
+    With no limit and no slow threshold this is `_median_ms` exactly (one
+    untimed warm-up, then `reps` timed calls), which is what the committed
+    OGS-00009 baseline used. With `limit_s` set it aborts a call that runs
+    longer and returns a `timed_out` record instead of a timing (#252's
+    1500 s Hybrid limit); with `slow_shape_s` set a shape whose warm-up is
+    slower than the threshold is timed once, as #252's harness did for the
+    O(overflow) 2.18 shapes. A timed-out shape carries no digest, so the
+    identity check cannot silently compare an empty result.
     """
     digests: dict[str, str] = {}
     counts: list[int] = []
@@ -342,13 +388,52 @@ def _timed_shape(
         counts.append(len(result["z"]))
         return result
 
-    median_ms, p95_ms, count = _median_ms(instrumented, reps)
-    if len(set(counts)) != 1:
-        raise SystemExit(
-            f"a shape returned {sorted(set(counts))} rows across its runs; "
-            "a query whose result size is not stable cannot be timed or compared."
-        )
-    return median_ms, p95_ms, count, digests
+    if not limit_s and not slow_shape_s:
+        median_ms, p95_ms, count = _median_ms(instrumented, reps)
+        _check_counts(counts)
+        return {
+            "timed_out": False,
+            "median_ms": median_ms,
+            "p95_ms": p95_ms,
+            "result_count": count,
+            "digests": digests,
+            "repetitions": reps,
+            "warmup_ms": None,
+        }
+
+    warmup_start = time.perf_counter()
+    try:
+        with _time_limit(limit_s):
+            instrumented()
+    except _ShapeTimeout:
+        return {"timed_out": True, "limit_s": limit_s, "digests": {}, "result_count": None}
+    warmup_ms = (time.perf_counter() - warmup_start) * 1000.0
+    repetitions = 1 if (slow_shape_s and warmup_ms / 1000.0 > slow_shape_s) else reps
+    times: list[float] = []
+    for _ in range(repetitions):
+        try:
+            started = time.perf_counter()
+            with _time_limit(limit_s):
+                instrumented()
+            times.append((time.perf_counter() - started) * 1000.0)
+        except _ShapeTimeout:
+            return {
+                "timed_out": True,
+                "limit_s": limit_s,
+                "digests": {},
+                "result_count": None,
+            }
+    _check_counts(counts)
+    times.sort()
+    return {
+        "timed_out": False,
+        "median_ms": times[len(times) // 2],
+        "p95_ms": times[min(len(times) - 1, int(0.95 * len(times)))],
+        "result_count": counts[0],
+        "digests": digests,
+        "repetitions": repetitions,
+        "warmup_ms": round(warmup_ms, 3),
+    }
 
 
 def _dense_plane_root(q: Any) -> Any:
@@ -432,25 +517,43 @@ def _measure_store(
         timings: list[dict[str, Any]] = []
         digests: dict[str, dict[str, str]] = {}
         for name, fn in patterns.items():
-            median_ms, p95_ms, count, shape_digests = _timed_shape(fn, args.reps)
+            timed = _timed_shape(
+                fn,
+                args.reps,
+                limit_s=args.shape_limit_s,
+                slow_shape_s=args.slow_shape_s,
+            )
+            if timed["timed_out"]:
+                timings.append(
+                    {"query": name, "timed_out": True, "limit_s": args.shape_limit_s}
+                )
+                print(
+                    f"[{spec.label}] {name:38s} HIT the {args.shape_limit_s:g}s limit; "
+                    "recorded as a limit hit",
+                    flush=True,
+                )
+                continue
             timings.append(
                 {
                     "query": name,
-                    "median_ms": round(median_ms, 3),
-                    "p95_ms": round(p95_ms, 3),
-                    "result_count": count,
+                    "timed_out": False,
+                    "median_ms": round(timed["median_ms"], 3),
+                    "p95_ms": round(timed["p95_ms"], 3),
+                    "repetitions": timed["repetitions"],
+                    "warmup_ms": timed["warmup_ms"],
+                    "result_count": timed["result_count"],
                 }
             )
-            digests[name] = shape_digests
+            digests[name] = timed["digests"]
             print(
-                f"[{spec.label}] {name:38s} median={median_ms:9.2f} ms  "
-                f"p95={p95_ms:9.2f} ms  count={count:,}",
+                f"[{spec.label}] {name:38s} median={timed['median_ms']:9.2f} ms  "
+                f"p95={timed['p95_ms']:9.2f} ms  count={timed['result_count']:,}",
                 flush=True,
             )
     finally:
         q.close()
 
-    memory = [] if args.skip_rss else _probe_store(spec, selection, list(digests))
+    memory = [] if args.skip_rss else _probe_store(spec, selection, list(digests), args)
     _check_memory_counts(memory, timings)
     load_after = os.getloadavg()[0]
     record = {
@@ -468,14 +571,27 @@ def _measure_store(
 
 
 def _probe_store(
-    spec: StoreSpec, selection: dict[str, Any], shapes: list[str]
+    spec: StoreSpec, selection: dict[str, Any], shapes: list[str], args: argparse.Namespace
 ) -> list[dict[str, Any]]:
     """One fresh interpreter per shape, because a shape's peak is not readable after it."""
-    extra = ["--store", f"{spec.label}={spec.path}", "--selection-json", json.dumps(selection)]
+    extra = [
+        "--store",
+        f"{spec.label}={spec.path}",
+        "--selection-json",
+        json.dumps(selection),
+        "--shape-limit-s",
+        str(args.shape_limit_s),
+    ]
     out = []
     for name in shapes:
         record = run_probe(name, extra)
         out.append(record)
+        if record.get("timed_out"):
+            print(
+                f"[{spec.label}] {name:38s} RSS probe HIT the {args.shape_limit_s:g}s limit",
+                flush=True,
+            )
+            continue
         print(
             f"[{spec.label}] {name:38s} baseline={record['baseline_mb']:9.1f} MB  "
             f"peak={record['peak_mb']:9.1f} MB  delta={record['delta_mb']:9.1f} MB",
@@ -485,8 +601,14 @@ def _probe_store(
 
 
 def _check_memory_counts(memory: list[dict[str, Any]], timings: list[dict[str, Any]]) -> None:
-    by_shape = {row["query"]: row["result_count"] for row in timings}
+    by_shape = {
+        row["query"]: row.get("result_count")
+        for row in timings
+        if not row.get("timed_out")
+    }
     for record in memory:
+        if record.get("timed_out"):
+            continue
         expected = by_shape.get(record["query"])
         if expected is not None and record["result_count"] != expected:
             raise SystemExit(
@@ -694,7 +816,12 @@ def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]
     selection = _selection_from_json(args.selection_json)
     q, _plan = _query_shapes.open_benchmark_store(spec.path)
     try:
-        return _query_shapes.measure_shape_rss(lambda: _patterns_for_store(q, selection), shape)
+        with _time_limit(args.shape_limit_s):
+            return _query_shapes.measure_shape_rss(
+                lambda: _patterns_for_store(q, selection), shape
+            )
+    except _ShapeTimeout:
+        return {"query": shape, "timed_out": True, "limit_s": args.shape_limit_s}
     finally:
         q.close()
 
@@ -737,6 +864,23 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="internal: the once-resolved selection an RSS probe must reuse",
     )
+    ap.add_argument(
+        "--shape-limit-s",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="abort one query call after SECONDS and record it as a limit hit "
+        "(0 disables it); #252's harness used 1500 s for the slow O(overflow) 2.18 "
+        "Hybrid shapes",
+    )
+    ap.add_argument(
+        "--slow-shape-s",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="after a warm-up slower than SECONDS, time the shape once instead of "
+        "--reps times (0 disables it), as #252's harness did for the slow shapes",
+    )
     _query_shapes.add_common_args(ap)
     return ap
 
@@ -753,17 +897,33 @@ def main() -> None:
     print(f"selection resolved from {stores[0].label}: {json.dumps(selection, sort_keys=True)}")
 
     reference_label = stores[0].label
-    reference_digests: dict[str, dict[str, str]] = {}
+    all_digests: list[dict[str, dict[str, str]]] = []
     records: list[dict[str, Any]] = []
-    for index, spec in enumerate(stores):
+    for spec in stores:
         record, digests = _measure_store(spec, selection, args)
-        if index == 0:
-            reference_digests = digests
-        else:
-            assert_identical(reference_label, reference_digests, spec.label, digests)
-            print(f"identity check passed: {spec.label} matches {reference_label}", flush=True)
         record["result_digests"] = digests
+        all_digests.append(digests)
         records.append(record)
+
+    # A shape that hit the time limit on any store carries no digest, so it is
+    # recorded per store but excluded from the identity comparison -- and named
+    # in the artifact, so a missing shape cannot hide as "identical".
+    measured = set().union(*(set(d) for d in all_digests))
+    common = set.intersection(*(set(d) for d in all_digests)) if all_digests else set()
+    if not common:
+        raise SystemExit(
+            "no shape was measured by every store; there is nothing to compare and "
+            "the run is not evidence"
+        )
+    reference_digests = {shape: all_digests[0][shape] for shape in common}
+    for spec, digests in zip(stores[1:], all_digests[1:], strict=True):
+        assert_identical(
+            reference_label,
+            reference_digests,
+            spec.label,
+            {shape: digests[shape] for shape in common},
+        )
+        print(f"identity check passed: {spec.label} matches {reference_label}", flush=True)
 
     result = {
         "harness": "benchmark_store_comparison",
@@ -772,7 +932,8 @@ def main() -> None:
         "identity": {
             "reference_store": reference_label,
             "stores": [spec.label for spec in stores],
-            "shapes": sorted(reference_digests),
+            "shapes": sorted(common),
+            "shapes_not_compared": sorted(measured - common),
             "arrays_per_shape": list(RESULT_ARRAY_NAMES),
             "identical": True,
         },

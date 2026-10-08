@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 
 import numpy as np
 import pytest
@@ -21,6 +22,7 @@ from benchmarks.benchmark_store_comparison import (
     _parse_region,
     _parse_store,
     _parser,
+    _timed_shape,
     differing_arrays,
     differing_shapes,
     digest_array,
@@ -247,3 +249,50 @@ def test_parser_accepts_a_store_specific_anchor_override():
     assert args.exposure == "finngen-r13-T2D"
     assert args.phewas_alid == "10:112998590:C:T"
     assert args.region == ("10", 112_500_000, 113_500_000)
+
+
+def test_timed_shape_records_a_limit_hit_without_a_digest():
+    """A shape over the limit must be recorded as a hit, never as a timing (#250)."""
+
+    def slow() -> dict[str, np.ndarray]:
+        time.sleep(5)
+        return _result([1.0])
+
+    timed = _timed_shape(slow, 5, limit_s=0.05, slow_shape_s=0.0)
+
+    assert timed["timed_out"] is True
+    assert timed["digests"] == {}
+    assert timed["result_count"] is None
+
+
+def test_timed_shape_times_a_slow_shape_once_after_its_warm_up():
+    """#252 timed an over-threshold shape once; the harness must match it."""
+    calls: list[int] = []
+
+    def shape() -> dict[str, np.ndarray]:
+        calls.append(1)
+        time.sleep(0.02)
+        return _result([1.0, 2.0])
+
+    timed = _timed_shape(shape, 5, limit_s=0.0, slow_shape_s=0.001)
+
+    assert timed["timed_out"] is False
+    assert timed["repetitions"] == 1
+    assert len(calls) == 2  # one warm-up plus one timed call
+    assert timed["result_count"] == 2
+
+
+def test_timed_shape_defaults_to_reps_and_digests_the_warm_up():
+    """No limit and no slow threshold must keep the committed `_median_ms` shape."""
+    calls: list[int] = []
+
+    def shape() -> dict[str, np.ndarray]:
+        calls.append(1)
+        return _result([1.0, 2.0])
+
+    timed = _timed_shape(shape, 3, limit_s=0.0, slow_shape_s=0.0)
+
+    assert timed["timed_out"] is False
+    assert timed["repetitions"] == 3
+    assert len(calls) == 4  # one warm-up plus three timed calls
+    assert timed["digests"]["z"] == digest_array(np.asarray([1.0, 2.0], dtype="float32"))
