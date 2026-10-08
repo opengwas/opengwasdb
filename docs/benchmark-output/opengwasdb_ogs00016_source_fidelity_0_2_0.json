@@ -1,0 +1,1184 @@
+{
+  "store": "/data/opengwasdb/work/epic240/250/OGS-00016-v3-c64",
+  "source_dir": "/data/opengwasdb/raw/finngen-r13/releases/r13-full/source",
+  "n_variants": 21230615,
+  "gates": {
+    "z_abs": 0.00048928125,
+    "z_overflow": 31.9990234375,
+    "se_rel": 0.01,
+    "eaf_rel": 0.0020704427128367836
+  },
+  "seed": 0,
+  "selection": {
+    "anchors": [
+      "finngen-r13-BMI_IRN",
+      "finngen-r13-HEIGHT_IRN",
+      "finngen-r13-T2D",
+      "finngen-r13-T2D_WIDE",
+      "finngen-r13-I9_CHD",
+      "finngen-r13-G6_ALZHEIMER"
+    ],
+    "fewest_cases": [
+      "finngen-r13-AB1_ANUG_WIDE"
+    ],
+    "random": [
+      "finngen-r13-AB1_SCABIES_WIDE",
+      "finngen-r13-E4_FLUIDELECTRONAS",
+      "finngen-r13-E4_THYMUSDIS",
+      "finngen-r13-I9_AORTANEUR",
+      "finngen-r13-KRA_PSY_DEMENTIA_EXMORE",
+      "finngen-r13-O15_ABORT_OTHER"
+    ]
+  },
+  "wall_seconds": 195.0,
+  "analyses": [
+    {
+      "analysis_id": "finngen-r13-BMI_IRN",
+      "source": "finngen_R13_BMI_IRN.gz",
+      "source_sha256": "ecb3d5b6b401df2f64dfda205b7731b77fdb5458bb8e7cde1ed3e4b5fb621d42",
+      "manifest_sha256": "ecb3d5b6b401df2f64dfda205b7731b77fdb5458bb8e7cde1ed3e4b5fb621d42",
+      "source_rows": 21324894,
+      "rows_matched_to_axis": 21324894,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192824,
+      "collapsed_cells": 96412,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": -0.00115727,
+          "sebeta": 0.0135908
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": 0.0226233,
+          "sebeta": 0.05058
+        }
+      ],
+      "collapsed_later_row_wins": 96391,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 21,
+      "store_cells": 21228482,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21132070,
+      "orientation_flipped": 10468521,
+      "z_abs_error": {
+        "max": 0.0004891527420269881,
+        "p9999": 0.0004882408598347793,
+        "p99": 0.00048339570397956455,
+        "median": 0.00024413384681798433
+      },
+      "se_rel_error": {
+        "max": 0.008382320987242498,
+        "p9999": 0.008268281755676437,
+        "p99": 0.007916916762204726,
+        "median": 0.00415418461848574
+      },
+      "eaf_cells_compared": 21132070,
+      "eaf_rel_error": {
+        "max": 0.0019906786299051173,
+        "p9999": 0.0019663796409072495,
+        "p99": 0.001878983499299633,
+        "median": 0.00014798168920738907
+      },
+      "eaf_cells_beyond_float32_minor_side": 4135090,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 99,
+      "overflow_cells_exact": 99,
+      "logp_cells_compared": 1307214,
+      "logp_abs_error": {
+        "max": 0.00639086749862372,
+        "p9999": 0.002927029314463425,
+        "p99": 0.0011074973609499494,
+        "median": 0.0003756059417718838
+      },
+      "statuses": {
+        "observed": 21228482
+      },
+      "parse_seconds": 17.25,
+      "store_read_seconds": 15.99,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-HEIGHT_IRN",
+      "source": "finngen_R13_HEIGHT_IRN.gz",
+      "source_sha256": "368039c71651fcfadf9ec7624a20621e70e91e14b14abacb91d5faf93b1ee067",
+      "manifest_sha256": "368039c71651fcfadf9ec7624a20621e70e91e14b14abacb91d5faf93b1ee067",
+      "source_rows": 21324952,
+      "rows_matched_to_axis": 21324952,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192824,
+      "collapsed_cells": 96412,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": -0.0155454,
+          "sebeta": 0.00967224
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": 0.0554012,
+          "sebeta": 0.0359078
+        }
+      ],
+      "collapsed_later_row_wins": 96379,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 33,
+      "store_cells": 21228540,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21132128,
+      "orientation_flipped": 10468544,
+      "z_abs_error": {
+        "max": 0.0004890564256889718,
+        "p9999": 0.0004882486772715115,
+        "p99": 0.00048339751329530946,
+        "median": 0.0002441370197556192
+      },
+      "se_rel_error": {
+        "max": 0.008384493972884209,
+        "p9999": 0.008260754631749556,
+        "p99": 0.007897830029412287,
+        "median": 0.004066617707780152
+      },
+      "eaf_cells_compared": 21132128,
+      "eaf_rel_error": {
+        "max": 0.001988100547609497,
+        "p9999": 0.0019665049827091883,
+        "p99": 0.0018790724766136397,
+        "median": 0.0001476746228146293
+      },
+      "eaf_cells_beyond_float32_minor_side": 4135511,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 1,
+      "overflow_cells_exact": 1,
+      "logp_cells_compared": 1937934,
+      "logp_abs_error": {
+        "max": 0.007021688663428449,
+        "p9999": 0.0038587902932649696,
+        "p99": 0.0015542742528157473,
+        "median": 0.00040053065536360677
+      },
+      "statuses": {
+        "observed": 21228540
+      },
+      "parse_seconds": 18.18,
+      "store_read_seconds": 13.79,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-T2D",
+      "source": "finngen_R13_T2D.gz",
+      "source_sha256": "76424434f5c966ad4da6d471eff0f6fcd01731004568aa6f3922d5ae52fad305",
+      "manifest_sha256": "76424434f5c966ad4da6d471eff0f6fcd01731004568aa6f3922d5ae52fad305",
+      "source_rows": 21326899,
+      "rows_matched_to_axis": 21326899,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192856,
+      "collapsed_cells": 96428,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": 0.0157796,
+          "sebeta": 0.0351015
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": -0.215776,
+          "sebeta": 0.136384
+        }
+      ],
+      "collapsed_later_row_wins": 96393,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 35,
+      "store_cells": 21230471,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21134043,
+      "orientation_flipped": 10469515,
+      "z_abs_error": {
+        "max": 0.0004885988509233385,
+        "p9999": 0.0004882395004714423,
+        "p99": 0.0004834019871418099,
+        "median": 0.00024403564740971273
+      },
+      "se_rel_error": {
+        "max": 0.00839453232783706,
+        "p9999": 0.008267396989116828,
+        "p99": 0.007907367559884929,
+        "median": 0.004170060219847547
+      },
+      "eaf_cells_compared": 21134043,
+      "eaf_rel_error": {
+        "max": 0.0019943729660428107,
+        "p9999": 0.001966276583609608,
+        "p99": 0.0018773151166523662,
+        "median": 6.737715575691376e-05
+      },
+      "eaf_cells_beyond_float32_minor_side": 4143440,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 8,
+      "overflow_cells_exact": 8,
+      "logp_cells_compared": 867681,
+      "logp_abs_error": {
+        "max": 0.006429845038923077,
+        "p9999": 0.002883605560484545,
+        "p99": 0.001031681525176964,
+        "median": 0.0003647756336500052
+      },
+      "statuses": {
+        "observed": 21230471
+      },
+      "parse_seconds": 19.45,
+      "store_read_seconds": 13.3,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-T2D_WIDE",
+      "source": "finngen_R13_T2D_WIDE.gz",
+      "source_sha256": "e08f1162c3f4e1e1ad2de08fdd0068297c87cf2a9afcbedc8b9c18fb68795771",
+      "manifest_sha256": "e08f1162c3f4e1e1ad2de08fdd0068297c87cf2a9afcbedc8b9c18fb68795771",
+      "source_rows": 21326455,
+      "rows_matched_to_axis": 21326455,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192852,
+      "collapsed_cells": 96426,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": 0.0368215,
+          "sebeta": 0.0424067
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": -0.285732,
+          "sebeta": 0.165666
+        }
+      ],
+      "collapsed_later_row_wins": 96397,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 29,
+      "store_cells": 21230029,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21133603,
+      "orientation_flipped": 10469309,
+      "z_abs_error": {
+        "max": 0.0004885161305683283,
+        "p9999": 0.00048823929514955623,
+        "p99": 0.00048340134506573543,
+        "median": 0.0002441977184178823
+      },
+      "se_rel_error": {
+        "max": 0.00838238225646894,
+        "p9999": 0.008255392755907592,
+        "p99": 0.007892359483511732,
+        "median": 0.004095303118204756
+      },
+      "eaf_cells_compared": 21133603,
+      "eaf_rel_error": {
+        "max": 0.0019900001216668507,
+        "p9999": 0.0019663887992475647,
+        "p99": 0.001879048878699306,
+        "median": 0.00010407282762978857
+      },
+      "eaf_cells_beyond_float32_minor_side": 4142203,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 0,
+      "overflow_cells_exact": 0,
+      "logp_cells_compared": 761714,
+      "logp_abs_error": {
+        "max": 0.005774229484273974,
+        "p9999": 0.002992004217007518,
+        "p99": 0.0010643897633938687,
+        "median": 0.00036270843181007706
+      },
+      "statuses": {
+        "observed": 21230029
+      },
+      "parse_seconds": 19.47,
+      "store_read_seconds": 12.53,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-I9_CHD",
+      "source": "finngen_R13_I9_CHD.gz",
+      "source_sha256": "780fe917bdeca2e0f502217159700d509327fee3ae12a34945d8e13d595c4b53",
+      "manifest_sha256": "780fe917bdeca2e0f502217159700d509327fee3ae12a34945d8e13d595c4b53",
+      "source_rows": 21327043,
+      "rows_matched_to_axis": 21327043,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192856,
+      "collapsed_cells": 96428,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": 0.0835959,
+          "sebeta": 0.0356522
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": 0.0145883,
+          "sebeta": 0.141336
+        }
+      ],
+      "collapsed_later_row_wins": 96395,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 33,
+      "store_cells": 21230615,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21134187,
+      "orientation_flipped": 10469583,
+      "z_abs_error": {
+        "max": 0.000488513354499176,
+        "p9999": 0.0004882396469840929,
+        "p99": 0.00048338583352285525,
+        "median": 0.00024400527314621945
+      },
+      "se_rel_error": {
+        "max": 0.008388446358266867,
+        "p9999": 0.008261855489124757,
+        "p99": 0.007900624328967812,
+        "median": 0.004128171717727302
+      },
+      "eaf_cells_compared": 21134187,
+      "eaf_rel_error": {
+        "max": 0.001976045934406758,
+        "p9999": 0.0019405798563664842,
+        "p99": 0.000570048327429663,
+        "median": 1.9647553267611518e-08
+      },
+      "eaf_cells_beyond_float32_minor_side": 4143018,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 0,
+      "overflow_cells_exact": 0,
+      "logp_cells_compared": 489934,
+      "logp_abs_error": {
+        "max": 0.005667578557051911,
+        "p9999": 0.002259102718512634,
+        "p99": 0.0008962431779463826,
+        "median": 0.000352096582213246
+      },
+      "statuses": {
+        "observed": 21230615
+      },
+      "parse_seconds": 19.45,
+      "store_read_seconds": 13.55,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-G6_ALZHEIMER",
+      "source": "finngen_R13_G6_ALZHEIMER.gz",
+      "source_sha256": "9cfdf75f996ca688eb9de4638fa0dc5249b102c8e65da0423769b5ce4324e8eb",
+      "manifest_sha256": "9cfdf75f996ca688eb9de4638fa0dc5249b102c8e65da0423769b5ce4324e8eb",
+      "source_rows": 21327043,
+      "rows_matched_to_axis": 21327043,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192856,
+      "collapsed_cells": 96428,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": 0.0663201,
+          "sebeta": 0.0750533
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": 0.0720881,
+          "sebeta": 0.307983
+        }
+      ],
+      "collapsed_later_row_wins": 96402,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 26,
+      "store_cells": 21230615,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21134187,
+      "orientation_flipped": 10469583,
+      "z_abs_error": {
+        "max": 0.0004884578291513009,
+        "p9999": 0.00048823690953970063,
+        "p99": 0.00048338587614705776,
+        "median": 0.00024411177458061317
+      },
+      "se_rel_error": {
+        "max": 0.008391906537562834,
+        "p9999": 0.00825900031193083,
+        "p99": 0.007901472567299526,
+        "median": 0.004119613144351872
+      },
+      "eaf_cells_compared": 21134187,
+      "eaf_rel_error": {
+        "max": 0.001976045934406758,
+        "p9999": 0.0019405798563664842,
+        "p99": 0.000570048327429663,
+        "median": 1.9647553267611518e-08
+      },
+      "eaf_cells_beyond_float32_minor_side": 4143018,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 47,
+      "overflow_cells_exact": 47,
+      "logp_cells_compared": 314186,
+      "logp_abs_error": {
+        "max": 0.0057066065897970475,
+        "p9999": 0.0035693877485986954,
+        "p99": 0.0008849024750189583,
+        "median": 0.0003475513328194957
+      },
+      "statuses": {
+        "observed": 21230615
+      },
+      "parse_seconds": 19.34,
+      "store_read_seconds": 13.17,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-AB1_ANUG_WIDE",
+      "source": "finngen_R13_AB1_ANUG_WIDE.gz",
+      "source_sha256": "a8da02e746cdf7fae2c5768ddd172146bbad779d8bdbaf803abe4131a1c3a39a",
+      "manifest_sha256": "a8da02e746cdf7fae2c5768ddd172146bbad779d8bdbaf803abe4131a1c3a39a",
+      "source_rows": 21327003,
+      "rows_matched_to_axis": 21327003,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192856,
+      "collapsed_cells": 96428,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": -1.23967,
+          "sebeta": 1.14836
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": -1.01882,
+          "sebeta": 4.02772
+        }
+      ],
+      "collapsed_later_row_wins": 96396,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 32,
+      "store_cells": 21230575,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21134147,
+      "orientation_flipped": 10469566,
+      "z_abs_error": {
+        "max": 0.0004883999493356939,
+        "p9999": 0.0004882363524541199,
+        "p99": 0.00048337740374233547,
+        "median": 0.0002442264363500257
+      },
+      "se_rel_error": {
+        "max": 0.008388436372131259,
+        "p9999": 0.00826097843284153,
+        "p99": 0.007896666150822265,
+        "median": 0.004034183941207648
+      },
+      "eaf_cells_compared": 21134147,
+      "eaf_rel_error": {
+        "max": 0.001976045934406758,
+        "p9999": 0.0019405798698561936,
+        "p99": 0.0005700456992592735,
+        "median": 1.964758701132697e-08
+      },
+      "eaf_cells_beyond_float32_minor_side": 4143001,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 0,
+      "overflow_cells_exact": 0,
+      "logp_cells_compared": 137394,
+      "logp_abs_error": {
+        "max": 0.000979568030732736,
+        "p9999": 0.0009117786608372035,
+        "p99": 0.0007213020051695555,
+        "median": 0.000333775960094318
+      },
+      "statuses": {
+        "observed": 21230575
+      },
+      "parse_seconds": 18.32,
+      "store_read_seconds": 13.3,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-AB1_SCABIES_WIDE",
+      "source": "finngen_R13_AB1_SCABIES_WIDE.gz",
+      "source_sha256": "5a7a0b940cb4b2cb5672a090e6003a8c497a9d6611c98183e262728a861a55fc",
+      "manifest_sha256": "5a7a0b940cb4b2cb5672a090e6003a8c497a9d6611c98183e262728a861a55fc",
+      "source_rows": 21327040,
+      "rows_matched_to_axis": 21327040,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192856,
+      "collapsed_cells": 96428,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": -0.00820634,
+          "sebeta": 0.110274
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": 0.071037,
+          "sebeta": 0.395925
+        }
+      ],
+      "collapsed_later_row_wins": 96382,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 46,
+      "store_cells": 21230612,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21134184,
+      "orientation_flipped": 10469583,
+      "z_abs_error": {
+        "max": 0.0004884000243250419,
+        "p9999": 0.0004882367786626219,
+        "p99": 0.0004833794108317413,
+        "median": 0.00024423968957454356
+      },
+      "se_rel_error": {
+        "max": 0.008387858336946961,
+        "p9999": 0.008267544751082502,
+        "p99": 0.007926091503747583,
+        "median": 0.004164467281762464
+      },
+      "eaf_cells_compared": 21134184,
+      "eaf_rel_error": {
+        "max": 0.0019803493296413526,
+        "p9999": 0.001961866158512407,
+        "p99": 0.0014698758180300027,
+        "median": 1.1775080054984868e-05
+      },
+      "eaf_cells_beyond_float32_minor_side": 4143067,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 0,
+      "overflow_cells_exact": 0,
+      "logp_cells_compared": 208237,
+      "logp_abs_error": {
+        "max": 0.001079240807730919,
+        "p9999": 0.0009689196075740369,
+        "p99": 0.0007344804943651439,
+        "median": 0.0003378119917134548
+      },
+      "statuses": {
+        "observed": 21230612
+      },
+      "parse_seconds": 19.18,
+      "store_read_seconds": 12.76,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-E4_FLUIDELECTRONAS",
+      "source": "finngen_R13_E4_FLUIDELECTRONAS.gz",
+      "source_sha256": "44a6b6bebd72858de4fb5bba5058e5b339278f65e5fd560b0215bad1da350c44",
+      "manifest_sha256": "44a6b6bebd72858de4fb5bba5058e5b339278f65e5fd560b0215bad1da350c44",
+      "source_rows": 21325691,
+      "rows_matched_to_axis": 21325691,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192842,
+      "collapsed_cells": 96421,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": -0.121694,
+          "sebeta": 0.479049
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": 2.70087,
+          "sebeta": 1.91577
+        }
+      ],
+      "collapsed_later_row_wins": 96380,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 41,
+      "store_cells": 21229270,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21132849,
+      "orientation_flipped": 10468903,
+      "z_abs_error": {
+        "max": 0.0004883992171484941,
+        "p9999": 0.00048823640681078175,
+        "p99": 0.0004834027312481037,
+        "median": 0.00024405494297008445
+      },
+      "se_rel_error": {
+        "max": 0.00838978366832289,
+        "p9999": 0.008256858250775323,
+        "p99": 0.00789943383288701,
+        "median": 0.00402092127367682
+      },
+      "eaf_cells_compared": 21132849,
+      "eaf_rel_error": {
+        "max": 0.0019921790893546927,
+        "p9999": 0.001966418919471136,
+        "p99": 0.0018791077205741196,
+        "median": 0.0001317487598929134
+      },
+      "eaf_cells_beyond_float32_minor_side": 4142394,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 0,
+      "overflow_cells_exact": 0,
+      "logp_cells_compared": 189501,
+      "logp_abs_error": {
+        "max": 0.0010635512780456935,
+        "p9999": 0.0009476013370698745,
+        "p99": 0.0007265985966862232,
+        "median": 0.00033456217656047116
+      },
+      "statuses": {
+        "observed": 21229270
+      },
+      "parse_seconds": 19.06,
+      "store_read_seconds": 13.77,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-E4_THYMUSDIS",
+      "source": "finngen_R13_E4_THYMUSDIS.gz",
+      "source_sha256": "b265b393b089827d9069baee8e37905e404e9b97246c14bfa8a4a819c4bf9db8",
+      "manifest_sha256": "b265b393b089827d9069baee8e37905e404e9b97246c14bfa8a4a819c4bf9db8",
+      "source_rows": 21326774,
+      "rows_matched_to_axis": 21326774,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192850,
+      "collapsed_cells": 96425,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": 1.07853,
+          "sebeta": 0.967614
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": -1.0644,
+          "sebeta": 3.8642
+        }
+      ],
+      "collapsed_later_row_wins": 96397,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 28,
+      "store_cells": 21230349,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21133924,
+      "orientation_flipped": 10469459,
+      "z_abs_error": {
+        "max": 0.0004883988618935575,
+        "p9999": 0.00048823598204712044,
+        "p99": 0.0004833841623455488,
+        "median": 0.0002443123633731892
+      },
+      "se_rel_error": {
+        "max": 0.008385466297547566,
+        "p9999": 0.008260505735482686,
+        "p99": 0.007909837497711575,
+        "median": 0.004118072875744502
+      },
+      "eaf_cells_compared": 21133924,
+      "eaf_rel_error": {
+        "max": 0.001987997577227247,
+        "p9999": 0.0019663786308551775,
+        "p99": 0.0018780480232882557,
+        "median": 7.426516773859963e-05
+      },
+      "eaf_cells_beyond_float32_minor_side": 4143010,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 0,
+      "overflow_cells_exact": 0,
+      "logp_cells_compared": 170079,
+      "logp_abs_error": {
+        "max": 0.001002932573160642,
+        "p9999": 0.00091782718034937,
+        "p99": 0.0007248447610971631,
+        "median": 0.0003348583690891971
+      },
+      "statuses": {
+        "observed": 21230349
+      },
+      "parse_seconds": 18.57,
+      "store_read_seconds": 13.84,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-I9_AORTANEUR",
+      "source": "finngen_R13_I9_AORTANEUR.gz",
+      "source_sha256": "5138b2cec1676f0765c829de5507c29c9b5196e1ab577a3705aacd08f95b86ee",
+      "manifest_sha256": "5138b2cec1676f0765c829de5507c29c9b5196e1ab577a3705aacd08f95b86ee",
+      "source_rows": 21326663,
+      "rows_matched_to_axis": 21326663,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192854,
+      "collapsed_cells": 96427,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": -0.100386,
+          "sebeta": 0.0912247
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": -0.580615,
+          "sebeta": 0.327373
+        }
+      ],
+      "collapsed_later_row_wins": 96398,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 29,
+      "store_cells": 21230236,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21133809,
+      "orientation_flipped": 10469405,
+      "z_abs_error": {
+        "max": 0.0004884544515277867,
+        "p9999": 0.00048823407324237136,
+        "p99": 0.0004834297051774827,
+        "median": 0.0002441449535042217
+      },
+      "se_rel_error": {
+        "max": 0.008391666843354538,
+        "p9999": 0.008269073641888816,
+        "p99": 0.007888823803038732,
+        "median": 0.003782092035061347
+      },
+      "eaf_cells_compared": 21133809,
+      "eaf_rel_error": {
+        "max": 0.001988100547609497,
+        "p9999": 0.001966318145719976,
+        "p99": 0.0018787987363279588,
+        "median": 8.717027104192749e-05
+      },
+      "eaf_cells_beyond_float32_minor_side": 4142780,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 0,
+      "overflow_cells_exact": 0,
+      "logp_cells_compared": 293718,
+      "logp_abs_error": {
+        "max": 0.002388372949813089,
+        "p9999": 0.0014427017638707392,
+        "p99": 0.0008080822945297111,
+        "median": 0.00034501261792652116
+      },
+      "statuses": {
+        "observed": 21230236
+      },
+      "parse_seconds": 19.58,
+      "store_read_seconds": 14.03,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-KRA_PSY_DEMENTIA_EXMORE",
+      "source": "finngen_R13_KRA_PSY_DEMENTIA_EXMORE.gz",
+      "source_sha256": "b0cc7174890ef755c2485629392b3ac248fbdb2488fd4c1499006775f2368b99",
+      "manifest_sha256": "b0cc7174890ef755c2485629392b3ac248fbdb2488fd4c1499006775f2368b99",
+      "source_rows": 21324897,
+      "rows_matched_to_axis": 21324897,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192820,
+      "collapsed_cells": 96410,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": 0.166792,
+          "sebeta": 0.0633881
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": 0.0426461,
+          "sebeta": 0.265902
+        }
+      ],
+      "collapsed_later_row_wins": 96375,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 35,
+      "store_cells": 21228487,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21132077,
+      "orientation_flipped": 10468516,
+      "z_abs_error": {
+        "max": 0.0004884982524462345,
+        "p9999": 0.00048823679630886457,
+        "p99": 0.0004834016233544691,
+        "median": 0.00024413713947768478
+      },
+      "se_rel_error": {
+        "max": 0.00838813988159996,
+        "p9999": 0.008255434428118266,
+        "p99": 0.007899540397019452,
+        "median": 0.004091622941648138
+      },
+      "eaf_cells_compared": 21132077,
+      "eaf_rel_error": {
+        "max": 0.0019887821618661066,
+        "p9999": 0.0019664553799513805,
+        "p99": 0.0018792009687937324,
+        "median": 0.00014808932635530935
+      },
+      "eaf_cells_beyond_float32_minor_side": 4138407,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 40,
+      "overflow_cells_exact": 40,
+      "logp_cells_compared": 317179,
+      "logp_abs_error": {
+        "max": 0.007602611174064577,
+        "p9999": 0.0036187259855318056,
+        "p99": 0.0008722805295819208,
+        "median": 0.0003486702163590927
+      },
+      "statuses": {
+        "observed": 21228487
+      },
+      "parse_seconds": 20.72,
+      "store_read_seconds": 12.86,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    },
+    {
+      "analysis_id": "finngen-r13-O15_ABORT_OTHER",
+      "source": "finngen_R13_O15_ABORT_OTHER.gz",
+      "source_sha256": "bc3c025e5e8d3a69a50ababb7604063f25bd9f6a4883fb0ff8ca7af8cda3ee85",
+      "manifest_sha256": "bc3c025e5e8d3a69a50ababb7604063f25bd9f6a4883fb0ff8ca7af8cda3ee85",
+      "source_rows": 21314174,
+      "rows_matched_to_axis": 21314174,
+      "rows_not_on_axis": 0,
+      "rows_unusable": 0,
+      "unusable_rows_with_a_store_cell": 0,
+      "collapsed_rows": 192590,
+      "collapsed_cells": 96295,
+      "collapsed_snv_rows": 0,
+      "collapsed_example": [
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "G",
+          "alt": "GGGGCC",
+          "beta": 0.543196,
+          "sebeta": 0.478723
+        },
+        {
+          "chrom": "1",
+          "pos": 827587,
+          "ref": "GGGGCC",
+          "alt": "G",
+          "beta": -1.04915,
+          "sebeta": 1.69978
+        }
+      ],
+      "collapsed_later_row_wins": 96264,
+      "collapsed_earlier_row_wins": 0,
+      "collapsed_neither": 0,
+      "collapsed_indistinguishable": 31,
+      "store_cells": 21217879,
+      "store_cells_without_a_source_row": 0,
+      "usable_rows_without_a_store_cell": 0,
+      "cells_compared": 21121584,
+      "orientation_flipped": 10463367,
+      "z_abs_error": {
+        "max": 0.0004883984281258691,
+        "p9999": 0.0004882339324628972,
+        "p99": 0.00048341640351511,
+        "median": 0.0002441553011863773
+      },
+      "se_rel_error": {
+        "max": 0.008388006569315017,
+        "p9999": 0.008253491642104219,
+        "p99": 0.007882747762550022,
+        "median": 0.003783537527331641
+      },
+      "eaf_cells_compared": 21121584,
+      "eaf_rel_error": {
+        "max": 0.0019892439231547843,
+        "p9999": 0.0019665050353271413,
+        "p99": 0.0018795493921171615,
+        "median": 0.00014797364431603553
+      },
+      "eaf_cells_beyond_float32_minor_side": 4138461,
+      "eaf_missing_in_store": 0,
+      "sign_disagreements": 0,
+      "overflow_cells": 0,
+      "overflow_cells_exact": 0,
+      "logp_cells_compared": 188725,
+      "logp_abs_error": {
+        "max": 0.0010486258651134506,
+        "p9999": 0.0009289066297823339,
+        "p99": 0.0007269541063811504,
+        "median": 0.00033505060507010853
+      },
+      "statuses": {
+        "observed": 21217879
+      },
+      "parse_seconds": 18.57,
+      "store_read_seconds": 13.11,
+      "passed": {
+        "every_source_row_on_the_axis": true,
+        "unusable_rows_are_missing": true,
+        "no_usable_row_lost_except_collapsed": true,
+        "every_store_cell_has_a_source_row": true,
+        "z_within_half_step": true,
+        "se_within_adr_bound": true,
+        "eaf_within_half_step": true,
+        "no_sign_disagreement": true,
+        "overflow_cells_exact": true
+      }
+    }
+  ],
+  "commit": "132de8b",
+  "measured_at": "2026-10-08T05:07:27.077637+00:00",
+  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/opengwasdb",
+  "opengwasdb_fingerprint": "49af77aedf3ff9287023310e47c91edab8189cc6775f98cfbc9f0868de583595"
+}

@@ -1,0 +1,36 @@
+{
+  "task": "#250",
+  "store": "OGS-00016",
+  "source": "/data/opengwasdb/stores/OGS-00016/store.opengwasdb",
+  "destination": "/data/opengwasdb/work/epic240/250/OGS-00016-v3-c64",
+  "source_format_version": "0.1.0",
+  "destination_format_version": "0.2.0",
+  "start_utc": "2026-10-07T19:30:06Z",
+  "end_utc": "2026-10-07T23:57:57Z",
+  "start_load_1m": 27.46,
+  "end_load_1m": 30.65,
+  "wall_seconds": 16071,
+  "peak_rss_kbytes": 47655760,
+  "peak_rss_gib": 45.45,
+  "phases_seconds": {
+    "copied the release envelope": 0.0,
+    "created the destination arrays": 0.6,
+    "wrote every shard over 32 worker(s)": 123.5,
+    "rewrote the manifests, index blobs and root attrs": 0.2,
+    "verified the conversion bit-exact": 1351.9,
+    "regenerated overview.html and validated the release": 14593.0
+  },
+  "published": true,
+  "bit_exact": true,
+  "exit_status": 0,
+  "before": {
+    "n_files": 237464,
+    "apparent_bytes": 126574143066,
+    "allocated_bytes": 127038353408
+  },
+  "after": {
+    "n_files": 2399,
+    "apparent_bytes": 128761086297,
+    "allocated_bytes": 128765976576
+  }
+}

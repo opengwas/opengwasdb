@@ -1,0 +1,1133 @@
+{
+  "harness": "benchmark_store_comparison",
+  "selection": {
+    "exposure_analysis_id": "GCST006867",
+    "phewas_alid": "10:112998590:C:T",
+    "region": {
+      "chrom": "10",
+      "start": 112500000,
+      "end": 113500000
+    },
+    "random_lookup_shapes": [
+      {
+        "n_variants": 10,
+        "n_analyses": 100
+      },
+      {
+        "n_variants": 100,
+        "n_analyses": 10
+      }
+    ],
+    "random_alids": [
+      "4:83961551:C:T",
+      "1:61777906:G:T",
+      "5:109187455:A:G",
+      "12:128393192:A:T",
+      "2:27672672:A:G",
+      "8:117041196:A:T",
+      "1:95622957:A:T",
+      "14:43849722:C:G",
+      "15:93521738:C:G",
+      "7:158497159:C:CCT",
+      "6:78473804:C:G",
+      "22:35184199:C:T",
+      "19:18802843:A:G",
+      "11:25310651:G:T",
+      "1:80132816:A:G",
+      "9:137220334:A:G",
+      "11:56874806:C:T",
+      "12:113955617:C:T",
+      "9:17833295:A:G",
+      "2:127123453:G:T",
+      "9:12848809:C:T",
+      "X:23840885:A:C",
+      "8:133870886:A:AACACAC",
+      "11:129141623:A:T",
+      "9:118072096:A:G",
+      "15:70627764:C:T",
+      "4:58336273:G:T",
+      "4:65083934:G:T",
+      "6:31926542:C:T",
+      "3:29552312:G:T",
+      "8:53215599:A:G",
+      "10:100857505:C:T",
+      "6:43056658:A:C",
+      "3:181394408:A:ATT",
+      "2:3270780:C:G",
+      "21:10574254:C:CT",
+      "6:167430898:C:CTG",
+      "10:38743057:C:T",
+      "16:83528596:A:G",
+      "17:42844807:C:T",
+      "9:85632525:C:G",
+      "17:3716094:C:G",
+      "16:51871804:A:AGAAGGAAGGAGGGAAGGAAGGAAGGAAGGAAGGAAG",
+      "9:69674767:A:C",
+      "12:29110339:A:G",
+      "11:12188429:C:T",
+      "13:40136776:C:T",
+      "5:164827846:C:T",
+      "4:123245212:C:T",
+      "8:74826160:A:T",
+      "X:137205517:C:T",
+      "11:63363810:A:AAC",
+      "2:159210071:A:G",
+      "17:22154625:A:G",
+      "6:85645138:A:G",
+      "11:123891540:G:T",
+      "7:101163779:C:G",
+      "1:21602999:C:T",
+      "4:186756194:A:T",
+      "5:80638939:A:G",
+      "12:126605894:C:G",
+      "8:55433459:C:T",
+      "1:162093670:C:T",
+      "4:100944758:A:G",
+      "18:40866728:A:G",
+      "14:41616874:A:G",
+      "14:31779862:C:T",
+      "16:73464193:C:T",
+      "8:6740815:A:G",
+      "6:70867306:C:T",
+      "15:100212726:C:G",
+      "17:77294859:A:G",
+      "1:13837403:C:T",
+      "8:117841321:A:G",
+      "1:238638452:T:TTA",
+      "5:24783566:C:T",
+      "13:39688414:G:T",
+      "6:36341751:C:G",
+      "2:12780691:G:T",
+      "11:123191191:G:GT",
+      "5:17940844:A:G",
+      "12:83824522:A:G",
+      "20:21746729:A:G",
+      "11:66320464:A:G",
+      "12:133077657:C:T",
+      "10:123024318:A:G",
+      "6:166760344:A:G",
+      "18:38577505:A:T",
+      "10:75367851:A:G",
+      "6:54858953:G:T",
+      "16:85518858:C:T",
+      "12:38408984:A:G",
+      "1:116855245:A:T",
+      "1:45251896:T:TG",
+      "5:60419936:C:CAG",
+      "1:232490057:C:T",
+      "1:6793879:A:G",
+      "3:30635109:A:C",
+      "20:18784451:C:T",
+      "6:111624773:C:T"
+    ],
+    "random_analyses": [
+      "GCST90628029",
+      "GCST90451753",
+      "GCST90628032",
+      "GCST90559264",
+      "GCST90275050",
+      "GCST90012035",
+      "GCST004623",
+      "GCST90101831",
+      "GCST90319614",
+      "GCST90085844",
+      "GCST90590317",
+      "GCST90572702",
+      "GCST90017139",
+      "GCST90704646",
+      "GCST90652384",
+      "GCST90270106",
+      "GCST90435137",
+      "GCST90007310",
+      "GCST90454233",
+      "GCST90270263",
+      "GCST90274714",
+      "GCST90797578",
+      "GCST90319609",
+      "GCST90707263",
+      "GCST90399859",
+      "GCST006464",
+      "GCST006360",
+      "GCST90319479",
+      "GCST90274795",
+      "GCST90012040",
+      "GCST90025975",
+      "GCST009237",
+      "GCST90027158",
+      "GCST90429837",
+      "GCST90007312",
+      "GCST90628001",
+      "GCST90278514",
+      "GCST90837185",
+      "GCST90025973",
+      "GCST90454203",
+      "GCST90429772",
+      "GCST90269926",
+      "GCST90566716",
+      "GCST90162552",
+      "GCST90566701",
+      "GCST90559193",
+      "GCST90302880",
+      "GCST90566747",
+      "GCST90061411",
+      "GCST90271699",
+      "GCST90435146",
+      "GCST90566734",
+      "GCST90572705",
+      "GCST90841463",
+      "GCST90335174",
+      "GCST90570676",
+      "GCST90566726",
+      "GCST90565701",
+      "GCST90797586",
+      "GCST90483482",
+      "GCST90026393",
+      "GCST90274801",
+      "GCST009971",
+      "GCST90568467",
+      "GCST90429801",
+      "GCST90448959",
+      "GCST90558258",
+      "GCST90013569",
+      "GCST90565684",
+      "GCST90624183",
+      "GCST90503482",
+      "GCST005811",
+      "GCST90399727",
+      "GCST009968",
+      "GCST90281042",
+      "GCST90281250",
+      "GCST90244152",
+      "GCST90000290",
+      "GCST90275789",
+      "GCST90025984",
+      "GCST90624705",
+      "GCST90091915",
+      "GCST90104542",
+      "GCST006488",
+      "GCST90565852",
+      "GCST012237",
+      "GCST90025950",
+      "GCST90565695",
+      "GCST90399722",
+      "GCST90633788",
+      "GCST90012015",
+      "GCST90091246",
+      "GCST005843",
+      "GCST90012005",
+      "GCST90061425",
+      "GCST90085821",
+      "GCST90726362",
+      "GCST90565839",
+      "GCST90270262",
+      "GCST90319484"
+    ],
+    "resolved_from": {
+      "label": "v2-18-ogs00011",
+      "path": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+      "n_variants": 164051296,
+      "n_analyses": 3317
+    }
+  },
+  "stores": [
+    {
+      "label": "v2-18-ogs00011",
+      "path": "/data/opengwasdb/stores/OGS-00011/store.opengwasdb",
+      "dataset": {
+        "release_id": "OGS-00011",
+        "store_id": "OGS-00011",
+        "n_variants": 164051296,
+        "n_analyses": 3317,
+        "completion_state": "observed_only",
+        "reference_assembly": "GRCh38",
+        "format_version": "0.1.0",
+        "encoding": {
+          "version": 3,
+          "z": {
+            "kind": "int16_fixed",
+            "scale": 1024
+          },
+          "se": {
+            "kind": "float16"
+          },
+          "eaf": {
+            "kind": "int8_residual",
+            "residual_range": 1.0
+          }
+        },
+        "layout": {
+          "z": {
+            "chunk_shape": [
+              1000,
+              1000
+            ],
+            "shard_shape": null,
+            "dtype": "int16"
+          },
+          "se": {
+            "chunk_shape": [
+              1000,
+              1000
+            ],
+            "shard_shape": null,
+            "dtype": "float16"
+          },
+          "eaf": {
+            "chunk_shape": [
+              1000,
+              1000
+            ],
+            "shard_shape": null,
+            "dtype": "int8"
+          },
+          "top_hits/p_5e_04/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": null,
+            "dtype": "float32"
+          },
+          "top_hits/p_5e_06/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": null,
+            "dtype": "float32"
+          },
+          "top_hits/p_5e_08/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": null,
+            "dtype": "float32"
+          }
+        }
+      },
+      "footprint": {
+        "n_files": 328782,
+        "apparent_bytes": 126926858077,
+        "allocated_bytes": 127605661696,
+        "du_apparent_bytes": 126926858077,
+        "du_allocated_bytes": 127605661696,
+        "arrays": [
+          {
+            "node": "data.zarr/ragged/eaf",
+            "n_files": 15427,
+            "apparent_bytes": 2554001400,
+            "allocated_bytes": 2583248896,
+            "largest_file_bytes": 200016
+          },
+          {
+            "node": "data.zarr/ragged/eaf_baseline",
+            "n_files": 822,
+            "apparent_bytes": 555869966,
+            "allocated_bytes": 557596672,
+            "largest_file_bytes": 699137
+          },
+          {
+            "node": "data.zarr/ragged/eaf_exception_index",
+            "n_files": 903,
+            "apparent_bytes": 1443216590,
+            "allocated_bytes": 1444626432,
+            "largest_file_bytes": 1600000
+          },
+          {
+            "node": "data.zarr/ragged/eaf_exception_value",
+            "n_files": 903,
+            "apparent_bytes": 721616592,
+            "allocated_bytes": 724180992,
+            "largest_file_bytes": 800000
+          },
+          {
+            "node": "data.zarr/ragged/offsets",
+            "n_files": 2,
+            "apparent_bytes": 10513,
+            "allocated_bytes": 16384,
+            "largest_file_bytes": 10154
+          },
+          {
+            "node": "data.zarr/ragged/se",
+            "n_files": 15427,
+            "apparent_bytes": 4810402424,
+            "allocated_bytes": 4841803776,
+            "largest_file_bytes": 375246
+          },
+          {
+            "node": "data.zarr/ragged/variant_index",
+            "n_files": 15427,
+            "apparent_bytes": 4253065877,
+            "allocated_bytes": 4285411328,
+            "largest_file_bytes": 438023
+          },
+          {
+            "node": "data.zarr/ragged/z",
+            "n_files": 15427,
+            "apparent_bytes": 4848459092,
+            "allocated_bytes": 4878606336,
+            "largest_file_bytes": 389266
+          },
+          {
+            "node": "data.zarr/ragged/z_overflow_index",
+            "n_files": 3,
+            "apparent_bytes": 3200258,
+            "allocated_bytes": 3207168,
+            "largest_file_bytes": 1600000
+          },
+          {
+            "node": "data.zarr/ragged/z_overflow_value",
+            "n_files": 3,
+            "apparent_bytes": 1600260,
+            "allocated_bytes": 1609728,
+            "largest_file_bytes": 800000
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/abs_z",
+            "n_files": 417,
+            "apparent_bytes": 12100257,
+            "allocated_bytes": 12881920,
+            "largest_file_bytes": 49026
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/analysis_index",
+            "n_files": 417,
+            "apparent_bytes": 61438,
+            "allocated_bytes": 1720320,
+            "largest_file_bytes": 603
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 7063,
+            "allocated_bytes": 12288,
+            "largest_file_bytes": 6705
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/eaf",
+            "n_files": 417,
+            "apparent_bytes": 18536017,
+            "allocated_bytes": 19664896,
+            "largest_file_bytes": 55464
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/p_value",
+            "n_files": 417,
+            "apparent_bytes": 48793032,
+            "allocated_bytes": 49647616,
+            "largest_file_bytes": 125176
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/se",
+            "n_files": 417,
+            "apparent_bytes": 10596496,
+            "allocated_bytes": 11505664,
+            "largest_file_bytes": 31658
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/variant_index",
+            "n_files": 417,
+            "apparent_bytes": 14063424,
+            "allocated_bytes": 14888960,
+            "largest_file_bytes": 47711
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/z",
+            "n_files": 417,
+            "apparent_bytes": 12982899,
+            "allocated_bytes": 13815808,
+            "largest_file_bytes": 51221
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/abs_z",
+            "n_files": 148,
+            "apparent_bytes": 5041473,
+            "allocated_bytes": 5341184,
+            "largest_file_bytes": 49775
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/analysis_index",
+            "n_files": 148,
+            "apparent_bytes": 28296,
+            "allocated_bytes": 614400,
+            "largest_file_bytes": 904
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 4941,
+            "allocated_bytes": 12288,
+            "largest_file_bytes": 4595
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/eaf",
+            "n_files": 148,
+            "apparent_bytes": 6908397,
+            "allocated_bytes": 7237632,
+            "largest_file_bytes": 55464
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/p_value",
+            "n_files": 148,
+            "apparent_bytes": 17400686,
+            "allocated_bytes": 17731584,
+            "largest_file_bytes": 123630
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/se",
+            "n_files": 148,
+            "apparent_bytes": 3613712,
+            "allocated_bytes": 3874816,
+            "largest_file_bytes": 31654
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/variant_index",
+            "n_files": 148,
+            "apparent_bytes": 4481799,
+            "allocated_bytes": 4812800,
+            "largest_file_bytes": 41004
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/z",
+            "n_files": 148,
+            "apparent_bytes": 5349872,
+            "allocated_bytes": 5656576,
+            "largest_file_bytes": 51956
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/abs_z",
+            "n_files": 102,
+            "apparent_bytes": 3790135,
+            "allocated_bytes": 4083712,
+            "largest_file_bytes": 50422
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/analysis_index",
+            "n_files": 102,
+            "apparent_bytes": 20884,
+            "allocated_bytes": 425984,
+            "largest_file_bytes": 965
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 3714,
+            "allocated_bytes": 8192,
+            "largest_file_bytes": 3356
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/eaf",
+            "n_files": 102,
+            "apparent_bytes": 4916165,
+            "allocated_bytes": 5144576,
+            "largest_file_bytes": 55166
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/p_value",
+            "n_files": 102,
+            "apparent_bytes": 11865408,
+            "allocated_bytes": 12025856,
+            "largest_file_bytes": 124352
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/se",
+            "n_files": 102,
+            "apparent_bytes": 2455784,
+            "allocated_bytes": 2654208,
+            "largest_file_bytes": 30889
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/variant_index",
+            "n_files": 102,
+            "apparent_bytes": 2992194,
+            "allocated_bytes": 3207168,
+            "largest_file_bytes": 39885
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/z",
+            "n_files": 102,
+            "apparent_bytes": 4000412,
+            "allocated_bytes": 4153344,
+            "largest_file_bytes": 52593
+          },
+          {
+            "node": "dense/data.zarr/eaf",
+            "n_files": 53665,
+            "apparent_bytes": 14420363784,
+            "allocated_bytes": 14531162112,
+            "largest_file_bytes": 445479
+          },
+          {
+            "node": "dense/data.zarr/eaf_baseline",
+            "n_files": 13417,
+            "apparent_bytes": 45829448,
+            "allocated_bytes": 55451648,
+            "largest_file_bytes": 3543
+          },
+          {
+            "node": "dense/data.zarr/eaf_exception_index",
+            "n_files": 837,
+            "apparent_bytes": 1337616590,
+            "allocated_bytes": 1338925056,
+            "largest_file_bytes": 1600000
+          },
+          {
+            "node": "dense/data.zarr/eaf_exception_value",
+            "n_files": 837,
+            "apparent_bytes": 668816592,
+            "allocated_bytes": 671195136,
+            "largest_file_bytes": 800000
+          },
+          {
+            "node": "dense/data.zarr/se",
+            "n_files": 53665,
+            "apparent_bytes": 32129734424,
+            "allocated_bytes": 32240484352,
+            "largest_file_bytes": 1010155
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_04/abs_z",
+            "n_files": 7143,
+            "apparent_bytes": 187338596,
+            "allocated_bytes": 202346496,
+            "largest_file_bytes": 51637
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_04/analysis_index",
+            "n_files": 7143,
+            "apparent_bytes": 618632,
+            "allocated_bytes": 29499392,
+            "largest_file_bytes": 371
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_04/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 8759,
+            "allocated_bytes": 16384,
+            "largest_file_bytes": 8401
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_04/eaf",
+            "n_files": 7143,
+            "apparent_bytes": 369745968,
+            "allocated_bytes": 381894656,
+            "largest_file_bytes": 53808
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_04/p_value",
+            "n_files": 7143,
+            "apparent_bytes": 806918619,
+            "allocated_bytes": 821288960,
+            "largest_file_bytes": 126417
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_04/se",
+            "n_files": 7143,
+            "apparent_bytes": 139301531,
+            "allocated_bytes": 153907200,
+            "largest_file_bytes": 27272
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_04/variant_index",
+            "n_files": 7143,
+            "apparent_bytes": 129685952,
+            "allocated_bytes": 145158144,
+            "largest_file_bytes": 33461
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_04/z",
+            "n_files": 7143,
+            "apparent_bytes": 202477799,
+            "allocated_bytes": 216584192,
+            "largest_file_bytes": 53743
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_06/abs_z",
+            "n_files": 2904,
+            "apparent_bytes": 84341856,
+            "allocated_bytes": 90611712,
+            "largest_file_bytes": 51701
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_06/analysis_index",
+            "n_files": 2904,
+            "apparent_bytes": 264661,
+            "allocated_bytes": 12001280,
+            "largest_file_bytes": 501
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_06/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 7705,
+            "allocated_bytes": 12288,
+            "largest_file_bytes": 7347
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_06/eaf",
+            "n_files": 2904,
+            "apparent_bytes": 149884108,
+            "allocated_bytes": 155430912,
+            "largest_file_bytes": 53669
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_06/p_value",
+            "n_files": 2904,
+            "apparent_bytes": 322068516,
+            "allocated_bytes": 327663616,
+            "largest_file_bytes": 126090
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_06/se",
+            "n_files": 2904,
+            "apparent_bytes": 55628545,
+            "allocated_bytes": 61841408,
+            "largest_file_bytes": 26999
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_06/variant_index",
+            "n_files": 2904,
+            "apparent_bytes": 47826469,
+            "allocated_bytes": 54063104,
+            "largest_file_bytes": 28538
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_06/z",
+            "n_files": 2904,
+            "apparent_bytes": 90492389,
+            "allocated_bytes": 96022528,
+            "largest_file_bytes": 53790
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_08/abs_z",
+            "n_files": 1892,
+            "apparent_bytes": 60310235,
+            "allocated_bytes": 64241664,
+            "largest_file_bytes": 51777
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_08/analysis_index",
+            "n_files": 1892,
+            "apparent_bytes": 175290,
+            "allocated_bytes": 7819264,
+            "largest_file_bytes": 418
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_08/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 6271,
+            "allocated_bytes": 12288,
+            "largest_file_bytes": 5913
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_08/eaf",
+            "n_files": 1892,
+            "apparent_bytes": 97695540,
+            "allocated_bytes": 101388288,
+            "largest_file_bytes": 53609
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_08/p_value",
+            "n_files": 1892,
+            "apparent_bytes": 204478558,
+            "allocated_bytes": 208470016,
+            "largest_file_bytes": 126405
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_08/se",
+            "n_files": 1892,
+            "apparent_bytes": 36455948,
+            "allocated_bytes": 40734720,
+            "largest_file_bytes": 26746
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_08/variant_index",
+            "n_files": 1892,
+            "apparent_bytes": 30418367,
+            "allocated_bytes": 34447360,
+            "largest_file_bytes": 28179
+          },
+          {
+            "node": "dense/data.zarr/top_hits/p_5e_08/z",
+            "n_files": 1892,
+            "apparent_bytes": 64312247,
+            "allocated_bytes": 67997696,
+            "largest_file_bytes": 53874
+          },
+          {
+            "node": "dense/data.zarr/z",
+            "n_files": 53665,
+            "apparent_bytes": 45813655274,
+            "allocated_bytes": 45924380672,
+            "largest_file_bytes": 1389868
+          },
+          {
+            "node": "dense/data.zarr/z_overflow_index",
+            "n_files": 27,
+            "apparent_bytes": 41604300,
+            "allocated_bytes": 41648128,
+            "largest_file_bytes": 1600000
+          },
+          {
+            "node": "dense/data.zarr/z_overflow_value",
+            "n_files": 27,
+            "apparent_bytes": 20804302,
+            "allocated_bytes": 20881408,
+            "largest_file_bytes": 800000
+          }
+        ],
+        "zarr_metadata": {
+          "n_files": 21,
+          "apparent_bytes": 1229,
+          "allocated_bytes": 86016,
+          "largest_file_bytes": 264
+        },
+        "envelope": {
+          "n_files": 23,
+          "apparent_bytes": 9986512103,
+          "allocated_bytes": 9986564096,
+          "largest_file_bytes": 5233548192,
+          "files": [
+            {
+              "path": "analyses.tsv",
+              "apparent_bytes": 1045886,
+              "allocated_bytes": 1048576
+            },
+            {
+              "path": "dense/analyses.tsv",
+              "apparent_bytes": 1045681,
+              "allocated_bytes": 1048576
+            },
+            {
+              "path": "dense/dense_to_shared.npy",
+              "apparent_bytes": 53663872,
+              "allocated_bytes": 53665792
+            },
+            {
+              "path": "dense/index.sqlite",
+              "apparent_bytes": 20480,
+              "allocated_bytes": 20480
+            },
+            {
+              "path": "dense/manifest.json",
+              "apparent_bytes": 660340,
+              "allocated_bytes": 663552
+            },
+            {
+              "path": "dense/overview.html",
+              "apparent_bytes": 3057975,
+              "allocated_bytes": 3059712
+            },
+            {
+              "path": "dense/variant_alid_bytes.npy",
+              "apparent_bytes": 424512032,
+              "allocated_bytes": 424513536
+            },
+            {
+              "path": "dense/variant_alid_rows.npy",
+              "apparent_bytes": 53064116,
+              "allocated_bytes": 53067776
+            },
+            {
+              "path": "dense/variant_offsets.npy",
+              "apparent_bytes": 107327616,
+              "allocated_bytes": 107331584
+            },
+            {
+              "path": "dense/variant_rsid_bytes.npy",
+              "apparent_bytes": 128,
+              "allocated_bytes": 4096
+            },
+            {
+              "path": "dense/variant_rsid_rows.npy",
+              "apparent_bytes": 128,
+              "allocated_bytes": 4096
+            },
+            {
+              "path": "dense/variants.tsv.gz",
+              "apparent_bytes": 167969339,
+              "allocated_bytes": 167972864
+            },
+            {
+              "path": "dense/variants.tsv.gz.tbi",
+              "apparent_bytes": 1637190,
+              "allocated_bytes": 1638400
+            },
+            {
+              "path": "index.sqlite",
+              "apparent_bytes": 20480,
+              "allocated_bytes": 20480
+            },
+            {
+              "path": "manifest.json",
+              "apparent_bytes": 2943518,
+              "allocated_bytes": 2945024
+            },
+            {
+              "path": "overview.html",
+              "apparent_bytes": 3058263,
+              "allocated_bytes": 3059712
+            },
+            {
+              "path": "variant_alid_bytes.npy",
+              "apparent_bytes": 5233548192,
+              "allocated_bytes": 5233549312
+            },
+            {
+              "path": "variant_alid_rows.npy",
+              "apparent_bytes": 654193636,
+              "allocated_bytes": 654196736
+            },
+            {
+              "path": "variant_offsets.npy",
+              "apparent_bytes": 1312410496,
+              "allocated_bytes": 1312411648
+            },
+            {
+              "path": "variant_rsid_bytes.npy",
+              "apparent_bytes": 128,
+              "allocated_bytes": 4096
+            },
+            {
+              "path": "variant_rsid_rows.npy",
+              "apparent_bytes": 128,
+              "allocated_bytes": 4096
+            },
+            {
+              "path": "variants.tsv.gz",
+              "apparent_bytes": 1963954052,
+              "allocated_bytes": 1963954176
+            },
+            {
+              "path": "variants.tsv.gz.tbi",
+              "apparent_bytes": 2337190,
+              "allocated_bytes": 2338816
+            }
+          ]
+        }
+      },
+      "timings": [
+        {
+          "query": "bulk",
+          "timed_out": false,
+          "median_ms": 30462.373,
+          "p95_ms": 34902.804,
+          "repetitions": 5,
+          "warmup_ms": 44660.739,
+          "result_count": 5052918
+        },
+        {
+          "query": "phewas",
+          "timed_out": false,
+          "median_ms": 28.637,
+          "p95_ms": 31.95,
+          "repetitions": 5,
+          "warmup_ms": 57.157,
+          "result_count": 3152
+        },
+        {
+          "query": "regional",
+          "timed_out": false,
+          "median_ms": 618470.722,
+          "p95_ms": 618470.722,
+          "repetitions": 1,
+          "warmup_ms": 628324.632,
+          "result_count": 8304617
+        },
+        {
+          "query": "regional_one_analysis",
+          "timed_out": false,
+          "median_ms": 624567.76,
+          "p95_ms": 624567.76,
+          "repetitions": 1,
+          "warmup_ms": 645474.369,
+          "result_count": 1365
+        },
+        {
+          "query": "tophits",
+          "timed_out": false,
+          "median_ms": 3.745,
+          "p95_ms": 4.031,
+          "repetitions": 5,
+          "warmup_ms": 10.607,
+          "result_count": 6001
+        },
+        {
+          "query": "random_lookup_10_variants_100_analyses",
+          "timed_out": false,
+          "median_ms": 38027.982,
+          "p95_ms": 44442.077,
+          "repetitions": 5,
+          "warmup_ms": 38603.91,
+          "result_count": 0
+        },
+        {
+          "query": "random_lookup_100_variants_10_analyses",
+          "timed_out": false,
+          "median_ms": 42924.38,
+          "p95_ms": 45469.4,
+          "repetitions": 5,
+          "warmup_ms": 47331.332,
+          "result_count": 18
+        }
+      ],
+      "memory": [
+        {
+          "baseline_mb": 2388.8,
+          "peak_mb": 15404.8,
+          "delta_mb": 13016.0,
+          "result_count": 5052918,
+          "query": "bulk"
+        },
+        {
+          "baseline_mb": 2383.7,
+          "peak_mb": 4929.6,
+          "delta_mb": 2545.8,
+          "result_count": 3152,
+          "query": "phewas"
+        },
+        {
+          "baseline_mb": 2384.3,
+          "peak_mb": 30181.9,
+          "delta_mb": 27797.6,
+          "result_count": 8304617,
+          "query": "regional"
+        },
+        {
+          "baseline_mb": 2388.2,
+          "peak_mb": 29549.6,
+          "delta_mb": 27161.4,
+          "result_count": 1365,
+          "query": "regional_one_analysis"
+        },
+        {
+          "baseline_mb": 2384.4,
+          "peak_mb": 2384.5,
+          "delta_mb": 0.1,
+          "result_count": 6001,
+          "query": "tophits"
+        },
+        {
+          "baseline_mb": 2388.0,
+          "peak_mb": 52589.1,
+          "delta_mb": 50201.1,
+          "result_count": 0,
+          "query": "random_lookup_10_variants_100_analyses"
+        },
+        {
+          "baseline_mb": 2388.0,
+          "peak_mb": 60327.9,
+          "delta_mb": 57939.9,
+          "result_count": 18,
+          "query": "random_lookup_100_variants_10_analyses"
+        }
+      ],
+      "effective_reader": {
+        "use_threads": null,
+        "pipeline": null,
+        "max_workers": null
+      },
+      "load_average_1m_before": 2.24,
+      "load_average_1m_after": 3.03,
+      "result_digests": {
+        "bulk": {
+          "variant_index": "e6a9c86fe44b34d2f23b5422e7982d215e1079967e8be6c78f4d673585e365a3",
+          "analysis_index": "26307b9bdf0730e049cc5c1ece0c0b41c46516ce3231b96674209eb2cf001c7f",
+          "z": "f873661dc70a014ee6fa3544913458b99af3b4fe4c76bf57661292b4cc7f0a75",
+          "se": "825ff963558f183e8be31751a6060911dd9be815c54159c74ad474d937d5b870",
+          "eaf": "115ab65e7e498e5e6d67135bef29a7a00b63482275a283a78cdd3a58a0e5da2e",
+          "association_status": "2d7ec5edb1a755352f19f4190f434b5c9dea7fb736bad31cea05be5d4de5b428"
+        },
+        "phewas": {
+          "variant_index": "a1ececf26a43299c223b904c9e9de85e6be18f8c93e4fc0061f63a835bf6f5e0",
+          "analysis_index": "5d08427f505d3e2e03d3460188339112e35a2e5fc9e1234910e473afb28606d8",
+          "z": "a5aa3335428895f32d241b8fc5946d33cd4fdbd9111fbe0dfb9281e73a2cce39",
+          "se": "63929e4babd7fc33accebc82ee55d8e0ab5f4d1badc8e73f419036b7b8268faa",
+          "eaf": "ef95850b8ce2b413c574ffb0d8a4004059e954674e3428f478660b5fecbd3a65",
+          "association_status": "35ea152ae5e7b692990628e1c0d3eff63104cd046071b735937a3562b1ae9342"
+        },
+        "regional": {
+          "variant_index": "2c8ac8346406e6608cd8722a9cfe868b0f9f6065a2a6fbaf7e0b02e7e2b3ec10",
+          "analysis_index": "5e7289a65d554741a73b5288854a2a9d1b36ca4447f4c9a4a347834e8df0a32c",
+          "z": "a8d8938cf9e2bb08c230b642e6556e62108362dcfa453a7c4e6700f3451d1320",
+          "se": "b502fb3fb1a13d101be3aa1e7a63fbb6eb0bc67edb5380be8d0a172db2992ebf",
+          "eaf": "dc4ed4fb0f7048d97b023b1d49e23be07f76882a2a6cb7ec1f684aef2efddf4e",
+          "association_status": "7c1641cb07492ce3f25704f6c463c504cf0253b226f6c7f32aac4535a3cf3599"
+        },
+        "regional_one_analysis": {
+          "variant_index": "d519621002a6cb34b1fdd5e986f6ec3ff6e56cb19315460232e004cb7b8927cd",
+          "analysis_index": "825350667cf8ef89c66164a4cd71b7033b8ac3d94a16d8ad9a9b2927d7d6d1ff",
+          "z": "262a5ac8b6d04c2264fb4d1b57d2ed2365dd2897b2bcaac5fd6a6944099e470c",
+          "se": "251075daee6e8486fc0b3daf3030dcb111a1ee9472ad5ee60b7b4e3cffe9362f",
+          "eaf": "fe20052e9563c5eb182256b7897c200276df5a7de41cf99d4b398fd622ac9a51",
+          "association_status": "54d4748c1566224229d72ee6a6d6dacdc343bada51ef8eb387dbafce5e6e3158"
+        },
+        "tophits": {
+          "variant_index": "700b6fdfad71205373c41bc3f3c26c979e7bacc4c9d4f340a0bdedf8e4499ab6",
+          "analysis_index": "693f3decade9128bd3559ecff7760953df20d0be13f6695ebb57fa824d1d2d2c",
+          "z": "d6fce68c540e8adc378f2653627ae883d541a7a06925953279075a5d739657dd",
+          "se": "0ca781e96147e1eb369dd8a465e2ab27f8cd3f7eb077a6297b297a53ee46c727",
+          "eaf": "46f5a769b6c346aaadaec9a75fde6db8eacfb3b486e7885f57b2afb81bf5f1ad",
+          "association_status": "83815b945bb98559ffbf14aeda49f0333e54196777137787149eb95b9dfdd2f6"
+        },
+        "random_lookup_10_variants_100_analyses": {
+          "variant_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+          "analysis_index": "90882f3f250a1b354c814524bb9f4d90a2ce613725f771b192ae2adbccf53a67",
+          "z": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+          "se": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+          "eaf": "d9e2a0f0845b73e173c673c6ad80c873a33b9e1efd754b1b1aa275357e9d2000",
+          "association_status": "a2875f8ea4947b6c82c90e231ea5a5459b829de56bbb0f52c862c8ccf28bb9d1"
+        },
+        "random_lookup_100_variants_10_analyses": {
+          "variant_index": "9a0d01c719175d780586f9929c8eb89ddb995dd6312e78262e5d27bb8c5766df",
+          "analysis_index": "251cc6bdedf372ef2383f8692a14000e11c3e536fa2a4ae407a5952aaf517b92",
+          "z": "887bee00c60ab2cd8daead7c401a375d9f4850386d7fbe2dc233e539c169fe09",
+          "se": "9fc63d72f4831541e0add74b77d3bda454530a2c6f6b381525bf1124c7fea693",
+          "eaf": "cad03bb8c0bce3f0a2a0caf7c61d530b8f903c434a3f0c1db7b96d6e7ef4c484",
+          "association_status": "c2fd6da587a5726b1372d393e024dce3448df473442c18f15057d00891311e76"
+        }
+      }
+    }
+  ],
+  "identity": {
+    "reference_store": "v2-18-ogs00011",
+    "stores": [
+      "v2-18-ogs00011"
+    ],
+    "shapes": [
+      "bulk",
+      "phewas",
+      "random_lookup_100_variants_10_analyses",
+      "random_lookup_10_variants_100_analyses",
+      "regional",
+      "regional_one_analysis",
+      "tophits"
+    ],
+    "shapes_not_compared": [],
+    "arrays_per_shape": [
+      "variant_index",
+      "analysis_index",
+      "z",
+      "se",
+      "eaf",
+      "association_status"
+    ],
+    "identical": true
+  },
+  "environment": {
+    "python": "3.11.15",
+    "numpy": "2.4.6",
+    "zarr": "2.18.7",
+    "numcodecs": "0.12.1",
+    "opengwasdb_commit": "745796c",
+    "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
+    "nproc": 224,
+    "cache": "warm page cache: the node holds about 1 TB of page cache and the stores are warm. A cold-cache run cannot be forced without root, so these timings are warm-cache numbers, not first-touch disk numbers.",
+    "effective_reader": {
+      "use_threads": null,
+      "pipeline": null,
+      "max_workers": null
+    }
+  },
+  "commit": "745796c",
+  "measured_at": "2026-10-08T04:06:31.902266+00:00",
+  "opengwasdb_path": "/tmp/epic240/244/base-src/opengwasdb",
+  "opengwasdb_fingerprint": "9fe19ecba575bdc1e2419cfcdff9fe69ca6e293f21279bf63ec8d10506450ac4"
+}

@@ -1,0 +1,278 @@
+---
+title: "OGS-00016 converted to format 0.2.0"
+subtitle: "FinnGen R13 · 2,754 Analyses × 21,230,615 variants · Zarr v3, sharded, Dense chunks narrowed to 64 Analyses · benchmarked against its 0.1.0 original"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+from pathlib import Path
+
+HERE = Path(".")
+
+conv16 = json.loads((HERE / "opengwasdb_ogs00016_conversion_0_2_0.json").read_text())
+conv11 = json.loads((HERE / "opengwasdb_ogs00011_conversion_0_2_0.json").read_text())
+bench = json.loads((HERE / "opengwasdb_ogs00016_finngen_benchmark_0_2_0.json").read_text())
+fid = json.loads((HERE / "opengwasdb_ogs00016_source_fidelity_0_2_0.json").read_text())
+cmp16_218 = json.loads((HERE / "opengwasdb_ogs00016_store_comparison_2_18.json").read_text())
+cmp16_z3 = json.loads((HERE / "opengwasdb_ogs00016_store_comparison_zarr3.json").read_text())
+cmp11_218 = json.loads((HERE / "opengwasdb_ogs00011_store_comparison_2_18.json").read_text())
+cmp11_z3 = json.loads((HERE / "opengwasdb_ogs00011_store_comparison_zarr3.json").read_text())
+
+
+def md_table(headers, rows, aligns=None):
+    aligns = aligns or ["---"] * len(headers)
+    head = "| " + " | ".join(headers) + " |"
+    rule = "|" + "|".join(aligns) + "|"
+    body = "\n".join("| " + " | ".join(str(c) for c in row) + " |" for row in rows)
+    return f"{head}\n{rule}\n{body}"
+
+
+def store(doc, label):
+    return next(s for s in doc["stores"] if s["label"] == label)
+
+
+def timings(s):
+    return {r["query"]: r for r in s["timings"]}
+
+
+def memory(s):
+    return {r["query"]: r for r in s["memory"]}
+
+
+LABELS = {
+    "tophits": "Top hits for one Analysis",
+    "phewas": "One variant, all Analyses",
+    "regional_one_analysis": "One window, one Analysis",
+    "random_lookup_10_variants_100_analyses": "10 variants × 100 Analyses",
+    "random_lookup_100_variants_10_analyses": "100 variants × 10 Analyses",
+    "regional": "One window, all Analyses",
+    "bulk": "One whole Analysis",
+}
+ORDER = ["tophits", "phewas", "regional_one_analysis",
+         "random_lookup_10_variants_100_analyses",
+         "random_lookup_100_variants_10_analyses", "regional", "bulk"]
+
+
+def fmt_time(ms):
+    return f"{ms / 1000:,.2f} s" if ms >= 1000 else f"{ms:,.1f} ms"
+
+
+def fmt_gb(mb):
+    return f"{mb / 1000:,.2f} GB"
+
+
+def three_column(cmp218, cmpz3, v2_label, v3_label):
+    """(shape, time/p95/RSS) for 2.18-on-0.1.0, zarr3-on-0.1.0, zarr3-on-0.2.0, count."""
+    s218 = store(cmp218, cmp218["stores"][0]["label"])
+    a, b, c = timings(s218), timings(store(cmpz3, v2_label)), timings(store(cmpz3, v3_label))
+    ma, mb, mc = memory(s218), memory(store(cmpz3, v2_label)), memory(store(cmpz3, v3_label))
+    rows = []
+    for sh in ORDER:
+        cells = []
+        for t, m in ((a, ma), (b, mb), (c, mc)):
+            r = t[sh]
+            if r.get("timed_out"):
+                cells.append("**limit hit**")
+            else:
+                cells.append(f"{fmt_time(r['median_ms'])} / {fmt_time(r['p95_ms'])} · {fmt_gb(m[sh]['peak_mb'])}")
+        rows.append([LABELS[sh], *cells, f"{a[sh]['result_count']:,}"])
+    return rows
+
+
+def per_plane(cmpz3, v2_label, v3_label):
+    v2 = {a["node"]: a for a in store(cmpz3, v2_label)["footprint"]["arrays"]}
+    v3 = {a["node"]: a for a in store(cmpz3, v3_label)["footprint"]["arrays"]}
+    planes = ["data.zarr/z", "data.zarr/se", "data.zarr/eaf",
+              "data.zarr/eaf_baseline", "data.zarr/top_hits/p_5e_04/z"]
+    rows = []
+    for node in planes:
+        a, b = v2[node]["apparent_bytes"], v3[node]["apparent_bytes"]
+        rows.append([node.replace("data.zarr/", ""), f"{a / 1e6:,.1f} MB",
+                     f"{b / 1e6:,.1f} MB", f"{b / a:.3f}×"])
+    return rows
+```
+
+::: {.callout-important}
+## What this measures
+
+OGS-00016 — every public FinnGen R13 endpoint, **2,754 Analyses × 21,230,615
+variants, 58.5 billion associations** — converted from `format_version` 0.1.0
+(Zarr v2, `[1000, 1000]` chunks) to **0.2.0 (Zarr v3, sharded, Dense inner chunk
+`[1000, 64]`, Dense shard `[100000, 1024]`, top-hit index sharded at 64 inner
+chunks)** by `scripts/convert_store_to_0_2_0.py`, then:
+
+* checked **bit-exact** against the source and validated (`validate_store`);
+* benchmarked as three columns — 2.18 on 0.1.0, this code on 0.1.0 (Zarr 3
+  reading v2), and this code on 0.2.0 — with the #242 seven-shape harness,
+  **every column returning identical result digests**;
+* re-run through the FinnGen benchmark and the source-fidelity harness;
+* measured per plane, to test #246's ukb-b-based shape decision on FinnGen's
+  near-null, low-case-count data.
+:::
+
+## Conversion cost
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for c in (conv16, conv11):
+    f = lambda phase: f"{c['phases_seconds'][phase]:,.1f} s"
+    rows.append([
+        c["store"], c["source_format_version"] + " → " + c["destination_format_version"],
+        f"{c['wall_seconds'] // 3600}:{(c['wall_seconds'] % 3600) // 60:02d}:{c['wall_seconds'] % 60:02d}",
+        f"{c['peak_rss_gib']:,.2f} GiB",
+        f("wrote every shard over 32 worker(s)"),
+        f("verified the conversion bit-exact"),
+        f("regenerated overview.html and validated the release"),
+    ])
+print(md_table(
+    ["Store", "format", "wall clock", "peak RSS", "write (32 workers)",
+     "bit-exact verify", "overview + validate"], rows))
+print()
+print("Both published only after the bit-exact check and `validate_store` passed, by renaming the")
+print("staging tree; peak RSS is the `/usr/bin/time -v` maximum, which is the validate phase.")
+```
+
+## Files and size
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for c in (conv16, conv11):
+    b, a = c["before"], c["after"]
+    rows.append([
+        c["store"],
+        f"{b['n_files']:,} → **{a['n_files']:,}**",
+        f"{b['apparent_bytes'] / 1e9:,.2f} → **{a['apparent_bytes'] / 1e9:,.2f} GB** "
+        f"({(a['apparent_bytes'] / b['apparent_bytes'] - 1) * 100:+.2f} %)",
+        f"{b['allocated_bytes'] / 1e9:,.2f} → {a['allocated_bytes'] / 1e9:,.2f} GB "
+        f"({(a['allocated_bytes'] / b['allocated_bytes'] - 1) * 100:+.2f} %)",
+    ])
+print(md_table(["Store", "files", "apparent bytes", "allocated bytes"], rows))
+```
+
+### Per-plane compressed size, OGS-00016
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(["array", "0.1.0", "0.2.0", "0.2.0 / 0.1.0"],
+               per_plane(cmp16_z3, "v2-ogs00016", "v3-ogs00016")))
+print()
+print("The `se` plane is the one that pays for 64-wide chunks on FinnGen "
+      f"({[r for r in per_plane(cmp16_z3, 'v2-ogs00016', 'v3-ogs00016') if r[0] == 'se'][0][3]}); "
+      "`z` and the top-hit index are flat. Total apparent size grows "
+      f"{conv16['after']['apparent_bytes'] / conv16['before']['apparent_bytes'] * 100 - 100:+.2f} %, "
+      "comparable with #245's +1.4 % on ukb-b, so **FinnGen does not contradict ADR 0058's shape decision**.")
+```
+
+## The three query columns
+
+Times are **median / p95**; memory is the fresh-interpreter peak RSS. Each run
+started at a 1-minute load below 3. The 2.18 column is the OGS-00016 benchmark's
+own harness environment (`745796c`); columns (b) and (c) are measured in one Zarr 3
+process against both stores, and the same harness revision produced the 2.18 column.
+
+### OGS-00016
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["query", "2.18 · 0.1.0", "this code · 0.1.0", "this code · 0.2.0", "rows"],
+    three_column(cmp16_218, cmp16_z3, "v2-ogs00016", "v3-ogs00016")))
+print()
+print("Whole-Analysis read on T2D: **55.79 s / 22.78 GB** on 2.18 (against #237's 60.5 s / "
+      "22.8 GB baseline), **47.41 s / 2.54 GB** with Zarr 3 reading the 0.1.0 store, and "
+      "**12.13 s / 2.57 GB** on the converted 0.2.0 store — **4.6× faster and 8.9× less memory** "
+      "than the 2.18 original.")
+```
+
+### OGS-00011
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["query", "2.18 · 0.1.0", "this code · 0.1.0", "this code · 0.2.0", "rows"],
+    three_column(cmp11_218, cmp11_z3, "v2-ogs00011", "v3-ogs00011")))
+print()
+print("The slow 2.18 shapes are the variant-side Overflow scans #252 fixed: the 1 Mb region "
+      "× all Analyses is **618.47 s / 30.18 GB** on 2.18 against **69.94 s / 5.74 GB** on 0.2.0, "
+      "and a region × one Analysis is **624.57 s / 29.55 GB** against **8.11 s / 4.97 GB**. "
+      "The random lookups fall from 38–43 s / 53–60 GB to 0.7–2.8 s / 2.5–5.0 GB.")
+```
+
+::: {.callout-note}
+## Identity
+
+Every one of the seven shapes returns **identical result digests** in all three
+columns, on both stores: 2.18 versus Zarr 3 on 0.1.0, 2.18 versus 0.2.0, and the
+in-process 0.1.0-versus-0.2.0 check the harness enforces before writing an
+artifact. A different value, order, dtype, length or NaN position would have
+failed the run instead of being reported.
+:::
+
+## FinnGen benchmark on the converted store
+
+```{python}
+#| echo: false
+#| output: asis
+loci = [[r["gene"], r["rsid"], r["analysis_id"].replace("finngen-r13-", ""),
+         f"{r['z_risk_allele']:.2f}", f"{r['neglog10_p']:.0f}"] for r in bench["known_loci"]]
+print("### Known loci recovered")
+print(md_table(["locus", "rsid", "Analysis", "z (risk allele)", "−log10 p"], loci))
+print()
+mr = [[r["exposure_id"].replace("finngen-r13-", ""), r["outcome_id"].replace("finngen-r13-", ""),
+       f"{r['ivw_beta']:.3f}", f"{r['ivw_se']:.3f}", f"{r['ivw_pval']:.1e}", r["n_instruments"]]
+      for r in bench["mr"]]
+print("### Mendelian randomisation")
+print(md_table(["exposure", "outcome", "IVW beta", "se", "p", "instruments"], mr))
+print()
+print(f"Source bulk parse of the same Analysis: **{bench['source_bulk']['median_s']:.1f} s**; "
+      f"the store's whole-Analysis read is "
+      f"{next(r for r in bench['timings'] if r['query'] == 'bulk')['median_ms'] / 1000 / bench['source_bulk']['median_s']:.1f}× the source.")
+```
+
+## Source fidelity
+
+```{python}
+#| echo: false
+#| output: asis
+all_pass = all(all(r["passed"].values()) for r in fid["analyses"])
+cells = sum(r["cells_compared"] for r in fid["analyses"])
+keep = ("z_abs", "z_overflow", "se_rel", "eaf_rel")
+rows = [[r["analysis_id"].replace("finngen-r13-", ""), f"{r['cells_compared']:,}",
+         "PASS" if all(r["passed"].values()) else "FAIL"] for r in fid["analyses"]]
+print(f"Cell-by-cell comparison against the source `.gz` files: **"
+      f"{'PASS' if all_pass else 'FAIL'}**, {len(fid['analyses'])} Analyses, "
+      f"{cells:,} cells compared (of {fid['n_variants']:,} variants each), every gate "
+      f"`{{'z_abs': {fid['gates']['z_abs']:.2e}, 'se_rel': {fid['gates']['se_rel']}, "
+      f"'eaf_rel': {fid['gates']['eaf_rel']:.3e}}}`.")
+print()
+print(md_table(["Analysis", "cells compared", "result"], rows))
+```
+
+## Summary
+
+**Format 0.2.0 is better where it was designed to be, and the cost is the one ADR 0058
+predicted.** On OGS-00016 the whole-Analysis read is 12.13 s / 2.57 GB against
+2.18's 55.79 s / 22.78 GB, the file count falls from 237,464 to 2,399, and total
+size grows 1.73 % — the `se` plane's +6.1 % is the only material per-plane cost.
+On OGS-00011 the 2.18 Overflow scans collapse (a 1 Mb region 618 s → 70 s, a
+region × one Analysis 625 s → 8 s, lookups 38–43 s → 0.7–2.8 s) and memory with
+them. The small query shapes are milliseconds slower on 0.2.0 than on 0.1.0 under
+Zarr 3, which is the fixed per-read dispatch cost #244 found; in absolute terms
+they remain milliseconds. No shape hit a time limit; no column produced a
+different answer.
