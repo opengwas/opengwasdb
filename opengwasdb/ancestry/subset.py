@@ -157,24 +157,21 @@ def build_hybrid_from_catalogue(
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
+    write_variant_index: bool = True,
 ) -> SubsetResult:
     """Subset the Catalogue to ``ancestry`` and build a Hybrid store from it.
 
     ``stored_effect_scale`` and ``original_sd_method``/``original_sd`` apply
-    uniformly to every kept Analysis (issues #17, #18) -- this entry point is
-    for a single Source Collection release where that is expected to hold; a
-    release mixing scales or SD methods per Analysis needs a manifest built
-    some other way.
+    uniformly to every kept Analysis (issues #17, #18); a release mixing scales
+    or SD methods per Analysis needs a manifest built some other way.
 
     Uses the unchanged ``build_hybrid_from_vcf_manifest`` on the row-filtered
-    manifest -- Assigned Ancestry rides through into ``analyses.tsv`` as part
-    of the build itself -- then folds release-level Catalogue provenance into
-    ``manifest.json``.
+    manifest -- Assigned Ancestry rides through into ``analyses.tsv`` -- then
+    folds release-level Catalogue provenance into ``manifest.json``.
 
     ``eaf_reference``/``eaf_reference_ancestry``/``allow_unverified_eaf`` pass
     straight through to the EAF orientation check (issue #115). This is the
-    path the `gwas-catalog-eur-hybrid` pilot is built by, and the path whose
-    store the flipped `GCST003566` frequencies ended up in, so it is the one
+    path the `gwas-catalog-eur-hybrid` pilot is built by, so it is the one
     that most needs a reference supplied.
     """
     # Imported here to keep the ancestry package importable without the heavy
@@ -207,6 +204,7 @@ def build_hybrid_from_catalogue(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        write_variant_index=write_variant_index,
     )
     record_catalogue_provenance(output_path, subset)
     return subset

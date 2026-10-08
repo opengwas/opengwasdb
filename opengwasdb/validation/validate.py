@@ -1152,19 +1152,385 @@ def _validate_ragged_downstream_seams(
     n_analyses_csr: int,
     errors: list[str],
 ) -> None:
-    """Seam: Reference-Completion state, then the Top-Hit Indexes.
+    """Seam: Reference-Completion state, the variant index, then Top-Hit Indexes.
 
     Completion is validated whenever the release declares it, for its own
-    sake. The Top-Hit Indexes are only cross-checked against the CSR once
-    every earlier seam passed -- ``_validate_ragged_top_hits`` reads the CSR
-    and would otherwise "confirm" a store the structural and value seams
-    already found broken.
+    sake. The variant-centric index and the Top-Hit Indexes are only
+    cross-checked against the CSR once every earlier seam passed -- both read
+    the CSR and would otherwise "confirm" a store the structural and value
+    seams already found broken.
     """
     data_root = store.arrays(mode="r")
     if store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
         _validate_ragged_completion(ragged_path, store, n_assoc, n_analyses_csr, errors)
+    if not errors and (ragged_path / _BY_VARIANT_GROUP).exists():
+        axis = VariantAxis(store.path)
+        try:
+            n_variant_axis = axis.n_variants
+        finally:
+            axis.close()
+        _validate_variant_index(
+            store,
+            ragged_path,
+            n_assoc,
+            errors,
+            component_label="data.zarr/ragged",
+            n_axis=n_variant_axis,
+        )
     if not errors and "top_hits" in data_root:
         _validate_ragged_top_hits(store.path, data_root, errors)
+
+
+#: The one source of the index group name, duplicated from the builder module
+#: to keep validation importable without the build stack.
+_BY_VARIANT_GROUP = "by_variant"
+
+#: Two independent 64-bit splitmix constants.  Summing the digest under two
+#: decorrelated seeds makes a collision a single sum could hide far less likely.
+_VARIANT_DIGEST_SEEDS = (0x9E3779B97F4A7C15, 0xD1B54A32D192ED03)
+
+#: Cells one digest window holds.  The digest must never materialise a plane,
+#: so it hashes a window and folds the sum in (issue #254).
+_DIGEST_WINDOW = 1_000_000
+
+
+def _mix64(values: np.ndarray) -> np.ndarray:
+    """The splitmix64 finalizer, elementwise, on `uint64` (ADR 0060, ruling Q1).
+
+    A plain sum of fields would let a swapped `z` between two cells cancel; a
+    full avalanche mix does not, which is what makes the bounded digest a
+    substitute for a per-row comparison on a store too large to regroup.
+    """
+    x = np.asarray(values, dtype=np.uint64)
+    x = (x ^ (x >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+    x = (x ^ (x >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+    return x ^ (x >> np.uint64(31))
+
+
+def _raw_bits(values: np.ndarray) -> np.ndarray:
+    """A code array's stored bytes as `uint64`, so a digest follows the bytes.
+
+    A float16 `se` code viewed as its numeric value would lose NaN patterns;
+    the same dtype on both sides means viewing the same bytes is exact.
+    """
+    values = np.ascontiguousarray(values)
+    unsigned = np.dtype(f"u{values.dtype.itemsize}")
+    return values.view(unsigned).astype(np.uint64)
+
+
+def _hash_fields(fields: list[np.ndarray]) -> tuple[int, int]:
+    """Two order-independent 64-bit sums over the mixed field tuples."""
+    if not fields or len(fields[0]) == 0:
+        return 0, 0
+    mixed = np.zeros(len(fields[0]), dtype=np.uint64)
+    for entry in fields:
+        mixed = _mix64(mixed ^ _raw_bits(entry))
+    first = int(np.sum(_mix64(mixed ^ np.uint64(_VARIANT_DIGEST_SEEDS[0])), dtype=np.uint64))
+    second = int(np.sum(_mix64(mixed ^ np.uint64(_VARIANT_DIGEST_SEEDS[1])), dtype=np.uint64))
+    return first, second
+
+
+def _exception_bits(
+    codes: np.ndarray, sentinel: int, table: Any, positions: np.ndarray
+) -> np.ndarray:
+    """Per-cell exact-value bits: the table's float32 at an exception cell, else 0."""
+    out = np.zeros(len(codes), dtype=np.uint64)
+    exceptional = codes == sentinel
+    if exceptional.any():
+        exact = np.asarray(table.lookup(positions[exceptional]), dtype=np.float32)
+        out[exceptional] = _raw_bits(exact)
+    return out
+
+
+def _cell_fields(
+    root: Any,
+    encoding: StoreEncoding,
+    tables: tuple[Any, Any, Any],
+    variants: np.ndarray,
+    analyses: np.ndarray,
+    positions: np.ndarray,
+    lo: int,
+    hi: int,
+) -> list[np.ndarray]:
+    """The digest's fields for one component: key, every code, exact exceptions."""
+    fields = [variants, analyses, np.asarray(root["z"][lo:hi]), np.asarray(root["se"][lo:hi])]
+    if "eaf" in root:
+        fields.append(np.asarray(root["eaf"][lo:hi]))
+    if "imputed" in root:
+        fields.append(np.asarray(root["imputed"][lo:hi]))
+    z_overflow, eaf_exceptions, se_exceptions = tables
+    if encoding.z.is_fixed_point:
+        fields.append(
+            _exception_bits(np.asarray(root["z"][lo:hi]), Z_OVERFLOW, z_overflow, positions)
+        )
+    if encoding.eaf.is_residual:
+        fields.append(
+            _exception_bits(
+                np.asarray(root["eaf"][lo:hi]),
+                EAF_EXCEPTION,
+                eaf_exceptions,
+                positions,
+            )
+        )
+    if encoding.se.is_residual:
+        fields.append(
+            _exception_bits(np.asarray(root["se"][lo:hi]), SE_EXCEPTION, se_exceptions, positions)
+        )
+    return fields
+
+
+def _read_exception_tables(root: Any) -> tuple[Any, Any, Any]:
+    """The three exception tables, read once for a whole digest pass."""
+    return (
+        ZOverflowTable.read(root),
+        EafExceptionTable.read(root),
+        SeExceptionTable.read(root),
+    )
+
+
+def _source_digest(
+    root: Any, encoding: StoreEncoding, offsets: np.ndarray, n_assoc: int
+) -> tuple[int, int]:
+    """The Analysis-sorted side's digest, streamed in windows."""
+    tables = _read_exception_tables(root)
+    total = [0, 0]
+    for lo in range(0, n_assoc, _DIGEST_WINDOW):
+        hi = min(lo + _DIGEST_WINDOW, n_assoc)
+        positions = np.arange(lo, hi, dtype=np.int64)
+        analyses = np.searchsorted(offsets[1:], positions, side="right").astype(np.int64)
+        variants = np.asarray(root["variant_index"][lo:hi], dtype=np.int64)
+        a, b = _hash_fields(
+            _cell_fields(root, encoding, tables, variants, analyses, positions, lo, hi)
+        )
+        total[0] = (total[0] + a) % (1 << 64)
+        total[1] = (total[1] + b) % (1 << 64)
+    return total[0], total[1]
+
+
+def _index_digest(
+    index: Any, encoding: StoreEncoding, by_offsets: np.ndarray, n_assoc: int
+) -> tuple[int, int]:
+    """The by-variant side's digest, streamed in windows."""
+    tables = _read_exception_tables(index)
+    total = [0, 0]
+    for lo in range(0, n_assoc, _DIGEST_WINDOW):
+        hi = min(lo + _DIGEST_WINDOW, n_assoc)
+        positions = np.arange(lo, hi, dtype=np.int64)
+        variants = (np.searchsorted(by_offsets, positions, side="right") - 1).astype(np.int64)
+        analyses = np.asarray(index["analysis_index"][lo:hi], dtype=np.int64)
+        a, b = _hash_fields(
+            _cell_fields(index, encoding, tables, variants, analyses, positions, lo, hi)
+        )
+        total[0] = (total[0] + a) % (1 << 64)
+        total[1] = (total[1] + b) % (1 << 64)
+    return total[0], total[1]
+
+
+def _validate_variant_index_presence(
+    store: OpenGWASDBStore, root: Any, errors: list[str], label: str
+) -> Any | None:
+    """Check the group and its manifest provenance block agree; return the group."""
+    group = root[_BY_VARIANT_GROUP] if _BY_VARIANT_GROUP in root else None
+    block = store.manifest.provenance.get("ragged", {}).get("by_variant")
+    if group is None and block is not None:
+        errors.append(
+            f"{label}: the manifest records provenance.ragged.by_variant but the release "
+            f"carries no {_BY_VARIANT_GROUP} group; the index it describes is absent"
+        )
+        return None
+    if group is not None and block is None:
+        errors.append(
+            f"{label}/{_BY_VARIANT_GROUP}: the release carries a variant index but its "
+            "manifest records no provenance.ragged.by_variant block"
+        )
+    return group
+
+
+def _validate_variant_index_structure(
+    index: Any,
+    n_axis: int,
+    n_analyses: int,
+    n_assoc: int,
+    errors: list[str],
+    label: str,
+) -> np.ndarray | None:
+    """Shape/ordering checks for the index, returning its offsets or `None`."""
+    offsets = _validate_index_offsets(index, n_axis, n_assoc, errors, label)
+    if offsets is None:
+        return None
+    if not _validate_index_analyses(index, n_analyses, n_assoc, errors, label):
+        return None
+    return offsets
+
+
+def _validate_index_offsets(
+    index: Any, n_axis: int, n_assoc: int, errors: list[str], label: str
+) -> np.ndarray | None:
+    """The offsets array must span `[0, n_assoc)` over `n_axis` variants."""
+    offsets = np.asarray(index["offsets"][:], dtype=np.int64)
+    if len(offsets) != n_axis + 1:
+        errors.append(
+            f"{label}/{_BY_VARIANT_GROUP}/offsets has {len(offsets)} entries but the variant "
+            f"axis is {n_axis} (expected {n_axis + 1})"
+        )
+        return None
+    if int(offsets[0]) != 0 or int(offsets[-1]) != n_assoc:
+        errors.append(
+            f"{label}/{_BY_VARIANT_GROUP}/offsets does not span [0, {n_assoc}) "
+            f"(starts {int(offsets[0])}, ends {int(offsets[-1])})"
+        )
+        return None
+    if np.any(np.diff(offsets) < 0):
+        errors.append(f"{label}/{_BY_VARIANT_GROUP}/offsets is not non-decreasing")
+        return None
+    for name in ("z", "se", "analysis_index"):
+        if array_length(index[name]) != n_assoc:
+            errors.append(
+                f"{label}/{_BY_VARIANT_GROUP}/{name} has {array_length(index[name])} "
+                f"entries but the component has {n_assoc} associations"
+            )
+            return None
+    return offsets
+
+
+def _validate_index_analyses(
+    index: Any, n_analyses: int, n_assoc: int, errors: list[str], label: str
+) -> bool:
+    """Every `analysis_index` must name a real Analysis."""
+    analyses = np.asarray(index["analysis_index"][:], dtype=np.int64)
+    if n_assoc and (analyses.min() < 0 or analyses.max() >= n_analyses):
+        errors.append(
+            f"{label}/{_BY_VARIANT_GROUP}/analysis_index is outside the component's "
+            f"{n_analyses} Analyses"
+        )
+        return False
+    return True
+
+
+def _validate_variant_index_members(
+    index: Any, root: Any, errors: list[str], label: str
+) -> None:
+    """`eaf` and `imputed` must be present on exactly both sides or neither."""
+    for name in ("eaf", "imputed"):
+        if (name in index) != (name in root):
+            errors.append(
+                f"{label}/{_BY_VARIANT_GROUP}/{name} is present on one side only; the "
+                "component and its variant index must carry the same members"
+            )
+
+
+def _validate_variant_index(
+    store: OpenGWASDBStore,
+    ragged_path: Path,
+    n_assoc: int,
+    errors: list[str],
+    *,
+    component_label: str,
+    n_axis: int,
+) -> None:
+    """Seam: the variant-centric index agrees with the Analysis-sorted planes.
+
+    Presence, shape, per-variant counts, within-variant ordering, and a
+    bounded two-seed 64-bit digest of every cell's `(variant, analysis, raw
+    codes, exact exception values)` against the Analysis-sorted side.  The
+    digest is order-independent and windowed, so peak memory is a window plus
+    the offset array, never a plane (issue #254, ruling Q1).
+    """
+    root = open_group(ragged_path)
+    index = _validate_variant_index_presence(store, root, errors, component_label)
+    if index is None:
+        return
+    offsets = np.asarray(root["offsets"][:], dtype=np.int64)
+    by_offsets = _validate_variant_index_structure(
+        index, n_axis, len(offsets) - 1, n_assoc, errors, component_label
+    )
+    if by_offsets is None:
+        return
+    _validate_variant_index_block(store, n_axis, n_assoc, errors, component_label)
+    _validate_variant_index_members(index, root, errors, component_label)
+    _validate_variant_index_counts(root, by_offsets, n_axis, n_assoc, errors, component_label)
+    _validate_variant_index_ordering(index, by_offsets, n_assoc, errors, component_label)
+    if errors:
+        return
+    source_digest = _source_digest(root, store.manifest.encoding, offsets, n_assoc)
+    index_digest = _index_digest(index, store.manifest.encoding, by_offsets, n_assoc)
+    if source_digest != index_digest:
+        errors.append(
+            f"{component_label}/{_BY_VARIANT_GROUP}: the index's content digest "
+            f"{index_digest} does not match the Analysis-sorted planes' {source_digest}; a "
+            "row's analysis, a code or an exact exception value was re-keyed wrong"
+        )
+
+
+def _validate_variant_index_block(
+    store: OpenGWASDBStore,
+    n_axis: int,
+    n_assoc: int,
+    errors: list[str],
+    label: str,
+) -> None:
+    """The recorded provenance block must describe the index that is present."""
+    block = store.manifest.provenance.get("ragged", {}).get("by_variant")
+    if block is None:
+        return
+    if int(block.get("n_axis", -1)) != n_axis or int(block.get("n_rows", -1)) != n_assoc:
+        errors.append(
+            f"{label}: provenance.ragged.by_variant records "
+            f"n_axis={block.get('n_axis')!r} n_rows={block.get('n_rows')!r} but the index "
+            f"holds {n_axis} variants over {n_assoc} rows"
+        )
+
+
+def _validate_variant_index_counts(
+    root: Any,
+    by_offsets: np.ndarray,
+    n_axis: int,
+    n_assoc: int,
+    errors: list[str],
+    label: str,
+) -> None:
+    """Every variant must hold exactly as many index rows as the source."""
+    counts = np.zeros(n_axis, dtype=np.int64)
+    for lo in range(0, n_assoc, _DIGEST_WINDOW):
+        hi = min(lo + _DIGEST_WINDOW, n_assoc)
+        counts += np.bincount(
+            np.asarray(root["variant_index"][lo:hi], dtype=np.int64), minlength=n_axis
+        )
+    if not np.array_equal(np.diff(by_offsets), counts):
+        differing = int(np.argmax(np.diff(by_offsets) != counts))
+        errors.append(
+            f"{label}/{_BY_VARIANT_GROUP}/offsets: variant {differing} holds "
+            f"{int(by_offsets[differing + 1] - by_offsets[differing])} rows but the "
+            f"Analysis-sorted planes hold {int(counts[differing])}"
+        )
+
+
+def _validate_variant_index_ordering(
+    index: Any,
+    by_offsets: np.ndarray,
+    n_assoc: int,
+    errors: list[str],
+    label: str,
+) -> None:
+    """Within each variant, the index's analyses must be non-decreasing.
+
+    Bounded by the same window the digest uses; the comparison resets at each
+    variant boundary carried by `by_offsets`.
+    """
+    analysis = np.asarray(index["analysis_index"][:], dtype=np.int64)
+    for lo in range(0, n_assoc, _DIGEST_WINDOW):
+        hi = min(lo + _DIGEST_WINDOW, n_assoc)
+        window = analysis[lo:hi]
+        if len(window) < 2:
+            continue
+        variant = np.searchsorted(by_offsets, np.arange(lo, hi, dtype=np.int64), side="right") - 1
+        same_variant = variant[1:] == variant[:-1]
+        if np.any(same_variant & (window[1:] < window[:-1])):
+            errors.append(
+                f"{label}/{_BY_VARIANT_GROUP}/analysis_index is not non-decreasing within "
+                "a variant's block"
+            )
+            return
 
 
 def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> ValidationResult:
@@ -1616,24 +1982,34 @@ def _validate_overflow(
     n_shared: int,
     errors: list[str],
     encoding: StoreEncoding,
-) -> None:
+) -> int | None:
     """Validate the Ragged Overflow CSR: array lengths, se sign, shared-index
-    bounds, and that it is observed-only (never imputed, even after completion)."""
+    bounds, and that it is observed-only (never imputed, even after completion).
+
+    Returns the association count, or `None` when a structural guard failed.
+    """
     try:
         root = open_group(ragged_path)
     except Exception as exc:  # noqa: BLE001
         errors.append(f"cannot open Ragged Overflow CSR: {exc}")
-        return
+        return None
     n_assoc = _validate_overflow_structure(root, encoding, n_shared, errors)
     if n_assoc is None:
-        return
+        return None
     _validate_overflow_values(root, encoding, n_assoc, errors)
+    return n_assoc
 
 
 def _validate_hybrid_invariants(
     store_path: Path, dense_dir: Path, n_shared: int, errors: list[str]
 ) -> None:
-    """Coverage + disjoint-partition invariants over the shared variant index space."""
+    """Coverage, disjoint-partition and variant-index invariants over the shared space.
+
+    The Overflow's variant-centric index (ADR 0060) is checked last, after the
+    partition invariant, so a corruption that both breaks disjointness and
+    stales the index reports the disjointness it broke rather than only the
+    index's disagreement.
+    """
     dense_to_shared = np.load(dense_to_shared_path(store_path))
     n_panel = len(dense_to_shared)
 
@@ -1645,7 +2021,15 @@ def _validate_hybrid_invariants(
         errors.append("dense_to_shared maps two Dense Component rows to one shared row")
         return
 
-    # Disjoint partition: no overflow variant is also a Dense Component (on-panel) row.
+    _validate_overflow_disjoint(store_path, n_shared, dense_to_shared, errors)
+    _validate_dense_coverage(store_path, dense_dir, dense_to_shared, n_panel, errors)
+    _validate_overflow_index(store_path, n_shared, errors)
+
+
+def _validate_overflow_disjoint(
+    store_path: Path, n_shared: int, dense_to_shared: np.ndarray, errors: list[str]
+) -> None:
+    """No overflow variant may also be a Dense Component (on-panel) row."""
     ragged_root = open_group(store_path / "data.zarr" / "ragged")
     overflow_vi = np.unique(ragged_root["variant_index"][:])
     on_panel = np.zeros(n_shared, dtype=bool)
@@ -1656,8 +2040,15 @@ def _validate_hybrid_invariants(
             "on-panel (Dense Component) variant"
         )
 
-    # Coverage: the shared table row each dense row maps to must carry the same
-    # ALID as the Dense Component's own variant (sampled for large stores).
+
+def _validate_dense_coverage(
+    store_path: Path,
+    dense_dir: Path,
+    dense_to_shared: np.ndarray,
+    n_panel: int,
+    errors: list[str],
+) -> None:
+    """The shared row each dense row maps to must carry the Dense Component's ALID."""
     dense_axis = VariantAxis(dense_dir)
     shared_axis = VariantAxis(store_path)
     try:
@@ -1673,6 +2064,23 @@ def _validate_hybrid_invariants(
     finally:
         dense_axis.close()
         shared_axis.close()
+
+
+def _validate_overflow_index(store_path: Path, n_shared: int, errors: list[str]) -> None:
+    """Validate the Overflow's variant-centric index when the release carries one."""
+    ragged_path = store_path / "data.zarr" / "ragged"
+    if errors or not (ragged_path / _BY_VARIANT_GROUP).exists():
+        return
+    root = open_group(ragged_path)
+    offsets = np.asarray(root["offsets"][:], dtype=np.int64)
+    _validate_variant_index(
+        open_store(store_path),
+        ragged_path,
+        int(offsets[-1]),
+        errors,
+        component_label="data.zarr/ragged",
+        n_axis=n_shared,
+    )
 
 
 def _load_manifest(store_path: Path, errors: list[str]) -> OpenGWASDBStore | None:

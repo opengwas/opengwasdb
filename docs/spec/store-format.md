@@ -1048,6 +1048,43 @@ ordering on every release, including ones this build did not write (§20).
 `float32`), aligned with the CSR `z`/`se` and absent when no Analysis in the
 release carries a frequency.
 
+### 11.1 The variant-centric index (`ragged/by_variant/`)
+
+A Ragged component MAY carry a variant-centric index at `ragged/by_variant/`
+(ADR 0060). It is **optional and additive**: an absent index is not an error,
+every query answers through the scan it replaces, and its presence is recorded
+in `provenance.ragged.by_variant` (`{"group", "n_axis", "n_rows"}`) rather than
+in `format_version`. It holds one row per association of the Analysis-sorted
+component, ordered `(variant_index, analysis_index)`, so a variant's rows are
+contiguous:
+
+| array | dtype | contents |
+|---|---|---|
+| `offsets` | int64 | `n_axis + 1` row offsets on the component's own variant axis (the shared axis for a Hybrid Overflow); `offsets[v] == offsets[v+1]` for a variant the index does not cover |
+| `analysis_index` | int32 | the Analysis of each row |
+| `z`, `se` | the component's `z`/`se` dtypes | the same stored codes, re-keyed |
+| `eaf` | the component's `eaf` dtype | the same codes, re-keyed; present only when the component has an `eaf` array |
+| `imputed` | uint8 | the imputed mask, present only when the component has one |
+| `z_overflow_index` / `_value` | int64 / float32 | the re-keyed `z` overflow table |
+| `eaf_exception_index` / `_value` | int64 / float32 | the re-keyed EAF exception table |
+| `se_exception_index` / `_value` | int64 / float32 | the re-keyed SE exception table, under `int8_residual` |
+
+The per-variant `eaf_baseline`, `eaf_reference` and the `se_coefficients` are
+**shared** with the Analysis-sorted plane, never duplicated: only arrays keyed
+on the flat cell position are re-keyed. `imputed` and the exception tables move
+with the rows because a decode cannot reconstruct them from the
+Analysis-sorted component (the duplicate does not preserve the source's CSR
+ordinal). `analysis_index` and not `variant_index` is the per-row key: the
+row's variant is implied by the offsets, and storing it would duplicate the
+Analysis-sorted `variant_index`.
+
+A query reads it through the analysis-sorted component's own layouts: the
+`ragged/by_variant/offsets` array takes the `RAGGED_PER_VARIANT` role with a
+**1,000-element inner-chunk hint** (it is read a variant at a time), the cell
+sequences the `ASSOCIATION_SEQUENCE` role, and the re-keyed tables the
+`RAGGED_EXCEPTION_TABLE` role. The hint is a fact about the path, so the
+converter and the builders reproduce the same inner chunk.
+
 Ragged layout is used when Analyses do not share one dense source variant axis or when Association Coverage is Cis-and-Signals.
 
 For Observed-Only Ragged stores, absence from an Analysis sequence means the association is not retained by that Store Release.
@@ -1314,6 +1351,7 @@ Validators MUST check at least:
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
 - `variant_index` is **non-decreasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11). It is checked on every release, not only on ones this build wrote, because a stored segment out of order makes the variant-side binary search answer with a plausible, wrong row. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows (1,000,000 int32, 4 MB), carries the preceding value across a window boundary and resets at each Analysis boundary, so peak memory is the window, its comparison bool and the per-Analysis offsets (`O(n_analyses)`), independent of the association count;
+- the variant-centric index, when present, agrees with the Analysis-sorted component and is recorded in `provenance.ragged.by_variant`: its `offsets` array is `n_axis + 1` direct offsets spanning `[0, N)`, each variant holds exactly as many index rows as the component holds at that variant, `analysis_index` is non-decreasing within each variant's block and names a real Analysis, `eaf`/`imputed` are present on both sides or neither, and the cell contents match the Analysis-sorted planes. The content check is a bounded, order-independent two-seed 64-bit digest of each cell's `(variant, analysis, every raw code, any exact exception value)`, computed windowed on both orderings, so peak memory is a window plus the offset array and the (small) exception tables — never a plane (§11.1, ADR 0060);
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
 - the `se` plane, its `se_coefficients` and its exception table agree with the plan the manifest declares (§6a): a residual-coded plane has finite `float32` coefficients of shape `(n_analyses, 2)`, a sorted duplicate-free exception table whose positions lie inside the plane and whose entries are exactly the cells marked `-127`, and a complete `eaf` plane beside it; a `float16` plane has none of those arrays, and carrying one is a failure rather than a harmless relic;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);

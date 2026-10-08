@@ -57,6 +57,7 @@ from opengwasdb.layouts.hybrid.layout import (
     dense_component_path,
     dense_to_shared_path,
 )
+from opengwasdb.layouts.ragged.by_variant import build_variant_index, with_variant_index
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import (
     RAGGED_ZARR_PATH,
@@ -427,6 +428,7 @@ def _write_shared_tables_and_overflow(
         eaf_baseline=overflow_baseline,
         se_coefficients=_shared_se_coefficients(dense.dir, src_manifest.encoding),
     )
+    build_variant_index(staged.path, n_axis=axis.n_shared)
     return csr.n_associations
 
 
@@ -698,12 +700,17 @@ def _write_completed_manifest(
             },
             "n_variants": n_variants,
             "n_analyses": n_analyses,
+            "ragged": with_variant_index(
+                staged.path,
+                {
+                    key: value
+                    for key, value in src_manifest.provenance.get("ragged", {}).items()
+                    if key != "by_variant"
+                },
+            ),
             "completion": {
-                # The panel this release was completed against, at the top
-                # level and not only inside the Dense Component: "one panel per
-                # completed store" is load-bearing once `eaf_reference` holds
-                # that panel's frequencies, so it is recorded where a reader of
-                # the Hybrid store looks (issue #116).
+                # The panel this release was completed against, recorded where a
+                # reader of the Hybrid store looks (issue #116).
                 "method": dense_completion["method"],
                 "ld_panel_id": dense_completion["ld_panel_id"],
                 "ancestry": dense_completion["ancestry"],

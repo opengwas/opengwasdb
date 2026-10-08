@@ -50,7 +50,9 @@ from opengwasdb.store.arrays import (
     ArrayRole,
     chunk_layout,
     component_variant_chunk,
+    inner_chunk_hint_for_path,
     open_group,
+    role_for_array_path,
     shard_layout,
     sharded_compressor,
 )
@@ -356,6 +358,14 @@ def _role_for(path: str, group: Any) -> ArrayRole:
         return ArrayRole.TOP_HIT_INDEX
     if "rho" in parts:
         return ArrayRole.RHO_ARRAY
+    if "by_variant" in parts:
+        # ADR 0060's variant-centric index: the seam's own path table is the one
+        # authority, so this mirror cannot drift from it.  `offsets` carries a
+        # path hint (1,000) the role's default would get wrong.
+        role = role_for_array_path(path)
+        if role is None:
+            raise AssertionError(f"no ArrayRole is known for array {path!r}")
+        return role
     if "ragged" in parts:
         # A Ragged CSR component's shared names take #248's Ragged roles, whose
         # shards are sized independently of the Dense ones (ADR 0059).
@@ -438,6 +448,7 @@ def test_every_built_array_matches_the_seam_policy(conformance_stores: list[_Bui
             expected_chunks = chunk_layout(
                 role,
                 shape,
+                hint=inner_chunk_hint_for_path(path),
                 component_chunk=component_variant_chunk(group),
             )
             assert tuple(int(size) for size in array.chunks) == expected_chunks, (

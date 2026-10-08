@@ -76,8 +76,23 @@ def hybrid_residual(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return dst
 
 
+def _canonical(result: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """A result in canonical `(variant_index, analysis_index)` order.
+
+    The facade makes no ordering guarantee beyond grouping (ADR 0033), and the
+    variant-centric index (ADR 0060) returns a region variant-major where the
+    Analysis-side oracle concatenates Analysis-major.  Parity is therefore
+    asserted on the rows, not on an order neither path promises.
+    """
+    order = np.lexsort(
+        (np.asarray(result["analysis_index"]), np.asarray(result["variant_index"]))
+    )
+    return {key: np.asarray(result[key])[order] for key in _RESULT_KEYS}
+
+
 def _same_oracle(got: dict[str, np.ndarray], want: dict[str, np.ndarray], label: str) -> None:
     assert sorted(got) == sorted(want), label
+    got, want = _canonical(got), _canonical(want)
     for key in _RESULT_KEYS:
         np.testing.assert_array_equal(
             np.asarray(got[key]), np.asarray(want[key]), err_msg=f"{label}:{key}"
@@ -310,6 +325,10 @@ def test_identity_catches_a_misaligned_window(
 ) -> None:
     monkeypatch.setattr(RaggedCSRReader, "variant_positions", _shifted_window)
     with query_store(ragged_residual.completed) as query:
+        # These three tests mutate the Analysis-side scan to prove the identity
+        # check catches its bugs; force the scan rather than the index, which
+        # does not share the mutated code (ADR 0060).
+        query._by_variant = None
         first_alid = _any_alid(query)
         _wanted, want = _oracle_for_alid(query, first_alid)
         got = query.phewas(first_alid)
@@ -325,6 +344,7 @@ def test_identity_catches_an_off_by_one_search(
         RaggedCSRReader, "variant_positions", _off_by_one_using(RaggedCSRReader.variant_positions)
     )
     with query_store(ragged_residual.completed) as query:
+        query._by_variant = None
         alid = _any_alid(query)
         _wanted, want = _oracle_for_alid(query, alid)
         got = query.phewas(alid)
@@ -344,6 +364,7 @@ def test_identity_catches_a_dropped_imputed_mask(
 
     monkeypatch.setattr(RaggedCSRReader, "eaf_at_read", without_mask)
     with query_store(ragged_residual.completed) as query:
+        query._by_variant = None
         got = query.range_phewas("1", 900_000, 1_100_000)
         wanted = query._variant_axis.range_indices("1", 900_000, 1_100_000)
         want = _ragged_oracle(

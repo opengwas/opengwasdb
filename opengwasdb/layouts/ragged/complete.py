@@ -71,6 +71,7 @@ from opengwasdb.encoding import (
     write_se_csr,
 )
 from opengwasdb.layouts.dense.build import add_hit_counts
+from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.model.analyses import (
@@ -1191,9 +1192,17 @@ def _write_eaf_and_se_arrays(
 
 
 def _write_completed_zarr(
-    staged: StagedRelease, encode_plan: _EncodePlan, csr: _CompletedCsr, n_analyses: int
+    staged: StagedRelease,
+    encode_plan: _EncodePlan,
+    csr: _CompletedCsr,
+    n_analyses: int,
+    n_variants: int,
 ) -> None:
-    """Phase 4: write the completed CSR as the store's ragged zarr group."""
+    """Phase 4: write the completed CSR as the store's ragged zarr group, then
+    its variant-centric index (ADR 0060). The index is rebuilt from the
+    completed planes, never carried over from the observed source: the
+    completion remaps the variant axis and adds imputed cells, so a copied
+    index would answer with the source's rows."""
     print("Writing zarr CSR...")
     ragged_path = staged.path / RAGGED_ZARR_PATH
     ragged_path.mkdir(parents=True, exist_ok=True)
@@ -1201,6 +1210,8 @@ def _write_completed_zarr(
     flat = _flatten_csr(csr)
     _write_csr_id_arrays(root, flat, encode_plan.codec)
     _write_eaf_and_se_arrays(root, encode_plan, flat, n_analyses)
+    print("Building variant-centric index...")
+    build_variant_index(staged.path, n_axis=n_variants)
 
 
 def _write_top_hits_and_analyses(
@@ -1249,6 +1260,7 @@ def _write_top_hits_and_analyses(
 def _completed_manifest(
     manifest: StoreManifest,
     *,
+    staged: StagedRelease,
     source_format_version: str,
     release_id: str | None,
     ld_panel_id: str,
@@ -1278,6 +1290,7 @@ def _completed_manifest(
             n_imputed=csr.total_imputed,
             n_missing=csr.total_missing,
         ),
+        by_variant=recorded_provenance(staged.path),
     )
 
 
@@ -1339,11 +1352,12 @@ def _run_completion(
             region_cap_bp=region_cap_bp,
         )
         encode_plan = _encode_plan(src, ld_dir, ancestry, manifest, axis)
-        _write_completed_zarr(staged, encode_plan, csr, state.n_analyses)
+        _write_completed_zarr(staged, encode_plan, csr, state.n_analyses, len(axis.variants))
         _write_top_hits_and_analyses(staged, state, encode_plan, ancestry=ancestry)
         staged.write_manifest(
             _completed_manifest(
                 manifest,
+                staged=staged,
                 source_format_version=source_format_version,
                 release_id=release_id,
                 ld_panel_id=ld_panel_id,

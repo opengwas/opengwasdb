@@ -176,6 +176,7 @@ zarr.config.set({"codec_pipeline.path": _FUSED_PIPELINE, "codec_pipeline.max_wor
 __all__ = [
     "ASSOCIATION_OFFSETS_CHUNK",
     "ASSOCIATION_SEQUENCE_CHUNK",
+    "BY_VARIANT_OFFSETS_CHUNK",
     "COMPRESSOR_RECORD",
     "DENSE_CHUNK_SHAPE",
     "DENSE_SHARD_SHAPE",
@@ -200,6 +201,7 @@ __all__ = [
     "count_shard_writes",
     "create_array",
     "create_group",
+    "inner_chunk_hint_for_path",
     "inner_chunk_of",
     "is_recorded_group_path",
     "move_in_group",
@@ -305,6 +307,16 @@ ASSOCIATION_SEQUENCE_CHUNK = 200_000
 
 #: The per-Analysis offset array that indexes an association sequence.
 ASSOCIATION_OFFSETS_CHUNK = 10_000
+
+#: The inner chunk of a `ragged/by_variant/offsets` array (ADR 0060).  The
+#: index's offset array is read at a single variant, so one 8 KiB inner chunk
+#: per variant is the right read unit -- unlike `ASSOCIATION_OFFSETS_CHUNK`'s
+#: 10,000, which is tuned for streaming one Analysis's segment.  The value is a
+#: **path** hint, not a role one: `RAGGED_PER_VARIANT`'s default follows the
+#: component plane, which is wrong for this array, so every creator (builders,
+#: the converter, the legacy relayout and the augment command) must derive the
+#: same hint from the path -- see `inner_chunk_hint_for_path`.
+BY_VARIANT_OFFSETS_CHUNK = 1_000
 
 #: Ceiling for a per-variant side array (EAF baseline/reference).  The policy
 #: follows the chunk of a sibling variant-axis array when the group has one, so
@@ -1336,6 +1348,57 @@ _RAGGED_ROLES_BY_NAME: Mapping[str, ArrayRole] = MappingProxyType(
 )
 
 
+#: The arrays of the variant-centric index (`ragged/by_variant/...`, ADR 0060).
+#: The index is a re-keying of the component's cell-keyed arrays, so each leaf
+#: takes the same role its Analysis-sorted sibling does: `offsets` is the one
+#: `RAGGED_PER_VARIANT` array (with its own inner-chunk hint, see
+#: `inner_chunk_hint_for_path`), the cell sequences and the imputed mask are
+#: `ASSOCIATION_SEQUENCE`, and the re-keyed exception tables are
+#: `RAGGED_EXCEPTION_TABLE`.  `imputed`, `eaf` and the `se_exception_*` pair are
+#: present only when the Analysis-sorted component carries them; that coupling
+#: is checked by validation, not here, so a one-sided member is a release error
+#: rather than a mapper guess.
+_BY_VARIANT_ROLES_BY_LEAF: Mapping[str, ArrayRole] = MappingProxyType(
+    {
+        "offsets": ArrayRole.RAGGED_PER_VARIANT,
+        "analysis_index": ArrayRole.ASSOCIATION_SEQUENCE,
+        "z": ArrayRole.ASSOCIATION_SEQUENCE,
+        "se": ArrayRole.ASSOCIATION_SEQUENCE,
+        "eaf": ArrayRole.ASSOCIATION_SEQUENCE,
+        "imputed": ArrayRole.ASSOCIATION_SEQUENCE,
+        "z_overflow_index": ArrayRole.RAGGED_EXCEPTION_TABLE,
+        "z_overflow_value": ArrayRole.RAGGED_EXCEPTION_TABLE,
+        "eaf_exception_index": ArrayRole.RAGGED_EXCEPTION_TABLE,
+        "eaf_exception_value": ArrayRole.RAGGED_EXCEPTION_TABLE,
+        "se_exception_index": ArrayRole.RAGGED_EXCEPTION_TABLE,
+        "se_exception_value": ArrayRole.RAGGED_EXCEPTION_TABLE,
+    }
+)
+
+#: The one path whose `RAGGED_PER_VARIANT` layout carries an explicit hint
+#: (ADR 0060): `by_variant/offsets` is read a variant at a time, so 1,000
+#: elements an inner chunk.  It is a *path* fact, not a role fact, because the
+#: sibling `ragged/eaf_baseline` keeps the plane-following default.
+BY_VARIANT_OFFSETS_PATH = "ragged/by_variant/offsets"
+
+
+def inner_chunk_hint_for_path(path: str) -> int | None:
+    """The explicit inner-chunk hint an array's **path** requires, or `None`.
+
+    One array in the format needs a layout its role's default would get wrong:
+    `ragged/by_variant/offsets`, whose `RAGGED_PER_VARIANT` policy would
+    otherwise follow the sibling plane and chunk 200,000 at a time (ADR 0060).
+    The hint is a scalar element count because `RAGGED_PER_VARIANT` is 1-D:
+    `_per_variant` takes an int, unlike the Dense grid's `(rows, cols)` tuple.
+    Every creator that derives a layout from a path -- the converter's
+    `_plan_one_array`, the legacy relayout and the augment command -- must ask
+    here rather than restate the number, or a converted array and a rebuilt one
+    would silently disagree about their inner chunk (and a query reading one
+    variant would decompress 200,000 offsets, not 1,000).
+    """
+    return BY_VARIANT_OFFSETS_CHUNK if path.strip("/") == BY_VARIANT_OFFSETS_PATH else None
+
+
 def role_for_array_path(path: str) -> ArrayRole | None:
     """The `ArrayRole` a `data.zarr` array's path maps to, or `None`.
 
@@ -1395,18 +1458,37 @@ def _grouped_role(head: str, rest: str) -> ArrayRole | None:
     not define returns `None`, so a conversion refuses it rather than copying an
     unknown member under a guessed role.  `top_hits/<tier>` is exactly one
     segment, so a deeper path is refused here as it is by
-    `is_recorded_group_path` for the group itself.
+    `is_recorded_group_path` for the group itself.  `ragged/by_variant/...` is
+    ADR 0060's variant-centric index.
     """
     if head == "top_hits":
-        tier, separator, leaf = rest.partition("/")
-        if not tier or not separator or not leaf or "/" in leaf:
-            return None
-        return _TOP_HIT_ROLES_BY_LEAF.get(leaf)
+        return _top_hit_tier_role(rest)
     if head == "rho":
         return _RHO_ROLES_BY_LEAF.get(rest)
     if head == "ragged":
-        return _RAGGED_ROLES_BY_NAME.get(rest)
+        return _ragged_group_role(rest)
     return None
+
+
+def _top_hit_tier_role(rest: str) -> ArrayRole | None:
+    """The role of `top_hits/<tier>/<leaf>`, or `None` for a malformed path."""
+    _tier, separator, leaf = rest.partition("/")
+    if not separator or not leaf or "/" in leaf:
+        return None
+    return _TOP_HIT_ROLES_BY_LEAF.get(leaf)
+
+
+def _ragged_group_role(rest: str) -> ArrayRole | None:
+    """The role of an array under `ragged/`, including `by_variant/` (ADR 0060)."""
+    prefix = "by_variant/"
+    if rest.startswith(prefix):
+        leaf = rest[len(prefix) :]
+        if not leaf or "/" in leaf:
+            return None
+        return _BY_VARIANT_ROLES_BY_LEAF.get(leaf)
+    if rest == "by_variant":
+        return None
+    return _RAGGED_ROLES_BY_NAME.get(rest)
 
 
 #: The Dense `data.zarr` group paths a conversion may carry over.  A group is a
@@ -1429,6 +1511,11 @@ def is_recorded_group_path(path: str) -> bool:
     if name in _RECORDED_GROUP_NAMES:
         return True
     head, _, rest = name.partition("/")
+    if head == "ragged" and rest == "by_variant":
+        # The variant-centric index group (ADR 0060).  It holds arrays only, so
+        # exactly one extra segment is recorded and `ragged/by_variant/<x>/<y>`
+        # is refused like any other deeper group.
+        return True
     return head == "top_hits" and bool(rest) and "/" not in rest
 
 

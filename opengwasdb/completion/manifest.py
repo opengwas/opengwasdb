@@ -53,6 +53,7 @@ def completed_release_manifest(
     release_id: str | None,
     source_format_version: str,
     completion_provenance: dict[str, Any],
+    by_variant: dict[str, Any] | None = None,
 ) -> StoreManifest:
     """The Reference-Completed release's manifest, shared by the Dense and
     Ragged builders. A completion writes into its source's arrays, so the
@@ -64,7 +65,29 @@ def completed_release_manifest(
     source's with ``-completed`` appended when none is supplied, exactly as
     each builder used to compute it. ``completion_provenance`` is the
     caller's own ``build_completion_provenance`` result: the completion
-    counters a layout reports differ, so each layout builds its own."""
+    counters a layout reports differ, so each layout builds its own.
+
+    ``by_variant`` is the completed release's variant-index provenance, or
+    `None` when no index was built. The source's block is **not** carried
+    forward: a rebuilt component has different row counts, so a copied block
+    would describe an index the completed release does not hold.
+    """
+    provenance = {
+        **source_manifest.provenance,
+        "source_release_id": source_manifest.release_id,
+        "completion": completion_provenance,
+    }
+    ragged = {
+        key: value
+        for key, value in source_manifest.provenance.get("ragged", {}).items()
+        if key != "by_variant"
+    }
+    if by_variant is not None:
+        ragged["by_variant"] = by_variant
+    if ragged:
+        provenance["ragged"] = ragged
+    elif "ragged" in provenance:
+        del provenance["ragged"]
     return StoreManifest(
         encoding=encoding,
         store_id=source_manifest.store_id,
@@ -75,9 +98,5 @@ def completed_release_manifest(
         completion_state=CompletionState.REFERENCE_COMPLETED,
         reference_assembly=source_manifest.reference_assembly,
         created_at=datetime.now(UTC).isoformat(),
-        provenance={
-            **source_manifest.provenance,
-            "source_release_id": source_manifest.release_id,
-            "completion": completion_provenance,
-        },
+        provenance=provenance,
     )

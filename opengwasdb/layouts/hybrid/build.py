@@ -159,6 +159,7 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
     placed_hashed_values,
     validated_hashed_values,
 )
+from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.model.analyses import Analysis
@@ -797,6 +798,7 @@ class _BuildOptions:
     eaf_reference: str | Path | None
     eaf_reference_ancestry: str | None
     allow_unverified_eaf: bool
+    write_variant_index: bool = True
 
 
 @dataclass(frozen=True)
@@ -2613,12 +2615,16 @@ def _flush_overflow_component(
     csr: RaggedCSRWriter,
     encoding: StoreEncoding,
     se_coefficients: np.ndarray | None,
+    n_shared: int,
+    *,
+    write_variant_index: bool = True,
 ) -> int:
     """Flush the assembled overflow CSR's SE half into the zarr group the eaf
-    write created, and build its top-hit index. The group already holds the
-    frequency half; this adds to it rather than replacing it (issue #232).
-    Returns the overflow association count the shared manifest's provenance
-    records. Each step logs its start and elapsed time (issue #221)."""
+    write created, build its top-hit index, and (ADR 0060) its by-variant index.
+    The group already holds the frequency half; this adds to it rather than
+    replacing it (issue #232).  Returns the overflow association count the
+    shared manifest's provenance records.  Each step logs its start and elapsed
+    time (issue #221)."""
     log.info("Ragged Overflow CSR flush: start (%d associations)", csr.n_associations)
     started = time.monotonic()
     csr.flush_se(staged.path, encoding, se_coefficients=se_coefficients)
@@ -2626,6 +2632,9 @@ def _flush_overflow_component(
     n_overflow = csr.n_associations
     log.info("Building Ragged Overflow top-hit index")
     build_ragged_top_hit_indexes(staged.path, encoding=encoding)
+    if write_variant_index:
+        log.info("Building Ragged Overflow by-variant index (%d variants)", n_shared)
+        build_variant_index(staged.path, n_axis=n_shared)
     return n_overflow
 
 
@@ -3141,6 +3150,8 @@ def _finalise_store(
         components.csr,
         components.encoding,
         components.se_coefficients,
+        prepared.partition.n_shared,
+        write_variant_index=options.write_variant_index,
     )
     _write_shared_metadata(prepared, components, options, n_overflow)
     log.info(
@@ -3174,7 +3185,7 @@ def build_hybrid_from_vcf_manifest(
     eaf_reference: str | Path | None = None, eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False, source_reader_capability: str | None = None,
     source_assembly: str | None = None, checkpoint: bool = False,
-    resume: bool = False,
+    resume: bool = False, write_variant_index: bool = True,
 ) -> HybridBuildResult:
     """Build a Hybrid store from a manifest of GWAS-VCF files and a reference
     panel or precomputed variant reference. A thin orchestrator over three deep
@@ -3200,9 +3211,8 @@ def build_hybrid_from_vcf_manifest(
     per-release default (#174), and ``eaf_reference`` drives the orientation check.
 
     ``checkpoint=True`` opts the build into phase-granularity resume; ``resume=True``
-    continues one from the checkpoint this call's ``output_path`` implies (issue #227;
-    `_run_checkpointed_build`, `_resume_requested`), and a destination whose checkpoint
-    is still there is refused unless ``overwrite=True`` discards it.
+    continues one from the checkpoint this call's ``output_path`` implies (issue #227),
+    and a destination whose checkpoint is still there is refused unless ``overwrite=True``.
     """
     if reference_panel is None and variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
@@ -3220,6 +3230,7 @@ def build_hybrid_from_vcf_manifest(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        write_variant_index=write_variant_index,
     )
     defaults = _ManifestDefaults(source_reader_capability, source_assembly)
     if resume:
@@ -3564,6 +3575,7 @@ def _build_params(
         "eaf_reference": _text(options.eaf_reference),
         "eaf_reference_ancestry": options.eaf_reference_ancestry,
         "allow_unverified_eaf": options.allow_unverified_eaf,
+        "write_variant_index": options.write_variant_index,
         "overwrite": bool(overwrite),
         "source_reader_capability": defaults.source_reader_capability,
         "source_assembly": defaults.source_assembly,
@@ -3599,6 +3611,7 @@ def _options_from_params(params: Mapping[str, Any], n_workers: int | None) -> _B
         eaf_reference=params["eaf_reference"],
         eaf_reference_ancestry=params["eaf_reference_ancestry"],
         allow_unverified_eaf=params["allow_unverified_eaf"],
+        write_variant_index=bool(params.get("write_variant_index", True)),
     )
 
 
@@ -3774,6 +3787,9 @@ def _write_hybrid_manifest(
         provenance["maf"] = maf
     if variant_reference is not None:
         provenance["variant_reference"] = variant_reference
+    block = recorded_provenance(staged.path)
+    if block is not None:
+        provenance["ragged"] = {**provenance.get("ragged", {}), "by_variant": block}
     manifest = StoreManifest(
         encoding=encoding,
         store_id=store_id,

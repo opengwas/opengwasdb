@@ -10,6 +10,40 @@ the end of this file.
 
 ## [Unreleased]
 
+### Added
+
+- **A variant-centric `by_variant/` index for Ragged and Hybrid Overflow
+  components (#252 step 5, ADR 0060).** A Ragged component's CSR is
+  analysis-major: `offsets` locates an Analysis in O(1), but a per-variant
+  question had to read every Analysis's `variant_index`. Every Ragged builder
+  (BESD, SSF, the Hybrid Overflow writer and Ragged Reference Completion) now
+  also writes `ragged/by_variant/` -- one row per association, ordered
+  `(variant_index, analysis_index)`, carrying `analysis_index`, the `z`/`se`/
+  `eaf` codes, the `imputed` mask where the component has one, and the
+  exception/overflow tables re-keyed to the duplicate's ordinals. It shares the
+  component's `eaf_baseline`, `eaf_reference` and `se_coefficients`, and its
+  `offsets` array is `n_axis + 1` direct offsets on the component's own variant
+  axis (the shared axis for a Hybrid Overflow). `phewas` and `range_phewas` on
+  a Ragged or Hybrid release now read one variant's (or one region's)
+  contiguous row block instead of scanning; `lookup` keeps #252's per-Analysis
+  binary search. An absent index is not an error -- the query falls back to the
+  scan -- so the index is optional and additive and does not change
+  `format_version`. The build is a bounded counting sort (windowed `bincount`,
+  band-partitioned spill, whole-shard writes) whose peak memory is a window
+  plus the offset array; at OGS-00011's 3,085,080,783-row Overflow the index is
+  about +18 GB on disk. `ogdb build-variant-index STORE` adds it to an existing
+  0.2.0 release in place (a 0.1.0 release is converted first), refreshing the
+  manifest and any consolidated-metadata record atomically with one rename; the
+  `build-ragged-besd`, `build-ragged-ssf`, `build-hybrid` and
+  `build-hybrid-from-catalogue` commands take `--no-variant-index` to skip it.
+  `validate` checks the index's presence against the manifest's
+  `provenance.ragged.by_variant` block, its offsets and per-variant counts, its
+  within-variant ordering, and a bounded two-seed 64-bit digest of every
+  cell's variant, Analysis, raw codes and exact exception values against the
+  Analysis-sorted planes; a damaged or stale index now fails. Reference
+  Completion (Ragged and Hybrid) rebuilds the index from the completed planes
+  rather than carrying the source's forward.
+
 ### Changed
 
 - **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**

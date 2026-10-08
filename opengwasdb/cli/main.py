@@ -102,6 +102,15 @@ _ALLOW_UNVERIFIED_HELP = (
     "Accept Analyses the supplied --eaf-reference could not verify (too little "
     "overlap or frequency spread) instead of failing. Recorded in the store's provenance."
 )
+_NO_VARIANT_INDEX_HELP = (
+    "Skip the variant-centric by_variant/ index (ADR 0060). The index makes a "
+    "by-variant PheWAS or region query proportional to the answer; without it those "
+    "queries scan every Analysis's variant_index. Costs roughly the component's "
+    "own cell-keyed bytes on disk and one extra build pass."
+)
+_NO_VARIANT_INDEX_OPTION = Annotated[
+    bool, typer.Option("--no-variant-index", help=_NO_VARIANT_INDEX_HELP)
+]
 #: The two chunk options every Dense-shaped build shares.  They name the
 #: **inner chunk** -- the unit a query reads -- not the shard: the shard is the
 #: format's decided shape, and an inner chunk that does not tile it is refused
@@ -540,18 +549,16 @@ def build_hybrid_command(
         None, "--source-assembly", callback=_validate_source_assembly,
         help=_SOURCE_ASSEMBLY_HELP,
     ),
+    no_variant_index: _NO_VARIANT_INDEX_OPTION = False,
 ) -> None:
     """Build a Hybrid store (Dense Component + Ragged Overflow) from a VCF manifest.
 
     MANIFEST_PATH is a TSV with columns: trait_id, file_path, trait_name, n,
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
-    On-panel variants in --reference-panel fill the Dense Component; off-panel variants
-    go to Ragged Overflow. --variant-reference supplies a precomputed axis and source
-    map, bypassing Pass 1 (#186); a reference that names no rsids runs Pass 1's
-    harvest, keeping the names the two-pass build gives every variant both axes
-    carry (#255). --source-reader-capability and --source-assembly
-    supply per-release defaults (#174). --checkpoint keeps a resumable record of
-    each phase (#227), and --resume continues the build for OUTPUT_PATH from one.
+    On-panel variants fill the Dense Component, off-panel the Ragged Overflow.
+    --variant-reference supplies a precomputed axis and source map, bypassing
+    Pass 1 (#186). --checkpoint keeps a resumable record of each phase (#227),
+    and --resume continues the build for OUTPUT_PATH from one.
     """
     res = build_hybrid_from_vcf_manifest(
         manifest_path, output_path, reference_panel=reference_panel,
@@ -561,6 +568,7 @@ def build_hybrid_command(
         eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=capability, source_assembly=assembly,
         checkpoint=checkpoint, resume=resume,
+        write_variant_index=not no_variant_index,
     )
     _echo_summary(
         dict(
@@ -607,15 +615,14 @@ def build_hybrid_from_catalogue_command(
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    no_variant_index: _NO_VARIANT_INDEX_OPTION = False,
 ) -> None:
     """Subset the Catalogue to one ancestry and build a Hybrid store from it.
 
     Row-filters the Catalogue to ``assigned_ancestry == ANCESTRY`` (a manifest the
     unchanged build reads, plus STORED_EFFECT_SCALE and ORIGINAL_SD_METHOD/ORIGINAL_SD
-    stamped onto every kept row -- the Catalogue itself never carries these columns,
-    issues #17/#18), runs build-hybrid, and records per-Analysis Assigned Ancestry +
-    Catalogue provenance in the store sidecar. Non-matching Analyses are absent from
-    the store (still parked in the Catalogue).
+    stamped onto every kept row), runs build-hybrid, and records per-Analysis
+    Assigned Ancestry + Catalogue provenance in the store sidecar.
     """
     from opengwasdb.ancestry.subset import build_hybrid_from_catalogue
 
@@ -635,6 +642,7 @@ def build_hybrid_from_catalogue_command(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        write_variant_index=not no_variant_index,
     )
     typer.echo(
         json.dumps(
@@ -1105,6 +1113,7 @@ def build_ragged_besd_command(
     tissue: str | None = typer.Option(None),
     source_build: str = typer.Option("hg38"),
     overwrite: bool = typer.Option(False),
+    no_variant_index: _NO_VARIANT_INDEX_OPTION = False,
 ) -> None:
     """Build a Ragged Observed-Only store from BESD files.
 
@@ -1121,6 +1130,7 @@ def build_ragged_besd_command(
         tissue=tissue or None,
         source_build=source_build,
         overwrite=overwrite,
+        write_variant_index=not no_variant_index,
     )
     _echo_summary(
         {
@@ -1144,6 +1154,7 @@ def build_ragged_ssf_command(
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    no_variant_index: _NO_VARIANT_INDEX_OPTION = False,
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
@@ -1165,6 +1176,7 @@ def build_ragged_ssf_command(
         release_id=release_id,
         stored_effect_scale=stored_effect_scale,
         overwrite=overwrite,
+        write_variant_index=not no_variant_index,
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
@@ -1293,6 +1305,42 @@ def complete_dense_resume_command(
             },
             sort_keys=True,
         )
+    )
+
+
+@app.command("build-variant-index")
+def build_variant_index_command(
+    store_path: Path,
+    force: Annotated[
+        bool, typer.Option("--force", help="Rebuild an index the release already carries")
+    ] = False,
+    spill_dir: Annotated[
+        Path | None,
+        typer.Option(
+            help="Directory for the build's transient spill files (default: beside the store)"
+        ),
+    ] = None,
+) -> None:
+    """Add the variant-centric `by_variant/` index to a 0.2.0 Ragged or Hybrid release.
+
+    The index is a `(variant, analysis)`-ordered duplicate of the component's
+    cell-keyed arrays (ADR 0060), written in place with the release's manifest
+    and any consolidated-metadata record refreshed with it. A release that does
+    not carry one answers every query through the scan it replaces, so this is
+    an acceleration, not a repair: a `0.1.0` release is converted first.
+    """
+    from opengwasdb.layouts.ragged.by_variant import add_variant_index
+
+    result = add_variant_index(store_path, force=force, spill_dir=spill_dir)
+    _echo_summary(
+        {
+            "store_path": str(store_path),
+            "n_axis": result.n_axis,
+            "n_rows": result.n_rows,
+            "elapsed_seconds": round(result.elapsed_seconds, 2),
+            "peak_rss_gib": round(result.peak_rss_bytes / 2**30, 2),
+            "disk_bytes": result.disk_bytes,
+        }
     )
 
 

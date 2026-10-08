@@ -29,6 +29,8 @@ from opengwasdb.layouts.ragged.besd_reader import (
     read_epi,
     read_esi,
 )
+from opengwasdb.layouts.ragged.by_variant import build_variant_index
+from opengwasdb.layouts.ragged.provenance import ragged_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata, write_analysis_records
@@ -41,9 +43,6 @@ from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import manifest_column
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants.axis import (
-    VARIANT_AXIS_FORMAT,
-    VARIANT_TABIX_FILENAME,
-    VARIANT_TABLE_FILENAME,
     write_variant_axis,
 )
 from opengwasdb.variants.normalise import (
@@ -77,21 +76,19 @@ def build_ragged_from_besd(
     tissue: str | None = None,
     source_build: str = "hg38",
     overwrite: bool = False,
+    write_variant_index: bool = True,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from BESD files.
 
     besd_prefix: path without extension (.esi, .epi, .besd are appended).
-    source_build: genome assembly of the input BESD ("hg38" or "hg19").
-    When source_build is "hg19", SNP coordinates are lifted over to hg38 inline.
+    source_build: input assembly, "hg38" or "hg19" (hg19 is lifted inline).
     When analyses_path is supplied, Analytical and Attribution Metadata are overlaid
     onto the EPI-derived analyses while keeping BESD coordinates authoritative (issue #173).
     """
     prefix = Path(besd_prefix)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        # Phase 1 — source reading (ESI/EPI); Phase 2 — canonical variant axis
-        # (liftover first: a row that fails the lift never reaches the axis,
-        # so no association can sit at a wrong coordinate).
+        # Phase 1/2 — sources, then the canonical variant axis (liftover first).
         snps, probes = _read_sources(prefix)
         lifted = _lifted_coordinates(snps, source_build)
         variants, rsid_by_alid, esi_to_variant = _canonical_variants(snps, lifted)
@@ -102,7 +99,10 @@ def build_ragged_from_besd(
         analyses = _analysis_records(probes, tissue, analyses_path)
         staged.index_connection().close()
         # Phase 4 — CSR ingestion and the encoding plan it decides.
-        csr, encoding = _ingest_besd(prefix, probes, esi_to_variant, len(variants), staged.path)
+        csr, encoding = _ingest_besd(
+            prefix, probes, esi_to_variant, len(variants), staged.path,
+            write_variant_index=write_variant_index,
+        )
         # Phase 5 — indexes and manifest output.
         print("Building top-hit indexes ...")
         build_ragged_top_hit_indexes(staged.path, encoding=encoding)
@@ -522,6 +522,8 @@ def _ingest_besd(
     esi_to_variant: dict[int, tuple[int, bool]],
     n_variants: int,
     staged_path: Path,
+    *,
+    write_variant_index: bool = True,
 ) -> tuple[RaggedCSRWriter, StoreEncoding]:
     """Stream the BESD file into a CSR store under ``staged_path``.
 
@@ -567,6 +569,8 @@ def _ingest_besd(
     encoding = _decide_encoding(csr, len(probes))
     print(f"Flushing zarr CSR ({csr.n_associations:,} associations) ...")
     csr.flush(staged_path, encoding)
+    if write_variant_index:
+        build_variant_index(staged_path, n_axis=n_variants)
 
     if skipped_probes:
         print(f"  {skipped_probes} probes had no valid associations after filtering")
@@ -602,15 +606,7 @@ def _write_manifest(
             "n_variants": n_variants,
             "n_analyses": n_analyses,
             "n_associations": n_associations,
-            "ragged": {
-                "statistic_arrays": ["z", "se"],
-                "se_dtype": encoding.se.dtype,
-                "variant_axis": {
-                    "format": VARIANT_AXIS_FORMAT,
-                    "table": VARIANT_TABLE_FILENAME,
-                    "tabix_index": VARIANT_TABIX_FILENAME,
-                },
-            },
+            "ragged": ragged_provenance(staged.path, encoding),
         },
     )
     staged.write_manifest(manifest)
