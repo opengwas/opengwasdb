@@ -239,21 +239,23 @@ the end of this file.
   whole number of shards (never below one), so each shard is written exactly
   once. On a synthetic 160,000,000-cell component (four 50,000,000-element
   sequence shards) the measured write amplification (`count_shard_writes`, the
-  real bytes handed to the storage layer) falls from 6.362x to 1.000x, the most
-  writes to any one sequence shard from 13 to 1, and the flush halves from
-  19.92 s to 10.52 s
+  real bytes handed to the storage layer) falls from 5.922x to 1.000x, the most
+  writes to any one sequence shard from 13 to 1, and the flush from 92.78 s to
+  81.82 s
   (`docs/benchmark-output/opengwasdb_ragged_write_amplification_epic240_249.json`).
   The registered pilots' sequences each fit in one shard, but the pre-#249 step
   still rewrote OGS-00004's single 27,369,974-cell Overflow shard **7 times**,
   OGS-00006's two shards **15 writes in total** (12 + 3) and OGS-00011's 62
   shards at most 13 times each (797 shard writes per array).
-  The cost is the region's working set, measured at **66-79 bytes a cell** (the
-  #249 review probe; #228's whole-plane write measured 72.9), so a
-  50,000,000-cell region is about **3.3-4.0 GB (3.1-3.7 GiB)**; the pre-#249
-  step's region was 4,194,304 cells, about a twelfth of that. The
-  30-bytes-a-cell figure this replaces predated the v3 sharding, which encodes
-  the whole shard per write. The harness's own tracemalloc `region_alloc_peak_bytes`
-  fields supersede this estimate when the artifact is re-run.
+  The cost is the region's working set, measured by the same artifact at
+  **89.5 bytes a cell** over the pre-#249 4,194,304-cell region (0.37 GB) and
+  **79.0 bytes a cell** over the fixed 50,000,000-cell region (**3.95 GB,
+  3.68 GiB**). The 30-bytes-a-cell figure this replaces predated the v3
+  sharding, which encodes the whole shard per write.
+  On the four rebuild pilots the 0.2.0 builds are within noise of the 0.1.0 ones
+  (Dense 9:14 -> 8:27, Hybrid 43:53 -> 43:31, both Ragged within 2 s; peak RSS
+  within 1% on Dense and Hybrid), in
+  `docs/benchmark-output/opengwasdb_build_cost_epic240_249.json`.
   Extending `require_whole_shard_writes` to every sharded array -- 1-D included,
   whatever its shard size -- found a second partial-shard writer: the Dense SE
   rewrite (`encoding/se.py`) filled `se_exception_index`/`_value` one row band at

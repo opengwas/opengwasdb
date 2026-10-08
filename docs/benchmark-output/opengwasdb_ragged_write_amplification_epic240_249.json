@@ -1,6 +1,7 @@
 {
   "artifact": "Ragged sequence write amplification before/after #249",
-  "commit": "7fa3c50",
+  "commit": "6fc7a0a",
+  "measured_at": "2026-10-08T06:27:01.915195+00:00",
   "shard_elements": 50000000,
   "inner_chunk": 200000,
   "region_cells": 4194304,
@@ -8,6 +9,7 @@
     "total_cells": 160000000,
     "n_analyses": 32,
     "n_variants": 20000000,
+    "seed": 0,
     "encoding": {
       "version": 3,
       "z": {
@@ -15,24 +17,40 @@
         "scale": 1024
       },
       "se": {
-        "kind": "float16"
+        "kind": "int8_residual",
+        "residual_range": 0.5
       },
       "eaf": {
-        "kind": "float32"
+        "kind": "int8_residual",
+        "residual_range": 0.5
       }
     }
   },
+  "runs": [
+    {
+      "path": "/tmp/epic240/249/r4-amp-legacy.json",
+      "legacy_step": true
+    },
+    {
+      "path": "/tmp/epic240/249/r4-amp-fixed.json",
+      "legacy_step": false
+    }
+  ],
   "legacy_step": {
     "artifact": "Ragged sequence write amplification, epic #240 / #249",
-    "commit": "7fa3c50",
-    "measured_at": "2026-10-07T20:11:22.368678+00:00",
+    "commit": "6fc7a0a",
+    "measured_at": "2026-10-08T06:24:23.488599+00:00",
+    "guard_env": null,
     "legacy_step": true,
     "shard_elements": 50000000,
     "inner_chunk": 200000,
     "region_cells": 4194304,
+    "region_step_cells": 4194304,
+    "largest_region_cells": 4194304,
     "total_cells": 160000000,
     "n_analyses": 32,
     "n_variants": 20000000,
+    "seed": 0,
     "encoding": {
       "version": 3,
       "z": {
@@ -40,26 +58,59 @@
         "scale": 1024
       },
       "se": {
-        "kind": "float16"
+        "kind": "int8_residual",
+        "residual_range": 0.5
       },
       "eaf": {
-        "kind": "float32"
+        "kind": "int8_residual",
+        "residual_range": 0.5
       }
     },
-    "wall_seconds": 19.92,
-    "peak_rss_kib": 17346108,
-    "peak_rss_gib": 16.54,
-    "total_bytes_written": 8051028236,
-    "total_final_bytes": 1265431214,
-    "total_amplification": 6.362,
+    "wall_seconds": 92.78,
+    "eaf_region_alloc_peak_bytes": 375294817,
+    "se_region_alloc_peak_bytes": 275707995,
+    "region_alloc_peak_bytes": 375294817,
+    "region_gib": 0.35,
+    "region_bytes_per_cell": 89.5,
+    "eaf_region_rss_delta_kib": 516364,
+    "se_region_rss_delta_kib": 373284,
+    "lifetime_peak_rss_kib": 3254216,
+    "lifetime_peak_rss_gib": 3.1,
+    "total_bytes_written": 4728302676,
+    "total_final_bytes": 798378505,
+    "total_amplification": 5.922,
     "arrays": {
       "eaf": {
         "shards": 4,
         "shard_writes": 42,
         "max_writes_one_shard": 13,
-        "bytes_written": 3339402682,
-        "final_bytes": 524849123,
-        "amplification": 6.363
+        "bytes_written": 894585746,
+        "final_bytes": 140828487,
+        "amplification": 6.352
+      },
+      "eaf_baseline": {
+        "shards": 2,
+        "shard_writes": 2,
+        "max_writes_one_shard": 1,
+        "bytes_written": 65062570,
+        "final_bytes": 65063794,
+        "amplification": 1.0
+      },
+      "eaf_exception_index": {
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 1044,
+        "final_bytes": 1997,
+        "amplification": 0.523
+      },
+      "eaf_exception_value": {
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 532,
+        "final_bytes": 1489,
+        "amplification": 0.357
       },
       "offsets": {
         "shards": 1,
@@ -73,56 +124,84 @@
         "shards": 4,
         "shard_writes": 42,
         "max_writes_one_shard": 13,
-        "bytes_written": 1779179225,
-        "final_bytes": 279624240,
-        "amplification": 6.363
+        "bytes_written": 836603558,
+        "final_bytes": 131555661,
+        "amplification": 6.359
+      },
+      "se_coefficients": {
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 189,
+        "final_bytes": 1428,
+        "amplification": 0.132
+      },
+      "se_exception_index": {
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 205,
+        "final_bytes": 1412,
+        "amplification": 0.145
+      },
+      "se_exception_value": {
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 62,
+        "final_bytes": 1273,
+        "amplification": 0.049
       },
       "variant_index": {
         "shards": 4,
         "shard_writes": 42,
         "max_writes_one_shard": 13,
-        "bytes_written": 902897651,
-        "final_bytes": 141896013,
-        "amplification": 6.363
+        "bytes_written": 902458890,
+        "final_bytes": 141849214,
+        "amplification": 6.362
       },
       "z": {
         "shards": 4,
         "shard_writes": 42,
         "max_writes_one_shard": 13,
-        "bytes_written": 2029548431,
-        "final_bytes": 319058483,
+        "bytes_written": 2029588825,
+        "final_bytes": 319069581,
         "amplification": 6.361
       },
       "z_overflow_index": {
-        "shards": 0,
-        "shard_writes": 0,
-        "max_writes_one_shard": 0,
-        "bytes_written": 0,
-        "final_bytes": 947,
-        "amplification": 0.0
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 532,
+        "final_bytes": 1482,
+        "amplification": 0.359
       },
       "z_overflow_value": {
-        "shards": 0,
-        "shard_writes": 0,
-        "max_writes_one_shard": 0,
-        "bytes_written": 0,
-        "final_bytes": 951,
-        "amplification": 0.0
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 276,
+        "final_bytes": 1230,
+        "amplification": 0.224
       }
     },
-    "note": "bytes_written counts every byte handed to the storage layer while the component flushed; final_bytes is what is on disk afterwards. A shard written once has amplification near 1; a max_writes_one_shard above 1 is the read-modify-write this ticket fixes."
+    "note": "bytes_written counts every byte handed to the storage layer while the component flushed; final_bytes is what is on disk afterwards. A shard written once has amplification near 1; a max_writes_one_shard above 1 is the read-modify-write this ticket fixes. `eaf_region_alloc_peak_bytes` and `se_region_alloc_peak_bytes` are tracemalloc peaks around `write_eaf_plane`/`flush_se` (the SE half with the coefficients supplied, and the EAF baseline already held), so the peak is the region's and not a whole-plane pass's; the RSS deltas are recorded beside them but collapse when the allocator reuses freed memory. `region_bytes_per_cell` divides the larger allocation peak by `largest_region_cells` (min(step, total)). `lifetime_peak_rss_kib` is `ru_maxrss` and predates the flush."
   },
   "fixed_step": {
     "artifact": "Ragged sequence write amplification, epic #240 / #249",
-    "commit": "7fa3c50",
-    "measured_at": "2026-10-07T20:13:39.779892+00:00",
+    "commit": "6fc7a0a",
+    "measured_at": "2026-10-08T06:26:49.165739+00:00",
+    "guard_env": "1",
     "legacy_step": false,
     "shard_elements": 50000000,
     "inner_chunk": 200000,
     "region_cells": 4194304,
+    "region_step_cells": 50000000,
+    "largest_region_cells": 50000000,
     "total_cells": 160000000,
     "n_analyses": 32,
     "n_variants": 20000000,
+    "seed": 0,
     "encoding": {
       "version": 3,
       "z": {
@@ -130,26 +209,59 @@
         "scale": 1024
       },
       "se": {
-        "kind": "float16"
+        "kind": "int8_residual",
+        "residual_range": 0.5
       },
       "eaf": {
-        "kind": "float32"
+        "kind": "int8_residual",
+        "residual_range": 0.5
       }
     },
-    "wall_seconds": 10.52,
-    "peak_rss_kib": 17346324,
-    "peak_rss_gib": 16.54,
-    "total_bytes_written": 1265423214,
-    "total_final_bytes": 1265431214,
+    "wall_seconds": 81.82,
+    "eaf_region_alloc_peak_bytes": 3950303981,
+    "se_region_alloc_peak_bytes": 3150069325,
+    "region_alloc_peak_bytes": 3950303981,
+    "region_gib": 3.679,
+    "region_bytes_per_cell": 79.0,
+    "eaf_region_rss_delta_kib": 4022080,
+    "se_region_rss_delta_kib": 3223792,
+    "lifetime_peak_rss_kib": 6209908,
+    "lifetime_peak_rss_gib": 5.92,
+    "total_bytes_written": 798363876,
+    "total_final_bytes": 798378505,
     "total_amplification": 1.0,
     "arrays": {
       "eaf": {
         "shards": 4,
         "shard_writes": 4,
         "max_writes_one_shard": 1,
-        "bytes_written": 524847898,
-        "final_bytes": 524849123,
+        "bytes_written": 140827346,
+        "final_bytes": 140828487,
         "amplification": 1.0
+      },
+      "eaf_baseline": {
+        "shards": 2,
+        "shard_writes": 2,
+        "max_writes_one_shard": 1,
+        "bytes_written": 65062570,
+        "final_bytes": 65063794,
+        "amplification": 1.0
+      },
+      "eaf_exception_index": {
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 1044,
+        "final_bytes": 1997,
+        "amplification": 0.523
+      },
+      "eaf_exception_value": {
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 532,
+        "final_bytes": 1489,
+        "amplification": 0.357
       },
       "offsets": {
         "shards": 1,
@@ -163,44 +275,68 @@
         "shards": 4,
         "shard_writes": 4,
         "max_writes_one_shard": 1,
-        "bytes_written": 279623015,
-        "final_bytes": 279624240,
+        "bytes_written": 131554520,
+        "final_bytes": 131555661,
         "amplification": 1.0
+      },
+      "se_coefficients": {
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 189,
+        "final_bytes": 1428,
+        "amplification": 0.132
+      },
+      "se_exception_index": {
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 205,
+        "final_bytes": 1412,
+        "amplification": 0.145
+      },
+      "se_exception_value": {
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 62,
+        "final_bytes": 1273,
+        "amplification": 0.049
       },
       "variant_index": {
         "shards": 4,
         "shard_writes": 4,
         "max_writes_one_shard": 1,
-        "bytes_written": 141894792,
-        "final_bytes": 141896013,
+        "bytes_written": 141847993,
+        "final_bytes": 141849214,
         "amplification": 1.0
       },
       "z": {
         "shards": 4,
         "shard_writes": 4,
         "max_writes_one_shard": 1,
-        "bytes_written": 319057262,
-        "final_bytes": 319058483,
+        "bytes_written": 319068360,
+        "final_bytes": 319069581,
         "amplification": 1.0
       },
       "z_overflow_index": {
-        "shards": 0,
-        "shard_writes": 0,
-        "max_writes_one_shard": 0,
-        "bytes_written": 0,
-        "final_bytes": 947,
-        "amplification": 0.0
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 532,
+        "final_bytes": 1482,
+        "amplification": 0.359
       },
       "z_overflow_value": {
-        "shards": 0,
-        "shard_writes": 0,
-        "max_writes_one_shard": 0,
-        "bytes_written": 0,
-        "final_bytes": 951,
-        "amplification": 0.0
+        "shards": 1,
+        "shard_writes": 1,
+        "max_writes_one_shard": 1,
+        "bytes_written": 276,
+        "final_bytes": 1230,
+        "amplification": 0.224
       }
     },
-    "note": "bytes_written counts every byte handed to the storage layer while the component flushed; final_bytes is what is on disk afterwards. A shard written once has amplification near 1; a max_writes_one_shard above 1 is the read-modify-write this ticket fixes."
+    "note": "bytes_written counts every byte handed to the storage layer while the component flushed; final_bytes is what is on disk afterwards. A shard written once has amplification near 1; a max_writes_one_shard above 1 is the read-modify-write this ticket fixes. `eaf_region_alloc_peak_bytes` and `se_region_alloc_peak_bytes` are tracemalloc peaks around `write_eaf_plane`/`flush_se` (the SE half with the coefficients supplied, and the EAF baseline already held), so the peak is the region's and not a whole-plane pass's; the RSS deltas are recorded beside them but collapse when the allocator reuses freed memory. `region_bytes_per_cell` divides the larger allocation peak by `largest_region_cells` (min(step, total)). `lifetime_peak_rss_kib` is `ru_maxrss` and predates the flush."
   },
-  "note": "Both runs are the re-runnable output of benchmarks/measure_write_amplification.py; the legacy run replaces sequence_region_step with the pre-#249 region-only step on the same code path. Never hand-edited."
+  "note": "Both runs are the re-runnable output of benchmarks/measure_write_amplification.py; the legacy run replaces sequence_region_step with the pre-#249 region-only step on the same code path. The envelope itself is written by --combine. Never hand-edited."
 }

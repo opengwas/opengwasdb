@@ -54,11 +54,11 @@ DEFAULT_SE_FIT_CELL_BUDGET = 1 << 24
 SCAN_WINDOW_CHUNKS = 8
 #: Cells one `flush` region writes at a time, as a *floor*.  The region holds
 #: the four source planes, the codes it encodes them to and the frequencies it
-#: decodes back -- measured at 66-79 bytes a cell in the #249 review probe -- so
-#: 2**22 is roughly a 0.3 GB working set whatever the component's cell count
-#: (issue #228).  The Ragged sequence planes are written one **shard** at a time
-#: even when that is larger (issue #249), because a write covering part of a shard
-#: is a read-modify-write of the whole shard; see `RaggedCSRWriter._flat_regions`.
+#: decodes back -- measured by the #249 artifact at 89.5 bytes a cell, so 2**22
+#: is roughly a 0.37 GB working set whatever the component's cell count (issue
+#: #228).  The Ragged sequence planes are written one **shard** at a time even
+#: when that is larger (issue #249), because a write covering part of a shard is
+#: a read-modify-write of the whole shard; see `RaggedCSRWriter._flat_regions`.
 DEFAULT_FLUSH_REGION_CELLS = 1 << 22
 
 
@@ -662,11 +662,11 @@ class RaggedCSRWriter:
         concatenating write cost a measured 72.9 bytes a cell, or 1.10 TB (issue
         #228).  Each region is a whole Ragged sequence shard (issue #249), so
         each shard is written exactly once; on the 50,000,000-element shard that
-        is roughly 3.1-3.7 GiB (66-79 bytes a cell, measured in the #249 review
-        probe), against a pre-#249 4,194,304-cell region of about a twelfth that.
-        What is stored is unchanged -- each plane's codes are a per-cell function
-        of its value, keyed on global flat position (`positions_flat(lo)` per
-        region).
+        is roughly 3.68 GiB (79.0 bytes a cell, the #249 re-run artifact),
+        against 0.37 GB (89.5 bytes a cell) for the pre-#249 4,194,304-cell
+        region.  What is stored is unchanged -- each plane's codes are a per-cell
+        function of its value, keyed on global flat position (`positions_flat(lo)`
+        per region).
         `eaf_baseline` lets Reference Completion carry its source's baselines
         across a variant remap; see `_flush_baseline`.
         """
