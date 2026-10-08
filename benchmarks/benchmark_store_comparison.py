@@ -38,10 +38,13 @@ import hashlib
 import json
 import os
 import platform
+import signal
 import socket
 import subprocess
+import time
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,17 +55,24 @@ import zarr
 
 from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
+from benchmarks._quiet import wait_for_quiet as _wait_for_quiet
 from benchmarks._rss import run_probe
 from benchmarks.benchmark_ukbb_dense import _median_ms
 from opengwasdb.query.facade import _empty_result
-from opengwasdb.store.arrays import inner_chunk_of
 
 # Selection anchors, matching the OGS-00009 report (benchmark_ukbb_dense.py):
 # the statin-use exposure Analysis, the chr19 APOE/APOC region, and the seeded
 # random draws `_query_shapes` fixes. The PheWAS variant is derived once from
 # this exposure's strongest genome-wide hit.
-EXPOSURE = "ukb-b-17805"
-REGION = ("19", 44_500_000, 45_500_000)
+#
+# These are DEFAULTS, not constants: a Store Release whose analyses do not carry
+# `ukb-b-17805` (OGS-00016's FinnGen R13, OGS-00011's GWAS Catalog Hybrid) cannot
+# resolve them, so `--exposure`, `--phewas-alid` and `--region` let the caller
+# name the anchors that store actually has. The defaults reproduce the committed
+# OGS-00009 baseline byte for byte when no override is given (#250).
+DEFAULT_EXPOSURE = "ukb-b-17805"
+DEFAULT_PHEWAS_ALID: str | None = None
+DEFAULT_REGION = ("19", 44_500_000, 45_500_000)
 DEFAULT_OUTPUT = Path("docs/benchmark-output/opengwasdb_store_comparison.json")
 
 # Every index-keyed query result carries these six parallel arrays. Read from
@@ -121,6 +131,24 @@ def _region_tuple(selection: dict[str, Any]) -> tuple[str, int, int]:
     return (str(region["chrom"]), int(region["start"]), int(region["end"]))
 
 
+def _parse_region(text: str) -> tuple[str, int, int]:
+    """``"19:44500000-45500000"`` -> ``("19", 44500000, 45500000)``.
+
+    A malformed region is a hard error: a silently empty window would make the
+    regional shape time an empty read and still agree across stores.
+    """
+    chrom, separator, span = text.partition(":")
+    start_text, dash, end_text = span.partition("-")
+    if not (chrom and separator and dash and start_text.isdigit() and end_text.isdigit()):
+        raise argparse.ArgumentTypeError(
+            f"--region must be CHROM:START-END with integer coordinates, got {text!r}"
+        )
+    start, end = int(start_text), int(end_text)
+    if end <= start:
+        raise argparse.ArgumentTypeError(f"--region end must exceed start, got {text!r}")
+    return (chrom, start, end)
+
+
 def _patterns_for_store(
     q: Any, selection: dict[str, Any]
 ) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
@@ -141,33 +169,53 @@ def _patterns_for_store(
     )
 
 
-def _resolve_selection(spec: StoreSpec) -> dict[str, Any]:
-    """Resolve the selection once, against the first store, and record it."""
+def _resolve_selection(
+    spec: StoreSpec,
+    *,
+    exposure: str = DEFAULT_EXPOSURE,
+    phewas_alid: str | None = DEFAULT_PHEWAS_ALID,
+    region: tuple[str, int, int] = DEFAULT_REGION,
+) -> dict[str, Any]:
+    """Resolve the selection once, against the first store, and record it.
+
+    `exposure` must be an Analysis the store carries; the PheWAS variant is
+    derived from that Analysis's strongest genome-wide hit unless the caller
+    pinned `phewas_alid` (a store whose top hits cannot resolve one). The region
+    is the caller's, defaulting to the OGS-00009 chr19 window.
+    """
     q, _plan = _query_shapes.open_benchmark_store(spec.path)
     try:
         analyses = q.analyses_table()
         by_id = {row["analysis_id"]: index for index, row in analyses.items()}
-        if EXPOSURE not in by_id:
+        if exposure not in by_id:
             raise SystemExit(
-                f"{spec.path}: exposure Analysis {EXPOSURE!r} is absent, so the "
-                "shared selection cannot be resolved. Refusing to guess one."
+                f"{spec.path}: exposure Analysis {exposure!r} is absent, so the "
+                "shared selection cannot be resolved. Refusing to guess one; pass "
+                "--exposure with an Analysis this store carries."
             )
-        top_hits = q.top_hits(threshold=_query_shapes.GENOME_WIDE)
-        keep = top_hits["analysis_index"] == by_id[EXPOSURE]
-        if not keep.any():
-            raise SystemExit(
-                f"{spec.path}: exposure Analysis {EXPOSURE!r} has no genome-wide "
-                "significant hits; there is no top hit to derive the PheWAS variant from."
-            )
-        hit_z = np.abs(top_hits["z"][keep])
-        strongest = int(top_hits["variant_index"][keep][int(np.argmax(hit_z))])
-        record = q._variant_axis.by_index(strongest)
-        if record is None:
-            raise SystemExit(f"{spec.path}: top-hit variant index {strongest} does not resolve")
+        if phewas_alid is not None:
+            record_alid = phewas_alid
+        else:
+            top_hits = q.top_hits(threshold=_query_shapes.GENOME_WIDE)
+            keep = top_hits["analysis_index"] == by_id[exposure]
+            if not keep.any():
+                raise SystemExit(
+                    f"{spec.path}: exposure Analysis {exposure!r} has no genome-wide "
+                    "significant hits; there is no top hit to derive the PheWAS variant "
+                    "from. Pass --phewas-alid to pin one."
+                )
+            hit_z = np.abs(top_hits["z"][keep])
+            strongest = int(top_hits["variant_index"][keep][int(np.argmax(hit_z))])
+            record = q._variant_axis.by_index(strongest)
+            if record is None:
+                raise SystemExit(
+                    f"{spec.path}: top-hit variant index {strongest} does not resolve"
+                )
+            record_alid = record.alid
         random_alids, random_analyses = _query_shapes.resolve_axis_selections(
             q._variant_axis,
             analyses,
-            int(q._root["z"].shape[0]),
+            int(q._variant_axis.n_variants),
             len(analyses),
         )
         if len(random_alids) != _query_shapes.RANDOM_AXIS_SIZE:
@@ -177,16 +225,16 @@ def _resolve_selection(spec: StoreSpec) -> dict[str, Any]:
                 "selection is not the selection the report names."
             )
         return {
-            "exposure_analysis_id": EXPOSURE,
-            "phewas_alid": record.alid,
-            "region": {"chrom": REGION[0], "start": REGION[1], "end": REGION[2]},
+            "exposure_analysis_id": exposure,
+            "phewas_alid": record_alid,
+            "region": {"chrom": region[0], "start": region[1], "end": region[2]},
             "random_lookup_shapes": _query_shapes.RANDOM_LOOKUP_SHAPES,
             "random_alids": random_alids,
             "random_analyses": random_analyses,
             "resolved_from": {
                 "label": spec.label,
                 "path": str(spec.path),
-                "n_variants": int(q._root["z"].shape[0]),
+                "n_variants": int(q._variant_axis.n_variants),
                 "n_analyses": len(analyses),
             },
         }
@@ -276,14 +324,90 @@ def assert_identical(
     )
 
 
-def _timed_shape(
-    fn: Callable[[], dict[str, np.ndarray]], reps: int
-) -> tuple[float, float, int, dict[str, str]]:
-    """Time one shape over `reps` after the shared warm-up, digesting that warm-up.
+def _check_counts(counts: list[int]) -> None:
+    if len(set(counts)) != 1:
+        raise SystemExit(
+            f"a shape returned {sorted(set(counts))} rows across its runs; "
+            "a query whose result size is not stable cannot be timed or compared."
+        )
 
-    `_median_ms` runs one untimed warm-up call, then `reps` timed calls; the
-    digest and the per-rep result counts are captured on the untimed call, so
-    the identity check costs no timed run.
+
+class _ShapeTimeout(Exception):
+    """A single query call exceeded `--shape-limit-s`."""
+
+
+@contextmanager
+def _time_limit(seconds: float):
+    """Abort the enclosed call after `seconds`, or do nothing when it is 0.
+
+    #252's harness used a 1500 s SIGALRM limit for the slow variant-side shapes
+    """
+    if not seconds or seconds <= 0:
+        yield
+        return
+
+    def _raise(_signum: int, _frame: Any) -> None:
+        raise _ShapeTimeout
+
+    previous = signal.signal(signal.SIGALRM, _raise)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, float(seconds))
+        yield
+    finally:
+        # Restore the handler even if arming or clearing the timer raises, so a
+        # failed `setitimer` cannot leave our handler installed for the rest of
+        # the process (#250 review r1, nit 12).
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        finally:
+            signal.signal(signal.SIGALRM, previous)
+
+
+def _harness_fingerprint() -> dict[str, str]:
+    """The harness file that ran, so an artifact can name it and its digest.
+
+    `opengwasdb_fingerprint` names the package; a 2.18 column runs this harness
+    under a *different* checkout, so the artifact must also say which harness
+    revision produced the numbers (#250 review r1, minor 9).
+    """
+    path = Path(__file__).resolve()
+    return {
+        "harness_path": str(path),
+        "harness_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
+def _common_shapes(
+    all_digests: list[dict[str, dict[str, str]]],
+) -> tuple[set[str], set[str]]:
+    """The shapes every store measured, and every shape any store measured.
+
+    A shape that hit the time limit on one store carries no digest and must not
+    be compared as if it were equal; the difference is what
+    `identity.shapes_not_compared` records (#250 review r1, minor 11).
+    """
+    measured = set().union(*(set(d) for d in all_digests)) if all_digests else set()
+    common = set.intersection(*(set(d) for d in all_digests)) if all_digests else set()
+    return common, measured
+
+
+def _timed_shape(
+    fn: Callable[[], dict[str, np.ndarray]],
+    reps: int,
+    *,
+    limit_s: float = 0.0,
+    slow_shape_s: float = 0.0,
+) -> dict[str, Any]:
+    """Time one shape after a shared warm-up, digesting that warm-up.
+
+    With no limit and no slow threshold this is `_median_ms` exactly (one
+    untimed warm-up, then `reps` timed calls), which is what the committed
+    OGS-00009 baseline used. With `limit_s` set it aborts a call that runs
+    longer and returns a `timed_out` record instead of a timing (#252's
+    1500 s Hybrid limit); with `slow_shape_s` set a shape whose warm-up is
+    slower than the threshold is timed once, as #252's harness did for the
+    O(overflow) 2.18 shapes. A timed-out shape carries no digest, so the
+    identity check cannot silently compare an empty result.
     """
     digests: dict[str, str] = {}
     counts: list[int] = []
@@ -298,41 +422,122 @@ def _timed_shape(
         counts.append(len(result["z"]))
         return result
 
-    median_ms, p95_ms, count = _median_ms(instrumented, reps)
-    if len(set(counts)) != 1:
-        raise SystemExit(
-            f"a shape returned {sorted(set(counts))} rows across its runs; "
-            "a query whose result size is not stable cannot be timed or compared."
-        )
-    return median_ms, p95_ms, count, digests
+    if not limit_s and not slow_shape_s:
+        median_ms, p95_ms, count = _median_ms(instrumented, reps)
+        _check_counts(counts)
+        return {
+            "timed_out": False,
+            "median_ms": median_ms,
+            "p95_ms": p95_ms,
+            "result_count": count,
+            "digests": digests,
+            "repetitions": reps,
+            "warmup_ms": None,
+        }
+
+    warmup_start = time.perf_counter()
+    try:
+        with _time_limit(limit_s):
+            instrumented()
+    except _ShapeTimeout:
+        return {"timed_out": True, "limit_s": limit_s, "digests": {}, "result_count": None}
+    warmup_ms = (time.perf_counter() - warmup_start) * 1000.0
+    repetitions = 1 if (slow_shape_s and warmup_ms / 1000.0 > slow_shape_s) else reps
+    times: list[float] = []
+    for _ in range(repetitions):
+        try:
+            started = time.perf_counter()
+            with _time_limit(limit_s):
+                instrumented()
+            times.append((time.perf_counter() - started) * 1000.0)
+        except _ShapeTimeout:
+            return {
+                "timed_out": True,
+                "limit_s": limit_s,
+                "digests": {},
+                "result_count": None,
+            }
+    _check_counts(counts)
+    times.sort()
+    return {
+        "timed_out": False,
+        "median_ms": times[len(times) // 2],
+        "p95_ms": times[min(len(times) - 1, int(0.95 * len(times)))],
+        "result_count": counts[0],
+        "digests": digests,
+        "repetitions": repetitions,
+        "warmup_ms": round(warmup_ms, 3),
+    }
+
+
+def _dense_plane_root(q: Any) -> Any:
+    """The Zarr root that holds the `z`/`se`/`eaf` planes for this store.
+
+    A Dense or Reference-Completed release keeps them at the release root. A
+    Hybrid release keeps them in the nested Dense Component
+    (`dense/data.zarr`); its outer root holds only `ragged` and `top_hits`, and
+    the Hybrid facade has no `_root` at all, so a plane lookup must name the
+    component explicitly (#250).
+    """
+    root = getattr(q, "_root", None)
+    if root is not None and "z" in root:
+        return root
+    dense = getattr(q, "_dense", None)
+    if dense is not None and "z" in dense._root:
+        return dense._root
+    raise SystemExit(
+        f"{type(q).__name__} exposes no Dense plane root (z/se/eaf); cannot read its layout"
+    )
 
 
 def _layout_block(q: Any) -> dict[str, Any]:
-    """The physical layout each Dense plane reads at, and one top-hit tier's.
+    """The physical layout of every array a query reads, by component.
 
     #246 compares shapes, so the artifact must say which shape each store is,
     read back from the arrays rather than from the manifest: a 0.1.0 plane has
-    no shard, and a converted one has the shard the conversion wrote.  The
+    no shard, and a converted one has the shard the conversion wrote. The
     inner chunk is zarr's `chunks` (the read unit), the shard `shards` (the
-    file unit).
+    file unit). A Hybrid reads *two* components, so its Dense planes are
+    prefixed `dense/` and its Overflow's `ragged/*` arrays and outer
+    `top_hits` tiers are recorded too (#250 review r1, minor 8).
     """
 
     def shape_of(array: Any) -> dict[str, Any]:
         shards = getattr(array, "shards", None)
         return {
-            "chunk_shape": list(inner_chunk_of(array)),
+            # `Array.chunks` is the inner chunk (the read unit) for a v2 array and
+            # a v3 sharded array alike; `inner_chunk_of` is the seam's spelling of
+            # this, but inlined so the harness also runs against the 2.18 tree,
+            # which predates the seam helper (#250).
+            "chunk_shape": [int(size) for size in array.chunks],
             "shard_shape": None if shards is None else [int(size) for size in shards],
             "dtype": str(array.dtype),
         }
 
+    def top_hit_tiers(group: Any, prefix: str, layout: dict[str, Any]) -> None:
+        if "top_hits" not in group:
+            return
+        for tier in sorted(group["top_hits"].group_keys()):
+            if "z" in group["top_hits"][tier]:
+                layout[f"{prefix}top_hits/{tier}/z"] = shape_of(group["top_hits"][tier]["z"])
+
+    outer = getattr(q, "_root", None)
+    is_hybrid = outer is None or "z" not in outer
+    dense = getattr(q, "_dense", None)._root if is_hybrid else outer
+    prefix = "dense/" if is_hybrid else ""
+
     layout: dict[str, Any] = {}
     for name in ("z", "se", "eaf"):
-        if name in q._root:
-            layout[name] = shape_of(q._root[name])
-    if "top_hits" in q._root:
-        for tier in sorted(q._root["top_hits"].group_keys()):
-            if "z" in q._root["top_hits"][tier]:
-                layout[f"top_hits/{tier}/z"] = shape_of(q._root["top_hits"][tier]["z"])
+        if name in dense:
+            layout[f"{prefix}{name}"] = shape_of(dense[name])
+    top_hit_tiers(dense, prefix, layout)
+    if is_hybrid:
+        outer = q.store.arrays(mode="r")
+        if "ragged" in outer:
+            for name in ("z", "se", "eaf", "variant_index", "offsets"):
+                if name in outer["ragged"]:
+                    layout[f"ragged/{name}"] = shape_of(outer["ragged"][name])
+        top_hit_tiers(outer, "", layout)
     return layout
 
 
@@ -340,7 +545,7 @@ def _dataset_block(q: Any, plan: Any) -> dict[str, Any]:
     return {
         "release_id": plan.release_id,
         "store_id": plan.store_id,
-        "n_variants": int(q._root["z"].shape[0]),
+        "n_variants": int(q._variant_axis.n_variants),
         "n_analyses": len(q.analyses_table()),
         "completion_state": str(plan.completion_state),
         "reference_assembly": getattr(plan, "reference_assembly", None),
@@ -354,34 +559,67 @@ def _measure_store(
     spec: StoreSpec, selection: dict[str, Any], args: argparse.Namespace
 ) -> tuple[dict[str, Any], dict[str, dict[str, str]]]:
     """Time and digest every shape for one store; run its RSS probes if asked."""
+    waited_for_load_s, wait_timed_out = _wait_for_quiet(args.max_start_load)
+    if wait_timed_out:
+        print(
+            f"[{spec.label}] WARNING: the 1-minute load stayed at or above "
+            f"{args.max_start_load} for the whole wait; timing this column contended",
+            flush=True,
+        )
     load_before = os.getloadavg()[0]
     q, plan = _query_shapes.open_benchmark_store(spec.path)
     try:
         dataset = _dataset_block(q, plan)
-        effective_reader = effective_reader_settings(q._root)
+        effective_reader = effective_reader_settings(_dense_plane_root(q))
         patterns = _patterns_for_store(q, selection)
         timings: list[dict[str, Any]] = []
         digests: dict[str, dict[str, str]] = {}
+        limit_hits: list[str] = []
+        after_limit_hit = False
         for name, fn in patterns.items():
-            median_ms, p95_ms, count, shape_digests = _timed_shape(fn, args.reps)
-            timings.append(
-                {
-                    "query": name,
-                    "median_ms": round(median_ms, 3),
-                    "p95_ms": round(p95_ms, 3),
-                    "result_count": count,
-                }
+            timed = _timed_shape(
+                fn,
+                args.reps,
+                limit_s=args.shape_limit_s,
+                slow_shape_s=args.slow_shape_s,
             )
-            digests[name] = shape_digests
+            if timed["timed_out"]:
+                limit_hits.append(name)
+                after_limit_hit = True
+                timings.append(
+                    {"query": name, "timed_out": True, "limit_s": args.shape_limit_s}
+                )
+                print(
+                    f"[{spec.label}] {name:38s} HIT the {args.shape_limit_s:g}s limit; "
+                    "recorded as a limit hit",
+                    flush=True,
+                )
+                continue
+            row: dict[str, Any] = {
+                "query": name,
+                "timed_out": False,
+                "median_ms": round(timed["median_ms"], 3),
+                "p95_ms": round(timed["p95_ms"], 3),
+                "repetitions": timed["repetitions"],
+                "warmup_ms": timed["warmup_ms"],
+                "result_count": timed["result_count"],
+            }
+            if after_limit_hit:
+                # A SIGALRM abandons an in-flight Zarr 3 read on its event-loop
+                # thread; a shape timed after that shares the CPU with it
+                # (#250 review r1, nit 12).
+                row["after_limit_hit"] = True
+            timings.append(row)
+            digests[name] = timed["digests"]
             print(
-                f"[{spec.label}] {name:38s} median={median_ms:9.2f} ms  "
-                f"p95={p95_ms:9.2f} ms  count={count:,}",
+                f"[{spec.label}] {name:38s} median={timed['median_ms']:9.2f} ms  "
+                f"p95={timed['p95_ms']:9.2f} ms  count={timed['result_count']:,}",
                 flush=True,
             )
     finally:
         q.close()
 
-    memory = [] if args.skip_rss else _probe_store(spec, selection, list(digests))
+    memory = [] if args.skip_rss else _probe_store(spec, selection, list(digests), args)
     _check_memory_counts(memory, timings)
     load_after = os.getloadavg()[0]
     record = {
@@ -392,6 +630,9 @@ def _measure_store(
         "timings": timings,
         "memory": memory,
         "effective_reader": effective_reader,
+        "limit_hits": limit_hits,
+        "waited_for_load_s": round(waited_for_load_s, 1),
+        "load_wait_timed_out": wait_timed_out,
         "load_average_1m_before": round(load_before, 2),
         "load_average_1m_after": round(load_after, 2),
     }
@@ -399,14 +640,27 @@ def _measure_store(
 
 
 def _probe_store(
-    spec: StoreSpec, selection: dict[str, Any], shapes: list[str]
+    spec: StoreSpec, selection: dict[str, Any], shapes: list[str], args: argparse.Namespace
 ) -> list[dict[str, Any]]:
     """One fresh interpreter per shape, because a shape's peak is not readable after it."""
-    extra = ["--store", f"{spec.label}={spec.path}", "--selection-json", json.dumps(selection)]
+    extra = [
+        "--store",
+        f"{spec.label}={spec.path}",
+        "--selection-json",
+        json.dumps(selection),
+        "--shape-limit-s",
+        str(args.shape_limit_s),
+    ]
     out = []
     for name in shapes:
         record = run_probe(name, extra)
         out.append(record)
+        if record.get("timed_out"):
+            print(
+                f"[{spec.label}] {name:38s} RSS probe HIT the {args.shape_limit_s:g}s limit",
+                flush=True,
+            )
+            continue
         print(
             f"[{spec.label}] {name:38s} baseline={record['baseline_mb']:9.1f} MB  "
             f"peak={record['peak_mb']:9.1f} MB  delta={record['delta_mb']:9.1f} MB",
@@ -416,8 +670,14 @@ def _probe_store(
 
 
 def _check_memory_counts(memory: list[dict[str, Any]], timings: list[dict[str, Any]]) -> None:
-    by_shape = {row["query"]: row["result_count"] for row in timings}
+    by_shape = {
+        row["query"]: row.get("result_count")
+        for row in timings
+        if not row.get("timed_out")
+    }
     for record in memory:
+        if record.get("timed_out"):
+            continue
         expected = by_shape.get(record["query"])
         if expected is not None and record["result_count"] != expected:
             raise SystemExit(
@@ -565,10 +825,23 @@ def effective_reader_settings(root: Any) -> dict[str, Any]:
     fingerprint of the `opengwasdb` this process imported (#253).
     """
     plane = root["z"]
+    # zarr-python 3 dispatches every read through an async array; zarr-python 2
+    # has no such wrapper, so its `pipeline`/`max_workers` do not exist and are
+    # reported as None. The 2.18 baseline column (#250) runs this same harness
+    # under the 2.18 environment, so the absent wrapper must not crash the run.
+    async_array = getattr(plane, "_async_array", None)
+    codec_pipeline = getattr(async_array, "codec_pipeline", None)
     return {
-        "use_threads": bool(numcodecs.blosc.use_threads),
-        "pipeline": type(plane._async_array.codec_pipeline).__name__,
-        "max_workers": zarr.config.get("codec_pipeline.max_workers", None),
+        # The raw value, not `bool(...)`: numcodecs 0.12 (the 2.18 environment)
+        # uses `None` to mean "decide at decode time" (effectively threaded),
+        # and coercing that to False would record the opposite of what ran. The
+        # 2.18 baseline column (#250) therefore records `null`, and the v3
+        # environment records `true`.
+        "use_threads": numcodecs.blosc.use_threads,
+        "pipeline": None if codec_pipeline is None else type(codec_pipeline).__name__,
+        "max_workers": (
+            None if codec_pipeline is None else zarr.config.get("codec_pipeline.max_workers", None)
+        ),
     }
 
 
@@ -612,7 +885,12 @@ def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]
     selection = _selection_from_json(args.selection_json)
     q, _plan = _query_shapes.open_benchmark_store(spec.path)
     try:
-        return _query_shapes.measure_shape_rss(lambda: _patterns_for_store(q, selection), shape)
+        with _time_limit(args.shape_limit_s):
+            return _query_shapes.measure_shape_rss(
+                lambda: _patterns_for_store(q, selection), shape
+            )
+    except _ShapeTimeout:
+        return {"query": shape, "timed_out": True, "limit_s": args.shape_limit_s}
     finally:
         q.close()
 
@@ -629,9 +907,56 @@ def _parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     ap.add_argument(
+        "--exposure",
+        default=DEFAULT_EXPOSURE,
+        metavar="ANALYSIS_ID",
+        help=f"the Analysis the shapes are anchored on (default {DEFAULT_EXPOSURE!r}, "
+        "the OGS-00009 exposure); must exist in the first store",
+    )
+    ap.add_argument(
+        "--phewas-alid",
+        default=DEFAULT_PHEWAS_ALID,
+        metavar="ALID",
+        help="pin the PheWAS variant instead of deriving it from the exposure's "
+        "strongest genome-wide top hit",
+    )
+    ap.add_argument(
+        "--region",
+        type=_parse_region,
+        default=DEFAULT_REGION,
+        metavar="CHROM:START-END",
+        help=f"the regional shape's window (default {DEFAULT_REGION[0]}:"
+        f"{DEFAULT_REGION[1]}-{DEFAULT_REGION[2]})",
+    )
+    ap.add_argument(
+        "--max-start-load",
+        type=float,
+        default=3.0,
+        metavar="LOAD",
+        help="wait until the 1-minute load before each column's timing is below LOAD "
+        "(0 disables); every column waits, not only each pair (#250 review r1)",
+    )
+    ap.add_argument(
         "--selection-json",
         default=None,
         help="internal: the once-resolved selection an RSS probe must reuse",
+    )
+    ap.add_argument(
+        "--shape-limit-s",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="abort one query call after SECONDS and record it as a limit hit "
+        "(0 disables it); #252's harness used 1500 s for the slow O(overflow) 2.18 "
+        "Hybrid shapes",
+    )
+    ap.add_argument(
+        "--slow-shape-s",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="after a warm-up slower than SECONDS, time the shape once instead of "
+        "--reps times (0 disables it), as #252's harness did for the slow shapes",
     )
     _query_shapes.add_common_args(ap)
     return ap
@@ -643,21 +968,38 @@ def main() -> None:
         return
 
     stores = _validated_stores(args)
-    selection = _resolve_selection(stores[0])
+    selection = _resolve_selection(
+        stores[0], exposure=args.exposure, phewas_alid=args.phewas_alid, region=args.region
+    )
     print(f"selection resolved from {stores[0].label}: {json.dumps(selection, sort_keys=True)}")
 
     reference_label = stores[0].label
-    reference_digests: dict[str, dict[str, str]] = {}
+    all_digests: list[dict[str, dict[str, str]]] = []
     records: list[dict[str, Any]] = []
-    for index, spec in enumerate(stores):
+    for spec in stores:
         record, digests = _measure_store(spec, selection, args)
-        if index == 0:
-            reference_digests = digests
-        else:
-            assert_identical(reference_label, reference_digests, spec.label, digests)
-            print(f"identity check passed: {spec.label} matches {reference_label}", flush=True)
         record["result_digests"] = digests
+        all_digests.append(digests)
         records.append(record)
+
+    # A shape that hit the time limit on any store carries no digest, so it is
+    # recorded per store but excluded from the identity comparison -- and named
+    # in the artifact, so a missing shape cannot hide as "identical".
+    common, measured = _common_shapes(all_digests)
+    if not common:
+        raise SystemExit(
+            "no shape was measured by every store; there is nothing to compare and "
+            "the run is not evidence"
+        )
+    reference_digests = {shape: all_digests[0][shape] for shape in common}
+    for spec, digests in zip(stores[1:], all_digests[1:], strict=True):
+        assert_identical(
+            reference_label,
+            reference_digests,
+            spec.label,
+            {shape: digests[shape] for shape in common},
+        )
+        print(f"identity check passed: {spec.label} matches {reference_label}", flush=True)
 
     result = {
         "harness": "benchmark_store_comparison",
@@ -666,11 +1008,13 @@ def main() -> None:
         "identity": {
             "reference_store": reference_label,
             "stores": [spec.label for spec in stores],
-            "shapes": sorted(reference_digests),
+            "shapes": sorted(common),
+            "shapes_not_compared": sorted(measured - common),
             "arrays_per_shape": list(RESULT_ARRAY_NAMES),
             "identical": True,
         },
         "environment": _environment_block(records[0]["effective_reader"]),
+        "harness_file": _harness_fingerprint(),
         **provenance(),
     }
     write_artifact(args.output, result)

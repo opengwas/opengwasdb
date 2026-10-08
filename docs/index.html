@@ -134,6 +134,18 @@
       <h2>Rendered reports</h2>
       <ul>
         <li>
+          <a href="benchmark-output/opengwasdb_ogs00016_0_2_0.html">
+            OGS-00016 converted to format 0.2.0 — FinnGen R13, Zarr v3 with sharding
+          </a>
+          <br>
+          The full FinnGen R13 release converted bit-exactly from 0.1.0 to Zarr v3 with
+          sharded, narrower Dense chunks, and benchmarked as three columns (2.18 on the
+          original, this code on the original, this code on the converted store) with
+          identical results, plus the FinnGen benchmark, the source-fidelity harness, and
+          the per-plane compressed-size cost of the narrower chunks. The 0.1.0-only report
+          is left unlinked until the converted releases are registered.
+        </li>
+        <li>
           <a href="benchmark-output/opengwasdb_ogs00010_completed_benchmark.html">
             OGS-00010 — Reference-Completed at full scale: imputation, performance, and MR
           </a>
@@ -266,6 +278,7 @@
     <section>
       <h2>Report sources (Quarto)</h2>
       <ul>
+        <li><a href="benchmark-output/opengwasdb_ogs00016_0_2_0.qmd">opengwasdb_ogs00016_0_2_0.qmd</a></li>
         <li><a href="benchmark-output/opengwasdb_ogs00010_completed_benchmark.qmd">opengwasdb_ogs00010_completed_benchmark.qmd</a></li>
         <li><a href="benchmark-output/opengwasdb_ogs00009_dense_benchmark.qmd">opengwasdb_ogs00009_dense_benchmark.qmd</a></li>
         <li><a href="benchmark-output/opengwasdb_ukbb_dense_benchmark.qmd">opengwasdb_ukbb_dense_benchmark.qmd</a></li>

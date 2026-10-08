@@ -1,0 +1,322 @@
+{
+  "task": "#250",
+  "runner": "benchmarks/ogs00011_extra_shapes.py",
+  "probe": "benchmarks.ogs00011_ab.measure_one_shape",
+  "repetitions_share_one_interpreter": true,
+  "raw": "opengwasdb_ogs00011_extra_shapes.jsonl",
+  "environments": {
+    "a-2.18-0.1.0": {
+      "recorded": true,
+      "python": "/tmp/epic240/244/base-src/.pixi/envs/dev/bin/python",
+      "zarr": "2.18.7",
+      "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
+      "opengwasdb_path": "/tmp/epic240/244/base-src/opengwasdb",
+      "opengwasdb_fingerprint": "9fe19ecba575bdc1e2419cfcdff9fe69ca6e293f21279bf63ec8d10506450ac4",
+      "commit": "745796c",
+      "probe_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_ab.py",
+      "probe_sha256": "1e74a9613d0736e1c59b1bf74c37e14b5c6754d07d43aa6dfa0ab6a400dbcb26",
+      "runner_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_extra_shapes.py",
+      "runner_sha256": "74ab9480bf3405b92b3c6c3bf4a598cb651616520c90479a10342a9207d0fc99"
+    },
+    "b-code-0.1.0": {
+      "recorded": true,
+      "python": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/.pixi/envs/dev/bin/python",
+      "zarr": "3.4.0",
+      "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
+      "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/opengwasdb",
+      "opengwasdb_fingerprint": "49af77aedf3ff9287023310e47c91edab8189cc6775f98cfbc9f0868de583595",
+      "commit": "850b3c7",
+      "probe_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_ab.py",
+      "probe_sha256": "1e74a9613d0736e1c59b1bf74c37e14b5c6754d07d43aa6dfa0ab6a400dbcb26",
+      "runner_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_extra_shapes.py",
+      "runner_sha256": "74ab9480bf3405b92b3c6c3bf4a598cb651616520c90479a10342a9207d0fc99"
+    },
+    "c-code-0.2.0": {
+      "recorded": true,
+      "python": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/.pixi/envs/dev/bin/python",
+      "zarr": "3.4.0",
+      "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
+      "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/opengwasdb",
+      "opengwasdb_fingerprint": "49af77aedf3ff9287023310e47c91edab8189cc6775f98cfbc9f0868de583595",
+      "commit": "850b3c7",
+      "probe_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_ab.py",
+      "probe_sha256": "1e74a9613d0736e1c59b1bf74c37e14b5c6754d07d43aa6dfa0ab6a400dbcb26",
+      "runner_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_extra_shapes.py",
+      "runner_sha256": "74ab9480bf3405b92b3c6c3bf4a598cb651616520c90479a10342a9207d0fc99"
+    }
+  },
+  "shapes": {
+    "phewas_off_axis": {
+      "a-2.18-0.1.0": {
+        "repetitions": 5,
+        "median_ms": 22644.352,
+        "p95_ms": 26396.832,
+        "peak_mib": 27618.6,
+        "result_count": 1,
+        "sha256": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2",
+        "elapsed_ms": [
+          22644.352,
+          22462.119,
+          19563.745,
+          26396.832,
+          24070.238
+        ],
+        "start_load_1m": [
+          1.81,
+          2.62,
+          2.63,
+          2.46,
+          2.24
+        ],
+        "gate_wait_s": [
+          0.0,
+          0.0,
+          0.0,
+          15.0,
+          0.0
+        ],
+        "gate_gave_up": [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T17:44:09.847617+00:00"
+        }
+      },
+      "b-code-0.1.0": {
+        "repetitions": 5,
+        "median_ms": 28200.849,
+        "p95_ms": 28662.942,
+        "peak_mib": 2470.6,
+        "result_count": 1,
+        "sha256": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2",
+        "elapsed_ms": [
+          26420.002,
+          27906.076,
+          28200.849,
+          28662.942,
+          28578.838
+        ],
+        "start_load_1m": [
+          2.08,
+          2.78,
+          2.55,
+          2.59,
+          2.52
+        ],
+        "gate_wait_s": [
+          0.0,
+          0.0,
+          0.0,
+          15.0,
+          15.0
+        ],
+        "gate_gave_up": [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T17:47:13.528372+00:00"
+        }
+      },
+      "c-code-0.2.0": {
+        "repetitions": 5,
+        "median_ms": 28974.729,
+        "p95_ms": 29883.425,
+        "peak_mib": 2577.2,
+        "result_count": 1,
+        "sha256": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2",
+        "elapsed_ms": [
+          28895.436,
+          27909.638,
+          29883.425,
+          28974.729,
+          29367.131
+        ],
+        "start_load_1m": [
+          2.89,
+          2.89,
+          2.6,
+          2.5,
+          2.72
+        ],
+        "gate_wait_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "gate_gave_up": [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T17:51:07.078786+00:00"
+        }
+      }
+    },
+    "bulk_overflow_heavy": {
+      "a-2.18-0.1.0": {
+        "repetitions": 5,
+        "median_ms": 46569.739,
+        "p95_ms": 50270.45,
+        "peak_mib": 20265.6,
+        "result_count": 85226242,
+        "sha256": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76",
+        "elapsed_ms": [
+          46064.077,
+          45439.861,
+          46569.739,
+          47269.859,
+          50270.45
+        ],
+        "start_load_1m": [
+          2.42,
+          2.39,
+          2.43,
+          2.51,
+          2.92
+        ],
+        "gate_wait_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "gate_gave_up": [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T17:54:35.681560+00:00"
+        }
+      },
+      "b-code-0.1.0": {
+        "repetitions": 5,
+        "median_ms": 43129.362,
+        "p95_ms": 46454.522,
+        "peak_mib": 14761.0,
+        "result_count": 85226242,
+        "sha256": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76",
+        "elapsed_ms": [
+          45453.853,
+          43129.362,
+          40928.575,
+          46454.522,
+          39986.758
+        ],
+        "start_load_1m": [
+          2.39,
+          2.37,
+          2.14,
+          2.48,
+          2.42
+        ],
+        "gate_wait_s": [
+          0.0,
+          0.0,
+          0.0,
+          15.0,
+          0.0
+        ],
+        "gate_gave_up": [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T18:00:44.273773+00:00"
+        }
+      },
+      "c-code-0.2.0": {
+        "repetitions": 5,
+        "median_ms": 26123.219,
+        "p95_ms": 26551.633,
+        "peak_mib": 14386.6,
+        "result_count": 85226242,
+        "sha256": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76",
+        "elapsed_ms": [
+          26123.219,
+          25889.135,
+          25800.04,
+          26179.78,
+          26551.633
+        ],
+        "start_load_1m": [
+          2.76,
+          2.24,
+          2.11,
+          2.32,
+          2.02
+        ],
+        "gate_wait_s": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "gate_gave_up": [
+          false,
+          false,
+          false,
+          false,
+          false
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T18:06:51.178242+00:00"
+        }
+      }
+    }
+  },
+  "identity": {
+    "phewas_off_axis": {
+      "identical": true,
+      "counts": {
+        "a-2.18-0.1.0": 1,
+        "b-code-0.1.0": 1,
+        "c-code-0.2.0": 1
+      },
+      "digests": {
+        "a-2.18-0.1.0": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2",
+        "b-code-0.1.0": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2",
+        "c-code-0.2.0": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2"
+      }
+    },
+    "bulk_overflow_heavy": {
+      "identical": true,
+      "counts": {
+        "a-2.18-0.1.0": 85226242,
+        "b-code-0.1.0": 85226242,
+        "c-code-0.2.0": 85226242
+      },
+      "digests": {
+        "a-2.18-0.1.0": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76",
+        "b-code-0.1.0": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76",
+        "c-code-0.2.0": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76"
+      }
+    }
+  }
+}

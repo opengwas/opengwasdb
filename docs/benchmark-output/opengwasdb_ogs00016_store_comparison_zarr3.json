@@ -1,0 +1,1460 @@
+{
+  "harness": "benchmark_store_comparison",
+  "selection": {
+    "exposure_analysis_id": "finngen-r13-T2D",
+    "phewas_alid": "10:112998590:C:T",
+    "region": {
+      "chrom": "10",
+      "start": 112500000,
+      "end": 113500000
+    },
+    "random_lookup_shapes": [
+      {
+        "n_variants": 10,
+        "n_analyses": 100
+      },
+      {
+        "n_variants": 100,
+        "n_analyses": 10
+      }
+    ],
+    "random_alids": [
+      "4:101754197:C:T",
+      "1:66037834:C:T",
+      "5:123239058:A:T",
+      "13:38461969:G:T",
+      "2:36914980:A:G",
+      "8:135829049:A:G",
+      "1:101131299:C:G",
+      "14:71039253:A:C",
+      "16:15986145:A:G",
+      "8:9101876:A:G",
+      "6:90347065:C:T",
+      "X:35744527:C:CAT",
+      "20:644352:C:T",
+      "11:48912886:C:T",
+      "1:84828751:C:T",
+      "10:19094524:A:G",
+      "11:81595322:G:T",
+      "13:23571023:C:T",
+      "9:34937866:C:T",
+      "2:141365217:T:TTTTGTTTG",
+      "9:29177498:C:T",
+      "X:79925596:C:T",
+      "9:5289607:G:T",
+      "12:18867100:C:T",
+      "10:1477562:A:G",
+      "15:100274436:G:T",
+      "4:75005414:C:T",
+      "4:82779166:C:CCAACTAGCTAATCTTAAACTAGCAAAAGTATCCT",
+      "6:44063404:C:T",
+      "3:45699727:A:G",
+      "8:71024009:A:T",
+      "10:125117248:A:G",
+      "6:55689815:A:T",
+      "4:762128:C:T",
+      "2:11936059:G:T",
+      "22:22978886:A:T",
+      "7:7092402:A:AAAC",
+      "10:63627962:C:CA",
+      "17:28026599:C:T",
+      "17:82309214:C:T",
+      "9:106916569:T:TG",
+      "17:45486586:A:T",
+      "16:82462153:C:T",
+      "9:90813504:C:T",
+      "12:56546875:C:T",
+      "11:35967852:A:G",
+      "13:68277760:C:T",
+      "6:386252:T:TA",
+      "4:140495329:A:G",
+      "8:93777187:C:T",
+      "X:144935819:A:G",
+      "11:87836711:C:T",
+      "2:174066110:A:C",
+      "17:67254502:C:G",
+      "6:97418461:C:CT",
+      "12:13257509:A:G",
+      "7:116621039:C:T",
+      "1:22562720:G:T",
+      "5:10184786:A:T",
+      "5:97781381:A:G",
+      "13:36508842:A:T",
+      "8:73320078:C:T",
+      "1:169559484:C:T",
+      "4:119232147:A:C",
+      "18:79029080:G:T",
+      "14:68646758:A:G",
+      "14:58731069:A:G",
+      "17:9056352:C:T",
+      "8:18265538:C:T",
+      "6:82612537:G:T",
+      "16:24517788:C:T",
+      "18:38079144:C:G",
+      "1:14530588:A:T",
+      "8:136510745:C:T",
+      "1:247375076:A:G",
+      "5:39543838:C:G",
+      "13:67803974:A:G",
+      "6:49045127:C:T",
+      "2:22147616:C:G",
+      "12:12465607:A:G",
+      "5:32473663:G:T",
+      "12:112010681:C:T",
+      "21:13983402:A:T",
+      "11:90975855:A:G",
+      "13:44293368:C:T",
+      "11:10250060:A:G",
+      "7:6578131:A:C",
+      "18:77319111:C:T",
+      "10:99382939:C:T",
+      "6:68310031:C:G",
+      "17:31989113:C:T",
+      "12:65365458:A:G",
+      "1:145606929:C:G",
+      "1:48562134:C:G",
+      "5:78056901:C:T",
+      "1:241436798:C:T",
+      "1:7291374:C:T",
+      "3:46889323:A:G",
+      "20:63489853:A:T",
+      "6:124291286:T:TTTA"
+    ],
+    "random_analyses": [
+      "finngen-r13-Q17_CHROMOSOMAL_ABNORMALITI_NOT_ELSEW_CLASSIFIED",
+      "finngen-r13-L12_URTIGA_CONTACT",
+      "finngen-r13-Q17_CLEFT_AND_CARIES",
+      "finngen-r13-M13_SPINALOSTEOCHON",
+      "finngen-r13-H7_PERIPHRETINADEGEN",
+      "finngen-r13-CD2_BENIGN_BRONCHUS_LUNG",
+      "finngen-r13-AB1_HELMINTIASES",
+      "finngen-r13-E4_PREPUB",
+      "finngen-r13-J10_ASTHMA_EXMORE",
+      "finngen-r13-E4_FABRY_KIDNEY",
+      "finngen-r13-O15_LABOUR_OTHER",
+      "finngen-r13-O15_EXIST_HYPERT_COMPLIC",
+      "finngen-r13-CHIRHEP_NAS",
+      "finngen-r13-Q17_MICROTIA",
+      "finngen-r13-Q17_CONGENITAL_DISLOCATION_OF_HIP_UNILATERAL",
+      "finngen-r13-GENERALI_SKIN_ERUPT_DRUGS_MEDICAM",
+      "finngen-r13-KRA_PSY_DEMENTIA_EXMORE",
+      "finngen-r13-C3_RECTUM_MUCINO",
+      "finngen-r13-M13_BIOMECHLESIO",
+      "finngen-r13-H7_BCKRNDRETINOPAT",
+      "finngen-r13-H7_CORNULCER",
+      "finngen-r13-Q17_OTHER_CONGEN_MALFO_MALE_GENITAL_ORGANS",
+      "finngen-r13-J10_ABSCMEDIASTINUM",
+      "finngen-r13-Q17_NEUROFIBROMATOSIS_1",
+      "finngen-r13-K11_HERING",
+      "finngen-r13-AB1_SCARLET_FEVER",
+      "finngen-r13-AB1_RICKETTSIOSES_WIDE",
+      "finngen-r13-I9_VASCINT",
+      "finngen-r13-H7_IRISCILIARYNAS",
+      "finngen-r13-CD2_BENIGN_CHOROID",
+      "finngen-r13-D3_ANAEMIA_IRONDEF_NAS",
+      "finngen-r13-AB1_VIRAL_MENINGITIS",
+      "finngen-r13-D3_OTHERBLOOD",
+      "finngen-r13-KELA_DIAB_INSUL_EXMORE",
+      "finngen-r13-C3_RENAL_CELL_CARCINOMA",
+      "finngen-r13-PHLEBI_THROMBOP_SUPERF_VESSE_LOWER_EXTREMITI",
+      "finngen-r13-H8_EXT_NAS",
+      "finngen-r13-D3_COAGDEF",
+      "finngen-r13-D3_BLOODNAS",
+      "finngen-r13-M13_ANKYLOSISJOINT",
+      "finngen-r13-K11_OESOBST",
+      "finngen-r13-G6_TARSTUN",
+      "finngen-r13-N14_HYPERTROPHYBREAST_BOTH",
+      "finngen-r13-F5_OTHERSUB",
+      "finngen-r13-N14_FEMPELINFINOTH",
+      "finngen-r13-M13_REACTARTH",
+      "finngen-r13-I9_ENDOCARD",
+      "finngen-r13-N14_MENSIRREG",
+      "finngen-r13-E4_ACIDOSIS",
+      "finngen-r13-H7_CHORSCAR",
+      "finngen-r13-KRA_PSY_DEVWIDE_EXMORE",
+      "finngen-r13-N14_MENOPAUSOT",
+      "finngen-r13-O15_LABOUR_ANEST_COMPLIC",
+      "finngen-r13-CD2_BENIGN_CAROTIDBODY",
+      "finngen-r13-K11_ALCGASTR",
+      "finngen-r13-NIV",
+      "finngen-r13-N14_INFLUTH",
+      "finngen-r13-MENINGITIS",
+      "finngen-r13-Q17_OTHER_CONGEN_MALFO_URINARY_SYSTEM",
+      "finngen-r13-M13_INTERHYDRARTHR",
+      "finngen-r13-D3_HEREDHYPOGAMMA",
+      "finngen-r13-H7_KERATOCONUS",
+      "finngen-r13-AB1_WHOOPCOUGH",
+      "finngen-r13-N14_VULVAL_HSIL",
+      "finngen-r13-K11_PARALIL",
+      "finngen-r13-L12_LOCALDCONNECTISSUEOTH",
+      "finngen-r13-M13_OSTEOMYELITIS",
+      "finngen-r13-CD2_BENIGN_RECTUM_ANAL",
+      "finngen-r13-MACULA_NAS",
+      "finngen-r13-O15_PREG_GU_INFECT",
+      "finngen-r13-M13_MONOARTHRITIS",
+      "finngen-r13-AB1_OTHER_BACTERIAL",
+      "finngen-r13-K11_ERUPTION",
+      "finngen-r13-AB1_VIRAN_CNS_INFECTIONS_NOS",
+      "finngen-r13-H8_EXT_OTH",
+      "finngen-r13-H8_PERFORATION",
+      "finngen-r13-G6_CPETAL",
+      "finngen-r13-C3_BREAST_ERPLUS_WIDE",
+      "finngen-r13-H8_EXTDISINOTH",
+      "finngen-r13-D3_COMPLEMENTDEF",
+      "finngen-r13-O15_PUERP_INFECT_OTHER",
+      "finngen-r13-E4_IRON_MET",
+      "finngen-r13-EOSINOPHIL_DISEASE",
+      "finngen-r13-AB1_SEPSIS_CONDITION_WIDE",
+      "finngen-r13-N14_CHRONTUBULOINTNEPHRITIS",
+      "finngen-r13-AUTOIMMUNE_HYPERTHYROIDISM",
+      "finngen-r13-C_DIFFICILE_ENTEROCOLITIS",
+      "finngen-r13-MIGRAINE_TRIPTAN",
+      "finngen-r13-K11_DULC",
+      "finngen-r13-Q17_CONGENITAL_MITRAL_VALVE_REGURGITATION",
+      "finngen-r13-CD2_BENIGN_APPENDIX",
+      "finngen-r13-E4_IDIOPATHIC_HYPERCALCIURIA",
+      "finngen-r13-AB1_OTHER_CHLAMYDIAE",
+      "finngen-r13-C3_URINARY_TRACT",
+      "finngen-r13-E4_AMINOTRANSPORT",
+      "finngen-r13-E4_CENTRAL_NERVOUS_SYSTEM_DISORDER_CAUSING_PRECOCIOUS_PUBERTY",
+      "finngen-r13-Q17_MONOSOMI_DELET_AUTOSOMES_NOT_ELSEW_CLASSIFIED",
+      "finngen-r13-N14_ABNORMALBLEED",
+      "finngen-r13-H7_ALLERGICCONJUNCTIVITIS",
+      "finngen-r13-ILD_INSUFFICIENCY"
+    ],
+    "resolved_from": {
+      "label": "v2-ogs00016",
+      "path": "/data/opengwasdb/stores/OGS-00016/store.opengwasdb",
+      "n_variants": 21230615,
+      "n_analyses": 2754
+    }
+  },
+  "stores": [
+    {
+      "label": "v2-ogs00016",
+      "path": "/data/opengwasdb/stores/OGS-00016/store.opengwasdb",
+      "dataset": {
+        "release_id": "OGS-00016",
+        "store_id": "OGS-00016",
+        "n_variants": 21230615,
+        "n_analyses": 2754,
+        "completion_state": "observed_only",
+        "reference_assembly": "GRCh38",
+        "format_version": "0.1.0",
+        "encoding": {
+          "version": 3,
+          "z": {
+            "kind": "int16_fixed",
+            "scale": 1024
+          },
+          "se": {
+            "kind": "int8_residual",
+            "residual_range": 2.0
+          },
+          "eaf": {
+            "kind": "int8_residual",
+            "residual_range": 0.5
+          }
+        },
+        "layout": {
+          "z": {
+            "chunk_shape": [
+              1000,
+              1000
+            ],
+            "shard_shape": null,
+            "dtype": "int16"
+          },
+          "se": {
+            "chunk_shape": [
+              1000,
+              1000
+            ],
+            "shard_shape": null,
+            "dtype": "int8"
+          },
+          "eaf": {
+            "chunk_shape": [
+              1000,
+              1000
+            ],
+            "shard_shape": null,
+            "dtype": "int8"
+          },
+          "top_hits/p_5e_04/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": null,
+            "dtype": "float32"
+          },
+          "top_hits/p_5e_06/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": null,
+            "dtype": "float32"
+          },
+          "top_hits/p_5e_08/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": null,
+            "dtype": "float32"
+          }
+        }
+      },
+      "footprint": {
+        "n_files": 237464,
+        "apparent_bytes": 126574143066,
+        "allocated_bytes": 127038353408,
+        "du_apparent_bytes": 126574143066,
+        "du_allocated_bytes": 127038353408,
+        "arrays": [
+          {
+            "node": "data.zarr/eaf",
+            "n_files": 63694,
+            "apparent_bytes": 15480616261,
+            "allocated_bytes": 15611756544,
+            "largest_file_bytes": 421442
+          },
+          {
+            "node": "data.zarr/eaf_baseline",
+            "n_files": 21232,
+            "apparent_bytes": 73309704,
+            "allocated_bytes": 87822336,
+            "largest_file_bytes": 3507
+          },
+          {
+            "node": "data.zarr/eaf_exception_index",
+            "n_files": 8,
+            "apparent_bytes": 11200324,
+            "allocated_bytes": 11214848,
+            "largest_file_bytes": 1600000
+          },
+          {
+            "node": "data.zarr/eaf_exception_value",
+            "n_files": 8,
+            "apparent_bytes": 5600326,
+            "allocated_bytes": 5623808,
+            "largest_file_bytes": 800000
+          },
+          {
+            "node": "data.zarr/se",
+            "n_files": 63694,
+            "apparent_bytes": 23648668169,
+            "allocated_bytes": 23779741696,
+            "largest_file_bytes": 685594
+          },
+          {
+            "node": "data.zarr/se_coefficients",
+            "n_files": 4,
+            "apparent_bytes": 16700,
+            "allocated_bytes": 28672,
+            "largest_file_bytes": 6016
+          },
+          {
+            "node": "data.zarr/se_exception_index",
+            "n_files": 51,
+            "apparent_bytes": 6765079,
+            "allocated_bytes": 6864896,
+            "largest_file_bytes": 399260
+          },
+          {
+            "node": "data.zarr/se_exception_value",
+            "n_files": 51,
+            "apparent_bytes": 16074622,
+            "allocated_bytes": 16171008,
+            "largest_file_bytes": 340445
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/abs_z",
+            "n_files": 2939,
+            "apparent_bytes": 67384124,
+            "allocated_bytes": 73715712,
+            "largest_file_bytes": 42644
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/analysis_index",
+            "n_files": 2939,
+            "apparent_bytes": 271254,
+            "allocated_bytes": 12144640,
+            "largest_file_bytes": 321
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 7174,
+            "allocated_bytes": 12288,
+            "largest_file_bytes": 6816
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/eaf",
+            "n_files": 2939,
+            "apparent_bytes": 154092263,
+            "allocated_bytes": 157749248,
+            "largest_file_bytes": 54530
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/p_value",
+            "n_files": 2939,
+            "apparent_bytes": 333135722,
+            "allocated_bytes": 339226624,
+            "largest_file_bytes": 125354
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/se",
+            "n_files": 2939,
+            "apparent_bytes": 142034433,
+            "allocated_bytes": 148688896,
+            "largest_file_bytes": 55388
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/variant_index",
+            "n_files": 2939,
+            "apparent_bytes": 75955081,
+            "allocated_bytes": 81920000,
+            "largest_file_bytes": 33952
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/z",
+            "n_files": 2939,
+            "apparent_bytes": 73564037,
+            "allocated_bytes": 78176256,
+            "largest_file_bytes": 44772
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/abs_z",
+            "n_files": 412,
+            "apparent_bytes": 10173267,
+            "allocated_bytes": 11063296,
+            "largest_file_bytes": 43098
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/analysis_index",
+            "n_files": 412,
+            "apparent_bytes": 58380,
+            "allocated_bytes": 1699840,
+            "largest_file_bytes": 611
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 5704,
+            "allocated_bytes": 12288,
+            "largest_file_bytes": 5346
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/eaf",
+            "n_files": 412,
+            "apparent_bytes": 21119935,
+            "allocated_bytes": 21925888,
+            "largest_file_bytes": 54350
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/p_value",
+            "n_files": 412,
+            "apparent_bytes": 47971919,
+            "allocated_bytes": 48840704,
+            "largest_file_bytes": 125483
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/se",
+            "n_files": 412,
+            "apparent_bytes": 18724350,
+            "allocated_bytes": 19542016,
+            "largest_file_bytes": 53647
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/variant_index",
+            "n_files": 412,
+            "apparent_bytes": 7726071,
+            "allocated_bytes": 8560640,
+            "largest_file_bytes": 32400
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/z",
+            "n_files": 412,
+            "apparent_bytes": 11036394,
+            "allocated_bytes": 11866112,
+            "largest_file_bytes": 45235
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/abs_z",
+            "n_files": 220,
+            "apparent_bytes": 5860499,
+            "allocated_bytes": 6352896,
+            "largest_file_bytes": 43813
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/analysis_index",
+            "n_files": 220,
+            "apparent_bytes": 35297,
+            "allocated_bytes": 913408,
+            "largest_file_bytes": 558
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 3734,
+            "allocated_bytes": 8192,
+            "largest_file_bytes": 3376
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/eaf",
+            "n_files": 220,
+            "apparent_bytes": 11235540,
+            "allocated_bytes": 11677696,
+            "largest_file_bytes": 54061
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/p_value",
+            "n_files": 220,
+            "apparent_bytes": 25950774,
+            "allocated_bytes": 26349568,
+            "largest_file_bytes": 125904
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/se",
+            "n_files": 220,
+            "apparent_bytes": 9949872,
+            "allocated_bytes": 10403840,
+            "largest_file_bytes": 52076
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/variant_index",
+            "n_files": 220,
+            "apparent_bytes": 3732073,
+            "allocated_bytes": 4161536,
+            "largest_file_bytes": 21476
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/z",
+            "n_files": 220,
+            "apparent_bytes": 6320564,
+            "allocated_bytes": 6770688,
+            "largest_file_bytes": 45950
+          },
+          {
+            "node": "data.zarr/z",
+            "n_files": 63694,
+            "apparent_bytes": 84430319653,
+            "allocated_bytes": 84562055168,
+            "largest_file_bytes": 1578808
+          },
+          {
+            "node": "data.zarr/z_overflow_index",
+            "n_files": 2,
+            "apparent_bytes": 277995,
+            "allocated_bytes": 282624,
+            "largest_file_bytes": 277752
+          },
+          {
+            "node": "data.zarr/z_overflow_value",
+            "n_files": 2,
+            "apparent_bytes": 139121,
+            "allocated_bytes": 143360,
+            "largest_file_bytes": 138876
+          }
+        ],
+        "zarr_metadata": {
+          "n_files": 10,
+          "apparent_bytes": 672,
+          "allocated_bytes": 40960,
+          "largest_file_bytes": 264
+        },
+        "envelope": {
+          "n_files": 11,
+          "apparent_bytes": 1874805979,
+          "allocated_bytes": 1874825216,
+          "largest_file_bytes": 677979136,
+          "files": [
+            {
+              "path": "analyses.tsv",
+              "apparent_bytes": 680101,
+              "allocated_bytes": 684032
+            },
+            {
+              "path": "index.sqlite",
+              "apparent_bytes": 20480,
+              "allocated_bytes": 20480
+            },
+            {
+              "path": "manifest.json",
+              "apparent_bytes": 585393,
+              "allocated_bytes": 585728
+            },
+            {
+              "path": "overview.html",
+              "apparent_bytes": 2592611,
+              "allocated_bytes": 2592768
+            },
+            {
+              "path": "variant_alid_bytes.npy",
+              "apparent_bytes": 677979136,
+              "allocated_bytes": 677982208
+            },
+            {
+              "path": "variant_alid_rows.npy",
+              "apparent_bytes": 84747504,
+              "allocated_bytes": 84750336
+            },
+            {
+              "path": "variant_offsets.npy",
+              "apparent_bytes": 169845048,
+              "allocated_bytes": 169848832
+            },
+            {
+              "path": "variant_rsid_bytes.npy",
+              "apparent_bytes": 490401008,
+              "allocated_bytes": 490401792
+            },
+            {
+              "path": "variant_rsid_rows.npy",
+              "apparent_bytes": 81733608,
+              "allocated_bytes": 81735680
+            },
+            {
+              "path": "variants.tsv.gz",
+              "apparent_bytes": 364505894,
+              "allocated_bytes": 364507136
+            },
+            {
+              "path": "variants.tsv.gz.tbi",
+              "apparent_bytes": 1694611,
+              "allocated_bytes": 1695744
+            }
+          ]
+        }
+      },
+      "timings": [
+        {
+          "query": "bulk",
+          "timed_out": false,
+          "median_ms": 36151.082,
+          "p95_ms": 36326.116,
+          "repetitions": 3,
+          "warmup_ms": 54806.568,
+          "result_count": 21230471
+        },
+        {
+          "query": "phewas",
+          "timed_out": false,
+          "median_ms": 23.44,
+          "p95_ms": 24.489,
+          "repetitions": 3,
+          "warmup_ms": 27.224,
+          "result_count": 2754
+        },
+        {
+          "query": "regional",
+          "timed_out": false,
+          "median_ms": 2646.519,
+          "p95_ms": 2649.646,
+          "repetitions": 3,
+          "warmup_ms": 11722.736,
+          "result_count": 18180899
+        },
+        {
+          "query": "regional_one_analysis",
+          "timed_out": false,
+          "median_ms": 71.797,
+          "p95_ms": 107.315,
+          "repetitions": 3,
+          "warmup_ms": 74.015,
+          "result_count": 6602
+        },
+        {
+          "query": "tophits",
+          "timed_out": false,
+          "median_ms": 16.436,
+          "p95_ms": 16.624,
+          "repetitions": 3,
+          "warmup_ms": 44.019,
+          "result_count": 25771
+        },
+        {
+          "query": "random_lookup_10_variants_100_analyses",
+          "timed_out": false,
+          "median_ms": 128.212,
+          "p95_ms": 134.549,
+          "repetitions": 3,
+          "warmup_ms": 122.284,
+          "result_count": 1000
+        },
+        {
+          "query": "random_lookup_100_variants_10_analyses",
+          "timed_out": false,
+          "median_ms": 795.341,
+          "p95_ms": 809.404,
+          "repetitions": 3,
+          "warmup_ms": 873.149,
+          "result_count": 1000
+        }
+      ],
+      "memory": [
+        {
+          "baseline_mb": 311.0,
+          "peak_mb": 2550.8,
+          "delta_mb": 2239.7,
+          "result_count": 21230471,
+          "query": "bulk"
+        },
+        {
+          "baseline_mb": 309.0,
+          "peak_mb": 329.3,
+          "delta_mb": 20.3,
+          "result_count": 2754,
+          "query": "phewas"
+        },
+        {
+          "baseline_mb": 306.9,
+          "peak_mb": 2496.6,
+          "delta_mb": 2189.7,
+          "result_count": 18180899,
+          "query": "regional"
+        },
+        {
+          "baseline_mb": 308.8,
+          "peak_mb": 334.7,
+          "delta_mb": 25.9,
+          "result_count": 6602,
+          "query": "regional_one_analysis"
+        },
+        {
+          "baseline_mb": 310.2,
+          "peak_mb": 312.5,
+          "delta_mb": 2.3,
+          "result_count": 25771,
+          "query": "tophits"
+        },
+        {
+          "baseline_mb": 309.1,
+          "peak_mb": 338.8,
+          "delta_mb": 29.7,
+          "result_count": 1000,
+          "query": "random_lookup_10_variants_100_analyses"
+        },
+        {
+          "baseline_mb": 308.2,
+          "peak_mb": 407.4,
+          "delta_mb": 99.2,
+          "result_count": 1000,
+          "query": "random_lookup_100_variants_10_analyses"
+        }
+      ],
+      "effective_reader": {
+        "use_threads": true,
+        "pipeline": "FusedCodecPipeline",
+        "max_workers": 1
+      },
+      "limit_hits": [],
+      "waited_for_load_s": 90.0,
+      "load_average_1m_before": 2.86,
+      "load_average_1m_after": 3.34,
+      "result_digests": {
+        "bulk": {
+          "variant_index": "591c17c3ef6fde85f546d689075bc0f04ac2bcc76ff48ad8156e627a6fffd701",
+          "analysis_index": "cf440a358bf111a945cd1cc468d18bf7090be2328063ce0b82fc705bc54932aa",
+          "z": "f194ee3d2005e68e1af8c5e2f816e28b1ba04ba609e19aa0ca4c5dc5dc05d469",
+          "se": "565022a58d718bb72294fa3ad00a4a480d6d52d4166aa5d4293ffe86f0356b22",
+          "eaf": "63a4605898a18253bddb6411b0924c7b3e3e776bda13646e338d2c9a911329b2",
+          "association_status": "9f04d1b1efca453fe08187265438bcf88619ddafdb33f1623918516cd3ab6ced"
+        },
+        "phewas": {
+          "variant_index": "e128989a4f3e4c7161c16dd7981f2c9a864bb53ac2d020cf41093a64cd0a08e8",
+          "analysis_index": "5e4619e2b99b0dd162669a0bab9e045bc09ad4e9b15daad0eab28ad63ccc6e9e",
+          "z": "cff23f3621bd4884643d31ebcab1bda4e20d242cec38ba5cc891706f4eb57050",
+          "se": "cf692621edacc27668ec591fc796f9ec68cfbd7954b607452d8b927573283218",
+          "eaf": "695b0c4b0772b6e104dd3fd665386b07135d7d4ce52f49ce89d0a91a2f56a3fe",
+          "association_status": "702cc15d39befc35654c3fcd693dabf0d49158d18dfa1d2d3b50903cdc367fa4"
+        },
+        "regional": {
+          "variant_index": "11483b74d5843eff79137231ae6dcdf2a7d0087fb6b7c6b77a593d9e0a536359",
+          "analysis_index": "27ab0f0f40f68f5085befb960bcb203dcad7ddb239dfb1e10838a38a7338b010",
+          "z": "1d1786e4efc1fa332053de50ee28d864f8a6ece631d03fdd4de4db71f367dd88",
+          "se": "b0795c2f30caa35b4c009d60dae69e210c7a1f007ba7786b0271ddfbd07f0ae2",
+          "eaf": "5b2551064e6a0a0414c0efbe4f1c4e2b8df5079ecc874132a441bfc07a1d7f06",
+          "association_status": "8958f4e8f597d3722becfcfc4044c87551b92fa3ed7d50e5eba83b59e9894cf5"
+        },
+        "regional_one_analysis": {
+          "variant_index": "b78e00b1cf16d2736b0ea191bbb90bcab441414775e5433fe8dfb1b3ec0225ca",
+          "analysis_index": "0e42d950a4a2408511eec768475daba578aa64338853be7aad3363cacf598874",
+          "z": "07763b53191c60ec018d570f65ed71b8af0d757a7f7ed28d3ae7d0651ceb71bc",
+          "se": "679c8aa6499d94c958ac3b705ce5e3efdf31fb293b7b420fa183d8da25aeb8e3",
+          "eaf": "53c2667e1135011656552edbc24ae4f16ed028500e810c8709de80f7b3113682",
+          "association_status": "b7e845ee611996644ff3e00f5220bd51b735bcdbfbd755315fc92d0506a3b1e7"
+        },
+        "tophits": {
+          "variant_index": "3351249bde9d1a6bcaa9fe7e99d358d43623e7b666ee54d56ae0e9e330505e82",
+          "analysis_index": "9d489a7383774f0fba7741ae406d38773fa1c6cb8aece8804db1f700118118f7",
+          "z": "9c693e968346dcc43fd847bd6e2f751c3217c323ef351bd06c54631943fabf64",
+          "se": "b9fa013dcbcdc969767a1e42e038c2c5e7241061bdf805e07933e208f4a3739a",
+          "eaf": "6e73819519f8acf6da6ce59bdfebcb2a8038dbf8d20c757dbd6e6dcff1137c6c",
+          "association_status": "4ac93533cb4a35376052a5c11ade37088f9526117d35f1d90234a99a1ed1a066"
+        },
+        "random_lookup_10_variants_100_analyses": {
+          "variant_index": "7218a3f9dbbe4778153d95052232ec244be30b7a9380a421bec304d209a2c428",
+          "analysis_index": "a5012ed86fe9a68b89bc6d233526b7919476234bd4b1746b2abf7b06c069a6e1",
+          "z": "3fdb2f2dbc55ac479cf91e2cb35c27db232a4d23a38a8d6ef98f2d13f23200be",
+          "se": "2da4859a0dec03d52061f30ae230af05f58ba394e7f81ddca8ca80beac3e2b46",
+          "eaf": "a7b8a9db497744812d9d3b1a0892cf8148194b160bdfdc13ee077d6de7f55018",
+          "association_status": "896a1da8bffcce435074e21530256d715eaeae468bdee64f1c15746ef5ba107e"
+        },
+        "random_lookup_100_variants_10_analyses": {
+          "variant_index": "5dd2d7819cf969f0af5d62b13d2a59eb09490674261ba27833f6081dc3d1b13e",
+          "analysis_index": "8bb6f1b495dee7e8f74c88ef89544f464269c79aab6e4fdd4eeede418be3bf2b",
+          "z": "220334594989a87e3831bad49dfaa74219df11e9c606f96055ad8da63daaa0ad",
+          "se": "c053f539d3628169afc4935fc0c9b5eb18ef7954be3051e3aed6c1775c979642",
+          "eaf": "582b2829adda9a850cbd76a6b34e1efe6fe0c9b1a5c98b33d849d4c528b3feec",
+          "association_status": "896a1da8bffcce435074e21530256d715eaeae468bdee64f1c15746ef5ba107e"
+        }
+      }
+    },
+    {
+      "label": "v3-ogs00016",
+      "path": "/data/opengwasdb/work/epic240/250/OGS-00016-v3-c64",
+      "dataset": {
+        "release_id": "089f9ccc-558f-4155-bcc6-d9a4605adfc6",
+        "store_id": "OGS-00016",
+        "n_variants": 21230615,
+        "n_analyses": 2754,
+        "completion_state": "observed_only",
+        "reference_assembly": "GRCh38",
+        "format_version": "0.2.0",
+        "encoding": {
+          "version": 3,
+          "z": {
+            "kind": "int16_fixed",
+            "scale": 1024
+          },
+          "se": {
+            "kind": "int8_residual",
+            "residual_range": 2.0
+          },
+          "eaf": {
+            "kind": "int8_residual",
+            "residual_range": 0.5
+          }
+        },
+        "layout": {
+          "z": {
+            "chunk_shape": [
+              1000,
+              64
+            ],
+            "shard_shape": [
+              100000,
+              1024
+            ],
+            "dtype": "int16"
+          },
+          "se": {
+            "chunk_shape": [
+              1000,
+              64
+            ],
+            "shard_shape": [
+              100000,
+              1024
+            ],
+            "dtype": "int8"
+          },
+          "eaf": {
+            "chunk_shape": [
+              1000,
+              64
+            ],
+            "shard_shape": [
+              100000,
+              1024
+            ],
+            "dtype": "int8"
+          },
+          "top_hits/p_5e_04/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": [
+              1048576
+            ],
+            "dtype": "float32"
+          },
+          "top_hits/p_5e_06/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": [
+              1048576
+            ],
+            "dtype": "float32"
+          },
+          "top_hits/p_5e_08/z": {
+            "chunk_shape": [
+              16384
+            ],
+            "shard_shape": [
+              1048576
+            ],
+            "dtype": "float32"
+          }
+        }
+      },
+      "footprint": {
+        "n_files": 2399,
+        "apparent_bytes": 128761086297,
+        "allocated_bytes": 128765976576,
+        "du_apparent_bytes": 128761086297,
+        "du_allocated_bytes": 128765976576,
+        "arrays": [
+          {
+            "node": "data.zarr/eaf",
+            "n_files": 640,
+            "apparent_bytes": 15935541196,
+            "allocated_bytes": 15936851968,
+            "largest_file_bytes": 34516364
+          },
+          {
+            "node": "data.zarr/eaf_baseline",
+            "n_files": 23,
+            "apparent_bytes": 73370621,
+            "allocated_bytes": 73416704,
+            "largest_file_bytes": 3456354
+          },
+          {
+            "node": "data.zarr/eaf_exception_index",
+            "n_files": 2,
+            "apparent_bytes": 11201147,
+            "allocated_bytes": 11206656,
+            "largest_file_bytes": 11200116
+          },
+          {
+            "node": "data.zarr/eaf_exception_value",
+            "n_files": 2,
+            "apparent_bytes": 5601151,
+            "allocated_bytes": 5607424,
+            "largest_file_bytes": 5600116
+          },
+          {
+            "node": "data.zarr/se",
+            "n_files": 640,
+            "apparent_bytes": 25102278546,
+            "allocated_bytes": 25103564800,
+            "largest_file_bytes": 57503811
+          },
+          {
+            "node": "data.zarr/se_coefficients",
+            "n_files": 2,
+            "apparent_bytes": 17692,
+            "allocated_bytes": 20480,
+            "largest_file_bytes": 16357
+          },
+          {
+            "node": "data.zarr/se_exception_index",
+            "n_files": 2,
+            "apparent_bytes": 6769520,
+            "allocated_bytes": 6774784,
+            "largest_file_bytes": 6768234
+          },
+          {
+            "node": "data.zarr/se_exception_value",
+            "n_files": 2,
+            "apparent_bytes": 16260532,
+            "allocated_bytes": 16265216,
+            "largest_file_bytes": 16259242
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/abs_z",
+            "n_files": 47,
+            "apparent_bytes": 67392211,
+            "allocated_bytes": 67493888,
+            "largest_file_bytes": 1602449
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/analysis_index",
+            "n_files": 47,
+            "apparent_bytes": 270350,
+            "allocated_bytes": 385024,
+            "largest_file_bytes": 6594
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 8119,
+            "allocated_bytes": 12288,
+            "largest_file_bytes": 6841
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/eaf",
+            "n_files": 47,
+            "apparent_bytes": 154484696,
+            "allocated_bytes": 154583040,
+            "largest_file_bytes": 3407210
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/p_value",
+            "n_files": 47,
+            "apparent_bytes": 333367807,
+            "allocated_bytes": 333459456,
+            "largest_file_bytes": 7472671
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/se",
+            "n_files": 47,
+            "apparent_bytes": 142283680,
+            "allocated_bytes": 142372864,
+            "largest_file_bytes": 3198437
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/variant_index",
+            "n_files": 47,
+            "apparent_bytes": 76184267,
+            "allocated_bytes": 76288000,
+            "largest_file_bytes": 2008424
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_04/z",
+            "n_files": 47,
+            "apparent_bytes": 73575671,
+            "allocated_bytes": 73674752,
+            "largest_file_bytes": 1736930
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/abs_z",
+            "n_files": 8,
+            "apparent_bytes": 10179045,
+            "allocated_bytes": 10190848,
+            "largest_file_bytes": 1629067
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/analysis_index",
+            "n_files": 8,
+            "apparent_bytes": 58486,
+            "allocated_bytes": 73728,
+            "largest_file_bytes": 9979
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 6650,
+            "allocated_bytes": 12288,
+            "largest_file_bytes": 5372
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/eaf",
+            "n_files": 8,
+            "apparent_bytes": 21205282,
+            "allocated_bytes": 21225472,
+            "largest_file_bytes": 3325151
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/p_value",
+            "n_files": 8,
+            "apparent_bytes": 47930632,
+            "allocated_bytes": 47947776,
+            "largest_file_bytes": 7519961
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/se",
+            "n_files": 8,
+            "apparent_bytes": 18782697,
+            "allocated_bytes": 18796544,
+            "largest_file_bytes": 2959072
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/variant_index",
+            "n_files": 8,
+            "apparent_bytes": 7783312,
+            "allocated_bytes": 7802880,
+            "largest_file_bytes": 1254254
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_06/z",
+            "n_files": 8,
+            "apparent_bytes": 11042982,
+            "allocated_bytes": 11055104,
+            "largest_file_bytes": 1763824
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/abs_z",
+            "n_files": 5,
+            "apparent_bytes": 5860081,
+            "allocated_bytes": 5869568,
+            "largest_file_bytes": 1735706
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/analysis_index",
+            "n_files": 5,
+            "apparent_bytes": 32260,
+            "allocated_bytes": 45056,
+            "largest_file_bytes": 9758
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/analysis_offsets",
+            "n_files": 2,
+            "apparent_bytes": 4687,
+            "allocated_bytes": 8192,
+            "largest_file_bytes": 3409
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/eaf",
+            "n_files": 5,
+            "apparent_bytes": 11287948,
+            "allocated_bytes": 11304960,
+            "largest_file_bytes": 3314078
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/p_value",
+            "n_files": 5,
+            "apparent_bytes": 25945086,
+            "allocated_bytes": 25956352,
+            "largest_file_bytes": 7616959
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/se",
+            "n_files": 5,
+            "apparent_bytes": 9983334,
+            "allocated_bytes": 9998336,
+            "largest_file_bytes": 2929269
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/variant_index",
+            "n_files": 5,
+            "apparent_bytes": 3758390,
+            "allocated_bytes": 3772416,
+            "largest_file_bytes": 1134597
+          },
+          {
+            "node": "data.zarr/top_hits/p_5e_08/z",
+            "n_files": 5,
+            "apparent_bytes": 6320683,
+            "allocated_bytes": 6332416,
+            "largest_file_bytes": 1870704
+          },
+          {
+            "node": "data.zarr/z",
+            "n_files": 640,
+            "apparent_bytes": 84707075529,
+            "allocated_bytes": 84708339712,
+            "largest_file_bytes": 160284580
+          },
+          {
+            "node": "data.zarr/z_overflow_index",
+            "n_files": 2,
+            "apparent_bytes": 278798,
+            "allocated_bytes": 282624,
+            "largest_file_bytes": 277772
+          },
+          {
+            "node": "data.zarr/z_overflow_value",
+            "n_files": 2,
+            "apparent_bytes": 139926,
+            "allocated_bytes": 143360,
+            "largest_file_bytes": 138896
+          }
+        ],
+        "zarr_metadata": {
+          "n_files": 5,
+          "apparent_bytes": 5728,
+          "allocated_bytes": 24576,
+          "largest_file_bytes": 434
+        },
+        "envelope": {
+          "n_files": 11,
+          "apparent_bytes": 1874797555,
+          "allocated_bytes": 1874817024,
+          "largest_file_bytes": 677979136,
+          "files": [
+            {
+              "path": "analyses.tsv",
+              "apparent_bytes": 680101,
+              "allocated_bytes": 684032
+            },
+            {
+              "path": "index.sqlite",
+              "apparent_bytes": 20480,
+              "allocated_bytes": 20480
+            },
+            {
+              "path": "manifest.json",
+              "apparent_bytes": 593431,
+              "allocated_bytes": 593920
+            },
+            {
+              "path": "overview.html",
+              "apparent_bytes": 2592638,
+              "allocated_bytes": 2592768
+            },
+            {
+              "path": "variant_alid_bytes.npy",
+              "apparent_bytes": 677979136,
+              "allocated_bytes": 677982208
+            },
+            {
+              "path": "variant_alid_rows.npy",
+              "apparent_bytes": 84747504,
+              "allocated_bytes": 84750336
+            },
+            {
+              "path": "variant_offsets.npy",
+              "apparent_bytes": 169845048,
+              "allocated_bytes": 169848832
+            },
+            {
+              "path": "variant_rsid_bytes.npy",
+              "apparent_bytes": 490401008,
+              "allocated_bytes": 490401792
+            },
+            {
+              "path": "variant_rsid_rows.npy",
+              "apparent_bytes": 81733608,
+              "allocated_bytes": 81735680
+            },
+            {
+              "path": "variants.tsv.gz",
+              "apparent_bytes": 364505894,
+              "allocated_bytes": 364507136
+            },
+            {
+              "path": "variants.tsv.gz.tbi",
+              "apparent_bytes": 1694611,
+              "allocated_bytes": 1695744
+            }
+          ]
+        }
+      },
+      "timings": [
+        {
+          "query": "bulk",
+          "timed_out": false,
+          "median_ms": 13519.971,
+          "p95_ms": 13924.037,
+          "repetitions": 3,
+          "warmup_ms": 23458.683,
+          "result_count": 21230471
+        },
+        {
+          "query": "phewas",
+          "timed_out": false,
+          "median_ms": 55.306,
+          "p95_ms": 57.868,
+          "repetitions": 3,
+          "warmup_ms": 61.526,
+          "result_count": 2754
+        },
+        {
+          "query": "regional",
+          "timed_out": false,
+          "median_ms": 3608.445,
+          "p95_ms": 3640.156,
+          "repetitions": 3,
+          "warmup_ms": 12976.846,
+          "result_count": 18180899
+        },
+        {
+          "query": "regional_one_analysis",
+          "timed_out": false,
+          "median_ms": 47.168,
+          "p95_ms": 50.411,
+          "repetitions": 3,
+          "warmup_ms": 83.627,
+          "result_count": 6602
+        },
+        {
+          "query": "tophits",
+          "timed_out": false,
+          "median_ms": 18.552,
+          "p95_ms": 18.653,
+          "repetitions": 3,
+          "warmup_ms": 43.282,
+          "result_count": 25771
+        },
+        {
+          "query": "random_lookup_10_variants_100_analyses",
+          "timed_out": false,
+          "median_ms": 316.056,
+          "p95_ms": 348.555,
+          "repetitions": 3,
+          "warmup_ms": 351.503,
+          "result_count": 1000
+        },
+        {
+          "query": "random_lookup_100_variants_10_analyses",
+          "timed_out": false,
+          "median_ms": 1166.237,
+          "p95_ms": 1173.727,
+          "repetitions": 3,
+          "warmup_ms": 1176.999,
+          "result_count": 1000
+        }
+      ],
+      "memory": [
+        {
+          "baseline_mb": 333.7,
+          "peak_mb": 2591.7,
+          "delta_mb": 2257.9,
+          "result_count": 21230471,
+          "query": "bulk"
+        },
+        {
+          "baseline_mb": 331.4,
+          "peak_mb": 372.5,
+          "delta_mb": 41.1,
+          "result_count": 2754,
+          "query": "phewas"
+        },
+        {
+          "baseline_mb": 333.1,
+          "peak_mb": 2589.8,
+          "delta_mb": 2256.6,
+          "result_count": 18180899,
+          "query": "regional"
+        },
+        {
+          "baseline_mb": 333.4,
+          "peak_mb": 379.3,
+          "delta_mb": 45.9,
+          "result_count": 6602,
+          "query": "regional_one_analysis"
+        },
+        {
+          "baseline_mb": 333.9,
+          "peak_mb": 336.5,
+          "delta_mb": 2.6,
+          "result_count": 25771,
+          "query": "tophits"
+        },
+        {
+          "baseline_mb": 333.3,
+          "peak_mb": 382.0,
+          "delta_mb": 48.7,
+          "result_count": 1000,
+          "query": "random_lookup_10_variants_100_analyses"
+        },
+        {
+          "baseline_mb": 331.3,
+          "peak_mb": 458.4,
+          "delta_mb": 127.1,
+          "result_count": 1000,
+          "query": "random_lookup_100_variants_10_analyses"
+        }
+      ],
+      "effective_reader": {
+        "use_threads": true,
+        "pipeline": "FusedCodecPipeline",
+        "max_workers": 1
+      },
+      "limit_hits": [],
+      "waited_for_load_s": 30.0,
+      "load_average_1m_before": 2.65,
+      "load_average_1m_after": 2.99,
+      "result_digests": {
+        "bulk": {
+          "variant_index": "591c17c3ef6fde85f546d689075bc0f04ac2bcc76ff48ad8156e627a6fffd701",
+          "analysis_index": "cf440a358bf111a945cd1cc468d18bf7090be2328063ce0b82fc705bc54932aa",
+          "z": "f194ee3d2005e68e1af8c5e2f816e28b1ba04ba609e19aa0ca4c5dc5dc05d469",
+          "se": "565022a58d718bb72294fa3ad00a4a480d6d52d4166aa5d4293ffe86f0356b22",
+          "eaf": "63a4605898a18253bddb6411b0924c7b3e3e776bda13646e338d2c9a911329b2",
+          "association_status": "9f04d1b1efca453fe08187265438bcf88619ddafdb33f1623918516cd3ab6ced"
+        },
+        "phewas": {
+          "variant_index": "e128989a4f3e4c7161c16dd7981f2c9a864bb53ac2d020cf41093a64cd0a08e8",
+          "analysis_index": "5e4619e2b99b0dd162669a0bab9e045bc09ad4e9b15daad0eab28ad63ccc6e9e",
+          "z": "cff23f3621bd4884643d31ebcab1bda4e20d242cec38ba5cc891706f4eb57050",
+          "se": "cf692621edacc27668ec591fc796f9ec68cfbd7954b607452d8b927573283218",
+          "eaf": "695b0c4b0772b6e104dd3fd665386b07135d7d4ce52f49ce89d0a91a2f56a3fe",
+          "association_status": "702cc15d39befc35654c3fcd693dabf0d49158d18dfa1d2d3b50903cdc367fa4"
+        },
+        "regional": {
+          "variant_index": "11483b74d5843eff79137231ae6dcdf2a7d0087fb6b7c6b77a593d9e0a536359",
+          "analysis_index": "27ab0f0f40f68f5085befb960bcb203dcad7ddb239dfb1e10838a38a7338b010",
+          "z": "1d1786e4efc1fa332053de50ee28d864f8a6ece631d03fdd4de4db71f367dd88",
+          "se": "b0795c2f30caa35b4c009d60dae69e210c7a1f007ba7786b0271ddfbd07f0ae2",
+          "eaf": "5b2551064e6a0a0414c0efbe4f1c4e2b8df5079ecc874132a441bfc07a1d7f06",
+          "association_status": "8958f4e8f597d3722becfcfc4044c87551b92fa3ed7d50e5eba83b59e9894cf5"
+        },
+        "regional_one_analysis": {
+          "variant_index": "b78e00b1cf16d2736b0ea191bbb90bcab441414775e5433fe8dfb1b3ec0225ca",
+          "analysis_index": "0e42d950a4a2408511eec768475daba578aa64338853be7aad3363cacf598874",
+          "z": "07763b53191c60ec018d570f65ed71b8af0d757a7f7ed28d3ae7d0651ceb71bc",
+          "se": "679c8aa6499d94c958ac3b705ce5e3efdf31fb293b7b420fa183d8da25aeb8e3",
+          "eaf": "53c2667e1135011656552edbc24ae4f16ed028500e810c8709de80f7b3113682",
+          "association_status": "b7e845ee611996644ff3e00f5220bd51b735bcdbfbd755315fc92d0506a3b1e7"
+        },
+        "tophits": {
+          "variant_index": "3351249bde9d1a6bcaa9fe7e99d358d43623e7b666ee54d56ae0e9e330505e82",
+          "analysis_index": "9d489a7383774f0fba7741ae406d38773fa1c6cb8aece8804db1f700118118f7",
+          "z": "9c693e968346dcc43fd847bd6e2f751c3217c323ef351bd06c54631943fabf64",
+          "se": "b9fa013dcbcdc969767a1e42e038c2c5e7241061bdf805e07933e208f4a3739a",
+          "eaf": "6e73819519f8acf6da6ce59bdfebcb2a8038dbf8d20c757dbd6e6dcff1137c6c",
+          "association_status": "4ac93533cb4a35376052a5c11ade37088f9526117d35f1d90234a99a1ed1a066"
+        },
+        "random_lookup_10_variants_100_analyses": {
+          "variant_index": "7218a3f9dbbe4778153d95052232ec244be30b7a9380a421bec304d209a2c428",
+          "analysis_index": "a5012ed86fe9a68b89bc6d233526b7919476234bd4b1746b2abf7b06c069a6e1",
+          "z": "3fdb2f2dbc55ac479cf91e2cb35c27db232a4d23a38a8d6ef98f2d13f23200be",
+          "se": "2da4859a0dec03d52061f30ae230af05f58ba394e7f81ddca8ca80beac3e2b46",
+          "eaf": "a7b8a9db497744812d9d3b1a0892cf8148194b160bdfdc13ee077d6de7f55018",
+          "association_status": "896a1da8bffcce435074e21530256d715eaeae468bdee64f1c15746ef5ba107e"
+        },
+        "random_lookup_100_variants_10_analyses": {
+          "variant_index": "5dd2d7819cf969f0af5d62b13d2a59eb09490674261ba27833f6081dc3d1b13e",
+          "analysis_index": "8bb6f1b495dee7e8f74c88ef89544f464269c79aab6e4fdd4eeede418be3bf2b",
+          "z": "220334594989a87e3831bad49dfaa74219df11e9c606f96055ad8da63daaa0ad",
+          "se": "c053f539d3628169afc4935fc0c9b5eb18ef7954be3051e3aed6c1775c979642",
+          "eaf": "582b2829adda9a850cbd76a6b34e1efe6fe0c9b1a5c98b33d849d4c528b3feec",
+          "association_status": "896a1da8bffcce435074e21530256d715eaeae468bdee64f1c15746ef5ba107e"
+        }
+      }
+    }
+  ],
+  "identity": {
+    "reference_store": "v2-ogs00016",
+    "stores": [
+      "v2-ogs00016",
+      "v3-ogs00016"
+    ],
+    "shapes": [
+      "bulk",
+      "phewas",
+      "random_lookup_100_variants_10_analyses",
+      "random_lookup_10_variants_100_analyses",
+      "regional",
+      "regional_one_analysis",
+      "tophits"
+    ],
+    "shapes_not_compared": [],
+    "arrays_per_shape": [
+      "variant_index",
+      "analysis_index",
+      "z",
+      "se",
+      "eaf",
+      "association_status"
+    ],
+    "identical": true
+  },
+  "environment": {
+    "python": "3.12.14",
+    "numpy": "2.4.6",
+    "zarr": "3.4.0",
+    "numcodecs": "0.17.0",
+    "opengwasdb_commit": "04e9815",
+    "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
+    "nproc": 224,
+    "cache": "warm page cache: the node holds about 1 TB of page cache and the stores are warm. A cold-cache run cannot be forced without root, so these timings are warm-cache numbers, not first-touch disk numbers.",
+    "effective_reader": {
+      "use_threads": true,
+      "pipeline": "FusedCodecPipeline",
+      "max_workers": 1
+    }
+  },
+  "harness_file": {
+    "harness_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/benchmark_store_comparison.py",
+    "harness_sha256": "8e3da43ed17f7fe2e24d8304f60dcbaf31029e2368f2d6dafffae2624febea92"
+  },
+  "commit": "04e9815",
+  "measured_at": "2026-10-08T09:05:37.214102+00:00",
+  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/opengwasdb",
+  "opengwasdb_fingerprint": "49af77aedf3ff9287023310e47c91edab8189cc6775f98cfbc9f0868de583595"
+}

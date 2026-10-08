@@ -41,6 +41,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -226,18 +227,35 @@ def _tree_on_path(tree: Path) -> None:
     sys.path.insert(0, str(tree))
 
 
-def _one_shape(args: argparse.Namespace) -> None:
-    """Run one shape once with an alarm and an RSS sampler; print one JSON line."""
+def measure_one_shape(
+    store: str,
+    shape: str,
+    limit: float,
+    *,
+    before_timing: Callable[[], dict] | None = None,
+) -> dict:
+    """Run one shape once with an alarm and an RSS sampler; return its record.
+
+    Split out of `_one_shape` so the committed extras runner
+    (`benchmarks/ogs00011_extra_shapes.py`) can call it in-process and add the
+    environment record beside it (#250 review r2, major 3).
+
+    `before_timing` runs after the store is open and the shape is built, and
+    immediately before `load_start` is sampled and the clock starts; its
+    fields join the record. The runner passes its load gate here, because
+    opening OGS-00011 itself raises the load: a gate before the open let a
+    repetition start at 3.54 after passing at 2.72 (#250 round 3).
+    """
     import benchmarks.benchmark_ogs00011_hybrid as harness
     from benchmarks._rss import RssSampler, rss_mb
     from opengwasdb.query import query_store
 
-    limit = args.limit
     # A plain handle, not a `with` block: the shape's callable holds the query,
     # and closing it before the shape runs reads an empty store (review round 1).
-    query = query_store(args.store)
+    query = query_store(store)
     try:
-        fn = harness._patterns(query, Path(args.store))[args.shape]
+        fn = harness._patterns(query, Path(store))[shape]
+        gate = before_timing() if before_timing is not None else {}
         load_start = _loads()
         baseline_mb = rss_mb()
         previous = signal.signal(signal.SIGALRM, _raise)
@@ -259,7 +277,7 @@ def _one_shape(args: argparse.Namespace) -> None:
     finally:
         query.close()
     record: dict[str, object] = {
-        "shape": args.shape,
+        "shape": shape,
         "limit_s": limit,
         "elapsed_ms": round(elapsed_ms, 3),
         "timed_out": timed_out,
@@ -267,11 +285,17 @@ def _one_shape(args: argparse.Namespace) -> None:
         "peak_mb": round(sampler.peak_mb, 1),
         "load_start": load_start,
         "load_end": load_end,
+        **gate,
     }
     if result is not None:
         record["result_count"] = int(len(result["z"]))
         record["sha256"] = _digest(result)
-    print(json.dumps(record), flush=True)
+    return record
+
+
+def _one_shape(args: argparse.Namespace) -> None:
+    """Run one shape once with an alarm and an RSS sampler; print one JSON line."""
+    print(json.dumps(measure_one_shape(args.store, args.shape, args.limit)), flush=True)
 
 
 def _one_identity(args: argparse.Namespace) -> None:

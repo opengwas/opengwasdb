@@ -1,0 +1,68 @@
+  copied the release envelope: 0.0s
+  data.zarr: 35 arrays to convert
+  created the destination arrays: 0.6s
+  writing 2348 shards over 32 worker(s)
+  wrote every shard over 32 worker(s): 123.5s
+  rewrote the manifests, index blobs and root attrs: 0.2s
+  verifying eaf
+  verifying eaf_baseline
+  verifying eaf_exception_index
+  verifying eaf_exception_value
+  verifying se
+  verifying se_coefficients
+  verifying se_exception_index
+  verifying se_exception_value
+  verifying top_hits/p_5e_04/abs_z
+  verifying top_hits/p_5e_04/analysis_index
+  verifying top_hits/p_5e_04/analysis_offsets
+  verifying top_hits/p_5e_04/eaf
+  verifying top_hits/p_5e_04/p_value
+  verifying top_hits/p_5e_04/se
+  verifying top_hits/p_5e_04/variant_index
+  verifying top_hits/p_5e_04/z
+  verifying top_hits/p_5e_06/abs_z
+  verifying top_hits/p_5e_06/analysis_index
+  verifying top_hits/p_5e_06/analysis_offsets
+  verifying top_hits/p_5e_06/eaf
+  verifying top_hits/p_5e_06/p_value
+  verifying top_hits/p_5e_06/se
+  verifying top_hits/p_5e_06/variant_index
+  verifying top_hits/p_5e_06/z
+  verifying top_hits/p_5e_08/abs_z
+  verifying top_hits/p_5e_08/analysis_index
+  verifying top_hits/p_5e_08/analysis_offsets
+  verifying top_hits/p_5e_08/eaf
+  verifying top_hits/p_5e_08/p_value
+  verifying top_hits/p_5e_08/se
+  verifying top_hits/p_5e_08/variant_index
+  verifying top_hits/p_5e_08/z
+  verifying z
+  verifying z_overflow_index
+  verifying z_overflow_value
+  verified the conversion bit-exact: 1351.9s
+  regenerated overview.html and validated the release: 14593.0s
+Published /data/opengwasdb/work/epic240/250/OGS-00016-v3-c64 as 0.2.0
+Converted /data/opengwasdb/stores/OGS-00016/store.opengwasdb -> /data/opengwasdb/work/epic240/250/OGS-00016-v3-c64
+	Command being timed: "pixi run -e dev python scripts/convert_store_to_0_2_0.py /data/opengwasdb/stores/OGS-00016/store.opengwasdb --into /data/opengwasdb/work/epic240/250/OGS-00016-v3-c64 --workers 32"
+	User time (seconds): 14990.22
+	System time (seconds): 5280.11
+	Percent of CPU this job got: 126%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 4:27:51
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 47655760
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 275
+	Minor (reclaiming a frame) page faults: 126927335
+	Voluntary context switches: 5754433
+	Involuntary context switches: 47175
+	Swaps: 0
+	File system inputs: 253215168
+	File system outputs: 247841992
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
