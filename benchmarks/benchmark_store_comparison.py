@@ -55,6 +55,7 @@ import zarr
 
 from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
+from benchmarks._quiet import wait_for_quiet as _wait_for_quiet
 from benchmarks._rss import run_probe
 from benchmarks.benchmark_ukbb_dense import _median_ms
 from opengwasdb.query.facade import _empty_result
@@ -362,25 +363,6 @@ def _time_limit(seconds: float):
             signal.signal(signal.SIGALRM, previous)
 
 
-def _wait_for_quiet(max_load: float, timeout_s: float = 3600.0, poll_s: float = 15.0) -> float:
-    """Block until the 1-minute load average is below `max_load`; return seconds waited.
-
-    Every *column* waits, not only every pair: a run that times store B after
-    store A's timings and its seven RSS probes can otherwise start contended,
-    which is what #250 review round 1 found on the 0.2.0 columns. A `max_load`
-    of 0 disables the wait; the timeout stops a permanently busy node from
-    stalling the run for ever.
-    """
-    if max_load <= 0:
-        return 0.0
-    started = time.perf_counter()
-    while os.getloadavg()[0] >= max_load:
-        if time.perf_counter() - started > timeout_s:
-            break
-        time.sleep(poll_s)
-    return time.perf_counter() - started
-
-
 def _harness_fingerprint() -> dict[str, str]:
     """The harness file that ran, so an artifact can name it and its digest.
 
@@ -577,7 +559,13 @@ def _measure_store(
     spec: StoreSpec, selection: dict[str, Any], args: argparse.Namespace
 ) -> tuple[dict[str, Any], dict[str, dict[str, str]]]:
     """Time and digest every shape for one store; run its RSS probes if asked."""
-    waited_for_load_s = _wait_for_quiet(args.max_start_load)
+    waited_for_load_s, wait_timed_out = _wait_for_quiet(args.max_start_load)
+    if wait_timed_out:
+        print(
+            f"[{spec.label}] WARNING: the 1-minute load stayed at or above "
+            f"{args.max_start_load} for the whole wait; timing this column contended",
+            flush=True,
+        )
     load_before = os.getloadavg()[0]
     q, plan = _query_shapes.open_benchmark_store(spec.path)
     try:
@@ -644,6 +632,7 @@ def _measure_store(
         "effective_reader": effective_reader,
         "limit_hits": limit_hits,
         "waited_for_load_s": round(waited_for_load_s, 1),
+        "load_wait_timed_out": wait_timed_out,
         "load_average_1m_before": round(load_before, 2),
         "load_average_1m_after": round(load_after, 2),
     }

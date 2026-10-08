@@ -13,6 +13,7 @@ jupyter: python3
 
 ```{python}
 #| echo: false
+import hashlib
 import json
 from pathlib import Path
 
@@ -92,8 +93,16 @@ def three_column(cmp218, cmpz3, v2_label, v3_label):
     ma, mb, mc = memory(s218), memory(store(cmpz3, v2_label)), memory(store(cmpz3, v3_label))
     rows = []
     for sh in ORDER:
+        # A column that hit the time limit has no count; take it from one that did
+        # and print "—" if none did, never a silent zero (CLAUDE.md).
+        count = next(
+            (row.get("result_count") for row in (a[sh], b[sh], c[sh])
+             if isinstance(row.get("result_count"), int)),
+            None,
+        )
         rows.append([LABELS[sh], time_cell(a[sh], ma[sh]), time_cell(b[sh], mb[sh]),
-                     time_cell(c[sh], mc[sh]), f"{a[sh].get('result_count', 0):,}"])
+                     time_cell(c[sh], mc[sh]),
+                     f"{count:,}" if count is not None else "—"])
     return rows
 
 
@@ -146,14 +155,21 @@ def three_column_identity(cmp218, cmpz3, v2_label, v3_label):
     return state
 
 
+COMPARISONS = {
+    "OGS-00016 2.18": cmp16_218, "OGS-00016 Zarr 3": cmp16_z3,
+    "OGS-00011 2.18": cmp11_218, "OGS-00011 Zarr 3": cmp11_z3,
+}
+
+
 def harness_revisions():
     """The distinct harness digests recorded across the four comparison artifacts."""
-    out = set()
-    for doc in (cmp16_218, cmp16_z3, cmp11_218, cmp11_z3):
-        fp = doc.get("harness_file", {})
-        if fp.get("harness_sha256"):
-            out.add(fp["harness_sha256"][:12])
-    return sorted(out)
+    return sorted({doc["harness_file"]["harness_sha256"][:12] for doc in COMPARISONS.values()
+                   if doc.get("harness_file", {}).get("harness_sha256")})
+
+
+def without_harness_digest():
+    return [name for name, doc in COMPARISONS.items()
+            if not doc.get("harness_file", {}).get("harness_sha256")]
 
 
 EXTRA_LABELS = {
@@ -162,11 +178,15 @@ EXTRA_LABELS = {
 }
 
 
+EXTRA_SHAPES = ("phewas_off_axis", "bulk_overflow_heavy")
+EXTRA_COLUMNS = ("a-2.18-0.1.0", "b-code-0.1.0", "c-code-0.2.0")
+
+
 def extras_rows(extras):
     rows = []
-    for shape in ("phewas_off_axis", "bulk_overflow_heavy"):
+    for shape in EXTRA_SHAPES:
         cells = []
-        for column in ("a-2.18-0.1.0", "b-code-0.1.0", "c-code-0.2.0"):
+        for column in EXTRA_COLUMNS:
             r = extras["shapes"][shape][column]
             cells.append(f"{fmt_time(r['median_ms'])} / {fmt_time(r['p95_ms'])} · "
                          f"{fmt_rss(r['peak_mib'])}")
@@ -175,16 +195,72 @@ def extras_rows(extras):
     return rows
 
 
-def per_plane(cmpz3, v2_label, v3_label):
-    v2 = {a["node"]: a for a in store(cmpz3, v2_label)["footprint"]["arrays"]}
-    v3 = {a["node"]: a for a in store(cmpz3, v3_label)["footprint"]["arrays"]}
-    planes = ["data.zarr/z", "data.zarr/se", "data.zarr/eaf",
-              "data.zarr/eaf_baseline",
-              "data.zarr/top_hits/p_5e_04/z"]
-    return [[node.replace("data.zarr/", ""), f"{v2[node]['apparent_bytes'] / 1e6:,.1f} MB",
-             f"{v3[node]['apparent_bytes'] / 1e6:,.1f} MB",
-             f"{v3[node]['apparent_bytes'] / v2[node]['apparent_bytes']:.3f}×"]
-            for node in planes]
+def extras_range(shape, column):
+    """(fastest, slowest) repetition, in ms."""
+    elapsed = extras["shapes"][shape][column]["elapsed_ms"]
+    return min(elapsed), max(elapsed)
+
+
+def committed_sha256(relative):
+    """The sha256 of a file in this checkout, or None when rendered outside one."""
+    path = HERE / "../.." / relative
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+
+def digest_sentence(environments):
+    """Whether the probe and runner the extras recorded are the committed files."""
+    recorded = [env for env in environments.values() if env["recorded"]]
+    probe = {env["probe_sha256"] for env in recorded}
+    runner = {env["runner_sha256"] for env in recorded}
+    probe_now = committed_sha256("benchmarks/ogs00011_ab.py")
+    runner_now = committed_sha256("benchmarks/ogs00011_extra_shapes.py")
+    if probe_now is None or runner_now is None:
+        return "Recorded digests **not compared**: this render ran outside the repository."
+    probe_state = "is" if probe == {probe_now} else "is **not**"
+    text = (f"The probe every column recorded {probe_state} the committed "
+            f"`benchmarks/ogs00011_ab.py` ({probe_now[:12]}). ")
+    if runner == {runner_now}:
+        return text + f"So is the runner ({runner_now[:12]})."
+    return text + (
+        f"The runner they recorded ({', '.join(sorted(r[:12] for r in runner))}) is **not** the "
+        f"committed runner ({runner_now[:12]}): after this run its load wait was moved into "
+        "`benchmarks/_quiet.py`, which the store-comparison harness shares (the duplication gate "
+        "flagged the copy), and the file as it ran was not kept.")
+
+
+def extras_load_sentence():
+    """How many extra-shape repetitions began at a load of 3 or more, and the waits."""
+    rows = [extras["shapes"][sh][col] for sh in EXTRA_SHAPES for col in EXTRA_COLUMNS]
+    loads = [load for row in rows for load in row["start_load_1m"]]
+    high = [load for load in loads if load >= 3]
+    gave_up = [row for row in rows if row["run"]["waited_timed_out"]]
+    return (f"Each of the {len(rows)} runs was gated below load 3 before its first repetition"
+            + (f", but **{len(gave_up)} gave up waiting**" if gave_up else
+               " and none gave up waiting")
+            + f"; the repetitions themselves were not gated, and **{len(high)} of {len(loads)} "
+            f"began at a 1-minute load of 3 or more** (up to {max(loads):.2f}).")
+
+
+PLANES = ["data.zarr/z", "data.zarr/se", "data.zarr/eaf", "data.zarr/eaf_baseline",
+          "data.zarr/top_hits/p_5e_04/z"]
+
+
+def plane_bytes(s):
+    return {a["node"]: a["apparent_bytes"] for a in s["footprint"]["arrays"]}
+
+
+def plane_ratios(new, old):
+    """{plane: 0.2.0 bytes / 0.1.0 bytes} for every plane both stores hold."""
+    a, b = plane_bytes(new), plane_bytes(old)
+    return {node: a[node] / b[node] for node in PLANES if node in a and node in b}
+
+
+def per_plane(cmpz3, v2_label, v3_label, ref_ratios):
+    v2, v3 = plane_bytes(store(cmpz3, v2_label)), plane_bytes(store(cmpz3, v3_label))
+    return [[node.replace("data.zarr/", ""), f"{v2[node] / 1e6:,.1f} MB",
+             f"{v3[node] / 1e6:,.1f} MB", f"{v3[node] / v2[node]:.3f}×",
+             f"{ref_ratios[node]:.3f}×" if node in ref_ratios else "—"]
+            for node in PLANES]
 
 
 def sizes(c):
@@ -198,17 +274,8 @@ def sizes(c):
     }
 
 
-def ratio(cmpz3, v2_label, v3_label, shape):
-    return (timings(store(cmpz3, v3_label))[shape]["median_ms"]
-            / timings(store(cmpz3, v2_label))[shape]["median_ms"])
-
-
-# ADR 0058's OGS-00009 ratios, quoted from the ADR; the FinnGen ratios beside
-# them are computed from this run's artifacts.
-ADR_0058_RATIOS = {
-    "phewas": 2.76, "random_lookup_10_variants_100_analyses": 2.80,
-    "random_lookup_100_variants_10_analyses": 1.83, "regional": 1.35, "bulk": 0.35,
-}
+# ADR 0058's OGS-00009 ratios come from #246's committed artifact via
+# `ref_ratio` below; nothing is quoted from the ADR text.
 
 s16, s11 = sizes(conv16), sizes(conv11)
 m16, m11 = conv16["monitor"], conv11["monitor"]
@@ -216,6 +283,64 @@ ds16 = bench["dataset"]
 N_ANALYSES = f"{ds16['n_analyses']:,}"
 N_VARIANTS = f"{ds16['n_variants']:,}"
 N_ASSOC_BN = f"{ds16['n_associations'] / 1e9:,.1f}"
+LAYOUT_OLD = store(cmp16_z3, "v2-ogs00016")["dataset"]["layout"]
+LAYOUT_NEW = store(cmp16_z3, "v3-ogs00016")["dataset"]["layout"]
+CHUNK_OLD = LAYOUT_OLD["z"]["chunk_shape"]
+CHUNK_NEW, SHARD_NEW = LAYOUT_NEW["z"]["chunk_shape"], LAYOUT_NEW["z"]["shard_shape"]
+TOP_HITS_PER_SHARD = (LAYOUT_NEW["top_hits/p_5e_04/z"]["shard_shape"][0]
+                      // LAYOUT_NEW["top_hits/p_5e_04/z"]["chunk_shape"][0])
+
+# #241's 0.1.0 report, for the two comparisons it owns (the T2D baseline RSS and
+# the source-parse time); #246's shape report, for this ADR's OGS-00009 ratios.
+bench241 = json.loads((HERE / "opengwasdb_ogs00016_finngen_benchmark.json").read_text())
+BULK_218_MIB = next(r for r in bench241["memory"] if r["query"] == "bulk")["peak_mb"]
+BULK_218_MS = next(r for r in bench241["timings"] if r["query"] == "bulk")["median_ms"]
+SRC_218_S = bench241["source_bulk"]["median_s"]
+ogs00009 = json.loads(
+    (HERE / "opengwasdb_246_shapes/opengwasdb_store_comparison_ogs00009_shapes.json").read_text()
+)
+
+
+REF_OLD, REF_NEW = store(ogs00009, "v2-c1000"), store(ogs00009, "v3-c64")
+REF_PLANES = plane_ratios(REF_NEW, REF_OLD)
+REF_TOTAL = (REF_NEW["footprint"]["apparent_bytes"] / REF_OLD["footprint"]["apparent_bytes"]
+             * 100 - 100)
+
+
+def ref_ratio(shape):
+    """ADR 0058's OGS-00009 0.1.0 -> 0.2.0 ratio, computed from #246's artifact."""
+    return timings(REF_NEW)[shape]["median_ms"] / timings(REF_OLD)[shape]["median_ms"]
+
+
+# #252's committed A/B, for the off-panel PheWAS it measured on 0.1.0.
+ab252 = json.loads((HERE / "opengwasdb_ogs00011_hybrid_252_ab.json").read_text())
+
+
+def window_sentence(cmp218, cmpz3):
+    """When each artifact was written, and how many repetitions each column ran."""
+    def reps(doc):
+        counts = {}
+        for s in doc["stores"]:
+            for r in s["timings"]:
+                counts[r["repetitions"]] = counts.get(r["repetitions"], 0) + 1
+        return ", ".join(f"{n} repetition(s) on {k} shape timing(s)"
+                         for n, k in sorted(counts.items(), reverse=True))
+    return (f"The 2.18 artifact was written at {cmp218['measured_at'][:16].replace('T', ' ')} "
+            f"UTC with {reps(cmp218)}; the Zarr 3 artifact at "
+            f"{cmpz3['measured_at'][:16].replace('T', ' ')} UTC with {reps(cmpz3)}.")
+
+
+def two_baselines(cmp218, cmpz3, v2, v3, shape):
+    """(0.2.0 / this code on 0.1.0, 0.2.0 / Zarr 2.18) medians."""
+    v3_ms = timings(store(cmpz3, v3))[shape]["median_ms"]
+    return (v3_ms / timings(store(cmpz3, v2))[shape]["median_ms"],
+            v3_ms / timings(store(cmp218, label_of(cmp218)))[shape]["median_ms"])
+
+
+def extras_two_baselines(extras, shape):
+    row = extras["shapes"][shape]
+    return (row["c-code-0.2.0"]["median_ms"] / row["b-code-0.1.0"]["median_ms"],
+            row["c-code-0.2.0"]["median_ms"] / row["a-2.18-0.1.0"]["median_ms"])
 ```
 
 ::: {.callout-important}
@@ -224,9 +349,9 @@ N_ASSOC_BN = f"{ds16['n_associations'] / 1e9:,.1f}"
 OGS-00016 — every public FinnGen R13 endpoint, **`{python} N_ANALYSES` Analyses ×
 `{python} N_VARIANTS` variants, `{python} N_ASSOC_BN` billion associations** — converted from
 `format_version` 0.1.0
-(Zarr v2, `[1000, 1000]` chunks) to **0.2.0 (Zarr v3, sharded, Dense inner chunk
-`[1000, 64]`, Dense shard `[100000, 1024]`, top-hit index sharded at 64 inner
-chunks)** by `scripts/convert_store_to_0_2_0.py`, then:
+(Zarr v2, `{python} CHUNK_OLD` chunks) to **0.2.0 (Zarr v3, sharded, Dense inner
+chunk `{python} CHUNK_NEW`, Dense shard `{python} SHARD_NEW`, top-hit index sharded
+at `{python} TOP_HITS_PER_SHARD` inner chunks)** by `scripts/convert_store_to_0_2_0.py`, then:
 
 * checked **bit-exact** against the source and validated (`validate_store`);
 * benchmarked as three columns — 2.18 on 0.1.0, this code on 0.1.0 (Zarr 3
@@ -237,7 +362,7 @@ chunks)** by `scripts/convert_store_to_0_2_0.py`, then:
   near-null, low-case-count data.
 
 Peak RSS is labelled **GiB** throughout: `benchmarks/_rss.py` measures MiB and
-this report divides by 1024. #237's "22.8 GB" is the same ~22,778 MiB figure with
+this report divides by 1024. #237's "22.8 GB" is the same `{python} f"{BULK_218_MIB:,.0f}"` MiB figure with
 MB/1000, so the RSS compared against it is identical and the ratios are
 unaffected.
 :::
@@ -248,25 +373,31 @@ unaffected.
 #| echo: false
 #| output: asis
 rows = []
+WRITE_PHASE = next(k for k in conv16["phases_seconds"] if k.startswith("wrote every shard"))
+assert all(WRITE_PHASE in c["phases_seconds"] for c in (conv16, conv11))
 for c in (conv16, conv11):
     ph = c["phases_seconds"]
     rows.append([
         c["store"], c["source_format_version"] + " → " + c["destination_format_version"],
         f"{c['wall_seconds'] // 3600}:{(c['wall_seconds'] % 3600) // 60:02d}:{c['wall_seconds'] % 60:02d}",
         f"{c['peak_rss_gib']:,.2f} GiB",
-        f"{ph['wrote every shard over 32 worker(s)']:,.1f} s",
+        f"{ph[WRITE_PHASE]:,.1f} s",
         f"{ph['verified the conversion bit-exact']:,.1f} s",
         f"{ph['regenerated overview.html and validated the release']:,.1f} s",
     ])
-print(md_table(["Store", "format", "wall clock", "peak RSS", "write (32 workers)",
+print(md_table(["Store", "format", "wall clock", "peak RSS",
+                f"write ({WRITE_PHASE.removeprefix('wrote every shard over ')})",
                 "bit-exact verify", "overview + validate"], rows))
 print()
 print("Both were published only after the bit-exact check and `validate_store` passed, by renaming")
 print("the staging tree. Both ran **concurrently**, so the wall times are concurrent-machine")
 print(f"numbers: across the window in which both were running, the 1-minute load sampled "
       f"{m16['both_running_load_1m_min']:.2f}–{m16['both_running_load_1m_max']:.2f} "
-      f"(`{m16['log']}`). The quoted peak RSS is the process-tree maximum, which is the")
-print("validate phase; the raw `/usr/bin/time -v` logs are committed beside this document.")
+      f"(`{m16['log']}`). The quoted peak RSS is `/usr/bin/time -v`'s maximum resident set "
+      "size: the largest single process among the converter and its workers, not their sum. "
+      "Which phase it")
+print("peaked in is inferred from the phase times and the code (see the worker report), not "
+      "sampled; the raw `/usr/bin/time -v` logs are committed beside this document.")
 ```
 
 ## Files and size
@@ -284,24 +415,33 @@ print(md_table(["Store", "files", "apparent bytes", "allocated bytes"],
 ```{python}
 #| echo: false
 #| output: asis
-rows = per_plane(cmp16_z3, "v2-ogs00016", "v3-ogs00016")
-print(md_table(["array", "0.1.0", "0.2.0", "0.2.0 / 0.1.0"], rows))
-se = next(r for r in rows if r[0] == "se")
+rows = per_plane(cmp16_z3, "v2-ogs00016", "v3-ogs00016", REF_PLANES)
+print(md_table(["array", "0.1.0", "0.2.0", "0.2.0 / 0.1.0", "OGS-00009, same ratio (#246)"],
+               rows))
+finn_planes = plane_ratios(store(cmp16_z3, "v3-ogs00016"), store(cmp16_z3, "v2-ogs00016"))
+largest = max(finn_planes, key=finn_planes.get)
+above_ref = [n.replace("data.zarr/", "") for n in finn_planes
+             if n in REF_PLANES and finn_planes[n] > REF_PLANES[n]]
 total = conv16["after"]["apparent_bytes"] / conv16["before"]["apparent_bytes"] * 100 - 100
 print()
-print(f"The `se` plane is the only material cost of 64-wide chunks on FinnGen "
-      f"({se[3].rstrip('×')}×); `z` and the top-hit index are flat. Total apparent size grows "
-      f"{total:+.2f} %, comparable with #245's +1.4 % on ukb-b, so **FinnGen does not contradict "
-      f"ADR 0058's shape decision**.")
+print(f"The largest per-plane cost of 64-wide chunks on FinnGen is "
+      f"`{largest.replace('data.zarr/', '')}` at {finn_planes[largest]:.3f}×, against "
+      f"{REF_PLANES[largest]:.3f}× for the same plane on OGS-00009, the data ADR 0058 decided on. "
+      + (f"FinnGen's ratio is above OGS-00009's only on {', '.join(above_ref)}. " if above_ref
+         else "No FinnGen plane ratio is above OGS-00009's. ")
+      + f"Total apparent size grows {total:+.2f} %, against OGS-00009's {REF_TOTAL:+.2f} %. "
+      "ADR 0058's generated *Checked on FinnGen* block applies the decision's tests to these "
+      "numbers and states its verdict.")
 ```
 
 ## The three query columns
 
-Times are **median / p95**; memory is the fresh-interpreter peak RSS. Each
-*zarr 3 column* waited for the 1-minute load to fall below 3 before its timing
-began. The 2.18 column is the OGS-00016 benchmark's harness run under `745796c`'s
-package and Zarr 2.18; columns (b) and (c) run in one Zarr 3 process against both
-stores.
+Times are **median / p95**; memory is the fresh-interpreter peak RSS. The
+harness waits for the 1-minute load to fall below 3 before each column it
+times (`--max-start-load`); the load each column actually began at is printed
+with each store's table. The 2.18 column is the same harness run under
+`745796c`'s package and Zarr 2.18; columns (b) and (c) run in one Zarr 3
+process against both stores.
 
 ```{python}
 #| echo: false
@@ -310,12 +450,13 @@ print(load_sentence(cmp16_218, cmp16_z3, "v2-ogs00016", "v3-ogs00016"))
 revs = harness_revisions()
 print()
 if not revs:
-    print("Harness digests recorded in the Zarr 3 artifacts: **not recorded** (these "
-          "artifacts predate the field); the harness revision is `132de8b`.")
+    print("Harness digests recorded in the comparison artifacts: **not recorded** (these "
+          "artifacts predate the field).")
 elif len(revs) == 1:
-    print(f"Harness digest recorded in every re-run artifact: `{revs[0]}` — one harness "
-          "revision produced all the re-run columns (the OGS-00011 2.18 column predates "
-          "the field).")
+    missing = without_harness_digest()
+    print(f"Harness digest recorded: `{revs[0]}`, one harness revision for every artifact "
+          "that records one" + (f"; {', '.join(missing)} predates the field." if missing
+                                else "."))
 else:
     print(f"**The columns were produced by different harness revisions: {revs}.**")
 ```
@@ -327,6 +468,8 @@ else:
 #| output: asis
 print(md_table(["query", "2.18 · 0.1.0", "this code · 0.1.0", "this code · 0.2.0", "rows"],
                three_column(cmp16_218, cmp16_z3, "v2-ogs00016", "v3-ogs00016")))
+print()
+print(window_sentence(cmp16_218, cmp16_z3))
 print()
 t218 = timings(store(cmp16_218, label_of(cmp16_218)))
 b, c = t218["bulk"], timings(store(cmp16_z3, "v3-ogs00016"))["bulk"]
@@ -347,6 +490,15 @@ print(load_sentence(cmp11_218, cmp11_z3, "v2-ogs00011", "v3-ogs00011"))
 print()
 print(md_table(["query", "2.18 · 0.1.0", "this code · 0.1.0", "this code · 0.2.0", "rows"],
                three_column(cmp11_218, cmp11_z3, "v2-ogs00011", "v3-ogs00011")))
+print()
+once_11 = [r for r in timings(store(cmp11_218, label_of(cmp11_218))).values()
+           if r["repetitions"] == 1]
+print("**The 2.18 column is not paired with the Zarr 3 columns here**: it is the first run, "
+      f"not repeated in the Zarr 3 window because its {len(once_11)} single-repetition shapes "
+      f"take {fmt_time(min(r['median_ms'] for r in once_11))}–"
+      f"{fmt_time(max(r['median_ms'] for r in once_11))} each. "
+      + window_sentence(cmp11_218, cmp11_z3)
+      + " Its artifact also predates the harness digest field.")
 print()
 t218_11 = timings(store(cmp11_218, label_of(cmp11_218)))
 a = memory(store(cmp11_218, label_of(cmp11_218)))
@@ -375,8 +527,13 @@ print("0.2.0 also costs memory on the smaller OGS-00011 shapes: versus Zarr 3 on
 
 The seven-shape PheWAS anchor is on the reference axis, so it never exercises
 the Ragged Overflow's PheWAS path; these two shapes do. They are measured by
-`benchmarks/ogs00011_ab.py --one-shape` (the probe #252 built), three
-repetitions each.
+`benchmarks/ogs00011_extra_shapes.py`, the committed runner. One invocation
+runs one shape in one column: it waits for a 1-minute load below 3, then calls
+#252's probe (`benchmarks.ogs00011_ab.measure_one_shape`) once per repetition
+**in that one interpreter**, so only repetition 1 starts in a fresh process,
+and peak RSS is the process's, sampled during each call. Every record carries
+the interpreter, the Zarr version, the `opengwasdb` path and fingerprint, the
+commit, and the probe's and runner's sha256.
 
 ```{python}
 #| echo: false
@@ -384,19 +541,40 @@ repetitions each.
 print(md_table(["shape", "2.18 · 0.1.0", "this code · 0.1.0", "this code · 0.2.0", "rows"],
                extras_rows(extras)))
 print()
+for shape in EXTRA_SHAPES:
+    print(f"- `{shape}`, every repetition: " + "; ".join(
+        f"{column} {fmt_time(extras_range(shape, column)[0])}–"
+        f"{fmt_time(extras_range(shape, column)[1])}" for column in EXTRA_COLUMNS))
+print()
 identity = extras["identity"]
 print("Every extra shape returns the same rows and sha256 in all three columns: "
       + ", ".join(f"`{name}` {entry['identical']}" for name, entry in identity.items()) + ".")
-loads = {
-    f"{shape} {column}": extras["shapes"][shape][column]["start_load_1m"][0]
-    for shape in ("phewas_off_axis", "bulk_overflow_heavy")
-    for column in ("a-2.18-0.1.0", "b-code-0.1.0", "c-code-0.2.0")
-}
-contended = [name for name, load in loads.items() if load >= 3]
-print("Each extra column's first-repetition start load: "
-      + ", ".join(f"{name} {load:.2f}" for name, load in loads.items()) + ". "
-      + (f"**{', '.join(contended)} began at or above 3.**" if contended
-         else "All began below 3."))
+print()
+environments = extras["environments"]
+print(md_table(
+    ["column", "interpreter", "zarr", "`opengwasdb` fingerprint", "commit", "probe sha256",
+     "runner sha256"],
+    [[f"`{column}`", f"`{env['python']}`", env["zarr"], env["opengwasdb_fingerprint"][:12],
+      env["commit"], env["probe_sha256"][:12], env["runner_sha256"][:12]]
+     if env["recorded"] else [f"`{column}`", *["**not recorded**"] * 6]
+     for column, env in environments.items()]))
+print()
+print(digest_sentence(environments) + " The commit is the checkout's `HEAD`; the probe and "
+      "runner were working-tree files when they ran, which is why each record carries their "
+      "sha256 as well as the package fingerprint.")
+print()
+print("Start load of every repetition, and the repetition the median came from:")
+print()
+for shape in EXTRA_SHAPES:
+    for column in EXTRA_COLUMNS:
+        row = extras["shapes"][shape][column]
+        median_rep = row["elapsed_ms"].index(row["median_ms"]) + 1
+        high = [index + 1 for index, load in enumerate(row["start_load_1m"]) if load >= 3]
+        suffix = f"; repetitions at or above load 3: {high}" if high else "; all below 3"
+        print(f"- `{shape}` {column}: waited {row['run']['waited_for_load_s']:g} s; loads "
+              f"{row['start_load_1m']}; median from repetition {median_rep}{suffix}")
+print()
+print(extras_load_sentence())
 ```
 
 ::: {.callout-note}
@@ -436,7 +614,9 @@ bulk_ms = next(r for r in bench["timings"] if r["query"] == "bulk")["median_ms"]
 src_s = bench["source_bulk"]["median_s"]
 print(f"Source bulk parse of the same Analysis: **{src_s:.1f} s**. The 0.2.0 store reads the "
       f"whole Analysis in {bulk_ms / 1000:.2f} s, **{src_s / (bulk_ms / 1000):.1f}× faster than "
-      f"parsing the source `.gz`** (the 0.1.0 original was 3.0× slower).")
+      f"parsing the source `.gz`**; #241's 0.1.0 run read it in {BULK_218_MS / 1000:.1f} s "
+      f"against a {SRC_218_S:.1f} s parse, {(BULK_218_MS / 1000) / SRC_218_S:.1f}× slower than "
+      "the parse.")
 ```
 
 ## Source fidelity
@@ -462,34 +642,201 @@ print(md_table(["Analysis", "cells compared", "result"], rows))
 ```{python}
 #| echo: false
 #| output: asis
-c16 = {sh: ratio(cmp16_z3, "v2-ogs00016", "v3-ogs00016", sh) for sh in ADR_0058_RATIOS}
-c11 = {sh: ratio(cmp11_z3, "v2-ogs00011", "v3-ogs00011", sh) for sh in ADR_0058_RATIOS}
-rows = [[LABELS[sh], f"{c16[sh]:.2f}×", f"{ADR_0058_RATIOS[sh]:.2f}×", f"{c11[sh]:.2f}×"]
-        for sh in ("phewas", "random_lookup_10_variants_100_analyses",
-                   "random_lookup_100_variants_10_analyses", "regional", "bulk")]
-print("0.2.0 versus 0.1.0, both under Zarr 3 (ratio of medians), beside ADR 0058's "
-      "OGS-00009 ratios:")
+
+def fmt_ratio(value):
+    return f"{value:.2f}×"
+
+
+r16 = {sh: two_baselines(cmp16_218, cmp16_z3, "v2-ogs00016", "v3-ogs00016", sh) for sh in ORDER}
+r11 = {sh: two_baselines(cmp11_218, cmp11_z3, "v2-ogs00011", "v3-ogs00011", sh) for sh in ORDER}
+ex = {sh: extras_two_baselines(extras, sh) for sh in EXTRA_SHAPES}
+
+
+def ratio_table(ratios, labels):
+    return md_table(
+        ["shape", "0.2.0 / 0.1.0", "0.2.0 / 2.18"],
+        [[labels[sh], fmt_ratio(ratios[sh][0]), fmt_ratio(ratios[sh][1])] for sh in ratios],
+    )
+
+
+def listed(ratios, labels, which, slower):
+    """'shape (1.23×)' for each shape 0.2.0 is slower (or faster) on, against one baseline."""
+    return [f"{labels[sh]} ({fmt_ratio(r[which])})" for sh, r in ratios.items()
+            if (r[which] > 1) == slower]
+
+
+def count_of(items, total):
+    return f"{len(items)} of {total} shapes" + (f" ({'; '.join(items)})" if items else "")
+
+
+def gaps_vs_218(cmp218, cmpz3, v3):
+    """{shape: 0.2.0 median − 2.18 median, ms} where 0.2.0 is slower."""
+    a, c = timings(store(cmp218, label_of(cmp218))), timings(store(cmpz3, v3))
+    return {sh: c[sh]["median_ms"] - a[sh]["median_ms"] for sh in ORDER
+            if c[sh]["median_ms"] > a[sh]["median_ms"]}
+
+
+def rss_deltas(cmpz3, v2, v3):
+    """0.2.0 peak RSS − this code on 0.1.0, MiB, per shape."""
+    b, c = memory(store(cmpz3, v2)), memory(store(cmpz3, v3))
+    return [c[sh]["peak_mb"] - b[sh]["peak_mb"] for sh in ORDER]
+
+
+def delta_phrase(deltas):
+    if min(deltas) > 0:
+        return f"higher on every shape, by {min(deltas):,.0f}–{max(deltas):,.0f} MiB"
+    return f"between {min(deltas):+,.0f} and {max(deltas):+,.0f} MiB"
+
+
+print("Every ratio below is 0.2.0's median against **two** baselines: this code on 0.1.0 "
+      "(the format effect alone) and Zarr 2.18 (what a user sees against the status quo). "
+      "Each store's three-column table above has the underlying times.")
 print()
-print(md_table(["shape", "OGS-00016 (FinnGen)", "OGS-00009 (ADR 0058)", "OGS-00011"], rows))
+print("#### OGS-00016")
+print(ratio_table(r16, LABELS))
 print()
-print("**Where 0.2.0 is better.** " + f"OGS-00016's whole-Analysis read is "
-      f"{fmt_time(timings(store(cmp16_z3, 'v3-ogs00016'))['bulk']['median_ms'])} against "
-      f"{fmt_time(timings(store(cmp16_z3, 'v2-ogs00016'))['bulk']['median_ms'])} on 0.1.0 and "
-      f"{fmt_time(t218['bulk']['median_ms'])} on 2.18; peak RSS falls "
-      f"{m_a / m_c:.2f}×; the file count falls from {conv16['before']['n_files']:,} to "
-      f"{conv16['after']['n_files']:,}. OGS-00011's Overflow scans collapse by the ratios above.")
+print("#### OGS-00011")
+print(ratio_table(r11, LABELS))
 print()
-print("**Where 0.2.0 is worse.** Across all four FinnGen shapes that grew, the 0.1.0→0.2.0 "
-      f"ratios ({c16['phewas']:.2f}× phewas, {c16['random_lookup_10_variants_100_analyses']:.2f}× "
-      f"10×100, {c16['random_lookup_100_variants_10_analyses']:.2f}× 100×10, "
-      f"{c16['regional']:.2f}× window-all) match ADR 0058's OGS-00009 ratios "
-      f"({ADR_0058_RATIOS['phewas']:.2f}×, {ADR_0058_RATIOS['random_lookup_10_variants_100_analyses']:.2f}×, "
-      f"{ADR_0058_RATIOS['random_lookup_100_variants_10_analyses']:.2f}×, {ADR_0058_RATIOS['regional']:.2f}×), "
-      "so they are the cost the decision measured on ukb-b, not a FinnGen surprise. Size grows "
+print("#### The two #252 Overflow shapes")
+print(ratio_table(ex, EXTRA_LABELS))
+print()
+
+print("**The format effect (0.2.0 against this code on 0.1.0).** On OGS-00016, 0.2.0 is "
+      f"faster on {count_of(listed(r16, LABELS, 0, False), 7)} and slower on "
+      f"{count_of(listed(r16, LABELS, 0, True), 7)}. On OGS-00011 it is faster on "
+      f"{count_of(listed(r11, LABELS, 0, False), 7)} and slower on "
+      f"{count_of(listed(r11, LABELS, 0, True), 7)}. Of the two Overflow shapes, the "
+      f"overflow-heavy bulk is {fmt_ratio(ex['bulk_overflow_heavy'][0])} and the off-panel "
+      f"PheWAS {fmt_ratio(ex['phewas_off_axis'][0])}. Peak RSS "
+      f"is {delta_phrase(rss_deltas(cmp16_z3, 'v2-ogs00016', 'v3-ogs00016'))} on OGS-00016, and "
+      f"{delta_phrase(rss_deltas(cmp11_z3, 'v2-ogs00011', 'v3-ogs00011'))} on OGS-00011.")
+print()
+adr_shapes = ["phewas", "random_lookup_10_variants_100_analyses",
+              "random_lookup_100_variants_10_analyses", "regional", "bulk"]
+above = {sh: r16[sh][0] / ref_ratio(sh) - 1 for sh in adr_shapes if r16[sh][0] > ref_ratio(sh)}
+print("On the five shapes ADR 0058 timed on OGS-00009, FinnGen's 0.1.0 → 0.2.0 ratios sit "
+      "beside the decision's own (computed from #246's artifact): "
+      + "; ".join(f"{LABELS[sh]} {fmt_ratio(r16[sh][0])} against {fmt_ratio(ref_ratio(sh))}"
+                  for sh in adr_shapes)
+      + ". "
+      + (f"FinnGen's ratio is above OGS-00009's on {', '.join(LABELS[sh] for sh in above)}, by "
+         f"at most {max(above.values()) * 100:.1f} %; elsewhere it is below. " if above else
+         "No FinnGen ratio is above OGS-00009's. ")
+      + "ADR 0058's generated *Checked on FinnGen* block states whether FinnGen departs "
+      "materially from them.")
+print()
+
+gaps16 = gaps_vs_218(cmp16_218, cmp16_z3, "v3-ogs00016")
+gaps11 = gaps_vs_218(cmp11_218, cmp11_z3, "v3-ogs00011")
+worst16 = max(gaps16, key=gaps16.get)
+print("**The user-visible change (0.2.0 against Zarr 2.18).** 0.2.0 is faster on "
+      f"{count_of(listed(r16, LABELS, 1, False), 7)} of OGS-00016 and on "
+      f"{count_of(listed(r11, LABELS, 1, False), 7)} of OGS-00011. **On OGS-00016 it is "
+      f"slower than 2.18 on {len(gaps16)} of seven shapes**: "
+      + "; ".join(f"{LABELS[sh]} {fmt_ratio(r16[sh][1])} (+{fmt_time(gap)})"
+                  for sh, gap in gaps16.items())
+      + f". The largest absolute gap is {fmt_time(gaps16[worst16])}, on {LABELS[worst16]}. "
+      f"On OGS-00011 it is slower on {len(gaps11)} of seven: "
+      + "; ".join(f"{LABELS[sh]} {fmt_ratio(r11[sh][1])} (+{fmt_time(gap)})"
+                  for sh, gap in gaps11.items())
+      + ". The off-panel Overflow PheWAS is slower by seconds; see the warning below.")
+print()
+
+b16, c16 = timings(store(cmp16_z3, "v2-ogs00016"))["bulk"], timings(store(cmp16_z3, "v3-ogs00016"))["bulk"]
+mb16 = memory(store(cmp16_z3, "v2-ogs00016"))["bulk"]["peak_mb"]
+ma16 = memory(store(cmp16_218, label_of(cmp16_218)))["bulk"]["peak_mb"]
+mc16 = memory(store(cmp16_z3, "v3-ogs00016"))["bulk"]["peak_mb"]
+t11 = {col: timings(s)["regional"]["median_ms"] for col, s in (
+    ("2.18", store(cmp11_218, label_of(cmp11_218))), ("0.1.0", store(cmp11_z3, "v2-ogs00011")),
+    ("0.2.0", store(cmp11_z3, "v3-ogs00011")))}
+print("**Where the big gains come from.** OGS-00016's whole-Analysis read — the shape this "
+      f"format exists for — takes {fmt_time(c16['median_ms'])} on 0.2.0 against "
+      f"{fmt_time(b16['median_ms'])} under this code on 0.1.0 and "
+      f"{fmt_time(t218['bulk']['median_ms'])} on 2.18: of the "
+      f"{t218['bulk']['median_ms'] / c16['median_ms']:.2f}× gain over 2.18, the format's own "
+      f"share is {b16['median_ms'] / c16['median_ms']:.2f}×. "
+      f"Its peak RSS is {fmt_rss(mc16)} against {fmt_rss(mb16)} on 0.1.0 and {fmt_rss(ma16)} on "
+      f"2.18, so the {ma16 / mc16:.2f}× memory gain is the Zarr 3 reader's: 0.2.0 itself uses "
+      f"{'more' if mc16 > mb16 else 'less'} than this code on 0.1.0. OGS-00011's window across "
+      f"all Analyses falls from {fmt_time(t11['2.18'])} on 2.18 to {fmt_time(t11['0.1.0'])} "
+      f"under this code on 0.1.0 — #252's fix, before any format change — and to "
+      f"{fmt_time(t11['0.2.0'])} on 0.2.0.")
+print()
+
+ph = extras["shapes"]["phewas_off_axis"]
+lo = {col: extras_range("phewas_off_axis", col)[0] for col in EXTRA_COLUMNS}
+hi = {col: extras_range("phewas_off_axis", col)[1] for col in EXTRA_COLUMNS}
+separated = lo["c-code-0.2.0"] > max(hi["a-2.18-0.1.0"], hi["b-code-0.1.0"])
+reps = sorted({ph[col]["repetitions"] for col in EXTRA_COLUMNS})
+high = {col: sum(load >= 3 for load in ph[col]["start_load_1m"]) for col in EXTRA_COLUMNS}
+layout = {s["label"]: s["dataset"]["layout"]["ragged/variant_index"] for s in cmp11_z3["stores"]}
+print("::: {.callout-warning}")
+print("## The one shape slower than the status quo by seconds")
+print(f"The off-panel Overflow PheWAS — the path the seven #242 shapes never touch — takes "
+      f"**{fmt_time(ph['c-code-0.2.0']['median_ms'])} on 0.2.0 against "
+      f"{fmt_time(ph['b-code-0.1.0']['median_ms'])} under this code on 0.1.0 and "
+      f"{fmt_time(ph['a-2.18-0.1.0']['median_ms'])} on 2.18** (medians of "
+      f"{' / '.join(map(str, reps))} repetitions per column). The decided stack is "
+      f"**{fmt_ratio(ex['phewas_off_axis'][1])} slower than 2.18** and "
+      f"{fmt_ratio(ex['phewas_off_axis'][0])} slower than this code on 0.1.0, while its peak "
+      f"RSS falls from {fmt_rss(ph['a-2.18-0.1.0']['peak_mib'])} to "
+      f"{fmt_rss(ph['c-code-0.2.0']['peak_mib'])}.")
+print()
+ranges = ", ".join(f"{col} {fmt_time(lo[col])}–{fmt_time(hi[col])}" for col in EXTRA_COLUMNS)
+print((f"**Confirmed:** every 0.2.0 repetition is slower than every repetition of both other "
+       f"columns ({ranges})." if separated else
+       f"**Not confirmed:** the repetitions overlap ({ranges}).")
+      + " Repetitions at a 1-minute load of 3 or more: "
+      + ", ".join(f"{col} {high[col]} of {ph[col]['repetitions']}" for col in EXTRA_COLUMNS)
+      + (". 0.2.0 had no more of them than either other column, so load does not explain its "
+         "slowdown." if high["c-code-0.2.0"] <= min(high["a-2.18-0.1.0"], high["b-code-0.1.0"])
+         else ". **0.2.0 had more of them than another column**, so load may contribute."))
+print()
+print("**Why.** An off-panel PheWAS reads only the Overflow, and with no variant-side index it "
+      "must scan every Analysis's `variant_index` for the variant. #252's windowed scan bounds "
+      "that scan's memory by reading a few inner chunks at a time (`SCAN_WINDOW_CHUNKS`), at "
+      "the cost of one read per window. The Overflow's inner chunk is "
+      f"{layout['v2-ogs00011']['chunk_shape'][0]:,} elements at 0.1.0 and "
+      f"{layout['v3-ogs00011']['chunk_shape'][0]:,} at 0.2.0, so the chunks did not narrow on "
+      "this path; what 0.2.0 changes is that each window becomes a partial read of a "
+      f"{layout['v3-ogs00011']['shard_shape'][0]:,}-element shard (its index, then byte ranges, "
+      "through the sharding codec) where 0.1.0 read each chunk as its own file. That per-window "
+      "cost is inferred from the code and these layouts, not profiled. Read as one contiguous "
+      f"segment instead, the same arrays are faster at 0.2.0 (the overflow-heavy bulk, "
+      f"{fmt_ratio(ex['bulk_overflow_heavy'][0])}). The designed fix is ADR 0060's by-variant "
+      "index (#252 step 5), which reads a variant's rows directly instead of scanning; it is "
+      "outside #250.")
+print()
+after = ab252["shapes"]["phewas_off_axis"]["after"]
+inside = lo["b-code-0.1.0"] <= after["elapsed_ms"] <= hi["b-code-0.1.0"]
+print("**Against #252's committed number.** #252's A/B "
+      "(`opengwasdb_ogs00011_hybrid_252_ab.json`) recorded this path on 0.1.0 at "
+      f"{fmt_time(after['elapsed_ms'])} in one run at a 1-minute load of "
+      f"{after['load_start'][0]:.2f}, under commit {ab252['provenance']['after']['commit']}. "
+      f"This run's {ph['b-code-0.1.0']['repetitions']} 0.1.0 repetitions span "
+      f"{fmt_time(lo['b-code-0.1.0'])}–{fmt_time(hi['b-code-0.1.0'])}, which "
+      + ("contains it, so the gap between the medians is the spread of a single sample against "
+         "a median, not evidence of a change." if inside else
+         "**does not contain it**: the gap is larger than this run's spread.")
+      + " The Overflow read path is unchanged between that commit and this code (no change "
+      "under `opengwasdb/query/`, and only writer roles in `layouts/ragged/zarr_csr.py`); "
+      "ADR 0060 quotes 26.4 s for the same path from an earlier version of #252's artifact.")
+print(":::")
+print()
+
+loads7 = {f"{name} {col}": load for name, docs in (
+    ("OGS-00016", (cmp16_218, cmp16_z3, "v2-ogs00016", "v3-ogs00016")),
+    ("OGS-00011", (cmp11_218, cmp11_z3, "v2-ogs00011", "v3-ogs00011")))
+    for col, load in column_loads(*docs).items()}
+busy7 = [name for name, load in loads7.items() if load >= 3]
+print(f"**Size.** Total apparent size grows "
       f"{conv16['after']['apparent_bytes'] / conv16['before']['apparent_bytes'] * 100 - 100:+.2f} % "
-      f"({conv11['after']['apparent_bytes'] / conv11['before']['apparent_bytes'] * 100 - 100:+.2f} % "
-      "on OGS-00011), the `se` plane is the largest per-plane cost, and OGS-00011's smaller shapes "
-      "use a few hundred MiB more peak memory. The rows timed once (`n=1`) are marked in the")
-print("tables; the OGS-00011 2.18 slow shapes are single samples and their ratios are inside that "
-      "run's spread.")
+      f"on OGS-00016 and "
+      f"{conv11['after']['apparent_bytes'] / conv11['before']['apparent_bytes'] * 100 - 100:+.2f} % "
+      f"on OGS-00011, against OGS-00009's {REF_TOTAL:+.2f} %; the largest per-plane cost on FinnGen "
+      f"is `{largest.replace('data.zarr/', '')}` at {finn_planes[largest]:.3f}×. **Load.** "
+      + (f"Every seven-shape column began below load 3 (highest {max(loads7.values()):.2f}); "
+         if not busy7 else f"**{', '.join(busy7)} began at or above load 3**; ")
+      + "the extras' loads are listed per repetition above.")
 ```

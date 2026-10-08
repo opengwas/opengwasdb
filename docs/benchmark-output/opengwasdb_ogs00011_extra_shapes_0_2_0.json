@@ -1,88 +1,221 @@
 {
   "task": "#250",
-  "probe": "benchmarks/ogs00011_ab.py --one-shape",
+  "runner": "benchmarks/ogs00011_extra_shapes.py",
+  "probe": "benchmarks.ogs00011_ab.measure_one_shape",
+  "repetitions_share_one_interpreter": true,
   "raw": "opengwasdb_ogs00011_extra_shapes.jsonl",
+  "environments": {
+    "a-2.18-0.1.0": {
+      "recorded": true,
+      "python": "/tmp/epic240/244/base-src/.pixi/envs/dev/bin/python",
+      "zarr": "2.18.7",
+      "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
+      "opengwasdb_path": "/tmp/epic240/244/base-src/opengwasdb",
+      "opengwasdb_fingerprint": "9fe19ecba575bdc1e2419cfcdff9fe69ca6e293f21279bf63ec8d10506450ac4",
+      "commit": "745796c",
+      "probe_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_ab.py",
+      "probe_sha256": "6bf954d583448f32096c1024b4af9525c0ba440004a26c78a3307bcd2c512b64",
+      "runner_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_extra_shapes.py",
+      "runner_sha256": "5b2e671f9053d003aa87d32fec0452728efb6c05d6c431f854c21505466cd422"
+    },
+    "b-code-0.1.0": {
+      "recorded": true,
+      "python": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/.pixi/envs/dev/bin/python",
+      "zarr": "3.4.0",
+      "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
+      "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/opengwasdb",
+      "opengwasdb_fingerprint": "49af77aedf3ff9287023310e47c91edab8189cc6775f98cfbc9f0868de583595",
+      "commit": "6e01315",
+      "probe_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_ab.py",
+      "probe_sha256": "6bf954d583448f32096c1024b4af9525c0ba440004a26c78a3307bcd2c512b64",
+      "runner_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_extra_shapes.py",
+      "runner_sha256": "5b2e671f9053d003aa87d32fec0452728efb6c05d6c431f854c21505466cd422"
+    },
+    "c-code-0.2.0": {
+      "recorded": true,
+      "python": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/.pixi/envs/dev/bin/python",
+      "zarr": "3.4.0",
+      "hostname": "app-dc3-ogws-p0.services.bris.ac.uk",
+      "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/opengwasdb",
+      "opengwasdb_fingerprint": "49af77aedf3ff9287023310e47c91edab8189cc6775f98cfbc9f0868de583595",
+      "commit": "6e01315",
+      "probe_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_ab.py",
+      "probe_sha256": "6bf954d583448f32096c1024b4af9525c0ba440004a26c78a3307bcd2c512b64",
+      "runner_path": "/home/gh13047/repo/opengwasdb-wt/250-convert-benchmark-production/benchmarks/ogs00011_extra_shapes.py",
+      "runner_sha256": "5b2e671f9053d003aa87d32fec0452728efb6c05d6c431f854c21505466cd422"
+    }
+  },
   "shapes": {
     "phewas_off_axis": {
       "a-2.18-0.1.0": {
-        "repetitions": 3,
-        "median_ms": 19077.891,
-        "p95_ms": 19719.587,
-        "peak_mib": 27611.8,
+        "repetitions": 5,
+        "median_ms": 18993.526,
+        "p95_ms": 19701.057,
+        "peak_mib": 27618.3,
         "result_count": 1,
         "sha256": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2",
+        "elapsed_ms": [
+          18483.751,
+          18993.526,
+          19701.057,
+          19453.019,
+          18595.316
+        ],
         "start_load_1m": [
-          2.72,
-          3.09,
-          2.71
-        ]
+          2.98,
+          3.17,
+          3.8,
+          3.88,
+          4.13
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T15:57:04.476259+00:00",
+          "waited_for_load_s": 0.0,
+          "waited_timed_out": false
+        }
       },
       "b-code-0.1.0": {
-        "repetitions": 3,
-        "median_ms": 27941.955,
-        "p95_ms": 28659.978,
-        "peak_mib": 2423.9,
+        "repetitions": 5,
+        "median_ms": 26796.852,
+        "p95_ms": 27365.367,
+        "peak_mib": 2471.8,
         "result_count": 1,
         "sha256": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2",
+        "elapsed_ms": [
+          20361.939,
+          26796.852,
+          25964.027,
+          27365.367,
+          27076.268
+        ],
         "start_load_1m": [
-          3.05,
-          3.26,
-          12.3
-        ]
+          2.77,
+          3.22,
+          4.32,
+          4.99,
+          4.5
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T16:00:12.280157+00:00",
+          "waited_for_load_s": 45.0,
+          "waited_timed_out": false
+        }
       },
       "c-code-0.2.0": {
-        "repetitions": 3,
-        "median_ms": 31193.913,
-        "p95_ms": 31923.288,
-        "peak_mib": 2455.0,
+        "repetitions": 5,
+        "median_ms": 33391.498,
+        "p95_ms": 33550.724,
+        "peak_mib": 2662.9,
         "result_count": 1,
         "sha256": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2",
+        "elapsed_ms": [
+          33524.146,
+          32644.769,
+          33550.724,
+          33391.498,
+          30831.732
+        ],
         "start_load_1m": [
-          2.91,
-          3.91,
-          4.08
-        ]
+          2.83,
+          3.88,
+          3.65,
+          3.29,
+          2.89
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T16:03:41.127537+00:00",
+          "waited_for_load_s": 15.0,
+          "waited_timed_out": false
+        }
       }
     },
     "bulk_overflow_heavy": {
       "a-2.18-0.1.0": {
-        "repetitions": 3,
-        "median_ms": 49233.229,
-        "p95_ms": 60067.037,
-        "peak_mib": 20266.8,
+        "repetitions": 5,
+        "median_ms": 49229.427,
+        "p95_ms": 51343.859,
+        "peak_mib": 20262.2,
         "result_count": 85226242,
         "sha256": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76",
+        "elapsed_ms": [
+          51343.859,
+          45831.859,
+          49229.427,
+          48599.511,
+          49840.682
+        ],
         "start_load_1m": [
-          2.25,
-          4.1,
-          3.4
-        ]
+          2.92,
+          3.0,
+          2.05,
+          2.45,
+          3.0
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T16:07:23.554094+00:00",
+          "waited_for_load_s": 0.0,
+          "waited_timed_out": false
+        }
       },
       "b-code-0.1.0": {
-        "repetitions": 3,
-        "median_ms": 45945.771,
-        "p95_ms": 54399.944,
-        "peak_mib": 14719.1,
+        "repetitions": 5,
+        "median_ms": 43686.624,
+        "p95_ms": 45411.653,
+        "peak_mib": 14439.4,
         "result_count": 85226242,
         "sha256": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76",
+        "elapsed_ms": [
+          42626.645,
+          43686.624,
+          44580.7,
+          45411.653,
+          41260.404
+        ],
         "start_load_1m": [
-          8.18,
-          3.97,
-          2.8
-        ]
+          2.45,
+          2.65,
+          2.92,
+          2.79,
+          2.73
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T16:13:41.160549+00:00",
+          "waited_for_load_s": 0.0,
+          "waited_timed_out": false
+        }
       },
       "c-code-0.2.0": {
-        "repetitions": 3,
-        "median_ms": 26975.483,
-        "p95_ms": 27980.749,
-        "peak_mib": 14399.8,
+        "repetitions": 5,
+        "median_ms": 26126.051,
+        "p95_ms": 27103.59,
+        "peak_mib": 14464.0,
         "result_count": 85226242,
         "sha256": "b8f2550400bbdac27247ed6238598d5272e978e226ffa504ebc35cd949bd2d76",
+        "elapsed_ms": [
+          27103.59,
+          26326.616,
+          26126.051,
+          25915.585,
+          25395.522
+        ],
         "start_load_1m": [
-          3.69,
-          2.73,
-          2.63
-        ]
+          3.54,
+          3.12,
+          2.26,
+          2.38,
+          2.5
+        ],
+        "run": {
+          "recorded": true,
+          "measured_at": "2026-10-08T16:19:33.815785+00:00",
+          "waited_for_load_s": 0.0,
+          "waited_timed_out": false
+        }
       }
     }
   },

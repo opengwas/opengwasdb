@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Aggregate #250's two #252 Hybrid extra shapes from the raw one-shape runs.
 
-`benchmarks/ogs00011_ab.py --one-shape` prints one JSON record per run; this
-collapses the committed `opengwasdb_ogs00011_extra_shapes.jsonl` into a
-per-column median/p95/peak-RSS/count/digest artifact and refuses to publish if
-the three columns do not return the same rows and sha256.
+`benchmarks/ogs00011_extra_shapes.py` runs #252's probe
+(`benchmarks.ogs00011_ab.measure_one_shape`) and appends one JSON record per
+repetition, carrying the environment it ran in. This collapses the committed
+`opengwasdb_ogs00011_extra_shapes.jsonl` into a per-column
+median/p95/peak-RSS/count/digest artifact, with each column's environment and
+each run's start, wait and per-repetition loads. It refuses to publish if the
+three columns do not return the same rows and sha256, or if one column label
+covers runs from different environments.
 
 Run from the repository root:
 
@@ -49,7 +53,11 @@ def _row(records: list[dict]) -> dict:
         "peak_mib": round(max(float(record["peak_mb"]) for record in records), 1),
         "result_count": records[0]["result_count"],
         "sha256": records[0]["sha256"],
+        # In repetition order, so the report can say which repetition supplied the
+        # median and which repetition started at a load of 3 or more (#250 r2, 3b).
+        "elapsed_ms": [round(float(record["elapsed_ms"]), 3) for record in records],
         "start_load_1m": [round(float(record["load_start"][0]), 2) for record in records],
+        "run": _run(records),
     }
 
 
@@ -67,11 +75,62 @@ def _shape_rows(grouped: dict[tuple[str, str], list[dict]], shape: str) -> dict[
     return rows
 
 
+#: What names a column's code and interpreter; every run under one label must agree.
+ENVIRONMENT_FIELDS = (
+    "python", "zarr", "hostname", "opengwasdb_path", "opengwasdb_fingerprint",
+    "commit", "probe_path", "probe_sha256", "runner_path", "runner_sha256",
+)
+#: What one runner invocation records once, for all of its repetitions.
+RUN_FIELDS = ("measured_at", "waited_for_load_s", "waited_timed_out")
+
+
+def _environment(record: dict) -> dict:
+    """One record's environment, or `recorded: false` if it predates the fields."""
+    if not all(field in record for field in ENVIRONMENT_FIELDS):
+        return {"recorded": False}
+    return {"recorded": True} | {field: record[field] for field in ENVIRONMENT_FIELDS}
+
+
+def _environments(grouped: dict[tuple[str, str], list[dict]]) -> dict[str, dict]:
+    """The one environment each column ran under, across every shape it ran.
+
+    A column whose records predate the fields is reported as `recorded: false`
+    rather than silently omitted (#250 review r2, major 3). A column whose runs
+    disagree on any field is refused: the label would otherwise name code it
+    did not all run.
+    """
+    out: dict[str, dict] = {}
+    for (column, _shape), records in grouped.items():
+        for record in records:
+            environment = _environment(record)
+            known = out.setdefault(column, environment)
+            differing = sorted(key for key in known.keys() | environment.keys()
+                               if known.get(key) != environment.get(key))
+            if differing:
+                raise SystemExit(f"{RAW}: column {column} ran under different {differing}")
+    return out
+
+
+def _run(records: list[dict]) -> dict:
+    """When one runner invocation started, how long it waited for quiet, and if it gave up."""
+    if not all(field in record for record in records for field in RUN_FIELDS):
+        return {"recorded": False}
+    runs = {tuple(record[field] for field in RUN_FIELDS) for record in records}
+    if len(runs) != 1:
+        raise SystemExit(f"{RAW}: one column and shape holds {len(runs)} runs; keep one")
+    return {"recorded": True} | {field: records[0][field] for field in RUN_FIELDS}
+
+
 def _aggregate(grouped: dict[tuple[str, str], list[dict]]) -> dict:
     artifact: dict = {
         "task": "#250",
-        "probe": "benchmarks/ogs00011_ab.py --one-shape",
+        "runner": "benchmarks/ogs00011_extra_shapes.py",
+        "probe": "benchmarks.ogs00011_ab.measure_one_shape",
+        # The runner calls the probe once per repetition in one interpreter per
+        # column and shape, so repetition 1 is the only cold-process one.
+        "repetitions_share_one_interpreter": True,
         "raw": RAW,
+        "environments": _environments(grouped),
         "shapes": {shape: _shape_rows(grouped, shape) for shape in SHAPE_ORDER},
     }
     artifact["identity"] = {

@@ -367,5 +367,18 @@ def test_effective_reader_settings_tolerates_a_zarr2_plane():
 
 
 def test_wait_for_quiet_returns_immediately_when_disabled_or_below_the_limit():
-    assert _wait_for_quiet(0) == 0.0
-    assert _wait_for_quiet(10_000) < 1.0
+    assert _wait_for_quiet(0) == (0.0, False)
+    waited, timed_out = _wait_for_quiet(10_000)
+    assert waited < 1.0
+    assert timed_out is False
+
+
+def test_wait_for_quiet_reports_that_it_gave_up_on_a_busy_node(monkeypatch):
+    """A node that never quietens is reported, not silently timed (#250 review r2, nit 8)."""
+    clock = iter(float(second) for second in range(0, 100_000, 15))
+    monkeypatch.setattr("os.getloadavg", lambda: (50.0, 50.0, 50.0))
+    monkeypatch.setattr("time.perf_counter", lambda: next(clock))
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    waited, timed_out = _wait_for_quiet(3.0, timeout_s=60.0, poll_s=15.0)
+    assert timed_out is True
+    assert waited > 60.0

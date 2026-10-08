@@ -131,13 +131,17 @@ def main() -> None:
         source = Path(command[command.index("scripts/convert_store_to_0_2_0.py") + 1])
         destination = Path(command[command.index("--into") + 1])
         first, last, pid = windows[spec["name"]]
+        source_format = json.loads((source / "manifest.json").read_text())["format_version"]
+        destination_format = json.loads(
+            (destination / "manifest.json").read_text()
+        )["format_version"]
         record = {
             "task": "#250",
             "store": spec["name"],
             "source": str(source),
             "destination": str(destination),
-            "source_format_version": "0.1.0",
-            "destination_format_version": "0.2.0",
+            "source_format_version": str(source_format),
+            "destination_format_version": str(destination_format),
             "log": spec["log"],
             "wall_seconds": wall_s,
             "peak_rss_kbytes": maxrss,
