@@ -1,6 +1,6 @@
 ---
 title: "OGS-00016 converted to format 0.2.0"
-subtitle: "FinnGen R13 · 2,754 Analyses × 21,230,615 variants · Zarr v3, sharded, Dense chunks narrowed to 64 Analyses · benchmarked against its 0.1.0 original"
+subtitle: "FinnGen R13 · Zarr v3 with sharding and narrower Dense chunks · benchmarked against its 0.1.0 original"
 date: today
 format:
   html:
@@ -193,13 +193,18 @@ ADR_0058_RATIOS = {
 
 s16, s11 = sizes(conv16), sizes(conv11)
 m16, m11 = conv16["monitor"], conv11["monitor"]
+ds16 = bench["dataset"]
+N_ANALYSES = f"{ds16['n_analyses']:,}"
+N_VARIANTS = f"{ds16['n_variants']:,}"
+N_ASSOC_BN = f"{ds16['n_associations'] / 1e9:,.1f}"
 ```
 
 ::: {.callout-important}
 ## What this measures
 
-OGS-00016 — every public FinnGen R13 endpoint, **2,754 Analyses × 21,230,615
-variants, 58.5 billion associations** — converted from `format_version` 0.1.0
+OGS-00016 — every public FinnGen R13 endpoint, **`{python} N_ANALYSES` Analyses ×
+`{python} N_VARIANTS` variants, `{python} N_ASSOC_BN` billion associations** — converted from
+`format_version` 0.1.0
 (Zarr v2, `[1000, 1000]` chunks) to **0.2.0 (Zarr v3, sharded, Dense inner chunk
 `[1000, 64]`, Dense shard `[100000, 1024]`, top-hit index sharded at 64 inner
 chunks)** by `scripts/convert_store_to_0_2_0.py`, then:
