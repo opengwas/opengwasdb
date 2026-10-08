@@ -107,12 +107,11 @@ attributes.
   regions was a read-modify-write of the whole shard, about twelve times per
   shard; `RaggedCSRWriter` now rounds its write region up to a whole number of
   shards.  The cost is the region's working set, measured at 66-79 bytes a cell:
-  about 3.1-3.7 GiB at the full shard, against about 0.3 GB for the
-  4,194,304-cell region the pre-#249 step used.  The whole-shard write guard
-  covers every sharded array, 1-D included whatever its shard size, so this
-  cannot regress silently; it also caught the Dense SE rewrite filling
-  `se_exception_index`/`_value` one band at a time, which now buffers the bands
-  and writes each table once.
+  about 3.1-3.7 GiB at the full shard; the pre-#249 4,194,304-cell region was
+  about a twelfth of that.  The whole-shard write guard covers every sharded
+  array, 1-D included whatever its shard size, so this cannot regress silently;
+  it also caught the Dense SE rewrite filling `se_exception_index`/`_value` one
+  band at a time, which now buffers the bands and writes each table once.
 
 ## Alternatives rejected
 

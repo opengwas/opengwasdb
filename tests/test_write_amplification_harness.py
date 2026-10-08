@@ -26,17 +26,27 @@ def test_the_plan_forces_the_residual_branches() -> None:
     assert plan.z.kind == "int16_fixed"
 
 
-def test_the_synthetic_reaches_the_residual_paths_and_side_tables(tmp_path: Path) -> None:
-    """A small flush writes the residual planes and every exception/overflow table."""
+def test_the_synthetic_reaches_the_residual_paths_and_side_tables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A small flush writes the residual planes, every side table, and a real region peak."""
+    import benchmarks.measure_write_amplification as amp
+    import opengwasdb.store.arrays as store_arrays
+
+    # Several regions in a cheap fixture: a 200-cell shard (one 200-cell inner
+    # chunk) with a 200-cell region, so six regions cover 1,200 cells.
+    for module in (store_arrays, amp):
+        monkeypatch.setattr(module, "RAGGED_SEQUENCE_SHARD_ELEMENTS", 200)
+        monkeypatch.setattr(module, "ASSOCIATION_SEQUENCE_CHUNK", 200)
     payload = measure(
         SimpleNamespace(
             legacy_step=False,
             work=tmp_path / "amp",
-            total_cells=6000,
+            total_cells=1200,
             n_analyses=2,
             n_variants=500,
             seed=0,
-            region_cells=1 << 22,
+            region_cells=200,
         )
     )
     assert payload["encoding"]["se"]["kind"] == "int8_residual"
@@ -52,17 +62,23 @@ def test_the_synthetic_reaches_the_residual_paths_and_side_tables(tmp_path: Path
     for name in ("eaf_exception_index", "se_exception_index", "z_overflow_index"):
         assert payload["arrays"][name]["final_bytes"] > 0, name
     # The planted exact exceptions make the tables non-empty, not just present.
-    assert payload["arrays"]["eaf"]["shard_writes"] == 1
+    assert payload["arrays"]["eaf"]["shards"] == 6
+    assert payload["arrays"]["eaf"]["max_writes_one_shard"] == 1
     assert payload["seed"] == 0
-    # The region peak must be measured, not null or zero, and its per-cell cost
-    # must be plausible: a collapsed measurement (a failed `clear_refs`, a
-    # missing VmHWM, or a peak taken from outside the region) would report null,
-    # zero or a number far below any real region working set (#249 r2).
-    eaf_peak = payload["eaf_region_flush_peak_rss_kib"]
-    se_peak = payload["se_region_flush_peak_rss_kib"]
-    assert eaf_peak and se_peak, payload
-    assert payload["flush_peak_rss_kib"] == max(eaf_peak, se_peak)
-    assert payload["region_bytes_per_cell"] > 0, payload["region_bytes_per_cell"]
+    # The fixture really is several regions, and each window's allocation peak is
+    # the region's: the SE half allocates at least its float32 error plane, so a
+    # peak below `cells x 4 B` is a collapsed or out-of-window measurement -- the
+    # failure mode the RSS delta cannot show (#249 r3).
+    largest = payload["largest_region_cells"]
+    assert largest == 200, payload["region_step_cells"]
+    assert payload["eaf_region_alloc_peak_bytes"] > 0, payload
+    assert payload["se_region_alloc_peak_bytes"] >= largest * 4, payload[
+        "se_region_alloc_peak_bytes"
+    ]
+    assert payload["region_alloc_peak_bytes"] == max(
+        payload["eaf_region_alloc_peak_bytes"], payload["se_region_alloc_peak_bytes"]
+    )
+    assert payload["region_bytes_per_cell"] >= 4, payload["region_bytes_per_cell"]
 
 
 def _run(legacy_step: bool) -> dict[str, object]:

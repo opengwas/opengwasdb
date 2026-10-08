@@ -42,6 +42,7 @@ import json
 import os
 import resource
 import time
+import tracemalloc
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -165,30 +166,35 @@ def _reset_peak_rss() -> bool:
     return True
 
 
-def _measure_region(work: Callable[[], None]) -> int | None:
-    """Run `work` and return the KiB of RSS it added, or `None` if /proc cannot say.
+def _measure_window(work: Callable[[], None]) -> tuple[int, int | None]:
+    """Run `work`; return `(tracemalloc peak bytes, RSS delta KiB or None)`.
 
-    A failed reset or a missing VmHWM returns `None`, so an artifact can never
-    carry a wrong-but-plausible region figure.
+    `tracemalloc`'s peak is allocation-level, so it does not depend on what the
+    allocator keeps resident and reuses: the RSS delta of a window that reuses
+    freed memory collapses (the review measured a 31 MB SE region as 248 KiB),
+    while the allocation peak is the region's.  The RSS delta is kept as a
+    secondary figure and is `None` when /proc cannot say.
     """
-    before = _status_kib("VmRSS")
-    if before is None or not _reset_peak_rss():
+    rss_before = _status_kib("VmRSS")
+    reset_ok = _reset_peak_rss()
+    tracemalloc.start()
+    tracemalloc.reset_peak()
+    try:
         work()
+        _current, alloc_peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    rss_delta: int | None = None
+    if rss_before is not None and reset_ok:
+        rss_after = _status_kib("VmHWM")
+        rss_delta = None if rss_after is None else max(0, rss_after - rss_before)
+    return alloc_peak, rss_delta
+
+
+def _bytes_per_cell(peak_bytes: int | None, cells: int) -> float | None:
+    if peak_bytes is None or cells <= 0:
         return None
-    work()
-    after = _status_kib("VmHWM")
-    return None if after is None else max(0, after - before)
-
-
-def _peak_or_none(peaks: list[int | None]) -> int | None:
-    known = [peak for peak in peaks if peak is not None]
-    return max(known) if known else None
-
-
-def _bytes_per_cell(peak_kib: int | None, cells: int) -> float | None:
-    if peak_kib is None or cells <= 0:
-        return None
-    return round(peak_kib * 1024 / cells, 1)
+    return round(peak_bytes / cells, 1)
 
 
 def measure(args: argparse.Namespace) -> dict[str, Any]:
@@ -205,20 +211,25 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
     writer = _synthetic_writer(args.total_cells, args.n_analyses, args.n_variants, args.seed)
     encoding = _plan()
     step_cells = int(zarr_csr.sequence_region_step(writer.n_associations, args.region_cells))
+    largest_region_cells = max(1, min(step_cells, writer.n_associations))
+    # A Hybrid build already holds this writer's one per-variant EAF baseline by
+    # flush time (#230), so derive it *before* the eaf window: deriving it inside
+    # would measure the baseline (about 1.5 GB at 160 M cells, bounded by
+    # `DEFAULT_BASELINE_CELL_BUDGET`), not the region.
+    writer._eaf_baseline(encoding)
     started = time.monotonic()
     with count_shard_writes() as recorder:
-        # The region peak has to be measured where the region *is* the peak.  The
-        # eaf half is measured as itself; the SE half is measured with the
-        # coefficients supplied, as a Hybrid build supplies them, so its peak is
-        # the region and not a whole-plane `_fit_own_coefficients` (which the
-        # review measured at 94 B/cell against the region's 66-79).
-        eaf_peak = _measure_region(
+        # Each window's peak is measured where the region is the allocation: the
+        # eaf half as itself, and the SE half with the coefficients supplied, as
+        # a Hybrid build supplies them, so the whole-plane `_fit_own_coefficients`
+        # (94 B/cell in the review probe) runs between the two windows.
+        eaf_alloc, eaf_rss = _measure_window(
             lambda: writer.write_eaf_plane(args.work, encoding, region_cells=args.region_cells)
         )
         root = writer._eaf_root
         offsets = np.asarray(writer._offsets, dtype=np.int64)
         coefficients = writer._fit_own_coefficients(root, encoding, offsets, writer.n_associations)
-        se_peak = _measure_region(
+        se_alloc, se_rss = _measure_window(
             lambda: writer.flush_se(
                 args.work,
                 encoding,
@@ -228,7 +239,7 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
         )
     wall = time.monotonic() - started
     lifetime_peak_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    flush_peak_kib = _peak_or_none([eaf_peak, se_peak])
+    region_alloc_peak = max(eaf_alloc, se_alloc)
 
     written = recorder.bytes_written_by_array()
     counts = recorder.chunk_writes()
@@ -249,19 +260,20 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
         "inner_chunk": ASSOCIATION_SEQUENCE_CHUNK,
         "region_cells": args.region_cells,
         "region_step_cells": step_cells,
+        "largest_region_cells": largest_region_cells,
         "total_cells": args.total_cells,
         "n_analyses": args.n_analyses,
         "n_variants": args.n_variants,
         "seed": args.seed,
         "encoding": encoding.to_manifest(),
         "wall_seconds": round(wall, 2),
-        "eaf_region_flush_peak_rss_kib": eaf_peak,
-        "se_region_flush_peak_rss_kib": se_peak,
-        "flush_peak_rss_kib": flush_peak_kib,
-        "flush_peak_rss_gib": (
-            None if flush_peak_kib is None else round(flush_peak_kib / (1024 * 1024), 3)
-        ),
-        "region_bytes_per_cell": _bytes_per_cell(flush_peak_kib, step_cells),
+        "eaf_region_alloc_peak_bytes": eaf_alloc,
+        "se_region_alloc_peak_bytes": se_alloc,
+        "region_alloc_peak_bytes": region_alloc_peak,
+        "region_gib": round(region_alloc_peak / (1024**3), 3),
+        "region_bytes_per_cell": _bytes_per_cell(region_alloc_peak, largest_region_cells),
+        "eaf_region_rss_delta_kib": eaf_rss,
+        "se_region_rss_delta_kib": se_rss,
         "lifetime_peak_rss_kib": lifetime_peak_kib,
         "lifetime_peak_rss_gib": round(lifetime_peak_kib / (1024 * 1024), 2),
         "total_bytes_written": total_written,
@@ -272,14 +284,15 @@ def measure(args: argparse.Namespace) -> dict[str, Any]:
             "bytes_written counts every byte handed to the storage layer while the "
             "component flushed; final_bytes is what is on disk afterwards. A shard "
             "written once has amplification near 1; a max_writes_one_shard above 1 "
-            "is the read-modify-write this ticket fixes. `eaf_region_flush_peak_rss_kib` "
-            "and `se_region_flush_peak_rss_kib` are VmHWM after `clear_refs` minus "
-            "VmRSS before `write_eaf_plane`/`flush_se` (the SE half with the "
-            "coefficients supplied, as a Hybrid build supplies them), so the peak is "
-            "the region's and not a whole-plane fit's; null means /proc could not say. "
-            "`region_bytes_per_cell` divides the larger of the two by "
-            "`region_step_cells`. `lifetime_peak_rss_kib` is `ru_maxrss` and predates "
-            "the flush."
+            "is the read-modify-write this ticket fixes. `eaf_region_alloc_peak_bytes` "
+            "and `se_region_alloc_peak_bytes` are tracemalloc peaks around "
+            "`write_eaf_plane`/`flush_se` (the SE half with the coefficients "
+            "supplied, and the EAF baseline already held), so the peak is the "
+            "region's and not a whole-plane pass's; the RSS deltas are recorded "
+            "beside them but collapse when the allocator reuses freed memory. "
+            "`region_bytes_per_cell` divides the larger allocation peak by "
+            "`largest_region_cells` (min(step, total)). `lifetime_peak_rss_kib` is "
+            "`ru_maxrss` and predates the flush."
         ),
     }
 

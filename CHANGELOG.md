@@ -248,10 +248,12 @@ the end of this file.
   OGS-00006's two shards **15 writes in total** (12 + 3) and OGS-00011's 62
   shards at most 13 times each (797 shard writes per array).
   The cost is the region's working set, measured at **66-79 bytes a cell** (the
-  review probe; #228's whole-plane write measured 72.9): about **3.3-4.0 GB
-  (3.1-3.7 GiB)** for a 50,000,000-cell region, against about 0.3 GB for the
-  4,194,304-cell region the pre-#249 step used. The 30-bytes-a-cell figure this
-  replaces predated the v3 sharding, which encodes the whole shard per write.
+  #249 review probe; #228's whole-plane write measured 72.9), so a
+  50,000,000-cell region is about **3.3-4.0 GB (3.1-3.7 GiB)**; the pre-#249
+  step's region was 4,194,304 cells, about a twelfth of that. The
+  30-bytes-a-cell figure this replaces predated the v3 sharding, which encodes
+  the whole shard per write. The harness's own tracemalloc `region_alloc_peak_bytes`
+  fields supersede this estimate when the artifact is re-run.
   Extending `require_whole_shard_writes` to every sharded array -- 1-D included,
   whatever its shard size -- found a second partial-shard writer: the Dense SE
   rewrite (`encoding/se.py`) filled `se_exception_index`/`_value` one row band at

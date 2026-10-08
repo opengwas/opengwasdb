@@ -358,6 +358,14 @@ def merge_artifacts(paths: list[Path]) -> dict[str, Any]:
     runs: list[dict[str, Any]] = []
     for path in paths:
         payload = json.loads(path.read_text(encoding="utf-8"))
+        missing_notes = [
+            key for key in ("production_config", "timing_note") if key not in payload
+        ]
+        if missing_notes:
+            raise SystemExit(
+                f"{path}: no {missing_notes}; a run from before the harness recorded "
+                "them cannot be merged, so only a fresh re-run can be"
+            )
         if merged is None:
             merged = {key: payload[key] for key in _ARTIFACT_KEYS if key in payload}
             merged["steps"] = []
@@ -385,12 +393,18 @@ def merge_artifacts(paths: list[Path]) -> dict[str, Any]:
 
 
 def _refuse_a_bad_timed_merge(steps: list[dict[str, Any]]) -> None:
-    """A timed before/after has one step per (pilot, side) and no guard."""
+    """A timed before/after has one step per (pilot, side), no guard, and a state."""
     pairs = [(step["pilot"], step["side"]) for step in steps]
     duplicates = sorted({pair for pair in pairs if pairs.count(pair) > 1})
     if duplicates:
         raise SystemExit(f"duplicate pilot/side step(s) in the merge: {duplicates}")
-    guarded = [step for step in steps if step.get("guard_env") is not None]
+    unstated = [pair for pair, step in zip(pairs, steps, strict=True) if "guard_env" not in step]
+    if unstated:
+        raise SystemExit(
+            f"step(s) {unstated} record no {GUARD_ENV}; a missing key is not "
+            "'unset', so only a fresh re-run can be merged"
+        )
+    guarded = [step for step in steps if step["guard_env"] is not None]
     if guarded:
         raise SystemExit(
             f"{len(guarded)} step(s) ran with {GUARD_ENV} set; the merged artifact is "

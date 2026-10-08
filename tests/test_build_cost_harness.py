@@ -154,6 +154,13 @@ def test_run_step_records_the_guard_environment(tmp_path: Path, monkeypatch) -> 
     assert step["exit_code"] == 0
 
 
+def _write_payload(tmp_path: Path, name: str, payload: dict) -> Path:
+    """Write one artifact payload and return its path."""
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def _artifact(tmp_path: Path, name: str, commit_sha: str, steps: list[dict]) -> Path:
     payload = {
         "artifact": "test",
@@ -169,9 +176,7 @@ def _artifact(tmp_path: Path, name: str, commit_sha: str, steps: list[dict]) -> 
         "timing_note": "time -v on the CLI process",
         "steps": [{"guard_env": None, **step} for step in steps],
     }
-    path = tmp_path / name
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    return path
+    return _write_payload(tmp_path, name, payload)
 
 
 def test_merge_artifacts_keeps_run_order_and_its_own_provenance(tmp_path: Path) -> None:
@@ -207,3 +212,39 @@ def test_merge_artifacts_refuses_a_guard_on_step(tmp_path: Path) -> None:
     guarded = _artifact(tmp_path, "guarded.json", "f48ab2a", steps)
     with pytest.raises(SystemExit, match="guard must be unset"):
         merge_artifacts([guarded])
+
+
+def test_merge_artifacts_refuses_a_run_without_the_notes(tmp_path: Path) -> None:
+    """A run from before the notes existed cannot be merged (#249 r3)."""
+    path = _write_payload(
+        tmp_path,
+        "old.json",
+        {
+            "artifact": "test",
+            "commit": "f48ab2a",
+            "base_revision": "f168ef1",
+            "head_revision": "f48ab2a",
+            "steps": [{"pilot": "dense", "side": "base", "guard_env": None}],
+        },
+    )
+    with pytest.raises(SystemExit, match="cannot be merged"):
+        merge_artifacts([path])
+
+
+def test_merge_artifacts_refuses_a_step_without_guard_env(tmp_path: Path) -> None:
+    """A missing `guard_env` is missing data, not 'unset' (#249 r3)."""
+    path = _write_payload(
+        tmp_path,
+        "no-guard.json",
+        {
+            "artifact": "test",
+            "commit": "f48ab2a",
+            "base_revision": "f168ef1",
+            "head_revision": "f48ab2a",
+            "production_config": "note",
+            "timing_note": "note",
+            "steps": [{"pilot": "dense", "side": "base"}],
+        },
+    )
+    with pytest.raises(SystemExit, match="record no"):
+        merge_artifacts([path])

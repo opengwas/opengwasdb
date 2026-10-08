@@ -663,10 +663,10 @@ class RaggedCSRWriter:
         #228).  Each region is a whole Ragged sequence shard (issue #249), so
         each shard is written exactly once; on the 50,000,000-element shard that
         is roughly 3.1-3.7 GiB (66-79 bytes a cell, measured in the #249 review
-        probe), against the ~0.3 GB a 4,194,304-cell region used before.  What is
-        stored is is
-        unchanged -- each plane's codes are a per-cell function of its value,
-        keyed on global flat position (`positions_flat(lo)` per region).
+        probe), against a pre-#249 4,194,304-cell region of about a twelfth that.
+        What is stored is unchanged -- each plane's codes are a per-cell function
+        of its value, keyed on global flat position (`positions_flat(lo)` per
+        region).
         `eaf_baseline` lets Reference Completion carry its source's baselines
         across a variant remap; see `_flush_baseline`.
         """
