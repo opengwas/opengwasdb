@@ -48,7 +48,7 @@ def _extras_record(column: str, shape: str, **overrides) -> dict:
         "python": "/py", "zarr": "3.4.0", "hostname": "h", "opengwasdb_path": "/p",
         "opengwasdb_fingerprint": "f1", "commit": "c", "probe_path": "/probe",
         "probe_sha256": "p", "runner_path": "/runner", "runner_sha256": "r",
-        "measured_at": "t", "waited_for_load_s": 0.0, "waited_timed_out": False,
+        "measured_at": "t", "gate_wait_s": 0.0, "gate_gave_up": False,
     }
     return record | overrides
 
@@ -80,3 +80,20 @@ def test_adr_0058_verdict_reports_each_way_finngen_could_contradict_it(monkeypat
     failures = module._failures(data)
     assert len(failures) == 2
     assert "contradicts the decision" in module._verdict(data)[0]
+
+
+def test_extras_row_keeps_each_repetitions_wait_in_order(monkeypatch):
+    """Per-repetition gates differ run to run; the aggregate keeps every one."""
+    monkeypatch.chdir(ROOT)
+    module = _load("build_ogs00011_extra_shapes", "scripts/build_ogs00011_extra_shapes.py")
+    records = [
+        _extras_record("a", "phewas_off_axis", rep=1, gate_wait_s=0.0),
+        _extras_record("a", "phewas_off_axis", rep=2, gate_wait_s=60.0, gate_gave_up=True),
+    ]
+    row = module._row(records)
+    assert row["gate_wait_s"] == [0.0, 60.0]
+    assert row["gate_gave_up"] == [False, True]
+    assert row["run"] == {"recorded": True, "measured_at": "t"}
+    ungated = [{k: v for k, v in record.items() if k != "gate_wait_s"} for record in records]
+    with pytest.raises(SystemExit, match="predates the per-repetition load gate"):
+        module._row(ungated)

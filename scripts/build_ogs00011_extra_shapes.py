@@ -5,10 +5,11 @@
 (`benchmarks.ogs00011_ab.measure_one_shape`) and appends one JSON record per
 repetition, carrying the environment it ran in. This collapses the committed
 `opengwasdb_ogs00011_extra_shapes.jsonl` into a per-column
-median/p95/peak-RSS/count/digest artifact, with each column's environment and
-each run's start, wait and per-repetition loads. It refuses to publish if the
-three columns do not return the same rows and sha256, or if one column label
-covers runs from different environments.
+median/p95/peak-RSS/count/digest artifact, with each column's environment,
+each run's start, and every repetition's load and load-gate wait. It refuses to
+publish if the three columns do not return the same rows and sha256, if one
+column label covers runs from different environments, or if a record predates
+the per-repetition gate.
 
 Run from the repository root:
 
@@ -42,9 +43,29 @@ def _group(raw: Path) -> dict[tuple[str, str], list[dict]]:
     return grouped
 
 
-def _row(records: list[dict]) -> dict:
+def _check(records: list[dict]) -> None:
+    """Refuse a timed-out run, or one from before the per-repetition gate."""
     if any(record["timed_out"] for record in records):
         raise SystemExit("a one-shape run hit the time limit; refusing to publish")
+    if not all(field in record for record in records for field in GATE_FIELDS):
+        raise SystemExit(f"{RAW}: a record predates the per-repetition load gate; re-run it")
+
+
+def _per_repetition(records: list[dict]) -> dict:
+    """Each repetition's time, start load and gate, in repetition order.
+
+    So the report can say which repetition supplied the median, what load each
+    began at, and how long its gate waited (#250 r2, 3b; round 3).
+    """
+    return {
+        "elapsed_ms": [round(float(record["elapsed_ms"]), 3) for record in records],
+        "start_load_1m": [round(float(record["load_start"][0]), 2) for record in records],
+        **{field: [record[field] for record in records] for field in GATE_FIELDS},
+    }
+
+
+def _row(records: list[dict]) -> dict:
+    _check(records)
     elapsed = [float(record["elapsed_ms"]) for record in records]
     return {
         "repetitions": len(records),
@@ -53,10 +74,7 @@ def _row(records: list[dict]) -> dict:
         "peak_mib": round(max(float(record["peak_mb"]) for record in records), 1),
         "result_count": records[0]["result_count"],
         "sha256": records[0]["sha256"],
-        # In repetition order, so the report can say which repetition supplied the
-        # median and which repetition started at a load of 3 or more (#250 r2, 3b).
-        "elapsed_ms": [round(float(record["elapsed_ms"]), 3) for record in records],
-        "start_load_1m": [round(float(record["load_start"][0]), 2) for record in records],
+        **_per_repetition(records),
         "run": _run(records),
     }
 
@@ -81,7 +99,11 @@ ENVIRONMENT_FIELDS = (
     "commit", "probe_path", "probe_sha256", "runner_path", "runner_sha256",
 )
 #: What one runner invocation records once, for all of its repetitions.
-RUN_FIELDS = ("measured_at", "waited_for_load_s", "waited_timed_out")
+RUN_FIELDS = ("measured_at",)
+#: What the runner's load gate records on every repetition (#250 round 3).
+#: Named apart from the first run's once-per-run `waited_for_load_s`, so a
+#: record from before the gate cannot pass for a gated one.
+GATE_FIELDS = ("gate_wait_s", "gate_gave_up")
 
 
 def _environment(record: dict) -> dict:
@@ -112,7 +134,7 @@ def _environments(grouped: dict[tuple[str, str], list[dict]]) -> dict[str, dict]
 
 
 def _run(records: list[dict]) -> dict:
-    """When one runner invocation started, how long it waited for quiet, and if it gave up."""
+    """When one runner invocation started."""
     if not all(field in record for record in records for field in RUN_FIELDS):
         return {"recorded": False}
     runs = {tuple(record[field] for field in RUN_FIELDS) for record in records}
