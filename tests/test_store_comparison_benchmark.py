@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import time
 
 import numpy as np
@@ -22,6 +23,7 @@ from benchmarks.benchmark_store_comparison import (
     _parse_region,
     _parse_store,
     _parser,
+    _ShapeTimeout,
     _timed_shape,
     differing_arrays,
     differing_shapes,
@@ -251,30 +253,44 @@ def test_parser_accepts_a_store_specific_anchor_override():
     assert args.region == ("10", 112_500_000, 113_500_000)
 
 
-def test_timed_shape_records_a_limit_hit_without_a_digest():
-    """A shape over the limit must be recorded as a hit, never as a timing (#250)."""
+def test_timed_shape_records_a_limit_hit_without_a_digest(monkeypatch):
+    """A shape over the limit must be recorded as a hit, never as a timing (#250).
 
-    def slow() -> dict[str, np.ndarray]:
-        time.sleep(5)
-        return _result([1.0])
+    `setitimer` raises `_ShapeTimeout` on the arm call and does nothing on the
+    clear, so the test exercises the handler and its restoration without waiting
+    on a clock or delivering a real signal.
+    """
+    calls = {"n": 0}
 
-    timed = _timed_shape(slow, 5, limit_s=0.05, slow_shape_s=0.0)
+    def arm_then_raise(_which: int, _seconds: float) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _ShapeTimeout
+
+    monkeypatch.setattr(signal, "setitimer", arm_then_raise)
+
+    timed = _timed_shape(lambda: _result([1.0]), 5, limit_s=1.0, slow_shape_s=0.0)
 
     assert timed["timed_out"] is True
     assert timed["digests"] == {}
     assert timed["result_count"] is None
 
 
-def test_timed_shape_times_a_slow_shape_once_after_its_warm_up():
-    """#252 timed an over-threshold shape once; the harness must match it."""
+def test_timed_shape_times_a_slow_shape_once_after_its_warm_up(monkeypatch):
+    """#252 timed an over-threshold shape once; the harness must match it.
+
+    The clock is stubbed rather than slept on: the warm-up spans 5 s, so the
+    shape is timed once even though `reps` is 5.
+    """
     calls: list[int] = []
+    ticks = iter([0.0, 5.0, 10.0, 20.0])
+    monkeypatch.setattr(time, "perf_counter", lambda: next(ticks))
 
     def shape() -> dict[str, np.ndarray]:
         calls.append(1)
-        time.sleep(0.02)
         return _result([1.0, 2.0])
 
-    timed = _timed_shape(shape, 5, limit_s=0.0, slow_shape_s=0.001)
+    timed = _timed_shape(shape, 5, limit_s=0.0, slow_shape_s=1.0)
 
     assert timed["timed_out"] is False
     assert timed["repetitions"] == 1
