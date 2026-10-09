@@ -371,7 +371,7 @@ def test_scaling_harness_splits_phases_and_matches_counts(tmp_path: Path) -> Non
     from benchmarks.variant_side_scaling import measure
 
     store = _build_ssf_store(tmp_path / "scaling", store_id="idx")
-    measured = measure(store, ["phewas"])
+    measured = measure(store, ["phewas"], reps=1)
     sides = measured["phewas"]
     assert set(sides) == {"indexed", "scanned"}
     for side in sides.values():

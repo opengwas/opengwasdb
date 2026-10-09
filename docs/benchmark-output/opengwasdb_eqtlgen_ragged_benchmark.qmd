@@ -1,6 +1,6 @@
 ---
 title: "eQTLgen cis Ragged Store — Query Benchmark"
-subtitle: "Ragged CSR zarr layout · 18,280 analyses · 121,858,034 associations"
+subtitle: "Ragged CSR zarr layout · 19,250 analyses · 127,331,910 associations"
 date: today
 format:
   html:
@@ -80,15 +80,6 @@ for t in timings:
 Markdown("\n".join([header, sep] + rows_md))
 ```
 
-The `tophits` row is a non-empty, analysis-addressed query for
-`ENSG00000198502`, limited to its first 10 genome-wide-significant hits in
-genomic order. The Ragged top-hit tiers reuse the layout's natural
-analysis-major CSR order and add per-tier offsets, so the selected query reads
-one contiguous slice. It fell from the previous **146.95 ms** global index read
-to **1.71 ms** median (**86× faster**); rebuilding all tiers from 121.9 million
-associations took **12.1 seconds**, and the selected result matched the
-corresponding global subset.
-
 ```{python}
 import matplotlib.pyplot as plt
 import numpy as np
@@ -122,7 +113,6 @@ param_rows = [
     ("Region", f"{sel['region_chrom']}:{sel['region_start']:,}–{sel['region_end']:,}"),
     ("PheWAS variant", sel["phewas_alid"]),
     ("Top-hit threshold", str(sel["top_hit_threshold"])),
-    ("Top-hit analysis", sel["top_hit_analysis_id"]),
     ("Random lookup variants", str(len(sel["random_alids"]))),
     ("Random lookup analyses", str(len(sel["random_analysis_ids"]))),
 ]

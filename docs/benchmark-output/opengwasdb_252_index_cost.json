@@ -1,0 +1,57 @@
+{
+  "commit": "a0a38a5",
+  "harness": "benchmarks/measure_variant_index_cost.py",
+  "measured_at": "2026-10-09T02:54:37.923288+00:00",
+  "opengwasdb_fingerprint": "d9ec968e180c889d770ce2fce54e3d7a3323fa2b66d672c6406cd858abb5b7da",
+  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-index/opengwasdb",
+  "stores": [
+    {
+      "baseline_rss_gib": 0.15,
+      "build_seconds": 0.2,
+      "index_bytes": 334795,
+      "index_gib": 0.0,
+      "label": "OGS-00001",
+      "n_axis": 86376,
+      "n_rows": 86373,
+      "peak_rss_gib": 0.166,
+      "previous_index_gib": 0.0,
+      "store": "/data/opengwasdb/work/epic252/OGS-00001-0.2.0"
+    },
+    {
+      "baseline_rss_gib": 0.163,
+      "build_seconds": 0.3,
+      "index_bytes": 720286,
+      "index_gib": 0.001,
+      "label": "OGS-00007",
+      "n_axis": 171006,
+      "n_rows": 202803,
+      "peak_rss_gib": 0.176,
+      "previous_index_gib": 0.001,
+      "store": "/data/opengwasdb/work/epic252/OGS-00007-0.2.0"
+    },
+    {
+      "baseline_rss_gib": 0.169,
+      "build_seconds": 60.2,
+      "index_bytes": 169286741,
+      "index_gib": 0.158,
+      "label": "OGS-00006",
+      "n_axis": 12086463,
+      "n_rows": 58054212,
+      "peak_rss_gib": 2.1,
+      "previous_index_gib": 0.158,
+      "store": "/data/opengwasdb/work/epic252/OGS-00006-0.2.0"
+    },
+    {
+      "baseline_rss_gib": 0.422,
+      "build_seconds": 445.7,
+      "index_bytes": 453593931,
+      "index_gib": 0.422,
+      "label": "eQTLGen",
+      "n_axis": 8932843,
+      "n_rows": 127331910,
+      "peak_rss_gib": 2.702,
+      "previous_index_gib": 0.422,
+      "store": "/data/opengwasdb/work/epic252/eqtlgen-cis.opengwasdb"
+    }
+  ]
+}

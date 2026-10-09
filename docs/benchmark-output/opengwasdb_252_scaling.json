@@ -1,0 +1,317 @@
+{
+  "commit": "a0a38a5",
+  "harness": "benchmarks/variant_side_scaling.py",
+  "measured_at": "2026-10-09T02:58:37.033411+00:00",
+  "opengwasdb_fingerprint": "d9ec968e180c889d770ce2fce54e3d7a3323fa2b66d672c6406cd858abb5b7da",
+  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-index/opengwasdb",
+  "stores": {
+    "OGS-00001": {
+      "shapes": {
+        "lookup_10x10": {
+          "indexed": {
+            "baseline_mb": 187.1,
+            "delta_mb": 3.4,
+            "elapsed_s": 0.0528,
+            "gather_s": 0.0028,
+            "match_s": 0.0378,
+            "peak_mb": 190.5,
+            "read_s": 0.0122,
+            "reps": 3,
+            "result_count": 1
+          },
+          "scanned": {
+            "baseline_mb": 194.1,
+            "delta_mb": 0.0,
+            "elapsed_s": 0.0535,
+            "gather_s": 0.0027,
+            "match_s": 0.0387,
+            "peak_mb": 194.1,
+            "read_s": 0.0122,
+            "reps": 3,
+            "result_count": 1
+          }
+        },
+        "phewas": {
+          "indexed": {
+            "baseline_mb": 168.5,
+            "delta_mb": 3.3,
+            "elapsed_s": 0.0109,
+            "gather_s": 0.0012,
+            "match_s": 0.0021,
+            "peak_mb": 171.8,
+            "read_s": 0.0076,
+            "reps": 3,
+            "result_count": 1
+          },
+          "scanned": {
+            "baseline_mb": 174.6,
+            "delta_mb": 2.7,
+            "elapsed_s": 0.0138,
+            "gather_s": 0.0027,
+            "match_s": 0.0025,
+            "peak_mb": 177.3,
+            "read_s": 0.0086,
+            "reps": 3,
+            "result_count": 1
+          }
+        },
+        "range_phewas": {
+          "indexed": {
+            "baseline_mb": 180.1,
+            "delta_mb": 0.0,
+            "elapsed_s": 0.0,
+            "gather_s": 0.0,
+            "match_s": 0.0,
+            "peak_mb": 180.1,
+            "read_s": 0.0,
+            "reps": 3,
+            "result_count": 0
+          },
+          "scanned": {
+            "baseline_mb": 181.8,
+            "delta_mb": 0.0,
+            "elapsed_s": 0.0,
+            "gather_s": 0.0,
+            "match_s": 0.0,
+            "peak_mb": 181.8,
+            "read_s": 0.0,
+            "reps": 3,
+            "result_count": 0
+          }
+        }
+      },
+      "store": "/data/opengwasdb/work/epic252/OGS-00001-0.2.0"
+    },
+    "OGS-00006": {
+      "shapes": {
+        "lookup_10x10": {
+          "indexed": {
+            "baseline_mb": 811.4,
+            "delta_mb": 2.0,
+            "elapsed_s": 0.046,
+            "gather_s": 0.0015,
+            "match_s": 0.0445,
+            "peak_mb": 813.4,
+            "read_s": 0.0,
+            "reps": 3,
+            "result_count": 0
+          },
+          "scanned": {
+            "baseline_mb": 822.6,
+            "delta_mb": 0.2,
+            "elapsed_s": 0.0488,
+            "gather_s": 0.0014,
+            "match_s": 0.0474,
+            "peak_mb": 822.7,
+            "read_s": 0.0,
+            "reps": 3,
+            "result_count": 0
+          }
+        },
+        "phewas": {
+          "indexed": {
+            "baseline_mb": 295.8,
+            "delta_mb": 2.9,
+            "elapsed_s": 0.0262,
+            "gather_s": 0.0014,
+            "match_s": 0.0025,
+            "peak_mb": 298.8,
+            "read_s": 0.0223,
+            "reps": 3,
+            "result_count": 1
+          },
+          "scanned": {
+            "baseline_mb": 471.5,
+            "delta_mb": 15.7,
+            "elapsed_s": 0.5827,
+            "gather_s": 0.0055,
+            "match_s": 0.5524,
+            "peak_mb": 487.2,
+            "read_s": 0.0249,
+            "reps": 3,
+            "result_count": 1
+          }
+        },
+        "range_phewas": {
+          "indexed": {
+            "baseline_mb": 494.2,
+            "delta_mb": 0.2,
+            "elapsed_s": 0.0358,
+            "gather_s": 0.0061,
+            "match_s": 0.0069,
+            "peak_mb": 494.5,
+            "read_s": 0.0227,
+            "reps": 3,
+            "result_count": 9321
+          },
+          "scanned": {
+            "baseline_mb": 610.0,
+            "delta_mb": 221.1,
+            "elapsed_s": 1.7428,
+            "gather_s": 0.0105,
+            "match_s": 0.884,
+            "peak_mb": 831.1,
+            "read_s": 0.8483,
+            "reps": 3,
+            "result_count": 9321
+          }
+        }
+      },
+      "store": "/data/opengwasdb/work/epic252/OGS-00006-0.2.0"
+    },
+    "OGS-00007": {
+      "shapes": {
+        "lookup_10x10": {
+          "indexed": {
+            "baseline_mb": 221.7,
+            "delta_mb": 3.0,
+            "elapsed_s": 0.0678,
+            "gather_s": 0.0033,
+            "match_s": 0.0494,
+            "peak_mb": 224.7,
+            "read_s": 0.0151,
+            "reps": 3,
+            "result_count": 1
+          },
+          "scanned": {
+            "baseline_mb": 233.1,
+            "delta_mb": 3.6,
+            "elapsed_s": 0.0672,
+            "gather_s": 0.0037,
+            "match_s": 0.0487,
+            "peak_mb": 236.7,
+            "read_s": 0.0148,
+            "reps": 3,
+            "result_count": 1
+          }
+        },
+        "phewas": {
+          "indexed": {
+            "baseline_mb": 201.4,
+            "delta_mb": 1.1,
+            "elapsed_s": 0.0129,
+            "gather_s": 0.0019,
+            "match_s": 0.0018,
+            "peak_mb": 202.4,
+            "read_s": 0.0091,
+            "reps": 3,
+            "result_count": 1
+          },
+          "scanned": {
+            "baseline_mb": 206.2,
+            "delta_mb": 1.6,
+            "elapsed_s": 0.0195,
+            "gather_s": 0.0033,
+            "match_s": 0.004,
+            "peak_mb": 207.8,
+            "read_s": 0.0121,
+            "reps": 3,
+            "result_count": 1
+          }
+        },
+        "range_phewas": {
+          "indexed": {
+            "baseline_mb": 208.7,
+            "delta_mb": 2.0,
+            "elapsed_s": 0.0,
+            "gather_s": 0.0,
+            "match_s": 0.0,
+            "peak_mb": 210.7,
+            "read_s": 0.0,
+            "reps": 3,
+            "result_count": 0
+          },
+          "scanned": {
+            "baseline_mb": 212.0,
+            "delta_mb": 0.0,
+            "elapsed_s": 0.0,
+            "gather_s": 0.0,
+            "match_s": 0.0,
+            "peak_mb": 212.1,
+            "read_s": 0.0,
+            "reps": 3,
+            "result_count": 0
+          }
+        }
+      },
+      "store": "/data/opengwasdb/work/epic252/OGS-00007-0.2.0"
+    },
+    "eQTLGen": {
+      "shapes": {
+        "lookup_10x10": {
+          "indexed": {
+            "baseline_mb": 896.4,
+            "delta_mb": 0.1,
+            "elapsed_s": 0.0487,
+            "gather_s": 0.0014,
+            "match_s": 0.0473,
+            "peak_mb": 896.5,
+            "read_s": 0.0,
+            "reps": 3,
+            "result_count": 0
+          },
+          "scanned": {
+            "baseline_mb": 900.3,
+            "delta_mb": 0.0,
+            "elapsed_s": 0.0514,
+            "gather_s": 0.0014,
+            "match_s": 0.05,
+            "peak_mb": 900.3,
+            "read_s": 0.0,
+            "reps": 3,
+            "result_count": 0
+          }
+        },
+        "phewas": {
+          "indexed": {
+            "baseline_mb": 845.1,
+            "delta_mb": 0.6,
+            "elapsed_s": 0.016,
+            "gather_s": 0.0011,
+            "match_s": 0.0026,
+            "peak_mb": 845.7,
+            "read_s": 0.0124,
+            "reps": 3,
+            "result_count": 7
+          },
+          "scanned": {
+            "baseline_mb": 881.5,
+            "delta_mb": 1.2,
+            "elapsed_s": 1.2183,
+            "gather_s": 0.0057,
+            "match_s": 1.1985,
+            "peak_mb": 882.7,
+            "read_s": 0.0142,
+            "reps": 3,
+            "result_count": 7
+          }
+        },
+        "range_phewas": {
+          "indexed": {
+            "baseline_mb": 885.7,
+            "delta_mb": 0.3,
+            "elapsed_s": 0.023,
+            "gather_s": 0.0038,
+            "match_s": 0.0088,
+            "peak_mb": 886.0,
+            "read_s": 0.0104,
+            "reps": 3,
+            "result_count": 62633
+          },
+          "scanned": {
+            "baseline_mb": 856.2,
+            "delta_mb": 39.8,
+            "elapsed_s": 2.0118,
+            "gather_s": 0.0185,
+            "match_s": 1.9533,
+            "peak_mb": 896.0,
+            "read_s": 0.04,
+            "reps": 3,
+            "result_count": 62633
+          }
+        }
+      },
+      "store": "/data/opengwasdb/work/epic252/eqtlgen-cis.opengwasdb"
+    }
+  }
+}

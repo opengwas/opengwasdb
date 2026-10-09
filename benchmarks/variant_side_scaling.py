@@ -22,8 +22,9 @@ Shape by shape the phases separate asymptotics from constant factors: a scan's
 match phase grows with the store, an index's does not.
 
     pixi run -e dev python benchmarks/variant_side_scaling.py \
-        --store /data/opengwasdb/work/epic252/OGS-00001 \
-        --output docs/benchmark-output/opengwasdb_252_scaling_OGS-00001.json
+        --store OGS-00001=/data/opengwasdb/work/epic252/OGS-00001-0.2.0 \
+        --store OGS-00011=/data/opengwasdb/work/epic252/OGS-00011-0.2.0 \
+        --output docs/benchmark-output/opengwasdb_252_scaling.json
 
 A store without the index is refused: the indexed side would be the scan.
 """
@@ -40,7 +41,7 @@ from typing import Any
 
 import numpy as np
 
-from benchmarks._artifact import provenance
+from benchmarks._artifact import add_labelled_store_option, labelled_stores, provenance
 from benchmarks._rss import RssSampler, rss_mb
 from opengwasdb.layouts.ragged.by_variant import ByVariantReader
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -128,30 +129,50 @@ def _calls(query: Any) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
     return calls
 
 
-def _probe(store: Path, shape: str, *, indexed: bool) -> dict[str, Any]:
-    """One shape on one side, in this process, with phases and peak RSS."""
+def _probe(store: Path, shape: str, *, indexed: bool, reps: int = 3) -> dict[str, Any]:
+    """One shape on one side, in this process, with phases and peak RSS.
+
+    A warm-up runs first; each timed repetition waits for the 1-minute load to
+    fall below 3, so a contended node is recorded rather than silently timed.
+    The reported time and each phase are the median over the repetitions; peak
+    RSS is the maximum the sampler saw across them.
+    """
+    from benchmarks._quiet import wait_for_quiet
+
     _install_phases()
     query = query_store(store)
     if not indexed:
         query._by_variant = None
     try:
         call = _calls(query)[shape]
+        call()  # warm-up
         _timer.times = {"match": 0.0, "read": 0.0}
         baseline = rss_mb()
+        totals: list[float] = []
+        matches: list[float] = []
+        reads: list[float] = []
+        result: dict[str, np.ndarray] = {}
         with RssSampler() as sampler:
-            started = perf_counter()
-            result = call()
-            total = perf_counter() - started
+            for _ in range(reps):
+                wait_for_quiet(3.0)
+                _timer.times = {"match": 0.0, "read": 0.0}
+                started = perf_counter()
+                result = call()
+                totals.append(perf_counter() - started)
+                matches.append(_timer.times["match"])
+                reads.append(_timer.times["read"])
         peak = max(sampler.peak_mb, rss_mb())
     finally:
         query.close()
-    match = _timer.times["match"]
-    read = _timer.times["read"]
+    total = float(np.median(totals))
+    match = float(np.median(matches))
+    read = float(np.median(reads))
     return {
         "baseline_mb": round(baseline, 1),
         "peak_mb": round(peak, 1),
         "delta_mb": round(peak - baseline, 1),
         "result_count": int(len(result["z"])),
+        "reps": reps,
         "elapsed_s": round(total, 4),
         "match_s": round(match, 4),
         "read_s": round(read, 4),
@@ -159,12 +180,12 @@ def _probe(store: Path, shape: str, *, indexed: bool) -> dict[str, Any]:
     }
 
 
-def measure(store: Path, shapes: list[str]) -> dict[str, Any]:
+def measure(store: Path, shapes: list[str], *, reps: int = 3) -> dict[str, Any]:
     shapes_out: dict[str, Any] = {}
     for shape in shapes:
         sides: dict[str, Any] = {}
         for side, indexed in (("indexed", True), ("scanned", False)):
-            sides[side] = _probe(store, shape, indexed=indexed)
+            sides[side] = _probe(store, shape, indexed=indexed, reps=reps)
         if sides["indexed"]["result_count"] != sides["scanned"]["result_count"]:
             raise SystemExit(
                 f"{store}:{shape}: indexed {sides['indexed']['result_count']} rows "
@@ -176,13 +197,14 @@ def measure(store: Path, shapes: list[str]) -> dict[str, Any]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--store", type=Path, required=True)
+    add_labelled_store_option(parser)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--shapes",
         default="phewas,range_phewas,lookup_10x10",
         help="comma-separated shape names",
     )
+    parser.add_argument("--reps", type=int, default=3, help="repetitions per side")
     return parser
 
 
@@ -190,18 +212,22 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     from opengwasdb.layouts.ragged.by_variant import has_variant_index
 
-    if not has_variant_index(args.store):
-        raise SystemExit(f"{args.store}: no variant index; run `ogdb build-variant-index` first")
     shapes = [name.strip() for name in args.shapes.split(",") if name.strip()]
+    stores = labelled_stores(args.store)
+    for _label, path in stores:
+        if not has_variant_index(path):
+            raise SystemExit(f"{path}: no variant index; run `ogdb build-variant-index` first")
     artifact = {
         "harness": "benchmarks/variant_side_scaling.py",
-        "store": str(args.store),
         **provenance(),
-        "shapes": measure(args.store, shapes),
+        "stores": {
+            label: {"store": str(path), "shapes": measure(path, shapes, reps=args.reps)}
+            for label, path in stores
+        },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"output": str(args.output), "shapes": shapes}))
+    print(json.dumps({"output": str(args.output), "stores": [label for label, _ in stores]}))
     return 0
 
 
