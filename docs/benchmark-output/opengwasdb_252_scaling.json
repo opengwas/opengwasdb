@@ -1,8 +1,8 @@
 {
-  "commit": "de61a5c",
+  "commit": "a1e4b3f",
   "harness": "benchmarks/variant_side_scaling.py",
-  "measured_at": "2026-10-09T15:33:25.273586+00:00",
-  "opengwasdb_fingerprint": "e83396abb375c486e5fa028f7494c5be5d939e4deeb719a7dc6e1849e02dc656",
+  "measured_at": "2026-10-09T17:52:45.593143+00:00",
+  "opengwasdb_fingerprint": "9da7c21b371255fb6161d90b81ea17e47995a282e4b2ce43e858315512e30510",
   "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-index/opengwasdb",
   "shapes": [
     "phewas",
@@ -15,106 +15,154 @@
     "OGS-00001": {
       "shapes": {
         "lookup_10_variants": {
-          "content_sha256": "137dcc6f96ccd65d52854cb0c072572ecfeca4a65db2bacd42648be002961f9d",
           "indexed": {
-            "baseline_mb": 197.9,
-            "delta_mb": 6.6,
-            "dense_s": 0.0114,
-            "elapsed_s": 0.0372,
-            "overflow_match_s": 0.0074,
-            "overflow_read_s": 0.0184,
-            "peak_mb": 204.5,
+            "baseline_mb": 192.4,
+            "delta_mb": 1.8,
+            "dense_s": 0.0117,
+            "digest": "137dcc6f96ccd65d52854cb0c072572ecfeca4a65db2bacd42648be002961f9d",
+            "elapsed_s": 0.0423,
+            "overflow_match_s": 0.0081,
+            "overflow_read_s": 0.0225,
+            "peak_mb": 194.2,
             "reps": 3,
-            "result_count": 10
+            "result_count": 10,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "1 Mb around the first indexed variant",
           "scanned": {
-            "baseline_mb": 203.7,
-            "delta_mb": 1.6,
-            "dense_s": 0.0111,
-            "elapsed_s": 0.0354,
-            "overflow_match_s": 0.0069,
-            "overflow_read_s": 0.0174,
-            "peak_mb": 205.3,
+            "baseline_mb": 196.0,
+            "delta_mb": 4.8,
+            "dense_s": 0.0125,
+            "digest": "137dcc6f96ccd65d52854cb0c072572ecfeca4a65db2bacd42648be002961f9d",
+            "elapsed_s": 0.0429,
+            "overflow_match_s": 0.0079,
+            "overflow_read_s": 0.0226,
+            "peak_mb": 200.8,
             "reps": 3,
-            "result_count": 10
+            "result_count": 10,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "lookup_50_analyses": {
-          "skipped": "no non-empty selection on this store"
+          "skipped": "no non-empty lookup selection exists"
         },
         "phewas": {
-          "content_sha256": "a10bae01a799e757b7b4979704efeed196f385060111ae2773cc6eec407d9aa8",
           "indexed": {
-            "baseline_mb": 173.1,
-            "delta_mb": 5.2,
-            "dense_s": 0.0013,
-            "elapsed_s": 0.0114,
-            "overflow_match_s": 0.0017,
-            "overflow_read_s": 0.0084,
-            "peak_mb": 178.3,
+            "baseline_mb": 171.5,
+            "delta_mb": 2.2,
+            "dense_s": 0.0014,
+            "digest": "a10bae01a799e757b7b4979704efeed196f385060111ae2773cc6eec407d9aa8",
+            "elapsed_s": 0.0187,
+            "overflow_match_s": 0.003,
+            "overflow_read_s": 0.0144,
+            "peak_mb": 173.6,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "1 Mb around the first indexed variant",
           "scanned": {
-            "baseline_mb": 178.5,
-            "delta_mb": 1.1,
-            "dense_s": 0.0029,
-            "elapsed_s": 0.0147,
-            "overflow_match_s": 0.0024,
-            "overflow_read_s": 0.0095,
-            "peak_mb": 179.6,
+            "baseline_mb": 175.7,
+            "delta_mb": 1.9,
+            "dense_s": 0.005,
+            "digest": "a10bae01a799e757b7b4979704efeed196f385060111ae2773cc6eec407d9aa8",
+            "elapsed_s": 0.0265,
+            "overflow_match_s": 0.0046,
+            "overflow_read_s": 0.017,
+            "peak_mb": 177.6,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "phewas_off_panel": {
-          "content_sha256": "a10bae01a799e757b7b4979704efeed196f385060111ae2773cc6eec407d9aa8",
           "indexed": {
-            "baseline_mb": 183.5,
-            "delta_mb": 2.3,
+            "baseline_mb": 178.7,
+            "delta_mb": 3.5,
             "dense_s": 0.0013,
-            "elapsed_s": 0.011,
-            "overflow_match_s": 0.0017,
-            "overflow_read_s": 0.008,
-            "peak_mb": 185.8,
+            "digest": "a10bae01a799e757b7b4979704efeed196f385060111ae2773cc6eec407d9aa8",
+            "elapsed_s": 0.0211,
+            "overflow_match_s": 0.0035,
+            "overflow_read_s": 0.0164,
+            "peak_mb": 182.2,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "1 Mb around the first indexed variant",
           "scanned": {
-            "baseline_mb": 185.5,
-            "delta_mb": 1.6,
-            "dense_s": 0.0025,
-            "elapsed_s": 0.0144,
-            "overflow_match_s": 0.0027,
-            "overflow_read_s": 0.0092,
-            "peak_mb": 187.1,
+            "baseline_mb": 180.4,
+            "delta_mb": 1.9,
+            "dense_s": 0.005,
+            "digest": "a10bae01a799e757b7b4979704efeed196f385060111ae2773cc6eec407d9aa8",
+            "elapsed_s": 0.0292,
+            "overflow_match_s": 0.0049,
+            "overflow_read_s": 0.0193,
+            "peak_mb": 182.2,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "range_phewas": {
-          "content_sha256": "702182b481b573b690868be8ed63e7433ba58fc7cdcb37968aafc542d81fcd57",
           "indexed": {
-            "baseline_mb": 191.1,
-            "delta_mb": 0.4,
+            "baseline_mb": 182.3,
+            "delta_mb": 1.6,
             "dense_s": 0.0,
-            "elapsed_s": 0.0281,
-            "overflow_match_s": 0.0141,
-            "overflow_read_s": 0.0165,
-            "peak_mb": 191.5,
+            "digest": "702182b481b573b690868be8ed63e7433ba58fc7cdcb37968aafc542d81fcd57",
+            "elapsed_s": 0.0292,
+            "overflow_match_s": 0.0136,
+            "overflow_read_s": 0.0176,
+            "peak_mb": 183.9,
             "reps": 3,
-            "result_count": 1335
+            "result_count": 1335,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "1 Mb around the first indexed variant",
           "scanned": {
-            "baseline_mb": 193.8,
-            "delta_mb": 4.4,
-            "dense_s": 0.0084,
-            "elapsed_s": 0.0372,
-            "overflow_match_s": 0.0054,
-            "overflow_read_s": 0.0235,
-            "peak_mb": 198.2,
+            "baseline_mb": 186.9,
+            "delta_mb": 3.4,
+            "dense_s": 0.0089,
+            "digest": "702182b481b573b690868be8ed63e7433ba58fc7cdcb37968aafc542d81fcd57",
+            "elapsed_s": 0.0373,
+            "overflow_match_s": 0.0053,
+            "overflow_read_s": 0.0231,
+            "peak_mb": 190.3,
             "reps": 3,
-            "result_count": 1335
+            "result_count": 1335,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         }
       },
@@ -123,128 +171,188 @@
     "OGS-00006": {
       "shapes": {
         "lookup_10_variants": {
-          "content_sha256": "cbe5f18ee6d982282fa701a92b56d1d8276f9f177ab32509e2215fbe87629475",
           "indexed": {
-            "baseline_mb": 629.1,
-            "delta_mb": 1.7,
-            "dense_s": 0.011,
-            "elapsed_s": 0.0786,
-            "overflow_match_s": 0.0289,
-            "overflow_read_s": 0.0387,
-            "peak_mb": 630.8,
+            "baseline_mb": 820.6,
+            "delta_mb": 0.1,
+            "dense_s": 0.0119,
+            "digest": "cbe5f18ee6d982282fa701a92b56d1d8276f9f177ab32509e2215fbe87629475",
+            "elapsed_s": 0.0906,
+            "overflow_match_s": 0.0333,
+            "overflow_read_s": 0.0454,
+            "peak_mb": 820.7,
             "reps": 3,
-            "result_count": 8
+            "result_count": 8,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 638.6,
+            "baseline_mb": 820.5,
             "delta_mb": 0.0,
-            "dense_s": 0.0106,
-            "elapsed_s": 0.0795,
-            "overflow_match_s": 0.0287,
-            "overflow_read_s": 0.0401,
-            "peak_mb": 638.6,
+            "dense_s": 0.0101,
+            "digest": "cbe5f18ee6d982282fa701a92b56d1d8276f9f177ab32509e2215fbe87629475",
+            "elapsed_s": 0.0878,
+            "overflow_match_s": 0.0317,
+            "overflow_read_s": 0.0459,
+            "peak_mb": 820.5,
             "reps": 3,
-            "result_count": 8
+            "result_count": 8,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "lookup_50_analyses": {
-          "content_sha256": "96ef7c6e9b9f5cd88a3cfd56d8664889701de22d19a735292f0a6a6ffcdb005d",
           "indexed": {
-            "baseline_mb": 656.5,
-            "delta_mb": 0.0,
-            "dense_s": 0.0523,
-            "elapsed_s": 0.7547,
-            "overflow_match_s": 0.1474,
-            "overflow_read_s": 0.555,
-            "peak_mb": 656.5,
+            "baseline_mb": 818.4,
+            "delta_mb": 1.1,
+            "dense_s": 0.0659,
+            "digest": "96ef7c6e9b9f5cd88a3cfd56d8664889701de22d19a735292f0a6a6ffcdb005d",
+            "elapsed_s": 0.928,
+            "overflow_match_s": 0.184,
+            "overflow_read_s": 0.6782,
+            "peak_mb": 819.5,
             "reps": 3,
-            "result_count": 17
+            "result_count": 17,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 667.5,
+            "baseline_mb": 819.6,
             "delta_mb": 0.0,
-            "dense_s": 0.0609,
-            "elapsed_s": 0.8646,
-            "overflow_match_s": 0.177,
-            "overflow_read_s": 0.6267,
-            "peak_mb": 667.5,
+            "dense_s": 0.0662,
+            "digest": "96ef7c6e9b9f5cd88a3cfd56d8664889701de22d19a735292f0a6a6ffcdb005d",
+            "elapsed_s": 0.9165,
+            "overflow_match_s": 0.1822,
+            "overflow_read_s": 0.6681,
+            "peak_mb": 819.6,
             "reps": 3,
-            "result_count": 17
+            "result_count": 17,
+            "waits_s": [
+              15.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "phewas": {
-          "content_sha256": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
           "indexed": {
-            "baseline_mb": 282.7,
-            "delta_mb": 1.2,
-            "dense_s": 0.0013,
-            "elapsed_s": 0.0231,
-            "overflow_match_s": 0.0022,
-            "overflow_read_s": 0.0196,
-            "peak_mb": 283.9,
+            "baseline_mb": 233.9,
+            "delta_mb": 1.5,
+            "dense_s": 0.0015,
+            "digest": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
+            "elapsed_s": 0.0384,
+            "overflow_match_s": 0.0041,
+            "overflow_read_s": 0.0327,
+            "peak_mb": 235.4,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 490.1,
-            "delta_mb": 8.9,
-            "dense_s": 0.0049,
-            "elapsed_s": 0.5806,
-            "overflow_match_s": 0.5462,
-            "overflow_read_s": 0.0294,
-            "peak_mb": 499.0,
+            "baseline_mb": 441.2,
+            "delta_mb": 21.4,
+            "dense_s": 0.0058,
+            "digest": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
+            "elapsed_s": 0.6114,
+            "overflow_match_s": 0.5715,
+            "overflow_read_s": 0.0341,
+            "peak_mb": 462.6,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "phewas_off_panel": {
-          "content_sha256": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
           "indexed": {
-            "baseline_mb": 535.3,
-            "delta_mb": 0.3,
-            "dense_s": 0.0016,
-            "elapsed_s": 0.0401,
-            "overflow_match_s": 0.0033,
-            "overflow_read_s": 0.0352,
-            "peak_mb": 535.6,
+            "baseline_mb": 462.4,
+            "delta_mb": 0.0,
+            "dense_s": 0.0015,
+            "digest": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
+            "elapsed_s": 0.0371,
+            "overflow_match_s": 0.0038,
+            "overflow_read_s": 0.0318,
+            "peak_mb": 462.4,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 546.2,
-            "delta_mb": 3.1,
-            "dense_s": 0.0071,
-            "elapsed_s": 0.7073,
-            "overflow_match_s": 0.6035,
-            "overflow_read_s": 0.0967,
-            "peak_mb": 549.3,
+            "baseline_mb": 465.3,
+            "delta_mb": 9.1,
+            "dense_s": 0.006,
+            "digest": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
+            "elapsed_s": 0.5893,
+            "overflow_match_s": 0.5496,
+            "overflow_read_s": 0.0337,
+            "peak_mb": 474.5,
             "reps": 3,
-            "result_count": 20
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "range_phewas": {
-          "content_sha256": "604a6535b8b8429f4d760dd0fc1c683e63dcc587e3dc6b691ee65c5095c7ca76",
           "indexed": {
-            "baseline_mb": 568.6,
-            "delta_mb": 0.4,
-            "dense_s": 0.0,
-            "elapsed_s": 0.0448,
-            "overflow_match_s": 0.0154,
-            "overflow_read_s": 0.0338,
-            "peak_mb": 568.9,
+            "baseline_mb": 473.9,
+            "delta_mb": 0.5,
+            "dense_s": 0.0032,
+            "digest": "a24fbf9b79a0e8b8c2709cd05b5b382b65e8587ed0485b7260e8c6d2098b684e",
+            "elapsed_s": 0.052,
+            "overflow_match_s": 0.0139,
+            "overflow_read_s": 0.035,
+            "peak_mb": 474.4,
             "reps": 3,
-            "result_count": 2716
+            "result_count": 8745,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 605.1,
-            "delta_mb": 2.2,
-            "dense_s": 0.0092,
-            "elapsed_s": 0.8915,
-            "overflow_match_s": 0.783,
-            "overflow_read_s": 0.0994,
-            "peak_mb": 607.3,
+            "baseline_mb": 534.3,
+            "delta_mb": 334.1,
+            "dense_s": 0.014,
+            "digest": "a24fbf9b79a0e8b8c2709cd05b5b382b65e8587ed0485b7260e8c6d2098b684e",
+            "elapsed_s": 2.8663,
+            "overflow_match_s": 1.7917,
+            "overflow_read_s": 1.0606,
+            "peak_mb": 868.3,
             "reps": 3,
-            "result_count": 2716
+            "result_count": 8745,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         }
       },
@@ -253,48 +361,69 @@
     "OGS-00006-0.1.0": {
       "shapes": {
         "lookup_10_variants": {
-          "skipped": "no non-empty selection on this store"
+          "skipped": "this store carries no variant index, so the lookup selections (taken from an indexed variant's block) are unavailable"
         },
         "lookup_50_analyses": {
-          "skipped": "no non-empty selection on this store"
+          "skipped": "this store carries no variant index, so the lookup selections (taken from an indexed variant's block) are unavailable"
         },
         "phewas": {
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 662.7,
-            "delta_mb": 0.1,
-            "dense_s": 0.0055,
-            "elapsed_s": 0.5561,
-            "overflow_match_s": 0.5221,
-            "overflow_read_s": 0.0285,
-            "peak_mb": 662.8,
+            "baseline_mb": 820.2,
+            "delta_mb": 0.0,
+            "dense_s": 0.0047,
+            "digest": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
+            "elapsed_s": 0.5488,
+            "overflow_match_s": 0.5149,
+            "overflow_read_s": 0.0293,
+            "peak_mb": 820.2,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              15.0,
+              0.0
+            ]
           }
         },
         "phewas_off_panel": {
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 661.7,
+            "baseline_mb": 819.4,
             "delta_mb": 0.0,
-            "dense_s": 0.0152,
-            "elapsed_s": 0.5927,
-            "overflow_match_s": 0.5081,
-            "overflow_read_s": 0.0694,
-            "peak_mb": 661.7,
+            "dense_s": 0.0041,
+            "digest": "14092a1e62fec138a3b280bc34b9173a92c7938de57944cb62d1f8bed5a11ab8",
+            "elapsed_s": 0.5834,
+            "overflow_match_s": 0.5042,
+            "overflow_read_s": 0.0751,
+            "peak_mb": 819.4,
             "reps": 3,
-            "result_count": 20
+            "result_count": 20,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "range_phewas": {
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 662.0,
-            "delta_mb": 0.1,
-            "dense_s": 0.0084,
-            "elapsed_s": 0.9608,
-            "overflow_match_s": 0.8538,
-            "overflow_read_s": 0.0986,
-            "peak_mb": 662.0,
+            "baseline_mb": 818.4,
+            "delta_mb": 33.5,
+            "dense_s": 0.0068,
+            "digest": "a24fbf9b79a0e8b8c2709cd05b5b382b65e8587ed0485b7260e8c6d2098b684e",
+            "elapsed_s": 2.4002,
+            "overflow_match_s": 1.5704,
+            "overflow_read_s": 0.823,
+            "peak_mb": 851.9,
             "reps": 3,
-            "result_count": 2716
+            "result_count": 8745,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         }
       },
@@ -303,106 +432,154 @@
     "OGS-00007": {
       "shapes": {
         "lookup_10_variants": {
-          "content_sha256": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
           "indexed": {
-            "baseline_mb": 229.5,
-            "delta_mb": 1.7,
-            "dense_s": 0.01,
-            "elapsed_s": 0.0309,
-            "overflow_match_s": 0.006,
-            "overflow_read_s": 0.0149,
-            "peak_mb": 231.2,
+            "baseline_mb": 212.1,
+            "delta_mb": 1.5,
+            "dense_s": 0.0125,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.0459,
+            "overflow_match_s": 0.0087,
+            "overflow_read_s": 0.0248,
+            "peak_mb": 213.7,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "1 Mb around the first indexed variant",
           "scanned": {
-            "baseline_mb": 231.7,
-            "delta_mb": 0.3,
-            "dense_s": 0.0099,
-            "elapsed_s": 0.029,
-            "overflow_match_s": 0.0056,
-            "overflow_read_s": 0.0135,
-            "peak_mb": 232.0,
+            "baseline_mb": 213.7,
+            "delta_mb": 1.3,
+            "dense_s": 0.0122,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.0448,
+            "overflow_match_s": 0.0084,
+            "overflow_read_s": 0.0242,
+            "peak_mb": 215.0,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "lookup_50_analyses": {
-          "skipped": "no non-empty selection on this store"
+          "skipped": "no non-empty lookup selection exists"
         },
         "phewas": {
-          "content_sha256": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
           "indexed": {
-            "baseline_mb": 210.8,
-            "delta_mb": 1.0,
-            "dense_s": 0.0021,
-            "elapsed_s": 0.0232,
-            "overflow_match_s": 0.0037,
-            "overflow_read_s": 0.0174,
-            "peak_mb": 211.8,
+            "baseline_mb": 202.9,
+            "delta_mb": 1.1,
+            "dense_s": 0.0018,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.0234,
+            "overflow_match_s": 0.0039,
+            "overflow_read_s": 0.0177,
+            "peak_mb": 203.9,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "1 Mb around the first indexed variant",
           "scanned": {
-            "baseline_mb": 212.7,
-            "delta_mb": 2.3,
-            "dense_s": 0.0045,
-            "elapsed_s": 0.0279,
-            "overflow_match_s": 0.0055,
-            "overflow_read_s": 0.0179,
-            "peak_mb": 215.0,
+            "baseline_mb": 205.2,
+            "delta_mb": 2.6,
+            "dense_s": 0.0055,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.0333,
+            "overflow_match_s": 0.0067,
+            "overflow_read_s": 0.0212,
+            "peak_mb": 207.8,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "phewas_off_panel": {
-          "content_sha256": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
           "indexed": {
-            "baseline_mb": 217.9,
-            "delta_mb": 0.3,
-            "dense_s": 0.0011,
-            "elapsed_s": 0.017,
-            "overflow_match_s": 0.0031,
-            "overflow_read_s": 0.0128,
-            "peak_mb": 218.2,
+            "baseline_mb": 207.9,
+            "delta_mb": 0.0,
+            "dense_s": 0.0015,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.0233,
+            "overflow_match_s": 0.0037,
+            "overflow_read_s": 0.0181,
+            "peak_mb": 207.9,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "1 Mb around the first indexed variant",
           "scanned": {
-            "baseline_mb": 219.6,
-            "delta_mb": 2.1,
-            "dense_s": 0.0035,
-            "elapsed_s": 0.0263,
-            "overflow_match_s": 0.0055,
-            "overflow_read_s": 0.0172,
-            "peak_mb": 221.6,
+            "baseline_mb": 208.2,
+            "delta_mb": 0.8,
+            "dense_s": 0.0052,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.0307,
+            "overflow_match_s": 0.0062,
+            "overflow_read_s": 0.0193,
+            "peak_mb": 209.0,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "range_phewas": {
-          "content_sha256": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
           "indexed": {
-            "baseline_mb": 223.6,
-            "delta_mb": 2.1,
+            "baseline_mb": 209.0,
+            "delta_mb": 0.0,
             "dense_s": 0.0,
-            "elapsed_s": 0.0177,
-            "overflow_match_s": 0.0089,
-            "overflow_read_s": 0.0124,
-            "peak_mb": 225.6,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.0262,
+            "overflow_match_s": 0.0137,
+            "overflow_read_s": 0.0179,
+            "peak_mb": 209.0,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "1 Mb around the first indexed variant",
           "scanned": {
-            "baseline_mb": 226.9,
-            "delta_mb": 2.7,
-            "dense_s": 0.003,
-            "elapsed_s": 0.0236,
-            "overflow_match_s": 0.0051,
-            "overflow_read_s": 0.0155,
-            "peak_mb": 229.6,
+            "baseline_mb": 209.8,
+            "delta_mb": 2.3,
+            "dense_s": 0.005,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.0359,
+            "overflow_match_s": 0.0064,
+            "overflow_read_s": 0.0246,
+            "peak_mb": 212.1,
             "reps": 3,
-            "result_count": 1
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         }
       },
@@ -411,128 +588,188 @@
     "OGS-00011": {
       "shapes": {
         "lookup_10_variants": {
-          "content_sha256": "30483ec6ca89bf171af5be33022bc70c005d4a7451be0a79ddda82d5b11606e0",
           "indexed": {
-            "baseline_mb": 2059.3,
-            "delta_mb": 0.0,
-            "dense_s": 0.0978,
-            "elapsed_s": 0.2809,
-            "overflow_match_s": 0.0956,
-            "overflow_read_s": 0.0875,
-            "peak_mb": 2059.3,
+            "baseline_mb": 2500.0,
+            "delta_mb": 0.7,
+            "dense_s": 0.026,
+            "digest": "30483ec6ca89bf171af5be33022bc70c005d4a7451be0a79ddda82d5b11606e0",
+            "elapsed_s": 0.2682,
+            "overflow_match_s": 0.0898,
+            "overflow_read_s": 0.1524,
+            "peak_mb": 2500.6,
             "reps": 3,
-            "result_count": 5
+            "result_count": 5,
+            "waits_s": [
+              30.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 2059.2,
+            "baseline_mb": 2497.6,
             "delta_mb": 0.0,
-            "dense_s": 0.0899,
-            "elapsed_s": 0.2521,
-            "overflow_match_s": 0.0824,
-            "overflow_read_s": 0.0798,
-            "peak_mb": 2059.2,
+            "dense_s": 0.0232,
+            "digest": "30483ec6ca89bf171af5be33022bc70c005d4a7451be0a79ddda82d5b11606e0",
+            "elapsed_s": 0.2632,
+            "overflow_match_s": 0.0875,
+            "overflow_read_s": 0.1525,
+            "peak_mb": 2497.6,
             "reps": 3,
-            "result_count": 5
+            "result_count": 5,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "lookup_50_analyses": {
-          "content_sha256": "f06913885cf405a7aa691363f2d6f05a9d8641da0dfbb37711376f92be535330",
           "indexed": {
-            "baseline_mb": 2061.2,
+            "baseline_mb": 2487.3,
             "delta_mb": 0.1,
-            "dense_s": 0.8257,
-            "elapsed_s": 2.3951,
-            "overflow_match_s": 0.7951,
-            "overflow_read_s": 0.7743,
-            "peak_mb": 2061.2,
+            "dense_s": 0.1746,
+            "digest": "f06913885cf405a7aa691363f2d6f05a9d8641da0dfbb37711376f92be535330",
+            "elapsed_s": 2.6847,
+            "overflow_match_s": 0.8822,
+            "overflow_read_s": 1.6279,
+            "peak_mb": 2487.4,
             "reps": 3,
-            "result_count": 50
+            "result_count": 50,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 2080.2,
+            "baseline_mb": 2486.5,
             "delta_mb": 0.0,
-            "dense_s": 0.5575,
-            "elapsed_s": 1.596,
-            "overflow_match_s": 0.5264,
-            "overflow_read_s": 0.5121,
-            "peak_mb": 2080.2,
+            "dense_s": 0.1788,
+            "digest": "f06913885cf405a7aa691363f2d6f05a9d8641da0dfbb37711376f92be535330",
+            "elapsed_s": 2.6769,
+            "overflow_match_s": 0.8851,
+            "overflow_read_s": 1.6129,
+            "peak_mb": 2486.5,
             "reps": 3,
-            "result_count": 50
+            "result_count": 50,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "phewas": {
-          "content_sha256": "8dd552f6b02b45491683319cc8a12307852a00c392b25c593f3b49ccda804109",
           "indexed": {
-            "baseline_mb": 895.0,
-            "delta_mb": 2.0,
-            "dense_s": 0.1462,
-            "elapsed_s": 0.1462,
-            "overflow_match_s": 0.0,
-            "overflow_read_s": 0.0,
-            "peak_mb": 897.0,
-            "reps": 3,
-            "result_count": 2268
-          },
-          "scanned": {
-            "baseline_mb": 921.7,
+            "baseline_mb": 982.8,
             "delta_mb": 0.0,
-            "dense_s": 0.1498,
-            "elapsed_s": 0.1498,
+            "dense_s": 0.1018,
+            "digest": "8dd552f6b02b45491683319cc8a12307852a00c392b25c593f3b49ccda804109",
+            "elapsed_s": 0.1018,
             "overflow_match_s": 0.0,
             "overflow_read_s": 0.0,
-            "peak_mb": 921.7,
+            "peak_mb": 982.8,
             "reps": 3,
-            "result_count": 2268
+            "result_count": 2268,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 980.8,
+            "delta_mb": 0.0,
+            "dense_s": 0.1007,
+            "digest": "8dd552f6b02b45491683319cc8a12307852a00c392b25c593f3b49ccda804109",
+            "elapsed_s": 0.1007,
+            "overflow_match_s": 0.0,
+            "overflow_read_s": 0.0,
+            "peak_mb": 980.8,
+            "reps": 3,
+            "result_count": 2268,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "phewas_off_panel": {
-          "content_sha256": "f4b0e71b0cf6df85f12fb2ad7ac5e718b0c86f24a4b1ac8b8805baa2b088d394",
           "indexed": {
-            "baseline_mb": 1054.8,
-            "delta_mb": 1.2,
+            "baseline_mb": 979.0,
+            "delta_mb": 0.0,
             "dense_s": 0.0,
-            "elapsed_s": 0.042,
-            "overflow_match_s": 0.0165,
-            "overflow_read_s": 0.0315,
-            "peak_mb": 1056.0,
+            "digest": "f4b0e71b0cf6df85f12fb2ad7ac5e718b0c86f24a4b1ac8b8805baa2b088d394",
+            "elapsed_s": 0.0388,
+            "overflow_match_s": 0.0154,
+            "overflow_read_s": 0.0295,
+            "peak_mb": 979.0,
             "reps": 3,
-            "result_count": 66
+            "result_count": 66,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 1097.5,
-            "delta_mb": 13.6,
-            "dense_s": 0.2559,
-            "elapsed_s": 26.641,
-            "overflow_match_s": 26.1561,
-            "overflow_read_s": 0.2291,
-            "peak_mb": 1111.1,
+            "baseline_mb": 1005.9,
+            "delta_mb": 16.2,
+            "dense_s": 0.0087,
+            "digest": "f4b0e71b0cf6df85f12fb2ad7ac5e718b0c86f24a4b1ac8b8805baa2b088d394",
+            "elapsed_s": 32.6928,
+            "overflow_match_s": 32.273,
+            "overflow_read_s": 0.4111,
+            "peak_mb": 1022.1,
             "reps": 3,
-            "result_count": 77
+            "result_count": 66,
+            "waits_s": [
+              30.0,
+              45.0,
+              45.0
+            ]
           }
         },
         "range_phewas": {
-          "content_sha256": "cbb4819bf18de8da51997b1b217dc305c20a29358b947118e8bfc22aabb277e3",
           "indexed": {
-            "baseline_mb": 1152.7,
-            "delta_mb": 235.0,
-            "dense_s": 0.9087,
-            "elapsed_s": 1.1661,
-            "overflow_match_s": 0.0173,
-            "overflow_read_s": 0.2401,
-            "peak_mb": 1387.7,
+            "baseline_mb": 1233.4,
+            "delta_mb": 2082.1,
+            "dense_s": 2.4114,
+            "digest": "6da47c827f98fb2e12aa1df8c7830146ab7244fe541668ad94c99ece86680b99",
+            "elapsed_s": 2.6107,
+            "overflow_match_s": 0.0103,
+            "overflow_read_s": 0.189,
+            "peak_mb": 3315.4,
             "reps": 3,
-            "result_count": 252593
+            "result_count": 8304617,
+            "waits_s": [
+              30.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 1571.7,
-            "delta_mb": 2393.7,
-            "dense_s": 4.1015,
-            "elapsed_s": 49.1269,
-            "overflow_match_s": 42.8775,
-            "overflow_read_s": 2.1479,
-            "peak_mb": 3965.4,
+            "baseline_mb": 1909.4,
+            "delta_mb": 2180.4,
+            "dense_s": 5.1565,
+            "digest": "6da47c827f98fb2e12aa1df8c7830146ab7244fe541668ad94c99ece86680b99",
+            "elapsed_s": 114.9762,
+            "overflow_match_s": 99.372,
+            "overflow_read_s": 10.4478,
+            "peak_mb": 4089.7,
             "reps": 3,
-            "result_count": 252593
+            "result_count": 8304617,
+            "waits_s": [
+              75.0,
+              15.0,
+              45.0
+            ]
           }
         }
       },
@@ -541,128 +778,188 @@
     "eQTLGen": {
       "shapes": {
         "lookup_10_variants": {
-          "content_sha256": "27e6fadc6d99df0ce5d118058619653110a36f6605a1eb90125a09752dd336eb",
           "indexed": {
-            "baseline_mb": 744.5,
+            "baseline_mb": 871.1,
             "delta_mb": 0.0,
-            "dense_s": 0.0319,
-            "elapsed_s": 0.202,
-            "overflow_match_s": 0.0462,
-            "overflow_read_s": 0.1239,
-            "peak_mb": 744.5,
+            "dense_s": 0.0303,
+            "digest": "27e6fadc6d99df0ce5d118058619653110a36f6605a1eb90125a09752dd336eb",
+            "elapsed_s": 0.1998,
+            "overflow_match_s": 0.0458,
+            "overflow_read_s": 0.1237,
+            "peak_mb": 871.1,
             "reps": 3,
-            "result_count": 5
+            "result_count": 5,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 747.6,
+            "baseline_mb": 869.4,
             "delta_mb": 0.0,
-            "dense_s": 0.0296,
-            "elapsed_s": 0.2031,
-            "overflow_match_s": 0.0463,
-            "overflow_read_s": 0.1271,
-            "peak_mb": 747.6,
+            "dense_s": 0.0291,
+            "digest": "27e6fadc6d99df0ce5d118058619653110a36f6605a1eb90125a09752dd336eb",
+            "elapsed_s": 0.1999,
+            "overflow_match_s": 0.0469,
+            "overflow_read_s": 0.1239,
+            "peak_mb": 869.4,
             "reps": 3,
-            "result_count": 5
+            "result_count": 5,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "lookup_50_analyses": {
-          "content_sha256": "da45ff491b00c875ed610b23c134d18356404c2256a0f1d9a91339fb87ba7652",
           "indexed": {
-            "baseline_mb": 748.2,
+            "baseline_mb": 867.2,
             "delta_mb": 0.0,
-            "dense_s": 0.1084,
-            "elapsed_s": 0.9443,
-            "overflow_match_s": 0.2272,
-            "overflow_read_s": 0.6087,
-            "peak_mb": 748.3,
+            "dense_s": 0.0905,
+            "digest": "da45ff491b00c875ed610b23c134d18356404c2256a0f1d9a91339fb87ba7652",
+            "elapsed_s": 0.7845,
+            "overflow_match_s": 0.183,
+            "overflow_read_s": 0.511,
+            "peak_mb": 867.2,
             "reps": 3,
-            "result_count": 24
+            "result_count": 24,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 748.4,
+            "baseline_mb": 868.2,
             "delta_mb": 0.0,
-            "dense_s": 0.1089,
-            "elapsed_s": 0.9457,
-            "overflow_match_s": 0.2205,
-            "overflow_read_s": 0.6163,
-            "peak_mb": 748.4,
+            "dense_s": 0.1058,
+            "digest": "da45ff491b00c875ed610b23c134d18356404c2256a0f1d9a91339fb87ba7652",
+            "elapsed_s": 0.9256,
+            "overflow_match_s": 0.2159,
+            "overflow_read_s": 0.6038,
+            "peak_mb": 868.2,
             "reps": 3,
-            "result_count": 24
+            "result_count": 24,
+            "waits_s": [
+              15.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "phewas": {
-          "content_sha256": "36f7e775071c905d845d6802ca6506bdd18ae496299fee4b729b6514f2d7c07f",
           "indexed": {
-            "baseline_mb": 674.4,
-            "delta_mb": 0.9,
-            "dense_s": 0.0029,
-            "elapsed_s": 0.0172,
-            "overflow_match_s": 0.0025,
-            "overflow_read_s": 0.0119,
-            "peak_mb": 675.3,
-            "reps": 3,
-            "result_count": 7
-          },
-          "scanned": {
-            "baseline_mb": 681.2,
+            "baseline_mb": 862.1,
             "delta_mb": 0.0,
-            "dense_s": 0.0027,
-            "elapsed_s": 0.8316,
-            "overflow_match_s": 0.8173,
-            "overflow_read_s": 0.0116,
-            "peak_mb": 681.2,
+            "dense_s": 0.0014,
+            "digest": "36f7e775071c905d845d6802ca6506bdd18ae496299fee4b729b6514f2d7c07f",
+            "elapsed_s": 0.0194,
+            "overflow_match_s": 0.0034,
+            "overflow_read_s": 0.0146,
+            "peak_mb": 862.1,
             "reps": 3,
-            "result_count": 7
+            "result_count": 7,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 865.5,
+            "delta_mb": 0.1,
+            "dense_s": 0.005,
+            "digest": "36f7e775071c905d845d6802ca6506bdd18ae496299fee4b729b6514f2d7c07f",
+            "elapsed_s": 1.2479,
+            "overflow_match_s": 1.2229,
+            "overflow_read_s": 0.02,
+            "peak_mb": 865.6,
+            "reps": 3,
+            "result_count": 7,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "phewas_off_panel": {
-          "content_sha256": "36f7e775071c905d845d6802ca6506bdd18ae496299fee4b729b6514f2d7c07f",
           "indexed": {
-            "baseline_mb": 705.4,
-            "delta_mb": 1.0,
-            "dense_s": 0.0058,
-            "elapsed_s": 0.0342,
-            "overflow_match_s": 0.004,
-            "overflow_read_s": 0.0244,
-            "peak_mb": 706.4,
+            "baseline_mb": 864.9,
+            "delta_mb": 0.5,
+            "dense_s": 0.0023,
+            "digest": "36f7e775071c905d845d6802ca6506bdd18ae496299fee4b729b6514f2d7c07f",
+            "elapsed_s": 0.0239,
+            "overflow_match_s": 0.0042,
+            "overflow_read_s": 0.0174,
+            "peak_mb": 865.4,
             "reps": 3,
-            "result_count": 7
+            "result_count": 7,
+            "waits_s": [
+              30.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 709.5,
+            "baseline_mb": 866.0,
             "delta_mb": 0.1,
-            "dense_s": 0.0066,
-            "elapsed_s": 1.3338,
-            "overflow_match_s": 1.3031,
-            "overflow_read_s": 0.0242,
-            "peak_mb": 709.6,
+            "dense_s": 0.0052,
+            "digest": "36f7e775071c905d845d6802ca6506bdd18ae496299fee4b729b6514f2d7c07f",
+            "elapsed_s": 1.0999,
+            "overflow_match_s": 1.0779,
+            "overflow_read_s": 0.0168,
+            "peak_mb": 866.1,
             "reps": 3,
-            "result_count": 36
+            "result_count": 7,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         },
         "range_phewas": {
-          "content_sha256": "7c4e4266e87cbbbfe3ef3c3ebbc4fb76137a9f11debfa7249c9ae37a5451e113",
           "indexed": {
-            "baseline_mb": 709.5,
-            "delta_mb": 0.0,
-            "dense_s": 0.0,
-            "elapsed_s": 0.0288,
-            "overflow_match_s": 0.015,
-            "overflow_read_s": 0.0191,
-            "peak_mb": 709.5,
+            "baseline_mb": 867.8,
+            "delta_mb": 3.2,
+            "dense_s": 0.0058,
+            "digest": "bfdf2b07259998cf13da6bea591ea8b7d4ab873ec5c0af436bf5acc1cbdad44c",
+            "elapsed_s": 0.0358,
+            "overflow_match_s": 0.012,
+            "overflow_read_s": 0.018,
+            "peak_mb": 871.1,
             "reps": 3,
-            "result_count": 92
+            "result_count": 48884,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
           "scanned": {
-            "baseline_mb": 741.9,
-            "delta_mb": 0.0,
-            "dense_s": 0.0032,
-            "elapsed_s": 1.8744,
-            "overflow_match_s": 1.8406,
-            "overflow_read_s": 0.0306,
-            "peak_mb": 741.9,
+            "baseline_mb": 867.5,
+            "delta_mb": 38.1,
+            "dense_s": 0.0174,
+            "digest": "bfdf2b07259998cf13da6bea591ea8b7d4ab873ec5c0af436bf5acc1cbdad44c",
+            "elapsed_s": 3.2363,
+            "overflow_match_s": 3.1855,
+            "overflow_read_s": 0.0334,
+            "peak_mb": 905.6,
             "reps": 3,
-            "result_count": 92
+            "result_count": 48884,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
           }
         }
       },

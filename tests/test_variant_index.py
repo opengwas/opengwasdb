@@ -21,6 +21,8 @@ rules are known to have teeth.
 from __future__ import annotations
 
 import os
+import shutil
+from contextlib import contextmanager
 from json import loads
 from pathlib import Path
 from shutil import copytree
@@ -565,15 +567,10 @@ def test_windowed_exception_table_reads_only_the_window() -> None:
     index = np.arange(total, dtype=np.int64) * 2  # positions 0, 2, 4, ...
     value = np.linspace(0.0, 1.0, total).astype(np.float32)
     counter = _CellCounter()
-    table, directory = _windowed_table(index, value, 200_000, counter)
-    try:
+    with _windowed_table(index, value, 200_000, counter) as table:
         positions = index[-3:].copy()  # the table's tail
         got = table.lookup(positions)
         np.testing.assert_allclose(got, value[-3:])
-    finally:
-        import shutil
-
-        shutil.rmtree(directory)
     assert counter.cells < total // 4, (
         f"the windowed lookup read {counter.cells} of {total} cells; it must read a window"
     )
@@ -594,8 +591,7 @@ def test_windowed_exception_table_is_bounded_by_scattered_positions() -> None:
     value = np.linspace(0.0, 1.0, total).astype(np.float32)
 
     counter = _CellCounter()
-    table, directory = _windowed_table(index, value, chunk, counter)
-    try:
+    with _windowed_table(index, value, chunk, counter) as table:
         wanted = np.array(
             [index[i] for i in list(range(0, total, total // 10))[:10]], dtype=np.int64
         )
@@ -613,13 +609,16 @@ def test_windowed_exception_table_is_bounded_by_scattered_positions() -> None:
         assert read_first < total * chunk, (
             f"scattered lookup read {read_first} cells against a {total}-cell table"
         )
-        assert read_second < read_first // 4, (
-            f"a repeat lookup read {read_second} cells; the chunk cache must make it cheap"
+        # The repeat skips the bisect (its chunk edges are cached) but still
+        # reads the chunks the positions fall in: one per position, not the span.
+        assert read_second < read_first, (
+            f"a repeat lookup read {read_second} cells against a first read of {read_first}; "
+            "the chunk-edge cache must make it cheaper"
         )
-    finally:
-        import shutil
-
-        shutil.rmtree(directory)
+        assert read_second <= (len(wanted) + 4) * chunk * 2, (
+            f"a repeat lookup read {read_second} cells for {len(wanted)} positions; "
+            "it must read about one chunk per position"
+        )
 
 
 class _CellCounter:
@@ -658,9 +657,10 @@ class _CountedGroup(dict):
         return key in self._arrays
 
 
+@contextmanager
 def _windowed_table(
     index: np.ndarray, value: np.ndarray, chunk: int, counter: _CellCounter
-) -> tuple[Any, str]:
+):
     """A `WindowedExactTable` over a real zarr group, counting cells read."""
     import tempfile
 
@@ -684,7 +684,34 @@ def _windowed_table(
             "eaf_exception_value": _CountedArray(root["eaf_exception_value"], counter),
         }
     )
-    return WindowedExactTable.of(group, EafExceptionTable), directory
+    try:
+        yield WindowedExactTable.of(group, EafExceptionTable)
+    finally:
+        shutil.rmtree(directory)
+
+
+def test_windowed_exception_table_reads_a_clustered_range_as_one_span() -> None:
+    """A clustered lookup reads the span once, not one chunk per position.
+
+    #252 round-2 regression: an analysis-side bulk decode passes a contiguous
+    range of exception positions; scanning chunk by chunk there is 2.6x slower
+    than one `searchsorted` over the span.  This asserts the span path.
+    """
+    entries, chunk = 32768, 64  # 512 inner chunks
+    positions = np.arange(entries, dtype=np.int64) * 3
+    freqs = np.linspace(0.0, 1.0, entries).astype(np.float32)
+    counter = _CellCounter()
+    with _windowed_table(positions, freqs, chunk, counter) as table:
+        wanted = positions[:1000].copy()  # 1,000 adjacent entries
+        first = counter.cells
+        got = table.lookup(wanted)
+        read = counter.cells - first
+        np.testing.assert_allclose(got, freqs[:1000])
+        # The span is 1,000 entries = 16 chunks; allow the bisect and slack, but
+        # refuse anything near one chunk per position.
+        assert read <= 60 * chunk, (
+            f"clustered lookup read {read} cells for {len(wanted)} adjacent positions"
+        )
 
 
 def test_augment_recovers_a_leftover_building_group(tmp_path: Path) -> None:

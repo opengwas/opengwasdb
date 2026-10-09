@@ -1,0 +1,16 @@
+{
+  "harness": "benchmarks/measure_252_validate_index.py",
+  "commit": "a1e4b3f",
+  "measured_at": "2026-10-09T19:15:38.521476+00:00",
+  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-index/opengwasdb",
+  "opengwasdb_fingerprint": "9da7c21b371255fb6161d90b81ea17e47995a282e4b2ce43e858315512e30510",
+  "store": "/data/opengwasdb/work/epic252/OGS-00011-0.2.0",
+  "component": "data.zarr/ragged",
+  "n_assoc": 3085080783,
+  "n_axis": 164051296,
+  "seconds": 2657.4,
+  "errors": [],
+  "baseline_mb": 165.2,
+  "peak_mb": 4201.4,
+  "peak_gib": 4.103
+}

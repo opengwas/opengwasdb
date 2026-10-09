@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Self, cast
+from typing import Any, ClassVar, NoReturn, Self, cast
 
 import numpy as np
 
@@ -352,40 +352,78 @@ class WindowedExactTable(SparseExactTable):
             # `sorted_positions[i] > high`, so the next chunk is strictly later.
             chunk_index = max(next_index, chunk_index + 1)
 
-    def lookup(self, positions: np.ndarray) -> np.ndarray:
-        """Exact values at `positions`, reading only the chunks they fall in.
+    def _first_ge(self, target: int) -> int:
+        """Table-entry index of the first entry `>= target` (an element index)."""
+        total = array_length(self.index_zarr)
+        chunk_index, chunk, _ = self._chunk_after(target, strict=False)
+        if chunk_index * chunk >= total:
+            return total
+        block, _ = self._chunk(chunk_index, total, chunk)
+        return chunk_index * chunk + int(np.searchsorted(block, target, side="left"))
 
-        Positions are sorted and the scan advances chunk by chunk: a chunk that
-        holds any of them is read once, and the gap to the next position's
-        chunk is crossed by a bisect (`_chunk_after`) rather than by reading
-        every chunk between.  A clustered block of cells therefore reads its
-        handful of chunks, and a scattered set reads at most one chunk per
-        position (plus the bisect), instead of the whole span between the first
-        and last (review round 2, finding 3).
+    def _last_le(self, target: int) -> int:
+        """One past the table-entry index of the last entry `<= target`."""
+        total = array_length(self.index_zarr)
+        chunk_index, chunk, _ = self._chunk_after(target, strict=True)
+        if chunk_index == 0:
+            return 0
+        block, _ = self._chunk(chunk_index - 1, total, chunk)
+        start = (chunk_index - 1) * chunk
+        return start + int(np.searchsorted(block, target, side="right"))
+
+    def _lookup_span(self, first: int, last: int, positions: np.ndarray) -> np.ndarray:
+        """One vectorised `searchsorted` over the entries `[first, last)`."""
+        index = np.asarray(self.index_zarr[first:last], dtype=np.int64)
+        value = np.asarray(self.value_zarr[first:last], dtype=np.float32)
+        slot = np.searchsorted(index, positions)
+        found = slot < len(index)
+        hit = np.zeros(len(positions), dtype=bool)
+        hit[found] = index[slot[found]] == positions[found]
+        if not np.all(hit):
+            self._raise_missing(positions[~hit])
+        return np.asarray(value[slot], dtype=np.float32)
+
+    def _raise_missing(self, missing_positions: np.ndarray) -> NoReturn:
+        missing = np.asarray(missing_positions, dtype=np.int64)[:5].tolist()
+        raise ValueError(
+            f"{self.what_name} table has no entry for cell(s) at flat "
+            f"position(s) {missing}; the store's plane and its table disagree"
+        )
+
+    def lookup(self, positions: np.ndarray) -> np.ndarray:
+        """Exact values at `positions`, reading only the entries they cover.
+
+        A **clustered** set -- a decode block, or a whole Analysis's contiguous
+        range -- is read as one slice of the table and `searchsorted` once, so
+        its cost is O(table entries in the range) and it matches the eager
+        lookup the code used before the table was windowed (review round 2,
+        finding 3's regression).  A **scattered** set, where the entries between
+        the first and last position would be far more than the positions
+        themselves, is scanned chunk by chunk instead, so it reads at most one
+        chunk per position rather than the whole span.
         """
         positions = np.asarray(positions, dtype=np.int64)
         if len(positions) == 0:
             return np.empty(0, dtype=np.float32)
-        total = array_length(self.index_zarr)
-        if total == 0:
-            missing = positions[:5].tolist()
-            raise ValueError(
-                f"{self.what_name} table has no entry for cell(s) at flat "
-                f"position(s) {missing}; the store's plane and its table disagree"
-            )
+        if array_length(self.index_zarr) == 0:
+            self._raise_missing(positions)
+        first = self._first_ge(int(positions.min()))
+        last = self._last_le(int(positions.max()))
+        if last - first <= 4 * len(positions) + 1024:
+            return self._lookup_span(first, last, positions)
         order = np.argsort(positions, kind="stable")
-        sorted_positions = positions[order]
         out = np.empty(len(positions), dtype=np.float32)
         found = np.zeros(len(positions), dtype=bool)
         self._scan_chunks(
-            sorted_positions, order, out, found, total, max(1, int(self.index_zarr.chunks[0]))
+            positions[order],
+            order,
+            out,
+            found,
+            array_length(self.index_zarr),
+            max(1, int(self.index_zarr.chunks[0])),
         )
         if not np.all(found):
-            missing = positions[~found][:5].tolist()
-            raise ValueError(
-                f"{self.what_name} table has no entry for cell(s) at flat "
-                f"position(s) {missing}; the store's plane and its table disagree"
-            )
+            self._raise_missing(positions[~found])
         return out
 
 

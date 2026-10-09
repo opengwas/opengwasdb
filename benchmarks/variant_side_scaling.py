@@ -166,12 +166,13 @@ def _store_inputs(query: Any) -> dict[str, Any]:
                 block = []
             alid = str(axis.by_index(index).alid)
             if not narrow_alids:
-                record = axis.by_index(index)
-                region = (
-                    record.chromosome,
-                    max(1, int(record.position) - 500_000),
-                    int(record.position) + 500_000,
-                )
+                if not holds:
+                    record = axis.by_index(index)
+                    region = (
+                        record.chromosome,
+                        max(1, int(record.position) - 500_000),
+                        int(record.position) + 500_000,
+                    )
                 narrow_analyses = [str(table[a]["analysis_id"]) for a in block[:5]]
             if len(narrow_alids) < 10:
                 narrow_alids.append(alid)
