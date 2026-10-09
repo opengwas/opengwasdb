@@ -1,82 +1,120 @@
 {
-  "commit": "a0a38a5",
+  "commit": "de61a5c",
   "harness": "benchmarks/variant_side_scaling.py",
-  "measured_at": "2026-10-09T02:58:37.033411+00:00",
-  "opengwasdb_fingerprint": "d9ec968e180c889d770ce2fce54e3d7a3323fa2b66d672c6406cd858abb5b7da",
+  "measured_at": "2026-10-09T15:33:25.273586+00:00",
+  "opengwasdb_fingerprint": "e83396abb375c486e5fa028f7494c5be5d939e4deeb719a7dc6e1849e02dc656",
   "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-index/opengwasdb",
+  "shapes": [
+    "phewas",
+    "phewas_off_panel",
+    "range_phewas",
+    "lookup_10_variants",
+    "lookup_50_analyses"
+  ],
   "stores": {
     "OGS-00001": {
       "shapes": {
-        "lookup_10x10": {
+        "lookup_10_variants": {
+          "content_sha256": "137dcc6f96ccd65d52854cb0c072572ecfeca4a65db2bacd42648be002961f9d",
           "indexed": {
-            "baseline_mb": 187.1,
-            "delta_mb": 3.4,
-            "elapsed_s": 0.0528,
-            "gather_s": 0.0028,
-            "match_s": 0.0378,
-            "peak_mb": 190.5,
-            "read_s": 0.0122,
+            "baseline_mb": 197.9,
+            "delta_mb": 6.6,
+            "dense_s": 0.0114,
+            "elapsed_s": 0.0372,
+            "overflow_match_s": 0.0074,
+            "overflow_read_s": 0.0184,
+            "peak_mb": 204.5,
+            "reps": 3,
+            "result_count": 10
+          },
+          "scanned": {
+            "baseline_mb": 203.7,
+            "delta_mb": 1.6,
+            "dense_s": 0.0111,
+            "elapsed_s": 0.0354,
+            "overflow_match_s": 0.0069,
+            "overflow_read_s": 0.0174,
+            "peak_mb": 205.3,
+            "reps": 3,
+            "result_count": 10
+          }
+        },
+        "lookup_50_analyses": {
+          "skipped": "no non-empty selection on this store"
+        },
+        "phewas": {
+          "content_sha256": "a10bae01a799e757b7b4979704efeed196f385060111ae2773cc6eec407d9aa8",
+          "indexed": {
+            "baseline_mb": 173.1,
+            "delta_mb": 5.2,
+            "dense_s": 0.0013,
+            "elapsed_s": 0.0114,
+            "overflow_match_s": 0.0017,
+            "overflow_read_s": 0.0084,
+            "peak_mb": 178.3,
             "reps": 3,
             "result_count": 1
           },
           "scanned": {
-            "baseline_mb": 194.1,
-            "delta_mb": 0.0,
-            "elapsed_s": 0.0535,
-            "gather_s": 0.0027,
-            "match_s": 0.0387,
-            "peak_mb": 194.1,
-            "read_s": 0.0122,
+            "baseline_mb": 178.5,
+            "delta_mb": 1.1,
+            "dense_s": 0.0029,
+            "elapsed_s": 0.0147,
+            "overflow_match_s": 0.0024,
+            "overflow_read_s": 0.0095,
+            "peak_mb": 179.6,
             "reps": 3,
             "result_count": 1
           }
         },
-        "phewas": {
+        "phewas_off_panel": {
+          "content_sha256": "a10bae01a799e757b7b4979704efeed196f385060111ae2773cc6eec407d9aa8",
           "indexed": {
-            "baseline_mb": 168.5,
-            "delta_mb": 3.3,
-            "elapsed_s": 0.0109,
-            "gather_s": 0.0012,
-            "match_s": 0.0021,
-            "peak_mb": 171.8,
-            "read_s": 0.0076,
+            "baseline_mb": 183.5,
+            "delta_mb": 2.3,
+            "dense_s": 0.0013,
+            "elapsed_s": 0.011,
+            "overflow_match_s": 0.0017,
+            "overflow_read_s": 0.008,
+            "peak_mb": 185.8,
             "reps": 3,
             "result_count": 1
           },
           "scanned": {
-            "baseline_mb": 174.6,
-            "delta_mb": 2.7,
-            "elapsed_s": 0.0138,
-            "gather_s": 0.0027,
-            "match_s": 0.0025,
-            "peak_mb": 177.3,
-            "read_s": 0.0086,
+            "baseline_mb": 185.5,
+            "delta_mb": 1.6,
+            "dense_s": 0.0025,
+            "elapsed_s": 0.0144,
+            "overflow_match_s": 0.0027,
+            "overflow_read_s": 0.0092,
+            "peak_mb": 187.1,
             "reps": 3,
             "result_count": 1
           }
         },
         "range_phewas": {
+          "content_sha256": "702182b481b573b690868be8ed63e7433ba58fc7cdcb37968aafc542d81fcd57",
           "indexed": {
-            "baseline_mb": 180.1,
-            "delta_mb": 0.0,
-            "elapsed_s": 0.0,
-            "gather_s": 0.0,
-            "match_s": 0.0,
-            "peak_mb": 180.1,
-            "read_s": 0.0,
+            "baseline_mb": 191.1,
+            "delta_mb": 0.4,
+            "dense_s": 0.0,
+            "elapsed_s": 0.0281,
+            "overflow_match_s": 0.0141,
+            "overflow_read_s": 0.0165,
+            "peak_mb": 191.5,
             "reps": 3,
-            "result_count": 0
+            "result_count": 1335
           },
           "scanned": {
-            "baseline_mb": 181.8,
-            "delta_mb": 0.0,
-            "elapsed_s": 0.0,
-            "gather_s": 0.0,
-            "match_s": 0.0,
-            "peak_mb": 181.8,
-            "read_s": 0.0,
+            "baseline_mb": 193.8,
+            "delta_mb": 4.4,
+            "dense_s": 0.0084,
+            "elapsed_s": 0.0372,
+            "overflow_match_s": 0.0054,
+            "overflow_read_s": 0.0235,
+            "peak_mb": 198.2,
             "reps": 3,
-            "result_count": 0
+            "result_count": 1335
           }
         }
       },
@@ -84,230 +122,547 @@
     },
     "OGS-00006": {
       "shapes": {
-        "lookup_10x10": {
+        "lookup_10_variants": {
+          "content_sha256": "cbe5f18ee6d982282fa701a92b56d1d8276f9f177ab32509e2215fbe87629475",
           "indexed": {
-            "baseline_mb": 811.4,
-            "delta_mb": 2.0,
-            "elapsed_s": 0.046,
-            "gather_s": 0.0015,
-            "match_s": 0.0445,
-            "peak_mb": 813.4,
-            "read_s": 0.0,
+            "baseline_mb": 629.1,
+            "delta_mb": 1.7,
+            "dense_s": 0.011,
+            "elapsed_s": 0.0786,
+            "overflow_match_s": 0.0289,
+            "overflow_read_s": 0.0387,
+            "peak_mb": 630.8,
             "reps": 3,
-            "result_count": 0
+            "result_count": 8
           },
           "scanned": {
-            "baseline_mb": 822.6,
-            "delta_mb": 0.2,
-            "elapsed_s": 0.0488,
-            "gather_s": 0.0014,
-            "match_s": 0.0474,
-            "peak_mb": 822.7,
-            "read_s": 0.0,
+            "baseline_mb": 638.6,
+            "delta_mb": 0.0,
+            "dense_s": 0.0106,
+            "elapsed_s": 0.0795,
+            "overflow_match_s": 0.0287,
+            "overflow_read_s": 0.0401,
+            "peak_mb": 638.6,
             "reps": 3,
-            "result_count": 0
+            "result_count": 8
+          }
+        },
+        "lookup_50_analyses": {
+          "content_sha256": "96ef7c6e9b9f5cd88a3cfd56d8664889701de22d19a735292f0a6a6ffcdb005d",
+          "indexed": {
+            "baseline_mb": 656.5,
+            "delta_mb": 0.0,
+            "dense_s": 0.0523,
+            "elapsed_s": 0.7547,
+            "overflow_match_s": 0.1474,
+            "overflow_read_s": 0.555,
+            "peak_mb": 656.5,
+            "reps": 3,
+            "result_count": 17
+          },
+          "scanned": {
+            "baseline_mb": 667.5,
+            "delta_mb": 0.0,
+            "dense_s": 0.0609,
+            "elapsed_s": 0.8646,
+            "overflow_match_s": 0.177,
+            "overflow_read_s": 0.6267,
+            "peak_mb": 667.5,
+            "reps": 3,
+            "result_count": 17
           }
         },
         "phewas": {
+          "content_sha256": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
           "indexed": {
-            "baseline_mb": 295.8,
-            "delta_mb": 2.9,
-            "elapsed_s": 0.0262,
-            "gather_s": 0.0014,
-            "match_s": 0.0025,
-            "peak_mb": 298.8,
-            "read_s": 0.0223,
+            "baseline_mb": 282.7,
+            "delta_mb": 1.2,
+            "dense_s": 0.0013,
+            "elapsed_s": 0.0231,
+            "overflow_match_s": 0.0022,
+            "overflow_read_s": 0.0196,
+            "peak_mb": 283.9,
             "reps": 3,
             "result_count": 1
           },
           "scanned": {
-            "baseline_mb": 471.5,
-            "delta_mb": 15.7,
-            "elapsed_s": 0.5827,
-            "gather_s": 0.0055,
-            "match_s": 0.5524,
-            "peak_mb": 487.2,
-            "read_s": 0.0249,
+            "baseline_mb": 490.1,
+            "delta_mb": 8.9,
+            "dense_s": 0.0049,
+            "elapsed_s": 0.5806,
+            "overflow_match_s": 0.5462,
+            "overflow_read_s": 0.0294,
+            "peak_mb": 499.0,
             "reps": 3,
             "result_count": 1
           }
         },
-        "range_phewas": {
+        "phewas_off_panel": {
+          "content_sha256": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
           "indexed": {
-            "baseline_mb": 494.2,
-            "delta_mb": 0.2,
-            "elapsed_s": 0.0358,
-            "gather_s": 0.0061,
-            "match_s": 0.0069,
-            "peak_mb": 494.5,
-            "read_s": 0.0227,
+            "baseline_mb": 535.3,
+            "delta_mb": 0.3,
+            "dense_s": 0.0016,
+            "elapsed_s": 0.0401,
+            "overflow_match_s": 0.0033,
+            "overflow_read_s": 0.0352,
+            "peak_mb": 535.6,
             "reps": 3,
-            "result_count": 9321
+            "result_count": 1
           },
           "scanned": {
-            "baseline_mb": 610.0,
-            "delta_mb": 221.1,
-            "elapsed_s": 1.7428,
-            "gather_s": 0.0105,
-            "match_s": 0.884,
-            "peak_mb": 831.1,
-            "read_s": 0.8483,
+            "baseline_mb": 546.2,
+            "delta_mb": 3.1,
+            "dense_s": 0.0071,
+            "elapsed_s": 0.7073,
+            "overflow_match_s": 0.6035,
+            "overflow_read_s": 0.0967,
+            "peak_mb": 549.3,
             "reps": 3,
-            "result_count": 9321
+            "result_count": 20
+          }
+        },
+        "range_phewas": {
+          "content_sha256": "604a6535b8b8429f4d760dd0fc1c683e63dcc587e3dc6b691ee65c5095c7ca76",
+          "indexed": {
+            "baseline_mb": 568.6,
+            "delta_mb": 0.4,
+            "dense_s": 0.0,
+            "elapsed_s": 0.0448,
+            "overflow_match_s": 0.0154,
+            "overflow_read_s": 0.0338,
+            "peak_mb": 568.9,
+            "reps": 3,
+            "result_count": 2716
+          },
+          "scanned": {
+            "baseline_mb": 605.1,
+            "delta_mb": 2.2,
+            "dense_s": 0.0092,
+            "elapsed_s": 0.8915,
+            "overflow_match_s": 0.783,
+            "overflow_read_s": 0.0994,
+            "peak_mb": 607.3,
+            "reps": 3,
+            "result_count": 2716
           }
         }
       },
       "store": "/data/opengwasdb/work/epic252/OGS-00006-0.2.0"
     },
-    "OGS-00007": {
+    "OGS-00006-0.1.0": {
       "shapes": {
-        "lookup_10x10": {
-          "indexed": {
-            "baseline_mb": 221.7,
-            "delta_mb": 3.0,
-            "elapsed_s": 0.0678,
-            "gather_s": 0.0033,
-            "match_s": 0.0494,
-            "peak_mb": 224.7,
-            "read_s": 0.0151,
-            "reps": 3,
-            "result_count": 1
-          },
+        "lookup_10_variants": {
+          "skipped": "no non-empty selection on this store"
+        },
+        "lookup_50_analyses": {
+          "skipped": "no non-empty selection on this store"
+        },
+        "phewas": {
           "scanned": {
-            "baseline_mb": 233.1,
-            "delta_mb": 3.6,
-            "elapsed_s": 0.0672,
-            "gather_s": 0.0037,
-            "match_s": 0.0487,
-            "peak_mb": 236.7,
-            "read_s": 0.0148,
+            "baseline_mb": 662.7,
+            "delta_mb": 0.1,
+            "dense_s": 0.0055,
+            "elapsed_s": 0.5561,
+            "overflow_match_s": 0.5221,
+            "overflow_read_s": 0.0285,
+            "peak_mb": 662.8,
             "reps": 3,
             "result_count": 1
           }
         },
-        "phewas": {
+        "phewas_off_panel": {
+          "scanned": {
+            "baseline_mb": 661.7,
+            "delta_mb": 0.0,
+            "dense_s": 0.0152,
+            "elapsed_s": 0.5927,
+            "overflow_match_s": 0.5081,
+            "overflow_read_s": 0.0694,
+            "peak_mb": 661.7,
+            "reps": 3,
+            "result_count": 20
+          }
+        },
+        "range_phewas": {
+          "scanned": {
+            "baseline_mb": 662.0,
+            "delta_mb": 0.1,
+            "dense_s": 0.0084,
+            "elapsed_s": 0.9608,
+            "overflow_match_s": 0.8538,
+            "overflow_read_s": 0.0986,
+            "peak_mb": 662.0,
+            "reps": 3,
+            "result_count": 2716
+          }
+        }
+      },
+      "store": "/data/opengwasdb/stores/OGS-00006/store.opengwasdb"
+    },
+    "OGS-00007": {
+      "shapes": {
+        "lookup_10_variants": {
+          "content_sha256": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
           "indexed": {
-            "baseline_mb": 201.4,
-            "delta_mb": 1.1,
-            "elapsed_s": 0.0129,
-            "gather_s": 0.0019,
-            "match_s": 0.0018,
-            "peak_mb": 202.4,
-            "read_s": 0.0091,
+            "baseline_mb": 229.5,
+            "delta_mb": 1.7,
+            "dense_s": 0.01,
+            "elapsed_s": 0.0309,
+            "overflow_match_s": 0.006,
+            "overflow_read_s": 0.0149,
+            "peak_mb": 231.2,
             "reps": 3,
             "result_count": 1
           },
           "scanned": {
-            "baseline_mb": 206.2,
-            "delta_mb": 1.6,
-            "elapsed_s": 0.0195,
-            "gather_s": 0.0033,
-            "match_s": 0.004,
-            "peak_mb": 207.8,
-            "read_s": 0.0121,
+            "baseline_mb": 231.7,
+            "delta_mb": 0.3,
+            "dense_s": 0.0099,
+            "elapsed_s": 0.029,
+            "overflow_match_s": 0.0056,
+            "overflow_read_s": 0.0135,
+            "peak_mb": 232.0,
+            "reps": 3,
+            "result_count": 1
+          }
+        },
+        "lookup_50_analyses": {
+          "skipped": "no non-empty selection on this store"
+        },
+        "phewas": {
+          "content_sha256": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+          "indexed": {
+            "baseline_mb": 210.8,
+            "delta_mb": 1.0,
+            "dense_s": 0.0021,
+            "elapsed_s": 0.0232,
+            "overflow_match_s": 0.0037,
+            "overflow_read_s": 0.0174,
+            "peak_mb": 211.8,
+            "reps": 3,
+            "result_count": 1
+          },
+          "scanned": {
+            "baseline_mb": 212.7,
+            "delta_mb": 2.3,
+            "dense_s": 0.0045,
+            "elapsed_s": 0.0279,
+            "overflow_match_s": 0.0055,
+            "overflow_read_s": 0.0179,
+            "peak_mb": 215.0,
+            "reps": 3,
+            "result_count": 1
+          }
+        },
+        "phewas_off_panel": {
+          "content_sha256": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+          "indexed": {
+            "baseline_mb": 217.9,
+            "delta_mb": 0.3,
+            "dense_s": 0.0011,
+            "elapsed_s": 0.017,
+            "overflow_match_s": 0.0031,
+            "overflow_read_s": 0.0128,
+            "peak_mb": 218.2,
+            "reps": 3,
+            "result_count": 1
+          },
+          "scanned": {
+            "baseline_mb": 219.6,
+            "delta_mb": 2.1,
+            "dense_s": 0.0035,
+            "elapsed_s": 0.0263,
+            "overflow_match_s": 0.0055,
+            "overflow_read_s": 0.0172,
+            "peak_mb": 221.6,
             "reps": 3,
             "result_count": 1
           }
         },
         "range_phewas": {
+          "content_sha256": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
           "indexed": {
-            "baseline_mb": 208.7,
-            "delta_mb": 2.0,
-            "elapsed_s": 0.0,
-            "gather_s": 0.0,
-            "match_s": 0.0,
-            "peak_mb": 210.7,
-            "read_s": 0.0,
+            "baseline_mb": 223.6,
+            "delta_mb": 2.1,
+            "dense_s": 0.0,
+            "elapsed_s": 0.0177,
+            "overflow_match_s": 0.0089,
+            "overflow_read_s": 0.0124,
+            "peak_mb": 225.6,
             "reps": 3,
-            "result_count": 0
+            "result_count": 1
           },
           "scanned": {
-            "baseline_mb": 212.0,
-            "delta_mb": 0.0,
-            "elapsed_s": 0.0,
-            "gather_s": 0.0,
-            "match_s": 0.0,
-            "peak_mb": 212.1,
-            "read_s": 0.0,
+            "baseline_mb": 226.9,
+            "delta_mb": 2.7,
+            "dense_s": 0.003,
+            "elapsed_s": 0.0236,
+            "overflow_match_s": 0.0051,
+            "overflow_read_s": 0.0155,
+            "peak_mb": 229.6,
             "reps": 3,
-            "result_count": 0
+            "result_count": 1
           }
         }
       },
       "store": "/data/opengwasdb/work/epic252/OGS-00007-0.2.0"
     },
-    "eQTLGen": {
+    "OGS-00011": {
       "shapes": {
-        "lookup_10x10": {
+        "lookup_10_variants": {
+          "content_sha256": "30483ec6ca89bf171af5be33022bc70c005d4a7451be0a79ddda82d5b11606e0",
           "indexed": {
-            "baseline_mb": 896.4,
-            "delta_mb": 0.1,
-            "elapsed_s": 0.0487,
-            "gather_s": 0.0014,
-            "match_s": 0.0473,
-            "peak_mb": 896.5,
-            "read_s": 0.0,
+            "baseline_mb": 2059.3,
+            "delta_mb": 0.0,
+            "dense_s": 0.0978,
+            "elapsed_s": 0.2809,
+            "overflow_match_s": 0.0956,
+            "overflow_read_s": 0.0875,
+            "peak_mb": 2059.3,
             "reps": 3,
-            "result_count": 0
+            "result_count": 5
           },
           "scanned": {
-            "baseline_mb": 900.3,
+            "baseline_mb": 2059.2,
             "delta_mb": 0.0,
-            "elapsed_s": 0.0514,
-            "gather_s": 0.0014,
-            "match_s": 0.05,
-            "peak_mb": 900.3,
-            "read_s": 0.0,
+            "dense_s": 0.0899,
+            "elapsed_s": 0.2521,
+            "overflow_match_s": 0.0824,
+            "overflow_read_s": 0.0798,
+            "peak_mb": 2059.2,
             "reps": 3,
-            "result_count": 0
+            "result_count": 5
+          }
+        },
+        "lookup_50_analyses": {
+          "content_sha256": "f06913885cf405a7aa691363f2d6f05a9d8641da0dfbb37711376f92be535330",
+          "indexed": {
+            "baseline_mb": 2061.2,
+            "delta_mb": 0.1,
+            "dense_s": 0.8257,
+            "elapsed_s": 2.3951,
+            "overflow_match_s": 0.7951,
+            "overflow_read_s": 0.7743,
+            "peak_mb": 2061.2,
+            "reps": 3,
+            "result_count": 50
+          },
+          "scanned": {
+            "baseline_mb": 2080.2,
+            "delta_mb": 0.0,
+            "dense_s": 0.5575,
+            "elapsed_s": 1.596,
+            "overflow_match_s": 0.5264,
+            "overflow_read_s": 0.5121,
+            "peak_mb": 2080.2,
+            "reps": 3,
+            "result_count": 50
           }
         },
         "phewas": {
+          "content_sha256": "8dd552f6b02b45491683319cc8a12307852a00c392b25c593f3b49ccda804109",
           "indexed": {
-            "baseline_mb": 845.1,
-            "delta_mb": 0.6,
-            "elapsed_s": 0.016,
-            "gather_s": 0.0011,
-            "match_s": 0.0026,
-            "peak_mb": 845.7,
-            "read_s": 0.0124,
+            "baseline_mb": 895.0,
+            "delta_mb": 2.0,
+            "dense_s": 0.1462,
+            "elapsed_s": 0.1462,
+            "overflow_match_s": 0.0,
+            "overflow_read_s": 0.0,
+            "peak_mb": 897.0,
+            "reps": 3,
+            "result_count": 2268
+          },
+          "scanned": {
+            "baseline_mb": 921.7,
+            "delta_mb": 0.0,
+            "dense_s": 0.1498,
+            "elapsed_s": 0.1498,
+            "overflow_match_s": 0.0,
+            "overflow_read_s": 0.0,
+            "peak_mb": 921.7,
+            "reps": 3,
+            "result_count": 2268
+          }
+        },
+        "phewas_off_panel": {
+          "content_sha256": "f4b0e71b0cf6df85f12fb2ad7ac5e718b0c86f24a4b1ac8b8805baa2b088d394",
+          "indexed": {
+            "baseline_mb": 1054.8,
+            "delta_mb": 1.2,
+            "dense_s": 0.0,
+            "elapsed_s": 0.042,
+            "overflow_match_s": 0.0165,
+            "overflow_read_s": 0.0315,
+            "peak_mb": 1056.0,
+            "reps": 3,
+            "result_count": 66
+          },
+          "scanned": {
+            "baseline_mb": 1097.5,
+            "delta_mb": 13.6,
+            "dense_s": 0.2559,
+            "elapsed_s": 26.641,
+            "overflow_match_s": 26.1561,
+            "overflow_read_s": 0.2291,
+            "peak_mb": 1111.1,
+            "reps": 3,
+            "result_count": 77
+          }
+        },
+        "range_phewas": {
+          "content_sha256": "cbb4819bf18de8da51997b1b217dc305c20a29358b947118e8bfc22aabb277e3",
+          "indexed": {
+            "baseline_mb": 1152.7,
+            "delta_mb": 235.0,
+            "dense_s": 0.9087,
+            "elapsed_s": 1.1661,
+            "overflow_match_s": 0.0173,
+            "overflow_read_s": 0.2401,
+            "peak_mb": 1387.7,
+            "reps": 3,
+            "result_count": 252593
+          },
+          "scanned": {
+            "baseline_mb": 1571.7,
+            "delta_mb": 2393.7,
+            "dense_s": 4.1015,
+            "elapsed_s": 49.1269,
+            "overflow_match_s": 42.8775,
+            "overflow_read_s": 2.1479,
+            "peak_mb": 3965.4,
+            "reps": 3,
+            "result_count": 252593
+          }
+        }
+      },
+      "store": "/data/opengwasdb/work/epic252/OGS-00011-0.2.0"
+    },
+    "eQTLGen": {
+      "shapes": {
+        "lookup_10_variants": {
+          "content_sha256": "27e6fadc6d99df0ce5d118058619653110a36f6605a1eb90125a09752dd336eb",
+          "indexed": {
+            "baseline_mb": 744.5,
+            "delta_mb": 0.0,
+            "dense_s": 0.0319,
+            "elapsed_s": 0.202,
+            "overflow_match_s": 0.0462,
+            "overflow_read_s": 0.1239,
+            "peak_mb": 744.5,
+            "reps": 3,
+            "result_count": 5
+          },
+          "scanned": {
+            "baseline_mb": 747.6,
+            "delta_mb": 0.0,
+            "dense_s": 0.0296,
+            "elapsed_s": 0.2031,
+            "overflow_match_s": 0.0463,
+            "overflow_read_s": 0.1271,
+            "peak_mb": 747.6,
+            "reps": 3,
+            "result_count": 5
+          }
+        },
+        "lookup_50_analyses": {
+          "content_sha256": "da45ff491b00c875ed610b23c134d18356404c2256a0f1d9a91339fb87ba7652",
+          "indexed": {
+            "baseline_mb": 748.2,
+            "delta_mb": 0.0,
+            "dense_s": 0.1084,
+            "elapsed_s": 0.9443,
+            "overflow_match_s": 0.2272,
+            "overflow_read_s": 0.6087,
+            "peak_mb": 748.3,
+            "reps": 3,
+            "result_count": 24
+          },
+          "scanned": {
+            "baseline_mb": 748.4,
+            "delta_mb": 0.0,
+            "dense_s": 0.1089,
+            "elapsed_s": 0.9457,
+            "overflow_match_s": 0.2205,
+            "overflow_read_s": 0.6163,
+            "peak_mb": 748.4,
+            "reps": 3,
+            "result_count": 24
+          }
+        },
+        "phewas": {
+          "content_sha256": "36f7e775071c905d845d6802ca6506bdd18ae496299fee4b729b6514f2d7c07f",
+          "indexed": {
+            "baseline_mb": 674.4,
+            "delta_mb": 0.9,
+            "dense_s": 0.0029,
+            "elapsed_s": 0.0172,
+            "overflow_match_s": 0.0025,
+            "overflow_read_s": 0.0119,
+            "peak_mb": 675.3,
             "reps": 3,
             "result_count": 7
           },
           "scanned": {
-            "baseline_mb": 881.5,
-            "delta_mb": 1.2,
-            "elapsed_s": 1.2183,
-            "gather_s": 0.0057,
-            "match_s": 1.1985,
-            "peak_mb": 882.7,
-            "read_s": 0.0142,
+            "baseline_mb": 681.2,
+            "delta_mb": 0.0,
+            "dense_s": 0.0027,
+            "elapsed_s": 0.8316,
+            "overflow_match_s": 0.8173,
+            "overflow_read_s": 0.0116,
+            "peak_mb": 681.2,
             "reps": 3,
             "result_count": 7
           }
         },
-        "range_phewas": {
+        "phewas_off_panel": {
+          "content_sha256": "36f7e775071c905d845d6802ca6506bdd18ae496299fee4b729b6514f2d7c07f",
           "indexed": {
-            "baseline_mb": 885.7,
-            "delta_mb": 0.3,
-            "elapsed_s": 0.023,
-            "gather_s": 0.0038,
-            "match_s": 0.0088,
-            "peak_mb": 886.0,
-            "read_s": 0.0104,
+            "baseline_mb": 705.4,
+            "delta_mb": 1.0,
+            "dense_s": 0.0058,
+            "elapsed_s": 0.0342,
+            "overflow_match_s": 0.004,
+            "overflow_read_s": 0.0244,
+            "peak_mb": 706.4,
             "reps": 3,
-            "result_count": 62633
+            "result_count": 7
           },
           "scanned": {
-            "baseline_mb": 856.2,
-            "delta_mb": 39.8,
-            "elapsed_s": 2.0118,
-            "gather_s": 0.0185,
-            "match_s": 1.9533,
-            "peak_mb": 896.0,
-            "read_s": 0.04,
+            "baseline_mb": 709.5,
+            "delta_mb": 0.1,
+            "dense_s": 0.0066,
+            "elapsed_s": 1.3338,
+            "overflow_match_s": 1.3031,
+            "overflow_read_s": 0.0242,
+            "peak_mb": 709.6,
             "reps": 3,
-            "result_count": 62633
+            "result_count": 36
+          }
+        },
+        "range_phewas": {
+          "content_sha256": "7c4e4266e87cbbbfe3ef3c3ebbc4fb76137a9f11debfa7249c9ae37a5451e113",
+          "indexed": {
+            "baseline_mb": 709.5,
+            "delta_mb": 0.0,
+            "dense_s": 0.0,
+            "elapsed_s": 0.0288,
+            "overflow_match_s": 0.015,
+            "overflow_read_s": 0.0191,
+            "peak_mb": 709.5,
+            "reps": 3,
+            "result_count": 92
+          },
+          "scanned": {
+            "baseline_mb": 741.9,
+            "delta_mb": 0.0,
+            "dense_s": 0.0032,
+            "elapsed_s": 1.8744,
+            "overflow_match_s": 1.8406,
+            "overflow_read_s": 0.0306,
+            "peak_mb": 741.9,
+            "reps": 3,
+            "result_count": 92
           }
         }
       },

@@ -240,8 +240,13 @@ def _probe(
     finally:
         query.close()
     total = float(np.median(totals))
-    medians = {key: float(np.median(values)) for key, values in phases.items()}
-    accounted = sum(medians.values())
+    overflow_match = float(np.median(phases["overflow_match"]))
+    overflow_read = float(np.median(phases["overflow_read"]))
+    # Everything not attributed to the Overflow reader is the Dense side (a
+    # Hybrid's Dense Component read) plus result assembly.  Reporting the
+    # remainder rather than the wrapped Dense calls keeps the phases additive:
+    # a Dense plane's public method calls others, so summing them double-counts.
+    dense = max(0.0, total - overflow_match - overflow_read)
     return {
         "baseline_mb": round(baseline, 1),
         "peak_mb": round(peak, 1),
@@ -249,10 +254,9 @@ def _probe(
         "result_count": int(len(result["z"])),
         "reps": reps,
         "elapsed_s": round(total, 4),
-        "dense_s": round(medians["dense"], 4),
-        "overflow_match_s": round(medians["overflow_match"], 4),
-        "overflow_read_s": round(medians["overflow_read"], 4),
-        "gather_s": round(max(0.0, total - accounted), 4),
+        "dense_s": round(dense, 4),
+        "overflow_match_s": round(overflow_match, 4),
+        "overflow_read_s": round(overflow_read, 4),
     }
 
 

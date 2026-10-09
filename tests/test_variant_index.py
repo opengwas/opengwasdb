@@ -407,7 +407,6 @@ def test_scaling_harness_splits_phases_and_matches_counts(tmp_path: Path) -> Non
             "dense_s",
             "overflow_match_s",
             "overflow_read_s",
-            "gather_s",
         } <= set(sides[side])
         assert sides[side]["result_count"] == sides["indexed"]["result_count"]
     assert (
