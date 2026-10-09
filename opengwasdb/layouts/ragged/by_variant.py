@@ -589,12 +589,34 @@ class ByVariantReader:
         self._coefficients = (
             self._ragged[SE_COEFFICIENTS] if SE_COEFFICIENTS in self._ragged else None
         )
-        self._codec = StoreCodec(
-            encoding,
-            z_overflow=ZOverflowTable.read(self._index),
-            eaf_exceptions=EafExceptionTable.read(self._index),
-            se_exceptions=SeExceptionTable.read(self._index),
-        )
+        self._codec_cache: StoreCodec | None = None
+
+    @property
+    def _codec(self) -> StoreCodec:
+        """The codec, built on first decode -- and not before.
+
+        The index's re-keyed exception tables are read whole by `StoreCodec`, and
+        at OGS-00011 the EAF exception table is 180,396,687 entries (~2.1 GiB).
+        Reading them at open made every query that merely *opened* the store pay
+        that 2.1 GiB, including the analysis-side shapes the index does not
+        serve; a first decode is the first time the tables are needed.
+        """
+        if self._codec_cache is None:
+            self._codec_cache = StoreCodec(
+                self._encoding,
+                z_overflow=ZOverflowTable.read(self._index),
+                eaf_exceptions=EafExceptionTable.read(self._index),
+                se_exceptions=SeExceptionTable.read(self._index),
+            )
+        return self._codec_cache
+
+    def warm(self) -> None:
+        """Read the codec's exception tables now, so a caller can time past them.
+
+        The tables are a one-off per store open -- ~2.1 GiB and ~2.4 s at
+        OGS-00011 -- and a benchmark that wants the per-query cost excludes them.
+        """
+        _ = self._codec
 
     @property
     def n_axis(self) -> int:

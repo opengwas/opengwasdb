@@ -7,9 +7,10 @@ off-axis PheWAS or region queries proportional to the answer: without a
 variant-side index, those must read every Analysis's `variant_index` to find
 the rows. This ADR decides the index's on-disk shape, compatibly with ADR 0057
 (format 0.2.0), ADR 0058 (the decided Dense chunk and shard shapes) and #248's
-ADR 0059 (the Ragged roles and shard policies). **Building it is separate work**
-(#252 step 5); the epic can close without it, and a release that carries no
-index queries correctly through the scan it replaces.
+ADR 0059 (the Ragged roles and shard policies). **It was built and measured
+as #252 step 5**; the storage, build and query numbers in the sections below
+are from the committed artifacts, not estimates. A release that carries no
+index still queries correctly through the scan it replaces.
 
 ## Context
 
@@ -209,18 +210,25 @@ instead; it copies `z`, `se` and `eaf` and shares the per-variant
 (12.34 + 6.17 + 6.17 + 3.085 = 27.8 GB) plus `by_variant/offsets` over the
 shared axis (164,051,297 × int64 = **1.31 GB**), plus the re-keyed EAF
 exception table (2.17 GB) and a small re-keyed `z` overflow table: about
-**31.3 GB**, and at the Overflow's own measured 1.7× **about +18 GB on disk —
-close to doubling the 18 GB Overflow**, matching #252's original estimate.
+**31.3 GB**.
+
+**Measured (ruling c, `docs/benchmark-output/opengwasdb_252_index_cost.json`):
+the finished `ragged/by_variant/` group is 16.678 GiB (17.91 GB) on disk**, so
+`data.zarr/ragged` grew from 20 GB to 37 GB — within the ~+18 GB estimate above,
+and not quite doubling the Overflow after compression. The estimate was made
+from raw byte counts; the measured group is smaller because the duplicated
+`z`/`se`/`eaf` codes compress like the Analysis-sorted planes they copy. The
+same artifact's other rows: eQTLGen (127,331,910 rows) **+0.422 GiB**, OGS-00006
+(58,054,212) **+0.158 GiB**, the pilots (86,373 and 202,803) under a megabyte.
 
 OGS-00011's Overflow is observed-only and codes `se` as `float16`, so neither
-`imputed` nor an SE exception table is duplicated there and the estimate above
-stands. A **completed standalone Ragged** component adds `by_variant/imputed`
-(uint8, 3.085 GB raw at this scale) and a component whose plan selects
-`int8_residual` adds a re-keyed `se_exception_index` / `_value` pair, whose raw
-size is the Analysis-sorted table's own — **12 bytes per exception in total**
-(an int64 index plus a float32 value), before compression; both are
-proportional to the cells the component already stores.
-The general accounting is therefore
+`imputed` nor an SE exception table is duplicated there. A **completed
+standalone Ragged** component adds `by_variant/imputed` (uint8, 3.085 GB raw at
+this scale) and a component whose plan selects `int8_residual` adds a re-keyed
+`se_exception_index` / `_value` pair, whose raw size is the Analysis-sorted
+table's own — **12 bytes per exception in total** (an int64 index plus a
+float32 value), before compression; both are proportional to the cells the
+component already stores. The general accounting is therefore
 `n_axis + 1` int64 offsets + one int32 and one `z` cell per association + one
 `se` cell + one `eaf` cell + (one uint8 `imputed` cell when completed) + the
 re-keyed overflow and exception tables.
@@ -233,21 +241,52 @@ axis (`np.bincount(variant_index, minlength=n_shared)`, 164 M int64 = 1.31 GB),
 a prefix sum to `offsets`, and one pass to scatter each cell into its variant's
 block while copying the codes and re-keying the overflow and exception tables
 (and the `imputed` mask and SE exceptions where the component carries them).
-Two passes over ~30 GB of values; **estimated 30–60 min** on this node,
-parallelisable by variant band because the destination offsets are known after
-the counting pass. The streamed Overflow writers (#228/#233) are the model: the
-index is written in the same bounded regions, in the same phases, so the
-build's peak is unchanged.
+
+**Measured on OGS-00011 (ruling c): 2,035.8 s (33.9 min), peak RSS 9.914 GiB.**
+The implementation is bounded, not a whole-component pass: a windowed count, a
+band-partitioned spill (destinations are known after the counting pass), and
+whole-shard writes, holding the `n_axis + 1` offsets (1.31 GB), one 50 M-cell
+band, and the (small) exception tables. The first estimate was 30–60 min; the
+measured build sits at the low end, and the same artifact's smaller rows scale
+as expected — eQTLGen (127.3 M rows) 356.7 s / 2.73 GiB, OGS-00006 (58.1 M)
+54.5 s / 2.11 GiB, the pilots sub-second. The build re-reads the component it
+is duplicating; it never needs the cells resident, so its peak does not grow
+with the store.
 
 ### Query cost
 
-At OGS-00011, a per-variant PheWAS reads one 8 KB `by_variant/offsets` inner
-chunk and the variant's row block: at 3,317 Analyses × ~9 bytes a cell that is
-about 30 KB, one inner chunk of each of `analysis_index`, `z`, `se` and `eaf`.
-That is five or so chunk reads against Dense PheWAS's measured 30.7 ms. A 1 Mb
-region reads `offsets[lo:hi]` and the range's contiguous blocks, so its cost is
-the answer's size (the TCF7L2 window held 8.3 M rows ≈ 75 MB of values) rather
-than the store's. Both meet the acceptance target.
+**Measured on OGS-00011 (`docs/benchmark-output/opengwasdb_ogs00011_252_variant_index_ab.json`),
+each shape in a fresh process with the index present and absent** (the absence is
+a rename of `ragged/by_variant/`, so the scan side is genuine; answers are
+compared in canonical row order, and every shape's two answers matched):
+
+| shape | scan | index | speed-up |
+|---|---:|---:|---:|
+| off-axis PheWAS (`phewas_off_axis`) | 31,833.3 ms | **44.7 ms** | 711× |
+| 1 Mb region (`regional`) | 97,980.0 ms | **5,033.1 ms** | 19.5× |
+| bulk, one Analysis genome-wide | 14,322.4 ms | 13,209.2 ms | control |
+| PheWAS, on-axis variant (Dense) | 1,917.9 ms | 1,925.1 ms | control |
+| region × one Analysis | 10,244.5 ms | 11,539.7 ms | control |
+| top hits | 45.7 ms | 66.7 ms | control |
+| random lookup, 10×100 | 3,062.7 ms | 3,094.9 ms | control |
+| random lookup, 100×10 | 2,376.3 ms | 3,271.0 ms | control |
+| bulk, largest Overflow | 26,808.6 ms | 29,223.7 ms | control |
+
+Off-axis PheWAS lands in the tens of milliseconds the acceptance asks for,
+against the same harness's on-axis Dense PheWAS of ~1.9 s. The 1 Mb region is
+5.0 s, not the sub-second the first estimate hoped: most of that is the Dense
+Component's own window read, which the index does not serve — the Overflow's
+part is the range's contiguous blocks. A per-variant read is one 8 KB offsets
+chunk plus the variant's ~30 KB block; step 2's phase split confirms the scan's
+cost is its **match** phase (eQTLGen PheWAS: 1198 ms match / 14 ms read) while
+the index's match is ~2 ms.
+
+The index's re-keyed EAF exception table (180,396,687 entries, ~2.1 GiB) is read
+once per query process, on the first decode (~2.4 s at OGS-00011). It is read
+lazily: opening a store for an analysis-side shape that never decodes the index
+pays nothing, and the benchmark warms it before timing a decoding shape so the
+table read is not charged to the per-query number. The scan side pays the
+equivalent table read when its reader opens.
 
 ## Considered options
 
@@ -281,8 +320,9 @@ than the store's. Both meet the acceptance target.
   `format_version` changes, an unindexed release still answers every query,
   and a 0.1.0 or 0.2.0 release can gain or lose it by a build, not a
   conversion.
-- **A `ragged/by_variant/` group roughly doubles the Overflow's bytes on disk**
-  at OGS-00011 (~+18 GB). That is the price of making per-variant work
+- **A `ragged/by_variant/` group is a large share of the Overflow's bytes on
+  disk** at OGS-00011 (measured **+16.678 GiB**, from 20 GB to 37 GB of
+  `data.zarr/ragged`). That is the price of making per-variant work
   proportional to the answer.
 - **The strict path and group mapper must be extended** (the `by_variant`
   group and its leaf→role table, and the offsets array's inner-chunk hint as
@@ -292,10 +332,12 @@ than the store's. Both meet the acceptance target.
   the builder writes the duplicate in the same phases and bounded regions as
   the Analysis-sorted arrays, and the Hybrid's `dense_to_shared` map is
   unchanged because the index is keyed on the shared axis.
-- **Building and wiring it is #252 step 5, out of scope for #252 and not
-  required to finish epic #240.** A builder phase, a query-facade route and its
-  tests, parity-checked against the step-3 scan on an indexed fixture and on
-  OGS-00011.
+- **Built and wired as #252 step 5.** The Ragged, SSF, BESD and Hybrid builders
+  write it, Reference Completion rebuilds it, `ogdb build-variant-index` adds it
+  to an existing 0.2.0 release, the query facade reads it (falling back to the
+  scan), and `validate` checks it. Parity against the step-3 scan is asserted on
+  indexed fixtures and on OGS-00011 (`
+  docs/benchmark-output/opengwasdb_ogs00011_252_variant_index_ab.json`).
 
 ## References
 

@@ -206,15 +206,33 @@ def _loads() -> list[float]:
     return [float(parts[0]), float(parts[1]), float(parts[2])]
 
 
-def _digest(result: dict[str, np.ndarray]) -> str:
+def _digest(result: dict[str, np.ndarray], *, canonical: bool = False) -> str:
+    """A sha256 over the six arrays, optionally in canonical row order.
+
+    `canonical=True` sorts by `(variant_index, analysis_index)` first, for a
+    comparison where the two answers may be grouped differently: the facade
+    makes no ordering guarantee (ADR 0033) and the variant index returns a
+    region variant-major where the scan returns flat-CSR order (ADR 0060).
+    """
+    keys = ("variant_index", "analysis_index", "z", "se", "eaf")
+    status = np.asarray(result["association_status"], dtype=object)
+    order = None
+    if canonical and len(result["z"]):
+        order = np.lexsort(
+            (np.asarray(result["analysis_index"]), np.asarray(result["variant_index"]))
+        )
     h = hashlib.sha256()
-    for key in ("variant_index", "analysis_index", "z", "se", "eaf"):
-        arr = np.ascontiguousarray(result[key])
+    for key in keys:
+        arr = np.asarray(result[key])
+        if order is not None:
+            arr = arr[order]
+        arr = np.ascontiguousarray(arr)
         h.update(key.encode())
         h.update(str(arr.dtype).encode())
         h.update(str(arr.shape).encode())
         h.update(arr.tobytes())
-    status = np.asarray(result["association_status"], dtype=object)
+    if order is not None:
+        status = status[order]
     h.update(b"association_status")
     h.update(str(len(status)).encode())
     for value in status:
@@ -233,6 +251,8 @@ def measure_one_shape(
     limit: float,
     *,
     before_timing: Callable[[], dict] | None = None,
+    canonical_digest: bool = False,
+    warm_index: bool = False,
 ) -> dict:
     """Run one shape once with an alarm and an RSS sampler; return its record.
 
@@ -253,6 +273,13 @@ def measure_one_shape(
     # A plain handle, not a `with` block: the shape's callable holds the query,
     # and closing it before the shape runs reads an empty store (review round 1).
     query = query_store(store)
+    if warm_index:
+        # Read the variant index's exception tables before the clock starts: the
+        # scan side reads the equivalent table when its reader opens, so timing
+        # the first indexed decode cold would compare two different spans.
+        reader = getattr(query, "_by_variant", None)
+        if reader is not None:
+            reader.warm()
     try:
         fn = harness._patterns(query, Path(store))[shape]
         gate = before_timing() if before_timing is not None else {}
@@ -289,13 +316,31 @@ def measure_one_shape(
     }
     if result is not None:
         record["result_count"] = int(len(result["z"]))
-        record["sha256"] = _digest(result)
+        record["sha256"] = _digest(result, canonical=canonical_digest)
+        record["canonical_digest"] = canonical_digest
     return record
 
 
 def _one_shape(args: argparse.Namespace) -> None:
     """Run one shape once with an alarm and an RSS sampler; print one JSON line."""
-    print(json.dumps(measure_one_shape(args.store, args.shape, args.limit)), flush=True)
+    gate = None
+    max_load = getattr(args, "max_start_load", 0.0) or 0.0
+    if max_load > 0:
+        from benchmarks._quiet import wait_for_quiet
+
+        def gate() -> dict:
+            waited, gave_up = wait_for_quiet(max_load)
+            return {"gate_waited_s": round(waited, 1), "gate_gave_up": gave_up}
+
+    record = measure_one_shape(
+        args.store,
+        args.shape,
+        args.limit,
+        before_timing=gate,
+        canonical_digest=bool(getattr(args, "canonical_identity", False)),
+        warm_index=bool(getattr(args, "warm_index", False)),
+    )
+    print(json.dumps(record), flush=True)
 
 
 def _one_identity(args: argparse.Namespace) -> None:
@@ -518,6 +563,24 @@ def main() -> None:
     ap.add_argument("--output", type=Path)
     ap.add_argument("--one-shape", dest="one_shape", action="store_true")
     ap.add_argument("--one-identity", dest="one_identity", action="store_true")
+    ap.add_argument(
+        "--max-start-load",
+        type=float,
+        default=0.0,
+        help="--one-shape: wait for the 1-minute load below this before timing (0 = off)",
+    )
+    ap.add_argument(
+        "--canonical-identity",
+        dest="canonical_identity",
+        action="store_true",
+        help="--one-shape: hash the answer in canonical (variant, analysis) row order",
+    )
+    ap.add_argument(
+        "--warm-index",
+        dest="warm_index",
+        action="store_true",
+        help="--one-shape: read the variant index's exception tables before timing",
+    )
     ap.add_argument("--shape")
     ap.add_argument("--tree")
     args = ap.parse_args()

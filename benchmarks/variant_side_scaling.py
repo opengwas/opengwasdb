@@ -42,12 +42,14 @@ from typing import Any
 import numpy as np
 
 from benchmarks._artifact import add_labelled_store_option, labelled_stores, provenance
+from benchmarks._query_shapes import probe_variant_alid
 from benchmarks._rss import RssSampler, rss_mb
 from opengwasdb.layouts.ragged.by_variant import ByVariantReader
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.query import query_store
 
-REGION = ("1", 114_000_000, 115_000_000)
+#: The TCF7L2 1 Mb window the committed OGS-00011 benchmark uses (rs7903146).
+REGION = ("10", 112_500_000, 113_500_000)
 
 _MATCH_METHODS = ("variant_positions", "segment_positions")
 _READ_METHODS = (
@@ -99,31 +101,19 @@ def _install_phases() -> None:
     _PHASES_INSTALLED = True
 
 
-def _first_alid(query: Any, *, off_panel: bool | None = None) -> str | None:
-    table = query.variants_table()
-    if not table:
-        return None
-    indices = np.sort(np.array(list(table), dtype=np.int64))
-    mask = getattr(query, "_on_panel_mask", None)
-    if off_panel is not None and mask is not None:
-        on_panel = np.asarray(mask(indices))
-        indices = indices[~on_panel] if off_panel else indices[on_panel]
-    return str(table[int(indices[0])]["alid"]) if len(indices) else None
-
-
 def _calls(query: Any) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
-    alid = _first_alid(query)
-    off = _first_alid(query, off_panel=True)
+    on = probe_variant_alid(query, off_panel=False)
+    off = probe_variant_alid(query, off_panel=True)
     analyses = [str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())][:10]
     calls: dict[str, Callable[[], dict[str, np.ndarray]]] = {
         "range_phewas": lambda: query.range_phewas(*REGION),
     }
-    if alid is not None:
-        calls["phewas"] = lambda: query.phewas(alid)
+    if on is not None:
+        calls["phewas"] = lambda: query.phewas(on)
     if off is not None:
         calls["phewas_off_panel"] = lambda: query.phewas(off)
-    if analyses and alid is not None:
-        calls["lookup_10x10"] = lambda: query.lookup([alid], analyses)
+    if analyses and on is not None:
+        calls["lookup_10x10"] = lambda: query.lookup([on], analyses)
     if analyses and off is not None:
         calls["lookup_off_panel"] = lambda: query.lookup([off], analyses)
     return calls
