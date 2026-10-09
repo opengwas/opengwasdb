@@ -246,12 +246,13 @@ block while copying the codes and re-keying the overflow and exception tables
 The implementation is bounded, not a whole-component pass: a windowed count, a
 band-partitioned spill (destinations are known after the counting pass), and
 whole-shard writes, holding the `n_axis + 1` offsets (1.31 GB), one 50 M-cell
-band, and the (small) exception tables. The first estimate was 30–60 min; the
-measured build sits at the low end, and the same artifact's smaller rows scale
-as expected — eQTLGen (127.3 M rows) 356.7 s / 2.73 GiB, OGS-00006 (58.1 M)
-54.5 s / 2.11 GiB, the pilots sub-second. The build re-reads the component it
-is duplicating; it never needs the cells resident, so its peak does not grow
-with the store.
+band, and the exception tables. Its peak therefore grows with the **exception
+count E**, not with the association count N: the same artifact measures 2.11 GiB
+for OGS-00006 (58.1 M rows) and 2.73 GiB for eQTLGen (127.3 M rows), against
+9.91 GiB for OGS-00011 (3,085 M rows, whose re-keyed EAF table is 180 M entries
+-- about 2.1 GiB held whole during the re-key). The build re-reads the component
+it is duplicating; it never needs the cells resident. The first estimate was
+30–60 min and the measured build sits at the low end.
 
 ### Query cost
 

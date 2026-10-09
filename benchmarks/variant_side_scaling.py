@@ -119,13 +119,16 @@ def _calls(query: Any) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
     return calls
 
 
-def _probe(store: Path, shape: str, *, indexed: bool, reps: int = 3) -> dict[str, Any]:
+def _probe(
+    store: Path, shape: str, *, indexed: bool, reps: int = 3, max_load: float = 3.0
+) -> dict[str, Any]:
     """One shape on one side, in this process, with phases and peak RSS.
 
     A warm-up runs first; each timed repetition waits for the 1-minute load to
-    fall below 3, so a contended node is recorded rather than silently timed.
-    The reported time and each phase are the median over the repetitions; peak
-    RSS is the maximum the sampler saw across them.
+    fall below `max_load` (0 disables), so a contended node is recorded rather
+    than silently timed -- and a test can turn the wait off.  The reported time
+    and each phase are the median over the repetitions; peak RSS is the maximum
+    the sampler saw across them.
     """
     from benchmarks._quiet import wait_for_quiet
 
@@ -144,7 +147,7 @@ def _probe(store: Path, shape: str, *, indexed: bool, reps: int = 3) -> dict[str
         result: dict[str, np.ndarray] = {}
         with RssSampler() as sampler:
             for _ in range(reps):
-                wait_for_quiet(3.0)
+                wait_for_quiet(max_load)
                 _timer.times = {"match": 0.0, "read": 0.0}
                 started = perf_counter()
                 result = call()
@@ -170,12 +173,14 @@ def _probe(store: Path, shape: str, *, indexed: bool, reps: int = 3) -> dict[str
     }
 
 
-def measure(store: Path, shapes: list[str], *, reps: int = 3) -> dict[str, Any]:
+def measure(
+    store: Path, shapes: list[str], *, reps: int = 3, max_load: float = 3.0
+) -> dict[str, Any]:
     shapes_out: dict[str, Any] = {}
     for shape in shapes:
         sides: dict[str, Any] = {}
         for side, indexed in (("indexed", True), ("scanned", False)):
-            sides[side] = _probe(store, shape, indexed=indexed, reps=reps)
+            sides[side] = _probe(store, shape, indexed=indexed, reps=reps, max_load=max_load)
         if sides["indexed"]["result_count"] != sides["scanned"]["result_count"]:
             raise SystemExit(
                 f"{store}:{shape}: indexed {sides['indexed']['result_count']} rows "
@@ -195,6 +200,12 @@ def _parser() -> argparse.ArgumentParser:
         help="comma-separated shape names",
     )
     parser.add_argument("--reps", type=int, default=3, help="repetitions per side")
+    parser.add_argument(
+        "--max-start-load",
+        type=float,
+        default=3.0,
+        help="wait for the 1-minute load below this before each repetition (0 disables)",
+    )
     return parser
 
 
@@ -211,7 +222,12 @@ def main(argv: list[str] | None = None) -> int:
         "harness": "benchmarks/variant_side_scaling.py",
         **provenance(),
         "stores": {
-            label: {"store": str(path), "shapes": measure(path, shapes, reps=args.reps)}
+            label: {
+                "store": str(path),
+                "shapes": measure(
+                    path, shapes, reps=args.reps, max_load=args.max_start_load
+                ),
+            }
             for label, path in stores
         },
     }

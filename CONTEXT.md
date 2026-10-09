@@ -152,6 +152,9 @@ The Store-wide union of canonical variants referenced by its Analyses. Each vari
 **Variant Index**:
 A compact Store-local reference to a row in the Store Variant Table. It has no identity or stability guarantee outside its Store Release.
 
+**By-Variant Index**:
+An optional, additive structure inside a Ragged component (`ragged/by_variant/`, ADR 0060): a `(variant index, Analysis)`-ordered duplicate of the component's cell-keyed arrays that makes a by-variant PheWAS or region query proportional to the answer. Distinct from the **Variant Index** (a row reference); the name is deliberately different. It does not change `format_version`, and a release without it answers every query through the scan it replaces.
+
 **Reference Assembly**:
 The genome assembly to which every genomic coordinate in a Store Release refers — every variant coordinate, and a Trait's own position (`trait_chr`/`trait_bp`) when it has one — such as GRCh37 or GRCh38. Each Store Release declares exactly one Reference Assembly.
 

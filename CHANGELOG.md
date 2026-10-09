@@ -28,13 +28,19 @@ the end of this file.
   contiguous row block instead of scanning; `lookup` keeps #252's per-Analysis
   binary search. An absent index is not an error -- the query falls back to the
   scan -- so the index is optional and additive and does not change
-  `format_version`. The build is a bounded counting sort (windowed `bincount`,
-  band-partitioned spill, whole-shard writes) whose peak memory is a window
-  plus the offset array; at OGS-00011's 3,085,080,783-row Overflow the index is
-  about +18 GB on disk. `ogdb build-variant-index STORE` adds it to an existing
-  0.2.0 release in place (a 0.1.0 release is converted first), refreshing the
-  manifest and any consolidated-metadata record atomically with one rename; the
-  `build-ragged-besd`, `build-ragged-ssf`, `build-hybrid` and
+  `format_version`. The build is a bounded counting sort (windowed count,
+  band-partitioned spill, whole-shard writes) whose peak memory is the source's
+  and the re-keyed exception tables plus one band -- so it grows with the
+  exception count E, not with the association count N (measured peak 2.1 GiB at
+  OGS-00006, 2.7 GiB at eQTLGen, 9.9 GiB at OGS-00011, whose re-keyed EAF table
+  is 180 M entries); the index is **+16.678 GiB on disk** at OGS-00011 and
+  0.158 GiB at OGS-00006. `ogdb build-variant-index STORE` adds it to an
+  existing 0.2.0 release in place (a 0.1.0 release is converted first); the
+  install is **ordered, not atomic** -- the new group is built beside the old,
+  renamed into place, and the manifest and any consolidated record are
+  refreshed after, with the previous group, manifest and record restored on a
+  failure and a leftover build or half-finished swap settled on the next run;
+  the `build-ragged-besd`, `build-ragged-ssf`, `build-hybrid` and
   `build-hybrid-from-catalogue` commands take `--no-variant-index` to skip it.
   `validate` checks the index's presence against the manifest's
   `provenance.ragged.by_variant` block, its offsets and per-variant counts, its

@@ -162,12 +162,14 @@ def build_hybrid_from_catalogue(
     """Subset the Catalogue to ``ancestry`` and build a Hybrid store from it.
 
     ``stored_effect_scale`` and ``original_sd_method``/``original_sd`` apply
-    uniformly to every kept Analysis (issues #17, #18); a release mixing scales
-    or SD methods per Analysis needs a manifest built some other way.
-
+    uniformly to every kept Analysis (issues #17, #18) -- this entry point is
+    for a single Source Collection release where that is expected to hold; a
+    release mixing scales or SD methods per Analysis needs a manifest built
+    some other way.
     Uses the unchanged ``build_hybrid_from_vcf_manifest`` on the row-filtered
-    manifest -- Assigned Ancestry rides through into ``analyses.tsv`` -- then
-    folds release-level Catalogue provenance into ``manifest.json``.
+    manifest -- Assigned Ancestry rides through into ``analyses.tsv`` as part
+    of the build itself -- then folds release-level Catalogue provenance into
+    ``manifest.json``.
 
     ``eaf_reference``/``eaf_reference_ancestry``/``allow_unverified_eaf`` pass
     straight through to the EAF orientation check (issue #115). This is the

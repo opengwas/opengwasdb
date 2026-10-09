@@ -88,7 +88,9 @@ def build_ragged_from_besd(
     prefix = Path(besd_prefix)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        # Phase 1/2 — sources, then the canonical variant axis (liftover first).
+        # Phase 1 — source reading (ESI/EPI); Phase 2 — canonical variant axis
+        # (liftover first: a row that fails the lift never reaches the axis,
+        # so no association can sit at a wrong coordinate).
         snps, probes = _read_sources(prefix)
         lifted = _lifted_coordinates(snps, source_build)
         variants, rsid_by_alid, esi_to_variant = _canonical_variants(snps, lifted)
@@ -104,10 +106,7 @@ def build_ragged_from_besd(
             write_variant_index=write_variant_index,
         )
         # Phase 5 — indexes and manifest output.
-        print("Building top-hit indexes ...")
-        build_ragged_top_hit_indexes(staged.path, encoding=encoding)
-        print("Writing analyses.tsv ...")
-        write_analysis_records(staged.path / "analyses.tsv", add_hit_counts(staged.path, analyses))
+        _write_besd_outputs(staged, analyses, encoding)
         _write_manifest(
             staged,
             store_id,
@@ -126,6 +125,16 @@ def build_ragged_from_besd(
             f"{result.n_associations:,} associations"
         )
     return result
+
+
+def _write_besd_outputs(
+    staged: StagedRelease, analyses: list[Analysis], encoding: StoreEncoding
+) -> None:
+    """The top-hit indexes and `analyses.tsv` a BESD build finishes with."""
+    print("Building top-hit indexes ...")
+    build_ragged_top_hit_indexes(staged.path, encoding=encoding)
+    print("Writing analyses.tsv ...")
+    write_analysis_records(staged.path / "analyses.tsv", add_hit_counts(staged.path, analyses))
 
 
 def _read_sources(prefix: Path) -> tuple[list[SnpRecord], list[ProbeRecord]]:

@@ -76,16 +76,30 @@ def _analysis_ids(query: Any, limit: int) -> list[str]:
     return [str(row["analysis_id"]) for _, row in rows[:limit]]
 
 
-def _calls(query: Any) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
-    """One callable per shape, bound to inputs this store actually holds.
+def _select_inputs(query: Any) -> dict[str, Any]:
+    """The variant and Analysis inputs both facades are queried with.
+
+    Selected **once**, from the indexed facade, so the scan side runs the same
+    query and not a similar one: `probe_variant_alid` finds an off-panel variant
+    through the index, which the scan facade does not have.
+    """
+    return {
+        "on": probe_variant_alid(query, off_panel=False),
+        "off": probe_variant_alid(query, off_panel=True),
+        "analyses": _analysis_ids(query, 10),
+    }
+
+
+def _calls(
+    query: Any, inputs: dict[str, Any]
+) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
+    """One callable per shape, bound to `query` and the shared `inputs`.
 
     The probe variants come from `probe_variant_alid`, which asks the axis by
     index: `variants_table()` on OGS-00011's 164 M-variant shared axis is a
     memory bomb, and this harness must not use it.
     """
-    on = probe_variant_alid(query, off_panel=False)
-    off = probe_variant_alid(query, off_panel=True)
-    analyses = _analysis_ids(query, 10)
+    on, off, analyses = inputs["on"], inputs["off"], inputs["analyses"]
     calls: dict[str, Callable[[], dict[str, np.ndarray]]] = {}
     if on is not None:
         calls["phewas"] = lambda: query.phewas(on)
@@ -111,10 +125,17 @@ def check_store(store: Path) -> dict[str, Any]:
     scanned._by_variant = None
     shapes: dict[str, Any] = {}
     try:
-        calls = _calls(indexed)
-        for name, call in calls.items():
+        # The inputs are selected once from the indexed facade and both call
+        # sets are bound to them, so the scan side runs the *same* query.  The
+        # closures must be built per facade: a single `_calls(indexed)` called
+        # twice queried the index both times, which made this harness unable to
+        # fail (review round 1, blocker).
+        inputs = _select_inputs(indexed)
+        calls_indexed = _calls(indexed, inputs)
+        calls_scanned = _calls(scanned, inputs)
+        for name, call in calls_indexed.items():
             indexed_digest, indexed_rows = _digest(call())
-            scan_digest, scan_rows = _digest(call())
+            scan_digest, scan_rows = _digest(calls_scanned[name]())
             if indexed_rows != scan_rows or indexed_digest != scan_digest:
                 raise SystemExit(
                     f"{store}:{name}: indexed {indexed_rows} rows/{indexed_digest[:12]} "

@@ -39,6 +39,7 @@ from typing import Any
 import numpy as np
 
 from opengwasdb.encoding import (
+    EafBaselineError,
     EafExceptionTable,
     SeExceptionTable,
     StoreCodec,
@@ -221,19 +222,20 @@ def _partition_cells(
     record: np.dtype,
     spill_dir: Path,
     n_bands: int,
-) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[tuple[str, str, str, np.ndarray, np.ndarray]]]:
+) -> tuple[
+    list[list[np.ndarray]],
+    list[list[np.ndarray]],
+    list[tuple[str, str, str, np.ndarray, np.ndarray]],
+]:
     """One pass over the source, splitting every cell into its band.
 
-    Returns the per-table re-keyed exception entries as a list of
-    `(index, value)` pairs (each `int64`/`float32`), in `_EXCEPTION_TABLES`
-    order for the tables the component carries, and the source tables those
-    entries were drawn from.
+    Returns the per-table re-keyed exception entries as two parallel lists of
+    lists (index and value), in `_EXCEPTION_TABLES` order for the tables the
+    component carries, and the source tables those entries were drawn from.
     """
     source_tables = _read_source_exception_tables(source)
-    rekeyed: list[tuple[np.ndarray, np.ndarray]] = [
-        (np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float32))
-        for _ in source_tables
-    ]
+    rekeyed_index: list[list[np.ndarray]] = [[] for _ in source_tables]
+    rekeyed_value: list[list[np.ndarray]] = [[] for _ in source_tables]
     handles = [_band_file(spill_dir, band).open("wb") for band in range(n_bands)]
     try:
         for analysis in range(len(offsets) - 1):
@@ -243,11 +245,13 @@ def _partition_cells(
             variant_index = np.asarray(source["variant_index"][start:stop], dtype=np.int32)
             destination = _destination_ordinals(variant_index, by_offsets)
             _partition_segment(source, analysis, start, stop, destination, record, handles)
-            _rekey_segment(source_tables, rekeyed, start, stop, destination)
+            _rekey_segment(
+                source_tables, rekeyed_index, rekeyed_value, start, stop, destination
+            )
     finally:
         for handle in handles:
             handle.close()
-    return rekeyed, source_tables
+    return rekeyed_index, rekeyed_value, source_tables
 
 
 def _read_source_exception_tables(
@@ -300,7 +304,8 @@ def _partition_segment(
 
 def _rekey_segment(
     source_tables: list[tuple[str, str, str, np.ndarray, np.ndarray]],
-    rekeyed: list[tuple[np.ndarray, np.ndarray]],
+    rekeyed_index: list[list[np.ndarray]],
+    rekeyed_value: list[list[np.ndarray]],
     start: int,
     stop: int,
     destination: np.ndarray,
@@ -308,7 +313,10 @@ def _rekey_segment(
     """Re-key the exception cells in `[start, stop)` to their by-variant ordinals.
 
     An exception is only a cell that happens to carry an exact value, so it is
-    re-keyed from the same destination ordinals the partition computed.
+    re-keyed from the same destination ordinals the partition computed.  Each
+    Analysis's slice is appended to a list and concatenated once at the end, not
+    concatenated per Analysis: the latter copies O(Analyses x E) (review round 1,
+    finding 14).
     """
     for slot, (_label, _index_name, _value_name, index, value) in enumerate(source_tables):
         lo = int(np.searchsorted(index, start, side="left"))
@@ -316,11 +324,8 @@ def _rekey_segment(
         if lo == hi:
             continue
         positions = index[lo:hi]
-        old_index, old_value = rekeyed[slot]
-        rekeyed[slot] = (
-            np.concatenate([old_index, destination[positions - start]]),
-            np.concatenate([old_value, value[lo:hi]]),
-        )
+        rekeyed_index[slot].append(destination[positions - start])
+        rekeyed_value[slot].append(value[lo:hi])
 
 
 def _write_index_arrays(source: Any, index: Any, by_offsets: np.ndarray, n_rows: int) -> None:
@@ -401,12 +406,19 @@ def _write_bands(
 def _write_rekeyed_tables(
     index: Any,
     source_tables: list[tuple[str, str, str, np.ndarray, np.ndarray]],
-    rekeyed: list[Any],
+    rekeyed_index: list[list[np.ndarray]],
+    rekeyed_value: list[list[np.ndarray]],
 ) -> None:
     """Write the re-keyed exception tables, uncompressed, beside the copied codes."""
-    for (_label, index_name, value_name, _index, _value), (positions, values) in zip(
-        source_tables, rekeyed, strict=True
+    for (_label, index_name, value_name, _index, _value), index_parts, value_parts in zip(
+        source_tables, rekeyed_index, rekeyed_value, strict=True
     ):
+        positions = (
+            np.concatenate(index_parts) if index_parts else np.empty(0, dtype=np.int64)
+        )
+        values = (
+            np.concatenate(value_parts) if value_parts else np.empty(0, dtype=np.float32)
+        )
         order = np.argsort(positions, kind="stable")
         positions, values = positions[order], values[order]
         if len(positions) > 1 and np.any(positions[1:] == positions[:-1]):
@@ -507,12 +519,12 @@ def _build(
     record = _record_dtype(source)
     n_bands = max(1, -(-n_associations // BAND_ROWS))
     log.info("by_variant: partitioning into %d bands", n_bands)
-    rekeyed, source_tables = _partition_cells(
+    rekeyed_index, rekeyed_value, source_tables = _partition_cells(
         source, offsets, by_offsets, record, spill, n_bands
     )
     log.info("by_variant: assembling bands")
     _write_bands(source, index, record, spill, n_bands, n_associations)
-    _write_rekeyed_tables(index, source_tables, rekeyed)
+    _write_rekeyed_tables(index, source_tables, rekeyed_index, rekeyed_value)
     return n_axis, n_associations
 
 
@@ -572,13 +584,27 @@ class ByVariantReader:
     index and the shared component respectively.
     """
 
-    def __init__(self, store_path: str | Path, encoding: StoreEncoding | None = None):
+    def __init__(
+        self,
+        store_path: str | Path,
+        encoding: StoreEncoding | None = None,
+        *,
+        n_axis: int | None = None,
+    ):
         self._ragged = store_arrays.open_group(Path(store_path) / RAGGED_ZARR_PATH)
+        if BY_VARIANT_GROUP not in self._ragged:
+            raise ValueError(
+                f"{store_path}: {RAGGED_ZARR_PATH}/{BY_VARIANT_GROUP} is absent; a variant "
+                "index must be built before it is read (ADR 0060)"
+            )
         self._index = self._ragged[BY_VARIANT_GROUP]
         if encoding is None:
             encoding = StoreManifest.load(Path(store_path)).encoding
         self._encoding = encoding
+        self._require_arrays()
+        self._require_members()
         self._offsets = self._index["offsets"]
+        self._require_span(store_path, n_axis)
         self._analysis_index = self._index["analysis_index"]
         self._z = self._index["z"]
         self._se = self._index["se"]
@@ -590,6 +616,63 @@ class ByVariantReader:
             self._ragged[SE_COEFFICIENTS] if SE_COEFFICIENTS in self._ragged else None
         )
         self._codec_cache: StoreCodec | None = None
+
+    def _require_arrays(self) -> None:
+        """A missing required array is named, not a bare `KeyError` from a later read."""
+        missing = [
+            name
+            for name in ("offsets", "analysis_index", "z", "se")
+            if name not in self._index
+        ]
+        if missing:
+            raise ValueError(
+                f"{self._index.name}: the variant index is missing {missing}; a "
+                "half-written group is invalid (ADR 0060)"
+            )
+
+    def _require_members(self) -> None:
+        """The index must carry exactly the component's optional members.
+
+        A missing `imputed` on a release that declares reference EAF is refused
+        here for the same reason the scan plane refuses it: without the mask the
+        panel substitution cannot be applied, and substituting zeros would
+        silently read every imputed cell as observed.
+        """
+        if self._encoding.eaf.reference and "imputed" not in self._index:
+            raise EafBaselineError(
+                "this release declares reference EAF for its imputed cells but its "
+                "variant index carries no imputed mask; without it an indexed read "
+                "would read every imputed cell as observed (spec §9, §15)"
+            )
+        for name in ("eaf", "imputed"):
+            if (name in self._index) != (name in self._ragged):
+                raise ValueError(
+                    f"{self._index.name}/{name} is present on one side only; the "
+                    "component and its variant index must carry the same members"
+                )
+
+    def _require_span(self, store_path: str | Path, n_axis: int | None) -> None:
+        """The index must span the component it duplicates, and the declared axis.
+
+        `offsets[-1]` is the row count and must equal the Analysis-sorted
+        component's own; a mismatch is a stale index answering with another "
+        "store's rows.  When the caller knows the variant axis length, the
+        "offsets array must be `n_axis + 1` long.
+        """
+        offsets = np.asarray(self._offsets[:], dtype=np.int64)
+        component = self._ragged["offsets"]
+        component_rows = int(component[-1])
+        if len(offsets) == 0 or int(offsets[-1]) != component_rows:
+            raise ValueError(
+                f"{store_path}: {BY_VARIANT_GROUP}/offsets ends at "
+                f"{int(offsets[-1]) if len(offsets) else 'nothing'} but the component "
+                f"holds {component_rows} associations; the index is stale"
+            )
+        if n_axis is not None and len(offsets) != int(n_axis) + 1:
+            raise ValueError(
+                f"{store_path}: {BY_VARIANT_GROUP}/offsets has {len(offsets)} entries "
+                f"but the variant axis is {n_axis} (expected {int(n_axis) + 1})"
+            )
 
     @property
     def _codec(self) -> StoreCodec:
@@ -604,9 +687,9 @@ class ByVariantReader:
         if self._codec_cache is None:
             self._codec_cache = StoreCodec(
                 self._encoding,
-                z_overflow=ZOverflowTable.read(self._index),
-                eaf_exceptions=EafExceptionTable.read(self._index),
-                se_exceptions=SeExceptionTable.read(self._index),
+                z_overflow=ZOverflowTable.open(self._index),
+                eaf_exceptions=EafExceptionTable.open(self._index),
+                se_exceptions=SeExceptionTable.open(self._index),
             )
         return self._codec_cache
 
@@ -790,13 +873,71 @@ def add_variant_index(
     """Add the by-variant index to an existing 0.2.0 Ragged or Hybrid release.
 
     The release is written in place.  The group is built under
-    `by_variant.building`, moved into place with one rename, and only then are
-    the manifest and any consolidated-metadata record refreshed, so an
-    interrupted run leaves either no `by_variant` group or a complete one --
-    never a group the manifest denies or a manifest claiming a group that is
-    absent.  A consolidated record is moved aside for the duration (the write
-    seam refuses any write beneath one) and restored, refreshed, afterwards.
+    `by_variant.building`, renamed into place, and only then are the manifest and
+    any consolidated-metadata record refreshed.  The install is **ordered, not
+    atomic**: each rename is atomic but the sequence is not, so a process killed
+    between them leaves a state `_recover_interrupted_install` settles on the
+    next run -- a leftover build is dropped, a half-finished swap is completed
+    or undone.  A failed run restores the previous group, the previous manifest
+    and any consolidated record; a `--force` rebuild builds the new index before
+    the old one is removed, so a failed rebuild leaves the old index in place.
     """
+    store, ragged, target = _augment_target(store_path, force)
+    n_axis = component_n_axis(store.path)
+    manifest = Path(store_path) / "manifest.json"
+    manifest_backup = manifest.with_name("manifest.json.variant-index.bak")
+    shutil.copy2(manifest, manifest_backup)
+    suspended = _suspend_consolidated_metadata(store.data_path)
+    installed = False
+    try:
+        result = build_variant_index(
+            store.path,
+            n_axis=n_axis,
+            group_name=f"{BY_VARIANT_GROUP}.building",
+            spill_dir=spill_dir,
+        )
+        _install_group(ragged)
+        installed = True
+        _record_index_in_manifest(store_path, result)
+    except BaseException:
+        _roll_back_build(ragged, installed=installed)
+        if manifest_backup.exists():
+            os.replace(manifest_backup, manifest)
+        _restore_consolidated_metadata(suspended)
+        raise
+    manifest_backup.unlink(missing_ok=True)
+    shutil.rmtree(ragged / f"{BY_VARIANT_GROUP}{_OLD_SUFFIX}", ignore_errors=True)
+    _refresh_consolidated_metadata(store.data_path, suspended)
+    return result
+
+
+#: The suffix an index being replaced is renamed to while the new one is swapped in.
+_OLD_SUFFIX = ".variant-index.old"
+
+
+def _recover_interrupted_install(ragged: Path) -> None:
+    """Settle the states a process killed mid-augment can leave.
+
+    A leftover `.building` group is incomplete by definition and dropped.  A
+    leftover `.old` means a swap was in progress: if the target is present the
+    swap finished and the backup is stale; otherwise the process died between
+    the two renames and the backup is the whole previous index.
+    """
+    building = ragged / f"{BY_VARIANT_GROUP}.building"
+    old = ragged / f"{BY_VARIANT_GROUP}{_OLD_SUFFIX}"
+    target = ragged / BY_VARIANT_GROUP
+    if building.exists():
+        shutil.rmtree(building, ignore_errors=True)
+    if not old.exists():
+        return
+    if target.exists():
+        shutil.rmtree(old, ignore_errors=True)
+    else:
+        os.replace(old, target)
+
+
+def _augment_target(store_path: str | Path, force: bool) -> tuple[Any, Path, Path]:
+    """Open the release and settle the preconditions for an in-place augment."""
     from opengwasdb.store import open_store
     from opengwasdb.store.open import CURRENT_FORMAT_VERSION
 
@@ -810,42 +951,42 @@ def add_variant_index(
     ragged = store.data_path / "ragged"
     if not ragged.exists():
         raise VariantIndexError(f"{store_path}: the release has no Ragged component")
-    if (ragged / BY_VARIANT_GROUP).exists():
-        if not force:
-            raise VariantIndexError(
-                f"{store_path}: ragged/{BY_VARIANT_GROUP} already exists; pass --force to "
-                "rebuild it"
-            )
-        shutil.rmtree(ragged / BY_VARIANT_GROUP)
-    n_axis = component_n_axis(store.path)
-    suspended = _suspend_consolidated_metadata(store.data_path)
-    try:
-        result = build_variant_index(
-            store.path,
-            n_axis=n_axis,
-            group_name=f"{BY_VARIANT_GROUP}.building",
-            spill_dir=spill_dir,
+    _recover_interrupted_install(ragged)
+    target = ragged / BY_VARIANT_GROUP
+    if target.exists() and not force:
+        raise VariantIndexError(
+            f"{store_path}: ragged/{BY_VARIANT_GROUP} already exists; pass --force to "
+            "rebuild it"
         )
-        _install_group(ragged)
-        _record_index_in_manifest(store_path, result)
-    except BaseException:
-        _roll_back_group(ragged)
-        _restore_consolidated_metadata(suspended)
-        raise
-    _refresh_consolidated_metadata(store.data_path, suspended)
-    return result
+    return store, ragged, target
 
 
 def _install_group(ragged: Path) -> None:
-    """Rename the built group into place; one rename, atomic on a local store."""
+    """Rename the built group into place, keeping the replaced one as a backup.
+
+    The renamed-aside previous index is left for the caller to delete only after
+    the manifest rewrite succeeds, so a failure can restore it.
+    """
     building = ragged / f"{BY_VARIANT_GROUP}.building"
     target = ragged / BY_VARIANT_GROUP
+    old = ragged / f"{BY_VARIANT_GROUP}{_OLD_SUFFIX}"
+    if target.exists():
+        os.replace(target, old)
     os.replace(building, target)
 
 
-def _roll_back_group(ragged: Path) -> None:
-    for name in (BY_VARIANT_GROUP, f"{BY_VARIANT_GROUP}.building"):
-        shutil.rmtree(ragged / name, ignore_errors=True)
+def _roll_back_build(ragged: Path, *, installed: bool) -> None:
+    """Undo an interrupted augment: drop the new build, restore the replaced index."""
+    building = ragged / f"{BY_VARIANT_GROUP}.building"
+    target = ragged / BY_VARIANT_GROUP
+    old = ragged / f"{BY_VARIANT_GROUP}{_OLD_SUFFIX}"
+    shutil.rmtree(building, ignore_errors=True)
+    if old.exists():
+        shutil.rmtree(target, ignore_errors=True)
+        os.replace(old, target)
+    elif installed:
+        # A fresh index was installed but the restored manifest does not claim it.
+        shutil.rmtree(target, ignore_errors=True)
 
 
 def _record_index_in_manifest(store_path: str | Path, result: VariantIndexResult) -> None:
@@ -885,7 +1026,9 @@ def _suspend_consolidated_metadata(data_path: Path) -> list[tuple[str, str]]:
             shutil.copy2(record, backup)
             data = json.loads(record.read_text(encoding="utf-8"))
             data.pop("consolidated_metadata", None)
-            record.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            temporary = record.with_name(f"{record.name}.variant-index.tmp")
+            temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            os.replace(temporary, record)
         else:
             backup = record.with_name(f"{record.name}.variant-index.bak")
             os.replace(record, backup)

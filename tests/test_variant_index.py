@@ -20,9 +20,11 @@ rules are known to have teeth.
 
 from __future__ import annotations
 
+import os
 from json import loads
 from pathlib import Path
 from shutil import copytree
+from typing import Any
 
 import numpy as np
 import pytest
@@ -366,12 +368,37 @@ def test_augment_is_idempotent_through_the_identity_harness(tmp_path: Path) -> N
     assert any(shape["rows"] > 0 for shape in shapes.values())
 
 
+def test_identity_harness_catches_a_corrupted_indexed_decode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A corrupted indexed answer must make the identity harness exit non-zero.
+
+    Review round 1, finding 1: the harness built its shape closures once, on the
+    indexed facade, so both digests came from the index and the scan side was
+    never queried -- it could not fail.  This mutation is the proof it can.
+    """
+    from benchmarks.variant_index_identity import check_store
+    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+
+    store = _build_ssf_store(tmp_path / "identity-mutation", store_id="idx")
+    original = ByVariantReader.decode
+
+    def corrupt(self: ByVariantReader, *args: object, **kwargs: object) -> dict:
+        block = original(self, *args, **kwargs)
+        block["z"] = block["z"] + np.float32(1.0)
+        return block
+
+    monkeypatch.setattr(ByVariantReader, "decode", corrupt)
+    with pytest.raises(SystemExit, match="indexed .* != scanned"):
+        check_store(store)
+
+
 def test_scaling_harness_splits_phases_and_matches_counts(tmp_path: Path) -> None:
     """The step-2 harness reports three phases per side with equal counts."""
     from benchmarks.variant_side_scaling import measure
 
     store = _build_ssf_store(tmp_path / "scaling", store_id="idx")
-    measured = measure(store, ["phewas"], reps=1)
+    measured = measure(store, ["phewas"], reps=1, max_load=0)
     sides = measured["phewas"]
     assert set(sides) == {"indexed", "scanned"}
     for side in sides.values():
@@ -424,6 +451,242 @@ def test_augment_rolls_back_when_the_install_fails(
     assert not (store / "data.zarr" / "ragged" / BY_VARIANT_GROUP).exists()
     assert not (store / "data.zarr" / "ragged" / f"{BY_VARIANT_GROUP}.building").exists()
     assert (store / "manifest.json").read_bytes() == before
+
+
+def _ragged(store: Path) -> Path:
+    return store / "data.zarr" / "ragged"
+
+
+def test_reader_refuses_a_missing_required_array(tmp_path: Path) -> None:
+    """A missing `by_variant/z` is a named error, not a bare KeyError later."""
+    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+
+    store = _build_ssf_store(tmp_path / "missing-array", store_id="idx")
+    root = store_arrays.open_group_for_write(store / "data.zarr" / "ragged", "a")
+    del root[BY_VARIANT_GROUP]["z"]
+    with pytest.raises(ValueError, match="missing"):
+        ByVariantReader(store)
+
+
+def test_reader_refuses_a_stale_index_at_open(tmp_path: Path) -> None:
+    """`offsets[-1]` must equal the component's row count, or the index is stale."""
+    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+
+    store = _build_ssf_store(tmp_path / "stale-at-open", store_id="idx")
+    root = store_arrays.open_group_for_write(store / "data.zarr" / "ragged", "a")
+    offsets = np.asarray(root[BY_VARIANT_GROUP]["offsets"][:])
+    offsets[-1] = int(offsets[-1]) + 1
+    root[BY_VARIANT_GROUP]["offsets"][:] = offsets
+    with pytest.raises(ValueError, match="stale"):
+        ByVariantReader(store)
+
+
+def test_reader_refuses_a_missing_imputed_mask_on_reference_eaf(
+    residual: RaggedResidualScenario,
+) -> None:
+    """A reference-EAF release without the index's mask must raise, not read zeros."""
+    from opengwasdb.encoding import EafBaselineError
+    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
+
+    root = store_arrays.open_group_for_write(
+        residual.completed / "data.zarr" / "ragged", "a"
+    )
+    del root[BY_VARIANT_GROUP]["imputed"]
+    with pytest.raises(EafBaselineError, match="imputed"):
+        ByVariantReader(residual.completed)
+
+
+def test_validation_rejects_a_wrong_index_inner_chunk(tmp_path: Path) -> None:
+    """The index's recorded layout must match the role policy, hint included."""
+    store = _build_ssf_store(tmp_path / "wrong-chunk", store_id="idx")
+    root = store_arrays.open_group_for_write(store / "data.zarr" / "ragged", "a")
+    index = root[BY_VARIANT_GROUP]
+    analysis_index = np.asarray(index["analysis_index"][:], dtype=np.int32)
+    store_arrays.create_array(
+        index,
+        "analysis_index",
+        store_arrays.ArrayRole.ASSOCIATION_SEQUENCE,
+        data=analysis_index,
+        dtype=np.int32,
+        compressor=store_arrays.compressor(),
+        hint=(100_000,),  # the policy's declared chunk is 200,000
+        overwrite=True,
+    )
+    result = validate_store(store)
+    assert not result.ok
+    assert any("inner chunk" in error for error in result.errors), result.errors
+
+
+def test_validation_rejects_a_missing_index_array(tmp_path: Path) -> None:
+    store = _build_ssf_store(tmp_path / "missing-index-array", store_id="idx")
+    root = store_arrays.open_group_for_write(store / "data.zarr" / "ragged", "a")
+    del root[BY_VARIANT_GROUP]["analysis_index"]
+    result = validate_store(store)
+    assert not result.ok
+    assert any("analysis_index" in error for error in result.errors), result.errors
+
+
+def test_cli_build_variant_index_adds_it_and_refuses_0_1_0(tmp_path: Path) -> None:
+    from legacy_fixtures import relayout_as_0_1_0
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    runner = CliRunner()
+    store = _build_ssf_store(tmp_path / "cli", store_id="cli", write_variant_index=False)
+    result = runner.invoke(app, ["build-variant-index", str(store)])
+    assert result.exit_code == 0, result.output
+    assert has_variant_index(store)
+
+    legacy = relayout_as_0_1_0(store, tmp_path / "cli-0.1.0")
+    refused = runner.invoke(app, ["build-variant-index", str(legacy)])
+    assert refused.exit_code != 0
+    assert "convert_store_to_0_2_0" in refused.output, refused.output
+
+
+def test_windowed_exception_table_reads_only_the_window() -> None:
+    """A lookup on a multi-chunk table reads O(log + answer) cells, not the table.
+
+    #252 review round 1, finding 2: the indexed decode read whole exception
+    tables (2.1 GiB at OGS-00011).  This counts the cells the windowed table's
+    `lookup` reads and asserts it is a tiny fraction of a 600,000-entry table.
+    """
+    from opengwasdb.encoding import EafExceptionTable
+    from opengwasdb.encoding.codec import WindowedExactTable
+
+    total = 20_000_000  # 100 inner chunks (200,000 each) -- too many to read whole
+    index = np.arange(total, dtype=np.int64) * 2  # positions 0, 2, 4, ...
+    value = np.linspace(0.0, 1.0, total).astype(np.float32)
+
+    class _Counting:
+        def __init__(self) -> None:
+            self.cells = 0
+
+    counter = _Counting()
+
+    class _Array:
+        def __init__(self, array: Any) -> None:
+            self._array = array
+
+        @property
+        def shape(self) -> tuple[int, ...]:
+            return tuple(self._array.shape)
+
+        @property
+        def chunks(self) -> tuple[int, ...]:
+            return tuple(self._array.chunks)
+
+        def __getitem__(self, key: object) -> np.ndarray:
+            out = self._array[key]
+            counter.cells += int(np.size(out))
+            return out
+
+    class _Group(dict):
+        def __init__(self, arrays: dict) -> None:
+            super().__init__(arrays)
+            self._arrays = arrays
+
+        def __getitem__(self, key: str) -> object:
+            return self._arrays[key]
+
+        def __contains__(self, key: object) -> bool:
+            return key in self._arrays
+
+    # A real zarr array for the two halves, wrapped to count cells read.
+    import tempfile
+
+    from opengwasdb.store import arrays as store_arrays
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = store_arrays.open_group_for_write(Path(directory) / "t.zarr", "w")
+        store_arrays.create_array(
+            root, "eaf_exception_index", store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE,
+            data=index, dtype=np.int64, compressor=None,
+        )
+        store_arrays.create_array(
+            root, "eaf_exception_value", store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE,
+            data=value, dtype=np.float32, compressor=None,
+        )
+        group = _Group({
+            "eaf_exception_index": _Array(root["eaf_exception_index"]),
+            "eaf_exception_value": _Array(root["eaf_exception_value"]),
+        })
+        table = WindowedExactTable.of(group, EafExceptionTable)
+        # The last few exception cells only.
+        positions = index[-3:].copy()
+        got = table.lookup(positions)
+        np.testing.assert_allclose(got, value[-3:])
+    assert counter.cells < total // 4, (
+        f"the windowed lookup read {counter.cells} of {total} cells; it must read a window"
+    )
+
+
+def test_augment_recovers_a_leftover_building_group(tmp_path: Path) -> None:
+    """A process killed during the build leaves `.building`, which is dropped."""
+    store = _build_ssf_store(tmp_path / "aug-building", store_id="aug", write_variant_index=False)
+    building = _ragged(store) / f"{BY_VARIANT_GROUP}.building"
+    building.mkdir()
+    (building / "zarr.json").write_text("{}")
+    add_variant_index(store)
+    assert has_variant_index(store)
+    assert not building.exists()
+
+
+def test_augment_recovers_a_half_finished_swap(tmp_path: Path) -> None:
+    """A kill between the two install renames leaves `.old`; the next run restores it."""
+    store = _build_ssf_store(tmp_path / "aug-swap", store_id="aug")
+    index = _ragged(store) / BY_VARIANT_GROUP
+    old = _ragged(store) / f"{BY_VARIANT_GROUP}.variant-index.old"
+    os.replace(index, old)  # target missing, backup holds the whole index
+    add_variant_index(store, force=True)
+    assert has_variant_index(store)
+    assert not old.exists()
+    assert validate_store(store).ok, validate_store(store).errors
+
+
+def test_force_rebuild_keeps_the_old_index_until_the_new_one_is_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--force` must not delete the old index before the new build succeeds."""
+    store = _build_ssf_store(tmp_path / "aug-force-fail", store_id="aug")
+    assert has_variant_index(store)
+
+    import opengwasdb.layouts.ragged.by_variant as module
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("simulated build failure")
+
+    monkeypatch.setattr(module, "build_variant_index", _boom)
+    with pytest.raises(RuntimeError):
+        add_variant_index(store, force=True)
+    assert has_variant_index(store), "the old index must survive a failed rebuild"
+    assert validate_store(store).ok, validate_store(store).errors
+
+
+def test_augment_restores_consolidated_metadata_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import zarr
+
+    store = _build_ssf_store(
+        tmp_path / "aug-consolidated-fail", store_id="aug", write_variant_index=False
+    )
+    data_root = store / "data.zarr"
+    zarr.consolidate_metadata(str(data_root), zarr_format=3)
+    record_before = (data_root / "zarr.json").read_bytes()
+
+    import opengwasdb.layouts.ragged.by_variant as module
+
+    def _boom(_store_path: str | Path, _result: object) -> None:
+        raise RuntimeError("simulated crash")
+
+    monkeypatch.setattr(module, "_record_index_in_manifest", _boom)
+    with pytest.raises(RuntimeError):
+        add_variant_index(store)
+    assert (data_root / "zarr.json").read_bytes() == record_before, (
+        "the consolidated record must be restored byte for byte"
+    )
+    assert not (data_root / "ragged" / BY_VARIANT_GROUP).exists()
 
 
 def test_augment_refreshes_consolidated_metadata(tmp_path: Path) -> None:

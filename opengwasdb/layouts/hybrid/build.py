@@ -3211,8 +3211,9 @@ def build_hybrid_from_vcf_manifest(
     per-release default (#174), and ``eaf_reference`` drives the orientation check.
 
     ``checkpoint=True`` opts the build into phase-granularity resume; ``resume=True``
-    continues one from the checkpoint this call's ``output_path`` implies (issue #227),
-    and a destination whose checkpoint is still there is refused unless ``overwrite=True``.
+    continues one from the checkpoint this call's ``output_path`` implies (issue #227;
+    `_run_checkpointed_build`, `_resume_requested`), and a destination whose checkpoint
+    is still there is refused unless ``overwrite=True`` discards it.
     """
     if reference_panel is None and variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
@@ -3233,6 +3234,18 @@ def build_hybrid_from_vcf_manifest(
         write_variant_index=write_variant_index,
     )
     defaults = _ManifestDefaults(source_reader_capability, source_assembly)
+    return _dispatch_build(manifest_path, options, defaults, overwrite, checkpoint, resume)
+
+
+def _dispatch_build(
+    manifest_path: str | Path,
+    options: _BuildOptions,
+    defaults: _ManifestDefaults,
+    overwrite: bool,
+    checkpoint: bool,
+    resume: bool,
+) -> HybridBuildResult:
+    """Start a resumed, checkpointed or ordinary build from the same options."""
     if resume:
         return _resume_requested(manifest_path, options, defaults, overwrite)
     return _run_checkpointed_build(manifest_path, options, defaults, overwrite, checkpoint)

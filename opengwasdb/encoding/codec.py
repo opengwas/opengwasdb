@@ -54,6 +54,7 @@ from opengwasdb.encoding.plan import (
 from opengwasdb.store.arrays import (
     EXCEPTION_TABLE_CHUNK,
     ArrayRole,
+    array_length,
     create_array,
 )
 
@@ -201,6 +202,19 @@ class SparseExactTable:
             value=np.asarray(group[cls.value_name][:], dtype=np.float32),
         )
 
+    @classmethod
+    def open(cls, group: Any) -> SparseExactTable:
+        """A view of the table that reads only the window a lookup needs.
+
+        The decode paths use this rather than `read`, which materialises the
+        whole table: OGS-00011's EAF exception table is 180,396,687 entries
+        (about 2.1 GiB), read at open and again per process.  This holds the
+        arrays, not their bytes (ADR 0060, #252 review round 1).
+        """
+        if cls.index_name not in group or cls.value_name not in group:
+            return cls.empty()
+        return WindowedExactTable.of(group, cls)
+
     def write(self, group: Any, *, compressor: Any = None, role: ArrayRole | None = None) -> None:
         """Write the table beside its plane, replacing any existing one.
 
@@ -227,6 +241,102 @@ class SparseExactTable:
                 hint=EXACT_TABLE_CHUNK,
                 overwrite=True,
             )
+
+
+@dataclass(frozen=True)
+class WindowedExactTable(SparseExactTable):
+    """A lazy view of an exact table stored in a group.
+
+    `lookup` reads only the sorted index's window covering the requested
+    positions, by bisecting the on-disk index one inner chunk at a time, so a
+    process never holds the whole table and a query's table read is O(cells in
+    the answer).  The bisect costs O(log(E / chunk)) inner-chunk reads -- about
+    10 chunk reads of 200,000 int64 for OGS-00011's 180,396,687-entry table.
+    """
+
+    index_zarr: Any = None
+    value_zarr: Any = None
+    what_name: str = ""
+
+    @classmethod
+    def of(cls, group: Any, table_type: type[SparseExactTable]) -> WindowedExactTable:
+        return cls(
+            index=np.empty(0, dtype=np.int64),
+            value=np.empty(0, dtype=np.float32),
+            index_zarr=group[table_type.index_name],
+            value_zarr=group[table_type.value_name],
+            what_name=table_type.what or table_type.index_name,
+        )
+
+    def _chunk_with(self, target: int, *, take_last: bool) -> tuple[int, int, int]:
+        """Bisect the index chunks, returning `(chunk index, inner chunk, total)`.
+
+        `take_last=False` finds the first chunk whose last element is `>=`
+        target (a lower bound); `take_last=True` finds the first chunk whose
+        first element is `>` target (one past the last chunk that can hold it).
+        """
+        total = array_length(self.index_zarr)
+        if total == 0:
+            return 0, 1, 0
+        chunk = max(1, int(self.index_zarr.chunks[0]))
+        n_chunks = max(1, -(-total // chunk))
+        low, high = 0, n_chunks
+        while low < high:
+            mid = (low + high) // 2
+            start = mid * chunk
+            data = np.asarray(
+                self.index_zarr[start : min(start + chunk, total)], dtype=np.int64
+            )
+            past = int(data[0]) <= target if take_last else int(data[-1]) < target
+            if past:
+                low = mid + 1
+            else:
+                high = mid
+        return low, chunk, total
+
+    def _first_ge(self, target: int) -> int:
+        """First element `>= target`, by bisecting the index chunk by chunk."""
+        low, chunk, total = self._chunk_with(target, take_last=False)
+        if low >= max(1, -(-total // chunk)):
+            return total
+        start = low * chunk
+        data = np.asarray(self.index_zarr[start : min(start + chunk, total)], dtype=np.int64)
+        return start + int(np.searchsorted(data, target, side="left"))
+
+    def _last_le(self, target: int) -> int:
+        """One past the last element `<= target`, by bisecting the index."""
+        low, chunk, total = self._chunk_with(target, take_last=True)
+        if low == 0:
+            return 0
+        start = (low - 1) * chunk
+        data = np.asarray(self.index_zarr[start : min(start + chunk, total)], dtype=np.int64)
+        return start + int(np.searchsorted(data, target, side="right"))
+
+    def lookup(self, positions: np.ndarray) -> np.ndarray:
+        positions = np.asarray(positions, dtype=np.int64)
+        if len(positions) == 0:
+            return np.empty(0, dtype=np.float32)
+        if array_length(self.index_zarr) == 0:
+            missing = positions[:5].tolist()
+            raise ValueError(
+                f"{self.what_name} table has no entry for cell(s) at flat "
+                f"position(s) {missing}; the store's plane and its table disagree"
+            )
+        first = self._first_ge(int(positions.min()))
+        last = self._last_le(int(positions.max()))
+        index = np.asarray(self.index_zarr[first:last], dtype=np.int64)
+        value = np.asarray(self.value_zarr[first:last], dtype=np.float32)
+        slot = np.searchsorted(index, positions)
+        found = slot < len(index)
+        hit = np.zeros(len(positions), dtype=bool)
+        hit[found] = index[slot[found]] == positions[found]
+        if not np.all(hit):
+            missing = positions[~hit][:5].tolist()
+            raise ValueError(
+                f"{self.what_name} table has no entry for cell(s) at flat "
+                f"position(s) {missing}; the store's plane and its table disagree"
+            )
+        return np.asarray(value[slot], dtype=np.float32)
 
 
 class SparseExactBuilder:
@@ -579,9 +689,9 @@ class StoreCodec:
         self,
         encoding: StoreEncoding,
         *,
-        z_overflow: ZOverflowTable | None = None,
-        eaf_exceptions: EafExceptionTable | None = None,
-        se_exceptions: SeExceptionTable | None = None,
+        z_overflow: SparseExactTable | None = None,
+        eaf_exceptions: SparseExactTable | None = None,
+        se_exceptions: SparseExactTable | None = None,
     ) -> None:
         self.encoding = encoding
         self.z_overflow = z_overflow

@@ -172,6 +172,18 @@ def _empty_rho_matrix_result() -> dict[str, np.ndarray]:
     }
 
 
+def _open_by_variant(store: OpenGWASDBStore, variant_axis: VariantAxis) -> ByVariantReader | None:
+    """The component's variant index reader, or `None` when it carries none (ADR 0060).
+
+    Absence is not an error: every variant-side query falls back to the scan.
+    """
+    if not has_variant_index(store.path):
+        return None
+    return ByVariantReader(
+        store.path, store.manifest.encoding, n_axis=variant_axis.n_variants
+    )
+
+
 def _variants_table(variant_axis: VariantAxis) -> dict[int, dict]:
     """Return all variants keyed by variant_index.
 
@@ -660,12 +672,8 @@ class RaggedStoreQuery:
     def __init__(self, store: OpenGWASDBStore):
         self.store = store
         self._csr = RaggedCSRReader(store.path)
-        self._by_variant = (
-            ByVariantReader(store.path, store.manifest.encoding)
-            if has_variant_index(store.path)
-            else None
-        )
         self._variant_axis = VariantAxis(store.path)
+        self._by_variant = _open_by_variant(store, self._variant_axis)
         self._analyses = AnalysesIndex(store.path)
         self._top_hits = TopHitTiers(store.arrays(mode="r"))
 
@@ -1129,15 +1137,11 @@ class HybridStoreQuery:
         self._dense = StoreQuery(self._dense_store)
         self._dense_to_shared = np.load(dense_to_shared_path(store.path)).astype("int32")
         self._csr = RaggedCSRReader(store.path)  # overflow at store/data.zarr/ragged
-        self._by_variant = (
-            ByVariantReader(store.path, store.manifest.encoding)
-            if has_variant_index(store.path)
-            else None
-        )
-        self._top_hits = TopHitTiers(store.arrays(mode="r"))  # overflow's own tiers
         self._connection = store.index_connection()
         self._analyses = AnalysesIndex(store.path)  # shared analyses.tsv
         self._variant_axis = VariantAxis(store.path, self._connection)  # shared union table
+        self._by_variant = _open_by_variant(store, self._variant_axis)
+        self._top_hits = TopHitTiers(store.arrays(mode="r"))  # overflow's own tiers
 
     def close(self) -> None:
         self._dense.close()

@@ -79,7 +79,7 @@ class DenseZPlane:
         """Open the plane `name` in `group` under a store's declared plan."""
         return cls(
             group[name],
-            StoreCodec(encoding, z_overflow=ZOverflowTable.read(group)),
+            StoreCodec(encoding, z_overflow=ZOverflowTable.open(group)),
             group,
         )
 
@@ -217,7 +217,7 @@ class DenseSePlane:
             raise ValueError(f"int8_residual se plane is missing required arrays: {missing}")
         return cls(
             group["se"],
-            StoreCodec(encoding, se_exceptions=SeExceptionTable.read(group)),
+            StoreCodec(encoding, se_exceptions=SeExceptionTable.open(group)),
             DenseEafPlane.open(group, encoding) if residual else None,
             group[SE_COEFFICIENTS] if residual else None,
             group,
@@ -498,7 +498,7 @@ class DenseEafPlane(_EafPlaneBase):
     def open(cls, group: Any, encoding: StoreEncoding, *, name: str = "eaf") -> DenseEafPlane:
         return cls(
             group[name] if name in group else None,
-            StoreCodec(encoding, eaf_exceptions=EafExceptionTable.read(group)),
+            StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group)),
             baseline=group[EAF_BASELINE] if EAF_BASELINE in group else None,
             reference=group[EAF_REFERENCE] if EAF_REFERENCE in group else None,
             imputed=group["imputed"] if "imputed" in group else None,
@@ -760,7 +760,7 @@ class RaggedEafPlane(_EafPlaneBase):
     def open(cls, group: Any, encoding: StoreEncoding, *, imputed: Any = None) -> RaggedEafPlane:
         return cls(
             group["eaf"] if "eaf" in group else None,
-            StoreCodec(encoding, eaf_exceptions=EafExceptionTable.read(group)),
+            StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group)),
             group["variant_index"],
             baseline=group[EAF_BASELINE] if EAF_BASELINE in group else None,
             reference=group[EAF_REFERENCE] if EAF_REFERENCE in group else None,
@@ -840,7 +840,7 @@ class RaggedSePlane:
             missing = [name for name in required if name not in group]
             raise ValueError(f"int8_residual se plane is missing required arrays: {missing}")
         self._coefficients = group[SE_COEFFICIENTS] if residual else None
-        self._codec = StoreCodec(encoding, se_exceptions=SeExceptionTable.read(group))
+        self._codec = StoreCodec(encoding, se_exceptions=SeExceptionTable.open(group))
 
     @classmethod
     def open(

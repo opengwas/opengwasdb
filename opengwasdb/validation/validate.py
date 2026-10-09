@@ -61,8 +61,11 @@ from opengwasdb.store.arrays import (
     SHARDED_COMPRESSOR_RECORD,
     ArrayRole,
     array_length,
+    chunk_layout,
+    inner_chunk_hint_for_path,
     inner_chunk_of,
     open_group,
+    role_for_array_path,
     shard_layout,
 )
 from opengwasdb.store.open import (
@@ -1280,11 +1283,16 @@ def _cell_fields(
 
 
 def _read_exception_tables(root: Any) -> tuple[Any, Any, Any]:
-    """The three exception tables, read once for a whole digest pass."""
+    """The three exception tables as **windowed** views, for one digest pass.
+
+    `open`, not `read`: the digest looks up only the exception cells in each
+    window, so the table's whole 180 M-entry array is never materialised
+    (review round 1, finding 3).
+    """
     return (
-        ZOverflowTable.read(root),
-        EafExceptionTable.read(root),
-        SeExceptionTable.read(root),
+        ZOverflowTable.open(root),
+        EafExceptionTable.open(root),
+        SeExceptionTable.open(root),
     )
 
 
@@ -1396,9 +1404,21 @@ def _validate_index_offsets(
 def _validate_index_analyses(
     index: Any, n_analyses: int, n_assoc: int, errors: list[str], label: str
 ) -> bool:
-    """Every `analysis_index` must name a real Analysis."""
-    analyses = np.asarray(index["analysis_index"][:], dtype=np.int64)
-    if n_assoc and (analyses.min() < 0 or analyses.max() >= n_analyses):
+    """Every `analysis_index` must name a real Analysis, checked in windows.
+
+    Windowed so a 3.09 B-row index does not read its 12.3 GB `analysis_index`
+    twice as int64 (review round 1, finding 3).
+    """
+    if n_assoc == 0:
+        return True
+    lowest = np.iinfo(np.int64).max
+    highest = np.iinfo(np.int64).min
+    for lo in range(0, n_assoc, _DIGEST_WINDOW):
+        hi = min(lo + _DIGEST_WINDOW, n_assoc)
+        window = np.asarray(index["analysis_index"][lo:hi], dtype=np.int64)
+        lowest = min(lowest, int(window.min()))
+        highest = max(highest, int(window.max()))
+    if lowest < 0 or highest >= n_analyses:
         errors.append(
             f"{label}/{_BY_VARIANT_GROUP}/analysis_index is outside the component's "
             f"{n_analyses} Analyses"
@@ -1448,6 +1468,7 @@ def _validate_variant_index(
         return
     _validate_variant_index_block(store, n_axis, n_assoc, errors, component_label)
     _validate_variant_index_members(index, root, errors, component_label)
+    _validate_variant_index_layout(index, errors, component_label)
     _validate_variant_index_counts(root, by_offsets, n_axis, n_assoc, errors, component_label)
     _validate_variant_index_ordering(index, by_offsets, n_assoc, errors, component_label)
     if errors:
@@ -1481,6 +1502,43 @@ def _validate_variant_index_block(
         )
 
 
+def _validate_variant_index_layout(index: Any, errors: list[str], label: str) -> None:
+    """Every `by_variant/` array must carry the role's decided inner chunk and shard.
+
+    ADR 0060: the index adds no role and no shard policy, and the offsets array's
+    1,000-element inner-chunk hint is part of its recorded layout.  A
+    conversion that reproduced a different chunk from a build would be a layout
+    divergence a reader cannot see, so it is checked here.
+    """
+    for name in sorted(index.array_keys()):
+        _validate_one_index_array(index, name, errors, label)
+
+
+def _validate_one_index_array(
+    index: Any, name: str, errors: list[str], label: str
+) -> None:
+    """One `by_variant/` array's inner chunk and shard against its role policy."""
+    path = f"ragged/by_variant/{name}"
+    role = role_for_array_path(path)
+    if role is None:
+        errors.append(f"{label}/{path}: no ArrayRole is registered for this path")
+        return
+    array = index[name]
+    shape = tuple(int(size) for size in array.shape)
+    expected = chunk_layout(role, shape, hint=inner_chunk_hint_for_path(path))
+    if tuple(inner_chunk_of(array)) != expected:
+        errors.append(
+            f"{label}/{path}: inner chunk {tuple(inner_chunk_of(array))} != the "
+            f"role policy's {expected}"
+        )
+    expected_shard = shard_layout(role, shape, inner_chunk=expected)
+    if array.shards is not None and tuple(int(s) for s in array.shards) != expected_shard:
+        errors.append(
+            f"{label}/{path}: shard {tuple(int(s) for s in array.shards)} != the "
+            f"role policy's {expected_shard}"
+        )
+
+
 def _validate_variant_index_counts(
     root: Any,
     by_offsets: np.ndarray,
@@ -1489,13 +1547,19 @@ def _validate_variant_index_counts(
     errors: list[str],
     label: str,
 ) -> None:
-    """Every variant must hold exactly as many index rows as the source."""
+    """Every variant must hold exactly as many index rows as the source.
+
+    The histogram is accumulated with `np.add.at` over each window's unique
+    values, not `np.bincount(minlength=n_axis)`: the latter allocates 1.31 GB
+    per window (3,085 windows at OGS-00011) where the former allocates one
+    window's uniques (review round 1, finding 3).
+    """
     counts = np.zeros(n_axis, dtype=np.int64)
     for lo in range(0, n_assoc, _DIGEST_WINDOW):
         hi = min(lo + _DIGEST_WINDOW, n_assoc)
-        counts += np.bincount(
-            np.asarray(root["variant_index"][lo:hi], dtype=np.int64), minlength=n_axis
-        )
+        window = np.asarray(root["variant_index"][lo:hi], dtype=np.int64)
+        values, multiplicity = np.unique(window, return_counts=True)
+        np.add.at(counts, values, multiplicity)
     if not np.array_equal(np.diff(by_offsets), counts):
         differing = int(np.argmax(np.diff(by_offsets) != counts))
         errors.append(
@@ -1515,12 +1579,12 @@ def _validate_variant_index_ordering(
     """Within each variant, the index's analyses must be non-decreasing.
 
     Bounded by the same window the digest uses; the comparison resets at each
-    variant boundary carried by `by_offsets`.
+    variant boundary carried by `by_offsets` and the window's array is read one
+    window at a time (review round 1, finding 3).
     """
-    analysis = np.asarray(index["analysis_index"][:], dtype=np.int64)
     for lo in range(0, n_assoc, _DIGEST_WINDOW):
         hi = min(lo + _DIGEST_WINDOW, n_assoc)
-        window = analysis[lo:hi]
+        window = np.asarray(index["analysis_index"][lo:hi], dtype=np.int64)
         if len(window) < 2:
             continue
         variant = np.searchsorted(by_offsets, np.arange(lo, hi, dtype=np.int64), side="right") - 1
