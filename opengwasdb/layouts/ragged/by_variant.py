@@ -885,12 +885,10 @@ def _refresh_consolidated_metadata(data_path: Path, suspended: list[tuple[str, s
     """
     if not suspended:
         return
-    import zarr
-
     for record, backup in suspended:
         group_dir = Path(record).parent
         zarr_format = 3 if Path(record).name == "zarr.json" else 2
-        zarr.consolidate_metadata(str(group_dir), zarr_format=zarr_format)
+        store_arrays.consolidate_group_metadata(group_dir, zarr_format=zarr_format)
         Path(backup).unlink(missing_ok=True)
     backup_dir = Path(suspended[0][1]).parent
     if backup_dir.name == ".variant-index-backup" and not any(backup_dir.iterdir()):

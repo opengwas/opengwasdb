@@ -198,6 +198,7 @@ __all__ = [
     "component_variant_chunk",
     "compressor",
     "compressor_of",
+    "consolidate_group_metadata",
     "count_shard_writes",
     "create_array",
     "create_group",
@@ -2085,6 +2086,18 @@ def open_group(
     return zarr.open_group(
         store, mode=zarr_mode, zarr_format=_open_group_format(mode, zarr_format)
     )
+
+
+def consolidate_group_metadata(directory: str | Path, *, zarr_format: int) -> None:
+    """Regenerate a group's consolidated-metadata record from its live metadata.
+
+    The one place this package calls zarr's consolidation, so the array-creation
+    seam remains the only module that talks to zarr directly
+    (`tests/test_array_creation_seam.py`).  The augment path takes a store's
+    record out of the way to write beneath it and must put a regenerated one
+    back; that refresh goes through here rather than a second zarr call site.
+    """
+    zarr.consolidate_metadata(str(directory), zarr_format=_checked_zarr_format(zarr_format))
 
 
 def open_group_for_write(
