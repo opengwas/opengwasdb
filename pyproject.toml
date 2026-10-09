@@ -159,3 +159,4 @@ report = { features = ["report"], solve-group = "default" }
 test = "pytest"
 lint = "ruff check ."
 typecheck = "mypy opengwasdb"
+prototype-issue-262 = "python benchmarks/prototype_issue_262_hapmap3.py"
