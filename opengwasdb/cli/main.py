@@ -588,6 +588,8 @@ def _echo_hybrid_result(res: HybridBuildResult) -> None:
             n_overflow=res.n_overflow,
         )
     )
+
+
 @app.command("build-hybrid-from-catalogue")
 def build_hybrid_from_catalogue_command(
     catalogue_path: Path,

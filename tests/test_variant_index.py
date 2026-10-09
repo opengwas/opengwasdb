@@ -400,7 +400,7 @@ def test_scaling_harness_splits_phases_and_matches_counts(tmp_path: Path) -> Non
     store = _build_ssf_store(tmp_path / "scaling", store_id="idx")
     measured = measure(store, ["phewas"], reps=1, max_load=0)
     sides = measured["phewas"]
-    assert {"indexed", "scanned", "content_sha256"} <= set(sides)
+    assert {"indexed", "scanned", "region_label"} <= set(sides)
     for side in ("indexed", "scanned"):
         assert {
             "elapsed_s",
@@ -490,18 +490,20 @@ def test_reader_refuses_a_stale_index_at_open(tmp_path: Path) -> None:
 
 
 def test_reader_refuses_a_missing_imputed_mask_on_reference_eaf(
-    residual: RaggedResidualScenario,
+    residual: RaggedResidualScenario, tmp_path: Path
 ) -> None:
     """A reference-EAF release without the index's mask must raise, not read zeros."""
     from opengwasdb.encoding import EafBaselineError
     from opengwasdb.layouts.ragged.by_variant import ByVariantReader
 
-    root = store_arrays.open_group_for_write(
-        residual.completed / "data.zarr" / "ragged", "a"
-    )
+    # A copy, so the destructive edit does not damage the module-scoped fixture
+    # for the tests that share it (review round 2, finding 6).
+    copied = tmp_path / "residual-copy"
+    copytree(residual.completed, copied)
+    root = store_arrays.open_group_for_write(copied / "data.zarr" / "ragged", "a")
     del root[BY_VARIANT_GROUP]["imputed"]
     with pytest.raises(EafBaselineError, match="imputed"):
-        ByVariantReader(residual.completed)
+        ByVariantReader(copied)
 
 
 def test_validation_rejects_a_wrong_index_inner_chunk(tmp_path: Path) -> None:
@@ -557,76 +559,132 @@ def test_windowed_exception_table_reads_only_the_window() -> None:
 
     #252 review round 1, finding 2: the indexed decode read whole exception
     tables (2.1 GiB at OGS-00011).  This counts the cells the windowed table's
-    `lookup` reads and asserts it is a tiny fraction of a 600,000-entry table.
+    `lookup` reads and asserts it is a small fraction of a 20 M-entry table.
     """
-    from opengwasdb.encoding import EafExceptionTable
-    from opengwasdb.encoding.codec import WindowedExactTable
-
     total = 20_000_000  # 100 inner chunks (200,000 each) -- too many to read whole
     index = np.arange(total, dtype=np.int64) * 2  # positions 0, 2, 4, ...
     value = np.linspace(0.0, 1.0, total).astype(np.float32)
-
-    class _Counting:
-        def __init__(self) -> None:
-            self.cells = 0
-
-    counter = _Counting()
-
-    class _Array:
-        def __init__(self, array: Any) -> None:
-            self._array = array
-
-        @property
-        def shape(self) -> tuple[int, ...]:
-            return tuple(self._array.shape)
-
-        @property
-        def chunks(self) -> tuple[int, ...]:
-            return tuple(self._array.chunks)
-
-        def __getitem__(self, key: object) -> np.ndarray:
-            out = self._array[key]
-            counter.cells += int(np.size(out))
-            return out
-
-    class _Group(dict):
-        def __init__(self, arrays: dict) -> None:
-            super().__init__(arrays)
-            self._arrays = arrays
-
-        def __getitem__(self, key: str) -> object:
-            return self._arrays[key]
-
-        def __contains__(self, key: object) -> bool:
-            return key in self._arrays
-
-    # A real zarr array for the two halves, wrapped to count cells read.
-    import tempfile
-
-    from opengwasdb.store import arrays as store_arrays
-
-    with tempfile.TemporaryDirectory() as directory:
-        root = store_arrays.open_group_for_write(Path(directory) / "t.zarr", "w")
-        store_arrays.create_array(
-            root, "eaf_exception_index", store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE,
-            data=index, dtype=np.int64, compressor=None,
-        )
-        store_arrays.create_array(
-            root, "eaf_exception_value", store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE,
-            data=value, dtype=np.float32, compressor=None,
-        )
-        group = _Group({
-            "eaf_exception_index": _Array(root["eaf_exception_index"]),
-            "eaf_exception_value": _Array(root["eaf_exception_value"]),
-        })
-        table = WindowedExactTable.of(group, EafExceptionTable)
-        # The last few exception cells only.
-        positions = index[-3:].copy()
+    counter = _CellCounter()
+    table, directory = _windowed_table(index, value, 200_000, counter)
+    try:
+        positions = index[-3:].copy()  # the table's tail
         got = table.lookup(positions)
         np.testing.assert_allclose(got, value[-3:])
+    finally:
+        import shutil
+
+        shutil.rmtree(directory)
     assert counter.cells < total // 4, (
         f"the windowed lookup read {counter.cells} of {total} cells; it must read a window"
     )
+
+
+def test_windowed_exception_table_is_bounded_by_scattered_positions() -> None:
+    """Scattered lookups read one chunk per position, not the whole span.
+
+    #252 review round 2, finding 3: the window was `[min, max]`, so 20 cells
+    picked across the table read everything between them (1.69 GiB on
+    OGS-00011).  This builds a 512-chunk table, looks up 10 positions spread
+    across it, and asserts the first lookup reads well under the span and a
+    second reads almost nothing (the chunk-edge cache).
+    """
+    total = 32768  # 512 inner chunks of 64
+    chunk = 64
+    index = np.arange(total, dtype=np.int64) * 3
+    value = np.linspace(0.0, 1.0, total).astype(np.float32)
+
+    counter = _CellCounter()
+    table, directory = _windowed_table(index, value, chunk, counter)
+    try:
+        wanted = np.array(
+            [index[i] for i in list(range(0, total, total // 10))[:10]], dtype=np.int64
+        )
+        assert len(wanted) == 10
+        first = counter.cells
+        got = table.lookup(wanted)
+        read_first = counter.cells - first
+        second = counter.cells
+        table.lookup(wanted)
+        read_second = counter.cells - second
+        # The answer is right...
+        np.testing.assert_allclose(got, value[np.searchsorted(index, wanted)])
+        # ...and a scattered lookup reads at most a chunk per position plus the
+        # bisect, far less than the span between the first and last.
+        assert read_first < total * chunk, (
+            f"scattered lookup read {read_first} cells against a {total}-cell table"
+        )
+        assert read_second < read_first // 4, (
+            f"a repeat lookup read {read_second} cells; the chunk cache must make it cheap"
+        )
+    finally:
+        import shutil
+
+        shutil.rmtree(directory)
+
+
+class _CellCounter:
+    def __init__(self) -> None:
+        self.cells = 0
+
+
+class _CountedArray:
+    def __init__(self, array: Any, counter: _CellCounter) -> None:
+        self._array = array
+        self._counter = counter
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return tuple(self._array.shape)
+
+    @property
+    def chunks(self) -> tuple[int, ...]:
+        return tuple(self._array.chunks)
+
+    def __getitem__(self, key: object) -> np.ndarray:
+        out = self._array[key]
+        self._counter.cells += int(np.size(out))
+        return out
+
+
+class _CountedGroup(dict):
+    def __init__(self, arrays: dict) -> None:
+        super().__init__(arrays)
+        self._arrays = arrays
+
+    def __getitem__(self, key: str) -> object:
+        return self._arrays[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._arrays
+
+
+def _windowed_table(
+    index: np.ndarray, value: np.ndarray, chunk: int, counter: _CellCounter
+) -> tuple[Any, str]:
+    """A `WindowedExactTable` over a real zarr group, counting cells read."""
+    import tempfile
+
+    from opengwasdb.encoding import EafExceptionTable
+    from opengwasdb.encoding.codec import WindowedExactTable
+    from opengwasdb.store import arrays as store_arrays
+
+    directory = tempfile.mkdtemp(prefix="windowed-table-")
+    root = store_arrays.open_group_for_write(Path(directory) / "t.zarr", "w")
+    store_arrays.create_array(
+        root, "eaf_exception_index", store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE,
+        data=index, dtype=np.int64, compressor=None, hint=chunk,
+    )
+    store_arrays.create_array(
+        root, "eaf_exception_value", store_arrays.ArrayRole.RAGGED_EXCEPTION_TABLE,
+        data=value, dtype=np.float32, compressor=None, hint=chunk,
+    )
+    group = _CountedGroup(
+        {
+            "eaf_exception_index": _CountedArray(root["eaf_exception_index"], counter),
+            "eaf_exception_value": _CountedArray(root["eaf_exception_value"], counter),
+        }
+    )
+    return WindowedExactTable.of(group, EafExceptionTable), directory
 
 
 def test_augment_recovers_a_leftover_building_group(tmp_path: Path) -> None:

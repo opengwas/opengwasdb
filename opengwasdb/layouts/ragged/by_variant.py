@@ -655,22 +655,28 @@ class ByVariantReader:
         """The index must span the component it duplicates, and the declared axis.
 
         `offsets[-1]` is the row count and must equal the Analysis-sorted
-        component's own; a mismatch is a stale index answering with another "
-        "store's rows.  When the caller knows the variant axis length, the
-        "offsets array must be `n_axis + 1` long.
+        component's own; a mismatch is a stale index answering with another
+        store's rows.  When the caller knows the variant axis length, the
+        offsets array must be `n_axis + 1` long.  Only scalars are read -- the
+        length, the first and the last offset -- so opening the reader does not
+        materialise a 164 M-entry (1.28 GB) array (review round 2, finding 2).
         """
-        offsets = np.asarray(self._offsets[:], dtype=np.int64)
-        component = self._ragged["offsets"]
-        component_rows = int(component[-1])
-        if len(offsets) == 0 or int(offsets[-1]) != component_rows:
+        entries = array_length(self._offsets)
+        component_rows = int(self._ragged["offsets"][-1])
+        if entries == 0 or int(self._offsets[-1]) != component_rows:
+            last = int(self._offsets[-1]) if entries else None
             raise ValueError(
-                f"{store_path}: {BY_VARIANT_GROUP}/offsets ends at "
-                f"{int(offsets[-1]) if len(offsets) else 'nothing'} but the component "
-                f"holds {component_rows} associations; the index is stale"
+                f"{store_path}: {BY_VARIANT_GROUP}/offsets ends at {last} but the "
+                f"component holds {component_rows} associations; the index is stale"
             )
-        if n_axis is not None and len(offsets) != int(n_axis) + 1:
+        if int(self._offsets[0]) != 0:
             raise ValueError(
-                f"{store_path}: {BY_VARIANT_GROUP}/offsets has {len(offsets)} entries "
+                f"{store_path}: {BY_VARIANT_GROUP}/offsets starts at "
+                f"{int(self._offsets[0])}, not 0"
+            )
+        if n_axis is not None and entries != int(n_axis) + 1:
+            raise ValueError(
+                f"{store_path}: {BY_VARIANT_GROUP}/offsets has {entries} entries "
                 f"but the variant axis is {n_axis} (expected {int(n_axis) + 1})"
             )
 

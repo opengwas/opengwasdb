@@ -19,7 +19,7 @@ This is the harness the step-5 identity artifact is written from:
         --store /data/opengwasdb/work/epic252/OGS-00011 \
         --output docs/benchmark-output/opengwasdb_252_variant_index_identity.json
 
-It refuses to publish a run in which any shape returned nothing on either side
+It refuses to publish a run in which every shape returned nothing on either side
 (a vacuous identity), or in which any shape's two answers differ.
 """
 

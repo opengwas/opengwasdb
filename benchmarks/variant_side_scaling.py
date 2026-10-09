@@ -50,9 +50,12 @@ from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.query import query_store
 
 #: The TCF7L2 1 Mb window the committed OGS-00011 benchmark uses (rs7903146).
-#: A store that does not hold it gets one around the first variant it does hold,
-#: so no cell measures an empty range (review round 1, finding 4).
+#: A store that does not hold it gets a 1 Mb window around the first variant it
+#: does hold, labelled in the artifact, so no cell measures an empty range
+#: (review round 1 finding 4, round 2 finding 4).
 TCF7L2_REGION = ("10", 112_500_000, 113_500_000)
+TCF7L2_LABEL = "TCF7L2 chr10:112.5-113.5 Mb"
+PROBE_LABEL = "1 Mb around the first indexed variant"
 
 _OVERFLOW_MATCH = ("variant_positions", "segment_positions")
 _OVERFLOW_READ = (
@@ -61,6 +64,7 @@ _OVERFLOW_READ = (
     "eaf_slice_read",
     "z_at",
     "se_at",
+    "eaf_at",
     "eaf_at_read",
     "variant_index_at",
 )
@@ -135,8 +139,17 @@ def _store_inputs(query: Any) -> dict[str, Any]:
     axis = query._variant_axis
     table = query.analyses_table()
     reader = getattr(query, "_by_variant", None)
+    on = probe_variant_alid(query, off_panel=False)
+    off = probe_variant_alid(query, off_panel=True)
     n = int(axis.n_variants)
     region = TCF7L2_REGION
+    region_label = TCF7L2_LABEL
+    try:
+        holds = len(axis.range_indices(*TCF7L2_REGION)) > 0
+    except (ValueError, KeyError):  # a store without that chromosome
+        holds = False
+    if not holds:
+        region_label = PROBE_LABEL
     narrow_alids: list[str] = []
     narrow_analyses: list[str] = []
     wide_alids: list[str] = []
@@ -169,14 +182,19 @@ def _store_inputs(query: Any) -> dict[str, Any]:
                 break
     return {
         "region": region,
+        "region_label": region_label,
+        "on": on,
+        "off": off,
         "narrow": (narrow_alids, narrow_analyses),
         "wide": (wide_alids, wide_analyses),
     }
 
 
 def _calls(query: Any, inputs: dict[str, Any]) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
-    on = probe_variant_alid(query, off_panel=False)
-    off = probe_variant_alid(query, off_panel=True)
+    # The variant identities are selected **once** for both arms: a scan arm
+    # re-probing with the index absent returns a different variant, which made
+    # the two arms different queries (review round 2, finding 4).
+    on, off = inputs["on"], inputs["off"]
     region = inputs["region"]
     narrow_alids, narrow_analyses = inputs["narrow"]
     wide_alids, wide_analyses = inputs["wide"]
@@ -226,10 +244,14 @@ def _probe(
         baseline = rss_mb()
         totals: list[float] = []
         phases: dict[str, list[float]] = {"dense": [], "overflow_match": [], "overflow_read": []}
+        waits: list[float] = []
         result: dict[str, np.ndarray] = {}
         with RssSampler() as sampler:
             for _ in range(reps):
-                wait_for_quiet(max_load)
+                waited, gave_up = wait_for_quiet(max_load)
+                waits.append(round(waited, 1))
+                if gave_up:
+                    raise SystemExit(f"{store}:{shape}: load gate gave up before a repetition")
                 _timer.reset()
                 started = perf_counter()
                 result = call()
@@ -252,7 +274,9 @@ def _probe(
         "peak_mb": round(peak, 1),
         "delta_mb": round(peak - baseline, 1),
         "result_count": int(len(result["z"])),
+        "digest": _content_digest(result) if result else "",
         "reps": reps,
+        "waits_s": waits,
         "elapsed_s": round(total, 4),
         "dense_s": round(dense, 4),
         "overflow_match_s": round(overflow_match, 4),
@@ -308,7 +332,14 @@ def measure(
         finally:
             probe.close()
         if not available:
-            shapes_out[shape] = {"skipped": "no non-empty selection on this store"}
+            shapes_out[shape] = {
+                "skipped": (
+                    "this store carries no variant index, so the lookup selections "
+                    "(taken from an indexed variant's block) are unavailable"
+                    if not indexed
+                    else "no non-empty lookup selection exists"
+                )
+            }
             print(f"{store.name}:{shape}: skipped (no non-empty selection)", flush=True)
             continue
         sides: dict[str, Any] = {}
@@ -323,22 +354,22 @@ def measure(
                 max_load=max_load,
             )
             sides[side] = record
+            digests[side] = record["digest"]
         if indexed:
-            query = query_store(store)
-            try:
-                call = _calls(query, inputs)[shape]
-                digests["indexed"] = _content_digest(call())
-                query._by_variant = None
-                digests["scanned"] = _content_digest(call())
-            finally:
-                query.close()
+            # The timed arms must be the same query, same answer (review round 2,
+            # finding 4): the scan arm's variant identities now come from the
+            # same `inputs`, and a difference is refused rather than published.
+            if sides["indexed"]["result_count"] != sides["scanned"]["result_count"]:
+                raise SystemExit(
+                    f"{store}:{shape}: indexed {sides['indexed']['result_count']} rows "
+                    f"!= scanned {sides['scanned']['result_count']}"
+                )
             if digests["indexed"] != digests["scanned"]:
                 raise SystemExit(
                     f"{store}:{shape}: indexed content {digests['indexed'][:12]} "
                     f"!= scanned {digests['scanned'][:12]}"
                 )
-            sides["content_sha256"] = digests["indexed"]
-        shapes_out[shape] = sides
+        shapes_out[shape] = {**sides, "region_label": inputs["region_label"]}
     return shapes_out
 
 

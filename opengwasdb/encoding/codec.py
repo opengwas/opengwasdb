@@ -31,7 +31,7 @@ can be wrong by 3000x (ADR 0037 §4).
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, ClassVar, Self, cast
 
 import numpy as np
@@ -257,6 +257,12 @@ class WindowedExactTable(SparseExactTable):
     index_zarr: Any = None
     value_zarr: Any = None
     what_name: str = ""
+    #: The first and last element of each chunk a lookup has read or bisected
+    #: through.  Cached per table for the process's life: a second lookup over
+    #: the same table reuses them instead of re-reading the chunks
+    #: (review round 2, finding 3).
+    chunk_first: dict[int, int] = field(default_factory=dict)
+    chunk_last: dict[int, int] = field(default_factory=dict)
 
     @classmethod
     def of(cls, group: Any, table_type: type[SparseExactTable]) -> WindowedExactTable:
@@ -268,12 +274,28 @@ class WindowedExactTable(SparseExactTable):
             what_name=table_type.what or table_type.index_name,
         )
 
-    def _chunk_with(self, target: int, *, take_last: bool) -> tuple[int, int, int]:
+    def _chunk_edge(self, chunk_index: int, total: int, chunk: int, *, first: bool) -> int:
+        """One chunk's first or last element, cached across lookups."""
+        cache = self.chunk_first if first else self.chunk_last
+        cached = cache.get(chunk_index)
+        if cached is not None:
+            return cached
+        start = chunk_index * chunk
+        stop = min(start + chunk, total)
+        data = np.asarray(self.index_zarr[start:stop], dtype=np.int64)
+        self.chunk_first[chunk_index] = int(data[0])
+        self.chunk_last[chunk_index] = int(data[-1])
+        return self.chunk_first[chunk_index] if first else self.chunk_last[chunk_index]
+
+    def _chunk_after(self, target: int, *, strict: bool) -> tuple[int, int, int]:
         """Bisect the index chunks, returning `(chunk index, inner chunk, total)`.
 
-        `take_last=False` finds the first chunk whose last element is `>=`
-        target (a lower bound); `take_last=True` finds the first chunk whose
-        first element is `>` target (one past the last chunk that can hold it).
+        `strict=False` finds the first chunk whose **last** element is `>=`
+        target (the chunk that could hold a lower bound); `strict=True` finds
+        the first chunk whose **first** element is `>` target (one past the
+        last chunk that can hold it).  Each step reads one chunk's edge, cached
+        afterwards, so a repeated lookup pays nothing for the bisect
+        (review round 2, finding 3).
         """
         total = array_length(self.index_zarr)
         if total == 0:
@@ -283,60 +305,88 @@ class WindowedExactTable(SparseExactTable):
         low, high = 0, n_chunks
         while low < high:
             mid = (low + high) // 2
-            start = mid * chunk
-            data = np.asarray(
-                self.index_zarr[start : min(start + chunk, total)], dtype=np.int64
-            )
-            past = int(data[0]) <= target if take_last else int(data[-1]) < target
+            edge = self._chunk_edge(mid, total, chunk, first=strict)
+            past = edge <= target if strict else edge < target
             if past:
                 low = mid + 1
             else:
                 high = mid
         return low, chunk, total
 
-    def _first_ge(self, target: int) -> int:
-        """First element `>= target`, by bisecting the index chunk by chunk."""
-        low, chunk, total = self._chunk_with(target, take_last=False)
-        if low >= max(1, -(-total // chunk)):
-            return total
-        start = low * chunk
-        data = np.asarray(self.index_zarr[start : min(start + chunk, total)], dtype=np.int64)
-        return start + int(np.searchsorted(data, target, side="left"))
+    def _chunk(self, chunk_index: int, total: int, chunk: int) -> tuple[np.ndarray, np.ndarray]:
+        """One inner chunk's index and value, the unit a lookup reads."""
+        start = chunk_index * chunk
+        stop = min(start + chunk, total)
+        index = np.asarray(self.index_zarr[start:stop], dtype=np.int64)
+        value = np.asarray(self.value_zarr[start:stop], dtype=np.float32)
+        if len(index):
+            self.chunk_first[chunk_index] = int(index[0])
+            self.chunk_last[chunk_index] = int(index[-1])
+        return index, value
 
-    def _last_le(self, target: int) -> int:
-        """One past the last element `<= target`, by bisecting the index."""
-        low, chunk, total = self._chunk_with(target, take_last=True)
-        if low == 0:
-            return 0
-        start = (low - 1) * chunk
-        data = np.asarray(self.index_zarr[start : min(start + chunk, total)], dtype=np.int64)
-        return start + int(np.searchsorted(data, target, side="right"))
+    def _scan_chunks(
+        self,
+        sorted_positions: np.ndarray,
+        order: np.ndarray,
+        out: np.ndarray,
+        found: np.ndarray,
+        total: int,
+        chunk: int,
+    ) -> None:
+        """Match sorted positions against the chunks they fall in, in one pass."""
+        chunk_index = self._chunk_after(int(sorted_positions[0]), strict=False)[0]
+        i = 0
+        while i < len(sorted_positions) and chunk_index * chunk < total:
+            block_index, block_value = self._chunk(chunk_index, total, chunk)
+            high = int(block_index[-1])
+            while i < len(sorted_positions) and int(sorted_positions[i]) <= high:
+                target = int(sorted_positions[i])
+                slot = int(np.searchsorted(block_index, target, side="left"))
+                if slot < len(block_index) and int(block_index[slot]) == target:
+                    out[order[i]] = block_value[slot]
+                    found[order[i]] = True
+                i += 1
+            if i >= len(sorted_positions):
+                break
+            next_index = self._chunk_after(int(sorted_positions[i]), strict=False)[0]
+            # `sorted_positions[i] > high`, so the next chunk is strictly later.
+            chunk_index = max(next_index, chunk_index + 1)
 
     def lookup(self, positions: np.ndarray) -> np.ndarray:
+        """Exact values at `positions`, reading only the chunks they fall in.
+
+        Positions are sorted and the scan advances chunk by chunk: a chunk that
+        holds any of them is read once, and the gap to the next position's
+        chunk is crossed by a bisect (`_chunk_after`) rather than by reading
+        every chunk between.  A clustered block of cells therefore reads its
+        handful of chunks, and a scattered set reads at most one chunk per
+        position (plus the bisect), instead of the whole span between the first
+        and last (review round 2, finding 3).
+        """
         positions = np.asarray(positions, dtype=np.int64)
         if len(positions) == 0:
             return np.empty(0, dtype=np.float32)
-        if array_length(self.index_zarr) == 0:
+        total = array_length(self.index_zarr)
+        if total == 0:
             missing = positions[:5].tolist()
             raise ValueError(
                 f"{self.what_name} table has no entry for cell(s) at flat "
                 f"position(s) {missing}; the store's plane and its table disagree"
             )
-        first = self._first_ge(int(positions.min()))
-        last = self._last_le(int(positions.max()))
-        index = np.asarray(self.index_zarr[first:last], dtype=np.int64)
-        value = np.asarray(self.value_zarr[first:last], dtype=np.float32)
-        slot = np.searchsorted(index, positions)
-        found = slot < len(index)
-        hit = np.zeros(len(positions), dtype=bool)
-        hit[found] = index[slot[found]] == positions[found]
-        if not np.all(hit):
-            missing = positions[~hit][:5].tolist()
+        order = np.argsort(positions, kind="stable")
+        sorted_positions = positions[order]
+        out = np.empty(len(positions), dtype=np.float32)
+        found = np.zeros(len(positions), dtype=bool)
+        self._scan_chunks(
+            sorted_positions, order, out, found, total, max(1, int(self.index_zarr.chunks[0]))
+        )
+        if not np.all(found):
+            missing = positions[~found][:5].tolist()
             raise ValueError(
                 f"{self.what_name} table has no entry for cell(s) at flat "
                 f"position(s) {missing}; the store's plane and its table disagree"
             )
-        return np.asarray(value[slot], dtype=np.float32)
+        return out
 
 
 class SparseExactBuilder:

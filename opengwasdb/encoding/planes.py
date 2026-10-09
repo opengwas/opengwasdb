@@ -183,7 +183,11 @@ class DenseZPlane:
             # A float plane has no overflow table, and must not acquire an
             # empty one just because it was written through here.
             return
-        previous = self._codec.z_overflow or ZOverflowTable.empty()
+        # Read the whole table from the group: the codec's is a WindowedExactTable
+        # whose in-memory arrays are empty, so `or ZOverflowTable.empty()` would
+        # merge the patched cells with nothing and drop every existing entry
+        # (review round 2, finding 1).
+        previous = ZOverflowTable.read(self._group)
         untouched = ~np.isin(previous.index, positions)
         merged = ZOverflowBuilder()
         merged.add(previous.index[untouched], previous.value[untouched])
@@ -354,7 +358,7 @@ class DenseSePlane:
             exceptions=builder,
         )
         write_shard_cells(self._array, rows, cols, codes)
-        previous = self._codec.se_exceptions or SeExceptionTable.empty()
+        previous = SeExceptionTable.read(self._group)
         merged = SeExceptionBuilder()
         keep = ~np.isin(previous.index, positions)
         merged.add(previous.index[keep], previous.value[keep])
@@ -709,7 +713,7 @@ class DenseEafPlane(_EafPlaneBase):
         write_shard_cells(self._array, rows, cols, codes)
         if not self._codec.encoding.eaf.is_residual:
             return
-        previous = self._codec.eaf_exceptions or EafExceptionTable.empty()
+        previous = EafExceptionTable.read(self._group)
         untouched = ~np.isin(previous.index, positions)
         merged = EafExceptionBuilder()
         merged.add(previous.index[untouched], previous.value[untouched])
