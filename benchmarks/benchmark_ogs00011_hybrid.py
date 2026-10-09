@@ -134,6 +134,10 @@ def _patterns(q: Any, store: Path) -> dict[str, Any]:
     off_axis = _off_axis_alid(q, n_variants)
     patterns["phewas_off_axis"] = lambda: q.phewas(off_axis)
     patterns["bulk_overflow_heavy"] = lambda: q.analysis(OVERFLOW_HEAVY)
+    # The Dense Component of the same Analysis, which is the one shape whose
+    # column carries many Dense EAF exception cells: the named bulk control for
+    # the windowed-table regression (review round 3, finding 1).
+    patterns["bulk_dense_exceptions"] = lambda: q._dense.analysis(OVERFLOW_HEAVY)
     return patterns
 
 
