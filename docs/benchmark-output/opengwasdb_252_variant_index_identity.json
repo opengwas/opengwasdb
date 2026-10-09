@@ -1,0 +1,159 @@
+{
+  "harness": "benchmarks/variant_index_identity.py",
+  "commit": "2cfc61a",
+  "measured_at": "2026-10-09T11:49:32.450492+00:00",
+  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-index/opengwasdb",
+  "opengwasdb_fingerprint": "e83396abb375c486e5fa028f7494c5be5d939e4deeb719a7dc6e1849e02dc656",
+  "stores": {
+    "OGS-00001": {
+      "store": "/data/opengwasdb/work/epic252/OGS-00001-0.2.0",
+      "shapes": {
+        "phewas": {
+          "rows": 1,
+          "sha256": "66b57ea28878c13330bd93f7afcbdb7b1b3dc96de1d2c5ea4c8d9bf522694c87",
+          "identical": true
+        },
+        "phewas_off_panel": {
+          "rows": 1,
+          "sha256": "66b57ea28878c13330bd93f7afcbdb7b1b3dc96de1d2c5ea4c8d9bf522694c87",
+          "identical": true
+        },
+        "range_phewas": {
+          "rows": 0,
+          "sha256": "cddff7590c887464c049b2f29710067ebdcf7135854c6eb99e12762457c41262",
+          "identical": true
+        },
+        "lookup": {
+          "rows": 1,
+          "sha256": "66b57ea28878c13330bd93f7afcbdb7b1b3dc96de1d2c5ea4c8d9bf522694c87",
+          "identical": true
+        },
+        "lookup_off_panel": {
+          "rows": 1,
+          "sha256": "66b57ea28878c13330bd93f7afcbdb7b1b3dc96de1d2c5ea4c8d9bf522694c87",
+          "identical": true
+        }
+      }
+    },
+    "OGS-00007": {
+      "store": "/data/opengwasdb/work/epic252/OGS-00007-0.2.0",
+      "shapes": {
+        "phewas": {
+          "rows": 1,
+          "sha256": "8686a298d6f1016f3e48ec09325a6d5ac4093aa10dea67feb8bd5f3621125fc5",
+          "identical": true
+        },
+        "phewas_off_panel": {
+          "rows": 1,
+          "sha256": "8686a298d6f1016f3e48ec09325a6d5ac4093aa10dea67feb8bd5f3621125fc5",
+          "identical": true
+        },
+        "range_phewas": {
+          "rows": 0,
+          "sha256": "cddff7590c887464c049b2f29710067ebdcf7135854c6eb99e12762457c41262",
+          "identical": true
+        },
+        "lookup": {
+          "rows": 1,
+          "sha256": "8686a298d6f1016f3e48ec09325a6d5ac4093aa10dea67feb8bd5f3621125fc5",
+          "identical": true
+        },
+        "lookup_off_panel": {
+          "rows": 1,
+          "sha256": "8686a298d6f1016f3e48ec09325a6d5ac4093aa10dea67feb8bd5f3621125fc5",
+          "identical": true
+        }
+      }
+    },
+    "OGS-00006": {
+      "store": "/data/opengwasdb/work/epic252/OGS-00006-0.2.0",
+      "shapes": {
+        "phewas": {
+          "rows": 1,
+          "sha256": "df4bfb0f7a007967eb6d9e97714e55bb5aa7716f98c49809ea0d5f6e8e93a7e8",
+          "identical": true
+        },
+        "phewas_off_panel": {
+          "rows": 1,
+          "sha256": "df4bfb0f7a007967eb6d9e97714e55bb5aa7716f98c49809ea0d5f6e8e93a7e8",
+          "identical": true
+        },
+        "range_phewas": {
+          "rows": 8745,
+          "sha256": "60a34ab42b8488ebec4dad5f0405815343c08ec910c017349fb8693ed6406746",
+          "identical": true
+        },
+        "lookup": {
+          "rows": 0,
+          "sha256": "cddff7590c887464c049b2f29710067ebdcf7135854c6eb99e12762457c41262",
+          "identical": true
+        },
+        "lookup_off_panel": {
+          "rows": 0,
+          "sha256": "cddff7590c887464c049b2f29710067ebdcf7135854c6eb99e12762457c41262",
+          "identical": true
+        }
+      }
+    },
+    "eQTLGen": {
+      "store": "/data/opengwasdb/work/epic252/eqtlgen-cis.opengwasdb",
+      "shapes": {
+        "phewas": {
+          "rows": 7,
+          "sha256": "a893894143a56d1fbd32ef76900499c1ea5452da860c0fc13b8cb432e7b90b3a",
+          "identical": true
+        },
+        "phewas_off_panel": {
+          "rows": 7,
+          "sha256": "a893894143a56d1fbd32ef76900499c1ea5452da860c0fc13b8cb432e7b90b3a",
+          "identical": true
+        },
+        "range_phewas": {
+          "rows": 48884,
+          "sha256": "aeae76eea22f3402b40452bfd9de0ba4096cec170dc33d56ad4b1bca7e7c4c39",
+          "identical": true
+        },
+        "lookup": {
+          "rows": 0,
+          "sha256": "cddff7590c887464c049b2f29710067ebdcf7135854c6eb99e12762457c41262",
+          "identical": true
+        },
+        "lookup_off_panel": {
+          "rows": 0,
+          "sha256": "cddff7590c887464c049b2f29710067ebdcf7135854c6eb99e12762457c41262",
+          "identical": true
+        }
+      }
+    },
+    "OGS-00011": {
+      "store": "/data/opengwasdb/work/epic252/OGS-00011-0.2.0",
+      "shapes": {
+        "phewas": {
+          "rows": 2268,
+          "sha256": "d3b76c311b0fe3f1e0fc26d18928c56299317e673cfd4f9058c231e0959b916b",
+          "identical": true
+        },
+        "phewas_off_panel": {
+          "rows": 66,
+          "sha256": "0162b394067abe90c46e570d142cc2c9a60268276c44f6eaff6f08ce94633a18",
+          "identical": true
+        },
+        "range_phewas": {
+          "rows": 8304617,
+          "sha256": "bbf5ee1d83250e0591f5e819d708fcdbfb870b5370ee83562b6b03f499b9f220",
+          "identical": true
+        },
+        "lookup": {
+          "rows": 0,
+          "sha256": "cddff7590c887464c049b2f29710067ebdcf7135854c6eb99e12762457c41262",
+          "identical": true
+        },
+        "lookup_off_panel": {
+          "rows": 0,
+          "sha256": "cddff7590c887464c049b2f29710067ebdcf7135854c6eb99e12762457c41262",
+          "identical": true
+        }
+      }
+    }
+  }
+}

@@ -394,17 +394,26 @@ def test_identity_harness_catches_a_corrupted_indexed_decode(
 
 
 def test_scaling_harness_splits_phases_and_matches_counts(tmp_path: Path) -> None:
-    """The step-2 harness reports three phases per side with equal counts."""
+    """The step-2 harness reports the Dense/Overflow phases and compares content."""
     from benchmarks.variant_side_scaling import measure
 
     store = _build_ssf_store(tmp_path / "scaling", store_id="idx")
     measured = measure(store, ["phewas"], reps=1, max_load=0)
     sides = measured["phewas"]
-    assert set(sides) == {"indexed", "scanned"}
-    for side in sides.values():
-        assert {"elapsed_s", "match_s", "read_s", "gather_s"} <= set(side)
-        assert side["result_count"] == sides["indexed"]["result_count"]
-    assert sides["indexed"]["match_s"] <= sides["scanned"]["match_s"] + 0.05
+    assert {"indexed", "scanned", "content_sha256"} <= set(sides)
+    for side in ("indexed", "scanned"):
+        assert {
+            "elapsed_s",
+            "dense_s",
+            "overflow_match_s",
+            "overflow_read_s",
+            "gather_s",
+        } <= set(sides[side])
+        assert sides[side]["result_count"] == sides["indexed"]["result_count"]
+    assert (
+        sides["indexed"]["overflow_match_s"]
+        <= sides["scanned"]["overflow_match_s"] + 0.05
+    )
 
 
 def test_completion_rebuilds_the_index(residual: RaggedResidualScenario) -> None:

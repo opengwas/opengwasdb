@@ -89,19 +89,26 @@ def _index_hidden(store: Path) -> Iterator[None]:
         os.replace(hidden, index)
 
 
-def measure(store: Path, shapes: list[str], *, limit: float, max_load: float) -> dict:
+def measure(
+    store: Path, shapes: list[str], *, limit: float, max_load: float, reps: int = 1
+) -> dict:
     if not (store / _INDEX_REL).exists():
         raise SystemExit(f"{store}: no {_INDEX_REL}; run `ogdb build-variant-index` first")
     out: dict[str, dict] = {}
     for shape in shapes:
-        with _index_hidden(store):
-            scan = _probe(store, shape, limit, max_load, warm=False)
         # Warm only the shapes that decode the index: warming the rest would
         # read the exception tables for a shape that never needs them and
         # inflate its peak RSS against the scan side's.
         warm = shape in _INDEX_SHAPES
-        indexed = _probe(store, shape, limit, max_load, warm=warm)
-        for side in (scan, indexed):
+        scans: list[dict] = []
+        indexeds: list[dict] = []
+        for _ in range(reps):
+            with _index_hidden(store):
+                scans.append(_probe(store, shape, limit, max_load, warm=False))
+            indexeds.append(_probe(store, shape, limit, max_load, warm=warm))
+        scan = _best(scans)
+        indexed = _best(indexeds)
+        for side in (*scans, *indexeds):
             if side.get("timed_out"):
                 raise SystemExit(
                     f"{shape}: hit the {limit}s limit; a timed-out run is not evidence"
@@ -111,14 +118,31 @@ def measure(store: Path, shapes: list[str], *, limit: float, max_load: float) ->
                 f"{shape}: scan {scan.get('result_count')} rows/{scan.get('sha256')} "
                 f"!= index {indexed.get('result_count')} rows/{indexed.get('sha256')}"
             )
-        out[shape] = {"scanned": scan, "indexed": indexed}
+        out[shape] = {
+            "scanned": scan,
+            "indexed": indexed,
+            "scanned_reps": [s["elapsed_ms"] for s in scans],
+            "indexed_reps": [s["elapsed_ms"] for s in indexeds],
+        }
         print(
             f"{shape}: scan {scan['elapsed_ms']:.1f} ms ({scan['peak_mb'] / 1024:.2f} GiB) "
             f"-> index {indexed['elapsed_ms']:.1f} ms ({indexed['peak_mb'] / 1024:.2f} GiB) "
-            f"rows {indexed.get('result_count')}",
+            f"rows {indexed.get('result_count')} (median of {reps})",
             flush=True,
         )
     return out
+
+
+def _best(records: list[dict]) -> dict:
+    """One side's record, with the median elapsed/peak and the reps kept."""
+    if len(records) == 1:
+        return records[0]
+    import statistics
+
+    merged = dict(records[0])
+    merged["elapsed_ms"] = round(statistics.median(r["elapsed_ms"] for r in records), 3)
+    merged["peak_mb"] = round(statistics.median(r["peak_mb"] for r in records), 1)
+    return merged
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -130,6 +154,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-start-load", type=float, default=3.0, help="gate each side below this load"
     )
+    parser.add_argument("--reps", type=int, default=1, help="repetitions per side (median)")
     return parser
 
 
@@ -141,7 +166,11 @@ def main(argv: list[str] | None = None) -> int:
         "store": str(args.store),
         **provenance(),
         "shapes": measure(
-            args.store, shapes, limit=args.limit, max_load=args.max_start_load
+            args.store,
+            shapes,
+            limit=args.limit,
+            max_load=args.max_start_load,
+            reps=args.reps,
         ),
     }
     write_artifact(args.output, artifact)

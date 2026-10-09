@@ -35,7 +35,12 @@ from typing import Any
 
 import numpy as np
 
-from benchmarks._artifact import provenance
+from benchmarks._artifact import (
+    add_labelled_store_option,
+    labelled_stores,
+    provenance,
+    write_artifact,
+)
 from benchmarks._query_shapes import probe_variant_alid
 from opengwasdb.query import query_store
 
@@ -157,23 +162,24 @@ def check_store(store: Path) -> dict[str, Any]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--store", type=Path, required=True)
+    add_labelled_store_option(parser, help="a store to check; repeatable")
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    shapes = check_store(args.store)
+    stores = labelled_stores(args.store)
     artifact = {
         "harness": "benchmarks/variant_index_identity.py",
-        "store": str(args.store),
         **provenance(),
-        "shapes": shapes,
+        "stores": {
+            label: {"store": str(path), "shapes": check_store(path)}
+            for label, path in stores
+        },
     }
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"output": str(args.output), "shapes": sorted(shapes)}))
+    write_artifact(args.output, artifact)
+    print(json.dumps({"output": str(args.output), "stores": [label for label, _ in stores]}))
     return 0
 
 
