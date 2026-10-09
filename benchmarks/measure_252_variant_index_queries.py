@@ -35,7 +35,8 @@ from benchmarks._query_shapes import probe_variant_alid
 from benchmarks._rss import RssSampler, rss_mb
 from opengwasdb.query import query_store
 
-#: When this process started, for the "cold includes open" wall time.
+#: Taken *after* the imports, so the name says what it measures: the wall from
+#: this point (imports excluded, about 0.9 s of them) through the cold answer.
 _PROCESS_START = time.perf_counter()
 
 
@@ -65,10 +66,12 @@ def measure(store: Path, reps: int, scattered_cells: int) -> dict:
         cold = query.phewas(alid)
         out["cold_query_s"] = round(time.perf_counter() - cold_start, 4)
         out["cold_rows"] = int(len(cold["z"]))
-        # Cold **including open**: from process start through the first answer,
-        # with the process's high-water RSS at that moment.
-        out["cold_process_wall_s"] = round(time.perf_counter() - _PROCESS_START, 3)
-        out["cold_maxrss_gib"] = round(_maxrss_gib(), 3)
+        # Cold **including open**: from after the imports through the first
+        # answer.  `cold_sampled_rss_mb` is this process's own RSS (statm);
+        # `maxrss` is reported separately because under `pixi run` it starts at
+        # ~2 GiB inherited from the launcher (review round 3, finding 2).
+        out["cold_after_imports_wall_s"] = round(time.perf_counter() - _PROCESS_START, 3)
+        out["cold_sampled_rss_mb"] = round(rss_mb(), 1)
 
         reader.warm()
         warm: list[float] = []
@@ -97,7 +100,7 @@ def measure(store: Path, reps: int, scattered_cells: int) -> dict:
                 "table_entries": int(len(index)),
                 "seconds": round(scattered_s, 4),
                 "delta_mb": round(peak - baseline, 1),
-                "peak_mb": round(peak, 1),
+                "process_peak_mb": round(peak, 1),
             }
     finally:
         query.close()

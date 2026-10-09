@@ -591,39 +591,47 @@ def test_windowed_exception_table_is_bounded_by_scattered_positions() -> None:
     value = np.linspace(0.0, 1.0, total).astype(np.float32)
 
     counter = _CellCounter()
-    with _windowed_table(index, value, chunk, counter) as table:
-        wanted = np.array(
-            [index[i] for i in list(range(0, total, total // 10))[:10]], dtype=np.int64
-        )
-        assert len(wanted) == 10
-        first = counter.cells
-        got = table.lookup(wanted)
-        read_first = counter.cells - first
-        second = counter.cells
-        table.lookup(wanted)
-        read_second = counter.cells - second
-        # The answer is right...
-        np.testing.assert_allclose(got, value[np.searchsorted(index, wanted)])
-        # ...and a scattered lookup reads at most a chunk per position plus the
-        # bisect, far less than the span between the first and last.
-        assert read_first < total * chunk, (
-            f"scattered lookup read {read_first} cells against a {total}-cell table"
-        )
-        # The repeat skips the bisect (its chunk edges are cached) but still
-        # reads the chunks the positions fall in: one per position, not the span.
-        assert read_second < read_first, (
-            f"a repeat lookup read {read_second} cells against a first read of {read_first}; "
-            "the chunk-edge cache must make it cheaper"
-        )
-        assert read_second <= (len(wanted) + 4) * chunk * 2, (
-            f"a repeat lookup read {read_second} cells for {len(wanted)} positions; "
-            "it must read about one chunk per position"
-        )
+    # A small scan window, so the scattered path reads several windows rather
+    # than the whole table in one.
+    from opengwasdb.encoding.codec import WindowedExactTable
+
+    original_window = WindowedExactTable.scan_window_entries
+    WindowedExactTable.scan_window_entries = chunk * 8
+    try:
+        with _windowed_table(index, value, chunk, counter) as table:
+            wanted = np.array(
+                [index[i] for i in list(range(0, total, total // 10))[:10]], dtype=np.int64
+            )
+            assert len(wanted) == 10
+            first = counter.cells
+            got = table.lookup(wanted)
+            read_first = counter.cells - first
+            second = counter.cells
+            table.lookup(wanted)
+            read_second = counter.cells - second
+            # The answer is right, and a scattered lookup reads windows rather
+            # than the whole span between the first and last position.
+            np.testing.assert_allclose(got, value[np.searchsorted(index, wanted)])
+            assert len(wanted) < total // chunk, (
+                "the fixture must have more chunks than positions for the bound to mean "
+                "anything"
+            )
+            assert read_second < total, (
+                f"a scattered lookup read {read_second} cells against a {total}-cell table; "
+                "it must read windows, not the whole table"
+            )
+            assert read_second <= read_first, (
+                f"a repeat read {read_second} cells against a first read of {read_first}; "
+                "the chunk-edge cache must not make it worse"
+            )
+    finally:
+        WindowedExactTable.scan_window_entries = original_window
 
 
 class _CellCounter:
     def __init__(self) -> None:
         self.cells = 0
+        self.calls = 0
 
 
 class _CountedArray:
@@ -642,6 +650,7 @@ class _CountedArray:
     def __getitem__(self, key: object) -> np.ndarray:
         out = self._array[key]
         self._counter.cells += int(np.size(out))
+        self._counter.calls += 1
         return out
 
 
@@ -712,6 +721,39 @@ def test_windowed_exception_table_reads_a_clustered_range_as_one_span() -> None:
         assert read <= 60 * chunk, (
             f"clustered lookup read {read} cells for {len(wanted)} adjacent positions"
         )
+
+
+def test_windowed_exception_table_bounds_the_number_of_zarr_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A scattered lookup must not issue one zarr read per inner chunk.
+
+    #252 round-3 finding 1: the per-chunk scan paid one zarr read per chunk per
+    call, so a Dense column's ~1 M exception cells over a 165 M-entry table cost
+    6-9 s.  This counts **zarr reads** (not cells) with the window set to the
+    whole table, so the new batched scan needs one window read and the old
+    per-chunk scan needs one per position.
+    """
+    from opengwasdb.encoding.codec import WindowedExactTable
+
+    total = 32768  # 512 inner chunks of 64
+    chunk = 64
+    index = np.arange(total, dtype=np.int64) * 3
+    value = np.linspace(0.0, 1.0, total).astype(np.float32)
+    monkeypatch.setattr(WindowedExactTable, "scan_window_entries", total)
+    counter = _CellCounter()
+    with _windowed_table(index, value, chunk, counter) as table:
+        wanted = np.array(
+            [index[i] for i in list(range(0, total, total // 40))[:40]], dtype=np.int64
+        )
+        assert len(wanted) == 40
+        counter.calls = 0
+        got = table.lookup(wanted)
+        reads = counter.calls
+        np.testing.assert_allclose(got, value[np.searchsorted(index, wanted)])
+    # One window read (index + value) plus the bisect's cached chunk edges.  The
+    # per-chunk scan issued roughly one data read per position.
+    assert reads <= 60, f"scattered lookup issued {reads} zarr reads for {len(wanted)} positions"
 
 
 def test_augment_recovers_a_leftover_building_group(tmp_path: Path) -> None:

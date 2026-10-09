@@ -115,13 +115,17 @@ class VariantIndexResult:
 
 
 def _peak_rss_bytes() -> int:
-    """This process's peak RSS (a lifetime high-water mark), in bytes.
+    """This process's **current** RSS, in bytes.
 
-    `maxrss` is KiB on Linux.  The build's number is taken from a process whose
-    only work is the build (the augment command and the benchmark harness), so
-    the lifetime high-water mark *is* the build's peak.
+    `ru_maxrss` is a lifetime high-water mark and, under `pixi run`, starts at
+    about 2 GiB inherited from the launcher before this process does anything,
+    so it over-reports a build by about that much (review round 3, finding 2).
+    `/proc/self/statm`'s resident pages are this process's own memory; the
+    caller is the build, so a sample after it is the build's footprint.
     """
-    return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024
+    with open("/proc/self/statm") as handle:
+        resident_pages = int(handle.read().split()[1])
+    return resident_pages * resource.getpagesize()
 
 
 def _directory_bytes(path: Path) -> int:

@@ -76,6 +76,44 @@ def hybrid_residual(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return dst
 
 
+def _without_index(store: Path, destination: Path) -> Path:
+    """A copy of `store` with `ragged/by_variant/` renamed aside.
+
+    The scan route -- the only route for every registered release -- is exercised
+    without changing the code, so the oracle tests can run over both (review
+    round 3, required before merge).
+    """
+    import os
+    import shutil
+
+    shutil.copytree(store, destination)
+    index = destination / "data.zarr" / "ragged" / "by_variant"
+    os.replace(index, index.with_name("by_variant.hidden"))
+    return destination
+
+
+@pytest.fixture(scope="module")
+def ragged_residual_scanned(
+    tmp_path_factory: pytest.TempPathFactory, ragged_residual: RaggedResidualScenario
+) -> Path:
+    """The completed Ragged fixture with its variant index absent."""
+    return _without_index(
+        ragged_residual.completed,
+        tmp_path_factory.mktemp("ragged-scanned") / "scanned.opengwasdb",
+    )
+
+
+@pytest.fixture(scope="module")
+def hybrid_residual_scanned(
+    tmp_path_factory: pytest.TempPathFactory, hybrid_residual: Path
+) -> Path:
+    """The completed Hybrid fixture with its Overflow variant index absent."""
+    return _without_index(
+        hybrid_residual,
+        tmp_path_factory.mktemp("hybrid-scanned") / "scanned.opengwasdb",
+    )
+
+
 def _canonical(result: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """A result in canonical `(variant_index, analysis_index)` order.
 
@@ -179,11 +217,20 @@ def test_hybrid_fixture_is_residual_in_both_components(hybrid_residual: Path) ->
 
 
 @pytest.mark.parametrize("observed_only", [False, True])
+@pytest.mark.parametrize("scanned", [False, True])
 def test_ragged_variant_shapes_match_the_analysis_side(
-    ragged_residual: RaggedResidualScenario, observed_only: bool
+    ragged_residual: RaggedResidualScenario,
+    ragged_residual_scanned: Path,
+    observed_only: bool,
+    scanned: bool,
 ) -> None:
-    """phewas, range_phewas and lookup equal the Analysis-side decode."""
-    with query_store(ragged_residual.completed) as query:
+    """phewas, range_phewas and lookup equal the Analysis-side decode.
+
+    Parametrised over the index present and absent (review round 3): the scan
+    route is the only route for every registered release.
+    """
+    store = ragged_residual_scanned if scanned else ragged_residual.completed
+    with query_store(store) as query:
         analysis_ids = [
             str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())
         ]
@@ -240,9 +287,13 @@ def test_ragged_range_phewas_returns_imputed_rows(
         assert (status == "imputed").any(), "the range must return imputed cells"
 
 
-def test_hybrid_off_panel_shapes_match_the_overflow_side(hybrid_residual: Path) -> None:
+@pytest.mark.parametrize("scanned", [False, True])
+def test_hybrid_off_panel_shapes_match_the_overflow_side(
+    hybrid_residual: Path, hybrid_residual_scanned: Path, scanned: bool
+) -> None:
     """Off-panel phewas, range_phewas and lookup equal the Overflow-side decode."""
-    with query_store(hybrid_residual) as query:
+    store = hybrid_residual_scanned if scanned else hybrid_residual
+    with query_store(store) as query:
         columns = list(range(query._csr.n_analyses))
         analysis_ids = [
             str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())

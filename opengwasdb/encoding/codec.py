@@ -257,6 +257,10 @@ class WindowedExactTable(SparseExactTable):
     index_zarr: Any = None
     value_zarr: Any = None
     what_name: str = ""
+    #: Table entries one scattered-scan window holds: read in one zarr call and
+    #: matched with one vectorised `searchsorted`.  About 96 MB per window for
+    #: an int64 index plus a float32 value (review round 3, finding 1).
+    scan_window_entries: ClassVar[int] = 8_000_000
     #: The first and last element of each chunk a lookup has read or bisected
     #: through.  Cached per table for the process's life: a second lookup over
     #: the same table reuses them instead of re-reading the chunks
@@ -333,24 +337,40 @@ class WindowedExactTable(SparseExactTable):
         total: int,
         chunk: int,
     ) -> None:
-        """Match sorted positions against the chunks they fall in, in one pass."""
-        chunk_index = self._chunk_after(int(sorted_positions[0]), strict=False)[0]
+        """Match sorted positions against the table in multi-chunk windows.
+
+        A window of `scan_window_entries` entries is read in **one** zarr call
+        and the positions falling in it are matched with one vectorised
+        `searchsorted`; the next position's window is found by bisect.  A
+        scattered lookup therefore costs O(span / window) zarr reads rather
+        than one read per inner chunk, which is what a Dense column's ~1 M
+        exception cells over a 165 M-entry table paid (review round 3,
+        finding 1).  Peak memory is one window plus the positions.
+        """
+        window = max(int(self.scan_window_entries), chunk)
         i = 0
-        while i < len(sorted_positions) and chunk_index * chunk < total:
-            block_index, block_value = self._chunk(chunk_index, total, chunk)
-            high = int(block_index[-1])
-            while i < len(sorted_positions) and int(sorted_positions[i]) <= high:
-                target = int(sorted_positions[i])
-                slot = int(np.searchsorted(block_index, target, side="left"))
-                if slot < len(block_index) and int(block_index[slot]) == target:
-                    out[order[i]] = block_value[slot]
-                    found[order[i]] = True
-                i += 1
-            if i >= len(sorted_positions):
+        n = len(sorted_positions)
+        while i < n:
+            chunk_index = self._chunk_after(int(sorted_positions[i]), strict=False)[0]
+            if chunk_index * chunk >= total:
                 break
-            next_index = self._chunk_after(int(sorted_positions[i]), strict=False)[0]
-            # `sorted_positions[i] > high`, so the next chunk is strictly later.
-            chunk_index = max(next_index, chunk_index + 1)
+            start = (chunk_index * chunk // window) * window
+            stop = min(start + window, total)
+            block_index = np.asarray(self.index_zarr[start:stop], dtype=np.int64)
+            block_value = np.asarray(self.value_zarr[start:stop], dtype=np.float32)
+            high = int(block_index[-1])
+            j = i
+            while j < n and int(sorted_positions[j]) <= high:
+                j += 1
+            segment = sorted_positions[i:j]
+            slot = np.searchsorted(block_index, segment)
+            in_bounds = slot < len(block_index)
+            hit = np.zeros(len(segment), dtype=bool)
+            hit[in_bounds] = block_index[slot[in_bounds]] == segment[in_bounds]
+            matched = order[i:j][hit]
+            out[matched] = block_value[slot[hit]]
+            found[matched] = True
+            i = j
 
     def _first_ge(self, target: int) -> int:
         """Table-entry index of the first entry `>= target` (an element index)."""

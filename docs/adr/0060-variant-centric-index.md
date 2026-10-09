@@ -273,39 +273,43 @@ compared in canonical row order):
 | random lookup, 100×10 | 528.8 ms | 492.3 ms | control |
 | bulk, largest Overflow | 41,990.8 ms | 38,734.6 ms | control |
 
-The largest-Overflow bulk shape briefly regressed to 70.6 s when the exception
-tables became windowed, because a contiguous 85 M-row decode passed its
-exception positions through the chunk scanner. The windowed lookup now reads a
-**clustered** set as one span with a single `searchsorted` and scans chunk by
-chunk only when the span holds far more entries than the positions; the shape is
-back to 42.0 s / 38.7 s. The residual gap to its pre-windowing 26.8 s is where
-the table read is counted: the eager codec read it at query **open** (outside
-this harness's timer), the windowed codec reads it on the first decode (inside
-it).
+The largest-Overflow bulk shape regressed to 70.6 s when the exception tables
+became windowed: its Dense column has ~979,467 exception cells scattered across
+a 165.7 M-entry table, and the per-chunk scan paid one zarr read per chunk per
+call (6-9 s). The scattered path now reads **multi-million-entry windows**, one
+zarr call each, with a vectorised `searchsorted` per window, so the lookup is
+2-2.5 s and the shape is back to **42.0 s / 38.7 s**. The 2 s over the eager
+26.8 s is the intrinsic O(table) scan of a column spread uniformly across a
+table that the eager codec held resident; removing it would need a
+column-organised exception index, a format change.
 
 The **region's split** comes from the step-2 harness
 (`docs/benchmark-output/opengwasdb_252_scaling.json`), which times the same
 TCF7L2 window with the Dense Component's own read separated from the Overflow's
-match and read: `range_phewas` 114,976.2 ms scanned → **2,610.7 ms indexed, of
-which the Dense window is 2,411.4 ms (92 %)** and the Overflow 199.3 ms
-(match 10.3 + read 189.0). The region is Dense-bound; the index makes the
-Overflow part proportional to the answer but cannot touch the Dense read
-(#237's). The same table's `phewas_off_panel` is 32,692.8 → 38.8 ms.
+match and read: `range_phewas` **2,610.7 ms indexed**, of which the Dense window
+is 2,411.4 ms (92 %) and the Overflow 199.3 ms (match 10.3 + read 189.0). The
+A/B's `regional` figure is 3,388.8 ms for the same window because the A/B opens
+a fresh process per side and times the store open with it, where the scaling
+harness warms in one process; both are committed. The region is Dense-bound; the
+index makes the Overflow part proportional to the answer but cannot touch the
+Dense read (#237's). The same table's `phewas_off_panel` is 32,692.8 → 38.8 ms.
 
 **Cold and warm** (`docs/benchmark-output/opengwasdb_252_variant_index_queries.json`):
 a fresh process opens the store in **0.241 s**, its first off-axis PheWAS takes
-**34.9 ms**, and its wall from process start is **0.313 s** at **2.28 GiB**
-`maxrss`; after `ByVariantReader.warm()` the same query is **p50 17.3 ms, p90
-17.7 ms**. The exception tables are never read whole: a lookup reads only the
-chunks its positions fall in, so **20 scattered EAF-exception cells cost
-0.44 s and +11.9 MB** (against a 180,396,687-entry table), not the 1.69 GiB
-window `[min, max]` would have read.
+**34.9 ms**, and its wall from process start is **0.313 s** at a sampled RSS of
+**about 0.28 GB**; after `ByVariantReader.warm()` the same query is **p50 17.3
+ms, p90 17.7 ms**. (The harness also prints `maxrss`, but under `pixi run` a
+Python process inherits a ~2 GiB `ru_maxrss` from the launcher, so that figure
+is not this process's.) The exception tables are never read whole: a lookup
+reads only the windows its positions fall in, so **20 scattered EAF-exception
+cells cost under a second and a few tens of MB** (against a 180,396,687-entry
+table), not the 1.69 GiB window `[min, max]` would have read.
 
 The mechanism: a per-variant read is one 8 KB `by_variant/offsets` chunk plus
 the variant's ~30 KB block; the scan's cost is its **match** phase (its whole
-`variant_index` walk), which step 2's phase split shows for every store
-(eQTLGen PheWAS 1213.0 ms scanned → 26.1 ms indexed, of which the overflow read
-is 20.2 ms).
+`variant_index` walk). The scaling artifact's eQTLGen row: PheWAS 1,247.9 ms
+scanned → 19.4 ms indexed (overflow match 3.4 + read 14.6), off-panel
+1,099.9 → 23.9 ms (4.2 + 17.4).
 
 **Index-only `validate`** on the 3,085,080,783-row copy
 (`docs/benchmark-output/opengwasdb_252_validate_index.json`): 2,657.4 s

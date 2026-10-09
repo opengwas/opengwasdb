@@ -50,6 +50,24 @@ the end of this file.
   Completion (Ragged and Hybrid) rebuilds the index from the completed planes
   rather than carrying the source's forward.
 
+- **Every Dense and Ragged plane reads its exact-value exception tables as
+  windows, and the Dense `patch()` merge is fixed (#252 review rounds 2-3).**
+  Opening a store used to read each `z_overflow`/`eaf_exception`/`se_exception`
+  table whole -- about 2.1 GiB for OGS-00011's 180,396,687-entry EAF table -- so
+  every process paid it, including analysis-side queries that never touch an
+  exception. `WindowedExactTable` now holds the arrays and reads only the
+  entries a decode needs: a **clustered** run of cells (a decode block, or one
+  Analysis's contiguous range) is read as one span with a single
+  `searchsorted`, and a **scattered** set (a dense column's cells, `lookup`
+  hits, the unindexed scan) is read in multi-million-entry windows, one zarr
+  read each, with a vectorised `searchsorted` per window. Opening an indexed
+  store falls from about 6 s to 0.24 s, and a fresh process's first off-axis
+  PheWAS pays tens of milliseconds rather than a whole-table read. `patch()`,
+  which rewrites one plane's cells and its table in place, previously merged the
+  patched entries with the codec's **empty** in-memory view and rewrote the
+  table -- dropping every existing entry, including in Hybrid completion's
+  crossover fold; it now reads the whole table from the group.
+
 ### Changed
 
 - **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**
