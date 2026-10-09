@@ -418,7 +418,9 @@ def _new_staging_work_dir(dst: Path) -> Path:
     return work
 
 
-def _commit_staged_release(dst: Path, work: Path, *, overwrite: bool) -> None:
+def _commit_staged_release(
+    dst: Path, work: Path, *, overwrite: bool, what: str = "release"
+) -> None:
     """Publish the fully-written ``work`` directory at ``dst``, atomically.
 
     The destination is checked again *under the parent-directory lock* rather
@@ -448,7 +450,7 @@ def _commit_staged_release(dst: Path, work: Path, *, overwrite: bool) -> None:
         if dst.exists() and not overwrite:
             raise FileExistsError(
                 f"output path already exists: {dst} "
-                "(published by another process while this release was staging)"
+                f"(another process published a {what} there while this one was staging)"
             )
         if dst.exists():
             old = dst.with_name(f".{dst.name}.old")
@@ -463,6 +465,36 @@ def _commit_staged_release(dst: Path, work: Path, *, overwrite: bool) -> None:
             shutil.rmtree(old, ignore_errors=True)
         else:
             work.rename(dst)
+
+
+@contextmanager
+def _staged_directory(
+    dst: Path, *, overwrite: bool, retain_to: Path | None, what: str
+) -> Iterator[Path]:
+    """The isolation/publication window both staging seams share (ADR 0043).
+
+    Creates a unique ``.{name}.tmp.*`` sibling of ``dst``, yields its path, and
+    on a clean exit commits it under the parent-directory lock.  Any
+    ``BaseException`` -- from the body or from the commit -- discards this
+    invocation's work directory (moving it to `retain_to` when a checkpointed
+    build asked for that) and re-raises.
+    """
+    if dst.exists() and not overwrite:
+        raise FileExistsError(f"output path already exists: {dst}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    work = _new_staging_work_dir(dst)
+    try:
+        yield work
+    except BaseException:
+        _discard_staging_work_dir(work, retain_to)
+        raise
+    try:
+        _commit_staged_release(dst, work, overwrite=overwrite, what=what)
+    except BaseException:
+        # `work` is still there exactly when the swap did not complete; if it
+        # did, it has been renamed to `dst` and this is a no-op.
+        _discard_staging_work_dir(work, retain_to)
+        raise
 
 
 @dataclass(frozen=True)
@@ -582,27 +614,44 @@ class OpenGWASDBStore(_ReleasePaths):
         caller's behaviour.
         """
         dst = Path(dest_path)
-        if dst.exists() and not overwrite:
-            raise FileExistsError(f"output path already exists: {dst}")
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        work = _new_staging_work_dir(dst)
-        if adopt is not None:
-            _adopt_staging_work_dir(work, Path(adopt))
+        with _staged_directory(
+            dst, overwrite=overwrite, retain_to=retain_on_failure_to, what="release"
+        ) as work:
+            if adopt is not None:
+                _adopt_staging_work_dir(work, Path(adopt))
+            yield StagedRelease(work)
 
-        staged = StagedRelease(work)
-        try:
-            yield staged
-        except BaseException:
-            _discard_staging_work_dir(work, retain_on_failure_to)
-            raise
 
-        try:
-            _commit_staged_release(dst, work, overwrite=overwrite)
-        except BaseException:
-            # `work` is still there exactly when the swap did not complete;
-            # if it did, it has been renamed to `dst` and this is a no-op.
-            _discard_staging_work_dir(work, retain_on_failure_to)
-            raise
+@contextmanager
+def staged_named_group(
+    dest_path: str | Path, *, overwrite: bool = False
+) -> Iterator[Path]:
+    """Stage one named directory inside a published tree, atomically.
+
+    The named-group companion of `OpenGWASDBStore.staging` (ADR 0043), for a
+    derived artifact that lives *inside* an existing release rather than being
+    a release of its own -- an Indexed Variant Subset under
+    ``data.zarr/indexed_subsets/<name>`` (ADR 0053, #264).  It offers the same
+    isolation and publication rules at the group level:
+
+    * the body writes into a fresh, invocation-unique ``.{name}.tmp.*`` sibling
+      created by `_new_staging_work_dir`, so two builds for one name can never
+      touch each other's work and a killed build's directory is inert;
+    * any ``BaseException`` discards exactly this invocation's work directory
+      and re-raises, leaving an existing published group untouched;
+    * publication runs under the parent-directory advisory lock, re-checks
+      ``dest_path`` there, and swaps with the same two-rename sequence and
+      rollback as a release commit -- so ``dest_path`` is never absent mid-swap
+      and a failed replacement leaves the previous group exactly as it was.
+
+    It yields the work directory's path; the caller has to create the contents
+    (a Zarr group, for the derived indexes that use it).  ``dest_path``'s parent
+    must already exist as the group the new name is published into.
+    """
+    with _staged_directory(
+        Path(dest_path), overwrite=overwrite, retain_to=None, what="named group"
+    ) as work:
+        yield work
 
 
 @dataclass(frozen=True)

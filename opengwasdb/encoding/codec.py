@@ -718,6 +718,18 @@ class StoreCodec:
         """The value a freshly created z plane is filled with: "missing"."""
         return Z_MISSING if self.encoding.z.is_fixed_point else float("nan")
 
+    @property
+    def se_fill_value(self) -> Any:
+        """The value a freshly created `se` plane is filled with: "missing".
+
+        A `residual` plane's missing marker is its reserved sentinel, not a
+        NaN it cannot hold (ADR 0038 §6). An Indexed Variant Subset creates its
+        planes before writing every band, so the fill is what an unwritten cell
+        would read as -- and it must be the missing marker, not the dtype
+        default.
+        """
+        return SE_MISSING if self.encoding.se.is_residual else float("nan")
+
     def encode_z(
         self,
         values: np.ndarray,

@@ -10,6 +10,37 @@ the end of this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`opengwasdb build-indexed-subset STORE SUBSET_NAME --variant-list
+  variants.alid.txt --reference-assembly GRCh38` builds a full-statistic
+  Observed-Only Dense Indexed Variant Subset (ADR 0053, issue #264).** It
+  writes `data.zarr/indexed_subsets/<name>/`: the subset's sorted Store Variant
+  Indices, Analysis-major Z and its exact overflow table, SE and its
+  coefficients/exception table when the release residual-codes it, and EAF and
+  its subset baseline/exception table when the release has one. The stored
+  codes are copied from the primary planes and the side-table positions
+  remapped, so every decoded indexed cell is *identical* to the authoritative
+  primary cell rather than a re-encode of a decoded value. The artifact covers
+  every Analysis and has one full-statistic profile: there is no Z-only or
+  per-Analysis mode. Beta, p-value and Analysis metadata are not copied.
+  The variant list takes one canonical ALID per nonblank line, requires an
+  explicit matching Reference Assembly, refuses malformed, duplicate or
+  zero-match input, and records requested/resolved/absent counts plus the
+  input's SHA-256 and the source release identity. Publication follows ADR
+  0043 at the named-group level: a unique temporary sibling, validation of the
+  staged group, then a release-local advisory lock and an atomic rename, so
+  two same-name no-overwrite builds yield one winner and one loud
+  `FileExistsError` while different names never touch each other. Standalone
+  `validate` now checks the namespace, the attributes, the Variant Indices and
+  shapes, the side tables, Z/SE missingness and every decoded indexed Z/SE/EAF
+  against the primary planes; a release with no namespace stays valid and
+  unchanged, unknown or temporary entries fail, and deleting the group leaves
+  a valid release. The index does not move `format_version` (it narrows ADRs
+  0038 and 0041), and query integration (#265), Reference-Completed support
+  (#266) and the production benchmark (#267) are deliberately out of scope.
+  Spec §10b and §20 record the physical contract and validation rules.
+
 ### Changed
 
 - **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**

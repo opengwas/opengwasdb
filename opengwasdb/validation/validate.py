@@ -38,6 +38,7 @@ from opengwasdb.encoding import (
     per_variant_chunk_size,
 )
 from opengwasdb.index.sqlite import get_metadata
+from opengwasdb.layouts.dense.indexed_subsets import validate_indexed_subsets
 from opengwasdb.layouts.dense.top_hits import threshold_key, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -797,6 +798,12 @@ def _validate_dense_store(
             # After the shape seam, so a plane that does not span the axis is
             # named as such rather than only as a layout disagreement (#245).
             _validate_recorded_layout(manifest, connection, root, errors)
+            # The optional indexed-subset namespace (ADR 0053, #264).  A release
+            # without it stays valid and unchanged; a release with it must hold
+            # only published, self-consistent, value-equal subsets.
+            validate_indexed_subsets(
+                store.path, root, manifest, n_variants, n_analyses, errors
+            )
     except Exception as exc:  # noqa: BLE001 - validators should report actionable failures
         errors.append(f"validation failed: {exc}")
     return ValidationResult(errors=errors)

@@ -180,6 +180,8 @@ __all__ = [
     "DENSE_CHUNK_SHAPE",
     "DENSE_SHARD_SHAPE",
     "EXCEPTION_TABLE_CHUNK",
+    "INDEXED_SUBSET_CHUNK",
+    "INDEXED_SUBSET_SHARD",
     "PER_VARIANT_CHUNK",
     "RAGGED_SEQUENCE_SHARD_ELEMENTS",
     "RAGGED_SIDE_SHARD_ELEMENTS",
@@ -333,6 +335,18 @@ TOP_HIT_CHUNK_SIZE = 16_384
 #: no override.  `encoding/codec.EXACT_TABLE_CHUNK` is this value.
 EXCEPTION_TABLE_CHUNK = 200_000
 
+#: An Indexed Variant Subset's variant-axis inner chunk.  The subset planes are
+#: Analysis-major (`n_analyses x n_subset_variants`), so the *Analysis* axis is
+#: the row of one variant, and an inner chunk of one row by this many variants
+#: makes a single-Analysis read a contiguous run of chunks rather than a
+#: genome-wide gather (ADR 0053; prototype `CACHE_ROWS`).
+INDEXED_SUBSET_CHUNK = 65_536
+
+#: An Indexed Variant Subset plane's variant-axis shard: 16 inner chunks.  The
+#: shard is bounded along the variant axis only, so one shard never spans two
+#: Analyses -- reading one Analysis never decompresses another's cells.
+INDEXED_SUBSET_SHARD = 16 * INDEXED_SUBSET_CHUNK
+
 
 class ArrayRole(StrEnum):
     """What an array *is*, which is what fixes its chunk layout.
@@ -377,6 +391,13 @@ class ArrayRole(StrEnum):
     SE_COEFFICIENTS = "se_coefficients"
     #: One array of the Rho Matrix group (`rho`, `n_null`, `variant_index`).
     RHO_ARRAY = "rho_array"
+    #: One statistic plane of an Indexed Variant Subset (`z`, `se`, `eaf`).
+    #: Analysis-major (`n_analyses x n_subset_variants`) and chunked for narrow
+    #: single-Analysis reads; a distinct role because neither axis's layout is
+    #: the Dense grid's (ADR 0053, #264).
+    INDEXED_SUBSET_PLANE = "indexed_subset_plane"
+    #: An Indexed Variant Subset's sorted Store Variant Indices.
+    INDEXED_SUBSET_VARIANT_INDEX = "indexed_subset_variant_index"
 
 
 @dataclass(frozen=True)
@@ -471,6 +492,26 @@ def _rho_array(ctx: _LayoutContext) -> tuple[int, ...]:
     return (max(1, min(ctx.shape[0], RHO_CHUNK_ROWS)),)
 
 
+def _indexed_subset_plane(ctx: _LayoutContext) -> tuple[int, ...]:
+    """An Indexed Variant Subset statistic plane, one Analysis per chunk row.
+
+    Analysis-major, so the row is one Analysis and the column is a subset
+    variant.  The default inner chunk is `(1, INDEXED_SUBSET_CHUNK)`, clipped
+    to the array, which is what makes a single-Analysis query a sequential
+    read; a caller's `hint` overrides it (the writer passes the same shape).
+    """
+    hint = ctx.hint if ctx.hint is not None else (1, INDEXED_SUBSET_CHUNK)
+    return (
+        max(1, min(int(hint[0]), ctx.shape[0])),
+        max(1, min(int(hint[1]), ctx.shape[1])),
+    )
+
+
+def _indexed_subset_variant_index(ctx: _LayoutContext) -> tuple[int, ...]:
+    """An Indexed Variant Subset's sorted Variant Index array."""
+    return _length_clipped(ctx, INDEXED_SUBSET_CHUNK)
+
+
 #: The role -> physical-layout policy.  One entry per role; later tickets that
 #: change the layout (Zarr v3 sharding, #247) change this table, and the
 #: converter (#245) reads the same table so builders and converter agree.  Each
@@ -492,6 +533,8 @@ _LAYOUTS: Mapping[ArrayRole, Callable[[_LayoutContext], tuple[int, ...]]] = Mapp
         ArrayRole.EXCEPTION_TABLE: _exception_table,
         ArrayRole.SE_COEFFICIENTS: _se_coefficients,
         ArrayRole.RHO_ARRAY: _rho_array,
+        ArrayRole.INDEXED_SUBSET_PLANE: _indexed_subset_plane,
+        ArrayRole.INDEXED_SUBSET_VARIANT_INDEX: _indexed_subset_variant_index,
     }
 )
 
@@ -795,6 +838,24 @@ def _shard_top_hit_index(ctx: _ShardContext) -> tuple[int, ...]:
     )
 
 
+def _shard_indexed_subset_plane(ctx: _ShardContext) -> tuple[int, ...]:
+    """An Indexed Variant Subset plane's shard: one Analysis row, bounded.
+
+    The Analysis axis shard is one row, so a single-Analysis read never touches
+    another Analysis's cells; the variant axis is `INDEXED_SUBSET_SHARD`
+    rounded to a whole number of inner chunks and clipped to the array.
+    """
+    return (
+        _clip_shard_to_multiple(1, ctx.inner_chunk[0], ctx.shape[0]),
+        _clip_shard_to_multiple(INDEXED_SUBSET_SHARD, ctx.inner_chunk[1], ctx.shape[1]),
+    )
+
+
+def _shard_indexed_subset_variant_index(ctx: _ShardContext) -> tuple[int, ...]:
+    """An Indexed Variant Subset's Variant Index array, sharded by element cap."""
+    return _shard_element_cap(ctx)
+
+
 def _shard_whole_array(ctx: _ShardContext) -> tuple[int, ...]:
     """One shard holds the whole array, so a small side array is one file.
 
@@ -826,6 +887,8 @@ _SHARD_LAYOUTS: Mapping[ArrayRole, Callable[[_ShardContext], tuple[int, ...]]] =
             ArrayRole.EXCEPTION_TABLE: _shard_whole_array,
             ArrayRole.SE_COEFFICIENTS: _shard_whole_array,
             ArrayRole.RHO_ARRAY: _shard_element_cap,
+            ArrayRole.INDEXED_SUBSET_PLANE: _shard_indexed_subset_plane,
+            ArrayRole.INDEXED_SUBSET_VARIANT_INDEX: _shard_indexed_subset_variant_index,
         }
     )
 )

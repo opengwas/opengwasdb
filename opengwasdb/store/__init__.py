@@ -34,6 +34,7 @@ __all__ = [
     "open_store",
     "parse_format_version",
     "split_format_version",
+    "staged_named_group",
 ]
 
 #: Same names, as a set for the lazy resolver below.  A set membership test,

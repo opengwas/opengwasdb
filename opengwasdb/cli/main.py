@@ -33,6 +33,11 @@ from opengwasdb.layouts.dense.complete import (
     resume_dense_completion,
 )
 from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE
+from opengwasdb.layouts.dense.indexed_subsets import (
+    DEFAULT_BAND_CELLS,
+    IndexedSubsetError,
+    build_indexed_subset,
+)
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.rho import (
     DEFAULT_RHO_MIN_NULLS,
@@ -1333,6 +1338,61 @@ def build_dense_rho_command(
         n_workers=n_workers,
     )
     typer.echo("done")
+
+
+_INDEXED_SUBSET_VARIANT_LIST_OPTION = typer.Option(
+    ...,
+    "--variant-list",
+    help=(
+        "Path to a file of canonical ALIDs, one per nonblank line. Absent ALIDs are "
+        "permitted and counted; malformed or duplicate ones fail the build."
+    ),
+)
+_INDEXED_SUBSET_ASSEMBLY_OPTION = typer.Option(
+    ...,
+    "--reference-assembly",
+    help=(
+        "The variant list's Reference Assembly (e.g. GRCh38). Required: cross-store "
+        "Variant Identity is assembly plus ALID, and a mismatch fails the build."
+    ),
+)
+_INDEXED_SUBSET_OVERWRITE_OPTION = typer.Option(
+    False, "--overwrite", help="Atomically replace an existing subset of the same name"
+)
+_INDEXED_SUBSET_BAND_CELLS_OPTION = typer.Option(
+    DEFAULT_BAND_CELLS,
+    "--band-cells",
+    help="Peak cells read per streamed band; bounds build memory",
+)
+
+
+@app.command("build-indexed-subset")
+def build_indexed_subset_command(
+    store_path: Path,
+    subset_name: str,
+    variant_list: Path = _INDEXED_SUBSET_VARIANT_LIST_OPTION,
+    reference_assembly: str = _INDEXED_SUBSET_ASSEMBLY_OPTION,
+    overwrite: bool = _INDEXED_SUBSET_OVERWRITE_OPTION,
+    band_cells: int = _INDEXED_SUBSET_BAND_CELLS_OPTION,
+) -> None:
+    """Build one full-statistic Indexed Variant Subset for an Observed-Only Dense store."""
+    try:
+        result = build_indexed_subset(
+            store_path,
+            subset_name,
+            variant_list,
+            reference_assembly=reference_assembly,
+            overwrite=overwrite,
+            band_cells=band_cells,
+        )
+    except IndexedSubsetError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"built indexed subset {result.name!r} at {result.path}")
+    typer.echo(
+        f"requested {result.requested_count}, resolved {result.resolved_count}, "
+        f"absent {result.absent_count}"
+    )
 
 
 @app.command("regenerate-overview")
