@@ -103,7 +103,14 @@ the end of this file.
   Completion State define; an Observed-Only index carries neither array, a
   Reference-Completed one missing `imputed` fails, and corruption in any
   status or reference-EAF dependency fails validation rather than degrading to
-  an observed- or missing-looking result. Query defaults include imputed
+  an observed- or missing-looking result. The read path separately refuses a
+  mask whose dtype is not `uint8` and, for the Analysis being decoded, any
+  value outside `{0, 1}` before the codec, Association Status or
+  `observed_only` filter can interpret it -- a float or out-of-domain mask
+  would otherwise read as imputed to the frequency substitution and observed
+  to Association Status at once; comparing the mask's and `eaf_reference`'s
+  full content against the release remains `validate`'s job. Query defaults
+  include imputed
   associations, `observed_only=True` excludes exactly them, and results match
   the ordinary selected-Analysis result field-for-field including
   `association_status` and Store order. Publication stays atomic, so a failed

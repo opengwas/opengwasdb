@@ -1180,7 +1180,14 @@ bounds `[0, n_variants)`. A malformed encoding block is refused as a malformed
 subset rather than allowed to raise a decode error. An entry that is not a
 readable Zarr group -- a plain directory, an array, or metadata a reader
 cannot parse or validate -- is refused the same way, not left to leak a zarr,
-JSON or ValueError exception through the facade. It does NOT re-derive
+JSON or ValueError exception through the facade. For a Reference-Completed
+index it also reads the `imputed` mask's dtype from its metadata and checks
+that the mask column of the Analysis being decoded holds only 0 and 1, before
+any value, Association Status or `observed_only` filter is derived from it: a
+float or out-of-domain mask would otherwise be read as imputed by the frequency
+substitution and as observed by Association Status at the same time. It does
+not compare the mask's or `eaf_reference`'s content against the release --
+`validate` does that. It does NOT re-derive
 decoded values or side-table internals -- that is `validate`'s expensive job --
 and cannot detect an in-range Variant Index shift while identity and bounds
 hold. A subset on a Ragged or Hybrid release is refused, because Indexed

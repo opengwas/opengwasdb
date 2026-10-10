@@ -38,7 +38,7 @@ from test_dense_completion import (
     _SIGNAL_Z_TRUE,
     write_signal_panel,
 )
-from test_indexed_subset_query import _assert_results_equal, _ordinary_filtered
+from test_indexed_subset_query import _assert_results_equal, _invoke, _ordinary_filtered
 from test_indexed_subsets import (
     INDEXED_SUBSETS_GROUP,
     _authoritative_digest,
@@ -469,6 +469,79 @@ def test_validation_rejects_a_non_boolean_imputed_mask(
     group["imputed"][:] = mask
     errors = _errors_for(store)
     assert any("values other than 0 and 1" in e for e in errors), errors
+
+
+# ── Read-path mask structure/domain (issue #266 review) ─────────────────────
+#
+# The read path refuses a mask the codec and Association Status would read
+# differently -- a float mask, or a value outside {0,1} -- before decoding the
+# Analysis's column.  Comparing the mask's or `eaf_reference`'s *content*
+# against the release stays `validate`'s job.
+
+
+def _set_mask_value(store: Path, value: int) -> None:
+    group = _index_group(store, "hm3")
+    mask = np.asarray(group["imputed"][:])
+    mask[0, 0] = value
+    group["imputed"][:] = mask
+
+
+def _replace_mask_with_float(store: Path) -> None:
+    """Rewrite the mask as float32 holding a 0.5 cell.
+
+    A decoder that coerced it to uint8 would see 0 (observed) while a truthy
+    test would see imputed -- the inconsistency this refuses.
+    """
+    group = _index_group(store, "hm3")
+    n_analyses = int(group.attrs["n_analyses"])
+    n_subset = int(group.attrs["n_subset_variants"])
+    values = np.zeros((n_analyses, n_subset), dtype="float32")
+    values[0, 0] = 0.5
+    del group["imputed"]
+    group.create_array("imputed", chunks=(1, n_subset), shards=(1, n_subset), data=values)
+
+
+def _damage_mask(store: Path, damage: str) -> None:
+    if damage == "value2":
+        _set_mask_value(store, 2)
+    else:
+        _replace_mask_with_float(store)
+
+
+def test_open_refuses_a_float_mask_before_decoding(
+    tmp_path: Path, completed_store: Path
+) -> None:
+    store = _build_subset(shutil.copytree(completed_store, tmp_path / "s.opengwasdb"), tmp_path)
+    _replace_mask_with_float(store)
+    with pytest.raises(IndexedSubsetError, match="uint8") as excinfo:
+        open_indexed_subset(store, "hm3")
+    message = str(excinfo.value)
+    assert str(store) in message and "hm3" in message, message
+
+
+@pytest.mark.parametrize("observed_only", [False, True])
+@pytest.mark.parametrize("damage", ["value2", "float"])
+def test_damaged_mask_is_refused_by_the_api(
+    tmp_path: Path, completed_store: Path, damage: str, observed_only: bool
+) -> None:
+    store = _build_subset(shutil.copytree(completed_store, tmp_path / "s.opengwasdb"), tmp_path)
+    _damage_mask(store, damage)
+    with pytest.raises(IndexedSubsetError) as excinfo:
+        _analyse(store, "a1", indexed_subset="hm3", observed_only=observed_only)
+    message = str(excinfo.value)
+    assert str(store) in message and "hm3" in message, message
+
+
+@pytest.mark.parametrize("damage", ["value2", "float"])
+def test_damaged_mask_is_refused_by_the_cli(
+    tmp_path: Path, completed_store: Path, damage: str
+) -> None:
+    store = _build_subset(shutil.copytree(completed_store, tmp_path / "s.opengwasdb"), tmp_path)
+    _damage_mask(store, damage)
+    code, output = _invoke(store, "a1", "--indexed-subset", "hm3", "--format", "json")
+    assert code == 1, output
+    assert "error:" in output, output
+    assert str(store) in output and "hm3" in output, output
 
 
 def test_validation_rejects_a_corrupt_reference_eaf(

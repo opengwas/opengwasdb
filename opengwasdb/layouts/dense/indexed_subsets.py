@@ -320,6 +320,8 @@ class IndexedSubset:
                 f"Analysis index {analysis_index} is outside [0, {self.n_analyses})"
             )
         return _decode_analysis_column(
+            self.store_path,
+            self.name,
             self._group,
             self.encoding,
             self.n_subset_variants,
@@ -1249,13 +1251,26 @@ def _require_status_dependency_shapes(
     *,
     completed: bool,
 ) -> None:
-    """The status mask and reference EAF the release's Completion State implies."""
-    if completed and tuple(int(size) for size in group[_IMPUTED_MASK].shape) != expected_shape:
-        raise IndexedSubsetError(
-            f"Indexed Variant Subset {name!r} imputed shape "
-            f"{tuple(int(size) for size in group[_IMPUTED_MASK].shape)} does not match "
-            f"{expected_shape}"
-        )
+    """The status mask and reference EAF the release's Completion State implies.
+
+    The mask's dtype is checked here because it is read from the array's
+    metadata: a float mask would be coerced to uint8 by a decoder and lose the
+    very values that should have refused it (#266 review).  The mask's *domain*
+    is checked per decoded column in `_read_imputed_mask_column`, and its
+    content against the primary release by validation.
+    """
+    if completed:
+        actual = tuple(int(size) for size in group[_IMPUTED_MASK].shape)
+        if actual != expected_shape:
+            raise IndexedSubsetError(
+                f"Indexed Variant Subset {name!r} imputed shape {actual} does not match "
+                f"{expected_shape}"
+            )
+        dtype = str(group[_IMPUTED_MASK].dtype)
+        if dtype != "uint8":
+            raise IndexedSubsetError(
+                f"Indexed Variant Subset {name!r} imputed has dtype {dtype}, not uint8"
+            )
     if encoding.eaf.reference and array_length(group[EAF_REFERENCE]) != n_subset:
         raise IndexedSubsetError(
             f"Indexed Variant Subset {name!r} eaf_reference has "
@@ -1420,6 +1435,8 @@ def _codec(group: Any, encoding: StoreEncoding) -> StoreCodec:
 
 
 def _decode_analysis_column(
+    store_path: Path,
+    name: str,
     group: Any,
     encoding: StoreEncoding,
     n_subset: int,
@@ -1435,12 +1452,15 @@ def _decode_analysis_column(
     The imputed mask and reference EAF are read from the index's own arrays and
     handed to the same codec the primary planes use (#266): an imputed cell
     reads the panel's frequency and an observed cell whose source reported none
-    stays NaN, exactly as on the primary plane.
+    stays NaN, exactly as on the primary plane.  The mask column is validated
+    before the codec sees it, so a float or out-of-domain value cannot be read
+    as imputed by the frequency substitution and as observed by Association
+    Status at the same time.
     """
     codec = _codec(group, encoding)
     start = analysis_index * n_subset
     positions = positions_flat(start)
-    imputed = _imputed_column(group, analysis_index)
+    imputed = _read_imputed_mask_column(store_path, name, group, analysis_index)
     z = codec.decode_z(np.asarray(group["z"][analysis_index, :]), positions=positions)
     eaf = _decode_eaf_column(codec, group, n_subset, analysis_index, positions, imputed)
     se_raw = np.asarray(group["se"][analysis_index, :])
@@ -1454,11 +1474,35 @@ def _decode_analysis_column(
     )
 
 
-def _imputed_column(group: Any, analysis_index: int) -> np.ndarray | None:
-    """One Analysis's `imputed` mask cell for cell, or None on an Observed-Only index."""
+def _read_imputed_mask_column(
+    store_path: Path, name: str, group: Any, analysis_index: int
+) -> np.ndarray | None:
+    """One Analysis's status mask, or None on an Observed-Only index.
+
+    The mask is read without coercing its dtype: a float mask whose 0.5 cells
+    are silently narrowed to 0 would be observed to Association Status and
+    imputed to the frequency substitution, which is the plausible-wrong answer
+    this refuses (#266 review).  The check is bounded to the column being
+    decoded; `validate` compares the whole mask's content against the primary
+    release.
+    """
     if _IMPUTED_MASK not in group:
         return None
-    return np.asarray(group[_IMPUTED_MASK][analysis_index, :], dtype=np.uint8)
+    raw = np.asarray(group[_IMPUTED_MASK][analysis_index, :])
+    if str(raw.dtype) != "uint8":
+        raise IndexedSubsetError(
+            f"store {store_path}: Indexed Variant Subset {name!r} imputed mask has "
+            f"dtype {raw.dtype}, not uint8"
+        )
+    invalid = (raw != 0) & (raw != 1)
+    if np.any(invalid):
+        examples = np.unique(raw[invalid]).tolist()[:3]
+        raise IndexedSubsetError(
+            f"store {store_path}: Indexed Variant Subset {name!r} imputed mask contains "
+            f"values other than 0 and 1 (e.g. {examples}); its cells cannot be classified "
+            "as observed or imputed"
+        )
+    return raw
 
 
 def _index_reference(group: Any) -> np.ndarray | None:
@@ -1702,7 +1746,7 @@ def _validate_one_indexed_subset(
         return
     subset = np.asarray(group["variant_index"][:], dtype=np.int64)
     _compare_indexed_values(
-        name, context.root, group, declared, subset, context.n_analyses, completed, errors
+        name, context.root, group, declared, subset, context.n_analyses, errors
     )
 
 
@@ -2035,7 +2079,6 @@ def _compare_indexed_values(
     encoding: StoreEncoding,
     subset: np.ndarray,
     n_analyses: int,
-    completed: bool,
     errors: list[str],
 ) -> None:
     """Stream decoded index bands and compare them to the primary planes.
