@@ -397,6 +397,74 @@ instruments. `--skip-rss` drops the memory probes for a timings-only run.
 
 ---
 
+### `benchmark_indexed_subset.py` (#267)
+
+Promotes the issue-262 prototype into the maintained, reproducible measurement
+of an Indexed Variant Subset (ADR 0053) at production scale. On **OGS-00009**
+it builds the complete full-statistic HapMap3 index (Z, SE and EAF — not a
+Z-only projection) and measures whether one Analysis's full result can be read
+from the index in under a second.
+
+The harness has one publication gate: it compares every parallel array of the
+indexed result against the ordinary result filtered to the subset's Store
+Variant Indices, field by field, and **refuses to publish unless they are
+exactly equal**. The comparison is a pure function in the harness and is
+tested against the mismatches it must catch (a changed value, a dropped row).
+
+Two measurement-safety rules matter:
+
+- **The authoritative release is never written.** The run reflinks the Store
+  Release into `--work` (`cp -a --reflink=auto`), records a recursive
+  `(path, size, mtime)` fingerprint plus `manifest.json`/`analyses.tsv`
+  content hashes of the original before and after, and reports
+  `targets.original_store_unchanged`.
+- **Physical bytes, not apparent bytes.** The index's allocated bytes
+  (`st_blocks * 512`) are measured directly, not inferred from the writer's
+  uncompressed sizes, and the baseline is the untouched release's own physical
+  size. The artifact carries both logical and physical totals plus a per-plane
+  breakdown.
+
+The canonical GRCh38 HapMap3 ALID list is derived from the publisher-verified
+LDSC source (`w_hm3.snplist.gz`, MD5 `153ecc2bcfa740afafe656e6a384d769`) by
+rsid **and** allele compatibility against the store's Variant Index. rsids
+absent from the Store axis and present-but-allele-incompatible rsids are
+counted, never substituted. Because an absent rsid has no GRCh38 position in
+the release, it cannot appear in the ALID list: the writer's own `absent` count
+is zero while the rsid-level absence is recorded separately under
+`input.hapmap3_resolution`. The build also refuses to guess when a rsid matches
+several allele-compatible Store rows.
+
+**Output files written to `docs/benchmark-output/`:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_267_indexed_subset_benchmark.json` | The full measurement artifact (all fields #267 names) |
+| `opengwasdb_267_indexed_subset_benchmark.qmd` / `.html` | Rendered report, reads the artifact at render time |
+
+**Usage** (run from the repo root, on the machine holding the store):
+
+```bash
+pixi run -e dev python benchmarks/benchmark_indexed_subset.py \
+    --store /data/opengwasdb/stores/OGS-00009/store.opengwasdb \
+    --work /data/opengwasdb/work/267-indexed \
+    --analysis-id ukb-b-17805 \
+    --reps 5 \
+    --output docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.json
+
+cd docs/benchmark-output && pixi run -e report quarto render \
+    opengwasdb_267_indexed_subset_benchmark.qmd
+```
+
+All paths above are the script's built-in defaults. The build runs as a
+subprocess under `/usr/bin/time -v`, so its peak RSS does not include the
+harness's query caches and is bounded by `--band-cells` plus a fixed allowance
+rather than by the full `2,024 x 1,206,903` matrix. `--reuse-copy` reuses an
+existing reflinked copy (and its published subset) instead of refusing to
+overwrite it; the same invocation is also available as
+`pixi run -e dev benchmark-indexed-subset`.
+
+---
+
 ### `benchmark_store_comparison.py`
 
 Compares several Store Releases holding **the same data in different physical

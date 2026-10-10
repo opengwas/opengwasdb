@@ -1121,6 +1121,11 @@ A published group self-describes; validation rejects a group missing any of
 `requested_count`, `resolved_count`, `absent_count`, `builder_version`,
 `created_at` and `order` (`analysis,variant`).
 
+A regenerated `overview.html` lists every published subset from that recorded
+metadata -- name, requested/resolved/absent counts, physical size, input
+checksum, Reference Assembly and build provenance. It presents the group's own
+attributes and is not a second source of truth (§1).
+
 ### Lifecycle
 
 Generation follows ADR 0043's isolation and publication rules at the

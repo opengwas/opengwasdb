@@ -118,6 +118,36 @@ the end of this file.
   Hybrid releases remain explicit selector failures. Spec §10b and §20 record
   the physical contract and validation rules.
 
+- **`overview.html` lists every published Indexed Variant Subset from its own
+  group metadata (ADR 0053, issue #267).** A store that carries
+  `data.zarr/indexed_subsets` gains an **Indexed Subsets** tab (between Rho and
+  the Guide) with one row per published name: statistic profile,
+  requested/resolved/absent counts, physical size, input SHA-256, Reference
+  Assembly, source store/release/format, builder version and creation time. The
+  page reads the recorded attributes and never recomputes a value, so it remains
+  a regenerable presentation rather than a second source of truth; an
+  unreadable or staging group is omitted rather than shown with invented
+  values. `regenerate-overview` picks the tab up with no new flags. Spec §10b
+  records the overview contract.
+
+- **A maintained full-statistic HapMap3 Indexed Variant Subset benchmark and
+  report replace the issue-262 prototype (issue #267).**
+  `benchmarks/benchmark_indexed_subset.py` builds the complete HapMap3 index on
+  OGS-00009 (Z, SE and EAF), measures the full-result indexed read against the
+  ordinary path, and records git commit, UTC measurement time, Store identity,
+  release identity, `format_version`, Store Encoding, the
+  MD5-verified canonical GRCh38 HapMap3 source and the derived ALID list's
+  SHA-256, rsid-level requested/resolved/absent counts, total and per-plane
+  physical bytes, build phase times and peak RSS, first-read/warm-median/p95
+  timings, result counts, ordinary timings before and after index generation,
+  and the exact indexed-vs-ordinary equivalence outcome. It refuses to publish
+  unless every returned field decodes exactly equally. The run measures against
+  a reflinked copy and proves the authoritative release unchanged by comparing
+  its recursive metadata fingerprint and its `manifest.json`/`analyses.tsv`
+  hashes before and after. `docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.qmd`
+  renders the committed artifact. The scratch
+  `benchmarks/prototype_issue_262_hapmap3.py` and its Pixi task are removed.
+
 ### Changed
 
 - **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**

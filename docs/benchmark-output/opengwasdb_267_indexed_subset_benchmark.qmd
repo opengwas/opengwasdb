@@ -1,0 +1,332 @@
+---
+title: "Indexed Variant Subsets on OGS-00009 — HapMap3 full-statistic extraction"
+subtitle: "Rebuilding the issue-262 prototype as a reproducible benchmark · sub-second full-result LDSC extraction with exact decoded equivalence"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+HERE = Path(".")
+b = json.loads((HERE / "opengwasdb_267_indexed_subset_benchmark.json").read_text())
+
+analysis_id = b.get("analysis_id", "ukb-b-17805")
+store = b["store"]
+inp = b["input"]
+res = inp["hapmap3_resolution"]
+storage = b["storage"]
+build = b["build"]
+timings = b["timings"]
+equiv = b["equivalence"]
+targets = b["targets"]
+pub = b["publication"]
+
+
+def md_table(headers, rows):
+    head = "| " + " | ".join(headers) + " |"
+    sep = "|" + "|".join(["---"] * len(headers)) + "|"
+    body = "\n".join("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
+    return f"{head}\n{sep}\n{body}"
+
+
+def bytes_h(n):
+    value = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            return f"{value:,.1f} {unit}" if unit != "B" else f"{int(value):,} B"
+        value /= 1024
+    return f"{n:,} B"
+
+
+def ms(v):
+    return f"{v:,.1f} ms" if v < 1000 else f"{v / 1000:,.2f} s"
+```
+
+::: {.callout-important}
+## Result
+
+```{python}
+#| echo: false
+#| output: asis
+status = "**published**" if pub["published"] else "**REFUSED**"
+print(f"""
+Issue #262 asked whether the ~1.2 million HapMap3 variants in one Analysis could
+be extracted in under a second. On OGS-00009, with a **full-statistic** index
+(Z, SE and EAF — not a Z-only projection), the indexed full result for
+`{analysis_id}` returns in
+**{ms(timings['indexed']['median_ms'])} warm median** ({timings['indexed']['result_count']:,}
+associations), against **{ms(timings['ordinary_before']['median_ms'])}** for the
+ordinary primary-plane path — a
+**{timings['ordinary_before']['median_ms'] / timings['indexed']['median_ms']:.0f}x**
+improvement.
+
+Exact decoded equivalence with the ordinary filtered result is **{equiv['exact']}**;
+publication status: {status}.
+""")
+```
+:::
+
+## Scope
+
+```{python}
+#| echo: false
+#| output: asis
+enc = store["encoding"]
+ver = enc.get("version") if isinstance(enc, dict) else None
+enc_text = ", ".join(
+    f"{name} `{plane.get('kind')}`"
+    for name, plane in sorted(enc.items())
+    if isinstance(plane, dict) and "kind" in plane
+) if isinstance(enc, dict) else str(enc)
+print(md_table(
+    ["Property", "Value"],
+    [
+        ["Store Release", f"{store['store_id']} (`{store['release_id']}`)"],
+        ["Completion state", store["completion_state"]],
+        ["Primary layout", "dense"],
+        ["Analyses", f"{store.get('n_analyses', 0):,}"],
+        ["Variants (Store axis)", f"{store.get('n_variants', 0):,}"],
+        ["Store format version", store["format_version"]],
+        ["Store Encoding", f"{enc_text} (v{ver})"],
+        ["Reference Assembly", store["reference_assembly"]],
+        ["Measured at (UTC)", b["measured_at"]],
+        ["Git commit", f"`{b['commit']}`"],
+        ["opengwasdb fingerprint", f"`{b['opengwasdb_fingerprint'][:16]}…`"],
+    ],
+))
+```
+
+The package version and the Store Release `format_version` are different things
+and move independently.
+
+## Input: the canonical GRCh38 HapMap3 ALID list
+
+The input is the canonical LDSC HapMap3 list
+(`w_hm3.snplist.gz`, MD5 `{python} inp['hapmap3_source_md5']`), resolved against
+OGS-00009's Variant Index by rsid **and** allele compatibility, and written as
+canonical ALIDs. The build's variant-list checksum is the file's own SHA-256, so
+the index records exactly which bytes produced it.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["HapMap3 input", "Count"],
+    [
+        ["rsids requested", f"{res['rsids_requested']:,}"],
+        ["rsids resolved to an allele-compatible Store variant", f"{res['resolved_rsids']:,}"],
+        ["absent from the Store Variant Index", f"{res['absent_from_store_axis']:,}"],
+        ["present but allele-incompatible", f"{res['allele_incompatible']:,}"],
+        ["rsids matching multiple Store rows (aliases)", f"{res['multiple_store_rows']:,}"],
+        ["duplicate canonical ALIDs collapsed", f"{res['duplicate_alids']:,}"],
+        ["resolution time", ms(res["resolution_ms"])],
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Indexed Variant Subset input", "Value"],
+    [
+        ["subset name", "`hm3`"],
+        ["variant-list path", f"`{inp['variant_list_path']}`"],
+        ["variant-list SHA-256", f"`{inp['variant_list_sha256']}`"],
+        ["Reference Assembly", inp["reference_assembly"]],
+        ["requested", f"{inp['requested']:,}"],
+        ["resolved", f"{inp['resolved']:,}"],
+        ["absent", f"{inp['absent']:,}"],
+    ],
+))
+```
+
+An absent HapMap3 rsid has no GRCh38 position in this Store Release, so it cannot
+appear in an ALID list; the writer's own `absent` count is therefore zero while
+the rsid-level absence above is {python} f"{res['absent_from_store_axis']:,}".
+Both are recorded rather than one being presented as the other.
+
+## Storage: measured, not projected
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Storage", "Bytes", "Human"],
+    [
+        ["OGS-00009 baseline (logical)", f"{storage['baseline_logical_bytes']:,}", bytes_h(storage["baseline_logical_bytes"])],
+        ["OGS-00009 baseline (physical)", f"{storage['baseline_physical_bytes']:,}", bytes_h(storage["baseline_physical_bytes"])],
+        ["HapMap3 index (logical)", f"{storage['index_logical_bytes']:,}", bytes_h(storage["index_logical_bytes"])],
+        ["HapMap3 index (physical)", f"{storage['index_physical_bytes']:,}", bytes_h(storage["index_physical_bytes"])],
+        ["Increase over the release (physical)", f"{storage['increase_percent']:.3f}%", ""],
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+planes = storage["planes"]
+plane_rows = sorted(
+    (name, size) for name, size in planes.items() if name != "total"
+)
+print(md_table(
+    ["Index array / entry", "Physical bytes"],
+    [[f"`{name}`", f"{size:,}"] for name, size in plane_rows]
+    + [["**total**", f"**{planes['total']:,}**"]],
+))
+```
+
+```{python}
+#| echo: false
+fig, ax = plt.subplots(figsize=(7.5, 1.8))
+plane_names = [name for name, _ in plane_rows]
+plane_sizes = [size for _, size in plane_rows]
+colors = ["#3b7dd8" if name in ("z", "se", "eaf") else "#b9b9b9" for name in plane_names]
+ax.barh(plane_names, plane_sizes, color=colors)
+ax.set_xlabel("physical bytes (allocated)", fontsize=9)
+ax.tick_params(labelsize=8)
+for spine in ("top", "right"):
+    ax.spines[spine].set_visible(False)
+plt.tight_layout()
+plt.show()
+```
+
+The index is derived, rebuildable data (ADR 0053): deleting it changes no
+association and no Analytical Metadata.
+
+## Build cost and bounded memory
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Build", "Value"],
+    [
+        ["Configured band", f"{build['band_cells']:,} cells"],
+        ["prepare (open release, resolve list)", f"{build['phases']['prepare_seconds']:,.2f} s"],
+        ["publish (write planes + staged validation)", f"{build['phases']['publish_seconds']:,.2f} s"],
+        ["in-process total", f"{build.get('in_process_seconds', 0):,.2f} s"],
+        ["subprocess wall total (incl. interpreter startup)", f"{build['total_seconds']:,.2f} s"],
+        ["peak RSS", f"{build['peak_rss_mb']:,.1f} MB"],
+        ["RSS bound (band + fixed overhead)", f"{build['rss_bound_mb']:,.1f} MB"],
+        ["peak RSS within declared bound", str(build["rss_within_bound"])],
+        ["measurement source", build["peak_rss_source"]],
+        ["build block reused from", build.get("reused_from", "") or "this run"],
+    ],
+))
+```
+
+The bound is `band_cells x {python} 32 bytes` plus a fixed allowance, so it is a
+function of the configured band and not of the full
+`{store.get('n_analyses', 0):,} x {store.get('n_variants', 0):,}` matrix. The
+measured peak is reported as it was measured: where it exceeds the declared
+bound, the target below fails rather than the bound being widened after the
+fact. At
+`{store.get('n_analyses', 0) * store.get('n_variants', 0) / 1e9:.1f}` billion
+cells the decoded matrix is terabytes, so the band bound is what the target is
+about.
+
+## Query latency
+
+```{python}
+#| echo: false
+#| output: asis
+def timing_row(label, t):
+    return [label, ms(t["first_ms"]), ms(t["median_ms"]), ms(t["p95_ms"]), f"{t['result_count']:,}"]
+
+print(md_table(
+    ["Query", "first read", "warm median", "p95", "results"],
+    [
+        timing_row("ordinary, before index", timings["ordinary_before"]),
+        timing_row("**indexed**", timings["indexed"]),
+        timing_row("ordinary, after index", timings["ordinary_after"]),
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Target", "Outcome"],
+    [
+        ["warm median under 1 s", f"{targets['warm_median_under_1s']}"],
+        ["exact decoded equivalence", f"{targets['exact_equivalence']}"],
+        [f"ordinary unchanged within ±{b['ordinary_stability']['noise_envelope_percent']:.0f}% envelope",
+         f"{targets['ordinary_unchanged_within_envelope']} "
+         f"(median moved {b['ordinary_stability']['median_change_percent']:+.2f}%)"],
+        ["authoritative store unchanged", f"{targets['original_store_unchanged']}"],
+    ],
+))
+```
+
+## Caveats and honesty
+
+- **The build and the query timings come from the same measurement campaign,
+  but not the same processes.** The build block is the real full-run build (the
+  index is expensive — {python} f"{build['total_seconds'] / 60:.0f} minutes" —
+  and is reused rather than rebuilt for a timing re-run); the query timings are
+  measured against that published index after the filesystem has settled, so
+  the ordinary before/after comparison is not confounded by the build's
+  writeback. `build.reused_from` names the artifact the build block came from.
+  A fresh default invocation rebuilds and re-measures everything.
+- **The RSS target fails.** The measured peak ({python}
+  f"{build['peak_rss_mb']:,.1f} MB") exceeds the declared
+  band-plus-fixed-overhead bound ({python} f"{build['rss_bound_mb']:,.1f} MB") —
+  the fixed term underestimated Zarr's partial-chunk write working set for the
+  default band. The peak is still set by the band and not by the
+  matrix (the decoded matrix is terabytes). The failure is left in; widening the
+  bound after the fact would be exactly the tuning this harness refuses.
+- The per-plane physical figures bucket the group's top-level entries, so a
+  future encoding that adds an array appears here without a hard-coded plane
+  list.
+
+## Exact equivalence (the publication gate)
+
+Every parallel array of the indexed result must decode exactly to the ordinary
+result filtered to the subset's Store Variant Indices. The harness refuses to
+publish when any field differs.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Field", "Exact"],
+    [[f"`{name}`", str(value)] for name, value in sorted(equiv["fields"].items())]
+    + [["expected rows", f"{equiv['expected_count']:,}"],
+       ["indexed rows", f"{equiv['indexed_count']:,}"],
+       ["**exact**", f"**{equiv['exact']}**"]],
+))
+```
+
+::: {.callout-note}
+## Reproducing this measurement
+
+```bash
+pixi run -e dev python benchmarks/benchmark_indexed_subset.py \
+  --store /data/opengwasdb/stores/OGS-00009/store.opengwasdb \
+  --work /data/opengwasdb/work/267-indexed \
+  --analysis-id ukb-b-17805 \
+  --reps 5 \
+  --output docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.json
+pixi run -e report quarto render \
+  docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.qmd
+```
+
+The harness measures against a reflinked copy and compares the original
+release's recursive metadata fingerprint before and after the run. Re-run the
+harness; never hand-edit a number in the artifact or this page.
+:::

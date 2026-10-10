@@ -1,0 +1,139 @@
+{
+  "commit": "d3ae80f",
+  "measured_at": "2026-10-10T07:21:02.172770+00:00",
+  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/267-indexed-benchmark/opengwasdb",
+  "opengwasdb_fingerprint": "0b8c151dc3b9f164b7fce0c0472d12d3908bb5a1259789af60c6de7bb9d6ebea",
+  "store": {
+    "path": "/data/opengwasdb/work/267-indexed/store-copy.opengwasdb",
+    "store_id": "OGS-00009",
+    "release_id": "OGS-00009",
+    "format_version": "0.1.0",
+    "reference_assembly": "GRCh38",
+    "completion_state": "observed_only",
+    "n_analyses": 2024,
+    "n_variants": 9847701,
+    "encoding": {
+      "eaf": {
+        "kind": "int8_residual",
+        "residual_range": 0.5
+      },
+      "se": {
+        "kind": "int8_residual",
+        "residual_range": 0.5
+      },
+      "version": 3,
+      "z": {
+        "kind": "int16_fixed",
+        "scale": 1024
+      }
+    }
+  },
+  "input": {
+    "variant_list_path": "/data/opengwasdb/work/267-indexed/hm3.grch38.alid.txt",
+    "variant_list_sha256": "4a7c82aa625a006ff437dcaa2769b00e056413d54c72e98f7378327c69513398",
+    "hapmap3_source_path": "/data/opengwasdb/work/262-hapmap3-prototype/w_hm3.snplist.gz",
+    "hapmap3_source_md5": "153ecc2bcfa740afafe656e6a384d769",
+    "reference_assembly": "GRCh38",
+    "requested": 1206903,
+    "resolved": 1206903,
+    "absent": 0,
+    "hapmap3_resolution": {
+      "rsids_requested": 1217311,
+      "resolved_rsids": 1206903,
+      "absent_from_store_axis": 10385,
+      "allele_incompatible": 23,
+      "multiple_store_rows": 2743,
+      "duplicate_alids": 0,
+      "resolution_ms": 3750.222
+    }
+  },
+  "storage": {
+    "baseline_logical_bytes": 34680981363,
+    "baseline_physical_bytes": 34926288896,
+    "index_physical_bytes": 6234992640,
+    "index_logical_bytes": 5943821227,
+    "increase_percent": 17.852,
+    "planes": {
+      ".zgroup": 4096,
+      ".zattrs": 4096,
+      "variant_index": 1294336,
+      "z": 4360564736,
+      "se": 1158279168,
+      "eaf": 710676480,
+      "z_overflow_index": 12288,
+      "z_overflow_value": 12288,
+      "eaf_baseline": 4009984,
+      "eaf_exception_index": 12288,
+      "eaf_exception_value": 12288,
+      "se_coefficients": 24576,
+      "se_exception_index": 45056,
+      "se_exception_value": 36864,
+      "total": 6234992640
+    }
+  },
+  "build": {
+    "total_seconds": 4690.0,
+    "in_process_seconds": 4688.245,
+    "peak_rss_mb": 1237.5,
+    "band_cells": 4000000,
+    "rss_bound_mb": 1146.1,
+    "rss_within_bound": false,
+    "phases": {
+      "prepare_seconds": 8.611,
+      "publish_seconds": 4679.634
+    },
+    "peak_rss_source": "/usr/bin/time -v (build subprocess)",
+    "reused_from": "/data/opengwasdb/work/267-indexed/artifact-build-run.json"
+  },
+  "timings": {
+    "ordinary_before": {
+      "first_ms": 20923.595,
+      "median_ms": 16040.029,
+      "p95_ms": 16441.169,
+      "repetitions": 5,
+      "result_count": 7578651
+    },
+    "ordinary_after": {
+      "first_ms": 16303.946,
+      "median_ms": 16919.181,
+      "p95_ms": 19559.413,
+      "repetitions": 5,
+      "result_count": 7578651
+    },
+    "indexed": {
+      "first_ms": 331.919,
+      "median_ms": 337.373,
+      "p95_ms": 345.897,
+      "repetitions": 5,
+      "result_count": 1178549
+    }
+  },
+  "equivalence": {
+    "exact": true,
+    "fields": {
+      "analysis_index": true,
+      "association_status": true,
+      "eaf": true,
+      "se": true,
+      "variant_index": true,
+      "z": true
+    },
+    "expected_count": 1178549,
+    "indexed_count": 1178549
+  },
+  "targets": {
+    "warm_median_under_1s": true,
+    "exact_equivalence": true,
+    "ordinary_unchanged_within_envelope": true,
+    "original_store_unchanged": true
+  },
+  "publication": {
+    "published": true,
+    "reason": ""
+  },
+  "ordinary_stability": {
+    "median_change_percent": 5.481,
+    "noise_envelope_percent": 25.0,
+    "within_envelope": true
+  }
+}

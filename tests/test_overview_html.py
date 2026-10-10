@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from opengwasdb.build.observed import build_dense_observed_from_sources
+from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.rho import build_dense_rho
 from opengwasdb.model.analyses import AnalysesTable, read_analyses
@@ -405,3 +407,143 @@ def test_rho_tab_heatmap_caps_at_300_traits(tmp_path):
     assert len(payload["labels"]) == 300
     assert len(payload["rho"]) == 300 * 300
     assert "300 Analyses by |rho|" in section
+
+
+# ── Indexed Variant Subsets tab (issue #267, ADR 0053) ──────────────────────
+
+
+def _indexed_subset_variant_list(tmp_path: Path) -> Path:
+    """Three canonical ALIDs: two in the fixture store, one absent."""
+    path = tmp_path / "hm3.alid.txt"
+    path.write_text("1:100:A:G\n1:200:A:G\n1:999999:A:G\n", encoding="utf-8")
+    return path
+
+
+def _build_indexed_subset_store(
+    tmp_path: Path, *, subset_name: str = "hm3", n_variants: int = 20
+) -> Path:
+    """A small real Dense store carrying one published Indexed Variant Subset."""
+    rows = []
+    for a in range(2):
+        for v in range(n_variants):
+            pos = (v + 1) * 100
+            rows.append(
+                f"a{a}\tp{a}\tTrait {a}\tTrait {a} primary\t1\t{pos}\tA\tG\t"
+                f"{1.0 + 0.1 * a + 0.01 * v:.5f}\t1.0\trs{v}\tsd"
+            )
+    source = tmp_path / "idx_source.tsv"
+    source.write_text(_RHO_SOURCE_HEADER + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    store = tmp_path / f"{subset_name}-store.opengwasdb"
+    build_dense_observed_from_sources(
+        [source],
+        store,
+        store_id="idx-fixture",
+        release_id="idx-v1",
+        reference_assembly="GRCh38",
+    )
+    build_indexed_subset(
+        store,
+        subset_name,
+        _indexed_subset_variant_list(tmp_path),
+        reference_assembly="GRCh38",
+    )
+    return store
+
+
+def _indexed_subsets_section(content: str) -> str:
+    return content.split('id="tab-indexed-subsets"')[1].split('id="tab-guide"')[0]
+
+
+def test_overview_html_omits_indexed_subsets_tab_without_namespace(tmp_path):
+    _write_manifest(tmp_path)
+    content = write_overview_html(tmp_path, _table()).read_text(encoding="utf-8")
+
+    assert "Indexed Subsets" not in content
+    assert 'id="tab-indexed-subsets"' not in content
+
+
+def test_overview_html_lists_indexed_subsets_from_group_metadata(tmp_path):
+    store = _build_indexed_subset_store(tmp_path)
+    table = read_analyses(store / "analyses.tsv")
+    content = write_overview_html(store, table).read_text(encoding="utf-8")
+    section = _indexed_subsets_section(content)
+
+    assert '<button data-tab="indexed-subsets">Indexed Subsets</button>' in content
+    # The tab sits between Rho (absent here) and Guide, and never replaces it.
+    assert content.index('data-tab="indexed-subsets"') < content.index('data-tab="guide"')
+    # Name and the requested/resolved/absent counts the writer recorded.
+    assert ">hm3<" in section
+    assert ">3<" in section  # requested
+    assert ">2<" in section  # resolved
+    assert ">1<" in section  # absent
+    # Physical size is a measurement, not a placeholder.
+    assert "Physical bytes" in section
+    assert "0 B" not in section
+
+
+def test_indexed_subsets_tab_reports_checksum_assembly_and_provenance(tmp_path):
+    store = _build_indexed_subset_store(tmp_path)
+    table = read_analyses(store / "analyses.tsv")
+    content = write_overview_html(store, table).read_text(encoding="utf-8")
+    section = _indexed_subsets_section(content)
+
+    checksum = hashlib.sha256(_indexed_subset_variant_list(tmp_path).read_bytes()).hexdigest()
+    assert checksum in section
+    assert ">hg38<" in section  # normalised Reference Assembly the group records
+    assert "idx-fixture" in section  # source store id
+    assert "idx-v1" in section  # source release id
+    assert "full_statistic" in section  # statistic profile
+
+
+def test_indexed_subsets_tab_lists_every_published_name(tmp_path):
+    store = _build_indexed_subset_store(tmp_path, subset_name="hm3")
+    build_indexed_subset(
+        store,
+        "panel",
+        _indexed_subset_variant_list(tmp_path),
+        reference_assembly="GRCh38",
+    )
+    table = read_analyses(store / "analyses.tsv")
+    content = write_overview_html(store, table).read_text(encoding="utf-8")
+    section = _indexed_subsets_section(content)
+
+    assert ">hm3<" in section
+    assert ">panel<" in section
+
+
+def test_indexed_subsets_tab_skips_unreadable_group_without_crashing(tmp_path):
+    store = _build_indexed_subset_store(tmp_path)
+    damaged = store / "data.zarr" / "indexed_subsets" / "broken"
+    damaged.mkdir()
+    (damaged / "zarr.json").write_text("not json", encoding="utf-8")
+    table = read_analyses(store / "analyses.tsv")
+
+    content = write_overview_html(store, table).read_text(encoding="utf-8")
+    section = _indexed_subsets_section(content)
+
+    assert ">hm3<" in section
+    assert ">broken<" not in section
+
+
+def test_indexed_subsets_physical_size_matches_du(tmp_path):
+    """The reported physical size is allocated bytes, directories included.
+
+    `du -s -B1` is the definition callers compare against; a files-only sum
+    silently omits the directory blocks a many-chunk index carries.
+    """
+    import subprocess
+
+    from opengwasdb.layouts.dense.overview import _physical_bytes
+
+    (tmp_path / "z").mkdir()
+    (tmp_path / "z" / "chunk").write_bytes(b"x" * 10)
+    du = int(
+        subprocess.run(
+            ["du", "-s", "--block-size=1", str(tmp_path)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()[0]
+    )
+
+    assert _physical_bytes(tmp_path) == du
