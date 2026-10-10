@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -246,11 +247,13 @@ def _probe(
         totals: list[float] = []
         phases: dict[str, list[float]] = {"dense": [], "overflow_match": [], "overflow_read": []}
         waits: list[float] = []
+        loads: list[float] = []
         result: dict[str, np.ndarray] = {}
         with RssSampler() as sampler:
             for _ in range(reps):
                 waited, gave_up = wait_for_quiet(max_load)
                 waits.append(round(waited, 1))
+                loads.append(round(os.getloadavg()[0], 2))
                 if gave_up:
                     raise SystemExit(f"{store}:{shape}: load gate gave up before a repetition")
                 _timer.reset()
@@ -278,6 +281,7 @@ def _probe(
         "digest": _content_digest(result) if result else "",
         "reps": reps,
         "waits_s": waits,
+        "loads": loads,
         "elapsed_s": round(total, 4),
         "dense_s": round(dense, 4),
         "overflow_match_s": round(overflow_match, 4),

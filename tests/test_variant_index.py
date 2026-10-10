@@ -756,6 +756,105 @@ def test_windowed_exception_table_bounds_the_number_of_zarr_reads(
     assert reads <= 60, f"scattered lookup issued {reads} zarr reads for {len(wanted)} positions"
 
 
+def test_peak_rss_reports_a_high_water_mark_not_the_current_rss() -> None:
+    """`_peak_rss_bytes` reports a peak, not the RSS left after the build.
+
+    #252 review round 4, finding 1: a `statm` sample taken once the build
+    returned reported the process's ~27 MB baseline for a 9.9 GiB build.  This
+    allocates 512 MB, frees it, and requires the reported peak to still hold
+    the allocation -- which a current-RSS read cannot.
+    """
+    import gc
+
+    from opengwasdb.layouts.ragged.by_variant import _peak_rss_bytes
+
+    allocation = 512 * 1024 * 1024  # 512 MB: a twentieth of OGS-00011's 9.9 GiB build
+    block = np.ones(allocation // 8, dtype=np.float64)  # 8 bytes per element
+    assert block.nbytes == allocation
+    del block
+    gc.collect()
+    peak = _peak_rss_bytes()
+    assert peak >= allocation, (
+        f"the reported peak ({peak} bytes) is below a {allocation}-byte allocation "
+        "this process made and then freed; that is the current RSS, not a peak"
+    )
+
+
+def test_windowed_exception_table_scans_a_sparse_scatter_chunk_by_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A window holding few positions is not read whole.
+
+    #252 review round 4, finding 2: production windows hold 40 chunks (~96 MB),
+    so five scattered cells paid five whole windows.  This uses the production
+    window shape and five positions and bounds the cells read to a small
+    multiple of `positions x chunk x 2`, which the always-batch scan cannot
+    meet (it reads a whole window per touched window).
+    """
+    from opengwasdb.encoding.codec import WindowedExactTable
+
+    total, chunk, window_chunks = 32768, 64, 40  # 512 chunks; production window = 40
+    monkeypatch.setattr(WindowedExactTable, "scan_window_entries", chunk * window_chunks)
+    index = np.arange(total, dtype=np.int64) * 3
+    value = np.linspace(0.0, 1.0, total).astype(np.float32)
+    counter = _CellCounter()
+    with _windowed_table(index, value, chunk, counter) as table:
+        wanted = np.array(
+            [index[i] for i in (0, total // 5, 2 * total // 5, 3 * total // 5, total - 1)],
+            dtype=np.int64,
+        )
+        assert len(wanted) == 5
+        first = counter.cells
+        got = table.lookup(wanted)
+        read = counter.cells - first
+        np.testing.assert_allclose(got, value[np.searchsorted(index, wanted)])
+    bound = 8 * len(wanted) * chunk * 2
+    assert read <= bound, (
+        f"a 5-position sparse scatter read {read} cells; reading one chunk per "
+        f"position is about {len(wanted) * chunk * 2} and the bound is {bound}"
+    )
+
+
+def test_windowed_exception_table_scan_terminates_with_an_unaligned_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unaligned scan window must not spin.
+
+    #252 review round 4, finding 3: with `chunk = 7` and `window = 10` a chunk
+    straddling a window's end (chunk 7 holds entry 55; the window ends at 50)
+    left `j == i` and the loop never advanced -- the reviewer's fuzz hung for
+    ten minutes.  The alarm turns that hang into a failure.
+    """
+    import signal
+
+    from opengwasdb.encoding.codec import WindowedExactTable
+
+    total, chunk = 32768, 7  # 4,682 chunks; 10 % 7 != 0, so the window is unaligned
+    monkeypatch.setattr(WindowedExactTable, "scan_window_entries", 10)
+    index = np.arange(total, dtype=np.int64) * 3
+    value = np.linspace(0.0, 1.0, total).astype(np.float32)
+    counter = _CellCounter()
+
+    def _alarm(_signum: int, _frame: object) -> None:
+        raise TimeoutError("the scattered scan did not make progress")
+
+    with _windowed_table(index, value, chunk, counter) as table:
+        # Entry 55 is in chunk 7, which starts at 49 and so straddles a
+        # 10-entry window ending at 50 -- the exact geometry that hung.
+        wanted = np.array(
+            [index[i] for i in (55, 7 * 100 + 6, 1000, 5000, total - 1)],
+            dtype=np.int64,
+        )
+        previous = signal.signal(signal.SIGALRM, _alarm)
+        signal.setitimer(signal.ITIMER_REAL, 20.0)
+        try:
+            got = table.lookup(wanted)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0.0)
+            signal.signal(signal.SIGALRM, previous)
+        np.testing.assert_allclose(got, value[np.searchsorted(index, wanted)])
+
+
 def test_augment_recovers_a_leftover_building_group(tmp_path: Path) -> None:
     """A process killed during the build leaves `.building`, which is dropped."""
     store = _build_ssf_store(tmp_path / "aug-building", store_id="aug", write_variant_index=False)

@@ -231,6 +231,10 @@ def test_ragged_variant_shapes_match_the_analysis_side(
     """
     store = ragged_residual_scanned if scanned else ragged_residual.completed
     with query_store(store) as query:
+        assert (query._by_variant is None) is scanned, (
+            "the scanned fixture must carry no index handle, or the oracle is the "
+            "index route twice (review round 4, nit)"
+        )
         analysis_ids = [
             str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())
         ]
@@ -294,6 +298,10 @@ def test_hybrid_off_panel_shapes_match_the_overflow_side(
     """Off-panel phewas, range_phewas and lookup equal the Overflow-side decode."""
     store = hybrid_residual_scanned if scanned else hybrid_residual
     with query_store(store) as query:
+        assert (query._by_variant is None) is scanned, (
+            "the scanned fixture must carry no index handle, or the oracle is the "
+            "index route twice (review round 4, nit)"
+        )
         columns = list(range(query._csr.n_analyses))
         analysis_ids = [
             str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())

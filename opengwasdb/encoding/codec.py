@@ -252,6 +252,9 @@ class WindowedExactTable(SparseExactTable):
     process never holds the whole table and a query's table read is O(cells in
     the answer).  The bisect costs O(log(E / chunk)) inner-chunk reads -- about
     10 chunk reads of 200,000 int64 for OGS-00011's 180,396,687-entry table.
+    A clustered set is then read as one span; a scattered set is scanned in
+    multi-chunk windows, each read whole when it holds enough positions and
+    chunk by chunk when it holds few (review round 4, finding 2).
     """
 
     index_zarr: Any = None
@@ -261,6 +264,12 @@ class WindowedExactTable(SparseExactTable):
     #: matched with one vectorised `searchsorted`.  About 96 MB per window for
     #: an int64 index plus a float32 value (review round 3, finding 1).
     scan_window_entries: ClassVar[int] = 8_000_000
+    #: Positions a scan window must hold to be worth reading whole.  A chunk's
+    #: index plus value costs about 12 ms and a window about 95-100 ms, so the
+    #: two strategies break even near ten positions; below this, each distinct
+    #: chunk is read on its own and a sparse set does not pay the window
+    #: (review round 4, finding 2).
+    dense_window_positions: ClassVar[int] = 12
     #: The first and last element of each chunk a lookup has read or bisected
     #: through.  Cached per table for the process's life: a second lookup over
     #: the same table reuses them instead of re-reading the chunks
@@ -337,17 +346,24 @@ class WindowedExactTable(SparseExactTable):
         total: int,
         chunk: int,
     ) -> None:
-        """Match sorted positions against the table in multi-chunk windows.
+        """Match sorted positions against the table, by density.
 
-        A window of `scan_window_entries` entries is read in **one** zarr call
-        and the positions falling in it are matched with one vectorised
-        `searchsorted`; the next position's window is found by bisect.  A
-        scattered lookup therefore costs O(span / window) zarr reads rather
-        than one read per inner chunk, which is what a Dense column's ~1 M
-        exception cells over a 165 M-entry table paid (review round 3,
-        finding 1).  Peak memory is one window plus the positions.
+        A window is a whole number of chunks.  If it holds at least
+        `dense_window_positions` of the lookup's positions -- a Dense column,
+        or any clustered set -- it is read in **one** zarr call and matched
+        with one vectorised `searchsorted`, so a Dense column's ~1 M exception
+        cells over a 165 M-entry table cost O(span / window) reads rather than
+        one read per inner chunk (review round 3, finding 1).  A window
+        holding fewer positions is not read: each distinct chunk under it is
+        read on its own, so a **sparse** scattered set costs one chunk per
+        position and not a ~96 MB window per cell (review round 4, finding 2).
+        Peak memory is one window plus the positions.
         """
         window = max(int(self.scan_window_entries), chunk)
+        # A window must be a whole number of chunks: a chunk straddling a
+        # partial window's end could hold a target beyond it, and the loop
+        # would not advance (review round 4, finding 3).
+        window -= window % chunk
         i = 0
         n = len(sorted_positions)
         while i < n:
@@ -356,21 +372,89 @@ class WindowedExactTable(SparseExactTable):
                 break
             start = (chunk_index * chunk // window) * window
             stop = min(start + window, total)
-            block_index = np.asarray(self.index_zarr[start:stop], dtype=np.int64)
-            block_value = np.asarray(self.value_zarr[start:stop], dtype=np.float32)
-            high = int(block_index[-1])
-            j = i
-            while j < n and int(sorted_positions[j]) <= high:
-                j += 1
-            segment = sorted_positions[i:j]
-            slot = np.searchsorted(block_index, segment)
-            in_bounds = slot < len(block_index)
-            hit = np.zeros(len(segment), dtype=bool)
-            hit[in_bounds] = block_index[slot[in_bounds]] == segment[in_bounds]
-            matched = order[i:j][hit]
-            out[matched] = block_value[slot[hit]]
-            found[matched] = True
+            j = self._window_end(sorted_positions, i, stop, total, chunk)
+            if j == i:
+                raise RuntimeError(
+                    f"the scattered scan made no progress at position "
+                    f"{int(sorted_positions[i])} (window of {window} entries, "
+                    f"chunk of {chunk}); the window does not cover its own "
+                    f"first position"
+                )
+            if j - i >= self.dense_window_positions:
+                self._read_window(
+                    start, stop, sorted_positions[i:j], order[i:j], out, found
+                )
+            else:
+                self._match_chunks(
+                    sorted_positions[i:j], order[i:j], out, found, total, chunk
+                )
             i = j
+
+    def _window_end(
+        self,
+        sorted_positions: np.ndarray,
+        i: int,
+        stop: int,
+        total: int,
+        chunk: int,
+    ) -> int:
+        """One past the last position the window ending at `stop` covers."""
+        high = self._chunk_edge((stop - 1) // chunk, total, chunk, first=False)
+        return i + int(np.searchsorted(sorted_positions[i:], high, side="right"))
+
+    def _read_window(
+        self,
+        start: int,
+        stop: int,
+        segment: np.ndarray,
+        segment_order: np.ndarray,
+        out: np.ndarray,
+        found: np.ndarray,
+    ) -> None:
+        """Read a dense window's index and value, then match the segment."""
+        block_index = np.asarray(self.index_zarr[start:stop], dtype=np.int64)
+        block_value = np.asarray(self.value_zarr[start:stop], dtype=np.float32)
+        self._match_block(block_index, block_value, segment, segment_order, out, found)
+
+    @staticmethod
+    def _match_block(
+        block_index: np.ndarray,
+        block_value: np.ndarray,
+        segment: np.ndarray,
+        segment_order: np.ndarray,
+        out: np.ndarray,
+        found: np.ndarray,
+    ) -> None:
+        """One `searchsorted` over a read window's entries."""
+        slot = np.searchsorted(block_index, segment)
+        in_bounds = slot < len(block_index)
+        hit = np.zeros(len(segment), dtype=bool)
+        hit[in_bounds] = block_index[slot[in_bounds]] == segment[in_bounds]
+        matched = segment_order[hit]
+        out[matched] = block_value[slot[hit]]
+        found[matched] = True
+
+    def _match_chunks(
+        self,
+        segment: np.ndarray,
+        segment_order: np.ndarray,
+        out: np.ndarray,
+        found: np.ndarray,
+        total: int,
+        chunk: int,
+    ) -> None:
+        """Read each distinct chunk a sparse segment falls in, once."""
+        blocks: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        for k, target in enumerate(segment):
+            target = int(target)
+            chunk_index = self._chunk_after(target, strict=False)[0]
+            if chunk_index not in blocks:
+                blocks[chunk_index] = self._chunk(chunk_index, total, chunk)
+            block_index, block_value = blocks[chunk_index]
+            slot = int(np.searchsorted(block_index, target, side="left"))
+            if slot < len(block_index) and int(block_index[slot]) == target:
+                out[segment_order[k]] = block_value[slot]
+                found[segment_order[k]] = True
 
     def _first_ge(self, target: int) -> int:
         """Table-entry index of the first entry `>= target` (an element index)."""
@@ -419,8 +503,9 @@ class WindowedExactTable(SparseExactTable):
         lookup the code used before the table was windowed (review round 2,
         finding 3's regression).  A **scattered** set, where the entries between
         the first and last position would be far more than the positions
-        themselves, is scanned chunk by chunk instead, so it reads at most one
-        chunk per position rather than the whole span.
+        themselves, is scanned window by window: a window holding enough of the
+        positions is read whole, a sparser window reads only the distinct
+        chunks its positions fall in (review round 4, finding 2).
         """
         positions = np.asarray(positions, dtype=np.int64)
         if len(positions) == 0:

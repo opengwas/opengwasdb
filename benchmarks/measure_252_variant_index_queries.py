@@ -4,7 +4,7 @@
 Three measurements on one indexed store, for the round-2 review:
 
 * **open** -- `query_store` time and the reader's own cost, with the process's
-  `maxrss`;
+  `launcher_maxrss_gib` (the launcher-inherited figure, kept labelled);
 * **cold** -- a fresh process's first off-axis PheWAS, from process start
   (open included): the number the ADR must quote, since the query optimises
   nothing before it;
@@ -40,7 +40,13 @@ from opengwasdb.query import query_store
 _PROCESS_START = time.perf_counter()
 
 
-def _maxrss_gib() -> float:
+def _launcher_maxrss_gib() -> float:
+    """`ru_maxrss`, which under `pixi run` starts near 2 GiB from the launcher.
+
+    Kept, explicitly labelled, only so the difference from
+    `cold_sampled_rss_mb` (this process's own RSS) is visible; a build's peak
+    is `VmHWM` (review round 3, finding 2; round 4, nit).
+    """
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0 / 1024.0
 
 
@@ -104,7 +110,8 @@ def measure(store: Path, reps: int, scattered_cells: int) -> dict:
             }
     finally:
         query.close()
-    out["maxrss_gib"] = round(_maxrss_gib(), 3)
+    out["launcher_maxrss_gib"] = round(_launcher_maxrss_gib(), 3)
+    out.pop("maxrss_gib", None)
     return out
 
 

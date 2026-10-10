@@ -59,9 +59,11 @@ the end of this file.
   entries a decode needs: a **clustered** run of cells (a decode block, or one
   Analysis's contiguous range) is read as one span with a single
   `searchsorted`, and a **scattered** set (a dense column's cells, `lookup`
-  hits, the unindexed scan) is read in multi-million-entry windows, one zarr
-  read each, with a vectorised `searchsorted` per window. Opening an indexed
-  store falls from about 6 s to 0.24 s, and a fresh process's first off-axis
+  hits, the unindexed scan) is scanned in multi-chunk windows: a window is read
+  whole with a vectorised `searchsorted` when it holds at least about 12 of the
+  set's positions, and chunk by chunk when it holds fewer, so a sparse set never
+  pays a whole ~96 MB window. Opening an indexed
+  store falls from about 2 s (the base, eager tables) to 0.4 s, and a fresh process's first off-axis
   PheWAS pays tens of milliseconds rather than a whole-table read. `patch()`,
   which rewrites one plane's cells and its table in place, previously merged the
   patched entries with the codec's **empty** in-memory view and rewrote the

@@ -29,7 +29,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import resource
 import shutil
 import time
 from dataclasses import dataclass
@@ -115,17 +114,22 @@ class VariantIndexResult:
 
 
 def _peak_rss_bytes() -> int:
-    """This process's **current** RSS, in bytes.
+    """This process's **peak** RSS, in bytes.
 
-    `ru_maxrss` is a lifetime high-water mark and, under `pixi run`, starts at
-    about 2 GiB inherited from the launcher before this process does anything,
-    so it over-reports a build by about that much (review round 3, finding 2).
-    `/proc/self/statm`'s resident pages are this process's own memory; the
-    caller is the build, so a sample after it is the build's footprint.
+    `VmHWM` is the process's own high-water mark: unlike `ru_maxrss` it does not
+    inherit the ~2 GiB a `pixi run` launcher hands a Python process, and unlike
+    a `statm` sample after the build it is not the *current* RSS -- the build's
+    arrays have been freed by the time the result is assembled, so a current
+    sample under-reports a 9.9 GiB build as the process's baseline (review
+    round 4, finding 1).
     """
-    with open("/proc/self/statm") as handle:
-        resident_pages = int(handle.read().split()[1])
-    return resident_pages * resource.getpagesize()
+    with open("/proc/self/status") as handle:
+        for line in handle:
+            if line.startswith("VmHWM:"):
+                return int(line.split()[1]) * 1024
+    raise RuntimeError(
+        "VmHWM is not in /proc/self/status; the build's peak RSS cannot be reported"
+    )
 
 
 def _directory_bytes(path: Path) -> int:

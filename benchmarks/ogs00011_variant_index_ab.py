@@ -38,18 +38,24 @@ _REPO = Path(__file__).resolve().parent.parent
 #: their scan and index answers must be equal *and* their cost unchanged.
 _INDEX_SHAPES = frozenset({"phewas_off_axis", "regional"})
 
+#: The controls whose eager-tables arm is run: the bulk shapes are the ones a
+#: windowed-versus-eager slowdown can hide in (review round 4, finding 5).
+_EAGER_SHAPES = frozenset({"bulk", "bulk_dense_exceptions", "bulk_overflow_heavy"})
+
 #: The index group, relative to the release directory.
 _INDEX_REL = Path("data.zarr") / "ragged" / "by_variant"
 _HIDDEN_REL = Path("data.zarr") / "ragged" / "by_variant.scan-ab-hidden"
 
 
-def _probe(store: Path, shape: str, limit: float, max_load: float, *, warm: bool) -> dict:
+def _probe(
+    store: Path, shape: str, limit: float, max_load: float, *, warm: bool, eager: bool = False
+) -> dict:
     """Run one shape in a **fresh interpreter** (clean peak RSS) with a load gate.
 
     A fresh process is what makes the two sides' RSS comparable: run in one
     process, the second side's sampler carries the first side's resident memory.
     `ogs00011_ab --one-shape` is the committed probe, here with the load gate it
-    records in `gate_waited_s`.
+    records in `gate_waited_s`.  `eager=True` adds the eager-tables arm.
     """
     argv = [
         sys.executable,
@@ -67,6 +73,8 @@ def _probe(store: Path, shape: str, limit: float, max_load: float, *, warm: bool
     ]
     if warm:
         argv.append("--warm-index")
+    if eager:
+        argv.append("--eager-tables")
     env = dict(os.environ)
     env["PYTHONPATH"] = str(_REPO) + os.pathsep + env.get("PYTHONPATH", "")
     out = subprocess.run(argv, cwd=str(_REPO), env=env, capture_output=True, text=True)
@@ -102,13 +110,16 @@ def measure(
         warm = shape in _INDEX_SHAPES
         scans: list[dict] = []
         indexeds: list[dict] = []
+        eagers: list[dict] = []
         for _ in range(reps):
             with _index_hidden(store):
                 scans.append(_probe(store, shape, limit, max_load, warm=False))
             indexeds.append(_probe(store, shape, limit, max_load, warm=warm))
+            if shape in _EAGER_SHAPES:
+                eagers.append(_probe(store, shape, limit, max_load, warm=warm, eager=True))
         scan = _best(scans)
         indexed = _best(indexeds)
-        for side in (*scans, *indexeds):
+        for side in (*scans, *indexeds, *eagers):
             if side.get("timed_out"):
                 raise SystemExit(
                     f"{shape}: hit the {limit}s limit; a timed-out run is not evidence"
@@ -117,6 +128,10 @@ def measure(
             raise SystemExit(
                 f"{shape}: scan {scan.get('result_count')} rows/{scan.get('sha256')} "
                 f"!= index {indexed.get('result_count')} rows/{indexed.get('sha256')}"
+            )
+        if eagers and eagers[0].get("sha256") != indexed.get("sha256"):
+            raise SystemExit(
+                f"{shape}: eager {eagers[0].get('sha256')} != index {indexed.get('sha256')}"
             )
         out[shape] = {
             "scanned": scan,
@@ -128,10 +143,24 @@ def measure(
             "scanned_waits_s": [s.get("gate_waited_s") for s in scans],
             "indexed_waits_s": [s.get("gate_waited_s") for s in indexeds],
         }
+        if eagers:
+            out[shape].update(
+                {
+                    "eager": _best(eagers),
+                    "eager_reps": [s["elapsed_ms"] for s in eagers],
+                    "eager_loads": [s["load_start"][0] for s in eagers],
+                }
+            )
         print(
             f"{shape}: scan {scan['elapsed_ms']:.1f} ms ({scan['peak_mb'] / 1024:.2f} GiB) "
             f"-> index {indexed['elapsed_ms']:.1f} ms ({indexed['peak_mb'] / 1024:.2f} GiB) "
-            f"rows {indexed.get('result_count')} (median of {reps})",
+            f"rows {indexed.get('result_count')} (median of {reps})"
+            + (
+                f"; eager {out[shape]['eager']['elapsed_ms']:.1f} ms "
+                f"({out[shape]['eager']['peak_mb'] / 1024:.2f} GiB)"
+                if eagers
+                else ""
+            ),
             flush=True,
         )
     return out

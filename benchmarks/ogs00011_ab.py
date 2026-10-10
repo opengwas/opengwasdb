@@ -321,8 +321,24 @@ def measure_one_shape(
     return record
 
 
+def _open_eager_tables() -> None:
+    """Make the exception/overflow tables eager (`read`) instead of windowed (`open`).
+
+    The named bulk controls compare two **windowed** arms, so a
+    windowed-versus-eager slowdown cancels in them and they cannot detect the
+    regression they were added for.  This restores 144f335's behaviour so the
+    windowed arm can be compared against it directly (review round 4,
+    finding 5).
+    """
+    from opengwasdb.encoding import SparseExactTable
+
+    SparseExactTable.open = classmethod(lambda cls, group: cls.read(group))
+
+
 def _one_shape(args: argparse.Namespace) -> None:
     """Run one shape once with an alarm and an RSS sampler; print one JSON line."""
+    if getattr(args, "eager_tables", False):
+        _open_eager_tables()
     gate = None
     max_load = getattr(args, "max_start_load", 0.0) or 0.0
     if max_load > 0:
@@ -562,6 +578,12 @@ def main() -> None:
     ap.add_argument("--identity", action="store_true")
     ap.add_argument("--output", type=Path)
     ap.add_argument("--one-shape", dest="one_shape", action="store_true")
+    ap.add_argument(
+        "--eager-tables",
+        dest="eager_tables",
+        action="store_true",
+        help="read exception/overflow tables eagerly (144f335's behaviour)",
+    )
     ap.add_argument("--one-identity", dest="one_identity", action="store_true")
     ap.add_argument(
         "--max-start-load",

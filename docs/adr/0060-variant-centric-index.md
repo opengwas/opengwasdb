@@ -272,53 +272,67 @@ compared in canonical row order). The run's gate is recorded in the artifact as
 | PheWAS, on-axis variant (Dense) | 136.7 ms | 135.3 ms | control |
 | region × one Analysis | 10,500.2 ms | 9,501.7 ms | control |
 | top hits | 84.4 ms | 49.6 ms | control |
-| random lookup, 10×100 | 1,819.4 ms | 2,815.9 ms | control |
-| random lookup, 100×10 | 539.4 ms | 730.9 ms | control |
-| bulk, largest Overflow | 30,825.5 ms | 29,974.6 ms | control (inconclusive) |
+| random lookup, 10×100 | 1,819.4 ms | 2,815.9 ms | control (noise) |
+| random lookup, 100×10 | 539.4 ms | 730.9 ms | control (noise) |
+| bulk, largest Overflow | 30,825.5 ms | 29,974.6 ms | control (ruling closed) |
+
+The two random-lookup rows print a difference -- 10×100: 1,819.4 → 2,815.9 ms;
+100×10: 539.4 → 730.9 ms -- that is repetition noise, not the index: in-process
+and interleaved at HEAD, 100×10 is 0.53 s with the index handle and 0.52 s
+without, and the scaling artifact's `lookup_50_analyses` is 1.97 s against
+1.96 s. The repetitions of every row overlap across the arms (the gate-6 run's
+`bulk` scan reps were 11.6-15.3 s and its index reps 11.0-12.6 s), so a row
+should be read as its min and max, not as a point.
 
 The largest-Overflow bulk shape regressed to 70.6 s when the exception tables
 became windowed: its Dense column has ~979,467 exception cells scattered across
 a 165.7 M-entry table, and the per-chunk scan paid one zarr read per chunk per
-call (6-9 s). The scattered path now reads **multi-million-entry windows**, one
-zarr call each, with a vectorised `searchsorted` per window, so the lookup is
-2-2.5 s. At the quiet load-3 baseline it was 26.8 s / 29.2 s; the latest run,
-under the recorded gate of 6 (per-repetition loads 4.5-6.0), is
-**30.8 s / 30.0 s** with a best scan repetition of 27.5 s. Because the load was
-above the brief's 3, that figure is **INCONCLUSIVE for a precise regression
-verdict** and a quiet-window re-run is recorded as outstanding; the 2.3x
-improvement over the 70.6 s it fell to is not in doubt. The 2 s over the eager
-26.8 s is the intrinsic O(table) scan of a column spread uniformly across a
-table the eager codec held resident; removing it would need a column-organised
-exception index, a format change.
+call (6-9 s). The scattered path now reads a window whole only when it holds
+enough of the lookup's positions and reads the distinct chunks otherwise
+(review round 4, finding 2), so a Dense column costs O(span / window) reads and
+a sparse set never pays a whole ~96 MB window per cell. The reviewer's
+in-process interleaved run -- shipped windowed tables against `.open` replaced
+by `.read`, same page cache, loads 4.0-5.4 -- measures the residual cost at
+**+0.58 s (2.3%)**: windowed 25.60 s against eager 25.02 s (Dense 12.61 /
+Overflow 13.00 against 12.53 / 12.48). Peak RSS for the shape **falls from
+14.0 GB to 10.0 GB**. The A/B's 30.8 s scan arm and the 4 s gap to the 26.8 s
+load-3 baseline are **load, not code**: the same shape measured eager in one
+process at the same load is 25.0 s, so the ruling is closed with no real
+regression beyond about +2 %.
 
 The **region's split** comes from the step-2 harness
 (`docs/benchmark-output/opengwasdb_252_scaling.json`), which times the same
 TCF7L2 window with the Dense Component's own read separated from the Overflow's
 match and read: `range_phewas` **3,509.9 ms indexed**, of which the Dense window
 is 3,301.0 ms (94 %) and the Overflow 208.8 ms (match 12.1 + read 196.7). The
-A/B's `regional` figure is 3,388.8 ms for the same window because the A/B opens
+A/B's `regional` figure is 3,292.8 ms for the same window because the A/B opens
 a fresh process per side and times the store open with it, where the scaling
 harness warms in one process; both are committed. The region is Dense-bound; the
 index makes the Overflow part proportional to the answer but cannot touch the
-Dense read (#237's). The same table's `phewas_off_panel` is 32,692.8 → 38.8 ms.
+Dense read (#237's). The same table's `phewas_off_panel` is 30,106.6 → 33.2 ms.
 
 **Cold and warm** (`docs/benchmark-output/opengwasdb_252_variant_index_queries.json`):
 a fresh process opens the store in **0.39 s**, its first off-axis PheWAS takes
 **48.5 ms**, and its wall from after the imports is **0.49 s** at a sampled RSS
 of **263 MB**; after `ByVariantReader.warm()` the same query is **p50 27.2 ms,
-p90 29.1 ms**. (The harness also prints `maxrss`, but under `pixi run` a Python
-process inherits a ~2 GiB `ru_maxrss` from the launcher, so that figure is not
-this process's.) The exception tables are never read whole. A **scattered**
-lookup now reads multi-million-entry windows: 20 EAF-exception cells across the
-180,396,687-entry table cost **2.0 s and +402 MB**, against the 1.69 GiB window
-`[min, max]` would have read. That is the deliberate trade for the batched scan:
-the scattered set reads windows proportional to its span rather than one chunk
-per cell, and the bulk Dense column (the shape that pays most) is 3x faster.
+p90 29.1 ms**. (The harness also prints `launcher_maxrss_gib`, but under
+`pixi run` a Python process inherits a ~2 GiB `ru_maxrss` from the launcher, so
+that figure is not this process's.) The exception tables are never read whole. A
+**scattered** lookup reads a window whole only when the window holds enough
+positions; a sparse set reads the distinct chunks, which is round 2's per-chunk
+cost (0.44 s and 12 MB for 20 cells) and never a ~96 MB window per cell. The
+Dense column, which is what the batching is for, paid 6-9 s chunk by chunk and
+pays 1.4-2 s in windows, so the bulk shape's peak RSS falls 14.0 → 10.0 GB. The
+committed scattered probe, taken before the density rule, is 2.0 s and +402 MB
+for 20 cells across the 180,396,687-entry table, against the 1.69 GiB window
+`[min, max]` would have read.
 
 The mechanism: a per-variant read is one 8 KB `by_variant/offsets` chunk plus
 the variant's ~30 KB block; the scan's cost is its **match** phase (its whole
 `variant_index` walk). The scaling artifact's eQTLGen row: PheWAS 1,360.3 ms
-scanned → 25.0 ms indexed (overflow match 3.9 + read 19.5).
+scanned → 25.0 ms indexed (overflow match 3.9 + read 19.5). The eQTLGen ragged
+benchmark artifact (`opengwasdb_eqtlgen_ragged_benchmark.json`, `a0a38a5`)
+predates the windowed tables and is labelled as such; its html matches its json.
 
 **Index-only `validate`** on the 3,085,080,783-row copy
 (`docs/benchmark-output/opengwasdb_252_validate_index.json`): 2,657.4 s
