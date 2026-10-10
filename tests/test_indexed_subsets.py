@@ -907,6 +907,30 @@ def test_analysis_tile_floors_at_one_physical_unit_when_the_budget_is_smaller() 
     assert max((a1 - a0) for a0, a1 in tiles) * write_unit == write_unit
 
 
+def test_default_band_avoids_deterministic_v2_source_rereads() -> None:
+    """The default budget is one source read unit, so v2 decodes it once.
+
+    OGS-00009's v2 output chunk is 65,536 variants and its primary
+    Analysis-axis read unit is 1,000.  The historical 4,000,000-cell budget
+    gave a 61-Analysis tile, splitting one read unit into ceil(1,000/61) = 17
+    tiles and decoding each source file 17 times; the 65,536,000-cell default
+    gives a 1,000-Analysis tile and decodes it once.  This is a
+    geometry/read-count argument, not an RSS claim.
+    """
+    write_unit = 65_536
+    read_unit = 1_000
+    n_analyses = 2_024
+    old = _analysis_tiles(n_analyses, write_unit, 4_000_000, read_unit)
+    new = _analysis_tiles(n_analyses, write_unit, DEFAULT_BAND_CELLS, read_unit)
+    old_tile = max(a1 - a0 for a0, a1 in old)
+    new_tile = max(a1 - a0 for a0, a1 in new)
+    assert old_tile == 61
+    assert new_tile == read_unit
+    assert -(-read_unit // old_tile) == 17
+    assert -(-read_unit // new_tile) == 1
+    assert DEFAULT_BAND_CELLS == write_unit * read_unit
+
+
 def test_build_records_a_materialized_band_within_the_declared_bound(
     tmp_path: Path, rich_store: Path, variant_list: Path
 ) -> None:
@@ -927,6 +951,8 @@ def test_build_records_the_default_band_invariant(
         DEFAULT_BAND_CELLS, result.physical_write_unit
     )
     assert 0 < result.max_materialized_cells <= result.band_cells_effective
+    assert result.max_materialized_bytes == max(result.materialized_plane_bytes.values())
+    assert result.materialized_plane_bytes, "the build must record per-plane buffer bytes"
 
 
 def test_v2_chunk_key_parser_rejects_v3_shard_keys() -> None:

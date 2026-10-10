@@ -111,16 +111,16 @@ log = logging.getLogger(__name__)
 #: The group under `data.zarr` that holds every Indexed Variant Subset.
 INDEXED_SUBSETS_GROUP = "indexed_subsets"
 
-#: Target band cell count for the build/validate gate.  The variant band is the
-#: index's physical write unit (a v2 chunk or a v3 shard) and this budget sizes
-#: the Analysis tile within it.  The writer never materialises more than
-#: ``max(band_cells, write_unit)`` source cells, so this is the declared memory
-#: invariant; the default covers one output write unit times a representative
-#: primary Analysis read unit (65,536 x 1,000 = 65.5M cells on OGS-00009) so a
-#: v2 build does not decode the primary once per tile.  A budget below the read
-#: unit is honoured: the build re-reads the source instead of materialising
-#: ``write_unit * read_unit``.  The CLI exposes it as `--band-cells`.
-DEFAULT_BAND_CELLS = 67_108_864
+#: Target band cell count for the build gate.  The variant band is the index's
+#: physical write unit (a v2 chunk or a v3 shard) and this budget sizes the
+#: Analysis tile within it.  The default is exactly one v2 output chunk times
+#: one representative primary Analysis read unit (65,536 x 1,000 = 65,536,000
+#: cells), so a v2 build decodes each primary file once rather than once per
+#: tile.  A smaller budget is honoured: the writer re-reads the source instead
+#: of materialising more than ``max(band_cells, write_unit)`` cells.  This is a
+#: writer-memory input, not an RSS acceptance target.  The CLI exposes it as
+#: `--band-cells`.
+DEFAULT_BAND_CELLS = 65_536_000
 
 #: The build's publication gate validates the structural invariants exhaustively
 #: and a bounded deterministic sample of decoded cells.  Standalone `validate`
@@ -385,6 +385,8 @@ class IndexedSubsetBuild:
     band_cells_effective: int = 0
     physical_write_unit: int = 0
     max_materialized_cells: int = 0
+    max_materialized_bytes: int = 0
+    materialized_plane_bytes: Mapping[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -392,14 +394,17 @@ class _WriteStats:
     """What one chunk-aligned write materialised, for the declared invariant.
 
     ``band_cells_effective`` is ``max(band_cells, write_unit)`` -- the bound the
-    writer enforces -- and ``max_materialized_cells`` is the largest source
-    block it actually held, so a build records both the invariant and the
-    measurement (#270 review).
+    writer enforces -- and ``max_materialized_cells``/``_bytes`` are the largest
+    source block it actually held, so a build records both the invariant and the
+    measurement.  ``materialized_plane_bytes`` is the derived raw buffer per
+    plane and dtype (#270 review).
     """
 
     physical_write_unit: int
     band_cells_effective: int
     max_materialized_cells: int
+    max_materialized_bytes: int
+    materialized_plane_bytes: Mapping[str, int]
 
 
 @dataclass(frozen=True)
@@ -715,13 +720,12 @@ def _create_subset_arrays(
 
 def _copy_one_plane(
     target: Any, source: Any, subset: np.ndarray, n_analyses: int, band_cells: int
-) -> int:
+) -> tuple[int, int]:
     """Copy one primary plane's codes into the index, one output file at a time.
 
-    The variant band is a whole index store file and the Analysis tiles are
-    bounded by ``band_cells``; each index file is encoded once while the largest
-    source block held is ``max(band_cells, write_unit)`` cells.  Returns that
-    measured maximum for the build to record and check.
+    Returns the measured maximum source cells held and the source dtype's item
+    size, so the caller can derive the raw buffer bytes.  Raises if the budget
+    is somehow exceeded, so the invariant cannot drift silently.
     """
     write_unit = _physical_write_unit(target)
     read_unit = _source_read_unit(source)
@@ -739,7 +743,7 @@ def _copy_one_plane(
                 )
             max_materialized = max(max_materialized, cells)
             target[a0:a1, start:stop] = np.asarray(source.oindex[rows, a0:a1]).T
-    return max_materialized
+    return max_materialized, int(np.dtype(source.dtype).itemsize)
 
 
 def _copy_plane_bands(
@@ -751,25 +755,25 @@ def _copy_plane_bands(
     subset: np.ndarray,
     n_analyses: int,
     band_cells: int,
-) -> int:
-    """Copy the primary planes' codes into the Analysis-major index.
-
-    Plane at a time and output-write-unit at a time: every compressed index
-    chunk (v2) or shard (v3) is encoded exactly once, while peak memory is one
-    band of one plane rather than the whole subset matrix (#270).  Returns the
-    largest source block any plane materialised.
-    """
-    maxima = [
-        _copy_one_plane(z_target, root["z"], subset, n_analyses, band_cells),
-        _copy_one_plane(se_target, root["se"], subset, n_analyses, band_cells),
-    ]
+) -> tuple[int, dict[str, int]]:
+    """Copy every plane and return its largest source block, cells and by plane."""
+    planes: dict[str, tuple[Any, Any]] = {
+        "z": (z_target, root["z"]),
+        "se": (se_target, root["se"]),
+    }
     if eaf_target is not None:
-        maxima.append(_copy_one_plane(eaf_target, root["eaf"], subset, n_analyses, band_cells))
+        planes["eaf"] = (eaf_target, root["eaf"])
     if imputed_target is not None:
-        maxima.append(
-            _copy_one_plane(imputed_target, root[_IMPUTED_MASK], subset, n_analyses, band_cells)
+        planes["imputed"] = (imputed_target, root[_IMPUTED_MASK])
+    max_cells = 0
+    plane_bytes: dict[str, int] = {}
+    for name, (target, source) in planes.items():
+        cells, itemsize = _copy_one_plane(
+            target, source, subset, n_analyses, band_cells
         )
-    return max(maxima, default=0)
+        max_cells = max(max_cells, cells)
+        plane_bytes[name] = cells * itemsize
+    return max_cells, plane_bytes
 
 
 def _remap_and_write(
@@ -901,7 +905,7 @@ def write_indexed_subset_group(
     z_target, se_target, eaf_target, imputed_target = _create_subset_arrays(
         group, encoding, codec, n_analyses, n_subset, completed=completed
     )
-    max_materialized = _copy_plane_bands(
+    max_materialized, plane_bytes = _copy_plane_bands(
         z_target,
         se_target,
         eaf_target,
@@ -915,11 +919,20 @@ def write_indexed_subset_group(
     _write_eaf_side_tables(group, root, encoding, subset, n_analyses)
     _write_se_side_tables(group, root, encoding, subset, n_analyses)
     group.attrs.update(attrs)
+    return _write_stats(z_target, band_cells, max_materialized, plane_bytes)
+
+
+def _write_stats(
+    z_target: Any, band_cells: int, max_materialized: int, plane_bytes: dict[str, int]
+) -> _WriteStats:
+    """The declared band invariant and the measured per-plane raw buffers."""
     write_unit = _physical_write_unit(z_target)
     return _WriteStats(
         physical_write_unit=write_unit,
         band_cells_effective=max(int(band_cells), write_unit),
         max_materialized_cells=max_materialized,
+        max_materialized_bytes=max(plane_bytes.values(), default=0),
+        materialized_plane_bytes=MappingProxyType(dict(plane_bytes)),
     )
 
 
@@ -1070,7 +1083,9 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
     _ensure_indexed_subset_namespace(plan.store_path, plan.fmt)
     write_seconds = 0.0
     validate_seconds = 0.0
-    write_stats = _WriteStats(0, max(int(band_cells), 1), 0)
+    write_stats = _WriteStats(
+        0, max(int(band_cells), 1), 0, 0, MappingProxyType({})
+    )
     try:
         with staged_named_group(dest, overwrite=overwrite) as work:
             staged = store_arrays.open_group_for_write(
@@ -1111,6 +1126,8 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
         band_cells_effective=write_stats.band_cells_effective,
         physical_write_unit=write_stats.physical_write_unit,
         max_materialized_cells=write_stats.max_materialized_cells,
+        max_materialized_bytes=write_stats.max_materialized_bytes,
+        materialized_plane_bytes=dict(write_stats.materialized_plane_bytes),
     )
 
 
@@ -2612,17 +2629,38 @@ def _validation_sample(
         rng,
     )
     sample_analyses, sample_slots = _dedupe_cells(cells)
-    strategy = (
-        "corners + "
-        f"{len(analysis_axis)} evenly spaced Analyses + "
-        f"{len(shard_starts)} physical write-unit boundaries + "
-        f"{len(inner_starts)} inner-chunk boundaries + "
-        f"{SAMPLE_RANDOM_PER_ANALYSIS} checksum-seeded cells per Analysis + "
-        f"{SAMPLE_GLOBAL_RANDOM} checksum-seeded cells across Analyses"
-    )
+    strategy = _sample_strategy(analysis_axis, shard_starts, inner_starts)
     return _SamplePlan(
         analyses=sample_analyses, slots=sample_slots, seed=seed, strategy=strategy
     )
+
+
+def _sample_strategy(
+    analysis_axis: np.ndarray, shard_starts: np.ndarray, inner_starts: np.ndarray
+) -> str:
+    """The human-readable sample strategy, with correct singular/plural."""
+    analysis_label = _counted(
+        len(analysis_axis), "evenly spaced Analysis", "evenly spaced Analyses"
+    )
+    shard_label = _counted(
+        len(shard_starts), "physical write-unit boundary", "physical write-unit boundaries"
+    )
+    inner_label = _counted(
+        len(inner_starts), "inner-chunk boundary", "inner-chunk boundaries"
+    )
+    return (
+        "corners + "
+        f"{analysis_label} + "
+        f"{shard_label} + "
+        f"{inner_label} + "
+        f"{SAMPLE_RANDOM_PER_ANALYSIS} checksum-seeded cells per Analysis + "
+        f"{SAMPLE_GLOBAL_RANDOM} checksum-seeded cells across Analyses"
+    )
+
+
+def _counted(count: int, singular: str, plural: str) -> str:
+    """`<count> <singular|plural>`, so a one-boundary sample reads correctly."""
+    return f"{count} {singular if count == 1 else plural}"
 
 
 def _sample_analysis_axis(n_analyses: int) -> np.ndarray:

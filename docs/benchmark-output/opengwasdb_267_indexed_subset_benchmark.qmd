@@ -275,6 +275,7 @@ print(md_table(
         ["physical write unit", f"{build['physical_write_unit']:,} variants"],
         ["declared band invariant", f"max(band, write unit) = {build['band_cells_effective']:,} cells"],
         ["largest materialised source block", f"{build['max_materialized_cells']:,} cells"],
+        ["largest raw buffer (cells x dtype)", f"{build['max_materialized_bytes']:,} B"],
         ["prepare (open release, resolve list)", f"{build['phases']['prepare_seconds']:,.2f} s"],
         ["write (planes, chunk-aligned)", f"{build['phases']['write_seconds']:,.2f} s"],
         ["staged validation (publication gate)", f"{build['phases']['validate_seconds']:,.2f} s"],
@@ -288,8 +289,8 @@ print(md_table(
         ["requested / resolved / absent (writer)", f"{build['requested']:,} / {build['resolved']:,} / {build['absent']:,}"],
         ["input SHA-256 (writer)", f"`{build['input_sha256']}`"],
         ["peak RSS", f"{build['peak_rss_mb']:,.1f} MB"],
-        ["RSS bound (band + fixed overhead)", f"{build['rss_bound_mb']:,.1f} MB"],
-        ["peak RSS within declared bound", str(build["rss_within_bound"])],
+        ["RSS acceptance threshold", f"{build['rss_bound_mb']:,.1f} MB ({build['rss_bound_label']})"],
+        ["peak RSS within acceptance threshold", str(build["rss_within_bound"])],
         ["measurement source", build["peak_rss_source"]],
         ["build block source", build["reused_from"] or "this run"],
     ],
@@ -318,11 +319,16 @@ multiple of the primary plane's own read unit when the budget allows, and the
 writer accepts decoding the primary once per tile when it does not, rather than
 materialising `write unit × read unit` cells.
 
-The bound is `band_cells` times a per-cell allowance plus a fixed term, so it is
-a function of the configured band and not of the full Store axis (whose decoded
-size is printed below). The measured peak is reported as measured: where it
-exceeds the declared bound the target below fails rather than the bound being
-widened after the fact.
+The writer's memory is bounded **separately from RSS**: the largest raw source
+block is the `largest materialised source block` cells and its
+`largest raw buffer` bytes above, independent of the subset's total size.
+
+The RSS target is the **preserved #267 acceptance threshold** listed above: the
+original 4,000,000-cell declaration times the same per-cell allowance plus the
+fixed term. It is deliberately *not* re-derived from the new band budget, so the
+measured peak is still compared against the historical target and the run records
+the miss honestly rather than being turned green by widening the model. The peak
+itself remains ALID-resolution-bound, not writer-band-bound.
 
 The build's publication gate is **`sampled`**: the enumerated structural rules
 (identity and attributes, exact array set, shapes/dtypes/chunking, the full
@@ -393,7 +399,7 @@ print(md_table(
             f"(median moved {b['ordinary_stability']['median_change_percent']:+.2f}%)",
         ],
         ["ordinary before/after bracketed", f"{targets['ordinary_bracketed']}"],
-        ["peak build RSS within declared bound", f"{targets['peak_rss_within_bound']}"],
+        ["peak build RSS within the #267 acceptance threshold", f"{targets['peak_rss_within_bound']}"],
         ["authoritative store unchanged", f"{targets['original_store_unchanged']}"],
     ],
 ))
@@ -433,12 +439,16 @@ print(md_table(
 #| echo: false
 #| output: asis
 print(f"""
-- **The RSS target is recorded as its measurement says.** The peak was
-  {build['peak_rss_mb']:,.1f} MB against the declared band-plus-fixed-overhead
-  bound of {build['rss_bound_mb']:,.1f} MB, so
-  `peak_rss_within_bound = {targets['peak_rss_within_bound']}`. The peak is still
-  set by the band, not by the full matrix (terabytes decoded). Widening the bound
-  after the fact would be the tuning this harness refuses.
+- **The RSS target is the preserved #267 acceptance threshold, reported as its
+  measurement says.** The peak was {build['peak_rss_mb']:,.1f} MB against the
+  historical {build['rss_bound_mb']:,.1f} MB threshold
+  ({build['rss_bound_label']}), so
+  `peak_rss_within_bound = {targets['peak_rss_within_bound']}`. The writer's own
+  bounded-band invariant ({build['max_materialized_cells']:,} cells; raw buffer
+  {build['max_materialized_bytes']:,} B) is recorded separately and is not used to
+  re-derive this acceptance target. The peak is ALID-resolution-bound, not
+  writer-band-bound, and widening the threshold after the fact would be the
+  tuning this harness refuses.
 - **The publication gate is a documented sample; standalone validation is exhaustive.** The build's staged validation compares a bounded deterministic decoded sample ({build['sample_cells']:,} cells, mode `{build['validation_mode']}`, {build['phases']['validate_seconds']:,.2f} s) and refuses systemic, ordering and output-boundary corruption. An isolated unsampled corruption can pass the build gate; standalone `validate` decodes and compares **every** indexed cell, side table, imputed mask and reference EAF and is the explicit audit for it. The risk is stated rather than hidden.
 - **The measured rewrite count is one per physical file.** The table above is
   the store-level count over the staged group, so a v2 chunk (or v3 shard)

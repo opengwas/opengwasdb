@@ -148,18 +148,25 @@ performance result.
   output unit when the budget is smaller -- independent of the subset's length;
   a tile that fits the budget is a whole multiple of the primary's read unit,
   and a budget below that unit decodes the primary once per tile rather than
-  materialising `write unit x read unit` cells. `DEFAULT_BAND_CELLS` is sized to
-  cover one output write unit times a representative primary read unit
-  (65,536 x 1,000 = 65.5M cells) so a v2 build does not re-read the primary. On
+  materialising `write unit x read unit` cells. `DEFAULT_BAND_CELLS` is exactly
+  one output write unit times a representative primary read unit
+  (65,536 x 1,000 = **65,536,000** cells), so a v2 build decodes each primary
+  file once: the historical 4,000,000-cell budget gave a 61-Analysis tile and
+  split one 1,000-Analysis primary read unit into 17 tiles, while the default
+  gives a 1,000-Analysis tile. On
   the fresh #270 OGS-00009 HapMap3 build every one of the 38,456 `z`,
   `se` and `eaf` physical files was encoded exactly once (measured at the store
   layer). The build took **243.58 s** -- write **229.168 s** and the publication
   gate **1.779 s** -- against the #267 build's 4,198 s, with byte-exact
   six-field equivalence, 6,235,021,312 physical index bytes (17.852%) and a
-  1,234.5 MB peak RSS. The declared band invariant is
-  `max(band_cells, write unit)` = 67.1M cells (65,536 x 1,000 rounded up), so
-  the benchmark's band-plus-fixed-overhead bound is 3,072.0 MB and the measured
-  peak is within it; the peak itself remains ALID-resolution-bound.
+  1,234.5 MB peak RSS. The writer-memory invariant is independent of RSS:
+  `max_materialized_cells <= max(band_cells, write unit)` (65,536,000 cells
+  here), with the derived raw buffer bytes recorded per plane/dtype. The
+  benchmark's RSS target is deliberately unchanged from the #267 acceptance
+  threshold of **1,146.1 MB** (the original 4,000,000-cell declaration), so the
+  run still records `peak_rss_within_bound = false`; the peak is
+  ALID-resolution-bound, not writer-band-bound, and the threshold is not
+  widened to turn it green.
 - The build's gate validates the structural invariants exhaustively (identity
   and attributes, exact array set, shapes/dtypes/chunking, the full Variant
   Index, counts and provenance), together with the small side-table remapping

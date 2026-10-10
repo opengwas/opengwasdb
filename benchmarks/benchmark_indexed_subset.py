@@ -60,18 +60,27 @@ HM3_URL = "https://zenodo.org/api/records/7773502/files/w_hm3.snplist.gz/content
 HM3_GZIP_MD5 = "153ecc2bcfa740afafe656e6a384d769"
 HM3_HEADER = ("SNP", "A1", "A2")
 
-#: The writer's default band; the RSS bound is band-derived, not matrix-derived.
-#: The writer's own default band budget; the RSS bound is derived from the
-#: build's declared invariant, not from this value alone.
+#: The writer's default band budget.  This is a writer-memory input, not the
+#: RSS acceptance target (see `HISTORICAL_RSS_BOUND_MB`).
 BAND_CELLS = DEFAULT_BAND_CELLS
-#: Generous per-band-cell allowance for the index planes plus decode scratch.
+#: Per-band-cell allowance used only to recompute the historical #267 acceptance
+#: threshold; it is not a writer-buffer model and is not claimed as a ceiling.
 BYTES_PER_BAND_CELL = 32
 FIXED_OVERHEAD_MB = 1024.0
+#: The #267 RSS acceptance threshold, kept as the target so the new artifact
+#: still records the historical miss honestly instead of being widened green.
+#: It is the original 4,000,000-cell declaration times the same per-cell
+#: allowance plus fixed overhead (1,146.1 MB).
+HISTORICAL_BAND_CELLS = 4_000_000
+HISTORICAL_RSS_BOUND_MB = (
+    FIXED_OVERHEAD_MB + HISTORICAL_BAND_CELLS * BYTES_PER_BAND_CELL / (1024 * 1024)
+)
 #: The documented ceiling on the build's decoded validation sample.  The
-#: in-code sample is smaller (corners + 16 Analyses x (2 ends + 3 x 8 chunk
-#: anchors + 8 seeded cells) + 32 global seeded cells = 580); this bound is what
-#: the artifact checks, so a future sample that grows is caught rather than
-#: quietly becoming a full pass (#270).
+#: in-code worst case is ``4 corners + 16 Analyses x (2 endpoints + 3 x 8
+#: write-unit anchors + 3 x 4 inner-chunk anchors + 8 seeded cells) + 32 global
+#: seeded cells = 772`` (deduplication only lowers it); the artifact checks this
+#: cap so a future sample that grows is caught rather than quietly becoming a
+#: full pass (#270).
 SAMPLE_CELLS_CEILING = 1024
 
 DEFAULT_REPS = 5
@@ -153,6 +162,7 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "build.peak_rss_mb",
     "build.band_cells",
     "build.rss_bound_mb",
+    "build.rss_bound_label",
     "build.rss_within_bound",
     "build.phases.prepare_seconds",
     "build.phases.write_seconds",
@@ -166,6 +176,8 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "build.band_cells_effective",
     "build.physical_write_unit",
     "build.max_materialized_cells",
+    "build.max_materialized_bytes",
+    "build.materialized_plane_bytes",
     "build.peak_rss_source",
     "build.requested",
     "build.resolved",
@@ -241,6 +253,8 @@ _BUILD_RUNNER = (
     "'band_cells_effective': result.band_cells_effective, "
     "'physical_write_unit': result.physical_write_unit, "
     "'max_materialized_cells': result.max_materialized_cells, "
+    "'max_materialized_bytes': result.max_materialized_bytes, "
+    "'materialized_plane_bytes': dict(result.materialized_plane_bytes), "
     "'requested': result.requested_count, 'resolved': result.resolved_count, "
     "'absent': result.absent_count, 'n_subset_variants': result.n_subset_variants, "
     "'input_sha256': result.input_sha256, 'output_chunk_writes': planes}))\n"
@@ -632,6 +646,8 @@ def run_build(store: Path, name: str, variant_list: Path, assembly: str, band_ce
         "band_cells_effective": int(phases["band_cells_effective"]),
         "physical_write_unit": int(phases["physical_write_unit"]),
         "max_materialized_cells": int(phases["max_materialized_cells"]),
+        "max_materialized_bytes": int(phases["max_materialized_bytes"]),
+        "materialized_plane_bytes": dict(phases["materialized_plane_bytes"]),
         "requested": int(phases["requested"]),
         "resolved": int(phases["resolved"]),
         "absent": int(phases["absent"]),
@@ -701,6 +717,8 @@ def load_prior_build(path: Path) -> dict:
         "band_cells_effective",
         "physical_write_unit",
         "max_materialized_cells",
+        "max_materialized_bytes",
+        "materialized_plane_bytes",
     ):
         if key not in build:
             missing.append(key)
@@ -735,6 +753,8 @@ def load_prior_build(path: Path) -> dict:
         "band_cells_effective": int(build["band_cells_effective"]),
         "physical_write_unit": int(build["physical_write_unit"]),
         "max_materialized_cells": int(build["max_materialized_cells"]),
+        "max_materialized_bytes": int(build["max_materialized_bytes"]),
+        "materialized_plane_bytes": dict(build["materialized_plane_bytes"]),
         "requested": int(build["requested"]),
         "resolved": int(build["resolved"]),
         "absent": int(build["absent"]),
@@ -797,6 +817,10 @@ def _semantic_problems(artifact: dict[str, Any]) -> list[str]:
     for field in ("total_seconds", "peak_rss_mb"):
         _positive(artifact, f"build.{field}", problems)
     _positive(artifact, "build.band_cells", problems)
+    if artifact["build"].get("rss_bound_label") != "the #267 4,000,000-cell declaration":
+        problems.append(
+            "build.rss_bound_label is not the preserved #267 acceptance declaration"
+        )
     for phase in ("prepare_seconds", "write_seconds", "validate_seconds", "publish_seconds"):
         _positive(artifact, f"build.phases.{phase}", problems)
     if (
@@ -883,18 +907,27 @@ def _validation_mode_problems(build: dict[str, Any]) -> list[str]:
 
 
 def _memory_bound_problems(build: dict[str, Any]) -> list[str]:
-    """Reasons the recorded band-memory invariant and measurement disagree.
+    """Reasons the recorded writer-memory invariant and measurement disagree.
 
     The declared invariant is ``max_materialized <= max(band_cells,
     physical_write_unit)`` -- one physical output unit when the budget is
-    smaller than it -- and the artifact must show both the declared bound and
-    the measurement, not just the configured budget (#270 review).
+    smaller than it -- and the artifact must show the declared bound, the
+    measured cells and the derived bytes, not just the configured budget.  This
+    is separate from the RSS acceptance target (#270 review).
     """
     problems: list[str] = []
-    for field in ("band_cells", "physical_write_unit", "max_materialized_cells"):
+    for field in (
+        "band_cells",
+        "physical_write_unit",
+        "max_materialized_cells",
+        "max_materialized_bytes",
+    ):
         value = build.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             problems.append(f"build.{field} must be a positive integer, got {value!r}")
+    plane_bytes = build.get("materialized_plane_bytes")
+    if not isinstance(plane_bytes, dict) or not plane_bytes:
+        problems.append("build.materialized_plane_bytes must be a non-empty object")
     if problems:
         return problems
     effective = build.get("band_cells_effective")
@@ -908,6 +941,12 @@ def _memory_bound_problems(build: dict[str, Any]) -> list[str]:
         problems.append(
             f"build.max_materialized_cells is {build['max_materialized_cells']}, above "
             f"the declared bound of {expected}"
+        )
+    if int(build["max_materialized_bytes"]) != max(
+        int(value) for value in plane_bytes.values()
+    ):
+        problems.append(
+            "build.max_materialized_bytes is not the largest materialized_plane_bytes value"
         )
     return problems
 
@@ -1086,10 +1125,11 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     )
     after_original = _metadata_fingerprint(args.store)
     index_physical = physical_bytes(index_group)
-    rss_bound_mb = (
-        FIXED_OVERHEAD_MB
-        + build["band_cells_effective"] * BYTES_PER_BAND_CELL / (1024 * 1024)
-    )
+    # The acceptance target is the original #267 band declaration (1,146.1 MB),
+    # kept as-is so the artifact still reports the historical RSS miss honestly.
+    # The writer's own bounded-band invariant is recorded separately under
+    # `build.band_cells_effective`/`max_materialized_*` and is not an RSS model.
+    rss_bound_mb = HISTORICAL_RSS_BOUND_MB
     peak_rss_mb = float(build["peak_rss_mb"])
     rss_within_bound = peak_rss_mb <= rss_bound_mb
 
@@ -1173,6 +1213,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "peak_rss_mb": peak_rss_mb,
             "band_cells": BAND_CELLS,
             "rss_bound_mb": round(rss_bound_mb, 1),
+            "rss_bound_label": "the #267 4,000,000-cell declaration",
             "rss_within_bound": rss_within_bound,
             "phases": build["phases"],
             "output_chunk_writes": build.get("output_chunk_writes", {}),
@@ -1183,6 +1224,8 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "band_cells_effective": build["band_cells_effective"],
             "physical_write_unit": build["physical_write_unit"],
             "max_materialized_cells": build["max_materialized_cells"],
+            "max_materialized_bytes": build["max_materialized_bytes"],
+            "materialized_plane_bytes": build["materialized_plane_bytes"],
             "peak_rss_source": "/usr/bin/time -v (build subprocess)",
             "requested": writer_requested,
             "resolved": writer_resolved,
