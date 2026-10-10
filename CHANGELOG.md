@@ -418,9 +418,9 @@ the end of this file.
   imputed mask and reference EAF, so an isolated corruption the build sample can
   miss is refused by an explicit audit. On the fresh #270 OGS-00009 HapMap3
   build the store layer measured every one of the 38,456 `z`, `se` and `eaf`
-  physical files encoded exactly once; the build took 243.58 s (write 229.168 s,
-  sampled validation 1.779 s) against the #267 4,198 s, with exact six-field
-  equivalence, 6,235,021,312 physical index bytes (17.852%) and a 1,234.5 MB
+  physical files encoded exactly once; the build took 184.04 s (write 171.665 s,
+  sampled validation 1.579 s) against the #267 4,198 s, with exact six-field
+  equivalence, 6,235,017,216 physical index bytes (17.852%) and a 1,238.6 MB
   peak RSS; the benchmark's RSS target is the preserved #267 acceptance
   threshold of 1,146.1 MB, so the run still records
   `peak_rss_within_bound = false` (the peak is ALID-resolution-bound, not the

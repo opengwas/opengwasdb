@@ -1,8 +1,8 @@
 {
-  "commit": "fb46434",
-  "measured_at": "2026-10-10T21:34:36.404384+00:00",
+  "commit": "bb5682d",
+  "measured_at": "2026-10-10T22:36:33.559329+00:00",
   "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/270-indexed-build-opt/opengwasdb",
-  "opengwasdb_fingerprint": "ed63745a544b6241f806c80e4ee741ae0df27cc6bd8568d3223ce8efb0379bfc",
+  "opengwasdb_fingerprint": "f269072c7fd9d7d75715fab2a7fafa28e051ed493236d13016827ad9a16fa81a",
   "artifact_schema_version": 5,
   "analysis_id": "ukb-b-17805",
   "subset_name": "hm3",
@@ -60,13 +60,13 @@
       "allele_incompatible": 23,
       "multiple_store_rows": 2743,
       "duplicate_alids": 0,
-      "resolution_ms": 3985.231
+      "resolution_ms": 3937.46
     }
   },
   "storage": {
     "baseline_logical_bytes": 34680981363,
     "baseline_physical_bytes": 34926288896,
-    "index_physical_bytes": 6235021312,
+    "index_physical_bytes": 6235017216,
     "index_logical_bytes": 5943821227,
     "increase_percent": 17.852,
     "planes": {
@@ -75,7 +75,7 @@
       "variant_index": 1294336,
       "z": 4360589312,
       "se": 1158283264,
-      "eaf": 710676480,
+      "eaf": 710672384,
       "z_overflow_index": 12288,
       "z_overflow_value": 12288,
       "eaf_baseline": 4009984,
@@ -84,23 +84,24 @@
       "se_coefficients": 24576,
       "se_exception_index": 45056,
       "se_exception_value": 36864,
-      "total": 6235021312
+      "total": 6235017216
     }
   },
   "build": {
     "run_mode": "fresh",
     "reused_from": "",
-    "total_seconds": 243.58,
-    "in_process_seconds": 242.26,
-    "peak_rss_mb": 1234.5,
-    "band_cells": 67108864,
-    "rss_bound_mb": 3072.0,
-    "rss_within_bound": true,
+    "total_seconds": 184.04,
+    "in_process_seconds": 182.393,
+    "peak_rss_mb": 1238.6,
+    "band_cells": 65536000,
+    "rss_bound_mb": 1146.1,
+    "rss_bound_label": "the #267 4,000,000-cell declaration",
+    "rss_within_bound": false,
     "phases": {
-      "prepare_seconds": 11.302,
-      "write_seconds": 229.168,
-      "validate_seconds": 1.779,
-      "publish_seconds": 230.958
+      "prepare_seconds": 9.136,
+      "write_seconds": 171.665,
+      "validate_seconds": 1.579,
+      "publish_seconds": 173.257
     },
     "output_chunk_writes": {
       "z": {
@@ -120,12 +121,18 @@
       }
     },
     "validation_mode": "sampled",
-    "sample_strategy": "corners + 16 evenly spaced Analyses + 8 physical write-unit boundaries + 1 inner-chunk boundaries + 8 checksum-seeded cells per Analysis + 32 checksum-seeded cells across Analyses",
+    "sample_strategy": "corners + 16 evenly spaced Analyses + 8 physical write-unit boundaries + 1 inner-chunk boundary + 8 checksum-seeded cells per Analysis + 32 checksum-seeded cells across Analyses",
     "sample_seed": 166638625948460791,
     "sample_cells": 528,
-    "band_cells_effective": 67108864,
+    "band_cells_effective": 65536000,
     "physical_write_unit": 65536,
     "max_materialized_cells": 65536000,
+    "max_materialized_bytes": 131072000,
+    "materialized_plane_bytes": {
+      "z": 131072000,
+      "se": 65536000,
+      "eaf": 65536000
+    },
     "peak_rss_source": "/usr/bin/time -v (build subprocess)",
     "requested": 1206903,
     "resolved": 1206903,
@@ -138,28 +145,28 @@
       "p95": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)"
     },
     "ordinary_before": {
-      "first_ms": 47224.433,
+      "first_ms": 48658.324,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 20345.949,
-      "p95_ms": 25496.659,
+      "median_ms": 17228.342,
+      "p95_ms": 24010.886,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 7578651
     },
     "ordinary_after": {
-      "first_ms": 20801.091,
+      "first_ms": 20523.892,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 19269.058,
-      "p95_ms": 20479.395,
+      "median_ms": 18690.667,
+      "p95_ms": 21763.016,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 7578651
     },
     "indexed": {
-      "first_ms": 471.767,
+      "first_ms": 443.811,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 446.706,
-      "p95_ms": 449.034,
+      "median_ms": 439.263,
+      "p95_ms": 442.383,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 1178549
@@ -192,8 +199,8 @@
   },
   "run": {
     "mode": "fresh",
-    "started_at": "2026-10-10T21:25:16.412234+00:00",
-    "finished_at": "2026-10-10T21:34:31.917955+00:00",
+    "started_at": "2026-10-10T22:28:21.893808+00:00",
+    "finished_at": "2026-10-10T22:36:29.061469+00:00",
     "subset_present_during_ordinary_before": false,
     "subset_published_by_this_run": true,
     "ordinary_bracketed": true,
@@ -204,7 +211,7 @@
     "exact_equivalence": true,
     "ordinary_unchanged_within_envelope": true,
     "original_store_unchanged": true,
-    "peak_rss_within_bound": true,
+    "peak_rss_within_bound": false,
     "ordinary_bracketed": true
   },
   "publication": {
@@ -212,7 +219,7 @@
     "reason": ""
   },
   "ordinary_stability": {
-    "median_change_percent": 5.293,
+    "median_change_percent": 8.488,
     "noise_envelope_percent": 25.0,
     "within_envelope": true
   }

@@ -156,10 +156,10 @@ performance result.
   gives a 1,000-Analysis tile. On
   the fresh #270 OGS-00009 HapMap3 build every one of the 38,456 `z`,
   `se` and `eaf` physical files was encoded exactly once (measured at the store
-  layer). The build took **243.58 s** -- write **229.168 s** and the publication
-  gate **1.779 s** -- against the #267 build's 4,198 s, with byte-exact
-  six-field equivalence, 6,235,021,312 physical index bytes (17.852%) and a
-  1,234.5 MB peak RSS. The writer-memory invariant is independent of RSS:
+  layer). The build took **184.04 s** -- write **171.665 s** and the publication
+  gate **1.579 s** -- against the #267 build's 4,198 s, with byte-exact
+  six-field equivalence, 6,235,017,216 physical index bytes (17.852%) and a
+  1,238.6 MB peak RSS. The writer-memory invariant is independent of RSS:
   `max_materialized_cells <= max(band_cells, write unit)` (65,536,000 cells
   here), with the derived raw buffer bytes recorded per plane/dtype. The
   benchmark's RSS target is deliberately unchanged from the #267 acceptance
@@ -182,7 +182,7 @@ performance result.
   audit; the build records the mode, sample strategy, seed, cell count and
   sampled duration. The risk is documented rather than hidden, and the low
   build cost is part of this ADR's outcome.
-- The #270 query latency was measured at **446.706 ms** warm median in that
+- The #270 query latency was measured at **439.263 ms** warm median in that
   benchmark run. The index chunk/shard geometry and per-plane physical bytes are
   identical to #267's and the query path is unchanged, so the difference from
   the #267 figure is not attributable to this change.
