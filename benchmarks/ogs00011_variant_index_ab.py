@@ -123,6 +123,10 @@ def measure(
             "indexed": indexed,
             "scanned_reps": [s["elapsed_ms"] for s in scans],
             "indexed_reps": [s["elapsed_ms"] for s in indexeds],
+            "scanned_loads": [s["load_start"][0] for s in scans],
+            "indexed_loads": [s["load_start"][0] for s in indexeds],
+            "scanned_waits_s": [s.get("gate_waited_s") for s in scans],
+            "indexed_waits_s": [s.get("gate_waited_s") for s in indexeds],
         }
         print(
             f"{shape}: scan {scan['elapsed_ms']:.1f} ms ({scan['peak_mb'] / 1024:.2f} GiB) "
@@ -164,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
     artifact = {
         "harness": "benchmarks/ogs00011_variant_index_ab.py",
         "store": str(args.store),
+        "max_start_load": args.max_start_load,
+        "reps": args.reps,
         **provenance(),
         "shapes": measure(
             args.store,
