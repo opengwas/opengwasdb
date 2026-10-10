@@ -51,7 +51,7 @@ the end of this file.
   rather than carrying the source's forward.
 
 - **Every Dense and Ragged plane reads its exact-value exception tables as
-  windows (#252 review rounds 2-3).**
+  windows (#252).**
   Opening a store used to read each `z_overflow`/`eaf_exception`/`se_exception`
   table whole -- about 2.1 GiB for OGS-00011's 180,396,687-entry EAF table -- so
   every process paid it, including analysis-side queries that never touch an
@@ -63,7 +63,7 @@ the end of this file.
   whole with a vectorised `searchsorted` when it holds at least about 12 of the
   set's positions, and chunk by chunk when it holds fewer, so a sparse set never
   pays a whole ~96 MB window. Opening an indexed
-  store falls from about 2 s (the base, eager tables) to 0.4 s, and a fresh process's first off-axis
+  store falls from about 2 s (the base, eager tables) to 0.24 s, and a fresh process's first off-axis
   PheWAS pays tens of milliseconds rather than a whole-table read. `patch()`,
   which rewrites one plane's cells and its table in place, now reads the whole
   table from the group, because the codec holds the group's arrays and no

@@ -266,27 +266,23 @@ in the artifact as `max_start_load = 6` with every repetition's start load and
 wait (`scanned_loads`, `indexed_loads`, `eager_loads`), because the shared node
 sat at 4-8:
 
-| shape | scan | index | speed-up |
-|---|---:|---:|---:|
-| off-axis PheWAS (`phewas_off_axis`) | 22,013.4 ms | **34.9 ms** | 631× |
-| 1 Mb region, TCF7L2 (`regional`) | 115,240.3 ms | **3,580.4 ms** | 32× |
-| bulk, one Analysis genome-wide | 13,092.0 ms | 12,764.7 ms | control |
-| bulk, Dense exceptions (`bulk_dense_exceptions`) | 14,777.3 ms | 15,504.8 ms | control |
-| PheWAS, on-axis variant (Dense) | 139.7 ms | 134.6 ms | control |
-| region × one Analysis | 8,575.9 ms | 8,666.5 ms | control |
-| top hits | 50.1 ms | 50.5 ms | control |
-| random lookup, 10×100 | 1,644.1 ms | 1,640.4 ms | control (noise) |
-| random lookup, 100×10 | 516.5 ms | 496.6 ms | control (noise) |
-| bulk, largest Overflow | 31,931.2 ms | 28,865.7 ms | control, windowed 10.7 % faster than eager |
+| shape | scan | index | eager | speed-up | index÷eager |
+|---|---:|---:|---:|---:|---:|
+| off-axis PheWAS (`phewas_off_axis`) | 22,013.4 ms | **34.9 ms** | — | 631× | — |
+| 1 Mb region, TCF7L2 (`regional`) | 115,240.3 ms | **3,580.4 ms** | — | 32× | — |
+| bulk, one Analysis genome-wide | 13,092.0 ms | 12,764.7 ms | 14,450.6 ms | control | **−11.7 %** |
+| bulk, Dense exceptions (`bulk_dense_exceptions`) | 14,777.3 ms | 15,504.8 ms | 14,229.5 ms | control | **+9.0 %** |
+| bulk, largest Overflow (`bulk_overflow_heavy`) | 31,931.2 ms | 28,865.7 ms | 32,334.1 ms | control | **−10.7 %** |
+| PheWAS, on-axis variant (Dense) | 139.7 ms | 134.6 ms | — | control | — |
+| region × one Analysis | 8,575.9 ms | 8,666.5 ms | — | control | — |
+| top hits | 50.1 ms | 50.5 ms | — | control | — |
+| random lookup, 10×100 | 1,644.1 ms | 1,640.4 ms | — | control (noise) | — |
+| random lookup, 100×10 | 516.5 ms | 496.6 ms | — | control (noise) | — |
 
 The two random-lookup rows are repetition noise, not the index: the scaling
 artifact's OGS-00011 `lookup_10_variants` is **327.6 ms indexed against
 323.3 ms scanned** and its `lookup_50_analyses` **3,089.3 ms against
-3,091.7 ms**, so the index is a no-op there. The repetitions of every row
-overlap across the arms (`bulk`'s index reps were 10.9-13.3 s against its eagers'
-13.9-15.9 s; `bulk_dense_exceptions`' index reps 13.3-15.6 s against its eagers'
-13.4-14.6 s), so a row is its min and max, not a point: the medians above are
-representative but the arms' spreads overlap.
+3,091.7 ms**, so the index is a no-op there.
 
 The largest-Overflow bulk shape regressed to 70.6 s when the exception tables
 became windowed: its Dense column has ~979,467 exception cells scattered across
@@ -295,21 +291,30 @@ call (6-9 s). The scattered path now reads a window whole only when it holds
 enough of the lookup's positions and reads the distinct chunks otherwise
 (review round 4, finding 2), so a Dense column costs O(span / window) reads and
 a sparse set never pays a whole ~96 MB window per cell. The A/B's eager arm
-measures the residual directly: the largest-Overflow shape is **28,865.7 ms
-indexed against 32,334.1 ms eager -- the windowed code is 10.7 % *faster***,
-and the Dense-exception shape is **15,504.8 ms indexed against 14,229.5 ms eager,
-+9.0 % windowed** -- the one shape where windowing still costs, on a median
-whose repetition ranges overlap (index 13.3-15.6 s against eager 13.4-14.6 s),
-so the cost is within the run's spread rather than a fixed penalty. Peak RSS for
-the Overflow shape **falls from 14,073 MB eager to 10,041 MB indexed**. At this
-run's load the eager code is ~32 s where 144f335 measured 26.8 s at load < 3, so
-the earlier "30.8 s scan against 26.8 s" gap was load, not code.
+cannot resolve a windowed-versus-eager difference of this size: `bulk`, whose
+Dense column has one exception cell and so does no table work, is **−11.7 %**
+(12,764.7 ms against 14,450.6 ms eager), and a windowed codec cannot be 12 %
+faster than eager where there is nothing to window -- the arm therefore carries
+a bias or noise of at least that size, plausibly because its eager open reads
+~4 GB of tables and disturbs the page cache the timed read needs. Against that
+calibration the other two ratios -- **−10.7 %** on the largest Overflow
+(28,865.7 against 32,334.1 ms) and **+9.0 %** on the Dense-exception shape
+(15,504.8 against 14,229.5 ms) -- bracket zero and are not distinguishable from
+it. The claim that stands is **no regression above the harness's noise**. An
+earlier three-shape run of the same harness, before the full ten-shape run
+overwrote it, gave **+3.2 %** (Dense exceptions) and **+0.8 %** (largest
+Overflow); with the full run the estimate spans 0 to +9 %, and the reviewer's
+uncommitted in-process interleaved comparison put it at +2.3 %. Peak RSS for the
+Overflow shape **falls from 14,073 MB eager to 10,041 MB indexed**, which is
+real. At this run's load the eager code is ~32 s where 144f335 measured 26.8 s
+at load < 3, so the earlier "30.8 s scan against 26.8 s" gap was load, not code.
 
 The **region's split** comes from the step-2 harness
 (`docs/benchmark-output/opengwasdb_252_scaling.json`), which times the same
 TCF7L2 window with the Dense Component's own read separated from the Overflow's
 match and read: `range_phewas` **3,314.4 ms indexed**, of which the Dense window
-is 3,113.4 ms (94 %) and the Overflow 188.2 ms, against **121,184.7 ms scanned**.
+is 3,113.4 ms (94 %) and the Overflow 201.0 ms (match 12.8 + read 188.2), against
+**121,184.7 ms scanned**.
 The A/B's `regional` figure is 3,580.4 ms for the same window because the A/B
 opens a fresh process per side and times the store open with it, where the
 scaling harness warms in one process; both are committed. The region is
@@ -336,7 +341,7 @@ is for, paid 6-9 s chunk by chunk and its windowed shape
 The mechanism: a per-variant read is one 8 KB `by_variant/offsets` chunk plus
 the variant's ~30 KB block; the scan's cost is its **match** phase (its whole
 `variant_index` walk). The scaling artifact's eQTLGen row: PheWAS 1,267.0 ms
-scanned → 23.1 ms indexed (dense 1.4 + overflow read 17.5). The eQTLGen ragged
+scanned → 23.1 ms indexed (dense 1.4 + match 4.3 + read 17.5). The eQTLGen ragged
 benchmark artifact (`opengwasdb_eqtlgen_ragged_benchmark.json`, `a0a38a5`)
 predates the windowed tables and is labelled as such; its html matches its json.
 
