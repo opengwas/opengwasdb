@@ -410,7 +410,7 @@ def test_rho_tab_heatmap_caps_at_300_traits(tmp_path):
     assert "300 Analyses by |rho|" in section
 
 
-# ── Indexed Variant Subsets tab (issue #267, ADR 0053) ──────────────────────
+# ── Indexed Variant Subsets tab (issue #267, ADR 0061) ──────────────────────
 
 
 def _indexed_subset_variant_list(tmp_path: Path) -> Path:
@@ -445,6 +445,18 @@ def _build_indexed_subset_store(
     build_indexed_subset(
         store,
         subset_name,
+        _indexed_subset_variant_list(tmp_path),
+        reference_assembly="GRCh38",
+    )
+    return store
+
+
+def _build_two_subset_store(tmp_path: Path) -> Path:
+    """A store carrying two published subsets, ``hm3`` and ``panel``."""
+    store = _build_indexed_subset_store(tmp_path, subset_name="hm3")
+    build_indexed_subset(
+        store,
+        "panel",
         _indexed_subset_variant_list(tmp_path),
         reference_assembly="GRCh38",
     )
@@ -497,13 +509,7 @@ def test_indexed_subsets_tab_reports_checksum_assembly_and_provenance(tmp_path):
 
 
 def test_indexed_subsets_tab_lists_every_published_name(tmp_path):
-    store = _build_indexed_subset_store(tmp_path, subset_name="hm3")
-    build_indexed_subset(
-        store,
-        "panel",
-        _indexed_subset_variant_list(tmp_path),
-        reference_assembly="GRCh38",
-    )
+    store = _build_two_subset_store(tmp_path)
     table = read_analyses(store / "analyses.tsv")
     content = write_overview_html(store, table).read_text(encoding="utf-8")
     section = _indexed_subsets_section(content)
@@ -623,3 +629,31 @@ def test_indexed_subsets_physical_size_matches_du(tmp_path):
     )
 
     assert _physical_bytes(tmp_path) == du
+
+
+def test_indexed_subsets_total_counts_each_traversal_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The total physical size is the sum of the rows, not a second full walk.
+
+    Counting the `_physical_bytes` calls makes the double traversal fail rather
+    than merely cost time: two published subsets must be walked once each.
+    """
+    from opengwasdb.layouts.dense import overview
+
+    store = _build_two_subset_store(tmp_path)
+
+    real = overview._physical_bytes
+    seen: list[Path] = []
+
+    def counting(path: Path) -> int:
+        seen.append(path)
+        return real(path)
+
+    monkeypatch.setattr(overview, "_physical_bytes", counting)
+    rows, total, problems = overview._collect_indexed_subsets(store)
+
+    assert problems == []
+    assert sorted(path.name for path in seen) == ["hm3", "panel"]
+    assert total == sum(real(path) for path in overview._published_subset_paths(store))
+    assert len(rows) == 2

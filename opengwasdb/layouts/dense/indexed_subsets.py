@@ -1,4 +1,4 @@
-"""Indexed Variant Subsets for Dense stores (ADR 0053, issue #264).
+"""Indexed Variant Subsets for Dense stores (ADR 0061, issue #264).
 
 An **Indexed Variant Subset** is a named, optional, rebuildable query index over
 a caller-supplied set of canonical ALIDs.  It holds every Analysis's full
@@ -20,7 +20,7 @@ Three decisions are load-bearing and worth stating where they are implemented:
    decoded values.**  A decoded `int8_residual` EAF is the result of an `expit`,
    and re-encoding it through `logit` can land on a neighbouring code at a step
    boundary -- a value that is plausible, wrong, and exactly the class of defect
-   ADR 0053 asks validation to catch.  Copying the codes and remapping the
+   ADR 0061 asks validation to catch.  Copying the codes and remapping the
    side-table positions makes the decoded index cell *identical* to the primary
    cell by construction.
 2. **The EAF baseline is the primary baseline subset to the subset's variants.**
@@ -59,8 +59,10 @@ import os
 import re
 import shutil
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -117,7 +119,7 @@ DEFAULT_BAND_CELLS = 4_000_000
 INDEXED_SUBSET_SCHEMA_VERSION = 1
 
 #: The statistic profile every subset carries.  There is deliberately no Z-only
-#: mode (ADR 0053), so this is a constant rather than a choice.
+#: mode (ADR 0061), so this is a constant rather than a choice.
 FULL_STATISTIC_PROFILE = "full_statistic"
 
 #: Subset-name grammar: a leading alphanumeric, then letters/digits/`.`/`_`/`-`.
@@ -219,7 +221,7 @@ class IndexedSubsetStaleError(IndexedSubsetError):
 class IndexedSubsetLayoutError(IndexedSubsetError):
     """An Indexed Variant Subset was requested on a layout that has none.
 
-    Indexed Variant Subsets are Dense-only (ADR 0053, #264): a Ragged release is
+    Indexed Variant Subsets are Dense-only (ADR 0061, #264): a Ragged release is
     already a direct per-Analysis CSR and a Hybrid one has no rule for unifying
     its two components.  A selector naming a subset on either is a caller error,
     not a reason to answer from the ordinary path (#265).
@@ -761,14 +763,14 @@ def _check_layout(manifest: StoreManifest, root: Any) -> None:
     """Refuse anything but a Dense Store Release an index can reproduce.
 
     Observed-Only and Reference-Completed Dense are both supported (#264,
-    #266).  Ragged and Hybrid remain explicit failures (ADR 0053).  A
+    #266).  Ragged and Hybrid remain explicit failures (ADR 0061).  A
     Reference-Completed release must carry its per-cell `imputed` mask: without
     it the index cannot reproduce Association Status, so it is refused here
     rather than written incompletely.
     """
     if manifest.primary_layout is not PrimaryStorageLayout.DENSE:
         raise IndexedSubsetError(
-            "Indexed Variant Subsets are Dense-only (ADR 0053); this release's "
+            "Indexed Variant Subsets are Dense-only (ADR 0061); this release's "
             f"primary_layout is {manifest.primary_layout.value!r}"
         )
     if manifest.completion_state is CompletionState.OBSERVED_ONLY:
@@ -959,7 +961,12 @@ def _validate_staged(plan: _SubsetPlan, work: Path) -> None:
     staged = store_arrays.open_group(work)
     errors: list[str] = []
     context = _SubsetValidation(
-        plan.store_path, plan.root, plan.manifest, plan.n_variants, plan.n_analyses
+        plan.store_path,
+        plan.root,
+        plan.manifest,
+        plan.n_variants,
+        plan.n_analyses,
+        plan.fmt,
     )
     _validate_one_indexed_subset(context, plan.name, staged, errors)
     if errors:
@@ -973,7 +980,7 @@ def remove_indexed_subset(store_path: str | Path, subset_name: str) -> bool:
     """Delete one published subset group, returning whether it existed.
 
     Removing a derived index changes no authoritative data; a release with none
-    is valid (ADR 0053).  The removal takes the namespace's publication lock
+    is valid (ADR 0061).  The removal takes the namespace's publication lock
     and first renames the group aside, so it can never interleave with a commit
     of the same name and a reader never sees a half-deleted group: the published
     name disappears atomically and the bytes are then reclaimed.  The rename
@@ -1172,8 +1179,15 @@ def _require_declared_counts(name: str, attrs: dict[str, Any], n_analyses: int) 
 def _require_variant_axis(
     name: str, group: Any, attrs: dict[str, Any], n_variants: int
 ) -> np.ndarray:
-    """The subset's Variant Indices are non-empty, sorted, unique and in bounds."""
+    """The subset's Variant Indices are int32, non-empty, sorted, unique and in bounds."""
     n_subset = _require_attr_int(name, attrs, ATTR_N_SUBSET_VARIANTS)
+    dtype = str(group["variant_index"].dtype)
+    if dtype != "int32":
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} variant_index has dtype {dtype}, not "
+            "int32; a widened or floating-point axis could silently truncate or "
+            "round a Store Variant Index"
+        )
     variant_index = np.asarray(group["variant_index"][:], dtype=np.int64)
     if len(variant_index) != n_subset:
         raise IndexedSubsetError(
@@ -1286,6 +1300,7 @@ def _require_decodable_subset(
     attrs: dict[str, Any],
     n_variants: int,
     n_analyses: int,
+    zarr_format: int,
     *,
     completed: bool,
 ) -> np.ndarray:
@@ -1302,6 +1317,10 @@ def _require_decodable_subset(
     `validate` expensive and is not a per-query obligation.  An in-range shift
     of a Variant Index is likewise not detectable here: identity and bounds hold
     and nothing cheap distinguishes it from the real axis.
+
+    The physical layout is checked too (#263 review): an inner chunk or shard
+    that spans Analyses, or a side array off the format's layout, would answer a
+    one-Analysis read by decoding another Analysis's cells.
     """
     _require_declared_metadata(name, attrs)
     _require_declared_counts(name, attrs, n_analyses)
@@ -1310,6 +1329,7 @@ def _require_decodable_subset(
     _require_plane_shapes(
         name, group, encoding, attrs, len(variant_index), completed=completed
     )
+    _require_array_layouts(name, group, zarr_format)
     return variant_index
 
 
@@ -1396,6 +1416,9 @@ def _open_indexed_subset(store_path: Path, subset_name: str) -> IndexedSubset:
         attrs,
         int(primary_z.shape[0]),
         int(primary_z.shape[1]),
+        zarr_format_for_version(
+            release.manifest.format_version, source=f"release at {store_path}"
+        ),
         completed=completed,
     )
     return IndexedSubset(
@@ -1595,6 +1618,118 @@ def _expected_arrays(encoding: StoreEncoding, *, completed: bool) -> frozenset[s
     return frozenset(names)
 
 
+#: The physical layout of every array a published subset carries: its
+#: `ArrayRole` and, for the `PER_VARIANT` side arrays, the override hint the
+#: writer passes.  The reader and the validator derive the expected inner chunk
+#: and shard from this through the store-array seam's authoritative policies, so
+#: neither trusts a recorded attribute nor reproduces a chunk sum by hand.  A
+#: layout is part of the format, not a free choice: a plane chunk or shard that
+#: spans Analyses defeats the one-Analysis narrow read the index exists for, and
+#: an off-format side array is the same class of silent divergence (#263 review).
+_INDEXED_SUBSET_ARRAY_LAYOUTS: Mapping[str, tuple[ArrayRole, int | None]] = (
+    MappingProxyType(
+        {
+            "variant_index": (ArrayRole.INDEXED_SUBSET_VARIANT_INDEX, None),
+            "z": (ArrayRole.INDEXED_SUBSET_PLANE, None),
+            "se": (ArrayRole.INDEXED_SUBSET_PLANE, None),
+            "eaf": (ArrayRole.INDEXED_SUBSET_PLANE, None),
+            _IMPUTED_MASK: (ArrayRole.INDEXED_SUBSET_PLANE, None),
+            EAF_REFERENCE: (ArrayRole.PER_VARIANT, store_arrays.INDEXED_SUBSET_CHUNK),
+            EAF_BASELINE: (ArrayRole.PER_VARIANT, store_arrays.INDEXED_SUBSET_CHUNK),
+            Z_OVERFLOW_INDEX: (ArrayRole.EXCEPTION_TABLE, None),
+            Z_OVERFLOW_VALUE: (ArrayRole.EXCEPTION_TABLE, None),
+            _SE_EXCEPTION_INDEX: (ArrayRole.EXCEPTION_TABLE, None),
+            _SE_EXCEPTION_VALUE: (ArrayRole.EXCEPTION_TABLE, None),
+            EAF_EXCEPTION_INDEX: (ArrayRole.EXCEPTION_TABLE, None),
+            EAF_EXCEPTION_VALUE: (ArrayRole.EXCEPTION_TABLE, None),
+            SE_COEFFICIENTS: (ArrayRole.SE_COEFFICIENTS, None),
+        }
+    )
+)
+
+
+def _inner_chunk_finding(
+    name: str, actual: tuple[int, ...], expected: tuple[int, ...]
+) -> str:
+    """The message for one array whose inner chunk is not the format's."""
+    return (
+        f"{name} inner chunk {actual} does not match the format's {expected}; "
+        "an Indexed Variant Subset plane must be one Analysis row per inner chunk"
+    )
+
+
+def _shard_findings(
+    name: str,
+    array: Any,
+    role: ArrayRole,
+    shape: tuple[int, ...],
+    expected_chunk: tuple[int, ...],
+    zarr_format: int,
+) -> list[str]:
+    """One array's shard findings on a v3 release, or its unsharded v2 ones."""
+    actual_shard = getattr(array, "shards", None)
+    if zarr_format != 3:
+        if actual_shard is None:
+            return []
+        return [f"{name} is sharded but this release's Zarr format is v2"]
+    if actual_shard is None:
+        return [
+            f"{name} is not sharded; format 0.2.0 stores every array with the "
+            "sharding codec"
+        ]
+    expected_shard = store_arrays.shard_layout(role, shape, inner_chunk=expected_chunk)
+    actual = tuple(int(size) for size in actual_shard)
+    if actual == expected_shard:
+        return []
+    return [
+        f"{name} shard {actual} does not match the format's {expected_shard}; "
+        "a shard must not span Analyses"
+    ]
+
+
+def _array_layout_findings(group: Any, zarr_format: int) -> list[str]:
+    """Every array whose inner chunk or shard is not the format's, unprefixed.
+
+    The expected layout is derived from each array's role and shape through
+    `chunk_layout`/`shard_layout`, the one table the writer and the converter
+    both decide layouts from, so no attribute needs to record it.  On a 0.2.0
+    (Zarr v3) release every array must carry a shard equal to the policy's;
+    on a 0.1.0 (Zarr v2) release none may (sharding is 0.2.0's).
+    """
+    findings: list[str] = []
+    for name, (role, hint) in _INDEXED_SUBSET_ARRAY_LAYOUTS.items():
+        if name not in group:
+            continue
+        array = group[name]
+        shape = tuple(int(size) for size in array.shape)
+        expected_chunk = store_arrays.chunk_layout(role, shape, hint=hint)
+        actual_chunk = tuple(int(size) for size in array.chunks)
+        if actual_chunk != expected_chunk:
+            findings.append(_inner_chunk_finding(name, actual_chunk, expected_chunk))
+            continue
+        findings.extend(
+            _shard_findings(name, array, role, shape, expected_chunk, zarr_format)
+        )
+    return findings
+
+
+def _require_array_layouts(name: str, group: Any, zarr_format: int) -> None:
+    """Refuse a subset whose arrays are not on the format's physical layout."""
+    findings = _array_layout_findings(group, zarr_format)
+    if findings:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} " + "; ".join(findings)
+        )
+
+
+def _check_array_layouts(
+    name: str, group: Any, zarr_format: int, errors: list[str]
+) -> None:
+    """Append every off-format inner chunk or shard of one subset."""
+    for finding in _array_layout_findings(group, zarr_format):
+        errors.append(f"indexed subset {name!r} {finding}")
+
+
 @dataclass(frozen=True)
 class _SubsetValidation:
     """The release-level facts every per-subset validation rule needs."""
@@ -1604,6 +1739,7 @@ class _SubsetValidation:
     manifest: StoreManifest
     n_variants: int
     n_analyses: int
+    zarr_format: int
 
     @property
     def namespace_dir(self) -> Path:
@@ -1626,7 +1762,16 @@ def validate_indexed_subsets(
     whose decoded values disagree with the primary planes all fail rather than
     being ignored.
     """
-    context = _SubsetValidation(Path(store_path), root, manifest, n_variants, n_analyses)
+    context = _SubsetValidation(
+        Path(store_path),
+        root,
+        manifest,
+        n_variants,
+        n_analyses,
+        zarr_format_for_version(
+            manifest.format_version, source=f"release at {store_path}"
+        ),
+    )
     if INDEXED_SUBSETS_GROUP not in root:
         _report_absent_namespace(context.namespace_dir, errors)
         return
@@ -1741,6 +1886,7 @@ def _validate_one_indexed_subset(
         name, group, declared, context.n_analyses, n_subset, completed, errors
     ):
         return
+    _check_array_layouts(name, group, context.zarr_format, errors)
     _validate_subset_side_tables(name, group, declared, n_subset, context.n_analyses, errors)
     if errors:
         return
@@ -1910,7 +2056,13 @@ def _check_variant_index_values(
 def _check_variant_index(
     name: str, group: Any, attrs: dict[str, Any], n_variants: int, errors: list[str]
 ) -> int | None:
-    """The subset's Variant Indices are sorted, unique and in bounds."""
+    """The subset's Variant Indices are int32, sorted, unique and in bounds."""
+    dtype = str(group["variant_index"].dtype)
+    if dtype != "int32":
+        errors.append(
+            f"indexed subset {name!r} variant_index has dtype {dtype}, not int32"
+        )
+        return None
     variant_index = np.asarray(group["variant_index"][:], dtype=np.int64)
     n_subset = len(variant_index)
     if n_subset == 0:

@@ -5,7 +5,7 @@ which defined `format_version` as `MAJOR.MINOR` and the reader's accept /
 reject / warn table over it. Issue #143; the closing format change of
 Roadmap 1 (#88).
 
-> **Narrowed by [ADR 0053](0053-indexed-variant-subsets.md):** a rebuildable,
+> **Narrowed by [ADR 0061](0061-indexed-variant-subsets.md):** a rebuildable,
 > non-authoritative query index that can be deleted without changing any
 > existing query answer does not move `format_version`; it is not the optional
 > Store-format content classified as a compatible change here.

@@ -14,7 +14,7 @@
 > contract (§5). ADR 0041 changes which digits carry a breaking change, and
 > which versions are readable at all. Read that one first.
 >
-> **Narrowed by [ADR 0053](0053-indexed-variant-subsets.md):** a rebuildable,
+> **Narrowed by [ADR 0061](0061-indexed-variant-subsets.md):** a rebuildable,
 > non-authoritative query index that can be deleted without changing any
 > existing query answer may be added in place and does not move
 > `format_version`. It is not the re-indexing transformation or optional

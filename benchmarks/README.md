@@ -400,7 +400,7 @@ instruments. `--skip-rss` drops the memory probes for a timings-only run.
 ### `benchmark_indexed_subset.py` (#267)
 
 Promotes the issue-262 prototype into the maintained, reproducible measurement
-of an Indexed Variant Subset (ADR 0053) at production scale. On **OGS-00009**
+of an Indexed Variant Subset (ADR 0061) at production scale. On **OGS-00009**
 it builds the complete full-statistic HapMap3 index (Z, SE and EAF — not a
 Z-only projection) and measures whether one Analysis's full result can be read
 from the index in under a second.

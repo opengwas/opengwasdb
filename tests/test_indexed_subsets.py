@@ -1,6 +1,6 @@
 """Indexed Variant Subsets: build, atomic publication, and standalone validation.
 
-Issue #264 implements the storage/lifecycle half of ADR 0053: one full-statistic,
+Issue #264 implements the storage/lifecycle half of ADR 0061: one full-statistic,
 all-Analysis Observed-Only Dense index, built atomically and validated against
 the primary planes. Query integration is #265 and Reference-Completed support is
 #266, so neither is exercised here.
@@ -37,6 +37,7 @@ from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.indexed_subsets import (
     DEFAULT_BAND_CELLS,
     INDEXED_SUBSETS_GROUP,
+    IndexedSubsetError,
     IndexedSubsetExistsError,
     IndexedSubsetNameError,
     IndexedSubsetStaleError,
@@ -1093,6 +1094,98 @@ def test_validation_rejects_a_wrong_plane_dtype(
     )
     errors = _errors_for(store)
     assert any("dtype" in error for error in errors), errors
+
+
+def _recreate_array(
+    group: zarr.Group,
+    name: str,
+    *,
+    chunks: tuple[int, ...],
+    shards: tuple[int, ...] | None = None,
+    dtype: str | None = None,
+) -> None:
+    """Replace an index array with the same data in an explicitly wrong layout.
+
+    The corruption tests are the one place the suite reaches into the Zarr group
+    by hand, so this keeps the damaged group readable and lets the rule under
+    test be the one that fails rather than a decode error.
+    """
+    data = np.asarray(group[name][:])
+    if dtype is not None:
+        data = data.astype(dtype)
+    del group[name]
+    group.create_array(name, data=data, chunks=chunks, shards=shards)
+
+
+def test_validation_rejects_a_plane_chunk_that_spans_analyses(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    """A chunk wider than one Analysis defeats the index's narrow-read contract."""
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    group = _index_group(store, "hm3")
+    n_analyses, n_subset = (int(size) for size in group["z"].shape)
+    _recreate_array(
+        group, "z", chunks=(n_analyses, n_subset), shards=(n_analyses, n_subset)
+    )
+
+    errors = _errors_for(store)
+    assert any("z" in error and "chunk" in error for error in errors), errors
+    with pytest.raises(IndexedSubsetError, match="chunk"):
+        open_indexed_subset(store, "hm3")
+
+
+def test_validation_rejects_a_plane_shard_that_spans_analyses(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    """A shard spanning Analyses makes a one-Analysis read decompress another's cells."""
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    group = _index_group(store, "hm3")
+    n_analyses, n_subset = (int(size) for size in group["z"].shape)
+    _recreate_array(
+        group, "z", chunks=(1, n_subset), shards=(n_analyses, n_subset)
+    )
+
+    errors = _errors_for(store)
+    assert any("z" in error and "shard" in error for error in errors), errors
+    with pytest.raises(IndexedSubsetError, match="shard"):
+        open_indexed_subset(store, "hm3")
+
+
+def test_validation_rejects_a_mis_chunked_per_variant_side_array(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    """A per-variant side array's chunk is part of the format, not a free choice."""
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    group = _index_group(store, "hm3")
+    n_subset = int(group.attrs["n_subset_variants"])
+    _recreate_array(group, "eaf_baseline", chunks=(1,), shards=(n_subset,))
+
+    errors = _errors_for(store)
+    assert any("eaf_baseline" in error for error in errors), errors
+    with pytest.raises(IndexedSubsetError, match="eaf_baseline"):
+        open_indexed_subset(store, "hm3")
+
+
+@pytest.mark.parametrize("dtype", ["float32", "int64"])
+def test_validation_requires_an_int32_variant_index(
+    tmp_path: Path, rich_store: Path, variant_list: Path, dtype: str
+) -> None:
+    """The Variant Index is stored int32; a widened or float axis is refused."""
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    group = _index_group(store, "hm3")
+    n_subset = int(group.attrs["n_subset_variants"])
+    _recreate_array(
+        group, "variant_index", chunks=(n_subset,), shards=(n_subset,), dtype=dtype
+    )
+
+    errors = _errors_for(store)
+    assert any("variant_index" in error and "int32" in error for error in errors), errors
+    with pytest.raises(IndexedSubsetError, match="int32"):
+        open_indexed_subset(store, "hm3")
 
 
 def test_build_rejects_an_unsafe_name(rich_store: Path, variant_list: Path) -> None:

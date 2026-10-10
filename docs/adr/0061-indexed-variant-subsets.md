@@ -1,9 +1,10 @@
 # Indexed Variant Subsets are optional full-statistic Dense query indexes
 
 Issue #262 asks for extraction of the approximately 1.2 million HapMap3 variants
-from one Analysis in under one second; issue #263 specifies the implementation. On OGS-00009 a membership index alone does
-not do that: those variants touch 9,822 of the Dense Z plane's 9,848 row chunks,
-so selecting their Store-local Variant Indices still takes a warm median of 15.37
+from one Analysis in under one second; issue #263 specifies the implementation.
+On OGS-00009 the #262 **prototype** found a membership index alone does not do
+that: those variants touch 9,822 of the Dense Z plane's 9,848 row chunks, so
+selecting their Store-local Variant Indices still took a warm median of 15.37
 seconds. This decision adds an optional Analysis-major derived index, accepts its
 bounded storage cost, and keeps the primary statistic planes authoritative.
 
@@ -29,14 +30,20 @@ it, and Association Status for a Reference-Completed release. Beta and p-value
 remain derived from Z and SE, and Analysis-level sample size remains in
 `analyses.tsv`; none is duplicated into the index.
 
-There is **no Z-only profile**. On the measured OGS-00009 release, the complete
-HapMap3 index is 5.211 GB (15.0% of the 34.681 GB release), versus 3.676 GB
-(10.6%) for Z alone: full statistics cost 1.42x, not 2x. The extra state and
-query contract of two profiles are not justified by saving 4.4% of the source
-release, especially when SE and EAF make the same index useful for instrument
-extraction and beta reconstruction. Residual-coded SE is also unreadable without
-the EAF it was coded against, so SE and its EAF dependencies are one indivisible
-bundle.
+There is **no Z-only profile**. The #262 **prototype** measured the complete
+HapMap3 index at **5.211 GB (15.0% of the 34.681 GB release)**, versus
+**3.676 GB (10.6%)** for Z alone: full statistics cost 1.42x, not 2x. The final
+**#267 production run** on OGS-00009 measured **6,235,037,696 physical bytes
+(17.852% over the release's 34,926,288,896 physical bytes)**, a build of
+**4,198 s**, and an exact-equivalence warm median of **407.267 ms** (max 407.823
+ms) for `ukb-b-17805`'s 1,178,549 present associations
+(`docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.{json,qmd}`,
+issue #267). Those production figures, not the prototype's, are the cost of the
+decision. The extra state and query contract of two profiles are not justified
+by saving the prototype's 4.4% of the source release, especially when SE and EAF
+make the same index useful for instrument extraction and beta reconstruction.
+Residual-coded SE is also unreadable without the EAF it was coded against, so SE
+and its EAF dependencies are one indivisible bundle.
 
 The public build and query interface follows the existing flat CLI:
 
@@ -59,8 +66,11 @@ A query through an Indexed Variant Subset has the same result fields,
 orientation, missing-cell filtering and genomic ordering as filtering the
 ordinary `analysis()` result to the same Store Variant Indices. Requesting an
 unknown, incomplete, stale or invalid subset fails loudly; it never silently
-falls back to the primary 15-second path. A caller that does not request a
-subset sees unchanged query behaviour.
+falls back to the primary 15-second path. The named subset is resolved and
+structurally validated before the Analysis ID is looked up, so a bad selector
+fails even when the Analysis ID is also unknown, while a valid subset with an
+unknown Analysis ID keeps the ordinary empty result. A caller that does not
+request a subset sees unchanged query behaviour.
 
 Indexed Variant Subsets are **non-authoritative derived artifacts**, like the
 Top-Hit Index and Rho Matrix. They may be added, atomically replaced or removed
@@ -110,12 +120,21 @@ performance result.
 
 ## Consequences
 
-- OGS-00009 users may choose no extra storage or one 5.211 GB HapMap3 index; no
-  Store Release pays the cost by default.
-- The prototype's Z path returns 1,178,549 present associations for
+- OGS-00009 users may choose no extra storage or one HapMap3 index; no Store
+  Release pays the cost by default. The #262 prototype put that index at
+  5.211 GB, and the final #267 production index measured 6,235,037,696 physical
+  bytes (17.852% of the release's physical bytes).
+- The #262 **prototype** Z path returns 1,178,549 present associations for
   `ukb-b-17805` in 11.9 ms median and is byte-equivalent after decoding,
-  including exact overflow values. Full-result latency must be measured during
-  implementation rather than inferred from that Z-only timing.
+  including exact overflow values; that is a prototype, Z-only figure, not the
+  production cost. The #267 production run measured the full-statistic index at
+  a **407.267 ms warm median** over the same 1,178,549 associations, byte-exact
+  against the primary result, and a **4,198 s** build.
+- The #267 production build's peak RSS was **1,234.8 MB** against its declared
+  band-plus-fixed-overhead bound of **1,146.1 MB**, so the run recorded
+  `peak_rss_within_bound = false`. The miss is reported honestly rather than
+  the bound being widened after the fact; the peak is still set by the band and
+  not by the full matrix.
 - The store format gains a compatible optional index namespace and validation
   rules. The specification, overview rendering, CLI documentation and sibling
   repository walkthrough must describe it in the implementation change.
