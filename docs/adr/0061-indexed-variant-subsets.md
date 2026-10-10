@@ -146,16 +146,16 @@ performance result.
   whole multiple of the primary plane's read unit, so a source file is decoded
   once. On the fresh #270 OGS-00009 HapMap3 build every one of the 38,456 `z`,
   `se` and `eaf` physical files was encoded exactly once (measured at the store
-  layer). The build took **194.19 s** -- write **182.34 s** and the publication
-  gate **1.807 s** -- against the #267 build's 4,198 s, with byte-exact
-  six-field equivalence, 6,235,013,120 physical index bytes (17.852%) and a
-  1,239.4 MB peak RSS (still resolution-bound, so the #267 bound miss recurs).
+  layer). The build took **215.89 s** -- write **203.546 s** and the publication
+  gate **2.792 s** -- against the #267 build's 4,198 s, with byte-exact
+  six-field equivalence, 6,235,000,832 physical index bytes (17.852%) and a
+  1,234.7 MB peak RSS (still resolution-bound, so the #267 bound miss recurs).
 - The build's gate validates the structural invariants exhaustively (identity
   and attributes, exact array set, shapes/dtypes/chunking, the full Variant
   Index, counts and provenance), together with the small side-table remapping
   and the per-variant EAF baseline/reference, and replaces the full-matrix
   decoded comparison with a **bounded deterministic stratified sample**: the
-  four corners, the slot before and after every inner-chunk boundary, 16 evenly
+  four corners, the slot before and after a spread of inner-chunk boundaries, 16 evenly
   spaced Analyses, and input-checksum-seeded cells -- **528 cells** on the
   #270 run (seed 166638625948460791), independent of the matrix. Standalone
   `validate_store`/`validate_indexed_subsets` remain **exhaustive** and decode
@@ -164,12 +164,12 @@ performance result.
   audit; the build records the mode, sample strategy, seed, cell count and
   sampled duration. The risk is documented rather than hidden, and the low
   build cost is part of this ADR's outcome.
-- The #270 query latency was measured at **555.670 ms** warm median in that
+- The #270 query latency was measured at **699.428 ms** warm median in that
   benchmark run. An interleaved same-machine A/B of the #267 and #270 indexes
-  (alternating reads in one process, 15 rounds each) measured **741.8 ms** and
-  **744.9 ms**; the two are within noise, their chunk/shard geometry is
+  (alternating reads in one process, 15 rounds each) measured **504.2 ms** and
+  **505.4 ms** -- within 1.2 ms of each other; their chunk/shard geometry is
   identical and their per-plane physical bytes differ by less than 0.01%, so
-  the run's figure is environmental rather than a layout regression.
+  the run's figure tracks machine load rather than any layout regression.
 - The store format gains a compatible optional index namespace and validation
   rules. The specification, overview rendering, CLI documentation and sibling
   repository walkthrough must describe it in the implementation change.

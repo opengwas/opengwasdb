@@ -1,8 +1,8 @@
 {
-  "commit": "6166c2b",
-  "measured_at": "2026-10-10T19:40:19.308422+00:00",
+  "commit": "dd56755",
+  "measured_at": "2026-10-10T19:54:08.870366+00:00",
   "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/270-indexed-build-opt/opengwasdb",
-  "opengwasdb_fingerprint": "9a591b0924b766cc70261184a520d3d4e8e916da3d2ab6fa14ff3f888f2f6cbf",
+  "opengwasdb_fingerprint": "09fad7b8cdb72f3604c6cc26c4b7d2ea436e314d0760e1efaa76d19b08b7f2ad",
   "artifact_schema_version": 4,
   "analysis_id": "ukb-b-17805",
   "subset_name": "hm3",
@@ -60,22 +60,22 @@
       "allele_incompatible": 23,
       "multiple_store_rows": 2743,
       "duplicate_alids": 0,
-      "resolution_ms": 4067.756
+      "resolution_ms": 3932.906
     }
   },
   "storage": {
     "baseline_logical_bytes": 34680981363,
     "baseline_physical_bytes": 34926288896,
-    "index_physical_bytes": 6235013120,
+    "index_physical_bytes": 6235000832,
     "index_logical_bytes": 5943821227,
     "increase_percent": 17.852,
     "planes": {
       ".zgroup": 4096,
       ".zattrs": 4096,
       "variant_index": 1294336,
-      "z": 4360556544,
-      "se": 1158311936,
-      "eaf": 710672384,
+      "z": 4360564736,
+      "se": 1158287360,
+      "eaf": 710676480,
       "z_overflow_index": 12288,
       "z_overflow_value": 12288,
       "eaf_baseline": 4009984,
@@ -84,23 +84,23 @@
       "se_coefficients": 24576,
       "se_exception_index": 45056,
       "se_exception_value": 36864,
-      "total": 6235013120
+      "total": 6235000832
     }
   },
   "build": {
     "run_mode": "fresh",
     "reused_from": "",
-    "total_seconds": 194.19,
-    "in_process_seconds": 192.775,
-    "peak_rss_mb": 1239.4,
+    "total_seconds": 215.89,
+    "in_process_seconds": 214.292,
+    "peak_rss_mb": 1234.7,
     "band_cells": 4000000,
     "rss_bound_mb": 1146.1,
     "rss_within_bound": false,
     "phases": {
-      "prepare_seconds": 8.616,
-      "write_seconds": 182.34,
-      "validate_seconds": 1.807,
-      "publish_seconds": 184.159
+      "prepare_seconds": 7.94,
+      "write_seconds": 203.546,
+      "validate_seconds": 2.792,
+      "publish_seconds": 206.352
     },
     "output_chunk_writes": {
       "z": {
@@ -135,28 +135,28 @@
       "p95": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)"
     },
     "ordinary_before": {
-      "first_ms": 48623.2,
+      "first_ms": 47885.874,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 19220.19,
-      "p95_ms": 22988.03,
+      "median_ms": 18689.511,
+      "p95_ms": 23277.8,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 7578651
     },
     "ordinary_after": {
-      "first_ms": 21077.516,
+      "first_ms": 26589.125,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 19705.555,
-      "p95_ms": 20786.152,
+      "median_ms": 18572.02,
+      "p95_ms": 19546.132,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 7578651
     },
     "indexed": {
-      "first_ms": 556.446,
+      "first_ms": 777.783,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 555.67,
-      "p95_ms": 556.536,
+      "median_ms": 699.428,
+      "p95_ms": 717.535,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 1178549
@@ -189,8 +189,8 @@
   },
   "run": {
     "mode": "fresh",
-    "started_at": "2026-10-10T19:31:51.591363+00:00",
-    "finished_at": "2026-10-10T19:40:14.938448+00:00",
+    "started_at": "2026-10-10T19:45:17.286845+00:00",
+    "finished_at": "2026-10-10T19:54:03.415865+00:00",
     "subset_present_during_ordinary_before": false,
     "subset_published_by_this_run": true,
     "ordinary_bracketed": true,
@@ -209,7 +209,7 @@
     "reason": ""
   },
   "ordinary_stability": {
-    "median_change_percent": 2.525,
+    "median_change_percent": 0.629,
     "noise_envelope_percent": 25.0,
     "within_envelope": true
   }

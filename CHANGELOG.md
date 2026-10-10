@@ -402,19 +402,19 @@ the end of this file.
   Index, counts and provenance), plus the small side-table remapping and the
   per-variant EAF baseline/reference, and replaces the full-matrix decoded
   comparison with a **bounded deterministic stratified sample** of decoded
-  Z/SE/EAF and Association Status: the endpoints of both axes, every inner-chunk
-  boundary, a spread of Analyses and input-checksum-seeded cells (528 cells on
-  the OGS-00009 run). The build result and artifact record `validation_mode`,
+  Z/SE/EAF and Association Status: the endpoints of both axes, a spread of
+  inner-chunk boundaries, a spread of Analyses and input-checksum-seeded cells
+  (528 cells on the OGS-00009 run). The build result and artifact record `validation_mode`,
   the sample strategy, seed and cell count, and the sampled duration. Standalone
   `validate` remains **exhaustive** and decodes every indexed cell, side table,
   imputed mask and reference EAF, so an isolated corruption the build sample can
   miss is refused by an explicit audit. On the fresh #270 OGS-00009 HapMap3
   build the store layer measured every one of the 38,456 `z`, `se` and `eaf`
-  physical files encoded exactly once; the build took 194.19 s (write 182.34 s,
-  sampled validation 1.807 s) against the #267 4,198 s, with exact six-field
-  equivalence, 6,235,013,120 physical index bytes (17.852%) and a 1,239.4 MB
+  physical files encoded exactly once; the build took 215.89 s (write 203.546 s,
+  sampled validation 2.792 s) against the #267 4,198 s, with exact six-field
+  equivalence, 6,235,000,832 physical index bytes (17.852%) and a 1,234.7 MB
   peak RSS (still resolution-bound, not the subset matrix). An interleaved
-  same-machine A/B of the #267 and #270 indexes measured 741.8 ms and 744.9 ms
+  same-machine A/B of the #267 and #270 indexes measured 504.2 ms and 505.4 ms
   warm median -- within noise -- so the layout and query path are unchanged.
   Tests build a v2 and a v3 index under a `count_shard_writes` recorder and fail
   if any physical output file is encoded more than once; a chunk-boundary
