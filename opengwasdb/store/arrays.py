@@ -49,6 +49,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -1105,6 +1106,19 @@ def array_key_of_store_key(key: str) -> str | None:
     return None if marker < 0 else key[:marker]
 
 
+#: A Zarr v2 chunk key is ``<array>/<c0>[.<c1>...]`` with purely numeric
+#: coordinates; every other suffix (``.zarray``, ``.zattrs``, ``zarr.json``,
+#: groups) is metadata and does not name a compressed output chunk.  v2 has no
+#: ``/c/`` marker, so `array_key_of_store_key` alone cannot see these.
+_V2_CHUNK_KEY = re.compile(r"^(?P<array>.+)/(?P<coordinates>\d+(?:\.\d+)*)$")
+
+
+def v2_chunk_array_key(key: str) -> str | None:
+    """The array path a Zarr v2 chunk key names, or `None` for anything else."""
+    match = _V2_CHUNK_KEY.match(key)
+    return match.group("array") if match else None
+
+
 class ShardWriteRecorder:
     """Every byte the Store hands to its storage layer, attributable to an array.
 
@@ -1114,12 +1128,22 @@ class ShardWriteRecorder:
     rewrites every shard once per region (#249).  The bytes are the real
     (compressed, as the codec pipeline wrote them) bytes, not the selection's
     logical size.
+
+    ``record_bytes=False`` records only the key: a build that writes gigabytes
+    through hundreds of thousands of chunks pays to ``to_bytes`` each write, and
+    a caller counting *how many times* a chunk was encoded (#270) does not need
+    the bytes.  ``chunk_writes`` reads v3 shard keys, ``v2_chunk_writes`` the
+    v2 chunk files, so the same recorder answers both Store formats.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, record_bytes: bool = True) -> None:
         self.writes: list[tuple[str, int]] = []
+        self.record_bytes = record_bytes
 
     def record(self, key: str, value: Any) -> None:
+        if not self.record_bytes:
+            self.writes.append((key, 0))
+            return
         to_bytes = getattr(value, "to_bytes", None)
         self.writes.append((key, len(to_bytes() if callable(to_bytes) else bytes(value))))
 
@@ -1128,6 +1152,17 @@ class ShardWriteRecorder:
         counted: dict[str, dict[str, int]] = {}
         for key, _size in self.writes:
             path = array_key_of_store_key(key)
+            if path is None:
+                continue
+            counted.setdefault(path, {})
+            counted[path][key] = counted[path].get(key, 0) + 1
+        return counted
+
+    def v2_chunk_writes(self) -> dict[str, dict[str, int]]:
+        """`array path -> {v2 chunk key: times written}`, metadata excluded."""
+        counted: dict[str, dict[str, int]] = {}
+        for key, _size in self.writes:
+            path = v2_chunk_array_key(key)
             if path is None:
                 continue
             counted.setdefault(path, {})
@@ -1149,18 +1184,23 @@ _WRITE_RECORDER: ShardWriteRecorder | None = None
 
 
 @contextmanager
-def count_shard_writes() -> Iterator[ShardWriteRecorder]:
+def count_shard_writes(*, record_bytes: bool = True) -> Iterator[ShardWriteRecorder]:
     """Record every Store write's bytes and shard key while the block runs.
 
     A benchmark/test hook, the counting companion of `require_whole_shard_writes`:
     the guard answers "is this write whole-shard?" and the recorder answers "how
     many bytes did it cost?", which is what #249's write-amplification table
     needs.  It is off in production (a `None` check per storage write).
+
+    ``record_bytes=False`` skips the per-write ``to_bytes`` and is what a caller
+    counting *encodings* (#270) uses: the key count is the measurement, and
+    materialising every compressed chunk only to measure its length would make
+    the measurement change the run it measures.
     """
     global _WRITE_RECORDER
     if _WRITE_RECORDER is not None:
         raise RuntimeError("a shard-write recorder is already installed")
-    recorder = ShardWriteRecorder()
+    recorder = ShardWriteRecorder(record_bytes=record_bytes)
     _WRITE_RECORDER = recorder
     try:
         yield recorder

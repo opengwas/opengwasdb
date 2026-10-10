@@ -273,7 +273,10 @@ print(md_table(
         ["run mode", build["run_mode"]],
         ["configured band", f"{build['band_cells']:,} cells"],
         ["prepare (open release, resolve list)", f"{build['phases']['prepare_seconds']:,.2f} s"],
-        ["publish (write planes + staged validation)", f"{build['phases']['publish_seconds']:,.2f} s"],
+        ["write (planes, chunk-aligned)", f"{build['phases']['write_seconds']:,.2f} s"],
+        ["staged validation (exhaustive second pass)", f"{build['phases']['validate_seconds']:,.2f} s"],
+        ["publish (write + validation + staging)", f"{build['phases']['publish_seconds']:,.2f} s"],
+        ["validation share of publish", f"{build['phases']['validate_seconds'] / build['phases']['publish_seconds'] * 100:,.1f}%"],
         ["in-process total", f"{build['in_process_seconds']:,.2f} s"],
         ["subprocess wall total (incl. interpreter startup)", f"{build['total_seconds']:,.2f} s"],
         ["requested / resolved / absent (writer)", f"{build['requested']:,} / {build['resolved']:,} / {build['absent']:,}"],
@@ -285,13 +288,34 @@ print(md_table(
         ["build block source", build["reused_from"] or "this run"],
     ],
 ))
+counts = build.get("output_chunk_writes", {})
+if counts:
+    print()
+    print(md_table(
+        ["Statistic plane", "physical files", "encodings", "most encodings of one file"],
+        [
+            [f"`{name}`", f"{stats['chunks']:,}", f"{stats['writes']:,}", stats["max_writes_one_chunk"]]
+            for name, stats in sorted(counts.items())
+        ],
+    ))
 ```
+
+The writer copies the primary planes' stored codes into the index **one physical
+output file at a time** — a v2 inner chunk or a v3 shard — so each compressed
+file is encoded exactly once (the table above is the measured count, not a
+claim). Before #270 the band was sized only by cell budget (about 1,976 variants
+on OGS-00009), so each 65,536-variant output chunk was partially rewritten about
+33 times. The Analysis axis is tiled within the band so peak memory is one band
+of one plane, independent of the subset's total size, while the tile is a whole
+multiple of the primary plane's own read unit so a source file is decoded once.
 
 The bound is `band_cells` times a per-cell allowance plus a fixed term, so it is
 a function of the configured band and not of the full Store axis (whose decoded
 size is printed below). The measured peak is reported as measured: where it
 exceeds the declared bound the target below fails rather than the bound being
-widened after the fact.
+widened after the fact. The exhaustive staged validation still decodes and
+compares **every** indexed cell and dependency against the primary planes; its
+share of the publish time is printed above rather than replaced by a sample.
 
 ```{python}
 #| echo: false
@@ -395,6 +419,15 @@ print(f"""
   `peak_rss_within_bound = {targets['peak_rss_within_bound']}`. The peak is still
   set by the band, not by the full matrix (terabytes decoded). Widening the bound
   after the fact would be the tuning this harness refuses.
+- **The publication gate is exhaustive, not a sample.** The staged validation
+  decodes and compares every indexed Z, SE and EAF cell, every side table, the
+  imputed mask and the reference EAF against the primary planes
+  ({build['phases']['validate_seconds']:,.2f} s, the share above). A corrupt cell
+  in any output chunk is refused, including one outside any small sample.
+- **The measured rewrite count is one per physical file.** The table above is
+  the store-level count over the staged group, so a v2 chunk (or v3 shard)
+  encoded twice would show `most encodings of one file = 2` and fail the
+  artifact's semantic checks.
 - **`first_ms` is not a cold-cache figure.** The OS page cache is never dropped,
   and `ordinary_after` follows `ordinary_before`, so it is already warm. The
   method is disclosed in the artifact under `timings.method`.
@@ -404,18 +437,13 @@ print(f"""
   (`build.run_mode = {build['run_mode']}`). A query-only re-run may reuse an
   earlier artifact's measured build block via `--build-stats`, and it is named
   here as `{build['reused_from'] or 'this run'}`.
-- **This is a historical measurement at the commit named in Scope**
-  (`{b['commit']}`, fingerprint `{b['opengwasdb_fingerprint'][:16]}…`). A later
-  documentation-only commit corrected stale "Observed-Only Dense only" wording
-  in CLI help, error messages and docstrings; it changed no measured code path,
-  so the artifact and its fingerprint remain the measurement for the code that
-  actually ran and are deliberately not re-generated for a wording change.
-- **`store.copy_kind` in this historical artifact is the copy method the older
-  `cp --reflink=auto` request assumed.** The harness now uses
-  `cp --reflink=always`, verifies the reflink, falls back to a documented
-  `full_copy`, and records `reused_scratch_copy` when it did not perform the
-  copy; this frozen artifact predates that verification and is not re-generated
-  to change a label with no measurement meaning.
+- **This measurement is at the commit named in Scope**
+  (`{b['commit']}`, fingerprint `{b['opengwasdb_fingerprint'][:16]}…`). It was
+  re-run for #270's chunk-aligned writer; both the artifact and this page are
+  regenerated from that run.
+- **`store.copy_kind` is the copy method the harness verified**, recorded as
+  `reflink` or `full_copy` from `cp --reflink=always` with a documented
+  fallback, or `reused_scratch_copy` when it did not perform the copy.
 - The per-plane physical figures bucket the group's top-level entries, so a
   future encoding that adds an array appears without a hard-coded plane list.
 """)
@@ -433,7 +461,7 @@ print(f"""```bash
 # scratch copy, measure ordinary_before, build, measure ordinary_after.
 pixi run -e dev python benchmarks/benchmark_indexed_subset.py \\
   --store {store['authoritative_path']} \\
-  --work /data/opengwasdb/work/267-indexed \\
+  --work /data/opengwasdb/work/270-indexed \\
   --analysis-id {analysis_id} \\
   --subset-name {subset_name} \\
   --reps 5 \\

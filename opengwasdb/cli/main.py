@@ -1362,7 +1362,10 @@ _INDEXED_SUBSET_OVERWRITE_OPTION = typer.Option(
 _INDEXED_SUBSET_BAND_CELLS_OPTION = typer.Option(
     DEFAULT_BAND_CELLS,
     "--band-cells",
-    help="Peak cells read per streamed band; bounds build memory",
+    help=(
+        "Target cells per streamed Analysis tile; the variant band is one output "
+        "chunk/shard, so peak build memory is bounded by the band, not the subset"
+    ),
 )
 
 

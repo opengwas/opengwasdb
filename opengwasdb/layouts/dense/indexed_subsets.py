@@ -58,6 +58,7 @@ import logging
 import os
 import re
 import shutil
+import time
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -109,9 +110,11 @@ log = logging.getLogger(__name__)
 #: The group under `data.zarr` that holds every Indexed Variant Subset.
 INDEXED_SUBSETS_GROUP = "indexed_subsets"
 
-#: Target cell count per build/validate band.  Bands bound peak memory at the
-#: band's raw codes plus its decoded floats and fixed overhead, independent of
-#: the subset's total size; the CLI exposes it as `--band-cells`.
+#: Target Analysis-tile cell count per build/validate band.  The variant band is
+#: fixed by the index's physical write unit (a v2 chunk or a v3 shard), and this
+#: budget chooses the Analysis tile within it, whole multiples of the primary's
+#: read unit; peak memory is one band of one plane, independent of the subset's
+#: total size.  The CLI exposes it as `--band-cells`.
 DEFAULT_BAND_CELLS = 4_000_000
 
 #: The one attribute schema this module writes and reads.  A future layout
@@ -334,7 +337,13 @@ class IndexedSubset:
 
 @dataclass(frozen=True)
 class IndexedSubsetBuild:
-    """What one successful `build_indexed_subset` published."""
+    """What one successful `build_indexed_subset` published.
+
+    ``write_seconds`` and ``validate_seconds`` split the staged publish into the
+    construction pass and the exhaustive second pass, so a caller can see which
+    half a build time is in (#270).  They are wall-clock measurements of the two
+    calls, not estimates.
+    """
 
     name: str
     path: Path
@@ -344,6 +353,8 @@ class IndexedSubsetBuild:
     resolved_count: int
     absent_count: int
     input_sha256: str
+    write_seconds: float = 0.0
+    validate_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -487,21 +498,64 @@ def _builder_version() -> str:
         return OPENGWASDB_PACKAGE_VERSION
 
 
-def _band_bounds(n_subset: int, n_analyses: int, band_cells: int) -> list[tuple[int, int]]:
-    """Subset-variant bands whose cell count is at most `band_cells`.
+def _physical_write_unit(array: Any) -> int:
+    """The variant-axis width at which one write covers one whole store file.
 
-    A zero-variant subset has no bands; returning an empty list rather than a
+    A Zarr v3 array is sharded: one compressed file per shard, so a write that
+    covers part of a shard is a read-modify-write of the whole shard (the
+    partial-shard defect #249 fixed for Ragged).  A Zarr v2 array has one file
+    per inner chunk.  The output band is therefore the shard where there is
+    one, and the inner chunk otherwise; an index plane written on its inner
+    chunk in a v3 store would re-encode every shard once per inner chunk.
+    """
+    shards = getattr(array, "shards", None)
+    return max(1, int(shards[1])) if shards is not None else max(1, int(array.chunks[1]))
+
+
+def _source_read_unit(array: Any) -> int:
+    """The primary plane's Analysis-axis read unit, for source-aligned tiling.
+
+    A tile that is a whole multiple of this decodes each primary chunk or shard
+    once; a smaller tile re-decodes the same primary file for every tile.
+    Reading is far cheaper than re-encoding a written chunk, but a band that
+    ignored the source geometry would decode the source tens of times more
+    than it must.  It is the same per-file geometry as the output write unit.
+    """
+    return _physical_write_unit(array)
+
+
+def _output_write_bands(n_subset: int, write_unit: int) -> list[tuple[int, int]]:
+    """Subset-variant bands aligned to the index's physical write unit.
+
+    Each band is a whole store file (a v2 chunk or a v3 shard) along the variant
+    axis, so the writer encodes every output file exactly once (#270).  A
+    zero-variant subset has no bands; returning an empty list rather than a
     zero-stride ``range`` keeps a caller from crashing on an index that
     validation separately rejects as empty.
     """
     if n_subset <= 0:
         return []
-    per_band = max(1, int(band_cells) // max(1, n_analyses))
-    per_band = min(per_band, n_subset)
-    return [
-        (start, min(start + per_band, n_subset))
-        for start in range(0, n_subset, per_band)
-    ]
+    unit = max(1, int(write_unit))
+    return [(start, min(start + unit, n_subset)) for start in range(0, n_subset, unit)]
+
+
+def _analysis_tiles(
+    n_analyses: int, write_unit: int, band_cells: int, read_unit: int
+) -> list[tuple[int, int]]:
+    """Analysis tiles that bound a write band's memory and align to the source.
+
+    A band of ``write_unit`` variants times a tile of Analyses must stay within
+    ``band_cells`` where the budget allows, but a tile smaller than the
+    primary's Analysis-axis read unit would decode each source file once per
+    tile.  The tile is therefore the largest whole multiple of ``read_unit``
+    that fits the budget, and at least one ``read_unit`` -- so the true bound is
+    ``write_unit * tile``, independent of the subset's length.
+    """
+    budget = max(1, int(band_cells) // max(1, int(write_unit)))
+    unit = max(1, min(int(read_unit), max(1, n_analyses)))
+    tile = (budget // unit) * unit if budget >= unit else unit
+    tile = max(1, min(tile, n_analyses))
+    return [(start, min(start + tile, n_analyses)) for start in range(0, n_analyses, tile)]
 
 
 def _remap_side_table(
@@ -595,6 +649,23 @@ def _create_subset_arrays(
     return z, se, eaf, imputed
 
 
+def _copy_one_plane(
+    target: Any, source: Any, subset: np.ndarray, n_analyses: int, band_cells: int
+) -> None:
+    """Copy one primary plane's codes into the index, one output file at a time.
+
+    The variant band is a whole index store file and the Analysis tiles are
+    multiples of the primary's read unit, so each primary file is decoded once
+    and each index file is encoded once.
+    """
+    write_unit = _physical_write_unit(target)
+    read_unit = _source_read_unit(source)
+    for start, stop in _output_write_bands(len(subset), write_unit):
+        rows = subset[start:stop]
+        for a0, a1 in _analysis_tiles(n_analyses, write_unit, band_cells, read_unit):
+            target[a0:a1, start:stop] = np.asarray(source.oindex[rows, a0:a1]).T
+
+
 def _copy_plane_bands(
     z_target: Any,
     se_target: Any,
@@ -605,17 +676,18 @@ def _copy_plane_bands(
     n_analyses: int,
     band_cells: int,
 ) -> None:
-    """Copy the primary planes' codes into the Analysis-major index, by band."""
-    for start, stop in _band_bounds(len(subset), n_analyses, band_cells):
-        rows = subset[start:stop]
-        z_target[:, start:stop] = np.asarray(root["z"].oindex[rows, :]).T
-        se_target[:, start:stop] = np.asarray(root["se"].oindex[rows, :]).T
-        if eaf_target is not None:
-            eaf_target[:, start:stop] = np.asarray(root["eaf"].oindex[rows, :]).T
-        if imputed_target is not None:
-            imputed_target[:, start:stop] = np.asarray(
-                root[_IMPUTED_MASK].oindex[rows, :]
-            ).T
+    """Copy the primary planes' codes into the Analysis-major index.
+
+    Plane at a time and output-write-unit at a time: every compressed index
+    chunk (v2) or shard (v3) is encoded exactly once, while peak memory is one
+    band of one plane rather than the whole subset matrix (#270).
+    """
+    _copy_one_plane(z_target, root["z"], subset, n_analyses, band_cells)
+    _copy_one_plane(se_target, root["se"], subset, n_analyses, band_cells)
+    if eaf_target is not None:
+        _copy_one_plane(eaf_target, root["eaf"], subset, n_analyses, band_cells)
+    if imputed_target is not None:
+        _copy_one_plane(imputed_target, root[_IMPUTED_MASK], subset, n_analyses, band_cells)
 
 
 def _remap_and_write(
@@ -722,8 +794,9 @@ def write_indexed_subset_group(
 
     Every array a published subset holds is created here; validation compares
     what this wrote against the primaries, and a caller never assembles the
-    group by hand.  The planes are copied band by band, so peak memory is the
-    configured band rather than the subset matrix.
+    group by hand.  The planes are copied one output store file at a time,
+    plane by plane, so each compressed chunk or shard is encoded once and peak
+    memory is one band of one plane rather than the subset matrix (#270).
 
     ``completed`` is the release's Completion State, passed in rather than
     re-derived from the presence of a primary array: a Reference-Completed
@@ -904,11 +977,14 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
     """Stage, validate and atomically publish one prepared subset."""
     dest = plan.store_path / "data.zarr" / INDEXED_SUBSETS_GROUP / plan.name
     _ensure_indexed_subset_namespace(plan.store_path, plan.fmt)
+    write_seconds = 0.0
+    validate_seconds = 0.0
     try:
         with staged_named_group(dest, overwrite=overwrite) as work:
             staged = store_arrays.open_group_for_write(
                 work, "w", zarr_format=plan.fmt
             )
+            started = time.perf_counter()
             write_indexed_subset_group(
                 staged,
                 plan.root,
@@ -919,7 +995,10 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
                 band_cells,
                 completed=plan.completed,
             )
+            write_seconds = time.perf_counter() - started
+            started = time.perf_counter()
             _validate_staged(plan, work)
+            validate_seconds = time.perf_counter() - started
     except DestinationExistsError as exc:
         raise IndexedSubsetExistsError(str(exc)) from exc
     return IndexedSubsetBuild(
@@ -931,6 +1010,8 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
         resolved_count=plan.resolved.resolved,
         absent_count=plan.resolved.absent,
         input_sha256=plan.variant_list.sha256,
+        write_seconds=write_seconds,
+        validate_seconds=validate_seconds,
     )
 
 
@@ -2268,13 +2349,22 @@ def _compare_indexed_values(
     _eaf_reference_error(name, group, root, subset, encoding, errors)
     if errors:
         return
-    for start, stop in _band_bounds(len(subset), n_analyses, DEFAULT_BAND_CELLS):
-        message = _compare_indexed_band(
-            name, context, group, encoding, subset, start, stop, n_analyses
-        )
-        if message is not None:
-            errors.append(message)
-            return
+    # Read the index in its own physical write units and tile the Analysis axis
+    # so each compressed output chunk (v2) or shard (v3) is decoded exactly
+    # once, while peak memory is one band of one plane.  The Analysis tile is
+    # the budget-derived one rather than the primary's read unit: validation
+    # decodes to float32, so a source-aligned 65,536-variant band held ~1.9 GB
+    # on the 20k probe (measured) and was no faster -- the decode and compare,
+    # not the primary re-read, is the work.
+    write_unit = _physical_write_unit(group["z"])
+    for start, stop in _output_write_bands(len(subset), write_unit):
+        for a0, a1 in _analysis_tiles(n_analyses, write_unit, DEFAULT_BAND_CELLS, 1):
+            message = _compare_indexed_band(
+                name, context, group, encoding, subset, start, stop, a0, a1
+            )
+            if message is not None:
+                errors.append(message)
+                return
 
 
 def _compare_indexed_band(
@@ -2285,30 +2375,32 @@ def _compare_indexed_band(
     subset: np.ndarray,
     start: int,
     stop: int,
-    n_analyses: int,
+    a0: int,
+    a1: int,
 ) -> str | None:
     """One band's decoded equality checks; the first failure's message, or None."""
     n_subset = len(subset)
     rows = subset[start:stop]
-    positions = positions_rows_cols(np.arange(n_analyses), np.arange(start, stop), n_subset)
-    index_z_raw = np.asarray(group["z"][:, start:stop])
-    index_se_raw = np.asarray(group["se"][:, start:stop])
+    cols = np.arange(a0, a1)
+    positions = positions_rows_cols(cols, np.arange(start, stop), n_subset)
+    index_z_raw = np.asarray(group["z"][a0:a1, start:stop])
+    index_se_raw = np.asarray(group["se"][a0:a1, start:stop])
     primary_eaf = (
-        context.eaf_plane.read_rows(rows).values
+        context.eaf_plane.read_block(rows, cols).values
         if context.eaf_plane.can_report_frequencies
         else None
     )
-    primary_z = context.z_plane.rows(rows)
-    primary_se = context.se_plane.rows(rows, eaf=primary_eaf)
+    primary_z = context.z_plane.block(rows, cols)
+    primary_se = context.se_plane.block(rows, cols, eaf=primary_eaf)
     index_eaf, eaf_error = _decode_index_eaf(
-        name, context, group, encoding, start, stop, n_analyses
+        name, context, group, encoding, start, stop, a0, a1
     )
     if eaf_error is not None:
         return eaf_error
     return (
         _missingness_error(name, context, index_z_raw, index_se_raw, encoding)
         or _imputed_band_error(
-            name, context, group, index_z_raw, index_se_raw, encoding, rows, start, stop
+            name, context, group, index_z_raw, index_se_raw, encoding, rows, start, stop, a0, a1
         )
         or _z_band_error(name, context, index_z_raw, primary_z, positions)
         or _eaf_band_error(name, index_eaf, primary_eaf)
@@ -2319,7 +2411,7 @@ def _compare_indexed_band(
             index_eaf,
             primary_se,
             encoding,
-            n_analyses,
+            cols,
             positions,
         )
     )
@@ -2332,7 +2424,8 @@ def _decode_index_eaf(
     encoding: StoreEncoding,
     start: int,
     stop: int,
-    n_analyses: int,
+    a0: int,
+    a1: int,
 ) -> tuple[np.ndarray | None, str | None]:
     """Decode one band's indexed EAF, with an error string when it cannot be.
 
@@ -2345,16 +2438,17 @@ def _decode_index_eaf(
     if not has_eaf and not encoding.eaf.reference:
         return None, None
     n_subset = int(group["z"].shape[1])
-    positions = positions_rows_cols(np.arange(n_analyses), np.arange(start, stop), n_subset)
+    tile = a1 - a0
+    positions = positions_rows_cols(np.arange(a0, a1), np.arange(start, stop), n_subset)
     if has_eaf:
-        codes = np.asarray(group["eaf"][:, start:stop])
+        codes = np.asarray(group["eaf"][a0:a1, start:stop])
         baseline_cells = (
             None
             if context.baseline is None
-            else context.baseline[start:stop][None, :].repeat(n_analyses, axis=0)
+            else context.baseline[start:stop][None, :].repeat(tile, axis=0)
         )
     else:
-        codes = np.full((n_analyses, stop - start), np.nan, dtype=np.float32)
+        codes = np.full((tile, stop - start), np.nan, dtype=np.float32)
         baseline_cells = None
     reference = None
     if EAF_REFERENCE in group:
@@ -2367,7 +2461,7 @@ def _decode_index_eaf(
             codes,
             baseline=baseline_cells,
             positions=positions,
-            imputed=_index_imputed_band(group, start, stop),
+            imputed=_index_imputed_band(group, start, stop, a0, a1),
             reference=reference,
         )
     except Exception as exc:
@@ -2375,11 +2469,13 @@ def _decode_index_eaf(
     return decoded, None
 
 
-def _index_imputed_band(group: Any, start: int, stop: int) -> np.ndarray | None:
+def _index_imputed_band(
+    group: Any, start: int, stop: int, a0: int, a1: int
+) -> np.ndarray | None:
     """The index's own `imputed` band, or None on an Observed-Only index."""
     if _IMPUTED_MASK not in group:
         return None
-    return np.asarray(group[_IMPUTED_MASK][:, start:stop], dtype=np.uint8)
+    return np.asarray(group[_IMPUTED_MASK][a0:a1, start:stop], dtype=np.uint8)
 
 
 def _imputed_band_error(
@@ -2392,6 +2488,8 @@ def _imputed_band_error(
     rows: np.ndarray,
     start: int,
     stop: int,
+    a0: int,
+    a1: int,
 ) -> str | None:
     """Whether the index's Association Status mask is well-formed and authoritative.
 
@@ -2400,7 +2498,7 @@ def _imputed_band_error(
     the primary labels observed cells imputed and vice versa, and a non-0/1
     value is not a mask at all.  Each is refused rather than decoded.
     """
-    index_imputed = _index_imputed_band(group, start, stop)
+    index_imputed = _index_imputed_band(group, start, stop, a0, a1)
     if index_imputed is None:
         return None
     if not np.all((index_imputed == 0) | (index_imputed == 1)):
@@ -2413,7 +2511,7 @@ def _imputed_band_error(
         return f"indexed subset {name!r} marks a missing Z/SE cell imputed"
     if context.primary_imputed is None:
         return f"indexed subset {name!r} carries an imputed mask but the release has none"
-    primary = np.asarray(context.primary_imputed.oindex[rows, :]).T
+    primary = np.asarray(context.primary_imputed.oindex[rows, a0:a1]).T
     if not np.array_equal(index_imputed, primary):
         return (
             f"indexed subset {name!r} imputed mask disagrees with the primary release; "
@@ -2499,7 +2597,7 @@ def _se_band_error(
     index_eaf: np.ndarray | None,
     primary_se: np.ndarray,
     encoding: StoreEncoding,
-    n_analyses: int,
+    cols: np.ndarray,
     positions: Any,
 ) -> str | None:
     if encoding.se.is_residual:
@@ -2509,7 +2607,7 @@ def _se_band_error(
             index_se_raw,
             eaf=index_eaf,
             analysis_index=np.broadcast_to(
-                np.arange(n_analyses)[:, None], index_se_raw.shape
+                np.asarray(cols, dtype=np.int64)[:, None], index_se_raw.shape
             ),
             coefficients=context.coefficients,
             positions=positions,

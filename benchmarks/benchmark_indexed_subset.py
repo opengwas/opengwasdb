@@ -72,7 +72,9 @@ OUTPUT = Path("docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.jso
 
 #: Bumped when the required artifact shape changes, so a committed artifact from
 #: an older harness is detectable rather than silently trusted.
-ARTIFACT_SCHEMA_VERSION = 2
+#: v3 adds the write/validate phase split and the measured output-chunk rewrite
+#: counts (#270).
+ARTIFACT_SCHEMA_VERSION = 3
 
 #: The six parallel arrays every selected-Analysis result carries (spec 10b).
 #: The six parallel arrays every selected-Analysis result carries (spec 10b).
@@ -139,7 +141,10 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "build.rss_bound_mb",
     "build.rss_within_bound",
     "build.phases.prepare_seconds",
+    "build.phases.write_seconds",
+    "build.phases.validate_seconds",
     "build.phases.publish_seconds",
+    "build.output_chunk_writes",
     "build.peak_rss_source",
     "build.requested",
     "build.resolved",
@@ -190,17 +195,29 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
 _BUILD_RUNNER = (
     "import json, sys, time\n"
     "from opengwasdb.layouts.dense.indexed_subsets import _prepare_subset, _publish_subset\n"
+    "from opengwasdb.store.arrays import count_shard_writes\n"
     "store, name, vlist, assembly, band = sys.argv[1], sys.argv[2], sys.argv[3], "
     "sys.argv[4], int(sys.argv[5])\n"
     "t0 = time.perf_counter()\n"
     "plan = _prepare_subset(store, name, vlist, assembly, band)\n"
     "t1 = time.perf_counter()\n"
-    "result = _publish_subset(plan, overwrite=False, band_cells=band)\n"
+    "with count_shard_writes(record_bytes=False) as recorder:\n"
+    "    result = _publish_subset(plan, overwrite=False, band_cells=band)\n"
     "t2 = time.perf_counter()\n"
+    "counts = recorder.chunk_writes()\n"
+    "if not counts:\n"
+    "    counts = recorder.v2_chunk_writes()\n"
+    "planes = {}\n"
+    "for path, keys in counts.items():\n"
+    "    if path in ('z', 'se', 'eaf', 'imputed'):\n"
+    "        vals = list(keys.values())\n"
+    "        planes[path] = {'chunks': len(keys), 'writes': int(sum(vals)), "
+    "'max_writes_one_chunk': int(max(vals))}\n"
     "print(json.dumps({'prepare_seconds': t1 - t0, 'publish_seconds': t2 - t1, "
+    "'write_seconds': result.write_seconds, 'validate_seconds': result.validate_seconds, "
     "'requested': result.requested_count, 'resolved': result.resolved_count, "
     "'absent': result.absent_count, 'n_subset_variants': result.n_subset_variants, "
-    "'input_sha256': result.input_sha256}))\n"
+    "'input_sha256': result.input_sha256, 'output_chunk_writes': planes}))\n"
 )
 
 
@@ -577,8 +594,11 @@ def run_build(store: Path, name: str, variant_list: Path, assembly: str, band_ce
         "peak_rss_mb": round(maxrss_kib / 1024.0, 1),
         "phases": {
             "prepare_seconds": round(float(phases["prepare_seconds"]), 3),
+            "write_seconds": round(float(phases["write_seconds"]), 3),
+            "validate_seconds": round(float(phases["validate_seconds"]), 3),
             "publish_seconds": round(float(phases["publish_seconds"]), 3),
         },
+        "output_chunk_writes": phases.get("output_chunk_writes", {}),
         "requested": int(phases["requested"]),
         "resolved": int(phases["resolved"]),
         "absent": int(phases["absent"]),
@@ -630,9 +650,16 @@ def load_prior_build(path: Path) -> dict:
     phases = build.get("phases") or {}
     missing += [
         f"phases.{key}"
-        for key in ("prepare_seconds", "publish_seconds")
+        for key in (
+            "prepare_seconds",
+            "write_seconds",
+            "validate_seconds",
+            "publish_seconds",
+        )
         if key not in phases
     ]
+    if not isinstance(build.get("output_chunk_writes"), dict):
+        missing.append("output_chunk_writes")
     if missing:
         raise SystemExit(f"{path} build block is missing: {', '.join(sorted(missing))}")
     if float(build["total_seconds"]) <= 0.0 or float(build["peak_rss_mb"]) <= 0.0:
@@ -652,8 +679,11 @@ def load_prior_build(path: Path) -> dict:
         "peak_rss_mb": float(build["peak_rss_mb"]),
         "phases": {
             "prepare_seconds": float(phases["prepare_seconds"]),
+            "write_seconds": float(phases["write_seconds"]),
+            "validate_seconds": float(phases["validate_seconds"]),
             "publish_seconds": float(phases["publish_seconds"]),
         },
+        "output_chunk_writes": dict(build["output_chunk_writes"]),
         "requested": int(build["requested"]),
         "resolved": int(build["resolved"]),
         "absent": int(build["absent"]),
@@ -716,6 +746,16 @@ def _semantic_problems(artifact: dict[str, Any]) -> list[str]:
     for field in ("total_seconds", "peak_rss_mb"):
         _positive(artifact, f"build.{field}", problems)
     _positive(artifact, "build.band_cells", problems)
+    for phase in ("prepare_seconds", "write_seconds", "validate_seconds", "publish_seconds"):
+        _positive(artifact, f"build.phases.{phase}", problems)
+    if (
+        build["phases"]["write_seconds"] + build["phases"]["validate_seconds"]
+        > build["phases"]["publish_seconds"] + 1e-6
+    ):
+        problems.append(
+            "build.phases write + validate exceed publish; the split does not fit the total"
+        )
+    problems.extend(_chunk_write_problems(build.get("output_chunk_writes")))
     requested = build["requested"]
     if requested <= 0 or requested != build["resolved"] + build["absent"]:
         problems.append(
@@ -757,6 +797,30 @@ def _semantic_problems(artifact: dict[str, Any]) -> list[str]:
     problems.extend(_bracketing_problems(run, build, artifact["targets"]))
     if artifact["publication"]["published"] != artifact["targets"]["exact_equivalence"]:
         problems.append("publication.published disagrees with targets.exact_equivalence")
+    return problems
+
+
+def _chunk_write_problems(counts: Any) -> list[str]:
+    """Reasons the recorded output-chunk rewrite counts are not a no-amplification proof.
+
+    A plane whose every chunk is encoded exactly once has ``writes == chunks``
+    and ``max_writes_one_chunk == 1``; anything else is the write amplification
+    #270 removes and must fail the run, not be reported as a number.
+    """
+    if not isinstance(counts, dict) or not counts:
+        return ["build.output_chunk_writes is empty; the rewrite count was not measured"]
+    problems: list[str] = []
+    for plane, stats in sorted(counts.items()):
+        if stats.get("writes") != stats.get("chunks"):
+            problems.append(
+                f"build.output_chunk_writes.{plane} writes {stats.get('writes')} chunks "
+                f"but has {stats.get('chunks')}; the output chunk was rewritten"
+            )
+        if stats.get("max_writes_one_chunk") != 1:
+            problems.append(
+                f"build.output_chunk_writes.{plane} max_writes_one_chunk is "
+                f"{stats.get('max_writes_one_chunk')}, not 1"
+            )
     return problems
 
 
@@ -996,6 +1060,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "rss_bound_mb": round(rss_bound_mb, 1),
             "rss_within_bound": rss_within_bound,
             "phases": build["phases"],
+            "output_chunk_writes": build.get("output_chunk_writes", {}),
             "peak_rss_source": "/usr/bin/time -v (build subprocess)",
             "requested": writer_requested,
             "resolved": writer_resolved,

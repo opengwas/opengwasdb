@@ -256,7 +256,17 @@ def _complete_artifact() -> dict:
             "band_cells": 4_000_000,
             "rss_bound_mb": 1.0,
             "rss_within_bound": True,
-            "phases": {"prepare_seconds": 0.1, "publish_seconds": 0.9},
+            "phases": {
+                "prepare_seconds": 0.1,
+                "write_seconds": 0.5,
+                "validate_seconds": 0.3,
+                "publish_seconds": 0.9,
+            },
+            "output_chunk_writes": {
+                "z": {"chunks": 2, "writes": 2, "max_writes_one_chunk": 1},
+                "se": {"chunks": 2, "writes": 2, "max_writes_one_chunk": 1},
+                "eaf": {"chunks": 2, "writes": 2, "max_writes_one_chunk": 1},
+            },
             "peak_rss_source": "/usr/bin/time -v",
             "requested": 3,
             "resolved": 2,
@@ -341,6 +351,24 @@ def test_assert_artifact_complete_rejects_an_unsix_field_equivalence_block() -> 
     artifact["equivalence"]["required_fields"] = ["z"]
 
     _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "required_fields")
+
+
+def test_assert_artifact_complete_rejects_a_rewritten_output_chunk() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["output_chunk_writes"]["z"] = {
+        "chunks": 2,
+        "writes": 4,
+        "max_writes_one_chunk": 3,
+    }
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "rewritten")
+
+
+def test_assert_artifact_complete_rejects_a_missing_write_phase() -> None:
+    artifact = _complete_artifact()
+    del artifact["build"]["phases"]["write_seconds"]
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "write_seconds")
 
 
 def test_assert_artifact_complete_rejects_bracketing_disagreement() -> None:

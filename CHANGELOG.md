@@ -386,6 +386,34 @@ the end of this file.
 
 ### Fixed
 
+- **Indexed Variant Subset builds no longer rewrite each output chunk (#270).**
+  The Analysis-major planes have a `(1, 65,536)` inner chunk (a
+  `(1, 1,048,576)` v3 shard), but the writer banded by cell budget alone -- on
+  OGS-00009 about 1,976 subset variants -- so each 65,536-variant output chunk
+  was partially read, recomputed and recompressed about 33 times per plane. The
+  writer now walks whole physical output files (a v2 chunk, or a v3 shard so a
+  shard is never a read-modify-write), plane at a time, and tiles the Analysis
+  axis within the band; the tile is a whole multiple of the primary plane's own
+  read unit, so each source file is decoded once. `--band-cells` now targets the
+  Analysis tile and the write band is the index's own geometry. The exhaustive
+  staged validation is retained and itself walks whole output files, so every
+  indexed Z/SE/EAF cell, side table, imputed mask and reference EAF is still
+  decoded and compared against the primary planes; its share of the publish is
+  reported separately rather than replaced by a sample. On the fresh #270
+  OGS-00009 HapMap3 build the store layer measured every one of the 38,456
+  `z`, `se` and `eaf` physical files encoded exactly once; the build took
+  1,738.57 s (write 143.819 s, exhaustive validation 1,585.591 s) against the
+  #267 4,198 s, with exact six-field equivalence, the same 6,235,033,600
+  physical index bytes (17.852%) and a 1,235.2 MB peak RSS (still set by ALID
+  resolution, not the subset matrix). A same-machine A/B of the #267 and #270
+  indexes measured 455.4 ms and 457.9 ms warm median, so the index layout and
+  query path are unchanged. Tests build a v2 and a v3 index under a
+  `count_shard_writes` recorder and fail if any physical output file is encoded
+  more than once, and a corruption test damages the last variant in the last
+  output unit and requires the exhaustive gate to refuse it. The benchmark
+  artifact gains a write/validate phase split and the measured per-plane output
+  rewrite counts (schema 3).
+
 - **Indexed Variant Subset review fixes (#263).** The read seam and standalone
   validation now derive every subset array's expected inner chunk and shard from
   the store-array `ArrayRole` policies and refuse an off-format layout, so a

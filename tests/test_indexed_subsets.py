@@ -23,6 +23,7 @@ import hashlib
 import shutil
 import threading
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -815,6 +816,55 @@ def test_index_plane_splits_into_multiple_shards(
     assert validate_store(store).ok
 
 
+# ── Output write amplification ──────────────────────────────────────────────
+#
+# #270: the writer must encode each compressed output file exactly once.  The
+# fixtures below are small, so a deliberately tiny `band_cells` forces the
+# unfixed band-per-Analysis writer to split each physical output unit; the
+# recorder counts the real storage writes.  A v2 store writes one file per
+# inner chunk, a v3 store one per shard, so both geometries are checked.
+
+
+def _statistic_write_counts(recorder: Any) -> dict[str, dict[str, int]]:
+    """The statistic planes' physical-file write counts, v2 or v3."""
+    counts = recorder.chunk_writes()
+    if not counts:
+        counts = recorder.v2_chunk_writes()
+    return {name: counts[name] for name in ("z", "se", "eaf", "imputed") if name in counts}
+
+
+def _assert_each_file_written_once(counts: dict[str, dict[str, int]]) -> None:
+    assert counts, "the fixture must write at least one statistic plane"
+    for plane, chunks in counts.items():
+        assert chunks, f"{plane} must have at least one physical file"
+        assert sum(chunks.values()) == len(chunks), (
+            f"index {plane} wrote {sum(chunks.values())} times over {len(chunks)} "
+            "physical files; each must be encoded exactly once"
+        )
+        assert max(chunks.values()) == 1, (
+            f"index {plane} rewrote a physical file "
+            f"({max(chunks.values())} times); #270 requires one encoding per file"
+        )
+
+
+def test_output_v2_chunks_are_encoded_once(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    legacy = relayout_as_0_1_0(rich_store, tmp_path / "legacy.opengwasdb")
+    with store_arrays.count_shard_writes(record_bytes=False) as recorder:
+        _build(legacy, "hm3", variant_list, band_cells=8)
+    _assert_each_file_written_once(_statistic_write_counts(recorder))
+
+
+def test_output_v3_shards_are_encoded_once(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    with store_arrays.count_shard_writes(record_bytes=False) as recorder:
+        _build(store, "hm3", variant_list, band_cells=8)
+    _assert_each_file_written_once(_statistic_write_counts(recorder))
+
+
 # ── Standalone validation ───────────────────────────────────────────────────
 
 
@@ -1094,6 +1144,31 @@ def test_validation_rejects_a_wrong_plane_dtype(
     )
     errors = _errors_for(store)
     assert any("dtype" in error for error in errors), errors
+
+
+def test_validation_refuses_corruption_outside_a_small_sample(
+    tmp_path: Path, big_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deterministic sample cannot excuse an isolated silent corruption.
+
+    The fixture is forced into two output units and the *last* subset variant is
+    corrupted, in the second unit.  A validator that sampled output chunks -- or
+    rows, or Analyses -- could pass while the last variant carries a wrong
+    statistic; the exhaustive publication gate must refuse it.
+    """
+    monkeypatch.setattr(
+        store_arrays, "INDEXED_SUBSET_SHARD", store_arrays.INDEXED_SUBSET_CHUNK
+    )
+    store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
+    _build(store, "big", _big_variant_list(tmp_path))
+    group = _index_group(store, "big")
+    n_subset = int(group["z"].shape[1])
+    assert int(group["z"].shards[1]) < n_subset, "the fixture must span more than one unit"
+    values = np.asarray(group["z"][:])
+    values[0, -1] = values[0, -1] + 1
+    group["z"][:] = values
+    errors = _errors_for(store)
+    assert any("z values" in error for error in errors), errors
 
 
 def _recreate_array(

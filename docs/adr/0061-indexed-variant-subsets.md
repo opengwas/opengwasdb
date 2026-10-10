@@ -133,8 +133,32 @@ performance result.
 - The #267 production build's peak RSS was **1,234.8 MB** against its declared
   band-plus-fixed-overhead bound of **1,146.1 MB**, so the run recorded
   `peak_rss_within_bound = false`. The miss is reported honestly rather than
-  the bound being widened after the fact; the peak is still set by the band and
-  not by the full matrix.
+  the bound being widened after the fact; the peak is independent of the full
+  matrix. The #270 per-phase measurement below shows it is set by ALID
+  resolution, not by the writer band, and so the same miss recurs.
+- **#270 removed the build's output-chunk write amplification.** The old writer
+  banded by cell budget alone -- about 1,976 subset variants on OGS-00009 -- and
+  so partially read, recomputed and recompressed each 65,536-variant output
+  chunk about 33 times per plane. The writer now walks whole physical output
+  files (a v2 chunk, or a v3 shard so a shard is never a read-modify-write),
+  plane at a time, and tiles the Analysis axis within the band; the tile is a
+  whole multiple of the primary plane's read unit, so a source file is decoded
+  once. The exhaustive staged validation is retained and itself walks whole
+  output files. On the fresh #270 OGS-00009 HapMap3 build every one of the
+  38,456 `z`, `se` and `eaf` physical files was encoded exactly once (measured
+  at the store layer). The build took **1,738.57 s** -- write **143.819 s** and
+  exhaustive staged validation **1,585.591 s** (91.7% of the publish) -- against
+  the #267 build's 4,198 s, with byte-exact six-field equivalence, the same
+  6,235,033,600 physical index bytes (17.852%) and a 1,235.2 MB peak RSS. The
+  residual peak is set by ALID resolution, not by the writer band, so it is
+  independent of the subset matrix; the validation pass remains the dominant
+  cost and is kept exhaustive rather than sampled.
+- The #270 query latency was measured at **699.805 ms** warm median in that
+  benchmark run, but a same-machine A/B of the #267 and #270 indexes immediately
+  afterwards measured **455.4 ms** and **457.9 ms** respectively: the index
+  layout and query path are unchanged and the run's higher figure is
+  environmental (a freshly written 6 GB index plus background machine load),
+  not a regression.
 - The store format gains a compatible optional index namespace and validation
   rules. The specification, overview rendering, CLI documentation and sibling
   repository walkthrough must describe it in the implementation change.
