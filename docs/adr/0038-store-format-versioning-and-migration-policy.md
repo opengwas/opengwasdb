@@ -13,6 +13,12 @@
 > (§4), and the rebuild/migrate/reject triage and Staged Release publication
 > contract (§5). ADR 0041 changes which digits carry a breaking change, and
 > which versions are readable at all. Read that one first.
+>
+> **Narrowed by [ADR 0061](0061-indexed-variant-subsets.md):** a rebuildable,
+> non-authoritative query index that can be deleted without changing any
+> existing query answer may be added in place and does not move
+> `format_version`. It is not the re-indexing transformation or optional
+> Store-format content discussed below.
 
 Implements store-format spec §21 ("Compatibility"), which has stated a rule
 since v0.1 without answering the operational questions around it, and which

@@ -124,6 +124,60 @@ height_eur	Height EUR pilot	rs222	1	200	1:200:C:T	C	T	-6	0.119995	1.97e-09	.	obs
 ldl_eur	LDL EUR pilot	rs111	1	100	1:100:A:G	A	G	-6	0.199951	1.97e-09	.	observed
 ```
 
+## Indexed Variant Subsets (fast repeated extraction)
+
+An **Indexed Variant Subset** is an optional, rebuildable Dense query index over
+a caller-supplied list of canonical ALIDs (ADR 0061). It covers every Analysis in
+the Store Release and holds the full available statistics (Z, SE and EAF, with
+the release's Association Status for a Reference-Completed store), laid out
+Analysis-major. It is derived data: adding or deleting it changes no association
+and no Analytical Metadata.
+
+Build one from a list of canonical ALIDs (one per nonblank line) and the list's
+Reference Assembly. The assembly must match the release's, because cross-Store
+Variant Identity is assembly plus ALID:
+
+```bash
+pixi run -e dev opengwasdb build-indexed-subset \
+  /tmp/opengwasdb-tiny.opengwasdb hm3 \
+  --variant-list /tmp/hm3.alid.txt \
+  --reference-assembly GRCh38
+```
+
+Then read one Analysis through it — the result is identical to filtering the
+ordinary `query-analysis` result to that subset:
+
+```bash
+pixi run -e dev opengwasdb query-analysis \
+  /tmp/opengwasdb-tiny.opengwasdb height_eur --indexed-subset hm3
+```
+
+`--overwrite` atomically replaces an existing subset of the same name.
+`--band-cells` bounds peak build memory (the complete write is staged, validated
+against the primary planes, and published by rename). `opengwasdb
+regenerate-overview STORE` lists every published subset — name,
+requested/resolved/absent counts, input checksum, Reference Assembly and build
+provenance read from the group's own metadata, with the physical size computed
+from the group's files at render time. An unreadable group, one whose
+recorded name disagrees with its directory, or one that fails the structural
+read seam (missing/extra arrays, wrong shapes or counts) is surfaced as an
+invalid entry rather than silently omitted, and is not also listed or counted
+as a valid subset.
+
+Failure behaviour is deliberate and loud:
+
+- a malformed, repeated or non-canonical ALID fails the build, naming the line;
+- a Reference Assembly mismatch, a subset name outside
+  `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`, or a list matching no Store variant is
+  refused before anything is written;
+- ALIDs absent from the Store Variant Table are **counted and recorded, never
+  treated as present**;
+- `--indexed-subset` on an unknown, incomplete, stale, corrupt or
+  non-Dense subset stops with an error naming the Store and subset. It never
+  falls back to the ordinary query path, because a silent fallback would return
+the slow answer while appearing to be indexed;
+- a query without `--indexed-subset` is unchanged and consults no subset state.
+
 ## Where to go next
 
 - Store contract: [`docs/spec/store-format.md`](spec/store-format.md)

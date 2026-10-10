@@ -67,12 +67,17 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NoReturn
 
 import numpy as np
 import zarr
 
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, EafRead
 from opengwasdb.index import AnalysesIndex
+from opengwasdb.layouts.dense.indexed_subsets import (
+    IndexedSubsetLayoutError,
+    open_indexed_subset,
+)
 from opengwasdb.layouts.dense.rho import DenseRhoReader
 from opengwasdb.layouts.dense.top_hits import DenseTopHitReader, TopHitTiers, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
@@ -348,8 +353,26 @@ class StoreQuery:
             "association_status": _status_array(imputed, z_vals, se_vals),
         }
 
-    def analysis(self, analysis_id: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
-        """Return all finite associations for one analysis."""
+    def analysis(
+        self,
+        analysis_id: str,
+        *,
+        observed_only: bool = False,
+        # Dense may carry one; decode it instead of the primary planes (#265).
+        indexed_subset: str | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Return all finite associations for one analysis.
+
+        With `indexed_subset`, read the Analysis's full statistics from the
+        named Indexed Variant Subset (ADR 0061, issue #265) instead of the
+        primary planes. The result is identical to filtering the ordinary
+        result to the subset's Variant Indices; an unknown, incomplete, stale or
+        invalid subset raises rather than falling back to the slow path.
+        """
+        if indexed_subset is not None:
+            return self._indexed_analysis(
+                analysis_id, indexed_subset, observed_only=observed_only
+            )
         analysis = self._analyses.by_id(analysis_id)
         if analysis is None:
             return _empty_result()
@@ -362,6 +385,54 @@ class StoreQuery:
         cols = np.full(len(rows), col, dtype="int32")
         return self._shared_cell_result(
             rows, cols, z_col[mask], se_col[mask], eaf_read, mask, observed_only=observed_only
+        )
+
+    def _indexed_analysis(
+        self, analysis_id: str, subset_name: str, *, observed_only: bool
+    ) -> dict[str, np.ndarray]:
+        """One Analysis's full statistics over a named Indexed Variant Subset.
+
+        The physical decode is the indexed-subset module's (`open_indexed_subset`
+        / `decode_analysis`, ADR 0061); this method only applies the ordinary
+        `analysis()` result contract -- the same finite-Z/SE filter, the same six
+        parallel arrays and the same observed/missing status.
+
+        Precedence: the named subset is resolved and structurally validated
+        **before** the Analysis ID is looked up, so a typo'd, stale or corrupt
+        selector always fails even when the Analysis is also unknown -- the
+        caller explicitly asked for an indexed answer, and an unknown ID does
+        not excuse the selector.  A *valid* subset with an unknown Analysis ID
+        keeps the ordinary empty-result semantics.
+        """
+        subset = open_indexed_subset(self.store.path, subset_name)
+        analysis = self._analyses.by_id(analysis_id)
+        if analysis is None:
+            return _empty_result()
+        col = int(analysis["analysis_index"])
+        decoded = subset.decode_analysis(col)
+        mask = np.isfinite(decoded.z) & np.isfinite(decoded.se)
+        rows = decoded.variant_index[mask].astype("int32")
+        cols = np.full(len(rows), col, dtype="int32")
+        eaf = (
+            np.full(len(decoded.z), np.nan, dtype="float32")
+            if decoded.eaf is None
+            else np.asarray(decoded.eaf, dtype="float32")
+        )
+        # A Reference-Completed index carries the per-cell imputed mask; an
+        # Observed-Only one carries none, so every finite cell is observed.
+        imputed = (
+            np.zeros(len(decoded.z), dtype=np.uint8)
+            if decoded.imputed is None
+            else np.asarray(decoded.imputed, dtype=np.uint8)
+        )
+        return self._cell_result(
+            rows,
+            cols,
+            decoded.z[mask],
+            decoded.se[mask],
+            observed_only=observed_only,
+            eaf_vals=eaf[mask],
+            imputed=imputed[mask],
         )
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
@@ -583,6 +654,19 @@ class StoreQuery:
         }
 
 
+def _refuse_indexed_subset(store_path: Path, layout: str, subset_name: str) -> NoReturn:
+    """Refuse a subset selector on a layout that cannot carry one (ADR 0061).
+
+    A caller who explicitly names a subset must never be answered from the
+    primary path (issue #265): silently ignoring the selector would look like a
+    successful indexed query while reading the slow matrix underneath.
+    """
+    raise IndexedSubsetLayoutError(
+        f"release {store_path} has {layout} layout; an Indexed Variant Subset "
+        f"({subset_name!r}) is Dense-only and cannot be used here"
+    )
+
+
 def _chunk_windows(lo: int, hi: int, chunk: int) -> Iterator[tuple[int, int]]:
     """Half-open windows of `chunk` covering `[lo, hi)`.
 
@@ -681,8 +765,21 @@ class RaggedStoreQuery:
             self._analyses, self._variant_axis, result, include_variant_info=include_variant_info
         )
 
-    def analysis(self, analysis_id: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
-        """All associations for one analysis (analysis_id lookup)."""
+    def analysis(
+        self,
+        analysis_id: str,
+        *,
+        observed_only: bool = False,
+        # Ragged carries no Indexed Variant Subsets; a selector is refused (#265).
+        indexed_subset: str | None = None,
+    ) -> dict[str, np.ndarray]:
+        """All associations for one analysis (analysis_id lookup).
+
+        Indexed Variant Subsets are Dense-only (ADR 0061), so a
+        selector naming one is refused rather than ignored (#265).
+        """
+        if indexed_subset is not None:
+            _refuse_indexed_subset(self.store.path, "Ragged", indexed_subset)
         idx = self._resolve_analysis_id(analysis_id)
         if idx is None:
             return _empty_result()
@@ -1230,7 +1327,23 @@ class HybridStoreQuery:
         return _concat_results(parts)
 
     # ── public query surface ─────────────────────────────────────────────────
-    def analysis(self, analysis_id: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
+    def analysis(
+        self,
+        analysis_id: str,
+        *,
+        observed_only: bool = False,
+        # Hybrid carries no Indexed Variant Subsets; a selector is refused (#265).
+        indexed_subset: str | None = None,
+    ) -> dict[str, np.ndarray]:
+        """All associations for one analysis (analysis_id lookup) across both components.
+
+        Indexed Variant Subsets are Dense-only (ADR 0061): the
+        shared root never carries one, and unifying the Dense and Ragged
+        Overflow Components is unspecified, so a selector is refused rather
+        than ignored (#265).
+        """
+        if indexed_subset is not None:
+            _refuse_indexed_subset(self.store.path, "Hybrid", indexed_subset)
         dense = self._remap_dense(self._dense.analysis(analysis_id, observed_only=observed_only))
         analysis = self._analyses.by_id(analysis_id)
         overflow = (

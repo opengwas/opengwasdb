@@ -33,6 +33,11 @@ from opengwasdb.layouts.dense.complete import (
     resume_dense_completion,
 )
 from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE
+from opengwasdb.layouts.dense.indexed_subsets import (
+    DEFAULT_BAND_CELLS,
+    IndexedSubsetError,
+    build_indexed_subset,
+)
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.rho import (
     DEFAULT_RHO_MIN_NULLS,
@@ -1335,6 +1340,61 @@ def build_dense_rho_command(
     typer.echo("done")
 
 
+_INDEXED_SUBSET_VARIANT_LIST_OPTION = typer.Option(
+    ...,
+    "--variant-list",
+    help=(
+        "Path to a file of canonical ALIDs, one per nonblank line. Absent ALIDs are "
+        "permitted and counted; malformed or duplicate ones fail the build."
+    ),
+)
+_INDEXED_SUBSET_ASSEMBLY_OPTION = typer.Option(
+    ...,
+    "--reference-assembly",
+    help=(
+        "The variant list's Reference Assembly (e.g. GRCh38). Required: cross-store "
+        "Variant Identity is assembly plus ALID, and a mismatch fails the build."
+    ),
+)
+_INDEXED_SUBSET_OVERWRITE_OPTION = typer.Option(
+    False, "--overwrite", help="Atomically replace an existing subset of the same name"
+)
+_INDEXED_SUBSET_BAND_CELLS_OPTION = typer.Option(
+    DEFAULT_BAND_CELLS,
+    "--band-cells",
+    help="Peak cells read per streamed band; bounds build memory",
+)
+
+
+@app.command("build-indexed-subset")
+def build_indexed_subset_command(
+    store_path: Path,
+    subset_name: str,
+    variant_list: Path = _INDEXED_SUBSET_VARIANT_LIST_OPTION,
+    reference_assembly: str = _INDEXED_SUBSET_ASSEMBLY_OPTION,
+    overwrite: bool = _INDEXED_SUBSET_OVERWRITE_OPTION,
+    band_cells: int = _INDEXED_SUBSET_BAND_CELLS_OPTION,
+) -> None:
+    """Build one full-statistic Indexed Variant Subset for a Dense store."""
+    try:
+        result = build_indexed_subset(
+            store_path,
+            subset_name,
+            variant_list,
+            reference_assembly=reference_assembly,
+            overwrite=overwrite,
+            band_cells=band_cells,
+        )
+    except IndexedSubsetError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"built indexed subset {result.name!r} at {result.path}")
+    typer.echo(
+        f"requested {result.requested_count}, resolved {result.resolved_count}, "
+        f"absent {result.absent_count}"
+    )
+
+
 @app.command("regenerate-overview")
 def regenerate_overview_command(store_path: Path) -> None:
     """Rewrite overview.html from a store's already-persisted data --
@@ -1359,6 +1419,16 @@ _VARIANT_INFO_OPTION = typer.Option(
         "and eaf (already materialised in the query result), rsid isn't "
         "derivable in-store and costs an extra variants.tsv.gz lookup that can "
         "dominate query time on a large result."
+    ),
+)
+_INDEXED_SUBSET_QUERY_OPTION = typer.Option(
+    None,
+    "--indexed-subset",
+    help=(
+        "Read this Analysis from a named Indexed Variant Subset instead of the "
+        "primary planes. The subset must exist and belong to this release: an "
+        "unknown, incomplete, stale, corrupt or unsupported subset fails loudly "
+        "rather than falling back to the ordinary path. Dense-only."
     ),
 )
 
@@ -1395,13 +1465,21 @@ def query_range_phewas_command(
 def query_analysis_command(
     store_path: Path,
     analysis_id: str,
+    indexed_subset: str | None = _INDEXED_SUBSET_QUERY_OPTION,
     output_format: OutputFormat = _FORMAT_OPTION,
     include_variant_info: bool = _VARIANT_INFO_OPTION,
 ) -> None:
     """Extract all finite associations for one analysis."""
 
     query = query_store(store_path)
-    _emit(query, query.analysis(analysis_id), output_format, include_variant_info)
+    try:
+        result = query.analysis(analysis_id, indexed_subset=indexed_subset)
+    except IndexedSubsetError as exc:
+        # An explicit selector must never silently degrade to the primary
+        # matrix (issue #265): name the Store and subset and stop.
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    _emit(query, result, output_format, include_variant_info)
 
 
 @app.command("query-lookup")

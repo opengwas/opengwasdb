@@ -159,3 +159,4 @@ report = { features = ["report"], solve-group = "default" }
 test = "pytest"
 lint = "ruff check ."
 typecheck = "mypy opengwasdb"
+benchmark-indexed-subset = "python benchmarks/benchmark_indexed_subset.py"

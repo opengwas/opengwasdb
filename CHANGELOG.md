@@ -10,7 +10,166 @@ the end of this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`opengwasdb build-indexed-subset STORE SUBSET_NAME --variant-list
+  variants.alid.txt --reference-assembly GRCh38` builds a full-statistic
+  Observed-Only Dense Indexed Variant Subset (ADR 0061, issue #264).** It
+  writes `data.zarr/indexed_subsets/<name>/`: the subset's sorted Store Variant
+  Indices, Analysis-major Z and its exact overflow table, SE and its
+  coefficients/exception table when the release residual-codes it, and EAF and
+  its subset baseline/exception table when the release has one. The stored
+  codes are copied from the primary planes and the side-table positions
+  remapped, so every decoded indexed cell is *identical* to the authoritative
+  primary cell rather than a re-encode of a decoded value. The artifact covers
+  every Analysis and has one full-statistic profile: there is no Z-only or
+  per-Analysis mode. Beta, p-value and Analysis metadata are not copied.
+  The variant list takes one canonical ALID per nonblank line, requires an
+  explicit matching Reference Assembly, refuses malformed, duplicate or
+  zero-match input, and records requested/resolved/absent counts plus the
+  input's SHA-256 and the source release identity. Publication follows ADR
+  0043 at the named-group level: the `indexed_subsets` namespace is created
+  under a lock on `data.zarr`, the build writes a unique temporary sibling and
+  validates the staged group, and publication takes the namespace's advisory
+  lock and renames atomically, so two same-name no-overwrite builds yield one
+  winner and one loud `IndexedSubsetExistsError` while different names never
+  touch each other. Removing a subset takes the same namespace lock, refuses a
+  group under consolidated metadata before the rename (the record would keep
+  listing the removed group), and renames
+  the group aside before reclaiming it, so a removal cannot interleave with a
+  commit. Standalone
+  `validate` now checks the namespace, the attributes, the Variant Indices and
+  shapes, the side tables, Z/SE missingness and every decoded indexed Z/SE/EAF
+  against the primary planes; a release with no namespace stays valid and
+  unchanged, an explicit empty group, a zero-variant index, an unknown entry or
+  a temporary entry fails,
+  and deleting the group leaves a valid release. The read seam refuses a subset
+  whose recorded source release, store, format, assembly or encoding no longer
+  matches the release it sits in, so a stale index is rejected before #265's
+  query path relies on it. The version-to-Zarr-layout rule lives with the
+  version tables (`opengwasdb.store.open.zarr_format_for_version`), not in this
+  module. The index does not move `format_version` (it narrows ADRs
+  0038 and 0041). Query integration (#265) and Reference-Completed support
+  (#266) follow in their own entries below; the production benchmark (#267) is
+  out of scope. Spec §10b and §20 record the physical contract and validation
+  rules.
+
+- **`query-analysis STORE ANALYSIS_ID --indexed-subset SUBSET_NAME` reads one
+  Analysis's full statistics from a named Indexed Variant Subset (ADR 0061,
+  issue #265), and the Python facade's `analysis()` takes the same optional
+  `indexed_subset=` keyword.** The result is the ordinary six parallel arrays
+  (`variant_index`, `analysis_index`, decoded `z`, decoded `se`, decoded `eaf`,
+  `association_status`) with the same meanings, dtypes, allele orientation,
+  finite Z/SE filtering and Store ordering as filtering the ordinary result to
+  the subset's Variant Indices; beta and p remain derived from the returned
+  `z`/`se`. Physical decoding is delegated to the #264 module, so the facade
+  duplicates none of its codec, exception, EAF or status reconstruction. An
+  explicit selector never falls back to the primary matrix: an unknown,
+  staging, incomplete, stale, or corrupt subset raises, and the CLI exits 1
+  naming the Store and subset. Corruption covers an unreadable group entry
+  (a plain directory, a Zarr array, or metadata that is unreadable or invalid
+  -- bad JSON, an unsupported `zarr_format`, a non-object document), malformed
+  encoding metadata, the wrong plane dtype, missing/unexpected arrays, a wrong
+  declared name/schema/profile/axis order, Variant Indices out of the
+  release's `[0, n_variants)` range, a declared Analysis count that disagrees
+  with the release, and requested/resolved/absent counts that do not add up. Those
+  checks run on the read path itself, not only under `validate`, and the
+  subset's Variant Index is read once per query rather than once to validate
+  and again to decode. A Ragged or Hybrid release refuses any selector. An
+  unknown Analysis ID keeps the ordinary empty-result behaviour, and omitting
+  the selector is byte-for-byte unchanged. Spec §10b records the query
+  contract; the sibling `opengwasdb-stores` query walkthrough update is
+  flagged for the final documentation ticket
+  (`opengwas/opengwasdb-stores#206`).
+
+- **Indexed Variant Subsets now build and query on Reference-Completed Dense
+  stores, reproducing ordinary Association Status and EAF semantics (ADR 0061,
+  issue #266).** The index carries two dependencies an Observed-Only one does
+  not: a per-cell, Analysis-major `imputed` mask — Association Status is never
+  an Analysis-level fact, so an Analysis left observed-only by the
+  ancestry-match filter reads its own observed cells correctly and no
+  completion state is inferred from another Analysis — and the subset
+  `eaf_reference` when the release declares reference EAF. Decoding substitutes
+  the panel frequency on imputed cells through the same codec the primary
+  `eaf` plane uses, so an imputed cell reads the panel's frequency and an
+  observed cell whose source reported none stays absent rather than taking the
+  panel's (ADR 0037 §4). The subset variant list's requested/resolved/absent
+  counts continue to distinguish an ALID absent from the Store Variant Table
+  (counted, never a match) from a variant absent from a source (on the axis,
+  filtered by the paired Z/SE rule). Standalone validation now also requires
+  every `imputed` value to be 0 or 1, no imputed cell to be missing, the mask
+  and `eaf_reference` to equal the release's own, `eaf_reference` to hold one
+  entry per indexed variant, and exactly the arrays the release's encoding and
+  Completion State define; an Observed-Only index carries neither array, a
+  Reference-Completed one missing `imputed` fails, and corruption in any
+  status or reference-EAF dependency fails validation rather than degrading to
+  an observed- or missing-looking result. The read path separately refuses a
+  mask whose dtype is not `uint8` and, for the Analysis being decoded, any
+  value outside `{0, 1}` before the codec, Association Status or
+  `observed_only` filter can interpret it -- a float or out-of-domain mask
+  would otherwise read as imputed to the frequency substitution and observed
+  to Association Status at once; comparing the mask's and `eaf_reference`'s
+  full content against the release remains `validate`'s job. Query defaults
+  include imputed
+  associations, `observed_only=True` excludes exactly them, and results match
+  the ordinary selected-Analysis result field-for-field including
+  `association_status` and Store order. Publication stays atomic, so a failed
+  completed replacement preserves the previous index exactly. Ragged and
+  Hybrid releases remain explicit selector failures. Spec §10b and §20 record
+  the physical contract and validation rules.
+
+- **`overview.html` lists every published Indexed Variant Subset from its own
+  group metadata (ADR 0061, issue #267).** A store that carries
+  `data.zarr/indexed_subsets` gains an **Indexed Subsets** tab (between Rho and
+  the Guide) with one row per published name: statistic profile,
+  requested/resolved/absent counts, physical size, input SHA-256, Reference
+  Assembly, source store/release/format, builder version and creation time. The
+  page reads the recorded attributes and never recomputes a value, so it remains
+  a regenerable presentation rather than a second source of truth; an
+  unreadable or staging group is omitted rather than shown with invented
+  values. `regenerate-overview` picks the tab up with no new flags. Spec §10b
+  records the overview contract.
+
+- **A maintained full-statistic HapMap3 Indexed Variant Subset benchmark and
+  report replace the issue-262 prototype (issue #267).**
+  `benchmarks/benchmark_indexed_subset.py` builds the complete HapMap3 index on
+  OGS-00009 (Z, SE and EAF), measures the full-result indexed read against the
+  ordinary path, and records git commit, UTC measurement time, Store identity,
+  release identity, `format_version`, Store Encoding, the
+  MD5-verified canonical GRCh38 HapMap3 source and the derived ALID list's
+  SHA-256, rsid-level requested/resolved/absent counts, total and per-plane
+  physical bytes, build phase times and peak RSS, first-read/warm-median/p95
+  timings, result counts, ordinary timings before and after index generation,
+  and the exact indexed-vs-ordinary equivalence outcome. It refuses to publish
+  unless every returned field decodes exactly equally. The run measures against
+  a reflinked copy and proves the authoritative release unchanged by comparing
+  its recursive metadata fingerprint and its `manifest.json`/`analyses.tsv`
+  hashes before and after. `docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.qmd`
+  renders the committed artifact. The scratch
+  `benchmarks/prototype_issue_262_hapmap3.py` and its Pixi task are removed.
+
 ### Changed
+
+- **Indexed Variant Subset overview and benchmark truthfulness (issue #267).**
+  `overview.html`'s Indexed Subsets tab now surfaces an unreadable group, or a
+  group whose recorded `indexed_subset_name` disagrees with its directory name,
+  as an invalid entry instead of silently omitting or relabelling it; the
+  directory name is the displayed identity. Its physical size was already
+  computed from the group's files at render time and is now documented as such
+  (the recorded metadata carries counts, checksum, assembly and provenance, not
+  bytes). The #267 benchmark harness now requires the full six result fields
+  (`variant_index`, `analysis_index`, `z`, `se`, `eaf`, `association_status`) to
+  be present on both sides and non-empty with matching dtype and length before
+  exact equivalence can hold, records the writer-returned
+  requested/resolved/absent counts reconciled against the HapMap3 rsid budget,
+  proves the ordinary before/after bracket (`run.ordinary_bracketed`) and
+  records it as a target, requires positive measured build metrics and refuses
+  a reuse-only run without `--build-stats` (or `--reset-subset`) so a zero build
+  block can never be fabricated, records the Analysis, subset name, primary
+  layout, run mode and the authoritative source path separately from the
+  measured scratch copy, and discloses the p95 and first-read methods. The
+  report contains no inline expressions and no hardcoded identifiers, and a
+  test searches the rendered HTML for unevaluated `{python}` markers.
 
 - **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**
   `CURRENT_FORMAT_VERSION` becomes `0.2.0`, and the converter's target is that
@@ -226,6 +385,63 @@ the end of this file.
   build records a `provenance.maf` block (stores #176).
 
 ### Fixed
+
+- **Indexed Variant Subset review fixes (#263).** The read seam and standalone
+  validation now derive every subset array's expected inner chunk and shard from
+  the store-array `ArrayRole` policies and refuse an off-format layout, so a
+  plane chunk or shard that spans Analyses -- or a per-variant side array laid
+  out off the format -- can no longer defeat the index's one-Analysis narrow
+  read; no attribute is required because the layout is authoritatively
+  derivable. `variant_index` must be stored `int32` on both surfaces. An
+  explicit `--indexed-subset` (or `analysis(indexed_subset=...)`) selector is
+  resolved and validated before the Analysis ID is looked up, so a typo'd, stale
+  or corrupt subset always fails even when the Analysis is also unknown, while a
+  valid subset with an unknown Analysis keeps the ordinary empty result. The
+  `overview.html` Indexed Subsets total no longer walks every subset directory
+  twice (the row size is measured once and summed). The duplicate Indexed
+  Variant Subset ADR is renumbered from `0053` to `0061` (the Hybrid Build
+  Checkpoint keeps `0053`), and its cost evidence separates the #262 prototype
+  figures from the final #267 production measurement (6,235,037,696 physical
+  bytes, 17.852%, 4,198 s build, 407.267 ms warm median), reporting the
+  production run's RSS-bound miss honestly.
+
+- **Indexed Variant Subset documentation and error text no longer claim
+  Observed-Only Dense exclusivity (#266).** `build-indexed-subset` has supported
+  both Observed-Only and Reference-Completed Dense since #266, but the build
+  command's description, the `query-analysis --indexed-subset` help, the
+  `IndexedSubsetLayoutError` message and docstring, the Ragged and Hybrid
+  `analysis()` docstrings, and the `indexed_subsets` module and
+  `validate_indexed_subsets` docstrings still said subsets were "Observed-Only
+  Dense only". They now say **Dense-only**, with Observed-Only-specific prose
+  kept where it genuinely describes the Observed-Only case (a missing `imputed`
+  mask, the Observed-Only encoding branch). Tests assert the CLI help and the
+  Ragged/Hybrid refusal message no longer misstate support.
+
+- **`overview.html` no longer renders an invalid Indexed Variant Subset as a
+  valid row, and detects partial groups (#267 review).** A named directory whose
+  recorded name disagrees with its directory, or that fails the Indexed Variant
+  Subset **structural read seam** (`open_indexed_subset`: schema, profile,
+  order, counts, exact array set, dtypes, shapes and in-range Variant Indices,
+  but no decoded-value comparison), is listed only as an invalid entry and
+  excluded from the table and the physical-size total. Previously a
+  name-mismatched group was both flagged and counted, and a group with a missing
+  array was rendered as valid. The structural probe is wrapped at the
+  presentation layer, so a missing or corrupt store `manifest.json` now also
+  renders the subset as an invalid entry instead of aborting `overview.html`
+  generation; row rendering and the rest of the page are outside that boundary
+  and still raise on a genuine bug.
+
+- **The benchmark scratch copy records a verified method (#267 review).**
+  `benchmarks/_artifact.scratch_copy` now tries `cp --reflink=always` (which
+  fails rather than silently falling back), falls back to a documented full
+  copy, and returns `reflink` or `full_copy`; the harness records that in
+  `store.copy_kind`, or `reused_scratch_copy` when it did not perform the copy.
+  The previous helper used `cp --reflink=auto` and the artifact claimed a
+  reflink without verification. The `#267` benchmark README no longer cites a
+  nonexistent `--band-cells` flag (the harness uses its configured `BAND_CELLS`
+  constant), and the artifact's semantic checks now require
+  `run.ordinary_bracketed`/`targets.ordinary_bracketed` and the fresh/reused,
+  subset-present and peak-RSS facts to agree with each other.
 
 - **A Ragged association sequence is written one whole shard at a time, and the
   Dense SE exception tables once each (#249).**

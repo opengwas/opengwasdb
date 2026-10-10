@@ -19,13 +19,16 @@ from __future__ import annotations
 
 import html
 import json
+import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from scipy.cluster.hierarchy import leaves_list, linkage  # type: ignore[import-untyped]
 from scipy.spatial.distance import squareform  # type: ignore[import-untyped]
 
+from opengwasdb.layouts.dense.indexed_subsets import IndexedSubsetError, open_indexed_subset
 from opengwasdb.layouts.dense.rho import DenseRhoReader
 from opengwasdb.model.analyses import ANCESTRY_PROP_PREFIX, AnalysesTable
 from opengwasdb.store.arrays import open_group
@@ -453,6 +456,32 @@ def _analysis_label(row: dict[str, str]) -> str:
     return row.get("analysis_label") or row.get("analysis_id", "")
 
 
+def _probe(action: Callable[[], Any]) -> tuple[Any, Exception | None]:
+    """Run a presentation-layer probe, returning its result or the exception.
+
+    `overview.html` is regenerable presentation (module docstring): a missing or
+    corrupt store manifest, or an unreadable group, must degrade to an explicit
+    invalid entry rather than aborting the page. Only these probes are wrapped --
+    row rendering and the rest of the render stay outside, so a genuine bug
+    still surfaces rather than being swallowed.
+    """
+    try:
+        return action(), None
+    except Exception:  # noqa: BLE001
+        return None, cast(Exception, sys.exc_info()[1])
+
+
+def _open_optional_group(path: Path) -> Any | None:
+    """A Zarr group opened read-only, or None when it is absent/unreadable.
+
+    Rho and Indexed Variant Subsets are opt-in derived artifacts; overview.html
+    is regenerable presentation and must degrade gracefully rather than fail to
+    render when one is missing or damaged (issues #23, #267).
+    """
+    group, _ = _probe(lambda: open_group(path))
+    return group
+
+
 def _load_rho_group(output_path: Path) -> Any | None:
     """The optional `data.zarr/rho` group (ADR 0025), or None if absent/unreadable.
 
@@ -460,11 +489,8 @@ def _load_rho_group(output_path: Path) -> Any | None:
     won't have one, and `overview.html` must degrade gracefully rather than
     fail to render (issue #23 AC3 applies here too).
     """
-    try:
-        root = open_group(output_path / "data.zarr")
-    except Exception:  # noqa: BLE001
-        return None
-    return root["rho"] if "rho" in root else None
+    root = _open_optional_group(output_path / "data.zarr")
+    return root["rho"] if root is not None and "rho" in root else None
 
 
 def _finite_pair_values(mat: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -722,6 +748,260 @@ def _render_rho_section(output_path: Path, table: AnalysesTable) -> str | None:
     )
 
 
+# ── Indexed Variant Subsets tab (issue #267, ADR 0061) ──────────────────────
+
+#: The published subsets live under this optional `data.zarr` group. Spelled
+#: here rather than imported so the generic overview renderer stays independent
+#: of the writer module; the attribute names are the store-format §10b keys.
+_INDEXED_SUBSETS_GROUP = "indexed_subsets"
+
+#: The group's own recorded facts, rendered in the order the store-format spec
+#: §10b names them. Overview presents them; it never recomputes a value.
+_INDEXED_SUBSET_FIELDS: tuple[str, ...] = (
+    "Subset",
+    "Profile",
+    "Requested",
+    "Resolved",
+    "Absent",
+    "Analyses",
+    "Physical bytes",
+    "Input SHA-256",
+    "Reference assembly",
+    "Source store",
+    "Source release",
+    "Source format",
+    "Builder",
+    "Created (UTC)",
+)
+
+
+def _human_bytes(count: int) -> str:
+    """A binary-unit rendering of a byte count for the summary line."""
+    value = float(count)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024.0 or unit == "TiB":
+            return f"{int(value):,} B" if unit == "B" else f"{value:,.1f} {unit}"
+        value /= 1024.0
+    return f"{count:,} B"  # unreachable; keeps mypy's return check happy
+
+
+def _physical_bytes(path: Path) -> int:
+    """Allocated bytes for `path` and everything under it (matches `du -s -B1`).
+
+    Allocated rather than apparent size, and directories included: the index is
+    bricked into tens of thousands of small chunk files inside deep directories,
+    and it is the bytes on disk that the storage-cost decision rests on.
+    """
+    total = path.stat().st_blocks * 512
+    for entry in path.rglob("*"):
+        total += entry.stat().st_blocks * 512
+    return total
+
+
+def _read_subset_attrs(path: Path) -> dict[str, Any] | None:
+    """A published subset's recorded attributes, or None when unreadable.
+
+    Overview presents the group's own recorded facts and never recomputes a
+    value; a damaged group is omitted rather than shown with invented values.
+    """
+    group = _open_optional_group(path)
+    return dict(group.attrs) if group is not None else None
+
+
+def _indexed_subset_value(attrs: dict[str, Any], key: str) -> str:
+    value = attrs.get(key, "")
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return str(value)
+    return f"{value:,}" if key.endswith(("_count", "_analyses", "_variants")) else str(value)
+
+
+def _indexed_subset_row(path: Path, attrs: dict[str, Any], size: int) -> dict[str, str]:
+    """One display row. The directory name is the identity, never the attrs name:
+    a group whose recorded name disagrees is flagged, not silently relabelled.
+
+    `size` is measured once by the caller so the total below is the sum of the
+    rows' sizes rather than a second walk of every chunk file (#263 review).
+    """
+    return {
+        "Subset": path.name,
+        "Profile": _indexed_subset_value(attrs, "statistic_profile"),
+        "Requested": _indexed_subset_value(attrs, "requested_count"),
+        "Resolved": _indexed_subset_value(attrs, "resolved_count"),
+        "Absent": _indexed_subset_value(attrs, "absent_count"),
+        "Analyses": _indexed_subset_value(attrs, "n_analyses"),
+        "Physical bytes": f"{size:,} B ({_human_bytes(size)})",
+        "Input SHA-256": _indexed_subset_value(attrs, "input_sha256"),
+        "Reference assembly": _indexed_subset_value(attrs, "reference_assembly"),
+        "Source store": _indexed_subset_value(attrs, "source_store_id"),
+        "Source release": _indexed_subset_value(attrs, "source_release_id"),
+        "Source format": _indexed_subset_value(attrs, "source_format_version"),
+        "Builder": _indexed_subset_value(attrs, "builder_version"),
+        "Created (UTC)": _indexed_subset_value(attrs, "created_at"),
+    }
+
+
+def _published_subset_paths(output_path: Path) -> list[Path]:
+    """The published subset groups under a release, sorted by name.
+
+    A leading `.` is the module's staging/replacement convention, so those
+    entries are skipped rather than rendered as a named subset.
+    """
+    namespace = output_path / "data.zarr" / _INDEXED_SUBSETS_GROUP
+    if not namespace.is_dir():
+        return []
+    return [
+        entry
+        for entry in sorted(namespace.iterdir())
+        if entry.is_dir() and not entry.name.startswith(".")
+    ]
+
+
+def _subset_problem(
+    store_path: Path, path: Path, attrs: dict[str, Any]
+) -> dict[str, str] | None:
+    """A reason a named directory must be surfaced rather than rendered as valid.
+
+    The recorded name must match the directory, and the group must pass the
+    Indexed Variant Subset **structural read seam** (`open_indexed_subset`):
+    schema, profile, order, declared counts, exact array set, plane dtypes and
+    shapes, and Variant Indices in bounds. It deliberately does not decode or
+    compare values -- that is `validate`'s expensive job -- so overview stays a
+    cheap presentation of a structurally complete group.
+    """
+    recorded = str(attrs.get("indexed_subset_name", ""))
+    if recorded != path.name:
+        return {
+            "name": path.name,
+            "issue": (
+                f"recorded name {recorded!r} disagrees with its directory name; "
+                "not trusted as a published subset"
+            ),
+        }
+    _, error = _probe(lambda: open_indexed_subset(store_path, path.name))
+    if error is None:
+        return None
+    if isinstance(error, IndexedSubsetError):
+        return {
+            "name": path.name,
+            "issue": str(error).removeprefix(f"store {store_path}: "),
+        }
+    return {
+        "name": path.name,
+        "issue": (
+            "structural check could not read the store or group "
+            f"({type(error).__name__}: {error})"
+        ),
+    }
+
+
+def _collect_indexed_subsets(
+    output_path: Path,
+) -> tuple[list[dict[str, str]], int, list[dict[str, str]]]:
+    """Valid rows, their total physical bytes, and every invalid entry.
+
+    A named directory that cannot be read, whose recorded name disagrees with
+    its directory, or that fails the structural read seam is reported in
+    `problems` and is **not** also rendered or counted as valid -- an entry that
+    is both listed and flagged would let a partial group inflate the totals.
+    """
+    rows: list[dict[str, str]] = []
+    total = 0
+    problems: list[dict[str, str]] = []
+    for path in _published_subset_paths(output_path):
+        attrs = _read_subset_attrs(path)
+        if attrs is None:
+            problems.append({"name": path.name, "issue": "unreadable Zarr group"})
+            continue
+        problem = _subset_problem(output_path, path, attrs)
+        if problem is not None:
+            problems.append(problem)
+            continue
+        size = _physical_bytes(path)
+        rows.append(_indexed_subset_row(path, attrs, size))
+        total += size
+    return rows, total, problems
+
+
+def _render_subset_problems(problems: list[dict[str, str]]) -> str:
+    rows = "\n".join(
+        "<tr>"
+        f'<td class="fname">{html.escape(problem["name"])}</td>'
+        f'<td class="fdesc">{html.escape(problem["issue"])}</td>'
+        "</tr>"
+        for problem in problems
+    )
+    return (
+        '<p class="guide-intro"><strong>Invalid or unreadable entries</strong> — '
+        "these named directories are not trusted as published subsets and their values "
+        "are not invented.</p>\n"
+        f'<table class="guide"><tbody>\n{rows}\n</tbody></table>\n'
+    )
+
+
+def _render_indexed_subsets_section(output_path: Path) -> str | None:
+    """The Indexed Variant Subsets tab (ADR 0061): one row per published name,
+    read from the group's own metadata. Absent entirely until a subset or an
+    invalid named entry exists."""
+    rows, total, problems = _collect_indexed_subsets(output_path)
+    if not rows and not problems:
+        return None
+    parts = [
+        '<p class="guide-intro">Optional Indexed Variant Subsets (ADR 0061) are derived, '
+        "rebuildable query indexes over a caller-supplied variant list. Counts, checksum, "
+        "Reference Assembly and build provenance are read from each group's recorded "
+        "metadata; physical size is computed from the group's files at render time.</p>\n"
+    ]
+    if problems:
+        parts.append(_render_subset_problems(problems))
+    if rows:
+        parts.append(
+            f'<p class="guide-intro">Total physical size: {total:,} B '
+            f"({_human_bytes(total)}).</p>\n"
+        )
+        parts.append(
+            _render_table_section(
+                table_id="indexed-subsets",
+                search_id="search-indexed-subsets",
+                search_placeholder="Filter subsets...",
+                fieldnames=_INDEXED_SUBSET_FIELDS,
+                rows=tuple(rows),
+                sticky_column="Subset",
+            )
+        )
+    else:
+        parts.append('<p class="guide-intro">No readable published subsets.</p>\n')
+    return "".join(parts)
+
+
+
+def _overview_tabs(
+    output_path: Path,
+    table: AnalysesTable,
+    analyses_section: str,
+    ancestry_section: str,
+    guide_section: str,
+) -> list[tuple[str, str, str]]:
+    """The store's tabs in display order.
+
+    Rho and Indexed Variant Subsets are opt-in derived artifacts, so each is
+    present only when the store actually carries one; the Guide is always last
+    and always present (issue #38).
+    """
+    tabs: list[tuple[str, str, str]] = [
+        ("analyses", "Analyses", analyses_section),
+        ("ancestry", "Ancestry", ancestry_section),
+    ]
+    optional = (
+        ("rho", "Rho Matrix", _render_rho_section(output_path, table)),
+        ("indexed-subsets", "Indexed Subsets", _render_indexed_subsets_section(output_path)),
+    )
+    tabs.extend(
+        (key, label, section) for key, label, section in optional if section is not None
+    )
+    tabs.append(("guide", "Guide", guide_section))
+    return tabs
+
+
 def write_overview_html(
     output_path: str | Path, table: AnalysesTable, *, title: str = "OpenGWASDB Analyses"
 ) -> Path:
@@ -754,18 +1034,9 @@ def write_overview_html(
         bar_columns=frozenset(_ancestry_prop_columns(table.fieldnames)),
     )
     guide_section = _render_guide_section(output_path)
-
-    # (key, label, section_html) in display order. The Rho tab is present only
-    # when `build-dense-rho` has actually been run against this store -- Rho
-    # is opt-in metadata, not something every store carries (ADR 0025).
-    tabs: list[tuple[str, str, str]] = [
-        ("analyses", "Analyses", analyses_section),
-        ("ancestry", "Ancestry", ancestry_section),
-    ]
-    rho_section = _render_rho_section(output_path, table)
-    if rho_section is not None:
-        tabs.append(("rho", "Rho Matrix", rho_section))
-    tabs.append(("guide", "Guide", guide_section))
+    tabs = _overview_tabs(
+        output_path, table, analyses_section, ancestry_section, guide_section
+    )
 
     tab_buttons = "\n".join(
         f'<button data-tab="{key}"{active}>{html.escape(label)}</button>'

@@ -1,0 +1,448 @@
+---
+title: "Indexed Variant Subsets on OGS-00009 — HapMap3 full-statistic extraction"
+subtitle: "A reproducible single-run benchmark · sub-second full-result LDSC extraction with exact six-field equivalence"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+
+HERE = Path(".")
+b = json.loads((HERE / "opengwasdb_267_indexed_subset_benchmark.json").read_text())
+
+analysis_id = b["analysis_id"]
+subset_name = b["subset_name"]
+store = b["store"]
+inp = b["input"]
+res = inp["hapmap3_resolution"]
+storage = b["storage"]
+build = b["build"]
+timings = b["timings"]
+equiv = b["equivalence"]
+targets = b["targets"]
+pub = b["publication"]
+run = b["run"]
+
+
+def md_table(headers, rows):
+    head = "| " + " | ".join(headers) + " |"
+    sep = "|" + "|".join(["---"] * len(headers)) + "|"
+    body = "\n".join("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
+    return f"{head}\n{sep}\n{body}"
+
+
+def bytes_h(n):
+    value = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            return f"{value:,.1f} {unit}" if unit != "B" else f"{int(value):,} B"
+        value /= 1024
+    return f"{n:,} B"
+
+
+def ms(v):
+    return f"{v:,.1f} ms" if v < 1000 else f"{v / 1000:,.2f} s"
+```
+
+::: {.callout-important}
+## Result
+
+```{python}
+#| echo: false
+#| output: asis
+status = "**published**" if pub["published"] else "**REFUSED**"
+speedup = timings["ordinary_before"]["median_ms"] / timings["indexed"]["median_ms"]
+print(f"""
+On OGS-00009, with a **full-statistic** index (Z, SE and EAF — not a Z-only
+projection), the indexed full result for `{analysis_id}` returns in
+**{ms(timings['indexed']['median_ms'])} warm median**
+({timings['indexed']['result_count']:,} associations), against
+**{ms(timings['ordinary_before']['median_ms'])}** for the ordinary primary-plane
+path — a **{speedup:.0f}x** improvement.
+
+The ordinary read is measured **before** the subset is built and again **after**
+it, in the same run against a scratch copy of the authoritative release; the
+artifact records
+`ordinary_bracketed = {run['ordinary_bracketed']}`. Exact decoded equivalence
+across all six result fields is **{equiv['exact']}**; publication status:
+{status}.
+""")
+```
+:::
+
+## Scope
+
+```{python}
+#| echo: false
+#| output: asis
+enc = store["encoding"]
+ver = enc.get("version") if isinstance(enc, dict) else None
+enc_text = ", ".join(
+    f"{name} `{plane.get('kind')}`"
+    for name, plane in sorted(enc.items())
+    if isinstance(plane, dict) and "kind" in plane
+)
+print(md_table(
+    ["Property", "Value"],
+    [
+        ["Store Release", f"{store['store_id']} (`{store['release_id']}`)"],
+        ["Primary layout", store["layout"]],
+        ["Completion state", store["completion_state"]],
+        ["Analyses", f"{store['n_analyses']:,}"],
+        ["Variants (Store axis)", f"{store['n_variants']:,}"],
+        ["Store format version", store["format_version"]],
+        ["Store Encoding", f"{enc_text} (v{ver})"],
+        ["Reference Assembly", store["reference_assembly"]],
+        ["Selected Analysis", f"`{analysis_id}`"],
+        ["Indexed Variant Subset", f"`{subset_name}`"],
+        ["Run mode", run["mode"]],
+        ["Measured at (UTC)", b["measured_at"]],
+        ["Git commit", f"`{b['commit']}`"],
+        ["opengwasdb fingerprint", f"`{b['opengwasdb_fingerprint'][:16]}…`"],
+    ],
+))
+```
+
+The package version and the Store Release `format_version` are different things and
+move independently.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Store path", "Value", "Role"],
+    [
+        ["Authoritative source", f"`{store['authoritative_path']}`", "never written"],
+        ["Measured scratch copy", f"`{store['path']}`", f"`copy_kind = {store['copy_kind']}`"],
+        ["Copy method recorded", "verified (`reflink`/`full_copy`) or `reused_scratch_copy`", ""],
+    ],
+))
+```
+
+The build writes only inside the scratch copy. The original release's
+recursive metadata fingerprint and its `manifest.json`/`analyses.tsv` hashes are
+compared before and after the run.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Run bracket", "State"],
+    [
+        ["subset present during ordinary_before", str(run["subset_present_during_ordinary_before"])],
+        ["subset published by this run", str(run["subset_published_by_this_run"])],
+        ["ordinary before/after bracketed", str(run["ordinary_bracketed"])],
+        ["run started (UTC)", run["started_at"]],
+        ["run finished (UTC)", run["finished_at"]],
+    ],
+))
+print(f"\noriginal_store_unchanged = {targets['original_store_unchanged']}")
+```
+
+## Input: the canonical GRCh38 HapMap3 ALID list
+
+The input is the canonical LDSC HapMap3 list, resolved against the Store's
+Variant Index by rsid **and** allele compatibility and written as canonical
+ALIDs. The list's SHA-256 is the same checksum the writer recorded.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["HapMap3 input", "Count"],
+    [
+        ["rsids requested", f"{res['rsids_requested']:,}"],
+        ["rsids resolved to an allele-compatible Store variant", f"{res['resolved_rsids']:,}"],
+        ["absent from the Store Variant Index", f"{res['absent_from_store_axis']:,}"],
+        ["present but allele-incompatible", f"{res['allele_incompatible']:,}"],
+        ["rsids matching multiple Store rows (aliases)", f"{res['multiple_store_rows']:,}"],
+        ["duplicate canonical ALIDs collapsed", f"{res['duplicate_alids']:,}"],
+        ["resolution time", ms(res["resolution_ms"])],
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Indexed Variant Subset input", "Value"],
+    [
+        ["HapMap3 source", f"`{inp['hapmap3_source_path']}`"],
+        ["HapMap3 source MD5", f"`{inp['hapmap3_source_md5']}`"],
+        ["subset name", f"`{subset_name}`"],
+        ["variant-list path", f"`{inp['variant_list_path']}`"],
+        ["variant-list SHA-256", f"`{inp['variant_list_sha256']}`"],
+        ["Reference Assembly", inp["reference_assembly"]],
+        ["requested (writer)", f"{inp['requested']:,}"],
+        ["resolved (writer)", f"{inp['resolved']:,}"],
+        ["absent (writer)", f"{inp['absent']:,}"],
+        ["canonical ALIDs derived", f"{inp['alids_derived']:,}"],
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(f"""
+The writer's own `absent` count is **{inp['absent']:,}**, while the rsid-level
+absence is **{res['absent_from_store_axis']:,}**. The two are reconciled rather
+than one being presented as the other, and a non-zero writer `absent` or an
+unbalanced rsid budget fails the run before an artifact is written.
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+recon = inp["counts_reconciliation"]
+print(md_table(
+    ["Reconciliation check", "Holds"],
+    [[f"`{name}`", str(value)] for name, value in sorted(recon.items())]
+    + [["**all reconciled**", f"**{inp['counts_reconciled']}**"]],
+))
+```
+
+## Storage: measured, not projected
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Storage", "Bytes", "Human"],
+    [
+        ["OGS-00009 baseline (logical)", f"{storage['baseline_logical_bytes']:,}", bytes_h(storage["baseline_logical_bytes"])],
+        ["OGS-00009 baseline (physical)", f"{storage['baseline_physical_bytes']:,}", bytes_h(storage["baseline_physical_bytes"])],
+        ["HapMap3 index (logical)", f"{storage['index_logical_bytes']:,}", bytes_h(storage["index_logical_bytes"])],
+        ["HapMap3 index (physical)", f"{storage['index_physical_bytes']:,}", bytes_h(storage["index_physical_bytes"])],
+        ["Increase over the release (physical)", f"{storage['increase_percent']:.3f}%", ""],
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+planes = storage["planes"]
+plane_rows = sorted((name, size) for name, size in planes.items() if name != "total")
+print(md_table(
+    ["Index array / entry", "Physical bytes"],
+    [[f"`{name}`", f"{size:,}"] for name, size in plane_rows]
+    + [["**total**", f"**{planes['total']:,}**"]],
+))
+```
+
+```{python}
+#| echo: false
+fig, ax = plt.subplots(figsize=(7.5, 1.8))
+plane_names = [name for name, _ in plane_rows]
+plane_sizes = [size for _, size in plane_rows]
+colors = ["#3b7dd8" if name in ("z", "se", "eaf") else "#b9b9b9" for name in plane_names]
+ax.barh(plane_names, plane_sizes, color=colors)
+ax.set_xlabel("physical bytes (allocated)", fontsize=9)
+ax.tick_params(labelsize=8)
+for spine in ("top", "right"):
+    ax.spines[spine].set_visible(False)
+plt.tight_layout()
+plt.show()
+```
+
+The index is derived, rebuildable data (ADR 0061): deleting it changes no
+association and no Analytical Metadata.
+
+## Build cost and bounded memory
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Build", "Value"],
+    [
+        ["run mode", build["run_mode"]],
+        ["configured band", f"{build['band_cells']:,} cells"],
+        ["prepare (open release, resolve list)", f"{build['phases']['prepare_seconds']:,.2f} s"],
+        ["publish (write planes + staged validation)", f"{build['phases']['publish_seconds']:,.2f} s"],
+        ["in-process total", f"{build['in_process_seconds']:,.2f} s"],
+        ["subprocess wall total (incl. interpreter startup)", f"{build['total_seconds']:,.2f} s"],
+        ["requested / resolved / absent (writer)", f"{build['requested']:,} / {build['resolved']:,} / {build['absent']:,}"],
+        ["input SHA-256 (writer)", f"`{build['input_sha256']}`"],
+        ["peak RSS", f"{build['peak_rss_mb']:,.1f} MB"],
+        ["RSS bound (band + fixed overhead)", f"{build['rss_bound_mb']:,.1f} MB"],
+        ["peak RSS within declared bound", str(build["rss_within_bound"])],
+        ["measurement source", build["peak_rss_source"]],
+        ["build block source", build["reused_from"] or "this run"],
+    ],
+))
+```
+
+The bound is `band_cells` times a per-cell allowance plus a fixed term, so it is
+a function of the configured band and not of the full Store axis (whose decoded
+size is printed below). The measured peak is reported as measured: where it
+exceeds the declared bound the target below fails rather than the bound being
+widened after the fact.
+
+```{python}
+#| echo: false
+#| output: asis
+full_matrix_cells = store["n_analyses"] * store["n_variants"]
+print(
+    f"Full decoded axis: {store['n_analyses']:,} Analyses x "
+    f"{store['n_variants']:,} variants = {full_matrix_cells:,} cells "
+    f"({full_matrix_cells * 4 / 1e12:.1f} TB at float32)."
+)
+```
+
+## Query latency
+
+```{python}
+#| echo: false
+#| output: asis
+method = timings["method"]
+
+
+def timing_row(label, t):
+    return [label, ms(t["first_ms"]), ms(t["median_ms"]), ms(t["p95_ms"]), f"{t['result_count']:,}"]
+
+
+print(md_table(
+    ["Query", "first read", "warm median", "p95", "results"],
+    [
+        timing_row("ordinary, before index", timings["ordinary_before"]),
+        timing_row("**indexed**", timings["indexed"]),
+        timing_row("ordinary, after index", timings["ordinary_after"]),
+    ],
+))
+print()
+print(md_table(
+    ["Timing method", "Definition"],
+    [
+        ["first read", method["first_read"]],
+        ["p95", method["p95"]],
+        ["warm median", "median of the sorted repetitions that follow the first read, on the same open store"],
+    ],
+))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Target", "Outcome"],
+    [
+        ["warm median under 1 s", f"{targets['warm_median_under_1s']}"],
+        ["exact decoded equivalence", f"{targets['exact_equivalence']}"],
+        [
+            f"ordinary unchanged within ±{b['ordinary_stability']['noise_envelope_percent']:.0f}% envelope",
+            f"{targets['ordinary_unchanged_within_envelope']} "
+            f"(median moved {b['ordinary_stability']['median_change_percent']:+.2f}%)",
+        ],
+        ["ordinary before/after bracketed", f"{targets['ordinary_bracketed']}"],
+        ["peak build RSS within declared bound", f"{targets['peak_rss_within_bound']}"],
+        ["authoritative store unchanged", f"{targets['original_store_unchanged']}"],
+    ],
+))
+```
+
+## Exact equivalence (the publication gate)
+
+Every one of the six parallel arrays must decode exactly equal, be present on
+both sides, be non-empty, and share dtype and length. A field missing from both
+sides fails: it was not measured.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Guard", "Value"],
+    [
+        ["required fields", ", ".join(f"`{name}`" for name in equiv["required_fields"])],
+        ["all six present on both sides", str(equiv["required_fields_present"])],
+        ["dtypes match", str(equiv["dtypes_match"])],
+        ["lengths match", str(equiv["lengths_match"])],
+        ["non-empty", str(equiv["non_empty"])],
+        ["expected rows", f"{equiv['expected_count']:,}"],
+        ["indexed rows", f"{equiv['indexed_count']:,}"],
+    ],
+))
+print()
+print(md_table(
+    ["Field", "Exact"],
+    [[f"`{name}`", str(value)] for name, value in sorted(equiv["fields"].items())],
+))
+```
+
+## Caveats and honesty
+
+```{python}
+#| echo: false
+#| output: asis
+print(f"""
+- **The RSS target is recorded as its measurement says.** The peak was
+  {build['peak_rss_mb']:,.1f} MB against the declared band-plus-fixed-overhead
+  bound of {build['rss_bound_mb']:,.1f} MB, so
+  `peak_rss_within_bound = {targets['peak_rss_within_bound']}`. The peak is still
+  set by the band, not by the full matrix (terabytes decoded). Widening the bound
+  after the fact would be the tuning this harness refuses.
+- **`first_ms` is not a cold-cache figure.** The OS page cache is never dropped,
+  and `ordinary_after` follows `ordinary_before`, so it is already warm. The
+  method is disclosed in the artifact under `timings.method`.
+- **`p95_ms` is the nearest-rank order statistic, i.e. the maximum of the five
+  warm repetitions** at the default `--reps`; it is not interpolated.
+- The build block is genuine for this run
+  (`build.run_mode = {build['run_mode']}`). A query-only re-run may reuse an
+  earlier artifact's measured build block via `--build-stats`, and it is named
+  here as `{build['reused_from'] or 'this run'}`.
+- **This is a historical measurement at the commit named in Scope**
+  (`{b['commit']}`, fingerprint `{b['opengwasdb_fingerprint'][:16]}…`). A later
+  documentation-only commit corrected stale "Observed-Only Dense only" wording
+  in CLI help, error messages and docstrings; it changed no measured code path,
+  so the artifact and its fingerprint remain the measurement for the code that
+  actually ran and are deliberately not re-generated for a wording change.
+- **`store.copy_kind` in this historical artifact is the copy method the older
+  `cp --reflink=auto` request assumed.** The harness now uses
+  `cp --reflink=always`, verifies the reflink, falls back to a documented
+  `full_copy`, and records `reused_scratch_copy` when it did not perform the
+  copy; this frozen artifact predates that verification and is not re-generated
+  to change a label with no measurement meaning.
+- The per-plane physical figures bucket the group's top-level entries, so a
+  future encoding that adds an array appears without a hard-coded plane list.
+""")
+```
+
+::: {.callout-note}
+## Reproducing this measurement
+
+```{python}
+#| echo: false
+#| output: asis
+print(f"""```bash
+# Fresh run: copy the authoritative release into scratch with a verified
+# reflink (falling back to a full copy), remove any existing subset from that
+# scratch copy, measure ordinary_before, build, measure ordinary_after.
+pixi run -e dev python benchmarks/benchmark_indexed_subset.py \\
+  --store {store['authoritative_path']} \\
+  --work /data/opengwasdb/work/267-indexed \\
+  --analysis-id {analysis_id} \\
+  --subset-name {subset_name} \\
+  --reps 5 \\
+  --reuse-copy --reset-subset \\
+  --output docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.json
+pixi run -e report quarto render \\
+  docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.qmd
+```""")
+```
+
+Re-run the harness; never hand-edit a number in the artifact or this page.
+:::
