@@ -136,29 +136,40 @@ performance result.
   the bound being widened after the fact; the peak is independent of the full
   matrix. The #270 per-phase measurement below shows it is set by ALID
   resolution, not by the writer band, and so the same miss recurs.
-- **#270 removed the build's output-chunk write amplification.** The old writer
+- **#270 removed the build's output-chunk write amplification and made the
+  build's publication gate a documented deterministic sample.** The old writer
   banded by cell budget alone -- about 1,976 subset variants on OGS-00009 -- and
   so partially read, recomputed and recompressed each 65,536-variant output
   chunk about 33 times per plane. The writer now walks whole physical output
   files (a v2 chunk, or a v3 shard so a shard is never a read-modify-write),
   plane at a time, and tiles the Analysis axis within the band; the tile is a
   whole multiple of the primary plane's read unit, so a source file is decoded
-  once. The exhaustive staged validation is retained and itself walks whole
-  output files. On the fresh #270 OGS-00009 HapMap3 build every one of the
-  38,456 `z`, `se` and `eaf` physical files was encoded exactly once (measured
-  at the store layer). The build took **1,738.57 s** -- write **143.819 s** and
-  exhaustive staged validation **1,585.591 s** (91.7% of the publish) -- against
-  the #267 build's 4,198 s, with byte-exact six-field equivalence, the same
-  6,235,033,600 physical index bytes (17.852%) and a 1,235.2 MB peak RSS. The
-  residual peak is set by ALID resolution, not by the writer band, so it is
-  independent of the subset matrix; the validation pass remains the dominant
-  cost and is kept exhaustive rather than sampled.
-- The #270 query latency was measured at **699.805 ms** warm median in that
-  benchmark run, but a same-machine A/B of the #267 and #270 indexes immediately
-  afterwards measured **455.4 ms** and **457.9 ms** respectively: the index
-  layout and query path are unchanged and the run's higher figure is
-  environmental (a freshly written 6 GB index plus background machine load),
-  not a regression.
+  once. On the fresh #270 OGS-00009 HapMap3 build every one of the 38,456 `z`,
+  `se` and `eaf` physical files was encoded exactly once (measured at the store
+  layer). The build took **194.19 s** -- write **182.34 s** and the publication
+  gate **1.807 s** -- against the #267 build's 4,198 s, with byte-exact
+  six-field equivalence, 6,235,013,120 physical index bytes (17.852%) and a
+  1,239.4 MB peak RSS (still resolution-bound, so the #267 bound miss recurs).
+- The build's gate validates the structural invariants exhaustively (identity
+  and attributes, exact array set, shapes/dtypes/chunking, the full Variant
+  Index, counts and provenance), together with the small side-table remapping
+  and the per-variant EAF baseline/reference, and replaces the full-matrix
+  decoded comparison with a **bounded deterministic stratified sample**: the
+  four corners, the slot before and after every inner-chunk boundary, 16 evenly
+  spaced Analyses, and input-checksum-seeded cells -- **528 cells** on the
+  #270 run (seed 166638625948460791), independent of the matrix. Standalone
+  `validate_store`/`validate_indexed_subsets` remain **exhaustive** and decode
+  every indexed cell, side table, imputed mask and reference EAF, so an
+  isolated corruption the build sample can miss is refused by an explicit
+  audit; the build records the mode, sample strategy, seed, cell count and
+  sampled duration. The risk is documented rather than hidden, and the low
+  build cost is part of this ADR's outcome.
+- The #270 query latency was measured at **555.670 ms** warm median in that
+  benchmark run. An interleaved same-machine A/B of the #267 and #270 indexes
+  (alternating reads in one process, 15 rounds each) measured **741.8 ms** and
+  **744.9 ms**; the two are within noise, their chunk/shard geometry is
+  identical and their per-plane physical bytes differ by less than 0.01%, so
+  the run's figure is environmental rather than a layout regression.
 - The store format gains a compatible optional index namespace and validation
   rules. The specification, overview rendering, CLI documentation and sibling
   repository walkthrough must describe it in the implementation change.

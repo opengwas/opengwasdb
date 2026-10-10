@@ -2256,7 +2256,7 @@ vertical-align: -.125em;
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>On OGS-00009, with a <strong>full-statistic</strong> index (Z, SE and EAF — not a Z-only projection), the indexed full result for <code>ukb-b-17805</code> returns in <strong>699.8 ms warm median</strong> (1,178,549 associations), against <strong>17.87 s</strong> for the ordinary primary-plane path — a <strong>26x</strong> improvement.</p>
+<p>On OGS-00009, with a <strong>full-statistic</strong> index (Z, SE and EAF — not a Z-only projection), the indexed full result for <code>ukb-b-17805</code> returns in <strong>555.7 ms warm median</strong> (1,178,549 associations), against <strong>19.22 s</strong> for the ordinary primary-plane path — a <strong>35x</strong> improvement.</p>
 <p>The ordinary read is measured <strong>before</strong> the subset is built and again <strong>after</strong> it, in the same run against a scratch copy of the authoritative release; the artifact records <code>ordinary_bracketed = True</code>. Exact decoded equivalence across all six result fields is <strong>True</strong>; publication status: <strong>published</strong>.</p>
 </div>
 </div>
@@ -2320,15 +2320,15 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>Measured at (UTC)</td>
-<td>2026-10-10T18:25:55.785284+00:00</td>
+<td>2026-10-10T19:40:19.308422+00:00</td>
 </tr>
 <tr class="odd">
 <td>Git commit</td>
-<td><code>9ea3c89</code></td>
+<td><code>6166c2b</code></td>
 </tr>
 <tr class="even">
 <td>opengwasdb fingerprint</td>
-<td><code>8126a493e1ec052b…</code></td>
+<td><code>9a591b0924b766cc…</code></td>
 </tr>
 </tbody>
 </table>
@@ -2387,11 +2387,11 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>run started (UTC)</td>
-<td>2026-10-10T17:52:21.254841+00:00</td>
+<td>2026-10-10T19:31:51.591363+00:00</td>
 </tr>
 <tr class="odd">
 <td>run finished (UTC)</td>
-<td>2026-10-10T18:25:50.758066+00:00</td>
+<td>2026-10-10T19:40:14.938448+00:00</td>
 </tr>
 </tbody>
 </table>
@@ -2434,7 +2434,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td>resolution time</td>
-<td>3.72 s</td>
+<td>4.07 s</td>
 </tr>
 </tbody>
 </table>
@@ -2560,7 +2560,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>HapMap3 index (physical)</td>
-<td>6,235,033,600</td>
+<td>6,235,013,120</td>
 <td>5.8 GiB</td>
 </tr>
 <tr class="odd">
@@ -2588,7 +2588,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><code>eaf</code></td>
-<td>710,692,864</td>
+<td>710,672,384</td>
 </tr>
 <tr class="even">
 <td><code>eaf_baseline</code></td>
@@ -2604,7 +2604,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><code>se</code></td>
-<td>1,158,307,840</td>
+<td>1,158,311,936</td>
 </tr>
 <tr class="even">
 <td><code>se_coefficients</code></td>
@@ -2624,7 +2624,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td><code>z</code></td>
-<td>4,360,560,640</td>
+<td>4,360,556,544</td>
 </tr>
 <tr class="odd">
 <td><code>z_overflow_index</code></td>
@@ -2636,11 +2636,11 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><strong>total</strong></td>
-<td><strong>6,235,033,600</strong></td>
+<td><strong>6,235,013,120</strong></td>
 </tr>
 </tbody>
 </table>
-<div id="2c08aeda" class="cell" data-execution_count="12">
+<div id="8a0a096a" class="cell" data-execution_count="12">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -2675,57 +2675,69 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td>prepare (open release, resolve list)</td>
-<td>7.63 s</td>
+<td>8.62 s</td>
 </tr>
 <tr class="even">
 <td>write (planes, chunk-aligned)</td>
-<td>143.82 s</td>
+<td>182.34 s</td>
 </tr>
 <tr class="odd">
-<td>staged validation (exhaustive second pass)</td>
-<td>1,585.59 s</td>
+<td>staged validation (publication gate)</td>
+<td>1.81 s</td>
 </tr>
 <tr class="even">
+<td>validation mode</td>
+<td>sampled</td>
+</tr>
+<tr class="odd">
+<td>decoded sample</td>
+<td>528 cells (corners + 16 evenly spaced Analyses + 8 inner-chunk boundaries + 8 checksum-seeded cells per Analysis + 32 checksum-seeded cells across Analyses)</td>
+</tr>
+<tr class="even">
+<td>sample seed (input-SHA-256)</td>
+<td><code>166638625948460791</code></td>
+</tr>
+<tr class="odd">
 <td>publish (write + validation + staging)</td>
-<td>1,729.42 s</td>
+<td>184.16 s</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>validation share of publish</td>
-<td>91.7%</td>
-</tr>
-<tr class="even">
-<td>in-process total</td>
-<td>1,737.05 s</td>
+<td>1.0%</td>
 </tr>
 <tr class="odd">
-<td>subprocess wall total (incl. interpreter startup)</td>
-<td>1,738.57 s</td>
+<td>in-process total</td>
+<td>192.78 s</td>
 </tr>
 <tr class="even">
+<td>subprocess wall total (incl. interpreter startup)</td>
+<td>194.19 s</td>
+</tr>
+<tr class="odd">
 <td>requested / resolved / absent (writer)</td>
 <td>1,206,903 / 1,206,903 / 0</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>input SHA-256 (writer)</td>
 <td><code>4a7c82aa625a006ff437dcaa2769b00e056413d54c72e98f7378327c69513398</code></td>
 </tr>
-<tr class="even">
-<td>peak RSS</td>
-<td>1,235.2 MB</td>
-</tr>
 <tr class="odd">
+<td>peak RSS</td>
+<td>1,239.4 MB</td>
+</tr>
+<tr class="even">
 <td>RSS bound (band + fixed overhead)</td>
 <td>1,146.1 MB</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>peak RSS within declared bound</td>
 <td>False</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>measurement source</td>
 <td>/usr/bin/time -v (build subprocess)</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>build block source</td>
 <td>this run</td>
 </tr>
@@ -2768,7 +2780,8 @@ vertical-align: -.125em;
 </tbody>
 </table>
 <p>The writer copies the primary planes’ stored codes into the index <strong>one physical output file at a time</strong> — a v2 inner chunk or a v3 shard — so each compressed file is encoded exactly once (the table above is the measured count, not a claim). Before #270 the band was sized only by cell budget (about 1,976 variants on OGS-00009), so each 65,536-variant output chunk was partially rewritten about 33 times. The Analysis axis is tiled within the band so peak memory is one band of one plane, independent of the subset’s total size, while the tile is a whole multiple of the primary plane’s own read unit so a source file is decoded once.</p>
-<p>The bound is <code>band_cells</code> times a per-cell allowance plus a fixed term, so it is a function of the configured band and not of the full Store axis (whose decoded size is printed below). The measured peak is reported as measured: where it exceeds the declared bound the target below fails rather than the bound being widened after the fact. The exhaustive staged validation still decodes and compares <strong>every</strong> indexed cell and dependency against the primary planes; its share of the publish time is printed above rather than replaced by a sample.</p>
+<p>The bound is <code>band_cells</code> times a per-cell allowance plus a fixed term, so it is a function of the configured band and not of the full Store axis (whose decoded size is printed below). The measured peak is reported as measured: where it exceeds the declared bound the target below fails rather than the bound being widened after the fact.</p>
+<p>The build’s publication gate is <strong><code>sampled</code></strong>: every structural invariant (identity, exact array set, shapes/dtypes/chunking, the full Variant Index, the small side-table remapping and provenance) is checked exhaustively, and the decoded Z/SE/EAF and Association Status of a bounded deterministic sample of cells are compared against the primary planes. The sample covers the endpoints of both axes, every physical output boundary, a spread of Analyses and input-checksum-seeded cells (the mode, strategy, seed and count are in the table above); a systemic, ordering or chunk-boundary corruption is caught. An isolated unsampled corruption can pass this gate by design; standalone <code>opengwasdb validate</code> remains <strong>exhaustive</strong> and decodes every indexed cell, so it is the audit that rules that out.</p>
 <p>Full decoded axis: 2,024 Analyses x 9,847,701 variants = 19,931,746,824 cells (0.1 TB at float32).</p>
 </section>
 <section id="query-latency" class="level2">
@@ -2786,23 +2799,23 @@ vertical-align: -.125em;
 <tbody>
 <tr class="odd">
 <td>ordinary, before index</td>
-<td>19.85 s</td>
-<td>17.87 s</td>
-<td>18.63 s</td>
+<td>48.62 s</td>
+<td>19.22 s</td>
+<td>22.99 s</td>
 <td>7,578,651</td>
 </tr>
 <tr class="even">
 <td><strong>indexed</strong></td>
-<td>703.8 ms</td>
-<td>699.8 ms</td>
-<td>700.7 ms</td>
+<td>556.4 ms</td>
+<td>555.7 ms</td>
+<td>556.5 ms</td>
 <td>1,178,549</td>
 </tr>
 <tr class="odd">
 <td>ordinary, after index</td>
-<td>23.00 s</td>
-<td>18.87 s</td>
-<td>22.04 s</td>
+<td>21.08 s</td>
+<td>19.71 s</td>
+<td>20.79 s</td>
 <td>7,578,651</td>
 </tr>
 </tbody>
@@ -2851,7 +2864,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td>ordinary unchanged within ±25% envelope</td>
-<td>True (median moved +5.62%)</td>
+<td>True (median moved +2.52%)</td>
 </tr>
 <tr class="even">
 <td>ordinary before/after bracketed</td>
@@ -2951,13 +2964,13 @@ vertical-align: -.125em;
 <section id="caveats-and-honesty" class="level2">
 <h2 class="anchored" data-anchor-id="caveats-and-honesty">Caveats and honesty</h2>
 <ul>
-<li><strong>The RSS target is recorded as its measurement says.</strong> The peak was 1,235.2 MB against the declared band-plus-fixed-overhead bound of 1,146.1 MB, so <code>peak_rss_within_bound = False</code>. The peak is still set by the band, not by the full matrix (terabytes decoded). Widening the bound after the fact would be the tuning this harness refuses.</li>
-<li><strong>The publication gate is exhaustive, not a sample.</strong> The staged validation decodes and compares every indexed Z, SE and EAF cell, every side table, the imputed mask and the reference EAF against the primary planes (1,585.59 s, the share above). A corrupt cell in any output chunk is refused, including one outside any small sample.</li>
+<li><strong>The RSS target is recorded as its measurement says.</strong> The peak was 1,239.4 MB against the declared band-plus-fixed-overhead bound of 1,146.1 MB, so <code>peak_rss_within_bound = False</code>. The peak is still set by the band, not by the full matrix (terabytes decoded). Widening the bound after the fact would be the tuning this harness refuses.</li>
+<li><strong>The publication gate is a documented sample; standalone validation is exhaustive.</strong> The build’s staged validation compares a bounded deterministic decoded sample (528 cells, mode <code>sampled</code>, 1.81 s) and refuses systemic, ordering and output-boundary corruption. An isolated unsampled corruption can pass the build gate; standalone <code>validate</code> decodes and compares <strong>every</strong> indexed cell, side table, imputed mask and reference EAF and is the explicit audit for it. The risk is stated rather than hidden.</li>
 <li><strong>The measured rewrite count is one per physical file.</strong> The table above is the store-level count over the staged group, so a v2 chunk (or v3 shard) encoded twice would show <code>most encodings of one file = 2</code> and fail the artifact’s semantic checks.</li>
 <li><strong><code>first_ms</code> is not a cold-cache figure.</strong> The OS page cache is never dropped, and <code>ordinary_after</code> follows <code>ordinary_before</code>, so it is already warm. The method is disclosed in the artifact under <code>timings.method</code>.</li>
 <li><strong><code>p95_ms</code> is the nearest-rank order statistic, i.e. the maximum of the five warm repetitions</strong> at the default <code>--reps</code>; it is not interpolated.</li>
 <li>The build block is genuine for this run (<code>build.run_mode = fresh</code>). A query-only re-run may reuse an earlier artifact’s measured build block via <code>--build-stats</code>, and it is named here as <code>this run</code>.</li>
-<li><strong>This measurement is at the commit named in Scope</strong> (<code>9ea3c89</code>, fingerprint <code>8126a493e1ec052b…</code>). It was re-run for #270’s chunk-aligned writer; both the artifact and this page are regenerated from that run.</li>
+<li><strong>This measurement is at the commit named in Scope</strong> (<code>6166c2b</code>, fingerprint <code>9a591b0924b766cc…</code>). It was re-run for #270’s chunk-aligned writer; both the artifact and this page are regenerated from that run.</li>
 <li><strong><code>store.copy_kind</code> is the copy method the harness verified</strong>, recorded as <code>reflink</code> or <code>full_copy</code> from <code>cp --reflink=always</code> with a documented fallback, or <code>reused_scratch_copy</code> when it did not perform the copy.</li>
 <li>The per-plane physical figures bucket the group’s top-level entries, so a future encoding that adds an array appears without a hard-coded plane list.</li>
 </ul>

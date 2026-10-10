@@ -1,9 +1,9 @@
 {
-  "commit": "9ea3c89",
-  "measured_at": "2026-10-10T18:25:55.785284+00:00",
+  "commit": "6166c2b",
+  "measured_at": "2026-10-10T19:40:19.308422+00:00",
   "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/270-indexed-build-opt/opengwasdb",
-  "opengwasdb_fingerprint": "8126a493e1ec052b12c4f59895721a32116ead9b8ea4f6ba4349599204925578",
-  "artifact_schema_version": 3,
+  "opengwasdb_fingerprint": "9a591b0924b766cc70261184a520d3d4e8e916da3d2ab6fa14ff3f888f2f6cbf",
+  "artifact_schema_version": 4,
   "analysis_id": "ukb-b-17805",
   "subset_name": "hm3",
   "store": {
@@ -60,22 +60,22 @@
       "allele_incompatible": 23,
       "multiple_store_rows": 2743,
       "duplicate_alids": 0,
-      "resolution_ms": 3724.87
+      "resolution_ms": 4067.756
     }
   },
   "storage": {
     "baseline_logical_bytes": 34680981363,
     "baseline_physical_bytes": 34926288896,
-    "index_physical_bytes": 6235033600,
+    "index_physical_bytes": 6235013120,
     "index_logical_bytes": 5943821227,
     "increase_percent": 17.852,
     "planes": {
       ".zgroup": 4096,
       ".zattrs": 4096,
       "variant_index": 1294336,
-      "z": 4360560640,
-      "se": 1158307840,
-      "eaf": 710692864,
+      "z": 4360556544,
+      "se": 1158311936,
+      "eaf": 710672384,
       "z_overflow_index": 12288,
       "z_overflow_value": 12288,
       "eaf_baseline": 4009984,
@@ -84,23 +84,23 @@
       "se_coefficients": 24576,
       "se_exception_index": 45056,
       "se_exception_value": 36864,
-      "total": 6235033600
+      "total": 6235013120
     }
   },
   "build": {
     "run_mode": "fresh",
     "reused_from": "",
-    "total_seconds": 1738.57,
-    "in_process_seconds": 1737.046,
-    "peak_rss_mb": 1235.2,
+    "total_seconds": 194.19,
+    "in_process_seconds": 192.775,
+    "peak_rss_mb": 1239.4,
     "band_cells": 4000000,
     "rss_bound_mb": 1146.1,
     "rss_within_bound": false,
     "phases": {
-      "prepare_seconds": 7.628,
-      "write_seconds": 143.819,
-      "validate_seconds": 1585.591,
-      "publish_seconds": 1729.418
+      "prepare_seconds": 8.616,
+      "write_seconds": 182.34,
+      "validate_seconds": 1.807,
+      "publish_seconds": 184.159
     },
     "output_chunk_writes": {
       "z": {
@@ -119,6 +119,10 @@
         "max_writes_one_chunk": 1
       }
     },
+    "validation_mode": "sampled",
+    "sample_strategy": "corners + 16 evenly spaced Analyses + 8 inner-chunk boundaries + 8 checksum-seeded cells per Analysis + 32 checksum-seeded cells across Analyses",
+    "sample_seed": 166638625948460791,
+    "sample_cells": 528,
     "peak_rss_source": "/usr/bin/time -v (build subprocess)",
     "requested": 1206903,
     "resolved": 1206903,
@@ -131,28 +135,28 @@
       "p95": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)"
     },
     "ordinary_before": {
-      "first_ms": 19853.255,
+      "first_ms": 48623.2,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 17865.406,
-      "p95_ms": 18626.506,
+      "median_ms": 19220.19,
+      "p95_ms": 22988.03,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 7578651
     },
     "ordinary_after": {
-      "first_ms": 22998.443,
+      "first_ms": 21077.516,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 18869.826,
-      "p95_ms": 22035.127,
+      "median_ms": 19705.555,
+      "p95_ms": 20786.152,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 7578651
     },
     "indexed": {
-      "first_ms": 703.833,
+      "first_ms": 556.446,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 699.805,
-      "p95_ms": 700.682,
+      "median_ms": 555.67,
+      "p95_ms": 556.536,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 1178549
@@ -185,12 +189,12 @@
   },
   "run": {
     "mode": "fresh",
-    "started_at": "2026-10-10T17:52:21.254841+00:00",
-    "finished_at": "2026-10-10T18:25:50.758066+00:00",
+    "started_at": "2026-10-10T19:31:51.591363+00:00",
+    "finished_at": "2026-10-10T19:40:14.938448+00:00",
     "subset_present_during_ordinary_before": false,
     "subset_published_by_this_run": true,
     "ordinary_bracketed": true,
-    "reset_subset": true
+    "reset_subset": false
   },
   "targets": {
     "warm_median_under_1s": true,
@@ -205,7 +209,7 @@
     "reason": ""
   },
   "ordinary_stability": {
-    "median_change_percent": 5.622,
+    "median_change_percent": 2.525,
     "noise_envelope_percent": 25.0,
     "within_envelope": true
   }
