@@ -35,9 +35,13 @@ from opengwasdb.cli.main import app
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
 from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.indexed_subsets import (
+    DEFAULT_BAND_CELLS,
     INDEXED_SUBSETS_GROUP,
+    IndexedSubsetExistsError,
     IndexedSubsetNameError,
+    IndexedSubsetStaleError,
     VariantListError,
+    _ensure_indexed_subset_namespace,
     build_indexed_subset,
     list_indexed_subsets,
     open_indexed_subset,
@@ -48,6 +52,8 @@ from opengwasdb.layouts.dense.indexed_subsets import (
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
+from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.open import destination_lock, directory_lock, zarr_format_for_version
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant
 
@@ -144,15 +150,46 @@ def _index_group(store: Path, name: str) -> zarr.Group:
     )
 
 
-def _build(store: Path, name: str, variant_list: Path, **kwargs) -> Path:
+def _build(
+    store: Path,
+    name: str,
+    variant_list: Path,
+    *,
+    reference_assembly: str = "GRCh38",
+    overwrite: bool = False,
+    band_cells: int = DEFAULT_BAND_CELLS,
+) -> Path:
     build_indexed_subset(
         store,
         name,
         variant_list,
-        reference_assembly="GRCh38",
-        **kwargs,
+        reference_assembly=reference_assembly,
+        overwrite=overwrite,
+        band_cells=band_cells,
     )
     return store
+
+
+def _concurrent_builds(
+    store: Path, names: tuple[str, ...], variant_list: Path
+) -> list[BaseException]:
+    """Build `names` at once and return whatever each worker raised."""
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(len(names))
+
+    def worker(name: str) -> None:
+        barrier.wait()
+        try:
+            _build(store, name, variant_list)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(name,)) for name in names]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    return errors
 
 
 # ── Fixture is meaningful (asserted before anything is asserted about it) ────
@@ -392,7 +429,7 @@ def test_same_name_concurrent_builds_yield_one_winner(
         try:
             _build(store, "race", variant_list)
             outcomes.append("won")
-        except FileExistsError as exc:
+        except IndexedSubsetExistsError as exc:
             outcomes.append(exc)
 
     threads = [threading.Thread(target=worker) for _ in range(2)]
@@ -402,8 +439,93 @@ def test_same_name_concurrent_builds_yield_one_winner(
         thread.join()
 
     assert outcomes.count("won") == 1, outcomes
-    assert sum(isinstance(item, FileExistsError) for item in outcomes) == 1
+    assert sum(isinstance(item, IndexedSubsetExistsError) for item in outcomes) == 1
     assert validate_store(store).ok
+
+
+def test_no_overwrite_build_raises_the_domain_exists_error(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    with pytest.raises(IndexedSubsetExistsError):
+        _build(store, "hm3", variant_list)
+
+
+def test_first_time_concurrent_different_name_builds_share_one_namespace(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    """No warm-up: both builds race to create `indexed_subsets` itself.
+
+    The namespace does not exist when the threads start, so namespace creation
+    happens concurrently with the first publications -- the path the lock in
+    `_ensure_indexed_subset_namespace` exists for.
+    """
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    assert not (store / "data.zarr" / INDEXED_SUBSETS_GROUP).exists()
+
+    errors = _concurrent_builds(store, ("one", "two"), variant_list)
+
+    assert not errors, errors
+    assert sorted(list_indexed_subsets(store)) == ["one", "two"]
+    assert validate_store(store).ok
+
+
+def test_namespace_creation_is_serialised_across_threads(
+    tmp_path: Path, rich_store: Path
+) -> None:
+    """Eight concurrent creators produce one valid namespace group, not a race."""
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    fmt = zarr_format_for_version(StoreManifest.load(store).format_version)
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(8)
+
+    def worker() -> None:
+        barrier.wait()
+        try:
+            _ensure_indexed_subset_namespace(store, fmt)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, errors
+    root = zarr.open_group(str(store / "data.zarr"), mode="r")
+    assert INDEXED_SUBSETS_GROUP in root
+    assert validate_store(store).ok
+
+
+def test_namespace_creation_waits_for_the_shared_directory_lock(
+    tmp_path: Path, rich_store: Path
+) -> None:
+    """Namespace creation takes the data.zarr lock, so it cannot race itself.
+
+    Deterministic where a timing race is not: while another holder owns the
+    shared directory lock, the namespace must not appear.
+    """
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    fmt = zarr_format_for_version(StoreManifest.load(store).format_version)
+    namespace = store / "data.zarr" / INDEXED_SUBSETS_GROUP
+    created = threading.Event()
+
+    def worker() -> None:
+        _ensure_indexed_subset_namespace(store, fmt)
+        created.set()
+
+    with directory_lock(store / "data.zarr"):
+        thread = threading.Thread(target=worker)
+        thread.start()
+        assert not created.wait(timeout=0.5), (
+            "namespace creation ran without holding the data.zarr lock"
+        )
+        assert not namespace.exists(), "namespace appeared while the lock was held"
+    thread.join(timeout=10)
+    assert created.is_set()
+    assert INDEXED_SUBSETS_GROUP in zarr.open_group(str(store / "data.zarr"), mode="r")
 
 
 def test_different_name_concurrent_builds_do_not_touch_each_other(
@@ -413,24 +535,64 @@ def test_different_name_concurrent_builds_do_not_touch_each_other(
     _build(store, "warmup", variant_list)
     remove_indexed_subset(store, "warmup")
 
+    errors = _concurrent_builds(store, ("one", "two"), variant_list)
+
+    assert not errors, errors
+    assert sorted(list_indexed_subsets(store)) == ["one", "two"]
+    assert validate_store(store).ok
+
+
+def test_removal_takes_the_publication_lock(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    """A removal cannot run while a publication holds the same destination lock."""
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    dest = store / "data.zarr" / INDEXED_SUBSETS_GROUP / "hm3"
+    removed = threading.Event()
+
+    def worker() -> None:
+        remove_indexed_subset(store, "hm3")
+        removed.set()
+
+    with destination_lock(dest):
+        thread = threading.Thread(target=worker)
+        thread.start()
+        assert not removed.wait(timeout=0.5), (
+            "remove_indexed_subset ran without holding the publication lock"
+        )
+    thread.join(timeout=10)
+    assert removed.is_set()
+    assert list_indexed_subsets(store) == ()
+    assert validate_store(store).ok
+
+
+def test_concurrent_removes_of_one_subset_have_one_winner(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    outcomes: list[bool] = []
     errors: list[BaseException] = []
     barrier = threading.Barrier(2)
 
-    def worker(name: str) -> None:
+    def worker() -> None:
         barrier.wait()
         try:
-            _build(store, name, variant_list)
+            outcomes.append(remove_indexed_subset(store, "hm3"))
         except Exception as exc:
             errors.append(exc)
 
-    threads = [threading.Thread(target=worker, args=(name,)) for name in ("one", "two")]
+    threads = [threading.Thread(target=worker) for _ in range(2)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
 
     assert not errors, errors
-    assert sorted(list_indexed_subsets(store)) == ["one", "two"]
+    assert sorted(outcomes) == [False, True]
+    namespace = store / "data.zarr" / INDEXED_SUBSETS_GROUP
+    assert not [p for p in namespace.iterdir() if p.name.startswith(".")]
     assert validate_store(store).ok
 
 
@@ -472,6 +634,174 @@ def test_build_on_a_0_1_0_store_keeps_the_v2_layout(
     assert not (subset / "zarr.json").exists()
     assert validate_store(legacy).ok
     assert open_indexed_subset(legacy, "hm3").n_subset_variants == 6
+
+
+# ── Encoding branches ───────────────────────────────────────────────────────
+#
+# The rich fixture reaches one combination (fixed-point z, residual se and
+# residual eaf).  These fixtures reach the other shapes the writer and validator
+# branch on, and each asserts the fixture reaches its branch before asserting
+# anything the index does with it.
+
+
+def _absent_eaf_store(tmp_path: Path) -> Path:
+    """A release with no eaf plane and a float16 se plane."""
+    store = tmp_path / "absent-eaf.opengwasdb"
+    records = [
+        NormalisedAssociation("a1", CanonicalVariant("1", 100, "A", "G"), z=2.0, se=0.1),
+        NormalisedAssociation("a2", CanonicalVariant("1", 100, "A", "G"), z=6.0, se=0.2),
+        NormalisedAssociation("a1", CanonicalVariant("1", 200, "C", "T"), z=3.0, se=0.2),
+        NormalisedAssociation("a2", CanonicalVariant("1", 300, "A", "G"), z=-6.0, se=0.5),
+    ]
+    build_dense_observed_store(
+        records,
+        store,
+        store_id="absent-eaf",
+        release_id="r",
+        reference_assembly="GRCh37",
+        chunk_shape=(2, 2),
+    )
+    return store
+
+
+def test_index_omits_eaf_and_se_side_tables_when_the_plan_has_none(tmp_path: Path) -> None:
+    store = _absent_eaf_store(tmp_path)
+    encoding = StoreManifest.load(store).encoding
+    assert encoding.eaf.is_absent, "the fixture must reach the absent-eaf branch"
+    assert not encoding.se.is_residual, "the fixture must reach the float16-se branch"
+
+    variant_list = tmp_path / "absent.alid.txt"
+    variant_list.write_text("1:100:A:G\n1:200:C:T\n1:300:A:G\n", encoding="utf-8")
+    _build(store, "absent", variant_list, reference_assembly="GRCh37")
+
+    group = _index_group(store, "absent")
+    assert "eaf" not in group
+    assert "eaf_baseline" not in group and "eaf_exception_index" not in group
+    assert "se_coefficients" not in group and "se_exception_index" not in group
+    subset = open_indexed_subset(store, "absent")
+    assert subset.has_eaf is False
+    assert subset.decode_analysis(0).eaf is None
+    assert validate_store(store).ok
+
+
+def _float32_eaf_store(tmp_path: Path) -> Path:
+    """One Analysis: the EAF baseline cannot amortise, so the plan is float32."""
+    store = tmp_path / "float32-eaf.opengwasdb"
+    records = [
+        NormalisedAssociation(
+            "a",
+            CanonicalVariant("1", row + 1, "A", "G"),
+            z=1.0,
+            se=0.2,
+            eaf=0.05 + 0.1 * row,
+        )
+        for row in range(8)
+    ]
+    build_dense_observed_store(
+        records,
+        store,
+        store_id="float32-eaf",
+        release_id="r",
+        reference_assembly="GRCh38",
+        chunk_shape=(4, 1),
+    )
+    return store
+
+
+def test_index_handles_a_float32_eaf_plane(tmp_path: Path) -> None:
+    store = _float32_eaf_store(tmp_path)
+    encoding = StoreManifest.load(store).encoding
+    assert encoding.eaf.kind == "float32", "the fixture must reach the float32-eaf branch"
+    assert not encoding.eaf.is_residual
+
+    variant_list = tmp_path / "float32.alid.txt"
+    variant_list.write_text("\n".join(f"1:{row + 1}:A:G" for row in range(8)) + "\n")
+    _build(store, "eaf32", variant_list)
+
+    group = _index_group(store, "eaf32")
+    assert str(group["eaf"].dtype) == "float32", "the index must store the declared dtype"
+    assert "eaf_baseline" not in group and "eaf_exception_index" not in group
+    subset = open_indexed_subset(store, "eaf32")
+    primary = DenseEafPlane.open(_root(store), encoding)
+    for analysis_index in range(subset.n_analyses):
+        decoded = subset.decode_analysis(analysis_index)
+        np.testing.assert_array_equal(
+            decoded.eaf, primary.read_column(analysis_index).values[subset.variant_index]
+        )
+    assert validate_store(store).ok
+
+
+# ── Chunk and shard boundaries ──────────────────────────────────────────────
+
+#: More variants than one Indexed Variant Subset inner chunk (65,536), so the
+#: Analysis-major planes span more than one chunk without being a real corpus.
+BIG_VARIANTS = 65_600
+
+
+@pytest.fixture(scope="module")
+def big_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    store = tmp_path_factory.mktemp("big") / "big.opengwasdb"
+    records = [
+        NormalisedAssociation(
+            "a",
+            CanonicalVariant("1", row + 1, "A", "G"),
+            z=float((row % 7) - 3),
+            se=0.2,
+        )
+        for row in range(BIG_VARIANTS)
+    ]
+    build_dense_observed_store(
+        records,
+        store,
+        store_id="big",
+        release_id="r",
+        reference_assembly="GRCh38",
+        chunk_shape=(1000, 1),
+    )
+    return store
+
+
+def _big_variant_list(tmp_path: Path) -> Path:
+    path = tmp_path / "big.alid.txt"
+    path.write_text("\n".join(f"1:{row + 1}:A:G" for row in range(BIG_VARIANTS)) + "\n")
+    return path
+
+
+def test_index_plane_spans_multiple_inner_chunks(tmp_path: Path, big_store: Path) -> None:
+    store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
+    _build(store, "big", _big_variant_list(tmp_path))
+
+    group = _index_group(store, "big")
+    assert tuple(group["z"].shape) == (1, BIG_VARIANTS)
+    assert tuple(group["z"].chunks) == (1, store_arrays.INDEXED_SUBSET_CHUNK)
+    assert group["z"].shape[1] > group["z"].chunks[1], "the fixture must span >1 chunk"
+
+    subset = open_indexed_subset(store, "big")
+    encoding = StoreManifest.load(store).encoding
+    primary = DenseZPlane.open(_root(store), encoding).column(0)
+    np.testing.assert_array_equal(subset.decode_analysis(0).z, primary[subset.variant_index])
+    assert validate_store(store).ok
+
+
+def test_index_plane_splits_into_multiple_shards(
+    tmp_path: Path, big_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One inner chunk per shard, so the 65,600-variant row needs two shards.
+    monkeypatch.setattr(
+        store_arrays, "INDEXED_SUBSET_SHARD", store_arrays.INDEXED_SUBSET_CHUNK
+    )
+    store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
+    _build(store, "big", _big_variant_list(tmp_path))
+
+    group = _index_group(store, "big")
+    assert tuple(group["z"].shards) == (1, store_arrays.INDEXED_SUBSET_CHUNK)
+    assert group["z"].shape[1] > group["z"].shards[1], "the fixture must span >1 shard"
+
+    subset = open_indexed_subset(store, "big")
+    encoding = StoreManifest.load(store).encoding
+    primary = DenseZPlane.open(_root(store), encoding).column(0)
+    np.testing.assert_array_equal(subset.decode_analysis(0).z, primary[subset.variant_index])
+    assert validate_store(store).ok
 
 
 # ── Standalone validation ───────────────────────────────────────────────────
@@ -629,6 +959,34 @@ def test_invalid_group_attributes_fail_validation(
     del group.attrs["input_sha256"]
     errors = _errors_for(store)
     assert any("input_sha256" in error for error in errors), errors
+
+
+def test_validation_rejects_an_explicit_empty_group(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    """An empty directory-turned-group is not a published subset."""
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    namespace = zarr.open_group(
+        str(store / "data.zarr" / INDEXED_SUBSETS_GROUP), mode="r+"
+    )
+    namespace.create_group("empty")
+
+    errors = _errors_for(store)
+    assert any("explicit empty group" in error for error in errors), errors
+
+
+def test_open_refuses_a_subset_from_another_release(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    """The read seam, which #265 builds on, rejects a stale index itself."""
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    group = _index_group(store, "hm3")
+    group.attrs["source_release_id"] = "another-release"
+
+    with pytest.raises(IndexedSubsetStaleError, match="stale"):
+        open_indexed_subset(store, "hm3")
 
 
 def test_validation_rejects_a_corrupted_se_value(

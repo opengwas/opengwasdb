@@ -58,6 +58,34 @@ SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingPr
 #: until a later decision deletes the v2 reader (ADR 0057).
 CURRENT_FORMAT_VERSION = "0.2.0"
 
+#: The Zarr on-disk format each readable release series is stored in.  The
+#: series-to-layout coupling is part of the format contract, so it lives beside
+#: the version tables rather than in each caller that needs it (#264 review).
+ZARR_FORMAT_BY_SERIES: Mapping[tuple[int, ...], int] = MappingProxyType(
+    {(0, 1): 2, (0, 2): 3}
+)
+
+
+def zarr_format_for_version(version: str, *, source: str = "release") -> int:
+    """The Zarr on-disk format a readable ``format_version`` is stored in.
+
+    Runs the reader's own version check first, so a caller can ask this alone
+    and get both "is it readable" and "what layout is it" -- a caller that
+    instead pattern-matched a version string would be the second place the
+    version-to-layout rule lives, and the two would eventually disagree.
+    """
+    series, _ = split_format_version(version)
+    check_format_version(version, source=source)
+    try:
+        return ZARR_FORMAT_BY_SERIES[series]
+    except KeyError:
+        raise UnsupportedFormatVersion(
+            f"{source} declares format_version={version!r}, series "
+            f"{_series_text(series)}, which this build reads but has no Zarr on-disk "
+            "layout for; the version table and the layout table disagree"
+        ) from None
+
+
 #: The versions the format carried before the reset, and what each one was.
 #: Every one is two-component, so the parser rejects it on shape alone; naming
 #: them here is what turns that rejection into an instruction rather than a
@@ -80,6 +108,16 @@ log = logging.getLogger(__name__)
 
 class UnsupportedFormatVersion(Exception):
     """A release declares a format_version this build cannot interpret."""
+
+
+class DestinationExistsError(FileExistsError):
+    """A staging/publication destination is already occupied.
+
+    A ``FileExistsError`` subclass so every existing caller that catches
+    ``FileExistsError`` (the release stager included) is unchanged, while a
+    derived-artifact writer can tell "the destination exists" apart from an
+    unrelated ``FileExistsError`` raised inside its staged body (#264 review).
+    """
 
 
 class MalformedFormatVersion(UnsupportedFormatVersion):
@@ -313,47 +351,56 @@ class _ReleasePaths:
 
 
 @contextmanager
-def _destination_lock(dst: Path) -> Iterator[None]:
-    """Serialise publications of releases into ``dst``'s parent directory.
+def directory_lock(directory: str | Path) -> Iterator[None]:
+    """Hold an advisory exclusive ``flock`` on a directory's own inode.
 
-    The lock is the parent directory's own inode, flocked through an
-    ``os.open`` handle, rather than a lock file. A lock file has to live
-    somewhere, and both obvious places fail: beside the destination it is
-    renamed into the published release when that destination is a Hybrid
-    release's nested Dense Component (staged at ``<outer-work>/dense``), and
-    under the system temp directory its identity moves with ``TMPDIR`` and
-    private temp namespaces -- two callers that do not share a temp root would
-    not contend -- while a tmp cleaner can unlink it mid-hold, dropping the
-    lock without any process noticing. A directory inode is a stable
-    filesystem identity, exists by the time a commit runs, and creates no
-    entry that could be published.
+    The lock primitive the publication and removal seams share.  The lock is
+    the directory inode itself, flocked through an ``os.open`` handle, rather
+    than a lock file.  A lock file has to live somewhere, and both obvious
+    places fail: beside the destination it is renamed into the published
+    release when that destination is a Hybrid release's nested Dense Component
+    (staged at ``<outer-work>/dense``), and under the system temp directory its
+    identity moves with ``TMPDIR`` and private temp namespaces -- two callers
+    that do not share a temp root would not contend -- while a tmp cleaner can
+    unlink it mid-hold, dropping the lock without any process noticing.  A
+    directory inode is a stable filesystem identity, exists by the time a
+    commit runs, and creates no entry that could be published.
 
-    The cost is granularity: every destination in one parent directory shares
-    this lock, so commits to different releases in the same directory are
-    serialised for the duration of a commit, including deletion of a replaced
-    release. Commits happen once per build, so that is accepted in exchange
-    for a lock that cannot be moved or reaped out from under it.
+    The cost is granularity: every destination in one directory shares this
+    lock, so commits to different names in the same directory are serialised
+    for the duration of a commit, including deletion of a replaced one.
 
     Advisory and host-local: ``flock`` is enforced by the local kernel and is
-    released when the holding process dies, so a crashed builder cannot leave
-    a destination permanently locked. Whether it also serialises processes on
+    released when the holding process dies, so a crashed writer cannot leave a
+    destination permanently locked.  Whether it also serialises processes on
     another host depends on the filesystem -- NFS and other network
     filesystems may not propagate ``flock``, so this is not a cross-host lock.
-    A filesystem that refuses ``flock`` outright fails the commit loudly rather
-    than publishing unserialised. Each rename inside the critical section is
-    still atomic by the filesystem's own guarantee.
 
     Two requirements follow, and both fail loudly rather than degrading: the
-    parent directory must be openable for reading (``os.open(O_RDONLY)`` needs
-    read/search permission on it, so a write-and-execute-only directory cannot
-    be locked), and the filesystem must implement ``flock`` on directories.
+    directory must be openable for reading (``os.open(O_RDONLY)`` needs
+    read/search permission on it), and the filesystem must implement ``flock``
+    on directories.
     """
-    fd = os.open(dst.parent, os.O_RDONLY)
+    fd = os.open(Path(directory), os.O_RDONLY)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:
         os.close(fd)
+
+
+@contextmanager
+def destination_lock(dst: str | Path) -> Iterator[None]:
+    """Serialise writes that publish or remove ``dst``, by locking its parent.
+
+    The lock is held for the publication/removal window only, never the build.
+
+    A filesystem that refuses ``flock`` outright fails the write loudly rather
+    than proceeding unserialised.  Each rename inside a critical section is
+    still atomic by the filesystem's own guarantee.
+    """
+    with directory_lock(Path(dst).parent):
+        yield
 
 
 def _adopt_staging_work_dir(work: Path, source: Path) -> None:
@@ -446,9 +493,9 @@ def _commit_staged_release(
     directory orphaned by a killed build, is therefore complementary to this
     lock, not interchangeable with it (ADR 0043).
     """
-    with _destination_lock(dst):
+    with destination_lock(dst):
         if dst.exists() and not overwrite:
-            raise FileExistsError(
+            raise DestinationExistsError(
                 f"output path already exists: {dst} "
                 f"(another process published a {what} there while this one was staging)"
             )
@@ -480,7 +527,7 @@ def _staged_directory(
     build asked for that) and re-raises.
     """
     if dst.exists() and not overwrite:
-        raise FileExistsError(f"output path already exists: {dst}")
+        raise DestinationExistsError(f"output path already exists: {dst}")
     dst.parent.mkdir(parents=True, exist_ok=True)
     work = _new_staging_work_dir(dst)
     try:

@@ -1102,7 +1102,7 @@ own value.
 ### Attributes
 
 A published group self-describes; validation rejects a group missing any of
-`schema` (`1`), `indexed_subset_name`, `statistic_profile` (`full_statistic`),
+`indexed_subset_schema` (`1`), `indexed_subset_name`, `statistic_profile` (`full_statistic`),
 `encoding` (the release's block, §6a), `reference_assembly` (normalised),
 `source_store_id`, `source_release_id`, `source_format_version`, `n_analyses`,
 `n_subset_variants`, `input_sha256` (the variant list's bytes),
@@ -1112,13 +1112,20 @@ A published group self-describes; validation rejects a group missing any of
 ### Lifecycle
 
 Generation follows ADR 0043's isolation and publication rules at the
-named-group level: it writes into an invocation-unique `.{name}.tmp.*` sibling,
+named-group level: it creates the `indexed_subsets` namespace group under a
+lock on `data.zarr`, writes into an invocation-unique `.{name}.tmp.*` sibling,
 validates the complete staged group, takes a release-local advisory lock on the
 namespace, re-checks the destination under it, and publishes by rename. A
 failure discards only that invocation's temporary group; an existing published
 group is preserved byte-for-byte after any failed replacement. Two same-name
 no-overwrite builds yield one winner and one loud failure; different names do
 not delete or publish one another's work.
+
+Removing a subset takes the same namespace lock and renames the group aside
+before reclaiming its bytes, so a removal can never interleave with a commit of
+the same name and a reader never sees a half-deleted group. The published name
+disappears atomically; a `.{name}.old.*` directory left by an interrupted
+removal is inert and is rejected by validation until it is cleaned up.
 
 The 0.2.0 converter (§21.4) does not carry this namespace: it refuses an array
 or group it cannot name a role for, so a release holding an Indexed Variant
@@ -1427,7 +1434,7 @@ Validators MUST check at least:
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2.0 release has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
-- an Indexed Variant Subset, when present, is self-describing and agrees with the release it indexes (§10b): the only entries under `data.zarr/indexed_subsets` are published subset groups — no staging or replacement directory, no unknown name and no non-group entry — and each group records a name, profile, encoding and source identity matching the release. It carries exactly the arrays its declared encoding defines; `variant_index` is sorted ascending, unique and in `[0, n_variants)`; its Analysis-major planes have shape `(n_analyses, n_subset_variants)` and the declared dtypes; its side tables are sorted, unique and in range; Z and SE missingness agree within the index; and every **decoded** indexed Z, SE and EAF equals the authoritative primary-plane cell at that Store Variant Index. A release with no `indexed_subsets` group stays valid and unchanged (ADR 0053, issue #264);
+- an Indexed Variant Subset, when present, is self-describing and agrees with the release it indexes (§10b): the only entries under `data.zarr/indexed_subsets` are published subset groups — no staging or replacement directory, no unknown name, no non-group entry and no explicit empty group — and each group records a name, profile, encoding and source identity matching the release. It carries exactly the arrays its declared encoding defines; `variant_index` is sorted ascending, unique and in `[0, n_variants)`; its Analysis-major planes have shape `(n_analyses, n_subset_variants)` and the declared dtypes; its side tables are sorted, unique and in range; Z and SE missingness agree within the index; and every **decoded** indexed Z, SE and EAF equals the authoritative primary-plane cell at that Store Variant Index. A release with no `indexed_subsets` group stays valid and unchanged, and a reader MUST refuse a subset whose recorded source release, store, format, assembly or encoding does not match the release, before decoding any value (ADR 0053, issue #264);
 - the recorded layout matches the arrays: the Dense planes' `chunk_shape` and `shard_shape` in `manifest.json` `provenance.dense`, in the `index.sqlite` `dense` blob and in the `data.zarr` root attributes each clip to the plane's dimensions to equal the plane's actual **inner** chunk, and name its actual shard, and the three compressors agree. A manifest that describes one shape over arrays of another is a silent failure class (§10a);
 - the per-variant chunking rule applies to the **inner** chunk of a sharded array, not to the shard (§6, §10a);
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).

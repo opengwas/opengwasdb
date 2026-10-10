@@ -40,7 +40,10 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import logging
+import os
 import re
+import shutil
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -73,7 +76,14 @@ from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import ArrayRole, array_length
-from opengwasdb.store.open import open_store, staged_named_group
+from opengwasdb.store.open import (
+    DestinationExistsError,
+    destination_lock,
+    directory_lock,
+    open_store,
+    staged_named_group,
+    zarr_format_for_version,
+)
 from opengwasdb.variants import VariantAxis, parse_canonical_alid
 
 log = logging.getLogger(__name__)
@@ -175,6 +185,15 @@ class IndexedSubsetAssemblyError(IndexedSubsetError, ValueError):
 
 class IndexedSubsetExistsError(IndexedSubsetError, FileExistsError):
     """A published subset already occupies the destination name."""
+
+
+class IndexedSubsetStaleError(IndexedSubsetError):
+    """A published subset does not belong to the release it sits in.
+
+    Raised by the read seam before any decoded value is handed back: a stale
+    index would return plausible associations for the wrong release, which is
+    the failure class this project exists to refuse (#264 review).
+    """
 
 
 class IndexedSubsetValidationError(IndexedSubsetError):
@@ -392,11 +411,6 @@ def resolve_variant_list(
 
 
 # ── Build ───────────────────────────────────────────────────────────────────
-
-
-def _store_zarr_format(manifest: StoreManifest) -> int:
-    """The Zarr on-disk format this release is written in: 3 for 0.2.0, else 2."""
-    return 2 if manifest.format_version.startswith("0.1") else 3
 
 
 def _check_assembly(manifest: StoreManifest, requested: str) -> str:
@@ -739,18 +753,38 @@ def _prepare_subset(
         root=root,
         n_analyses=n_analyses,
         n_variants=n_variants,
-        fmt=_store_zarr_format(manifest),
+        fmt=zarr_format_for_version(manifest.format_version, source=f"release at {store_path}"),
         attrs=attrs,
     )
+
+
+def _ensure_indexed_subset_namespace(store_path: Path, fmt: int) -> None:
+    """Create the optional namespace group, serialised against other creators.
+
+    Namespace creation is a write to ``data.zarr``, so it must not race: two
+    first-time builds for different names would otherwise both observe the
+    namespace absent and both create it (#264 review).  The lock is the
+    ``data.zarr`` inode -- a directory every creator shares -- and is released
+    before the staged build takes the namespace's own publication lock, so the
+    two locks are never nested.
+    """
+    data_path = store_path / "data.zarr"
+    try:
+        with directory_lock(data_path):
+            root = store_arrays.open_group_for_write(data_path, "a", zarr_format=fmt)
+            store_arrays.require_group(root, INDEXED_SUBSETS_GROUP)
+    except IndexedSubsetError:
+        raise
+    except Exception as exc:
+        raise IndexedSubsetError(
+            f"could not create the indexed-subset namespace in {data_path}: {exc}"
+        ) from exc
 
 
 def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> IndexedSubsetBuild:
     """Stage, validate and atomically publish one prepared subset."""
     dest = plan.store_path / "data.zarr" / INDEXED_SUBSETS_GROUP / plan.name
-    write_root = store_arrays.open_group_for_write(
-        plan.store_path / "data.zarr", "a", zarr_format=plan.fmt
-    )
-    store_arrays.require_group(write_root, INDEXED_SUBSETS_GROUP)
+    _ensure_indexed_subset_namespace(plan.store_path, plan.fmt)
     try:
         with staged_named_group(dest, overwrite=overwrite) as work:
             staged = store_arrays.open_group_for_write(
@@ -766,7 +800,7 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
                 band_cells,
             )
             _validate_staged(plan, work)
-    except FileExistsError as exc:
+    except DestinationExistsError as exc:
         raise IndexedSubsetExistsError(str(exc)) from exc
     return IndexedSubsetBuild(
         name=plan.name,
@@ -821,17 +855,23 @@ def remove_indexed_subset(store_path: str | Path, subset_name: str) -> bool:
     """Delete one published subset group, returning whether it existed.
 
     Removing a derived index changes no authoritative data; a release with none
-    is valid (ADR 0053).
+    is valid (ADR 0053).  The removal takes the namespace's publication lock
+    and first renames the group aside, so it can never interleave with a commit
+    of the same name and a reader never sees a half-deleted group: the published
+    name disappears atomically and the bytes are then reclaimed.
     """
     name = parse_indexed_subset_name(subset_name)
     store_path = Path(store_path)
-    root = store_arrays.open_group(store_path / "data.zarr", "r+")
-    if INDEXED_SUBSETS_GROUP not in root:
+    namespace_dir = store_path / "data.zarr" / INDEXED_SUBSETS_GROUP
+    if not namespace_dir.is_dir():
         return False
-    namespace = root[INDEXED_SUBSETS_GROUP]
-    if name not in namespace:
-        return False
-    del namespace[name]
+    dest = namespace_dir / name
+    with destination_lock(dest):
+        if not dest.is_dir():
+            return False
+        doomed = namespace_dir / f".{name}.old.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+        os.replace(dest, doomed)
+    shutil.rmtree(doomed, ignore_errors=True)
     return True
 
 
@@ -873,12 +913,32 @@ def _parse_subset_encoding(
         return None
 
 
+def _refuse_stale_subset(
+    name: str, attrs: dict[str, Any], encoding: StoreEncoding, manifest: StoreManifest
+) -> None:
+    """Raise when a published subset does not belong to `manifest`'s release."""
+    mismatches = _source_identity_mismatches(name, attrs, manifest)
+    if encoding != manifest.encoding:
+        mismatches.append(
+            f"indexed subset {name!r} was built with an encoding that is not the "
+            "release's; its values cannot be decoded against the authoritative planes"
+        )
+    if mismatches:
+        raise IndexedSubsetStaleError("; ".join(mismatches))
+
+
 def _side_table_length(group: Any, name: str) -> int:
     return array_length(group[name]) if name in group else 0
 
 
 def open_indexed_subset(store_path: str | Path, subset_name: str) -> IndexedSubset:
-    """Open a published subset's metadata and decode seam, or fail loudly."""
+    """Open a published subset's metadata and decode seam, or fail loudly.
+
+    The seam refuses a subset whose recorded source identity no longer matches
+    the release it sits in, before returning any object a caller could decode
+    through: a stale index would return plausible associations for the wrong
+    release, and #265's query path must not be the first place that is noticed.
+    """
     name = parse_indexed_subset_name(subset_name)
     store_path = Path(store_path)
     path = store_path / "data.zarr" / INDEXED_SUBSETS_GROUP / name
@@ -895,6 +955,8 @@ def open_indexed_subset(store_path: str | Path, subset_name: str) -> IndexedSubs
     encoding = _parse_subset_encoding(name, attrs, errors)
     if encoding is None:
         raise IndexedSubsetError(errors[0])
+    manifest = open_store(store_path).manifest
+    _refuse_stale_subset(name, attrs, encoding, manifest)
     return IndexedSubset(
         store_path=store_path,
         name=name,
@@ -1102,16 +1164,36 @@ def _namespace_member(namespace: Any, entry: str, errors: list[str]) -> Any:
         return None
 
 
-def _validate_one_indexed_subset(
-    context: _SubsetValidation, name: str, group: Any, errors: list[str]
-) -> None:
-    """Every rule one published Indexed Variant Subset must satisfy."""
-    attrs = dict(group.attrs)
+def _array_keys(group: Any) -> list[str]:
+    """The array members of a subset group."""
+    return [key for key in group.keys() if isinstance(group[key], zarr.Array)]
+
+
+def _subset_preconditions_ok(
+    name: str, group: Any, attrs: dict[str, Any], errors: list[str]
+) -> bool:
+    """The group is non-empty and records the attributes every rule reads."""
+    if not _array_keys(group):
+        errors.append(
+            f"indexed subset {name!r} is an explicit empty group with no arrays; a "
+            "published subset must carry at least its variant_index and statistic planes"
+        )
+        return False
     missing = _missing_required_attrs(attrs)
     if missing:
         errors.append(
             f"indexed subset {name!r} is missing attributes: {', '.join(missing)}"
         )
+        return False
+    return True
+
+
+def _validate_one_indexed_subset(
+    context: _SubsetValidation, name: str, group: Any, errors: list[str]
+) -> None:
+    """Every rule one published Indexed Variant Subset must satisfy."""
+    attrs = dict(group.attrs)
+    if not _subset_preconditions_ok(name, group, attrs, errors):
         return
     declared = _read_declared_encoding(name, attrs, context.manifest, errors)
     if declared is None:
@@ -1160,6 +1242,42 @@ def _read_declared_encoding(
     return declared
 
 
+def _source_identity_mismatches(
+    name: str, attrs: dict[str, Any], manifest: StoreManifest
+) -> list[str]:
+    """Recorded source identity that no longer matches the release it sits in.
+
+    Shared by validation (which reports every mismatch) and the read seam
+    (which refuses to hand out a stale index at all), so a reader and the
+    validator cannot disagree about what stale means (#264 review).
+    """
+    mismatches: list[str] = []
+    if str(attrs[ATTR_SOURCE_RELEASE_ID]) != manifest.release_id:
+        mismatches.append(
+            f"indexed subset {name!r} was built from release "
+            f"{attrs[ATTR_SOURCE_RELEASE_ID]!r}, but this release is "
+            f"{manifest.release_id!r}; the index is stale"
+        )
+    if str(attrs[ATTR_SOURCE_STORE_ID]) != manifest.store_id:
+        mismatches.append(
+            f"indexed subset {name!r} was built from store "
+            f"{attrs[ATTR_SOURCE_STORE_ID]!r}, but this release is {manifest.store_id!r}"
+        )
+    if str(attrs[ATTR_SOURCE_FORMAT_VERSION]) != manifest.format_version:
+        mismatches.append(
+            f"indexed subset {name!r} records source_format_version "
+            f"{attrs[ATTR_SOURCE_FORMAT_VERSION]!r}, but this release is "
+            f"{manifest.format_version!r}"
+        )
+    if str(attrs[ATTR_REFERENCE_ASSEMBLY]) != normalise_build(manifest.reference_assembly):
+        mismatches.append(
+            f"indexed subset {name!r} records reference_assembly "
+            f"{attrs[ATTR_REFERENCE_ASSEMBLY]!r}, but this release is "
+            f"{manifest.reference_assembly!r}"
+        )
+    return mismatches
+
+
 def _check_identity_attrs(
     name: str,
     attrs: dict[str, Any],
@@ -1170,33 +1288,11 @@ def _check_identity_attrs(
     """The recorded name, source identity, Analysis count and counts add up."""
     if str(attrs[ATTR_NAME]) != name:
         errors.append(f"indexed subset {name!r} records its name as {attrs[ATTR_NAME]!r}")
-    if str(attrs[ATTR_SOURCE_RELEASE_ID]) != manifest.release_id:
-        errors.append(
-            f"indexed subset {name!r} was built from release "
-            f"{attrs[ATTR_SOURCE_RELEASE_ID]!r}, but this release is "
-            f"{manifest.release_id!r}; the index is stale"
-        )
-    if str(attrs[ATTR_SOURCE_STORE_ID]) != manifest.store_id:
-        errors.append(
-            f"indexed subset {name!r} was built from store "
-            f"{attrs[ATTR_SOURCE_STORE_ID]!r}, but this release is {manifest.store_id!r}"
-        )
+    errors.extend(_source_identity_mismatches(name, attrs, manifest))
     if int(attrs[ATTR_N_ANALYSES]) != n_analyses:
         errors.append(
             f"indexed subset {name!r} declares {attrs[ATTR_N_ANALYSES]} Analyses but "
             f"analyses.tsv has {n_analyses}"
-        )
-    if str(attrs[ATTR_SOURCE_FORMAT_VERSION]) != manifest.format_version:
-        errors.append(
-            f"indexed subset {name!r} records source_format_version "
-            f"{attrs[ATTR_SOURCE_FORMAT_VERSION]!r}, but this release is "
-            f"{manifest.format_version!r}"
-        )
-    if str(attrs[ATTR_REFERENCE_ASSEMBLY]) != normalise_build(manifest.reference_assembly):
-        errors.append(
-            f"indexed subset {name!r} records reference_assembly "
-            f"{attrs[ATTR_REFERENCE_ASSEMBLY]!r}, but this release is "
-            f"{manifest.reference_assembly!r}"
         )
     requested = int(attrs[ATTR_REQUESTED_COUNT])
     resolved = int(attrs[ATTR_RESOLVED_COUNT])

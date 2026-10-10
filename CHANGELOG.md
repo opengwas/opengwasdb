@@ -28,15 +28,24 @@ the end of this file.
   explicit matching Reference Assembly, refuses malformed, duplicate or
   zero-match input, and records requested/resolved/absent counts plus the
   input's SHA-256 and the source release identity. Publication follows ADR
-  0043 at the named-group level: a unique temporary sibling, validation of the
-  staged group, then a release-local advisory lock and an atomic rename, so
-  two same-name no-overwrite builds yield one winner and one loud
-  `FileExistsError` while different names never touch each other. Standalone
+  0043 at the named-group level: the `indexed_subsets` namespace is created
+  under a lock on `data.zarr`, the build writes a unique temporary sibling and
+  validates the staged group, and publication takes the namespace's advisory
+  lock and renames atomically, so two same-name no-overwrite builds yield one
+  winner and one loud `IndexedSubsetExistsError` while different names never
+  touch each other. Removing a subset takes the same namespace lock and renames
+  the group aside before reclaiming it, so a removal cannot interleave with a
+  commit. Standalone
   `validate` now checks the namespace, the attributes, the Variant Indices and
   shapes, the side tables, Z/SE missingness and every decoded indexed Z/SE/EAF
   against the primary planes; a release with no namespace stays valid and
-  unchanged, unknown or temporary entries fail, and deleting the group leaves
-  a valid release. The index does not move `format_version` (it narrows ADRs
+  unchanged, an explicit empty group, unknown entry or temporary entry fails,
+  and deleting the group leaves a valid release. The read seam refuses a subset
+  whose recorded source release, store, format, assembly or encoding no longer
+  matches the release it sits in, so a stale index is rejected before #265's
+  query path relies on it. The version-to-Zarr-layout rule lives with the
+  version tables (`opengwasdb.store.open.zarr_format_for_version`), not in this
+  module. The index does not move `format_version` (it narrows ADRs
   0038 and 0041), and query integration (#265), Reference-Completed support
   (#266) and the production benchmark (#267) are deliberately out of scope.
   Spec §10b and §20 record the physical contract and validation rules.
