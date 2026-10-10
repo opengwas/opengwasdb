@@ -1019,6 +1019,122 @@ The per-variant chunking rule (§6) applies to the **inner chunk** of a sharded
 array. In zarr-python 3 `Array.chunks` is the inner chunk and `Array.shards` the
 outer shard; every read-unit rule MUST use `chunks`.
 
+## 10b. Indexed Variant Subsets (optional, Observed-Only Dense)
+
+An **Indexed Variant Subset** is a named, optional, rebuildable query index over
+a caller-supplied set of canonical ALIDs (ADR 0053). It is **derived,
+non-authoritative data**: it changes no association and no Analytical Metadata,
+a reader that does not know about it still reads the primary planes correctly,
+and it may be added, atomically replaced or removed in place without minting a
+Store Release or moving `format_version` (§21.1). Deleting it leaves a valid
+release whose ordinary queries are unchanged. It is therefore **not** the
+"optional array, index, or sidecar" a compatible format change is made of
+(ADRs 0038, 0041): those are content a reader may need to interpret
+authoritative data.
+
+The initial index is **Observed-Only Dense only**. Ragged stores already expose
+each Analysis as a direct CSR slice, and a Hybrid index would have to specify
+how its two components unify; neither is implied by a Dense result. A
+Reference-Completed release is refused rather than indexed incompletely
+(issue #266).
+
+It is stored beside the other optional derived artifacts:
+
+```text
+data.zarr/
+  rho/
+  top_hits/
+  indexed_subsets/
+    <name>/
+```
+
+### Variant list and subset name
+
+The input is one canonical ALID (§4) per nonblank line; a malformed, repeated or
+non-canonical ALID fails the build, naming the line. ALIDs absent from the Store
+Variant Table are permitted but counted and recorded, never treated as matches;
+a list resolving to no Store variant is refused. The caller MUST supply the
+list's Reference Assembly, and a mismatch with the release's
+`reference_assembly` is refused because cross-Store Variant Identity is
+assembly plus ALID (ADR 0053).
+
+A subset name MUST match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. A leading `.` is
+reserved so a name cannot collide with the `.{name}.tmp.*` staging groups or the
+`.{name}.old` replacement directory of the atomic publication below.
+
+### Arrays
+
+`variant_index` is the subset's sorted, unique Store Variant Indices, shape
+`(n_subset_variants,)`, `int32`; it is the subset's own axis order and the
+Analysis-major planes below are indexed in that order (`order =
+"analysis,variant"`). Its inner chunk is 65,536, clipped.
+
+The statistic planes are **Analysis-major**: shape `(n_analyses,
+n_subset_variants)`, so one Analysis is one row.
+
+| array | when | inner chunk |
+|---|---|---|
+| `z` | always | `(1, 65,536)`, clipped |
+| `se` | always | `(1, 65,536)`, clipped |
+| `eaf` | when the release has an `eaf` plane | `(1, 65,536)`, clipped |
+| `z_overflow_index`, `z_overflow_value` | declared fixed-point `z` | 200,000 |
+| `se_coefficients` | declared `int8_residual` `se` | `(min(n_analyses, 1024), 2)` |
+| `se_exception_index`, `se_exception_value` | declared `int8_residual` `se` | 200,000 |
+| `eaf_baseline` | declared `int8_residual` `eaf` | 65,536, clipped |
+| `eaf_exception_index`, `eaf_exception_value` | declared `int8_residual` `eaf` | 200,000 |
+
+The group carries exactly those arrays and no others, under the release's
+declared `encoding`: a `float16` `se` or a `float32`/`absent` `eaf` has none of
+the side arrays its plan does not define, exactly as §6a requires of the primary
+planes. On a 0.2.0 release (§10a) each plane's shard is one Analysis row by
+1,048,576 variants (16 inner chunks), clipped to the array, so reading one
+Analysis never decompresses another's cells.
+
+A cell's flat position in an Analysis-major plane is `analysis *
+n_subset_variants + subset_slot`, and a side table is keyed by it. The index
+copies the primary planes' stored **codes** and re-keys their side tables into
+this layout, so a decoded indexed cell is identical to the authoritative primary
+cell rather than a re-encode of a decoded value. `eaf_baseline` is the release's
+own per-variant baseline restricted to the subset's variants -- not one
+recomputed from the subset, which would decode a single-Analysis variant to its
+own value.
+
+### Attributes
+
+A published group self-describes; validation rejects a group missing any of
+`indexed_subset_schema` (`1`), `indexed_subset_name`, `statistic_profile` (`full_statistic`),
+`encoding` (the release's block, §6a), `reference_assembly` (normalised),
+`source_store_id`, `source_release_id`, `source_format_version`, `n_analyses`,
+`n_subset_variants`, `input_sha256` (the variant list's bytes),
+`requested_count`, `resolved_count`, `absent_count`, `builder_version`,
+`created_at` and `order` (`analysis,variant`).
+
+### Lifecycle
+
+Generation follows ADR 0043's isolation and publication rules at the
+named-group level: it creates the `indexed_subsets` namespace group under a
+lock on `data.zarr`, writes into an invocation-unique `.{name}.tmp.*` sibling,
+validates the complete staged group, takes a release-local advisory lock on the
+namespace, re-checks the destination under it, and publishes by rename. A
+failure discards only that invocation's temporary group; an existing published
+group is preserved byte-for-byte after any failed replacement. Two same-name
+no-overwrite builds yield one winner and one loud failure; different names do
+not delete or publish one another's work.
+
+Removing a subset takes the same namespace lock and renames the group aside
+before reclaiming its bytes, so a removal can never interleave with a commit of
+the same name and a reader never sees a half-deleted group. The published name
+disappears atomically; a `.{name}.old.*` directory left by an interrupted
+removal is inert and is rejected by validation until it is cleaned up. A
+removal beneath consolidated metadata is refused before the rename, because the
+record would keep listing the removed group and the next open would read it.
+
+The 0.2.0 converter (§21.4) does not carry this namespace: it refuses an array
+or group it cannot name a role for, so a release holding an Indexed Variant
+Subset must have it removed before conversion. That is safe -- the index is
+deletable derived data -- and the refusal is loud rather than a silent drop of
+an artifact the user built.
+
 ## 11. Ragged layout
 
 Ragged layout stores Analysis-specific association sequences referencing the Store Variant Table.
@@ -1320,6 +1436,7 @@ Validators MUST check at least:
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2.0 release has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
+- an Indexed Variant Subset, when present, is self-describing and agrees with the release it indexes (§10b): the only entries under `data.zarr/indexed_subsets` are published subset groups — no staging or replacement directory, no unknown name, no non-group entry and no explicit empty group — and each group records a name, profile, encoding and source identity matching the release. It carries exactly the arrays its declared encoding defines; `variant_index` is non-empty, sorted ascending, unique and in `[0, n_variants)` — a zero-variant subset is not an index and is rejected even when its planes are zero-length; its Analysis-major planes have shape `(n_analyses, n_subset_variants)` and the declared dtypes; its side tables are sorted, unique and in range; Z and SE missingness agree within the index; and every **decoded** indexed Z, SE and EAF equals the authoritative primary-plane cell at that Store Variant Index. A release with no `indexed_subsets` group stays valid and unchanged, and a reader MUST refuse a subset whose recorded source release, store, format, assembly or encoding does not match the release, before decoding any value (ADR 0053, issue #264);
 - the recorded layout matches the arrays: the Dense planes' `chunk_shape` and `shard_shape` in `manifest.json` `provenance.dense`, in the `index.sqlite` `dense` blob and in the `data.zarr` root attributes each clip to the plane's dimensions to equal the plane's actual **inner** chunk, and name its actual shard, and the three compressors agree. A manifest that describes one shape over arrays of another is a silent failure class (§10a);
 - the per-variant chunking rule applies to the **inner** chunk of a sharded array, not to the shard (§6, §10a);
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
@@ -1402,6 +1519,13 @@ The distinction is defined by **what a reader that does not know about the chang
 | a new `analyses.tsv` column | patch |
 | a required column removed or renamed (ADR 0034) | **minor** |
 | the encoding of `z`, `se` or `eaf` changes (ADR 0037) | **minor** |
+
+An **Indexed Variant Subset** (§10b, ADR 0053) is not one of those compatible
+additions: it is a rebuildable, non-authoritative acceleration artifact that can
+be deleted without changing any existing query answer, so it may be added or
+removed in place and does not move `format_version`. That narrows ADR 0038 and
+ADR 0041, whose "optional array, index, or sidecar" means optional content a
+reader may need to interpret authoritative data.
 
 ### 21.2 Reader obligations
 
