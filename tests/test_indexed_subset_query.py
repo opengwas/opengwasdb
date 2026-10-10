@@ -370,7 +370,8 @@ def _corrupt_z_layout(store: Path, *, chunk_analyses: int, shard_analyses: int) 
 def test_plane_chunk_spanning_analyses_is_refused(indexed_copy: Path) -> None:
     """A chunk wider than one Analysis defeats the narrow-read contract."""
     _corrupt_z_layout(indexed_copy, chunk_analyses=N_ANALYSES, shard_analyses=N_ANALYSES)
-    _assert_refused(indexed_copy, "hm3", "chunk")
+    message = _assert_refused(indexed_copy, "hm3", "chunk")
+    assert "one Analysis row" in message
 
 
 def test_plane_shard_spanning_analyses_is_refused(indexed_copy: Path) -> None:
@@ -386,7 +387,10 @@ def test_mis_chunked_per_variant_side_array_is_refused(indexed_copy: Path) -> No
     data = np.asarray(group["eaf_baseline"][:])
     del group["eaf_baseline"]
     group.create_array("eaf_baseline", data=data, chunks=(1,), shards=(n_subset,))
-    _assert_refused(indexed_copy, "hm3", "eaf_baseline")
+    message = _assert_refused(indexed_copy, "hm3", "eaf_baseline")
+    assert "Analysis row" not in message, (
+        "a per-variant side array must not be described as an Analysis-major plane"
+    )
 
 
 @pytest.mark.parametrize("dtype", ["float32", "int64"])

@@ -1649,12 +1649,27 @@ _INDEXED_SUBSET_ARRAY_LAYOUTS: Mapping[str, tuple[ArrayRole, int | None]] = (
 
 
 def _inner_chunk_finding(
-    name: str, actual: tuple[int, ...], expected: tuple[int, ...]
+    name: str,
+    role: ArrayRole,
+    actual: tuple[int, ...],
+    expected: tuple[int, ...],
 ) -> str:
-    """The message for one array whose inner chunk is not the format's."""
+    """The message for one array whose inner chunk is not the format's.
+
+    A 2-D Analysis-major plane is read one Analysis row at a time, so its chunk
+    has that specific reason; every other array's chunk is fixed by its role so
+    it tiles the format's read unit.  The message says which, rather than
+    claiming a one-Analysis-row rule for a 1-D side array, table or coefficient
+    array.
+    """
+    if role is ArrayRole.INDEXED_SUBSET_PLANE:
+        detail = (
+            "an Indexed Variant Subset plane must be one Analysis row per inner chunk"
+        )
+    else:
+        detail = "the inner chunk is fixed by this array's role in the format"
     return (
-        f"{name} inner chunk {actual} does not match the format's {expected}; "
-        "an Indexed Variant Subset plane must be one Analysis row per inner chunk"
+        f"{name} inner chunk {actual} does not match the format's {expected}; {detail}"
     )
 
 
@@ -1681,9 +1696,13 @@ def _shard_findings(
     actual = tuple(int(size) for size in actual_shard)
     if actual == expected_shard:
         return []
-    return [
-        f"{name} shard {actual} does not match the format's {expected_shard}; "
+    detail = (
         "a shard must not span Analyses"
+        if role is ArrayRole.INDEXED_SUBSET_PLANE
+        else "the shard is fixed by this array's role in the format"
+    )
+    return [
+        f"{name} shard {actual} does not match the format's {expected_shard}; {detail}"
     ]
 
 
@@ -1705,7 +1724,9 @@ def _array_layout_findings(group: Any, zarr_format: int) -> list[str]:
         expected_chunk = store_arrays.chunk_layout(role, shape, hint=hint)
         actual_chunk = tuple(int(size) for size in array.chunks)
         if actual_chunk != expected_chunk:
-            findings.append(_inner_chunk_finding(name, actual_chunk, expected_chunk))
+            findings.append(
+                _inner_chunk_finding(name, role, actual_chunk, expected_chunk)
+            )
             continue
         findings.extend(
             _shard_findings(name, array, role, shape, expected_chunk, zarr_format)

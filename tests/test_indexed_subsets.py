@@ -1130,8 +1130,11 @@ def test_validation_rejects_a_plane_chunk_that_spans_analyses(
     )
 
     errors = _errors_for(store)
-    assert any("z" in error and "chunk" in error for error in errors), errors
-    with pytest.raises(IndexedSubsetError, match="chunk"):
+    assert any(
+        "z" in error and "chunk" in error and "one Analysis row" in error
+        for error in errors
+    ), errors
+    with pytest.raises(IndexedSubsetError, match="one Analysis row"):
         open_indexed_subset(store, "hm3")
 
 
@@ -1165,8 +1168,13 @@ def test_validation_rejects_a_mis_chunked_per_variant_side_array(
 
     errors = _errors_for(store)
     assert any("eaf_baseline" in error for error in errors), errors
-    with pytest.raises(IndexedSubsetError, match="eaf_baseline"):
+    assert not any("Analysis row" in error for error in errors), (
+        "eaf_baseline is a 1-D per-variant side array, not an Analysis-major plane, "
+        "so its chunk mismatch must not claim a one-Analysis-row rule"
+    )
+    with pytest.raises(IndexedSubsetError, match="eaf_baseline") as excinfo:
         open_indexed_subset(store, "hm3")
+    assert "Analysis row" not in str(excinfo.value)
 
 
 @pytest.mark.parametrize("dtype", ["float32", "int64"])
