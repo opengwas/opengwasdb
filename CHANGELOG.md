@@ -401,12 +401,16 @@ the end of this file.
 - **`overview.html` no longer renders an invalid Indexed Variant Subset as a
   valid row, and detects partial groups (#267 review).** A named directory whose
   recorded name disagrees with its directory, or that fails the Indexed Variant
-  Subset **structural read seam** (`open_indexed_subset`: schema, profile, order,
-  counts, exact array set, dtypes, shapes and in-range Variant Indices, but no
-  decoded-value comparison), is listed only as an invalid entry and excluded
-  from the table and the physical-size total. Previously a name-mismatched group
-  was both flagged and counted, and a group with a missing array was rendered as
-  valid.
+  Subset **structural read seam** (`open_indexed_subset`: schema, profile,
+  order, counts, exact array set, dtypes, shapes and in-range Variant Indices,
+  but no decoded-value comparison), is listed only as an invalid entry and
+  excluded from the table and the physical-size total. Previously a
+  name-mismatched group was both flagged and counted, and a group with a missing
+  array was rendered as valid. The structural probe is wrapped at the
+  presentation layer, so a missing or corrupt store `manifest.json` now also
+  renders the subset as an invalid entry instead of aborting `overview.html`
+  generation; row rendering and the rest of the page are outside that boundary
+  and still raise on a genuine bug.
 
 - **The benchmark scratch copy records a verified method (#267 review).**
   `benchmarks/_artifact.scratch_copy` now tries `cp --reflink=always` (which

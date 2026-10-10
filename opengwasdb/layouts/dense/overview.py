@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import html
 import json
+import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from scipy.cluster.hierarchy import leaves_list, linkage  # type: ignore[import-untyped]
@@ -454,6 +456,21 @@ def _analysis_label(row: dict[str, str]) -> str:
     return row.get("analysis_label") or row.get("analysis_id", "")
 
 
+def _probe(action: Callable[[], Any]) -> tuple[Any, Exception | None]:
+    """Run a presentation-layer probe, returning its result or the exception.
+
+    `overview.html` is regenerable presentation (module docstring): a missing or
+    corrupt store manifest, or an unreadable group, must degrade to an explicit
+    invalid entry rather than aborting the page. Only these probes are wrapped --
+    row rendering and the rest of the render stay outside, so a genuine bug
+    still surfaces rather than being swallowed.
+    """
+    try:
+        return action(), None
+    except Exception:  # noqa: BLE001
+        return None, cast(Exception, sys.exc_info()[1])
+
+
 def _open_optional_group(path: Path) -> Any | None:
     """A Zarr group opened read-only, or None when it is absent/unreadable.
 
@@ -461,10 +478,8 @@ def _open_optional_group(path: Path) -> Any | None:
     is regenerable presentation and must degrade gracefully rather than fail to
     render when one is missing or damaged (issues #23, #267).
     """
-    try:
-        return open_group(path)
-    except Exception:  # noqa: BLE001
-        return None
+    group, _ = _probe(lambda: open_group(path))
+    return group
 
 
 def _load_rho_group(output_path: Path) -> Any | None:
@@ -859,14 +874,21 @@ def _subset_problem(
                 "not trusted as a published subset"
             ),
         }
-    try:
-        open_indexed_subset(store_path, path.name)
-    except IndexedSubsetError as exc:
+    _, error = _probe(lambda: open_indexed_subset(store_path, path.name))
+    if error is None:
+        return None
+    if isinstance(error, IndexedSubsetError):
         return {
             "name": path.name,
-            "issue": str(exc).removeprefix(f"store {store_path}: "),
+            "issue": str(error).removeprefix(f"store {store_path}: "),
         }
-    return None
+    return {
+        "name": path.name,
+        "issue": (
+            "structural check could not read the store or group "
+            f"({type(error).__name__}: {error})"
+        ),
+    }
 
 
 def _collect_indexed_subsets(

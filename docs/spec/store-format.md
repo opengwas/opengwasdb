@@ -1130,8 +1130,10 @@ recorded `indexed_subset_name` disagrees with its directory name, or that fails
 the structural read seam (§10b: schema, profile, order, counts, exact array set,
 dtypes, shapes and in-range Variant Indices, but no decoded-value comparison) is
 surfaced as an invalid entry rather than silently omitted or relabelled, and is
-**not** also listed or counted as a valid subset. The page presents these facts
-and is not a second source of truth (§1).
+**not** also listed or counted as a valid subset. A structural probe that cannot
+read the store metadata it needs (a missing or corrupt `manifest.json`) is
+treated the same way, so one unreadable release envelope cannot abort the whole
+page. The page presents these facts and is not a second source of truth (§1).
 
 ### Lifecycle
 

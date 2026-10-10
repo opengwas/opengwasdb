@@ -569,6 +569,38 @@ def test_indexed_subsets_tab_marks_a_partial_group(tmp_path):
     assert 'id="indexed-subsets"' not in section
 
 
+def _section_after_manifest_damage(tmp_path: Path, damage) -> str:
+    store = _build_indexed_subset_store(tmp_path)
+    damage(store)
+    table = read_analyses(store / "analyses.tsv")
+    content = write_overview_html(store, table).read_text(encoding="utf-8")
+    return _indexed_subsets_section(content)
+
+
+def _assert_structural_failure_is_flagged(section: str) -> None:
+    assert "hm3" in section
+    assert "Invalid or unreadable entries" in section
+    assert "structural check could not read the store or group" in section
+    assert 'id="indexed-subsets"' not in section
+
+
+def test_indexed_subsets_tab_survives_a_missing_manifest(tmp_path):
+    # The structural check reads the store manifest; a missing one must become an
+    # invalid entry, not abort the whole page.
+    section = _section_after_manifest_damage(
+        tmp_path, lambda store: (store / "manifest.json").unlink()
+    )
+    _assert_structural_failure_is_flagged(section)
+
+
+def test_indexed_subsets_tab_survives_a_corrupt_manifest(tmp_path):
+    def corrupt(store):
+        (store / "manifest.json").write_text("{not json", encoding="utf-8")
+
+    section = _section_after_manifest_damage(tmp_path, corrupt)
+    _assert_structural_failure_is_flagged(section)
+
+
 def test_indexed_subsets_physical_size_matches_du(tmp_path):
     """The reported physical size is allocated bytes, directories included.
 
