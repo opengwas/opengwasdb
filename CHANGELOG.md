@@ -416,7 +416,10 @@ the end of this file.
   the sample strategy, seed and cell count, and the sampled duration. Standalone
   `validate` remains **exhaustive** and decodes every indexed cell, side table,
   imputed mask and reference EAF, so an isolated corruption the build sample can
-  miss is refused by an explicit audit. On the fresh #270 OGS-00009 HapMap3
+  miss is refused by an explicit audit; it uses its own
+  `EXHAUSTIVE_VALIDATION_BAND_CELLS` (4,000,000 cells, unchanged from #267) so
+  its float32 decode does not grow to the writer's 65,536,000-cell block. On the
+  fresh #270 OGS-00009 HapMap3
   build the store layer measured every one of the 38,456 `z`, `se` and `eaf`
   physical files encoded exactly once; the build took 184.04 s (write 171.665 s,
   sampled validation 1.579 s) against the #267 4,198 s, with exact six-field

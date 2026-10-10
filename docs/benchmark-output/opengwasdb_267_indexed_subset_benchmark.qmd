@@ -276,6 +276,13 @@ print(md_table(
         ["declared band invariant", f"max(band, write unit) = {build['band_cells_effective']:,} cells"],
         ["largest materialised source block", f"{build['max_materialized_cells']:,} cells"],
         ["largest raw buffer (cells x dtype)", f"{build['max_materialized_bytes']:,} B"],
+        [
+            "raw buffer by plane",
+            ", ".join(
+                f"`{name}` {stats:,} B"
+                for name, stats in sorted(build["materialized_plane_bytes"].items())
+            ),
+        ],
         ["prepare (open release, resolve list)", f"{build['phases']['prepare_seconds']:,.2f} s"],
         ["write (planes, chunk-aligned)", f"{build['phases']['write_seconds']:,.2f} s"],
         ["staged validation (publication gate)", f"{build['phases']['validate_seconds']:,.2f} s"],

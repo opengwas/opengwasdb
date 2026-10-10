@@ -111,16 +111,24 @@ log = logging.getLogger(__name__)
 #: The group under `data.zarr` that holds every Indexed Variant Subset.
 INDEXED_SUBSETS_GROUP = "indexed_subsets"
 
-#: Target band cell count for the build gate.  The variant band is the index's
-#: physical write unit (a v2 chunk or a v3 shard) and this budget sizes the
-#: Analysis tile within it.  The default is exactly one v2 output chunk times
+#: Target band cell count for the build **writer**.  The variant band is the
+#: index's physical write unit (a v2 chunk or a v3 shard) and this budget sizes
+#: the Analysis tile within it.  The default is exactly one v2 output chunk times
 #: one representative primary Analysis read unit (65,536 x 1,000 = 65,536,000
 #: cells), so a v2 build decodes each primary file once rather than once per
 #: tile.  A smaller budget is honoured: the writer re-reads the source instead
 #: of materialising more than ``max(band_cells, write_unit)`` cells.  This is a
-#: writer-memory input, not an RSS acceptance target.  The CLI exposes it as
-#: `--band-cells`.
+#: writer-source-block input, not an RSS acceptance target.  The CLI exposes it
+#: as `--band-cells`.
 DEFAULT_BAND_CELLS = 65_536_000
+
+#: Target band cell count for the standalone **exhaustive** validation pass.
+#: It decodes and compares float32 planes, so its band is kept at the historical
+#: 4,000,000 cells and is deliberately independent of the writer default: a
+#: writer that reads 1,000-Analysis source blocks must not make the validation
+#: pass hold 65.5M decoded cells.  The build's own publication gate is sampled
+#: and does not use this.
+EXHAUSTIVE_VALIDATION_BAND_CELLS = 4_000_000
 
 #: The build's publication gate validates the structural invariants exhaustively
 #: and a bounded deterministic sample of decoded cells.  Standalone `validate`
@@ -386,7 +394,9 @@ class IndexedSubsetBuild:
     physical_write_unit: int = 0
     max_materialized_cells: int = 0
     max_materialized_bytes: int = 0
+    materialized_plane_cells: Mapping[str, int] = field(default_factory=dict)
     materialized_plane_bytes: Mapping[str, int] = field(default_factory=dict)
+    materialized_plane_dtypes: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -396,15 +406,17 @@ class _WriteStats:
     ``band_cells_effective`` is ``max(band_cells, write_unit)`` -- the bound the
     writer enforces -- and ``max_materialized_cells``/``_bytes`` are the largest
     source block it actually held, so a build records both the invariant and the
-    measurement.  ``materialized_plane_bytes`` is the derived raw buffer per
-    plane and dtype (#270 review).
+    measurement.  The per-plane cells, derived bytes and dtype are recorded so a
+    reader can recompute each buffer from the other two (#270 review).
     """
 
     physical_write_unit: int
     band_cells_effective: int
     max_materialized_cells: int
     max_materialized_bytes: int
+    materialized_plane_cells: Mapping[str, int]
     materialized_plane_bytes: Mapping[str, int]
+    materialized_plane_dtypes: Mapping[str, str]
 
 
 @dataclass(frozen=True)
@@ -720,12 +732,12 @@ def _create_subset_arrays(
 
 def _copy_one_plane(
     target: Any, source: Any, subset: np.ndarray, n_analyses: int, band_cells: int
-) -> tuple[int, int]:
+) -> tuple[int, str]:
     """Copy one primary plane's codes into the index, one output file at a time.
 
-    Returns the measured maximum source cells held and the source dtype's item
-    size, so the caller can derive the raw buffer bytes.  Raises if the budget
-    is somehow exceeded, so the invariant cannot drift silently.
+    Returns the measured maximum source cells held and the source dtype name, so
+    the caller can derive the raw buffer bytes.  Raises if the budget is somehow
+    exceeded, so the invariant cannot drift silently.
     """
     write_unit = _physical_write_unit(target)
     read_unit = _source_read_unit(source)
@@ -743,7 +755,7 @@ def _copy_one_plane(
                 )
             max_materialized = max(max_materialized, cells)
             target[a0:a1, start:stop] = np.asarray(source.oindex[rows, a0:a1]).T
-    return max_materialized, int(np.dtype(source.dtype).itemsize)
+    return max_materialized, str(np.dtype(source.dtype))
 
 
 def _copy_plane_bands(
@@ -755,8 +767,8 @@ def _copy_plane_bands(
     subset: np.ndarray,
     n_analyses: int,
     band_cells: int,
-) -> tuple[int, dict[str, int]]:
-    """Copy every plane and return its largest source block, cells and by plane."""
+) -> tuple[int, list[tuple[str, int, str]]]:
+    """Copy every plane and return the largest block and each (plane, cells, dtype)."""
     planes: dict[str, tuple[Any, Any]] = {
         "z": (z_target, root["z"]),
         "se": (se_target, root["se"]),
@@ -766,14 +778,14 @@ def _copy_plane_bands(
     if imputed_target is not None:
         planes["imputed"] = (imputed_target, root[_IMPUTED_MASK])
     max_cells = 0
-    plane_bytes: dict[str, int] = {}
+    buffers: list[tuple[str, int, str]] = []
     for name, (target, source) in planes.items():
-        cells, itemsize = _copy_one_plane(
+        cells, dtype = _copy_one_plane(
             target, source, subset, n_analyses, band_cells
         )
         max_cells = max(max_cells, cells)
-        plane_bytes[name] = cells * itemsize
-    return max_cells, plane_bytes
+        buffers.append((name, cells, dtype))
+    return max_cells, buffers
 
 
 def _remap_and_write(
@@ -905,7 +917,7 @@ def write_indexed_subset_group(
     z_target, se_target, eaf_target, imputed_target = _create_subset_arrays(
         group, encoding, codec, n_analyses, n_subset, completed=completed
     )
-    max_materialized, plane_bytes = _copy_plane_bands(
+    max_materialized, buffers = _copy_plane_bands(
         z_target,
         se_target,
         eaf_target,
@@ -919,20 +931,30 @@ def write_indexed_subset_group(
     _write_eaf_side_tables(group, root, encoding, subset, n_analyses)
     _write_se_side_tables(group, root, encoding, subset, n_analyses)
     group.attrs.update(attrs)
-    return _write_stats(z_target, band_cells, max_materialized, plane_bytes)
+    return _write_stats(z_target, band_cells, max_materialized, buffers)
 
 
 def _write_stats(
-    z_target: Any, band_cells: int, max_materialized: int, plane_bytes: dict[str, int]
+    z_target: Any,
+    band_cells: int,
+    max_materialized: int,
+    buffers: list[tuple[str, int, str]],
 ) -> _WriteStats:
     """The declared band invariant and the measured per-plane raw buffers."""
     write_unit = _physical_write_unit(z_target)
+    cells = {name: count for name, count, _dtype in buffers}
+    dtypes = {name: dtype for name, _count, dtype in buffers}
+    byte_sizes = {
+        name: count * np.dtype(dtype).itemsize for name, count, dtype in buffers
+    }
     return _WriteStats(
         physical_write_unit=write_unit,
         band_cells_effective=max(int(band_cells), write_unit),
         max_materialized_cells=max_materialized,
-        max_materialized_bytes=max(plane_bytes.values(), default=0),
-        materialized_plane_bytes=MappingProxyType(dict(plane_bytes)),
+        max_materialized_bytes=max(byte_sizes.values(), default=0),
+        materialized_plane_cells=MappingProxyType(cells),
+        materialized_plane_bytes=MappingProxyType(byte_sizes),
+        materialized_plane_dtypes=MappingProxyType(dtypes),
     )
 
 
@@ -1084,7 +1106,13 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
     write_seconds = 0.0
     validate_seconds = 0.0
     write_stats = _WriteStats(
-        0, max(int(band_cells), 1), 0, 0, MappingProxyType({})
+        0,
+        max(int(band_cells), 1),
+        0,
+        0,
+        MappingProxyType({}),
+        MappingProxyType({}),
+        MappingProxyType({}),
     )
     try:
         with staged_named_group(dest, overwrite=overwrite) as work:
@@ -1127,7 +1155,9 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
         physical_write_unit=write_stats.physical_write_unit,
         max_materialized_cells=write_stats.max_materialized_cells,
         max_materialized_bytes=write_stats.max_materialized_bytes,
+        materialized_plane_cells=dict(write_stats.materialized_plane_cells),
         materialized_plane_bytes=dict(write_stats.materialized_plane_bytes),
+        materialized_plane_dtypes=dict(write_stats.materialized_plane_dtypes),
     )
 
 
@@ -2797,7 +2827,9 @@ def _compare_indexed_values(
     # not the primary re-read, is the work.
     write_unit = _physical_write_unit(group["z"])
     for start, stop in _output_write_bands(len(subset), write_unit):
-        for a0, a1 in _analysis_tiles(n_analyses, write_unit, DEFAULT_BAND_CELLS, 1):
+        for a0, a1 in _analysis_tiles(
+            n_analyses, write_unit, EXHAUSTIVE_VALIDATION_BAND_CELLS, 1
+        ):
             message = _compare_indexed_band(
                 name, context, group, encoding, subset, start, stop, a0, a1
             )

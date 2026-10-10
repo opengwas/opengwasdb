@@ -34,9 +34,11 @@ from typer.testing import CliRunner, Result
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.cli.main import app
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.layouts.dense import indexed_subsets
 from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.indexed_subsets import (
     DEFAULT_BAND_CELLS,
+    EXHAUSTIVE_VALIDATION_BAND_CELLS,
     INDEXED_SUBSETS_GROUP,
     IndexedSubsetError,
     IndexedSubsetExistsError,
@@ -929,6 +931,57 @@ def test_default_band_avoids_deterministic_v2_source_rereads() -> None:
     assert -(-read_unit // old_tile) == 17
     assert -(-read_unit // new_tile) == 1
     assert DEFAULT_BAND_CELLS == write_unit * read_unit
+
+
+def test_exhaustive_validation_band_stays_at_four_million_cells() -> None:
+    """Standalone validation's float32 decode stays ~4M cells on OGS geometry.
+
+    The exhaustive pass compares decoded float32 planes, so it uses its own band
+    constant and not the writer default; a writer that reads 65.5M-cell source
+    blocks must not make the validation tile 65.5M cells.
+    """
+    write_unit = 65_536
+    read_unit = 1_000
+    n_analyses = 2_024
+    exhaustive = _analysis_tiles(
+        n_analyses, write_unit, EXHAUSTIVE_VALIDATION_BAND_CELLS, 1
+    )
+    writer = _analysis_tiles(n_analyses, write_unit, DEFAULT_BAND_CELLS, read_unit)
+    exhaustive_cells = max(a1 - a0 for a0, a1 in exhaustive) * write_unit
+    writer_cells = max(a1 - a0 for a0, a1 in writer) * write_unit
+    assert EXHAUSTIVE_VALIDATION_BAND_CELLS == 4_000_000
+    assert DEFAULT_BAND_CELLS == 65_536_000
+    assert exhaustive_cells <= EXHAUSTIVE_VALIDATION_BAND_CELLS
+    assert writer_cells == DEFAULT_BAND_CELLS
+    assert exhaustive_cells != writer_cells, "the two passes must use separate bands"
+
+
+def test_exhaustive_validation_uses_its_own_band(
+    tmp_path: Path,
+    rich_store: Path,
+    variant_list: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Standalone validation passes the exhaustive band, not the writer default.
+
+    Recording the `band_cells` argument of every `_analysis_tiles` call during
+    `validate_store` pins the path's constant so a later refactor cannot quietly
+    fall back to `DEFAULT_BAND_CELLS` and hold 65.5M float32 cells per tile.
+    """
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    seen: list[int] = []
+    original = indexed_subsets._analysis_tiles
+
+    def recording(*args: Any, **kwargs: Any) -> Any:
+        seen.append(int(args[2]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(indexed_subsets, "_analysis_tiles", recording)
+    assert validate_store(store).ok
+    assert seen, "the exhaustive validation must call _analysis_tiles"
+    assert all(band == EXHAUSTIVE_VALIDATION_BAND_CELLS for band in seen)
+    assert DEFAULT_BAND_CELLS not in seen
 
 
 def test_build_records_a_materialized_band_within_the_declared_bound(

@@ -179,9 +179,11 @@ performance result.
   `validate_store`/`validate_indexed_subsets` remain **exhaustive** and decode
   every indexed cell, side table, imputed mask and reference EAF, so an
   isolated corruption the build sample can miss is refused by an explicit
-  audit; the build records the mode, sample strategy, seed, cell count and
-  sampled duration. The risk is documented rather than hidden, and the low
-  build cost is part of this ADR's outcome.
+  audit. That pass uses its own `EXHAUSTIVE_VALIDATION_BAND_CELLS`
+  (4,000,000 cells, unchanged from #267) so its float32 decode does not grow to
+  the writer's 65,536,000-cell source block; the build records the mode, sample
+  strategy, seed, cell count and sampled duration. The risk is documented rather
+  than hidden, and the low build cost is part of this ADR's outcome.
 - The #270 query latency was measured at **439.263 ms** warm median in that
   benchmark run. The index chunk/shard geometry and per-plane physical bytes are
   identical to #267's and the query path is unchanged, so the difference from

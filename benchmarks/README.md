@@ -457,7 +457,7 @@ guess when a rsid matches several allele-compatible Store rows.
 
 | File | Description |
 |---|---|
-| `opengwasdb_267_indexed_subset_benchmark.json` | The full measurement artifact (all fields #267 names, schema `5`) |
+| `opengwasdb_267_indexed_subset_benchmark.json` | The full measurement artifact (all fields #267 names, schema `6`) |
 | `opengwasdb_267_indexed_subset_benchmark.qmd` / `.html` | Rendered report, reads the artifact at render time |
 
 **Usage** (run from the repo root, on the machine holding the store):
@@ -480,9 +480,20 @@ cd docs/benchmark-output && pixi run -e report quarto render \
 
 All paths above are the script's built-in defaults. The build runs as a
 subprocess under `/usr/bin/time -v`, so its peak RSS does not include the
-harness's query caches and is bounded by the harness's configured band
-(`BAND_CELLS`, 4,000,000 cells) plus a fixed allowance rather than by the full
-`2,024 x 1,206,903` matrix. `--reuse-copy` reuses an existing scratch copy
+harness's query caches. Two things are recorded separately:
+
+* the **writer source-block invariant** — `BAND_CELLS` (default **65,536,000**
+  = one 65,536-variant v2 output chunk × a 1,000-Analysis primary read unit)
+  bounds the largest materialised source block to
+  `max(BAND_CELLS, one physical output unit)`, with the measured cells and the
+  derived raw bytes recorded per plane/dtype;
+* the **preserved #267 RSS acceptance threshold** — **1,146.1 MB** from the
+  original 4,000,000-cell declaration. It is deliberately *not* re-derived from
+  the writer default, so the run still reports `rss_within_bound = false` at
+  ~1,238 MB rather than being turned green by a widened model. The measured
+  peak is ALID-resolution-bound, not writer-band-bound.
+
+`--reuse-copy` reuses an existing scratch copy
 instead of refusing to overwrite it; when that copy
 already carries the subset, `--build-stats <artifact>` is **required** (the
 measured build block is reused and validated) or `--reset-subset` removes the

@@ -1363,8 +1363,8 @@ _INDEXED_SUBSET_BAND_CELLS_OPTION = typer.Option(
     DEFAULT_BAND_CELLS,
     "--band-cells",
     help=(
-        "Target cells per streamed Analysis tile; the variant band is one output "
-        "chunk/shard, so peak build memory is bounded by the band, not the subset"
+        "Bounds the largest writer source block to max(requested cells, one "
+        "physical output unit); it is not a whole-process RSS target"
     ),
 )
 
