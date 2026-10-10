@@ -118,7 +118,58 @@ the end of this file.
   Hybrid releases remain explicit selector failures. Spec §10b and §20 record
   the physical contract and validation rules.
 
+- **`overview.html` lists every published Indexed Variant Subset from its own
+  group metadata (ADR 0053, issue #267).** A store that carries
+  `data.zarr/indexed_subsets` gains an **Indexed Subsets** tab (between Rho and
+  the Guide) with one row per published name: statistic profile,
+  requested/resolved/absent counts, physical size, input SHA-256, Reference
+  Assembly, source store/release/format, builder version and creation time. The
+  page reads the recorded attributes and never recomputes a value, so it remains
+  a regenerable presentation rather than a second source of truth; an
+  unreadable or staging group is omitted rather than shown with invented
+  values. `regenerate-overview` picks the tab up with no new flags. Spec §10b
+  records the overview contract.
+
+- **A maintained full-statistic HapMap3 Indexed Variant Subset benchmark and
+  report replace the issue-262 prototype (issue #267).**
+  `benchmarks/benchmark_indexed_subset.py` builds the complete HapMap3 index on
+  OGS-00009 (Z, SE and EAF), measures the full-result indexed read against the
+  ordinary path, and records git commit, UTC measurement time, Store identity,
+  release identity, `format_version`, Store Encoding, the
+  MD5-verified canonical GRCh38 HapMap3 source and the derived ALID list's
+  SHA-256, rsid-level requested/resolved/absent counts, total and per-plane
+  physical bytes, build phase times and peak RSS, first-read/warm-median/p95
+  timings, result counts, ordinary timings before and after index generation,
+  and the exact indexed-vs-ordinary equivalence outcome. It refuses to publish
+  unless every returned field decodes exactly equally. The run measures against
+  a reflinked copy and proves the authoritative release unchanged by comparing
+  its recursive metadata fingerprint and its `manifest.json`/`analyses.tsv`
+  hashes before and after. `docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.qmd`
+  renders the committed artifact. The scratch
+  `benchmarks/prototype_issue_262_hapmap3.py` and its Pixi task are removed.
+
 ### Changed
+
+- **Indexed Variant Subset overview and benchmark truthfulness (issue #267).**
+  `overview.html`'s Indexed Subsets tab now surfaces an unreadable group, or a
+  group whose recorded `indexed_subset_name` disagrees with its directory name,
+  as an invalid entry instead of silently omitting or relabelling it; the
+  directory name is the displayed identity. Its physical size was already
+  computed from the group's files at render time and is now documented as such
+  (the recorded metadata carries counts, checksum, assembly and provenance, not
+  bytes). The #267 benchmark harness now requires the full six result fields
+  (`variant_index`, `analysis_index`, `z`, `se`, `eaf`, `association_status`) to
+  be present on both sides and non-empty with matching dtype and length before
+  exact equivalence can hold, records the writer-returned
+  requested/resolved/absent counts reconciled against the HapMap3 rsid budget,
+  proves the ordinary before/after bracket (`run.ordinary_bracketed`) and
+  records it as a target, requires positive measured build metrics and refuses
+  a reuse-only run without `--build-stats` (or `--reset-subset`) so a zero build
+  block can never be fabricated, records the Analysis, subset name, primary
+  layout, run mode and the authoritative source path separately from the
+  measured scratch copy, and discloses the p95 and first-read methods. The
+  report contains no inline expressions and no hardcoded identifiers, and a
+  test searches the rendered HTML for unevaluated `{python}` markers.
 
 - **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**
   `CURRENT_FORMAT_VERSION` becomes `0.2.0`, and the converter's target is that
@@ -334,6 +385,44 @@ the end of this file.
   build records a `provenance.maf` block (stores #176).
 
 ### Fixed
+
+- **Indexed Variant Subset documentation and error text no longer claim
+  Observed-Only Dense exclusivity (#266).** `build-indexed-subset` has supported
+  both Observed-Only and Reference-Completed Dense since #266, but the build
+  command's description, the `query-analysis --indexed-subset` help, the
+  `IndexedSubsetLayoutError` message and docstring, the Ragged and Hybrid
+  `analysis()` docstrings, and the `indexed_subsets` module and
+  `validate_indexed_subsets` docstrings still said subsets were "Observed-Only
+  Dense only". They now say **Dense-only**, with Observed-Only-specific prose
+  kept where it genuinely describes the Observed-Only case (a missing `imputed`
+  mask, the Observed-Only encoding branch). Tests assert the CLI help and the
+  Ragged/Hybrid refusal message no longer misstate support.
+
+- **`overview.html` no longer renders an invalid Indexed Variant Subset as a
+  valid row, and detects partial groups (#267 review).** A named directory whose
+  recorded name disagrees with its directory, or that fails the Indexed Variant
+  Subset **structural read seam** (`open_indexed_subset`: schema, profile,
+  order, counts, exact array set, dtypes, shapes and in-range Variant Indices,
+  but no decoded-value comparison), is listed only as an invalid entry and
+  excluded from the table and the physical-size total. Previously a
+  name-mismatched group was both flagged and counted, and a group with a missing
+  array was rendered as valid. The structural probe is wrapped at the
+  presentation layer, so a missing or corrupt store `manifest.json` now also
+  renders the subset as an invalid entry instead of aborting `overview.html`
+  generation; row rendering and the rest of the page are outside that boundary
+  and still raise on a genuine bug.
+
+- **The benchmark scratch copy records a verified method (#267 review).**
+  `benchmarks/_artifact.scratch_copy` now tries `cp --reflink=always` (which
+  fails rather than silently falling back), falls back to a documented full
+  copy, and returns `reflink` or `full_copy`; the harness records that in
+  `store.copy_kind`, or `reused_scratch_copy` when it did not perform the copy.
+  The previous helper used `cp --reflink=auto` and the artifact claimed a
+  reflink without verification. The `#267` benchmark README no longer cites a
+  nonexistent `--band-cells` flag (the harness uses its configured `BAND_CELLS`
+  constant), and the artifact's semantic checks now require
+  `run.ordinary_bracketed`/`targets.ordinary_bracketed` and the fresh/reused,
+  subset-present and peak-RSS facts to agree with each other.
 
 - **A Ragged association sequence is written one whole shard at a time, and the
   Dense SE exception tables once each (#249).**
