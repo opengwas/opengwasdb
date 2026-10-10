@@ -2517,8 +2517,9 @@ def _validation_sample(
 ) -> _SamplePlan:
     """A deterministic, bounded, stratified sample of index cells to decode.
 
-    The sample covers the four corners, whole physical output boundaries (the
-    slot before each inner-chunk boundary and the first slot after it), a spread
+    The sample covers the four corners, a bounded spread of physical output
+    boundaries (the slot before each anchored inner-chunk boundary and the first
+    slot after it), a spread
     of Analyses including the first and last, and input-checksum-seeded cells.
     The boundary step is the *inner* chunk, so a v3 index whose whole subset is
     one shard still samples its inner-chunk boundaries; a larger subset samples
