@@ -1147,14 +1147,20 @@ they are without a subset. Every subset covers every Analysis, so there is no
 partial-Analysis answer.
 
 A reader MUST refuse an unknown, staging, incomplete, stale, invalid or
-unsupported subset by name rather than fall back to the authoritative planes:
-the selector is a request for the indexed path, and answering it from the
-primary matrix would silently return the slow path's result while appearing to
-be indexed. The read path re-checks the attributes, array set, axis order and
-plane shapes before decoding any value, independent of whether `validate` has
-been run, so a group that disagrees with itself cannot decode to a plausible,
-wrong association. A subset on a Ragged or Hybrid release is refused, because
-Indexed Variant Subsets are Observed-Only Dense only. When no subset is named,
+unsupported subset by name, naming the Store it belongs to, rather than fall
+back to the authoritative planes: the selector is a request for the indexed
+path, and answering it from the primary matrix would silently return the slow
+path's result while appearing to be indexed. Before decoding any value,
+independent of whether `validate` has been run, the read path re-checks the
+declared name, schema, profile and `order`, the declared Analysis and
+requested/resolved/absent counts, the exact array set, every plane's declared
+dtype and shape, and that `variant_index` is non-empty, sorted, unique and in
+bounds `[0, n_variants)`. A malformed encoding block is refused as a malformed
+subset rather than allowed to raise a decode error. It does NOT re-derive
+decoded values or side-table internals -- that is `validate`'s expensive job --
+and cannot detect an in-range Variant Index shift while identity and bounds
+hold. A subset on a Ragged or Hybrid release is refused, because Indexed
+Variant Subsets are Observed-Only Dense only. When no subset is named,
 selected-Analysis behaviour is unchanged and no indexed-subset state is
 consulted at all.
 

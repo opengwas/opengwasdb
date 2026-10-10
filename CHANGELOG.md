@@ -64,12 +64,20 @@ the end of this file.
   `z`/`se`. Physical decoding is delegated to the #264 module, so the facade
   duplicates none of its codec, exception, EAF or status reconstruction. An
   explicit selector never falls back to the primary matrix: an unknown,
-  staging, incomplete, stale, corrupt (array, shape or axis-order) or
-  unsupported (Ragged/Hybrid) subset raises, and the CLI exits 1 naming the
-  Store and subset. An unknown Analysis ID keeps the ordinary empty-result
-  behaviour, and omitting the selector is byte-for-byte unchanged. Spec §10b
-  records the query contract; the sibling `opengwasdb-stores` query
-  walkthrough update is flagged for the final documentation ticket.
+  staging, incomplete, stale, or corrupt subset raises, and the CLI exits 1
+  naming the Store and subset. Corruption covers malformed encoding metadata,
+  the wrong plane dtype, missing/unexpected arrays, a wrong declared
+  name/schema/profile/axis order, Variant Indices out of the release's
+  `[0, n_variants)` range, a declared Analysis count that disagrees with the
+  release, and requested/resolved/absent counts that do not add up. Those
+  checks run on the read path itself, not only under `validate`, and the
+  subset's Variant Index is read once per query rather than once to validate
+  and again to decode. A Ragged or Hybrid release refuses any selector. An
+  unknown Analysis ID keeps the ordinary empty-result behaviour, and omitting
+  the selector is byte-for-byte unchanged. Spec §10b records the query
+  contract; the sibling `opengwasdb-stores` query walkthrough update is
+  flagged for the final documentation ticket
+  (`opengwas/opengwasdb-stores#206`).
 
 ### Changed
 

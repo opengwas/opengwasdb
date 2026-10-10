@@ -30,6 +30,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr  # corruption tests open the indexed group directly
+from store_reads import chunk_reads, duplicate_chunk_keys
 from test_indexed_subsets import (
     EAF_EXCEPTION_VARIANT,
     MISSING_VARIANT,
@@ -50,7 +51,6 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     INDEXED_SUBSETS_GROUP,
     IndexedSubsetError,
     IndexedSubsetLayoutError,
-    IndexedSubsetStaleError,
     list_indexed_subsets,
     open_indexed_subset,
 )
@@ -109,6 +109,46 @@ def _assert_results_equal(left: dict[str, np.ndarray], right: dict[str, np.ndarr
         a, b = np.asarray(left[key]), np.asarray(right[key])
         assert a.dtype == b.dtype, f"{key}: dtypes differ ({a.dtype} != {b.dtype})"
         assert np.array_equal(a, b, equal_nan=a.dtype.kind == "f"), f"{key} differs"
+
+
+def _corrupt_group(store: Path) -> zarr.Group:
+    """Open the fixture's ``hm3`` group for in-place damage (failure tests only)."""
+    return zarr.open_group(
+        str(store / "data.zarr" / INDEXED_SUBSETS_GROUP / "hm3"), mode="r+", zarr_format=3
+    )
+
+
+def _replace_se_with_float16(store: Path) -> None:
+    """Damage the `se` plane's dtype, leaving its shape and every other array intact."""
+    group = _corrupt_group(store)
+    n_analyses = int(group.attrs["n_analyses"])
+    n_subset = int(group.attrs["n_subset_variants"])
+    del group["se"]
+    group.create_array(
+        "se",
+        shape=(n_analyses, n_subset),
+        chunks=(1, n_subset),
+        shards=(1, n_subset),
+        dtype="float16",
+    )
+
+
+def _push_variant_index_out_of_bounds(store: Path) -> None:
+    """Point the last subset slot beyond the fixture's 320-variant Store axis."""
+    group = _corrupt_group(store)
+    values = np.asarray(group["variant_index"][:])
+    values[-1] = 10_000_000  # still sorted, so only the bounds rule can refuse it
+    group["variant_index"][:] = values
+
+
+def _assert_refused(store: Path, subset: str, match: str) -> str:
+    """The API refuses `subset` with a message naming the Store and the subset."""
+    with pytest.raises(IndexedSubsetError, match=match) as excinfo:
+        _analyse(store, "a0", indexed_subset=subset)
+    message = str(excinfo.value)
+    assert str(store) in message, f"the failure must name the Store: {message}"
+    assert subset in message, f"the failure must name the subset: {message}"
+    return message
 
 
 # ── Fixture is meaningful, before anything is asserted about a query ─────────
@@ -208,9 +248,8 @@ def test_reversed_input_order_produces_the_same_result(indexed_copy: Path) -> No
 # ── Failure semantics: loud, named, and never a fallback ─────────────────────
 
 
-def test_unknown_subset_raises_naming_the_subset(indexed_store: Path) -> None:
-    with pytest.raises(IndexedSubsetError, match="no Indexed Variant Subset 'nope'"):
-        _analyse(indexed_store, "a0", indexed_subset="nope")
+def test_unknown_subset_raises_naming_store_and_subset(indexed_store: Path) -> None:
+    _assert_refused(indexed_store, "nope", "no Indexed Variant Subset 'nope'")
 
 
 def test_unknown_analysis_keeps_the_ordinary_empty_result(indexed_store: Path) -> None:
@@ -222,10 +261,8 @@ def test_unknown_analysis_keeps_the_ordinary_empty_result(indexed_store: Path) -
 
 def test_incomplete_group_is_refused(indexed_copy: Path) -> None:
     namespace = indexed_copy / "data.zarr" / INDEXED_SUBSETS_GROUP
-    incomplete = namespace / "half"
-    zarr.open_group(str(incomplete), mode="w", zarr_format=3)
-    with pytest.raises(IndexedSubsetError, match="half"):
-        _analyse(indexed_copy, "a0", indexed_subset="half")
+    zarr.open_group(str(namespace / "half"), mode="w", zarr_format=3)
+    _assert_refused(indexed_copy, "half", "half")
 
 
 def test_staging_group_is_not_published_and_is_refused(indexed_copy: Path) -> None:
@@ -237,32 +274,21 @@ def test_staging_group_is_not_published_and_is_refused(indexed_copy: Path) -> No
     result = _analyse(indexed_copy, "a0", indexed_subset="hm3")
     assert len(result["z"]) > 0, "a staging sibling must not disturb a published subset"
     # A name that exists only as a staging group is unknown, not read.
-    with pytest.raises(IndexedSubsetError, match="'half'"):
-        _analyse(indexed_copy, "a0", indexed_subset="half")
+    _assert_refused(indexed_copy, "half", "no Indexed Variant Subset 'half'")
 
 
 def test_stale_index_is_refused_while_the_primary_planes_stay_readable(
     indexed_copy: Path,
 ) -> None:
-    group = zarr.open_group(
-        str(indexed_copy / "data.zarr" / INDEXED_SUBSETS_GROUP / "hm3"),
-        mode="r+",
-        zarr_format=3,
-    )
-    group.attrs["source_release_id"] = "another-release"
-    with pytest.raises(IndexedSubsetStaleError, match="stale"):
-        _analyse(indexed_copy, "a0", indexed_subset="hm3")
+    _corrupt_group(indexed_copy).attrs["source_release_id"] = "another-release"
+    _assert_refused(indexed_copy, "hm3", "stale")
     # The authoritative matrix is untouched and still answers.
     ordinary = _analyse(indexed_copy, "a0")
     assert len(ordinary["z"]) > 0
 
 
 def test_shape_mismatch_is_refused(indexed_copy: Path) -> None:
-    group = zarr.open_group(
-        str(indexed_copy / "data.zarr" / INDEXED_SUBSETS_GROUP / "hm3"),
-        mode="r+",
-        zarr_format=3,
-    )
+    group = _corrupt_group(indexed_copy)
     n_analyses = int(group.attrs["n_analyses"])
     n_subset = int(group.attrs["n_subset_variants"])
     del group["z"]
@@ -273,20 +299,74 @@ def test_shape_mismatch_is_refused(indexed_copy: Path) -> None:
         shards=(1, n_subset - 1),
         dtype="int16",
     )
-    with pytest.raises(IndexedSubsetError, match="shape"):
-        _analyse(indexed_copy, "a0", indexed_subset="hm3")
+    _assert_refused(indexed_copy, "hm3", "shape")
 
 
-def test_malformed_metadata_is_refused(indexed_copy: Path) -> None:
-    """A non-integer attribute must name the subset, not escape as a ValueError."""
-    group = zarr.open_group(
-        str(indexed_copy / "data.zarr" / INDEXED_SUBSETS_GROUP / "hm3"),
-        mode="r+",
-        zarr_format=3,
-    )
-    group.attrs["n_analyses"] = "many"
-    with pytest.raises(IndexedSubsetError, match="non-integer n_analyses"):
-        _analyse(indexed_copy, "a0", indexed_subset="hm3")
+def test_wrong_plane_dtype_is_refused(indexed_copy: Path) -> None:
+    """A readable primary store still refuses a plane whose bytes are the wrong kind."""
+    _replace_se_with_float16(indexed_copy)
+    _assert_refused(indexed_copy, "hm3", "dtype")
+
+
+def test_out_of_bounds_variant_index_is_refused(indexed_copy: Path) -> None:
+    """An index that names a variant the release does not have is not decoded."""
+    _push_variant_index_out_of_bounds(indexed_copy)
+    _assert_refused(indexed_copy, "hm3", "out of bounds")
+
+
+@pytest.mark.parametrize(
+    ("attr", "value", "match"),
+    [
+        ("indexed_subset_name", "other", "records its name"),
+        ("indexed_subset_schema", 999, "declares schema"),
+        ("statistic_profile", "z_only", "statistic_profile"),
+        ("order", "variant,analysis", "may be transposed"),
+        ("n_analyses", 99, "but this release has"),
+    ],
+)
+def test_invalid_declared_metadata_is_refused(
+    indexed_copy: Path, attr: str, value: object, match: str
+) -> None:
+    """Name/schema/profile/order/counts are read-path contracts, not just validation ones."""
+    _corrupt_group(indexed_copy).attrs[attr] = value
+    _assert_refused(indexed_copy, "hm3", match)
+
+
+def test_inconsistent_requested_counts_are_refused(indexed_copy: Path) -> None:
+    group = _corrupt_group(indexed_copy)
+    group.attrs["requested_count"] = int(group.attrs["requested_count"]) + 1
+    _assert_refused(indexed_copy, "hm3", "do not add up")
+
+
+@pytest.mark.parametrize(
+    "encoding",
+    [
+        5,
+        {"version": 3, "z": {}, "se": {}, "eaf": {}},
+        {"version": 3, "z": {"kind": "int16_fixed", "scale": 1024}, "se": {"kind": "float16"}},
+    ],
+)
+def test_malformed_encoding_metadata_is_refused(indexed_copy: Path, encoding: object) -> None:
+    """Every malformed encoding shape surfaces as an IndexedSubsetError, not a traceback."""
+    _corrupt_group(indexed_copy).attrs["encoding"] = encoding
+    _assert_refused(indexed_copy, "hm3", "encoding")
+
+
+def test_malformed_integer_metadata_is_refused(indexed_copy: Path) -> None:
+    """A non-integer attribute must name the Store and subset, not raise ValueError."""
+    _corrupt_group(indexed_copy).attrs["n_analyses"] = "many"
+    _assert_refused(indexed_copy, "hm3", "non-integer n_analyses")
+
+
+def test_variant_index_is_read_once_per_indexed_query(
+    indexed_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seam validates the axis once; decode reuses it rather than re-reading (#265)."""
+    with chunk_reads(monkeypatch, ("variant_index",)) as reads:
+        result = _analyse(indexed_store, "a0", indexed_subset="hm3")
+    assert len(result["z"]) > 0, "the fixture must return rows for this to mean anything"
+    assert reads["variant_index"], "the subset's axis must be read for this to mean anything"
+    assert duplicate_chunk_keys(reads) == {}, "variant_index was read more than once in one query"
 
 
 def test_indexed_query_never_reads_the_primary_planes(
@@ -376,11 +456,41 @@ def test_cli_tsv_schema_is_unchanged_and_rows_match_the_subset(indexed_store: Pa
     assert len(with_selector) > 1, "the selector must return rows for this to mean anything"
 
 
+def _assert_cli_refused(store: Path, subset: str, match: str) -> str:
+    """The CLI exits 1 and names the Store, the subset and the reason."""
+    code, output = _invoke(store, "a0", "--indexed-subset", subset, "--format", "json")
+    assert code == 1, output
+    assert "error:" in output, output
+    assert str(store) in output, output
+    assert subset in output, output
+    assert match in output, output
+    return output
+
+
 def test_cli_unknown_subset_fails_loudly_without_falling_back(indexed_store: Path) -> None:
-    code, output = _invoke(indexed_store, "a0", "--indexed-subset", "nope")
-    assert code == 1
-    assert "error:" in output
-    assert "nope" in output
+    _assert_cli_refused(indexed_store, "nope", "no Indexed Variant Subset")
+
+
+def test_cli_malformed_encoding_fails_loudly_naming_store_and_subset(
+    indexed_copy: Path,
+) -> None:
+    _corrupt_group(indexed_copy).attrs["encoding"] = 5
+    _assert_cli_refused(indexed_copy, "hm3", "encoding")
+
+
+def test_cli_wrong_plane_dtype_fails_loudly(indexed_copy: Path) -> None:
+    _replace_se_with_float16(indexed_copy)
+    _assert_cli_refused(indexed_copy, "hm3", "dtype")
+
+
+def test_cli_transposed_order_fails_loudly(indexed_copy: Path) -> None:
+    _corrupt_group(indexed_copy).attrs["order"] = "variant,analysis"
+    _assert_cli_refused(indexed_copy, "hm3", "transposed")
+
+
+def test_cli_out_of_bounds_variant_index_fails_loudly(indexed_copy: Path) -> None:
+    _push_variant_index_out_of_bounds(indexed_copy)
+    _assert_cli_refused(indexed_copy, "hm3", "out of bounds")
 
 
 def test_cli_unsupported_layout_fails_loudly(tmp_path: Path) -> None:
@@ -392,4 +502,6 @@ def test_cli_unsupported_layout_fails_loudly(tmp_path: Path) -> None:
     code, output = _invoke(store, analysis_id, "--indexed-subset", "hm3")
     assert code == 1
     assert "error:" in output
+    assert str(store) in output
+    assert "hm3" in output
     assert "Dense" in output
