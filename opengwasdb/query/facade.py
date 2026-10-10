@@ -413,6 +413,13 @@ class StoreQuery:
             if decoded.eaf is None
             else np.asarray(decoded.eaf, dtype="float32")
         )
+        # A Reference-Completed index carries the per-cell imputed mask; an
+        # Observed-Only one carries none, so every finite cell is observed.
+        imputed = (
+            np.zeros(len(decoded.z), dtype=np.uint8)
+            if decoded.imputed is None
+            else np.asarray(decoded.imputed, dtype=np.uint8)
+        )
         return self._cell_result(
             rows,
             cols,
@@ -420,9 +427,7 @@ class StoreQuery:
             decoded.se[mask],
             observed_only=observed_only,
             eaf_vals=eaf[mask],
-            # An Indexed Variant Subset is Observed-Only (ADR 0053): there is no
-            # imputed mask to read, so every finite cell is observed.
-            imputed=np.zeros(len(rows), dtype=np.uint8),
+            imputed=imputed[mask],
         )
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:

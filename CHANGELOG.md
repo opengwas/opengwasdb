@@ -49,9 +49,10 @@ the end of this file.
   query path relies on it. The version-to-Zarr-layout rule lives with the
   version tables (`opengwasdb.store.open.zarr_format_for_version`), not in this
   module. The index does not move `format_version` (it narrows ADRs
-  0038 and 0041), and query integration (#265), Reference-Completed support
-  (#266) and the production benchmark (#267) are deliberately out of scope.
-  Spec §10b and §20 record the physical contract and validation rules.
+  0038 and 0041). Query integration (#265) and Reference-Completed support
+  (#266) follow in their own entries below; the production benchmark (#267) is
+  out of scope. Spec §10b and §20 record the physical contract and validation
+  rules.
 
 - **`query-analysis STORE ANALYSIS_ID --indexed-subset SUBSET_NAME` reads one
   Analysis's full statistics from a named Indexed Variant Subset (ADR 0053,
@@ -80,6 +81,42 @@ the end of this file.
   contract; the sibling `opengwasdb-stores` query walkthrough update is
   flagged for the final documentation ticket
   (`opengwas/opengwasdb-stores#206`).
+
+- **Indexed Variant Subsets now build and query on Reference-Completed Dense
+  stores, reproducing ordinary Association Status and EAF semantics (ADR 0053,
+  issue #266).** The index carries two dependencies an Observed-Only one does
+  not: a per-cell, Analysis-major `imputed` mask — Association Status is never
+  an Analysis-level fact, so an Analysis left observed-only by the
+  ancestry-match filter reads its own observed cells correctly and no
+  completion state is inferred from another Analysis — and the subset
+  `eaf_reference` when the release declares reference EAF. Decoding substitutes
+  the panel frequency on imputed cells through the same codec the primary
+  `eaf` plane uses, so an imputed cell reads the panel's frequency and an
+  observed cell whose source reported none stays absent rather than taking the
+  panel's (ADR 0037 §4). The subset variant list's requested/resolved/absent
+  counts continue to distinguish an ALID absent from the Store Variant Table
+  (counted, never a match) from a variant absent from a source (on the axis,
+  filtered by the paired Z/SE rule). Standalone validation now also requires
+  every `imputed` value to be 0 or 1, no imputed cell to be missing, the mask
+  and `eaf_reference` to equal the release's own, `eaf_reference` to hold one
+  entry per indexed variant, and exactly the arrays the release's encoding and
+  Completion State define; an Observed-Only index carries neither array, a
+  Reference-Completed one missing `imputed` fails, and corruption in any
+  status or reference-EAF dependency fails validation rather than degrading to
+  an observed- or missing-looking result. The read path separately refuses a
+  mask whose dtype is not `uint8` and, for the Analysis being decoded, any
+  value outside `{0, 1}` before the codec, Association Status or
+  `observed_only` filter can interpret it -- a float or out-of-domain mask
+  would otherwise read as imputed to the frequency substitution and observed
+  to Association Status at once; comparing the mask's and `eaf_reference`'s
+  full content against the release remains `validate`'s job. Query defaults
+  include imputed
+  associations, `observed_only=True` excludes exactly them, and results match
+  the ordinary selected-Analysis result field-for-field including
+  `association_status` and Store order. Publication stays atomic, so a failed
+  completed replacement preserves the previous index exactly. Ragged and
+  Hybrid releases remain explicit selector failures. Spec §10b and §20 record
+  the physical contract and validation rules.
 
 ### Changed
 
