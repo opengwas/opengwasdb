@@ -1421,6 +1421,16 @@ _VARIANT_INFO_OPTION = typer.Option(
         "dominate query time on a large result."
     ),
 )
+_INDEXED_SUBSET_QUERY_OPTION = typer.Option(
+    None,
+    "--indexed-subset",
+    help=(
+        "Read this Analysis from a named Indexed Variant Subset instead of the "
+        "primary planes. The subset must exist and belong to this release: an "
+        "unknown, incomplete, stale, corrupt or unsupported subset fails loudly "
+        "rather than falling back to the ordinary path. Observed-Only Dense only."
+    ),
+)
 
 
 @app.command("query-phewas")
@@ -1455,13 +1465,21 @@ def query_range_phewas_command(
 def query_analysis_command(
     store_path: Path,
     analysis_id: str,
+    indexed_subset: str | None = _INDEXED_SUBSET_QUERY_OPTION,
     output_format: OutputFormat = _FORMAT_OPTION,
     include_variant_info: bool = _VARIANT_INFO_OPTION,
 ) -> None:
     """Extract all finite associations for one analysis."""
 
     query = query_store(store_path)
-    _emit(query, query.analysis(analysis_id), output_format, include_variant_info)
+    try:
+        result = query.analysis(analysis_id, indexed_subset=indexed_subset)
+    except IndexedSubsetError as exc:
+        # An explicit selector must never silently degrade to the primary
+        # matrix (issue #265): name the Store and subset and stop.
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    _emit(query, result, output_format, include_variant_info)
 
 
 @app.command("query-lookup")

@@ -31,8 +31,9 @@ Three decisions are load-bearing and worth stating where they are implemented:
    reads that Analysis's shards and no other's; the build pays for it by
    rewriting shards band by band.
 
-Query integration is issue #265 and Reference-Completed support is issue #266;
-neither is implemented here.
+Query integration (#265) lives in `opengwasdb.query.facade`, which reads this
+module's seam and applies the ordinary selected-Analysis result contract to it;
+Reference-Completed support is issue #266 and is not implemented here.
 """
 
 from __future__ import annotations
@@ -193,6 +194,16 @@ class IndexedSubsetStaleError(IndexedSubsetError):
     Raised by the read seam before any decoded value is handed back: a stale
     index would return plausible associations for the wrong release, which is
     the failure class this project exists to refuse (#264 review).
+    """
+
+
+class IndexedSubsetLayoutError(IndexedSubsetError):
+    """An Indexed Variant Subset was requested on a layout that has none.
+
+    Indexed Variant Subsets are Observed-Only Dense only (ADR 0053, #264): a
+    Ragged release is already a direct per-Analysis CSR and a Hybrid one has no
+    rule for unifying its two components.  A selector naming a subset on either
+    is a caller error, not a reason to answer from the ordinary path (#265).
     """
 
 
@@ -916,6 +927,21 @@ def _missing_required_attrs(attrs: dict[str, Any]) -> list[str]:
     return [key for key in _REQUIRED_ATTRS if key not in attrs]
 
 
+def _require_attr_int(name: str, attrs: dict[str, Any], key: str) -> int:
+    """One attribute's integer value, or a loud failure naming the subset.
+
+    A malformed `indexed_subset`/`n_analyses`/count attr must not escape as a
+    bare `ValueError`: the query path and the CLI promise a subset-naming
+    error, and a traceback naming neither Store nor subset breaks that promise.
+    """
+    value = attrs[key]
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} records a non-integer {key}: {value!r}"
+        )
+    return int(value)
+
+
 def _parse_subset_encoding(
     name: str, attrs: dict[str, Any], errors: list[str]
 ) -> StoreEncoding | None:
@@ -947,6 +973,75 @@ def _side_table_length(group: Any, name: str) -> int:
     return array_length(group[name]) if name in group else 0
 
 
+def _require_expected_arrays(name: str, group: Any, encoding: StoreEncoding) -> None:
+    """The group carries exactly the arrays its encoding defines."""
+    expected = _expected_arrays(encoding)
+    missing = sorted(key for key in expected if key not in group)
+    if missing:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} is missing arrays: {', '.join(missing)}"
+        )
+    unknown = sorted(
+        key for key in group.keys() if key not in expected and isinstance(group[key], zarr.Array)
+    )
+    if unknown:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} carries unexpected arrays: {', '.join(unknown)}"
+        )
+
+
+def _require_variant_axis(name: str, group: Any, attrs: dict[str, Any]) -> np.ndarray:
+    """The subset's Variant Indices are non-empty, sorted, unique and self-consistent."""
+    n_subset = _require_attr_int(name, attrs, ATTR_N_SUBSET_VARIANTS)
+    variant_index = np.asarray(group["variant_index"][:], dtype=np.int64)
+    if len(variant_index) != n_subset:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} variant_index holds {len(variant_index)} "
+            f"variants but declares {n_subset}"
+        )
+    if n_subset == 0:
+        raise IndexedSubsetError(f"Indexed Variant Subset {name!r} contains no variants")
+    if n_subset > 1 and np.any(variant_index[1:] <= variant_index[:-1]):
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} variant_index is not sorted ascending and unique"
+        )
+    return variant_index
+
+
+def _require_plane_shapes(
+    name: str, group: Any, attrs: dict[str, Any], n_subset: int
+) -> None:
+    """Each statistic plane spans ``(n_analyses, n_subset_variants)``."""
+    expected_shape = (_require_attr_int(name, attrs, ATTR_N_ANALYSES), n_subset)
+    for plane in ("z", "se", "eaf"):
+        if plane not in group:
+            continue
+        actual = tuple(int(size) for size in group[plane].shape)
+        if actual != expected_shape:
+            raise IndexedSubsetError(
+                f"Indexed Variant Subset {name!r} {plane} shape {actual} does not match "
+                f"{expected_shape}"
+            )
+
+
+def _require_decodable_subset(
+    name: str, group: Any, encoding: StoreEncoding, attrs: dict[str, Any]
+) -> np.ndarray:
+    """Reject a published group that cannot be decoded safely, and return its axis.
+
+    The read seam is what #265's query path trusts; a group whose arrays or
+    shapes disagree with its own attributes would decode to a plausible, wrong
+    association rather than raise (CONTRIBUTING.md, "a wrong answer that looks
+    like a right answer").  Validation checks all of this too, but a query must
+    not depend on someone having run `validate` first.  Each rule is its own
+    helper so the seam stays readable and no one rule hides another.
+    """
+    _require_expected_arrays(name, group, encoding)
+    variant_index = _require_variant_axis(name, group, attrs)
+    _require_plane_shapes(name, group, attrs, len(variant_index))
+    return variant_index
+
+
 def open_indexed_subset(store_path: str | Path, subset_name: str) -> IndexedSubset:
     """Open a published subset's metadata and decode seam, or fail loudly.
 
@@ -973,22 +1068,23 @@ def open_indexed_subset(store_path: str | Path, subset_name: str) -> IndexedSubs
         raise IndexedSubsetError(errors[0])
     manifest = open_store(store_path).manifest
     _refuse_stale_subset(name, attrs, encoding, manifest)
+    variant_index = _require_decodable_subset(name, group, encoding, attrs)
     return IndexedSubset(
         store_path=store_path,
         name=name,
         path=path,
-        variant_index=np.asarray(group["variant_index"][:], dtype=np.int64),
-        n_analyses=int(attrs[ATTR_N_ANALYSES]),
-        n_subset_variants=int(attrs[ATTR_N_SUBSET_VARIANTS]),
+        variant_index=variant_index,
+        n_analyses=_require_attr_int(name, attrs, ATTR_N_ANALYSES),
+        n_subset_variants=_require_attr_int(name, attrs, ATTR_N_SUBSET_VARIANTS),
         encoding=encoding,
         reference_assembly=str(attrs[ATTR_REFERENCE_ASSEMBLY]),
         source_store_id=str(attrs[ATTR_SOURCE_STORE_ID]),
         source_release_id=str(attrs[ATTR_SOURCE_RELEASE_ID]),
         source_format_version=str(attrs[ATTR_SOURCE_FORMAT_VERSION]),
         input_sha256=str(attrs[ATTR_INPUT_SHA256]),
-        requested_count=int(attrs[ATTR_REQUESTED_COUNT]),
-        resolved_count=int(attrs[ATTR_RESOLVED_COUNT]),
-        absent_count=int(attrs[ATTR_ABSENT_COUNT]),
+        requested_count=_require_attr_int(name, attrs, ATTR_REQUESTED_COUNT),
+        resolved_count=_require_attr_int(name, attrs, ATTR_RESOLVED_COUNT),
+        absent_count=_require_attr_int(name, attrs, ATTR_ABSENT_COUNT),
         builder_version=str(attrs[ATTR_BUILDER_VERSION]),
         created_at=str(attrs[ATTR_CREATED_AT]),
         has_eaf="eaf" in group,

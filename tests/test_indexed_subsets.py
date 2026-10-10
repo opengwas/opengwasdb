@@ -110,9 +110,13 @@ def _fixture_records() -> list[NormalisedAssociation]:
     return records
 
 
-@pytest.fixture(scope="module")
-def rich_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    store = tmp_path_factory.mktemp("indexed") / "rich.opengwasdb"
+def build_rich_store(store: Path) -> Path:
+    """Build the rich Observed-Only Dense release the writer and query suites share.
+
+    Extracted from the `rich_store` fixture so #265's query suite can build its
+    own indexed copy without copying the fixture body (and so the two cannot
+    drift into subtly different releases).
+    """
     build_dense_observed_store(
         _fixture_records(),
         store,
@@ -122,6 +126,11 @@ def rich_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
         chunk_shape=(100, N_ANALYSES),
     )
     return store
+
+
+@pytest.fixture(scope="module")
+def rich_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return build_rich_store(tmp_path_factory.mktemp("indexed") / "rich.opengwasdb")
 
 
 @pytest.fixture

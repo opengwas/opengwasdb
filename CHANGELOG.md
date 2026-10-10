@@ -53,6 +53,24 @@ the end of this file.
   (#266) and the production benchmark (#267) are deliberately out of scope.
   Spec §10b and §20 record the physical contract and validation rules.
 
+- **`query-analysis STORE ANALYSIS_ID --indexed-subset SUBSET_NAME` reads one
+  Analysis's full statistics from a named Indexed Variant Subset (ADR 0053,
+  issue #265), and the Python facade's `analysis()` takes the same optional
+  `indexed_subset=` keyword.** The result is the ordinary six parallel arrays
+  (`variant_index`, `analysis_index`, decoded `z`, decoded `se`, decoded `eaf`,
+  `association_status`) with the same meanings, dtypes, allele orientation,
+  finite Z/SE filtering and Store ordering as filtering the ordinary result to
+  the subset's Variant Indices; beta and p remain derived from the returned
+  `z`/`se`. Physical decoding is delegated to the #264 module, so the facade
+  duplicates none of its codec, exception, EAF or status reconstruction. An
+  explicit selector never falls back to the primary matrix: an unknown,
+  staging, incomplete, stale, corrupt (array, shape or axis-order) or
+  unsupported (Ragged/Hybrid) subset raises, and the CLI exits 1 naming the
+  Store and subset. An unknown Analysis ID keeps the ordinary empty-result
+  behaviour, and omitting the selector is byte-for-byte unchanged. Spec §10b
+  records the query contract; the sibling `opengwasdb-stores` query
+  walkthrough update is flagged for the final documentation ticket.
+
 ### Changed
 
 - **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**

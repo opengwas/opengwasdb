@@ -1135,6 +1135,29 @@ Subset must have it removed before conversion. That is safe -- the index is
 deletable derived data -- and the refusal is loud rather than a silent drop of
 an artifact the user built.
 
+### Query
+
+A selected-Analysis query may name a published subset
+(`query-analysis STORE ANALYSIS_ID --indexed-subset SUBSET_NAME`, ADR 0053,
+issue #265). It returns the same parallel arrays, with the same meanings,
+dtypes, allele orientation, finite Z/SE filtering and Store ordering as
+filtering the ordinary selected-Analysis result to the subset's Variant
+Indices; beta and p-values remain derived from the returned Z and SE exactly as
+they are without a subset. Every subset covers every Analysis, so there is no
+partial-Analysis answer.
+
+A reader MUST refuse an unknown, staging, incomplete, stale, invalid or
+unsupported subset by name rather than fall back to the authoritative planes:
+the selector is a request for the indexed path, and answering it from the
+primary matrix would silently return the slow path's result while appearing to
+be indexed. The read path re-checks the attributes, array set, axis order and
+plane shapes before decoding any value, independent of whether `validate` has
+been run, so a group that disagrees with itself cannot decode to a plausible,
+wrong association. A subset on a Ragged or Hybrid release is refused, because
+Indexed Variant Subsets are Observed-Only Dense only. When no subset is named,
+selected-Analysis behaviour is unchanged and no indexed-subset state is
+consulted at all.
+
 ## 11. Ragged layout
 
 Ragged layout stores Analysis-specific association sequences referencing the Store Variant Table.
