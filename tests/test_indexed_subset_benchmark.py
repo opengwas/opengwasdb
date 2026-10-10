@@ -271,6 +271,9 @@ def _complete_artifact() -> dict:
             "sample_strategy": "corners + Analyses + chunk boundaries + seeded cells",
             "sample_seed": 12345,
             "sample_cells": 580,
+            "band_cells_effective": 4_000_000,
+            "physical_write_unit": 65_536,
+            "max_materialized_cells": 4_000_000,
             "peak_rss_source": "/usr/bin/time -v",
             "requested": 3,
             "resolved": 2,
@@ -394,6 +397,20 @@ def test_assert_artifact_complete_rejects_a_missing_sample_strategy() -> None:
     del artifact["build"]["sample_strategy"]
 
     _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "sample_strategy")
+
+
+def test_assert_artifact_complete_rejects_a_materialized_block_above_the_bound() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["max_materialized_cells"] = artifact["build"]["band_cells_effective"] + 1
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "max_materialized")
+
+
+def test_assert_artifact_complete_rejects_an_inconsistent_effective_band() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["band_cells_effective"] = artifact["build"]["band_cells"] - 1
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "band_cells_effective")
 
 
 def test_assert_artifact_complete_rejects_bracketing_disagreement() -> None:

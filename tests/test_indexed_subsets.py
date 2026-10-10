@@ -43,7 +43,9 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     IndexedSubsetNameError,
     IndexedSubsetStaleError,
     VariantListError,
+    _analysis_tiles,
     _ensure_indexed_subset_namespace,
+    _output_write_bands,
     _physical_write_unit,
     _validation_sample,
     build_indexed_subset,
@@ -868,6 +870,76 @@ def test_output_v3_shards_are_encoded_once(
     _assert_each_file_written_once(_statistic_write_counts(recorder))
 
 
+# ── Declared band-memory invariant (#270 review) ────────────────────────────
+
+
+def _materialized_bound(band_cells: int, write_unit: int) -> int:
+    return max(int(band_cells), int(write_unit))
+
+
+def test_analysis_tile_bound_is_independent_of_subset_size() -> None:
+    """A v3-size write unit cannot force the source buffer above the budget.
+
+    The Analysis tile is capped by ``band_cells`` with a floor of one Analysis,
+    so the largest materialised source block is ``max(band_cells, write_unit)``
+    -- one physical output unit when the budget is smaller -- and it does not
+    grow with the number of Analyses or variants.
+    """
+    band_cells = 4_000_000
+    write_unit = 1_048_576  # a v3 Indexed Variant Subset shard
+    read_unit = 1_000       # a primary Dense inner chunk's Analysis axis
+    bound = _materialized_bound(band_cells, write_unit)
+    for n_analyses in (1, 61, 2_024, 100_000, 1_000_000):
+        tiles = _analysis_tiles(n_analyses, write_unit, band_cells, read_unit)
+        assert sum(a1 - a0 for a0, a1 in tiles) == n_analyses
+        assert max((a1 - a0) for a0, a1 in tiles) * write_unit <= bound
+    for n_subset in (1, write_unit, 10 * write_unit, 100 * write_unit):
+        assert all(
+            stop - start <= write_unit
+            for start, stop in _output_write_bands(n_subset, write_unit)
+        )
+
+
+def test_analysis_tile_floors_at_one_physical_unit_when_the_budget_is_smaller() -> None:
+    write_unit = 1_048_576
+    tiles = _analysis_tiles(1_000, write_unit, band_cells=1, read_unit=1_000)
+    assert tiles == [(start, start + 1) for start in range(1_000)]
+    assert max((a1 - a0) for a0, a1 in tiles) * write_unit == write_unit
+
+
+def test_build_records_a_materialized_band_within_the_declared_bound(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    result = build_indexed_subset(
+        store, "hm3", variant_list, reference_assembly="GRCh38", band_cells=1
+    )
+    assert result.band_cells_effective == _materialized_bound(1, result.physical_write_unit)
+    assert 0 < result.max_materialized_cells <= result.band_cells_effective
+
+
+def test_build_records_the_default_band_invariant(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    result = build_indexed_subset(store, "hm3", variant_list, reference_assembly="GRCh38")
+    assert result.band_cells_effective == _materialized_bound(
+        DEFAULT_BAND_CELLS, result.physical_write_unit
+    )
+    assert 0 < result.max_materialized_cells <= result.band_cells_effective
+
+
+def test_v2_chunk_key_parser_rejects_v3_shard_keys() -> None:
+    assert store_arrays.v2_chunk_array_key("z/0.0") == "z"
+    assert store_arrays.v2_chunk_array_key("indexed_subsets/hm3/z/1.2") == (
+        "indexed_subsets/hm3/z"
+    )
+    assert store_arrays.v2_chunk_array_key("z/c/0/0") is None
+    assert store_arrays.v2_chunk_array_key("z/c/0") is None
+    assert store_arrays.v2_chunk_array_key("z/.zarray") is None
+    assert store_arrays.v2_chunk_array_key("zarr.json") is None
+
+
 # ── Standalone validation ───────────────────────────────────────────────────
 
 
@@ -890,6 +962,28 @@ def _sampled_errors(store: Path) -> list[str]:
         exhaustive=False,
     )
     return errors
+
+
+def test_sample_covers_write_unit_and_inner_chunk_boundaries() -> None:
+    """A v3 sample anchors the shard boundary and a distinct inner chunk."""
+    write_unit = 1_048_576
+    inner_chunk = 65_536
+    sample = _validation_sample(
+        {"input_sha256": "ab" * 32},
+        n_analyses=8,
+        n_subset=4 * write_unit,
+        write_unit=write_unit,
+        inner_chunk=inner_chunk,
+    )
+    slots = {int(slot) for slot in sample.slots}
+    assert write_unit in slots, "the physical write-unit boundary must be sampled"
+    inner_only = {
+        slot for slot in slots if slot % write_unit != 0 and slot % inner_chunk == 0
+    }
+    assert inner_only, "the inner-chunk spread must reach a non-shard boundary"
+    assert sample.cells < 1_200
+    assert "physical write-unit boundaries" in sample.strategy
+    assert "inner-chunk boundaries" in sample.strategy
 
 
 # ── Sampled publication gate and the exhaustive audit (#270) ────────────────

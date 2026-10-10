@@ -41,7 +41,11 @@ import numpy as np
 
 from benchmarks._artifact import provenance, scratch_copy, write_artifact
 from benchmarks.measure_build_cost import parse_time_v
-from opengwasdb.layouts.dense.indexed_subsets import open_indexed_subset, remove_indexed_subset
+from opengwasdb.layouts.dense.indexed_subsets import (
+    DEFAULT_BAND_CELLS,
+    open_indexed_subset,
+    remove_indexed_subset,
+)
 from opengwasdb.query import query_store
 from opengwasdb.variants.axis import VariantAxis
 
@@ -57,7 +61,9 @@ HM3_GZIP_MD5 = "153ecc2bcfa740afafe656e6a384d769"
 HM3_HEADER = ("SNP", "A1", "A2")
 
 #: The writer's default band; the RSS bound is band-derived, not matrix-derived.
-BAND_CELLS = 4_000_000
+#: The writer's own default band budget; the RSS bound is derived from the
+#: build's declared invariant, not from this value alone.
+BAND_CELLS = DEFAULT_BAND_CELLS
 #: Generous per-band-cell allowance for the index planes plus decode scratch.
 BYTES_PER_BAND_CELL = 32
 FIXED_OVERHEAD_MB = 1024.0
@@ -80,7 +86,9 @@ OUTPUT = Path("docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.jso
 #: an older harness is detectable rather than silently trusted.
 #: v3 adds the write/validate phase split and the measured output-chunk rewrite
 #: counts (#270).  v4 adds the sampled publication-gate mode and its sample.
-ARTIFACT_SCHEMA_VERSION = 4
+#: v5 adds the declared band-memory invariant and the measured maximum source
+#: block.
+ARTIFACT_SCHEMA_VERSION = 5
 
 #: The six parallel arrays every selected-Analysis result carries (spec 10b).
 #: The six parallel arrays every selected-Analysis result carries (spec 10b).
@@ -155,6 +163,9 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "build.sample_strategy",
     "build.sample_seed",
     "build.sample_cells",
+    "build.band_cells_effective",
+    "build.physical_write_unit",
+    "build.max_materialized_cells",
     "build.peak_rss_source",
     "build.requested",
     "build.resolved",
@@ -227,6 +238,9 @@ _BUILD_RUNNER = (
     "'write_seconds': result.write_seconds, 'validate_seconds': result.validate_seconds, "
     "'validation_mode': result.validation_mode, 'sample_strategy': result.sample_strategy, "
     "'sample_seed': result.sample_seed, 'sample_cells': result.sample_cells, "
+    "'band_cells_effective': result.band_cells_effective, "
+    "'physical_write_unit': result.physical_write_unit, "
+    "'max_materialized_cells': result.max_materialized_cells, "
     "'requested': result.requested_count, 'resolved': result.resolved_count, "
     "'absent': result.absent_count, 'n_subset_variants': result.n_subset_variants, "
     "'input_sha256': result.input_sha256, 'output_chunk_writes': planes}))\n"
@@ -615,6 +629,9 @@ def run_build(store: Path, name: str, variant_list: Path, assembly: str, band_ce
         "sample_strategy": str(phases["sample_strategy"]),
         "sample_seed": int(phases["sample_seed"]),
         "sample_cells": int(phases["sample_cells"]),
+        "band_cells_effective": int(phases["band_cells_effective"]),
+        "physical_write_unit": int(phases["physical_write_unit"]),
+        "max_materialized_cells": int(phases["max_materialized_cells"]),
         "requested": int(phases["requested"]),
         "resolved": int(phases["resolved"]),
         "absent": int(phases["absent"]),
@@ -676,7 +693,15 @@ def load_prior_build(path: Path) -> dict:
     ]
     if not isinstance(build.get("output_chunk_writes"), dict):
         missing.append("output_chunk_writes")
-    for key in ("validation_mode", "sample_strategy", "sample_seed", "sample_cells"):
+    for key in (
+        "validation_mode",
+        "sample_strategy",
+        "sample_seed",
+        "sample_cells",
+        "band_cells_effective",
+        "physical_write_unit",
+        "max_materialized_cells",
+    ):
         if key not in build:
             missing.append(key)
     if missing:
@@ -707,6 +732,9 @@ def load_prior_build(path: Path) -> dict:
         "sample_strategy": str(build["sample_strategy"]),
         "sample_seed": int(build["sample_seed"]),
         "sample_cells": int(build["sample_cells"]),
+        "band_cells_effective": int(build["band_cells_effective"]),
+        "physical_write_unit": int(build["physical_write_unit"]),
+        "max_materialized_cells": int(build["max_materialized_cells"]),
         "requested": int(build["requested"]),
         "resolved": int(build["resolved"]),
         "absent": int(build["absent"]),
@@ -780,6 +808,7 @@ def _semantic_problems(artifact: dict[str, Any]) -> list[str]:
         )
     problems.extend(_chunk_write_problems(build.get("output_chunk_writes")))
     problems.extend(_validation_mode_problems(build))
+    problems.extend(_memory_bound_problems(build))
     requested = build["requested"]
     if requested <= 0 or requested != build["resolved"] + build["absent"]:
         problems.append(
@@ -850,6 +879,36 @@ def _validation_mode_problems(build: dict[str, Any]) -> list[str]:
         problems.append(f"build.sample_seed must be a non-negative integer, got {seed!r}")
     if not isinstance(build.get("sample_strategy"), str) or not build["sample_strategy"]:
         problems.append("build.sample_strategy must be a non-empty string")
+    return problems
+
+
+def _memory_bound_problems(build: dict[str, Any]) -> list[str]:
+    """Reasons the recorded band-memory invariant and measurement disagree.
+
+    The declared invariant is ``max_materialized <= max(band_cells,
+    physical_write_unit)`` -- one physical output unit when the budget is
+    smaller than it -- and the artifact must show both the declared bound and
+    the measurement, not just the configured budget (#270 review).
+    """
+    problems: list[str] = []
+    for field in ("band_cells", "physical_write_unit", "max_materialized_cells"):
+        value = build.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            problems.append(f"build.{field} must be a positive integer, got {value!r}")
+    if problems:
+        return problems
+    effective = build.get("band_cells_effective")
+    expected = max(int(build["band_cells"]), int(build["physical_write_unit"]))
+    if effective != expected:
+        problems.append(
+            f"build.band_cells_effective is {effective!r}, expected max(band_cells, "
+            f"physical_write_unit) = {expected}"
+        )
+    if int(build["max_materialized_cells"]) > expected:
+        problems.append(
+            f"build.max_materialized_cells is {build['max_materialized_cells']}, above "
+            f"the declared bound of {expected}"
+        )
     return problems
 
 
@@ -1027,7 +1086,10 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     )
     after_original = _metadata_fingerprint(args.store)
     index_physical = physical_bytes(index_group)
-    rss_bound_mb = FIXED_OVERHEAD_MB + BAND_CELLS * BYTES_PER_BAND_CELL / (1024 * 1024)
+    rss_bound_mb = (
+        FIXED_OVERHEAD_MB
+        + build["band_cells_effective"] * BYTES_PER_BAND_CELL / (1024 * 1024)
+    )
     peak_rss_mb = float(build["peak_rss_mb"])
     rss_within_bound = peak_rss_mb <= rss_bound_mb
 
@@ -1118,6 +1180,9 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "sample_strategy": build["sample_strategy"],
             "sample_seed": build["sample_seed"],
             "sample_cells": build["sample_cells"],
+            "band_cells_effective": build["band_cells_effective"],
+            "physical_write_unit": build["physical_write_unit"],
+            "max_materialized_cells": build["max_materialized_cells"],
             "peak_rss_source": "/usr/bin/time -v (build subprocess)",
             "requested": writer_requested,
             "resolved": writer_resolved,

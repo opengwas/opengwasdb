@@ -142,9 +142,16 @@ performance result.
   so partially read, recomputed and recompressed each 65,536-variant output
   chunk about 33 times per plane. The writer now walks whole physical output
   files (a v2 chunk, or a v3 shard so a shard is never a read-modify-write),
-  plane at a time, and tiles the Analysis axis within the band; the tile is a
-  whole multiple of the primary plane's read unit, so a source file is decoded
-  once. On the fresh #270 OGS-00009 HapMap3 build every one of the 38,456 `z`,
+  plane at a time, and tiles the Analysis axis within the band. The tile is
+  capped by the band budget with a floor of one Analysis, so the largest
+  materialised source block is `max(band_cells, write unit)` -- one physical
+  output unit when the budget is smaller -- independent of the subset's length;
+  a tile that fits the budget is a whole multiple of the primary's read unit,
+  and a budget below that unit decodes the primary once per tile rather than
+  materialising `write unit x read unit` cells. `DEFAULT_BAND_CELLS` is sized to
+  cover one output write unit times a representative primary read unit
+  (65,536 x 1,000 = 65.5M cells) so a v2 build does not re-read the primary. On
+  the fresh #270 OGS-00009 HapMap3 build every one of the 38,456 `z`,
   `se` and `eaf` physical files was encoded exactly once (measured at the store
   layer). The build took **215.89 s** -- write **203.546 s** and the publication
   gate **2.792 s** -- against the #267 build's 4,198 s, with byte-exact
@@ -155,8 +162,9 @@ performance result.
   Index, counts and provenance), together with the small side-table remapping
   and the per-variant EAF baseline/reference, and replaces the full-matrix
   decoded comparison with a **bounded deterministic stratified sample**: the
-  four corners, the slot before and after a spread of inner-chunk boundaries, 16 evenly
-  spaced Analyses, and input-checksum-seeded cells -- **528 cells** on the
+  four corners, the slot before/at/last-of a spread of physical write-unit
+  boundaries and, separately, a small inner-chunk spread, 16 evenly spaced
+  Analyses, and input-checksum-seeded cells -- **528 cells** on the
   #270 run (seed 166638625948460791), independent of the matrix. Standalone
   `validate_store`/`validate_indexed_subsets` remain **exhaustive** and decode
   every indexed cell, side table, imputed mask and reference EAF, so an
@@ -165,11 +173,9 @@ performance result.
   sampled duration. The risk is documented rather than hidden, and the low
   build cost is part of this ADR's outcome.
 - The #270 query latency was measured at **699.428 ms** warm median in that
-  benchmark run. An interleaved same-machine A/B of the #267 and #270 indexes
-  (alternating reads in one process, 15 rounds each) measured **504.2 ms** and
-  **505.4 ms** -- within 1.2 ms of each other; their chunk/shard geometry is
-  identical and their per-plane physical bytes differ by less than 0.01%, so
-  the run's figure tracks machine load rather than any layout regression.
+  benchmark run. The index chunk/shard geometry and per-plane physical bytes are
+  identical to #267's and the query path is unchanged, so the difference from
+  the #267 figure is not attributable to this change.
 - The store format gains a compatible optional index namespace and validation
   rules. The specification, overview rendering, CLI documentation and sibling
   repository walkthrough must describe it in the implementation change.

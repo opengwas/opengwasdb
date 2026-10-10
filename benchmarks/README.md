@@ -457,7 +457,7 @@ guess when a rsid matches several allele-compatible Store rows.
 
 | File | Description |
 |---|---|
-| `opengwasdb_267_indexed_subset_benchmark.json` | The full measurement artifact (all fields #267 names, schema `2`) |
+| `opengwasdb_267_indexed_subset_benchmark.json` | The full measurement artifact (all fields #267 names, schema `5`) |
 | `opengwasdb_267_indexed_subset_benchmark.qmd` / `.html` | Rendered report, reads the artifact at render time |
 
 **Usage** (run from the repo root, on the machine holding the store):

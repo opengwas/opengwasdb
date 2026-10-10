@@ -111,12 +111,16 @@ log = logging.getLogger(__name__)
 #: The group under `data.zarr` that holds every Indexed Variant Subset.
 INDEXED_SUBSETS_GROUP = "indexed_subsets"
 
-#: Target Analysis-tile cell count per build/validate band.  The variant band is
-#: fixed by the index's physical write unit (a v2 chunk or a v3 shard), and this
-#: budget chooses the Analysis tile within it, whole multiples of the primary's
-#: read unit; peak memory is one band of one plane, independent of the subset's
-#: total size.  The CLI exposes it as `--band-cells`.
-DEFAULT_BAND_CELLS = 4_000_000
+#: Target band cell count for the build/validate gate.  The variant band is the
+#: index's physical write unit (a v2 chunk or a v3 shard) and this budget sizes
+#: the Analysis tile within it.  The writer never materialises more than
+#: ``max(band_cells, write_unit)`` source cells, so this is the declared memory
+#: invariant; the default covers one output write unit times a representative
+#: primary Analysis read unit (65,536 x 1,000 = 65.5M cells on OGS-00009) so a
+#: v2 build does not decode the primary once per tile.  A budget below the read
+#: unit is honoured: the build re-reads the source instead of materialising
+#: ``write_unit * read_unit``.  The CLI exposes it as `--band-cells`.
+DEFAULT_BAND_CELLS = 67_108_864
 
 #: The build's publication gate validates the structural invariants exhaustively
 #: and a bounded deterministic sample of decoded cells.  Standalone `validate`
@@ -129,7 +133,11 @@ VALIDATION_MODE_EXHAUSTIVE = "exhaustive"
 #: corruption, not a substitute for the exhaustive standalone audit (#270).
 SAMPLE_ANALYSES = 16
 SAMPLE_RANDOM_PER_ANALYSIS = 8
-SAMPLE_CHUNK_ANCHORS = 8
+#: Physical output write-unit boundaries (a v2 chunk or a v3 shard) and a
+#: separate, smaller inner-chunk spread, so a v3 index whose whole subset is one
+#: shard still samples its inner geometry.
+SAMPLE_SHARD_ANCHORS = 8
+SAMPLE_INNER_ANCHORS = 4
 SAMPLE_GLOBAL_RANDOM = 32
 
 #: The one attribute schema this module writes and reads.  A future layout
@@ -374,6 +382,24 @@ class IndexedSubsetBuild:
     sample_strategy: str = ""
     sample_seed: int = 0
     sample_cells: int = 0
+    band_cells_effective: int = 0
+    physical_write_unit: int = 0
+    max_materialized_cells: int = 0
+
+
+@dataclass(frozen=True)
+class _WriteStats:
+    """What one chunk-aligned write materialised, for the declared invariant.
+
+    ``band_cells_effective`` is ``max(band_cells, write_unit)`` -- the bound the
+    writer enforces -- and ``max_materialized_cells`` is the largest source
+    block it actually held, so a build records both the invariant and the
+    measurement (#270 review).
+    """
+
+    physical_write_unit: int
+    band_cells_effective: int
+    max_materialized_cells: int
 
 
 @dataclass(frozen=True)
@@ -575,18 +601,23 @@ def _output_write_bands(n_subset: int, write_unit: int) -> list[tuple[int, int]]
 def _analysis_tiles(
     n_analyses: int, write_unit: int, band_cells: int, read_unit: int
 ) -> list[tuple[int, int]]:
-    """Analysis tiles that bound a write band's memory and align to the source.
+    """Analysis tiles that bound a write band's memory.
 
     A band of ``write_unit`` variants times a tile of Analyses must stay within
-    ``band_cells`` where the budget allows, but a tile smaller than the
-    primary's Analysis-axis read unit would decode each source file once per
-    tile.  The tile is therefore the largest whole multiple of ``read_unit``
-    that fits the budget, and at least one ``read_unit`` -- so the true bound is
-    ``write_unit * tile``, independent of the subset's length.
+    ``band_cells``.  The tile is the largest whole multiple of the primary's
+    Analysis-axis read unit that fits, but it never grows past the budget to
+    reach that unit: when the budget is below one read unit the writer decodes
+    the primary once per tile rather than materialising ``write_unit *
+    read_unit`` cells.  The true bound is therefore ``max(band_cells,
+    write_unit)`` -- one physical output unit when the budget is smaller than
+    it -- independent of the subset's length.
     """
-    budget = max(1, int(band_cells) // max(1, int(write_unit)))
-    unit = max(1, min(int(read_unit), max(1, n_analyses)))
-    tile = (budget // unit) * unit if budget >= unit else unit
+    if n_analyses <= 0:
+        return []
+    write_unit = max(1, int(write_unit))
+    budget = max(1, int(band_cells) // write_unit)
+    unit = max(1, min(int(read_unit), n_analyses))
+    tile = (budget // unit) * unit if budget >= unit else budget
     tile = max(1, min(tile, n_analyses))
     return [(start, min(start + tile, n_analyses)) for start in range(0, n_analyses, tile)]
 
@@ -684,19 +715,31 @@ def _create_subset_arrays(
 
 def _copy_one_plane(
     target: Any, source: Any, subset: np.ndarray, n_analyses: int, band_cells: int
-) -> None:
+) -> int:
     """Copy one primary plane's codes into the index, one output file at a time.
 
     The variant band is a whole index store file and the Analysis tiles are
-    multiples of the primary's read unit, so each primary file is decoded once
-    and each index file is encoded once.
+    bounded by ``band_cells``; each index file is encoded once while the largest
+    source block held is ``max(band_cells, write_unit)`` cells.  Returns that
+    measured maximum for the build to record and check.
     """
     write_unit = _physical_write_unit(target)
     read_unit = _source_read_unit(source)
+    bound = max(int(band_cells), write_unit)
+    max_materialized = 0
     for start, stop in _output_write_bands(len(subset), write_unit):
         rows = subset[start:stop]
         for a0, a1 in _analysis_tiles(n_analyses, write_unit, band_cells, read_unit):
+            cells = int(len(rows)) * (a1 - a0)
+            if cells > bound:
+                raise IndexedSubsetError(
+                    f"Indexed Variant Subset writer materialised {cells} source cells in "
+                    f"one band, above the declared bound of {bound} (band_cells="
+                    f"{band_cells}, physical write unit={write_unit})"
+                )
+            max_materialized = max(max_materialized, cells)
             target[a0:a1, start:stop] = np.asarray(source.oindex[rows, a0:a1]).T
+    return max_materialized
 
 
 def _copy_plane_bands(
@@ -708,19 +751,25 @@ def _copy_plane_bands(
     subset: np.ndarray,
     n_analyses: int,
     band_cells: int,
-) -> None:
+) -> int:
     """Copy the primary planes' codes into the Analysis-major index.
 
     Plane at a time and output-write-unit at a time: every compressed index
     chunk (v2) or shard (v3) is encoded exactly once, while peak memory is one
-    band of one plane rather than the whole subset matrix (#270).
+    band of one plane rather than the whole subset matrix (#270).  Returns the
+    largest source block any plane materialised.
     """
-    _copy_one_plane(z_target, root["z"], subset, n_analyses, band_cells)
-    _copy_one_plane(se_target, root["se"], subset, n_analyses, band_cells)
+    maxima = [
+        _copy_one_plane(z_target, root["z"], subset, n_analyses, band_cells),
+        _copy_one_plane(se_target, root["se"], subset, n_analyses, band_cells),
+    ]
     if eaf_target is not None:
-        _copy_one_plane(eaf_target, root["eaf"], subset, n_analyses, band_cells)
+        maxima.append(_copy_one_plane(eaf_target, root["eaf"], subset, n_analyses, band_cells))
     if imputed_target is not None:
-        _copy_one_plane(imputed_target, root[_IMPUTED_MASK], subset, n_analyses, band_cells)
+        maxima.append(
+            _copy_one_plane(imputed_target, root[_IMPUTED_MASK], subset, n_analyses, band_cells)
+        )
+    return max(maxima, default=0)
 
 
 def _remap_and_write(
@@ -822,7 +871,7 @@ def write_indexed_subset_group(
     band_cells: int,
     *,
     completed: bool,
-) -> None:
+) -> _WriteStats:
     """Write one complete Indexed Variant Subset group from the primary planes.
 
     Every array a published subset holds is created here; validation compares
@@ -830,6 +879,9 @@ def write_indexed_subset_group(
     group by hand.  The planes are copied one output store file at a time,
     plane by plane, so each compressed chunk or shard is encoded once and peak
     memory is one band of one plane rather than the subset matrix (#270).
+
+    Returns the invariant and the measured maximum source block for the build
+    result: ``max_materialized <= max(band_cells, write_unit)``.
 
     ``completed`` is the release's Completion State, passed in rather than
     re-derived from the presence of a primary array: a Reference-Completed
@@ -849,7 +901,7 @@ def write_indexed_subset_group(
     z_target, se_target, eaf_target, imputed_target = _create_subset_arrays(
         group, encoding, codec, n_analyses, n_subset, completed=completed
     )
-    _copy_plane_bands(
+    max_materialized = _copy_plane_bands(
         z_target,
         se_target,
         eaf_target,
@@ -863,6 +915,12 @@ def write_indexed_subset_group(
     _write_eaf_side_tables(group, root, encoding, subset, n_analyses)
     _write_se_side_tables(group, root, encoding, subset, n_analyses)
     group.attrs.update(attrs)
+    write_unit = _physical_write_unit(z_target)
+    return _WriteStats(
+        physical_write_unit=write_unit,
+        band_cells_effective=max(int(band_cells), write_unit),
+        max_materialized_cells=max_materialized,
+    )
 
 
 def _check_layout(manifest: StoreManifest, root: Any) -> None:
@@ -1012,13 +1070,14 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
     _ensure_indexed_subset_namespace(plan.store_path, plan.fmt)
     write_seconds = 0.0
     validate_seconds = 0.0
+    write_stats = _WriteStats(0, max(int(band_cells), 1), 0)
     try:
         with staged_named_group(dest, overwrite=overwrite) as work:
             staged = store_arrays.open_group_for_write(
                 work, "w", zarr_format=plan.fmt
             )
             started = time.perf_counter()
-            write_indexed_subset_group(
+            write_stats = write_indexed_subset_group(
                 staged,
                 plan.root,
                 plan.manifest.encoding,
@@ -1049,6 +1108,9 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
         sample_strategy="" if sample is None else sample.strategy,
         sample_seed=0 if sample is None else sample.seed,
         sample_cells=0 if sample is None else sample.cells,
+        band_cells_effective=write_stats.band_cells_effective,
+        physical_write_unit=write_stats.physical_write_unit,
+        max_materialized_cells=write_stats.max_materialized_cells,
     )
 
 
@@ -2517,17 +2579,15 @@ def _validation_sample(
 ) -> _SamplePlan:
     """A deterministic, bounded, stratified sample of index cells to decode.
 
-    The sample covers the four corners, a bounded spread of physical output
-    boundaries (the slot before each anchored inner-chunk boundary and the first
-    slot after it), a spread
-    of Analyses including the first and last, and input-checksum-seeded cells.
-    The boundary step is the *inner* chunk, so a v3 index whose whole subset is
-    one shard still samples its inner-chunk boundaries; a larger subset samples
-    the shard boundaries too (every shard is a whole number of inner chunks).
-    It is deliberately bounded and independent of the matrix, so it catches the
-    systemic, ordering and output-geometry corruption a sample can catch and
-    may miss an isolated cell; the exhaustive standalone `validate` audit is
-    what rules that out (#270).
+    The sample covers the four corners; the slot before, at and last-of each
+    anchored **physical write-unit** boundary (a v2 chunk or a v3 shard) and,
+    separately, a smaller spread of **inner-chunk** boundaries; a spread of
+    Analyses including the first and last; and input-checksum-seeded cells.  The
+    two boundary sets are kept separate so a v3 index whose whole subset is one
+    shard still samples its inner geometry.  It is deliberately bounded and
+    independent of the matrix, so it catches the systemic, ordering and
+    output-geometry corruption a sample can catch and may miss an isolated cell;
+    the exhaustive standalone `validate` audit is what rules that out (#270).
     """
     seed = int.from_bytes(
         hashlib.sha256(str(attrs[ATTR_INPUT_SHA256]).encode("utf-8")).digest()[:8],
@@ -2535,15 +2595,28 @@ def _validation_sample(
     )
     rng = np.random.default_rng(seed)
     analysis_axis = _sample_analysis_axis(n_analyses)
-    boundary, chunk_starts = _sample_chunk_anchors(n_subset, write_unit, inner_chunk)
+    shard_starts = _sample_anchor_starts(n_subset, write_unit, SAMPLE_SHARD_ANCHORS)
+    # The inner spread stays inside one physical write unit, so at least some of
+    # its boundaries are distinct from the write-unit boundaries (a v3 shard is
+    # many inner chunks).
+    inner_span = min(int(n_subset), max(1, int(write_unit)))
+    inner_starts = _sample_anchor_starts(inner_span, inner_chunk, SAMPLE_INNER_ANCHORS)
     cells = _sample_cell_list(
-        n_analyses, n_subset, analysis_axis, boundary, chunk_starts, rng
+        n_analyses,
+        n_subset,
+        analysis_axis,
+        shard_starts,
+        int(write_unit),
+        inner_starts,
+        int(inner_chunk),
+        rng,
     )
     sample_analyses, sample_slots = _dedupe_cells(cells)
     strategy = (
         "corners + "
         f"{len(analysis_axis)} evenly spaced Analyses + "
-        f"{len(chunk_starts)} inner-chunk boundaries + "
+        f"{len(shard_starts)} physical write-unit boundaries + "
+        f"{len(inner_starts)} inner-chunk boundaries + "
         f"{SAMPLE_RANDOM_PER_ANALYSIS} checksum-seeded cells per Analysis + "
         f"{SAMPLE_GLOBAL_RANDOM} checksum-seeded cells across Analyses"
     )
@@ -2564,28 +2637,33 @@ def _sample_analysis_axis(n_analyses: int) -> np.ndarray:
     )
 
 
-def _sample_chunk_anchors(
-    n_subset: int, write_unit: int, inner_chunk: int
-) -> tuple[int, np.ndarray]:
-    """The boundary step (the finer of the two units) and the anchor starts."""
-    boundary = max(1, min(int(write_unit), int(inner_chunk)))
-    chunk_starts = np.arange(0, max(n_subset, 1), boundary, dtype=np.int64)
-    if len(chunk_starts) > SAMPLE_CHUNK_ANCHORS:
-        picks = np.unique(
-            np.linspace(
-                0, len(chunk_starts) - 1, num=SAMPLE_CHUNK_ANCHORS, dtype=np.int64
-            )
-        )
-        chunk_starts = chunk_starts[picks]
-    return boundary, chunk_starts
+def _sample_anchor_starts(n_subset: int, unit: int, cap: int) -> np.ndarray:
+    """Up to `cap` evenly spread multiples of `unit` below `n_subset`."""
+    unit = max(1, int(unit))
+    starts = np.arange(0, max(n_subset, 1), unit, dtype=np.int64)
+    if len(starts) > cap:
+        picks = np.unique(np.linspace(0, len(starts) - 1, num=cap, dtype=np.int64))
+        starts = starts[picks]
+    return starts
+
+
+def _add_boundary_cells(
+    add: Any, analysis: int, n_subset: int, start: int, unit: int
+) -> None:
+    """The slot before a boundary, the first slot on it and the unit's last slot."""
+    add(analysis, int(start) - 1)
+    add(analysis, int(start))
+    add(analysis, min(int(start) + int(unit), n_subset) - 1)
 
 
 def _sample_cell_list(
     n_analyses: int,
     n_subset: int,
     analysis_axis: np.ndarray,
-    boundary: int,
-    chunk_starts: np.ndarray,
+    shard_starts: np.ndarray,
+    shard_unit: int,
+    inner_starts: np.ndarray,
+    inner_unit: int,
     rng: np.random.Generator,
 ) -> list[tuple[int, int]]:
     """The bounded, stratified cell list before deduplication."""
@@ -2600,20 +2678,43 @@ def _sample_cell_list(
         for slot in (0, n_subset - 1):
             add(analysis, slot)
     for analysis in analysis_axis:
-        for slot in (0, n_subset - 1):
-            add(int(analysis), int(slot))
-        for chunk_start in chunk_starts:
-            add(int(analysis), int(chunk_start) - 1)
-            add(int(analysis), int(chunk_start))
-            add(int(analysis), min(int(chunk_start) + boundary, n_subset) - 1)
-        for slot in rng.integers(0, n_subset, size=SAMPLE_RANDOM_PER_ANALYSIS):
-            add(int(analysis), int(slot))
+        _add_analysis_cells(
+            add,
+            int(analysis),
+            n_subset,
+            shard_starts,
+            shard_unit,
+            inner_starts,
+            inner_unit,
+            rng,
+        )
     # Seeded cells over arbitrary Analyses, independent of the axis spread.
     random_analyses = rng.integers(0, n_analyses, size=SAMPLE_GLOBAL_RANDOM)
     random_slots = rng.integers(0, n_subset, size=SAMPLE_GLOBAL_RANDOM)
     for analysis, slot in zip(random_analyses, random_slots, strict=True):
         add(int(analysis), int(slot))
     return cells
+
+
+def _add_analysis_cells(
+    add: Any,
+    analysis: int,
+    n_subset: int,
+    shard_starts: np.ndarray,
+    shard_unit: int,
+    inner_starts: np.ndarray,
+    inner_unit: int,
+    rng: np.random.Generator,
+) -> None:
+    """The endpoints, boundary cells and seeded slots of one Analysis."""
+    for slot in (0, n_subset - 1):
+        add(analysis, slot)
+    for start in shard_starts:
+        _add_boundary_cells(add, analysis, n_subset, int(start), shard_unit)
+    for start in inner_starts:
+        _add_boundary_cells(add, analysis, n_subset, int(start), inner_unit)
+    for slot in rng.integers(0, n_subset, size=SAMPLE_RANDOM_PER_ANALYSIS):
+        add(analysis, int(slot))
 
 
 def _dedupe_cells(cells: list[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:

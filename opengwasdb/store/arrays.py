@@ -1114,7 +1114,14 @@ _V2_CHUNK_KEY = re.compile(r"^(?P<array>.+)/(?P<coordinates>\d+(?:\.\d+)*)$")
 
 
 def v2_chunk_array_key(key: str) -> str | None:
-    """The array path a Zarr v2 chunk key names, or `None` for anything else."""
+    """The array path a Zarr v2 chunk key names, or `None` for anything else.
+
+    A Zarr v3 sharded array stores one file per shard at ``<array>/c/<coords>``;
+    those keys are also numeric-suffixed, so ``/c/`` is refused explicitly
+    rather than parsed as a v2 chunk of a nested array (#270 review).
+    """
+    if "/c/" in key:
+        return None
     match = _V2_CHUNK_KEY.match(key)
     return match.group("array") if match else None
 

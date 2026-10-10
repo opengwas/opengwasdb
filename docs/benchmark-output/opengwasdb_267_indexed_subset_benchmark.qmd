@@ -272,6 +272,9 @@ print(md_table(
     [
         ["run mode", build["run_mode"]],
         ["configured band", f"{build['band_cells']:,} cells"],
+        ["physical write unit", f"{build['physical_write_unit']:,} variants"],
+        ["declared band invariant", f"max(band, write unit) = {build['band_cells_effective']:,} cells"],
+        ["largest materialised source block", f"{build['max_materialized_cells']:,} cells"],
         ["prepare (open release, resolve list)", f"{build['phases']['prepare_seconds']:,.2f} s"],
         ["write (planes, chunk-aligned)", f"{build['phases']['write_seconds']:,.2f} s"],
         ["staged validation (publication gate)", f"{build['phases']['validate_seconds']:,.2f} s"],
@@ -308,9 +311,12 @@ output file at a time** — a v2 inner chunk or a v3 shard — so each compresse
 file is encoded exactly once (the table above is the measured count, not a
 claim). Before #270 the band was sized only by cell budget (about 1,976 variants
 on OGS-00009), so each 65,536-variant output chunk was partially rewritten about
-33 times. The Analysis axis is tiled within the band so peak memory is one band
-of one plane, independent of the subset's total size, while the tile is a whole
-multiple of the primary plane's own read unit so a source file is decoded once.
+33 times. The Analysis axis is tiled within the band so the largest materialised
+source block is `max(band_cells, write unit)` — one physical output unit when the
+budget is smaller — independent of the subset's total size. A tile is a whole
+multiple of the primary plane's own read unit when the budget allows, and the
+writer accepts decoding the primary once per tile when it does not, rather than
+materialising `write unit × read unit` cells.
 
 The bound is `band_cells` times a per-cell allowance plus a fixed term, so it is
 a function of the configured band and not of the full Store axis (whose decoded

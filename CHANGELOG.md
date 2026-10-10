@@ -394,8 +394,14 @@ the end of this file.
   was partially read, recomputed and recompressed about 33 times per plane. The
   writer now walks whole physical output files (a v2 chunk, or a v3 shard so a
   shard is never a read-modify-write), plane at a time, and tiles the Analysis
-  axis within the band; the tile is a whole multiple of the primary plane's own
-  read unit, so each source file is decoded once. `--band-cells` now targets the
+  axis within the band. The tile is capped by the band budget with a floor of
+  one Analysis, so the largest materialised source block is
+  `max(band_cells, write unit)` -- one physical output unit when the budget is
+  smaller -- independent of the subset's length; a tile that fits the budget is
+  a whole multiple of the primary's read unit, and a budget below it decodes the
+  primary once per tile rather than materialising the unit. `DEFAULT_BAND_CELLS`
+  is sized to cover one output write unit times a representative primary read
+  unit so a v2 build does not re-read the primary. `--band-cells` targets the
   Analysis tile and the write band is the index's own geometry. The staged
   publication gate now checks every structural invariant exhaustively (identity
   and attributes, exact array set, shapes/dtypes/chunking, the full Variant
@@ -403,8 +409,8 @@ the end of this file.
   per-variant EAF baseline/reference, and replaces the full-matrix decoded
   comparison with a **bounded deterministic stratified sample** of decoded
   Z/SE/EAF and Association Status: the endpoints of both axes, a spread of
-  inner-chunk boundaries, a spread of Analyses and input-checksum-seeded cells
-  (528 cells on the OGS-00009 run). The build result and artifact record `validation_mode`,
+  physical write-unit boundaries and a separate inner-chunk spread, a spread of
+  Analyses and input-checksum-seeded cells (528 cells on the OGS-00009 run). The build result and artifact record `validation_mode`,
   the sample strategy, seed and cell count, and the sampled duration. Standalone
   `validate` remains **exhaustive** and decodes every indexed cell, side table,
   imputed mask and reference EAF, so an isolated corruption the build sample can
@@ -413,9 +419,8 @@ the end of this file.
   physical files encoded exactly once; the build took 215.89 s (write 203.546 s,
   sampled validation 2.792 s) against the #267 4,198 s, with exact six-field
   equivalence, 6,235,000,832 physical index bytes (17.852%) and a 1,234.7 MB
-  peak RSS (still resolution-bound, not the subset matrix). An interleaved
-  same-machine A/B of the #267 and #270 indexes measured 504.2 ms and 505.4 ms
-  warm median -- within noise -- so the layout and query path are unchanged.
+  peak RSS (still resolution-bound, not the subset matrix). The index
+  chunk/shard geometry and per-plane physical bytes are unchanged from #267.
   Tests build a v2 and a v3 index under a `count_shard_writes` recorder and fail
   if any physical output file is encoded more than once; a chunk-boundary
   corruption must fail the build sample; and an isolated unsampled corruption
