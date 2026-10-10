@@ -31,8 +31,9 @@ Three decisions are load-bearing and worth stating where they are implemented:
    reads that Analysis's shards and no other's; the build pays for it by
    rewriting shards band by band.
 
-Query integration is issue #265 and Reference-Completed support is issue #266;
-neither is implemented here.
+Query integration (#265) lives in `opengwasdb.query.facade`, which reads this
+module's seam and applies the ordinary selected-Analysis result contract to it;
+Reference-Completed support is issue #266 and is not implemented here.
 """
 
 from __future__ import annotations
@@ -196,6 +197,16 @@ class IndexedSubsetStaleError(IndexedSubsetError):
     """
 
 
+class IndexedSubsetLayoutError(IndexedSubsetError):
+    """An Indexed Variant Subset was requested on a layout that has none.
+
+    Indexed Variant Subsets are Observed-Only Dense only (ADR 0053, #264): a
+    Ragged release is already a direct per-Analysis CSR and a Hybrid one has no
+    rule for unifying its two components.  A selector naming a subset on either
+    is a caller error, not a reason to answer from the ordinary path (#265).
+    """
+
+
 class IndexedSubsetValidationError(IndexedSubsetError):
     """A staged subset failed validation and must not be published."""
 
@@ -277,10 +288,15 @@ class IndexedSubset:
         """
         if not 0 <= analysis_index < self.n_analyses:
             raise IndexedSubsetError(
+                f"store {self.store_path}: Indexed Variant Subset {self.name!r}: "
                 f"Analysis index {analysis_index} is outside [0, {self.n_analyses})"
             )
         return _decode_analysis_column(
-            self._group, self.encoding, self.n_subset_variants, analysis_index
+            self._group,
+            self.encoding,
+            self.n_subset_variants,
+            analysis_index,
+            self.variant_index,
         )
 
 
@@ -916,15 +932,43 @@ def _missing_required_attrs(attrs: dict[str, Any]) -> list[str]:
     return [key for key in _REQUIRED_ATTRS if key not in attrs]
 
 
+def _require_attr_int(name: str, attrs: dict[str, Any], key: str) -> int:
+    """One attribute's integer value, or a loud failure naming the subset.
+
+    A malformed `indexed_subset`/`n_analyses`/count attr must not escape as a
+    bare `ValueError`: the query path and the CLI promise a subset-naming
+    error, and a traceback naming neither Store nor subset breaks that promise.
+    """
+    value = attrs[key]
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} records a non-integer {key}: {value!r}"
+        )
+    return int(value)
+
+
 def _parse_subset_encoding(
     name: str, attrs: dict[str, Any], errors: list[str]
 ) -> StoreEncoding | None:
-    """The group's declared encoding, or None with a finding appended."""
+    """The group's declared encoding, or None with a finding appended.
+
+    Any way the encoding block can be malformed -- an unsupported kind, a
+    missing key, a non-mapping value, an unparseable number -- is normalised
+    into the same subset-naming failure.  The read seam and validation share
+    this, so a reader and the validator cannot disagree about whether a block
+    is readable (#265 review).
+    """
     try:
         return StoreEncoding.from_manifest(attrs[ATTR_ENCODING])
     except UnsupportedEncoding as exc:
         errors.append(
             f"indexed subset {name!r} declares an encoding this build cannot read: {exc}"
+        )
+        return None
+    except (KeyError, TypeError, ValueError) as exc:
+        errors.append(
+            f"indexed subset {name!r} declares malformed encoding metadata "
+            f"({type(exc).__name__}: {exc})"
         )
         return None
 
@@ -947,6 +991,164 @@ def _side_table_length(group: Any, name: str) -> int:
     return array_length(group[name]) if name in group else 0
 
 
+def _require_expected_arrays(name: str, group: Any, encoding: StoreEncoding) -> None:
+    """The group carries exactly the arrays its encoding defines."""
+    expected = _expected_arrays(encoding)
+    missing = sorted(key for key in expected if key not in group)
+    if missing:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} is missing arrays: {', '.join(missing)}"
+        )
+    _require_only_expected_members(name, group, expected)
+
+
+def _require_only_expected_members(
+    name: str, group: Any, expected: frozenset[str]
+) -> None:
+    """Every member is an expected array, not a group or an unknown array."""
+    members = list(group.keys())
+    non_arrays = sorted(key for key in members if not isinstance(group[key], zarr.Array))
+    if non_arrays:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} carries unexpected groups: {', '.join(non_arrays)}"
+        )
+    unknown = sorted(key for key in members if key not in expected)
+    if unknown:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} carries unexpected arrays: {', '.join(unknown)}"
+        )
+
+
+def _require_declared_metadata(name: str, attrs: dict[str, Any]) -> None:
+    """The group's own name, schema, profile and axis order, before decoding.
+
+    These mirror validation's `_read_declared_encoding` / `_check_identity_attrs`
+    / `_check_variant_index_attrs`, and running them on the read path is what
+    stops a re-labelled or transposed group from decoding under the wrong
+    contract when its shapes happen to fit (a square `n_analyses ==
+    n_subset_variants` group is exactly the case the `order` check is for).
+    Each is one attribute read, so the seam stays cheap.
+    """
+    if _require_attr_int(name, attrs, ATTR_SCHEMA) != INDEXED_SUBSET_SCHEMA_VERSION:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} declares schema {attrs[ATTR_SCHEMA]!r}, not "
+            f"{INDEXED_SUBSET_SCHEMA_VERSION}"
+        )
+    if str(attrs[ATTR_NAME]) != name:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} records its name as {attrs[ATTR_NAME]!r}"
+        )
+    if str(attrs[ATTR_PROFILE]) != FULL_STATISTIC_PROFILE:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} declares statistic_profile "
+            f"{attrs[ATTR_PROFILE]!r}, not {FULL_STATISTIC_PROFILE!r}"
+        )
+    if str(attrs[ATTR_ORDER]) != _SUBSET_ORDER:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} declares order {attrs[ATTR_ORDER]!r}, not "
+            f"{_SUBSET_ORDER!r}; its planes may be transposed"
+        )
+
+
+def _require_declared_counts(name: str, attrs: dict[str, Any], n_analyses: int) -> None:
+    """The recorded Analysis count matches the release, and the counts add up.
+
+    Mirrors validation's `_check_identity_attrs`.  Cheap (four attributes) and
+    validation-visible, so the read path runs it rather than letting a
+    wrong-width index decode under the release's shape by coincidence.
+    """
+    if _require_attr_int(name, attrs, ATTR_N_ANALYSES) != n_analyses:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} declares {attrs[ATTR_N_ANALYSES]} Analyses "
+            f"but this release has {n_analyses}"
+        )
+    requested = _require_attr_int(name, attrs, ATTR_REQUESTED_COUNT)
+    resolved = _require_attr_int(name, attrs, ATTR_RESOLVED_COUNT)
+    absent = _require_attr_int(name, attrs, ATTR_ABSENT_COUNT)
+    if requested != resolved + absent:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} records requested={requested}, "
+            f"resolved={resolved}, absent={absent}, which do not add up"
+        )
+
+
+def _require_variant_axis(
+    name: str, group: Any, attrs: dict[str, Any], n_variants: int
+) -> np.ndarray:
+    """The subset's Variant Indices are non-empty, sorted, unique and in bounds."""
+    n_subset = _require_attr_int(name, attrs, ATTR_N_SUBSET_VARIANTS)
+    variant_index = np.asarray(group["variant_index"][:], dtype=np.int64)
+    if len(variant_index) != n_subset:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} variant_index holds {len(variant_index)} "
+            f"variants but declares {n_subset}"
+        )
+    if n_subset == 0:
+        raise IndexedSubsetError(f"Indexed Variant Subset {name!r} contains no variants")
+    if n_subset > 1 and np.any(variant_index[1:] <= variant_index[:-1]):
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} variant_index is not sorted ascending and unique"
+        )
+    if int(variant_index.min()) < 0 or int(variant_index.max()) >= n_variants:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} variant_index is out of bounds "
+            f"[0, {n_variants})"
+        )
+    return variant_index
+
+
+def _require_plane_shapes(
+    name: str, group: Any, encoding: StoreEncoding, attrs: dict[str, Any], n_subset: int
+) -> None:
+    """Each statistic plane spans ``(n_analyses, n_subset_variants)`` in its declared dtype."""
+    expected_shape = (_require_attr_int(name, attrs, ATTR_N_ANALYSES), n_subset)
+    encodings: dict[str, Any] = {"z": encoding.z, "se": encoding.se, "eaf": encoding.eaf}
+    for plane, declared in encodings.items():
+        if plane not in group:
+            continue
+        actual = tuple(int(size) for size in group[plane].shape)
+        if actual != expected_shape:
+            raise IndexedSubsetError(
+                f"Indexed Variant Subset {name!r} {plane} shape {actual} does not match "
+                f"{expected_shape}"
+            )
+        if str(group[plane].dtype) != declared.dtype:
+            raise IndexedSubsetError(
+                f"Indexed Variant Subset {name!r} {plane} has dtype {group[plane].dtype} "
+                f"but the declared encoding is {declared.kind} ({declared.dtype})"
+            )
+
+
+def _require_decodable_subset(
+    name: str,
+    group: Any,
+    encoding: StoreEncoding,
+    attrs: dict[str, Any],
+    n_variants: int,
+    n_analyses: int,
+) -> np.ndarray:
+    """Reject a published group that cannot be decoded safely, and return its axis.
+
+    The read seam is what #265's query path trusts; a group whose arrays,
+    dtype, shapes or declared axis order disagree with its own attributes would
+    decode to a plausible, wrong association rather than raise
+    (CONTRIBUTING.md, "a wrong answer that looks like a right answer").
+    Validation checks all of this too, but a query must not depend on someone
+    having run `validate` first.  The checks here are the cheap, structural,
+    validation-visible ones; deliberately not among them is a full decoded-value
+    or side-table comparison against the primary planes, which is what makes
+    `validate` expensive and is not a per-query obligation.  An in-range shift
+    of a Variant Index is likewise not detectable here: identity and bounds hold
+    and nothing cheap distinguishes it from the real axis.
+    """
+    _require_declared_metadata(name, attrs)
+    _require_declared_counts(name, attrs, n_analyses)
+    _require_expected_arrays(name, group, encoding)
+    variant_index = _require_variant_axis(name, group, attrs, n_variants)
+    _require_plane_shapes(name, group, encoding, attrs, len(variant_index))
+    return variant_index
+
+
 def open_indexed_subset(store_path: str | Path, subset_name: str) -> IndexedSubset:
     """Open a published subset's metadata and decode seam, or fail loudly.
 
@@ -954,14 +1156,58 @@ def open_indexed_subset(store_path: str | Path, subset_name: str) -> IndexedSubs
     the release it sits in, before returning any object a caller could decode
     through: a stale index would return plausible associations for the wrong
     release, and #265's query path must not be the first place that is noticed.
+
+    Every failure names the Store and the subset: the caller asked for one
+    release's index, and "this release has no subset" without the release is
+    not actionable (issue #265 review).
     """
-    name = parse_indexed_subset_name(subset_name)
     store_path = Path(store_path)
+    try:
+        return _open_indexed_subset(store_path, subset_name)
+    except IndexedSubsetError as exc:
+        scoped = _store_scoped(store_path, exc)
+        if scoped is exc:
+            raise
+        raise scoped from exc
+
+
+def _store_scoped(store_path: Path, exc: IndexedSubsetError) -> IndexedSubsetError:
+    """Prefix a subset failure with the Store it belongs to, at most once."""
+    prefix = f"store {store_path}: "
+    if str(exc).startswith(prefix):
+        return exc
+    return type(exc)(f"{prefix}{exc}")
+
+
+def _open_subset_group(path: Path, name: str) -> tuple[Any, dict[str, Any]]:
+    """Open a published subset's Zarr group, normalising a corrupt store entry.
+
+    `path` is a directory the namespace layout selected, but it may be a plain
+    directory, a Zarr array, or a group whose metadata is unreadable or invalid
+    (bad JSON, an unsupported `zarr_format`, a non-object document).  Those are
+    corrupt-index failures the caller must see as an IndexedSubsetError, not as
+    a zarr/json/ValueError exception leaking through the query facade (#265
+    review).  The catch is broad on purpose, matching validation's
+    `_namespace_member`: the try body is only zarr's own open and attrs read, so
+    there is no module logic whose bug it could hide.
+    """
+    try:
+        group = store_arrays.open_group(path)
+        attrs = dict(group.attrs)
+    except Exception as exc:  # broad on purpose; see docstring, mirrors validation
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} at {path} is not a readable Zarr "
+            f"group: {exc}"
+        ) from exc
+    return group, attrs
+
+
+def _open_indexed_subset(store_path: Path, subset_name: str) -> IndexedSubset:
+    name = parse_indexed_subset_name(subset_name)
     path = store_path / "data.zarr" / INDEXED_SUBSETS_GROUP / name
     if not path.is_dir():
         raise IndexedSubsetError(f"this release has no Indexed Variant Subset {name!r}")
-    group = store_arrays.open_group(path)
-    attrs = dict(group.attrs)
+    group, attrs = _open_subset_group(path, name)
     missing = _missing_required_attrs(attrs)
     if missing:
         raise IndexedSubsetError(
@@ -971,24 +1217,37 @@ def open_indexed_subset(store_path: str | Path, subset_name: str) -> IndexedSubs
     encoding = _parse_subset_encoding(name, attrs, errors)
     if encoding is None:
         raise IndexedSubsetError(errors[0])
-    manifest = open_store(store_path).manifest
-    _refuse_stale_subset(name, attrs, encoding, manifest)
+    release = open_store(store_path)
+    _refuse_stale_subset(name, attrs, encoding, release.manifest)
+    # Bound the subset against the release's own axis: an out-of-range Variant
+    # Index would name a variant the Store does not have, and `resolve_rows`
+    # would index the Store Variant Table out of bounds.  The Analysis width is
+    # read from the same primary plane so a wrong-width index is refused too.
+    primary_z = release.arrays(mode="r")["z"]
+    variant_index = _require_decodable_subset(
+        name,
+        group,
+        encoding,
+        attrs,
+        int(primary_z.shape[0]),
+        int(primary_z.shape[1]),
+    )
     return IndexedSubset(
         store_path=store_path,
         name=name,
         path=path,
-        variant_index=np.asarray(group["variant_index"][:], dtype=np.int64),
-        n_analyses=int(attrs[ATTR_N_ANALYSES]),
-        n_subset_variants=int(attrs[ATTR_N_SUBSET_VARIANTS]),
+        variant_index=variant_index,
+        n_analyses=_require_attr_int(name, attrs, ATTR_N_ANALYSES),
+        n_subset_variants=_require_attr_int(name, attrs, ATTR_N_SUBSET_VARIANTS),
         encoding=encoding,
         reference_assembly=str(attrs[ATTR_REFERENCE_ASSEMBLY]),
         source_store_id=str(attrs[ATTR_SOURCE_STORE_ID]),
         source_release_id=str(attrs[ATTR_SOURCE_RELEASE_ID]),
         source_format_version=str(attrs[ATTR_SOURCE_FORMAT_VERSION]),
         input_sha256=str(attrs[ATTR_INPUT_SHA256]),
-        requested_count=int(attrs[ATTR_REQUESTED_COUNT]),
-        resolved_count=int(attrs[ATTR_RESOLVED_COUNT]),
-        absent_count=int(attrs[ATTR_ABSENT_COUNT]),
+        requested_count=_require_attr_int(name, attrs, ATTR_REQUESTED_COUNT),
+        resolved_count=_require_attr_int(name, attrs, ATTR_RESOLVED_COUNT),
+        absent_count=_require_attr_int(name, attrs, ATTR_ABSENT_COUNT),
         builder_version=str(attrs[ATTR_BUILDER_VERSION]),
         created_at=str(attrs[ATTR_CREATED_AT]),
         has_eaf="eaf" in group,
@@ -1009,8 +1268,18 @@ def _codec(group: Any, encoding: StoreEncoding) -> StoreCodec:
 
 
 def _decode_analysis_column(
-    group: Any, encoding: StoreEncoding, n_subset: int, analysis_index: int
+    group: Any,
+    encoding: StoreEncoding,
+    n_subset: int,
+    analysis_index: int,
+    variant_index: np.ndarray,
 ) -> IndexedSubsetAnalysis:
+    """Decode one Analysis's column from `group`.
+
+    `variant_index` is passed in rather than re-read from the group: the read
+    seam already holds it (`open_indexed_subset` validated it), so a query must
+    not pay for a second full read of the subset's axis chunk (#265 review).
+    """
     codec = _codec(group, encoding)
     start = analysis_index * n_subset
     positions = positions_flat(start)
@@ -1030,7 +1299,7 @@ def _decode_analysis_column(
     se_raw = np.asarray(group["se"][analysis_index, :])
     se = _decode_se_column(codec, encoding, se_raw, eaf, group, n_subset, analysis_index, positions)
     return IndexedSubsetAnalysis(
-        variant_index=np.asarray(group["variant_index"][:], dtype=np.int64),
+        variant_index=variant_index,
         z=z,
         se=se,
         eaf=eaf,
