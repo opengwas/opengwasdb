@@ -1125,7 +1125,9 @@ Removing a subset takes the same namespace lock and renames the group aside
 before reclaiming its bytes, so a removal can never interleave with a commit of
 the same name and a reader never sees a half-deleted group. The published name
 disappears atomically; a `.{name}.old.*` directory left by an interrupted
-removal is inert and is rejected by validation until it is cleaned up.
+removal is inert and is rejected by validation until it is cleaned up. A
+removal beneath consolidated metadata is refused before the rename, because the
+record would keep listing the removed group and the next open would read it.
 
 The 0.2.0 converter (§21.4) does not carry this namespace: it refuses an array
 or group it cannot name a role for, so a release holding an Indexed Variant

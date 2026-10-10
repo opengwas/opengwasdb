@@ -439,7 +439,14 @@ def _builder_version() -> str:
 
 
 def _band_bounds(n_subset: int, n_analyses: int, band_cells: int) -> list[tuple[int, int]]:
-    """Subset-variant bands whose cell count is at most `band_cells`."""
+    """Subset-variant bands whose cell count is at most `band_cells`.
+
+    A zero-variant subset has no bands; returning an empty list rather than a
+    zero-stride ``range`` keeps a caller from crashing on an index that
+    validation separately rejects as empty.
+    """
+    if n_subset <= 0:
+        return []
     per_band = max(1, int(band_cells) // max(1, n_analyses))
     per_band = min(per_band, n_subset)
     return [
@@ -858,7 +865,10 @@ def remove_indexed_subset(store_path: str | Path, subset_name: str) -> bool:
     is valid (ADR 0053).  The removal takes the namespace's publication lock
     and first renames the group aside, so it can never interleave with a commit
     of the same name and a reader never sees a half-deleted group: the published
-    name disappears atomically and the bytes are then reclaimed.
+    name disappears atomically and the bytes are then reclaimed.  The rename
+    bypasses zarr's own delete guard, so a group under consolidated metadata is
+    refused before it -- the record would keep listing the removed group and
+    the next open would read it.
     """
     name = parse_indexed_subset_name(subset_name)
     store_path = Path(store_path)
@@ -869,6 +879,12 @@ def remove_indexed_subset(store_path: str | Path, subset_name: str) -> bool:
     with destination_lock(dest):
         if not dest.is_dir():
             return False
+        # A raw rename bypasses zarr's own delete guard, so it repeats the
+        # consolidated-metadata refusal here: a record would keep listing the
+        # removed group and the next open would read it (#264 review).
+        store_arrays.refuse_under_consolidated_metadata(
+            dest, f"deleting indexed subset {name!r} in", wiped=True
+        )
         doomed = namespace_dir / f".{name}.old.{os.getpid()}.{uuid.uuid4().hex[:8]}"
         os.replace(dest, doomed)
     shutil.rmtree(doomed, ignore_errors=True)
@@ -1378,6 +1394,12 @@ def _check_variant_index(
     """The subset's Variant Indices are sorted, unique and in bounds."""
     variant_index = np.asarray(group["variant_index"][:], dtype=np.int64)
     n_subset = len(variant_index)
+    if n_subset == 0:
+        errors.append(
+            f"indexed subset {name!r} contains no variants; an Indexed Variant Subset "
+            "must cover at least one Store variant"
+        )
+        return None
     _check_variant_index_attrs(name, attrs, n_subset, errors)
     _check_variant_index_values(name, variant_index, n_variants, errors)
     return None if errors else n_subset

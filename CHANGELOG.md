@@ -33,13 +33,16 @@ the end of this file.
   validates the staged group, and publication takes the namespace's advisory
   lock and renames atomically, so two same-name no-overwrite builds yield one
   winner and one loud `IndexedSubsetExistsError` while different names never
-  touch each other. Removing a subset takes the same namespace lock and renames
+  touch each other. Removing a subset takes the same namespace lock, refuses a
+  group under consolidated metadata before the rename (the record would keep
+  listing the removed group), and renames
   the group aside before reclaiming it, so a removal cannot interleave with a
   commit. Standalone
   `validate` now checks the namespace, the attributes, the Variant Indices and
   shapes, the side tables, Z/SE missingness and every decoded indexed Z/SE/EAF
   against the primary planes; a release with no namespace stays valid and
-  unchanged, an explicit empty group, unknown entry or temporary entry fails,
+  unchanged, an explicit empty group, a zero-variant index, an unknown entry or
+  a temporary entry fails,
   and deleting the group leaves a valid release. The read seam refuses a subset
   whose recorded source release, store, format, assembly or encoding no longer
   matches the release it sits in, so a stale index is rejected before #265's

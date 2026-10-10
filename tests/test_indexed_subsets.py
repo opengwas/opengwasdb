@@ -53,6 +53,7 @@ from opengwasdb.layouts.dense.indexed_subsets import (
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store import arrays as store_arrays
+from opengwasdb.store.arrays import ConsolidatedMetadataError
 from opengwasdb.store.open import destination_lock, directory_lock, zarr_format_for_version
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant
@@ -974,6 +975,47 @@ def test_validation_rejects_an_explicit_empty_group(
 
     errors = _errors_for(store)
     assert any("explicit empty group" in error for error in errors), errors
+
+
+def test_validation_rejects_a_zero_variant_subset(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    """A zero-length Variant Index is rejected, not accepted as an empty index."""
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    group = _index_group(store, "hm3")
+    del group["variant_index"]
+    group.create_array(
+        "variant_index", shape=(0,), chunks=(1,), shards=(1,), dtype="int32"
+    )
+    group.attrs["n_subset_variants"] = 0
+
+    errors = _errors_for(store)
+    assert any("contains no variants" in error for error in errors), errors
+
+
+def test_remove_refuses_a_consolidated_namespace(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    """A raw rename would leave the consolidated record listing the deleted group."""
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    zarr.consolidate_metadata(str(store / "data.zarr"), zarr_format=3)
+    published = store / "data.zarr" / INDEXED_SUBSETS_GROUP / "hm3"
+    before = _digest(published)
+
+    listed = zarr.open_group(str(store / "data.zarr"), mode="r")
+    assert "hm3" in listed[INDEXED_SUBSETS_GROUP], (
+        "the consolidated record must list the subset for this to mean anything"
+    )
+
+    with pytest.raises(ConsolidatedMetadataError):
+        remove_indexed_subset(store, "hm3")
+
+    assert list_indexed_subsets(store) == ("hm3",)
+    assert _digest(published) == before, "a refused removal must change nothing"
+    reread = zarr.open_group(str(store / "data.zarr"), mode="r")
+    assert "hm3" in reread[INDEXED_SUBSETS_GROUP]
 
 
 def test_open_refuses_a_subset_from_another_release(
