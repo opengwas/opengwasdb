@@ -2213,8 +2213,8 @@ vertical-align: -.125em;
   <li><a href="#storage-measured-not-projected" id="toc-storage-measured-not-projected" class="nav-link" data-scroll-target="#storage-measured-not-projected">Storage: measured, not projected</a></li>
   <li><a href="#build-cost-and-bounded-memory" id="toc-build-cost-and-bounded-memory" class="nav-link" data-scroll-target="#build-cost-and-bounded-memory">Build cost and bounded memory</a></li>
   <li><a href="#query-latency" id="toc-query-latency" class="nav-link" data-scroll-target="#query-latency">Query latency</a></li>
-  <li><a href="#caveats-and-honesty" id="toc-caveats-and-honesty" class="nav-link" data-scroll-target="#caveats-and-honesty">Caveats and honesty</a></li>
   <li><a href="#exact-equivalence-the-publication-gate" id="toc-exact-equivalence-the-publication-gate" class="nav-link" data-scroll-target="#exact-equivalence-the-publication-gate">Exact equivalence (the publication gate)</a></li>
+  <li><a href="#caveats-and-honesty" id="toc-caveats-and-honesty" class="nav-link" data-scroll-target="#caveats-and-honesty">Caveats and honesty</a></li>
   </ul>
 </nav>
 </div>
@@ -2223,7 +2223,7 @@ vertical-align: -.125em;
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
 <h1 class="title">Indexed Variant Subsets on OGS-00009 — HapMap3 full-statistic extraction</h1>
-<p class="subtitle lead">Rebuilding the issue-262 prototype as a reproducible benchmark · sub-second full-result LDSC extraction with exact decoded equivalence</p>
+<p class="subtitle lead">A reproducible single-run benchmark · sub-second full-result LDSC extraction with exact six-field equivalence</p>
 </div>
 
 
@@ -2256,8 +2256,8 @@ vertical-align: -.125em;
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>Issue #262 asked whether the ~1.2 million HapMap3 variants in one Analysis could be extracted in under a second. On OGS-00009, with a <strong>full-statistic</strong> index (Z, SE and EAF — not a Z-only projection), the indexed full result for <code>ukb-b-17805</code> returns in <strong>337.4 ms warm median</strong> (1,178,549 associations), against <strong>16.04 s</strong> for the ordinary primary-plane path — a <strong>48x</strong> improvement.</p>
-<p>Exact decoded equivalence with the ordinary filtered result is <strong>True</strong>; publication status: <strong>published</strong>.</p>
+<p>On OGS-00009, with a <strong>full-statistic</strong> index (Z, SE and EAF — not a Z-only projection), the indexed full result for <code>ukb-b-17805</code> returns in <strong>407.3 ms warm median</strong> (1,178,549 associations), against <strong>16.39 s</strong> for the ordinary primary-plane path — a <strong>40x</strong> improvement.</p>
+<p>The ordinary read is measured <strong>before</strong> the subset is built and again <strong>after</strong> it, in the same run against a reflinked scratch copy; the artifact records <code>ordinary_bracketed = True</code>. Exact decoded equivalence across all six result fields is <strong>True</strong>; publication status: <strong>published</strong>.</p>
 </div>
 </div>
 <section id="scope" class="level2">
@@ -2279,12 +2279,12 @@ vertical-align: -.125em;
 <td>OGS-00009 (<code>OGS-00009</code>)</td>
 </tr>
 <tr class="even">
-<td>Completion state</td>
-<td>observed_only</td>
-</tr>
-<tr class="odd">
 <td>Primary layout</td>
 <td>dense</td>
+</tr>
+<tr class="odd">
+<td>Completion state</td>
+<td>observed_only</td>
 </tr>
 <tr class="even">
 <td>Analyses</td>
@@ -2307,24 +2307,94 @@ vertical-align: -.125em;
 <td>GRCh38</td>
 </tr>
 <tr class="odd">
-<td>Measured at (UTC)</td>
-<td>2026-10-10T07:21:02.172770+00:00</td>
+<td>Selected Analysis</td>
+<td><code>ukb-b-17805</code></td>
 </tr>
 <tr class="even">
-<td>Git commit</td>
-<td><code>d3ae80f</code></td>
+<td>Indexed Variant Subset</td>
+<td><code>hm3</code></td>
 </tr>
 <tr class="odd">
+<td>Run mode</td>
+<td>fresh</td>
+</tr>
+<tr class="even">
+<td>Measured at (UTC)</td>
+<td>2026-10-10T09:28:28.016992+00:00</td>
+</tr>
+<tr class="odd">
+<td>Git commit</td>
+<td><code>90c4ca8</code></td>
+</tr>
+<tr class="even">
 <td>opengwasdb fingerprint</td>
-<td><code>0b8c151dc3b9f164…</code></td>
+<td><code>216b6affaaca4976…</code></td>
 </tr>
 </tbody>
 </table>
 <p>The package version and the Store Release <code>format_version</code> are different things and move independently.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Store path</th>
+<th>Value</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Authoritative source</td>
+<td><code>/data/opengwasdb/stores/OGS-00009/store.opengwasdb</code></td>
+<td>never written</td>
+</tr>
+<tr class="even">
+<td>Measured copy</td>
+<td><code>/data/opengwasdb/work/267-indexed/store-copy.opengwasdb</code></td>
+<td><code>reflink</code> scratch copy</td>
+</tr>
+</tbody>
+</table>
+<p>The build writes only inside the reflinked scratch copy. The original release’s recursive metadata fingerprint and its <code>manifest.json</code>/<code>analyses.tsv</code> hashes are compared before and after the run.</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Run bracket</th>
+<th>State</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>subset present during ordinary_before</td>
+<td>False</td>
+</tr>
+<tr class="even">
+<td>subset published by this run</td>
+<td>True</td>
+</tr>
+<tr class="odd">
+<td>ordinary before/after bracketed</td>
+<td>True</td>
+</tr>
+<tr class="even">
+<td>run started (UTC)</td>
+<td>2026-10-10T08:14:26.053168+00:00</td>
+</tr>
+<tr class="odd">
+<td>run finished (UTC)</td>
+<td>2026-10-10T09:28:23.586358+00:00</td>
+</tr>
+</tbody>
+</table>
+<p>original_store_unchanged = True</p>
 </section>
 <section id="input-the-canonical-grch38-hapmap3-alid-list" class="level2">
 <h2 class="anchored" data-anchor-id="input-the-canonical-grch38-hapmap3-alid-list">Input: the canonical GRCh38 HapMap3 ALID list</h2>
-<p>The input is the canonical LDSC HapMap3 list (<code>w_hm3.snplist.gz</code>, MD5 153ecc2bcfa740afafe656e6a384d769), resolved against OGS-00009’s Variant Index by rsid <strong>and</strong> allele compatibility, and written as canonical ALIDs. The build’s variant-list checksum is the file’s own SHA-256, so the index records exactly which bytes produced it.</p>
+<p>The input is the canonical LDSC HapMap3 list, resolved against the Store’s Variant Index by rsid <strong>and</strong> allele compatibility and written as canonical ALIDs. The list’s SHA-256 is the same checksum the writer recorded.</p>
 <table class="caption-top table">
 <thead>
 <tr class="header">
@@ -2376,6 +2446,14 @@ vertical-align: -.125em;
 </thead>
 <tbody>
 <tr class="odd">
+<td>HapMap3 source</td>
+<td><code>/data/opengwasdb/work/262-hapmap3-prototype/w_hm3.snplist.gz</code></td>
+</tr>
+<tr class="even">
+<td>HapMap3 source MD5</td>
+<td><code>153ecc2bcfa740afafe656e6a384d769</code></td>
+</tr>
+<tr class="odd">
 <td>subset name</td>
 <td><code>hm3</code></td>
 </tr>
@@ -2392,20 +2470,62 @@ vertical-align: -.125em;
 <td>GRCh38</td>
 </tr>
 <tr class="odd">
-<td>requested</td>
+<td>requested (writer)</td>
 <td>1,206,903</td>
 </tr>
 <tr class="even">
-<td>resolved</td>
+<td>resolved (writer)</td>
 <td>1,206,903</td>
 </tr>
 <tr class="odd">
-<td>absent</td>
+<td>absent (writer)</td>
 <td>0</td>
+</tr>
+<tr class="even">
+<td>canonical ALIDs derived</td>
+<td>1,206,903</td>
 </tr>
 </tbody>
 </table>
-<p>An absent HapMap3 rsid has no GRCh38 position in this Store Release, so it cannot appear in an ALID list; the writer’s own <code>absent</code> count is therefore zero while the rsid-level absence above is {python} f”{res[‘absent_from_store_axis’]:,}“. Both are recorded rather than one being presented as the other.</p>
+<p>The writer’s own <code>absent</code> count is <strong>0</strong>, while the rsid-level absence is <strong>10,385</strong>. The two are reconciled rather than one being presented as the other, and a non-zero writer <code>absent</code> or an unbalanced rsid budget fails the run before an artifact is written.</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Reconciliation check</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>resolution_resolved_equals_alids</code></td>
+<td>True</td>
+</tr>
+<tr class="even">
+<td><code>rsid_budget_balances</code></td>
+<td>True</td>
+</tr>
+<tr class="odd">
+<td><code>variant_list_sha256_equals_writer</code></td>
+<td>True</td>
+</tr>
+<tr class="even">
+<td><code>writer_absent_zero</code></td>
+<td>True</td>
+</tr>
+<tr class="odd">
+<td><code>writer_requested_equals_alids</code></td>
+<td>True</td>
+</tr>
+<tr class="even">
+<td><code>writer_resolved_equals_alids</code></td>
+<td>True</td>
+</tr>
+<tr class="odd">
+<td><strong>all reconciled</strong></td>
+<td><strong>True</strong></td>
+</tr>
+</tbody>
+</table>
 </section>
 <section id="storage-measured-not-projected" class="level2">
 <h2 class="anchored" data-anchor-id="storage-measured-not-projected">Storage: measured, not projected</h2>
@@ -2435,7 +2555,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>HapMap3 index (physical)</td>
-<td>6,234,992,640</td>
+<td>6,235,037,696</td>
 <td>5.8 GiB</td>
 </tr>
 <tr class="odd">
@@ -2463,7 +2583,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><code>eaf</code></td>
-<td>710,676,480</td>
+<td>710,705,152</td>
 </tr>
 <tr class="even">
 <td><code>eaf_baseline</code></td>
@@ -2479,7 +2599,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><code>se</code></td>
-<td>1,158,279,168</td>
+<td>1,158,287,360</td>
 </tr>
 <tr class="even">
 <td><code>se_coefficients</code></td>
@@ -2499,7 +2619,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td><code>z</code></td>
-<td>4,360,564,736</td>
+<td>4,360,572,928</td>
 </tr>
 <tr class="odd">
 <td><code>z_overflow_index</code></td>
@@ -2511,11 +2631,11 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><strong>total</strong></td>
-<td><strong>6,234,992,640</strong></td>
+<td><strong>6,235,037,696</strong></td>
 </tr>
 </tbody>
 </table>
-<div id="83791e87" class="cell" data-execution_count="8">
+<div id="fb0917c7" class="cell" data-execution_count="12">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -2541,48 +2661,61 @@ vertical-align: -.125em;
 </thead>
 <tbody>
 <tr class="odd">
-<td>Configured band</td>
+<td>run mode</td>
+<td>fresh</td>
+</tr>
+<tr class="even">
+<td>configured band</td>
 <td>4,000,000 cells</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>prepare (open release, resolve list)</td>
-<td>8.61 s</td>
+<td>7.76 s</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>publish (write planes + staged validation)</td>
-<td>4,679.63 s</td>
+<td>4,189.64 s</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>in-process total</td>
-<td>4,688.24 s</td>
-</tr>
-<tr class="odd">
-<td>subprocess wall total (incl. interpreter startup)</td>
-<td>4,690.00 s</td>
+<td>4,197.40 s</td>
 </tr>
 <tr class="even">
-<td>peak RSS</td>
-<td>1,237.5 MB</td>
+<td>subprocess wall total (incl. interpreter startup)</td>
+<td>4,198.00 s</td>
 </tr>
 <tr class="odd">
+<td>requested / resolved / absent (writer)</td>
+<td>1,206,903 / 1,206,903 / 0</td>
+</tr>
+<tr class="even">
+<td>input SHA-256 (writer)</td>
+<td><code>4a7c82aa625a006ff437dcaa2769b00e056413d54c72e98f7378327c69513398</code></td>
+</tr>
+<tr class="odd">
+<td>peak RSS</td>
+<td>1,234.8 MB</td>
+</tr>
+<tr class="even">
 <td>RSS bound (band + fixed overhead)</td>
 <td>1,146.1 MB</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>peak RSS within declared bound</td>
 <td>False</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>measurement source</td>
 <td>/usr/bin/time -v (build subprocess)</td>
 </tr>
-<tr class="even">
-<td>build block reused from</td>
-<td>/data/opengwasdb/work/267-indexed/artifact-build-run.json</td>
+<tr class="odd">
+<td>build block source</td>
+<td>this run</td>
 </tr>
 </tbody>
 </table>
-<p>The bound is <code>band_cells x {python} 32 bytes</code> plus a fixed allowance, so it is a function of the configured band and not of the full <code>{store.get(&#39;n_analyses&#39;, 0):,} x {store.get(&#39;n_variants&#39;, 0):,}</code> matrix. The measured peak is reported as it was measured: where it exceeds the declared bound, the target below fails rather than the bound being widened after the fact. At <code>{store.get(&#39;n_analyses&#39;, 0) * store.get(&#39;n_variants&#39;, 0) / 1e9:.1f}</code> billion cells the decoded matrix is terabytes, so the band bound is what the target is about.</p>
+<p>The bound is <code>band_cells</code> times a per-cell allowance plus a fixed term, so it is a function of the configured band and not of the full Store axis (whose decoded size is printed below). The measured peak is reported as measured: where it exceeds the declared bound the target below fails rather than the bound being widened after the fact.</p>
+<p>Full decoded axis: 2,024 Analyses x 9,847,701 variants = 19,931,746,824 cells (0.1 TB at float32).</p>
 </section>
 <section id="query-latency" class="level2">
 <h2 class="anchored" data-anchor-id="query-latency">Query latency</h2>
@@ -2599,24 +2732,50 @@ vertical-align: -.125em;
 <tbody>
 <tr class="odd">
 <td>ordinary, before index</td>
-<td>20.92 s</td>
-<td>16.04 s</td>
-<td>16.44 s</td>
+<td>18.90 s</td>
+<td>16.39 s</td>
+<td>18.93 s</td>
 <td>7,578,651</td>
 </tr>
 <tr class="even">
 <td><strong>indexed</strong></td>
-<td>331.9 ms</td>
-<td>337.4 ms</td>
-<td>345.9 ms</td>
+<td>409.7 ms</td>
+<td>407.3 ms</td>
+<td>407.8 ms</td>
 <td>1,178,549</td>
 </tr>
 <tr class="odd">
 <td>ordinary, after index</td>
-<td>16.30 s</td>
-<td>16.92 s</td>
-<td>19.56 s</td>
+<td>19.68 s</td>
+<td>15.99 s</td>
+<td>16.24 s</td>
 <td>7,578,651</td>
+</tr>
+</tbody>
+</table>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Timing method</th>
+<th>Definition</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>first read</td>
+<td>first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column</td>
+</tr>
+<tr class="even">
+<td>p95</td>
+<td>nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N&lt;20; N=5)</td>
+</tr>
+<tr class="odd">
+<td>warm median</td>
+<td>median of the sorted repetitions that follow the first read, on the same open store</td>
 </tr>
 </tbody>
 </table>
@@ -2638,7 +2797,15 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td>ordinary unchanged within ±25% envelope</td>
-<td>True (median moved +5.48%)</td>
+<td>True (median moved +2.42%)</td>
+</tr>
+<tr class="even">
+<td>ordinary before/after bracketed</td>
+<td>True</td>
+</tr>
+<tr class="odd">
+<td>peak build RSS within declared bound</td>
+<td>False</td>
 </tr>
 <tr class="even">
 <td>authoritative store unchanged</td>
@@ -2647,17 +2814,51 @@ vertical-align: -.125em;
 </tbody>
 </table>
 </section>
-<section id="caveats-and-honesty" class="level2">
-<h2 class="anchored" data-anchor-id="caveats-and-honesty">Caveats and honesty</h2>
-<ul>
-<li><strong>The build and the query timings come from the same measurement campaign, but not the same processes.</strong> The build block is the real full-run build (the index is expensive — {python} f”{build[‘total_seconds’] / 60:.0f} minutes” — and is reused rather than rebuilt for a timing re-run); the query timings are measured against that published index after the filesystem has settled, so the ordinary before/after comparison is not confounded by the build’s writeback. <code>build.reused_from</code> names the artifact the build block came from. A fresh default invocation rebuilds and re-measures everything.</li>
-<li><strong>The RSS target fails.</strong> The measured peak ({python} f”{build[‘peak_rss_mb’]:,.1f} MB”) exceeds the declared band-plus-fixed-overhead bound ({python} f”{build[‘rss_bound_mb’]:,.1f} MB”) — the fixed term underestimated Zarr’s partial-chunk write working set for the default band. The peak is still set by the band and not by the matrix (the decoded matrix is terabytes). The failure is left in; widening the bound after the fact would be exactly the tuning this harness refuses.</li>
-<li>The per-plane physical figures bucket the group’s top-level entries, so a future encoding that adds an array appears here without a hard-coded plane list.</li>
-</ul>
-</section>
 <section id="exact-equivalence-the-publication-gate" class="level2">
 <h2 class="anchored" data-anchor-id="exact-equivalence-the-publication-gate">Exact equivalence (the publication gate)</h2>
-<p>Every parallel array of the indexed result must decode exactly to the ordinary result filtered to the subset’s Store Variant Indices. The harness refuses to publish when any field differs.</p>
+<p>Every one of the six parallel arrays must decode exactly equal, be present on both sides, be non-empty, and share dtype and length. A field missing from both sides fails: it was not measured.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Guard</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>required fields</td>
+<td><code>variant_index</code>, <code>analysis_index</code>, <code>z</code>, <code>se</code>, <code>eaf</code>, <code>association_status</code></td>
+</tr>
+<tr class="even">
+<td>all six present on both sides</td>
+<td>True</td>
+</tr>
+<tr class="odd">
+<td>dtypes match</td>
+<td>True</td>
+</tr>
+<tr class="even">
+<td>lengths match</td>
+<td>True</td>
+</tr>
+<tr class="odd">
+<td>non-empty</td>
+<td>True</td>
+</tr>
+<tr class="even">
+<td>expected rows</td>
+<td>1,178,549</td>
+</tr>
+<tr class="odd">
+<td>indexed rows</td>
+<td>1,178,549</td>
+</tr>
+</tbody>
+</table>
 <table class="caption-top table">
 <thead>
 <tr class="header">
@@ -2690,20 +2891,18 @@ vertical-align: -.125em;
 <td><code>z</code></td>
 <td>True</td>
 </tr>
-<tr class="odd">
-<td>expected rows</td>
-<td>1,178,549</td>
-</tr>
-<tr class="even">
-<td>indexed rows</td>
-<td>1,178,549</td>
-</tr>
-<tr class="odd">
-<td><strong>exact</strong></td>
-<td><strong>True</strong></td>
-</tr>
 </tbody>
 </table>
+</section>
+<section id="caveats-and-honesty" class="level2">
+<h2 class="anchored" data-anchor-id="caveats-and-honesty">Caveats and honesty</h2>
+<ul>
+<li><strong>The RSS target is recorded as its measurement says.</strong> The peak was 1,234.8 MB against the declared band-plus-fixed-overhead bound of 1,146.1 MB, so <code>peak_rss_within_bound = False</code>. The peak is still set by the band, not by the full matrix (terabytes decoded). Widening the bound after the fact would be the tuning this harness refuses.</li>
+<li><strong><code>first_ms</code> is not a cold-cache figure.</strong> The OS page cache is never dropped, and <code>ordinary_after</code> follows <code>ordinary_before</code>, so it is already warm. The method is disclosed in the artifact under <code>timings.method</code>.</li>
+<li><strong><code>p95_ms</code> is the nearest-rank order statistic, i.e. the maximum of the five warm repetitions</strong> at the default <code>--reps</code>; it is not interpolated.</li>
+<li>The build block is genuine for this run (<code>build.run_mode = fresh</code>). A query-only re-run may reuse an earlier artifact’s measured build block via <code>--build-stats</code>, and it is named here as <code>this run</code>.</li>
+<li>The per-plane physical figures bucket the group’s top-level entries, so a future encoding that adds an array appears without a hard-coded plane list.</li>
+</ul>
 <div class="callout callout-style-default callout-note callout-titled">
 <div class="callout-header d-flex align-content-center">
 <div class="callout-icon-container">
@@ -2714,15 +2913,20 @@ vertical-align: -.125em;
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> dev python benchmarks/benchmark_indexed_subset.py <span class="dt">\</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--store</span> /data/opengwasdb/stores/OGS-00009/store.opengwasdb <span class="dt">\</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--work</span> /data/opengwasdb/work/267-indexed <span class="dt">\</span></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--analysis-id</span> ukb-b-17805 <span class="dt">\</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">--reps</span> 5 <span class="dt">\</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">--output</span> docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.json</span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> report quarto render <span class="dt">\</span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.qmd</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>The harness measures against a reflinked copy and compares the original release’s recursive metadata fingerprint before and after the run. Re-run the harness; never hand-edit a number in the artifact or this page.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Fresh run: reflink the authoritative release into scratch, remove any existing</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co"># subset from that scratch copy, measure ordinary_before, build, measure</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co"># ordinary_after, and prove exact equivalence — then render this page.</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> dev python benchmarks/benchmark_indexed_subset.py <span class="dt">\</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">--store</span> /data/opengwasdb/stores/OGS-00009/store.opengwasdb <span class="dt">\</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">--work</span> /data/opengwasdb/work/267-indexed <span class="dt">\</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">--analysis-id</span> ukb-b-17805 <span class="dt">\</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">--subset-name</span> hm3 <span class="dt">\</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">--reps</span> 5 <span class="dt">\</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>  <span class="at">--reuse-copy</span> <span class="at">--reset-subset</span> <span class="dt">\</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>  <span class="at">--output</span> docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.json</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> report quarto render <span class="dt">\</span></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>  docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.qmd</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Re-run the harness; never hand-edit a number in the artifact or this page.</p>
 </div>
 </div>
 </section>
