@@ -66,7 +66,8 @@ the end of this file.
   explicit selector never falls back to the primary matrix: an unknown,
   staging, incomplete, stale, or corrupt subset raises, and the CLI exits 1
   naming the Store and subset. Corruption covers an unreadable group entry
-  (a plain directory, a Zarr array, or unreadable metadata), malformed
+  (a plain directory, a Zarr array, or metadata that is unreadable or invalid
+  -- bad JSON, an unsupported `zarr_format`, a non-object document), malformed
   encoding metadata, the wrong plane dtype, missing/unexpected arrays, a wrong
   declared name/schema/profile/axis order, Variant Indices out of the
   release's `[0, n_variants)` range, a declared Analysis count that disagrees

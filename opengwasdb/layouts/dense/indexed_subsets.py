@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
-import json
 import logging
 import os
 import re
@@ -1184,16 +1183,18 @@ def _open_subset_group(path: Path, name: str) -> tuple[Any, dict[str, Any]]:
     """Open a published subset's Zarr group, normalising a corrupt store entry.
 
     `path` is a directory the namespace layout selected, but it may be a plain
-    directory, a Zarr array, or a group whose metadata is unreadable.  Those are
+    directory, a Zarr array, or a group whose metadata is unreadable or invalid
+    (bad JSON, an unsupported `zarr_format`, a non-object document).  Those are
     corrupt-index failures the caller must see as an IndexedSubsetError, not as
-    a zarr/json exception leaking through the query facade (#265 review).  Only
-    the open and metadata read sit inside this boundary; a programming error in
-    this module is deliberately not caught.
+    a zarr/json/ValueError exception leaking through the query facade (#265
+    review).  The catch is broad on purpose, matching validation's
+    `_namespace_member`: the try body is only zarr's own open and attrs read, so
+    there is no module logic whose bug it could hide.
     """
     try:
         group = store_arrays.open_group(path)
         attrs = dict(group.attrs)
-    except (zarr.errors.BaseZarrError, json.JSONDecodeError) as exc:
+    except Exception as exc:  # broad on purpose; see docstring, mirrors validation
         raise IndexedSubsetError(
             f"Indexed Variant Subset {name!r} at {path} is not a readable Zarr "
             f"group: {exc}"
