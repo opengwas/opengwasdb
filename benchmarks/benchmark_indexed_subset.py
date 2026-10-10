@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import gzip
 import hashlib
 import json
@@ -40,7 +41,7 @@ import numpy as np
 
 from benchmarks._artifact import provenance, reflink_copy, write_artifact
 from benchmarks.measure_build_cost import parse_time_v
-from opengwasdb.layouts.dense.indexed_subsets import open_indexed_subset
+from opengwasdb.layouts.dense.indexed_subsets import open_indexed_subset, remove_indexed_subset
 from opengwasdb.query import query_store
 from opengwasdb.variants.axis import VariantAxis
 
@@ -69,19 +70,36 @@ SUB_SECOND_TARGET_MS = 1_000.0
 
 OUTPUT = Path("docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.json")
 
+#: Bumped when the required artifact shape changes, so a committed artifact from
+#: an older harness is detectable rather than silently trusted.
+ARTIFACT_SCHEMA_VERSION = 2
+
+#: The six parallel arrays every selected-Analysis result carries (spec 10b).
+#: The six parallel arrays every selected-Analysis result carries (spec 10b).
+#: Exact equivalence must check all six; a field silently absent from both sides
+#: is not agreement, it is an unmeasured field.
+REQUIRED_RESULT_FIELDS: tuple[str, ...] = (
+    "variant_index", "analysis_index", "z", "se", "eaf", "association_status",
+)
 #: Every field #267 names, as dotted paths. ``assert_artifact_complete`` refuses
 #: to write an artifact that cannot answer the issue.
 _REQUIRED_FIELDS: tuple[str, ...] = (
+    "artifact_schema_version",
     "commit",
     "measured_at",
     "opengwasdb_path",
     "opengwasdb_fingerprint",
+    "analysis_id",
+    "subset_name",
     "store.path",
+    "store.authoritative_path",
+    "store.copy_kind",
     "store.store_id",
     "store.release_id",
     "store.format_version",
     "store.reference_assembly",
     "store.completion_state",
+    "store.layout",
     "store.n_analyses",
     "store.n_variants",
     "store.encoding",
@@ -93,6 +111,14 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "input.requested",
     "input.resolved",
     "input.absent",
+    "input.alids_derived",
+    "input.counts_reconciled",
+    "input.counts_reconciliation.writer_requested_equals_alids",
+    "input.counts_reconciliation.writer_resolved_equals_alids",
+    "input.counts_reconciliation.writer_absent_zero",
+    "input.counts_reconciliation.resolution_resolved_equals_alids",
+    "input.counts_reconciliation.rsid_budget_balances",
+    "input.counts_reconciliation.variant_list_sha256_equals_writer",
     "input.hapmap3_resolution.rsids_requested",
     "input.hapmap3_resolution.resolved_rsids",
     "input.hapmap3_resolution.absent_from_store_axis",
@@ -105,6 +131,8 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "storage.index_logical_bytes",
     "storage.increase_percent",
     "storage.planes",
+    "build.run_mode",
+    "build.reused_from",
     "build.total_seconds",
     "build.peak_rss_mb",
     "build.band_cells",
@@ -113,6 +141,12 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "build.phases.prepare_seconds",
     "build.phases.publish_seconds",
     "build.peak_rss_source",
+    "build.requested",
+    "build.resolved",
+    "build.absent",
+    "build.input_sha256",
+    "timings.method.first_read",
+    "timings.method.p95",
     "timings.ordinary_before.first_ms",
     "timings.ordinary_before.median_ms",
     "timings.ordinary_before.p95_ms",
@@ -125,14 +159,27 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "timings.ordinary_after.median_ms",
     "timings.ordinary_after.p95_ms",
     "timings.ordinary_after.result_count",
+    "equivalence.required_fields",
+    "equivalence.required_fields_present",
+    "equivalence.dtypes_match",
+    "equivalence.lengths_match",
+    "equivalence.non_empty",
     "equivalence.exact",
     "equivalence.fields",
     "equivalence.expected_count",
     "equivalence.indexed_count",
+    "run.mode",
+    "run.started_at",
+    "run.finished_at",
+    "run.subset_present_during_ordinary_before",
+    "run.subset_published_by_this_run",
+    "run.ordinary_bracketed",
     "targets.warm_median_under_1s",
     "targets.exact_equivalence",
     "targets.ordinary_unchanged_within_envelope",
     "targets.original_store_unchanged",
+    "targets.peak_rss_within_bound",
+    "targets.ordinary_bracketed",
     "publication.published",
     "publication.reason",
 )
@@ -389,26 +436,46 @@ def compare_indexed_to_ordinary(
 ) -> dict[str, Any]:
     """Exact decoded equality of the indexed result and the ordinary subset.
 
-    Every parallel array is compared, including ``variant_index`` and
-    ``analysis_index``; a missing field or a length mismatch is a failure. The
-    comparison is the publication gate, so it must be able to say no.
+    Publication requires all six ``REQUIRED_RESULT_FIELDS`` to be present on
+    both sides, non-empty, of equal length and dtype, and value-equal including
+    ``association_status``. A field missing from both sides is an *unmeasured*
+    field, not agreement, so it fails: a store format that dropped a column
+    would otherwise compare two dicts that simply lack it.
     """
     expected = subset_ordinary_rows(ordinary, subset_variant_index)
-    fields = sorted(set(expected) | set(indexed))
+    fields = sorted(set(expected) | set(indexed) | set(REQUIRED_RESULT_FIELDS))
     per_field: dict[str, bool] = {}
+    dtype_match: dict[str, bool] = {}
+    length_match: dict[str, bool] = {}
     for name in fields:
         left = expected.get(name)
         right = indexed.get(name)
+        present = left is not None and right is not None
+        dtype_match[name] = present and left.dtype == right.dtype
+        length_match[name] = present and left.shape == right.shape
         per_field[name] = (
-            left is not None
-            and right is not None
-            and left.shape == right.shape
-            and _arrays_equal(left, right)
+            present and dtype_match[name] and length_match[name] and _arrays_equal(left, right)
         )
+    required_present = all(
+        name in expected and name in indexed for name in REQUIRED_RESULT_FIELDS
+    )
     expected_count = int(expected["variant_index"].size) if "variant_index" in expected else 0
     indexed_count = int(indexed["variant_index"].size) if "variant_index" in indexed else 0
+    non_empty = expected_count > 0 and indexed_count > 0
+    exact_fields = set(expected) == set(indexed) == set(REQUIRED_RESULT_FIELDS)
     return {
-        "exact": all(per_field.values()) and expected_count == indexed_count,
+        "exact": bool(
+            exact_fields
+            and required_present
+            and non_empty
+            and expected_count == indexed_count
+            and all(per_field.values())
+        ),
+        "required_fields": list(REQUIRED_RESULT_FIELDS),
+        "required_fields_present": required_present,
+        "dtypes_match": bool(all(dtype_match.values())),
+        "lengths_match": bool(all(length_match.values())),
+        "non_empty": non_empty,
         "fields": per_field,
         "expected_count": expected_count,
         "indexed_count": indexed_count,
@@ -418,8 +485,35 @@ def compare_indexed_to_ordinary(
 # ── Timing ──────────────────────────────────────────────────────────────────
 
 
+# ── Timing ──────────────────────────────────────────────────────────────────
+
+#: Disclosed once and reused by every timing block and by ``timings.method``.
+#: The OS page cache is never dropped, so ``first_ms`` is not a cold figure.
+FIRST_READ_SEMANTICS = (
+    "first full-result read of the block in the same process; the OS page cache is "
+    "not dropped, so it is not a cold-cache figure, and ordinary_after runs after "
+    "ordinary_before has already warmed the column"
+)
+
+
+def p95_method(repetitions: int) -> str:
+    """The exact p95 rule, so a reader is not left to assume interpolation."""
+    return (
+        f"nearest-rank over {repetitions} sorted warm repetitions: "
+        f"samples[min(N-1, int(0.95*N))] (max for N<20; N={repetitions})"
+    )
+
+
 def timed(query: Any, repetitions: int) -> dict[str, Any]:
-    """First-read plus warm median/p95 milliseconds for one full-result query."""
+    """First-read plus warm median/p95 milliseconds for one full-result query.
+
+    ``first_ms`` is the first read of this block in a long-lived process; the
+    OS page cache is **not** dropped, and an earlier block may already have
+    warmed the same column, so it is not a cold-cache measurement. ``p95_ms`` is
+    the nearest-rank order statistic over the sorted warm repetitions -- the
+    maximum for the five repetitions this harness runs -- and is disclosed so a
+    reader does not mistake it for an interpolated percentile.
+    """
     started = time.perf_counter()
     first = query()
     first_ms = (time.perf_counter() - started) * 1000.0
@@ -433,11 +527,14 @@ def timed(query: Any, repetitions: int) -> dict[str, Any]:
         del result
     samples.sort()
     median = samples[len(samples) // 2]
-    p95 = samples[min(len(samples) - 1, int(0.95 * len(samples)))]
+    p95_rank = min(len(samples) - 1, int(0.95 * len(samples)))
+    p95 = samples[p95_rank]
     return {
         "first_ms": round(first_ms, 3),
+        "first_read_semantics": FIRST_READ_SEMANTICS,
         "median_ms": round(median, 3),
         "p95_ms": round(p95, 3),
+        "p95_method": p95_method(repetitions),
         "repetitions": repetitions,
         "result_count": count,
     }
@@ -474,6 +571,8 @@ def run_build(store: Path, name: str, variant_list: Path, assembly: str, band_ce
     seconds, maxrss_kib = parse_time_v(completed.stderr)
     phases = json.loads(completed.stdout.strip().splitlines()[-1])
     return {
+        "run_mode": "fresh",
+        "reused_from": "",
         "total_seconds": round(seconds, 3),
         "peak_rss_mb": round(maxrss_kib / 1024.0, 1),
         "phases": {
@@ -488,26 +587,77 @@ def run_build(store: Path, name: str, variant_list: Path, assembly: str, band_ce
     }
 
 
-def load_prior_build(path: Path) -> dict:
-    """The build block of an earlier artifact, for a controlled re-measurement.
+def reuse_requires_build_stats(
+    subset_present_before: bool, build_stats: Path | None
+) -> Path | None:
+    """Refuse a reuse-only run that would have no genuine build measurement.
 
-    The index is expensive to build and, once published, already exists in the
-    reflinked copy. Re-running only the query timings against it is legitimate
-    when the build was measured in a run whose artifact is kept: this loads that
-    real measurement rather than reusing zeroes. The RSS bound is recomputed
-    from the measured peak, so a stale bound formula is never carried forward.
+    A subset already in the scratch copy means this run will not build it, so
+    the build block can only come from an earlier artifact the caller names.
+    Without it the harness would write exactly the fabricated zeros this
+    refusal exists to prevent.
+    """
+    if subset_present_before and build_stats is None:
+        raise SystemExit(
+            "scratch copy already carries the subset; refusing to re-measure it "
+            "without --build-stats, because the build block would be a fabricated "
+            "zero. Pass --build-stats <artifact> or --reset-subset."
+        )
+    return build_stats
+
+
+def load_prior_build(path: Path) -> dict:
+    """The genuine build block of an earlier artifact, for a query-only re-run.
+
+    Only used when the caller explicitly passes ``--build-stats`` for a copy
+    that already carries the subset. Every field is required and strictly
+    validated: a missing or zero build measurement must fail here rather than be
+    written into the artifact as a fabricated zero.
     """
     prior = json.loads(path.read_text(encoding="utf-8"))
-    build = prior["build"]
+    build = prior.get("build")
+    if not isinstance(build, dict):
+        raise SystemExit(f"{path} has no build block to reuse")
+    required = (
+        "total_seconds",
+        "peak_rss_mb",
+        "requested",
+        "resolved",
+        "absent",
+        "input_sha256",
+    )
+    missing = [key for key in required if key not in build]
+    phases = build.get("phases") or {}
+    missing += [
+        f"phases.{key}"
+        for key in ("prepare_seconds", "publish_seconds")
+        if key not in phases
+    ]
+    if missing:
+        raise SystemExit(f"{path} build block is missing: {', '.join(sorted(missing))}")
+    if float(build["total_seconds"]) <= 0.0 or float(build["peak_rss_mb"]) <= 0.0:
+        raise SystemExit(f"{path} build block has non-positive measured totals; refusing")
+    if int(build["requested"]) <= 0:
+        raise SystemExit(f"{path} build block has no requested variant count; refusing")
     return {
+        "run_mode": "reused",
+        "reused_from": str(path),
         "total_seconds": float(build["total_seconds"]),
-        "in_process_seconds": float(build.get("in_process_seconds", 0.0)),
+        "in_process_seconds": float(
+            build.get(
+                "in_process_seconds",
+                float(phases["prepare_seconds"]) + float(phases["publish_seconds"]),
+            )
+        ),
         "peak_rss_mb": float(build["peak_rss_mb"]),
         "phases": {
-            "prepare_seconds": float(build["phases"]["prepare_seconds"]),
-            "publish_seconds": float(build["phases"]["publish_seconds"]),
+            "prepare_seconds": float(phases["prepare_seconds"]),
+            "publish_seconds": float(phases["publish_seconds"]),
         },
-        "reused_from": str(path),
+        "requested": int(build["requested"]),
+        "resolved": int(build["resolved"]),
+        "absent": int(build["absent"]),
+        "input_sha256": str(build["input_sha256"]),
     }
 
 
@@ -524,24 +674,104 @@ def _has(artifact: dict[str, Any], dotted: str) -> bool:
 
 
 def assert_artifact_complete(artifact: dict[str, Any]) -> None:
-    """Refuse to publish an artifact missing any field #267 names."""
+    """Refuse to publish an artifact missing any #267 field or self-inconsistent."""
     missing = [field for field in _REQUIRED_FIELDS if not _has(artifact, field)]
     if missing:
         raise SystemExit(
             "benchmark artifact is missing #267 fields: " + ", ".join(sorted(missing))
         )
+    problems = _semantic_problems(artifact)
+    if problems:
+        raise SystemExit(
+            "benchmark artifact is semantically invalid: " + "; ".join(problems)
+        )
 
 
-def _store_identity(store: Path) -> dict[str, Any]:
-    manifest = json.loads((store / "manifest.json").read_text(encoding="utf-8"))
+def _positive(artifact: dict[str, Any], dotted: str, problems: list[str]) -> None:
+    value = artifact
+    for part in dotted.split("."):
+        value = value[part]
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        problems.append(f"{dotted} must be a positive number, got {value!r}")
+
+
+def _semantic_problems(artifact: dict[str, Any]) -> list[str]:
+    """Reasons a structurally complete artifact still cannot be believed."""
+    problems: list[str] = []
+    if artifact.get("artifact_schema_version") != ARTIFACT_SCHEMA_VERSION:
+        problems.append(
+            f"artifact_schema_version is {artifact.get('artifact_schema_version')!r}, "
+            f"expected {ARTIFACT_SCHEMA_VERSION}"
+        )
+    for field in ("analysis_id", "subset_name"):
+        if not isinstance(artifact.get(field), str) or not artifact[field]:
+            problems.append(f"{field} must be a non-empty string")
+    build = artifact["build"]
+    if build.get("run_mode") not in {"fresh", "reused"}:
+        problems.append(f"build.run_mode is {build.get('run_mode')!r}")
+    if build.get("run_mode") == "reused" and not build.get("reused_from"):
+        problems.append("build.run_mode is reused but build.reused_from is empty")
+    if build.get("run_mode") == "fresh" and build.get("reused_from"):
+        problems.append("build.run_mode is fresh but build.reused_from is set")
+    for field in ("total_seconds", "peak_rss_mb"):
+        _positive(artifact, f"build.{field}", problems)
+    _positive(artifact, "build.band_cells", problems)
+    requested = build["requested"]
+    if requested <= 0 or requested != build["resolved"] + build["absent"]:
+        problems.append(
+            f"build counts do not balance: requested={requested}, "
+            f"resolved={build['resolved']}, absent={build['absent']}"
+        )
+    inp = artifact["input"]
+    if (inp["requested"], inp["resolved"], inp["absent"]) != (
+        build["requested"],
+        build["resolved"],
+        build["absent"],
+    ):
+        problems.append("input counts are not the writer-returned build counts")
+    if inp["variant_list_sha256"] != build["input_sha256"]:
+        problems.append("input.variant_list_sha256 does not equal build.input_sha256")
+    if inp.get("counts_reconciled") is not True:
+        problems.append("input.counts_reconciled is not true")
+    equivalence = artifact["equivalence"]
+    if list(equivalence.get("required_fields", [])) != list(REQUIRED_RESULT_FIELDS):
+        problems.append("equivalence.required_fields is not the six result fields")
+    if equivalence.get("exact") is True and not (
+        equivalence.get("required_fields_present") is True
+        and equivalence.get("dtypes_match") is True
+        and equivalence.get("lengths_match") is True
+        and equivalence.get("non_empty") is True
+        and equivalence.get("expected_count") == equivalence.get("indexed_count")
+        and equivalence.get("expected_count")
+    ):
+        problems.append("equivalence.exact is true but its guards are not")
+    for block in ("ordinary_before", "indexed", "ordinary_after"):
+        _positive(artifact, f"timings.{block}.median_ms", problems)
+        _positive(artifact, f"timings.{block}.result_count", problems)
+        _positive(artifact, f"timings.{block}.repetitions", problems)
+    run = artifact["run"]
+    if run.get("mode") not in {"fresh", "reused"}:
+        problems.append(f"run.mode is {run.get('mode')!r}")
+    if not isinstance(run.get("ordinary_bracketed"), bool):
+        problems.append("run.ordinary_bracketed must be a bool")
+    if artifact["publication"]["published"] != artifact["targets"]["exact_equivalence"]:
+        problems.append("publication.published disagrees with targets.exact_equivalence")
+    return problems
+
+
+def _store_identity(measured: Path, authoritative: Path) -> dict[str, Any]:
+    manifest = json.loads((measured / "manifest.json").read_text(encoding="utf-8"))
     provenance_block = manifest.get("provenance") or {}
     return {
-        "path": str(store),
+        "path": str(measured),
+        "authoritative_path": str(authoritative),
+        "copy_kind": "reflink" if measured != authoritative else "in_place",
         "store_id": str(manifest.get("store_id", "")),
         "release_id": str(manifest.get("release_id", "")),
         "format_version": str(manifest.get("format_version", "")),
         "reference_assembly": str(manifest.get("reference_assembly", "")),
         "completion_state": str(manifest.get("completion_state", "")),
+        "layout": str(manifest.get("primary_layout", "")),
         "n_analyses": int(provenance_block.get("n_analyses", 0)),
         "n_variants": int(provenance_block.get("n_variants", 0)),
         "encoding": manifest.get("encoding", {}),
@@ -559,7 +789,15 @@ def _ordinary_unchanged(before: dict[str, Any], after: dict[str, Any]) -> dict[s
 
 
 def benchmark(args: argparse.Namespace) -> dict[str, Any]:
-    """Run the whole measurement and return the artifact."""
+    """Run the whole measurement and return the artifact.
+
+    The before/after bracket is explicit: ``ordinary_before`` is measured only
+    after any pre-existing subset has been removed from the scratch copy (or
+    when the copy carries none), the build runs next, and ``ordinary_after``
+    follows it. The artifact records each of those facts so a reader can prove
+    the bracket rather than take it on trust.
+    """
+    started_at = dt.datetime.now(dt.UTC).isoformat()
     args.work.mkdir(parents=True, exist_ok=True)
     source = args.hm3 if args.hm3.exists() else args.work / args.hm3.name
     source_md5 = md5_of(source)
@@ -576,29 +814,41 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     elif not args.reuse_copy:
         raise SystemExit(f"{copy} exists; pass --reuse-copy to reuse it")
 
+    name = args.subset_name
+    index_group = copy / "data.zarr" / "indexed_subsets" / name
+    if args.reset_subset and index_group.is_dir():
+        removed = remove_indexed_subset(copy, name)
+        print(f"Removed existing subset {name!r} from scratch copy (removed={removed})", flush=True)
+    subset_present_before = index_group.is_dir()
+    reuse_requires_build_stats(subset_present_before, args.build_stats)
+
     before_original = _metadata_fingerprint(args.store)
     resolution = resolve_hapmap3(copy, reference)
     variant_list = args.work / "hm3.grch38.alid.txt"
     variant_sha256 = write_alid_list(variant_list, resolution.alids)
-
     baseline_physical = physical_bytes(args.store)
     baseline_logical = logical_bytes(args.store)
 
     query = query_store(copy)
     try:
+        # ordinary_before must precede the build: this is the pre-index baseline,
+        # and the artifact records that no subset existed when it ran.
         ordinary_before = timed(lambda: query.analysis(args.analysis_id), args.reps)
-        name = args.subset_name
-        index_group = copy / "data.zarr" / "indexed_subsets" / name
-        if index_group.is_dir():
+        if subset_present_before:
+            build = load_prior_build(args.build_stats)
+            build_mode = "reused"
             print(f"Reusing published subset {name!r} in {copy}", flush=True)
-            build = load_prior_build(args.build_stats) if args.build_stats else None
         else:
             build = run_build(copy, name, variant_list, "GRCh38", BAND_CELLS)
+            build_mode = "fresh"
             print(f"Built subset {name!r} in {build['total_seconds']} s", flush=True)
+        subset_published_by_this_run = build_mode == "fresh" and index_group.is_dir()
+        ordinary_bracketed = (
+            not subset_present_before and build_mode == "fresh" and index_group.is_dir()
+        )
         # The build wrote ~6 GB; until the filesystem finishes flushing it, the
         # ordinary read competes with writeback and reports a slowdown that is
-        # not the query path's. Flush, then let the first timed read warm the
-        # column cache exactly as the before-build read did.
+        # not the query path's. Flush before the after-block is timed.
         os.sync()
         subset = open_indexed_subset(copy, name)
         indexed = timed(
@@ -609,6 +859,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         indexed_full = query.analysis(args.analysis_id, indexed_subset=name)
     finally:
         query.close()
+    finished_at = dt.datetime.now(dt.UTC).isoformat()
 
     equivalence = compare_indexed_to_ordinary(
         ordinary_full, indexed_full, subset.variant_index
@@ -616,7 +867,34 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     after_original = _metadata_fingerprint(args.store)
     index_physical = physical_bytes(index_group)
     rss_bound_mb = FIXED_OVERHEAD_MB + BAND_CELLS * BYTES_PER_BAND_CELL / (1024 * 1024)
-    peak_rss_mb = float(build["peak_rss_mb"]) if build else 0.0
+    peak_rss_mb = float(build["peak_rss_mb"])
+    rss_within_bound = peak_rss_mb <= rss_bound_mb
+
+    res = resolution.diagnostics
+    writer_requested = int(build["requested"])
+    writer_resolved = int(build["resolved"])
+    writer_absent = int(build["absent"])
+    alids_derived = len(resolution.alids)
+    counts_reconciliation = {
+        "writer_requested_equals_alids": writer_requested == alids_derived,
+        "writer_resolved_equals_alids": writer_resolved == alids_derived,
+        "writer_absent_zero": writer_absent == 0,
+        "resolution_resolved_equals_alids": res["resolved_rsids"] == alids_derived,
+        "rsid_budget_balances": (
+            res["resolved_rsids"]
+            + res["absent_from_store_axis"]
+            + res["allele_incompatible"]
+            == res["rsids_requested"]
+        ),
+        "variant_list_sha256_equals_writer": variant_sha256 == str(build["input_sha256"]),
+    }
+    counts_reconciled = all(counts_reconciliation.values())
+    if not counts_reconciled:
+        raise SystemExit(
+            "input counts do not reconcile between the HapMap3 resolution and the "
+            f"writer: {json.dumps(counts_reconciliation, sort_keys=True)}"
+        )
+
     targets = {
         "warm_median_under_1s": indexed["median_ms"] < SUB_SECOND_TARGET_MS,
         "exact_equivalence": bool(equivalence["exact"]),
@@ -624,20 +902,28 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             _ordinary_unchanged(ordinary_before, ordinary_after)["within_envelope"]
         ),
         "original_store_unchanged": before_original == after_original,
+        "peak_rss_within_bound": rss_within_bound,
+        "ordinary_bracketed": bool(ordinary_bracketed),
     }
     artifact: dict[str, Any] = {
         **provenance(),
-        "store": _store_identity(copy),
+        "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
+        "analysis_id": str(args.analysis_id),
+        "subset_name": name,
+        "store": _store_identity(copy, args.store),
         "input": {
             "variant_list_path": str(variant_list),
             "variant_list_sha256": variant_sha256,
             "hapmap3_source_path": str(source),
             "hapmap3_source_md5": source_md5,
             "reference_assembly": "GRCh38",
-            "requested": int(len(resolution.alids)),
-            "resolved": int(len(resolution.alids)),
-            "absent": 0,
-            "hapmap3_resolution": resolution.diagnostics,
+            "requested": writer_requested,
+            "resolved": writer_resolved,
+            "absent": writer_absent,
+            "alids_derived": alids_derived,
+            "counts_reconciled": counts_reconciled,
+            "counts_reconciliation": counts_reconciliation,
+            "hapmap3_resolution": res,
         },
         "storage": {
             "baseline_logical_bytes": baseline_logical,
@@ -648,36 +934,49 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "planes": plane_bytes(index_group),
         },
         "build": {
-            "total_seconds": build["total_seconds"] if build else 0.0,
-            "in_process_seconds": (
-                round(
+            "run_mode": build_mode,
+            "reused_from": str(build.get("reused_from", "")),
+            "total_seconds": float(build["total_seconds"]),
+            "in_process_seconds": round(
+                float(
                     build.get(
                         "in_process_seconds",
-                        build["phases"]["prepare_seconds"] + build["phases"]["publish_seconds"],
-                    ),
-                    3,
-                )
-                if build
-                else 0.0
+                        float(build["phases"]["prepare_seconds"])
+                        + float(build["phases"]["publish_seconds"]),
+                    )
+                ),
+                3,
             ),
             "peak_rss_mb": peak_rss_mb,
             "band_cells": BAND_CELLS,
             "rss_bound_mb": round(rss_bound_mb, 1),
-            "rss_within_bound": peak_rss_mb <= rss_bound_mb,
-            "phases": (
-                build["phases"]
-                if build
-                else {"prepare_seconds": 0.0, "publish_seconds": 0.0}
-            ),
+            "rss_within_bound": rss_within_bound,
+            "phases": build["phases"],
             "peak_rss_source": "/usr/bin/time -v (build subprocess)",
-            "reused_from": str(build.get("reused_from", "")) if build else "",
+            "requested": writer_requested,
+            "resolved": writer_resolved,
+            "absent": writer_absent,
+            "input_sha256": str(build["input_sha256"]),
         },
         "timings": {
+            "method": {
+                "first_read": FIRST_READ_SEMANTICS,
+                "p95": p95_method(args.reps),
+            },
             "ordinary_before": ordinary_before,
             "ordinary_after": ordinary_after,
             "indexed": indexed,
         },
         "equivalence": equivalence,
+        "run": {
+            "mode": build_mode,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "subset_present_during_ordinary_before": subset_present_before,
+            "subset_published_by_this_run": bool(subset_published_by_this_run),
+            "ordinary_bracketed": bool(ordinary_bracketed),
+            "reset_subset": bool(args.reset_subset),
+        },
         "targets": targets,
         "publication": {
             "published": bool(equivalence["exact"]),
@@ -703,6 +1002,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--reps", type=int, default=DEFAULT_REPS)
     parser.add_argument("--output", type=Path, default=OUTPUT)
     parser.add_argument("--reuse-copy", action="store_true")
+    parser.add_argument(
+        "--reset-subset",
+        action="store_true",
+        help=(
+            "Remove the named subset from the scratch copy before measuring, so "
+            "ordinary_before runs with no subset and this run builds it fresh. Never "
+            "touches the authoritative store."
+        ),
+    )
     parser.add_argument(
         "--build-stats",
         type=Path,

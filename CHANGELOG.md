@@ -150,6 +150,27 @@ the end of this file.
 
 ### Changed
 
+- **Indexed Variant Subset overview and benchmark truthfulness (issue #267).**
+  `overview.html`'s Indexed Subsets tab now surfaces an unreadable group, or a
+  group whose recorded `indexed_subset_name` disagrees with its directory name,
+  as an invalid entry instead of silently omitting or relabelling it; the
+  directory name is the displayed identity. Its physical size was already
+  computed from the group's files at render time and is now documented as such
+  (the recorded metadata carries counts, checksum, assembly and provenance, not
+  bytes). The #267 benchmark harness now requires the full six result fields
+  (`variant_index`, `analysis_index`, `z`, `se`, `eaf`, `association_status`) to
+  be present on both sides and non-empty with matching dtype and length before
+  exact equivalence can hold, records the writer-returned
+  requested/resolved/absent counts reconciled against the HapMap3 rsid budget,
+  proves the ordinary before/after bracket (`run.ordinary_bracketed`) and
+  records it as a target, requires positive measured build metrics and refuses
+  a reuse-only run without `--build-stats` (or `--reset-subset`) so a zero build
+  block can never be fabricated, records the Analysis, subset name, primary
+  layout, run mode and the authoritative source path separately from the
+  measured scratch copy, and discloses the p95 and first-read methods. The
+  report contains no inline expressions and no hardcoded identifiers, and a
+  test searches the rendered HTML for unevaluated `{python}` markers.
+
 - **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**
   `CURRENT_FORMAT_VERSION` becomes `0.2.0`, and the converter's target is that
   same constant rather than a second one (`SHARDED_FORMAT_VERSION` is gone; the

@@ -1121,10 +1121,14 @@ A published group self-describes; validation rejects a group missing any of
 `requested_count`, `resolved_count`, `absent_count`, `builder_version`,
 `created_at` and `order` (`analysis,variant`).
 
-A regenerated `overview.html` lists every published subset from that recorded
-metadata -- name, requested/resolved/absent counts, physical size, input
-checksum, Reference Assembly and build provenance. It presents the group's own
-attributes and is not a second source of truth (§1).
+A regenerated `overview.html` lists every published subset: the name, the
+requested/resolved/absent counts, the input checksum, the Reference Assembly and
+the build provenance are read from the group's own recorded metadata, while the
+physical size is computed from the group's files at render time (it is not
+recorded as an attribute). A named directory that cannot be read, or whose
+recorded `indexed_subset_name` disagrees with its directory name, is surfaced as
+an invalid entry rather than silently omitted or relabelled. The page presents
+these facts and is not a second source of truth (§1).
 
 ### Lifecycle
 

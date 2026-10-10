@@ -1,6 +1,6 @@
 ---
 title: "Indexed Variant Subsets on OGS-00009 — HapMap3 full-statistic extraction"
-subtitle: "Rebuilding the issue-262 prototype as a reproducible benchmark · sub-second full-result LDSC extraction with exact decoded equivalence"
+subtitle: "A reproducible single-run benchmark · sub-second full-result LDSC extraction with exact six-field equivalence"
 date: today
 format:
   html:
@@ -17,12 +17,12 @@ import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 
 HERE = Path(".")
 b = json.loads((HERE / "opengwasdb_267_indexed_subset_benchmark.json").read_text())
 
-analysis_id = b.get("analysis_id", "ukb-b-17805")
+analysis_id = b["analysis_id"]
+subset_name = b["subset_name"]
 store = b["store"]
 inp = b["input"]
 res = inp["hapmap3_resolution"]
@@ -32,6 +32,7 @@ timings = b["timings"]
 equiv = b["equivalence"]
 targets = b["targets"]
 pub = b["publication"]
+run = b["run"]
 
 
 def md_table(headers, rows):
@@ -61,19 +62,20 @@ def ms(v):
 #| echo: false
 #| output: asis
 status = "**published**" if pub["published"] else "**REFUSED**"
+speedup = timings["ordinary_before"]["median_ms"] / timings["indexed"]["median_ms"]
 print(f"""
-Issue #262 asked whether the ~1.2 million HapMap3 variants in one Analysis could
-be extracted in under a second. On OGS-00009, with a **full-statistic** index
-(Z, SE and EAF — not a Z-only projection), the indexed full result for
-`{analysis_id}` returns in
-**{ms(timings['indexed']['median_ms'])} warm median** ({timings['indexed']['result_count']:,}
-associations), against **{ms(timings['ordinary_before']['median_ms'])}** for the
-ordinary primary-plane path — a
-**{timings['ordinary_before']['median_ms'] / timings['indexed']['median_ms']:.0f}x**
-improvement.
+On OGS-00009, with a **full-statistic** index (Z, SE and EAF — not a Z-only
+projection), the indexed full result for `{analysis_id}` returns in
+**{ms(timings['indexed']['median_ms'])} warm median**
+({timings['indexed']['result_count']:,} associations), against
+**{ms(timings['ordinary_before']['median_ms'])}** for the ordinary primary-plane
+path — a **{speedup:.0f}x** improvement.
 
-Exact decoded equivalence with the ordinary filtered result is **{equiv['exact']}**;
-publication status: {status}.
+The ordinary read is measured **before** the subset is built and again **after**
+it, in the same run against a reflinked scratch copy; the artifact records
+`ordinary_bracketed = {run['ordinary_bracketed']}`. Exact decoded equivalence
+across all six result fields is **{equiv['exact']}**; publication status:
+{status}.
 """)
 ```
 :::
@@ -89,18 +91,21 @@ enc_text = ", ".join(
     f"{name} `{plane.get('kind')}`"
     for name, plane in sorted(enc.items())
     if isinstance(plane, dict) and "kind" in plane
-) if isinstance(enc, dict) else str(enc)
+)
 print(md_table(
     ["Property", "Value"],
     [
         ["Store Release", f"{store['store_id']} (`{store['release_id']}`)"],
+        ["Primary layout", store["layout"]],
         ["Completion state", store["completion_state"]],
-        ["Primary layout", "dense"],
-        ["Analyses", f"{store.get('n_analyses', 0):,}"],
-        ["Variants (Store axis)", f"{store.get('n_variants', 0):,}"],
+        ["Analyses", f"{store['n_analyses']:,}"],
+        ["Variants (Store axis)", f"{store['n_variants']:,}"],
         ["Store format version", store["format_version"]],
         ["Store Encoding", f"{enc_text} (v{ver})"],
         ["Reference Assembly", store["reference_assembly"]],
+        ["Selected Analysis", f"`{analysis_id}`"],
+        ["Indexed Variant Subset", f"`{subset_name}`"],
+        ["Run mode", run["mode"]],
         ["Measured at (UTC)", b["measured_at"]],
         ["Git commit", f"`{b['commit']}`"],
         ["opengwasdb fingerprint", f"`{b['opengwasdb_fingerprint'][:16]}…`"],
@@ -108,16 +113,46 @@ print(md_table(
 ))
 ```
 
-The package version and the Store Release `format_version` are different things
-and move independently.
+The package version and the Store Release `format_version` are different things and
+move independently.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Store path", "Value", "Role"],
+    [
+        ["Authoritative source", f"`{store['authoritative_path']}`", "never written"],
+        ["Measured copy", f"`{store['path']}`", f"`{store['copy_kind']}` scratch copy"],
+    ],
+))
+```
+
+The build writes only inside the reflinked scratch copy. The original release's
+recursive metadata fingerprint and its `manifest.json`/`analyses.tsv` hashes are
+compared before and after the run.
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Run bracket", "State"],
+    [
+        ["subset present during ordinary_before", str(run["subset_present_during_ordinary_before"])],
+        ["subset published by this run", str(run["subset_published_by_this_run"])],
+        ["ordinary before/after bracketed", str(run["ordinary_bracketed"])],
+        ["run started (UTC)", run["started_at"]],
+        ["run finished (UTC)", run["finished_at"]],
+    ],
+))
+print(f"\noriginal_store_unchanged = {targets['original_store_unchanged']}")
+```
 
 ## Input: the canonical GRCh38 HapMap3 ALID list
 
-The input is the canonical LDSC HapMap3 list
-(`w_hm3.snplist.gz`, MD5 `{python} inp['hapmap3_source_md5']`), resolved against
-OGS-00009's Variant Index by rsid **and** allele compatibility, and written as
-canonical ALIDs. The build's variant-list checksum is the file's own SHA-256, so
-the index records exactly which bytes produced it.
+The input is the canonical LDSC HapMap3 list, resolved against the Store's
+Variant Index by rsid **and** allele compatibility and written as canonical
+ALIDs. The list's SHA-256 is the same checksum the writer recorded.
 
 ```{python}
 #| echo: false
@@ -142,21 +177,41 @@ print(md_table(
 print(md_table(
     ["Indexed Variant Subset input", "Value"],
     [
-        ["subset name", "`hm3`"],
+        ["HapMap3 source", f"`{inp['hapmap3_source_path']}`"],
+        ["HapMap3 source MD5", f"`{inp['hapmap3_source_md5']}`"],
+        ["subset name", f"`{subset_name}`"],
         ["variant-list path", f"`{inp['variant_list_path']}`"],
         ["variant-list SHA-256", f"`{inp['variant_list_sha256']}`"],
         ["Reference Assembly", inp["reference_assembly"]],
-        ["requested", f"{inp['requested']:,}"],
-        ["resolved", f"{inp['resolved']:,}"],
-        ["absent", f"{inp['absent']:,}"],
+        ["requested (writer)", f"{inp['requested']:,}"],
+        ["resolved (writer)", f"{inp['resolved']:,}"],
+        ["absent (writer)", f"{inp['absent']:,}"],
+        ["canonical ALIDs derived", f"{inp['alids_derived']:,}"],
     ],
 ))
 ```
 
-An absent HapMap3 rsid has no GRCh38 position in this Store Release, so it cannot
-appear in an ALID list; the writer's own `absent` count is therefore zero while
-the rsid-level absence above is {python} f"{res['absent_from_store_axis']:,}".
-Both are recorded rather than one being presented as the other.
+```{python}
+#| echo: false
+#| output: asis
+print(f"""
+The writer's own `absent` count is **{inp['absent']:,}**, while the rsid-level
+absence is **{res['absent_from_store_axis']:,}**. The two are reconciled rather
+than one being presented as the other, and a non-zero writer `absent` or an
+unbalanced rsid budget fails the run before an artifact is written.
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+recon = inp["counts_reconciliation"]
+print(md_table(
+    ["Reconciliation check", "Holds"],
+    [[f"`{name}`", str(value)] for name, value in sorted(recon.items())]
+    + [["**all reconciled**", f"**{inp['counts_reconciled']}**"]],
+))
+```
 
 ## Storage: measured, not projected
 
@@ -179,9 +234,7 @@ print(md_table(
 #| echo: false
 #| output: asis
 planes = storage["planes"]
-plane_rows = sorted(
-    (name, size) for name, size in planes.items() if name != "total"
-)
+plane_rows = sorted((name, size) for name, size in planes.items() if name != "total")
 print(md_table(
     ["Index array / entry", "Physical bytes"],
     [[f"`{name}`", f"{size:,}"] for name, size in plane_rows]
@@ -215,37 +268,51 @@ association and no Analytical Metadata.
 print(md_table(
     ["Build", "Value"],
     [
-        ["Configured band", f"{build['band_cells']:,} cells"],
+        ["run mode", build["run_mode"]],
+        ["configured band", f"{build['band_cells']:,} cells"],
         ["prepare (open release, resolve list)", f"{build['phases']['prepare_seconds']:,.2f} s"],
         ["publish (write planes + staged validation)", f"{build['phases']['publish_seconds']:,.2f} s"],
-        ["in-process total", f"{build.get('in_process_seconds', 0):,.2f} s"],
+        ["in-process total", f"{build['in_process_seconds']:,.2f} s"],
         ["subprocess wall total (incl. interpreter startup)", f"{build['total_seconds']:,.2f} s"],
+        ["requested / resolved / absent (writer)", f"{build['requested']:,} / {build['resolved']:,} / {build['absent']:,}"],
+        ["input SHA-256 (writer)", f"`{build['input_sha256']}`"],
         ["peak RSS", f"{build['peak_rss_mb']:,.1f} MB"],
         ["RSS bound (band + fixed overhead)", f"{build['rss_bound_mb']:,.1f} MB"],
         ["peak RSS within declared bound", str(build["rss_within_bound"])],
         ["measurement source", build["peak_rss_source"]],
-        ["build block reused from", build.get("reused_from", "") or "this run"],
+        ["build block source", build["reused_from"] or "this run"],
     ],
 ))
 ```
 
-The bound is `band_cells x {python} 32 bytes` plus a fixed allowance, so it is a
-function of the configured band and not of the full
-`{store.get('n_analyses', 0):,} x {store.get('n_variants', 0):,}` matrix. The
-measured peak is reported as it was measured: where it exceeds the declared
-bound, the target below fails rather than the bound being widened after the
-fact. At
-`{store.get('n_analyses', 0) * store.get('n_variants', 0) / 1e9:.1f}` billion
-cells the decoded matrix is terabytes, so the band bound is what the target is
-about.
+The bound is `band_cells` times a per-cell allowance plus a fixed term, so it is
+a function of the configured band and not of the full Store axis (whose decoded
+size is printed below). The measured peak is reported as measured: where it
+exceeds the declared bound the target below fails rather than the bound being
+widened after the fact.
+
+```{python}
+#| echo: false
+#| output: asis
+full_matrix_cells = store["n_analyses"] * store["n_variants"]
+print(
+    f"Full decoded axis: {store['n_analyses']:,} Analyses x "
+    f"{store['n_variants']:,} variants = {full_matrix_cells:,} cells "
+    f"({full_matrix_cells * 4 / 1e12:.1f} TB at float32)."
+)
+```
 
 ## Query latency
 
 ```{python}
 #| echo: false
 #| output: asis
+method = timings["method"]
+
+
 def timing_row(label, t):
     return [label, ms(t["first_ms"]), ms(t["median_ms"]), ms(t["p95_ms"]), f"{t['result_count']:,}"]
+
 
 print(md_table(
     ["Query", "first read", "warm median", "p95", "results"],
@@ -253,6 +320,15 @@ print(md_table(
         timing_row("ordinary, before index", timings["ordinary_before"]),
         timing_row("**indexed**", timings["indexed"]),
         timing_row("ordinary, after index", timings["ordinary_after"]),
+    ],
+))
+print()
+print(md_table(
+    ["Timing method", "Definition"],
+    [
+        ["first read", method["first_read"]],
+        ["p95", method["p95"]],
+        ["warm median", "median of the sorted repetitions that follow the first read, on the same open store"],
     ],
 ))
 ```
@@ -265,68 +341,94 @@ print(md_table(
     [
         ["warm median under 1 s", f"{targets['warm_median_under_1s']}"],
         ["exact decoded equivalence", f"{targets['exact_equivalence']}"],
-        [f"ordinary unchanged within ±{b['ordinary_stability']['noise_envelope_percent']:.0f}% envelope",
-         f"{targets['ordinary_unchanged_within_envelope']} "
-         f"(median moved {b['ordinary_stability']['median_change_percent']:+.2f}%)"],
+        [
+            f"ordinary unchanged within ±{b['ordinary_stability']['noise_envelope_percent']:.0f}% envelope",
+            f"{targets['ordinary_unchanged_within_envelope']} "
+            f"(median moved {b['ordinary_stability']['median_change_percent']:+.2f}%)",
+        ],
+        ["ordinary before/after bracketed", f"{targets['ordinary_bracketed']}"],
+        ["peak build RSS within declared bound", f"{targets['peak_rss_within_bound']}"],
         ["authoritative store unchanged", f"{targets['original_store_unchanged']}"],
     ],
 ))
 ```
 
-## Caveats and honesty
-
-- **The build and the query timings come from the same measurement campaign,
-  but not the same processes.** The build block is the real full-run build (the
-  index is expensive — {python} f"{build['total_seconds'] / 60:.0f} minutes" —
-  and is reused rather than rebuilt for a timing re-run); the query timings are
-  measured against that published index after the filesystem has settled, so
-  the ordinary before/after comparison is not confounded by the build's
-  writeback. `build.reused_from` names the artifact the build block came from.
-  A fresh default invocation rebuilds and re-measures everything.
-- **The RSS target fails.** The measured peak ({python}
-  f"{build['peak_rss_mb']:,.1f} MB") exceeds the declared
-  band-plus-fixed-overhead bound ({python} f"{build['rss_bound_mb']:,.1f} MB") —
-  the fixed term underestimated Zarr's partial-chunk write working set for the
-  default band. The peak is still set by the band and not by the
-  matrix (the decoded matrix is terabytes). The failure is left in; widening the
-  bound after the fact would be exactly the tuning this harness refuses.
-- The per-plane physical figures bucket the group's top-level entries, so a
-  future encoding that adds an array appears here without a hard-coded plane
-  list.
-
 ## Exact equivalence (the publication gate)
 
-Every parallel array of the indexed result must decode exactly to the ordinary
-result filtered to the subset's Store Variant Indices. The harness refuses to
-publish when any field differs.
+Every one of the six parallel arrays must decode exactly equal, be present on
+both sides, be non-empty, and share dtype and length. A field missing from both
+sides fails: it was not measured.
 
 ```{python}
 #| echo: false
 #| output: asis
 print(md_table(
-    ["Field", "Exact"],
-    [[f"`{name}`", str(value)] for name, value in sorted(equiv["fields"].items())]
-    + [["expected rows", f"{equiv['expected_count']:,}"],
-       ["indexed rows", f"{equiv['indexed_count']:,}"],
-       ["**exact**", f"**{equiv['exact']}**"]],
+    ["Guard", "Value"],
+    [
+        ["required fields", ", ".join(f"`{name}`" for name in equiv["required_fields"])],
+        ["all six present on both sides", str(equiv["required_fields_present"])],
+        ["dtypes match", str(equiv["dtypes_match"])],
+        ["lengths match", str(equiv["lengths_match"])],
+        ["non-empty", str(equiv["non_empty"])],
+        ["expected rows", f"{equiv['expected_count']:,}"],
+        ["indexed rows", f"{equiv['indexed_count']:,}"],
+    ],
 ))
+print()
+print(md_table(
+    ["Field", "Exact"],
+    [[f"`{name}`", str(value)] for name, value in sorted(equiv["fields"].items())],
+))
+```
+
+## Caveats and honesty
+
+```{python}
+#| echo: false
+#| output: asis
+print(f"""
+- **The RSS target is recorded as its measurement says.** The peak was
+  {build['peak_rss_mb']:,.1f} MB against the declared band-plus-fixed-overhead
+  bound of {build['rss_bound_mb']:,.1f} MB, so
+  `peak_rss_within_bound = {targets['peak_rss_within_bound']}`. The peak is still
+  set by the band, not by the full matrix (terabytes decoded). Widening the bound
+  after the fact would be the tuning this harness refuses.
+- **`first_ms` is not a cold-cache figure.** The OS page cache is never dropped,
+  and `ordinary_after` follows `ordinary_before`, so it is already warm. The
+  method is disclosed in the artifact under `timings.method`.
+- **`p95_ms` is the nearest-rank order statistic, i.e. the maximum of the five
+  warm repetitions** at the default `--reps`; it is not interpolated.
+- The build block is genuine for this run
+  (`build.run_mode = {build['run_mode']}`). A query-only re-run may reuse an
+  earlier artifact's measured build block via `--build-stats`, and it is named
+  here as `{build['reused_from'] or 'this run'}`.
+- The per-plane physical figures bucket the group's top-level entries, so a
+  future encoding that adds an array appears without a hard-coded plane list.
+""")
 ```
 
 ::: {.callout-note}
 ## Reproducing this measurement
 
-```bash
-pixi run -e dev python benchmarks/benchmark_indexed_subset.py \
-  --store /data/opengwasdb/stores/OGS-00009/store.opengwasdb \
-  --work /data/opengwasdb/work/267-indexed \
-  --analysis-id ukb-b-17805 \
-  --reps 5 \
+```{python}
+#| echo: false
+#| output: asis
+print(f"""```bash
+# Fresh run: reflink the authoritative release into scratch, remove any existing
+# subset from that scratch copy, measure ordinary_before, build, measure
+# ordinary_after, and prove exact equivalence — then render this page.
+pixi run -e dev python benchmarks/benchmark_indexed_subset.py \\
+  --store {store['authoritative_path']} \\
+  --work /data/opengwasdb/work/267-indexed \\
+  --analysis-id {analysis_id} \\
+  --subset-name {subset_name} \\
+  --reps 5 \\
+  --reuse-copy --reset-subset \\
   --output docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.json
-pixi run -e report quarto render \
+pixi run -e report quarto render \\
   docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.qmd
+```""")
 ```
 
-The harness measures against a reflinked copy and compares the original
-release's recursive metadata fingerprint before and after the run. Re-run the
-harness; never hand-edit a number in the artifact or this page.
+Re-run the harness; never hand-edit a number in the artifact or this page.
 :::

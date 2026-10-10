@@ -800,9 +800,11 @@ def _indexed_subset_value(attrs: dict[str, Any], key: str) -> str:
 
 
 def _indexed_subset_row(path: Path, attrs: dict[str, Any]) -> dict[str, str]:
+    """One display row. The directory name is the identity, never the attrs name:
+    a group whose recorded name disagrees is flagged, not silently relabelled."""
     size = _physical_bytes(path)
     return {
-        "Subset": str(attrs.get("indexed_subset_name", path.name)),
+        "Subset": path.name,
         "Profile": _indexed_subset_value(attrs, "statistic_profile"),
         "Requested": _indexed_subset_value(attrs, "requested_count"),
         "Resolved": _indexed_subset_value(attrs, "resolved_count"),
@@ -835,46 +837,94 @@ def _published_subset_paths(output_path: Path) -> list[Path]:
     ]
 
 
+def _subset_problem(path: Path, attrs: dict[str, Any]) -> dict[str, str] | None:
+    """A reason a named directory must be surfaced rather than rendered as valid."""
+    recorded = str(attrs.get("indexed_subset_name", ""))
+    if recorded != path.name:
+        return {
+            "name": path.name,
+            "issue": (
+                f"recorded name {recorded!r} disagrees with its directory name; "
+                "not trusted as a published subset"
+            ),
+        }
+    return None
+
+
 def _collect_indexed_subsets(
     output_path: Path,
-) -> tuple[list[dict[str, str]], int]:
-    """One row per readable published subset plus their total physical bytes.
+) -> tuple[list[dict[str, str]], int, list[dict[str, str]]]:
+    """Readable rows, their total physical bytes, and every invalid entry.
 
-    An unreadable group is omitted rather than rendered with invented values;
-    overview is regenerable presentation, not validation.
+    A named directory that cannot be read, or whose recorded name disagrees with
+    its directory, is reported in `problems` instead of being silently dropped
+    -- an omitted invalid group and a store with no group look identical.
     """
     rows: list[dict[str, str]] = []
     total = 0
+    problems: list[dict[str, str]] = []
     for path in _published_subset_paths(output_path):
         attrs = _read_subset_attrs(path)
         if attrs is None:
+            problems.append({"name": path.name, "issue": "unreadable Zarr group"})
             continue
+        problem = _subset_problem(path, attrs)
+        if problem is not None:
+            problems.append(problem)
         rows.append(_indexed_subset_row(path, attrs))
         total += _physical_bytes(path)
-    return rows, total
+    return rows, total, problems
+
+
+def _render_subset_problems(problems: list[dict[str, str]]) -> str:
+    rows = "\n".join(
+        "<tr>"
+        f'<td class="fname">{html.escape(problem["name"])}</td>'
+        f'<td class="fdesc">{html.escape(problem["issue"])}</td>'
+        "</tr>"
+        for problem in problems
+    )
+    return (
+        '<p class="guide-intro"><strong>Invalid or unreadable entries</strong> — '
+        "these named directories are not trusted as published subsets and their values "
+        "are not invented.</p>\n"
+        f'<table class="guide"><tbody>\n{rows}\n</tbody></table>\n'
+    )
 
 
 def _render_indexed_subsets_section(output_path: Path) -> str | None:
     """The Indexed Variant Subsets tab (ADR 0053): one row per published name,
-    read from the group's own metadata. Absent entirely until a subset exists."""
-    rows, total = _collect_indexed_subsets(output_path)
-    if not rows:
+    read from the group's own metadata. Absent entirely until a subset or an
+    invalid named entry exists."""
+    rows, total, problems = _collect_indexed_subsets(output_path)
+    if not rows and not problems:
         return None
-    return (
+    parts = [
         '<p class="guide-intro">Optional Indexed Variant Subsets (ADR 0053) are derived, '
-        "rebuildable query indexes over a caller-supplied variant list. Deleting one changes "
-        "no association; these rows are read from each group's recorded metadata.</p>\n"
-        f'<p class="guide-intro">Total physical size: {total:,} B '
-        f"({_human_bytes(total)}).</p>\n"
-        + _render_table_section(
-            table_id="indexed-subsets",
-            search_id="search-indexed-subsets",
-            search_placeholder="Filter subsets...",
-            fieldnames=_INDEXED_SUBSET_FIELDS,
-            rows=tuple(rows),
-            sticky_column="Subset",
+        "rebuildable query indexes over a caller-supplied variant list. Counts, checksum, "
+        "Reference Assembly and build provenance are read from each group's recorded "
+        "metadata; physical size is computed from the group's files at render time.</p>\n"
+    ]
+    if problems:
+        parts.append(_render_subset_problems(problems))
+    if rows:
+        parts.append(
+            f'<p class="guide-intro">Total physical size: {total:,} B '
+            f"({_human_bytes(total)}).</p>\n"
         )
-    )
+        parts.append(
+            _render_table_section(
+                table_id="indexed-subsets",
+                search_id="search-indexed-subsets",
+                search_placeholder="Filter subsets...",
+                fieldnames=_INDEXED_SUBSET_FIELDS,
+                rows=tuple(rows),
+                sticky_column="Subset",
+            )
+        )
+    else:
+        parts.append('<p class="guide-intro">No readable published subsets.</p>\n')
+    return "".join(parts)
 
 
 

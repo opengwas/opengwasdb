@@ -155,9 +155,12 @@ pixi run -e dev opengwasdb query-analysis \
 `--overwrite` atomically replaces an existing subset of the same name.
 `--band-cells` bounds peak build memory (the complete write is staged, validated
 against the primary planes, and published by rename). `opengwasdb
-regenerate-overview STORE` lists every published subset — name, requested /
-resolved / absent counts, physical size, input checksum, Reference Assembly and
-build provenance — read from the group's own metadata.
+regenerate-overview STORE` lists every published subset — name,
+requested/resolved/absent counts, input checksum, Reference Assembly and build
+provenance read from the group's own metadata, with the physical size computed
+from the group's files at render time. An unreadable group, or one whose
+recorded name disagrees with its directory, is surfaced as an invalid entry
+rather than silently omitted.
 
 Failure behaviour is deliberate and loud:
 

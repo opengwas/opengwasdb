@@ -511,7 +511,7 @@ def test_indexed_subsets_tab_lists_every_published_name(tmp_path):
     assert ">panel<" in section
 
 
-def test_indexed_subsets_tab_skips_unreadable_group_without_crashing(tmp_path):
+def test_indexed_subsets_tab_marks_unreadable_group(tmp_path):
     store = _build_indexed_subset_store(tmp_path)
     damaged = store / "data.zarr" / "indexed_subsets" / "broken"
     damaged.mkdir()
@@ -521,8 +521,31 @@ def test_indexed_subsets_tab_skips_unreadable_group_without_crashing(tmp_path):
     content = write_overview_html(store, table).read_text(encoding="utf-8")
     section = _indexed_subsets_section(content)
 
+    # The valid subset still renders, and the unreadable directory is surfaced
+    # as an invalid entry rather than silently dropped (an omitted invalid group
+    # and a store with no group would otherwise look identical).
     assert ">hm3<" in section
-    assert ">broken<" not in section
+    assert "Invalid or unreadable entries" in section
+    assert "broken" in section
+    assert "unreadable Zarr group" in section
+
+
+def test_indexed_subsets_tab_marks_a_recorded_name_mismatch(tmp_path):
+    store = _build_indexed_subset_store(tmp_path, subset_name="hm3")
+    namespace = store / "data.zarr" / "indexed_subsets"
+    (namespace / "hm3").rename(namespace / "panel")
+    table = read_analyses(store / "analyses.tsv")
+
+    content = write_overview_html(store, table).read_text(encoding="utf-8")
+    section = _indexed_subsets_section(content)
+
+    # The directory name is the identity; the recorded `hm3` is flagged, not
+    # silently used to relabel the `panel` directory.
+    assert ">panel<" in section
+    assert "disagrees with its directory name" in section
+    # The recorded `hm3` is quoted and HTML-escaped in the invalid-entry row.
+    assert "recorded name" in section
+    assert "hm3" in section
 
 
 def test_indexed_subsets_physical_size_matches_du(tmp_path):
