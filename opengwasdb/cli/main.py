@@ -1375,7 +1375,7 @@ def build_indexed_subset_command(
     overwrite: bool = _INDEXED_SUBSET_OVERWRITE_OPTION,
     band_cells: int = _INDEXED_SUBSET_BAND_CELLS_OPTION,
 ) -> None:
-    """Build one full-statistic Indexed Variant Subset for an Observed-Only Dense store."""
+    """Build one full-statistic Indexed Variant Subset for a Dense store."""
     try:
         result = build_indexed_subset(
             store_path,
@@ -1428,7 +1428,7 @@ _INDEXED_SUBSET_QUERY_OPTION = typer.Option(
         "Read this Analysis from a named Indexed Variant Subset instead of the "
         "primary planes. The subset must exist and belong to this release: an "
         "unknown, incomplete, stale, corrupt or unsupported subset fails loudly "
-        "rather than falling back to the ordinary path. Observed-Only Dense only."
+        "rather than falling back to the ordinary path. Dense-only."
     ),
 )
 

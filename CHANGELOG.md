@@ -386,6 +386,18 @@ the end of this file.
 
 ### Fixed
 
+- **Indexed Variant Subset documentation and error text no longer claim
+  Observed-Only Dense exclusivity (#266).** `build-indexed-subset` has supported
+  both Observed-Only and Reference-Completed Dense since #266, but the build
+  command's description, the `query-analysis --indexed-subset` help, the
+  `IndexedSubsetLayoutError` message and docstring, the Ragged and Hybrid
+  `analysis()` docstrings, and the `indexed_subsets` module and
+  `validate_indexed_subsets` docstrings still said subsets were "Observed-Only
+  Dense only". They now say **Dense-only**, with Observed-Only-specific prose
+  kept where it genuinely describes the Observed-Only case (a missing `imputed`
+  mask, the Observed-Only encoding branch). Tests assert the CLI help and the
+  Ragged/Hybrid refusal message no longer misstate support.
+
 - **A Ragged association sequence is written one whole shard at a time, and the
   Dense SE exception tables once each (#249).**
   `RaggedCSRWriter` flushed its `variant_index`/`z`/`eaf`/`se` planes in regions

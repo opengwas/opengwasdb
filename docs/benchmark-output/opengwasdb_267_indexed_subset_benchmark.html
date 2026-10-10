@@ -2635,7 +2635,7 @@ vertical-align: -.125em;
 </tr>
 </tbody>
 </table>
-<div id="fb0917c7" class="cell" data-execution_count="12">
+<div id="d3dc1fa8" class="cell" data-execution_count="12">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -2901,6 +2901,7 @@ vertical-align: -.125em;
 <li><strong><code>first_ms</code> is not a cold-cache figure.</strong> The OS page cache is never dropped, and <code>ordinary_after</code> follows <code>ordinary_before</code>, so it is already warm. The method is disclosed in the artifact under <code>timings.method</code>.</li>
 <li><strong><code>p95_ms</code> is the nearest-rank order statistic, i.e. the maximum of the five warm repetitions</strong> at the default <code>--reps</code>; it is not interpolated.</li>
 <li>The build block is genuine for this run (<code>build.run_mode = fresh</code>). A query-only re-run may reuse an earlier artifact’s measured build block via <code>--build-stats</code>, and it is named here as <code>this run</code>.</li>
+<li><strong>This is a historical measurement at the commit named in Scope</strong> (<code>90c4ca8</code>, fingerprint <code>216b6affaaca4976…</code>). A later documentation-only commit corrected stale “Observed-Only Dense only” wording in CLI help, error messages and docstrings; it changed no measured code path, so the artifact and its fingerprint remain the measurement for the code that actually ran and are deliberately not re-generated for a wording change.</li>
 <li>The per-plane physical figures bucket the group’s top-level entries, so a future encoding that adds an array appears without a hard-coded plane list.</li>
 </ul>
 <div class="callout callout-style-default callout-note callout-titled">

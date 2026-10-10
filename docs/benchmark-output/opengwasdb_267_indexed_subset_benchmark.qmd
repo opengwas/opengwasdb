@@ -402,6 +402,12 @@ print(f"""
   (`build.run_mode = {build['run_mode']}`). A query-only re-run may reuse an
   earlier artifact's measured build block via `--build-stats`, and it is named
   here as `{build['reused_from'] or 'this run'}`.
+- **This is a historical measurement at the commit named in Scope**
+  (`{b['commit']}`, fingerprint `{b['opengwasdb_fingerprint'][:16]}…`). A later
+  documentation-only commit corrected stale "Observed-Only Dense only" wording
+  in CLI help, error messages and docstrings; it changed no measured code path,
+  so the artifact and its fingerprint remain the measurement for the code that
+  actually ran and are deliberately not re-generated for a wording change.
 - The per-plane physical figures bucket the group's top-level entries, so a
   future encoding that adds an array appears without a hard-coded plane list.
 """)

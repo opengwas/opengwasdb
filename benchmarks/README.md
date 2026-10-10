@@ -485,6 +485,13 @@ subset from the scratch copy so this run builds it fresh. Reusing an existing
 subset without either is refused, so a zero build block can never be written.
 The same invocation is available as `pixi run -e dev benchmark-indexed-subset`.
 
+**Measurement stability.** The committed artifact records both the reachable
+git commit it was measured at and a fingerprint of the `opengwasdb` sources
+that actually ran. A later documentation-only commit (for example correcting
+stale CLI help or error wording) changes no measured code path and does not
+invalidate the artifact; re-run the harness only when benchmarked code changes
+do.
+
 ---
 
 ### `benchmark_store_comparison.py`

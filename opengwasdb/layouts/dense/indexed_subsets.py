@@ -1,4 +1,4 @@
-"""Indexed Variant Subsets for Observed-Only Dense stores (ADR 0053, issue #264).
+"""Indexed Variant Subsets for Dense stores (ADR 0053, issue #264).
 
 An **Indexed Variant Subset** is a named, optional, rebuildable query index over
 a caller-supplied set of canonical ALIDs.  It holds every Analysis's full
@@ -219,10 +219,10 @@ class IndexedSubsetStaleError(IndexedSubsetError):
 class IndexedSubsetLayoutError(IndexedSubsetError):
     """An Indexed Variant Subset was requested on a layout that has none.
 
-    Indexed Variant Subsets are Observed-Only Dense only (ADR 0053, #264): a
-    Ragged release is already a direct per-Analysis CSR and a Hybrid one has no
-    rule for unifying its two components.  A selector naming a subset on either
-    is a caller error, not a reason to answer from the ordinary path (#265).
+    Indexed Variant Subsets are Dense-only (ADR 0053, #264): a Ragged release is
+    already a direct per-Analysis CSR and a Hybrid one has no rule for unifying
+    its two components.  A selector naming a subset on either is a caller error,
+    not a reason to answer from the ordinary path (#265).
     """
 
 
@@ -1620,8 +1620,8 @@ def validate_indexed_subsets(
 ) -> None:
     """Validate the optional `data.zarr/indexed_subsets` namespace, if present.
 
-    An Observed-Only Dense release with no namespace remains valid and
-    unchanged.  When the namespace is present every entry must be a published
+    A release with no `indexed_subsets` namespace remains valid and unchanged.
+    When the namespace is present every entry must be a published
     subset: a staging/replacement directory, an unknown name, a file or a group
     whose decoded values disagree with the primary planes all fail rather than
     being ignored.

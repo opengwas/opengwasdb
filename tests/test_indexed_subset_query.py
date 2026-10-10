@@ -425,16 +425,22 @@ def test_ragged_release_refuses_a_subset_selector(tmp_path: Path) -> None:
     build_ragged_from_ssf(manifest, filtered, store, store_id="ragged-test", release_id="v1")
     with query_store(store) as query:
         analysis_id = next(iter(query.analyses_table().values()))["analysis_id"]
-        with pytest.raises(IndexedSubsetLayoutError, match="Dense"):
+        with pytest.raises(IndexedSubsetLayoutError) as excinfo:
             query.analysis(analysis_id, indexed_subset="hm3")
+    # Reference-Completed Dense is supported (#266); the refusal must say
+    # Dense-only, not narrow the contract to Observed-Only Dense.
+    assert "Dense-only" in str(excinfo.value)
+    assert "Observed-Only" not in str(excinfo.value)
 
 
 def test_hybrid_release_refuses_a_subset_selector(tmp_path: Path) -> None:
     store = _hybrid(tmp_path, tmp_path)
     with query_store(store) as query:
         analysis_id = next(iter(query.analyses_table().values()))["analysis_id"]
-        with pytest.raises(IndexedSubsetLayoutError, match="Dense"):
+        with pytest.raises(IndexedSubsetLayoutError) as excinfo:
             query.analysis(analysis_id, indexed_subset="hm3")
+    assert "Dense-only" in str(excinfo.value)
+    assert "Observed-Only" not in str(excinfo.value)
 
 
 # ── CLI: same schemas, selector passthrough, loud failures ───────────────────
@@ -455,6 +461,26 @@ def _tsv_rows(store: Path, *args: str) -> list[list[str]]:
     code, output = _invoke(store, *args, "--format", "tsv")
     assert code == 0, output
     return list(csv.reader(output.splitlines(), delimiter="\t"))
+
+
+def test_cli_help_does_not_misstate_indexed_subset_support() -> None:
+    """The shipped CLI help must describe Dense support, not Observed-Only Dense.
+
+    Reference-Completed Dense has been supported since #266, so the build
+    command description and the `--indexed-subset` option help are user-facing
+    contract text; a stale "Observed-Only Dense only" would tell users that a
+    valid release shape cannot be indexed.
+    """
+    runner = CliRunner()
+    build_help = runner.invoke(app, ["build-indexed-subset", "--help"])
+    query_help = runner.invoke(app, ["query-analysis", "--help"])
+    assert build_help.exit_code == 0, build_help.output
+    assert query_help.exit_code == 0, query_help.output
+
+    assert "Observed-Only Dense only" not in build_help.output
+    assert "Observed-Only Dense only" not in query_help.output
+    assert "Indexed Variant Subset for a Dense store" in build_help.output
+    assert "Dense-only" in query_help.output
 
 
 def test_cli_json_schema_is_unchanged_with_the_selector(indexed_store: Path) -> None:

@@ -658,7 +658,7 @@ def _refuse_indexed_subset(store_path: Path, layout: str, subset_name: str) -> N
     """
     raise IndexedSubsetLayoutError(
         f"release {store_path} has {layout} layout; an Indexed Variant Subset "
-        f"({subset_name!r}) is Observed-Only Dense only and cannot be used here"
+        f"({subset_name!r}) is Dense-only and cannot be used here"
     )
 
 
@@ -770,7 +770,7 @@ class RaggedStoreQuery:
     ) -> dict[str, np.ndarray]:
         """All associations for one analysis (analysis_id lookup).
 
-        Indexed Variant Subsets are Observed-Only Dense only (ADR 0053), so a
+        Indexed Variant Subsets are Dense-only (ADR 0053), so a
         selector naming one is refused rather than ignored (#265).
         """
         if indexed_subset is not None:
@@ -1332,7 +1332,7 @@ class HybridStoreQuery:
     ) -> dict[str, np.ndarray]:
         """All associations for one analysis (analysis_id lookup) across both components.
 
-        Indexed Variant Subsets are Observed-Only Dense only (ADR 0053): the
+        Indexed Variant Subsets are Dense-only (ADR 0053): the
         shared root never carries one, and unifying the Dense and Ragged
         Overflow Components is unspecified, so a selector is refused rather
         than ignored (#265).
