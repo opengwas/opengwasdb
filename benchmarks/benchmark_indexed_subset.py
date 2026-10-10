@@ -39,7 +39,7 @@ from typing import Any
 
 import numpy as np
 
-from benchmarks._artifact import provenance, reflink_copy, write_artifact
+from benchmarks._artifact import provenance, scratch_copy, write_artifact
 from benchmarks.measure_build_cost import parse_time_v
 from opengwasdb.layouts.dense.indexed_subsets import open_indexed_subset, remove_indexed_subset
 from opengwasdb.query import query_store
@@ -754,18 +754,54 @@ def _semantic_problems(artifact: dict[str, Any]) -> list[str]:
         problems.append(f"run.mode is {run.get('mode')!r}")
     if not isinstance(run.get("ordinary_bracketed"), bool):
         problems.append("run.ordinary_bracketed must be a bool")
+    problems.extend(_bracketing_problems(run, build, artifact["targets"]))
     if artifact["publication"]["published"] != artifact["targets"]["exact_equivalence"]:
         problems.append("publication.published disagrees with targets.exact_equivalence")
     return problems
 
 
-def _store_identity(measured: Path, authoritative: Path) -> dict[str, Any]:
+def _bracketing_problems(
+    run: dict[str, Any], build: dict[str, Any], targets: dict[str, Any]
+) -> list[str]:
+    """Reasons the recorded before/after bracket cannot be believed.
+
+    The fields are mutually constrained: a fresh run reused nothing and is the
+    only kind that publishes the subset; a reused run had it present throughout;
+    and the two `ordinary_bracketed` copies must agree with those facts. Without
+    these, a hand-edited or mis-assembled artifact could claim bracketing it did
+    not measure.
+    """
+    problems: list[str] = []
+    fresh = run.get("mode") == "fresh"
+    present = run.get("subset_present_during_ordinary_before")
+    published = run.get("subset_published_by_this_run")
+    if run.get("mode") != build.get("run_mode"):
+        problems.append("run.mode disagrees with build.run_mode")
+    if fresh and present is not False:
+        problems.append("a fresh run must have no subset during ordinary_before")
+    if not fresh and present is not True:
+        problems.append("a reused run must have had the subset during ordinary_before")
+    if published is not fresh:
+        problems.append("run.subset_published_by_this_run must equal (run.mode == 'fresh')")
+    expected_bracketed = bool(fresh and present is False and published is True)
+    if run.get("ordinary_bracketed") is not expected_bracketed:
+        problems.append("run.ordinary_bracketed disagrees with the run facts")
+    if targets.get("ordinary_bracketed") is not run.get("ordinary_bracketed"):
+        problems.append("targets.ordinary_bracketed disagrees with run.ordinary_bracketed")
+    if targets.get("peak_rss_within_bound") is not build.get("rss_within_bound"):
+        problems.append(
+            "targets.peak_rss_within_bound disagrees with build.rss_within_bound"
+        )
+    return problems
+
+
+def _store_identity(measured: Path, authoritative: Path, copy_method: str) -> dict[str, Any]:
     manifest = json.loads((measured / "manifest.json").read_text(encoding="utf-8"))
     provenance_block = manifest.get("provenance") or {}
     return {
         "path": str(measured),
         "authoritative_path": str(authoritative),
-        "copy_kind": "reflink" if measured != authoritative else "in_place",
+        "copy_kind": copy_method,
         "store_id": str(manifest.get("store_id", "")),
         "release_id": str(manifest.get("release_id", "")),
         "format_version": str(manifest.get("format_version", "")),
@@ -809,10 +845,18 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     reference = read_hapmap3(source)
 
     copy = args.work / "store-copy.opengwasdb"
+    method_file = args.work / "scratch-copy-method.txt"
     if not copy.exists():
-        reflink_copy(args.store, copy)
+        copy_method = scratch_copy(args.store, copy)
+        method_file.write_text(copy_method + "\n", encoding="utf-8")
     elif not args.reuse_copy:
         raise SystemExit(f"{copy} exists; pass --reuse-copy to reuse it")
+    elif method_file.is_file():
+        copy_method = method_file.read_text(encoding="utf-8").strip()
+    else:
+        # Reusing a copy made before the method was recorded: the method is
+        # unknown, and the artifact says so rather than assuming a reflink.
+        copy_method = "reused_scratch_copy"
 
     name = args.subset_name
     index_group = copy / "data.zarr" / "indexed_subsets" / name
@@ -910,7 +954,7 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "artifact_schema_version": ARTIFACT_SCHEMA_VERSION,
         "analysis_id": str(args.analysis_id),
         "subset_name": name,
-        "store": _store_identity(copy, args.store),
+        "store": _store_identity(copy, args.store, copy_method),
         "input": {
             "variant_list_path": str(variant_list),
             "variant_list_sha256": variant_sha256,

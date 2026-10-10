@@ -26,6 +26,7 @@ import numpy as np
 from scipy.cluster.hierarchy import leaves_list, linkage  # type: ignore[import-untyped]
 from scipy.spatial.distance import squareform  # type: ignore[import-untyped]
 
+from opengwasdb.layouts.dense.indexed_subsets import IndexedSubsetError, open_indexed_subset
 from opengwasdb.layouts.dense.rho import DenseRhoReader
 from opengwasdb.model.analyses import ANCESTRY_PROP_PREFIX, AnalysesTable
 from opengwasdb.store.arrays import open_group
@@ -837,8 +838,18 @@ def _published_subset_paths(output_path: Path) -> list[Path]:
     ]
 
 
-def _subset_problem(path: Path, attrs: dict[str, Any]) -> dict[str, str] | None:
-    """A reason a named directory must be surfaced rather than rendered as valid."""
+def _subset_problem(
+    store_path: Path, path: Path, attrs: dict[str, Any]
+) -> dict[str, str] | None:
+    """A reason a named directory must be surfaced rather than rendered as valid.
+
+    The recorded name must match the directory, and the group must pass the
+    Indexed Variant Subset **structural read seam** (`open_indexed_subset`):
+    schema, profile, order, declared counts, exact array set, plane dtypes and
+    shapes, and Variant Indices in bounds. It deliberately does not decode or
+    compare values -- that is `validate`'s expensive job -- so overview stays a
+    cheap presentation of a structurally complete group.
+    """
     recorded = str(attrs.get("indexed_subset_name", ""))
     if recorded != path.name:
         return {
@@ -848,17 +859,25 @@ def _subset_problem(path: Path, attrs: dict[str, Any]) -> dict[str, str] | None:
                 "not trusted as a published subset"
             ),
         }
+    try:
+        open_indexed_subset(store_path, path.name)
+    except IndexedSubsetError as exc:
+        return {
+            "name": path.name,
+            "issue": str(exc).removeprefix(f"store {store_path}: "),
+        }
     return None
 
 
 def _collect_indexed_subsets(
     output_path: Path,
 ) -> tuple[list[dict[str, str]], int, list[dict[str, str]]]:
-    """Readable rows, their total physical bytes, and every invalid entry.
+    """Valid rows, their total physical bytes, and every invalid entry.
 
-    A named directory that cannot be read, or whose recorded name disagrees with
-    its directory, is reported in `problems` instead of being silently dropped
-    -- an omitted invalid group and a store with no group look identical.
+    A named directory that cannot be read, whose recorded name disagrees with
+    its directory, or that fails the structural read seam is reported in
+    `problems` and is **not** also rendered or counted as valid -- an entry that
+    is both listed and flagged would let a partial group inflate the totals.
     """
     rows: list[dict[str, str]] = []
     total = 0
@@ -868,9 +887,10 @@ def _collect_indexed_subsets(
         if attrs is None:
             problems.append({"name": path.name, "issue": "unreadable Zarr group"})
             continue
-        problem = _subset_problem(path, attrs)
+        problem = _subset_problem(output_path, path, attrs)
         if problem is not None:
             problems.append(problem)
+            continue
         rows.append(_indexed_subset_row(path, attrs))
         total += _physical_bytes(path)
     return rows, total, problems

@@ -1125,10 +1125,13 @@ A regenerated `overview.html` lists every published subset: the name, the
 requested/resolved/absent counts, the input checksum, the Reference Assembly and
 the build provenance are read from the group's own recorded metadata, while the
 physical size is computed from the group's files at render time (it is not
-recorded as an attribute). A named directory that cannot be read, or whose
-recorded `indexed_subset_name` disagrees with its directory name, is surfaced as
-an invalid entry rather than silently omitted or relabelled. The page presents
-these facts and is not a second source of truth (§1).
+recorded as an attribute). A named directory that cannot be read, whose
+recorded `indexed_subset_name` disagrees with its directory name, or that fails
+the structural read seam (§10b: schema, profile, order, counts, exact array set,
+dtypes, shapes and in-range Variant Indices, but no decoded-value comparison) is
+surfaced as an invalid entry rather than silently omitted or relabelled, and is
+**not** also listed or counted as a valid subset. The page presents these facts
+and is not a second source of truth (§1).
 
 ### Lifecycle
 

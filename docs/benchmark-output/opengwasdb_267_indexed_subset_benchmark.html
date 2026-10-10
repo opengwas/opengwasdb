@@ -2257,7 +2257,7 @@ vertical-align: -.125em;
 </div>
 <div class="callout-body-container callout-body">
 <p>On OGS-00009, with a <strong>full-statistic</strong> index (Z, SE and EAF — not a Z-only projection), the indexed full result for <code>ukb-b-17805</code> returns in <strong>407.3 ms warm median</strong> (1,178,549 associations), against <strong>16.39 s</strong> for the ordinary primary-plane path — a <strong>40x</strong> improvement.</p>
-<p>The ordinary read is measured <strong>before</strong> the subset is built and again <strong>after</strong> it, in the same run against a reflinked scratch copy; the artifact records <code>ordinary_bracketed = True</code>. Exact decoded equivalence across all six result fields is <strong>True</strong>; publication status: <strong>published</strong>.</p>
+<p>The ordinary read is measured <strong>before</strong> the subset is built and again <strong>after</strong> it, in the same run against a scratch copy of the authoritative release; the artifact records <code>ordinary_bracketed = True</code>. Exact decoded equivalence across all six result fields is <strong>True</strong>; publication status: <strong>published</strong>.</p>
 </div>
 </div>
 <section id="scope" class="level2">
@@ -2353,13 +2353,18 @@ vertical-align: -.125em;
 <td>never written</td>
 </tr>
 <tr class="even">
-<td>Measured copy</td>
+<td>Measured scratch copy</td>
 <td><code>/data/opengwasdb/work/267-indexed/store-copy.opengwasdb</code></td>
-<td><code>reflink</code> scratch copy</td>
+<td><code>copy_kind = reflink</code></td>
+</tr>
+<tr class="odd">
+<td>Copy method recorded</td>
+<td>verified (<code>reflink</code>/<code>full_copy</code>) or <code>reused_scratch_copy</code></td>
+<td></td>
 </tr>
 </tbody>
 </table>
-<p>The build writes only inside the reflinked scratch copy. The original release’s recursive metadata fingerprint and its <code>manifest.json</code>/<code>analyses.tsv</code> hashes are compared before and after the run.</p>
+<p>The build writes only inside the scratch copy. The original release’s recursive metadata fingerprint and its <code>manifest.json</code>/<code>analyses.tsv</code> hashes are compared before and after the run.</p>
 <table class="caption-top table">
 <thead>
 <tr class="header">
@@ -2635,7 +2640,7 @@ vertical-align: -.125em;
 </tr>
 </tbody>
 </table>
-<div id="d3dc1fa8" class="cell" data-execution_count="12">
+<div id="a7f22574" class="cell" data-execution_count="12">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -2902,6 +2907,7 @@ vertical-align: -.125em;
 <li><strong><code>p95_ms</code> is the nearest-rank order statistic, i.e. the maximum of the five warm repetitions</strong> at the default <code>--reps</code>; it is not interpolated.</li>
 <li>The build block is genuine for this run (<code>build.run_mode = fresh</code>). A query-only re-run may reuse an earlier artifact’s measured build block via <code>--build-stats</code>, and it is named here as <code>this run</code>.</li>
 <li><strong>This is a historical measurement at the commit named in Scope</strong> (<code>90c4ca8</code>, fingerprint <code>216b6affaaca4976…</code>). A later documentation-only commit corrected stale “Observed-Only Dense only” wording in CLI help, error messages and docstrings; it changed no measured code path, so the artifact and its fingerprint remain the measurement for the code that actually ran and are deliberately not re-generated for a wording change.</li>
+<li><strong><code>store.copy_kind</code> in this historical artifact is the copy method the older <code>cp --reflink=auto</code> request assumed.</strong> The harness now uses <code>cp --reflink=always</code>, verifies the reflink, falls back to a documented <code>full_copy</code>, and records <code>reused_scratch_copy</code> when it did not perform the copy; this frozen artifact predates that verification and is not re-generated to change a label with no measurement meaning.</li>
 <li>The per-plane physical figures bucket the group’s top-level entries, so a future encoding that adds an array appears without a hard-coded plane list.</li>
 </ul>
 <div class="callout callout-style-default callout-note callout-titled">
@@ -2914,9 +2920,9 @@ vertical-align: -.125em;
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Fresh run: reflink the authoritative release into scratch, remove any existing</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co"># subset from that scratch copy, measure ordinary_before, build, measure</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co"># ordinary_after, and prove exact equivalence — then render this page.</span></span>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Fresh run: copy the authoritative release into scratch with a verified</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co"># reflink (falling back to a full copy), remove any existing subset from that</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co"># scratch copy, measure ordinary_before, build, measure ordinary_after.</span></span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> dev python benchmarks/benchmark_indexed_subset.py <span class="dt">\</span></span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">--store</span> /data/opengwasdb/stores/OGS-00009/store.opengwasdb <span class="dt">\</span></span>
 <span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">--work</span> /data/opengwasdb/work/267-indexed <span class="dt">\</span></span>

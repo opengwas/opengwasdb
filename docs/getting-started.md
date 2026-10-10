@@ -158,9 +158,11 @@ against the primary planes, and published by rename). `opengwasdb
 regenerate-overview STORE` lists every published subset — name,
 requested/resolved/absent counts, input checksum, Reference Assembly and build
 provenance read from the group's own metadata, with the physical size computed
-from the group's files at render time. An unreadable group, or one whose
-recorded name disagrees with its directory, is surfaced as an invalid entry
-rather than silently omitted.
+from the group's files at render time. An unreadable group, one whose
+recorded name disagrees with its directory, or one that fails the structural
+read seam (missing/extra arrays, wrong shapes or counts) is surfaced as an
+invalid entry rather than silently omitted, and is not also listed or counted
+as a valid subset.
 
 Failure behaviour is deliberate and loud:
 

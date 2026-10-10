@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -65,18 +66,30 @@ def provenance() -> dict[str, str]:
     }
 
 
-def reflink_copy(source: Path, destination: Path) -> None:
-    """Copy a release, sharing extents where the filesystem can.
+def scratch_copy(source: Path, destination: Path) -> str:
+    """Copy a release into scratch, returning the copy method actually used.
 
     A reflink makes the copy near-free until one side is written, which is what
     makes "measure against a copy, keep the original" affordable for a store
-    measured in tens of gigabytes. Refuses an existing destination rather than
-    merging into it, and falls back to a full copy where the filesystem cannot
-    share extents.
+    measured in tens of gigabytes. The reflink is **verified**: the first attempt
+    is ``cp --reflink=always``, which fails rather than silently falling back on
+    a filesystem that cannot share extents; the retry is a documented full copy.
+    The return value names which happened (``"reflink"`` or ``"full_copy"``), so
+    an artifact can record a verified method instead of an assumed one. Refuses
+    an existing destination rather than merging into it.
     """
     if destination.exists():
         raise SystemExit(f"{destination}: already exists; refusing to overwrite")
-    subprocess.run(["cp", "-a", "--reflink=auto", str(source), str(destination)], check=True)
+    reflink = subprocess.run(
+        ["cp", "-a", "--reflink=always", str(source), str(destination)],
+        capture_output=True,
+        text=True,
+    )
+    if reflink.returncode == 0:
+        return "reflink"
+    shutil.rmtree(destination, ignore_errors=True)
+    subprocess.run(["cp", "-a", str(source), str(destination)], check=True)
+    return "full_copy"
 
 
 def write_artifact(path: Path, payload: dict[str, Any]) -> None:

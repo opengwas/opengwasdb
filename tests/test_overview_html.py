@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -528,6 +529,9 @@ def test_indexed_subsets_tab_marks_unreadable_group(tmp_path):
     assert "Invalid or unreadable entries" in section
     assert "broken" in section
     assert "unreadable Zarr group" in section
+    # ...and it is not also rendered as a valid row or counted in the totals.
+    valid_rows = section.split('id="indexed-subsets"')[1]
+    assert "broken" not in valid_rows
 
 
 def test_indexed_subsets_tab_marks_a_recorded_name_mismatch(tmp_path):
@@ -540,12 +544,29 @@ def test_indexed_subsets_tab_marks_a_recorded_name_mismatch(tmp_path):
     section = _indexed_subsets_section(content)
 
     # The directory name is the identity; the recorded `hm3` is flagged, not
-    # silently used to relabel the `panel` directory.
-    assert ">panel<" in section
+    # silently used to relabel the `panel` directory -- and an invalid entry is
+    # not also listed/counted as a valid one.
+    assert "panel" in section
     assert "disagrees with its directory name" in section
-    # The recorded `hm3` is quoted and HTML-escaped in the invalid-entry row.
     assert "recorded name" in section
     assert "hm3" in section
+    assert 'id="indexed-subsets"' not in section
+    assert "No readable published subsets" in section
+
+
+def test_indexed_subsets_tab_marks_a_partial_group(tmp_path):
+    store = _build_indexed_subset_store(tmp_path)
+    shutil.rmtree(store / "data.zarr" / "indexed_subsets" / "hm3" / "z")
+    table = read_analyses(store / "analyses.tsv")
+
+    content = write_overview_html(store, table).read_text(encoding="utf-8")
+    section = _indexed_subsets_section(content)
+
+    # The structural read seam catches a missing plane; the incomplete group is
+    # flagged and not rendered/counted as a valid subset.
+    assert "missing arrays" in section
+    assert "No readable published subsets" in section
+    assert 'id="indexed-subsets"' not in section
 
 
 def test_indexed_subsets_physical_size_matches_du(tmp_path):

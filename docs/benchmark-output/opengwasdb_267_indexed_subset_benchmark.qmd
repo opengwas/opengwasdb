@@ -72,7 +72,8 @@ projection), the indexed full result for `{analysis_id}` returns in
 path — a **{speedup:.0f}x** improvement.
 
 The ordinary read is measured **before** the subset is built and again **after**
-it, in the same run against a reflinked scratch copy; the artifact records
+it, in the same run against a scratch copy of the authoritative release; the
+artifact records
 `ordinary_bracketed = {run['ordinary_bracketed']}`. Exact decoded equivalence
 across all six result fields is **{equiv['exact']}**; publication status:
 {status}.
@@ -123,12 +124,13 @@ print(md_table(
     ["Store path", "Value", "Role"],
     [
         ["Authoritative source", f"`{store['authoritative_path']}`", "never written"],
-        ["Measured copy", f"`{store['path']}`", f"`{store['copy_kind']}` scratch copy"],
+        ["Measured scratch copy", f"`{store['path']}`", f"`copy_kind = {store['copy_kind']}`"],
+        ["Copy method recorded", "verified (`reflink`/`full_copy`) or `reused_scratch_copy`", ""],
     ],
 ))
 ```
 
-The build writes only inside the reflinked scratch copy. The original release's
+The build writes only inside the scratch copy. The original release's
 recursive metadata fingerprint and its `manifest.json`/`analyses.tsv` hashes are
 compared before and after the run.
 
@@ -408,6 +410,12 @@ print(f"""
   in CLI help, error messages and docstrings; it changed no measured code path,
   so the artifact and its fingerprint remain the measurement for the code that
   actually ran and are deliberately not re-generated for a wording change.
+- **`store.copy_kind` in this historical artifact is the copy method the older
+  `cp --reflink=auto` request assumed.** The harness now uses
+  `cp --reflink=always`, verifies the reflink, falls back to a documented
+  `full_copy`, and records `reused_scratch_copy` when it did not perform the
+  copy; this frozen artifact predates that verification and is not re-generated
+  to change a label with no measurement meaning.
 - The per-plane physical figures bucket the group's top-level entries, so a
   future encoding that adds an array appears without a hard-coded plane list.
 """)
@@ -420,9 +428,9 @@ print(f"""
 #| echo: false
 #| output: asis
 print(f"""```bash
-# Fresh run: reflink the authoritative release into scratch, remove any existing
-# subset from that scratch copy, measure ordinary_before, build, measure
-# ordinary_after, and prove exact equivalence — then render this page.
+# Fresh run: copy the authoritative release into scratch with a verified
+# reflink (falling back to a full copy), remove any existing subset from that
+# scratch copy, measure ordinary_before, build, measure ordinary_after.
 pixi run -e dev python benchmarks/benchmark_indexed_subset.py \\
   --store {store['authoritative_path']} \\
   --work /data/opengwasdb/work/267-indexed \\

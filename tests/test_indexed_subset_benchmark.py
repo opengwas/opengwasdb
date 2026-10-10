@@ -153,6 +153,27 @@ def test_plane_bytes_buckets_every_top_level_entry(tmp_path: Path) -> None:
     assert buckets["z"] >= 100  # allocated, not apparent, bytes
 
 
+def test_scratch_copy_reports_the_verified_method(tmp_path: Path) -> None:
+    """The copy helper names the method it actually used, not an assumption.
+
+    On a filesystem that supports reflink this returns `reflink`; elsewhere it
+    returns `full_copy`. Either way the destination is a real copy and an
+    existing destination is refused rather than merged into.
+    """
+    from benchmarks._artifact import scratch_copy
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "chunk").write_bytes(b"payload")
+    destination = tmp_path / "scratch"
+
+    method = scratch_copy(source, destination)
+
+    assert method in {"reflink", "full_copy"}
+    assert (destination / "chunk").read_bytes() == b"payload"
+    _expect_system_exit(lambda: scratch_copy(source, destination), "already exists")
+
+
 def _timing(median: float, count: int) -> dict:
     return {
         "first_ms": median,
@@ -320,6 +341,29 @@ def test_assert_artifact_complete_rejects_an_unsix_field_equivalence_block() -> 
     artifact["equivalence"]["required_fields"] = ["z"]
 
     _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "required_fields")
+
+
+def test_assert_artifact_complete_rejects_bracketing_disagreement() -> None:
+    artifact = _complete_artifact()
+    artifact["run"]["ordinary_bracketed"] = False
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "ordinary_bracketed")
+
+
+def test_assert_artifact_complete_rejects_fresh_run_with_subset_present() -> None:
+    artifact = _complete_artifact()
+    artifact["run"]["subset_present_during_ordinary_before"] = True
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "ordinary_before")
+
+
+def test_assert_artifact_complete_rejects_rss_target_disagreement() -> None:
+    artifact = _complete_artifact()
+    artifact["targets"]["peak_rss_within_bound"] = False
+
+    _expect_system_exit(
+        lambda: bench.assert_artifact_complete(artifact), "peak_rss_within_bound"
+    )
 
 
 def test_reuse_without_build_stats_is_refused() -> None:

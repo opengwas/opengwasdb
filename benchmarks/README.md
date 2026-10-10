@@ -417,8 +417,12 @@ empty result, a changed value).
 
 Three measurement-truthfulness rules matter:
 
-- **The authoritative release is never written.** The run reflinks the Store
-  Release into `--work` (`cp -a --reflink=auto`); the artifact records both the
+- **The authoritative release is never written.** The run copies the Store
+  Release into `--work` as a scratch copy, preferring a **verified** reflink
+  (`cp -a --reflink=always`, which fails rather than silently falling back) and
+  using a documented full copy where the filesystem cannot share extents; the
+  artifact records the method in `store.copy_kind` (`reflink`, `full_copy` or
+  `reused_scratch_copy`), plus both the
   `authoritative_path` and the measured scratch `path`. It records a recursive
   `(path, size, mtime)` fingerprint plus `manifest.json`/`analyses.tsv` content
   hashes of the original before and after, and reports
@@ -476,9 +480,10 @@ cd docs/benchmark-output && pixi run -e report quarto render \
 
 All paths above are the script's built-in defaults. The build runs as a
 subprocess under `/usr/bin/time -v`, so its peak RSS does not include the
-harness's query caches and is bounded by `--band-cells` plus a fixed allowance
-rather than by the full `2,024 x 1,206,903` matrix. `--reuse-copy` reuses an
-existing reflinked copy instead of refusing to overwrite it; when that copy
+harness's query caches and is bounded by the harness's configured band
+(`BAND_CELLS`, 4,000,000 cells) plus a fixed allowance rather than by the full
+`2,024 x 1,206,903` matrix. `--reuse-copy` reuses an existing scratch copy
+instead of refusing to overwrite it; when that copy
 already carries the subset, `--build-stats <artifact>` is **required** (the
 measured build block is reused and validated) or `--reset-subset` removes the
 subset from the scratch copy so this run builds it fresh. Reusing an existing

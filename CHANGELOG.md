@@ -398,6 +398,28 @@ the end of this file.
   mask, the Observed-Only encoding branch). Tests assert the CLI help and the
   Ragged/Hybrid refusal message no longer misstate support.
 
+- **`overview.html` no longer renders an invalid Indexed Variant Subset as a
+  valid row, and detects partial groups (#267 review).** A named directory whose
+  recorded name disagrees with its directory, or that fails the Indexed Variant
+  Subset **structural read seam** (`open_indexed_subset`: schema, profile, order,
+  counts, exact array set, dtypes, shapes and in-range Variant Indices, but no
+  decoded-value comparison), is listed only as an invalid entry and excluded
+  from the table and the physical-size total. Previously a name-mismatched group
+  was both flagged and counted, and a group with a missing array was rendered as
+  valid.
+
+- **The benchmark scratch copy records a verified method (#267 review).**
+  `benchmarks/_artifact.scratch_copy` now tries `cp --reflink=always` (which
+  fails rather than silently falling back), falls back to a documented full
+  copy, and returns `reflink` or `full_copy`; the harness records that in
+  `store.copy_kind`, or `reused_scratch_copy` when it did not perform the copy.
+  The previous helper used `cp --reflink=auto` and the artifact claimed a
+  reflink without verification. The `#267` benchmark README no longer cites a
+  nonexistent `--band-cells` flag (the harness uses its configured `BAND_CELLS`
+  constant), and the artifact's semantic checks now require
+  `run.ordinary_bracketed`/`targets.ordinary_bracketed` and the fresh/reused,
+  subset-present and peak-RSS facts to agree with each other.
+
 - **A Ragged association sequence is written one whole shard at a time, and the
   Dense SE exception tables once each (#249).**
   `RaggedCSRWriter` flushed its `variant_index`/`z`/`eaf`/`se` planes in regions
