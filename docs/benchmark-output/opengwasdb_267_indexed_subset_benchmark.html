@@ -6,7 +6,7 @@
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
-<meta name="dcterms.date" content="2026-10-10">
+<meta name="dcterms.date" content="2026-10-11">
 
 <title>Indexed Variant Subsets on OGS-00009 — HapMap3 full-statistic extraction</title>
 <style>
@@ -2234,7 +2234,7 @@ vertical-align: -.125em;
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">October 10, 2026</p>
+      <p class="date">October 11, 2026</p>
     </div>
   </div>
   
@@ -2256,7 +2256,7 @@ vertical-align: -.125em;
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>On OGS-00009, with a <strong>full-statistic</strong> index (Z, SE and EAF — not a Z-only projection), the indexed full result for <code>ukb-b-17805</code> returns in <strong>439.3 ms warm median</strong> (1,178,549 associations), against <strong>17.23 s</strong> for the ordinary primary-plane path — a <strong>39x</strong> improvement.</p>
+<p>On OGS-00009, with a <strong>full-statistic</strong> index (Z, SE and EAF — not a Z-only projection), the indexed full result for <code>ukb-b-17805</code> returns in <strong>456.6 ms warm median</strong> (1,178,549 associations), against <strong>17.20 s</strong> for the ordinary primary-plane path — a <strong>38x</strong> improvement.</p>
 <p>The ordinary read is measured <strong>before</strong> the subset is built and again <strong>after</strong> it, in the same run against a scratch copy of the authoritative release; the artifact records <code>ordinary_bracketed = True</code>. Exact decoded equivalence across all six result fields is <strong>True</strong>; publication status: <strong>published</strong>.</p>
 </div>
 </div>
@@ -2320,15 +2320,15 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>Measured at (UTC)</td>
-<td>2026-10-10T22:36:33.559329+00:00</td>
+<td>2026-10-10T23:30:47.773289+00:00</td>
 </tr>
 <tr class="odd">
 <td>Git commit</td>
-<td><code>bb5682d</code></td>
+<td><code>a36ea78</code></td>
 </tr>
 <tr class="even">
 <td>opengwasdb fingerprint</td>
-<td><code>f269072c7fd9d7d7…</code></td>
+<td><code>3e15ebba785a8538…</code></td>
 </tr>
 </tbody>
 </table>
@@ -2387,11 +2387,11 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>run started (UTC)</td>
-<td>2026-10-10T22:28:21.893808+00:00</td>
+<td>2026-10-10T23:22:41.526729+00:00</td>
 </tr>
 <tr class="odd">
 <td>run finished (UTC)</td>
-<td>2026-10-10T22:36:29.061469+00:00</td>
+<td>2026-10-10T23:30:43.300215+00:00</td>
 </tr>
 </tbody>
 </table>
@@ -2434,7 +2434,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td>resolution time</td>
-<td>3.94 s</td>
+<td>3.98 s</td>
 </tr>
 </tbody>
 </table>
@@ -2560,7 +2560,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>HapMap3 index (physical)</td>
-<td>6,235,017,216</td>
+<td>6,235,009,024</td>
 <td>5.8 GiB</td>
 </tr>
 <tr class="odd">
@@ -2588,7 +2588,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><code>eaf</code></td>
-<td>710,672,384</td>
+<td>710,676,480</td>
 </tr>
 <tr class="even">
 <td><code>eaf_baseline</code></td>
@@ -2604,7 +2604,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><code>se</code></td>
-<td>1,158,283,264</td>
+<td>1,158,299,648</td>
 </tr>
 <tr class="even">
 <td><code>se_coefficients</code></td>
@@ -2624,7 +2624,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td><code>z</code></td>
-<td>4,360,589,312</td>
+<td>4,360,560,640</td>
 </tr>
 <tr class="odd">
 <td><code>z_overflow_index</code></td>
@@ -2636,11 +2636,11 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><strong>total</strong></td>
-<td><strong>6,235,017,216</strong></td>
+<td><strong>6,235,009,024</strong></td>
 </tr>
 </tbody>
 </table>
-<div id="72ce2a24" class="cell" data-execution_count="12">
+<div id="7c72c6df" class="cell" data-execution_count="12">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -2690,70 +2690,74 @@ vertical-align: -.125em;
 <td>131,072,000 B</td>
 </tr>
 <tr class="odd">
-<td>prepare (open release, resolve list)</td>
-<td>9.14 s</td>
+<td>raw buffer by plane</td>
+<td><code>eaf</code> 65,536,000 B, <code>se</code> 65,536,000 B, <code>z</code> 131,072,000 B</td>
 </tr>
 <tr class="even">
-<td>write (planes, chunk-aligned)</td>
-<td>171.66 s</td>
+<td>prepare (open release, resolve list)</td>
+<td>8.20 s</td>
 </tr>
 <tr class="odd">
-<td>staged validation (publication gate)</td>
-<td>1.58 s</td>
+<td>write (planes, chunk-aligned)</td>
+<td>176.08 s</td>
 </tr>
 <tr class="even">
+<td>staged validation (publication gate)</td>
+<td>1.94 s</td>
+</tr>
+<tr class="odd">
 <td>validation mode</td>
 <td>sampled</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>decoded sample</td>
 <td>528 cells (corners + 16 evenly spaced Analyses + 8 physical write-unit boundaries + 1 inner-chunk boundary + 8 checksum-seeded cells per Analysis + 32 checksum-seeded cells across Analyses)</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>sample seed (input-SHA-256)</td>
 <td><code>166638625948460791</code></td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>publish (write + validation + staging)</td>
-<td>173.26 s</td>
+<td>178.03 s</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>validation share of publish</td>
-<td>0.9%</td>
-</tr>
-<tr class="odd">
-<td>in-process total</td>
-<td>182.39 s</td>
+<td>1.1%</td>
 </tr>
 <tr class="even">
-<td>subprocess wall total (incl. interpreter startup)</td>
-<td>184.04 s</td>
+<td>in-process total</td>
+<td>186.23 s</td>
 </tr>
 <tr class="odd">
+<td>subprocess wall total (incl. interpreter startup)</td>
+<td>187.53 s</td>
+</tr>
+<tr class="even">
 <td>requested / resolved / absent (writer)</td>
 <td>1,206,903 / 1,206,903 / 0</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>input SHA-256 (writer)</td>
 <td><code>4a7c82aa625a006ff437dcaa2769b00e056413d54c72e98f7378327c69513398</code></td>
 </tr>
-<tr class="odd">
-<td>peak RSS</td>
-<td>1,238.6 MB</td>
-</tr>
 <tr class="even">
+<td>peak RSS</td>
+<td>1,234.8 MB</td>
+</tr>
+<tr class="odd">
 <td>RSS acceptance threshold</td>
 <td>1,146.1 MB (the #267 4,000,000-cell declaration)</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>peak RSS within acceptance threshold</td>
 <td>False</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>measurement source</td>
 <td>/usr/bin/time -v (build subprocess)</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>build block source</td>
 <td>this run</td>
 </tr>
@@ -2816,23 +2820,23 @@ vertical-align: -.125em;
 <tbody>
 <tr class="odd">
 <td>ordinary, before index</td>
-<td>48.66 s</td>
-<td>17.23 s</td>
-<td>24.01 s</td>
+<td>44.38 s</td>
+<td>17.20 s</td>
+<td>21.33 s</td>
 <td>7,578,651</td>
 </tr>
 <tr class="even">
 <td><strong>indexed</strong></td>
-<td>443.8 ms</td>
-<td>439.3 ms</td>
-<td>442.4 ms</td>
+<td>450.1 ms</td>
+<td>456.6 ms</td>
+<td>524.7 ms</td>
 <td>1,178,549</td>
 </tr>
 <tr class="odd">
 <td>ordinary, after index</td>
-<td>20.52 s</td>
-<td>18.69 s</td>
-<td>21.76 s</td>
+<td>25.04 s</td>
+<td>18.83 s</td>
+<td>20.22 s</td>
 <td>7,578,651</td>
 </tr>
 </tbody>
@@ -2881,7 +2885,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td>ordinary unchanged within ±25% envelope</td>
-<td>True (median moved +8.49%)</td>
+<td>True (median moved +9.47%)</td>
 </tr>
 <tr class="even">
 <td>ordinary before/after bracketed</td>
@@ -2981,13 +2985,13 @@ vertical-align: -.125em;
 <section id="caveats-and-honesty" class="level2">
 <h2 class="anchored" data-anchor-id="caveats-and-honesty">Caveats and honesty</h2>
 <ul>
-<li><strong>The RSS target is the preserved #267 acceptance threshold, reported as its measurement says.</strong> The peak was 1,238.6 MB against the historical 1,146.1 MB threshold (the #267 4,000,000-cell declaration), so <code>peak_rss_within_bound = False</code>. The writer’s own bounded-band invariant (65,536,000 cells; raw buffer 131,072,000 B) is recorded separately and is not used to re-derive this acceptance target. The peak is ALID-resolution-bound, not writer-band-bound, and widening the threshold after the fact would be the tuning this harness refuses.</li>
-<li><strong>The publication gate is a documented sample; standalone validation is exhaustive.</strong> The build’s staged validation compares a bounded deterministic decoded sample (528 cells, mode <code>sampled</code>, 1.58 s) and refuses systemic, ordering and output-boundary corruption. An isolated unsampled corruption can pass the build gate; standalone <code>validate</code> decodes and compares <strong>every</strong> indexed cell, side table, imputed mask and reference EAF and is the explicit audit for it. The risk is stated rather than hidden.</li>
+<li><strong>The RSS target is the preserved #267 acceptance threshold, reported as its measurement says.</strong> The peak was 1,234.8 MB against the historical 1,146.1 MB threshold (the #267 4,000,000-cell declaration), so <code>peak_rss_within_bound = False</code>. The writer’s own bounded-band invariant (65,536,000 cells; raw buffer 131,072,000 B) is recorded separately and is not used to re-derive this acceptance target. The peak is ALID-resolution-bound, not writer-band-bound, and widening the threshold after the fact would be the tuning this harness refuses.</li>
+<li><strong>The publication gate is a documented sample; standalone validation is exhaustive.</strong> The build’s staged validation compares a bounded deterministic decoded sample (528 cells, mode <code>sampled</code>, 1.94 s) and refuses systemic, ordering and output-boundary corruption. An isolated unsampled corruption can pass the build gate; standalone <code>validate</code> decodes and compares <strong>every</strong> indexed cell, side table, imputed mask and reference EAF and is the explicit audit for it. The risk is stated rather than hidden.</li>
 <li><strong>The measured rewrite count is one per physical file.</strong> The table above is the store-level count over the staged group, so a v2 chunk (or v3 shard) encoded twice would show <code>most encodings of one file = 2</code> and fail the artifact’s semantic checks.</li>
 <li><strong><code>first_ms</code> is not a cold-cache figure.</strong> The OS page cache is never dropped, and <code>ordinary_after</code> follows <code>ordinary_before</code>, so it is already warm. The method is disclosed in the artifact under <code>timings.method</code>.</li>
 <li><strong><code>p95_ms</code> is the nearest-rank order statistic, i.e. the maximum of the five warm repetitions</strong> at the default <code>--reps</code>; it is not interpolated.</li>
 <li>The build block is genuine for this run (<code>build.run_mode = fresh</code>). A query-only re-run may reuse an earlier artifact’s measured build block via <code>--build-stats</code>, and it is named here as <code>this run</code>.</li>
-<li><strong>This measurement is at the commit named in Scope</strong> (<code>bb5682d</code>, fingerprint <code>f269072c7fd9d7d7…</code>). It was re-run for #270’s chunk-aligned writer; both the artifact and this page are regenerated from that run.</li>
+<li><strong>This measurement is at the commit named in Scope</strong> (<code>a36ea78</code>, fingerprint <code>3e15ebba785a8538…</code>). It was re-run for #270’s chunk-aligned writer; both the artifact and this page are regenerated from that run.</li>
 <li><strong><code>store.copy_kind</code> is the copy method the harness verified</strong>, recorded as <code>reflink</code> or <code>full_copy</code> from <code>cp --reflink=always</code> with a documented fallback, or <code>reused_scratch_copy</code> when it did not perform the copy.</li>
 <li>The per-plane physical figures bucket the group’s top-level entries, so a future encoding that adds an array appears without a hard-coded plane list.</li>
 </ul>

@@ -421,9 +421,9 @@ the end of this file.
   its float32 decode does not grow to the writer's 65,536,000-cell block. On the
   fresh #270 OGS-00009 HapMap3
   build the store layer measured every one of the 38,456 `z`, `se` and `eaf`
-  physical files encoded exactly once; the build took 184.04 s (write 171.665 s,
-  sampled validation 1.579 s) against the #267 4,198 s, with exact six-field
-  equivalence, 6,235,017,216 physical index bytes (17.852%) and a 1,238.6 MB
+  physical files encoded exactly once; the build took 187.53 s (write 176.076 s,
+  sampled validation 1.939 s) against the #267 4,198 s, with exact six-field
+  equivalence, 6,235,009,024 physical index bytes (17.852%) and a 1,234.8 MB
   peak RSS; the benchmark's RSS target is the preserved #267 acceptance
   threshold of 1,146.1 MB, so the run still records
   `peak_rss_within_bound = false` (the peak is ALID-resolution-bound, not the
