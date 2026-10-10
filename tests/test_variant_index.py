@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from contextlib import contextmanager
 from json import loads
 from pathlib import Path
@@ -760,23 +761,32 @@ def test_peak_rss_reports_a_high_water_mark_not_the_current_rss() -> None:
     """`_peak_rss_bytes` reports a peak, not the RSS left after the build.
 
     #252 review round 4, finding 1: a `statm` sample taken once the build
-    returned reported the process's ~27 MB baseline for a 9.9 GiB build.  This
-    allocates 512 MB, frees it, and requires the reported peak to still hold
-    the allocation -- which a current-RSS read cannot.
+    returned reported the process's baseline for a 9.9 GiB build.  The
+    allocate/free/report sequence runs in a **fresh interpreter** (review
+    round 5, finding 1): in a larger process the freed 512 MB sits under the
+    process's own footprint, so a current-RSS read would pass the assertion by
+    accident and the test could not fail.  A fresh process starts around
+    150 MB, so the old function returns well under the allocation.
     """
-    import gc
+    import subprocess
 
-    from opengwasdb.layouts.ragged.by_variant import _peak_rss_bytes
-
-    allocation = 512 * 1024 * 1024  # 512 MB: a twentieth of OGS-00011's 9.9 GiB build
-    block = np.ones(allocation // 8, dtype=np.float64)  # 8 bytes per element
-    assert block.nbytes == allocation
-    del block
-    gc.collect()
-    peak = _peak_rss_bytes()
+    program = (
+        "import gc\n"
+        "import numpy as np\n"
+        "from opengwasdb.layouts.ragged.by_variant import _peak_rss_bytes\n"
+        "block = np.ones(512 * 1024 * 1024 // 8, dtype=np.float64)\n"
+        "del block\n"
+        "gc.collect()\n"
+        "print(_peak_rss_bytes())\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", program], capture_output=True, text=True, check=True
+    )
+    allocation = 512 * 1024 * 1024
+    peak = int(completed.stdout.strip().splitlines()[-1])
     assert peak >= allocation, (
-        f"the reported peak ({peak} bytes) is below a {allocation}-byte allocation "
-        "this process made and then freed; that is the current RSS, not a peak"
+        f"a fresh interpreter reported a peak of {peak} bytes after making and "
+        f"freeing a {allocation}-byte allocation; that is the current RSS, not a peak"
     )
 
 

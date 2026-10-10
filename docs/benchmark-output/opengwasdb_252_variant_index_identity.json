@@ -1,9 +1,9 @@
 {
   "harness": "benchmarks/variant_index_identity.py",
-  "commit": "2e428e1",
-  "measured_at": "2026-10-10T01:44:57.431563+00:00",
+  "commit": "a0cc192",
+  "measured_at": "2026-10-10T06:46:03.669095+00:00",
   "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-index/opengwasdb",
-  "opengwasdb_fingerprint": "5da4d14b059fa5ef975065c9dc3dde5f29b4235fff6ead6eb2cb058225955729",
+  "opengwasdb_fingerprint": "b2d501a6a04220212c75f6f5a36e49ff1553f16989a47a162120eae22483041a",
   "stores": {
     "OGS-00001": {
       "store": "/data/opengwasdb/work/epic252/OGS-00001-0.2.0",

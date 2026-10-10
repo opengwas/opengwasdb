@@ -51,7 +51,7 @@ the end of this file.
   rather than carrying the source's forward.
 
 - **Every Dense and Ragged plane reads its exact-value exception tables as
-  windows, and the Dense `patch()` merge is fixed (#252 review rounds 2-3).**
+  windows (#252 review rounds 2-3).**
   Opening a store used to read each `z_overflow`/`eaf_exception`/`se_exception`
   table whole -- about 2.1 GiB for OGS-00011's 180,396,687-entry EAF table -- so
   every process paid it, including analysis-side queries that never touch an
@@ -65,10 +65,9 @@ the end of this file.
   pays a whole ~96 MB window. Opening an indexed
   store falls from about 2 s (the base, eager tables) to 0.4 s, and a fresh process's first off-axis
   PheWAS pays tens of milliseconds rather than a whole-table read. `patch()`,
-  which rewrites one plane's cells and its table in place, previously merged the
-  patched entries with the codec's **empty** in-memory view and rewrote the
-  table -- dropping every existing entry, including in Hybrid completion's
-  crossover fold; it now reads the whole table from the group.
+  which rewrites one plane's cells and its table in place, now reads the whole
+  table from the group, because the codec holds the group's arrays and no
+  longer keeps the table in memory.
 
 ### Changed
 

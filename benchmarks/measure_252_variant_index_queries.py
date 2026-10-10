@@ -23,6 +23,7 @@ Three measurements on one indexed store, for the round-2 review:
 from __future__ import annotations
 
 import argparse
+import os
 import resource
 import sys
 import time
@@ -54,11 +55,21 @@ def _percentile(values: list[float], q: float) -> float:
     return float(np.percentile(values, q)) if values else 0.0
 
 
+def _load() -> float:
+    """The 1-minute load average, recorded so a contended run is visible."""
+    return round(os.getloadavg()[0], 2)
+
+
 def measure(store: Path, reps: int, scattered_cells: int) -> dict:
     started = time.perf_counter()
     query = query_store(store)
     open_s = time.perf_counter() - started
-    out: dict = {"store": str(store), "open_s": round(open_s, 3), "reps": reps}
+    out: dict = {
+        "store": str(store),
+        "open_s": round(open_s, 3),
+        "reps": reps,
+        "load_start": _load(),
+    }
     try:
         alid = probe_variant_alid(query, off_panel=True)
         if alid is None:
@@ -96,6 +107,7 @@ def measure(store: Path, reps: int, scattered_cells: int) -> dict:
             ordinals = np.linspace(0, len(index) - 1, scattered_cells).astype(np.int64)
             positions = index[ordinals].copy()
             baseline = rss_mb()
+            load_before = _load()
             with RssSampler() as sampler:
                 scattered_start = time.perf_counter()
                 table.lookup(positions)
@@ -107,6 +119,7 @@ def measure(store: Path, reps: int, scattered_cells: int) -> dict:
                 "seconds": round(scattered_s, 4),
                 "delta_mb": round(peak - baseline, 1),
                 "process_peak_mb": round(peak, 1),
+                "load": load_before,
             }
     finally:
         query.close()

@@ -3,28 +3,28 @@
   "store": "/data/opengwasdb/work/epic252/OGS-00011-0.2.0",
   "max_start_load": 6.0,
   "reps": 3,
-  "commit": "2e428e1",
-  "measured_at": "2026-10-10T03:49:44.190493+00:00",
+  "commit": "a0cc192",
+  "measured_at": "2026-10-10T07:32:43.389597+00:00",
   "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-index/opengwasdb",
-  "opengwasdb_fingerprint": "5da4d14b059fa5ef975065c9dc3dde5f29b4235fff6ead6eb2cb058225955729",
+  "opengwasdb_fingerprint": "b2d501a6a04220212c75f6f5a36e49ff1553f16989a47a162120eae22483041a",
   "shapes": {
     "bulk": {
       "scanned": {
         "shape": "bulk",
         "limit_s": 900.0,
-        "elapsed_ms": 13208.214,
+        "elapsed_ms": 13091.981,
         "timed_out": false,
-        "baseline_mb": 269.6,
-        "peak_mb": 1249.4,
+        "baseline_mb": 272.7,
+        "peak_mb": 1263.4,
         "load_start": [
-          4.4,
-          5.98,
-          7.33
+          5.67,
+          8.31,
+          6.68
         ],
         "load_end": [
-          4.67,
-          5.96,
-          7.3
+          15.1,
+          10.13,
+          7.29
         ],
         "gate_waited_s": 0.0,
         "gate_gave_up": false,
@@ -35,45 +35,45 @@
       "indexed": {
         "shape": "bulk",
         "limit_s": 900.0,
-        "elapsed_ms": 12155.385,
+        "elapsed_ms": 12764.749,
         "timed_out": false,
-        "baseline_mb": 271.6,
-        "peak_mb": 1254.5,
+        "baseline_mb": 278.3,
+        "peak_mb": 1254.2,
         "load_start": [
-          4.83,
-          5.93,
-          7.27
+          5.79,
+          13.72,
+          11.94
         ],
         "load_end": [
-          4.94,
-          5.9,
-          7.24
+          5.27,
+          13.22,
+          11.8
         ],
-        "gate_waited_s": 0.0,
+        "gate_waited_s": 750.0,
         "gate_gave_up": false,
         "result_count": 5052918,
         "sha256": "2a8f865ac84562370a629c0a6716b88d49cb38a6df324cf5aed12fed39aedacb",
         "canonical_digest": true
       },
       "scanned_reps": [
-        13208.214,
-        15286.973,
-        11559.14
+        13595.828,
+        12372.32,
+        13091.981
       ],
       "indexed_reps": [
-        12155.385,
-        10973.959,
-        12640.512
+        12764.749,
+        10858.806,
+        13292.822
       ],
       "scanned_loads": [
+        5.67,
         4.4,
-        5.85,
-        5.09
+        4.12
       ],
       "indexed_loads": [
-        4.83,
-        5.75,
-        4.46
+        5.79,
+        4.14,
+        4.03
       ],
       "scanned_waits_s": [
         0.0,
@@ -81,28 +81,61 @@
         0.0
       ],
       "indexed_waits_s": [
+        750.0,
         0.0,
-        90.0,
         0.0
+      ],
+      "eager": {
+        "shape": "bulk",
+        "limit_s": 900.0,
+        "elapsed_ms": 14450.586,
+        "timed_out": false,
+        "baseline_mb": 2419.4,
+        "peak_mb": 5299.3,
+        "load_start": [
+          4.85,
+          12.86,
+          11.7
+        ],
+        "load_end": [
+          4.74,
+          12.44,
+          11.58
+        ],
+        "gate_waited_s": 0.0,
+        "gate_gave_up": false,
+        "result_count": 5052918,
+        "sha256": "2a8f865ac84562370a629c0a6716b88d49cb38a6df324cf5aed12fed39aedacb",
+        "canonical_digest": true
+      },
+      "eager_reps": [
+        13864.873,
+        14450.586,
+        15927.306
+      ],
+      "eager_loads": [
+        4.85,
+        4.67,
+        4.15
       ]
     },
     "phewas": {
       "scanned": {
         "shape": "phewas",
         "limit_s": 900.0,
-        "elapsed_ms": 136.678,
+        "elapsed_ms": 139.65,
         "timed_out": false,
-        "baseline_mb": 273.7,
-        "peak_mb": 294.4,
+        "baseline_mb": 271.2,
+        "peak_mb": 292.0,
         "load_start": [
-          3.91,
-          5.69,
-          6.97
+          3.49,
+          8.76,
+          10.31
         ],
         "load_end": [
-          3.91,
-          5.69,
-          6.97
+          3.49,
+          8.76,
+          10.31
         ],
         "gate_waited_s": 0.0,
         "gate_gave_up": false,
@@ -113,19 +146,19 @@
       "indexed": {
         "shape": "phewas",
         "limit_s": 900.0,
-        "elapsed_ms": 135.295,
+        "elapsed_ms": 134.589,
         "timed_out": false,
-        "baseline_mb": 274.6,
-        "peak_mb": 293.8,
+        "baseline_mb": 272.9,
+        "peak_mb": 290.2,
         "load_start": [
-          4.16,
-          5.69,
-          6.95
+          3.61,
+          8.7,
+          10.28
         ],
         "load_end": [
-          4.16,
-          5.69,
-          6.95
+          3.61,
+          8.7,
+          10.28
         ],
         "gate_waited_s": 0.0,
         "gate_gave_up": false,
@@ -134,24 +167,24 @@
         "canonical_digest": true
       },
       "scanned_reps": [
-        142.998,
-        136.678,
-        123.02
+        137.81,
+        139.65,
+        147.047
       ],
       "indexed_reps": [
-        137.86,
-        135.295,
-        132.167
+        130.214,
+        134.589,
+        147.556
       ],
       "scanned_loads": [
-        3.91,
-        4.71,
-        4.72
+        3.49,
+        3.44,
+        3.42
       ],
       "indexed_loads": [
-        4.16,
-        4.55,
-        4.68
+        3.61,
+        3.3,
+        3.29
       ],
       "scanned_waits_s": [
         0.0,
@@ -168,19 +201,19 @@
       "scanned": {
         "shape": "regional",
         "limit_s": 900.0,
-        "elapsed_ms": 108791.028,
+        "elapsed_ms": 115240.277,
         "timed_out": false,
-        "baseline_mb": 278.2,
-        "peak_mb": 1718.5,
+        "baseline_mb": 273.3,
+        "peak_mb": 1728.8,
         "load_start": [
-          4.5,
-          5.57,
-          6.85
+          3.24,
+          7.8,
+          9.89
         ],
         "load_end": [
-          6.96,
-          6.05,
-          6.9
+          11.9,
+          8.64,
+          9.91
         ],
         "gate_waited_s": 0.0,
         "gate_gave_up": false,
@@ -191,45 +224,45 @@
       "indexed": {
         "shape": "regional",
         "limit_s": 900.0,
-        "elapsed_ms": 3292.844,
+        "elapsed_ms": 3580.354,
         "timed_out": false,
-        "baseline_mb": 270.2,
-        "peak_mb": 1544.2,
+        "baseline_mb": 279.9,
+        "peak_mb": 1604.0,
         "load_start": [
-          5.74,
-          5.83,
-          6.81
+          5.82,
+          8.76,
+          9.89
         ],
         "load_end": [
-          5.92,
-          5.87,
-          6.81
+          5.67,
+          8.68,
+          9.86
         ],
-        "gate_waited_s": 15.0,
+        "gate_waited_s": 165.0,
         "gate_gave_up": false,
         "result_count": 8304617,
         "sha256": "cea526266433e336137362ae169e84bbdffac0020d82df00cf6e324d60dfe1ae",
         "canonical_digest": true
       },
       "scanned_reps": [
-        84523.052,
-        108791.028,
-        110526.765
+        103983.134,
+        128980.185,
+        115240.277
       ],
       "indexed_reps": [
-        3460.234,
-        2789.813,
-        3292.844
+        3580.354,
+        4494.35,
+        2727.503
       ],
       "scanned_loads": [
-        4.5,
-        5.7,
-        5.08
+        3.24,
+        5.56,
+        5.11
       ],
       "indexed_loads": [
-        5.74,
-        4.81,
-        5.28
+        5.82,
+        5.32,
+        4.87
       ],
       "scanned_waits_s": [
         0.0,
@@ -237,8 +270,8 @@
         0.0
       ],
       "indexed_waits_s": [
-        15.0,
-        0.0,
+        165.0,
+        480.0,
         0.0
       ]
     },
@@ -246,19 +279,19 @@
       "scanned": {
         "shape": "regional_one_analysis",
         "limit_s": 900.0,
-        "elapsed_ms": 10500.248,
+        "elapsed_ms": 8575.9,
         "timed_out": false,
-        "baseline_mb": 270.2,
-        "peak_mb": 321.8,
+        "baseline_mb": 270.7,
+        "peak_mb": 322.2,
         "load_start": [
-          5.07,
-          5.33,
-          6.31
+          5.19,
+          8.16,
+          9.93
         ],
         "load_end": [
-          4.98,
-          5.31,
-          6.3
+          5.25,
+          8.13,
+          9.91
         ],
         "gate_waited_s": 0.0,
         "gate_gave_up": false,
@@ -269,76 +302,76 @@
       "indexed": {
         "shape": "regional_one_analysis",
         "limit_s": 900.0,
-        "elapsed_ms": 9501.749,
+        "elapsed_ms": 8666.481,
         "timed_out": false,
-        "baseline_mb": 280.1,
-        "peak_mb": 322.9,
+        "baseline_mb": 271.4,
+        "peak_mb": 328.7,
         "load_start": [
-          5.7,
-          5.73,
-          6.4
+          4.99,
+          7.92,
+          9.82
         ],
         "load_end": [
-          5.73,
-          5.74,
-          6.39
+          5.15,
+          7.91,
+          9.8
         ],
-        "gate_waited_s": 45.0,
+        "gate_waited_s": 0.0,
         "gate_gave_up": false,
         "result_count": 1365,
         "sha256": "45d500bd4cdb2f7abcdcf1bfb940afff7f433e5aadeaeabacdf704630c64c9aa",
         "canonical_digest": true
       },
       "scanned_reps": [
-        9018.547,
-        10500.248,
-        10628.05
+        8575.9,
+        11727.001,
+        8413.399
       ],
       "indexed_reps": [
-        9281.774,
-        9501.749,
-        10757.684
+        8692.711,
+        8375.712,
+        8666.481
       ],
       "scanned_loads": [
-        5.07,
-        5.63,
-        5.49
+        5.19,
+        5.7,
+        5.46
       ],
       "indexed_loads": [
-        5.7,
-        5.64,
-        5.81
+        4.99,
+        5.88,
+        5.34
       ],
       "scanned_waits_s": [
         0.0,
-        0.0,
-        15.0
+        75.0,
+        0.0
       ],
       "indexed_waits_s": [
-        45.0,
-        15.0,
-        75.0
+        0.0,
+        0.0,
+        0.0
       ]
     },
     "tophits": {
       "scanned": {
         "shape": "tophits",
         "limit_s": 900.0,
-        "elapsed_ms": 84.425,
+        "elapsed_ms": 50.133,
         "timed_out": false,
-        "baseline_mb": 270.3,
-        "peak_mb": 271.8,
+        "baseline_mb": 277.5,
+        "peak_mb": 270.7,
         "load_start": [
-          5.92,
-          7.12,
-          6.86
+          5.16,
+          7.73,
+          9.3
         ],
         "load_end": [
-          5.92,
-          7.12,
-          6.86
+          5.16,
+          7.73,
+          9.3
         ],
-        "gate_waited_s": 105.0,
+        "gate_waited_s": 150.0,
         "gate_gave_up": false,
         "result_count": 6001,
         "sha256": "1f1b99ecab0832b25ff836aac17bca076b38c08d4d030aafdf09305271fc1d13",
@@ -347,53 +380,53 @@
       "indexed": {
         "shape": "tophits",
         "limit_s": 900.0,
-        "elapsed_ms": 49.603,
+        "elapsed_ms": 50.511,
         "timed_out": false,
-        "baseline_mb": 270.2,
-        "peak_mb": 271.5,
+        "baseline_mb": 269.9,
+        "peak_mb": 271.9,
         "load_start": [
-          5.65,
-          6.98,
-          6.82
+          5.47,
+          7.71,
+          9.28
         ],
         "load_end": [
-          5.65,
-          6.98,
-          6.82
+          5.47,
+          7.71,
+          9.28
         ],
-        "gate_waited_s": 15.0,
+        "gate_waited_s": 0.0,
         "gate_gave_up": false,
         "result_count": 6001,
         "sha256": "1f1b99ecab0832b25ff836aac17bca076b38c08d4d030aafdf09305271fc1d13",
         "canonical_digest": true
       },
       "scanned_reps": [
-        93.35,
-        47.161,
-        84.425
+        90.93,
+        50.133,
+        48.603
       ],
       "indexed_reps": [
-        50.997,
-        47.688,
-        49.603
+        43.322,
+        50.511,
+        59.09
       ],
       "scanned_loads": [
-        5.92,
-        5.55,
-        5.51
+        5.16,
+        5.09,
+        4.81
       ],
       "indexed_loads": [
-        5.65,
-        5.77,
-        5.56
+        5.47,
+        4.7,
+        5.16
       ],
       "scanned_waits_s": [
-        105.0,
+        150.0,
         0.0,
-        15.0
+        0.0
       ],
       "indexed_waits_s": [
-        15.0,
+        0.0,
         0.0,
         0.0
       ]
@@ -402,19 +435,19 @@
       "scanned": {
         "shape": "random_lookup_10_variants_100_analyses",
         "limit_s": 900.0,
-        "elapsed_ms": 1819.422,
+        "elapsed_ms": 1644.092,
         "timed_out": false,
-        "baseline_mb": 270.2,
-        "peak_mb": 324.5,
+        "baseline_mb": 270.6,
+        "peak_mb": 322.4,
         "load_start": [
-          5.16,
-          6.57,
-          6.69
+          5.46,
+          7.3,
+          9.06
         ],
         "load_end": [
-          5.47,
-          6.61,
-          6.71
+          5.46,
+          7.3,
+          9.06
         ],
         "gate_waited_s": 0.0,
         "gate_gave_up": false,
@@ -425,19 +458,19 @@
       "indexed": {
         "shape": "random_lookup_10_variants_100_analyses",
         "limit_s": 900.0,
-        "elapsed_ms": 2815.924,
+        "elapsed_ms": 1640.372,
         "timed_out": false,
-        "baseline_mb": 270.9,
-        "peak_mb": 326.2,
+        "baseline_mb": 270.3,
+        "peak_mb": 330.1,
         "load_start": [
-          5.35,
-          6.57,
-          6.69
+          5.62,
+          7.28,
+          9.03
         ],
         "load_end": [
-          5.16,
-          6.51,
-          6.67
+          5.65,
+          7.26,
+          9.01
         ],
         "gate_waited_s": 0.0,
         "gate_gave_up": false,
@@ -446,24 +479,24 @@
         "canonical_digest": true
       },
       "scanned_reps": [
-        1819.422,
-        2375.338,
-        1656.136
+        1419.258,
+        1644.092,
+        2036.256
       ],
       "indexed_reps": [
-        1693.699,
-        3318.141,
-        2815.924
+        1620.566,
+        2226.133,
+        1640.372
       ],
       "scanned_loads": [
-        5.16,
-        5.15,
-        5.63
+        5.46,
+        5.77,
+        5.98
       ],
       "indexed_loads": [
-        5.35,
-        5.77,
-        5.63
+        5.62,
+        5.42,
+        5.16
       ],
       "scanned_waits_s": [
         0.0,
@@ -472,7 +505,7 @@
       ],
       "indexed_waits_s": [
         0.0,
-        75.0,
+        15.0,
         15.0
       ]
     },
@@ -480,19 +513,19 @@
       "scanned": {
         "shape": "random_lookup_100_variants_10_analyses",
         "limit_s": 900.0,
-        "elapsed_ms": 539.411,
+        "elapsed_ms": 516.485,
         "timed_out": false,
-        "baseline_mb": 270.4,
-        "peak_mb": 429.2,
+        "baseline_mb": 275.0,
+        "peak_mb": 430.8,
         "load_start": [
-          5.97,
-          6.62,
-          6.72
+          5.38,
+          6.81,
+          8.69
         ],
         "load_end": [
-          5.97,
-          6.62,
-          6.72
+          5.38,
+          6.81,
+          8.69
         ],
         "gate_waited_s": 0.0,
         "gate_gave_up": false,
@@ -503,74 +536,74 @@
       "indexed": {
         "shape": "random_lookup_100_variants_10_analyses",
         "limit_s": 900.0,
-        "elapsed_ms": 730.871,
+        "elapsed_ms": 496.561,
         "timed_out": false,
-        "baseline_mb": 270.4,
-        "peak_mb": 429.8,
+        "baseline_mb": 269.7,
+        "peak_mb": 432.8,
         "load_start": [
-          5.72,
-          9.67,
-          8.63
+          5.64,
+          6.82,
+          8.67
         ],
         "load_end": [
-          5.72,
-          9.67,
-          8.63
+          5.64,
+          6.82,
+          8.67
         ],
-        "gate_waited_s": 405.0,
+        "gate_waited_s": 0.0,
         "gate_gave_up": false,
         "result_count": 18,
         "sha256": "6318b181f90319f1e4c5b1182f5212653bceb4c5c06e2eecc446e394c15af635",
         "canonical_digest": true
       },
       "scanned_reps": [
-        539.411,
-        485.643,
-        575.941
+        496.608,
+        516.485,
+        521.458
       ],
       "indexed_reps": [
-        862.024,
-        730.871,
-        622.488
+        496.561,
+        494.584,
+        530.594
       ],
       "scanned_loads": [
-        5.97,
-        5.8,
-        5.61
+        5.38,
+        5.4,
+        5.43
       ],
       "indexed_loads": [
-        5.72,
-        5.91,
-        5.53
+        5.64,
+        5.33,
+        5.38
       ],
       "scanned_waits_s": [
         0.0,
         0.0,
-        150.0
+        0.0
       ],
       "indexed_waits_s": [
-        405.0,
-        15.0,
-        60.0
+        0.0,
+        0.0,
+        0.0
       ]
     },
     "phewas_off_axis": {
       "scanned": {
         "shape": "phewas_off_axis",
         "limit_s": 900.0,
-        "elapsed_ms": 25855.15,
+        "elapsed_ms": 22013.369,
         "timed_out": false,
-        "baseline_mb": 271.2,
-        "peak_mb": 329.3,
+        "baseline_mb": 271.3,
+        "peak_mb": 329.4,
         "load_start": [
-          5.83,
-          8.22,
-          8.41
+          5.57,
+          6.59,
+          8.5
         ],
         "load_end": [
-          6.41,
-          8.14,
-          8.37
+          5.6,
+          6.51,
+          8.42
         ],
         "gate_waited_s": 0.0,
         "gate_gave_up": false,
@@ -581,54 +614,54 @@
       "indexed": {
         "shape": "phewas_off_axis",
         "limit_s": 900.0,
-        "elapsed_ms": 37.04,
+        "elapsed_ms": 34.909,
         "timed_out": false,
-        "baseline_mb": 269.9,
-        "peak_mb": 277.1,
+        "baseline_mb": 272.5,
+        "peak_mb": 278.6,
         "load_start": [
-          5.96,
-          7.82,
-          8.26
+          5.97,
+          6.56,
+          8.41
         ],
         "load_end": [
-          5.96,
-          7.82,
-          8.26
+          5.97,
+          6.56,
+          8.41
         ],
-        "gate_waited_s": 30.0,
+        "gate_waited_s": 0.0,
         "gate_gave_up": false,
         "result_count": 1,
         "sha256": "8eb5f9607935217cefe789eae6bdace4aafd04a09cf2aedd3258c6734ba559e2",
         "canonical_digest": true
       },
       "scanned_reps": [
-        25855.15,
-        30190.423,
-        24026.542
+        23680.464,
+        22013.369,
+        19944.789
       ],
       "indexed_reps": [
-        39.924,
-        37.04,
-        35.992
+        31.371,
+        38.177,
+        34.909
       ],
       "scanned_loads": [
-        5.83,
-        5.9,
-        5.51
+        5.57,
+        5.82,
+        5.91
       ],
       "indexed_loads": [
-        5.96,
-        5.59,
-        5.51
+        5.97,
+        5.67,
+        5.66
       ],
       "scanned_waits_s": [
         0.0,
         0.0,
-        0.0
+        150.0
       ],
       "indexed_waits_s": [
-        30.0,
-        15.0,
+        0.0,
+        0.0,
         0.0
       ]
     },
@@ -636,21 +669,21 @@
       "scanned": {
         "shape": "bulk_overflow_heavy",
         "limit_s": 900.0,
-        "elapsed_ms": 30825.468,
+        "elapsed_ms": 31931.203,
         "timed_out": false,
-        "baseline_mb": 269.1,
-        "peak_mb": 9989.6,
+        "baseline_mb": 271.6,
+        "peak_mb": 9992.0,
         "load_start": [
-          5.96,
-          7.19,
-          7.97
+          5.48,
+          6.53,
+          8.0
         ],
         "load_end": [
-          5.02,
-          6.82,
-          7.82
+          5.34,
+          6.37,
+          7.89
         ],
-        "gate_waited_s": 0.0,
+        "gate_waited_s": 30.0,
         "gate_gave_up": false,
         "result_count": 85226242,
         "sha256": "9248bad93d2590cbe9cac681afe08e007d30b4ee0332129103d36dc3f9c0bc2d",
@@ -659,76 +692,109 @@
       "indexed": {
         "shape": "bulk_overflow_heavy",
         "limit_s": 900.0,
-        "elapsed_ms": 29974.638,
+        "elapsed_ms": 28865.7,
         "timed_out": false,
-        "baseline_mb": 270.1,
-        "peak_mb": 9993.4,
+        "baseline_mb": 273.9,
+        "peak_mb": 10041.5,
         "load_start": [
-          5.77,
-          6.89,
-          7.78
+          5.44,
+          6.28,
+          7.79
         ],
         "load_end": [
-          5.26,
-          6.66,
-          7.68
+          5.89,
+          6.33,
+          7.76
         ],
-        "gate_waited_s": 30.0,
+        "gate_waited_s": 15.0,
         "gate_gave_up": false,
         "result_count": 85226242,
         "sha256": "9248bad93d2590cbe9cac681afe08e007d30b4ee0332129103d36dc3f9c0bc2d",
         "canonical_digest": true
       },
       "scanned_reps": [
-        33575.633,
-        27505.404,
-        30825.468
+        31931.203,
+        30784.265,
+        32000.778
       ],
       "indexed_reps": [
-        29108.275,
-        29974.638,
-        32953.583
+        28318.639,
+        31220.459,
+        28865.7
       ],
       "scanned_loads": [
-        5.96,
-        5.02,
-        5.05
+        5.48,
+        5.66,
+        5.9
       ],
       "indexed_loads": [
-        5.77,
-        4.46,
-        5.71
+        5.44,
+        5.38,
+        4.86
       ],
       "scanned_waits_s": [
-        0.0,
+        30.0,
         0.0,
         0.0
       ],
       "indexed_waits_s": [
-        30.0,
+        15.0,
         0.0,
-        150.0
+        0.0
+      ],
+      "eager": {
+        "shape": "bulk_overflow_heavy",
+        "limit_s": 900.0,
+        "elapsed_ms": 32334.148,
+        "timed_out": false,
+        "baseline_mb": 2419.3,
+        "peak_mb": 14073.0,
+        "load_start": [
+          5.69,
+          6.26,
+          7.66
+        ],
+        "load_end": [
+          5.41,
+          6.12,
+          7.56
+        ],
+        "gate_waited_s": 15.0,
+        "gate_gave_up": false,
+        "result_count": 85226242,
+        "sha256": "9248bad93d2590cbe9cac681afe08e007d30b4ee0332129103d36dc3f9c0bc2d",
+        "canonical_digest": true
+      },
+      "eager_reps": [
+        35521.28,
+        29889.84,
+        32334.148
+      ],
+      "eager_loads": [
+        5.69,
+        5.14,
+        5.69
       ]
     },
     "bulk_dense_exceptions": {
       "scanned": {
         "shape": "bulk_dense_exceptions",
         "limit_s": 900.0,
-        "elapsed_ms": 17360.101,
+        "elapsed_ms": 14777.275,
         "timed_out": false,
-        "baseline_mb": 270.1,
-        "peak_mb": 1517.1,
+        "baseline_mb": 271.3,
+        "peak_mb": 1537.2,
         "load_start": [
-          5.18,
-          6.35,
-          7.18
+          5.81,
+          5.75,
+          6.8
         ],
         "load_end": [
-          5.06,
-          6.27,
-          7.14
+          5.84,
+          5.76,
+          6.78
         ],
-        "gate_waited_s": 0.0,
+        "gate_waited_s": 15.0,
         "gate_gave_up": false,
         "result_count": 9498487,
         "sha256": "1fa93e57547632e664e1ba0ca0182165807a1810315b2f7dd97426e289222933",
@@ -737,19 +803,19 @@
       "indexed": {
         "shape": "bulk_dense_exceptions",
         "limit_s": 900.0,
-        "elapsed_ms": 18395.193,
+        "elapsed_ms": 15504.8,
         "timed_out": false,
-        "baseline_mb": 270.2,
-        "peak_mb": 1522.5,
+        "baseline_mb": 278.3,
+        "peak_mb": 1540.3,
         "load_start": [
-          5.13,
-          6.24,
-          7.12
+          5.63,
+          5.71,
+          6.75
         ],
         "load_end": [
-          5.04,
-          6.17,
-          7.08
+          5.26,
+          5.63,
+          6.71
         ],
         "gate_waited_s": 0.0,
         "gate_gave_up": false,
@@ -758,34 +824,67 @@
         "canonical_digest": true
       },
       "scanned_reps": [
-        13095.593,
-        18538.64,
-        17360.101
+        15948.921,
+        14777.275,
+        13084.234
       ],
       "indexed_reps": [
-        14495.837,
-        18395.193,
-        18795.455
+        15578.224,
+        15504.8,
+        13280.794
       ],
       "scanned_loads": [
-        5.18,
-        5.48,
-        5.5
+        5.81,
+        5.51,
+        5.6
       ],
       "indexed_loads": [
-        5.13,
-        5.72,
-        5.88
+        5.63,
+        5.89,
+        5.3
       ],
       "scanned_waits_s": [
+        15.0,
         0.0,
-        0.0,
-        30.0
+        0.0
       ],
       "indexed_waits_s": [
         0.0,
-        300.0,
+        90.0,
         0.0
+      ],
+      "eager": {
+        "shape": "bulk_dense_exceptions",
+        "limit_s": 900.0,
+        "elapsed_ms": 14229.484,
+        "timed_out": false,
+        "baseline_mb": 2419.4,
+        "peak_mb": 5446.0,
+        "load_start": [
+          4.84,
+          5.52,
+          6.65
+        ],
+        "load_end": [
+          5.4,
+          5.61,
+          6.67
+        ],
+        "gate_waited_s": 0.0,
+        "gate_gave_up": false,
+        "result_count": 9498487,
+        "sha256": "1fa93e57547632e664e1ba0ca0182165807a1810315b2f7dd97426e289222933",
+        "canonical_digest": true
+      },
+      "eager_reps": [
+        14591.015,
+        13392.501,
+        14229.484
+      ],
+      "eager_loads": [
+        4.84,
+        5.9,
+        5.83
       ]
     }
   }
