@@ -32,8 +32,22 @@ Three decisions are load-bearing and worth stating where they are implemented:
    rewriting shards band by band.
 
 Query integration (#265) lives in `opengwasdb.query.facade`, which reads this
-module's seam and applies the ordinary selected-Analysis result contract to it;
-Reference-Completed support is issue #266 and is not implemented here.
+module's seam and applies the ordinary selected-Analysis result contract to it.
+
+A Reference-Completed release (#266) adds two dependencies the Observed-Only
+index does not need, and neither may be inferred from another Analysis:
+
+4. **The imputed mask is copied per cell, Analysis-major.**  Association Status
+   is per cell, not per Analysis: one Analysis completed against the panel can
+   be imputed at a variant where another was never completed, and an observed
+   cell keeps `observed` even inside a completed Analysis.  A reader that
+   inferred imputation from an Analysis-level flag would label an observed cell
+   imputed, or an imputed cell observed (#266).
+5. **The subset's `eaf_reference` is the primary per-variant panel frequency
+   restricted to the subset's variants.**  Decoding an imputed cell substitutes
+   it through the same codec the primary plane uses, so an imputed cell reads
+   the panel's value and an observed cell whose source reported none stays NaN
+   -- never the panel's (ADR 0037 §4).
 """
 
 from __future__ import annotations
@@ -57,6 +71,7 @@ from opengwasdb.encoding import (
     EAF_BASELINE,
     EAF_EXCEPTION_INDEX,
     EAF_EXCEPTION_VALUE,
+    EAF_REFERENCE,
     SE_MISSING,
     Z_OVERFLOW_INDEX,
     Z_OVERFLOW_VALUE,
@@ -157,6 +172,10 @@ _REQUIRED_ATTRS: tuple[str, ...] = (
 #: Store-order variant slot.  It is what a side table's flat position means.
 _SUBSET_ORDER = "analysis,variant"
 
+#: The Association Status mask's array name.  It matches the primary Dense
+#: grid's `imputed` array so the two decoders read the same vocabulary.
+_IMPUTED_MASK = "imputed"
+
 #: The SE exception table's array names.  Naming them once keeps the writer, the
 #: reader and the validator from spelling one of them differently.
 _SE_EXCEPTION_INDEX = "se_exception_index"
@@ -241,12 +260,20 @@ class ResolvedVariantList:
 
 @dataclass(frozen=True)
 class IndexedSubsetAnalysis:
-    """One Analysis's decoded subset column, in Store Variant Index order."""
+    """One Analysis's decoded subset column, in Store Variant Index order.
+
+    ``imputed`` is the per-cell Association Status mask, or ``None`` on an
+    Observed-Only index that carries none.  ``eaf`` is ``None`` only when the
+    release holds neither an `eaf` plane nor reference EAF; a completed release
+    carrying reference EAF yields an array even with no `eaf` plane, because an
+    imputed cell there has the panel's frequency (issue #113).
+    """
 
     variant_index: np.ndarray
     z: np.ndarray
     se: np.ndarray
     eaf: np.ndarray | None
+    imputed: np.ndarray | None
 
 
 @dataclass(frozen=True)
@@ -275,6 +302,7 @@ class IndexedSubset:
     builder_version: str
     created_at: str
     has_eaf: bool
+    has_imputed: bool
     n_z_overflow: int
     n_eaf_exceptions: int
     n_se_exceptions: int
@@ -327,6 +355,7 @@ class _SubsetPlan:
     n_analyses: int
     n_variants: int
     fmt: int
+    completed: bool
     attrs: dict[str, Any]
 
 
@@ -505,9 +534,19 @@ def _read_side(root: Any, name: str) -> np.ndarray:
 
 
 def _create_subset_arrays(
-    group: Any, encoding: StoreEncoding, codec: StoreCodec, n_analyses: int, n_subset: int
-) -> tuple[Any, Any, Any | None]:
-    """Create the Analysis-major statistic planes, filled with each plane's marker."""
+    group: Any,
+    encoding: StoreEncoding,
+    codec: StoreCodec,
+    n_analyses: int,
+    n_subset: int,
+    *,
+    completed: bool,
+) -> tuple[Any, Any, Any | None, Any | None]:
+    """Create the Analysis-major statistic planes, filled with each plane's marker.
+
+    A Reference-Completed release additionally gains the `imputed` mask, which
+    is per cell: Association Status is not an Analysis-level fact (#266).
+    """
     comp = store_arrays.compressor()
     z = store_arrays.create_array(
         group,
@@ -538,13 +577,25 @@ def _create_subset_arrays(
             fill_value=codec.eaf_fill_value,
             compressor=comp,
         )
-    return z, se, eaf
+    imputed = None
+    if completed:
+        imputed = store_arrays.create_array(
+            group,
+            _IMPUTED_MASK,
+            ArrayRole.INDEXED_SUBSET_PLANE,
+            shape=(n_analyses, n_subset),
+            dtype="uint8",
+            fill_value=0,
+            compressor=comp,
+        )
+    return z, se, eaf, imputed
 
 
 def _copy_plane_bands(
     z_target: Any,
     se_target: Any,
     eaf_target: Any | None,
+    imputed_target: Any | None,
     root: Any,
     subset: np.ndarray,
     n_analyses: int,
@@ -557,6 +608,10 @@ def _copy_plane_bands(
         se_target[:, start:stop] = np.asarray(root["se"].oindex[rows, :]).T
         if eaf_target is not None:
             eaf_target[:, start:stop] = np.asarray(root["eaf"].oindex[rows, :]).T
+        if imputed_target is not None:
+            imputed_target[:, start:stop] = np.asarray(
+                root[_IMPUTED_MASK].oindex[rows, :]
+            ).T
 
 
 def _remap_and_write(
@@ -588,6 +643,19 @@ def _write_z_side_tables(
 def _write_eaf_side_tables(
     group: Any, root: Any, encoding: StoreEncoding, subset: np.ndarray, n_analyses: int
 ) -> None:
+    if encoding.eaf.reference:
+        # The panel frequency is per variant and identical for every Analysis
+        # imputed there, so the subset's copy is the primary's restricted to the
+        # subset's variants -- not one recomputed from the subset (#266).
+        store_arrays.create_array(
+            group,
+            EAF_REFERENCE,
+            ArrayRole.PER_VARIANT,
+            data=np.asarray(root[EAF_REFERENCE].oindex[subset], dtype=np.float32),
+            dtype="float32",
+            compressor=store_arrays.compressor(),
+            hint=store_arrays.INDEXED_SUBSET_CHUNK,
+        )
     if not encoding.eaf.is_residual:
         return
     baseline = np.asarray(root[EAF_BASELINE].oindex[subset], dtype=np.float32)
@@ -643,6 +711,8 @@ def write_indexed_subset_group(
     n_analyses: int,
     attrs: dict[str, Any],
     band_cells: int,
+    *,
+    completed: bool,
 ) -> None:
     """Write one complete Indexed Variant Subset group from the primary planes.
 
@@ -650,6 +720,10 @@ def write_indexed_subset_group(
     what this wrote against the primaries, and a caller never assembles the
     group by hand.  The planes are copied band by band, so peak memory is the
     configured band rather than the subset matrix.
+
+    ``completed`` is the release's Completion State, passed in rather than
+    re-derived from the presence of a primary array: a Reference-Completed
+    index must carry the imputed mask, and an Observed-Only one must not.
     """
     subset = np.asarray(subset, dtype=np.int64)
     n_subset = len(subset)
@@ -662,34 +736,51 @@ def write_indexed_subset_group(
         dtype="int32",
         compressor=store_arrays.compressor(),
     )
-    z_target, se_target, eaf_target = _create_subset_arrays(
-        group, encoding, codec, n_analyses, n_subset
+    z_target, se_target, eaf_target, imputed_target = _create_subset_arrays(
+        group, encoding, codec, n_analyses, n_subset, completed=completed
     )
-    _copy_plane_bands(z_target, se_target, eaf_target, root, subset, n_analyses, band_cells)
+    _copy_plane_bands(
+        z_target,
+        se_target,
+        eaf_target,
+        imputed_target,
+        root,
+        subset,
+        n_analyses,
+        band_cells,
+    )
     _write_z_side_tables(group, root, encoding, subset, n_analyses)
     _write_eaf_side_tables(group, root, encoding, subset, n_analyses)
     _write_se_side_tables(group, root, encoding, subset, n_analyses)
     group.attrs.update(attrs)
 
 
-def _check_layout(manifest: StoreManifest) -> None:
-    """Refuse anything but an Observed-Only Dense Store Release."""
+def _check_layout(manifest: StoreManifest, root: Any) -> None:
+    """Refuse anything but a Dense Store Release an index can reproduce.
+
+    Observed-Only and Reference-Completed Dense are both supported (#264,
+    #266).  Ragged and Hybrid remain explicit failures (ADR 0053).  A
+    Reference-Completed release must carry its per-cell `imputed` mask: without
+    it the index cannot reproduce Association Status, so it is refused here
+    rather than written incompletely.
+    """
     if manifest.primary_layout is not PrimaryStorageLayout.DENSE:
         raise IndexedSubsetError(
             "Indexed Variant Subsets are Dense-only (ADR 0053); this release's "
             f"primary_layout is {manifest.primary_layout.value!r}"
         )
-    if manifest.completion_state is not CompletionState.OBSERVED_ONLY:
+    if manifest.completion_state is CompletionState.OBSERVED_ONLY:
+        if manifest.encoding.eaf.reference:
+            raise IndexedSubsetError(
+                "this Observed-Only release declares reference EAF, which an "
+                "Observed-Only index does not carry; refusing rather than writing an "
+                "index that cannot reproduce the release's ordinary result"
+            )
+        return
+    if _IMPUTED_MASK not in root:
         raise IndexedSubsetError(
-            "Indexed Variant Subsets are Observed-Only for now; Reference-Completed "
-            "support is issue #266. This release is "
-            f"{manifest.completion_state.value!r}"
-        )
-    if manifest.encoding.eaf.reference:
-        raise IndexedSubsetError(
-            "this Observed-Only release declares reference EAF, which an Observed-Only "
-            "index does not carry; refusing rather than writing an index that cannot "
-            "reproduce the release's ordinary result"
+            "this Reference-Completed release carries no per-cell imputed mask; an "
+            "Indexed Variant Subset cannot reproduce Association Status without it"
         )
 
 
@@ -727,7 +818,6 @@ def _resolve_inputs(
 ) -> tuple[StoreManifest, VariantList, ResolvedVariantList]:
     """Open the release, check the layout and assembly, and resolve the list."""
     manifest = open_store(store_path).manifest
-    _check_layout(manifest)
     _check_assembly(manifest, reference_assembly)
     variant_list = read_variant_list(variant_list_path)
     resolved = resolve_variant_list(store_path, variant_list.alids)
@@ -762,6 +852,7 @@ def _prepare_subset(
         store_path, variant_list_path, reference_assembly
     )
     root = store_arrays.open_group(store_path / "data.zarr")
+    _check_layout(manifest, root)
     n_analyses = int(root["z"].shape[1])
     n_variants = int(root["z"].shape[0])
     attrs = _build_attributes(
@@ -777,6 +868,7 @@ def _prepare_subset(
         n_analyses=n_analyses,
         n_variants=n_variants,
         fmt=zarr_format_for_version(manifest.format_version, source=f"release at {store_path}"),
+        completed=manifest.completion_state is CompletionState.REFERENCE_COMPLETED,
         attrs=attrs,
     )
 
@@ -821,6 +913,7 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
                 plan.n_analyses,
                 plan.attrs,
                 band_cells,
+                completed=plan.completed,
             )
             _validate_staged(plan, work)
     except DestinationExistsError as exc:
@@ -991,9 +1084,11 @@ def _side_table_length(group: Any, name: str) -> int:
     return array_length(group[name]) if name in group else 0
 
 
-def _require_expected_arrays(name: str, group: Any, encoding: StoreEncoding) -> None:
-    """The group carries exactly the arrays its encoding defines."""
-    expected = _expected_arrays(encoding)
+def _require_expected_arrays(
+    name: str, group: Any, encoding: StoreEncoding, *, completed: bool
+) -> None:
+    """The group carries exactly the arrays its encoding and completion state define."""
+    expected = _expected_arrays(encoding, completed=completed)
     missing = sorted(key for key in expected if key not in group)
     if missing:
         raise IndexedSubsetError(
@@ -1098,25 +1193,75 @@ def _require_variant_axis(
 
 
 def _require_plane_shapes(
-    name: str, group: Any, encoding: StoreEncoding, attrs: dict[str, Any], n_subset: int
+    name: str,
+    group: Any,
+    encoding: StoreEncoding,
+    attrs: dict[str, Any],
+    n_subset: int,
+    *,
+    completed: bool,
 ) -> None:
     """Each statistic plane spans ``(n_analyses, n_subset_variants)`` in its declared dtype."""
     expected_shape = (_require_attr_int(name, attrs, ATTR_N_ANALYSES), n_subset)
     encodings: dict[str, Any] = {"z": encoding.z, "se": encoding.se, "eaf": encoding.eaf}
     for plane, declared in encodings.items():
-        if plane not in group:
-            continue
-        actual = tuple(int(size) for size in group[plane].shape)
-        if actual != expected_shape:
-            raise IndexedSubsetError(
-                f"Indexed Variant Subset {name!r} {plane} shape {actual} does not match "
-                f"{expected_shape}"
-            )
-        if str(group[plane].dtype) != declared.dtype:
-            raise IndexedSubsetError(
-                f"Indexed Variant Subset {name!r} {plane} has dtype {group[plane].dtype} "
-                f"but the declared encoding is {declared.kind} ({declared.dtype})"
-            )
+        _require_one_plane_shape(name, group, plane, declared, expected_shape)
+    _require_status_dependency_shapes(
+        name, group, encoding, expected_shape, n_subset, completed=completed
+    )
+
+
+def _plane_shape_findings(
+    group: Any, plane: str, declared: Any, expected_shape: tuple[int, int]
+) -> list[str]:
+    """One plane's shape/dtype findings, unprefixed so both callers share them."""
+    actual = tuple(int(size) for size in group[plane].shape)
+    findings: list[str] = []
+    if actual != expected_shape:
+        findings.append(f"{plane} shape {actual} does not match {expected_shape}")
+    if str(group[plane].dtype) != declared.dtype:
+        findings.append(
+            f"{plane} has dtype {group[plane].dtype} but the declared encoding is "
+            f"{declared.kind} ({declared.dtype})"
+        )
+    return findings
+
+
+def _require_one_plane_shape(
+    name: str, group: Any, plane: str, declared: Any, expected_shape: tuple[int, int]
+) -> None:
+    """One statistic plane's shape and dtype, when the index carries it."""
+    if plane not in group:
+        return
+    findings = _plane_shape_findings(group, plane, declared, expected_shape)
+    if findings:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} " + "; ".join(findings)
+        )
+
+
+def _require_status_dependency_shapes(
+    name: str,
+    group: Any,
+    encoding: StoreEncoding,
+    expected_shape: tuple[int, int],
+    n_subset: int,
+    *,
+    completed: bool,
+) -> None:
+    """The status mask and reference EAF the release's Completion State implies."""
+    if completed and tuple(int(size) for size in group[_IMPUTED_MASK].shape) != expected_shape:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} imputed shape "
+            f"{tuple(int(size) for size in group[_IMPUTED_MASK].shape)} does not match "
+            f"{expected_shape}"
+        )
+    if encoding.eaf.reference and array_length(group[EAF_REFERENCE]) != n_subset:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} eaf_reference has "
+            f"{array_length(group[EAF_REFERENCE])} entries but the subset has "
+            f"{n_subset} variants"
+        )
 
 
 def _require_decodable_subset(
@@ -1126,6 +1271,8 @@ def _require_decodable_subset(
     attrs: dict[str, Any],
     n_variants: int,
     n_analyses: int,
+    *,
+    completed: bool,
 ) -> np.ndarray:
     """Reject a published group that cannot be decoded safely, and return its axis.
 
@@ -1143,9 +1290,11 @@ def _require_decodable_subset(
     """
     _require_declared_metadata(name, attrs)
     _require_declared_counts(name, attrs, n_analyses)
-    _require_expected_arrays(name, group, encoding)
+    _require_expected_arrays(name, group, encoding, completed=completed)
     variant_index = _require_variant_axis(name, group, attrs, n_variants)
-    _require_plane_shapes(name, group, encoding, attrs, len(variant_index))
+    _require_plane_shapes(
+        name, group, encoding, attrs, len(variant_index), completed=completed
+    )
     return variant_index
 
 
@@ -1224,6 +1373,7 @@ def _open_indexed_subset(store_path: Path, subset_name: str) -> IndexedSubset:
     # would index the Store Variant Table out of bounds.  The Analysis width is
     # read from the same primary plane so a wrong-width index is refused too.
     primary_z = release.arrays(mode="r")["z"]
+    completed = release.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
     variant_index = _require_decodable_subset(
         name,
         group,
@@ -1231,6 +1381,7 @@ def _open_indexed_subset(store_path: Path, subset_name: str) -> IndexedSubset:
         attrs,
         int(primary_z.shape[0]),
         int(primary_z.shape[1]),
+        completed=completed,
     )
     return IndexedSubset(
         store_path=store_path,
@@ -1251,6 +1402,7 @@ def _open_indexed_subset(store_path: Path, subset_name: str) -> IndexedSubset:
         builder_version=str(attrs[ATTR_BUILDER_VERSION]),
         created_at=str(attrs[ATTR_CREATED_AT]),
         has_eaf="eaf" in group,
+        has_imputed=_IMPUTED_MASK in group,
         n_z_overflow=_side_table_length(group, Z_OVERFLOW_INDEX),
         n_eaf_exceptions=_side_table_length(group, EAF_EXCEPTION_INDEX),
         n_se_exceptions=_side_table_length(group, _SE_EXCEPTION_INDEX),
@@ -1279,23 +1431,18 @@ def _decode_analysis_column(
     `variant_index` is passed in rather than re-read from the group: the read
     seam already holds it (`open_indexed_subset` validated it), so a query must
     not pay for a second full read of the subset's axis chunk (#265 review).
+
+    The imputed mask and reference EAF are read from the index's own arrays and
+    handed to the same codec the primary planes use (#266): an imputed cell
+    reads the panel's frequency and an observed cell whose source reported none
+    stays NaN, exactly as on the primary plane.
     """
     codec = _codec(group, encoding)
     start = analysis_index * n_subset
     positions = positions_flat(start)
+    imputed = _imputed_column(group, analysis_index)
     z = codec.decode_z(np.asarray(group["z"][analysis_index, :]), positions=positions)
-    eaf = None
-    if "eaf" in group:
-        baseline = (
-            np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
-            if EAF_BASELINE in group
-            else None
-        )
-        eaf = codec.decode_eaf(
-            np.asarray(group["eaf"][analysis_index, :]),
-            baseline=baseline,
-            positions=positions,
-        )
+    eaf = _decode_eaf_column(codec, group, n_subset, analysis_index, positions, imputed)
     se_raw = np.asarray(group["se"][analysis_index, :])
     se = _decode_se_column(codec, encoding, se_raw, eaf, group, n_subset, analysis_index, positions)
     return IndexedSubsetAnalysis(
@@ -1303,7 +1450,57 @@ def _decode_analysis_column(
         z=z,
         se=se,
         eaf=eaf,
+        imputed=imputed,
     )
+
+
+def _imputed_column(group: Any, analysis_index: int) -> np.ndarray | None:
+    """One Analysis's `imputed` mask cell for cell, or None on an Observed-Only index."""
+    if _IMPUTED_MASK not in group:
+        return None
+    return np.asarray(group[_IMPUTED_MASK][analysis_index, :], dtype=np.uint8)
+
+
+def _index_reference(group: Any) -> np.ndarray | None:
+    """The subset's per-variant reference frequency, or None when it carries none."""
+    if EAF_REFERENCE not in group:
+        return None
+    return np.asarray(group[EAF_REFERENCE][:], dtype=np.float32)
+
+
+def _decode_eaf_column(
+    codec: StoreCodec,
+    group: Any,
+    n_subset: int,
+    analysis_index: int,
+    positions: Any,
+    imputed: np.ndarray | None,
+) -> np.ndarray | None:
+    """One Analysis's decoded frequencies, with the panel substitution applied.
+
+    A completed release may carry reference EAF with no `eaf` plane at all
+    (issue #113); then every observed cell reads NaN and every imputed cell
+    reads the panel's value.  Returning None is reserved for a release that
+    holds no frequency anywhere.
+    """
+    reference = _index_reference(group)
+    if "eaf" in group:
+        baseline = (
+            np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
+            if EAF_BASELINE in group
+            else None
+        )
+        return codec.decode_eaf(
+            np.asarray(group["eaf"][analysis_index, :]),
+            baseline=baseline,
+            positions=positions,
+            imputed=imputed,
+            reference=reference,
+        )
+    if reference is None:
+        return None
+    blank = np.full(n_subset, np.nan, dtype=np.float32)
+    return codec.decode_eaf(blank, imputed=imputed, reference=reference)
 
 
 def _decode_se_column(
@@ -1336,11 +1533,15 @@ def _decode_se_column(
 # ── Validation seam ─────────────────────────────────────────────────────────
 
 
-def _expected_arrays(encoding: StoreEncoding) -> frozenset[str]:
+def _expected_arrays(encoding: StoreEncoding, *, completed: bool) -> frozenset[str]:
     """Every Zarr array a subset under `encoding` must carry, and no others."""
     names = {"variant_index", "z", "se"}
     if not encoding.eaf.is_absent:
         names.add("eaf")
+    if completed:
+        names.add(_IMPUTED_MASK)
+    if encoding.eaf.reference:
+        names.add(EAF_REFERENCE)
     if encoding.z.is_fixed_point:
         names |= {Z_OVERFLOW_INDEX, Z_OVERFLOW_VALUE}
     if encoding.se.is_residual:
@@ -1483,21 +1684,26 @@ def _validate_one_indexed_subset(
     declared = _read_declared_encoding(name, attrs, context.manifest, errors)
     if declared is None:
         return
+    completed = context.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
     _check_identity_attrs(name, attrs, context.manifest, context.n_analyses, errors)
     if errors:
         return
-    if not _check_subset_arrays(name, group, declared, errors):
+    if not _check_subset_arrays(name, group, declared, completed, errors):
         return
     n_subset = _check_variant_index(name, group, attrs, context.n_variants, errors)
     if n_subset is None:
         return
-    if not _check_plane_shapes(name, group, declared, context.n_analyses, n_subset, errors):
+    if not _check_plane_shapes(
+        name, group, declared, context.n_analyses, n_subset, completed, errors
+    ):
         return
     _validate_subset_side_tables(name, group, declared, n_subset, context.n_analyses, errors)
     if errors:
         return
     subset = np.asarray(group["variant_index"][:], dtype=np.int64)
-    _compare_indexed_values(name, context.root, group, declared, subset, context.n_analyses, errors)
+    _compare_indexed_values(
+        name, context.root, group, declared, subset, context.n_analyses, completed, errors
+    )
 
 
 def _read_declared_encoding(
@@ -1602,10 +1808,10 @@ def _unknown_array_keys(group: Any, keys: list[str], expected: frozenset[str]) -
 
 
 def _check_subset_arrays(
-    name: str, group: Any, encoding: StoreEncoding, errors: list[str]
+    name: str, group: Any, encoding: StoreEncoding, completed: bool, errors: list[str]
 ) -> bool:
     """The group's array members are exactly the ones its encoding defines."""
-    expected = _expected_arrays(encoding)
+    expected = _expected_arrays(encoding, completed=completed)
     keys = list(group.keys())
     non_arrays = _non_array_keys(group, keys)
     unknown = _unknown_array_keys(group, keys, expected)
@@ -1680,6 +1886,7 @@ def _check_plane_shapes(
     encoding: StoreEncoding,
     n_analyses: int,
     n_subset: int,
+    completed: bool,
     errors: list[str],
 ) -> bool:
     """Each plane spans ``(n_analyses, n_subset)`` in its declared dtype."""
@@ -1690,20 +1897,40 @@ def _check_plane_shapes(
         "eaf": encoding.eaf,
     }
     for plane, declared in encodings.items():
-        if plane not in group:
-            continue
-        actual = tuple(int(size) for size in group[plane].shape)
-        if actual != expected_shape:
-            errors.append(
-                f"indexed subset {name!r} {plane} shape {actual} does not match "
-                f"{expected_shape}"
-            )
-        if str(group[plane].dtype) != declared.dtype:
-            errors.append(
-                f"indexed subset {name!r} {plane} has dtype {group[plane].dtype} but the "
-                f"declared encoding is {declared.kind} ({declared.dtype})"
-            )
+        _check_one_plane_shape(name, group, plane, declared, expected_shape, errors)
+    if completed:
+        _check_imputed_shape(name, group, expected_shape, errors)
     return not errors
+
+
+def _check_one_plane_shape(
+    name: str,
+    group: Any,
+    plane: str,
+    declared: Any,
+    expected_shape: tuple[int, int],
+    errors: list[str],
+) -> None:
+    """One statistic plane's shape and dtype, when the index carries it."""
+    if plane not in group:
+        return
+    for finding in _plane_shape_findings(group, plane, declared, expected_shape):
+        errors.append(f"indexed subset {name!r} {finding}")
+
+
+def _check_imputed_shape(
+    name: str, group: Any, expected_shape: tuple[int, int], errors: list[str]
+) -> None:
+    """The Reference-Completed index's status mask has the plane shape and dtype."""
+    actual = tuple(int(size) for size in group[_IMPUTED_MASK].shape)
+    if actual != expected_shape:
+        errors.append(
+            f"indexed subset {name!r} imputed shape {actual} does not match {expected_shape}"
+        )
+    if str(group[_IMPUTED_MASK].dtype) != "uint8":
+        errors.append(
+            f"indexed subset {name!r} imputed has dtype {group[_IMPUTED_MASK].dtype}, not uint8"
+        )
 
 
 def _validate_subset_side_tables(
@@ -1733,6 +1960,13 @@ def _validate_subset_side_tables(
                 f"the subset has {n_subset} variants"
             )
         _check_table(name, "eaf exception", EafExceptionTable.read(group), n_cells, errors)
+    if encoding.eaf.reference:
+        reference = np.asarray(group[EAF_REFERENCE][:], dtype=np.float32)
+        if len(reference) != n_subset:
+            errors.append(
+                f"indexed subset {name!r} eaf_reference has {len(reference)} entries but "
+                f"the subset has {n_subset} variants"
+            )
 
 
 def _check_table(name: str, what: str, table: Any, n_cells: int, errors: list[str]) -> None:
@@ -1757,9 +1991,10 @@ class _DecodeContext:
     codec: StoreCodec
     z_plane: DenseZPlane
     se_plane: DenseSePlane
-    eaf_plane: DenseEafPlane | None
+    eaf_plane: DenseEafPlane
     coefficients: np.ndarray
     baseline: np.ndarray | None
+    primary_imputed: Any | None
 
 
 def _open_decode_context(
@@ -1770,7 +2005,10 @@ def _open_decode_context(
         codec = _codec(group, encoding)
         z_plane = DenseZPlane.open(root, encoding)
         se_plane = DenseSePlane.open(root, encoding)
-        eaf_plane = DenseEafPlane.open(root, encoding) if "eaf" in group else None
+        # Opened even when the index carries no `eaf` array: a release whose
+        # source reported no frequency still has imputed cells with the panel's
+        # (issue #113), and those are exactly the values a naive skip would drop.
+        eaf_plane = DenseEafPlane.open(root, encoding)
     except Exception as exc:
         errors.append(f"indexed subset {name!r} cannot be decoded: {exc}")
         return None
@@ -1784,7 +2022,10 @@ def _open_decode_context(
         if encoding.eaf.is_residual
         else None
     )
-    return _DecodeContext(codec, z_plane, se_plane, eaf_plane, coefficients, baseline)
+    primary_imputed = root[_IMPUTED_MASK] if _IMPUTED_MASK in root else None
+    return _DecodeContext(
+        codec, z_plane, se_plane, eaf_plane, coefficients, baseline, primary_imputed
+    )
 
 
 def _compare_indexed_values(
@@ -1794,16 +2035,22 @@ def _compare_indexed_values(
     encoding: StoreEncoding,
     subset: np.ndarray,
     n_analyses: int,
+    completed: bool,
     errors: list[str],
 ) -> None:
     """Stream decoded index bands and compare them to the primary planes.
 
     Every decoded indexed Z, SE and EAF must equal its authoritative
-    primary-plane cell; missingness must agree within the index before the
-    values are compared.
+    primary-plane cell; the imputed mask and reference EAF must equal the
+    release's own (a wrong one would label or decode a cell plausibly and
+    wrongly); and missingness must agree within the index before the values
+    are compared.
     """
     context = _open_decode_context(name, group, root, encoding, errors)
     if context is None:
+        return
+    _eaf_reference_error(name, group, root, subset, encoding, errors)
+    if errors:
         return
     for start, stop in _band_bounds(len(subset), n_analyses, DEFAULT_BAND_CELLS):
         message = _compare_indexed_band(
@@ -1831,7 +2078,9 @@ def _compare_indexed_band(
     index_z_raw = np.asarray(group["z"][:, start:stop])
     index_se_raw = np.asarray(group["se"][:, start:stop])
     primary_eaf = (
-        context.eaf_plane.read_rows(rows).values if context.eaf_plane is not None else None
+        context.eaf_plane.read_rows(rows).values
+        if context.eaf_plane.can_report_frequencies
+        else None
     )
     primary_z = context.z_plane.rows(rows)
     primary_se = context.se_plane.rows(rows, eaf=primary_eaf)
@@ -1842,6 +2091,9 @@ def _compare_indexed_band(
         return eaf_error
     return (
         _missingness_error(name, context, index_z_raw, index_se_raw, encoding)
+        or _imputed_band_error(
+            name, context, group, index_z_raw, index_se_raw, encoding, rows, start, stop
+        )
         or _z_band_error(name, context, index_z_raw, primary_z, positions)
         or _eaf_band_error(name, index_eaf, primary_eaf)
         or _se_band_error(
@@ -1866,25 +2118,112 @@ def _decode_index_eaf(
     stop: int,
     n_analyses: int,
 ) -> tuple[np.ndarray | None, str | None]:
-    """Decode one band's indexed EAF, with an error string when it cannot be."""
-    if context.eaf_plane is None:
+    """Decode one band's indexed EAF, with an error string when it cannot be.
+
+    The index's own `imputed` mask and `eaf_reference` are used, so a corrupt
+    reference or status that changes a decoded frequency is caught by the
+    comparison against the primary rather than papered over with the primary's
+    own values.
+    """
+    has_eaf = "eaf" in group
+    if not has_eaf and not encoding.eaf.reference:
         return None, None
     n_subset = int(group["z"].shape[1])
-    baseline_cells = (
-        None
-        if context.baseline is None
-        else context.baseline[start:stop][None, :].repeat(n_analyses, axis=0)
-    )
     positions = positions_rows_cols(np.arange(n_analyses), np.arange(start, stop), n_subset)
+    if has_eaf:
+        codes = np.asarray(group["eaf"][:, start:stop])
+        baseline_cells = (
+            None
+            if context.baseline is None
+            else context.baseline[start:stop][None, :].repeat(n_analyses, axis=0)
+        )
+    else:
+        codes = np.full((n_analyses, stop - start), np.nan, dtype=np.float32)
+        baseline_cells = None
+    reference = None
+    if EAF_REFERENCE in group:
+        reference = np.broadcast_to(
+            np.asarray(group[EAF_REFERENCE][start:stop], dtype=np.float32)[None, :],
+            codes.shape,
+        )
     try:
         decoded = context.codec.decode_eaf(
-            np.asarray(group["eaf"][:, start:stop]),
+            codes,
             baseline=baseline_cells,
             positions=positions,
+            imputed=_index_imputed_band(group, start, stop),
+            reference=reference,
         )
     except Exception as exc:
         return None, f"indexed subset {name!r} eaf cannot be decoded: {exc}"
     return decoded, None
+
+
+def _index_imputed_band(group: Any, start: int, stop: int) -> np.ndarray | None:
+    """The index's own `imputed` band, or None on an Observed-Only index."""
+    if _IMPUTED_MASK not in group:
+        return None
+    return np.asarray(group[_IMPUTED_MASK][:, start:stop], dtype=np.uint8)
+
+
+def _imputed_band_error(
+    name: str,
+    context: _DecodeContext,
+    group: Any,
+    index_z_raw: np.ndarray,
+    index_se_raw: np.ndarray,
+    encoding: StoreEncoding,
+    rows: np.ndarray,
+    start: int,
+    stop: int,
+) -> str | None:
+    """Whether the index's Association Status mask is well-formed and authoritative.
+
+    Three silent-wrong-answer classes in one rule: an imputed cell that is
+    missing is an invalid state (spec §15), an imputed mask that does not match
+    the primary labels observed cells imputed and vice versa, and a non-0/1
+    value is not a mask at all.  Each is refused rather than decoded.
+    """
+    index_imputed = _index_imputed_band(group, start, stop)
+    if index_imputed is None:
+        return None
+    if not np.all((index_imputed == 0) | (index_imputed == 1)):
+        return f"indexed subset {name!r} imputed mask contains values other than 0 and 1"
+    se_missing = (
+        index_se_raw == SE_MISSING if encoding.se.is_residual else np.isnan(index_se_raw)
+    )
+    missing = context.codec.missing_mask(index_z_raw) | se_missing
+    if np.any(index_imputed.astype(bool) & missing):
+        return f"indexed subset {name!r} marks a missing Z/SE cell imputed"
+    if context.primary_imputed is None:
+        return f"indexed subset {name!r} carries an imputed mask but the release has none"
+    primary = np.asarray(context.primary_imputed.oindex[rows, :]).T
+    if not np.array_equal(index_imputed, primary):
+        return (
+            f"indexed subset {name!r} imputed mask disagrees with the primary release; "
+            "the index is stale or corrupt"
+        )
+    return None
+
+
+def _eaf_reference_error(
+    name: str,
+    group: Any,
+    root: Any,
+    subset: np.ndarray,
+    encoding: StoreEncoding,
+    errors: list[str],
+) -> None:
+    """The subset's reference EAF must be the release's restricted to its variants."""
+    if not encoding.eaf.reference:
+        return
+    index_reference = np.asarray(group[EAF_REFERENCE][:], dtype=np.float32)
+    primary = np.asarray(root[EAF_REFERENCE].oindex[subset], dtype=np.float32)
+    if not np.array_equal(index_reference, primary, equal_nan=True):
+        errors.append(
+            f"indexed subset {name!r} eaf_reference disagrees with the primary release; "
+            "the index is stale or corrupt"
+        )
 
 
 def _missingness_error(
