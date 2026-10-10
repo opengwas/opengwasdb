@@ -416,10 +416,11 @@ the end of this file.
   imputed mask and reference EAF, so an isolated corruption the build sample can
   miss is refused by an explicit audit. On the fresh #270 OGS-00009 HapMap3
   build the store layer measured every one of the 38,456 `z`, `se` and `eaf`
-  physical files encoded exactly once; the build took 215.89 s (write 203.546 s,
-  sampled validation 2.792 s) against the #267 4,198 s, with exact six-field
-  equivalence, 6,235,000,832 physical index bytes (17.852%) and a 1,234.7 MB
-  peak RSS (still resolution-bound, not the subset matrix). The index
+  physical files encoded exactly once; the build took 243.58 s (write 229.168 s,
+  sampled validation 1.779 s) against the #267 4,198 s, with exact six-field
+  equivalence, 6,235,021,312 physical index bytes (17.852%) and a 1,234.5 MB
+  peak RSS within the declared 3,072.0 MB bound (the peak is still
+  ALID-resolution-bound, not the subset matrix). The index
   chunk/shard geometry and per-plane physical bytes are unchanged from #267.
   Tests build a v2 and a v3 index under a `count_shard_writes` recorder and fail
   if any physical output file is encoded more than once; a chunk-boundary

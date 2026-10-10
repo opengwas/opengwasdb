@@ -135,7 +135,7 @@ performance result.
   `peak_rss_within_bound = false`. The miss is reported honestly rather than
   the bound being widened after the fact; the peak is independent of the full
   matrix. The #270 per-phase measurement below shows it is set by ALID
-  resolution, not by the writer band, and so the same miss recurs.
+  resolution, not by the writer band.
 - **#270 removed the build's output-chunk write amplification and made the
   build's publication gate a documented deterministic sample.** The old writer
   banded by cell budget alone -- about 1,976 subset variants on OGS-00009 -- and
@@ -153,10 +153,13 @@ performance result.
   (65,536 x 1,000 = 65.5M cells) so a v2 build does not re-read the primary. On
   the fresh #270 OGS-00009 HapMap3 build every one of the 38,456 `z`,
   `se` and `eaf` physical files was encoded exactly once (measured at the store
-  layer). The build took **215.89 s** -- write **203.546 s** and the publication
-  gate **2.792 s** -- against the #267 build's 4,198 s, with byte-exact
-  six-field equivalence, 6,235,000,832 physical index bytes (17.852%) and a
-  1,234.7 MB peak RSS (still resolution-bound, so the #267 bound miss recurs).
+  layer). The build took **243.58 s** -- write **229.168 s** and the publication
+  gate **1.779 s** -- against the #267 build's 4,198 s, with byte-exact
+  six-field equivalence, 6,235,021,312 physical index bytes (17.852%) and a
+  1,234.5 MB peak RSS. The declared band invariant is
+  `max(band_cells, write unit)` = 67.1M cells (65,536 x 1,000 rounded up), so
+  the benchmark's band-plus-fixed-overhead bound is 3,072.0 MB and the measured
+  peak is within it; the peak itself remains ALID-resolution-bound.
 - The build's gate validates the structural invariants exhaustively (identity
   and attributes, exact array set, shapes/dtypes/chunking, the full Variant
   Index, counts and provenance), together with the small side-table remapping
@@ -172,7 +175,7 @@ performance result.
   audit; the build records the mode, sample strategy, seed, cell count and
   sampled duration. The risk is documented rather than hidden, and the low
   build cost is part of this ADR's outcome.
-- The #270 query latency was measured at **699.428 ms** warm median in that
+- The #270 query latency was measured at **446.706 ms** warm median in that
   benchmark run. The index chunk/shard geometry and per-plane physical bytes are
   identical to #267's and the query path is unchanged, so the difference from
   the #267 figure is not attributable to this change.

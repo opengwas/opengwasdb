@@ -324,12 +324,13 @@ size is printed below). The measured peak is reported as measured: where it
 exceeds the declared bound the target below fails rather than the bound being
 widened after the fact.
 
-The build's publication gate is **`sampled`**: every structural invariant
-(identity, exact array set, shapes/dtypes/chunking, the full Variant Index, the
-small side-table remapping and provenance) is checked exhaustively, and the
-decoded Z/SE/EAF and Association Status of a bounded deterministic sample of
-cells are compared against the primary planes. The sample covers the endpoints
-of both axes, a spread of physical output boundaries, a spread of Analyses and
+The build's publication gate is **`sampled`**: the enumerated structural rules
+(identity and attributes, exact array set, shapes/dtypes/chunking, the full
+Variant Index, counts, the small side-table remapping and provenance) are
+checked exhaustively, and the decoded Z/SE/EAF and Association Status of a
+bounded deterministic sample of cells are compared against the primary planes.
+The sample anchors a spread of physical write-unit boundaries plus a separate
+inner-chunk spread, the endpoints of both axes, a spread of Analyses and
 input-checksum-seeded cells (the mode, strategy, seed and count are in the table
 above); a systemic, ordering or chunk-boundary corruption is caught. An isolated
 unsampled corruption can pass this gate by design; standalone `opengwasdb
