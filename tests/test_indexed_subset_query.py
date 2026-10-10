@@ -141,6 +141,18 @@ def _push_variant_index_out_of_bounds(store: Path) -> None:
     group["variant_index"][:] = values
 
 
+def _damage_subset_entry(store: Path, name: str, damage: str) -> None:
+    """Put a plain directory or an unreadable Zarr group at the subset's name.
+
+    Both pass ``Path.is_dir()`` and reach the group-open boundary, which is the
+    corruption the read seam must normalise rather than let zarr/json leak.
+    """
+    group_dir = store / "data.zarr" / INDEXED_SUBSETS_GROUP / name
+    group_dir.mkdir(parents=True)
+    if damage == "corrupt":
+        (group_dir / "zarr.json").write_text("{not json", encoding="utf-8")
+
+
 def _assert_refused(store: Path, subset: str, match: str) -> str:
     """The API refuses `subset` with a message naming the Store and the subset."""
     with pytest.raises(IndexedSubsetError, match=match) as excinfo:
@@ -356,6 +368,19 @@ def test_malformed_integer_metadata_is_refused(indexed_copy: Path) -> None:
     """A non-integer attribute must name the Store and subset, not raise ValueError."""
     _corrupt_group(indexed_copy).attrs["n_analyses"] = "many"
     _assert_refused(indexed_copy, "hm3", "non-integer n_analyses")
+
+
+@pytest.mark.parametrize("damage", ["plain", "corrupt"])
+def test_unreadable_subset_group_is_refused(indexed_copy: Path, damage: str) -> None:
+    """A plain directory or unreadable metadata is an IndexedSubsetError on both surfaces.
+
+    This is the open/read boundary: zarr's GroupNotFoundError and a metadata
+    JSONDecodeError must not escape the facade or the CLI.
+    """
+    name = f"{damage}idx"
+    _damage_subset_entry(indexed_copy, name, damage)
+    _assert_refused(indexed_copy, name, "not a readable Zarr group")
+    _assert_cli_refused(indexed_copy, name, "not a readable Zarr group")
 
 
 def test_variant_index_is_read_once_per_indexed_query(

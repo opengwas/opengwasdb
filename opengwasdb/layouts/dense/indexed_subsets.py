@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import json
 import logging
 import os
 import re
@@ -1179,13 +1180,33 @@ def _store_scoped(store_path: Path, exc: IndexedSubsetError) -> IndexedSubsetErr
     return type(exc)(f"{prefix}{exc}")
 
 
+def _open_subset_group(path: Path, name: str) -> tuple[Any, dict[str, Any]]:
+    """Open a published subset's Zarr group, normalising a corrupt store entry.
+
+    `path` is a directory the namespace layout selected, but it may be a plain
+    directory, a Zarr array, or a group whose metadata is unreadable.  Those are
+    corrupt-index failures the caller must see as an IndexedSubsetError, not as
+    a zarr/json exception leaking through the query facade (#265 review).  Only
+    the open and metadata read sit inside this boundary; a programming error in
+    this module is deliberately not caught.
+    """
+    try:
+        group = store_arrays.open_group(path)
+        attrs = dict(group.attrs)
+    except (zarr.errors.BaseZarrError, json.JSONDecodeError) as exc:
+        raise IndexedSubsetError(
+            f"Indexed Variant Subset {name!r} at {path} is not a readable Zarr "
+            f"group: {exc}"
+        ) from exc
+    return group, attrs
+
+
 def _open_indexed_subset(store_path: Path, subset_name: str) -> IndexedSubset:
     name = parse_indexed_subset_name(subset_name)
     path = store_path / "data.zarr" / INDEXED_SUBSETS_GROUP / name
     if not path.is_dir():
         raise IndexedSubsetError(f"this release has no Indexed Variant Subset {name!r}")
-    group = store_arrays.open_group(path)
-    attrs = dict(group.attrs)
+    group, attrs = _open_subset_group(path, name)
     missing = _missing_required_attrs(attrs)
     if missing:
         raise IndexedSubsetError(

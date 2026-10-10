@@ -65,11 +65,12 @@ the end of this file.
   duplicates none of its codec, exception, EAF or status reconstruction. An
   explicit selector never falls back to the primary matrix: an unknown,
   staging, incomplete, stale, or corrupt subset raises, and the CLI exits 1
-  naming the Store and subset. Corruption covers malformed encoding metadata,
-  the wrong plane dtype, missing/unexpected arrays, a wrong declared
-  name/schema/profile/axis order, Variant Indices out of the release's
-  `[0, n_variants)` range, a declared Analysis count that disagrees with the
-  release, and requested/resolved/absent counts that do not add up. Those
+  naming the Store and subset. Corruption covers an unreadable group entry
+  (a plain directory, a Zarr array, or unreadable metadata), malformed
+  encoding metadata, the wrong plane dtype, missing/unexpected arrays, a wrong
+  declared name/schema/profile/axis order, Variant Indices out of the
+  release's `[0, n_variants)` range, a declared Analysis count that disagrees
+  with the release, and requested/resolved/absent counts that do not add up. Those
   checks run on the read path itself, not only under `validate`, and the
   subset's Variant Index is read once per query rather than once to validate
   and again to decode. A Ragged or Hybrid release refuses any selector. An

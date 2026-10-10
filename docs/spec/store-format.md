@@ -1156,7 +1156,10 @@ declared name, schema, profile and `order`, the declared Analysis and
 requested/resolved/absent counts, the exact array set, every plane's declared
 dtype and shape, and that `variant_index` is non-empty, sorted, unique and in
 bounds `[0, n_variants)`. A malformed encoding block is refused as a malformed
-subset rather than allowed to raise a decode error. It does NOT re-derive
+subset rather than allowed to raise a decode error. An entry that is not a
+readable Zarr group -- a plain directory, an array, or metadata a reader
+cannot parse -- is refused the same way, not left to leak a zarr or JSON
+exception through the facade. It does NOT re-derive
 decoded values or side-table internals -- that is `validate`'s expensive job --
 and cannot detect an in-range Variant Index shift while identity and bounds
 hold. A subset on a Ragged or Hybrid release is refused, because Indexed
