@@ -1396,6 +1396,11 @@ def build_indexed_subset_command(
         f"requested {result.requested_count}, resolved {result.resolved_count}, "
         f"absent {result.absent_count}"
     )
+    typer.echo(
+        f"publication gate: {result.validation_mode}, {result.sample_cells} decoded "
+        f"sample cells (seed {result.sample_seed}) in {result.validate_seconds:.1f} s; "
+        "standalone validate remains exhaustive"
+    )
 
 
 @app.command("regenerate-overview")

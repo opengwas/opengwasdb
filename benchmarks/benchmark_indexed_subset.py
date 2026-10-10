@@ -61,6 +61,12 @@ BAND_CELLS = 4_000_000
 #: Generous per-band-cell allowance for the index planes plus decode scratch.
 BYTES_PER_BAND_CELL = 32
 FIXED_OVERHEAD_MB = 1024.0
+#: The documented ceiling on the build's decoded validation sample.  The
+#: in-code sample is smaller (corners + 16 Analyses x (2 ends + 3 x 8 chunk
+#: anchors + 8 seeded cells) + 32 global seeded cells = 580); this bound is what
+#: the artifact checks, so a future sample that grows is caught rather than
+#: quietly becoming a full pass (#270).
+SAMPLE_CELLS_CEILING = 1024
 
 DEFAULT_REPS = 5
 #: Ordinary timings are compared before/after; the envelope is the change the
@@ -73,8 +79,8 @@ OUTPUT = Path("docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.jso
 #: Bumped when the required artifact shape changes, so a committed artifact from
 #: an older harness is detectable rather than silently trusted.
 #: v3 adds the write/validate phase split and the measured output-chunk rewrite
-#: counts (#270).
-ARTIFACT_SCHEMA_VERSION = 3
+#: counts (#270).  v4 adds the sampled publication-gate mode and its sample.
+ARTIFACT_SCHEMA_VERSION = 4
 
 #: The six parallel arrays every selected-Analysis result carries (spec 10b).
 #: The six parallel arrays every selected-Analysis result carries (spec 10b).
@@ -145,6 +151,10 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "build.phases.validate_seconds",
     "build.phases.publish_seconds",
     "build.output_chunk_writes",
+    "build.validation_mode",
+    "build.sample_strategy",
+    "build.sample_seed",
+    "build.sample_cells",
     "build.peak_rss_source",
     "build.requested",
     "build.resolved",
@@ -215,6 +225,8 @@ _BUILD_RUNNER = (
     "'max_writes_one_chunk': int(max(vals))}\n"
     "print(json.dumps({'prepare_seconds': t1 - t0, 'publish_seconds': t2 - t1, "
     "'write_seconds': result.write_seconds, 'validate_seconds': result.validate_seconds, "
+    "'validation_mode': result.validation_mode, 'sample_strategy': result.sample_strategy, "
+    "'sample_seed': result.sample_seed, 'sample_cells': result.sample_cells, "
     "'requested': result.requested_count, 'resolved': result.resolved_count, "
     "'absent': result.absent_count, 'n_subset_variants': result.n_subset_variants, "
     "'input_sha256': result.input_sha256, 'output_chunk_writes': planes}))\n"
@@ -599,6 +611,10 @@ def run_build(store: Path, name: str, variant_list: Path, assembly: str, band_ce
             "publish_seconds": round(float(phases["publish_seconds"]), 3),
         },
         "output_chunk_writes": phases.get("output_chunk_writes", {}),
+        "validation_mode": str(phases["validation_mode"]),
+        "sample_strategy": str(phases["sample_strategy"]),
+        "sample_seed": int(phases["sample_seed"]),
+        "sample_cells": int(phases["sample_cells"]),
         "requested": int(phases["requested"]),
         "resolved": int(phases["resolved"]),
         "absent": int(phases["absent"]),
@@ -660,6 +676,9 @@ def load_prior_build(path: Path) -> dict:
     ]
     if not isinstance(build.get("output_chunk_writes"), dict):
         missing.append("output_chunk_writes")
+    for key in ("validation_mode", "sample_strategy", "sample_seed", "sample_cells"):
+        if key not in build:
+            missing.append(key)
     if missing:
         raise SystemExit(f"{path} build block is missing: {', '.join(sorted(missing))}")
     if float(build["total_seconds"]) <= 0.0 or float(build["peak_rss_mb"]) <= 0.0:
@@ -684,6 +703,10 @@ def load_prior_build(path: Path) -> dict:
             "publish_seconds": float(phases["publish_seconds"]),
         },
         "output_chunk_writes": dict(build["output_chunk_writes"]),
+        "validation_mode": str(build["validation_mode"]),
+        "sample_strategy": str(build["sample_strategy"]),
+        "sample_seed": int(build["sample_seed"]),
+        "sample_cells": int(build["sample_cells"]),
         "requested": int(build["requested"]),
         "resolved": int(build["resolved"]),
         "absent": int(build["absent"]),
@@ -756,6 +779,7 @@ def _semantic_problems(artifact: dict[str, Any]) -> list[str]:
             "build.phases write + validate exceed publish; the split does not fit the total"
         )
     problems.extend(_chunk_write_problems(build.get("output_chunk_writes")))
+    problems.extend(_validation_mode_problems(build))
     requested = build["requested"]
     if requested <= 0 or requested != build["resolved"] + build["absent"]:
         problems.append(
@@ -797,6 +821,35 @@ def _semantic_problems(artifact: dict[str, Any]) -> list[str]:
     problems.extend(_bracketing_problems(run, build, artifact["targets"]))
     if artifact["publication"]["published"] != artifact["targets"]["exact_equivalence"]:
         problems.append("publication.published disagrees with targets.exact_equivalence")
+    return problems
+
+
+def _validation_mode_problems(build: dict[str, Any]) -> list[str]:
+    """Reasons the recorded publication-gate mode cannot be believed.
+
+    The build's gate must be the documented ``sampled`` mode, and the sample
+    must be bounded and non-empty: the structural invariants are exhaustive,
+    the decoded comparison is a documented deterministic sample, and the
+    exhaustive audit is what standalone `validate` runs (#270).
+    """
+    problems: list[str] = []
+    if build.get("validation_mode") != "sampled":
+        problems.append(
+            f"build.validation_mode is {build.get('validation_mode')!r}, expected 'sampled'"
+        )
+    cells = build.get("sample_cells")
+    if not isinstance(cells, int) or isinstance(cells, bool) or cells < 1:
+        problems.append(f"build.sample_cells must be a positive integer, got {cells!r}")
+    elif cells > SAMPLE_CELLS_CEILING:
+        problems.append(
+            f"build.sample_cells is {cells}, above the documented bound of "
+            f"{SAMPLE_CELLS_CEILING}"
+        )
+    seed = build.get("sample_seed")
+    if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
+        problems.append(f"build.sample_seed must be a non-negative integer, got {seed!r}")
+    if not isinstance(build.get("sample_strategy"), str) or not build["sample_strategy"]:
+        problems.append("build.sample_strategy must be a non-empty string")
     return problems
 
 
@@ -1061,6 +1114,10 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "rss_within_bound": rss_within_bound,
             "phases": build["phases"],
             "output_chunk_writes": build.get("output_chunk_writes", {}),
+            "validation_mode": build["validation_mode"],
+            "sample_strategy": build["sample_strategy"],
+            "sample_seed": build["sample_seed"],
+            "sample_cells": build["sample_cells"],
             "peak_rss_source": "/usr/bin/time -v (build subprocess)",
             "requested": writer_requested,
             "resolved": writer_resolved,

@@ -44,6 +44,8 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     IndexedSubsetStaleError,
     VariantListError,
     _ensure_indexed_subset_namespace,
+    _physical_write_unit,
+    _validation_sample,
     build_indexed_subset,
     list_indexed_subsets,
     open_indexed_subset,
@@ -51,6 +53,7 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     read_variant_list,
     remove_indexed_subset,
     resolve_variant_list,
+    validate_indexed_subsets,
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -870,6 +873,83 @@ def test_output_v3_shards_are_encoded_once(
 
 def _errors_for(store: Path) -> list[str]:
     return validate_store(store).errors
+
+
+def _sampled_errors(store: Path) -> list[str]:
+    """The build's publication gate in isolation: structural + bounded sample."""
+    root = _root(store)
+    n_variants, n_analyses = (int(size) for size in root["z"].shape)
+    errors: list[str] = []
+    validate_indexed_subsets(
+        store,
+        root,
+        StoreManifest.load(store),
+        n_variants,
+        n_analyses,
+        errors,
+        exhaustive=False,
+    )
+    return errors
+
+
+# ── Sampled publication gate and the exhaustive audit (#270) ────────────────
+
+
+def test_build_sample_refuses_a_chunk_boundary_corruption(
+    tmp_path: Path, big_store: Path
+) -> None:
+    """A corruption at a physical output boundary must fail the build sample.
+
+    The sample deliberately includes the slot before each output boundary and
+    the first slot after it, so an off-by-one or chunk-remap defect is caught
+    even though the build no longer decodes the whole matrix.
+    """
+    store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
+    _build(store, "big", _big_variant_list(tmp_path))
+    group = _index_group(store, "big")
+    values = np.asarray(group["z"][:])
+    boundary = store_arrays.INDEXED_SUBSET_CHUNK
+    assert boundary < values.shape[1], "the fixture must have a second output unit"
+    values[0, boundary] = values[0, boundary] + 1
+    group["z"][:] = values
+    errors = _sampled_errors(store)
+    assert any("z values" in error for error in errors), errors
+    assert _errors_for(store), "the exhaustive audit must also refuse it"
+
+
+def test_build_sample_misses_isolated_corruption_but_standalone_refuses(
+    tmp_path: Path, big_store: Path
+) -> None:
+    """The sample's residual risk is stated, not hidden: it may miss one cell.
+
+    A cell the deterministic sample does not visit passes the build gate by
+    design; the exhaustive standalone audit must still find it, so the risk is
+    explicit and recoverable rather than silent.
+    """
+    store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
+    _build(store, "big", _big_variant_list(tmp_path))
+    group = _index_group(store, "big")
+    values = np.asarray(group["z"][:])
+    n_subset = int(values.shape[1])
+    sample = _validation_sample(
+        dict(group.attrs),
+        1,
+        n_subset,
+        _physical_write_unit(group["z"]),
+        int(group["z"].chunks[1]),
+    )
+    visited = set(zip(sample.analyses.tolist(), sample.slots.tolist(), strict=True))
+    unsampled = next(
+        slot for slot in range(n_subset) if (0, slot) not in visited
+    )
+    values[0, unsampled] = values[0, unsampled] + 1
+    group["z"][:] = values
+    assert not any("z values" in error for error in _sampled_errors(store)), (
+        "the chosen cell must be outside the documented sample"
+    )
+    assert any("z values" in error for error in _errors_for(store)), (
+        "the exhaustive audit must refuse the unsampled corruption"
+    )
 
 
 def test_validation_rejects_a_temporary_group(

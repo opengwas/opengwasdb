@@ -267,6 +267,10 @@ def _complete_artifact() -> dict:
                 "se": {"chunks": 2, "writes": 2, "max_writes_one_chunk": 1},
                 "eaf": {"chunks": 2, "writes": 2, "max_writes_one_chunk": 1},
             },
+            "validation_mode": "sampled",
+            "sample_strategy": "corners + Analyses + chunk boundaries + seeded cells",
+            "sample_seed": 12345,
+            "sample_cells": 580,
             "peak_rss_source": "/usr/bin/time -v",
             "requested": 3,
             "resolved": 2,
@@ -369,6 +373,27 @@ def test_assert_artifact_complete_rejects_a_missing_write_phase() -> None:
     del artifact["build"]["phases"]["write_seconds"]
 
     _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "write_seconds")
+
+
+def test_assert_artifact_complete_rejects_a_non_sampled_build_gate() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["validation_mode"] = "exhaustive"
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "validation_mode")
+
+
+def test_assert_artifact_complete_rejects_an_unbounded_sample() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["sample_cells"] = bench.SAMPLE_CELLS_CEILING + 1
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "sample_cells")
+
+
+def test_assert_artifact_complete_rejects_a_missing_sample_strategy() -> None:
+    artifact = _complete_artifact()
+    del artifact["build"]["sample_strategy"]
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "sample_strategy")
 
 
 def test_assert_artifact_complete_rejects_bracketing_disagreement() -> None:

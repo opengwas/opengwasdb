@@ -274,7 +274,10 @@ print(md_table(
         ["configured band", f"{build['band_cells']:,} cells"],
         ["prepare (open release, resolve list)", f"{build['phases']['prepare_seconds']:,.2f} s"],
         ["write (planes, chunk-aligned)", f"{build['phases']['write_seconds']:,.2f} s"],
-        ["staged validation (exhaustive second pass)", f"{build['phases']['validate_seconds']:,.2f} s"],
+        ["staged validation (publication gate)", f"{build['phases']['validate_seconds']:,.2f} s"],
+        ["validation mode", build["validation_mode"]],
+        ["decoded sample", f"{build['sample_cells']:,} cells ({build['sample_strategy']})"],
+        ["sample seed (input-SHA-256)", f"`{build['sample_seed']}`"],
         ["publish (write + validation + staging)", f"{build['phases']['publish_seconds']:,.2f} s"],
         ["validation share of publish", f"{build['phases']['validate_seconds'] / build['phases']['publish_seconds'] * 100:,.1f}%"],
         ["in-process total", f"{build['in_process_seconds']:,.2f} s"],
@@ -313,9 +316,19 @@ The bound is `band_cells` times a per-cell allowance plus a fixed term, so it is
 a function of the configured band and not of the full Store axis (whose decoded
 size is printed below). The measured peak is reported as measured: where it
 exceeds the declared bound the target below fails rather than the bound being
-widened after the fact. The exhaustive staged validation still decodes and
-compares **every** indexed cell and dependency against the primary planes; its
-share of the publish time is printed above rather than replaced by a sample.
+widened after the fact.
+
+The build's publication gate is **`sampled`**: every structural invariant
+(identity, exact array set, shapes/dtypes/chunking, the full Variant Index, the
+small side-table remapping and provenance) is checked exhaustively, and the
+decoded Z/SE/EAF and Association Status of a bounded deterministic sample of
+cells are compared against the primary planes. The sample covers the endpoints
+of both axes, every physical output boundary, a spread of Analyses and
+input-checksum-seeded cells (the mode, strategy, seed and count are in the table
+above); a systemic, ordering or chunk-boundary corruption is caught. An isolated
+unsampled corruption can pass this gate by design; standalone `opengwasdb
+validate` remains **exhaustive** and decodes every indexed cell, so it is the
+audit that rules that out.
 
 ```{python}
 #| echo: false
@@ -419,11 +432,7 @@ print(f"""
   `peak_rss_within_bound = {targets['peak_rss_within_bound']}`. The peak is still
   set by the band, not by the full matrix (terabytes decoded). Widening the bound
   after the fact would be the tuning this harness refuses.
-- **The publication gate is exhaustive, not a sample.** The staged validation
-  decodes and compares every indexed Z, SE and EAF cell, every side table, the
-  imputed mask and the reference EAF against the primary planes
-  ({build['phases']['validate_seconds']:,.2f} s, the share above). A corrupt cell
-  in any output chunk is refused, including one outside any small sample.
+- **The publication gate is a documented sample; standalone validation is exhaustive.** The build's staged validation compares a bounded deterministic decoded sample ({build['sample_cells']:,} cells, mode `{build['validation_mode']}`, {build['phases']['validate_seconds']:,.2f} s) and refuses systemic, ordering and output-boundary corruption. An isolated unsampled corruption can pass the build gate; standalone `validate` decodes and compares **every** indexed cell, side table, imputed mask and reference EAF and is the explicit audit for it. The risk is stated rather than hidden.
 - **The measured rewrite count is one per physical file.** The table above is
   the store-level count over the staged group, so a v2 chunk (or v3 shard)
   encoded twice would show `most encodings of one file = 2` and fail the
