@@ -127,7 +127,7 @@ ldl_eur	LDL EUR pilot	rs111	1	100	1:100:A:G	A	G	-6	0.199951	1.97e-09	.	observed
 ## Indexed Variant Subsets (fast repeated extraction)
 
 An **Indexed Variant Subset** is an optional, rebuildable Dense query index over
-a caller-supplied list of canonical ALIDs (ADR 0053). It covers every Analysis in
+a caller-supplied list of canonical ALIDs (ADR 0061). It covers every Analysis in
 the Store Release and holds the full available statistics (Z, SE and EAF, with
 the release's Association Status for a Reference-Completed store), laid out
 Analysis-major. It is derived data: adding or deleting it changes no association

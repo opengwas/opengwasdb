@@ -339,7 +339,7 @@ EXCEPTION_TABLE_CHUNK = 200_000
 #: Analysis-major (`n_analyses x n_subset_variants`), so the *Analysis* axis is
 #: the row of one variant, and an inner chunk of one row by this many variants
 #: makes a single-Analysis read a contiguous run of chunks rather than a
-#: genome-wide gather (ADR 0053; prototype `CACHE_ROWS`).
+#: genome-wide gather (ADR 0061; prototype `CACHE_ROWS`).
 INDEXED_SUBSET_CHUNK = 65_536
 
 #: An Indexed Variant Subset plane's variant-axis shard: 16 inner chunks.  The
@@ -394,7 +394,7 @@ class ArrayRole(StrEnum):
     #: One statistic plane of an Indexed Variant Subset (`z`, `se`, `eaf`).
     #: Analysis-major (`n_analyses x n_subset_variants`) and chunked for narrow
     #: single-Analysis reads; a distinct role because neither axis's layout is
-    #: the Dense grid's (ADR 0053, #264).
+    #: the Dense grid's (ADR 0061, #264).
     INDEXED_SUBSET_PLANE = "indexed_subset_plane"
     #: An Indexed Variant Subset's sorted Store Variant Indices.
     INDEXED_SUBSET_VARIANT_INDEX = "indexed_subset_variant_index"

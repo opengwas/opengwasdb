@@ -748,7 +748,7 @@ def _render_rho_section(output_path: Path, table: AnalysesTable) -> str | None:
     )
 
 
-# ── Indexed Variant Subsets tab (issue #267, ADR 0053) ──────────────────────
+# ── Indexed Variant Subsets tab (issue #267, ADR 0061) ──────────────────────
 
 #: The published subsets live under this optional `data.zarr` group. Spelled
 #: here rather than imported so the generic overview renderer stays independent
@@ -815,10 +815,13 @@ def _indexed_subset_value(attrs: dict[str, Any], key: str) -> str:
     return f"{value:,}" if key.endswith(("_count", "_analyses", "_variants")) else str(value)
 
 
-def _indexed_subset_row(path: Path, attrs: dict[str, Any]) -> dict[str, str]:
+def _indexed_subset_row(path: Path, attrs: dict[str, Any], size: int) -> dict[str, str]:
     """One display row. The directory name is the identity, never the attrs name:
-    a group whose recorded name disagrees is flagged, not silently relabelled."""
-    size = _physical_bytes(path)
+    a group whose recorded name disagrees is flagged, not silently relabelled.
+
+    `size` is measured once by the caller so the total below is the sum of the
+    rows' sizes rather than a second walk of every chunk file (#263 review).
+    """
     return {
         "Subset": path.name,
         "Profile": _indexed_subset_value(attrs, "statistic_profile"),
@@ -913,8 +916,9 @@ def _collect_indexed_subsets(
         if problem is not None:
             problems.append(problem)
             continue
-        rows.append(_indexed_subset_row(path, attrs))
-        total += _physical_bytes(path)
+        size = _physical_bytes(path)
+        rows.append(_indexed_subset_row(path, attrs, size))
+        total += size
     return rows, total, problems
 
 
@@ -935,14 +939,14 @@ def _render_subset_problems(problems: list[dict[str, str]]) -> str:
 
 
 def _render_indexed_subsets_section(output_path: Path) -> str | None:
-    """The Indexed Variant Subsets tab (ADR 0053): one row per published name,
+    """The Indexed Variant Subsets tab (ADR 0061): one row per published name,
     read from the group's own metadata. Absent entirely until a subset or an
     invalid named entry exists."""
     rows, total, problems = _collect_indexed_subsets(output_path)
     if not rows and not problems:
         return None
     parts = [
-        '<p class="guide-intro">Optional Indexed Variant Subsets (ADR 0053) are derived, '
+        '<p class="guide-intro">Optional Indexed Variant Subsets (ADR 0061) are derived, '
         "rebuildable query indexes over a caller-supplied variant list. Counts, checksum, "
         "Reference Assembly and build provenance are read from each group's recorded "
         "metadata; physical size is computed from the group's files at render time.</p>\n"

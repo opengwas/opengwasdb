@@ -259,7 +259,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-The index is derived, rebuildable data (ADR 0053): deleting it changes no
+The index is derived, rebuildable data (ADR 0061): deleting it changes no
 association and no Analytical Metadata.
 
 ## Build cost and bounded memory

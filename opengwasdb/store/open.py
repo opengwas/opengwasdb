@@ -678,7 +678,7 @@ def staged_named_group(
     The named-group companion of `OpenGWASDBStore.staging` (ADR 0043), for a
     derived artifact that lives *inside* an existing release rather than being
     a release of its own -- an Indexed Variant Subset under
-    ``data.zarr/indexed_subsets/<name>`` (ADR 0053, #264).  It offers the same
+    ``data.zarr/indexed_subsets/<name>`` (ADR 0061, #264).  It offers the same
     isolation and publication rules at the group level:
 
     * the body writes into a fresh, invocation-unique ``.{name}.tmp.*`` sibling

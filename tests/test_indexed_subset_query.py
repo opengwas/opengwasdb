@@ -282,6 +282,24 @@ def test_unknown_analysis_keeps_the_ordinary_empty_result(indexed_store: Path) -
     assert all(len(values) == 0 for values in result.values())
 
 
+def test_bad_subset_with_an_unknown_analysis_fails_loudly(indexed_copy: Path) -> None:
+    """The explicit selector is resolved and validated before the empty-result rule.
+
+    A typo'd subset must fail even when the Analysis ID is also unknown: the
+    caller asked for an indexed answer, and an unknown ID does not excuse the
+    selector.  A valid subset with an unknown Analysis still yields the ordinary
+    empty result (the test above).
+    """
+    with pytest.raises(IndexedSubsetError, match="no Indexed Variant Subset"):
+        _analyse(indexed_copy, "does-not-exist", indexed_subset="nope")
+
+
+def test_corrupt_subset_with_an_unknown_analysis_fails_loudly(indexed_copy: Path) -> None:
+    _corrupt_group(indexed_copy).attrs["source_release_id"] = "another-release"
+    with pytest.raises(IndexedSubsetError, match="stale"):
+        _analyse(indexed_copy, "does-not-exist", indexed_subset="hm3")
+
+
 def test_incomplete_group_is_refused(indexed_copy: Path) -> None:
     namespace = indexed_copy / "data.zarr" / INDEXED_SUBSETS_GROUP
     zarr.open_group(str(namespace / "half"), mode="w", zarr_format=3)
@@ -329,6 +347,61 @@ def test_wrong_plane_dtype_is_refused(indexed_copy: Path) -> None:
     """A readable primary store still refuses a plane whose bytes are the wrong kind."""
     _replace_se_with_float16(indexed_copy)
     _assert_refused(indexed_copy, "hm3", "dtype")
+
+
+def _corrupt_z_layout(store: Path, *, chunk_analyses: int, shard_analyses: int) -> None:
+    """Replace ``hm3``'s ``z`` plane with a chosen Analysis-axis layout.
+
+    The variant axis stays whole so the only corruption is the Analysis span
+    under test: ``chunk_analyses`` and ``shard_analyses`` cells of that axis.
+    """
+    group = _corrupt_group(store)
+    n_subset = int(group.attrs["n_subset_variants"])
+    data = np.asarray(group["z"][:])
+    del group["z"]
+    group.create_array(
+        "z",
+        data=data,
+        chunks=(chunk_analyses, n_subset),
+        shards=(shard_analyses, n_subset),
+    )
+
+
+def test_plane_chunk_spanning_analyses_is_refused(indexed_copy: Path) -> None:
+    """A chunk wider than one Analysis defeats the narrow-read contract."""
+    _corrupt_z_layout(indexed_copy, chunk_analyses=N_ANALYSES, shard_analyses=N_ANALYSES)
+    message = _assert_refused(indexed_copy, "hm3", "chunk")
+    assert "one Analysis row" in message
+
+
+def test_plane_shard_spanning_analyses_is_refused(indexed_copy: Path) -> None:
+    """A shard spanning Analyses reads another Analysis's cells to answer one."""
+    _corrupt_z_layout(indexed_copy, chunk_analyses=1, shard_analyses=N_ANALYSES)
+    _assert_refused(indexed_copy, "hm3", "shard")
+
+
+def test_mis_chunked_per_variant_side_array_is_refused(indexed_copy: Path) -> None:
+    """A per-variant side array's chunk is part of the format, not a free choice."""
+    group = _corrupt_group(indexed_copy)
+    n_subset = int(group.attrs["n_subset_variants"])
+    data = np.asarray(group["eaf_baseline"][:])
+    del group["eaf_baseline"]
+    group.create_array("eaf_baseline", data=data, chunks=(1,), shards=(n_subset,))
+    message = _assert_refused(indexed_copy, "hm3", "eaf_baseline")
+    assert "Analysis row" not in message, (
+        "a per-variant side array must not be described as an Analysis-major plane"
+    )
+
+
+@pytest.mark.parametrize("dtype", ["float32", "int64"])
+def test_non_int32_variant_index_is_refused(indexed_copy: Path, dtype: str) -> None:
+    """The Variant Index is stored int32; a widened or float axis is refused."""
+    group = _corrupt_group(indexed_copy)
+    n_subset = int(group.attrs["n_subset_variants"])
+    data = np.asarray(group["variant_index"][:]).astype(dtype)
+    del group["variant_index"]
+    group.create_array("variant_index", data=data, chunks=(n_subset,), shards=(n_subset,))
+    _assert_refused(indexed_copy, "hm3", "int32")
 
 
 def test_out_of_bounds_variant_index_is_refused(indexed_copy: Path) -> None:

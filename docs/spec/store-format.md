@@ -1022,7 +1022,7 @@ outer shard; every read-unit rule MUST use `chunks`.
 ## 10b. Indexed Variant Subsets (optional, Dense)
 
 An **Indexed Variant Subset** is a named, optional, rebuildable query index over
-a caller-supplied set of canonical ALIDs (ADR 0053). It is **derived,
+a caller-supplied set of canonical ALIDs (ADR 0061). It is **derived,
 non-authoritative data**: it changes no association and no Analytical Metadata,
 a reader that does not know about it still reads the primary planes correctly,
 and it may be added, atomically replaced or removed in place without minting a
@@ -1058,7 +1058,7 @@ Variant Table are permitted but counted and recorded, never treated as matches;
 a list resolving to no Store variant is refused. The caller MUST supply the
 list's Reference Assembly, and a mismatch with the release's
 `reference_assembly` is refused because cross-Store Variant Identity is
-assembly plus ALID (ADR 0053).
+assembly plus ALID (ADR 0061).
 
 A subset name MUST match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. A leading `.` is
 reserved so a name cannot collide with the `.{name}.tmp.*` staging groups or the
@@ -1069,7 +1069,10 @@ reserved so a name cannot collide with the `.{name}.tmp.*` staging groups or the
 `variant_index` is the subset's sorted, unique Store Variant Indices, shape
 `(n_subset_variants,)`, `int32`; it is the subset's own axis order and the
 Analysis-major planes below are indexed in that order (`order =
-"analysis,variant"`). Its inner chunk is 65,536, clipped.
+"analysis,variant"`). Its inner chunk is 65,536, clipped. The read seam and
+validation require that storage dtype: a widened integer or floating-point axis
+is refused rather than silently cast, because it could truncate or round a Store
+Variant Index.
 
 The statistic planes are **Analysis-major**: shape `(n_analyses,
 n_subset_variants)`, so one Analysis is one row.
@@ -1096,6 +1099,15 @@ always has `imputed`, a release declaring reference EAF always has
 and MUST hold only 0 and 1. On a 0.2.0 release (§10a) each plane's shard is one
 Analysis row by 1,048,576 variants (16 inner chunks), clipped to the array, so
 reading one Analysis never decompresses another's cells.
+
+The inner chunk and shard of **every** array, not only the statistic planes, are
+part of the format: each array's expected layout is derived from its `ArrayRole`
+and shape through the store-array seam's policies (§10a), so no attribute records
+it and none is required. On a 0.2.0 release every array MUST carry that shard; on
+a 0.1.0 release no array may be sharded. A plane inner chunk or shard that spans
+Analyses defeats the index's one-Analysis narrow read, and a per-variant side
+array off the format's layout is the same class of silent divergence; both the
+read seam and validation refuse them.
 
 A cell's flat position in an Analysis-major plane is `analysis *
 n_subset_variants + subset_slot`, and a side table is keyed by it. The index
@@ -1164,7 +1176,7 @@ an artifact the user built.
 ### Query
 
 A selected-Analysis query may name a published subset
-(`query-analysis STORE ANALYSIS_ID --indexed-subset SUBSET_NAME`, ADR 0053,
+(`query-analysis STORE ANALYSIS_ID --indexed-subset SUBSET_NAME`, ADR 0061,
 issue #265). It returns the same parallel arrays, with the same meanings,
 dtypes, allele orientation, finite Z/SE filtering and Store ordering as
 filtering the ordinary selected-Analysis result to the subset's Variant
@@ -1185,12 +1197,16 @@ A reader MUST refuse an unknown, staging, incomplete, stale, invalid or
 unsupported subset by name, naming the Store it belongs to, rather than fall
 back to the authoritative planes: the selector is a request for the indexed
 path, and answering it from the primary matrix would silently return the slow
-path's result while appearing to be indexed. Before decoding any value,
-independent of whether `validate` has been run, the read path re-checks the
-declared name, schema, profile and `order`, the declared Analysis and
-requested/resolved/absent counts, the exact array set, every plane's declared
-dtype and shape, and that `variant_index` is non-empty, sorted, unique and in
-bounds `[0, n_variants)`. A malformed encoding block is refused as a malformed
+path's result while appearing to be indexed. The named subset is resolved and
+structurally validated **before** the Analysis ID is resolved, so a typo'd,
+stale or corrupt selector always fails even when the Analysis ID is also unknown;
+a *valid* subset with an unknown Analysis ID keeps the ordinary empty result.
+Before decoding any value, independent of whether `validate` has been run, the
+read path re-checks the declared name, schema, profile and `order`, the declared
+Analysis and requested/resolved/absent counts, the exact array set, every plane's
+declared dtype and shape, the `int32` storage dtype of `variant_index`, every
+array's inner chunk and shard against the format's role policy, and that
+`variant_index` is non-empty, sorted, unique and in bounds `[0, n_variants)`. A malformed encoding block is refused as a malformed
 subset rather than allowed to raise a decode error. An entry that is not a
 readable Zarr group -- a plain directory, an array, or metadata a reader
 cannot parse or validate -- is refused the same way, not left to leak a zarr,
@@ -1510,7 +1526,7 @@ Validators MUST check at least:
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
 - the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2.0 release has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
-- an Indexed Variant Subset, when present, is self-describing and agrees with the release it indexes (§10b): the only entries under `data.zarr/indexed_subsets` are published subset groups — no staging or replacement directory, no unknown name, no non-group entry and no explicit empty group — and each group records a name, profile, encoding and source identity matching the release. It carries exactly the arrays its declared encoding and the release's Completion State define — an Observed-Only release's index has no `imputed`, a Reference-Completed release's must; a release declaring reference EAF carries `eaf_reference`, and one that does not carries none; `imputed` holds only 0 and 1; `variant_index` is non-empty, sorted ascending, unique and in `[0, n_variants)` — a zero-variant subset is not an index and is rejected even when its planes are zero-length; its Analysis-major planes have shape `(n_analyses, n_subset_variants)` and the declared dtypes; `eaf_reference` holds one entry per indexed variant when declared; its side tables are sorted, unique and in range; Z and SE missingness agree within the index; no imputed cell is missing; the `imputed` mask and `eaf_reference` equal the release's own; and every **decoded** indexed Z, SE and EAF equals the authoritative primary-plane cell at that Store Variant Index. A release with no `indexed_subsets` group stays valid and unchanged, and a reader MUST refuse a subset whose recorded source release, store, format, assembly or encoding does not match the release, before decoding any value (ADR 0053, issue #264, #266);
+- an Indexed Variant Subset, when present, is self-describing and agrees with the release it indexes (§10b): the only entries under `data.zarr/indexed_subsets` are published subset groups — no staging or replacement directory, no unknown name, no non-group entry and no explicit empty group — and each group records a name, profile, encoding and source identity matching the release. It carries exactly the arrays its declared encoding and the release's Completion State define — an Observed-Only release's index has no `imputed`, a Reference-Completed release's must; a release declaring reference EAF carries `eaf_reference`, and one that does not carries none; `imputed` holds only 0 and 1; `variant_index` is stored `int32` and is non-empty, sorted ascending, unique and in `[0, n_variants)` — a zero-variant subset is not an index and is rejected even when its planes are zero-length; every array's inner chunk and shard match the format's `ArrayRole` policy (the layout is derived, never an attribute); its Analysis-major planes have shape `(n_analyses, n_subset_variants)` and the declared dtypes; `eaf_reference` holds one entry per indexed variant when declared; its side tables are sorted, unique and in range; Z and SE missingness agree within the index; no imputed cell is missing; the `imputed` mask and `eaf_reference` equal the release's own; and every **decoded** indexed Z, SE and EAF equals the authoritative primary-plane cell at that Store Variant Index. A release with no `indexed_subsets` group stays valid and unchanged, and a reader MUST refuse a subset whose recorded source release, store, format, assembly or encoding does not match the release, before decoding any value (ADR 0061, issue #264, #266);
 - the recorded layout matches the arrays: the Dense planes' `chunk_shape` and `shard_shape` in `manifest.json` `provenance.dense`, in the `index.sqlite` `dense` blob and in the `data.zarr` root attributes each clip to the plane's dimensions to equal the plane's actual **inner** chunk, and name its actual shard, and the three compressors agree. A manifest that describes one shape over arrays of another is a silent failure class (§10a);
 - the per-variant chunking rule applies to the **inner** chunk of a sharded array, not to the shard (§6, §10a);
 - the Store Release directory contains no top-level file or directory beyond what its `primary_layout` (and, for Hybrid, its nested Dense Component directory) legitimately produces per §1/§10/§11/§16/§17 — the envelope is closed, not merely a set of required entries (issue #80).
@@ -1594,7 +1610,7 @@ The distinction is defined by **what a reader that does not know about the chang
 | a required column removed or renamed (ADR 0034) | **minor** |
 | the encoding of `z`, `se` or `eaf` changes (ADR 0037) | **minor** |
 
-An **Indexed Variant Subset** (§10b, ADR 0053) is not one of those compatible
+An **Indexed Variant Subset** (§10b, ADR 0061) is not one of those compatible
 additions: it is a rebuildable, non-authoritative acceleration artifact that can
 be deleted without changing any existing query answer, so it may be added or
 removed in place and does not move `format_version`. That narrows ADR 0038 and

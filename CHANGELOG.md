@@ -14,7 +14,7 @@ the end of this file.
 
 - **`opengwasdb build-indexed-subset STORE SUBSET_NAME --variant-list
   variants.alid.txt --reference-assembly GRCh38` builds a full-statistic
-  Observed-Only Dense Indexed Variant Subset (ADR 0053, issue #264).** It
+  Observed-Only Dense Indexed Variant Subset (ADR 0061, issue #264).** It
   writes `data.zarr/indexed_subsets/<name>/`: the subset's sorted Store Variant
   Indices, Analysis-major Z and its exact overflow table, SE and its
   coefficients/exception table when the release residual-codes it, and EAF and
@@ -55,7 +55,7 @@ the end of this file.
   rules.
 
 - **`query-analysis STORE ANALYSIS_ID --indexed-subset SUBSET_NAME` reads one
-  Analysis's full statistics from a named Indexed Variant Subset (ADR 0053,
+  Analysis's full statistics from a named Indexed Variant Subset (ADR 0061,
   issue #265), and the Python facade's `analysis()` takes the same optional
   `indexed_subset=` keyword.** The result is the ordinary six parallel arrays
   (`variant_index`, `analysis_index`, decoded `z`, decoded `se`, decoded `eaf`,
@@ -83,7 +83,7 @@ the end of this file.
   (`opengwas/opengwasdb-stores#206`).
 
 - **Indexed Variant Subsets now build and query on Reference-Completed Dense
-  stores, reproducing ordinary Association Status and EAF semantics (ADR 0053,
+  stores, reproducing ordinary Association Status and EAF semantics (ADR 0061,
   issue #266).** The index carries two dependencies an Observed-Only one does
   not: a per-cell, Analysis-major `imputed` mask — Association Status is never
   an Analysis-level fact, so an Analysis left observed-only by the
@@ -119,7 +119,7 @@ the end of this file.
   the physical contract and validation rules.
 
 - **`overview.html` lists every published Indexed Variant Subset from its own
-  group metadata (ADR 0053, issue #267).** A store that carries
+  group metadata (ADR 0061, issue #267).** A store that carries
   `data.zarr/indexed_subsets` gains an **Indexed Subsets** tab (between Rho and
   the Guide) with one row per published name: statistic profile,
   requested/resolved/absent counts, physical size, input SHA-256, Reference
@@ -385,6 +385,25 @@ the end of this file.
   build records a `provenance.maf` block (stores #176).
 
 ### Fixed
+
+- **Indexed Variant Subset review fixes (#263).** The read seam and standalone
+  validation now derive every subset array's expected inner chunk and shard from
+  the store-array `ArrayRole` policies and refuse an off-format layout, so a
+  plane chunk or shard that spans Analyses -- or a per-variant side array laid
+  out off the format -- can no longer defeat the index's one-Analysis narrow
+  read; no attribute is required because the layout is authoritatively
+  derivable. `variant_index` must be stored `int32` on both surfaces. An
+  explicit `--indexed-subset` (or `analysis(indexed_subset=...)`) selector is
+  resolved and validated before the Analysis ID is looked up, so a typo'd, stale
+  or corrupt subset always fails even when the Analysis is also unknown, while a
+  valid subset with an unknown Analysis keeps the ordinary empty result. The
+  `overview.html` Indexed Subsets total no longer walks every subset directory
+  twice (the row size is measured once and summed). The duplicate Indexed
+  Variant Subset ADR is renumbered from `0053` to `0061` (the Hybrid Build
+  Checkpoint keeps `0053`), and its cost evidence separates the #262 prototype
+  figures from the final #267 production measurement (6,235,037,696 physical
+  bytes, 17.852%, 4,198 s build, 407.267 ms warm median), reporting the
+  production run's RSS-bound miss honestly.
 
 - **Indexed Variant Subset documentation and error text no longer claim
   Observed-Only Dense exclusivity (#266).** `build-indexed-subset` has supported

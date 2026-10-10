@@ -364,7 +364,7 @@ class StoreQuery:
         """Return all finite associations for one analysis.
 
         With `indexed_subset`, read the Analysis's full statistics from the
-        named Indexed Variant Subset (ADR 0053, issue #265) instead of the
+        named Indexed Variant Subset (ADR 0061, issue #265) instead of the
         primary planes. The result is identical to filtering the ordinary
         result to the subset's Variant Indices; an unknown, incomplete, stale or
         invalid subset raises rather than falling back to the slow path.
@@ -393,16 +393,21 @@ class StoreQuery:
         """One Analysis's full statistics over a named Indexed Variant Subset.
 
         The physical decode is the indexed-subset module's (`open_indexed_subset`
-        / `decode_analysis`, ADR 0053); this method only applies the ordinary
+        / `decode_analysis`, ADR 0061); this method only applies the ordinary
         `analysis()` result contract -- the same finite-Z/SE filter, the same six
-        parallel arrays and the same observed/missing status. An unknown
-        Analysis ID keeps the ordinary empty-result semantics: the selector
-        fails loudly, an unknown ID does not.
+        parallel arrays and the same observed/missing status.
+
+        Precedence: the named subset is resolved and structurally validated
+        **before** the Analysis ID is looked up, so a typo'd, stale or corrupt
+        selector always fails even when the Analysis is also unknown -- the
+        caller explicitly asked for an indexed answer, and an unknown ID does
+        not excuse the selector.  A *valid* subset with an unknown Analysis ID
+        keeps the ordinary empty-result semantics.
         """
+        subset = open_indexed_subset(self.store.path, subset_name)
         analysis = self._analyses.by_id(analysis_id)
         if analysis is None:
             return _empty_result()
-        subset = open_indexed_subset(self.store.path, subset_name)
         col = int(analysis["analysis_index"])
         decoded = subset.decode_analysis(col)
         mask = np.isfinite(decoded.z) & np.isfinite(decoded.se)
@@ -650,7 +655,7 @@ class StoreQuery:
 
 
 def _refuse_indexed_subset(store_path: Path, layout: str, subset_name: str) -> NoReturn:
-    """Refuse a subset selector on a layout that cannot carry one (ADR 0053).
+    """Refuse a subset selector on a layout that cannot carry one (ADR 0061).
 
     A caller who explicitly names a subset must never be answered from the
     primary path (issue #265): silently ignoring the selector would look like a
@@ -770,7 +775,7 @@ class RaggedStoreQuery:
     ) -> dict[str, np.ndarray]:
         """All associations for one analysis (analysis_id lookup).
 
-        Indexed Variant Subsets are Dense-only (ADR 0053), so a
+        Indexed Variant Subsets are Dense-only (ADR 0061), so a
         selector naming one is refused rather than ignored (#265).
         """
         if indexed_subset is not None:
@@ -1332,7 +1337,7 @@ class HybridStoreQuery:
     ) -> dict[str, np.ndarray]:
         """All associations for one analysis (analysis_id lookup) across both components.
 
-        Indexed Variant Subsets are Dense-only (ADR 0053): the
+        Indexed Variant Subsets are Dense-only (ADR 0061): the
         shared root never carries one, and unifying the Dense and Ragged
         Overflow Components is unspecified, so a selector is refused rather
         than ignored (#265).
