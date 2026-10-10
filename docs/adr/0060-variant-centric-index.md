@@ -336,7 +336,8 @@ the 180,396,687-entry table cost **0.487 s and +11.8 MB** -- round 2's
 per-chunk cost, against the 1.69 GiB window `[min, max]` would have read and the
 pre-density **2.0 s and +402 MB**. The Dense column, which is what the batching
 is for, paid 6-9 s chunk by chunk and its windowed shape
-(`bulk_dense_exceptions`) is 15.5 s against 14.2 s eager, above.
+(`bulk_dense_exceptions`) is 15.5 s against 14.2 s eager, within the eager
+arm's noise (above).
 
 The mechanism: a per-variant read is one 8 KB `by_variant/offsets` chunk plus
 the variant's ~30 KB block; the scan's cost is its **match** phase (its whole
