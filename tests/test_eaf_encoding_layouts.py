@@ -436,6 +436,26 @@ def test_a_clipped_cell_resolves_to_its_exact_value_not_to_the_baseline(
     assert _observed(store)[(600, "a3")] == pytest.approx(0.85, abs=1e-6)
 
 
+def test_patching_a_dense_eaf_cell_keeps_the_existing_exceptions(dense_store: Path):
+    """A patch that touches no exception cell must leave the table's entries.
+
+    Review round 2, finding 1, for the EAF exception table.
+    """
+    root = open_store(dense_store).arrays(mode="a")
+    before = np.asarray(root[EAF_EXCEPTION_INDEX][:], dtype=np.int64)
+    assert len(before) >= 1, "fixture must have exception cells to lose"
+
+    from opengwasdb.encoding import DenseEafPlane
+
+    plane = DenseEafPlane.open(root, open_store(dense_store).manifest.encoding)
+    plane.patch(np.array([0]), np.array([0]), np.array([0.5], dtype=np.float32))
+
+    after = np.asarray(root[EAF_EXCEPTION_INDEX][:], dtype=np.int64)
+    assert set(before.tolist()) <= set(after.tolist()), (
+        f"patching an ordinary cell dropped EAF exception entries: {before} -> {after}"
+    )
+
+
 @pytest.mark.parametrize("layout", ["dense", "ragged"])
 def test_a_monomorphic_source_frequency_is_missing_not_zero(
     layout: str, dense_store: Path, ragged_store: Path

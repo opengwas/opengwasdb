@@ -116,6 +116,34 @@ def _build_source(tmp_path: Path) -> Path:
     return src
 
 
+def test_completion_keeps_a_populated_dense_overflow_table(tmp_path):
+    """A populated Dense exception table must survive the crossover fold.
+
+    review round 3, required before merge: the round-2 `patch()` data-loss
+    blocker was invisible because no test sent a Dense Component with non-empty
+    exception tables through Hybrid completion.  `big_z=60` puts panel rows
+    above the int16 fixed-point range, so the Dense z-overflow table holds
+    entries before the fold.
+    """
+    src, crossover_alid, _se, crossover_eaf = _residual_hybrid_crossover_source(
+        tmp_path, big_z=60.0
+    )
+    dense_root = zarr.open_group(str(src / "dense" / "data.zarr"), mode="r")
+    before = np.asarray(dense_root["z_overflow_index"][:], dtype=np.int64)
+    assert len(before) >= 1, "the source's Dense Component must have overflow entries"
+
+    ld = _residual_ld_panel_with_crossover(tmp_path, crossover_alid, crossover_eaf)
+    dst = tmp_path / "comp.opengwasdb"
+    complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+
+    completed = zarr.open_group(str(dst / "dense" / "data.zarr"), mode="r")
+    after = np.asarray(completed["z_overflow_index"][:], dtype=np.int64)
+    assert set(before.tolist()) <= set(after.tolist()), (
+        f"the crossover fold dropped Dense overflow entries: {before} -> {after}"
+    )
+    assert validate_store(dst).ok, validate_store(dst).errors
+
+
 def test_hybrid_completion(tmp_path):
     src = _build_source(tmp_path)
     ld = _make_ld_panel(tmp_path)
@@ -259,7 +287,9 @@ def _vcf_with_eaf(tmp_path: Path, name: str, rows: list[str]) -> Path:
     return write_gwas_vcf_with_eaf(tmp_path / f"{name}.vcf", rows)
 
 
-def _residual_hybrid_crossover_source(tmp_path: Path) -> tuple[Path, str, float, float]:
+def _residual_hybrid_crossover_source(
+    tmp_path: Path, *, big_z: float = 8.0
+) -> tuple[Path, str, float, float]:
     """A residual-SE Hybrid source with an off-panel crossover variant.
 
     SE tracks ``log(2*f*(1-f))`` per Analysis so the shared decision
@@ -297,7 +327,7 @@ def _residual_hybrid_crossover_source(tmp_path: Path) -> tuple[Path, str, float,
         for i in range(n_observed):
             freq = frequencies[i]
             se = se_value(col, freq, i)
-            z = 8.0 if i % 50 == 0 else 1.0
+            z = big_z if i % 50 == 0 else 1.0
             out.append(
                 f"1\t{(i + 1) * 1000}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF"
                 f"\t{z * se:.6f}:{se:.6f}:{freq:.6f}\n"

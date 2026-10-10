@@ -151,6 +151,32 @@ def test_dense_holds_only_the_out_of_range_cells_in_the_overflow_table(dense_sto
     assert np.array_equal(np.asarray(root[Z_OVERFLOW_INDEX][:]), expected)
 
 
+def test_patching_a_dense_z_cell_keeps_the_existing_overflow_entries(dense_store):
+    """A patch that touches no overflow cell must leave the table's entries.
+
+    Review round 2, finding 1: the planes read their table through a
+    `WindowedExactTable`, whose in-memory arrays are empty, and `patch` merged
+    that emptiness with the patched cells and rewrote the table -- dropping
+    every existing entry.  This patches an ordinary cell and asserts the three
+    out-of-range cells survive.
+    """
+    opened = open_store(dense_store)
+    root = opened.arrays(mode="a")
+    before = np.asarray(root[Z_OVERFLOW_INDEX][:], dtype=np.int64)
+    assert len(before) == 3, "fixture must have out-of-range cells to lose"
+
+    plane = DenseZPlane.open(root, opened.manifest.encoding)
+    # Cell (row 0, col 0) is variant 1:100, analysis a1 -- ORDINARY_Z, not an
+    # overflow cell, so nothing legitimate changes in the table.
+    plane.patch(np.array([0]), np.array([0]), np.array([ORDINARY_Z], dtype=np.float32))
+
+    after = np.asarray(root[Z_OVERFLOW_INDEX][:], dtype=np.int64)
+    assert set(before.tolist()) <= set(after.tolist()), (
+        f"patching an ordinary cell dropped overflow entries: {before} -> {after}"
+    )
+    assert validate_store(dense_store).ok
+
+
 def test_dense_top_hit_index_agrees_with_the_stored_plane(dense_store):
     """The index holds decoded float32 z (ADR 0037), and it must equal what a
     query reads back -- including for the cells held in the overflow table."""

@@ -76,8 +76,61 @@ def hybrid_residual(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return dst
 
 
+def _without_index(store: Path, destination: Path) -> Path:
+    """A copy of `store` with `ragged/by_variant/` renamed aside.
+
+    The scan route -- the only route for every registered release -- is exercised
+    without changing the code, so the oracle tests can run over both (review
+    round 3, required before merge).
+    """
+    import os
+    import shutil
+
+    shutil.copytree(store, destination)
+    index = destination / "data.zarr" / "ragged" / "by_variant"
+    os.replace(index, index.with_name("by_variant.hidden"))
+    return destination
+
+
+@pytest.fixture(scope="module")
+def ragged_residual_scanned(
+    tmp_path_factory: pytest.TempPathFactory, ragged_residual: RaggedResidualScenario
+) -> Path:
+    """The completed Ragged fixture with its variant index absent."""
+    return _without_index(
+        ragged_residual.completed,
+        tmp_path_factory.mktemp("ragged-scanned") / "scanned.opengwasdb",
+    )
+
+
+@pytest.fixture(scope="module")
+def hybrid_residual_scanned(
+    tmp_path_factory: pytest.TempPathFactory, hybrid_residual: Path
+) -> Path:
+    """The completed Hybrid fixture with its Overflow variant index absent."""
+    return _without_index(
+        hybrid_residual,
+        tmp_path_factory.mktemp("hybrid-scanned") / "scanned.opengwasdb",
+    )
+
+
+def _canonical(result: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """A result in canonical `(variant_index, analysis_index)` order.
+
+    The facade makes no ordering guarantee beyond grouping (ADR 0033), and the
+    variant-centric index (ADR 0060) returns a region variant-major where the
+    Analysis-side oracle concatenates Analysis-major.  Parity is therefore
+    asserted on the rows, not on an order neither path promises.
+    """
+    order = np.lexsort(
+        (np.asarray(result["analysis_index"]), np.asarray(result["variant_index"]))
+    )
+    return {key: np.asarray(result[key])[order] for key in _RESULT_KEYS}
+
+
 def _same_oracle(got: dict[str, np.ndarray], want: dict[str, np.ndarray], label: str) -> None:
     assert sorted(got) == sorted(want), label
+    got, want = _canonical(got), _canonical(want)
     for key in _RESULT_KEYS:
         np.testing.assert_array_equal(
             np.asarray(got[key]), np.asarray(want[key]), err_msg=f"{label}:{key}"
@@ -164,11 +217,24 @@ def test_hybrid_fixture_is_residual_in_both_components(hybrid_residual: Path) ->
 
 
 @pytest.mark.parametrize("observed_only", [False, True])
+@pytest.mark.parametrize("scanned", [False, True])
 def test_ragged_variant_shapes_match_the_analysis_side(
-    ragged_residual: RaggedResidualScenario, observed_only: bool
+    ragged_residual: RaggedResidualScenario,
+    ragged_residual_scanned: Path,
+    observed_only: bool,
+    scanned: bool,
 ) -> None:
-    """phewas, range_phewas and lookup equal the Analysis-side decode."""
-    with query_store(ragged_residual.completed) as query:
+    """phewas, range_phewas and lookup equal the Analysis-side decode.
+
+    Parametrised over the index present and absent (review round 3): the scan
+    route is the only route for every registered release.
+    """
+    store = ragged_residual_scanned if scanned else ragged_residual.completed
+    with query_store(store) as query:
+        assert (query._by_variant is None) is scanned, (
+            "the scanned fixture must carry no index handle, or the oracle is the "
+            "index route twice (review round 4, nit)"
+        )
         analysis_ids = [
             str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())
         ]
@@ -225,9 +291,17 @@ def test_ragged_range_phewas_returns_imputed_rows(
         assert (status == "imputed").any(), "the range must return imputed cells"
 
 
-def test_hybrid_off_panel_shapes_match_the_overflow_side(hybrid_residual: Path) -> None:
+@pytest.mark.parametrize("scanned", [False, True])
+def test_hybrid_off_panel_shapes_match_the_overflow_side(
+    hybrid_residual: Path, hybrid_residual_scanned: Path, scanned: bool
+) -> None:
     """Off-panel phewas, range_phewas and lookup equal the Overflow-side decode."""
-    with query_store(hybrid_residual) as query:
+    store = hybrid_residual_scanned if scanned else hybrid_residual
+    with query_store(store) as query:
+        assert (query._by_variant is None) is scanned, (
+            "the scanned fixture must carry no index handle, or the oracle is the "
+            "index route twice (review round 4, nit)"
+        )
         columns = list(range(query._csr.n_analyses))
         analysis_ids = [
             str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())
@@ -310,6 +384,10 @@ def test_identity_catches_a_misaligned_window(
 ) -> None:
     monkeypatch.setattr(RaggedCSRReader, "variant_positions", _shifted_window)
     with query_store(ragged_residual.completed) as query:
+        # These three tests mutate the Analysis-side scan to prove the identity
+        # check catches its bugs; force the scan rather than the index, which
+        # does not share the mutated code (ADR 0060).
+        query._by_variant = None
         first_alid = _any_alid(query)
         _wanted, want = _oracle_for_alid(query, first_alid)
         got = query.phewas(first_alid)
@@ -325,6 +403,7 @@ def test_identity_catches_an_off_by_one_search(
         RaggedCSRReader, "variant_positions", _off_by_one_using(RaggedCSRReader.variant_positions)
     )
     with query_store(ragged_residual.completed) as query:
+        query._by_variant = None
         alid = _any_alid(query)
         _wanted, want = _oracle_for_alid(query, alid)
         got = query.phewas(alid)
@@ -344,6 +423,7 @@ def test_identity_catches_a_dropped_imputed_mask(
 
     monkeypatch.setattr(RaggedCSRReader, "eaf_at_read", without_mask)
     with query_store(ragged_residual.completed) as query:
+        query._by_variant = None
         got = query.range_phewas("1", 900_000, 1_100_000)
         wanted = query._variant_axis.range_indices("1", 900_000, 1_100_000)
         want = _ragged_oracle(

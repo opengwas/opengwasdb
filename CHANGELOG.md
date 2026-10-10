@@ -10,6 +10,65 @@ the end of this file.
 
 ## [Unreleased]
 
+### Added
+
+- **A variant-centric `by_variant/` index for Ragged and Hybrid Overflow
+  components (#252 step 5, ADR 0060).** A Ragged component's CSR is
+  analysis-major: `offsets` locates an Analysis in O(1), but a per-variant
+  question had to read every Analysis's `variant_index`. Every Ragged builder
+  (BESD, SSF, the Hybrid Overflow writer and Ragged Reference Completion) now
+  also writes `ragged/by_variant/` -- one row per association, ordered
+  `(variant_index, analysis_index)`, carrying `analysis_index`, the `z`/`se`/
+  `eaf` codes, the `imputed` mask where the component has one, and the
+  exception/overflow tables re-keyed to the duplicate's ordinals. It shares the
+  component's `eaf_baseline`, `eaf_reference` and `se_coefficients`, and its
+  `offsets` array is `n_axis + 1` direct offsets on the component's own variant
+  axis (the shared axis for a Hybrid Overflow). `phewas` and `range_phewas` on
+  a Ragged or Hybrid release now read one variant's (or one region's)
+  contiguous row block instead of scanning; `lookup` keeps #252's per-Analysis
+  binary search. An absent index is not an error -- the query falls back to the
+  scan -- so the index is optional and additive and does not change
+  `format_version`. The build is a bounded counting sort (windowed count,
+  band-partitioned spill, whole-shard writes) whose peak memory is the source's
+  and the re-keyed exception tables plus one band -- so it grows with the
+  exception count E, not with the association count N (measured peak 2.1 GiB at
+  OGS-00006, 2.7 GiB at eQTLGen, 9.9 GiB at OGS-00011, whose re-keyed EAF table
+  is 180 M entries); the index is **+16.678 GiB on disk** at OGS-00011 and
+  0.158 GiB at OGS-00006. `ogdb build-variant-index STORE` adds it to an
+  existing 0.2.0 release in place (a 0.1.0 release is converted first); the
+  install is **ordered, not atomic** -- the new group is built beside the old,
+  renamed into place, and the manifest and any consolidated record are
+  refreshed after, with the previous group, manifest and record restored on a
+  failure and a leftover build or half-finished swap settled on the next run;
+  the `build-ragged-besd`, `build-ragged-ssf`, `build-hybrid` and
+  `build-hybrid-from-catalogue` commands take `--no-variant-index` to skip it.
+  `validate` checks the index's presence against the manifest's
+  `provenance.ragged.by_variant` block, its offsets and per-variant counts, its
+  within-variant ordering, and a bounded two-seed 64-bit digest of every
+  cell's variant, Analysis, raw codes and exact exception values against the
+  Analysis-sorted planes; a damaged or stale index now fails. Reference
+  Completion (Ragged and Hybrid) rebuilds the index from the completed planes
+  rather than carrying the source's forward.
+
+- **Every Dense and Ragged plane reads its exact-value exception tables as
+  windows (#252).**
+  Opening a store used to read each `z_overflow`/`eaf_exception`/`se_exception`
+  table whole -- about 2.1 GiB for OGS-00011's 180,396,687-entry EAF table -- so
+  every process paid it, including analysis-side queries that never touch an
+  exception. `WindowedExactTable` now holds the arrays and reads only the
+  entries a decode needs: a **clustered** run of cells (a decode block, or one
+  Analysis's contiguous range) is read as one span with a single
+  `searchsorted`, and a **scattered** set (a dense column's cells, `lookup`
+  hits, the unindexed scan) is scanned in multi-chunk windows: a window is read
+  whole with a vectorised `searchsorted` when it holds at least about 12 of the
+  set's positions, and chunk by chunk when it holds fewer, so a sparse set never
+  pays a whole ~96 MB window. Opening an indexed
+  store falls from about 2 s (the base, eager tables) to 0.24 s, and a fresh process's first off-axis
+  PheWAS pays tens of milliseconds rather than a whole-table read. `patch()`,
+  which rewrites one plane's cells and its table in place, now reads the whole
+  table from the group, because the codec holds the group's arrays and no
+  longer keeps the table in memory.
+
 ### Changed
 
 - **Every builder writes format 0.2.0: Zarr v3 with the sharding codec (#247).**

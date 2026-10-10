@@ -1,0 +1,26 @@
+{
+  "harness": "benchmarks/measure_252_variant_index_queries.py",
+  "commit": "a0cc192",
+  "measured_at": "2026-10-10T06:45:53.477067+00:00",
+  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-index/opengwasdb",
+  "opengwasdb_fingerprint": "b2d501a6a04220212c75f6f5a36e49ff1553f16989a47a162120eae22483041a",
+  "store": "/data/opengwasdb/work/epic252/OGS-00011-0.2.0",
+  "open_s": 0.235,
+  "reps": 40,
+  "load_start": 1.95,
+  "cold_query_s": 0.0335,
+  "cold_rows": 66,
+  "cold_after_imports_wall_s": 0.306,
+  "cold_sampled_rss_mb": 265.4,
+  "warm_p50_s": 0.0174,
+  "warm_p90_s": 0.0178,
+  "scattered": {
+    "cells": 20,
+    "table_entries": 180396687,
+    "seconds": 0.4872,
+    "delta_mb": 11.8,
+    "process_peak_mb": 1656.5,
+    "load": 1.79
+  },
+  "launcher_maxrss_gib": 1.84
+}

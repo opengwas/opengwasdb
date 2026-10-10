@@ -79,7 +79,7 @@ class DenseZPlane:
         """Open the plane `name` in `group` under a store's declared plan."""
         return cls(
             group[name],
-            StoreCodec(encoding, z_overflow=ZOverflowTable.read(group)),
+            StoreCodec(encoding, z_overflow=ZOverflowTable.open(group)),
             group,
         )
 
@@ -183,7 +183,11 @@ class DenseZPlane:
             # A float plane has no overflow table, and must not acquire an
             # empty one just because it was written through here.
             return
-        previous = self._codec.z_overflow or ZOverflowTable.empty()
+        # Read the whole table from the group: the codec's is a WindowedExactTable
+        # whose in-memory arrays are empty, so `or ZOverflowTable.empty()` would
+        # merge the patched cells with nothing and drop every existing entry
+        # (review round 2, finding 1).
+        previous = ZOverflowTable.read(self._group)
         untouched = ~np.isin(previous.index, positions)
         merged = ZOverflowBuilder()
         merged.add(previous.index[untouched], previous.value[untouched])
@@ -217,7 +221,7 @@ class DenseSePlane:
             raise ValueError(f"int8_residual se plane is missing required arrays: {missing}")
         return cls(
             group["se"],
-            StoreCodec(encoding, se_exceptions=SeExceptionTable.read(group)),
+            StoreCodec(encoding, se_exceptions=SeExceptionTable.open(group)),
             DenseEafPlane.open(group, encoding) if residual else None,
             group[SE_COEFFICIENTS] if residual else None,
             group,
@@ -354,7 +358,7 @@ class DenseSePlane:
             exceptions=builder,
         )
         write_shard_cells(self._array, rows, cols, codes)
-        previous = self._codec.se_exceptions or SeExceptionTable.empty()
+        previous = SeExceptionTable.read(self._group)
         merged = SeExceptionBuilder()
         keep = ~np.isin(previous.index, positions)
         merged.add(previous.index[keep], previous.value[keep])
@@ -498,7 +502,7 @@ class DenseEafPlane(_EafPlaneBase):
     def open(cls, group: Any, encoding: StoreEncoding, *, name: str = "eaf") -> DenseEafPlane:
         return cls(
             group[name] if name in group else None,
-            StoreCodec(encoding, eaf_exceptions=EafExceptionTable.read(group)),
+            StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group)),
             baseline=group[EAF_BASELINE] if EAF_BASELINE in group else None,
             reference=group[EAF_REFERENCE] if EAF_REFERENCE in group else None,
             imputed=group["imputed"] if "imputed" in group else None,
@@ -709,7 +713,7 @@ class DenseEafPlane(_EafPlaneBase):
         write_shard_cells(self._array, rows, cols, codes)
         if not self._codec.encoding.eaf.is_residual:
             return
-        previous = self._codec.eaf_exceptions or EafExceptionTable.empty()
+        previous = EafExceptionTable.read(self._group)
         untouched = ~np.isin(previous.index, positions)
         merged = EafExceptionBuilder()
         merged.add(previous.index[untouched], previous.value[untouched])
@@ -760,7 +764,7 @@ class RaggedEafPlane(_EafPlaneBase):
     def open(cls, group: Any, encoding: StoreEncoding, *, imputed: Any = None) -> RaggedEafPlane:
         return cls(
             group["eaf"] if "eaf" in group else None,
-            StoreCodec(encoding, eaf_exceptions=EafExceptionTable.read(group)),
+            StoreCodec(encoding, eaf_exceptions=EafExceptionTable.open(group)),
             group["variant_index"],
             baseline=group[EAF_BASELINE] if EAF_BASELINE in group else None,
             reference=group[EAF_REFERENCE] if EAF_REFERENCE in group else None,
@@ -840,7 +844,7 @@ class RaggedSePlane:
             missing = [name for name in required if name not in group]
             raise ValueError(f"int8_residual se plane is missing required arrays: {missing}")
         self._coefficients = group[SE_COEFFICIENTS] if residual else None
-        self._codec = StoreCodec(encoding, se_exceptions=SeExceptionTable.read(group))
+        self._codec = StoreCodec(encoding, se_exceptions=SeExceptionTable.open(group))
 
     @classmethod
     def open(

@@ -72,6 +72,7 @@ from opengwasdb.store.arrays import (
     ArrayRole,
     chunk_layout,
     create_array,
+    inner_chunk_hint_for_path,
     is_recorded_group_path,
     open_group,
     open_group_for_write,
@@ -467,16 +468,23 @@ def _plan_one_array(
             "arrays (z, se, eaf, eaf_baseline, eaf_reference, imputed, on_panel, "
             "se_coefficients, the z/se/eaf exception and overflow tables), the Ragged CSR "
             "group (ragged/z, se, eaf, variant_index, offsets, imputed, eaf_baseline, "
-            "eaf_reference, the exception and overflow tables), top_hits/<tier>/* and "
-            "rho/*. Add the role to the seam's path table (issue #248)."
+            "eaf_reference, the exception and overflow tables), the variant-centric index "
+            "(ragged/by_variant/offsets, analysis_index, z, se, eaf, imputed and the "
+            "re-keyed exception tables), top_hits/<tier>/* and rho/*. Add the role to "
+            "the seam's path table (issue #248, ADR 0060)."
         )
     array = source_root[path]
     shape = tuple(int(size) for size in array.shape)
     is_grid = role in _DENSE_GRID_ROLES
+    hint = (
+        (DENSE_CHUNK_SHAPE[0], dense_analysis_chunk)
+        if is_grid
+        else inner_chunk_hint_for_path(path)
+    )
     inner = chunk_layout(
         role,
         shape,
-        hint=(DENSE_CHUNK_SHAPE[0], dense_analysis_chunk) if is_grid else None,
+        hint=hint,
         component_chunk=component_chunk,
     )
     shard = shard_layout(

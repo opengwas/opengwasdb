@@ -204,6 +204,41 @@ def open_benchmark_store(store: Path) -> tuple[Any, StoreManifest]:
     return query_store(store), StoreManifest.load(store)
 
 
+def probe_variant_alid(
+    query: Any, *, off_panel: bool | None = None, samples: int = 2000
+) -> str | None:
+    """An ALID of a variant the store holds rows for, found in bounded time.
+
+    Deliberately *not* `query.variants_table()`: on OGS-00011's shared axis that
+    materialises a ~164,000,000-record dict and is a memory bomb (#252 step 5).
+    The variant axis is asked by index instead -- `O(samples)` probes, each one
+    `by_index` or one offsets read -- so a full-scale store costs a few MB, not
+    tens of GB.  `off_panel` narrows to a Hybrid's Overflow or Dense side; a
+    standalone Ragged component has no panel, so it is ignored there.
+    """
+    axis = query._variant_axis
+    n_variants = int(axis.n_variants)
+    if n_variants == 0:
+        return None
+    step = max(1, n_variants // max(1, samples))
+    candidates = list(range(0, n_variants, step))
+    on_panel = getattr(query, "_shared_is_on_panel", None)
+    if off_panel is not None and on_panel is not None:
+        wanted = [i for i in candidates if bool(on_panel(i)) != bool(off_panel)]
+        candidates = wanted or candidates
+    if off_panel is False and candidates:
+        # An on-panel variant: the Dense Component holds its rows, the Overflow
+        # index does not, so the row probe below would find nothing and wander.
+        return str(axis.by_index(candidates[0]).alid)
+    reader = getattr(query, "_by_variant", None)
+    if reader is not None:
+        for index in candidates:
+            start, end = reader.rows_for_variant(index)
+            if end > start:
+                return str(axis.by_index(index).alid)
+    return str(axis.by_index(candidates[-1]).alid)
+
+
 def start_benchmark(
     parser: argparse.ArgumentParser,
     measure: Callable[[argparse.Namespace, str], dict[str, float]],

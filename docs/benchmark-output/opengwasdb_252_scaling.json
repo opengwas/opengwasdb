@@ -1,0 +1,953 @@
+{
+  "commit": "a0cc192",
+  "harness": "benchmarks/variant_side_scaling.py",
+  "measured_at": "2026-10-10T07:16:55.415530+00:00",
+  "opengwasdb_fingerprint": "b2d501a6a04220212c75f6f5a36e49ff1553f16989a47a162120eae22483041a",
+  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/252-variant-index/opengwasdb",
+  "shapes": [
+    "phewas",
+    "range_phewas",
+    "lookup_10_variants",
+    "lookup_50_analyses"
+  ],
+  "stores": {
+    "OGS-00001": {
+      "shapes": {
+        "lookup_10_variants": {
+          "indexed": {
+            "baseline_mb": 179.6,
+            "delta_mb": 2.3,
+            "dense_s": 0.0126,
+            "digest": "137dcc6f96ccd65d52854cb0c072572ecfeca4a65db2bacd42648be002961f9d",
+            "elapsed_s": 0.0362,
+            "loads": [
+              2.08,
+              2.08,
+              2.08
+            ],
+            "overflow_match_s": 0.0066,
+            "overflow_read_s": 0.017,
+            "peak_mb": 181.9,
+            "reps": 3,
+            "result_count": 10,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "1 Mb around the first indexed variant",
+          "scanned": {
+            "baseline_mb": 181.4,
+            "delta_mb": 3.1,
+            "dense_s": 0.0114,
+            "digest": "137dcc6f96ccd65d52854cb0c072572ecfeca4a65db2bacd42648be002961f9d",
+            "elapsed_s": 0.0338,
+            "loads": [
+              2.08,
+              2.08,
+              2.08
+            ],
+            "overflow_match_s": 0.0067,
+            "overflow_read_s": 0.0157,
+            "peak_mb": 184.5,
+            "reps": 3,
+            "result_count": 10,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "lookup_50_analyses": {
+          "skipped": "no non-empty lookup selection exists"
+        },
+        "phewas": {
+          "indexed": {
+            "baseline_mb": 169.3,
+            "delta_mb": 3.4,
+            "dense_s": 0.0012,
+            "digest": "a10bae01a799e757b7b4979704efeed196f385060111ae2773cc6eec407d9aa8",
+            "elapsed_s": 0.0164,
+            "loads": [
+              2.08,
+              2.08,
+              2.08
+            ],
+            "overflow_match_s": 0.0028,
+            "overflow_read_s": 0.0124,
+            "peak_mb": 172.7,
+            "reps": 3,
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "1 Mb around the first indexed variant",
+          "scanned": {
+            "baseline_mb": 172.4,
+            "delta_mb": 0.0,
+            "dense_s": 0.0041,
+            "digest": "a10bae01a799e757b7b4979704efeed196f385060111ae2773cc6eec407d9aa8",
+            "elapsed_s": 0.022,
+            "loads": [
+              2.08,
+              2.08,
+              2.08
+            ],
+            "overflow_match_s": 0.0036,
+            "overflow_read_s": 0.0143,
+            "peak_mb": 172.4,
+            "reps": 3,
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "range_phewas": {
+          "indexed": {
+            "baseline_mb": 174.8,
+            "delta_mb": 2.5,
+            "dense_s": 0.0,
+            "digest": "702182b481b573b690868be8ed63e7433ba58fc7cdcb37968aafc542d81fcd57",
+            "elapsed_s": 0.0224,
+            "loads": [
+              2.08,
+              2.08,
+              2.08
+            ],
+            "overflow_match_s": 0.01,
+            "overflow_read_s": 0.0126,
+            "peak_mb": 177.3,
+            "reps": 3,
+            "result_count": 1335,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "1 Mb around the first indexed variant",
+          "scanned": {
+            "baseline_mb": 177.2,
+            "delta_mb": 0.7,
+            "dense_s": 0.0072,
+            "digest": "702182b481b573b690868be8ed63e7433ba58fc7cdcb37968aafc542d81fcd57",
+            "elapsed_s": 0.0301,
+            "loads": [
+              2.08,
+              2.08,
+              2.08
+            ],
+            "overflow_match_s": 0.0053,
+            "overflow_read_s": 0.0176,
+            "peak_mb": 178.0,
+            "reps": 3,
+            "result_count": 1335,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "store": "/data/opengwasdb/work/epic252/OGS-00001-0.2.0"
+    },
+    "OGS-00006": {
+      "shapes": {
+        "lookup_10_variants": {
+          "indexed": {
+            "baseline_mb": 811.1,
+            "delta_mb": 0.2,
+            "dense_s": 0.0119,
+            "digest": "cbe5f18ee6d982282fa701a92b56d1d8276f9f177ab32509e2215fbe87629475",
+            "elapsed_s": 0.0733,
+            "loads": [
+              2.51,
+              2.51,
+              2.51
+            ],
+            "overflow_match_s": 0.0267,
+            "overflow_read_s": 0.0347,
+            "peak_mb": 811.4,
+            "reps": 3,
+            "result_count": 8,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 810.3,
+            "delta_mb": 0.0,
+            "dense_s": 0.0111,
+            "digest": "cbe5f18ee6d982282fa701a92b56d1d8276f9f177ab32509e2215fbe87629475",
+            "elapsed_s": 0.0695,
+            "loads": [
+              2.51,
+              2.51,
+              2.51
+            ],
+            "overflow_match_s": 0.024,
+            "overflow_read_s": 0.0343,
+            "peak_mb": 810.3,
+            "reps": 3,
+            "result_count": 8,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "lookup_50_analyses": {
+          "indexed": {
+            "baseline_mb": 806.5,
+            "delta_mb": 0.0,
+            "dense_s": 0.0441,
+            "digest": "96ef7c6e9b9f5cd88a3cfd56d8664889701de22d19a735292f0a6a6ffcdb005d",
+            "elapsed_s": 0.6458,
+            "loads": [
+              2.55,
+              2.55,
+              2.55
+            ],
+            "overflow_match_s": 0.1274,
+            "overflow_read_s": 0.4743,
+            "peak_mb": 806.5,
+            "reps": 3,
+            "result_count": 17,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 808.2,
+            "delta_mb": 0.1,
+            "dense_s": 0.0439,
+            "digest": "96ef7c6e9b9f5cd88a3cfd56d8664889701de22d19a735292f0a6a6ffcdb005d",
+            "elapsed_s": 0.6367,
+            "loads": [
+              2.55,
+              2.55,
+              2.55
+            ],
+            "overflow_match_s": 0.1239,
+            "overflow_read_s": 0.4689,
+            "peak_mb": 808.3,
+            "reps": 3,
+            "result_count": 17,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "phewas": {
+          "indexed": {
+            "baseline_mb": 210.6,
+            "delta_mb": 5.7,
+            "dense_s": 0.0013,
+            "digest": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
+            "elapsed_s": 0.0336,
+            "loads": [
+              2.08,
+              2.08,
+              2.08
+            ],
+            "overflow_match_s": 0.0036,
+            "overflow_read_s": 0.0287,
+            "peak_mb": 216.3,
+            "reps": 3,
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 334.4,
+            "delta_mb": 9.0,
+            "dense_s": 0.0048,
+            "digest": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
+            "elapsed_s": 0.5199,
+            "loads": [
+              2.15,
+              2.15,
+              2.15
+            ],
+            "overflow_match_s": 0.4853,
+            "overflow_read_s": 0.0299,
+            "peak_mb": 343.4,
+            "reps": 3,
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "range_phewas": {
+          "indexed": {
+            "baseline_mb": 331.6,
+            "delta_mb": 3.1,
+            "dense_s": 0.0028,
+            "digest": "a24fbf9b79a0e8b8c2709cd05b5b382b65e8587ed0485b7260e8c6d2098b684e",
+            "elapsed_s": 0.0463,
+            "loads": [
+              2.15,
+              2.15,
+              2.15
+            ],
+            "overflow_match_s": 0.0126,
+            "overflow_read_s": 0.0309,
+            "peak_mb": 334.7,
+            "reps": 3,
+            "result_count": 8745,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 517.4,
+            "delta_mb": 338.3,
+            "dense_s": 0.0121,
+            "digest": "a24fbf9b79a0e8b8c2709cd05b5b382b65e8587ed0485b7260e8c6d2098b684e",
+            "elapsed_s": 2.5649,
+            "loads": [
+              2.3,
+              2.3,
+              2.51
+            ],
+            "overflow_match_s": 1.6182,
+            "overflow_read_s": 0.9346,
+            "peak_mb": 855.7,
+            "reps": 3,
+            "result_count": 8745,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "store": "/data/opengwasdb/work/epic252/OGS-00006-0.2.0"
+    },
+    "OGS-00006-0.1.0": {
+      "shapes": {
+        "lookup_10_variants": {
+          "skipped": "this store carries no variant index, so the lookup selections (taken from an indexed variant's block) are unavailable"
+        },
+        "lookup_50_analyses": {
+          "skipped": "this store carries no variant index, so the lookup selections (taken from an indexed variant's block) are unavailable"
+        },
+        "phewas": {
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 811.3,
+            "delta_mb": 0.0,
+            "dense_s": 0.0035,
+            "digest": "502b0e26dd68e462656cdf874ec5736d967ef6ca1e39e272318cdf8e41a15940",
+            "elapsed_s": 0.4587,
+            "loads": [
+              2.51,
+              2.51,
+              2.51
+            ],
+            "overflow_match_s": 0.4356,
+            "overflow_read_s": 0.0196,
+            "peak_mb": 811.3,
+            "reps": 3,
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "range_phewas": {
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 809.5,
+            "delta_mb": 33.5,
+            "dense_s": 0.0031,
+            "digest": "a24fbf9b79a0e8b8c2709cd05b5b382b65e8587ed0485b7260e8c6d2098b684e",
+            "elapsed_s": 2.4137,
+            "loads": [
+              2.51,
+              2.71,
+              2.71
+            ],
+            "overflow_match_s": 1.5651,
+            "overflow_read_s": 0.8455,
+            "peak_mb": 843.0,
+            "reps": 3,
+            "result_count": 8745,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "store": "/data/opengwasdb/stores/OGS-00006/store.opengwasdb"
+    },
+    "OGS-00007": {
+      "shapes": {
+        "lookup_10_variants": {
+          "indexed": {
+            "baseline_mb": 811.1,
+            "delta_mb": 0.0,
+            "dense_s": 0.0101,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.034,
+            "loads": [
+              3.14,
+              3.14,
+              3.14
+            ],
+            "overflow_match_s": 0.0069,
+            "overflow_read_s": 0.0171,
+            "peak_mb": 811.1,
+            "reps": 3,
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "1 Mb around the first indexed variant",
+          "scanned": {
+            "baseline_mb": 809.9,
+            "delta_mb": 0.0,
+            "dense_s": 0.0091,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.032,
+            "loads": [
+              3.14,
+              3.14,
+              3.14
+            ],
+            "overflow_match_s": 0.0059,
+            "overflow_read_s": 0.0169,
+            "peak_mb": 809.9,
+            "reps": 3,
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "lookup_50_analyses": {
+          "skipped": "no non-empty lookup selection exists"
+        },
+        "phewas": {
+          "indexed": {
+            "baseline_mb": 809.9,
+            "delta_mb": 0.5,
+            "dense_s": 0.0018,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.0156,
+            "loads": [
+              2.89,
+              2.89,
+              2.89
+            ],
+            "overflow_match_s": 0.0023,
+            "overflow_read_s": 0.0115,
+            "peak_mb": 810.4,
+            "reps": 3,
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "1 Mb around the first indexed variant",
+          "scanned": {
+            "baseline_mb": 810.4,
+            "delta_mb": 0.0,
+            "dense_s": 0.0046,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.0251,
+            "loads": [
+              2.89,
+              2.89,
+              2.89
+            ],
+            "overflow_match_s": 0.0061,
+            "overflow_read_s": 0.0145,
+            "peak_mb": 810.4,
+            "reps": 3,
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "range_phewas": {
+          "indexed": {
+            "baseline_mb": 809.9,
+            "delta_mb": 0.0,
+            "dense_s": 0.0,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.0172,
+            "loads": [
+              2.89,
+              2.89,
+              2.89
+            ],
+            "overflow_match_s": 0.0091,
+            "overflow_read_s": 0.0113,
+            "peak_mb": 809.9,
+            "reps": 3,
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "1 Mb around the first indexed variant",
+          "scanned": {
+            "baseline_mb": 809.9,
+            "delta_mb": 0.0,
+            "dense_s": 0.0036,
+            "digest": "1516c74dd8f1efde08f7efb2e1ed097aa9cbf31e8c88687161666fc8e8d4ff1d",
+            "elapsed_s": 0.026,
+            "loads": [
+              2.89,
+              2.89,
+              2.89
+            ],
+            "overflow_match_s": 0.0046,
+            "overflow_read_s": 0.0177,
+            "peak_mb": 809.9,
+            "reps": 3,
+            "result_count": 1,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "store": "/data/opengwasdb/work/epic252/OGS-00007-0.2.0"
+    },
+    "OGS-00011": {
+      "shapes": {
+        "lookup_10_variants": {
+          "indexed": {
+            "baseline_mb": 2855.8,
+            "delta_mb": 0.0,
+            "dense_s": 0.0284,
+            "digest": "30483ec6ca89bf171af5be33022bc70c005d4a7451be0a79ddda82d5b11606e0",
+            "elapsed_s": 0.3276,
+            "loads": [
+              4.73,
+              4.73,
+              4.73
+            ],
+            "overflow_match_s": 0.1124,
+            "overflow_read_s": 0.1869,
+            "peak_mb": 2855.8,
+            "reps": 3,
+            "result_count": 5,
+            "waits_s": [
+              30.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 2853.0,
+            "delta_mb": 2.9,
+            "dense_s": 0.0272,
+            "digest": "30483ec6ca89bf171af5be33022bc70c005d4a7451be0a79ddda82d5b11606e0",
+            "elapsed_s": 0.3233,
+            "loads": [
+              4.73,
+              4.73,
+              4.73
+            ],
+            "overflow_match_s": 0.1097,
+            "overflow_read_s": 0.1864,
+            "peak_mb": 2855.8,
+            "reps": 3,
+            "result_count": 5,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "lookup_50_analyses": {
+          "indexed": {
+            "baseline_mb": 2841.4,
+            "delta_mb": 1.8,
+            "dense_s": 0.2093,
+            "digest": "f06913885cf405a7aa691363f2d6f05a9d8641da0dfbb37711376f92be535330",
+            "elapsed_s": 3.0893,
+            "loads": [
+              4.43,
+              4.15,
+              3.98
+            ],
+            "overflow_match_s": 1.0181,
+            "overflow_read_s": 1.8619,
+            "peak_mb": 2843.2,
+            "reps": 3,
+            "result_count": 50,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 2843.2,
+            "delta_mb": 0.0,
+            "dense_s": 0.2016,
+            "digest": "f06913885cf405a7aa691363f2d6f05a9d8641da0dfbb37711376f92be535330",
+            "elapsed_s": 3.0917,
+            "loads": [
+              3.9,
+              3.9,
+              3.75
+            ],
+            "overflow_match_s": 1.0265,
+            "overflow_read_s": 1.8635,
+            "peak_mb": 2843.2,
+            "reps": 3,
+            "result_count": 50,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "phewas": {
+          "indexed": {
+            "baseline_mb": 904.6,
+            "delta_mb": 0.0,
+            "dense_s": 0.1189,
+            "digest": "8dd552f6b02b45491683319cc8a12307852a00c392b25c593f3b49ccda804109",
+            "elapsed_s": 0.1189,
+            "loads": [
+              3.14,
+              3.14,
+              3.14
+            ],
+            "overflow_match_s": 0.0,
+            "overflow_read_s": 0.0,
+            "peak_mb": 904.6,
+            "reps": 3,
+            "result_count": 2268,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 902.8,
+            "delta_mb": 0.0,
+            "dense_s": 0.1166,
+            "digest": "8dd552f6b02b45491683319cc8a12307852a00c392b25c593f3b49ccda804109",
+            "elapsed_s": 0.1166,
+            "loads": [
+              3.14,
+              3.14,
+              3.14
+            ],
+            "overflow_match_s": 0.0,
+            "overflow_read_s": 0.0,
+            "peak_mb": 902.8,
+            "reps": 3,
+            "result_count": 2268,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "range_phewas": {
+          "indexed": {
+            "baseline_mb": 1296.2,
+            "delta_mb": 1878.8,
+            "dense_s": 3.1134,
+            "digest": "6da47c827f98fb2e12aa1df8c7830146ab7244fe541668ad94c99ece86680b99",
+            "elapsed_s": 3.3144,
+            "loads": [
+              3.21,
+              3.27,
+              3.27
+            ],
+            "overflow_match_s": 0.0128,
+            "overflow_read_s": 0.1882,
+            "peak_mb": 3175.0,
+            "reps": 3,
+            "result_count": 8304617,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 2433.5,
+            "delta_mb": 2281.5,
+            "dense_s": 3.8999,
+            "digest": "6da47c827f98fb2e12aa1df8c7830146ab7244fe541668ad94c99ece86680b99",
+            "elapsed_s": 121.1847,
+            "loads": [
+              4.61,
+              3.7,
+              3.27
+            ],
+            "overflow_match_s": 100.9784,
+            "overflow_read_s": 16.3064,
+            "peak_mb": 4715.0,
+            "reps": 3,
+            "result_count": 8304617,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "store": "/data/opengwasdb/work/epic252/OGS-00011-0.2.0"
+    },
+    "eQTLGen": {
+      "shapes": {
+        "lookup_10_variants": {
+          "indexed": {
+            "baseline_mb": 2842.3,
+            "delta_mb": 0.0,
+            "dense_s": 0.0308,
+            "digest": "27e6fadc6d99df0ce5d118058619653110a36f6605a1eb90125a09752dd336eb",
+            "elapsed_s": 0.2018,
+            "loads": [
+              3.54,
+              3.54,
+              3.54
+            ],
+            "overflow_match_s": 0.0471,
+            "overflow_read_s": 0.1239,
+            "peak_mb": 2842.3,
+            "reps": 3,
+            "result_count": 5,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 2843.4,
+            "delta_mb": 0.0,
+            "dense_s": 0.0317,
+            "digest": "27e6fadc6d99df0ce5d118058619653110a36f6605a1eb90125a09752dd336eb",
+            "elapsed_s": 0.2044,
+            "loads": [
+              3.54,
+              3.54,
+              3.54
+            ],
+            "overflow_match_s": 0.0473,
+            "overflow_read_s": 0.1254,
+            "peak_mb": 2843.4,
+            "reps": 3,
+            "result_count": 5,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "lookup_50_analyses": {
+          "indexed": {
+            "baseline_mb": 2839.4,
+            "delta_mb": 0.8,
+            "dense_s": 0.1087,
+            "digest": "da45ff491b00c875ed610b23c134d18356404c2256a0f1d9a91339fb87ba7652",
+            "elapsed_s": 0.9379,
+            "loads": [
+              3.34,
+              3.34,
+              3.34
+            ],
+            "overflow_match_s": 0.2196,
+            "overflow_read_s": 0.6096,
+            "peak_mb": 2840.2,
+            "reps": 3,
+            "result_count": 24,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 2839.4,
+            "delta_mb": 0.8,
+            "dense_s": 0.111,
+            "digest": "da45ff491b00c875ed610b23c134d18356404c2256a0f1d9a91339fb87ba7652",
+            "elapsed_s": 0.9519,
+            "loads": [
+              3.34,
+              3.07,
+              3.07
+            ],
+            "overflow_match_s": 0.2222,
+            "overflow_read_s": 0.6187,
+            "peak_mb": 2840.2,
+            "reps": 3,
+            "result_count": 24,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "phewas": {
+          "indexed": {
+            "baseline_mb": 2839.4,
+            "delta_mb": 0.0,
+            "dense_s": 0.0014,
+            "digest": "36f7e775071c905d845d6802ca6506bdd18ae496299fee4b729b6514f2d7c07f",
+            "elapsed_s": 0.0231,
+            "loads": [
+              3.53,
+              3.53,
+              3.53
+            ],
+            "overflow_match_s": 0.0043,
+            "overflow_read_s": 0.0175,
+            "peak_mb": 2839.4,
+            "reps": 3,
+            "result_count": 7,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 2839.4,
+            "delta_mb": 0.9,
+            "dense_s": 0.006,
+            "digest": "36f7e775071c905d845d6802ca6506bdd18ae496299fee4b729b6514f2d7c07f",
+            "elapsed_s": 1.267,
+            "loads": [
+              3.53,
+              3.97,
+              3.97
+            ],
+            "overflow_match_s": 1.2404,
+            "overflow_read_s": 0.0207,
+            "peak_mb": 2840.3,
+            "reps": 3,
+            "result_count": 7,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "range_phewas": {
+          "indexed": {
+            "baseline_mb": 2839.4,
+            "delta_mb": 0.0,
+            "dense_s": 0.004,
+            "digest": "bfdf2b07259998cf13da6bea591ea8b7d4ab873ec5c0af436bf5acc1cbdad44c",
+            "elapsed_s": 0.0399,
+            "loads": [
+              3.97,
+              3.97,
+              3.97
+            ],
+            "overflow_match_s": 0.0148,
+            "overflow_read_s": 0.0211,
+            "peak_mb": 2839.4,
+            "reps": 3,
+            "result_count": 48884,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "region_label": "TCF7L2 chr10:112.5-113.5 Mb",
+          "scanned": {
+            "baseline_mb": 2839.4,
+            "delta_mb": 0.0,
+            "dense_s": 0.0214,
+            "digest": "bfdf2b07259998cf13da6bea591ea8b7d4ab873ec5c0af436bf5acc1cbdad44c",
+            "elapsed_s": 3.2552,
+            "loads": [
+              3.73,
+              3.59,
+              3.59
+            ],
+            "overflow_match_s": 3.1994,
+            "overflow_read_s": 0.0344,
+            "peak_mb": 2839.4,
+            "reps": 3,
+            "result_count": 48884,
+            "waits_s": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        }
+      },
+      "store": "/data/opengwasdb/work/epic252/eqtlgen-cis.opengwasdb"
+    }
+  }
+}

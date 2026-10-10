@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Nine-shape scan-vs-index A/B on one OGS-00011 store (#252 step 5).
+
+Every #242/#252 shape is run twice on the same store copy and the same code:
+once with `ragged/by_variant/` renamed aside (the step-3 scan) and once with it
+in place. Renaming the group is what makes the scan side genuine -- no code path
+is monkeypatched -- and the store copy is ours, so the original stays untouched.
+Each run is a fresh open with an RSS sampler and the same load gate the extras
+runner uses, and the two answers must be identical (count and sha256) or the
+shape fails the run.
+
+Shape construction and the one-shape probe are `ogs00011_ab`'s, so the nine
+shapes measured here are the committed ones, not a second copy:
+
+    pixi run -e dev python benchmarks/ogs00011_variant_index_ab.py \
+        --store /data/opengwasdb/work/epic252/OGS-00011-0.2.0 \
+        --output docs/benchmark-output/opengwasdb_ogs00011_252_variant_index_ab.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
+from json import loads
+from pathlib import Path
+
+from benchmarks._artifact import provenance, write_artifact
+from benchmarks.ogs00011_ab import SHAPES
+
+#: The repository root, so a probe subprocess can import `benchmarks`.
+_REPO = Path(__file__).resolve().parent.parent
+
+#: The shapes that read the variant index (ADR 0060).  The rest are controls:
+#: their scan and index answers must be equal *and* their cost unchanged.
+_INDEX_SHAPES = frozenset({"phewas_off_axis", "regional"})
+
+#: The controls whose eager-tables arm is run: the bulk shapes are the ones a
+#: windowed-versus-eager slowdown can hide in (review round 4, finding 5).
+_EAGER_SHAPES = frozenset({"bulk", "bulk_dense_exceptions", "bulk_overflow_heavy"})
+
+#: The index group, relative to the release directory.
+_INDEX_REL = Path("data.zarr") / "ragged" / "by_variant"
+_HIDDEN_REL = Path("data.zarr") / "ragged" / "by_variant.scan-ab-hidden"
+
+
+def _probe(
+    store: Path, shape: str, limit: float, max_load: float, *, warm: bool, eager: bool = False
+) -> dict:
+    """Run one shape in a **fresh interpreter** (clean peak RSS) with a load gate.
+
+    A fresh process is what makes the two sides' RSS comparable: run in one
+    process, the second side's sampler carries the first side's resident memory.
+    `ogs00011_ab --one-shape` is the committed probe, here with the load gate it
+    records in `gate_waited_s`.  `eager=True` adds the eager-tables arm.
+    """
+    argv = [
+        sys.executable,
+        str(_REPO / "benchmarks" / "ogs00011_ab.py"),
+        "--one-shape",
+        "--store",
+        str(store),
+        "--shape",
+        shape,
+        "--limit",
+        str(limit),
+        "--max-start-load",
+        str(max_load),
+        "--canonical-identity",
+    ]
+    if warm:
+        argv.append("--warm-index")
+    if eager:
+        argv.append("--eager-tables")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(_REPO) + os.pathsep + env.get("PYTHONPATH", "")
+    out = subprocess.run(argv, cwd=str(_REPO), env=env, capture_output=True, text=True)
+    if out.returncode != 0:
+        raise SystemExit(f"{shape} probe failed:\n{out.stdout}\n{out.stderr}")
+    return loads(out.stdout.strip().splitlines()[-1])
+
+
+@contextmanager
+def _index_hidden(store: Path) -> Iterator[None]:
+    """Rename the index aside for the scan run, restoring it whatever happens."""
+    index = store / _INDEX_REL
+    hidden = store / _HIDDEN_REL
+    if hidden.exists():
+        raise SystemExit(f"{hidden} already exists; a previous A/B run did not clean up")
+    os.replace(index, hidden)
+    try:
+        yield
+    finally:
+        os.replace(hidden, index)
+
+
+def measure(
+    store: Path, shapes: list[str], *, limit: float, max_load: float, reps: int = 1
+) -> dict:
+    if not (store / _INDEX_REL).exists():
+        raise SystemExit(f"{store}: no {_INDEX_REL}; run `ogdb build-variant-index` first")
+    out: dict[str, dict] = {}
+    for shape in shapes:
+        # Warm only the shapes that decode the index: warming the rest would
+        # read the exception tables for a shape that never needs them and
+        # inflate its peak RSS against the scan side's.
+        warm = shape in _INDEX_SHAPES
+        scans: list[dict] = []
+        indexeds: list[dict] = []
+        eagers: list[dict] = []
+        for _ in range(reps):
+            with _index_hidden(store):
+                scans.append(_probe(store, shape, limit, max_load, warm=False))
+            indexeds.append(_probe(store, shape, limit, max_load, warm=warm))
+            if shape in _EAGER_SHAPES:
+                eagers.append(_probe(store, shape, limit, max_load, warm=warm, eager=True))
+        scan = _best(scans)
+        indexed = _best(indexeds)
+        for side in (*scans, *indexeds, *eagers):
+            if side.get("timed_out"):
+                raise SystemExit(
+                    f"{shape}: hit the {limit}s limit; a timed-out run is not evidence"
+                )
+        if scan.get("sha256") != indexed.get("sha256"):
+            raise SystemExit(
+                f"{shape}: scan {scan.get('result_count')} rows/{scan.get('sha256')} "
+                f"!= index {indexed.get('result_count')} rows/{indexed.get('sha256')}"
+            )
+        if eagers and eagers[0].get("sha256") != indexed.get("sha256"):
+            raise SystemExit(
+                f"{shape}: eager {eagers[0].get('sha256')} != index {indexed.get('sha256')}"
+            )
+        out[shape] = {
+            "scanned": scan,
+            "indexed": indexed,
+            "scanned_reps": [s["elapsed_ms"] for s in scans],
+            "indexed_reps": [s["elapsed_ms"] for s in indexeds],
+            "scanned_loads": [s["load_start"][0] for s in scans],
+            "indexed_loads": [s["load_start"][0] for s in indexeds],
+            "scanned_waits_s": [s.get("gate_waited_s") for s in scans],
+            "indexed_waits_s": [s.get("gate_waited_s") for s in indexeds],
+        }
+        if eagers:
+            out[shape].update(
+                {
+                    "eager": _best(eagers),
+                    "eager_reps": [s["elapsed_ms"] for s in eagers],
+                    "eager_loads": [s["load_start"][0] for s in eagers],
+                }
+            )
+        print(
+            f"{shape}: scan {scan['elapsed_ms']:.1f} ms ({scan['peak_mb'] / 1024:.2f} GiB) "
+            f"-> index {indexed['elapsed_ms']:.1f} ms ({indexed['peak_mb'] / 1024:.2f} GiB) "
+            f"rows {indexed.get('result_count')} (median of {reps})"
+            + (
+                f"; eager {out[shape]['eager']['elapsed_ms']:.1f} ms "
+                f"({out[shape]['eager']['peak_mb'] / 1024:.2f} GiB)"
+                if eagers
+                else ""
+            ),
+            flush=True,
+        )
+    return out
+
+
+def _best(records: list[dict]) -> dict:
+    """One side's record, with the median elapsed/peak and the reps kept."""
+    if len(records) == 1:
+        return records[0]
+    import statistics
+
+    merged = dict(records[0])
+    merged["elapsed_ms"] = round(statistics.median(r["elapsed_ms"] for r in records), 3)
+    merged["peak_mb"] = round(statistics.median(r["peak_mb"] for r in records), 1)
+    return merged
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--store", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--shapes", default=",".join(SHAPES))
+    parser.add_argument("--limit", type=float, default=600.0, help="per-run seconds limit")
+    parser.add_argument(
+        "--max-start-load", type=float, default=3.0, help="gate each side below this load"
+    )
+    parser.add_argument("--reps", type=int, default=1, help="repetitions per side (median)")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    shapes = [name.strip() for name in args.shapes.split(",") if name.strip()]
+    artifact = {
+        "harness": "benchmarks/ogs00011_variant_index_ab.py",
+        "store": str(args.store),
+        "max_start_load": args.max_start_load,
+        "reps": args.reps,
+        **provenance(),
+        "shapes": measure(
+            args.store,
+            shapes,
+            limit=args.limit,
+            max_load=args.max_start_load,
+            reps=args.reps,
+        ),
+    }
+    write_artifact(args.output, artifact)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
