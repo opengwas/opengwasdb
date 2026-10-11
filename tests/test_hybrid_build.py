@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import shutil
 import weakref
 from pathlib import Path
 from types import SimpleNamespace
@@ -109,10 +110,13 @@ def _panel(tmp_path: Path) -> Path:
     return panel
 
 
-@pytest.fixture(params=[1, 2], ids=["serial", "parallel"])
-def hybrid_store(tmp_path, request):
+@pytest.fixture(scope="module", params=[1, 2], ids=["serial", "parallel"])
+def _hybrid_store_seed(
+    tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest
+) -> Path:
+    seed_path = tmp_path_factory.mktemp(f"hybrid-store-{request.param}")
     vcf1 = _make_vcf(
-        tmp_path,
+        seed_path,
         "trait_a",
         [
             f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n",  # z -4.0 dense
@@ -121,7 +125,7 @@ def hybrid_store(tmp_path, request):
         ],
     )
     vcf2 = _make_vcf(
-        tmp_path,
+        seed_path,
         "trait_b",
         [
             f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t6.0:0.5:0.25\n",  # z -12.0 dense
@@ -129,17 +133,25 @@ def hybrid_store(tmp_path, request):
         ],
     )
     manifest = _make_manifest(
-        tmp_path, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
+        seed_path, [("trait_a", vcf1, "Trait A"), ("trait_b", vcf2, "Trait B")]
     )
-    store_path = tmp_path / f"store_{request.param}.opengwasdb"
+    store_path = seed_path / f"store_{request.param}.opengwasdb"
     build_hybrid_from_vcf_manifest(
         manifest,
         store_path,
-        reference_panel=_panel(tmp_path),
+        reference_panel=_panel(seed_path),
         store_id="hybrid-test",
         release_id="v1",
         n_workers=request.param,
     )
+    return store_path
+
+
+@pytest.fixture
+def hybrid_store(tmp_path: Path, _hybrid_store_seed: Path) -> Path:
+    """Give each test an isolated copy of an expensive, immutable seed store."""
+    store_path = tmp_path / _hybrid_store_seed.name
+    shutil.copytree(_hybrid_store_seed, store_path)
     return store_path
 
 

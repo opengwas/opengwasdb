@@ -17,6 +17,7 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -163,20 +164,33 @@ def _ssf(tmp_path: Path) -> tuple[Path, Path]:
     return manifest, filtered
 
 
-@pytest.fixture
-def dense_store(tmp_path: Path) -> Path:
-    out = tmp_path / "dense.opengwasdb"
+def _copy_store(seed: Path, directory: Path) -> Path:
+    out = directory / seed.name
+    shutil.copytree(seed, out)
+    return out
+
+
+@pytest.fixture(scope="module")
+def _dense_store_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    seed_path = tmp_path_factory.mktemp("eaf-dense-store")
+    out = seed_path / "dense.opengwasdb"
     build_dense_from_vcf_manifest(
-        _vcf_manifest(tmp_path), out, store_id="eafenc", release_id="v1",
+        _vcf_manifest(seed_path), out, store_id="eafenc", release_id="v1",
         allow_unverified_eaf=True,
     )
     return out
 
 
 @pytest.fixture
-def ragged_store(tmp_path: Path) -> Path:
-    manifest, filtered = _ssf(tmp_path)
-    out = tmp_path / "ragged.opengwasdb"
+def dense_store(tmp_path: Path, _dense_store_seed: Path) -> Path:
+    return _copy_store(_dense_store_seed, tmp_path)
+
+
+@pytest.fixture(scope="module")
+def _ragged_store_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    seed_path = tmp_path_factory.mktemp("eaf-ragged-store")
+    manifest, filtered = _ssf(seed_path)
+    out = seed_path / "ragged.opengwasdb"
     build_ragged_from_ssf(
         manifest, filtered, out, store_id="eafenc", release_id="v1",
         allow_unverified_eaf=True,
@@ -184,23 +198,34 @@ def ragged_store(tmp_path: Path) -> Path:
     return out
 
 
+@pytest.fixture
+def ragged_store(tmp_path: Path, _ragged_store_seed: Path) -> Path:
+    return _copy_store(_ragged_store_seed, tmp_path)
+
+
 #: The panel the Hybrid fixture is built against: half the fixture's variants
 #: sit on it (Dense Component), half do not (Ragged Overflow).
 _ON_PANEL = _POSITIONS[:4]
 
 
-@pytest.fixture
-def hybrid_store(tmp_path: Path) -> Path:
-    panel = tmp_path / "panel.txt"
+@pytest.fixture(scope="module")
+def _hybrid_store_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    seed_path = tmp_path_factory.mktemp("eaf-hybrid-store")
+    panel = seed_path / "panel.txt"
     panel.write_text(
         "\n".join(f"1:{pos}:A:G" for pos in _ON_PANEL) + "\n", encoding="utf-8"
     )
-    out = tmp_path / "hybrid.opengwasdb"
+    out = seed_path / "hybrid.opengwasdb"
     build_hybrid_from_vcf_manifest(
-        _vcf_manifest(tmp_path), out, reference_panel=panel,
+        _vcf_manifest(seed_path), out, reference_panel=panel,
         store_id="eafenc", release_id="v1", allow_unverified_eaf=True,
     )
     return out
+
+
+@pytest.fixture
+def hybrid_store(tmp_path: Path, _hybrid_store_seed: Path) -> Path:
+    return _copy_store(_hybrid_store_seed, tmp_path)
 
 
 def _observed(store: Path) -> dict[tuple[int, str], float]:
@@ -636,13 +661,22 @@ def _ld_panel(tmp_path: Path) -> Path:
     return root
 
 
-@pytest.fixture
-def completed_store(tmp_path: Path, dense_store: Path) -> Path:
-    out = tmp_path / "dense-completed.opengwasdb"
+@pytest.fixture(scope="module")
+def _completed_store_seed(
+    tmp_path_factory: pytest.TempPathFactory, _dense_store_seed: Path
+) -> Path:
+    seed_path = tmp_path_factory.mktemp("eaf-completed-store")
+    source = _copy_store(_dense_store_seed, seed_path)
+    out = seed_path / "dense-completed.opengwasdb"
     complete_dense_store(
-        dense_store, out, _ld_panel(tmp_path), ancestry="EUR", min_cor=0.0, thresh=0.99
+        source, out, _ld_panel(seed_path), ancestry="EUR", min_cor=0.0, thresh=0.99
     )
     return out
+
+
+@pytest.fixture
+def completed_store(tmp_path: Path, _completed_store_seed: Path) -> Path:
+    return _copy_store(_completed_store_seed, tmp_path)
 
 
 def test_a_completed_release_declares_and_carries_reference_eaf(completed_store: Path):
@@ -717,20 +751,21 @@ def _vcf_without_frequencies(tmp_path: Path, analysis: str) -> Path:
     return path
 
 
-@pytest.fixture
-def store_with_no_frequencies(tmp_path: Path) -> Path:
-    manifest_path = tmp_path / "nofreq-manifest.tsv"
+@pytest.fixture(scope="module")
+def _store_with_no_frequencies_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    seed_path = tmp_path_factory.mktemp("eaf-no-frequency-store")
+    manifest_path = seed_path / "nofreq-manifest.tsv"
     rows = [
         "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method"
         "\tsource_assembly"
     ]
     for analysis in _ANALYSES:
         rows.append(
-            f"{analysis}\t{_vcf_without_frequencies(tmp_path, analysis)}\t{analysis}"
+            f"{analysis}\t{_vcf_without_frequencies(seed_path, analysis)}\t{analysis}"
             "\t10000\tsd\tdeclared_standardised\thg38"
         )
     manifest_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
-    out = tmp_path / "nofreq.opengwasdb"
+    out = seed_path / "nofreq.opengwasdb"
     build_dense_from_vcf_manifest(
         manifest_path, out, store_id="nofreq", release_id="v1", allow_unverified_eaf=True
     )
@@ -738,15 +773,31 @@ def store_with_no_frequencies(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def completed_store_with_no_source_frequencies(
-    tmp_path: Path, store_with_no_frequencies: Path
+def store_with_no_frequencies(
+    tmp_path: Path, _store_with_no_frequencies_seed: Path
 ) -> Path:
-    out = tmp_path / "nofreq-completed.opengwasdb"
+    return _copy_store(_store_with_no_frequencies_seed, tmp_path)
+
+
+@pytest.fixture(scope="module")
+def _completed_store_with_no_source_frequencies_seed(
+    tmp_path_factory: pytest.TempPathFactory, _store_with_no_frequencies_seed: Path
+) -> Path:
+    seed_path = tmp_path_factory.mktemp("eaf-completed-no-frequency-store")
+    source = _copy_store(_store_with_no_frequencies_seed, seed_path)
+    out = seed_path / "nofreq-completed.opengwasdb"
     complete_dense_store(
-        store_with_no_frequencies, out, _ld_panel(tmp_path),
+        source, out, _ld_panel(seed_path),
         ancestry="EUR", min_cor=0.0, thresh=0.99,
     )
     return out
+
+
+@pytest.fixture
+def completed_store_with_no_source_frequencies(
+    tmp_path: Path, _completed_store_with_no_source_frequencies_seed: Path
+) -> Path:
+    return _copy_store(_completed_store_with_no_source_frequencies_seed, tmp_path)
 
 
 def test_a_source_with_no_frequencies_declares_absent_and_no_reference(
@@ -818,15 +869,13 @@ def test_completion_stamps_eaf_scope_when_the_source_declared_none(
     assert any(scope == EafScope.ASSOCIATION.value for scope in scopes.values()), scopes
 
 
-@pytest.fixture
-def ragged_store_with_no_frequencies(tmp_path: Path) -> Path:
-    """The same source with no frequencies, in the other CSR pipeline.
-
-    Dense and Ragged completion are separately implemented, and the Ragged one
-    is where this was found: covering only Dense would leave the half that
-    failed uncovered.
-    """
-    filtered = tmp_path / "ssf-nofreq"
+@pytest.fixture(scope="module")
+def _ragged_store_with_no_frequencies_seed(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Path:
+    """Build the no-frequency CSR seed once; tests still receive private copies."""
+    seed_path = tmp_path_factory.mktemp("eaf-ragged-no-frequency-store")
+    filtered = seed_path / "ssf-nofreq"
     filtered.mkdir()
     manifest_rows = ["analysis_index\tanalysis_id\tfiltered_file\tn"]
     for index, analysis in enumerate(_ANALYSES):
@@ -838,14 +887,21 @@ def ragged_store_with_no_frequencies(tmp_path: Path) -> Path:
             for pos in _POSITIONS:
                 fh.write(f"1\t{pos}\tA\tG\t{_z_for(analysis, pos) * 0.3:.6f}\t0.3\t\n")
         manifest_rows.append(f"{index}\t{analysis}\t{analysis}.tsv.gz\t10000")
-    manifest = tmp_path / "ssf_nofreq_manifest.tsv"
+    manifest = seed_path / "ssf_nofreq_manifest.tsv"
     manifest.write_text("\n".join(manifest_rows) + "\n", encoding="utf-8")
-    out = tmp_path / "ragged-nofreq.opengwasdb"
+    out = seed_path / "ragged-nofreq.opengwasdb"
     build_ragged_from_ssf(
         manifest, filtered, out, store_id="nofreq", release_id="v1",
         allow_unverified_eaf=True,
     )
     return out
+
+
+@pytest.fixture
+def ragged_store_with_no_frequencies(
+    tmp_path: Path, _ragged_store_with_no_frequencies_seed: Path
+) -> Path:
+    return _copy_store(_ragged_store_with_no_frequencies_seed, tmp_path)
 
 
 def test_completing_a_ragged_source_with_no_frequencies_carries_panel_eaf(
