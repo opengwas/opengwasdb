@@ -54,7 +54,7 @@ import numcodecs
 import numpy as np
 import zarr
 
-from benchmarks import _hm3, _query_shapes
+from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._quiet import wait_for_quiet as _wait_for_quiet
 from benchmarks._rss import run_probe
@@ -620,16 +620,12 @@ def _measure_store(
         # HM3 extraction as a routine shape (#272): measured when this Store
         # publishes a usable `hm3` subset, otherwise a non-failing status. The
         # extraction runs while the store handle is still open.
-        hm3_extract = _hm3.measure_hm3_extract(
+        hm3_extract = _query_shapes.report_hm3_extract(
             q,
             selection["exposure_analysis_id"],
             store_path=spec.path,
             reps=args.reps,
-        )
-        print(
-            f"[{spec.label}] HM3 extract: status={hm3_extract['status']} "
-            f"{hm3_extract['detail']}",
-            flush=True,
+            label=spec.label,
         )
     finally:
         q.close()

@@ -30,7 +30,7 @@ from test_indexed_subset_query import _SUBSET_VARIANTS, _write_alid_list
 from test_query_metadata_reads import _hybrid
 from test_ragged_build_ssf import _make_fixture
 
-from benchmarks import _hm3
+from benchmarks import _hm3, _query_shapes
 from opengwasdb.layouts.dense.indexed_subsets import (
     INDEXED_SUBSETS_GROUP,
     IndexedSubsetError,
@@ -148,6 +148,16 @@ def test_dense_hm3_is_measured_with_timing_and_result_count(dense_with_hm3: Path
     assert record["p95_ms"] >= record["median_ms"]
     assert record["subset_n_variants"] == len(_SUBSET_VARIANTS)
     assert record["subset_resolved_count"] == len(_SUBSET_VARIANTS)
+
+
+def test_shared_seam_emits_the_same_record(dense_with_hm3: Path) -> None:
+    with query_store(dense_with_hm3) as query:
+        record = _query_shapes.measure_hm3_extract(
+            query, "a0", store_path=dense_with_hm3, reps=1
+        )
+    assert record["status"] == "measured", record
+    assert record["subset"] == "hm3"
+    assert record["result_count"] > 0, record
 
 
 def test_hybrid_root_discovers_its_dense_components_hm3(hybrid_with_hm3: Path) -> None:

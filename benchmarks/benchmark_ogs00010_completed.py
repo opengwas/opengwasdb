@@ -39,7 +39,7 @@ from typing import Any
 import numpy as np
 from scipy.special import erfc
 
-from benchmarks import _hm3, _query_shapes
+from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import run_probe
 from benchmarks.benchmark_ukbb_dense import (
@@ -747,8 +747,9 @@ def main() -> None:
     )
 
     # The Reference-Completed release's HM3 index, when it publishes one (#272).
-    hm3_extract = _hm3.measure_hm3_extract(q, EXPOSURE, store_path=args.store, reps=args.reps)
-    print(f"HM3 extract: status={hm3_extract['status']} {hm3_extract['detail']}", flush=True)
+    hm3_extract = _query_shapes.report_hm3_extract(
+        q, EXPOSURE, store_path=args.store, reps=args.reps
+    )
 
     result = {
         "dataset": {

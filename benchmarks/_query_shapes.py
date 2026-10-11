@@ -25,6 +25,7 @@ from typing import Any
 
 import numpy as np
 
+from benchmarks import _hm3
 from benchmarks._rss import sample_query
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -138,6 +139,65 @@ def build_query_patterns(
         random_alids=random_alids,
         random_analyses=random_analyses,
     )
+
+
+def measure_hm3_extract(query: Any, analysis_id: str, **kwargs: Any) -> dict[str, Any]:
+    """The per-Store HM3 extraction record every generic benchmark emits (#272).
+
+    The optional derived-artifact shape that sits alongside the seven timed
+    shapes: it is a *record*, not one of the `common_query_patterns` callables,
+    because a Store without a usable `hm3` Indexed Variant Subset has no result
+    to time or digest and must report a non-failing status instead. All five
+    full-scale harnesses and `benchmark_store_comparison.py` call this one seam
+    (accepted keyword arguments are `store_path` and `reps`), so the record
+    below is the stable contract the release-side report
+    (`opengwas/opengwasdb-stores#212`) consumes.
+
+    The record always carries `subset`, `status` and `detail`. `status` is one
+    of:
+
+    - `measured`: the Store publishes a structurally valid `hm3` subset and its
+      extraction was timed; the record additionally carries `analysis_id`,
+      `first_read_ms`, `median_ms`, `p95_ms`, `reps`, `result_count`,
+      `warm_result_count`, and the subset's recorded counts and provenance
+      (`subset_n_variants`, `subset_n_analyses`, `subset_requested_count`,
+      `subset_resolved_count`, `subset_absent_count`,
+      `subset_reference_assembly`, `subset_input_sha256`). No timing key is
+      present otherwise, so a consumer cannot read a non-measurement as a
+      zero-row result.
+    - `missing`: no subset named `hm3` is published on a Store that has a Dense
+      Component.
+    - `not_applicable`: the Store is Ragged-only; an Indexed Variant Subset is
+      Dense-only.
+    - `unsupported`: a published group whose *declared* subset schema or encoding
+      kind this build cannot read (forward compatibility).
+
+    `missing`, `not_applicable` and `unsupported` never fail the run. A `hm3`
+    group that is present and structurally corrupt, damaged or stale raises
+    (`classify_hm3`), and an extraction failure on a present, valid subset
+    propagates -- a broken index is never reported as absent.
+    """
+    return _hm3.measure_hm3_extract(query, analysis_id, **kwargs)
+
+
+def report_hm3_extract(
+    query: Any,
+    analysis_id: str,
+    *,
+    store_path: str | Path | None = None,
+    reps: int = 5,
+    label: str | None = None,
+) -> dict[str, Any]:
+    """Measure HM3, print one status line, and return the same record.
+
+    The console sibling of `measure_hm3_extract`: every harness prints the
+    status so a run log shows it beside the seven timed shapes, and sharing the
+    one formatter keeps the wording from drifting between reports.
+    """
+    record = measure_hm3_extract(query, analysis_id, store_path=store_path, reps=reps)
+    prefix = f"[{label}] " if label is not None else ""
+    print(f"{prefix}HM3 extract: status={record['status']} {record['detail']}", flush=True)
+    return record
 
 
 def measure_shape_rss(

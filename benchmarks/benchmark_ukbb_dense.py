@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 import zarr
 
-from benchmarks import _hm3, _query_shapes
+from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import run_probe
 from opengwasdb.layouts.dense.top_hits import threshold_key, write_top_hit_indexes
@@ -521,10 +521,11 @@ def main() -> None:
     print(f"MR IVW: beta={mr['ivw_beta']:.4f} se={mr['ivw_se']:.4f} "
           f"p={mr['ivw_pval']:.2e}  n_instruments={mr['n_instruments']}")
 
-    # A routine HM3 shape alongside the seven: measured when the Store publishes
-    # a usable `hm3` subset, otherwise a non-failing status (#272).
-    hm3_extract = _hm3.measure_hm3_extract(q, EXPOSURE, store_path=args.store, reps=args.reps)
-    print(f"HM3 extract: status={hm3_extract['status']} {hm3_extract['detail']}", flush=True)
+    # A routine HM3 shape alongside the seven (#272): measured when the Store
+    # publishes a usable `hm3` subset, otherwise a non-failing status.
+    hm3_extract = _query_shapes.report_hm3_extract(
+        q, EXPOSURE, store_path=args.store, reps=args.reps
+    )
 
     result = {
         "dataset": {"n_variants": n_variants, "n_analyses": n_analyses,

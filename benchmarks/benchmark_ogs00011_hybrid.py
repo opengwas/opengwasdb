@@ -45,8 +45,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from benchmarks import _hm3, _query_shapes
 from benchmarks import _hybrid_report as _report
+from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import run_probe
 from benchmarks.benchmark_finngen_dense import run_mr
@@ -369,10 +369,10 @@ def main() -> None:
               f"se={r['ivw_se']:.3f} p={r['ivw_pval']:.1e} n={r['n_instruments']} "
               f"(overflow {r['n_instruments_overflow']}) in {r['elapsed_s']} s", flush=True)
 
-    # A Hybrid root's HM3 index lives in its nested Dense Component (#271);
-    # a Hybrid with none reports the non-failing status, not a failure (#272).
-    hm3_extract = _hm3.measure_hm3_extract(q, EXPOSURE, store_path=args.store, reps=args.reps)
-    print(f"HM3 extract: status={hm3_extract['status']} {hm3_extract['detail']}", flush=True)
+    # A Hybrid root's HM3 index lives in its nested Dense Component (#271).
+    hm3_extract = _query_shapes.report_hm3_extract(
+        q, EXPOSURE, store_path=args.store, reps=args.reps
+    )
 
     result = {
         "dataset": {

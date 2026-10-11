@@ -10,16 +10,21 @@ is needed to reproduce or update the report.
 
 ## HM3 extraction in the generic benchmarks (#272)
 
-Every generic benchmark built on the shared workload (`benchmarks/_query_shapes.py`)
-records an `hm3_extract` object for each benchmarked Store: the selected Analysis's
-extraction through the Store's **HM3 Indexed Variant Subset** (the conventional
-`hm3` name, ADR 0061). HM3 is a *default derived artifact*, not a Store validity
-requirement, so a Store without one must never fail a benchmark run. The object's
-`status` is one of four values, and only `measured` carries a timing:
+Every generic benchmark built on the shared workload records an `hm3_extract`
+object for each benchmarked Store: the selected Analysis's extraction through
+the Store's **HM3 Indexed Variant Subset** (the conventional `hm3` name,
+ADR 0061). The one seam that produces it is
+`benchmarks._query_shapes.measure_hm3_extract(query, analysis_id,
+store_path=…, reps=…)`; the five full-scale harnesses and
+`benchmark_store_comparison.py` all call it, so the record below is the stable
+contract the release-side report (`opengwas/opengwasdb-stores#212`) consumes.
+HM3 is a *default derived artifact*, not a Store validity requirement, so a
+Store without one must never fail a benchmark run. The object's `status` is one
+of four values, and only `measured` carries a timing:
 
 | `status` | meaning | fields beside `status`/`subset` |
 |---|---|---|
-| `measured` | the Store publishes a structurally valid `hm3` subset and it was read | `analysis_id`, `first_read_ms`, `median_ms`, `p95_ms`, `reps`, `result_count`, `warm_result_count`, and the subset's recorded counts and provenance (`subset_n_variants`, `subset_resolved_count`, `subset_absent_count`, `subset_reference_assembly`, `subset_input_sha256`, …) |
+| `measured` | the Store publishes a structurally valid `hm3` subset and it was read | `analysis_id`, `first_read_ms`, `median_ms`, `p95_ms`, `reps`, `result_count`, `warm_result_count`, and the subset's recorded counts and provenance (`subset_n_variants`, `subset_n_analyses`, `subset_requested_count`, `subset_resolved_count`, `subset_absent_count`, `subset_reference_assembly`, `subset_input_sha256`) |
 | `missing` | the Store has a Dense Component (Dense or Hybrid) and publishes no subset named `hm3` | `detail` names the absent subset |
 | `not_applicable` | the Store is Ragged-only; an Indexed Variant Subset is Dense-only (ADR 0061) | `detail` names the layout reason |
 | `unsupported` | the Store publishes an `hm3` group whose *declared* schema or encoding is one this build cannot read (forward compatibility) | `detail` names the unsupported contract |
