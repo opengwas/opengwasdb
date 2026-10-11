@@ -128,10 +128,13 @@ ldl_eur	LDL EUR pilot	rs111	1	100	1:100:A:G	A	G	-6	0.199951	1.97e-09	.	observed
 
 An **Indexed Variant Subset** is an optional, rebuildable Dense query index over
 a caller-supplied list of canonical ALIDs (ADR 0061). It covers every Analysis in
-the Store Release and holds the full available statistics (Z, SE and EAF, with
+the Dense store and holds the full available statistics (Z, SE and EAF, with
 the release's Association Status for a Reference-Completed store), laid out
 Analysis-major. It is derived data: adding or deleting it changes no association
-and no Analytical Metadata.
+and no Analytical Metadata. On a **Hybrid** release, name the release root: the
+index is built over the self-contained Dense Component's on-panel variants and
+stored at `<root>/dense/data.zarr/indexed_subsets/<name>`. Ragged releases have
+none.
 
 Build one from a list of canonical ALIDs (one per nonblank line) and the list's
 Reference Assembly. The assembly must match the release's, because cross-Store
@@ -151,6 +154,12 @@ ordinary `query-analysis` result to that subset:
 pixi run -e dev opengwasdb query-analysis \
   /tmp/opengwasdb-tiny.opengwasdb height_eur --indexed-subset hm3
 ```
+
+A requested canonical ALID that belongs **only to a Hybrid release's
+shared/overflow axis** fails the build and is named: the index covers the Dense
+Component's on-panel variants, and silently counting an off-panel ALID as absent
+would return a plausible, incomplete answer. An ALID absent from the shared
+union table as well is still counted and recorded as absent.
 
 `--overwrite` atomically replaces an existing subset of the same name.
 `--band-cells` bounds the Analysis tile a build materialises: the variant band
@@ -180,10 +189,14 @@ Failure behaviour is deliberate and loud:
   refused before anything is written;
 - ALIDs absent from the Store Variant Table are **counted and recorded, never
   treated as present**;
-- `--indexed-subset` on an unknown, incomplete, stale, corrupt or
-  non-Dense subset stops with an error naming the Store and subset. It never
-  falls back to the ordinary query path, because a silent fallback would return
-the slow answer while appearing to be indexed;
+- `--indexed-subset` on an unknown, incomplete, stale or corrupt subset stops
+  with an error naming the Store and subset. On a Hybrid root it reads the
+  nested Dense Component's index, remaps its Variant Indices into the shared
+  space, and never reads or appends the Ragged Overflow; it never falls back to
+  the ordinary query path, because a silent fallback would return the slow
+  answer while appearing to be indexed;
+- `--indexed-subset` on a Ragged release still stops with an error naming the
+  Store and subset: Indexed Variant Subsets are Dense-only;
 - a query without `--indexed-subset` is unchanged and consults no subset state.
 
 ## Where to go next

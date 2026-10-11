@@ -1032,13 +1032,15 @@ release whose ordinary queries are unchanged. It is therefore **not** the
 (ADRs 0038, 0041): those are content a reader may need to interpret
 authoritative data.
 
-The index covers **Dense** stores, both Observed-Only and Reference-Completed.
-Ragged stores already expose each Analysis as a direct CSR slice, and a Hybrid
-index would have to specify how its two components unify; neither is implied by
-a Dense result, and a selector on either is refused. A Reference-Completed Dense
-index carries the per-cell `imputed` mask and the subset `eaf_reference`, so it
-reproduces the release's ordinary Association Status and frequency exactly
-(issue #266).
+The index content is **Dense-only**, covering both Observed-Only and
+Reference-Completed Dense releases. Ragged stores already expose each Analysis as
+a direct CSR slice and carry none. A Hybrid release is reachable from its root:
+`build-indexed-subset <root> ...` resolves to `<root>/dense` and stores the group
+at `dense/data.zarr/indexed_subsets/<name>`, indexing only that self-contained
+Dense Component's on-panel variants and never unifying them with the Ragged
+Overflow (issue #271). A Reference-Completed Dense index carries the per-cell
+`imputed` mask and the subset `eaf_reference`, so it reproduces the release's
+ordinary Association Status and frequency exactly (issue #266).
 
 It is stored beside the other optional derived artifacts:
 
@@ -1050,6 +1052,12 @@ data.zarr/
     <name>/
 ```
 
+For a Hybrid release these paths are relative to `<root>/dense`; the shared
+`data.zarr`, which holds only the Ragged Overflow and the merged top-hit cache,
+never carries the `indexed_subsets` namespace. Discovery, removal, overview,
+validation and the CLI accept the Hybrid root and resolve to the nested
+component, while a direct nested-Dense path remains valid.
+
 ### Variant list and subset name
 
 The input is one canonical ALID (§4) per nonblank line; a malformed, repeated or
@@ -1059,6 +1067,15 @@ a list resolving to no Store variant is refused. The caller MUST supply the
 list's Reference Assembly, and a mismatch with the release's
 `reference_assembly` is refused because cross-Store Variant Identity is
 assembly plus ALID (ADR 0061).
+
+On a Hybrid root, an ALID present in the shared union table but absent from the
+Dense Component is an **overflow-only** request: it MUST be refused and named,
+because resolving against the Dense Component alone would otherwise count it
+absent and silently drop it. An ALID absent from the shared union table as well
+keeps the counted-as-absent handling; the shared table makes the two
+observable, and that is what licenses preserving the existing handling. A direct
+nested-Dense build names only the Dense Component, so an off-panel ALID there is
+absent-and-counted as before.
 
 A subset name MUST match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. A leading `.` is
 reserved so a name cannot collide with the `.{name}.tmp.*` staging groups or the
@@ -1131,7 +1148,10 @@ A published group self-describes; validation rejects a group missing any of
 `source_store_id`, `source_release_id`, `source_format_version`, `n_analyses`,
 `n_subset_variants`, `input_sha256` (the variant list's bytes),
 `requested_count`, `resolved_count`, `absent_count`, `builder_version`,
-`created_at` and `order` (`analysis,variant`).
+`created_at` and `order` (`analysis,variant`). On a Hybrid release the
+`source_store_id`/`source_release_id`/`source_format_version` attributes record
+the nested Dense Component, the self-contained release the index physically
+belongs to and the one the read seam validates it against.
 
 A regenerated `overview.html` lists every published subset: the name, the
 requested/resolved/absent counts, the input checksum, the Reference Assembly and
@@ -1222,10 +1242,13 @@ not compare the mask's or `eaf_reference`'s content against the release --
 `validate` does that. It does NOT re-derive
 decoded values or side-table internals -- that is `validate`'s expensive job --
 and cannot detect an in-range Variant Index shift while identity and bounds
-hold. A subset on a Ragged or Hybrid release is refused, because Indexed
-Variant Subsets are Dense-only. When no subset is named,
-selected-Analysis behaviour is unchanged and no indexed-subset state is
-consulted at all.
+hold. A subset on a Ragged release is refused, because Indexed Variant Subsets
+are Dense-only. On a Hybrid root the selector is served by the nested Dense
+Component's index: the result's panel-local `variant_index` is remapped through
+`dense_to_shared.npy`, the Ragged Overflow is never read or appended, and an
+unknown, stale or corrupt selector still fails loudly rather than falling back
+to either ordinary path. When no subset is named, selected-Analysis behaviour
+is unchanged and no indexed-subset state is consulted at all.
 
 ## 11. Ragged layout
 

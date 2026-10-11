@@ -89,10 +89,48 @@ any existing query answer. The package and specification learn the optional
 namespace, while the Store Release's authoritative representation remains the
 same format.
 
-The initial index is Dense-only. Ragged already stores each Analysis as a direct
-CSR slice, while a Hybrid index would have to specify how its Dense and Ragged
-Overflow Components are unified; neither should be implied by a Dense
-performance result.
+The index content remains Dense-only. Ragged already stores each Analysis as a
+direct CSR slice, so it gets none. A Hybrid release is served by the index over
+its self-contained Dense Component: issue #271 resolves a Hybrid root to
+``<root>/dense``, indexes only that component's on-panel variants, and never
+unifies it with the Ragged Overflow (see the amendment below).
+
+## Amendment: Hybrid roots index their self-contained Dense Component (#271)
+
+Issue #271 extends the public interface without widening the artifact: an
+Indexed Variant Subset is still Dense-only content, and a Hybrid release's
+overlay makes it reachable from the release root.
+
+- `build-indexed-subset <hybrid-root> ...` resolves to `<root>/dense` and
+  stores `dense/data.zarr/indexed_subsets/<name>`. It indexes the Dense
+  Component's on-panel variants only and never reads or merges the Ragged
+  Overflow association planes. The recorded source identity is the nested Dense
+  Component's own (`<store_id>-dense`), because that is the release the read
+  seam validates against.
+- A requested canonical ALID that exists only on the shared/overflow axis is
+  refused by name. Resolving against the Dense Component alone would otherwise
+  count it as "absent from this Store Release" and drop it -- exactly the
+  plausible-wrong-answer class the project refuses. An ALID absent from both the
+  Dense Component and the shared union table keeps the existing counted-as-absent
+  handling; the shared table makes the two distinguishable, and that is the only
+  reason the existing handling is preserved.
+- `query-analysis <hybrid-root> ANALYSIS_ID --indexed-subset <name>` delegates
+  to the nested Dense Component's index, remaps the panel-local `variant_index`
+  through `dense_to_shared.npy`, and returns the ordinary six arrays over the
+  on-panel subset. It never reads or appends the Overflow and never falls back
+  to either ordinary path. A query without a selector is unchanged.
+- Discovery (`list_indexed_subsets`), removal (`remove_indexed_subset`),
+  validation, overview and the CLI resolve the Hybrid root, so an operator does
+  not name `<root>/dense`; a direct nested-Dense target remains compatible.
+- Ragged releases remain refused. The Dense Component is already a valid Dense
+  release, so reusing the unchanged Dense builder, validator and read seam is
+  what makes this a re-rooting rather than a second implementation.
+
+The overflow-only rule is deliberately asymmetric with a direct nested-Dense
+build: a caller who names `<root>/dense` has explicitly targeted the Dense
+Component, so an off-panel ALID there is absent-and-counted as before. Naming
+the Hybrid root asks for the release's variants, where an off-panel ALID is a
+request the index cannot satisfy.
 
 ## Considered options
 
