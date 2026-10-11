@@ -31,8 +31,8 @@ can be wrong by 3000x (ADR 0037 §4).
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from typing import Any, ClassVar, Self, cast
+from dataclasses import dataclass, field
+from typing import Any, ClassVar, NoReturn, Self, cast
 
 import numpy as np
 
@@ -54,6 +54,7 @@ from opengwasdb.encoding.plan import (
 from opengwasdb.store.arrays import (
     EXCEPTION_TABLE_CHUNK,
     ArrayRole,
+    array_length,
     create_array,
 )
 
@@ -201,6 +202,19 @@ class SparseExactTable:
             value=np.asarray(group[cls.value_name][:], dtype=np.float32),
         )
 
+    @classmethod
+    def open(cls, group: Any) -> SparseExactTable:
+        """A view of the table that reads only the window a lookup needs.
+
+        The decode paths use this rather than `read`, which materialises the
+        whole table: OGS-00011's EAF exception table is 180,396,687 entries
+        (about 2.1 GiB), read at open and again per process.  This holds the
+        arrays, not their bytes (ADR 0060, #252 review round 1).
+        """
+        if cls.index_name not in group or cls.value_name not in group:
+            return cls.empty()
+        return WindowedExactTable.of(group, cls)
+
     def write(self, group: Any, *, compressor: Any = None, role: ArrayRole | None = None) -> None:
         """Write the table beside its plane, replacing any existing one.
 
@@ -227,6 +241,295 @@ class SparseExactTable:
                 hint=EXACT_TABLE_CHUNK,
                 overwrite=True,
             )
+
+
+@dataclass(frozen=True)
+class WindowedExactTable(SparseExactTable):
+    """A lazy view of an exact table stored in a group.
+
+    `lookup` reads only the sorted index's window covering the requested
+    positions, by bisecting the on-disk index one inner chunk at a time, so a
+    process never holds the whole table and a query's table read is O(cells in
+    the answer).  The bisect costs O(log(E / chunk)) inner-chunk reads -- about
+    10 chunk reads of 200,000 int64 for OGS-00011's 180,396,687-entry table.
+    A clustered set is then read as one span; a scattered set is scanned in
+    multi-chunk windows, each read whole when it holds enough positions and
+    chunk by chunk when it holds few (review round 4, finding 2).
+    """
+
+    index_zarr: Any = None
+    value_zarr: Any = None
+    what_name: str = ""
+    #: Table entries one scattered-scan window holds: read in one zarr call and
+    #: matched with one vectorised `searchsorted`.  About 96 MB per window for
+    #: an int64 index plus a float32 value (review round 3, finding 1).
+    scan_window_entries: ClassVar[int] = 8_000_000
+    #: Positions a scan window must hold to be worth reading whole.  A chunk's
+    #: index plus value costs about 12 ms and a window about 95-100 ms, so the
+    #: two strategies break even near ten positions; below this, each distinct
+    #: chunk is read on its own and a sparse set does not pay the window
+    #: (review round 4, finding 2).
+    dense_window_positions: ClassVar[int] = 12
+    #: The first and last element of each chunk a lookup has read or bisected
+    #: through.  Cached per table for the process's life: a second lookup over
+    #: the same table reuses them instead of re-reading the chunks
+    #: (review round 2, finding 3).
+    chunk_first: dict[int, int] = field(default_factory=dict)
+    chunk_last: dict[int, int] = field(default_factory=dict)
+
+    @classmethod
+    def of(cls, group: Any, table_type: type[SparseExactTable]) -> WindowedExactTable:
+        return cls(
+            index=np.empty(0, dtype=np.int64),
+            value=np.empty(0, dtype=np.float32),
+            index_zarr=group[table_type.index_name],
+            value_zarr=group[table_type.value_name],
+            what_name=table_type.what or table_type.index_name,
+        )
+
+    def _chunk_edge(self, chunk_index: int, total: int, chunk: int, *, first: bool) -> int:
+        """One chunk's first or last element, cached across lookups."""
+        cache = self.chunk_first if first else self.chunk_last
+        cached = cache.get(chunk_index)
+        if cached is not None:
+            return cached
+        start = chunk_index * chunk
+        stop = min(start + chunk, total)
+        data = np.asarray(self.index_zarr[start:stop], dtype=np.int64)
+        self.chunk_first[chunk_index] = int(data[0])
+        self.chunk_last[chunk_index] = int(data[-1])
+        return self.chunk_first[chunk_index] if first else self.chunk_last[chunk_index]
+
+    def _chunk_after(self, target: int, *, strict: bool) -> tuple[int, int, int]:
+        """Bisect the index chunks, returning `(chunk index, inner chunk, total)`.
+
+        `strict=False` finds the first chunk whose **last** element is `>=`
+        target (the chunk that could hold a lower bound); `strict=True` finds
+        the first chunk whose **first** element is `>` target (one past the
+        last chunk that can hold it).  Each step reads one chunk's edge, cached
+        afterwards, so a repeated lookup pays nothing for the bisect
+        (review round 2, finding 3).
+        """
+        total = array_length(self.index_zarr)
+        if total == 0:
+            return 0, 1, 0
+        chunk = max(1, int(self.index_zarr.chunks[0]))
+        n_chunks = max(1, -(-total // chunk))
+        low, high = 0, n_chunks
+        while low < high:
+            mid = (low + high) // 2
+            edge = self._chunk_edge(mid, total, chunk, first=strict)
+            past = edge <= target if strict else edge < target
+            if past:
+                low = mid + 1
+            else:
+                high = mid
+        return low, chunk, total
+
+    def _chunk(self, chunk_index: int, total: int, chunk: int) -> tuple[np.ndarray, np.ndarray]:
+        """One inner chunk's index and value, the unit a lookup reads."""
+        start = chunk_index * chunk
+        stop = min(start + chunk, total)
+        index = np.asarray(self.index_zarr[start:stop], dtype=np.int64)
+        value = np.asarray(self.value_zarr[start:stop], dtype=np.float32)
+        if len(index):
+            self.chunk_first[chunk_index] = int(index[0])
+            self.chunk_last[chunk_index] = int(index[-1])
+        return index, value
+
+    def _scan_chunks(
+        self,
+        sorted_positions: np.ndarray,
+        order: np.ndarray,
+        out: np.ndarray,
+        found: np.ndarray,
+        total: int,
+        chunk: int,
+    ) -> None:
+        """Match sorted positions against the table, by density.
+
+        A window is a whole number of chunks.  If it holds at least
+        `dense_window_positions` of the lookup's positions -- a Dense column,
+        or any clustered set -- it is read in **one** zarr call and matched
+        with one vectorised `searchsorted`, so a Dense column's ~1 M exception
+        cells over a 165 M-entry table cost O(span / window) reads rather than
+        one read per inner chunk (review round 3, finding 1).  A window
+        holding fewer positions is not read: each distinct chunk under it is
+        read on its own, so a **sparse** scattered set costs one chunk per
+        position and not a ~96 MB window per cell (review round 4, finding 2).
+        Peak memory is one window plus the positions.
+        """
+        window = max(int(self.scan_window_entries), chunk)
+        # A window must be a whole number of chunks: a chunk straddling a
+        # partial window's end could hold a target beyond it, and the loop
+        # would not advance (review round 4, finding 3).
+        window -= window % chunk
+        i = 0
+        n = len(sorted_positions)
+        while i < n:
+            chunk_index = self._chunk_after(int(sorted_positions[i]), strict=False)[0]
+            if chunk_index * chunk >= total:
+                break
+            start = (chunk_index * chunk // window) * window
+            stop = min(start + window, total)
+            j = self._window_end(sorted_positions, i, stop, total, chunk)
+            if j == i:
+                raise RuntimeError(
+                    f"the scattered scan made no progress at position "
+                    f"{int(sorted_positions[i])} (window of {window} entries, "
+                    f"chunk of {chunk}); the window does not cover its own "
+                    f"first position"
+                )
+            if j - i >= self.dense_window_positions:
+                self._read_window(
+                    start, stop, sorted_positions[i:j], order[i:j], out, found
+                )
+            else:
+                self._match_chunks(
+                    sorted_positions[i:j], order[i:j], out, found, total, chunk
+                )
+            i = j
+
+    def _window_end(
+        self,
+        sorted_positions: np.ndarray,
+        i: int,
+        stop: int,
+        total: int,
+        chunk: int,
+    ) -> int:
+        """One past the last position the window ending at `stop` covers."""
+        high = self._chunk_edge((stop - 1) // chunk, total, chunk, first=False)
+        return i + int(np.searchsorted(sorted_positions[i:], high, side="right"))
+
+    def _read_window(
+        self,
+        start: int,
+        stop: int,
+        segment: np.ndarray,
+        segment_order: np.ndarray,
+        out: np.ndarray,
+        found: np.ndarray,
+    ) -> None:
+        """Read a dense window's index and value, then match the segment."""
+        block_index = np.asarray(self.index_zarr[start:stop], dtype=np.int64)
+        block_value = np.asarray(self.value_zarr[start:stop], dtype=np.float32)
+        self._match_block(block_index, block_value, segment, segment_order, out, found)
+
+    @staticmethod
+    def _match_block(
+        block_index: np.ndarray,
+        block_value: np.ndarray,
+        segment: np.ndarray,
+        segment_order: np.ndarray,
+        out: np.ndarray,
+        found: np.ndarray,
+    ) -> None:
+        """One `searchsorted` over a read window's entries."""
+        slot = np.searchsorted(block_index, segment)
+        in_bounds = slot < len(block_index)
+        hit = np.zeros(len(segment), dtype=bool)
+        hit[in_bounds] = block_index[slot[in_bounds]] == segment[in_bounds]
+        matched = segment_order[hit]
+        out[matched] = block_value[slot[hit]]
+        found[matched] = True
+
+    def _match_chunks(
+        self,
+        segment: np.ndarray,
+        segment_order: np.ndarray,
+        out: np.ndarray,
+        found: np.ndarray,
+        total: int,
+        chunk: int,
+    ) -> None:
+        """Read each distinct chunk a sparse segment falls in, once."""
+        blocks: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        for k, target in enumerate(segment):
+            target = int(target)
+            chunk_index = self._chunk_after(target, strict=False)[0]
+            if chunk_index not in blocks:
+                blocks[chunk_index] = self._chunk(chunk_index, total, chunk)
+            block_index, block_value = blocks[chunk_index]
+            slot = int(np.searchsorted(block_index, target, side="left"))
+            if slot < len(block_index) and int(block_index[slot]) == target:
+                out[segment_order[k]] = block_value[slot]
+                found[segment_order[k]] = True
+
+    def _first_ge(self, target: int) -> int:
+        """Table-entry index of the first entry `>= target` (an element index)."""
+        total = array_length(self.index_zarr)
+        chunk_index, chunk, _ = self._chunk_after(target, strict=False)
+        if chunk_index * chunk >= total:
+            return total
+        block, _ = self._chunk(chunk_index, total, chunk)
+        return chunk_index * chunk + int(np.searchsorted(block, target, side="left"))
+
+    def _last_le(self, target: int) -> int:
+        """One past the table-entry index of the last entry `<= target`."""
+        total = array_length(self.index_zarr)
+        chunk_index, chunk, _ = self._chunk_after(target, strict=True)
+        if chunk_index == 0:
+            return 0
+        block, _ = self._chunk(chunk_index - 1, total, chunk)
+        start = (chunk_index - 1) * chunk
+        return start + int(np.searchsorted(block, target, side="right"))
+
+    def _lookup_span(self, first: int, last: int, positions: np.ndarray) -> np.ndarray:
+        """One vectorised `searchsorted` over the entries `[first, last)`."""
+        index = np.asarray(self.index_zarr[first:last], dtype=np.int64)
+        value = np.asarray(self.value_zarr[first:last], dtype=np.float32)
+        slot = np.searchsorted(index, positions)
+        found = slot < len(index)
+        hit = np.zeros(len(positions), dtype=bool)
+        hit[found] = index[slot[found]] == positions[found]
+        if not np.all(hit):
+            self._raise_missing(positions[~hit])
+        return np.asarray(value[slot], dtype=np.float32)
+
+    def _raise_missing(self, missing_positions: np.ndarray) -> NoReturn:
+        missing = np.asarray(missing_positions, dtype=np.int64)[:5].tolist()
+        raise ValueError(
+            f"{self.what_name} table has no entry for cell(s) at flat "
+            f"position(s) {missing}; the store's plane and its table disagree"
+        )
+
+    def lookup(self, positions: np.ndarray) -> np.ndarray:
+        """Exact values at `positions`, reading only the entries they cover.
+
+        A **clustered** set -- a decode block, or a whole Analysis's contiguous
+        range -- is read as one slice of the table and `searchsorted` once, so
+        its cost is O(table entries in the range) and it matches the eager
+        lookup the code used before the table was windowed (review round 2,
+        finding 3's regression).  A **scattered** set, where the entries between
+        the first and last position would be far more than the positions
+        themselves, is scanned window by window: a window holding enough of the
+        positions is read whole, a sparser window reads only the distinct
+        chunks its positions fall in (review round 4, finding 2).
+        """
+        positions = np.asarray(positions, dtype=np.int64)
+        if len(positions) == 0:
+            return np.empty(0, dtype=np.float32)
+        if array_length(self.index_zarr) == 0:
+            self._raise_missing(positions)
+        first = self._first_ge(int(positions.min()))
+        last = self._last_le(int(positions.max()))
+        if last - first <= 4 * len(positions) + 1024:
+            return self._lookup_span(first, last, positions)
+        order = np.argsort(positions, kind="stable")
+        out = np.empty(len(positions), dtype=np.float32)
+        found = np.zeros(len(positions), dtype=bool)
+        self._scan_chunks(
+            positions[order],
+            order,
+            out,
+            found,
+            array_length(self.index_zarr),
+            max(1, int(self.index_zarr.chunks[0])),
+        )
+        if not np.all(found):
+            self._raise_missing(positions[~found])
+        return out
 
 
 class SparseExactBuilder:
@@ -579,9 +882,9 @@ class StoreCodec:
         self,
         encoding: StoreEncoding,
         *,
-        z_overflow: ZOverflowTable | None = None,
-        eaf_exceptions: EafExceptionTable | None = None,
-        se_exceptions: SeExceptionTable | None = None,
+        z_overflow: SparseExactTable | None = None,
+        eaf_exceptions: SparseExactTable | None = None,
+        se_exceptions: SparseExactTable | None = None,
     ) -> None:
         self.encoding = encoding
         self.z_overflow = z_overflow

@@ -83,7 +83,8 @@ def main() -> None:
 
     print(f"Running benchmark ({args.reps} reps per pattern) ...")
     results = _run_benchmark(
-        args.store, args.reps, build_seconds, liftover_failure_count, source_bytes
+        args.store, args.reps, build_seconds, liftover_failure_count, source_bytes,
+        max_start_load=args.max_start_load,
     )
 
     args.output.write_text(
@@ -113,9 +114,11 @@ def _run_benchmark(
     build_seconds: float | None,
     liftover_failure_count: int,
     source_bytes: int | None,
+    *,
+    max_start_load: float = 3.0,
 ) -> dict:
     q = query_store(store_path)
-    selection = _choose_queries(store_path)
+    selection = _choose_queries(store_path, q)
 
     query_specs: dict[str, object] = {
         "analysis": lambda: q.analysis(selection["analysis_probe_id"]),
@@ -138,7 +141,7 @@ def _run_benchmark(
 
     timings = []
     for name, fn in query_specs.items():
-        median_ms, p95_ms, result_count = _bench(fn, n_reps)
+        median_ms, p95_ms, result_count = _bench(fn, n_reps, max_start_load=max_start_load)
         timings.append(
             {
                 "query": name,
@@ -151,10 +154,7 @@ def _run_benchmark(
 
     csr = RaggedCSRReader(store_path)
     n_associations = csr.n_associations
-
-    import sqlite3
-    with sqlite3.connect(str(store_path / "index.sqlite")) as conn:
-        n_analyses = conn.execute("SELECT COUNT(*) FROM analyses").fetchone()[0]
+    n_analyses = len(q.analyses_table())
 
     va = VariantAxis(store_path)
     n_variants = va.n_variants
@@ -171,6 +171,7 @@ def _run_benchmark(
         storage["compression_ratio"] = round(source_bytes / store_bytes, 3)
 
     return {
+        "provenance": _provenance(),
         "dataset": {
             "n_variants": n_variants,
             "n_analyses": n_analyses,
@@ -187,33 +188,43 @@ def _run_benchmark(
     }
 
 
-def _choose_queries(store_path: Path) -> dict:
-    """Pick representative query parameters from the store content."""
-    import sqlite3
+def _provenance() -> dict:
+    """The commit, time, harness hash and load this artifact was measured under."""
+    import hashlib
+    import os
 
+    from benchmarks._artifact import provenance
+
+    harness = Path(__file__).resolve()
+    return {
+        **provenance(),
+        "harness": str(harness.name),
+        "harness_sha256": hashlib.sha256(harness.read_bytes()).hexdigest(),
+        "loadavg_at_write": list(os.getloadavg()),
+    }
+
+
+def _choose_queries(store_path: Path, q) -> dict:
+    """Pick representative query parameters from the store content.
+
+    Analysis metadata comes from `analyses.tsv` through the query facade -- the
+    retired `index.sqlite` `analyses` table (ADR 0034) is not consulted.
+    """
     # Probe with most associations — good for analysis query
     csr = RaggedCSRReader(store_path)
     offsets = csr._offsets[:]
     counts = np.diff(offsets.astype(np.int64))
     best_analysis_idx = int(np.argmax(counts))
 
-    with sqlite3.connect(str(store_path / "index.sqlite")) as conn:
-        conn.row_factory = sqlite3.Row
-        probe_row = conn.execute(
-            "SELECT trait_id, trait_chr, trait_bp FROM analyses WHERE analysis_index = ?",
-            (best_analysis_idx,),
-        ).fetchone()
-        # Random analyses for lookup query
-        all_probes = conn.execute("SELECT trait_id FROM analyses").fetchall()
-        root = zarr.open_group(str(store_path / "data.zarr"), mode="r")
-        hit_offsets = root["top_hits/p_5e_08/analysis_offsets"][:]
-        top_hit_analysis_idx = int(np.argmax(np.diff(hit_offsets)))
-        top_hit_row = conn.execute(
-            "SELECT trait_id FROM analyses WHERE analysis_index = ?",
-            (top_hit_analysis_idx,),
-        ).fetchone()
+    analyses = q.analyses_table()
+    probe_row = analyses[best_analysis_idx]
+    all_analyses = sorted(analyses.items())
+    root = zarr.open_group(str(store_path / "data.zarr"), mode="r")
+    hit_offsets = root["top_hits/p_5e_08/analysis_offsets"][:]
+    top_hit_analysis_idx = int(np.argmax(np.diff(hit_offsets)))
+    top_hit_row = analyses[top_hit_analysis_idx]
 
-    analysis_probe_id = str(probe_row["trait_id"])
+    analysis_probe_id = str(probe_row["analysis_id"])
     # Use probe chr/bp to define a 2 Mb region around it for range queries
     region_chrom = str(probe_row["trait_chr"])
     region_centre = int(probe_row["trait_bp"])
@@ -233,9 +244,9 @@ def _choose_queries(store_path: Path) -> dict:
 
     # Random lookup: 100 random variants × 10 random analyses
     n_random_variants = min(100, len(all_variants))
-    n_random_analyses = min(10, len(all_probes))
+    n_random_analyses = min(10, len(all_analyses))
     random_vi = sorted(RNG.choice(len(all_variants), n_random_variants, replace=False).tolist())
-    random_ai = sorted(RNG.choice(len(all_probes), n_random_analyses, replace=False).tolist())
+    random_ai = sorted(RNG.choice(len(all_analyses), n_random_analyses, replace=False).tolist())
 
     return {
         "analysis_probe_id": analysis_probe_id,
@@ -244,16 +255,25 @@ def _choose_queries(store_path: Path) -> dict:
         "region_end": region_end,
         "phewas_alid": phewas_alid,
         "top_hit_threshold": top_hit_threshold,
-        "top_hit_analysis_id": str(top_hit_row["trait_id"]),
+        "top_hit_analysis_id": str(top_hit_row["analysis_id"]),
         "random_alids": [str(all_variants[i].alid) for i in random_vi],
-        "random_analysis_ids": [str(all_probes[i]["trait_id"]) for i in random_ai],
+        "random_analysis_ids": [str(all_analyses[i][1]["analysis_id"]) for i in random_ai],
     }
 
 
-def _bench(fn, n_reps: int) -> tuple[float, float, int]:
+def _bench(fn, n_reps: int, *, max_start_load: float) -> tuple[float, float, int]:
+    """Median and p95 ms over `n_reps`, each repetition gated at a quiet load.
+
+    A warm-up runs first.  Every timed repetition waits for the 1-minute load to
+    fall below `max_start_load` (0 disables), so a contended node is recorded
+    rather than silently timed.
+    """
+    from benchmarks._quiet import wait_for_quiet
+
     result = fn()  # warm-up
     times = []
     for _ in range(n_reps):
+        wait_for_quiet(max_start_load)
         t0 = time.perf_counter()
         result = fn()
         times.append(time.perf_counter() - t0)
@@ -440,6 +460,9 @@ def _parse_args() -> argparse.Namespace:
                         help="Tear down and rebuild the store before benchmarking")
     parser.add_argument("--reps", type=int, default=5,
                         help="Query repetitions per pattern (default 5)")
+    parser.add_argument("--max-start-load", type=float, default=3.0,
+                        help="Wait for the 1-minute load to fall below this before "
+                             "each timed repetition (0 disables; default 3)")
     return parser.parse_args()
 
 

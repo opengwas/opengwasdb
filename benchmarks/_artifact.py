@@ -83,3 +83,21 @@ def write_artifact(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {path}", flush=True)
+
+
+def add_labelled_store_option(parser: Any, *, help: str = "a store to measure; repeatable") -> None:
+    """Add the `--store LABEL=PATH` option the per-store harnesses share."""
+    parser.add_argument(
+        "--store", action="append", required=True, metavar="LABEL=PATH", help=help
+    )
+
+
+def labelled_stores(entries: list[str]) -> list[tuple[str, Path]]:
+    """Parse `LABEL=PATH` entries, refusing one without a path."""
+    stores: list[tuple[str, Path]] = []
+    for entry in entries:
+        label, _, path = entry.partition("=")
+        if not path:
+            raise SystemExit(f"--store needs LABEL=PATH, got {entry!r}")
+        stores.append((label, Path(path)))
+    return stores
