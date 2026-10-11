@@ -37,7 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import zarr
-from _artifact import commit, reflink_copy, write_artifact
+from _artifact import commit, scratch_copy, write_artifact
 
 from opengwasdb.encoding.timing import PhaseTimer
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
@@ -54,7 +54,7 @@ def main() -> int:
     args = parser.parse_args()
 
     print(f"Copying {args.store} -> {args.into}", flush=True)
-    reflink_copy(args.store, args.into)
+    scratch_copy(args.store, args.into)
 
     manifest = StoreManifest.load(args.into)
     root = zarr.open_group(str(args.into / "data.zarr"), mode="r")

@@ -107,6 +107,19 @@ def test_the_readable_formats_are_the_two_the_epic_carries():
     assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (0,)}
 
 
+def test_each_readable_series_has_one_zarr_on_disk_format():
+    """The version-to-layout rule lives beside the version tables, so a caller
+    does not pattern-match a version string to guess it (#264 review)."""
+    assert store_open.zarr_format_for_version("0.1.0") == 2
+    assert store_open.zarr_format_for_version(CURRENT_FORMAT_VERSION) == 3
+    assert dict(store_open.ZARR_FORMAT_BY_SERIES) == {(0, 1): 2, (0, 2): 3}
+
+
+def test_an_unreadable_version_has_no_zarr_layout():
+    with pytest.raises(store_open.UnsupportedFormatVersion):
+        store_open.zarr_format_for_version("9.9.9")
+
+
 def test_an_unknown_series_is_rejected():
     """A breaking change moves the series, and this build reads two of them."""
     for version in ("0.3.0", "1.0.0", "9.9.9"):

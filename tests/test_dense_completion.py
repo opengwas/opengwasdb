@@ -1338,12 +1338,15 @@ def signal_observed_store(tmp_path: Path, signal_source_path: Path) -> Path:
     return out
 
 
-@pytest.fixture
-def signal_panel_npz_only(tmp_path: Path) -> Path:
-    """A single eigendecomposition-only block (no .unphased.vcor1.gz at all)
-    covering every position in `signal_source_path`, with genuine AR(1) LD
-    structure so imputation of the held-out position actually succeeds."""
-    root = tmp_path / "signal_panel"
+def write_signal_panel(root: Path) -> Path:
+    """Write the AR(1) eigendecomposition-only panel at `root`.
+
+    One block covering every `_SIGNAL_POSITIONS` variant, with genuine AR(1)
+    LD structure so elastic-net can actually recover a held-out position.  A
+    plain helper rather than a fixture body so the Indexed Variant Subset
+    suite (#266) can build the identical panel without a cross-module fixture
+    import.
+    """
     snps = [
         (f"1:{pos}:A:G", 0.3, pos) for pos in _SIGNAL_POSITIONS
     ]
@@ -1361,6 +1364,14 @@ def signal_panel_npz_only(tmp_path: Path) -> Path:
     vals, vecs = vals[::-1], vecs[:, ::-1]
     np.savez_compressed(block_dir / "100000-1200000.ldeig.npz", values=vals, vectors=vecs)
     return root
+
+
+@pytest.fixture
+def signal_panel_npz_only(tmp_path: Path) -> Path:
+    """A single eigendecomposition-only block (no .unphased.vcor1.gz at all)
+    covering every position in `signal_source_path`, with genuine AR(1) LD
+    structure so imputation of the held-out position actually succeeds."""
+    return write_signal_panel(tmp_path / "signal_panel")
 
 
 class TestEigendecompositionOnlyPanelImputesRealCells:

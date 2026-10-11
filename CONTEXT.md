@@ -137,6 +137,10 @@ A query that returns associations ranked by statistical significance. Dense and 
 **Top-Hit Index**:
 A layout-specific acceleration structure that supports Top-Hit Queries using the Store's shared significance thresholds and result contract. Dense and Ragged components may encode the index differently but expose the same query semantics.
 
+**Indexed Variant Subset**:
+An optional, named, rebuildable Dense-store query index containing every Analysis's full available association statistics over a declared subset of Store variants, chunked for rapid single-Analysis extraction. It is derived from and validated against the primary statistic planes, and adding or removing it does not change the Store Release's authoritative association data.
+_Avoid_: Projection, per-Analysis cache.
+
 **Rho**:
 The correlation between two Analyses' association statistics under the null — equivalently, the Analyses' phenotypic correlation multiplied by their proportion of sample overlap. It is estimated from pairs of non-significant (null) Z-Scores at approximately independent variants, and is undefined when too few shared null variants are available. Rho is symmetric between two Analyses; an Analysis with itself is 1.
 

@@ -697,6 +697,10 @@ _ROLE_CASES: dict[ArrayRole, tuple[tuple[int, ...], int | None]] = {
     ArrayRole.RAGGED_EXCEPTION_TABLE: ((51_000,), None),
     ArrayRole.SE_COEFFICIENTS: ((51, 2), None),
     ArrayRole.RHO_ARRAY: ((51_000,), None),
+    # Indexed Variant Subsets are Analysis-major, so the shape order is
+    # (n_analyses, n_subset_variants) (#264, ADR 0061).
+    ArrayRole.INDEXED_SUBSET_PLANE: ((100, 51_000), None),
+    ArrayRole.INDEXED_SUBSET_VARIANT_INDEX: ((51_000,), None),
 }
 
 

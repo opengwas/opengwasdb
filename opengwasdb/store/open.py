@@ -58,6 +58,34 @@ SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingPr
 #: until a later decision deletes the v2 reader (ADR 0057).
 CURRENT_FORMAT_VERSION = "0.2.0"
 
+#: The Zarr on-disk format each readable release series is stored in.  The
+#: series-to-layout coupling is part of the format contract, so it lives beside
+#: the version tables rather than in each caller that needs it (#264 review).
+ZARR_FORMAT_BY_SERIES: Mapping[tuple[int, ...], int] = MappingProxyType(
+    {(0, 1): 2, (0, 2): 3}
+)
+
+
+def zarr_format_for_version(version: str, *, source: str = "release") -> int:
+    """The Zarr on-disk format a readable ``format_version`` is stored in.
+
+    Runs the reader's own version check first, so a caller can ask this alone
+    and get both "is it readable" and "what layout is it" -- a caller that
+    instead pattern-matched a version string would be the second place the
+    version-to-layout rule lives, and the two would eventually disagree.
+    """
+    series, _ = split_format_version(version)
+    check_format_version(version, source=source)
+    try:
+        return ZARR_FORMAT_BY_SERIES[series]
+    except KeyError:
+        raise UnsupportedFormatVersion(
+            f"{source} declares format_version={version!r}, series "
+            f"{_series_text(series)}, which this build reads but has no Zarr on-disk "
+            "layout for; the version table and the layout table disagree"
+        ) from None
+
+
 #: The versions the format carried before the reset, and what each one was.
 #: Every one is two-component, so the parser rejects it on shape alone; naming
 #: them here is what turns that rejection into an instruction rather than a
@@ -80,6 +108,16 @@ log = logging.getLogger(__name__)
 
 class UnsupportedFormatVersion(Exception):
     """A release declares a format_version this build cannot interpret."""
+
+
+class DestinationExistsError(FileExistsError):
+    """A staging/publication destination is already occupied.
+
+    A ``FileExistsError`` subclass so every existing caller that catches
+    ``FileExistsError`` (the release stager included) is unchanged, while a
+    derived-artifact writer can tell "the destination exists" apart from an
+    unrelated ``FileExistsError`` raised inside its staged body (#264 review).
+    """
 
 
 class MalformedFormatVersion(UnsupportedFormatVersion):
@@ -313,47 +351,56 @@ class _ReleasePaths:
 
 
 @contextmanager
-def _destination_lock(dst: Path) -> Iterator[None]:
-    """Serialise publications of releases into ``dst``'s parent directory.
+def directory_lock(directory: str | Path) -> Iterator[None]:
+    """Hold an advisory exclusive ``flock`` on a directory's own inode.
 
-    The lock is the parent directory's own inode, flocked through an
-    ``os.open`` handle, rather than a lock file. A lock file has to live
-    somewhere, and both obvious places fail: beside the destination it is
-    renamed into the published release when that destination is a Hybrid
-    release's nested Dense Component (staged at ``<outer-work>/dense``), and
-    under the system temp directory its identity moves with ``TMPDIR`` and
-    private temp namespaces -- two callers that do not share a temp root would
-    not contend -- while a tmp cleaner can unlink it mid-hold, dropping the
-    lock without any process noticing. A directory inode is a stable
-    filesystem identity, exists by the time a commit runs, and creates no
-    entry that could be published.
+    The lock primitive the publication and removal seams share.  The lock is
+    the directory inode itself, flocked through an ``os.open`` handle, rather
+    than a lock file.  A lock file has to live somewhere, and both obvious
+    places fail: beside the destination it is renamed into the published
+    release when that destination is a Hybrid release's nested Dense Component
+    (staged at ``<outer-work>/dense``), and under the system temp directory its
+    identity moves with ``TMPDIR`` and private temp namespaces -- two callers
+    that do not share a temp root would not contend -- while a tmp cleaner can
+    unlink it mid-hold, dropping the lock without any process noticing.  A
+    directory inode is a stable filesystem identity, exists by the time a
+    commit runs, and creates no entry that could be published.
 
-    The cost is granularity: every destination in one parent directory shares
-    this lock, so commits to different releases in the same directory are
-    serialised for the duration of a commit, including deletion of a replaced
-    release. Commits happen once per build, so that is accepted in exchange
-    for a lock that cannot be moved or reaped out from under it.
+    The cost is granularity: every destination in one directory shares this
+    lock, so commits to different names in the same directory are serialised
+    for the duration of a commit, including deletion of a replaced one.
 
     Advisory and host-local: ``flock`` is enforced by the local kernel and is
-    released when the holding process dies, so a crashed builder cannot leave
-    a destination permanently locked. Whether it also serialises processes on
+    released when the holding process dies, so a crashed writer cannot leave a
+    destination permanently locked.  Whether it also serialises processes on
     another host depends on the filesystem -- NFS and other network
     filesystems may not propagate ``flock``, so this is not a cross-host lock.
-    A filesystem that refuses ``flock`` outright fails the commit loudly rather
-    than publishing unserialised. Each rename inside the critical section is
-    still atomic by the filesystem's own guarantee.
 
     Two requirements follow, and both fail loudly rather than degrading: the
-    parent directory must be openable for reading (``os.open(O_RDONLY)`` needs
-    read/search permission on it, so a write-and-execute-only directory cannot
-    be locked), and the filesystem must implement ``flock`` on directories.
+    directory must be openable for reading (``os.open(O_RDONLY)`` needs
+    read/search permission on it), and the filesystem must implement ``flock``
+    on directories.
     """
-    fd = os.open(dst.parent, os.O_RDONLY)
+    fd = os.open(Path(directory), os.O_RDONLY)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:
         os.close(fd)
+
+
+@contextmanager
+def destination_lock(dst: str | Path) -> Iterator[None]:
+    """Serialise writes that publish or remove ``dst``, by locking its parent.
+
+    The lock is held for the publication/removal window only, never the build.
+
+    A filesystem that refuses ``flock`` outright fails the write loudly rather
+    than proceeding unserialised.  Each rename inside a critical section is
+    still atomic by the filesystem's own guarantee.
+    """
+    with directory_lock(Path(dst).parent):
+        yield
 
 
 def _adopt_staging_work_dir(work: Path, source: Path) -> None:
@@ -418,7 +465,9 @@ def _new_staging_work_dir(dst: Path) -> Path:
     return work
 
 
-def _commit_staged_release(dst: Path, work: Path, *, overwrite: bool) -> None:
+def _commit_staged_release(
+    dst: Path, work: Path, *, overwrite: bool, what: str = "release"
+) -> None:
     """Publish the fully-written ``work`` directory at ``dst``, atomically.
 
     The destination is checked again *under the parent-directory lock* rather
@@ -444,11 +493,11 @@ def _commit_staged_release(dst: Path, work: Path, *, overwrite: bool) -> None:
     directory orphaned by a killed build, is therefore complementary to this
     lock, not interchangeable with it (ADR 0043).
     """
-    with _destination_lock(dst):
+    with destination_lock(dst):
         if dst.exists() and not overwrite:
-            raise FileExistsError(
+            raise DestinationExistsError(
                 f"output path already exists: {dst} "
-                "(published by another process while this release was staging)"
+                f"(another process published a {what} there while this one was staging)"
             )
         if dst.exists():
             old = dst.with_name(f".{dst.name}.old")
@@ -463,6 +512,36 @@ def _commit_staged_release(dst: Path, work: Path, *, overwrite: bool) -> None:
             shutil.rmtree(old, ignore_errors=True)
         else:
             work.rename(dst)
+
+
+@contextmanager
+def _staged_directory(
+    dst: Path, *, overwrite: bool, retain_to: Path | None, what: str
+) -> Iterator[Path]:
+    """The isolation/publication window both staging seams share (ADR 0043).
+
+    Creates a unique ``.{name}.tmp.*`` sibling of ``dst``, yields its path, and
+    on a clean exit commits it under the parent-directory lock.  Any
+    ``BaseException`` -- from the body or from the commit -- discards this
+    invocation's work directory (moving it to `retain_to` when a checkpointed
+    build asked for that) and re-raises.
+    """
+    if dst.exists() and not overwrite:
+        raise DestinationExistsError(f"output path already exists: {dst}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    work = _new_staging_work_dir(dst)
+    try:
+        yield work
+    except BaseException:
+        _discard_staging_work_dir(work, retain_to)
+        raise
+    try:
+        _commit_staged_release(dst, work, overwrite=overwrite, what=what)
+    except BaseException:
+        # `work` is still there exactly when the swap did not complete; if it
+        # did, it has been renamed to `dst` and this is a no-op.
+        _discard_staging_work_dir(work, retain_to)
+        raise
 
 
 @dataclass(frozen=True)
@@ -582,27 +661,44 @@ class OpenGWASDBStore(_ReleasePaths):
         caller's behaviour.
         """
         dst = Path(dest_path)
-        if dst.exists() and not overwrite:
-            raise FileExistsError(f"output path already exists: {dst}")
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        work = _new_staging_work_dir(dst)
-        if adopt is not None:
-            _adopt_staging_work_dir(work, Path(adopt))
+        with _staged_directory(
+            dst, overwrite=overwrite, retain_to=retain_on_failure_to, what="release"
+        ) as work:
+            if adopt is not None:
+                _adopt_staging_work_dir(work, Path(adopt))
+            yield StagedRelease(work)
 
-        staged = StagedRelease(work)
-        try:
-            yield staged
-        except BaseException:
-            _discard_staging_work_dir(work, retain_on_failure_to)
-            raise
 
-        try:
-            _commit_staged_release(dst, work, overwrite=overwrite)
-        except BaseException:
-            # `work` is still there exactly when the swap did not complete;
-            # if it did, it has been renamed to `dst` and this is a no-op.
-            _discard_staging_work_dir(work, retain_on_failure_to)
-            raise
+@contextmanager
+def staged_named_group(
+    dest_path: str | Path, *, overwrite: bool = False
+) -> Iterator[Path]:
+    """Stage one named directory inside a published tree, atomically.
+
+    The named-group companion of `OpenGWASDBStore.staging` (ADR 0043), for a
+    derived artifact that lives *inside* an existing release rather than being
+    a release of its own -- an Indexed Variant Subset under
+    ``data.zarr/indexed_subsets/<name>`` (ADR 0061, #264).  It offers the same
+    isolation and publication rules at the group level:
+
+    * the body writes into a fresh, invocation-unique ``.{name}.tmp.*`` sibling
+      created by `_new_staging_work_dir`, so two builds for one name can never
+      touch each other's work and a killed build's directory is inert;
+    * any ``BaseException`` discards exactly this invocation's work directory
+      and re-raises, leaving an existing published group untouched;
+    * publication runs under the parent-directory advisory lock, re-checks
+      ``dest_path`` there, and swaps with the same two-rename sequence and
+      rollback as a release commit -- so ``dest_path`` is never absent mid-swap
+      and a failed replacement leaves the previous group exactly as it was.
+
+    It yields the work directory's path; the caller has to create the contents
+    (a Zarr group, for the derived indexes that use it).  ``dest_path``'s parent
+    must already exist as the group the new name is published into.
+    """
+    with _staged_directory(
+        Path(dest_path), overwrite=overwrite, retain_to=None, what="named group"
+    ) as work:
+        yield work
 
 
 @dataclass(frozen=True)

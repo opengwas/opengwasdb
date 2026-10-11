@@ -201,10 +201,10 @@ def _hold_destination_lock(
     """
     os.environ["TMPDIR"] = tmpdir
     tempfile.tempdir = None
-    from opengwasdb.store.open import _destination_lock
+    from opengwasdb.store.open import destination_lock
 
     attempted.set()
-    with _destination_lock(Path(dst)):
+    with destination_lock(Path(dst)):
         entered.set()
         release.wait(timeout=10)
 
@@ -269,7 +269,7 @@ def test_lock_contends_across_processes_with_different_temp_roots(
 def test_destination_lock_serialises_holders(tmp_path: Path) -> None:
     """The commit lock is what makes two same-destination publications
     sequential; without it the check-then-swap sequence is not atomic."""
-    from opengwasdb.store.open import _destination_lock
+    from opengwasdb.store.open import destination_lock
 
     dst = tmp_path / "release.opengwasdb"
     holder_in = threading.Event()
@@ -278,13 +278,13 @@ def test_destination_lock_serialises_holders(tmp_path: Path) -> None:
     waiter_in = threading.Event()
 
     def hold() -> None:
-        with _destination_lock(dst):
+        with destination_lock(dst):
             holder_in.set()
             release_holder.wait(timeout=10)
 
     def wait() -> None:
         waiter_attempted.set()
-        with _destination_lock(dst):
+        with destination_lock(dst):
             waiter_in.set()
 
     holder = threading.Thread(target=hold)
