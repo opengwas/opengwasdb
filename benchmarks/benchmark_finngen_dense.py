@@ -38,8 +38,8 @@ import numpy as np
 import pandas as pd
 from scipy.special import erfc
 
+from benchmarks import _hm3, _query_shapes
 from benchmarks import _hybrid_report as _report
-from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import run_probe
 from benchmarks.benchmark_ukbb_dense import _clump, _dir_bytes, _median_ms
@@ -290,6 +290,11 @@ def main() -> None:
         print(f"MR {r['exposure_id']} -> {r['outcome_id']}: beta={r['ivw_beta']:.3f} "
               f"se={r['ivw_se']:.3f} p={r['ivw_pval']:.1e} n={r['n_instruments']}", flush=True)
 
+    # HM3 extraction as a routine shape (#272): measured when the Store
+    # publishes a usable `hm3` subset, otherwise a non-failing status.
+    hm3_extract = _hm3.measure_hm3_extract(q, EXPOSURE, store_path=args.store, reps=args.reps)
+    print(f"HM3 extract: status={hm3_extract['status']} {hm3_extract['detail']}", flush=True)
+
     result = {
         "dataset": {
             "store": str(args.store), "n_variants": n_variants, "n_analyses": n_analyses,
@@ -312,6 +317,7 @@ def main() -> None:
         ),
         "timings": timings,
         "memory": memory,
+        "hm3_extract": hm3_extract,
         "source_bulk": source_bulk,
         "known_loci": loci,
         "phewas_top": phewas_top(q, table),
