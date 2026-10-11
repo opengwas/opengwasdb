@@ -11,6 +11,7 @@ two cannot drift apart silently.
 from __future__ import annotations
 
 import gzip
+import shutil
 import tracemalloc
 from pathlib import Path
 
@@ -138,22 +139,69 @@ def _assert_same_tiers(built: zarr.Group, ref: zarr.Group) -> None:
             )
 
 
-@pytest.mark.parametrize("with_eaf", [True, False])
-@pytest.mark.parametrize("with_imputed", [True, False])
-@pytest.mark.parametrize("slice_cells", [1, 97, 10_000])
+@pytest.fixture(scope="module")
+def streaming_case_seeds(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[tuple[bool, bool], tuple[Path, Path, StoreEncoding, int]]:
+    """Build each immutable input/reference pair once, not once per slice size."""
+    root = tmp_path_factory.mktemp("ragged-top-hit-cases")
+    cases = {}
+    for with_eaf in (True, False):
+        for with_imputed in (True, False):
+            label = f"eaf-{int(with_eaf)}-imputed-{int(with_imputed)}"
+            writer = _writer([600, 700, 800, 900], with_eaf=with_eaf)
+            encoding = _encoding(writer, with_eaf)
+            store = _flush_store(root, label, writer, encoding, imputed=with_imputed)
+            reference_path = root / f"{label}-reference.zarr"
+            _, n_analyses = _reference_tiers(
+                store, encoding, TOP_HIT_THRESHOLDS, reference_path
+            )
+            cases[(with_eaf, with_imputed)] = (
+                store, reference_path, encoding, n_analyses
+            )
+    return cases
+
+
+@pytest.mark.parametrize(
+    ("with_eaf", "with_imputed", "slice_cells"),
+    [
+        (True, True, 1),
+        (True, True, 10_000),
+        (True, True, 97),
+        (True, False, 97),
+        (False, True, 97),
+        (False, False, 97),
+    ],
+    ids=(
+        "one-cell-slices",
+        "one-slice",
+        "all-optional-columns",
+        "eaf-only",
+        "imputed-only",
+        "required-columns-only",
+    ),
+)
 def test_streamed_tiers_match_materialising_reference(
-    tmp_path: Path, with_eaf: bool, with_imputed: bool, slice_cells: int
+    tmp_path: Path,
+    streaming_case_seeds: dict[tuple[bool, bool], tuple[Path, Path, StoreEncoding, int]],
+    with_eaf: bool,
+    with_imputed: bool,
+    slice_cells: int,
 ):
-    """Whatever the slice size and the optional columns, the streamed index is
-    bit-for-bit the materialising loader's: same tiers, same order, same counts.
+    """Slice boundaries and each optional-column shape match the reference.
+
+    The richest shape covers the one-cell and one-slice extremes; the ordinary
+    slice covers every optional-column combination. Their Cartesian product
+    repeated the expensive one-cell scan without reaching another code path.
     """
-    writer = _writer([600, 700, 800, 900], with_eaf=with_eaf)
-    encoding = _encoding(writer, with_eaf)
+    seed_store, seed_reference, encoding, n_analyses = streaming_case_seeds[
+        (with_eaf, with_imputed)
+    ]
     if with_eaf:
         assert encoding.eaf.is_residual, "fixture must select a residual eaf plane"
-    store = _flush_store(tmp_path, "store", writer, encoding, imputed=with_imputed)
-
-    ref, n_analyses = _reference_tiers(store, encoding, TOP_HIT_THRESHOLDS, tmp_path / "ref.zarr")
+    store = shutil.copytree(seed_store, tmp_path / "store")
+    reference_path = shutil.copytree(seed_reference, tmp_path / "ref.zarr")
+    ref = zarr.open_group(str(reference_path), mode="r")
     build_ragged_top_hit_indexes(
         store, thresholds=TOP_HIT_THRESHOLDS, encoding=encoding, slice_cells=slice_cells
     )

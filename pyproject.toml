@@ -33,6 +33,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8",
+  "pytest-xdist>=3.6",
   "ruff>=0.6",
   "mypy>=1.10",
   "lizard>=1.17",
@@ -137,6 +138,7 @@ pytest = ">=8"
 ruff = ">=0.6"
 mypy = ">=1.10"
 lizard = ">=1.17"
+pytest-xdist = ">=3.6"
 
 # Separate from dev: rendering docs/benchmark-output/*.qmd needs Quarto's
 # Jupyter engine (pyyaml, a Jupyter kernel) and matplotlib for the plotting
@@ -156,7 +158,9 @@ dev = { features = ["dev"], solve-group = "default" }
 report = { features = ["report"], solve-group = "default" }
 
 [tool.pixi.feature.dev.tasks]
-test = "pytest"
+# Keep the suite hermetic and prevent tiny multiprocessing fixtures from
+# inheriting a many-threaded BLAS pool. Both otherwise vary with the host.
+test = "env PYTHONNOUSERSITE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 pytest -n auto --maxprocesses=4 --dist=loadfile"
 lint = "ruff check ."
 typecheck = "mypy opengwasdb"
 benchmark-indexed-subset = "python benchmarks/benchmark_indexed_subset.py"

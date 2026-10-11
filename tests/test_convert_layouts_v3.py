@@ -200,6 +200,68 @@ def _convert(source: Path, destination: Path, *, zarr_rel: str = "data.zarr") ->
     return destination
 
 
+@pytest.fixture(scope="session")
+def _dense_converted_seed(
+    tmp_path_factory: pytest.TempPathFactory, dense_completed: Path
+) -> Path:
+    root = tmp_path_factory.mktemp("dense-converted")
+    return _convert(dense_completed, root / "dense-rc-0.2.0.opengwasdb")
+
+
+@pytest.fixture
+def dense_converted(tmp_path: Path, _dense_converted_seed: Path) -> Path:
+    return shutil.copytree(_dense_converted_seed, tmp_path / "dense-rc-0.2.0.opengwasdb")
+
+
+@pytest.fixture(scope="session")
+def _ragged_observed_converted_seed(
+    tmp_path_factory: pytest.TempPathFactory, ragged_observed: Path
+) -> Path:
+    root = tmp_path_factory.mktemp("ragged-observed-converted")
+    return _convert(ragged_observed, root / "ragged-obs-0.2.0.opengwasdb")
+
+
+@pytest.fixture
+def ragged_observed_converted(
+    tmp_path: Path, _ragged_observed_converted_seed: Path
+) -> Path:
+    return shutil.copytree(
+        _ragged_observed_converted_seed, tmp_path / "ragged-obs-0.2.0.opengwasdb"
+    )
+
+
+@pytest.fixture(scope="session")
+def _ragged_completed_converted_seed(
+    tmp_path_factory: pytest.TempPathFactory, ragged_completed: Path
+) -> Path:
+    root = tmp_path_factory.mktemp("ragged-completed-converted")
+    return _convert(ragged_completed, root / "ragged-rc-0.2.0.opengwasdb")
+
+
+@pytest.fixture
+def ragged_completed_converted(
+    tmp_path: Path, _ragged_completed_converted_seed: Path
+) -> Path:
+    return shutil.copytree(
+        _ragged_completed_converted_seed, tmp_path / "ragged-rc-0.2.0.opengwasdb"
+    )
+
+
+@pytest.fixture(scope="session")
+def _hybrid_converted_seed(
+    tmp_path_factory: pytest.TempPathFactory, hybrid_source: Path
+) -> Path:
+    root = tmp_path_factory.mktemp("hybrid-converted")
+    return _convert(
+        hybrid_source, root / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
+    )
+
+
+@pytest.fixture
+def hybrid_converted(tmp_path: Path, _hybrid_converted_seed: Path) -> Path:
+    return shutil.copytree(_hybrid_converted_seed, tmp_path / "hybrid-0.2.0.opengwasdb")
+
+
 # ── identity: every query shape the layout supports, source vs converted ─────
 
 
@@ -270,26 +332,29 @@ def test_a_dense_store_with_fewer_analyses_than_the_chunk_converts(
     assert verify_conversion(small_dense_observed, converted) is None
 
 
-def test_dense_reference_completed_identity(dense_completed: Path, tmp_path: Path):
-    converted = _convert(dense_completed, tmp_path / "dense-rc-0.2.0.opengwasdb")
-    verify_conversion(dense_completed, converted)
-    _assert_identity(dense_completed, converted)
+def test_dense_reference_completed_identity(
+    dense_completed: Path, dense_converted: Path
+):
+    verify_conversion(dense_completed, dense_converted)
+    _assert_identity(dense_completed, dense_converted)
 
 
-def test_ragged_observed_identity(ragged_observed: Path, tmp_path: Path):
-    converted = _convert(ragged_observed, tmp_path / "ragged-obs-0.2.0.opengwasdb")
-    verify_conversion(ragged_observed, converted)
-    _assert_identity(ragged_observed, converted)
+def test_ragged_observed_identity(
+    ragged_observed: Path, ragged_observed_converted: Path
+):
+    verify_conversion(ragged_observed, ragged_observed_converted)
+    _assert_identity(ragged_observed, ragged_observed_converted)
 
 
-def test_ragged_reference_completed_identity(ragged_completed: Path, tmp_path: Path):
-    converted = _convert(ragged_completed, tmp_path / "ragged-rc-0.2.0.opengwasdb")
-    verify_conversion(ragged_completed, converted)
-    _assert_identity(ragged_completed, converted)
+def test_ragged_reference_completed_identity(
+    ragged_completed: Path, ragged_completed_converted: Path
+):
+    verify_conversion(ragged_completed, ragged_completed_converted)
+    _assert_identity(ragged_completed, ragged_completed_converted)
 
 
 def test_ragged_reference_completed_keeps_the_completion_arrays(
-    ragged_completed: Path, tmp_path: Path
+    ragged_completed: Path, ragged_completed_converted: Path
 ):
     """A Ragged RC conversion must carry the imputed mask and eaf_reference.
 
@@ -306,8 +371,7 @@ def test_ragged_reference_completed_keeps_the_completion_arrays(
         "fixture has no panel frequencies"
     )
 
-    converted = _convert(ragged_completed, tmp_path / "ragged-rc-0.2.0.opengwasdb")
-    converted_root = open_group(converted / "data.zarr", "r")
+    converted_root = open_group(ragged_completed_converted / "data.zarr", "r")
     assert np.array_equal(
         source_mask, np.asarray(converted_root["ragged"]["imputed"][:])
     )
@@ -343,53 +407,44 @@ def test_hybrid_fixture_spans_both_components(hybrid_source: Path):
     _assert_hybrid_spans_both_components(hybrid_source)
 
 
-def test_hybrid_identity(hybrid_source: Path, tmp_path: Path):
+def test_hybrid_identity(hybrid_source: Path, hybrid_converted: Path):
     _assert_hybrid_spans_both_components(hybrid_source)
-    converted = _convert(
-        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
-    )
-    _assert_hybrid_spans_both_components(converted)
-    verify_conversion(hybrid_source, converted)
-    _assert_identity(hybrid_source, converted)
-    assert json.loads((converted / "manifest.json").read_text())["format_version"] == "0.2.0"
-    nested = json.loads((converted / "dense" / "manifest.json").read_text())
+    _assert_hybrid_spans_both_components(hybrid_converted)
+    verify_conversion(hybrid_source, hybrid_converted)
+    _assert_identity(hybrid_source, hybrid_converted)
+    assert json.loads((hybrid_converted / "manifest.json").read_text())["format_version"] == "0.2.0"
+    nested = json.loads((hybrid_converted / "dense" / "manifest.json").read_text())
     assert nested["format_version"] == "0.2.0"
-    assert (converted / "dense" / "data.zarr" / "z" / "zarr.json").is_file()
+    assert (hybrid_converted / "dense" / "data.zarr" / "z" / "zarr.json").is_file()
 
 
-def test_a_hybrid_conversion_records_the_component_layout(hybrid_source: Path, tmp_path: Path):
+def test_a_hybrid_conversion_records_the_component_layout(hybrid_converted: Path):
     """The nested component records its layout, closing #245's reported gap."""
-    converted = _convert(
-        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
-    )
-    nested_manifest = json.loads((converted / "dense" / "manifest.json").read_text())
+    nested_manifest = json.loads((hybrid_converted / "dense" / "manifest.json").read_text())
     block = nested_manifest["provenance"]["dense"]
-    nested_root = open_group(converted / "dense" / "data.zarr", "r")
+    nested_root = open_group(hybrid_converted / "dense" / "data.zarr", "r")
     plane = nested_root["z"]
     assert block["chunk_shape"] == list(int(size) for size in plane.chunks)
     assert block["shard_shape"] == list(int(size) for size in plane.shards)
     assert block["zarr_format"] == 3
-    outer_manifest = json.loads((converted / "manifest.json").read_text())
+    outer_manifest = json.loads((hybrid_converted / "manifest.json").read_text())
     hybrid = outer_manifest["provenance"]["hybrid"]
     assert hybrid["chunk_shape"] == block["chunk_shape"]
     assert hybrid["shard_shape"] == block["shard_shape"]
-    assert validate_store(converted).ok
+    assert validate_store(hybrid_converted).ok
 
 
 def test_a_nested_component_with_a_disagreeing_layout_is_invalid(
-    hybrid_source: Path, tmp_path: Path
+    hybrid_converted: Path,
 ):
     """A nested manifest describing another shape is a silent failure class."""
-    converted = _convert(
-        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
-    )
-    path = converted / "dense" / "manifest.json"
+    path = hybrid_converted / "dense" / "manifest.json"
     data = json.loads(path.read_text())
     assert data["provenance"]["dense"]["chunk_shape"]
     data["provenance"]["dense"]["chunk_shape"] = [1, 1]
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    result = validate_store(converted)
+    result = validate_store(hybrid_converted)
 
     assert not result.ok
     assert any("manifest.json provenance.dense" in error for error in result.errors), result.errors
@@ -474,16 +529,13 @@ def _stale_outer_manifest_chunk_shape(store: Path) -> None:
 
 
 def test_a_hybrid_with_a_stale_outer_manifest_layout_is_invalid(
-    hybrid_source: Path, tmp_path: Path
+    hybrid_converted: Path,
 ):
     """The outer `provenance.hybrid` must describe the nested component's arrays."""
-    converted = _convert(
-        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
-    )
-    assert validate_store(converted).ok
-    _stale_outer_manifest_chunk_shape(converted)
+    assert validate_store(hybrid_converted).ok
+    _stale_outer_manifest_chunk_shape(hybrid_converted)
 
-    result = validate_store(converted)
+    result = validate_store(hybrid_converted)
 
     assert not result.ok
     assert any(
@@ -492,13 +544,10 @@ def test_a_hybrid_with_a_stale_outer_manifest_layout_is_invalid(
 
 
 def test_a_hybrid_with_a_stale_outer_index_blob_is_invalid(
-    hybrid_source: Path, tmp_path: Path
+    hybrid_converted: Path,
 ):
     """The outer `index.sqlite` dense blob must describe the nested arrays too."""
-    converted = _convert(
-        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
-    )
-    connection = open_store(converted).index_connection()
+    connection = open_store(hybrid_converted).index_connection()
     with connection:
         blob = json.loads(
             connection.execute("SELECT value FROM metadata WHERE key = 'dense'").fetchone()["value"]
@@ -510,7 +559,7 @@ def test_a_hybrid_with_a_stale_outer_index_blob_is_invalid(
         )
         connection.commit()
 
-    result = validate_store(converted)
+    result = validate_store(hybrid_converted)
 
     assert not result.ok
     assert any("index.sqlite dense metadata" in error for error in result.errors), result.errors
@@ -524,16 +573,15 @@ def _edit_outer_hybrid(store: Path, mutate: Callable[[dict], None]) -> None:
 
 
 def test_a_hybrid_with_a_stale_outer_zarr_format_is_invalid(
-    hybrid_source: Path, tmp_path: Path
+    hybrid_converted: Path,
 ):
     """The outer recording's `zarr_format` must agree with the nested component."""
-    converted = _convert(
-        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
+    assert validate_store(hybrid_converted).ok
+    _edit_outer_hybrid(
+        hybrid_converted, lambda block: block.__setitem__("zarr_format", 2)
     )
-    assert validate_store(converted).ok
-    _edit_outer_hybrid(converted, lambda block: block.__setitem__("zarr_format", 2))
 
-    result = validate_store(converted)
+    result = validate_store(hybrid_converted)
 
     assert not result.ok
     assert any(
@@ -542,16 +590,13 @@ def test_a_hybrid_with_a_stale_outer_zarr_format_is_invalid(
 
 
 def test_a_hybrid_with_the_outer_compressor_removed_is_invalid(
-    hybrid_source: Path, tmp_path: Path
+    hybrid_converted: Path,
 ):
     """`provenance.hybrid.compressor` is required by spec §10a, not optional."""
-    converted = _convert(
-        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
-    )
-    assert validate_store(converted).ok
-    _edit_outer_hybrid(converted, lambda block: block.pop("compressor"))
+    assert validate_store(hybrid_converted).ok
+    _edit_outer_hybrid(hybrid_converted, lambda block: block.pop("compressor"))
 
-    result = validate_store(converted)
+    result = validate_store(hybrid_converted)
 
     assert not result.ok
     assert any(
@@ -584,14 +629,13 @@ def _set_manifest_dense_zarr_format(store: Path, value: Any) -> None:
 
 
 def test_a_0_2_0_dense_component_without_its_manifest_recording_is_invalid(
-    dense_completed: Path, tmp_path: Path
+    dense_converted: Path,
 ):
     """`provenance.dense` is required for 0.2.0, not skipped when absent."""
-    converted = _convert(dense_completed, tmp_path / "dense-rc-0.2.0.opengwasdb")
-    assert validate_store(converted).ok
-    _drop_manifest_dense_provenance(converted)
+    assert validate_store(dense_converted).ok
+    _drop_manifest_dense_provenance(dense_converted)
 
-    result = validate_store(converted)
+    result = validate_store(dense_converted)
 
     assert not result.ok
     assert any(
@@ -600,14 +644,13 @@ def test_a_0_2_0_dense_component_without_its_manifest_recording_is_invalid(
 
 
 def test_a_0_2_0_dense_component_without_its_index_blob_is_invalid(
-    dense_completed: Path, tmp_path: Path
+    dense_converted: Path,
 ):
     """The `index.sqlite` dense blob is required for 0.2.0, not skipped when absent."""
-    converted = _convert(dense_completed, tmp_path / "dense-rc-0.2.0.opengwasdb")
-    assert validate_store(converted).ok
-    _drop_index_dense_blob(converted)
+    assert validate_store(dense_converted).ok
+    _drop_index_dense_blob(dense_converted)
 
-    result = validate_store(converted)
+    result = validate_store(dense_converted)
 
     assert not result.ok
     assert any(
@@ -618,14 +661,13 @@ def test_a_0_2_0_dense_component_without_its_index_blob_is_invalid(
 
 @pytest.mark.parametrize("bad", ["3", 3.5, "bogus", True])
 def test_a_bad_zarr_format_value_is_a_validation_error_not_an_exception(
-    dense_completed: Path, bad: Any, tmp_path: Path
+    dense_converted: Path, bad: Any
 ):
     """Only the integers 2 and 3 are valid; no lossy `int(...)` coercion."""
-    converted = _convert(dense_completed, tmp_path / "dense-rc-0.2.0.opengwasdb")
-    assert validate_store(converted).ok
-    _set_manifest_dense_zarr_format(converted, bad)
+    assert validate_store(dense_converted).ok
+    _set_manifest_dense_zarr_format(dense_converted, bad)
 
-    result = validate_store(converted)  # must not raise
+    result = validate_store(dense_converted)  # must not raise
 
     assert not result.ok
     assert any("zarr_format" in error for error in result.errors), result.errors
@@ -653,9 +695,17 @@ def _completion_rollups(store: Path) -> dict[str, list[str]]:
     return {column: [str(row.get(column, "")) for row in rows] for column in columns}
 
 
-@pytest.mark.parametrize("fixture", ["dense_completed", "ragged_completed"])
+@pytest.mark.parametrize(
+    ("source_fixture", "converted_fixture"),
+    [
+        ("dense_completed", "dense_converted"),
+        ("ragged_completed", "ragged_completed_converted"),
+    ],
+)
 def test_completion_quality_and_rollups_survive_the_conversion(
-    fixture: str, request: pytest.FixtureRequest, tmp_path: Path
+    source_fixture: str,
+    converted_fixture: str,
+    request: pytest.FixtureRequest,
 ):
     """External completion data is walked, not only the Zarr arrays.
 
@@ -664,7 +714,7 @@ def test_completion_quality_and_rollups_survive_the_conversion(
     pass it.  The source is asserted to carry the data first, so the equality is
     not vacuous.
     """
-    source = request.getfixturevalue(fixture)
+    source = request.getfixturevalue(source_fixture)
     source_quality = _completion_quality(source)
     source_rollups = _completion_rollups(source)
     assert source_quality, "fixture has no completion_quality rows"
@@ -672,7 +722,7 @@ def test_completion_quality_and_rollups_survive_the_conversion(
         "fixture has no completion rollups"
     )
 
-    converted = _convert(source, tmp_path / "converted.opengwasdb")
+    converted = request.getfixturevalue(converted_fixture)
 
     assert _completion_quality(converted) == source_quality
     assert _completion_rollups(converted) == source_rollups
@@ -688,28 +738,22 @@ def _set_format_version(manifest: Path, version: str) -> None:
 
 
 def test_a_hybrid_with_an_unconverted_outer_manifest_is_invalid(
-    hybrid_source: Path, tmp_path: Path
+    hybrid_converted: Path,
 ):
-    converted = _convert(
-        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
-    )
-    _set_format_version(converted / "manifest.json", "0.1.0")
+    _set_format_version(hybrid_converted / "manifest.json", "0.1.0")
 
-    result = validate_store(converted)
+    result = validate_store(hybrid_converted)
 
     assert not result.ok
     assert any("Zarr v3 metadata" in error for error in result.errors), result.errors
 
 
 def test_a_hybrid_with_an_unconverted_nested_manifest_is_invalid(
-    hybrid_source: Path, tmp_path: Path
+    hybrid_converted: Path,
 ):
-    converted = _convert(
-        hybrid_source, tmp_path / "hybrid-0.2.0.opengwasdb", zarr_rel="dense/data.zarr"
-    )
-    _set_format_version(converted / "dense" / "manifest.json", "0.1.0")
+    _set_format_version(hybrid_converted / "dense" / "manifest.json", "0.1.0")
 
-    result = validate_store(converted)
+    result = validate_store(hybrid_converted)
 
     assert not result.ok
     assert any(
@@ -786,7 +830,7 @@ def test_an_unknown_group_in_the_hybrid_overflow_fails(hybrid_source: Path, tmp_
 
 
 def test_dense_reference_completed_records_the_effective_chunk(
-    dense_completed: Path, tmp_path: Path
+    dense_converted: Path,
 ):
     """The completed source's recorded chunk is rewritten to the axis written.
 
@@ -794,9 +838,8 @@ def test_dense_reference_completed_records_the_effective_chunk(
     carry the effective recording, so the converted manifest's `chunk_shape` is
     the new inner chunk, and it matches the arrays.
     """
-    converted = _convert(dense_completed, tmp_path / "dense-rc-0.2.0.opengwasdb")
-    manifest = json.loads((converted / "manifest.json").read_text())
-    root = open_group(converted / "data.zarr", "r")
+    manifest = json.loads((dense_converted / "manifest.json").read_text())
+    root = open_group(dense_converted / "data.zarr", "r")
     planes = [name for name in ("z", "se", "eaf", "imputed") if name in root]
     assert {"z", "se", "imputed"} <= set(planes), planes
     for name in planes:
@@ -806,7 +849,7 @@ def test_dense_reference_completed_records_the_effective_chunk(
         assert manifest["provenance"]["dense"]["shard_shape"] == list(
             int(size) for size in root[name].shards
         ), name
-    assert validate_store(converted).ok
+    assert validate_store(dense_converted).ok
 
 
 # ── the Ragged and Overflow shard policy, decided here ───────────────────────

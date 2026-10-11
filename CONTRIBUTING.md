@@ -134,7 +134,7 @@ how a reader gets from a line of code to the reasoning behind it.
 ```bash
 pixi run lint
 pixi run typecheck
-pixi run -e dev pytest
+pixi run -e dev test
 ```
 
 Both carry pre-existing findings. **The rule is that a change adds none** —
@@ -167,7 +167,10 @@ unreviewable. Clearing a baseline is welcome as a change of its own.
 
 ## Tests
 
-`pixi run -e dev pytest`. Every behavioural change comes with a test.
+`pixi run -e dev test`. Every behavioural change comes with a test. Use the task rather
+than invoking `pytest` directly: it isolates the Pixi environment from user-site packages and
+limits native numerical thread pools so fork-based integration fixtures do not inherit dozens
+of idle BLAS threads.
 
 ### A test that cannot fail is worse than no test
 

@@ -193,6 +193,13 @@ def _dense_row_by_alid(store: Path) -> dict[str, int]:
     return rows
 
 
+@pytest.fixture(scope="module")
+def residual_hybrid_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The shared residual control is immutable and identical in three tests."""
+    root = tmp_path_factory.mktemp("shared-se-residual-hybrid")
+    return _build_hybrid(root, "control", [dict(), dict()])
+
+
 # -- one component alone vetoes residual eligibility --------------------------
 
 
@@ -209,7 +216,11 @@ def _dense_row_by_alid(store: Path) -> dict[str, int]:
     ids=["dense-veto", "overflow-veto"],
 )
 def test_one_component_alone_vetoes_residual_and_both_persist_float16(
-    tmp_path: Path, drop_eaf_dense: bool, veto_alid: str, codeable_alid: str
+    tmp_path: Path,
+    residual_hybrid_store: Path,
+    drop_eaf_dense: bool,
+    veto_alid: str,
+    codeable_alid: str,
 ) -> None:
     """Issue #141 AC3: failure of either component's eligibility gate persists
     float16 for *both* components.
@@ -224,7 +235,7 @@ def test_one_component_alone_vetoes_residual_and_both_persist_float16(
     """
     veto_config = {"drop_eaf_at": veto_alid}
     # The two fixtures are identical except for the vetoed cell's AF field.
-    control = _build_hybrid(tmp_path, "control", [dict(), dict()])
+    control = residual_hybrid_store
     veto = _build_hybrid(tmp_path, "veto", [veto_config, dict()])
 
     # AC9 "residual eligibility": the control reaches the residual plan end to
@@ -421,7 +432,9 @@ def test_residual_hybrid_missing_cells_stay_missing(tmp_path: Path) -> None:
         assert np.isfinite(hits["se"]).all()
 
 
-def test_residual_hybrid_query_shapes_cover_both_components(tmp_path: Path) -> None:
+def test_residual_hybrid_query_shapes_cover_both_components(
+    residual_hybrid_store: Path,
+) -> None:
     """Issue #142 AC3: Analysis/PheWAS/lookup/range/top-hits over one residual Hybrid.
 
     The Hybrid facade unions its Dense Component with its Ragged Overflow, so
@@ -432,7 +445,7 @@ def test_residual_hybrid_query_shapes_cover_both_components(tmp_path: Path) -> N
     the fixture put in -- a query that returned an int8 code for any cell, on
     either component, fails the value comparison.
     """
-    store = _build_hybrid(tmp_path, "matrix142", [dict(), dict()])
+    store = residual_hybrid_store
     encoding = StoreManifest.load(store)
     assert encoding.encoding.se.is_residual
     assert encoding.encoding.se == StoreManifest.load(store / "dense").encoding.se

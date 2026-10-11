@@ -126,59 +126,116 @@ def _source_without_cohort_eaf(store: Path) -> Path:
     return store
 
 
-@pytest.fixture
-def signal_panel_npz_only(tmp_path: Path) -> Path:
-    """The AR(1) panel `test_dense_completion` uses, built in this test's tmp dir."""
-    return write_signal_panel(tmp_path / "signal_panel")
+@pytest.fixture(scope="module")
+def _signal_panel_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return write_signal_panel(tmp_path_factory.mktemp("indexed-completion-panel") / "signal_panel")
 
 
 @pytest.fixture
-def cohort_eaf_store(tmp_path: Path) -> Path:
-    return _source_with_cohort_eaf(tmp_path / "cohort-obs.opengwasdb")
+def signal_panel_npz_only(tmp_path: Path, _signal_panel_seed: Path) -> Path:
+    """Give tests a private copy of the AR(1) panel used by completion."""
+    return shutil.copytree(_signal_panel_seed, tmp_path / "signal_panel")
+
+
+@pytest.fixture(scope="module")
+def _cohort_eaf_store_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("indexed-completion-cohort")
+    return _source_with_cohort_eaf(root / "cohort-obs.opengwasdb")
 
 
 @pytest.fixture
-def reference_only_store(tmp_path: Path) -> Path:
-    return _source_without_cohort_eaf(tmp_path / "reference-only-obs.opengwasdb")
+def cohort_eaf_store(tmp_path: Path, _cohort_eaf_store_seed: Path) -> Path:
+    return shutil.copytree(_cohort_eaf_store_seed, tmp_path / "cohort-obs.opengwasdb")
+
+
+@pytest.fixture(scope="module")
+def _reference_only_store_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("indexed-completion-reference-only")
+    return _source_without_cohort_eaf(root / "reference-only-obs.opengwasdb")
 
 
 @pytest.fixture
-def completed_store(
-    tmp_path: Path,
-    cohort_eaf_store: Path,
-    signal_panel_npz_only: Path,
-) -> Path:
-    """A completed release whose source reported frequencies (plus reference EAF)."""
-    dst = tmp_path / "cohort-comp.opengwasdb"
+def reference_only_store(tmp_path: Path, _reference_only_store_seed: Path) -> Path:
+    return shutil.copytree(
+        _reference_only_store_seed, tmp_path / "reference-only-obs.opengwasdb"
+    )
+
+
+def _copy_completion_inputs(
+    root: Path, source_seed: Path, source_name: str, panel_seed: Path
+) -> tuple[Path, Path]:
+    """Copy immutable inputs before a module-scoped completion build."""
+    source = shutil.copytree(source_seed, root / source_name)
+    panel = shutil.copytree(panel_seed, root / "signal_panel")
+    return source, panel
+
+
+def _complete_seed(
+    source: Path,
+    dst: Path,
+    panel: Path,
+    *,
+    impute_analysis_ids: set[str] | None = None,
+) -> None:
+    """Complete a shared seed with the settings common to this module."""
     complete_dense_store(
-        cohort_eaf_store,
+        source,
         dst,
-        signal_panel_npz_only,
+        panel,
         ancestry="EUR",
         min_cor=0.0,
         release_id="comp-v1",
-        impute_analysis_ids={"a1"},
+        impute_analysis_ids=impute_analysis_ids,
     )
+
+
+@pytest.fixture(scope="module")
+def _completed_store_seed(
+    tmp_path_factory: pytest.TempPathFactory,
+    _cohort_eaf_store_seed: Path,
+    _signal_panel_seed: Path,
+) -> Path:
+    """Build the completed release once; tests mutate isolated copies."""
+    root = tmp_path_factory.mktemp("indexed-completion-completed")
+    source, panel = _copy_completion_inputs(
+        root, _cohort_eaf_store_seed, "cohort-obs.opengwasdb", _signal_panel_seed
+    )
+    dst = root / "cohort-comp.opengwasdb"
+    _complete_seed(source, dst, panel, impute_analysis_ids={"a1"})
+    return dst
+
+
+@pytest.fixture
+def completed_store(tmp_path: Path, _completed_store_seed: Path) -> Path:
+    return shutil.copytree(_completed_store_seed, tmp_path / "cohort-comp.opengwasdb")
+
+
+@pytest.fixture(scope="module")
+def _reference_only_completed_store_seed(
+    tmp_path_factory: pytest.TempPathFactory,
+    _reference_only_store_seed: Path,
+    _signal_panel_seed: Path,
+) -> Path:
+    """Build the reference-only completed release once."""
+    root = tmp_path_factory.mktemp("indexed-completion-reference-completed")
+    source, panel = _copy_completion_inputs(
+        root,
+        _reference_only_store_seed,
+        "reference-only-obs.opengwasdb",
+        _signal_panel_seed,
+    )
+    dst = root / "reference-only-comp.opengwasdb"
+    _complete_seed(source, dst, panel)
     return dst
 
 
 @pytest.fixture
 def reference_only_completed_store(
-    tmp_path: Path,
-    reference_only_store: Path,
-    signal_panel_npz_only: Path,
+    tmp_path: Path, _reference_only_completed_store_seed: Path
 ) -> Path:
-    """A completed release whose source reported no frequency: no `eaf` plane."""
-    dst = tmp_path / "reference-only-comp.opengwasdb"
-    complete_dense_store(
-        reference_only_store,
-        dst,
-        signal_panel_npz_only,
-        ancestry="EUR",
-        min_cor=0.0,
-        release_id="comp-v1",
+    return shutil.copytree(
+        _reference_only_completed_store_seed, tmp_path / "reference-only-comp.opengwasdb"
     )
-    return dst
 
 
 def _write_alid_list(tmp_path: Path, name: str = "hm3.alid.txt") -> Path:
