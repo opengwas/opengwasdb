@@ -13,7 +13,7 @@ import numpy as np
 from opengwasdb.build.observed import build_dense_observed_from_sources
 from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
 from opengwasdb.layouts.dense.overview import write_overview_html
-from opengwasdb.layouts.dense.rho import build_dense_rho
+from opengwasdb.layouts.dense.rho import build_dense_rho, write_rho_group
 from opengwasdb.model.analyses import AnalysesTable, read_analyses
 
 
@@ -394,11 +394,35 @@ def test_rho_tab_degrades_gracefully_with_two_analyses(tmp_path):
 
 
 def test_rho_tab_heatmap_caps_at_300_traits(tmp_path):
-    # A store with more than 300 Analyses -- the heatmap must cap, not embed
-    # a 300+ x 300+ submatrix. Few variants per analysis (fast to build);
-    # min_nulls=1 so the pairs aren't all NaN.
-    store = _build_rho_store(tmp_path, n_analyses=310, n_variants=30, min_nulls=1)
-    table = read_analyses(store / "analyses.tsv")
+    # This is a renderer boundary test, not another test of the Rho estimator.
+    # Write its persisted input directly: estimating all 47,895 pairs used to
+    # account for most of this module's runtime without exercising the cap.
+    n_analyses = 310
+    n_pairs = n_analyses * (n_analyses - 1) // 2
+    store = tmp_path / "rho-store.opengwasdb"
+    store.mkdir()
+    _write_manifest(store)
+    write_rho_group(
+        store,
+        np.linspace(-0.8, 0.8, n_pairs, dtype=np.float32),
+        np.full(n_pairs, 30, dtype=np.int32),
+        np.arange(30, dtype=np.int32),
+        z_thresh=1.0,
+        min_nulls=1,
+        window_bp=50,
+        n_analyses=n_analyses,
+    )
+    table = AnalysesTable(
+        fieldnames=("analysis_index", "analysis_id", "analysis_label"),
+        rows=tuple(
+            {
+                "analysis_index": str(index),
+                "analysis_id": f"a{index}",
+                "analysis_label": f"Trait {index}",
+            }
+            for index in range(n_analyses)
+        ),
+    )
 
     content = write_overview_html(store, table).read_text(encoding="utf-8")
     section = _rho_section(content)

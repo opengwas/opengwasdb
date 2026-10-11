@@ -142,9 +142,8 @@ def rich_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return build_rich_store(tmp_path_factory.mktemp("indexed") / "rich.opengwasdb")
 
 
-@pytest.fixture
-def variant_list(tmp_path: Path) -> Path:
-    """An unsorted list of present ALIDs, one absent one, and a blank line."""
+def _write_standard_variant_list(path: Path) -> Path:
+    """Write the shared unsorted list with present, absent, and blank entries."""
     alids = [
         alid(SE_EXCEPTION_VARIANT),
         alid(OVERFLOW_VARIANT),
@@ -154,9 +153,30 @@ def variant_list(tmp_path: Path) -> Path:
         alid(42),
         ABSENT_ALID,
     ]
-    path = tmp_path / "subset.alid.txt"
     path.write_text("\n".join(alids) + "\n\n", encoding="utf-8")
     return path
+
+
+@pytest.fixture
+def variant_list(tmp_path: Path) -> Path:
+    return _write_standard_variant_list(tmp_path / "subset.alid.txt")
+
+
+@pytest.fixture(scope="module")
+def _indexed_store_seed(
+    tmp_path_factory: pytest.TempPathFactory, rich_store: Path
+) -> Path:
+    root = tmp_path_factory.mktemp("indexed-subset-published")
+    store = shutil.copytree(rich_store, root / "store.opengwasdb")
+    variant_list = _write_standard_variant_list(root / "subset.alid.txt")
+    _build(store, "hm3", variant_list)
+    return store
+
+
+@pytest.fixture
+def indexed_store(tmp_path: Path, _indexed_store_seed: Path) -> Path:
+    """A private copy of the common published subset used by corruption tests."""
+    return shutil.copytree(_indexed_store_seed, tmp_path / "store.opengwasdb")
 
 
 def _root(store: Path) -> zarr.Group:
@@ -295,13 +315,8 @@ def test_build_rejects_zero_match(tmp_path: Path, rich_store: Path) -> None:
 # ── Build ───────────────────────────────────────────────────────────────────
 
 
-def test_build_stores_variant_indices_in_store_order(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
-
-    subset = open_indexed_subset(store, "hm3")
+def test_build_stores_variant_indices_in_store_order(indexed_store: Path) -> None:
+    subset = open_indexed_subset(indexed_store, "hm3")
     assert subset.variant_index.tolist() == [OVERFLOW_VARIANT, MISSING_VARIANT,
                                              EAF_EXCEPTION_VARIANT, SE_EXCEPTION_VARIANT,
                                              42, 200]
@@ -313,24 +328,18 @@ def test_build_stores_variant_indices_in_store_order(
 
 
 def test_built_index_carries_overflow_and_both_exception_tables(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path,
 ) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
-    subset = open_indexed_subset(store, "hm3")
+    subset = open_indexed_subset(indexed_store, "hm3")
     assert subset.n_z_overflow > 0, "the fixture must force Z overflow into the index"
     assert subset.n_eaf_exceptions > 0, "the fixture must force an EAF exception"
     assert subset.n_se_exceptions > 0, "the fixture must force an SE exception"
 
 
-def test_decoded_index_values_equal_the_primary_planes(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
-    subset = open_indexed_subset(store, "hm3")
-    encoding = StoreManifest.load(store).encoding
-    root = _root(store)
+def test_decoded_index_values_equal_the_primary_planes(indexed_store: Path) -> None:
+    subset = open_indexed_subset(indexed_store, "hm3")
+    encoding = StoreManifest.load(indexed_store).encoding
+    root = _root(indexed_store)
     z_plane = DenseZPlane.open(root, encoding)
     eaf_plane = DenseEafPlane.open(root, encoding)
     se_plane = DenseSePlane.open(root, encoding)
@@ -347,7 +356,7 @@ def test_decoded_index_values_equal_the_primary_planes(
         np.testing.assert_array_equal(decoded.z, primary_z, err_msg=f"z col {analysis_index}")
         np.testing.assert_array_equal(decoded.se, primary_se, err_msg=f"se col {analysis_index}")
         np.testing.assert_array_equal(decoded.eaf, primary_eaf, err_msg=f"eaf col {analysis_index}")
-    assert validate_store(store).ok
+    assert validate_store(indexed_store).ok
 
 
 def test_band_size_does_not_change_the_index(
@@ -411,10 +420,9 @@ def test_interrupted_build_leaves_no_published_group_or_temp(
 
 
 def test_failed_overwrite_preserves_the_published_group_byte_for_byte(
-    tmp_path: Path, rich_store: Path, variant_list: Path, monkeypatch: pytest.MonkeyPatch
+    indexed_store: Path, variant_list: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     published = store / "data.zarr" / INDEXED_SUBSETS_GROUP / "hm3"
     before = _digest(published)
 
@@ -463,10 +471,9 @@ def test_same_name_concurrent_builds_yield_one_winner(
 
 
 def test_no_overwrite_build_raises_the_domain_exists_error(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path, variant_list: Path
 ) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     with pytest.raises(IndexedSubsetExistsError):
         _build(store, "hm3", variant_list)
 
@@ -561,12 +568,9 @@ def test_different_name_concurrent_builds_do_not_touch_each_other(
     assert validate_store(store).ok
 
 
-def test_removal_takes_the_publication_lock(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
+def test_removal_takes_the_publication_lock(indexed_store: Path) -> None:
     """A removal cannot run while a publication holds the same destination lock."""
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     dest = store / "data.zarr" / INDEXED_SUBSETS_GROUP / "hm3"
     removed = threading.Event()
 
@@ -587,10 +591,9 @@ def test_removal_takes_the_publication_lock(
 
 
 def test_concurrent_removes_of_one_subset_have_one_winner(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path,
 ) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     outcomes: list[bool] = []
     errors: list[BaseException] = []
     barrier = threading.Barrier(2)
@@ -616,10 +619,9 @@ def test_concurrent_removes_of_one_subset_have_one_winner(
 
 
 def test_removing_the_derived_group_leaves_a_valid_store_with_unchanged_queries(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path,
 ) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     with query_store(store) as query:
         before = query.analysis("a0")
 
@@ -1125,11 +1127,8 @@ def test_build_sample_misses_isolated_corruption_but_standalone_refuses(
     )
 
 
-def test_validation_rejects_a_temporary_group(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+def test_validation_rejects_a_temporary_group(indexed_store: Path) -> None:
+    store = indexed_store
     namespace = zarr.open_group(
         str(store / "data.zarr" / INDEXED_SUBSETS_GROUP), mode="r+"
     )
@@ -1140,10 +1139,9 @@ def test_validation_rejects_a_temporary_group(
 
 
 def test_validation_rejects_an_unknown_entry_in_the_namespace(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path,
 ) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     (store / "data.zarr" / INDEXED_SUBSETS_GROUP / "stray.txt").write_text(
         "not a group", encoding="utf-8"
     )
@@ -1152,10 +1150,9 @@ def test_validation_rejects_an_unknown_entry_in_the_namespace(
 
 
 def test_validation_rejects_an_unknown_array_in_a_subset(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path,
 ) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     group = _index_group(store, "hm3")
     group.create_array(
         "surprise", shape=(1,), chunks=(1,), shards=(1,), dtype="int16"
@@ -1164,11 +1161,8 @@ def test_validation_rejects_an_unknown_array_in_a_subset(
     assert any("surprise" in error for error in errors), errors
 
 
-def test_validation_rejects_a_stale_release_identity(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+def test_validation_rejects_a_stale_release_identity(indexed_store: Path) -> None:
+    store = indexed_store
     group = _index_group(store, "hm3")
     group.attrs["source_release_id"] = "some-other-release"
     errors = _errors_for(store)
@@ -1176,10 +1170,9 @@ def test_validation_rejects_a_stale_release_identity(
 
 
 def test_validation_rejects_unsorted_and_duplicated_variant_indices(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path,
 ) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     group = _index_group(store, "hm3")
     group["variant_index"][:] = np.array([5, 5, 11, 20, 30, 42], dtype="int32")
     errors = _errors_for(store)
@@ -1187,10 +1180,9 @@ def test_validation_rejects_unsorted_and_duplicated_variant_indices(
 
 
 def test_validation_rejects_out_of_bounds_variant_indices(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path,
 ) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     group = _index_group(store, "hm3")
     values = np.asarray(group["variant_index"][:])
     values[-1] = 10_000_000
@@ -1199,11 +1191,8 @@ def test_validation_rejects_out_of_bounds_variant_indices(
     assert any("bounds" in error for error in errors), errors
 
 
-def test_validation_rejects_a_wrong_plane_shape(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+def test_validation_rejects_a_wrong_plane_shape(indexed_store: Path) -> None:
+    store = indexed_store
     group = _index_group(store, "hm3")
     del group["z"]
     group.create_array("z", shape=(N_ANALYSES, 3), chunks=(1, 3), shards=(1, 3), dtype="int16")
@@ -1211,11 +1200,8 @@ def test_validation_rejects_a_wrong_plane_shape(
     assert any("shape" in error for error in errors), errors
 
 
-def test_validation_rejects_a_corrupted_value(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+def test_validation_rejects_a_corrupted_value(indexed_store: Path) -> None:
+    store = indexed_store
     group = _index_group(store, "hm3")
     values = np.asarray(group["z"][:])
     values[0, 0] = values[0, 0] + 1
@@ -1224,22 +1210,16 @@ def test_validation_rejects_a_corrupted_value(
     assert any("z values" in error for error in errors), errors
 
 
-def test_validation_rejects_a_missing_overflow_table(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+def test_validation_rejects_a_missing_overflow_table(indexed_store: Path) -> None:
+    store = indexed_store
     group = _index_group(store, "hm3")
     del group["z_overflow_index"]
     errors = _errors_for(store)
     assert any("z_overflow_index" in error for error in errors), errors
 
 
-def test_validation_rejects_a_missing_eaf_baseline(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+def test_validation_rejects_a_missing_eaf_baseline(indexed_store: Path) -> None:
+    store = indexed_store
     group = _index_group(store, "hm3")
     del group["eaf_baseline"]
     errors = _errors_for(store)
@@ -1247,10 +1227,9 @@ def test_validation_rejects_a_missing_eaf_baseline(
 
 
 def test_validation_rejects_z_se_missingness_disagreement(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path,
 ) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     group = _index_group(store, "hm3")
     # Mark one present z cell missing without touching se.
     values = np.asarray(group["z"][:])
@@ -1264,23 +1243,17 @@ def test_validation_rejects_z_se_missingness_disagreement(
     assert any("missingness" in error for error in errors), errors
 
 
-def test_invalid_group_attributes_fail_validation(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+def test_invalid_group_attributes_fail_validation(indexed_store: Path) -> None:
+    store = indexed_store
     group = _index_group(store, "hm3")
     del group.attrs["input_sha256"]
     errors = _errors_for(store)
     assert any("input_sha256" in error for error in errors), errors
 
 
-def test_validation_rejects_an_explicit_empty_group(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
+def test_validation_rejects_an_explicit_empty_group(indexed_store: Path) -> None:
     """An empty directory-turned-group is not a published subset."""
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     namespace = zarr.open_group(
         str(store / "data.zarr" / INDEXED_SUBSETS_GROUP), mode="r+"
     )
@@ -1290,12 +1263,9 @@ def test_validation_rejects_an_explicit_empty_group(
     assert any("explicit empty group" in error for error in errors), errors
 
 
-def test_validation_rejects_a_zero_variant_subset(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
+def test_validation_rejects_a_zero_variant_subset(indexed_store: Path) -> None:
     """A zero-length Variant Index is rejected, not accepted as an empty index."""
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     group = _index_group(store, "hm3")
     del group["variant_index"]
     group.create_array(
@@ -1307,12 +1277,9 @@ def test_validation_rejects_a_zero_variant_subset(
     assert any("contains no variants" in error for error in errors), errors
 
 
-def test_remove_refuses_a_consolidated_namespace(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
+def test_remove_refuses_a_consolidated_namespace(indexed_store: Path) -> None:
     """A raw rename would leave the consolidated record listing the deleted group."""
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     zarr.consolidate_metadata(str(store / "data.zarr"), zarr_format=3)
     published = store / "data.zarr" / INDEXED_SUBSETS_GROUP / "hm3"
     before = _digest(published)
@@ -1331,12 +1298,9 @@ def test_remove_refuses_a_consolidated_namespace(
     assert "hm3" in reread[INDEXED_SUBSETS_GROUP]
 
 
-def test_open_refuses_a_subset_from_another_release(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
+def test_open_refuses_a_subset_from_another_release(indexed_store: Path) -> None:
     """The read seam, which #265 builds on, rejects a stale index itself."""
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     group = _index_group(store, "hm3")
     group.attrs["source_release_id"] = "another-release"
 
@@ -1344,11 +1308,8 @@ def test_open_refuses_a_subset_from_another_release(
         open_indexed_subset(store, "hm3")
 
 
-def test_validation_rejects_a_corrupted_se_value(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+def test_validation_rejects_a_corrupted_se_value(indexed_store: Path) -> None:
+    store = indexed_store
     group = _index_group(store, "hm3")
     values = np.asarray(group["se"][:])
     values[0, 0] = values[0, 0] + 1
@@ -1357,11 +1318,8 @@ def test_validation_rejects_a_corrupted_se_value(
     assert any("se values" in error for error in errors), errors
 
 
-def test_validation_rejects_a_corrupted_eaf_value(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+def test_validation_rejects_a_corrupted_eaf_value(indexed_store: Path) -> None:
+    store = indexed_store
     group = _index_group(store, "hm3")
     values = np.asarray(group["eaf"][:])
     values[0, 0] = values[0, 0] + 1
@@ -1370,11 +1328,8 @@ def test_validation_rejects_a_corrupted_eaf_value(
     assert any("eaf values" in error for error in errors), errors
 
 
-def test_validation_rejects_a_corrupted_eaf_baseline(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+def test_validation_rejects_a_corrupted_eaf_baseline(indexed_store: Path) -> None:
+    store = indexed_store
     group = _index_group(store, "hm3")
     baseline = np.asarray(group["eaf_baseline"][:])
     baseline[0] = baseline[0] + 0.1
@@ -1383,11 +1338,8 @@ def test_validation_rejects_a_corrupted_eaf_baseline(
     assert errors, "a corrupted baseline must fail validation"
 
 
-def test_validation_rejects_a_wrong_plane_dtype(
-    tmp_path: Path, rich_store: Path, variant_list: Path
-) -> None:
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+def test_validation_rejects_a_wrong_plane_dtype(indexed_store: Path) -> None:
+    store = indexed_store
     group = _index_group(store, "hm3")
     n_analyses, n_subset = np.asarray(group["se"].shape)
     del group["se"]
@@ -1446,11 +1398,10 @@ def _recreate_array(
 
 
 def test_validation_rejects_a_plane_chunk_that_spans_analyses(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path,
 ) -> None:
     """A chunk wider than one Analysis defeats the index's narrow-read contract."""
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     group = _index_group(store, "hm3")
     n_analyses, n_subset = (int(size) for size in group["z"].shape)
     _recreate_array(
@@ -1467,11 +1418,10 @@ def test_validation_rejects_a_plane_chunk_that_spans_analyses(
 
 
 def test_validation_rejects_a_plane_shard_that_spans_analyses(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path,
 ) -> None:
     """A shard spanning Analyses makes a one-Analysis read decompress another's cells."""
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     group = _index_group(store, "hm3")
     n_analyses, n_subset = (int(size) for size in group["z"].shape)
     _recreate_array(
@@ -1485,11 +1435,10 @@ def test_validation_rejects_a_plane_shard_that_spans_analyses(
 
 
 def test_validation_rejects_a_mis_chunked_per_variant_side_array(
-    tmp_path: Path, rich_store: Path, variant_list: Path
+    indexed_store: Path,
 ) -> None:
     """A per-variant side array's chunk is part of the format, not a free choice."""
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     group = _index_group(store, "hm3")
     n_subset = int(group.attrs["n_subset_variants"])
     _recreate_array(group, "eaf_baseline", chunks=(1,), shards=(n_subset,))
@@ -1507,11 +1456,10 @@ def test_validation_rejects_a_mis_chunked_per_variant_side_array(
 
 @pytest.mark.parametrize("dtype", ["float32", "int64"])
 def test_validation_requires_an_int32_variant_index(
-    tmp_path: Path, rich_store: Path, variant_list: Path, dtype: str
+    indexed_store: Path, dtype: str
 ) -> None:
     """The Variant Index is stored int32; a widened or float axis is refused."""
-    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
-    _build(store, "hm3", variant_list)
+    store = indexed_store
     group = _index_group(store, "hm3")
     n_subset = int(group.attrs["n_subset_variants"])
     _recreate_array(

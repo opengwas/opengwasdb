@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import shutil as file_ops
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,7 @@ from residual_fixtures import write_gwas_vcf_with_eaf
 
 from opengwasdb.layouts.dense.top_hits import read_top_hit_counts, threshold_key
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+from opengwasdb.layouts.hybrid.complete import HybridCompletionResult, complete_hybrid_store
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.model.manifest import StoreManifest
@@ -116,6 +117,33 @@ def _build_source(tmp_path: Path) -> Path:
     return src
 
 
+@pytest.fixture(scope="module")
+def _completed_hybrid_seed(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[Path, Path, HybridCompletionResult]:
+    root = tmp_path_factory.mktemp("completed-hybrid")
+    src = _build_source(root)
+    dst = root / "dst.opengwasdb"
+    result = complete_hybrid_store(
+        src, dst, _make_ld_panel(root), min_cor=0.0, thresh=0.9
+    )
+    return src, dst, result
+
+
+@pytest.fixture
+def completed_hybrid(
+    tmp_path: Path,
+    _completed_hybrid_seed: tuple[Path, Path, HybridCompletionResult],
+) -> tuple[Path, Path, HybridCompletionResult]:
+    """Private copies of a standard completed Hybrid Store Release."""
+    src, dst, result = _completed_hybrid_seed
+    return (
+        file_ops.copytree(src, tmp_path / "src.opengwasdb"),
+        file_ops.copytree(dst, tmp_path / "dst.opengwasdb"),
+        result,
+    )
+
+
 def test_completion_keeps_a_populated_dense_overflow_table(tmp_path):
     """A populated Dense exception table must survive the crossover fold.
 
@@ -144,12 +172,8 @@ def test_completion_keeps_a_populated_dense_overflow_table(tmp_path):
     assert validate_store(dst).ok, validate_store(dst).errors
 
 
-def test_hybrid_completion(tmp_path):
-    src = _build_source(tmp_path)
-    ld = _make_ld_panel(tmp_path)
-    dst = tmp_path / "dst.opengwasdb"
-
-    result = complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+def test_hybrid_completion(completed_hybrid) -> None:
+    src, dst, _result = completed_hybrid
 
     # Completed hybrid store validates.
     assert validate_store(dst).ok, validate_store(dst).errors
@@ -171,13 +195,12 @@ def test_hybrid_completion(tmp_path):
     assert np.array_equal(src_ovf["se"][:], dst_ovf["se"][:])
 
 
-def test_stray_file_at_completed_hybrid_top_level_fails_validation(tmp_path):
+def test_stray_file_at_completed_hybrid_top_level_fails_validation(
+    completed_hybrid,
+) -> None:
     # Issue #80: the closed-envelope check applies to a completed Hybrid
     # release's own top-level directory, not just its nested Dense Component.
-    src = _build_source(tmp_path)
-    ld = _make_ld_panel(tmp_path)
-    dst = tmp_path / "dst.opengwasdb"
-    complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    _src, dst, _result = completed_hybrid
 
     (dst / "traits.tsv.gz").write_bytes(b"stray")
 
@@ -190,11 +213,10 @@ def test_stray_file_at_completed_hybrid_top_level_fails_validation(tmp_path):
     )
 
 
-def test_stray_file_in_completed_hybrid_dense_component_fails_validation(tmp_path):
-    src = _build_source(tmp_path)
-    ld = _make_ld_panel(tmp_path)
-    dst = tmp_path / "dst.opengwasdb"
-    complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+def test_stray_file_in_completed_hybrid_dense_component_fails_validation(
+    completed_hybrid,
+) -> None:
+    _src, dst, _result = completed_hybrid
 
     (dst / "dense" / "stray.txt").write_text("x")
 
@@ -206,14 +228,13 @@ def test_stray_file_in_completed_hybrid_dense_component_fails_validation(tmp_pat
     )
 
 
-def test_completed_analyses_tsv_has_no_phenotype_columns_and_carries_analysis_label(tmp_path):
+def test_completed_analyses_tsv_has_no_phenotype_columns_and_carries_analysis_label(
+    completed_hybrid,
+) -> None:
     """ADR 0034/issue #68: hybrid completion must carry the unified schema
     forward (no phenotype_id/phenotype_label) at both the completed Dense
     Component and the shared/top-level analyses.tsv."""
-    src = _build_source(tmp_path)
-    ld = _make_ld_panel(tmp_path)
-    dst = tmp_path / "dst.opengwasdb"
-    complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    _src, dst, _result = completed_hybrid
 
     for path in (dst / "dense" / "analyses.tsv", dst / "analyses.tsv"):
         table = read_analyses(path)
@@ -227,15 +248,12 @@ def test_completed_analyses_tsv_has_no_phenotype_columns_and_carries_analysis_la
         assert "completion_n_missing_total" in table.fieldnames
 
 
-def test_hit_counts_sum_dense_and_overflow_after_completion(tmp_path):
+def test_hit_counts_sum_dense_and_overflow_after_completion(completed_hybrid) -> None:
     # The completed Dense Component's own analyses.tsv already carries
     # correct post-completion counts (test_dense_completion.py); the shared
     # root's counts must be that plus the Ragged Overflow's own top-hit
     # index (ADR 0032) -- neither component alone is double-counted.
-    src = _build_source(tmp_path)
-    ld = _make_ld_panel(tmp_path)
-    dst = tmp_path / "dst.opengwasdb"
-    complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    _src, dst, _result = completed_hybrid
 
     rows = sorted(
         read_analyses(dst / "analyses.tsv").rows, key=lambda r: int(r["analysis_index"])
@@ -249,11 +267,8 @@ def test_hit_counts_sum_dense_and_overflow_after_completion(tmp_path):
         assert [int(r[column]) for r in rows] == expected
 
 
-def test_completed_status_only_on_dense(tmp_path):
-    src = _build_source(tmp_path)
-    ld = _make_ld_panel(tmp_path)
-    dst = tmp_path / "dst.opengwasdb"
-    result = complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+def test_completed_status_only_on_dense(completed_hybrid) -> None:
+    _src, dst, result = completed_hybrid
 
     q = query_store(dst)
     # The off-panel overflow association must always be observed.
@@ -647,14 +662,11 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
     assert "eaf" not in written
 
 
-def test_rho_delegates_to_dense_component(tmp_path):
+def test_rho_delegates_to_dense_component(completed_hybrid) -> None:
     # No Rho Matrix is built for this fixture's Dense Component -- rho()
     # must delegate through and return the same empty shape StoreQuery
     # returns for a Dense store with no Rho Matrix, not raise.
-    src = _build_source(tmp_path)
-    ld = _make_ld_panel(tmp_path)
-    dst = tmp_path / "dst.opengwasdb"
-    complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    _src, dst, _result = completed_hybrid
 
     q = query_store(dst)
     assert len(q.rho("trait_a", "trait_b")["rho"]) == 0

@@ -235,28 +235,36 @@ def test_rsid_for_a_colliding_alid_is_the_smallest_site(tmp_path, n_workers):
     assert read_variant_reference(artifact).rsid_by_alid == {HG38_ALID_1: "rsAG"}
 
 
-@pytest.mark.parametrize("n_workers", [1, 2])
-def test_rsid_selection_is_stable_across_python_hash_seeds(tmp_path, n_workers):
+def test_rsid_selection_is_stable_across_python_hash_seeds(tmp_path):
     """Issue #192: the selected rsid must not move with PYTHONHASHSEED. The
     previous implementation iterated the union set, so the winner flipped
-    between seeds; every seed must now pick the same canonical rsid."""
+    between seeds; every seed and worker count must pick the canonical rsid."""
     manifest = _swapped_allele_manifest(tmp_path)
     results = set()
+    script = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from opengwasdb.variants.reference import extract_variant_reference\n"
+        "manifest, output = Path(sys.argv[1]), Path(sys.argv[2])\n"
+        "for workers in (1, 2):\n"
+        "    extract_variant_reference(\n"
+        "        manifest, output / f'{workers}.variant-ref.tsv.gz', n_workers=workers\n"
+        "    )\n"
+    )
     for seed in ("0", "1", "2"):
-        artifact = tmp_path / f"seed-{seed}-{n_workers}.variant-ref.tsv.gz"
+        output = tmp_path / f"seed-{seed}"
+        output.mkdir()
         completed = subprocess.run(
-            [
-                sys.executable, "-c", "from opengwasdb.cli.main import app; app()",
-                "extract-variant-reference", str(manifest),
-                "--output-path", str(artifact), "--n-workers", str(n_workers),
-            ],
+            [sys.executable, "-c", script, str(manifest), str(output)],
             check=False,
             capture_output=True,
             text=True,
             env={**os.environ, "PYTHONHASHSEED": seed},
         )
         assert completed.returncode == 0, completed.stderr
-        results.add(read_variant_reference(artifact).rsid_by_alid[HG38_ALID_1])
+        for n_workers in (1, 2):
+            artifact = output / f"{n_workers}.variant-ref.tsv.gz"
+            results.add(read_variant_reference(artifact).rsid_by_alid[HG38_ALID_1])
     assert results == {"rsAG"}, f"rsid moved across PYTHONHASHSEED: {sorted(results)}"
 
 

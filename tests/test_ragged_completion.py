@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import shutil
 import struct
 from pathlib import Path
 
@@ -142,27 +143,52 @@ def _assert_completed_stores_equal(dst_a, dst_b) -> None:
 
 # ── Tests ───────────────────────────────────────────────────────────────────
 
-@pytest.fixture
-def observed_store(tmp_path):
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "obs.opengwasdb"
+@pytest.fixture(scope="module")
+def _observed_store_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("ragged-completion-observed")
+    prefix = _make_besd_fixture(root)
+    out = root / "obs.opengwasdb"
     build_ragged_from_besd(prefix, out, store_id="test", release_id="obs-v1", tissue="Blood")
     return out
 
 
 @pytest.fixture
-def ld_panel(tmp_path):
-    return _make_ld_panel(tmp_path, "1", 900_000, 1_300_000)
+def observed_store(tmp_path: Path, _observed_store_seed: Path) -> Path:
+    return shutil.copytree(_observed_store_seed, tmp_path / "obs.opengwasdb")
+
+
+@pytest.fixture(scope="module")
+def _ld_panel_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return _make_ld_panel(
+        tmp_path_factory.mktemp("ragged-completion-panel"), "1", 900_000, 1_300_000
+    )
 
 
 @pytest.fixture
-def completed_store(tmp_path, observed_store, ld_panel):
-    dst = tmp_path / "comp.opengwasdb"
+def ld_panel(tmp_path: Path, _ld_panel_seed: Path) -> Path:
+    return shutil.copytree(_ld_panel_seed, tmp_path / "ld_panel")
+
+
+@pytest.fixture(scope="module")
+def _completed_store_seed(
+    tmp_path_factory: pytest.TempPathFactory,
+    _observed_store_seed: Path,
+    _ld_panel_seed: Path,
+) -> Path:
+    root = tmp_path_factory.mktemp("ragged-completion-completed")
+    observed = shutil.copytree(_observed_store_seed, root / "obs.opengwasdb")
+    panel = shutil.copytree(_ld_panel_seed, root / "ld_panel")
+    dst = root / "comp.opengwasdb"
     complete_ragged_store(
-        observed_store, dst, ld_panel,
+        observed, dst, panel,
         ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
     )
     return dst
+
+
+@pytest.fixture
+def completed_store(tmp_path: Path, _completed_store_seed: Path) -> Path:
+    return shutil.copytree(_completed_store_seed, tmp_path / "comp.opengwasdb")
 
 
 class TestTopHitCountsRefreshedByCompletion:
