@@ -76,7 +76,11 @@ from opengwasdb.index import AnalysesIndex
 from opengwasdb.layouts.dense.rho import DenseRhoReader
 from opengwasdb.layouts.dense.top_hits import DenseTopHitReader, TopHitTiers, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
-from opengwasdb.layouts.ragged.by_variant import ByVariantReader, has_variant_index
+from opengwasdb.layouts.ragged.by_variant import (
+    ByVariantReader,
+    VariantIndexError,
+    has_variant_index,
+)
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.query.resolve import resolve_rows
@@ -172,13 +176,17 @@ def _empty_rho_matrix_result() -> dict[str, np.ndarray]:
     }
 
 
-def _open_by_variant(store: OpenGWASDBStore, variant_axis: VariantAxis) -> ByVariantReader | None:
-    """The component's variant index reader, or `None` when it carries none (ADR 0060).
+def _open_by_variant(store: OpenGWASDBStore, variant_axis: VariantAxis) -> ByVariantReader:
+    """The component's variant index reader (ADR 0060).
 
-    Absence is not an error: every variant-side query falls back to the scan.
+    Absence is an error: a release without an index is refused with an
+    instruction to run `ogdb build-variant-index`.
     """
     if not has_variant_index(store.path):
-        return None
+        raise VariantIndexError(
+            f"Store at {store.path} carries no variant index (ragged/by_variant); "
+            f"build it with 'ogdb build-variant-index {store.path}'"
+        )
     return ByVariantReader(
         store.path, store.manifest.encoding, n_axis=variant_axis.n_variants
     )
@@ -673,7 +681,7 @@ class RaggedStoreQuery:
         self.store = store
         self._csr = RaggedCSRReader(store.path)
         self._variant_axis = VariantAxis(store.path)
-        self._by_variant = _open_by_variant(store, self._variant_axis)
+        self._by_variant: ByVariantReader = _open_by_variant(store, self._variant_axis)
         self._analyses = AnalysesIndex(store.path)
         self._top_hits = TopHitTiers(store.arrays(mode="r"))
 
@@ -772,20 +780,8 @@ class RaggedStoreQuery:
         if len(variant_indices) == 0:
             return _empty_result()
 
-        # With the variant-centric index (ADR 0060) the window's rows are one
-        # contiguous block of the index: read exactly them, not every
-        # Analysis's `variant_index`.  Without it, search each Analysis's
-        # sorted segment for the window's variants, in chunk-sized windows
-        # (#252).  Neither path materialises a whole plane.
-        if self._by_variant is not None:
-            return self._indexed_variant_result(
-                np.asarray(variant_indices, dtype=np.int32), observed_only=observed_only
-            )
-        hit_positions = self._csr.variant_positions(np.asarray(variant_indices, dtype=np.int32))
-        return self._hit_rows_result(
-            hit_positions,
-            self._csr.variant_index_at(hit_positions),
-            observed_only=observed_only,
+        return self._indexed_variant_result(
+            np.asarray(variant_indices, dtype=np.int32), observed_only=observed_only
         )
 
     def _indexed_variant_result(
@@ -797,7 +793,6 @@ class RaggedStoreQuery:
         set of variants is the block spanning its minimum and maximum, filtered
         to the set when the set is not itself contiguous.
         """
-        assert self._by_variant is not None
         low, high = int(variant_indices.min()), int(variant_indices.max())
         first, last = self._by_variant.rows_for_variant_range(low, high)
         if first == last:
@@ -926,39 +921,17 @@ class RaggedStoreQuery:
         }
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
-        """All analyses that have an association for a given variant identifier.
-
-        With the variant-centric index (ADR 0060) this reads one variant's
-        contiguous row block; without it the step-3 scan reads every Analysis's
-        `variant_index` in chunk-sized windows and decodes z/se/eaf only at the
-        hits, so peak memory is a window rather than the store (#252).
-        """
+        """All analyses that have an association for a given variant identifier."""
         variant = self._variant_axis.by_identifier(identifier)
         if variant is None:
             return _empty_result()
 
-        # With the index, one variant's rows are a contiguous block: read them
-        # and stop, instead of scanning every Analysis's `variant_index`
-        # (#252, ADR 0060).  Without it the scan below is the answer, bounded
-        # to a window rather than 4N bytes.
-        if self._by_variant is not None:
-            target_variant = int(variant.variant_index)
-            first, last = self._by_variant.rows_for_variant(target_variant)
-            if first == last:
-                return _empty_result()
-            block = self._by_variant.decode(target_variant, target_variant, first, last)
-            return _by_variant_block_result(block, observed_only=observed_only)
-        target_vi = np.int32(variant.variant_index)
-
-        # The scan is O(total associations) and stays so on an unindexed
-        # release, but it reads in chunk-sized windows, so peak memory is a
-        # window rather than 4N bytes of `variant_index` (#252).
-        hit_positions = self._csr.variant_positions(np.array([target_vi], dtype=np.int32))
-        return self._hit_rows_result(
-            hit_positions,
-            np.full(len(hit_positions), target_vi, dtype="int32"),
-            observed_only=observed_only,
-        )
+        target_variant = int(variant.variant_index)
+        first, last = self._by_variant.rows_for_variant(target_variant)
+        if first == last:
+            return _empty_result()
+        block = self._by_variant.decode(target_variant, target_variant, first, last)
+        return _by_variant_block_result(block, observed_only=observed_only)
 
     def top_hits(
         self,
@@ -1140,7 +1113,7 @@ class HybridStoreQuery:
         self._connection = store.index_connection()
         self._analyses = AnalysesIndex(store.path)  # shared analyses.tsv
         self._variant_axis = VariantAxis(store.path, self._connection)  # shared union table
-        self._by_variant = _open_by_variant(store, self._variant_axis)
+        self._by_variant: ByVariantReader = _open_by_variant(store, self._variant_axis)
         self._top_hits = TopHitTiers(store.arrays(mode="r"))  # overflow's own tiers
 
     def close(self) -> None:
@@ -1307,10 +1280,7 @@ class HybridStoreQuery:
             return _empty_result()
         wanted = np.array(sorted(shared_indices), dtype=np.int32)
         if wanted_analyses is None:
-            if self._by_variant is not None:
-                return self._overflow_indexed(wanted)
-            positions = self._csr.variant_positions(wanted)
-            return self._overflow_rows(positions)
+            return self._overflow_indexed(wanted)
         parts: list[dict[str, np.ndarray]] = []
         for col in sorted(wanted_analyses):
             positions = self._csr.segment_positions(wanted, analysis_index=int(col))
@@ -1327,7 +1297,6 @@ class HybridStoreQuery:
         filtered to the set when on-panel variants interleave.  Reads the
         answer, not the Overflow's `variant_index`.
         """
-        assert self._by_variant is not None
         low, high = int(wanted.min()), int(wanted.max())
         first, last = self._by_variant.rows_for_variant_range(low, high)
         if first == last:

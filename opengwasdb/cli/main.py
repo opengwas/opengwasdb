@@ -102,15 +102,6 @@ _ALLOW_UNVERIFIED_HELP = (
     "Accept Analyses the supplied --eaf-reference could not verify (too little "
     "overlap or frequency spread) instead of failing. Recorded in the store's provenance."
 )
-_NO_VARIANT_INDEX_HELP = (
-    "Skip the variant-centric by_variant/ index (ADR 0060). The index makes a "
-    "by-variant PheWAS or region query proportional to the answer; without it those "
-    "queries scan every Analysis's variant_index. Costs roughly the component's "
-    "own cell-keyed bytes on disk and one extra build pass."
-)
-_NO_VARIANT_INDEX_OPTION = Annotated[
-    bool, typer.Option("--no-variant-index", help=_NO_VARIANT_INDEX_HELP)
-]
 #: The two chunk options every Dense-shaped build shares.  They name the
 #: **inner chunk** -- the unit a query reads -- not the shard: the shard is the
 #: format's decided shape, and an inner chunk that does not tile it is refused
@@ -549,7 +540,6 @@ def build_hybrid_command(
         None, "--source-assembly", callback=_validate_source_assembly,
         help=_SOURCE_ASSEMBLY_HELP,
     ),
-    no_variant_index: _NO_VARIANT_INDEX_OPTION = False,
 ) -> None:
     """Build a Hybrid store (Dense Component + Ragged Overflow) from a VCF manifest.
 
@@ -571,7 +561,6 @@ def build_hybrid_command(
         eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=capability, source_assembly=assembly,
         checkpoint=checkpoint, resume=resume,
-        write_variant_index=not no_variant_index,
     )
     _echo_hybrid_result(res)
 
@@ -623,7 +612,6 @@ def build_hybrid_from_catalogue_command(
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
-    no_variant_index: _NO_VARIANT_INDEX_OPTION = False,
 ) -> None:
     """Subset the Catalogue to one ancestry and build a Hybrid store from it.
 
@@ -650,7 +638,6 @@ def build_hybrid_from_catalogue_command(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
-        write_variant_index=not no_variant_index,
     )
     typer.echo(
         json.dumps(
@@ -1121,7 +1108,6 @@ def build_ragged_besd_command(
     tissue: str | None = typer.Option(None),
     source_build: str = typer.Option("hg38"),
     overwrite: bool = typer.Option(False),
-    no_variant_index: _NO_VARIANT_INDEX_OPTION = False,
 ) -> None:
     """Build a Ragged Observed-Only store from BESD files.
 
@@ -1138,7 +1124,6 @@ def build_ragged_besd_command(
         tissue=tissue or None,
         source_build=source_build,
         overwrite=overwrite,
-        write_variant_index=not no_variant_index,
     )
     _echo_summary(
         {
@@ -1162,7 +1147,6 @@ def build_ragged_ssf_command(
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
-    no_variant_index: _NO_VARIANT_INDEX_OPTION = False,
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
@@ -1184,7 +1168,6 @@ def build_ragged_ssf_command(
         release_id=release_id,
         stored_effect_scale=stored_effect_scale,
         overwrite=overwrite,
-        write_variant_index=not no_variant_index,
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,

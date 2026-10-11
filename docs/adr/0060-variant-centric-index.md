@@ -9,8 +9,11 @@ the rows. This ADR decides the index's on-disk shape, compatibly with ADR 0057
 (format 0.2.0), ADR 0058 (the decided Dense chunk and shard shapes) and #248's
 ADR 0059 (the Ragged roles and shard policies). **It was built and measured
 as #252 step 5**; the storage, build and query numbers in the sections below
-are from the committed artifacts, not estimates. A release that carries no
-index still queries correctly through the scan it replaces.
+are from the measurements on branch `bench/252-variant-index`. The index is
+**required, not optional**: `by_variant/` is part of the 0.2.0 format contract,
+unindexed 0.2.0 releases are migrated with `ogdb build-variant-index`,
+`validate` fails on a missing index, and the query facade refuses an unindexed
+store.
 
 ## Context
 
@@ -188,7 +191,9 @@ that.
   on an unindexed release.
 - `top_hits` and the Analysis-side reads are unchanged.
 
-An absent index is not an error: the facade falls back to the step-3 scan.
+An absent index is refused by the query facade with an instruction to run
+`ogdb build-variant-index`, and fails validation; the PheWAS and regional scan
+fallback is deleted.
 
 ### Storage at OGS-00011 scale
 
@@ -381,10 +386,15 @@ store is O(N) and is #254's (#252's additions are windowed).
 
 ## Consequences
 
-- **The index is optional and additive.** No Analysis-sorted array changes, no
-  `format_version` changes, an unindexed release still answers every query,
-  and a 0.1.0 or 0.2.0 release can gain or lose it by a build, not a
-  conversion.
+- **The index is required, not optional.** `by_variant/` is part of the 0.2.0
+  format contract for Ragged and Hybrid Overflow components; builders,
+  completion and subsets always write it, and validation and the query facade
+  refuse an unindexed release. Unindexed 0.2.0 releases are migrated in place
+  with `ogdb build-variant-index`. `format_version` remains 0.2.0: 0.2.0 is an
+  unreleased pre-publication format under epic #240, ADR 0041 forbids burning
+  pre-release version numbers, and a reader can tell from
+  `provenance.ragged.by_variant` in `manifest.json` that the release carries
+  the index.
 - **A `ragged/by_variant/` group is a large share of the Overflow's bytes on
   disk** at OGS-00011 (measured **+16.678 GiB**, from 20 GB to 37 GB of
   `data.zarr/ragged`). That is the price of making per-variant work
@@ -398,11 +408,11 @@ store is O(N) and is #254's (#252's additions are windowed).
   the Analysis-sorted arrays, and the Hybrid's `dense_to_shared` map is
   unchanged because the index is keyed on the shared axis.
 - **Built and wired as #252 step 5.** The Ragged, SSF, BESD and Hybrid builders
-  write it, Reference Completion rebuilds it, `ogdb build-variant-index` adds it
-  to an existing 0.2.0 release, the query facade reads it (falling back to the
-  scan), and `validate` checks it. Parity against the step-3 scan is asserted on
-  indexed fixtures and on OGS-00011 (`
-  docs/benchmark-output/opengwasdb_ogs00011_252_variant_index_ab.json`).
+  always write it, Reference Completion rebuilds it, `ogdb build-variant-index`
+  migrates an existing 0.2.0 release, the query facade reads it (refusing an
+  unindexed store), and `validate` checks it. Parity against the step-3 scan was
+  verified on indexed fixtures and on OGS-00011; measurement harnesses and
+  outputs are preserved on branch `bench/252-variant-index`.
 
 ## References
 

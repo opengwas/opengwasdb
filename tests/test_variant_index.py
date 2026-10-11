@@ -20,6 +20,7 @@ rules are known to have teeth.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -67,6 +68,16 @@ def _build_ssf_store(
     kwargs.setdefault("release_id", "v1")
     store = root / name
     build_ragged_from_ssf(manifest, filtered, store, **kwargs)
+    return store
+
+
+def _strip_variant_index(store: Path) -> Path:
+    """Remove by_variant/ group and manifest provenance to simulate an unindexed store."""
+    shutil.rmtree(store / "data.zarr" / "ragged" / BY_VARIANT_GROUP)
+    manifest_path = store / "manifest.json"
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data.get("provenance", {}).get("ragged", {}).pop("by_variant", None)
+    manifest_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return store
 
 
@@ -200,15 +211,6 @@ def test_imputed_and_se_exceptions_are_duplicated(residual: RaggedResidualScenar
 # ── identity: indexed vs the step-3 scan, and the reader vs the CSR ─────────
 
 
-def _indexed_and_scanned(store: Path):
-    """Two query facades over one store: with the index, and forced to scan."""
-    indexed = query_store(store)
-    scanned = query_store(store)
-    assert scanned._by_variant is not None
-    scanned._by_variant = None
-    return indexed, scanned
-
-
 def _canonical(result: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     order = np.lexsort(
         (np.asarray(result["analysis_index"]), np.asarray(result["variant_index"]))
@@ -217,30 +219,50 @@ def _canonical(result: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
 
 
 @pytest.mark.parametrize("fixture_name", ["observed_ssf", "observed_besd", "residual"])
-def test_variant_shapes_are_identical_indexed_and_scanned(
+def test_variant_shapes_match_analysis_side_oracle(
     request: pytest.FixtureRequest, fixture_name: str
 ) -> None:
+    from test_variant_side_scans import _canonical as canon
+    from test_variant_side_scans import _ragged_oracle
+
     fixture = request.getfixturevalue(fixture_name)
     store = fixture.completed if hasattr(fixture, "completed") else fixture
-    indexed, scanned = _indexed_and_scanned(store)
-    with indexed, scanned:
-        table = indexed.variants_table()
+    with query_store(store) as query:
+        table = query.variants_table()
         alid = str(next(iter(table.values()))["alid"])
+        target = query._variant_axis.by_identifier(alid)
+        assert target is not None
         analysis_ids = [
-            str(row["analysis_id"]) for _, row in sorted(indexed.analyses_table().items())
+            str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())
         ]
-        calls = {
-            "phewas": lambda q: q.phewas(alid),
-            "range_phewas": lambda q: q.range_phewas("1", 0, 2_000_000),
-            "lookup": lambda q: q.lookup([alid], analysis_ids),
-        }
-        for name, call in calls.items():
-            got, want = call(indexed), call(scanned)
-            assert len(got["z"]) == len(want["z"]), f"{name}: row count differs"
-            for key in _RESULT_KEYS:
-                np.testing.assert_array_equal(
-                    _canonical(got)[key], _canonical(want)[key], err_msg=f"{name}:{key}"
-                )
+        wanted_range = query._variant_axis.range_indices("1", 0, 2_000_000)
+
+        got_phewas = query.phewas(alid)
+        want_phewas = _ragged_oracle(
+            query, np.array([target.variant_index]), analysis_ids=analysis_ids, observed_only=False
+        )
+        assert len(got_phewas["z"]) == len(want_phewas["z"])
+        for key in _RESULT_KEYS:
+            np.testing.assert_array_equal(
+                canon(got_phewas)[key], canon(want_phewas)[key], err_msg=f"phewas:{key}"
+            )
+
+        got_range = query.range_phewas("1", 0, 2_000_000)
+        want_range = _ragged_oracle(
+            query, wanted_range, analysis_ids=analysis_ids, observed_only=False
+        )
+        assert len(got_range["z"]) == len(want_range["z"])
+        for key in _RESULT_KEYS:
+            np.testing.assert_array_equal(
+                canon(got_range)[key], canon(want_range)[key], err_msg=f"range:{key}"
+            )
+
+        got_lookup = query.lookup([alid], analysis_ids)
+        assert len(got_lookup["z"]) == len(want_phewas["z"])
+        for key in _RESULT_KEYS:
+            np.testing.assert_array_equal(
+                canon(got_lookup)[key], canon(want_phewas)[key], err_msg=f"lookup:{key}"
+            )
 
 
 def test_the_reader_recovers_each_rows_variant_from_the_offsets(observed_ssf: Path) -> None:
@@ -295,7 +317,7 @@ def test_validation_rejects_a_wrong_code(observed_ssf: Path, tmp_path: Path) -> 
     _damage(index, "z", z)
     result = validate_store(store)
     assert not result.ok
-    assert any("digest" in error for error in result.errors), result.errors
+    assert any(BY_VARIANT_GROUP in error for error in result.errors), result.errors
 
 
 def test_validation_rejects_a_swapped_analysis(observed_ssf: Path, tmp_path: Path) -> None:
@@ -349,7 +371,7 @@ def test_validation_rejects_a_stale_index_after_a_row_changes(
 
 
 def test_augment_adds_the_index_and_records_provenance(tmp_path: Path) -> None:
-    store = _build_ssf_store(tmp_path / "aug", store_id="aug", write_variant_index=False)
+    store = _strip_variant_index(_build_ssf_store(tmp_path / "aug", store_id="aug"))
     assert not has_variant_index(store)
     result = add_variant_index(store)
     assert result.n_rows == int(np.asarray(open_store(store).arrays()["ragged"]["offsets"][-1]))
@@ -361,61 +383,52 @@ def test_augment_adds_the_index_and_records_provenance(tmp_path: Path) -> None:
         add_variant_index(store)
 
 
-def test_augment_is_idempotent_through_the_identity_harness(tmp_path: Path) -> None:
-    """The committed identity harness returns identical answers on a fresh store."""
-    from benchmarks.variant_index_identity import check_store
+def test_augment_is_idempotent(tmp_path: Path) -> None:
+    """Rebuilding an already-indexed store with force=True produces a valid release."""
+    store = _strip_variant_index(_build_ssf_store(tmp_path / "idempotent", store_id="idx"))
+    result1 = add_variant_index(store)
+    assert validate_store(store).ok, validate_store(store).errors
+    result2 = add_variant_index(store, force=True)
+    assert validate_store(store).ok, validate_store(store).errors
+    assert result1.n_rows == result2.n_rows
 
-    store = _build_ssf_store(tmp_path / "identity", store_id="idx")
-    shapes = check_store(store)
-    assert "phewas" in shapes and shapes["phewas"]["identical"]
-    assert any(shape["rows"] > 0 for shape in shapes.values())
 
-
-def test_identity_harness_catches_a_corrupted_indexed_decode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_query_facade_refuses_store_without_variant_index(
+    observed_ssf: Path, tmp_path: Path
 ) -> None:
-    """A corrupted indexed answer must make the identity harness exit non-zero.
-
-    Review round 1, finding 1: the harness built its shape closures once, on the
-    indexed facade, so both digests came from the index and the scan side was
-    never queried -- it could not fail.  This mutation is the proof it can.
-    """
-    from benchmarks.variant_index_identity import check_store
-    from opengwasdb.layouts.ragged.by_variant import ByVariantReader
-
-    store = _build_ssf_store(tmp_path / "identity-mutation", store_id="idx")
-    original = ByVariantReader.decode
-
-    def corrupt(self: ByVariantReader, *args: object, **kwargs: object) -> dict:
-        block = original(self, *args, **kwargs)
-        block["z"] = block["z"] + np.float32(1.0)
-        return block
-
-    monkeypatch.setattr(ByVariantReader, "decode", corrupt)
-    with pytest.raises(SystemExit, match="indexed .* != scanned"):
-        check_store(store)
+    """Opening an unindexed store raises VariantIndexError naming ogdb build-variant-index."""
+    store = _strip_variant_index(_copy_and_validate(observed_ssf, tmp_path))
+    with pytest.raises(VariantIndexError, match="ogdb build-variant-index"):
+        query_store(store)
 
 
-def test_scaling_harness_splits_phases_and_matches_counts(tmp_path: Path) -> None:
-    """The step-2 harness reports the Dense/Overflow phases and compares content."""
-    from benchmarks.variant_side_scaling import measure
+def test_validate_fails_when_variant_index_missing(
+    observed_ssf: Path, tmp_path: Path
+) -> None:
+    """Validation fails on a missing variant index."""
+    store = _strip_variant_index(_copy_and_validate(observed_ssf, tmp_path))
+    result = validate_store(store)
+    assert not result.ok
+    assert any("by_variant" in err for err in result.errors)
 
-    store = _build_ssf_store(tmp_path / "scaling", store_id="idx")
-    measured = measure(store, ["phewas"], reps=1, max_load=0)
-    sides = measured["phewas"]
-    assert {"indexed", "scanned", "region_label"} <= set(sides)
-    for side in ("indexed", "scanned"):
-        assert {
-            "elapsed_s",
-            "dense_s",
-            "overflow_match_s",
-            "overflow_read_s",
-        } <= set(sides[side])
-        assert sides[side]["result_count"] == sides["indexed"]["result_count"]
-    assert (
-        sides["indexed"]["overflow_match_s"]
-        <= sides["scanned"]["overflow_match_s"] + 0.05
-    )
+
+def test_cli_rejects_no_variant_index_option() -> None:
+    """CLI builders no longer accept --no-variant-index."""
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    runner = CliRunner()
+    for cmd in (
+        "build-ragged-ssf",
+        "build-ragged-besd",
+        "build-hybrid",
+        "build-hybrid-from-catalogue",
+    ):
+        result = runner.invoke(app, [cmd, "--help"])
+        assert "--no-variant-index" not in result.output, (
+            f"{cmd} still advertises --no-variant-index"
+        )
 
 
 def test_completion_rebuilds_the_index(residual: RaggedResidualScenario) -> None:
@@ -448,7 +461,7 @@ def test_augment_rebuilds_with_force(tmp_path: Path) -> None:
 def test_augment_rolls_back_when_the_install_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    store = _build_ssf_store(tmp_path / "aug-rollback", store_id="aug", write_variant_index=False)
+    store = _strip_variant_index(_build_ssf_store(tmp_path / "aug-rollback", store_id="aug"))
     before = (store / "manifest.json").read_bytes()
 
     import opengwasdb.layouts.ragged.by_variant as module
@@ -546,7 +559,7 @@ def test_cli_build_variant_index_adds_it_and_refuses_0_1_0(tmp_path: Path) -> No
     from opengwasdb.cli.main import app
 
     runner = CliRunner()
-    store = _build_ssf_store(tmp_path / "cli", store_id="cli", write_variant_index=False)
+    store = _strip_variant_index(_build_ssf_store(tmp_path / "cli", store_id="cli"))
     result = runner.invoke(app, ["build-variant-index", str(store)])
     assert result.exit_code == 0, result.output
     assert has_variant_index(store)
@@ -867,7 +880,7 @@ def test_windowed_exception_table_scan_terminates_with_an_unaligned_window(
 
 def test_augment_recovers_a_leftover_building_group(tmp_path: Path) -> None:
     """A process killed during the build leaves `.building`, which is dropped."""
-    store = _build_ssf_store(tmp_path / "aug-building", store_id="aug", write_variant_index=False)
+    store = _strip_variant_index(_build_ssf_store(tmp_path / "aug-building", store_id="aug"))
     building = _ragged(store) / f"{BY_VARIANT_GROUP}.building"
     building.mkdir()
     (building / "zarr.json").write_text("{}")
@@ -912,8 +925,8 @@ def test_augment_restores_consolidated_metadata_on_failure(
 ) -> None:
     import zarr
 
-    store = _build_ssf_store(
-        tmp_path / "aug-consolidated-fail", store_id="aug", write_variant_index=False
+    store = _strip_variant_index(
+        _build_ssf_store(tmp_path / "aug-consolidated-fail", store_id="aug")
     )
     data_root = store / "data.zarr"
     zarr.consolidate_metadata(str(data_root), zarr_format=3)
@@ -936,8 +949,8 @@ def test_augment_restores_consolidated_metadata_on_failure(
 def test_augment_refreshes_consolidated_metadata(tmp_path: Path) -> None:
     import zarr
 
-    store = _build_ssf_store(
-        tmp_path / "aug-consolidated", store_id="aug", write_variant_index=False
+    store = _strip_variant_index(
+        _build_ssf_store(tmp_path / "aug-consolidated", store_id="aug")
     )
     data_root = store / "data.zarr"
     zarr.consolidate_metadata(str(data_root), zarr_format=3)

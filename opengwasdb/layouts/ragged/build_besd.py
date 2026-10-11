@@ -76,7 +76,6 @@ def build_ragged_from_besd(
     tissue: str | None = None,
     source_build: str = "hg38",
     overwrite: bool = False,
-    write_variant_index: bool = True,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from BESD files.
 
@@ -103,7 +102,6 @@ def build_ragged_from_besd(
         # Phase 4 — CSR ingestion and the encoding plan it decides.
         csr, encoding = _ingest_besd(
             prefix, probes, esi_to_variant, len(variants), staged.path,
-            write_variant_index=write_variant_index,
         )
         # Phase 5 — indexes and manifest output.
         _write_besd_outputs(staged, analyses, encoding)
@@ -531,8 +529,6 @@ def _ingest_besd(
     esi_to_variant: dict[int, tuple[int, bool]],
     n_variants: int,
     staged_path: Path,
-    *,
-    write_variant_index: bool = True,
 ) -> tuple[RaggedCSRWriter, StoreEncoding]:
     """Stream the BESD file into a CSR store under ``staged_path``.
 
@@ -578,8 +574,7 @@ def _ingest_besd(
     encoding = _decide_encoding(csr, len(probes))
     print(f"Flushing zarr CSR ({csr.n_associations:,} associations) ...")
     csr.flush(staged_path, encoding)
-    if write_variant_index:
-        build_variant_index(staged_path, n_axis=n_variants)
+    build_variant_index(staged_path, n_axis=n_variants)
 
     if skipped_probes:
         print(f"  {skipped_probes} probes had no valid associations after filtering")

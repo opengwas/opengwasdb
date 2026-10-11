@@ -157,7 +157,6 @@ def build_hybrid_from_catalogue(
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
-    write_variant_index: bool = True,
 ) -> SubsetResult:
     """Subset the Catalogue to ``ancestry`` and build a Hybrid store from it.
 
@@ -206,7 +205,6 @@ def build_hybrid_from_catalogue(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
-        write_variant_index=write_variant_index,
     )
     record_catalogue_provenance(output_path, subset)
     return subset

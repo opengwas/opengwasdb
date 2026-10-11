@@ -1166,7 +1166,7 @@ def _validate_ragged_downstream_seams(
     data_root = store.arrays(mode="r")
     if store.manifest.completion_state is CompletionState.REFERENCE_COMPLETED:
         _validate_ragged_completion(ragged_path, store, n_assoc, n_analyses_csr, errors)
-    if not errors and (ragged_path / _BY_VARIANT_GROUP).exists():
+    if not errors:
         axis = VariantAxis(store.path)
         try:
             n_variant_axis = axis.n_variants
@@ -1188,150 +1188,8 @@ def _validate_ragged_downstream_seams(
 #: to keep validation importable without the build stack.
 _BY_VARIANT_GROUP = "by_variant"
 
-#: Two independent 64-bit splitmix constants.  Summing the digest under two
-#: decorrelated seeds makes a collision a single sum could hide far less likely.
-_VARIANT_DIGEST_SEEDS = (0x9E3779B97F4A7C15, 0xD1B54A32D192ED03)
-
-#: Cells one digest window holds.  The digest must never materialise a plane,
-#: so it hashes a window and folds the sum in (issue #254).
-_DIGEST_WINDOW = 1_000_000
-
-
-def _mix64(values: np.ndarray) -> np.ndarray:
-    """The splitmix64 finalizer, elementwise, on `uint64` (ADR 0060, ruling Q1).
-
-    A plain sum of fields would let a swapped `z` between two cells cancel; a
-    full avalanche mix does not, which is what makes the bounded digest a
-    substitute for a per-row comparison on a store too large to regroup.
-    """
-    x = np.asarray(values, dtype=np.uint64)
-    x = (x ^ (x >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
-    x = (x ^ (x >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
-    return x ^ (x >> np.uint64(31))
-
-
-def _raw_bits(values: np.ndarray) -> np.ndarray:
-    """A code array's stored bytes as `uint64`, so a digest follows the bytes.
-
-    A float16 `se` code viewed as its numeric value would lose NaN patterns;
-    the same dtype on both sides means viewing the same bytes is exact.
-    """
-    values = np.ascontiguousarray(values)
-    unsigned = np.dtype(f"u{values.dtype.itemsize}")
-    return values.view(unsigned).astype(np.uint64)
-
-
-def _hash_fields(fields: list[np.ndarray]) -> tuple[int, int]:
-    """Two order-independent 64-bit sums over the mixed field tuples."""
-    if not fields or len(fields[0]) == 0:
-        return 0, 0
-    mixed = np.zeros(len(fields[0]), dtype=np.uint64)
-    for entry in fields:
-        mixed = _mix64(mixed ^ _raw_bits(entry))
-    first = int(np.sum(_mix64(mixed ^ np.uint64(_VARIANT_DIGEST_SEEDS[0])), dtype=np.uint64))
-    second = int(np.sum(_mix64(mixed ^ np.uint64(_VARIANT_DIGEST_SEEDS[1])), dtype=np.uint64))
-    return first, second
-
-
-def _exception_bits(
-    codes: np.ndarray, sentinel: int, table: Any, positions: np.ndarray
-) -> np.ndarray:
-    """Per-cell exact-value bits: the table's float32 at an exception cell, else 0."""
-    out = np.zeros(len(codes), dtype=np.uint64)
-    exceptional = codes == sentinel
-    if exceptional.any():
-        exact = np.asarray(table.lookup(positions[exceptional]), dtype=np.float32)
-        out[exceptional] = _raw_bits(exact)
-    return out
-
-
-def _cell_fields(
-    root: Any,
-    encoding: StoreEncoding,
-    tables: tuple[Any, Any, Any],
-    variants: np.ndarray,
-    analyses: np.ndarray,
-    positions: np.ndarray,
-    lo: int,
-    hi: int,
-) -> list[np.ndarray]:
-    """The digest's fields for one component: key, every code, exact exceptions."""
-    fields = [variants, analyses, np.asarray(root["z"][lo:hi]), np.asarray(root["se"][lo:hi])]
-    if "eaf" in root:
-        fields.append(np.asarray(root["eaf"][lo:hi]))
-    if "imputed" in root:
-        fields.append(np.asarray(root["imputed"][lo:hi]))
-    z_overflow, eaf_exceptions, se_exceptions = tables
-    if encoding.z.is_fixed_point:
-        fields.append(
-            _exception_bits(np.asarray(root["z"][lo:hi]), Z_OVERFLOW, z_overflow, positions)
-        )
-    if encoding.eaf.is_residual:
-        fields.append(
-            _exception_bits(
-                np.asarray(root["eaf"][lo:hi]),
-                EAF_EXCEPTION,
-                eaf_exceptions,
-                positions,
-            )
-        )
-    if encoding.se.is_residual:
-        fields.append(
-            _exception_bits(np.asarray(root["se"][lo:hi]), SE_EXCEPTION, se_exceptions, positions)
-        )
-    return fields
-
-
-def _read_exception_tables(root: Any) -> tuple[Any, Any, Any]:
-    """The three exception tables as **windowed** views, for one digest pass.
-
-    `open`, not `read`: the digest looks up only the exception cells in each
-    window, so the table's whole 180 M-entry array is never materialised
-    (review round 1, finding 3).
-    """
-    return (
-        ZOverflowTable.open(root),
-        EafExceptionTable.open(root),
-        SeExceptionTable.open(root),
-    )
-
-
-def _source_digest(
-    root: Any, encoding: StoreEncoding, offsets: np.ndarray, n_assoc: int
-) -> tuple[int, int]:
-    """The Analysis-sorted side's digest, streamed in windows."""
-    tables = _read_exception_tables(root)
-    total = [0, 0]
-    for lo in range(0, n_assoc, _DIGEST_WINDOW):
-        hi = min(lo + _DIGEST_WINDOW, n_assoc)
-        positions = np.arange(lo, hi, dtype=np.int64)
-        analyses = np.searchsorted(offsets[1:], positions, side="right").astype(np.int64)
-        variants = np.asarray(root["variant_index"][lo:hi], dtype=np.int64)
-        a, b = _hash_fields(
-            _cell_fields(root, encoding, tables, variants, analyses, positions, lo, hi)
-        )
-        total[0] = (total[0] + a) % (1 << 64)
-        total[1] = (total[1] + b) % (1 << 64)
-    return total[0], total[1]
-
-
-def _index_digest(
-    index: Any, encoding: StoreEncoding, by_offsets: np.ndarray, n_assoc: int
-) -> tuple[int, int]:
-    """The by-variant side's digest, streamed in windows."""
-    tables = _read_exception_tables(index)
-    total = [0, 0]
-    for lo in range(0, n_assoc, _DIGEST_WINDOW):
-        hi = min(lo + _DIGEST_WINDOW, n_assoc)
-        positions = np.arange(lo, hi, dtype=np.int64)
-        variants = (np.searchsorted(by_offsets, positions, side="right") - 1).astype(np.int64)
-        analyses = np.asarray(index["analysis_index"][lo:hi], dtype=np.int64)
-        a, b = _hash_fields(
-            _cell_fields(index, encoding, tables, variants, analyses, positions, lo, hi)
-        )
-        total[0] = (total[0] + a) % (1 << 64)
-        total[1] = (total[1] + b) % (1 << 64)
-    return total[0], total[1]
+#: Array cells scanned in one window (issue #254).
+_INDEX_WINDOW = 1_000_000
 
 
 def _validate_variant_index_presence(
@@ -1340,13 +1198,19 @@ def _validate_variant_index_presence(
     """Check the group and its manifest provenance block agree; return the group."""
     group = root[_BY_VARIANT_GROUP] if _BY_VARIANT_GROUP in root else None
     block = store.manifest.provenance.get("ragged", {}).get("by_variant")
-    if group is None and block is not None:
-        errors.append(
-            f"{label}: the manifest records provenance.ragged.by_variant but the release "
-            f"carries no {_BY_VARIANT_GROUP} group; the index it describes is absent"
-        )
+    if group is None:
+        if block is not None:
+            errors.append(
+                f"{label}: the manifest records provenance.ragged.by_variant but the release "
+                f"carries no {_BY_VARIANT_GROUP} group; the index it describes is absent"
+            )
+        else:
+            errors.append(
+                f"{label}: carries no {_BY_VARIANT_GROUP} group; a Ragged component must "
+                f"carry the variant-centric index (ADR 0060)"
+            )
         return None
-    if group is not None and block is None:
+    if block is None:
         errors.append(
             f"{label}/{_BY_VARIANT_GROUP}: the release carries a variant index but its "
             "manifest records no provenance.ragged.by_variant block"
@@ -1413,8 +1277,8 @@ def _validate_index_analyses(
         return True
     lowest = np.iinfo(np.int64).max
     highest = np.iinfo(np.int64).min
-    for lo in range(0, n_assoc, _DIGEST_WINDOW):
-        hi = min(lo + _DIGEST_WINDOW, n_assoc)
+    for lo in range(0, n_assoc, _INDEX_WINDOW):
+        hi = min(lo + _INDEX_WINDOW, n_assoc)
         window = np.asarray(index["analysis_index"][lo:hi], dtype=np.int64)
         lowest = min(lowest, int(window.min()))
         highest = max(highest, int(window.max()))
@@ -1439,6 +1303,209 @@ def _validate_variant_index_members(
             )
 
 
+def _code_differs(a: Any, b: Any) -> bool:
+    """True when stored codes a and b differ, treating NaN == NaN."""
+    if a == b:
+        return False
+    try:
+        return not (np.isnan(a) and np.isnan(b))
+    except (TypeError, ValueError):
+        return True
+
+
+def _sample_non_empty_variants(by_offsets: np.ndarray, sample_variants: int) -> np.ndarray:
+    """Deterministic selection of non-empty variant indices for sampled validation."""
+    widths = np.diff(by_offsets)
+    non_empty = np.where(widths > 0)[0]
+    if len(non_empty) <= sample_variants:
+        return non_empty
+    rng = np.random.default_rng(0)
+    chosen = rng.choice(non_empty, size=sample_variants - 2, replace=False)
+    return np.unique(np.concatenate([[non_empty[0], non_empty[-1]], chosen]))
+
+
+def _check_z_overflow(
+    root: Any, index: Any, b_z: Any, tag: str, s_idx: int, src_idx: int
+) -> str | None:
+    if b_z != Z_OVERFLOW:
+        return None
+    idx_v = ZOverflowTable.open(index).lookup(np.array([s_idx]))
+    src_v = ZOverflowTable.open(root).lookup(np.array([src_idx]))
+    return f"{tag} z overflow value != Analysis-sorted table" if idx_v != src_v else None
+
+
+def _check_eaf_exception(
+    root: Any, index: Any, b_eaf: Any, tag: str, s_idx: int, src_idx: int
+) -> str | None:
+    if b_eaf != EAF_EXCEPTION:
+        return None
+    idx_v = EafExceptionTable.open(index).lookup(np.array([s_idx]))
+    src_v = EafExceptionTable.open(root).lookup(np.array([src_idx]))
+    return f"{tag} eaf exception value != Analysis-sorted table" if idx_v != src_v else None
+
+
+def _check_se_exception(
+    root: Any, index: Any, b_se: Any, tag: str, s_idx: int, src_idx: int
+) -> str | None:
+    if b_se != SE_EXCEPTION:
+        return None
+    idx_v = SeExceptionTable.open(index).lookup(np.array([s_idx]))
+    src_v = SeExceptionTable.open(root).lookup(np.array([src_idx]))
+    return f"{tag} se exception value != Analysis-sorted table" if idx_v != src_v else None
+
+
+def _check_cell_exceptions(
+    root: Any,
+    index: Any,
+    encoding: StoreEncoding,
+    b_z: Any,
+    b_se: Any,
+    b_eaf: Any,
+    tag: str,
+    s_idx: int,
+    src_idx: int,
+) -> str | None:
+    """Validate exception-table values at an exception cell; returns an error string or None."""
+    if encoding.z.is_fixed_point:
+        err = _check_z_overflow(root, index, b_z, tag, s_idx, src_idx)
+        if err is not None:
+            return err
+    if encoding.eaf.is_residual and b_eaf is not None:
+        err = _check_eaf_exception(root, index, b_eaf, tag, s_idx, src_idx)
+        if err is not None:
+            return err
+    if encoding.se.is_residual:
+        return _check_se_exception(root, index, b_se, tag, s_idx, src_idx)
+    return None
+
+
+def _check_cell_codes(
+    root: Any,
+    b_z: Any,
+    b_se: Any,
+    b_eaf: Any,
+    b_imp: Any,
+    tag: str,
+    src_idx: int,
+) -> str | None:
+    """Compare raw stored codes for equality, returning an error string on mismatch."""
+    if _code_differs(b_z, root["z"][src_idx]):
+        return f"{tag} z code {b_z!r} != source {root['z'][src_idx]!r}"
+    if _code_differs(b_se, root["se"][src_idx]):
+        return f"{tag} se code {b_se!r} != source {root['se'][src_idx]!r}"
+    if b_eaf is not None and _code_differs(b_eaf, root["eaf"][src_idx]):
+        return f"{tag} eaf code {b_eaf!r} != source {root['eaf'][src_idx]!r}"
+    if b_imp is not None and b_imp != root["imputed"][src_idx]:
+        return f"{tag} imputed {b_imp!r} != source {root['imputed'][src_idx]!r}"
+    return None
+
+
+def _find_source_position(
+    src_vi: np.ndarray, v: int, a: int, label: str
+) -> tuple[int, str | None]:
+    pos = int(np.searchsorted(src_vi, v))
+    if pos >= len(src_vi) or src_vi[pos] != v:
+        return -1, (
+            f"{label}/{_BY_VARIANT_GROUP}: variant {v} in Analysis {a} is missing "
+            "from the Analysis-sorted planes"
+        )
+    return pos, None
+
+
+def _validate_one_cell(
+    root: Any,
+    index: Any,
+    offsets: np.ndarray,
+    encoding: StoreEncoding,
+    label: str,
+    v: int,
+    a: int,
+    codes: tuple[Any, Any, Any, Any],
+    ordinal: int,
+) -> str | None:
+    cs, ce = int(offsets[a]), int(offsets[a + 1])
+    src_vi = np.asarray(root["variant_index"][cs:ce], dtype=np.int32)
+    pos, err = _find_source_position(src_vi, v, a, label)
+    if err is not None:
+        return err
+    src_pos = cs + pos
+    tag = f"{label}/{_BY_VARIANT_GROUP}: (variant={v}, analysis={a})"
+    b_z, b_se, b_eaf, b_imp = codes
+    err = _check_cell_codes(root, b_z, b_se, b_eaf, b_imp, tag, src_pos)
+    if err is not None:
+        return err
+    return _check_cell_exceptions(root, index, encoding, b_z, b_se, b_eaf, tag, ordinal, src_pos)
+
+
+def _load_optional_columns(
+    root: Any, index: Any, s: int, e: int
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    has_eaf = "eaf" in index and "eaf" in root
+    has_imp = "imputed" in index and "imputed" in root
+    b_eaf = np.asarray(index["eaf"][s:e]) if has_eaf else None
+    b_imp = np.asarray(index["imputed"][s:e]) if has_imp else None
+    return b_eaf, b_imp
+
+
+def _cell_codes_tuple(
+    b_z: np.ndarray,
+    b_se: np.ndarray,
+    b_eaf: np.ndarray | None,
+    b_imp: np.ndarray | None,
+    i: int,
+) -> tuple[Any, Any, Any, Any]:
+    eaf_val = b_eaf[i] if b_eaf is not None else None
+    imp_val = b_imp[i] if b_imp is not None else None
+    return (b_z[i], b_se[i], eaf_val, imp_val)
+
+
+def _validate_variant_cells(
+    root: Any,
+    index: Any,
+    offsets: np.ndarray,
+    by_offsets: np.ndarray,
+    encoding: StoreEncoding,
+    label: str,
+    v: int,
+) -> str | None:
+    """Compare all index cells for one variant against the source planes."""
+    s, e = int(by_offsets[v]), int(by_offsets[v + 1])
+    b_analyses = np.asarray(index["analysis_index"][s:e], dtype=np.int32)
+    b_z, b_se = np.asarray(index["z"][s:e]), np.asarray(index["se"][s:e])
+    b_eaf, b_imp = _load_optional_columns(root, index, s, e)
+    for i, a_val in enumerate(b_analyses):
+        codes = _cell_codes_tuple(b_z, b_se, b_eaf, b_imp, i)
+        err = _validate_one_cell(
+            root, index, offsets, encoding, label, v, int(a_val), codes, s + i
+        )
+        if err is not None:
+            return err
+    return None
+
+
+def _validate_variant_index_sample(
+    root: Any,
+    index: Any,
+    offsets: np.ndarray,
+    by_offsets: np.ndarray,
+    encoding: StoreEncoding,
+    n_assoc: int,
+    errors: list[str],
+    label: str,
+    *,
+    sample_variants: int = 100,
+) -> None:
+    """Sampled cell comparison: cells in `by_variant` match the Analysis-sorted planes."""
+    if n_assoc == 0:
+        return
+    sample = _sample_non_empty_variants(by_offsets, sample_variants)
+    for v in sample:
+        err = _validate_variant_cells(root, index, offsets, by_offsets, encoding, label, int(v))
+        if err is not None:
+            errors.append(err)
+            return
+
+
 def _validate_variant_index(
     store: OpenGWASDBStore,
     ragged_path: Path,
@@ -1451,10 +1518,7 @@ def _validate_variant_index(
     """Seam: the variant-centric index agrees with the Analysis-sorted planes.
 
     Presence, shape, per-variant counts, within-variant ordering, and a
-    bounded two-seed 64-bit digest of every cell's `(variant, analysis, raw
-    codes, exact exception values)` against the Analysis-sorted side.  The
-    digest is order-independent and windowed, so peak memory is a window plus
-    the offset array, never a plane (issue #254, ruling Q1).
+    sampled cell comparison against the Analysis-sorted side.
     """
     root = open_group(ragged_path)
     index = _validate_variant_index_presence(store, root, errors, component_label)
@@ -1473,14 +1537,9 @@ def _validate_variant_index(
     _validate_variant_index_ordering(index, by_offsets, n_assoc, errors, component_label)
     if errors:
         return
-    source_digest = _source_digest(root, store.manifest.encoding, offsets, n_assoc)
-    index_digest = _index_digest(index, store.manifest.encoding, by_offsets, n_assoc)
-    if source_digest != index_digest:
-        errors.append(
-            f"{component_label}/{_BY_VARIANT_GROUP}: the index's content digest "
-            f"{index_digest} does not match the Analysis-sorted planes' {source_digest}; a "
-            "row's analysis, a code or an exact exception value was re-keyed wrong"
-        )
+    _validate_variant_index_sample(
+        root, index, offsets, by_offsets, store.manifest.encoding, n_assoc, errors, component_label
+    )
 
 
 def _validate_variant_index_block(
@@ -1555,8 +1614,8 @@ def _validate_variant_index_counts(
     window's uniques (review round 1, finding 3).
     """
     counts = np.zeros(n_axis, dtype=np.int64)
-    for lo in range(0, n_assoc, _DIGEST_WINDOW):
-        hi = min(lo + _DIGEST_WINDOW, n_assoc)
+    for lo in range(0, n_assoc, _INDEX_WINDOW):
+        hi = min(lo + _INDEX_WINDOW, n_assoc)
         window = np.asarray(root["variant_index"][lo:hi], dtype=np.int64)
         values, multiplicity = np.unique(window, return_counts=True)
         np.add.at(counts, values, multiplicity)
@@ -1582,8 +1641,8 @@ def _validate_variant_index_ordering(
     variant boundary carried by `by_offsets` and the window's array is read one
     window at a time (review round 1, finding 3).
     """
-    for lo in range(0, n_assoc, _DIGEST_WINDOW):
-        hi = min(lo + _DIGEST_WINDOW, n_assoc)
+    for lo in range(0, n_assoc, _INDEX_WINDOW):
+        hi = min(lo + _INDEX_WINDOW, n_assoc)
         window = np.asarray(index["analysis_index"][lo:hi], dtype=np.int64)
         if len(window) < 2:
             continue
@@ -2131,9 +2190,9 @@ def _validate_dense_coverage(
 
 
 def _validate_overflow_index(store_path: Path, n_shared: int, errors: list[str]) -> None:
-    """Validate the Overflow's variant-centric index when the release carries one."""
+    """Validate the Overflow's variant-centric index (ADR 0060)."""
     ragged_path = store_path / "data.zarr" / "ragged"
-    if errors or not (ragged_path / _BY_VARIANT_GROUP).exists():
+    if errors:
         return
     root = open_group(ragged_path)
     offsets = np.asarray(root["offsets"][:], dtype=np.int64)

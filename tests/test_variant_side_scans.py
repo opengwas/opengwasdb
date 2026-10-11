@@ -30,6 +30,7 @@ import gzip
 # `store_reads` is the chunk-count instrument #253 added: these tests count
 # chunk reads at zarr's store rather than trusting a peak-memory number.
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -45,6 +46,7 @@ from test_ragged_residual_completion import RaggedResidualScenario
 from opengwasdb.encoding import EafRead
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
+from opengwasdb.layouts.ragged.by_variant import VariantIndexError
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader, RaggedCSRWriter
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -217,24 +219,12 @@ def test_hybrid_fixture_is_residual_in_both_components(hybrid_residual: Path) ->
 
 
 @pytest.mark.parametrize("observed_only", [False, True])
-@pytest.mark.parametrize("scanned", [False, True])
 def test_ragged_variant_shapes_match_the_analysis_side(
     ragged_residual: RaggedResidualScenario,
-    ragged_residual_scanned: Path,
     observed_only: bool,
-    scanned: bool,
 ) -> None:
-    """phewas, range_phewas and lookup equal the Analysis-side decode.
-
-    Parametrised over the index present and absent (review round 3): the scan
-    route is the only route for every registered release.
-    """
-    store = ragged_residual_scanned if scanned else ragged_residual.completed
-    with query_store(store) as query:
-        assert (query._by_variant is None) is scanned, (
-            "the scanned fixture must carry no index handle, or the oracle is the "
-            "index route twice (review round 4, nit)"
-        )
+    """phewas, range_phewas and lookup equal the Analysis-side decode."""
+    with query_store(ragged_residual.completed) as query:
         analysis_ids = [
             str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())
         ]
@@ -281,6 +271,14 @@ def test_ragged_variant_shapes_match_the_analysis_side(
         )
 
 
+def test_unindexed_ragged_store_is_refused(ragged_residual_scanned: Path) -> None:
+    with pytest.raises(VariantIndexError, match="ogdb build-variant-index"):
+        query_store(ragged_residual_scanned)
+    val = validate_store(ragged_residual_scanned)
+    assert not val.ok
+    assert any("by_variant" in err for err in val.errors)
+
+
 def test_ragged_range_phewas_returns_imputed_rows(
     ragged_residual: RaggedResidualScenario,
 ) -> None:
@@ -291,17 +289,11 @@ def test_ragged_range_phewas_returns_imputed_rows(
         assert (status == "imputed").any(), "the range must return imputed cells"
 
 
-@pytest.mark.parametrize("scanned", [False, True])
 def test_hybrid_off_panel_shapes_match_the_overflow_side(
-    hybrid_residual: Path, hybrid_residual_scanned: Path, scanned: bool
+    hybrid_residual: Path,
 ) -> None:
     """Off-panel phewas, range_phewas and lookup equal the Overflow-side decode."""
-    store = hybrid_residual_scanned if scanned else hybrid_residual
-    with query_store(store) as query:
-        assert (query._by_variant is None) is scanned, (
-            "the scanned fixture must carry no index handle, or the oracle is the "
-            "index route twice (review round 4, nit)"
-        )
+    with query_store(hybrid_residual) as query:
         columns = list(range(query._csr.n_analyses))
         analysis_ids = [
             str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())
@@ -339,6 +331,14 @@ def test_hybrid_off_panel_shapes_match_the_overflow_side(
             _overflow_oracle(query, lookup_rows[lookup_keep], columns),
             "hybrid off-panel lookup",
         )
+
+
+def test_unindexed_hybrid_store_is_refused(hybrid_residual_scanned: Path) -> None:
+    with pytest.raises(VariantIndexError, match="ogdb build-variant-index"):
+        query_store(hybrid_residual_scanned)
+    val = validate_store(hybrid_residual_scanned)
+    assert not val.ok
+    assert any("by_variant" in err for err in val.errors)
 
 
 # ── the identity check has teeth (deliberately wrong versions) ──────────────
@@ -379,18 +379,26 @@ def _analysis_ids(query) -> list[str]:
     return [str(row["analysis_id"]) for _, row in sorted(query.analyses_table().items())]
 
 
+def _scan_target_variant(query: Any, target_variant: int) -> dict[str, np.ndarray]:
+    """Execute a scan query for target_variant directly on the CSR."""
+    hit_positions = query._csr.variant_positions(np.asarray([target_variant], dtype=np.int32))
+    return query._hit_rows_result(
+        hit_positions,
+        np.full(len(hit_positions), target_variant, dtype="int32"),
+        observed_only=False,
+    )
+
+
 def test_identity_catches_a_misaligned_window(
     ragged_residual: RaggedResidualScenario, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(RaggedCSRReader, "variant_positions", _shifted_window)
     with query_store(ragged_residual.completed) as query:
-        # These three tests mutate the Analysis-side scan to prove the identity
-        # check catches its bugs; force the scan rather than the index, which
-        # does not share the mutated code (ADR 0060).
-        query._by_variant = None
         first_alid = _any_alid(query)
+        target = query._variant_axis.by_identifier(first_alid)
+        assert target is not None
         _wanted, want = _oracle_for_alid(query, first_alid)
-        got = query.phewas(first_alid)
+        got = _scan_target_variant(query, target.variant_index)
         assert len(want["z"]) > 0, "the oracle must return the target for a miss to be visible"
         with pytest.raises(AssertionError):
             _same_oracle(got, want, "shifted")
@@ -403,10 +411,11 @@ def test_identity_catches_an_off_by_one_search(
         RaggedCSRReader, "variant_positions", _off_by_one_using(RaggedCSRReader.variant_positions)
     )
     with query_store(ragged_residual.completed) as query:
-        query._by_variant = None
         alid = _any_alid(query)
+        target = query._variant_axis.by_identifier(alid)
+        assert target is not None
         _wanted, want = _oracle_for_alid(query, alid)
-        got = query.phewas(alid)
+        got = _scan_target_variant(query, target.variant_index)
         assert len(want["z"]) > 0, "the oracle must return the target for a miss to be visible"
         with pytest.raises(AssertionError):
             _same_oracle(got, want, "off-by-one")
@@ -423,9 +432,13 @@ def test_identity_catches_a_dropped_imputed_mask(
 
     monkeypatch.setattr(RaggedCSRReader, "eaf_at_read", without_mask)
     with query_store(ragged_residual.completed) as query:
-        query._by_variant = None
-        got = query.range_phewas("1", 900_000, 1_100_000)
         wanted = query._variant_axis.range_indices("1", 900_000, 1_100_000)
+        hit_positions = query._csr.variant_positions(np.asarray(wanted, dtype=np.int32))
+        got = query._hit_rows_result(
+            hit_positions,
+            query._csr.variant_index_at(hit_positions),
+            observed_only=False,
+        )
         want = _ragged_oracle(
             query, wanted, analysis_ids=_analysis_ids(query), observed_only=False
         )

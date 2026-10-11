@@ -278,7 +278,6 @@ def build_ragged_from_ssf(
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
-    write_variant_index: bool = True,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs.
 
@@ -302,7 +301,7 @@ def build_ragged_from_ssf(
         variants, alid_to_idx = _build_variant_axis(staged, alid_variant, rsid_by_alid)
         csr, encoding, eaf_scopes = _encode_ssf_csr(
             per_analysis, alid_to_idx, len(analytes),
-            len(variants), staged.path, write_variant_index=write_variant_index,
+            len(variants), staged.path,
         )
         _write_indexes_and_metadata(
             staged,
@@ -464,8 +463,6 @@ def _encode_ssf_csr(
     n_analyses: int,
     n_variants: int,
     output: Path,
-    *,
-    write_variant_index: bool = True,
 ) -> tuple[RaggedCSRWriter, StoreEncoding, list[str]]:
     """Stream every analysis's associations into the CSR and flush.
 
@@ -496,8 +493,7 @@ def _encode_ssf_csr(
         )
     )
     csr.flush(output, encoding)
-    if write_variant_index:
-        build_variant_index(output, n_axis=n_variants)
+    build_variant_index(output, n_axis=n_variants)
     return csr, encoding, eaf_scopes
 
 
