@@ -6,7 +6,7 @@
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
-<meta name="dcterms.date" content="2026-10-10">
+<meta name="dcterms.date" content="2026-10-11">
 
 <title>Indexed Variant Subsets on OGS-00009 — HapMap3 full-statistic extraction</title>
 <style>
@@ -2206,7 +2206,7 @@ vertical-align: -.125em;
 <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
   <nav id="TOC" role="doc-toc" class="toc-active">
     <h2 id="toc-title">Table of contents</h2>
-
+   
   <ul>
   <li><a href="#scope" id="toc-scope" class="nav-link active" data-scroll-target="#scope">Scope</a></li>
   <li><a href="#input-the-canonical-grch38-hapmap3-alid-list" id="toc-input-the-canonical-grch38-hapmap3-alid-list" class="nav-link" data-scroll-target="#input-the-canonical-grch38-hapmap3-alid-list">Input: the canonical GRCh38 HapMap3 ALID list</a></li>
@@ -2230,17 +2230,17 @@ vertical-align: -.125em;
 
 <div class="quarto-title-meta">
 
-
+    
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">October 10, 2026</p>
+      <p class="date">October 11, 2026</p>
     </div>
   </div>
-
-
+  
+    
   </div>
-
+  
 
 
 </header>
@@ -2256,7 +2256,7 @@ vertical-align: -.125em;
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>On OGS-00009, with a <strong>full-statistic</strong> index (Z, SE and EAF — not a Z-only projection), the indexed full result for <code>ukb-b-17805</code> returns in <strong>407.3 ms warm median</strong> (1,178,549 associations), against <strong>16.39 s</strong> for the ordinary primary-plane path — a <strong>40x</strong> improvement.</p>
+<p>On OGS-00009, with a <strong>full-statistic</strong> index (Z, SE and EAF — not a Z-only projection), the indexed full result for <code>ukb-b-17805</code> returns in <strong>456.6 ms warm median</strong> (1,178,549 associations), against <strong>17.20 s</strong> for the ordinary primary-plane path — a <strong>38x</strong> improvement.</p>
 <p>The ordinary read is measured <strong>before</strong> the subset is built and again <strong>after</strong> it, in the same run against a scratch copy of the authoritative release; the artifact records <code>ordinary_bracketed = True</code>. Exact decoded equivalence across all six result fields is <strong>True</strong>; publication status: <strong>published</strong>.</p>
 </div>
 </div>
@@ -2320,15 +2320,15 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>Measured at (UTC)</td>
-<td>2026-10-10T09:28:28.016992+00:00</td>
+<td>2026-10-10T23:30:47.773289+00:00</td>
 </tr>
 <tr class="odd">
 <td>Git commit</td>
-<td><code>90c4ca8</code></td>
+<td><code>a36ea78</code></td>
 </tr>
 <tr class="even">
 <td>opengwasdb fingerprint</td>
-<td><code>216b6affaaca4976…</code></td>
+<td><code>3e15ebba785a8538…</code></td>
 </tr>
 </tbody>
 </table>
@@ -2354,7 +2354,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>Measured scratch copy</td>
-<td><code>/data/opengwasdb/work/267-indexed/store-copy.opengwasdb</code></td>
+<td><code>/data/opengwasdb/work/270-indexed/store-copy.opengwasdb</code></td>
 <td><code>copy_kind = reflink</code></td>
 </tr>
 <tr class="odd">
@@ -2387,11 +2387,11 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>run started (UTC)</td>
-<td>2026-10-10T08:14:26.053168+00:00</td>
+<td>2026-10-10T23:22:41.526729+00:00</td>
 </tr>
 <tr class="odd">
 <td>run finished (UTC)</td>
-<td>2026-10-10T09:28:23.586358+00:00</td>
+<td>2026-10-10T23:30:43.300215+00:00</td>
 </tr>
 </tbody>
 </table>
@@ -2434,7 +2434,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td>resolution time</td>
-<td>3.75 s</td>
+<td>3.98 s</td>
 </tr>
 </tbody>
 </table>
@@ -2464,7 +2464,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>variant-list path</td>
-<td><code>/data/opengwasdb/work/267-indexed/hm3.grch38.alid.txt</code></td>
+<td><code>/data/opengwasdb/work/270-indexed/hm3.grch38.alid.txt</code></td>
 </tr>
 <tr class="odd">
 <td>variant-list SHA-256</td>
@@ -2560,7 +2560,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>HapMap3 index (physical)</td>
-<td>6,235,037,696</td>
+<td>6,235,009,024</td>
 <td>5.8 GiB</td>
 </tr>
 <tr class="odd">
@@ -2588,7 +2588,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><code>eaf</code></td>
-<td>710,705,152</td>
+<td>710,676,480</td>
 </tr>
 <tr class="even">
 <td><code>eaf_baseline</code></td>
@@ -2604,7 +2604,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><code>se</code></td>
-<td>1,158,287,360</td>
+<td>1,158,299,648</td>
 </tr>
 <tr class="even">
 <td><code>se_coefficients</code></td>
@@ -2624,7 +2624,7 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td><code>z</code></td>
-<td>4,360,572,928</td>
+<td>4,360,560,640</td>
 </tr>
 <tr class="odd">
 <td><code>z_overflow_index</code></td>
@@ -2636,11 +2636,11 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td><strong>total</strong></td>
-<td><strong>6,235,037,696</strong></td>
+<td><strong>6,235,009,024</strong></td>
 </tr>
 </tbody>
 </table>
-<div id="a7f22574" class="cell" data-execution_count="12">
+<div id="7c72c6df" class="cell" data-execution_count="12">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -2671,55 +2671,138 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>configured band</td>
-<td>4,000,000 cells</td>
+<td>65,536,000 cells</td>
 </tr>
 <tr class="odd">
+<td>physical write unit</td>
+<td>65,536 variants</td>
+</tr>
+<tr class="even">
+<td>declared band invariant</td>
+<td>max(band, write unit) = 65,536,000 cells</td>
+</tr>
+<tr class="odd">
+<td>largest materialised source block</td>
+<td>65,536,000 cells</td>
+</tr>
+<tr class="even">
+<td>largest raw buffer (cells x dtype)</td>
+<td>131,072,000 B</td>
+</tr>
+<tr class="odd">
+<td>raw buffer by plane</td>
+<td><code>eaf</code> 65,536,000 B, <code>se</code> 65,536,000 B, <code>z</code> 131,072,000 B</td>
+</tr>
+<tr class="even">
 <td>prepare (open release, resolve list)</td>
-<td>7.76 s</td>
-</tr>
-<tr class="even">
-<td>publish (write planes + staged validation)</td>
-<td>4,189.64 s</td>
+<td>8.20 s</td>
 </tr>
 <tr class="odd">
+<td>write (planes, chunk-aligned)</td>
+<td>176.08 s</td>
+</tr>
+<tr class="even">
+<td>staged validation (publication gate)</td>
+<td>1.94 s</td>
+</tr>
+<tr class="odd">
+<td>validation mode</td>
+<td>sampled</td>
+</tr>
+<tr class="even">
+<td>decoded sample</td>
+<td>528 cells (corners + 16 evenly spaced Analyses + 8 physical write-unit boundaries + 1 inner-chunk boundary + 8 checksum-seeded cells per Analysis + 32 checksum-seeded cells across Analyses)</td>
+</tr>
+<tr class="odd">
+<td>sample seed (input-SHA-256)</td>
+<td><code>166638625948460791</code></td>
+</tr>
+<tr class="even">
+<td>publish (write + validation + staging)</td>
+<td>178.03 s</td>
+</tr>
+<tr class="odd">
+<td>validation share of publish</td>
+<td>1.1%</td>
+</tr>
+<tr class="even">
 <td>in-process total</td>
-<td>4,197.40 s</td>
-</tr>
-<tr class="even">
-<td>subprocess wall total (incl. interpreter startup)</td>
-<td>4,198.00 s</td>
+<td>186.23 s</td>
 </tr>
 <tr class="odd">
+<td>subprocess wall total (incl. interpreter startup)</td>
+<td>187.53 s</td>
+</tr>
+<tr class="even">
 <td>requested / resolved / absent (writer)</td>
 <td>1,206,903 / 1,206,903 / 0</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>input SHA-256 (writer)</td>
 <td><code>4a7c82aa625a006ff437dcaa2769b00e056413d54c72e98f7378327c69513398</code></td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>peak RSS</td>
 <td>1,234.8 MB</td>
 </tr>
-<tr class="even">
-<td>RSS bound (band + fixed overhead)</td>
-<td>1,146.1 MB</td>
-</tr>
 <tr class="odd">
-<td>peak RSS within declared bound</td>
+<td>RSS acceptance threshold</td>
+<td>1,146.1 MB (the #267 4,000,000-cell declaration)</td>
+</tr>
+<tr class="even">
+<td>peak RSS within acceptance threshold</td>
 <td>False</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>measurement source</td>
 <td>/usr/bin/time -v (build subprocess)</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>build block source</td>
 <td>this run</td>
 </tr>
 </tbody>
 </table>
-<p>The bound is <code>band_cells</code> times a per-cell allowance plus a fixed term, so it is a function of the configured band and not of the full Store axis (whose decoded size is printed below). The measured peak is reported as measured: where it exceeds the declared bound the target below fails rather than the bound being widened after the fact.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Statistic plane</th>
+<th>physical files</th>
+<th>encodings</th>
+<th>most encodings of one file</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>eaf</code></td>
+<td>38,456</td>
+<td>38,456</td>
+<td>1</td>
+</tr>
+<tr class="even">
+<td><code>se</code></td>
+<td>38,456</td>
+<td>38,456</td>
+<td>1</td>
+</tr>
+<tr class="odd">
+<td><code>z</code></td>
+<td>38,456</td>
+<td>38,456</td>
+<td>1</td>
+</tr>
+</tbody>
+</table>
+<p>The writer copies the primary planes’ stored codes into the index <strong>one physical output file at a time</strong> — a v2 inner chunk or a v3 shard — so each compressed file is encoded exactly once (the table above is the measured count, not a claim). Before #270 the band was sized only by cell budget (about 1,976 variants on OGS-00009), so each 65,536-variant output chunk was partially rewritten about 33 times. The Analysis axis is tiled within the band so the largest materialised source block is <code>max(band_cells, write unit)</code> — one physical output unit when the budget is smaller — independent of the subset’s total size. A tile is a whole multiple of the primary plane’s own read unit when the budget allows, and the writer accepts decoding the primary once per tile when it does not, rather than materialising <code>write unit × read unit</code> cells.</p>
+<p>The writer’s memory is bounded <strong>separately from RSS</strong>: the largest raw source block is the <code>largest materialised source block</code> cells and its <code>largest raw buffer</code> bytes above, independent of the subset’s total size.</p>
+<p>The RSS target is the <strong>preserved #267 acceptance threshold</strong> listed above: the original 4,000,000-cell declaration times the same per-cell allowance plus the fixed term. It is deliberately <em>not</em> re-derived from the new band budget, so the measured peak is still compared against the historical target and the run records the miss honestly rather than being turned green by widening the model. The peak itself remains ALID-resolution-bound, not writer-band-bound.</p>
+<p>The build’s publication gate is <strong><code>sampled</code></strong>: the enumerated structural rules (identity and attributes, exact array set, shapes/dtypes/chunking, the full Variant Index, counts, the small side-table remapping and provenance) are checked exhaustively, and the decoded Z/SE/EAF and Association Status of a bounded deterministic sample of cells are compared against the primary planes. The sample anchors a spread of physical write-unit boundaries plus a separate inner-chunk spread, the endpoints of both axes, a spread of Analyses and input-checksum-seeded cells (the mode, strategy, seed and count are in the table above); a systemic, ordering or chunk-boundary corruption is caught. An isolated unsampled corruption can pass this gate by design; standalone <code>opengwasdb validate</code> remains <strong>exhaustive</strong> and decodes every indexed cell, so it is the audit that rules that out.</p>
 <p>Full decoded axis: 2,024 Analyses x 9,847,701 variants = 19,931,746,824 cells (0.1 TB at float32).</p>
 </section>
 <section id="query-latency" class="level2">
@@ -2737,23 +2820,23 @@ vertical-align: -.125em;
 <tbody>
 <tr class="odd">
 <td>ordinary, before index</td>
-<td>18.90 s</td>
-<td>16.39 s</td>
-<td>18.93 s</td>
+<td>44.38 s</td>
+<td>17.20 s</td>
+<td>21.33 s</td>
 <td>7,578,651</td>
 </tr>
 <tr class="even">
 <td><strong>indexed</strong></td>
-<td>409.7 ms</td>
-<td>407.3 ms</td>
-<td>407.8 ms</td>
+<td>450.1 ms</td>
+<td>456.6 ms</td>
+<td>524.7 ms</td>
 <td>1,178,549</td>
 </tr>
 <tr class="odd">
 <td>ordinary, after index</td>
-<td>19.68 s</td>
-<td>15.99 s</td>
-<td>16.24 s</td>
+<td>25.04 s</td>
+<td>18.83 s</td>
+<td>20.22 s</td>
 <td>7,578,651</td>
 </tr>
 </tbody>
@@ -2802,14 +2885,14 @@ vertical-align: -.125em;
 </tr>
 <tr class="odd">
 <td>ordinary unchanged within ±25% envelope</td>
-<td>True (median moved +2.42%)</td>
+<td>True (median moved +9.47%)</td>
 </tr>
 <tr class="even">
 <td>ordinary before/after bracketed</td>
 <td>True</td>
 </tr>
 <tr class="odd">
-<td>peak build RSS within declared bound</td>
+<td>peak build RSS within the #267 acceptance threshold</td>
 <td>False</td>
 </tr>
 <tr class="even">
@@ -2902,12 +2985,14 @@ vertical-align: -.125em;
 <section id="caveats-and-honesty" class="level2">
 <h2 class="anchored" data-anchor-id="caveats-and-honesty">Caveats and honesty</h2>
 <ul>
-<li><strong>The RSS target is recorded as its measurement says.</strong> The peak was 1,234.8 MB against the declared band-plus-fixed-overhead bound of 1,146.1 MB, so <code>peak_rss_within_bound = False</code>. The peak is still set by the band, not by the full matrix (terabytes decoded). Widening the bound after the fact would be the tuning this harness refuses.</li>
+<li><strong>The RSS target is the preserved #267 acceptance threshold, reported as its measurement says.</strong> The peak was 1,234.8 MB against the historical 1,146.1 MB threshold (the #267 4,000,000-cell declaration), so <code>peak_rss_within_bound = False</code>. The writer’s own bounded-band invariant (65,536,000 cells; raw buffer 131,072,000 B) is recorded separately and is not used to re-derive this acceptance target. The peak is ALID-resolution-bound, not writer-band-bound, and widening the threshold after the fact would be the tuning this harness refuses.</li>
+<li><strong>The publication gate is a documented sample; standalone validation is exhaustive.</strong> The build’s staged validation compares a bounded deterministic decoded sample (528 cells, mode <code>sampled</code>, 1.94 s) and refuses systemic, ordering and output-boundary corruption. An isolated unsampled corruption can pass the build gate; standalone <code>validate</code> decodes and compares <strong>every</strong> indexed cell, side table, imputed mask and reference EAF and is the explicit audit for it. The risk is stated rather than hidden.</li>
+<li><strong>The measured rewrite count is one per physical file.</strong> The table above is the store-level count over the staged group, so a v2 chunk (or v3 shard) encoded twice would show <code>most encodings of one file = 2</code> and fail the artifact’s semantic checks.</li>
 <li><strong><code>first_ms</code> is not a cold-cache figure.</strong> The OS page cache is never dropped, and <code>ordinary_after</code> follows <code>ordinary_before</code>, so it is already warm. The method is disclosed in the artifact under <code>timings.method</code>.</li>
 <li><strong><code>p95_ms</code> is the nearest-rank order statistic, i.e. the maximum of the five warm repetitions</strong> at the default <code>--reps</code>; it is not interpolated.</li>
 <li>The build block is genuine for this run (<code>build.run_mode = fresh</code>). A query-only re-run may reuse an earlier artifact’s measured build block via <code>--build-stats</code>, and it is named here as <code>this run</code>.</li>
-<li><strong>This is a historical measurement at the commit named in Scope</strong> (<code>90c4ca8</code>, fingerprint <code>216b6affaaca4976…</code>). A later documentation-only commit corrected stale “Observed-Only Dense only” wording in CLI help, error messages and docstrings; it changed no measured code path, so the artifact and its fingerprint remain the measurement for the code that actually ran and are deliberately not re-generated for a wording change.</li>
-<li><strong><code>store.copy_kind</code> in this historical artifact is the copy method the older <code>cp --reflink=auto</code> request assumed.</strong> The harness now uses <code>cp --reflink=always</code>, verifies the reflink, falls back to a documented <code>full_copy</code>, and records <code>reused_scratch_copy</code> when it did not perform the copy; this frozen artifact predates that verification and is not re-generated to change a label with no measurement meaning.</li>
+<li><strong>This measurement is at the commit named in Scope</strong> (<code>a36ea78</code>, fingerprint <code>3e15ebba785a8538…</code>). It was re-run for #270’s chunk-aligned writer; both the artifact and this page are regenerated from that run.</li>
+<li><strong><code>store.copy_kind</code> is the copy method the harness verified</strong>, recorded as <code>reflink</code> or <code>full_copy</code> from <code>cp --reflink=always</code> with a documented fallback, or <code>reused_scratch_copy</code> when it did not perform the copy.</li>
 <li>The per-plane physical figures bucket the group’s top-level entries, so a future encoding that adds an array appears without a hard-coded plane list.</li>
 </ul>
 <div class="callout callout-style-default callout-note callout-titled">
@@ -2925,7 +3010,7 @@ vertical-align: -.125em;
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co"># scratch copy, measure ordinary_before, build, measure ordinary_after.</span></span>
 <span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> dev python benchmarks/benchmark_indexed_subset.py <span class="dt">\</span></span>
 <span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">--store</span> /data/opengwasdb/stores/OGS-00009/store.opengwasdb <span class="dt">\</span></span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">--work</span> /data/opengwasdb/work/267-indexed <span class="dt">\</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">--work</span> /data/opengwasdb/work/270-indexed <span class="dt">\</span></span>
 <span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">--analysis-id</span> ukb-b-17805 <span class="dt">\</span></span>
 <span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">--subset-name</span> hm3 <span class="dt">\</span></span>
 <span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">--reps</span> 5 <span class="dt">\</span></span>
@@ -2951,7 +3036,7 @@ vertical-align: -.125em;
     anchorJS.add('.anchored');
     const isCodeAnnotation = (el) => {
       for (const clz of el.classList) {
-        if (clz.startsWith('code-annotation-')) {
+        if (clz.startsWith('code-annotation-')) {                     
           return true;
         }
       }
@@ -2971,11 +3056,11 @@ vertical-align: -.125em;
         button.setAttribute("data-bs-toggle", "tooltip");
         button.setAttribute("data-bs-placement", "left");
         button.setAttribute("data-bs-title", "Copied!");
-        tooltip = new bootstrap.Tooltip(button,
-          { trigger: "manual",
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
             customClass: "code-copy-button-tooltip",
             offset: [0, -8]});
-        tooltip.show();
+        tooltip.show();    
       }
       setTimeout(function() {
         if (tooltip) {
@@ -3052,7 +3137,7 @@ vertical-align: -.125em;
       if (onUntriggerFn) {
         config.onUntrigger = onUntriggerFn;
       }
-      window.tippy(el, config);
+      window.tippy(el, config); 
     }
     const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
     for (var i=0; i<noterefs.length; i++) {
@@ -3127,7 +3212,7 @@ vertical-align: -.125em;
       tippyHover(xref, undefined, function(instance) {
         instance.disable();
         let url = xref.getAttribute('href');
-        let hash = undefined;
+        let hash = undefined; 
         if (url.startsWith('#')) {
           hash = url;
         } else {
@@ -3155,7 +3240,7 @@ vertical-align: -.125em;
               if (note !== null) {
                 const html = processXRef(id, note);
                 instance.setContent(html);
-              }
+              } 
             }).finally(() => {
               instance.enable();
               instance.show();
@@ -3179,7 +3264,7 @@ vertical-align: -.125em;
               }
               const html = processXRef(null, note);
               instance.setContent(html);
-            }
+            } 
           }).finally(() => {
             instance.enable();
             instance.show();
@@ -3219,7 +3304,7 @@ vertical-align: -.125em;
               height = bottom - top;
             }
             if (top !== null && height !== null && parent !== null) {
-              // cook up a div (if necessary) and position it
+              // cook up a div (if necessary) and position it 
               let div = window.document.getElementById("code-annotation-line-highlight");
               if (div === null) {
                 div = window.document.createElement("div");

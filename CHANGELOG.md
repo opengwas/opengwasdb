@@ -386,6 +386,57 @@ the end of this file.
 
 ### Fixed
 
+- **Indexed Variant Subset builds no longer rewrite each output chunk, and the
+  build's publication gate is a documented deterministic sample (#270).**
+  The Analysis-major planes have a `(1, 65,536)` inner chunk (a
+  `(1, 1,048,576)` v3 shard), but the writer banded by cell budget alone -- on
+  OGS-00009 about 1,976 subset variants -- so each 65,536-variant output chunk
+  was partially read, recomputed and recompressed about 33 times per plane. The
+  writer now walks whole physical output files (a v2 chunk, or a v3 shard so a
+  shard is never a read-modify-write), plane at a time, and tiles the Analysis
+  axis within the band. The tile is capped by the band budget with a floor of
+  one Analysis, so the largest materialised source block is
+  `max(band_cells, write unit)` -- one physical output unit when the budget is
+  smaller -- independent of the subset's length; a tile that fits the budget is
+  a whole multiple of the primary's read unit, and a budget below it decodes the
+  primary once per tile rather than materialising the unit. `DEFAULT_BAND_CELLS`
+  is exactly one output write unit times a representative primary read unit
+  (65,536 x 1,000 = 65,536,000 cells), so a v2 build decodes each primary file
+  once (the historical 4,000,000-cell budget split one 1,000-Analysis read unit
+  into 17 tiles). `--band-cells` targets the
+  Analysis tile and the write band is the index's own geometry. The staged
+  publication gate now checks every structural invariant exhaustively (identity
+  and attributes, exact array set, shapes/dtypes/chunking, the full Variant
+  Index, counts and provenance), plus the small side-table remapping and the
+  per-variant EAF baseline/reference, and replaces the full-matrix decoded
+  comparison with a **bounded deterministic stratified sample** of decoded
+  Z/SE/EAF and Association Status: the endpoints of both axes, a spread of
+  physical write-unit boundaries and a separate inner-chunk spread, a spread of
+  Analyses and input-checksum-seeded cells (528 cells on the OGS-00009 run). The build result and artifact record `validation_mode`,
+  the sample strategy, seed and cell count, and the sampled duration. Standalone
+  `validate` remains **exhaustive** and decodes every indexed cell, side table,
+  imputed mask and reference EAF, so an isolated corruption the build sample can
+  miss is refused by an explicit audit; it uses its own
+  `EXHAUSTIVE_VALIDATION_BAND_CELLS` (4,000,000 cells, unchanged from #267) so
+  its float32 decode does not grow to the writer's 65,536,000-cell block. On the
+  fresh #270 OGS-00009 HapMap3
+  build the store layer measured every one of the 38,456 `z`, `se` and `eaf`
+  physical files encoded exactly once; the build took 187.53 s (write 176.076 s,
+  sampled validation 1.939 s) against the #267 4,198 s, with exact six-field
+  equivalence, 6,235,009,024 physical index bytes (17.852%) and a 1,234.8 MB
+  peak RSS; the benchmark's RSS target is the preserved #267 acceptance
+  threshold of 1,146.1 MB, so the run still records
+  `peak_rss_within_bound = false` (the peak is ALID-resolution-bound, not the
+  subset matrix), while the writer's own bounded-band invariant and derived raw
+  buffer bytes are recorded separately. The index
+  chunk/shard geometry and per-plane physical bytes are unchanged from #267.
+  Tests build a v2 and a v3 index under a `count_shard_writes` recorder and fail
+  if any physical output file is encoded more than once; a chunk-boundary
+  corruption must fail the build sample; and an isolated unsampled corruption
+  may pass it but must fail the exhaustive standalone audit. The benchmark
+  artifact gains the validation mode/sample, the bounded-band invariant and the
+  per-plane rewrite counts (schema 5).
+
 - **Indexed Variant Subset review fixes (#263).** The read seam and standalone
   validation now derive every subset array's expected inner chunk and shard from
   the store-array `ArrayRole` policies and refuse an off-format layout, so a

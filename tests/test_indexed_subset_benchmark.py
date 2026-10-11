@@ -252,11 +252,45 @@ def _complete_artifact() -> dict:
             "reused_from": "",
             "total_seconds": 1.0,
             "in_process_seconds": 1.0,
-            "peak_rss_mb": 1.0,
-            "band_cells": 4_000_000,
-            "rss_bound_mb": 1.0,
-            "rss_within_bound": True,
-            "phases": {"prepare_seconds": 0.1, "publish_seconds": 0.9},
+            "peak_rss_mb": 1238.6,
+            "band_cells": 65_536_000,
+            "rss_bound_mb": 1146.1,
+            "rss_bound_label": "the #267 4,000,000-cell declaration",
+            "rss_within_bound": False,
+            "phases": {
+                "prepare_seconds": 0.1,
+                "write_seconds": 0.5,
+                "validate_seconds": 0.3,
+                "publish_seconds": 0.9,
+            },
+            "output_chunk_writes": {
+                "z": {"chunks": 2, "writes": 2, "max_writes_one_chunk": 1},
+                "se": {"chunks": 2, "writes": 2, "max_writes_one_chunk": 1},
+                "eaf": {"chunks": 2, "writes": 2, "max_writes_one_chunk": 1},
+            },
+            "validation_mode": "sampled",
+            "sample_strategy": "corners + Analyses + chunk boundaries + seeded cells",
+            "sample_seed": 12345,
+            "sample_cells": 580,
+            "band_cells_effective": 65_536_000,
+            "physical_write_unit": 65_536,
+            "max_materialized_cells": 65_536_000,
+            "max_materialized_bytes": 131_072_000,
+            "materialized_plane_cells": {
+                "z": 65_536_000,
+                "se": 65_536_000,
+                "eaf": 65_536_000,
+            },
+            "materialized_plane_bytes": {
+                "z": 131_072_000,
+                "se": 65_536_000,
+                "eaf": 65_536_000,
+            },
+            "materialized_plane_dtypes": {
+                "z": "int16",
+                "se": "int8",
+                "eaf": "int8",
+            },
             "peak_rss_source": "/usr/bin/time -v",
             "requested": 3,
             "resolved": 2,
@@ -297,7 +331,7 @@ def _complete_artifact() -> dict:
             "exact_equivalence": True,
             "ordinary_unchanged_within_envelope": True,
             "original_store_unchanged": True,
-            "peak_rss_within_bound": True,
+            "peak_rss_within_bound": False,
             "ordinary_bracketed": True,
         },
         "publication": {"published": True, "reason": ""},
@@ -343,6 +377,125 @@ def test_assert_artifact_complete_rejects_an_unsix_field_equivalence_block() -> 
     _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "required_fields")
 
 
+def test_assert_artifact_complete_rejects_a_rewritten_output_chunk() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["output_chunk_writes"]["z"] = {
+        "chunks": 2,
+        "writes": 4,
+        "max_writes_one_chunk": 3,
+    }
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "rewritten")
+
+
+def test_assert_artifact_complete_rejects_a_missing_write_phase() -> None:
+    artifact = _complete_artifact()
+    del artifact["build"]["phases"]["write_seconds"]
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "write_seconds")
+
+
+def test_assert_artifact_complete_rejects_a_non_sampled_build_gate() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["validation_mode"] = "exhaustive"
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "validation_mode")
+
+
+def test_assert_artifact_complete_rejects_an_unbounded_sample() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["sample_cells"] = bench.SAMPLE_CELLS_CEILING + 1
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "sample_cells")
+
+
+def test_assert_artifact_complete_rejects_a_missing_sample_strategy() -> None:
+    artifact = _complete_artifact()
+    del artifact["build"]["sample_strategy"]
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "sample_strategy")
+
+
+def test_assert_artifact_complete_rejects_a_materialized_block_above_the_bound() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["max_materialized_cells"] = artifact["build"]["band_cells_effective"] + 1
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "max_materialized")
+
+
+def test_assert_artifact_complete_rejects_an_inconsistent_effective_band() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["band_cells_effective"] = artifact["build"]["band_cells"] - 1
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "band_cells_effective")
+
+
+def test_assert_artifact_complete_rejects_inconsistent_materialized_bytes() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["max_materialized_bytes"] += 1
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "max_materialized_bytes")
+
+
+def test_assert_artifact_complete_rejects_a_changed_rss_acceptance_label() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["rss_bound_label"] = "a widened model"
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "rss_bound_label")
+
+
+def test_assert_artifact_complete_rejects_a_widened_rss_threshold() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["rss_bound_mb"] = 3072.0
+
+    _expect_system_exit(lambda: bench.assert_artifact_complete(artifact), "rss_bound_mb")
+
+
+def test_assert_artifact_complete_rejects_inconsistent_rss_within() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["rss_within_bound"] = True
+
+    _expect_system_exit(
+        lambda: bench.assert_artifact_complete(artifact), "rss_within_bound"
+    )
+
+
+def test_assert_artifact_complete_rejects_inconsistent_rss_target() -> None:
+    artifact = _complete_artifact()
+    artifact["targets"]["peak_rss_within_bound"] = True
+
+    _expect_system_exit(
+        lambda: bench.assert_artifact_complete(artifact), "peak_rss_within_bound"
+    )
+
+
+def test_assert_artifact_complete_rejects_a_plane_byte_mismatch() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["materialized_plane_bytes"]["z"] += 2
+    artifact["build"]["max_materialized_bytes"] = max(
+        artifact["build"]["materialized_plane_bytes"].values()
+    )
+
+    _expect_system_exit(
+        lambda: bench.assert_artifact_complete(artifact), "materialized_plane_bytes"
+    )
+
+
+def test_assert_artifact_complete_rejects_a_plane_cell_mismatch() -> None:
+    artifact = _complete_artifact()
+    artifact["build"]["materialized_plane_cells"]["z"] -= 1
+    artifact["build"]["materialized_plane_bytes"]["z"] = (
+        artifact["build"]["materialized_plane_cells"]["z"] * 2
+    )
+    artifact["build"]["max_materialized_bytes"] = max(
+        artifact["build"]["materialized_plane_bytes"].values()
+    )
+
+    _expect_system_exit(
+        lambda: bench.assert_artifact_complete(artifact), "materialized_plane_cells"
+    )
+
+
 def test_assert_artifact_complete_rejects_bracketing_disagreement() -> None:
     artifact = _complete_artifact()
     artifact["run"]["ordinary_bracketed"] = False
@@ -359,7 +512,7 @@ def test_assert_artifact_complete_rejects_fresh_run_with_subset_present() -> Non
 
 def test_assert_artifact_complete_rejects_rss_target_disagreement() -> None:
     artifact = _complete_artifact()
-    artifact["targets"]["peak_rss_within_bound"] = False
+    artifact["build"]["rss_within_bound"] = True
 
     _expect_system_exit(
         lambda: bench.assert_artifact_complete(artifact), "peak_rss_within_bound"

@@ -1,13 +1,13 @@
 {
-  "commit": "90c4ca8",
-  "measured_at": "2026-10-10T09:28:28.016992+00:00",
-  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/267-indexed-benchmark/opengwasdb",
-  "opengwasdb_fingerprint": "216b6affaaca497685ae529364b97e4c34c409db0255c5e39399c1f831dc586d",
-  "artifact_schema_version": 2,
+  "commit": "a36ea78",
+  "measured_at": "2026-10-10T23:30:47.773289+00:00",
+  "opengwasdb_path": "/home/gh13047/repo/opengwasdb-wt/270-indexed-build-opt/opengwasdb",
+  "opengwasdb_fingerprint": "3e15ebba785a85388b52ef24b8be2dadf5bb18ba3d834c0758937812a9436e19",
+  "artifact_schema_version": 6,
   "analysis_id": "ukb-b-17805",
   "subset_name": "hm3",
   "store": {
-    "path": "/data/opengwasdb/work/267-indexed/store-copy.opengwasdb",
+    "path": "/data/opengwasdb/work/270-indexed/store-copy.opengwasdb",
     "authoritative_path": "/data/opengwasdb/stores/OGS-00009/store.opengwasdb",
     "copy_kind": "reflink",
     "store_id": "OGS-00009",
@@ -35,7 +35,7 @@
     }
   },
   "input": {
-    "variant_list_path": "/data/opengwasdb/work/267-indexed/hm3.grch38.alid.txt",
+    "variant_list_path": "/data/opengwasdb/work/270-indexed/hm3.grch38.alid.txt",
     "variant_list_sha256": "4a7c82aa625a006ff437dcaa2769b00e056413d54c72e98f7378327c69513398",
     "hapmap3_source_path": "/data/opengwasdb/work/262-hapmap3-prototype/w_hm3.snplist.gz",
     "hapmap3_source_md5": "153ecc2bcfa740afafe656e6a384d769",
@@ -60,22 +60,22 @@
       "allele_incompatible": 23,
       "multiple_store_rows": 2743,
       "duplicate_alids": 0,
-      "resolution_ms": 3752.631
+      "resolution_ms": 3984.148
     }
   },
   "storage": {
     "baseline_logical_bytes": 34680981363,
     "baseline_physical_bytes": 34926288896,
-    "index_physical_bytes": 6235037696,
+    "index_physical_bytes": 6235009024,
     "index_logical_bytes": 5943821227,
     "increase_percent": 17.852,
     "planes": {
       ".zgroup": 4096,
       ".zattrs": 4096,
       "variant_index": 1294336,
-      "z": 4360572928,
-      "se": 1158287360,
-      "eaf": 710705152,
+      "z": 4360560640,
+      "se": 1158299648,
+      "eaf": 710676480,
       "z_overflow_index": 12288,
       "z_overflow_value": 12288,
       "eaf_baseline": 4009984,
@@ -84,21 +84,64 @@
       "se_coefficients": 24576,
       "se_exception_index": 45056,
       "se_exception_value": 36864,
-      "total": 6235037696
+      "total": 6235009024
     }
   },
   "build": {
     "run_mode": "fresh",
     "reused_from": "",
-    "total_seconds": 4198.0,
-    "in_process_seconds": 4197.396,
+    "total_seconds": 187.53,
+    "in_process_seconds": 186.229,
     "peak_rss_mb": 1234.8,
-    "band_cells": 4000000,
+    "band_cells": 65536000,
     "rss_bound_mb": 1146.1,
+    "rss_bound_label": "the #267 4,000,000-cell declaration",
     "rss_within_bound": false,
     "phases": {
-      "prepare_seconds": 7.756,
-      "publish_seconds": 4189.64
+      "prepare_seconds": 8.201,
+      "write_seconds": 176.076,
+      "validate_seconds": 1.939,
+      "publish_seconds": 178.028
+    },
+    "output_chunk_writes": {
+      "z": {
+        "chunks": 38456,
+        "writes": 38456,
+        "max_writes_one_chunk": 1
+      },
+      "se": {
+        "chunks": 38456,
+        "writes": 38456,
+        "max_writes_one_chunk": 1
+      },
+      "eaf": {
+        "chunks": 38456,
+        "writes": 38456,
+        "max_writes_one_chunk": 1
+      }
+    },
+    "validation_mode": "sampled",
+    "sample_strategy": "corners + 16 evenly spaced Analyses + 8 physical write-unit boundaries + 1 inner-chunk boundary + 8 checksum-seeded cells per Analysis + 32 checksum-seeded cells across Analyses",
+    "sample_seed": 166638625948460791,
+    "sample_cells": 528,
+    "band_cells_effective": 65536000,
+    "physical_write_unit": 65536,
+    "max_materialized_cells": 65536000,
+    "max_materialized_bytes": 131072000,
+    "materialized_plane_cells": {
+      "z": 65536000,
+      "se": 65536000,
+      "eaf": 65536000
+    },
+    "materialized_plane_bytes": {
+      "z": 131072000,
+      "se": 65536000,
+      "eaf": 65536000
+    },
+    "materialized_plane_dtypes": {
+      "z": "int16",
+      "se": "int8",
+      "eaf": "int8"
     },
     "peak_rss_source": "/usr/bin/time -v (build subprocess)",
     "requested": 1206903,
@@ -112,28 +155,28 @@
       "p95": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)"
     },
     "ordinary_before": {
-      "first_ms": 18898.66,
+      "first_ms": 44379.239,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 16389.083,
-      "p95_ms": 18925.604,
+      "median_ms": 17198.114,
+      "p95_ms": 21325.256,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 7578651
     },
     "ordinary_after": {
-      "first_ms": 19684.35,
+      "first_ms": 25044.432,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 15991.763,
-      "p95_ms": 16238.576,
+      "median_ms": 18827.58,
+      "p95_ms": 20219.34,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 7578651
     },
     "indexed": {
-      "first_ms": 409.682,
+      "first_ms": 450.086,
       "first_read_semantics": "first full-result read of the block in the same process; the OS page cache is not dropped, so it is not a cold-cache figure, and ordinary_after runs after ordinary_before has already warmed the column",
-      "median_ms": 407.267,
-      "p95_ms": 407.823,
+      "median_ms": 456.64,
+      "p95_ms": 524.722,
       "p95_method": "nearest-rank over 5 sorted warm repetitions: samples[min(N-1, int(0.95*N))] (max for N<20; N=5)",
       "repetitions": 5,
       "result_count": 1178549
@@ -166,12 +209,12 @@
   },
   "run": {
     "mode": "fresh",
-    "started_at": "2026-10-10T08:14:26.053168+00:00",
-    "finished_at": "2026-10-10T09:28:23.586358+00:00",
+    "started_at": "2026-10-10T23:22:41.526729+00:00",
+    "finished_at": "2026-10-10T23:30:43.300215+00:00",
     "subset_present_during_ordinary_before": false,
     "subset_published_by_this_run": true,
     "ordinary_bracketed": true,
-    "reset_subset": true
+    "reset_subset": false
   },
   "targets": {
     "warm_median_under_1s": true,
@@ -186,7 +229,7 @@
     "reason": ""
   },
   "ordinary_stability": {
-    "median_change_percent": 2.424,
+    "median_change_percent": 9.475,
     "noise_envelope_percent": 25.0,
     "within_envelope": true
   }

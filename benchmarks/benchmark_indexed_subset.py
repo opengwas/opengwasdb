@@ -41,7 +41,11 @@ import numpy as np
 
 from benchmarks._artifact import provenance, scratch_copy, write_artifact
 from benchmarks.measure_build_cost import parse_time_v
-from opengwasdb.layouts.dense.indexed_subsets import open_indexed_subset, remove_indexed_subset
+from opengwasdb.layouts.dense.indexed_subsets import (
+    DEFAULT_BAND_CELLS,
+    open_indexed_subset,
+    remove_indexed_subset,
+)
 from opengwasdb.query import query_store
 from opengwasdb.variants.axis import VariantAxis
 
@@ -56,11 +60,28 @@ HM3_URL = "https://zenodo.org/api/records/7773502/files/w_hm3.snplist.gz/content
 HM3_GZIP_MD5 = "153ecc2bcfa740afafe656e6a384d769"
 HM3_HEADER = ("SNP", "A1", "A2")
 
-#: The writer's default band; the RSS bound is band-derived, not matrix-derived.
-BAND_CELLS = 4_000_000
-#: Generous per-band-cell allowance for the index planes plus decode scratch.
+#: The writer's default band budget.  This is a writer-memory input, not the
+#: RSS acceptance target (see `HISTORICAL_RSS_BOUND_MB`).
+BAND_CELLS = DEFAULT_BAND_CELLS
+#: Per-band-cell allowance used only to recompute the historical #267 acceptance
+#: threshold; it is not a writer-buffer model and is not claimed as a ceiling.
 BYTES_PER_BAND_CELL = 32
 FIXED_OVERHEAD_MB = 1024.0
+#: The #267 RSS acceptance threshold, kept as the target so the new artifact
+#: still records the historical miss honestly instead of being widened green.
+#: It is the original 4,000,000-cell declaration times the same per-cell
+#: allowance plus fixed overhead (1,146.1 MB).
+HISTORICAL_BAND_CELLS = 4_000_000
+HISTORICAL_RSS_BOUND_MB = (
+    FIXED_OVERHEAD_MB + HISTORICAL_BAND_CELLS * BYTES_PER_BAND_CELL / (1024 * 1024)
+)
+#: The documented ceiling on the build's decoded validation sample.  The
+#: in-code worst case is ``4 corners + 16 Analyses x (2 endpoints + 3 x 8
+#: write-unit anchors + 3 x 4 inner-chunk anchors + 8 seeded cells) + 32 global
+#: seeded cells = 772`` (deduplication only lowers it); the artifact checks this
+#: cap so a future sample that grows is caught rather than quietly becoming a
+#: full pass (#270).
+SAMPLE_CELLS_CEILING = 1024
 
 DEFAULT_REPS = 5
 #: Ordinary timings are compared before/after; the envelope is the change the
@@ -72,7 +93,12 @@ OUTPUT = Path("docs/benchmark-output/opengwasdb_267_indexed_subset_benchmark.jso
 
 #: Bumped when the required artifact shape changes, so a committed artifact from
 #: an older harness is detectable rather than silently trusted.
-ARTIFACT_SCHEMA_VERSION = 2
+#: v3 adds the write/validate phase split and the measured output-chunk rewrite
+#: counts (#270).  v4 adds the sampled publication-gate mode and its sample.
+#: v5 adds the declared band-memory invariant and the measured maximum source
+#: block.  v6 adds the per-plane cells/dtype/bytes buffer breakdown and the RSS
+#: arithmetic checks.
+ARTIFACT_SCHEMA_VERSION = 6
 
 #: The six parallel arrays every selected-Analysis result carries (spec 10b).
 #: The six parallel arrays every selected-Analysis result carries (spec 10b).
@@ -137,9 +163,24 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "build.peak_rss_mb",
     "build.band_cells",
     "build.rss_bound_mb",
+    "build.rss_bound_label",
     "build.rss_within_bound",
     "build.phases.prepare_seconds",
+    "build.phases.write_seconds",
+    "build.phases.validate_seconds",
     "build.phases.publish_seconds",
+    "build.output_chunk_writes",
+    "build.validation_mode",
+    "build.sample_strategy",
+    "build.sample_seed",
+    "build.sample_cells",
+    "build.band_cells_effective",
+    "build.physical_write_unit",
+    "build.max_materialized_cells",
+    "build.max_materialized_bytes",
+    "build.materialized_plane_cells",
+    "build.materialized_plane_bytes",
+    "build.materialized_plane_dtypes",
     "build.peak_rss_source",
     "build.requested",
     "build.resolved",
@@ -190,17 +231,38 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
 _BUILD_RUNNER = (
     "import json, sys, time\n"
     "from opengwasdb.layouts.dense.indexed_subsets import _prepare_subset, _publish_subset\n"
+    "from opengwasdb.store.arrays import count_shard_writes\n"
     "store, name, vlist, assembly, band = sys.argv[1], sys.argv[2], sys.argv[3], "
     "sys.argv[4], int(sys.argv[5])\n"
     "t0 = time.perf_counter()\n"
     "plan = _prepare_subset(store, name, vlist, assembly, band)\n"
     "t1 = time.perf_counter()\n"
-    "result = _publish_subset(plan, overwrite=False, band_cells=band)\n"
+    "with count_shard_writes(record_bytes=False) as recorder:\n"
+    "    result = _publish_subset(plan, overwrite=False, band_cells=band)\n"
     "t2 = time.perf_counter()\n"
+    "counts = recorder.chunk_writes()\n"
+    "if not counts:\n"
+    "    counts = recorder.v2_chunk_writes()\n"
+    "planes = {}\n"
+    "for path, keys in counts.items():\n"
+    "    if path in ('z', 'se', 'eaf', 'imputed'):\n"
+    "        vals = list(keys.values())\n"
+    "        planes[path] = {'chunks': len(keys), 'writes': int(sum(vals)), "
+    "'max_writes_one_chunk': int(max(vals))}\n"
     "print(json.dumps({'prepare_seconds': t1 - t0, 'publish_seconds': t2 - t1, "
+    "'write_seconds': result.write_seconds, 'validate_seconds': result.validate_seconds, "
+    "'validation_mode': result.validation_mode, 'sample_strategy': result.sample_strategy, "
+    "'sample_seed': result.sample_seed, 'sample_cells': result.sample_cells, "
+    "'band_cells_effective': result.band_cells_effective, "
+    "'physical_write_unit': result.physical_write_unit, "
+    "'max_materialized_cells': result.max_materialized_cells, "
+    "'max_materialized_bytes': result.max_materialized_bytes, "
+    "'materialized_plane_cells': dict(result.materialized_plane_cells), "
+    "'materialized_plane_bytes': dict(result.materialized_plane_bytes), "
+    "'materialized_plane_dtypes': dict(result.materialized_plane_dtypes), "
     "'requested': result.requested_count, 'resolved': result.resolved_count, "
     "'absent': result.absent_count, 'n_subset_variants': result.n_subset_variants, "
-    "'input_sha256': result.input_sha256}))\n"
+    "'input_sha256': result.input_sha256, 'output_chunk_writes': planes}))\n"
 )
 
 
@@ -577,8 +639,22 @@ def run_build(store: Path, name: str, variant_list: Path, assembly: str, band_ce
         "peak_rss_mb": round(maxrss_kib / 1024.0, 1),
         "phases": {
             "prepare_seconds": round(float(phases["prepare_seconds"]), 3),
+            "write_seconds": round(float(phases["write_seconds"]), 3),
+            "validate_seconds": round(float(phases["validate_seconds"]), 3),
             "publish_seconds": round(float(phases["publish_seconds"]), 3),
         },
+        "output_chunk_writes": phases.get("output_chunk_writes", {}),
+        "validation_mode": str(phases["validation_mode"]),
+        "sample_strategy": str(phases["sample_strategy"]),
+        "sample_seed": int(phases["sample_seed"]),
+        "sample_cells": int(phases["sample_cells"]),
+        "band_cells_effective": int(phases["band_cells_effective"]),
+        "physical_write_unit": int(phases["physical_write_unit"]),
+        "max_materialized_cells": int(phases["max_materialized_cells"]),
+        "max_materialized_bytes": int(phases["max_materialized_bytes"]),
+        "materialized_plane_cells": dict(phases["materialized_plane_cells"]),
+        "materialized_plane_bytes": dict(phases["materialized_plane_bytes"]),
+        "materialized_plane_dtypes": dict(phases["materialized_plane_dtypes"]),
         "requested": int(phases["requested"]),
         "resolved": int(phases["resolved"]),
         "absent": int(phases["absent"]),
@@ -630,9 +706,31 @@ def load_prior_build(path: Path) -> dict:
     phases = build.get("phases") or {}
     missing += [
         f"phases.{key}"
-        for key in ("prepare_seconds", "publish_seconds")
+        for key in (
+            "prepare_seconds",
+            "write_seconds",
+            "validate_seconds",
+            "publish_seconds",
+        )
         if key not in phases
     ]
+    if not isinstance(build.get("output_chunk_writes"), dict):
+        missing.append("output_chunk_writes")
+    for key in (
+        "validation_mode",
+        "sample_strategy",
+        "sample_seed",
+        "sample_cells",
+        "band_cells_effective",
+        "physical_write_unit",
+        "max_materialized_cells",
+        "max_materialized_bytes",
+        "materialized_plane_cells",
+        "materialized_plane_bytes",
+        "materialized_plane_dtypes",
+    ):
+        if key not in build:
+            missing.append(key)
     if missing:
         raise SystemExit(f"{path} build block is missing: {', '.join(sorted(missing))}")
     if float(build["total_seconds"]) <= 0.0 or float(build["peak_rss_mb"]) <= 0.0:
@@ -652,8 +750,22 @@ def load_prior_build(path: Path) -> dict:
         "peak_rss_mb": float(build["peak_rss_mb"]),
         "phases": {
             "prepare_seconds": float(phases["prepare_seconds"]),
+            "write_seconds": float(phases["write_seconds"]),
+            "validate_seconds": float(phases["validate_seconds"]),
             "publish_seconds": float(phases["publish_seconds"]),
         },
+        "output_chunk_writes": dict(build["output_chunk_writes"]),
+        "validation_mode": str(build["validation_mode"]),
+        "sample_strategy": str(build["sample_strategy"]),
+        "sample_seed": int(build["sample_seed"]),
+        "sample_cells": int(build["sample_cells"]),
+        "band_cells_effective": int(build["band_cells_effective"]),
+        "physical_write_unit": int(build["physical_write_unit"]),
+        "max_materialized_cells": int(build["max_materialized_cells"]),
+        "max_materialized_bytes": int(build["max_materialized_bytes"]),
+        "materialized_plane_cells": dict(build["materialized_plane_cells"]),
+        "materialized_plane_bytes": dict(build["materialized_plane_bytes"]),
+        "materialized_plane_dtypes": dict(build["materialized_plane_dtypes"]),
         "requested": int(build["requested"]),
         "resolved": int(build["resolved"]),
         "absent": int(build["absent"]),
@@ -716,6 +828,28 @@ def _semantic_problems(artifact: dict[str, Any]) -> list[str]:
     for field in ("total_seconds", "peak_rss_mb"):
         _positive(artifact, f"build.{field}", problems)
     _positive(artifact, "build.band_cells", problems)
+    if build.get("rss_bound_label") != "the #267 4,000,000-cell declaration":
+        problems.append(
+            "build.rss_bound_label is not the preserved #267 acceptance declaration"
+        )
+    if round(float(build.get("rss_bound_mb", 0.0)), 1) != round(HISTORICAL_RSS_BOUND_MB, 1):
+        problems.append(
+            f"build.rss_bound_mb is {build.get('rss_bound_mb')!r}, not the preserved "
+            f"#267 threshold {HISTORICAL_RSS_BOUND_MB:.1f}"
+        )
+    for phase in ("prepare_seconds", "write_seconds", "validate_seconds", "publish_seconds"):
+        _positive(artifact, f"build.phases.{phase}", problems)
+    if (
+        build["phases"]["write_seconds"] + build["phases"]["validate_seconds"]
+        > build["phases"]["publish_seconds"] + 1e-6
+    ):
+        problems.append(
+            "build.phases write + validate exceed publish; the split does not fit the total"
+        )
+    problems.extend(_chunk_write_problems(build.get("output_chunk_writes")))
+    problems.extend(_validation_mode_problems(build))
+    problems.extend(_memory_bound_problems(build))
+    problems.extend(_rss_problems(build, artifact["targets"]))
     requested = build["requested"]
     if requested <= 0 or requested != build["resolved"] + build["absent"]:
         problems.append(
@@ -757,6 +891,163 @@ def _semantic_problems(artifact: dict[str, Any]) -> list[str]:
     problems.extend(_bracketing_problems(run, build, artifact["targets"]))
     if artifact["publication"]["published"] != artifact["targets"]["exact_equivalence"]:
         problems.append("publication.published disagrees with targets.exact_equivalence")
+    return problems
+
+
+def _validation_mode_problems(build: dict[str, Any]) -> list[str]:
+    """Reasons the recorded publication-gate mode cannot be believed.
+
+    The build's gate must be the documented ``sampled`` mode, and the sample
+    must be bounded and non-empty: the structural invariants are exhaustive,
+    the decoded comparison is a documented deterministic sample, and the
+    exhaustive audit is what standalone `validate` runs (#270).
+    """
+    problems: list[str] = []
+    if build.get("validation_mode") != "sampled":
+        problems.append(
+            f"build.validation_mode is {build.get('validation_mode')!r}, expected 'sampled'"
+        )
+    cells = build.get("sample_cells")
+    if not isinstance(cells, int) or isinstance(cells, bool) or cells < 1:
+        problems.append(f"build.sample_cells must be a positive integer, got {cells!r}")
+    elif cells > SAMPLE_CELLS_CEILING:
+        problems.append(
+            f"build.sample_cells is {cells}, above the documented bound of "
+            f"{SAMPLE_CELLS_CEILING}"
+        )
+    seed = build.get("sample_seed")
+    if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
+        problems.append(f"build.sample_seed must be a non-negative integer, got {seed!r}")
+    if not isinstance(build.get("sample_strategy"), str) or not build["sample_strategy"]:
+        problems.append("build.sample_strategy must be a non-empty string")
+    return problems
+
+
+def _memory_bound_problems(build: dict[str, Any]) -> list[str]:
+    """Reasons the recorded writer-memory invariant and measurement disagree.
+
+    The declared invariant is ``max_materialized <= max(band_cells,
+    physical_write_unit)`` -- one physical output unit when the budget is
+    smaller than it -- and the artifact must show the declared bound, the
+    measured cells and, per plane, the dtype and derived bytes so a reader can
+    recompute every buffer.  This is separate from the RSS acceptance target
+    (#270 review).
+    """
+    problems: list[str] = []
+    for field in (
+        "band_cells",
+        "physical_write_unit",
+        "max_materialized_cells",
+        "max_materialized_bytes",
+    ):
+        value = build.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            problems.append(f"build.{field} must be a positive integer, got {value!r}")
+    cells = build.get("materialized_plane_cells")
+    plane_bytes = build.get("materialized_plane_bytes")
+    dtypes = build.get("materialized_plane_dtypes")
+    for name, value in (
+        ("materialized_plane_cells", cells),
+        ("materialized_plane_bytes", plane_bytes),
+        ("materialized_plane_dtypes", dtypes),
+    ):
+        if not isinstance(value, dict) or not value:
+            problems.append(f"build.{name} must be a non-empty object")
+    if problems:
+        return problems
+    if set(cells) != set(plane_bytes) or set(cells) != set(dtypes):
+        problems.append("build.materialized_plane_* name the same planes")
+        return problems
+    for plane, count in cells.items():
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            problems.append(f"build.materialized_plane_cells.{plane} must be positive")
+            continue
+        try:
+            itemsize = np.dtype(dtypes[plane]).itemsize
+        except TypeError:
+            problems.append(
+                f"build.materialized_plane_dtypes.{plane} is not a dtype: {dtypes[plane]!r}"
+            )
+            continue
+        if int(plane_bytes[plane]) != count * itemsize:
+            problems.append(
+                f"build.materialized_plane_bytes.{plane} is {plane_bytes[plane]}, not "
+                f"{count} x {dtypes[plane]} = {count * itemsize}"
+            )
+        if count != int(build["max_materialized_cells"]):
+            problems.append(
+                f"build.materialized_plane_cells.{plane} is {count}, not "
+                "max_materialized_cells"
+            )
+    expected = max(int(build["band_cells"]), int(build["physical_write_unit"]))
+    if build.get("band_cells_effective") != expected:
+        problems.append(
+            f"build.band_cells_effective is {build.get('band_cells_effective')!r}, "
+            f"expected max(band_cells, physical_write_unit) = {expected}"
+        )
+    if int(build["max_materialized_cells"]) > expected:
+        problems.append(
+            f"build.max_materialized_cells is {build['max_materialized_cells']}, above "
+            f"the declared bound of {expected}"
+        )
+    if int(build["max_materialized_bytes"]) != max(
+        int(value) for value in plane_bytes.values()
+    ):
+        problems.append(
+            "build.max_materialized_bytes is not the largest materialized_plane_bytes value"
+        )
+    return problems
+
+
+def _rss_problems(build: dict[str, Any], targets: dict[str, Any]) -> list[str]:
+    """Reasons the RSS acceptance arithmetic does not hold.
+
+    The acceptance target is the preserved #267 threshold, and both the build
+    flag and the target flag must equal the direct comparison
+    ``peak_rss_mb <= rss_bound_mb``; a hand-edited green result must fail.
+    """
+    problems: list[str] = []
+    try:
+        peak = float(build["peak_rss_mb"])
+        bound = float(build["rss_bound_mb"])
+    except (KeyError, TypeError, ValueError):
+        return ["build.peak_rss_mb/rss_bound_mb must be numbers"]
+    expected = peak <= bound
+    if bool(build.get("rss_within_bound")) is not expected:
+        problems.append(
+            f"build.rss_within_bound is {build.get('rss_within_bound')!r}, expected "
+            f"peak_rss_mb <= rss_bound_mb = {expected}"
+        )
+    if bool(targets.get("peak_rss_within_bound")) is not expected:
+        problems.append(
+            f"targets.peak_rss_within_bound is "
+            f"{targets.get('peak_rss_within_bound')!r}, expected "
+            f"peak_rss_mb <= rss_bound_mb = {expected}"
+        )
+    return problems
+
+
+def _chunk_write_problems(counts: Any) -> list[str]:
+    """Reasons the recorded output-chunk rewrite counts are not a no-amplification proof.
+
+    A plane whose every chunk is encoded exactly once has ``writes == chunks``
+    and ``max_writes_one_chunk == 1``; anything else is the write amplification
+    #270 removes and must fail the run, not be reported as a number.
+    """
+    if not isinstance(counts, dict) or not counts:
+        return ["build.output_chunk_writes is empty; the rewrite count was not measured"]
+    problems: list[str] = []
+    for plane, stats in sorted(counts.items()):
+        if stats.get("writes") != stats.get("chunks"):
+            problems.append(
+                f"build.output_chunk_writes.{plane} writes {stats.get('writes')} chunks "
+                f"but has {stats.get('chunks')}; the output chunk was rewritten"
+            )
+        if stats.get("max_writes_one_chunk") != 1:
+            problems.append(
+                f"build.output_chunk_writes.{plane} max_writes_one_chunk is "
+                f"{stats.get('max_writes_one_chunk')}, not 1"
+            )
     return problems
 
 
@@ -910,7 +1201,11 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
     )
     after_original = _metadata_fingerprint(args.store)
     index_physical = physical_bytes(index_group)
-    rss_bound_mb = FIXED_OVERHEAD_MB + BAND_CELLS * BYTES_PER_BAND_CELL / (1024 * 1024)
+    # The acceptance target is the original #267 band declaration (1,146.1 MB),
+    # kept as-is so the artifact still reports the historical RSS miss honestly.
+    # The writer's own bounded-band invariant is recorded separately under
+    # `build.band_cells_effective`/`max_materialized_*` and is not an RSS model.
+    rss_bound_mb = HISTORICAL_RSS_BOUND_MB
     peak_rss_mb = float(build["peak_rss_mb"])
     rss_within_bound = peak_rss_mb <= rss_bound_mb
 
@@ -994,8 +1289,21 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "peak_rss_mb": peak_rss_mb,
             "band_cells": BAND_CELLS,
             "rss_bound_mb": round(rss_bound_mb, 1),
+            "rss_bound_label": "the #267 4,000,000-cell declaration",
             "rss_within_bound": rss_within_bound,
             "phases": build["phases"],
+            "output_chunk_writes": build.get("output_chunk_writes", {}),
+            "validation_mode": build["validation_mode"],
+            "sample_strategy": build["sample_strategy"],
+            "sample_seed": build["sample_seed"],
+            "sample_cells": build["sample_cells"],
+            "band_cells_effective": build["band_cells_effective"],
+            "physical_write_unit": build["physical_write_unit"],
+            "max_materialized_cells": build["max_materialized_cells"],
+            "max_materialized_bytes": build["max_materialized_bytes"],
+            "materialized_plane_cells": build["materialized_plane_cells"],
+            "materialized_plane_bytes": build["materialized_plane_bytes"],
+            "materialized_plane_dtypes": build["materialized_plane_dtypes"],
             "peak_rss_source": "/usr/bin/time -v (build subprocess)",
             "requested": writer_requested,
             "resolved": writer_resolved,

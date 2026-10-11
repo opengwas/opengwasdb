@@ -58,6 +58,7 @@ import logging
 import os
 import re
 import shutil
+import time
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -86,6 +87,7 @@ from opengwasdb.encoding import (
     StoreEncoding,
     UnsupportedEncoding,
     ZOverflowTable,
+    positions_at,
     positions_flat,
     positions_rows_cols,
 )
@@ -109,10 +111,42 @@ log = logging.getLogger(__name__)
 #: The group under `data.zarr` that holds every Indexed Variant Subset.
 INDEXED_SUBSETS_GROUP = "indexed_subsets"
 
-#: Target cell count per build/validate band.  Bands bound peak memory at the
-#: band's raw codes plus its decoded floats and fixed overhead, independent of
-#: the subset's total size; the CLI exposes it as `--band-cells`.
-DEFAULT_BAND_CELLS = 4_000_000
+#: Target band cell count for the build **writer**.  The variant band is the
+#: index's physical write unit (a v2 chunk or a v3 shard) and this budget sizes
+#: the Analysis tile within it.  The default is exactly one v2 output chunk times
+#: one representative primary Analysis read unit (65,536 x 1,000 = 65,536,000
+#: cells), so a v2 build decodes each primary file once rather than once per
+#: tile.  A smaller budget is honoured: the writer re-reads the source instead
+#: of materialising more than ``max(band_cells, write_unit)`` cells.  This is a
+#: writer-source-block input, not an RSS acceptance target.  The CLI exposes it
+#: as `--band-cells`.
+DEFAULT_BAND_CELLS = 65_536_000
+
+#: Target band cell count for the standalone **exhaustive** validation pass.
+#: It decodes and compares float32 planes, so its band is kept at the historical
+#: 4,000,000 cells and is deliberately independent of the writer default: a
+#: writer that reads 1,000-Analysis source blocks must not make the validation
+#: pass hold 65.5M decoded cells.  The build's own publication gate is sampled
+#: and does not use this.
+EXHAUSTIVE_VALIDATION_BAND_CELLS = 4_000_000
+
+#: The build's publication gate validates the structural invariants exhaustively
+#: and a bounded deterministic sample of decoded cells.  Standalone `validate`
+#: uses the exhaustive mode below, which decodes every cell (#270).
+VALIDATION_MODE_SAMPLED = "sampled"
+VALIDATION_MODE_EXHAUSTIVE = "exhaustive"
+
+#: The build-time decoded sample's fixed budget.  It is small and independent of
+#: the matrix: a safety net against systemic, ordering and output-geometry
+#: corruption, not a substitute for the exhaustive standalone audit (#270).
+SAMPLE_ANALYSES = 16
+SAMPLE_RANDOM_PER_ANALYSIS = 8
+#: Physical output write-unit boundaries (a v2 chunk or a v3 shard) and a
+#: separate, smaller inner-chunk spread, so a v3 index whose whole subset is one
+#: shard still samples its inner geometry.
+SAMPLE_SHARD_ANCHORS = 8
+SAMPLE_INNER_ANCHORS = 4
+SAMPLE_GLOBAL_RANDOM = 32
 
 #: The one attribute schema this module writes and reads.  A future layout
 #: change moves it rather than adding a field a reader would have to guess at.
@@ -334,7 +368,13 @@ class IndexedSubset:
 
 @dataclass(frozen=True)
 class IndexedSubsetBuild:
-    """What one successful `build_indexed_subset` published."""
+    """What one successful `build_indexed_subset` published.
+
+    ``write_seconds`` and ``validate_seconds`` split the staged publish into the
+    construction pass and the publication gate (#270).  ``validation_mode`` is
+    the mode the gate used (``sampled`` for a build), and the sample fields name
+    the deterministic decoded sample so a reader can reproduce it.
+    """
 
     name: str
     path: Path
@@ -344,6 +384,53 @@ class IndexedSubsetBuild:
     resolved_count: int
     absent_count: int
     input_sha256: str
+    write_seconds: float = 0.0
+    validate_seconds: float = 0.0
+    validation_mode: str = VALIDATION_MODE_EXHAUSTIVE
+    sample_strategy: str = ""
+    sample_seed: int = 0
+    sample_cells: int = 0
+    band_cells_effective: int = 0
+    physical_write_unit: int = 0
+    max_materialized_cells: int = 0
+    max_materialized_bytes: int = 0
+    materialized_plane_cells: Mapping[str, int] = field(default_factory=dict)
+    materialized_plane_bytes: Mapping[str, int] = field(default_factory=dict)
+    materialized_plane_dtypes: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _WriteStats:
+    """What one chunk-aligned write materialised, for the declared invariant.
+
+    ``band_cells_effective`` is ``max(band_cells, write_unit)`` -- the bound the
+    writer enforces -- and ``max_materialized_cells``/``_bytes`` are the largest
+    source block it actually held, so a build records both the invariant and the
+    measurement.  The per-plane cells, derived bytes and dtype are recorded so a
+    reader can recompute each buffer from the other two (#270 review).
+    """
+
+    physical_write_unit: int
+    band_cells_effective: int
+    max_materialized_cells: int
+    max_materialized_bytes: int
+    materialized_plane_cells: Mapping[str, int]
+    materialized_plane_bytes: Mapping[str, int]
+    materialized_plane_dtypes: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class _SamplePlan:
+    """One build's deterministic decoded sample and the facts that produced it."""
+
+    analyses: np.ndarray
+    slots: np.ndarray
+    seed: int
+    strategy: str
+
+    @property
+    def cells(self) -> int:
+        return int(len(self.analyses))
 
 
 @dataclass(frozen=True)
@@ -487,21 +574,69 @@ def _builder_version() -> str:
         return OPENGWASDB_PACKAGE_VERSION
 
 
-def _band_bounds(n_subset: int, n_analyses: int, band_cells: int) -> list[tuple[int, int]]:
-    """Subset-variant bands whose cell count is at most `band_cells`.
+def _physical_write_unit(array: Any) -> int:
+    """The variant-axis width at which one write covers one whole store file.
 
-    A zero-variant subset has no bands; returning an empty list rather than a
+    A Zarr v3 array is sharded: one compressed file per shard, so a write that
+    covers part of a shard is a read-modify-write of the whole shard (the
+    partial-shard defect #249 fixed for Ragged).  A Zarr v2 array has one file
+    per inner chunk.  The output band is therefore the shard where there is
+    one, and the inner chunk otherwise; an index plane written on its inner
+    chunk in a v3 store would re-encode every shard once per inner chunk.
+    """
+    shards = getattr(array, "shards", None)
+    return max(1, int(shards[1])) if shards is not None else max(1, int(array.chunks[1]))
+
+
+def _source_read_unit(array: Any) -> int:
+    """The primary plane's Analysis-axis read unit, for source-aligned tiling.
+
+    A tile that is a whole multiple of this decodes each primary chunk or shard
+    once; a smaller tile re-decodes the same primary file for every tile.
+    Reading is far cheaper than re-encoding a written chunk, but a band that
+    ignored the source geometry would decode the source tens of times more
+    than it must.  It is the same per-file geometry as the output write unit.
+    """
+    return _physical_write_unit(array)
+
+
+def _output_write_bands(n_subset: int, write_unit: int) -> list[tuple[int, int]]:
+    """Subset-variant bands aligned to the index's physical write unit.
+
+    Each band is a whole store file (a v2 chunk or a v3 shard) along the variant
+    axis, so the writer encodes every output file exactly once (#270).  A
+    zero-variant subset has no bands; returning an empty list rather than a
     zero-stride ``range`` keeps a caller from crashing on an index that
     validation separately rejects as empty.
     """
     if n_subset <= 0:
         return []
-    per_band = max(1, int(band_cells) // max(1, n_analyses))
-    per_band = min(per_band, n_subset)
-    return [
-        (start, min(start + per_band, n_subset))
-        for start in range(0, n_subset, per_band)
-    ]
+    unit = max(1, int(write_unit))
+    return [(start, min(start + unit, n_subset)) for start in range(0, n_subset, unit)]
+
+
+def _analysis_tiles(
+    n_analyses: int, write_unit: int, band_cells: int, read_unit: int
+) -> list[tuple[int, int]]:
+    """Analysis tiles that bound a write band's memory.
+
+    A band of ``write_unit`` variants times a tile of Analyses must stay within
+    ``band_cells``.  The tile is the largest whole multiple of the primary's
+    Analysis-axis read unit that fits, but it never grows past the budget to
+    reach that unit: when the budget is below one read unit the writer decodes
+    the primary once per tile rather than materialising ``write_unit *
+    read_unit`` cells.  The true bound is therefore ``max(band_cells,
+    write_unit)`` -- one physical output unit when the budget is smaller than
+    it -- independent of the subset's length.
+    """
+    if n_analyses <= 0:
+        return []
+    write_unit = max(1, int(write_unit))
+    budget = max(1, int(band_cells) // write_unit)
+    unit = max(1, min(int(read_unit), n_analyses))
+    tile = (budget // unit) * unit if budget >= unit else budget
+    tile = max(1, min(tile, n_analyses))
+    return [(start, min(start + tile, n_analyses)) for start in range(0, n_analyses, tile)]
 
 
 def _remap_side_table(
@@ -595,6 +730,34 @@ def _create_subset_arrays(
     return z, se, eaf, imputed
 
 
+def _copy_one_plane(
+    target: Any, source: Any, subset: np.ndarray, n_analyses: int, band_cells: int
+) -> tuple[int, str]:
+    """Copy one primary plane's codes into the index, one output file at a time.
+
+    Returns the measured maximum source cells held and the source dtype name, so
+    the caller can derive the raw buffer bytes.  Raises if the budget is somehow
+    exceeded, so the invariant cannot drift silently.
+    """
+    write_unit = _physical_write_unit(target)
+    read_unit = _source_read_unit(source)
+    bound = max(int(band_cells), write_unit)
+    max_materialized = 0
+    for start, stop in _output_write_bands(len(subset), write_unit):
+        rows = subset[start:stop]
+        for a0, a1 in _analysis_tiles(n_analyses, write_unit, band_cells, read_unit):
+            cells = int(len(rows)) * (a1 - a0)
+            if cells > bound:
+                raise IndexedSubsetError(
+                    f"Indexed Variant Subset writer materialised {cells} source cells in "
+                    f"one band, above the declared bound of {bound} (band_cells="
+                    f"{band_cells}, physical write unit={write_unit})"
+                )
+            max_materialized = max(max_materialized, cells)
+            target[a0:a1, start:stop] = np.asarray(source.oindex[rows, a0:a1]).T
+    return max_materialized, str(np.dtype(source.dtype))
+
+
 def _copy_plane_bands(
     z_target: Any,
     se_target: Any,
@@ -604,18 +767,25 @@ def _copy_plane_bands(
     subset: np.ndarray,
     n_analyses: int,
     band_cells: int,
-) -> None:
-    """Copy the primary planes' codes into the Analysis-major index, by band."""
-    for start, stop in _band_bounds(len(subset), n_analyses, band_cells):
-        rows = subset[start:stop]
-        z_target[:, start:stop] = np.asarray(root["z"].oindex[rows, :]).T
-        se_target[:, start:stop] = np.asarray(root["se"].oindex[rows, :]).T
-        if eaf_target is not None:
-            eaf_target[:, start:stop] = np.asarray(root["eaf"].oindex[rows, :]).T
-        if imputed_target is not None:
-            imputed_target[:, start:stop] = np.asarray(
-                root[_IMPUTED_MASK].oindex[rows, :]
-            ).T
+) -> tuple[int, list[tuple[str, int, str]]]:
+    """Copy every plane and return the largest block and each (plane, cells, dtype)."""
+    planes: dict[str, tuple[Any, Any]] = {
+        "z": (z_target, root["z"]),
+        "se": (se_target, root["se"]),
+    }
+    if eaf_target is not None:
+        planes["eaf"] = (eaf_target, root["eaf"])
+    if imputed_target is not None:
+        planes["imputed"] = (imputed_target, root[_IMPUTED_MASK])
+    max_cells = 0
+    buffers: list[tuple[str, int, str]] = []
+    for name, (target, source) in planes.items():
+        cells, dtype = _copy_one_plane(
+            target, source, subset, n_analyses, band_cells
+        )
+        max_cells = max(max_cells, cells)
+        buffers.append((name, cells, dtype))
+    return max_cells, buffers
 
 
 def _remap_and_write(
@@ -717,13 +887,17 @@ def write_indexed_subset_group(
     band_cells: int,
     *,
     completed: bool,
-) -> None:
+) -> _WriteStats:
     """Write one complete Indexed Variant Subset group from the primary planes.
 
     Every array a published subset holds is created here; validation compares
     what this wrote against the primaries, and a caller never assembles the
-    group by hand.  The planes are copied band by band, so peak memory is the
-    configured band rather than the subset matrix.
+    group by hand.  The planes are copied one output store file at a time,
+    plane by plane, so each compressed chunk or shard is encoded once and peak
+    memory is one band of one plane rather than the subset matrix (#270).
+
+    Returns the invariant and the measured maximum source block for the build
+    result: ``max_materialized <= max(band_cells, write_unit)``.
 
     ``completed`` is the release's Completion State, passed in rather than
     re-derived from the presence of a primary array: a Reference-Completed
@@ -743,7 +917,7 @@ def write_indexed_subset_group(
     z_target, se_target, eaf_target, imputed_target = _create_subset_arrays(
         group, encoding, codec, n_analyses, n_subset, completed=completed
     )
-    _copy_plane_bands(
+    max_materialized, buffers = _copy_plane_bands(
         z_target,
         se_target,
         eaf_target,
@@ -757,6 +931,31 @@ def write_indexed_subset_group(
     _write_eaf_side_tables(group, root, encoding, subset, n_analyses)
     _write_se_side_tables(group, root, encoding, subset, n_analyses)
     group.attrs.update(attrs)
+    return _write_stats(z_target, band_cells, max_materialized, buffers)
+
+
+def _write_stats(
+    z_target: Any,
+    band_cells: int,
+    max_materialized: int,
+    buffers: list[tuple[str, int, str]],
+) -> _WriteStats:
+    """The declared band invariant and the measured per-plane raw buffers."""
+    write_unit = _physical_write_unit(z_target)
+    cells = {name: count for name, count, _dtype in buffers}
+    dtypes = {name: dtype for name, _count, dtype in buffers}
+    byte_sizes = {
+        name: count * np.dtype(dtype).itemsize for name, count, dtype in buffers
+    }
+    return _WriteStats(
+        physical_write_unit=write_unit,
+        band_cells_effective=max(int(band_cells), write_unit),
+        max_materialized_cells=max_materialized,
+        max_materialized_bytes=max(byte_sizes.values(), default=0),
+        materialized_plane_cells=MappingProxyType(cells),
+        materialized_plane_bytes=MappingProxyType(byte_sizes),
+        materialized_plane_dtypes=MappingProxyType(dtypes),
+    )
 
 
 def _check_layout(manifest: StoreManifest, root: Any) -> None:
@@ -904,12 +1103,24 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
     """Stage, validate and atomically publish one prepared subset."""
     dest = plan.store_path / "data.zarr" / INDEXED_SUBSETS_GROUP / plan.name
     _ensure_indexed_subset_namespace(plan.store_path, plan.fmt)
+    write_seconds = 0.0
+    validate_seconds = 0.0
+    write_stats = _WriteStats(
+        0,
+        max(int(band_cells), 1),
+        0,
+        0,
+        MappingProxyType({}),
+        MappingProxyType({}),
+        MappingProxyType({}),
+    )
     try:
         with staged_named_group(dest, overwrite=overwrite) as work:
             staged = store_arrays.open_group_for_write(
                 work, "w", zarr_format=plan.fmt
             )
-            write_indexed_subset_group(
+            started = time.perf_counter()
+            write_stats = write_indexed_subset_group(
                 staged,
                 plan.root,
                 plan.manifest.encoding,
@@ -919,7 +1130,10 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
                 band_cells,
                 completed=plan.completed,
             )
-            _validate_staged(plan, work)
+            write_seconds = time.perf_counter() - started
+            started = time.perf_counter()
+            sample = _validate_staged(plan, work)
+            validate_seconds = time.perf_counter() - started
     except DestinationExistsError as exc:
         raise IndexedSubsetExistsError(str(exc)) from exc
     return IndexedSubsetBuild(
@@ -931,6 +1145,19 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
         resolved_count=plan.resolved.resolved,
         absent_count=plan.resolved.absent,
         input_sha256=plan.variant_list.sha256,
+        write_seconds=write_seconds,
+        validate_seconds=validate_seconds,
+        validation_mode=VALIDATION_MODE_SAMPLED,
+        sample_strategy="" if sample is None else sample.strategy,
+        sample_seed=0 if sample is None else sample.seed,
+        sample_cells=0 if sample is None else sample.cells,
+        band_cells_effective=write_stats.band_cells_effective,
+        physical_write_unit=write_stats.physical_write_unit,
+        max_materialized_cells=write_stats.max_materialized_cells,
+        max_materialized_bytes=write_stats.max_materialized_bytes,
+        materialized_plane_cells=dict(write_stats.materialized_plane_cells),
+        materialized_plane_bytes=dict(write_stats.materialized_plane_bytes),
+        materialized_plane_dtypes=dict(write_stats.materialized_plane_dtypes),
     )
 
 
@@ -956,8 +1183,14 @@ def build_indexed_subset(
     return _publish_subset(plan, overwrite=overwrite, band_cells=band_cells)
 
 
-def _validate_staged(plan: _SubsetPlan, work: Path) -> None:
-    """Validate the freshly written group before it may be published."""
+def _validate_staged(plan: _SubsetPlan, work: Path) -> _SamplePlan | None:
+    """Validate the freshly written group before it may be published.
+
+    The publication gate is **sampled**: the structural invariants are checked
+    exhaustively and a bounded deterministic sample of decoded cells is
+    compared.  The returned plan names that sample so the build result records
+    it.  Standalone ``validate`` stays exhaustive (#270).
+    """
     staged = store_arrays.open_group(work)
     errors: list[str] = []
     context = _SubsetValidation(
@@ -968,12 +1201,15 @@ def _validate_staged(plan: _SubsetPlan, work: Path) -> None:
         plan.n_analyses,
         plan.fmt,
     )
-    _validate_one_indexed_subset(context, plan.name, staged, errors)
+    sample = _validate_one_indexed_subset(
+        context, plan.name, staged, errors, exhaustive=False
+    )
     if errors:
         raise IndexedSubsetValidationError(
             f"staged Indexed Variant Subset {plan.name!r} failed validation and was not "
             "published: " + "; ".join(errors)
         )
+    return sample
 
 
 def remove_indexed_subset(store_path: str | Path, subset_name: str) -> bool:
@@ -1774,6 +2010,8 @@ def validate_indexed_subsets(
     n_variants: int,
     n_analyses: int,
     errors: list[str],
+    *,
+    exhaustive: bool = True,
 ) -> None:
     """Validate the optional `data.zarr/indexed_subsets` namespace, if present.
 
@@ -1782,6 +2020,12 @@ def validate_indexed_subsets(
     subset: a staging/replacement directory, an unknown name, a file or a group
     whose decoded values disagree with the primary planes all fail rather than
     being ignored.
+
+    ``exhaustive`` is the default and is what standalone `validate` uses: every
+    indexed cell is decoded and compared.  The build's publication gate calls
+    this family of rules with ``exhaustive=False``, which keeps every structural
+    invariant exhaustive and compares a bounded deterministic decoded sample
+    (#270).
     """
     context = _SubsetValidation(
         Path(store_path),
@@ -1801,7 +2045,7 @@ def validate_indexed_subsets(
         errors.append(f"data.zarr/{INDEXED_SUBSETS_GROUP} is not a group")
         return
     for entry in _namespace_entries(context.namespace_dir):
-        _validate_namespace_entry(context, namespace, entry, errors)
+        _validate_namespace_entry(context, namespace, entry, errors, exhaustive=exhaustive)
 
 
 def _report_absent_namespace(namespace_dir: Path, errors: list[str]) -> None:
@@ -1823,7 +2067,12 @@ def _namespace_entries(namespace_dir: Path) -> list[str]:
 
 
 def _validate_namespace_entry(
-    context: _SubsetValidation, namespace: Any, entry: str, errors: list[str]
+    context: _SubsetValidation,
+    namespace: Any,
+    entry: str,
+    errors: list[str],
+    *,
+    exhaustive: bool = True,
 ) -> None:
     """Judge one namespace entry and validate it when it is a published group."""
     if _is_staging_name(entry):
@@ -1845,7 +2094,7 @@ def _validate_namespace_entry(
     if not isinstance(member, zarr.Group):
         errors.append(f"indexed-subset entry {entry!r} is not a group")
         return
-    _validate_one_indexed_subset(context, entry, member, errors)
+    _validate_one_indexed_subset(context, entry, member, errors, exhaustive=exhaustive)
 
 
 def _namespace_member(namespace: Any, entry: str, errors: list[str]) -> Any:
@@ -1885,36 +2134,87 @@ def _subset_preconditions_ok(
 
 
 def _validate_one_indexed_subset(
-    context: _SubsetValidation, name: str, group: Any, errors: list[str]
-) -> None:
-    """Every rule one published Indexed Variant Subset must satisfy."""
+    context: _SubsetValidation,
+    name: str,
+    group: Any,
+    errors: list[str],
+    *,
+    exhaustive: bool,
+) -> _SamplePlan | None:
+    """Every rule one published Indexed Variant Subset must satisfy.
+
+    The structural invariants are always exhaustive.  Decoded Z/SE/EAF and
+    Association Status are compared for every cell when ``exhaustive`` is set
+    (standalone `validate`) and over a bounded deterministic sample otherwise
+    (the build's publication gate).  The sample plan is returned in the sampled
+    case so the build result can record it (#270).
+    """
     attrs = dict(group.attrs)
+    prepared = _validate_subset_structure(context, name, group, attrs, errors)
+    if prepared is None:
+        return None
+    declared, subset = prepared
+    # Cheap, high-value invariants that stay exhaustive even on the sampled
+    # build path: the side tables are small, so their remapping and the
+    # per-variant baselines are compared in full rather than sampled.
+    _check_side_tables_against_primary(
+        name, group, context.root, declared, subset, context.n_analyses, errors
+    )
+    _eaf_reference_error(name, group, context.root, subset, declared, errors)
+    if errors:
+        return None
+    if exhaustive:
+        _compare_indexed_values(
+            name, context.root, group, declared, subset, context.n_analyses, errors
+        )
+        return None
+    sample = _validation_sample(
+        attrs,
+        context.n_analyses,
+        len(subset),
+        _physical_write_unit(group["z"]),
+        int(group["z"].chunks[1]),
+    )
+    _compare_indexed_sample(name, context.root, group, declared, subset, sample, errors)
+    return sample
+
+
+def _validate_subset_structure(
+    context: _SubsetValidation,
+    name: str,
+    group: Any,
+    attrs: dict[str, Any],
+    errors: list[str],
+) -> tuple[StoreEncoding, np.ndarray] | None:
+    """The exhaustive structural rules, and the resolved Variant Index.
+
+    Returns the declared encoding and the sorted Variant Index, or None when a
+    finding already rules the group out.
+    """
     if not _subset_preconditions_ok(name, group, attrs, errors):
-        return
+        return None
     declared = _read_declared_encoding(name, attrs, context.manifest, errors)
     if declared is None:
-        return
+        return None
     completed = context.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
     _check_identity_attrs(name, attrs, context.manifest, context.n_analyses, errors)
     if errors:
-        return
+        return None
     if not _check_subset_arrays(name, group, declared, completed, errors):
-        return
+        return None
     n_subset = _check_variant_index(name, group, attrs, context.n_variants, errors)
     if n_subset is None:
-        return
+        return None
     if not _check_plane_shapes(
         name, group, declared, context.n_analyses, n_subset, completed, errors
     ):
-        return
+        return None
     _check_array_layouts(name, group, context.zarr_format, errors)
     _validate_subset_side_tables(name, group, declared, n_subset, context.n_analyses, errors)
     if errors:
-        return
+        return None
     subset = np.asarray(group["variant_index"][:], dtype=np.int64)
-    _compare_indexed_values(
-        name, context.root, group, declared, subset, context.n_analyses, errors
-    )
+    return declared, subset
 
 
 def _read_declared_encoding(
@@ -2201,6 +2501,78 @@ def _check_table(name: str, what: str, table: Any, n_cells: int, errors: list[st
         errors.append(f"indexed subset {name!r} {what} table is not sorted and unique")
 
 
+def _check_side_tables_against_primary(
+    name: str,
+    group: Any,
+    root: Any,
+    encoding: StoreEncoding,
+    subset: np.ndarray,
+    n_analyses: int,
+    errors: list[str],
+) -> None:
+    """The index's small side tables are exactly the primary's, remapped.
+
+    Exhaustive even on the sampled build path: the tables are O(exception
+    count) or O(n_subset), not O(n_analyses * n_subset), and a wrong remap
+    would move a decoded cell plausibly and wrongly (#270).  The full decoded
+    matrix comparison is what sampling replaces; this is not.
+    """
+    if encoding.z.is_fixed_point:
+        _check_remapped_table(
+            name, "z overflow", group, root,
+            Z_OVERFLOW_INDEX, Z_OVERFLOW_VALUE, subset, n_analyses, errors,
+        )
+    if encoding.se.is_residual:
+        expected_coefficients = np.asarray(root[SE_COEFFICIENTS][:], dtype=np.float32)
+        actual_coefficients = np.asarray(group[SE_COEFFICIENTS][:], dtype=np.float32)
+        if not np.array_equal(actual_coefficients, expected_coefficients):
+            errors.append(
+                f"indexed subset {name!r} se_coefficients disagree with the primary release"
+            )
+        _check_remapped_table(
+            name, "se exception", group, root,
+            _SE_EXCEPTION_INDEX, _SE_EXCEPTION_VALUE, subset, n_analyses, errors,
+        )
+    if encoding.eaf.is_residual:
+        expected_baseline = np.asarray(root[EAF_BASELINE].oindex[subset], dtype=np.float32)
+        actual_baseline = np.asarray(group[EAF_BASELINE][:], dtype=np.float32)
+        if not np.array_equal(actual_baseline, expected_baseline, equal_nan=True):
+            errors.append(
+                f"indexed subset {name!r} eaf_baseline disagrees with the primary release"
+            )
+        _check_remapped_table(
+            name, "eaf exception", group, root,
+            EAF_EXCEPTION_INDEX, EAF_EXCEPTION_VALUE, subset, n_analyses, errors,
+        )
+
+
+def _check_remapped_table(
+    name: str,
+    what: str,
+    group: Any,
+    root: Any,
+    index_name: str,
+    value_name: str,
+    subset: np.ndarray,
+    n_analyses: int,
+    errors: list[str],
+) -> None:
+    """One exception/overflow table must equal the primary's remapped table."""
+    expected_index, expected_value = _remap_side_table(
+        _read_side(root, index_name), _read_side(root, value_name), subset, n_analyses
+    )
+    if not (
+        np.array_equal(_read_side(group, index_name), expected_index)
+        and np.array_equal(
+            _read_side(group, value_name), expected_value, equal_nan=True
+        )
+    ):
+        errors.append(
+            f"indexed subset {name!r} {what} table is not the primary release's remapped "
+            "table; the index is stale or corrupt"
+        )
+
+
 @dataclass
 class _DecodeContext:
     """The primary and indexed decoders one validation pass reuses."""
@@ -2245,6 +2617,187 @@ def _open_decode_context(
     )
 
 
+def _validation_sample(
+    attrs: Mapping[str, Any],
+    n_analyses: int,
+    n_subset: int,
+    write_unit: int,
+    inner_chunk: int,
+) -> _SamplePlan:
+    """A deterministic, bounded, stratified sample of index cells to decode.
+
+    The sample covers the four corners; the slot before, at and last-of each
+    anchored **physical write-unit** boundary (a v2 chunk or a v3 shard) and,
+    separately, a smaller spread of **inner-chunk** boundaries; a spread of
+    Analyses including the first and last; and input-checksum-seeded cells.  The
+    two boundary sets are kept separate so a v3 index whose whole subset is one
+    shard still samples its inner geometry.  It is deliberately bounded and
+    independent of the matrix, so it catches the systemic, ordering and
+    output-geometry corruption a sample can catch and may miss an isolated cell;
+    the exhaustive standalone `validate` audit is what rules that out (#270).
+    """
+    seed = int.from_bytes(
+        hashlib.sha256(str(attrs[ATTR_INPUT_SHA256]).encode("utf-8")).digest()[:8],
+        "big",
+    )
+    rng = np.random.default_rng(seed)
+    analysis_axis = _sample_analysis_axis(n_analyses)
+    shard_starts = _sample_anchor_starts(n_subset, write_unit, SAMPLE_SHARD_ANCHORS)
+    # The inner spread stays inside one physical write unit, so at least some of
+    # its boundaries are distinct from the write-unit boundaries (a v3 shard is
+    # many inner chunks).
+    inner_span = min(int(n_subset), max(1, int(write_unit)))
+    inner_starts = _sample_anchor_starts(inner_span, inner_chunk, SAMPLE_INNER_ANCHORS)
+    cells = _sample_cell_list(
+        n_analyses,
+        n_subset,
+        analysis_axis,
+        shard_starts,
+        int(write_unit),
+        inner_starts,
+        int(inner_chunk),
+        rng,
+    )
+    sample_analyses, sample_slots = _dedupe_cells(cells)
+    strategy = _sample_strategy(analysis_axis, shard_starts, inner_starts)
+    return _SamplePlan(
+        analyses=sample_analyses, slots=sample_slots, seed=seed, strategy=strategy
+    )
+
+
+def _sample_strategy(
+    analysis_axis: np.ndarray, shard_starts: np.ndarray, inner_starts: np.ndarray
+) -> str:
+    """The human-readable sample strategy, with correct singular/plural."""
+    analysis_label = _counted(
+        len(analysis_axis), "evenly spaced Analysis", "evenly spaced Analyses"
+    )
+    shard_label = _counted(
+        len(shard_starts), "physical write-unit boundary", "physical write-unit boundaries"
+    )
+    inner_label = _counted(
+        len(inner_starts), "inner-chunk boundary", "inner-chunk boundaries"
+    )
+    return (
+        "corners + "
+        f"{analysis_label} + "
+        f"{shard_label} + "
+        f"{inner_label} + "
+        f"{SAMPLE_RANDOM_PER_ANALYSIS} checksum-seeded cells per Analysis + "
+        f"{SAMPLE_GLOBAL_RANDOM} checksum-seeded cells across Analyses"
+    )
+
+
+def _counted(count: int, singular: str, plural: str) -> str:
+    """`<count> <singular|plural>`, so a one-boundary sample reads correctly."""
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _sample_analysis_axis(n_analyses: int) -> np.ndarray:
+    """A bounded spread of Analysis indices, including the first and last."""
+    return np.unique(
+        np.linspace(
+            0,
+            max(n_analyses - 1, 0),
+            num=min(SAMPLE_ANALYSES, max(n_analyses, 1)),
+            dtype=np.int64,
+        )
+    )
+
+
+def _sample_anchor_starts(n_subset: int, unit: int, cap: int) -> np.ndarray:
+    """Up to `cap` evenly spread multiples of `unit` below `n_subset`."""
+    unit = max(1, int(unit))
+    starts = np.arange(0, max(n_subset, 1), unit, dtype=np.int64)
+    if len(starts) > cap:
+        picks = np.unique(np.linspace(0, len(starts) - 1, num=cap, dtype=np.int64))
+        starts = starts[picks]
+    return starts
+
+
+def _add_boundary_cells(
+    add: Any, analysis: int, n_subset: int, start: int, unit: int
+) -> None:
+    """The slot before a boundary, the first slot on it and the unit's last slot."""
+    add(analysis, int(start) - 1)
+    add(analysis, int(start))
+    add(analysis, min(int(start) + int(unit), n_subset) - 1)
+
+
+def _sample_cell_list(
+    n_analyses: int,
+    n_subset: int,
+    analysis_axis: np.ndarray,
+    shard_starts: np.ndarray,
+    shard_unit: int,
+    inner_starts: np.ndarray,
+    inner_unit: int,
+    rng: np.random.Generator,
+) -> list[tuple[int, int]]:
+    """The bounded, stratified cell list before deduplication."""
+    cells: list[tuple[int, int]] = []
+
+    def add(analysis: int, slot: int) -> None:
+        if 0 <= analysis < n_analyses and 0 <= slot < n_subset:
+            cells.append((int(analysis), int(slot)))
+
+    # First/last cells on both axes.
+    for analysis in (0, n_analyses - 1):
+        for slot in (0, n_subset - 1):
+            add(analysis, slot)
+    for analysis in analysis_axis:
+        _add_analysis_cells(
+            add,
+            int(analysis),
+            n_subset,
+            shard_starts,
+            shard_unit,
+            inner_starts,
+            inner_unit,
+            rng,
+        )
+    # Seeded cells over arbitrary Analyses, independent of the axis spread.
+    random_analyses = rng.integers(0, n_analyses, size=SAMPLE_GLOBAL_RANDOM)
+    random_slots = rng.integers(0, n_subset, size=SAMPLE_GLOBAL_RANDOM)
+    for analysis, slot in zip(random_analyses, random_slots, strict=True):
+        add(int(analysis), int(slot))
+    return cells
+
+
+def _add_analysis_cells(
+    add: Any,
+    analysis: int,
+    n_subset: int,
+    shard_starts: np.ndarray,
+    shard_unit: int,
+    inner_starts: np.ndarray,
+    inner_unit: int,
+    rng: np.random.Generator,
+) -> None:
+    """The endpoints, boundary cells and seeded slots of one Analysis."""
+    for slot in (0, n_subset - 1):
+        add(analysis, slot)
+    for start in shard_starts:
+        _add_boundary_cells(add, analysis, n_subset, int(start), shard_unit)
+    for start in inner_starts:
+        _add_boundary_cells(add, analysis, n_subset, int(start), inner_unit)
+    for slot in rng.integers(0, n_subset, size=SAMPLE_RANDOM_PER_ANALYSIS):
+        add(analysis, int(slot))
+
+
+def _dedupe_cells(cells: list[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:
+    """Deduplicate cells, preserving the deterministic order."""
+    seen: set[tuple[int, int]] = set()
+    analyses: list[int] = []
+    slots: list[int] = []
+    for analysis, slot in cells:
+        if (analysis, slot) not in seen:
+            seen.add((analysis, slot))
+            analyses.append(analysis)
+            slots.append(slot)
+    return np.asarray(analyses, dtype=np.int64), np.asarray(slots, dtype=np.int64)
+
+
 def _compare_indexed_values(
     name: str,
     root: Any,
@@ -2254,27 +2807,35 @@ def _compare_indexed_values(
     n_analyses: int,
     errors: list[str],
 ) -> None:
-    """Stream decoded index bands and compare them to the primary planes.
+    """Stream decoded index bands and compare every one to the primary planes.
 
-    Every decoded indexed Z, SE and EAF must equal its authoritative
-    primary-plane cell; the imputed mask and reference EAF must equal the
-    release's own (a wrong one would label or decode a cell plausibly and
-    wrongly); and missingness must agree within the index before the values
-    are compared.
+    Standalone ``validate`` only (#270): every decoded indexed Z, SE and EAF
+    must equal its authoritative primary-plane cell; the imputed mask and
+    reference EAF must equal the release's own; and missingness must agree
+    within the index before the values are compared.  The build's publication
+    gate uses the bounded sample in `_compare_indexed_sample` instead.
     """
     context = _open_decode_context(name, group, root, encoding, errors)
     if context is None:
         return
-    _eaf_reference_error(name, group, root, subset, encoding, errors)
-    if errors:
-        return
-    for start, stop in _band_bounds(len(subset), n_analyses, DEFAULT_BAND_CELLS):
-        message = _compare_indexed_band(
-            name, context, group, encoding, subset, start, stop, n_analyses
-        )
-        if message is not None:
-            errors.append(message)
-            return
+    # Read the index in its own physical write units and tile the Analysis axis
+    # so each compressed output chunk (v2) or shard (v3) is decoded exactly
+    # once, while peak memory is one band of one plane.  The Analysis tile is
+    # the budget-derived one rather than the primary's read unit: validation
+    # decodes to float32, so a source-aligned 65,536-variant band held ~1.9 GB
+    # on the 20k probe (measured) and was no faster -- the decode and compare,
+    # not the primary re-read, is the work.
+    write_unit = _physical_write_unit(group["z"])
+    for start, stop in _output_write_bands(len(subset), write_unit):
+        for a0, a1 in _analysis_tiles(
+            n_analyses, write_unit, EXHAUSTIVE_VALIDATION_BAND_CELLS, 1
+        ):
+            message = _compare_indexed_band(
+                name, context, group, encoding, subset, start, stop, a0, a1
+            )
+            if message is not None:
+                errors.append(message)
+                return
 
 
 def _compare_indexed_band(
@@ -2285,31 +2846,50 @@ def _compare_indexed_band(
     subset: np.ndarray,
     start: int,
     stop: int,
-    n_analyses: int,
+    a0: int,
+    a1: int,
 ) -> str | None:
     """One band's decoded equality checks; the first failure's message, or None."""
     n_subset = len(subset)
     rows = subset[start:stop]
-    positions = positions_rows_cols(np.arange(n_analyses), np.arange(start, stop), n_subset)
-    index_z_raw = np.asarray(group["z"][:, start:stop])
-    index_se_raw = np.asarray(group["se"][:, start:stop])
+    cols = np.arange(a0, a1)
+    positions = positions_rows_cols(cols, np.arange(start, stop), n_subset)
+    index_z_raw = np.asarray(group["z"][a0:a1, start:stop])
+    index_se_raw = np.asarray(group["se"][a0:a1, start:stop])
     primary_eaf = (
-        context.eaf_plane.read_rows(rows).values
+        context.eaf_plane.read_block(rows, cols).values
         if context.eaf_plane.can_report_frequencies
         else None
     )
-    primary_z = context.z_plane.rows(rows)
-    primary_se = context.se_plane.rows(rows, eaf=primary_eaf)
+    primary_z = context.z_plane.block(rows, cols)
+    primary_se = context.se_plane.block(rows, cols, eaf=primary_eaf)
     index_eaf, eaf_error = _decode_index_eaf(
-        name, context, group, encoding, start, stop, n_analyses
+        name, context, group, encoding, start, stop, a0, a1
     )
     if eaf_error is not None:
         return eaf_error
+    def imputed_check() -> str | None:
+        return _imputed_band_error(
+            name, context, group, index_z_raw, index_se_raw, encoding, rows, start, stop, a0, a1
+        )
+
+    cells = (index_z_raw, index_se_raw, index_eaf, primary_z, primary_eaf, primary_se, positions)
+    return _compare_decoded_cells(name, context, encoding, cells, cols, imputed_check)
+
+
+def _compare_decoded_cells(
+    name: str,
+    context: _DecodeContext,
+    encoding: StoreEncoding,
+    cells: tuple[Any, ...],
+    cols: np.ndarray,
+    imputed_check: Any,
+) -> str | None:
+    """The decoded equality checks shared by an exhaustive band and the sample."""
+    index_z_raw, index_se_raw, index_eaf, primary_z, primary_eaf, primary_se, positions = cells
     return (
         _missingness_error(name, context, index_z_raw, index_se_raw, encoding)
-        or _imputed_band_error(
-            name, context, group, index_z_raw, index_se_raw, encoding, rows, start, stop
-        )
+        or imputed_check()
         or _z_band_error(name, context, index_z_raw, primary_z, positions)
         or _eaf_band_error(name, index_eaf, primary_eaf)
         or _se_band_error(
@@ -2319,7 +2899,7 @@ def _compare_indexed_band(
             index_eaf,
             primary_se,
             encoding,
-            n_analyses,
+            cols,
             positions,
         )
     )
@@ -2332,7 +2912,8 @@ def _decode_index_eaf(
     encoding: StoreEncoding,
     start: int,
     stop: int,
-    n_analyses: int,
+    a0: int,
+    a1: int,
 ) -> tuple[np.ndarray | None, str | None]:
     """Decode one band's indexed EAF, with an error string when it cannot be.
 
@@ -2345,29 +2926,52 @@ def _decode_index_eaf(
     if not has_eaf and not encoding.eaf.reference:
         return None, None
     n_subset = int(group["z"].shape[1])
-    positions = positions_rows_cols(np.arange(n_analyses), np.arange(start, stop), n_subset)
+    tile = a1 - a0
+    positions = positions_rows_cols(np.arange(a0, a1), np.arange(start, stop), n_subset)
     if has_eaf:
-        codes = np.asarray(group["eaf"][:, start:stop])
+        codes = np.asarray(group["eaf"][a0:a1, start:stop])
         baseline_cells = (
             None
             if context.baseline is None
-            else context.baseline[start:stop][None, :].repeat(n_analyses, axis=0)
+            else context.baseline[start:stop][None, :].repeat(tile, axis=0)
         )
     else:
-        codes = np.full((n_analyses, stop - start), np.nan, dtype=np.float32)
+        codes = np.full((tile, stop - start), np.nan, dtype=np.float32)
         baseline_cells = None
-    reference = None
-    if EAF_REFERENCE in group:
-        reference = np.broadcast_to(
-            np.asarray(group[EAF_REFERENCE][start:stop], dtype=np.float32)[None, :],
-            codes.shape,
-        )
+    reference_values = (
+        np.asarray(group[EAF_REFERENCE][start:stop], dtype=np.float32)
+        if EAF_REFERENCE in group
+        else None
+    )
+    return _decode_index_eaf_codes(
+        name, context, codes, baseline_cells, reference_values,
+        _index_imputed_band(group, start, stop, a0, a1), positions,
+    )
+
+
+def _decode_index_eaf_codes(
+    name: str,
+    context: _DecodeContext,
+    codes: np.ndarray,
+    baseline: np.ndarray | None,
+    reference_values: np.ndarray | None,
+    imputed: np.ndarray | None,
+    positions: Any,
+) -> tuple[np.ndarray | None, str | None]:
+    """Decode index EAF codes through the index's own codec, or report why not.
+
+    ``reference_values`` is the per-variant panel frequency (1-D) or None; it is
+    broadcast to the codes' shape so a band and a point sample share this path.
+    """
+    reference = (
+        None if reference_values is None else np.broadcast_to(reference_values, codes.shape)
+    )
     try:
         decoded = context.codec.decode_eaf(
             codes,
-            baseline=baseline_cells,
+            baseline=baseline,
             positions=positions,
-            imputed=_index_imputed_band(group, start, stop),
+            imputed=imputed,
             reference=reference,
         )
     except Exception as exc:
@@ -2375,11 +2979,13 @@ def _decode_index_eaf(
     return decoded, None
 
 
-def _index_imputed_band(group: Any, start: int, stop: int) -> np.ndarray | None:
+def _index_imputed_band(
+    group: Any, start: int, stop: int, a0: int, a1: int
+) -> np.ndarray | None:
     """The index's own `imputed` band, or None on an Observed-Only index."""
     if _IMPUTED_MASK not in group:
         return None
-    return np.asarray(group[_IMPUTED_MASK][:, start:stop], dtype=np.uint8)
+    return np.asarray(group[_IMPUTED_MASK][a0:a1, start:stop], dtype=np.uint8)
 
 
 def _imputed_band_error(
@@ -2392,17 +2998,39 @@ def _imputed_band_error(
     rows: np.ndarray,
     start: int,
     stop: int,
+    a0: int,
+    a1: int,
 ) -> str | None:
-    """Whether the index's Association Status mask is well-formed and authoritative.
+    """Whether the index's Association Status mask is well-formed and authoritative."""
+    index_imputed = _index_imputed_band(group, start, stop, a0, a1)
+    if index_imputed is None:
+        return None
+    primary_cells = (
+        None
+        if context.primary_imputed is None
+        else np.asarray(context.primary_imputed.oindex[rows, a0:a1]).T
+    )
+    return _imputed_mask_message(
+        name, context, index_z_raw, index_se_raw, encoding, index_imputed, primary_cells
+    )
+
+
+def _imputed_mask_message(
+    name: str,
+    context: _DecodeContext,
+    index_z_raw: np.ndarray,
+    index_se_raw: np.ndarray,
+    encoding: StoreEncoding,
+    index_imputed: np.ndarray,
+    primary_cells: np.ndarray | None,
+) -> str | None:
+    """The well-formedness and authority checks shared by the band and sample paths.
 
     Three silent-wrong-answer classes in one rule: an imputed cell that is
     missing is an invalid state (spec §15), an imputed mask that does not match
     the primary labels observed cells imputed and vice versa, and a non-0/1
     value is not a mask at all.  Each is refused rather than decoded.
     """
-    index_imputed = _index_imputed_band(group, start, stop)
-    if index_imputed is None:
-        return None
     if not np.all((index_imputed == 0) | (index_imputed == 1)):
         return f"indexed subset {name!r} imputed mask contains values other than 0 and 1"
     se_missing = (
@@ -2411,10 +3039,9 @@ def _imputed_band_error(
     missing = context.codec.missing_mask(index_z_raw) | se_missing
     if np.any(index_imputed.astype(bool) & missing):
         return f"indexed subset {name!r} marks a missing Z/SE cell imputed"
-    if context.primary_imputed is None:
+    if primary_cells is None:
         return f"indexed subset {name!r} carries an imputed mask but the release has none"
-    primary = np.asarray(context.primary_imputed.oindex[rows, :]).T
-    if not np.array_equal(index_imputed, primary):
+    if not np.array_equal(index_imputed, primary_cells):
         return (
             f"indexed subset {name!r} imputed mask disagrees with the primary release; "
             "the index is stale or corrupt"
@@ -2499,18 +3126,20 @@ def _se_band_error(
     index_eaf: np.ndarray | None,
     primary_se: np.ndarray,
     encoding: StoreEncoding,
-    n_analyses: int,
+    cols: np.ndarray,
     positions: Any,
 ) -> str | None:
     if encoding.se.is_residual:
         if index_eaf is None:
             return f"indexed subset {name!r} se cannot be decoded without its eaf plane"
+        analysis_index = np.asarray(cols, dtype=np.int64)
+        if index_se_raw.ndim == 2:
+            # A band is (Analysis, slot); the sample is a flat run of cells.
+            analysis_index = np.broadcast_to(analysis_index[:, None], index_se_raw.shape)
         index_se = context.codec.decode_se(
             index_se_raw,
             eaf=index_eaf,
-            analysis_index=np.broadcast_to(
-                np.arange(n_analyses)[:, None], index_se_raw.shape
-            ),
+            analysis_index=analysis_index,
             coefficients=context.coefficients,
             positions=positions,
         )
@@ -2528,3 +3157,154 @@ def _se_band_error(
             "be decoded; the index is stale or corrupt"
         )
     return None
+
+
+# ── Sampled publication gate (#270) ─────────────────────────────────────────
+
+
+def _points(array: Any, analyses: np.ndarray, slots: np.ndarray) -> np.ndarray:
+    """The pointwise cells `(analyses[i], slots[i])` of an index array."""
+    return np.asarray(array.vindex[analyses, slots])
+
+
+def _index_imputed_points(
+    group: Any, analyses: np.ndarray, slots: np.ndarray
+) -> np.ndarray | None:
+    """The index's own `imputed` cells for the sample, or None without one."""
+    if _IMPUTED_MASK not in group:
+        return None
+    return np.asarray(group[_IMPUTED_MASK].vindex[analyses, slots], dtype=np.uint8)
+
+
+def _imputed_points_error(
+    name: str,
+    context: _DecodeContext,
+    group: Any,
+    variants: np.ndarray,
+    sample: _SamplePlan,
+    encoding: StoreEncoding,
+    index_z_raw: np.ndarray,
+    index_se_raw: np.ndarray,
+) -> str | None:
+    """The sample's Association Status mask, well-formed and authoritative."""
+    index_imputed = _index_imputed_points(group, sample.analyses, sample.slots)
+    if index_imputed is None:
+        return None
+    primary_cells = (
+        None
+        if context.primary_imputed is None
+        else np.asarray(
+            context.primary_imputed.vindex[variants, sample.analyses], dtype=np.uint8
+        )
+    )
+    return _imputed_mask_message(
+        name, context, index_z_raw, index_se_raw, encoding, index_imputed, primary_cells
+    )
+
+
+def _decode_index_eaf_points(
+    name: str,
+    context: _DecodeContext,
+    group: Any,
+    encoding: StoreEncoding,
+    sample: _SamplePlan,
+    positions: Any,
+) -> tuple[np.ndarray | None, str | None]:
+    """Decode the sample's indexed EAF from the index's own tables."""
+    has_eaf = "eaf" in group
+    if not has_eaf and not encoding.eaf.reference:
+        return None, None
+    if has_eaf:
+        codes = _points(group["eaf"], sample.analyses, sample.slots)
+        baseline = (
+            None
+            if context.baseline is None
+            else np.asarray(context.baseline[sample.slots], dtype=np.float32)
+        )
+    else:
+        codes = np.full(sample.cells, np.nan, dtype=np.float32)
+        baseline = None
+    reference_values = (
+        np.asarray(group[EAF_REFERENCE][sample.slots], dtype=np.float32)
+        if EAF_REFERENCE in group
+        else None
+    )
+    return _decode_index_eaf_codes(
+        name, context, codes, baseline, reference_values,
+        _index_imputed_points(group, sample.analyses, sample.slots), positions,
+    )
+
+
+def _compare_indexed_sample(
+    name: str,
+    root: Any,
+    group: Any,
+    encoding: StoreEncoding,
+    subset: np.ndarray,
+    sample: _SamplePlan,
+    errors: list[str],
+) -> None:
+    """Decode and compare a bounded deterministic sample of index cells.
+
+    The build's publication gate (#270): the structural invariants and the
+    small side tables are checked exhaustively elsewhere, and here the decoded
+    Z/SE/EAF and Association Status of the sample's cells are compared against
+    the primary planes.  The sample covers first/last cells, physical output
+    boundaries, a spread of Analyses and checksum-seeded cells; an isolated
+    unsampled corruption can pass this gate by design and is left to the
+    exhaustive standalone audit.
+    """
+    context = _open_decode_context(name, group, root, encoding, errors)
+    if context is None:
+        return
+    if sample.cells == 0:
+        errors.append(f"indexed subset {name!r} validation sample is empty")
+        return
+    view = _sample_decoded_view(name, context, group, encoding, subset, sample, errors)
+    if view is None:
+        return
+    cells, cols, imputed_check = view
+    message = _compare_decoded_cells(name, context, encoding, cells, cols, imputed_check)
+    if message is not None:
+        errors.append(message + " (sampled cell)")
+
+
+def _sample_decoded_view(
+    name: str,
+    context: _DecodeContext,
+    group: Any,
+    encoding: StoreEncoding,
+    subset: np.ndarray,
+    sample: _SamplePlan,
+    errors: list[str],
+) -> tuple[tuple[Any, ...], np.ndarray, Any] | None:
+    """Gather the sample's index and primary decoded cells for comparison.
+
+    Returns the ``(cells, cols, imputed_check)`` triple `_compare_decoded_cells`
+    needs, or None after reporting a decode failure.
+    """
+    variants = subset[sample.slots]
+    n_subset = len(subset)
+    positions = positions_at(sample.analyses * n_subset + sample.slots)
+    index_z_raw = _points(group["z"], sample.analyses, sample.slots)
+    index_se_raw = _points(group["se"], sample.analyses, sample.slots)
+    primary_eaf = (
+        context.eaf_plane.read_points(variants, sample.analyses).values
+        if context.eaf_plane.can_report_frequencies
+        else None
+    )
+    index_eaf, eaf_error = _decode_index_eaf_points(
+        name, context, group, encoding, sample, positions
+    )
+    if eaf_error is not None:
+        errors.append(eaf_error)
+        return None
+    primary_z = context.z_plane.points(variants, sample.analyses)
+    primary_se = context.se_plane.points(variants, sample.analyses, eaf=primary_eaf)
+    def imputed_check() -> str | None:
+        return _imputed_points_error(
+            name, context, group, variants, sample, encoding, index_z_raw, index_se_raw
+        )
+
+    cells = (index_z_raw, index_se_raw, index_eaf, primary_z, primary_eaf, primary_se, positions)
+    return cells, sample.analyses, imputed_check

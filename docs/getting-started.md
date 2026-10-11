@@ -153,8 +153,16 @@ pixi run -e dev opengwasdb query-analysis \
 ```
 
 `--overwrite` atomically replaces an existing subset of the same name.
-`--band-cells` bounds peak build memory (the complete write is staged, validated
-against the primary planes, and published by rename). `opengwasdb
+`--band-cells` bounds the Analysis tile a build materialises: the variant band
+is the index's own inner chunk (v2) or shard (v3), so every compressed output
+file is encoded exactly once, and the largest source block held is
+`max(band-cells, one output chunk/shard)`, independent of the subset's variant
+count. The complete write is staged and published by rename; the staged
+publication gate checks every structural invariant exhaustively and compares the
+decoded Z/SE/EAF and Association Status of a bounded deterministic sample of
+cells. Standalone `opengwasdb validate` remains **exhaustive** and decodes every
+indexed cell, so it is the audit for a corruption outside the build sample.
+`opengwasdb
 regenerate-overview STORE` lists every published subset — name,
 requested/resolved/absent counts, input checksum, Reference Assembly and build
 provenance read from the group's own metadata, with the physical size computed

@@ -23,6 +23,7 @@ import hashlib
 import shutil
 import threading
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -33,16 +34,22 @@ from typer.testing import CliRunner, Result
 from opengwasdb.build.source import NormalisedAssociation
 from opengwasdb.cli.main import app
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.layouts.dense import indexed_subsets
 from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.indexed_subsets import (
     DEFAULT_BAND_CELLS,
+    EXHAUSTIVE_VALIDATION_BAND_CELLS,
     INDEXED_SUBSETS_GROUP,
     IndexedSubsetError,
     IndexedSubsetExistsError,
     IndexedSubsetNameError,
     IndexedSubsetStaleError,
     VariantListError,
+    _analysis_tiles,
     _ensure_indexed_subset_namespace,
+    _output_write_bands,
+    _physical_write_unit,
+    _validation_sample,
     build_indexed_subset,
     list_indexed_subsets,
     open_indexed_subset,
@@ -50,6 +57,7 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     read_variant_list,
     remove_indexed_subset,
     resolve_variant_list,
+    validate_indexed_subsets,
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
@@ -815,11 +823,306 @@ def test_index_plane_splits_into_multiple_shards(
     assert validate_store(store).ok
 
 
+# ── Output write amplification ──────────────────────────────────────────────
+#
+# #270: the writer must encode each compressed output file exactly once.  The
+# fixtures below are small, so a deliberately tiny `band_cells` forces the
+# unfixed band-per-Analysis writer to split each physical output unit; the
+# recorder counts the real storage writes.  A v2 store writes one file per
+# inner chunk, a v3 store one per shard, so both geometries are checked.
+
+
+def _statistic_write_counts(recorder: Any) -> dict[str, dict[str, int]]:
+    """The statistic planes' physical-file write counts, v2 or v3."""
+    counts = recorder.chunk_writes()
+    if not counts:
+        counts = recorder.v2_chunk_writes()
+    return {name: counts[name] for name in ("z", "se", "eaf", "imputed") if name in counts}
+
+
+def _assert_each_file_written_once(counts: dict[str, dict[str, int]]) -> None:
+    assert counts, "the fixture must write at least one statistic plane"
+    for plane, chunks in counts.items():
+        assert chunks, f"{plane} must have at least one physical file"
+        assert sum(chunks.values()) == len(chunks), (
+            f"index {plane} wrote {sum(chunks.values())} times over {len(chunks)} "
+            "physical files; each must be encoded exactly once"
+        )
+        assert max(chunks.values()) == 1, (
+            f"index {plane} rewrote a physical file "
+            f"({max(chunks.values())} times); #270 requires one encoding per file"
+        )
+
+
+def test_output_v2_chunks_are_encoded_once(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    legacy = relayout_as_0_1_0(rich_store, tmp_path / "legacy.opengwasdb")
+    with store_arrays.count_shard_writes(record_bytes=False) as recorder:
+        _build(legacy, "hm3", variant_list, band_cells=8)
+    _assert_each_file_written_once(_statistic_write_counts(recorder))
+
+
+def test_output_v3_shards_are_encoded_once(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    with store_arrays.count_shard_writes(record_bytes=False) as recorder:
+        _build(store, "hm3", variant_list, band_cells=8)
+    _assert_each_file_written_once(_statistic_write_counts(recorder))
+
+
+# ── Declared band-memory invariant (#270 review) ────────────────────────────
+
+
+def _materialized_bound(band_cells: int, write_unit: int) -> int:
+    return max(int(band_cells), int(write_unit))
+
+
+def test_analysis_tile_bound_is_independent_of_subset_size() -> None:
+    """A v3-size write unit cannot force the source buffer above the budget.
+
+    The Analysis tile is capped by ``band_cells`` with a floor of one Analysis,
+    so the largest materialised source block is ``max(band_cells, write_unit)``
+    -- one physical output unit when the budget is smaller -- and it does not
+    grow with the number of Analyses or variants.
+    """
+    band_cells = 4_000_000
+    write_unit = 1_048_576  # a v3 Indexed Variant Subset shard
+    read_unit = 1_000       # a primary Dense inner chunk's Analysis axis
+    bound = _materialized_bound(band_cells, write_unit)
+    for n_analyses in (1, 61, 2_024, 100_000, 1_000_000):
+        tiles = _analysis_tiles(n_analyses, write_unit, band_cells, read_unit)
+        assert sum(a1 - a0 for a0, a1 in tiles) == n_analyses
+        assert max((a1 - a0) for a0, a1 in tiles) * write_unit <= bound
+    for n_subset in (1, write_unit, 10 * write_unit, 100 * write_unit):
+        assert all(
+            stop - start <= write_unit
+            for start, stop in _output_write_bands(n_subset, write_unit)
+        )
+
+
+def test_analysis_tile_floors_at_one_physical_unit_when_the_budget_is_smaller() -> None:
+    write_unit = 1_048_576
+    tiles = _analysis_tiles(1_000, write_unit, band_cells=1, read_unit=1_000)
+    assert tiles == [(start, start + 1) for start in range(1_000)]
+    assert max((a1 - a0) for a0, a1 in tiles) * write_unit == write_unit
+
+
+def test_default_band_avoids_deterministic_v2_source_rereads() -> None:
+    """The default budget is one source read unit, so v2 decodes it once.
+
+    OGS-00009's v2 output chunk is 65,536 variants and its primary
+    Analysis-axis read unit is 1,000.  The historical 4,000,000-cell budget
+    gave a 61-Analysis tile, splitting one read unit into ceil(1,000/61) = 17
+    tiles and decoding each source file 17 times; the 65,536,000-cell default
+    gives a 1,000-Analysis tile and decodes it once.  This is a
+    geometry/read-count argument, not an RSS claim.
+    """
+    write_unit = 65_536
+    read_unit = 1_000
+    n_analyses = 2_024
+    old = _analysis_tiles(n_analyses, write_unit, 4_000_000, read_unit)
+    new = _analysis_tiles(n_analyses, write_unit, DEFAULT_BAND_CELLS, read_unit)
+    old_tile = max(a1 - a0 for a0, a1 in old)
+    new_tile = max(a1 - a0 for a0, a1 in new)
+    assert old_tile == 61
+    assert new_tile == read_unit
+    assert -(-read_unit // old_tile) == 17
+    assert -(-read_unit // new_tile) == 1
+    assert DEFAULT_BAND_CELLS == write_unit * read_unit
+
+
+def test_exhaustive_validation_band_stays_at_four_million_cells() -> None:
+    """Standalone validation's float32 decode stays ~4M cells on OGS geometry.
+
+    The exhaustive pass compares decoded float32 planes, so it uses its own band
+    constant and not the writer default; a writer that reads 65.5M-cell source
+    blocks must not make the validation tile 65.5M cells.
+    """
+    write_unit = 65_536
+    read_unit = 1_000
+    n_analyses = 2_024
+    exhaustive = _analysis_tiles(
+        n_analyses, write_unit, EXHAUSTIVE_VALIDATION_BAND_CELLS, 1
+    )
+    writer = _analysis_tiles(n_analyses, write_unit, DEFAULT_BAND_CELLS, read_unit)
+    exhaustive_cells = max(a1 - a0 for a0, a1 in exhaustive) * write_unit
+    writer_cells = max(a1 - a0 for a0, a1 in writer) * write_unit
+    assert EXHAUSTIVE_VALIDATION_BAND_CELLS == 4_000_000
+    assert DEFAULT_BAND_CELLS == 65_536_000
+    assert exhaustive_cells <= EXHAUSTIVE_VALIDATION_BAND_CELLS
+    assert writer_cells == DEFAULT_BAND_CELLS
+    assert exhaustive_cells != writer_cells, "the two passes must use separate bands"
+
+
+def test_exhaustive_validation_uses_its_own_band(
+    tmp_path: Path,
+    rich_store: Path,
+    variant_list: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Standalone validation passes the exhaustive band, not the writer default.
+
+    Recording the `band_cells` argument of every `_analysis_tiles` call during
+    `validate_store` pins the path's constant so a later refactor cannot quietly
+    fall back to `DEFAULT_BAND_CELLS` and hold 65.5M float32 cells per tile.
+    """
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    _build(store, "hm3", variant_list)
+    seen: list[int] = []
+    original = indexed_subsets._analysis_tiles
+
+    def recording(*args: Any, **kwargs: Any) -> Any:
+        seen.append(int(args[2]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(indexed_subsets, "_analysis_tiles", recording)
+    assert validate_store(store).ok
+    assert seen, "the exhaustive validation must call _analysis_tiles"
+    assert all(band == EXHAUSTIVE_VALIDATION_BAND_CELLS for band in seen)
+    assert DEFAULT_BAND_CELLS not in seen
+
+
+def test_build_records_a_materialized_band_within_the_declared_bound(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    result = build_indexed_subset(
+        store, "hm3", variant_list, reference_assembly="GRCh38", band_cells=1
+    )
+    assert result.band_cells_effective == _materialized_bound(1, result.physical_write_unit)
+    assert 0 < result.max_materialized_cells <= result.band_cells_effective
+
+
+def test_build_records_the_default_band_invariant(
+    tmp_path: Path, rich_store: Path, variant_list: Path
+) -> None:
+    store = shutil.copytree(rich_store, tmp_path / "store.opengwasdb")
+    result = build_indexed_subset(store, "hm3", variant_list, reference_assembly="GRCh38")
+    assert result.band_cells_effective == _materialized_bound(
+        DEFAULT_BAND_CELLS, result.physical_write_unit
+    )
+    assert 0 < result.max_materialized_cells <= result.band_cells_effective
+    assert result.max_materialized_bytes == max(result.materialized_plane_bytes.values())
+    assert result.materialized_plane_bytes, "the build must record per-plane buffer bytes"
+
+
+def test_v2_chunk_key_parser_rejects_v3_shard_keys() -> None:
+    assert store_arrays.v2_chunk_array_key("z/0.0") == "z"
+    assert store_arrays.v2_chunk_array_key("indexed_subsets/hm3/z/1.2") == (
+        "indexed_subsets/hm3/z"
+    )
+    assert store_arrays.v2_chunk_array_key("z/c/0/0") is None
+    assert store_arrays.v2_chunk_array_key("z/c/0") is None
+    assert store_arrays.v2_chunk_array_key("z/.zarray") is None
+    assert store_arrays.v2_chunk_array_key("zarr.json") is None
+
+
 # ── Standalone validation ───────────────────────────────────────────────────
 
 
 def _errors_for(store: Path) -> list[str]:
     return validate_store(store).errors
+
+
+def _sampled_errors(store: Path) -> list[str]:
+    """The build's publication gate in isolation: structural + bounded sample."""
+    root = _root(store)
+    n_variants, n_analyses = (int(size) for size in root["z"].shape)
+    errors: list[str] = []
+    validate_indexed_subsets(
+        store,
+        root,
+        StoreManifest.load(store),
+        n_variants,
+        n_analyses,
+        errors,
+        exhaustive=False,
+    )
+    return errors
+
+
+def test_sample_covers_write_unit_and_inner_chunk_boundaries() -> None:
+    """A v3 sample anchors the shard boundary and a distinct inner chunk."""
+    write_unit = 1_048_576
+    inner_chunk = 65_536
+    sample = _validation_sample(
+        {"input_sha256": "ab" * 32},
+        n_analyses=8,
+        n_subset=4 * write_unit,
+        write_unit=write_unit,
+        inner_chunk=inner_chunk,
+    )
+    slots = {int(slot) for slot in sample.slots}
+    assert write_unit in slots, "the physical write-unit boundary must be sampled"
+    inner_only = {
+        slot for slot in slots if slot % write_unit != 0 and slot % inner_chunk == 0
+    }
+    assert inner_only, "the inner-chunk spread must reach a non-shard boundary"
+    assert sample.cells < 1_200
+    assert "physical write-unit boundaries" in sample.strategy
+    assert "inner-chunk boundaries" in sample.strategy
+
+
+# ── Sampled publication gate and the exhaustive audit (#270) ────────────────
+
+
+def test_build_sample_refuses_a_chunk_boundary_corruption(
+    tmp_path: Path, big_store: Path
+) -> None:
+    """A corruption at a physical output boundary must fail the build sample.
+
+    The sample deliberately includes the slot before each output boundary and
+    the first slot after it, so an off-by-one or chunk-remap defect is caught
+    even though the build no longer decodes the whole matrix.
+    """
+    store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
+    _build(store, "big", _big_variant_list(tmp_path))
+    group = _index_group(store, "big")
+    values = np.asarray(group["z"][:])
+    boundary = store_arrays.INDEXED_SUBSET_CHUNK
+    assert boundary < values.shape[1], "the fixture must have a second output unit"
+    values[0, boundary] = values[0, boundary] + 1
+    group["z"][:] = values
+    errors = _sampled_errors(store)
+    assert any("z values" in error for error in errors), errors
+    assert _errors_for(store), "the exhaustive audit must also refuse it"
+
+
+def test_build_sample_misses_isolated_corruption_but_standalone_refuses(
+    tmp_path: Path, big_store: Path
+) -> None:
+    """The sample's residual risk is stated, not hidden: it may miss one cell.
+
+    A cell the deterministic sample does not visit passes the build gate by
+    design; the exhaustive standalone audit must still find it, so the risk is
+    explicit and recoverable rather than silent.
+    """
+    store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
+    _build(store, "big", _big_variant_list(tmp_path))
+    group = _index_group(store, "big")
+    values = np.asarray(group["z"][:])
+    n_subset = int(values.shape[1])
+    sample = _validation_sample(
+        dict(group.attrs),
+        1,
+        n_subset,
+        _physical_write_unit(group["z"]),
+        int(group["z"].chunks[1]),
+    )
+    visited = set(zip(sample.analyses.tolist(), sample.slots.tolist(), strict=True))
+    unsampled = next(
+        slot for slot in range(n_subset) if (0, slot) not in visited
+    )
+    values[0, unsampled] = values[0, unsampled] + 1
+    group["z"][:] = values
+    assert not any("z values" in error for error in _sampled_errors(store)), (
+        "the chosen cell must be outside the documented sample"
+    )
+    assert any("z values" in error for error in _errors_for(store)), (
+        "the exhaustive audit must refuse the unsampled corruption"
+    )
 
 
 def test_validation_rejects_a_temporary_group(
@@ -1094,6 +1397,31 @@ def test_validation_rejects_a_wrong_plane_dtype(
     )
     errors = _errors_for(store)
     assert any("dtype" in error for error in errors), errors
+
+
+def test_validation_refuses_corruption_outside_a_small_sample(
+    tmp_path: Path, big_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deterministic sample cannot excuse an isolated silent corruption.
+
+    The fixture is forced into two output units and the *last* subset variant is
+    corrupted, in the second unit.  A validator that sampled output chunks -- or
+    rows, or Analyses -- could pass while the last variant carries a wrong
+    statistic; the exhaustive publication gate must refuse it.
+    """
+    monkeypatch.setattr(
+        store_arrays, "INDEXED_SUBSET_SHARD", store_arrays.INDEXED_SUBSET_CHUNK
+    )
+    store = shutil.copytree(big_store, tmp_path / "store.opengwasdb")
+    _build(store, "big", _big_variant_list(tmp_path))
+    group = _index_group(store, "big")
+    n_subset = int(group["z"].shape[1])
+    assert int(group["z"].shards[1]) < n_subset, "the fixture must span more than one unit"
+    values = np.asarray(group["z"][:])
+    values[0, -1] = values[0, -1] + 1
+    group["z"][:] = values
+    errors = _errors_for(store)
+    assert any("z values" in error for error in errors), errors
 
 
 def _recreate_array(

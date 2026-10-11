@@ -1362,7 +1362,10 @@ _INDEXED_SUBSET_OVERWRITE_OPTION = typer.Option(
 _INDEXED_SUBSET_BAND_CELLS_OPTION = typer.Option(
     DEFAULT_BAND_CELLS,
     "--band-cells",
-    help="Peak cells read per streamed band; bounds build memory",
+    help=(
+        "Bounds the largest writer source block to max(requested cells, one "
+        "physical output unit); it is not a whole-process RSS target"
+    ),
 )
 
 
@@ -1392,6 +1395,11 @@ def build_indexed_subset_command(
     typer.echo(
         f"requested {result.requested_count}, resolved {result.resolved_count}, "
         f"absent {result.absent_count}"
+    )
+    typer.echo(
+        f"publication gate: {result.validation_mode}, {result.sample_cells} decoded "
+        f"sample cells (seed {result.sample_seed}) in {result.validate_seconds:.1f} s; "
+        "standalone validate remains exhaustive"
     )
 
 

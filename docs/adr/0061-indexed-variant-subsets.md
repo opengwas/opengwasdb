@@ -133,8 +133,61 @@ performance result.
 - The #267 production build's peak RSS was **1,234.8 MB** against its declared
   band-plus-fixed-overhead bound of **1,146.1 MB**, so the run recorded
   `peak_rss_within_bound = false`. The miss is reported honestly rather than
-  the bound being widened after the fact; the peak is still set by the band and
-  not by the full matrix.
+  the bound being widened after the fact; the peak is independent of the full
+  matrix. The #270 per-phase measurement below shows it is set by ALID
+  resolution, not by the writer band.
+- **#270 removed the build's output-chunk write amplification and made the
+  build's publication gate a documented deterministic sample.** The old writer
+  banded by cell budget alone -- about 1,976 subset variants on OGS-00009 -- and
+  so partially read, recomputed and recompressed each 65,536-variant output
+  chunk about 33 times per plane. The writer now walks whole physical output
+  files (a v2 chunk, or a v3 shard so a shard is never a read-modify-write),
+  plane at a time, and tiles the Analysis axis within the band. The tile is
+  capped by the band budget with a floor of one Analysis, so the largest
+  materialised source block is `max(band_cells, write unit)` -- one physical
+  output unit when the budget is smaller -- independent of the subset's length;
+  a tile that fits the budget is a whole multiple of the primary's read unit,
+  and a budget below that unit decodes the primary once per tile rather than
+  materialising `write unit x read unit` cells. `DEFAULT_BAND_CELLS` is exactly
+  one output write unit times a representative primary read unit
+  (65,536 x 1,000 = **65,536,000** cells), so a v2 build decodes each primary
+  file once: the historical 4,000,000-cell budget gave a 61-Analysis tile and
+  split one 1,000-Analysis primary read unit into 17 tiles, while the default
+  gives a 1,000-Analysis tile. On
+  the fresh #270 OGS-00009 HapMap3 build every one of the 38,456 `z`,
+  `se` and `eaf` physical files was encoded exactly once (measured at the store
+  layer). The build took **187.53 s** -- write **176.076 s** and the publication
+  gate **1.939 s** -- against the #267 build's 4,198 s, with byte-exact
+  six-field equivalence, 6,235,009,024 physical index bytes (17.852%) and a
+  1,234.8 MB peak RSS. The writer-memory invariant is independent of RSS:
+  `max_materialized_cells <= max(band_cells, write unit)` (65,536,000 cells
+  here), with the derived raw buffer bytes recorded per plane/dtype. The
+  benchmark's RSS target is deliberately unchanged from the #267 acceptance
+  threshold of **1,146.1 MB** (the original 4,000,000-cell declaration), so the
+  run still records `peak_rss_within_bound = false`; the peak is
+  ALID-resolution-bound, not writer-band-bound, and the threshold is not
+  widened to turn it green.
+- The build's gate validates the structural invariants exhaustively (identity
+  and attributes, exact array set, shapes/dtypes/chunking, the full Variant
+  Index, counts and provenance), together with the small side-table remapping
+  and the per-variant EAF baseline/reference, and replaces the full-matrix
+  decoded comparison with a **bounded deterministic stratified sample**: the
+  four corners, the slot before/at/last-of a spread of physical write-unit
+  boundaries and, separately, a small inner-chunk spread, 16 evenly spaced
+  Analyses, and input-checksum-seeded cells -- **528 cells** on the
+  #270 run (seed 166638625948460791), independent of the matrix. Standalone
+  `validate_store`/`validate_indexed_subsets` remain **exhaustive** and decode
+  every indexed cell, side table, imputed mask and reference EAF, so an
+  isolated corruption the build sample can miss is refused by an explicit
+  audit. That pass uses its own `EXHAUSTIVE_VALIDATION_BAND_CELLS`
+  (4,000,000 cells, unchanged from #267) so its float32 decode does not grow to
+  the writer's 65,536,000-cell source block; the build records the mode, sample
+  strategy, seed, cell count and sampled duration. The risk is documented rather
+  than hidden, and the low build cost is part of this ADR's outcome.
+- The #270 query latency was measured at **456.64 ms** warm median in that
+  benchmark run. The index chunk/shard geometry and per-plane physical bytes are
+  identical to #267's and the query path is unchanged, so the difference from
+  the #267 figure is not attributable to this change.
 - The store format gains a compatible optional index namespace and validation
   rules. The specification, overview rendering, CLI documentation and sibling
   repository walkthrough must describe it in the implementation change.
