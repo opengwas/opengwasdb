@@ -168,11 +168,16 @@ def test_streamed_overflow_selects_the_same_plan_as_one_bundle(tmp_path):
 # ── Seam: chunk-aligned batches for the byte measurement ─────────────────────
 
 
-@pytest.mark.parametrize("multiple", [1, 7, 64, 1000])
+@pytest.mark.parametrize("multiple", [7, 64, 1000])
 def test_chunk_aligned_batches_end_on_multiples_and_reconstruct_the_cells(tmp_path, multiple):
     """The byte measurement charges chunk by chunk and pads only the plane's
     final edge chunk, so every batch but the last must end on a chunk boundary
-    -- a batch that ended anywhere else would change the selected SE range."""
+    -- a batch that ended anywhere else would change the selected SE range.
+
+    A multiple of one makes the alignment assertion vacuous and took 25 seconds
+    to prove every integer is divisible by one. The cell-budget-one case above
+    already exercises reconstruction from one-cell batches.
+    """
     sizes = [1500, 1, 0, 1800, 900, 1900]
     writer = _writer(sizes, without_eaf=(2, 4))
     encoding = _residual_encoding(writer, len(sizes))

@@ -160,7 +160,7 @@ report = { features = ["report"], solve-group = "default" }
 [tool.pixi.feature.dev.tasks]
 # Keep the suite hermetic and prevent tiny multiprocessing fixtures from
 # inheriting a many-threaded BLAS pool. Both otherwise vary with the host.
-test = "env PYTHONNOUSERSITE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 pytest -n auto --maxprocesses=4 --dist=loadfile"
+test = "env PYTHONNOUSERSITE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 pytest -n auto --maxprocesses=12 --dist=loadfile"
 lint = "ruff check ."
 typecheck = "mypy opengwasdb"
 benchmark-indexed-subset = "python benchmarks/benchmark_indexed_subset.py"
