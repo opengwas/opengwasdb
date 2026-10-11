@@ -1332,18 +1332,25 @@ class HybridStoreQuery:
         analysis_id: str,
         *,
         observed_only: bool = False,
-        # Hybrid carries no Indexed Variant Subsets; a selector is refused (#265).
+        # Delegated to the nested Dense Component's index; never the overflow (#271).
         indexed_subset: str | None = None,
     ) -> dict[str, np.ndarray]:
         """All associations for one analysis (analysis_id lookup) across both components.
 
-        Indexed Variant Subsets are Dense-only (ADR 0061): the
-        shared root never carries one, and unifying the Dense and Ragged
-        Overflow Components is unspecified, so a selector is refused rather
-        than ignored (#265).
+        With a selector, the answer comes from the nested Dense Component's
+        Indexed Variant Subset and covers its on-panel variants only: the index
+        is built against that self-contained Dense release (issue #271), its
+        panel-local `variant_index` is remapped through `dense_to_shared.npy`,
+        and the Ragged Overflow is never read or concatenated. An unknown,
+        stale, incomplete, corrupt or unsupported selector raises from the
+        nested Dense path rather than falling back to either ordinary path.
         """
         if indexed_subset is not None:
-            _refuse_indexed_subset(self.store.path, "Hybrid", indexed_subset)
+            return self._remap_dense(
+                self._dense.analysis(
+                    analysis_id, observed_only=observed_only, indexed_subset=indexed_subset
+                )
+            )
         dense = self._remap_dense(self._dense.analysis(analysis_id, observed_only=observed_only))
         analysis = self._analyses.by_id(analysis_id)
         overflow = (

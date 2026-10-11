@@ -1378,7 +1378,12 @@ def build_indexed_subset_command(
     overwrite: bool = _INDEXED_SUBSET_OVERWRITE_OPTION,
     band_cells: int = _INDEXED_SUBSET_BAND_CELLS_OPTION,
 ) -> None:
-    """Build one full-statistic Indexed Variant Subset for a Dense store."""
+    """Build one full-statistic Indexed Variant Subset for a Dense store.
+
+    A Hybrid root is accepted and targets its self-contained Dense Component:
+    the index is stored under ``<root>/dense/data.zarr/indexed_subsets`` and
+    indexes only that component's on-panel variants (issue #271).
+    """
     try:
         result = build_indexed_subset(
             store_path,
@@ -1436,7 +1441,9 @@ _INDEXED_SUBSET_QUERY_OPTION = typer.Option(
         "Read this Analysis from a named Indexed Variant Subset instead of the "
         "primary planes. The subset must exist and belong to this release: an "
         "unknown, incomplete, stale, corrupt or unsupported subset fails loudly "
-        "rather than falling back to the ordinary path. Dense-only."
+        "rather than falling back to the ordinary path. Dense-only; on a Hybrid "
+        "root the selector is served from the nested Dense Component's index and "
+        "never from the Ragged Overflow."
     ),
 )
 

@@ -506,14 +506,18 @@ def test_ragged_release_refuses_a_subset_selector(tmp_path: Path) -> None:
     assert "Observed-Only" not in str(excinfo.value)
 
 
-def test_hybrid_release_refuses_a_subset_selector(tmp_path: Path) -> None:
+def test_hybrid_root_without_an_index_refuses_a_subset_selector(tmp_path: Path) -> None:
+    """A Hybrid root now carries subsets in its nested Dense Component (#271).
+
+    With no such index present, the selector still fails loudly (an absent
+    subset), not with the old Dense-only layout refusal.
+    """
     store = _hybrid(tmp_path, tmp_path)
     with query_store(store) as query:
         analysis_id = next(iter(query.analyses_table().values()))["analysis_id"]
-        with pytest.raises(IndexedSubsetLayoutError) as excinfo:
+        with pytest.raises(IndexedSubsetError) as excinfo:
             query.analysis(analysis_id, indexed_subset="hm3")
-    assert "Dense-only" in str(excinfo.value)
-    assert "Observed-Only" not in str(excinfo.value)
+    assert "no Indexed Variant Subset" in str(excinfo.value)
 
 
 # ── CLI: same schemas, selector passthrough, loud failures ───────────────────

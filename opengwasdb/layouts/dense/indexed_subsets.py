@@ -92,6 +92,7 @@ from opengwasdb.encoding import (
     positions_rows_cols,
 )
 from opengwasdb.encoding.planes import SE_COEFFICIENTS
+from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
@@ -521,6 +522,38 @@ def _canonical_alid_or_none(candidate: str) -> str | None:
     effect, other = sorted((parsed.effect_allele, parsed.other_allele))
     canonical = f"{parsed.chromosome}:{parsed.position}:{effect}:{other}"
     return canonical if canonical == candidate else None
+
+
+def indexed_subset_store_path(store_path: str | Path) -> Path:
+    """The directory that owns `store_path`'s Indexed Variant Subsets.
+
+    A Dense Store Release owns its own ``data.zarr/indexed_subsets``.  A Hybrid
+    release stores them inside its self-contained Dense Component at
+    ``<root>/dense`` (issue #271): the shared/overflow axis has no association
+    planes of its own to index, and the nested component is already a valid
+    Dense release the unchanged builder and validator operate on.  Ragged owns
+    none.  An unreadable manifest is returned unchanged, so a caller still sees
+    the missing-subset or unreadable-group failure it would have seen before
+    this resolver rather than a manifest error.
+    """
+    path = Path(store_path)
+    try:
+        manifest = StoreManifest.load(path)
+    except (OSError, ValueError, KeyError, TypeError):
+        return path
+    if manifest.primary_layout is PrimaryStorageLayout.HYBRID:
+        return dense_component_path(path)
+    return path
+
+
+def indexed_subset_namespace_path(store_path: str | Path) -> Path:
+    """The `indexed_subsets` directory for `store_path`, resolving a Hybrid root.
+
+    The one place the physical namespace is located, so discovery, removal,
+    overview and reading cannot disagree about where a Hybrid release keeps
+    its index (issue #271).
+    """
+    return indexed_subset_store_path(store_path) / "data.zarr" / INDEXED_SUBSETS_GROUP
 
 
 def resolve_variant_list(
@@ -1016,14 +1049,142 @@ def _build_attributes(
     }
 
 
+def _resolve_build_target(store_path: Path) -> tuple[Path, StoreManifest, Path | None]:
+    """The release the index physically belongs to, and its Hybrid root if any.
+
+    A Dense release is its own target.  A Hybrid release's target is its
+    self-contained Dense Component (``<root>/dense``), returned with the root so
+    the variant-list check can distinguish an overflow-only ALID from one truly
+    absent from the shared union table (issue #271).  A Ragged release is
+    returned unchanged and refused by `_check_layout` with the existing
+    Dense-only message.
+    """
+    release = open_store(store_path)
+    if release.manifest.primary_layout is PrimaryStorageLayout.HYBRID:
+        dense_path = dense_component_path(store_path)
+        try:
+            dense_manifest = open_store(dense_path).manifest
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise IndexedSubsetError(
+                f"Hybrid release {store_path} has no readable Dense Component at "
+                f"{dense_path}: {exc}"
+            ) from exc
+        return dense_path, dense_manifest, store_path
+    return store_path, release.manifest, None
+
+
+def _matched_alids(axis: VariantAxis, variant_index: np.ndarray) -> set[str]:
+    """The canonical ALIDs of `variant_index` in `axis`, without a table scan.
+
+    `identity_by_indices` reads the mmap'd ALID index when the store carries
+    one; a store built before issue 029 has none, so per-row `by_indices` is
+    the fallback.
+    """
+    if len(variant_index) == 0:
+        return set()
+    identity = axis.identity_by_indices(np.asarray(variant_index, dtype=np.int64))
+    if identity is not None:
+        return {str(alid) for alid in identity["alid"]}
+    return {record.alid for record in axis.by_indices(variant_index).values()}
+
+
+def _off_panel_candidates(
+    dense_path: Path, alids: tuple[str, ...], dense_resolved: ResolvedVariantList
+) -> list[str]:
+    """Requested ALIDs the Dense Component does not carry.
+
+    A count mismatch between the resolved Variant Indices and the ALIDs read
+    back from them means the two axes disagree about what a row is; refusing to
+    guess keeps an on-panel ALID from being mislabelled overflow-only.
+    """
+    if dense_resolved.resolved == 0:
+        return list(alids)
+    dense_axis = VariantAxis(dense_path)
+    try:
+        dense_alids = _matched_alids(dense_axis, dense_resolved.variant_index)
+    finally:
+        dense_axis.close()
+    if len(dense_alids) != int(dense_resolved.resolved):
+        raise IndexedSubsetError(
+            f"internal error resolving the variant list against Dense Component "
+            f"{dense_path}: {dense_resolved.resolved} Variant Indices resolved but "
+            f"{len(dense_alids)} distinct ALIDs were read back; refusing to guess "
+            "which requested ALIDs are on-panel"
+        )
+    return [alid for alid in alids if alid not in dense_alids]
+
+
+def _overflow_only_alids(hybrid_root: Path, candidates: list[str]) -> list[str]:
+    """The candidates present in the shared union table -- off-panel, not absent.
+
+    One batched pass short-circuits the common all-absent case; only when
+    something is present does the per-ALID pass pay for names to report.
+    """
+    shared_axis = VariantAxis(hybrid_root)
+    try:
+        if len(shared_axis.indices_by_identifiers(candidates)) == 0:
+            return []
+        return [alid for alid in candidates if shared_axis.by_identifier(alid) is not None]
+    finally:
+        shared_axis.close()
+
+
+def _refuse_overflow_only(
+    hybrid_root: Path,
+    dense_path: Path,
+    alids: tuple[str, ...],
+    dense_resolved: ResolvedVariantList,
+) -> None:
+    """Refuse requested ALIDs that exist only on a Hybrid release's overflow axis.
+
+    An Indexed Variant Subset built from a Hybrid root indexes its Dense
+    Component only (ADR 0061, issue #271).  An off-panel ALID is present in the
+    shared union table but has no Dense row, so resolving against the Dense
+    Component alone would count it as "absent from this Store Release" and drop
+    it silently -- the plausible-wrong-answer class this project refuses.
+
+    The shared union table makes the distinction observable, so the existing
+    absent handling is preserved only for an ALID absent from *both* axes; one
+    present in the shared table but not the Dense Component fails the build and
+    is named.
+    """
+    candidates = _off_panel_candidates(dense_path, alids, dense_resolved)
+    if not candidates:
+        return
+    overflow = _overflow_only_alids(hybrid_root, candidates)
+    if not overflow:
+        return
+    preview = ", ".join(repr(alid) for alid in overflow[:5])
+    suffix = f" (and {len(overflow) - 5} more)" if len(overflow) > 5 else ""
+    raise IndexedSubsetError(
+        f"{len(overflow)} requested canonical ALID(s) belong only to the shared/overflow "
+        f"axis of Hybrid release {hybrid_root} and cannot be indexed by its Dense "
+        f"Component's Indexed Variant Subset: {preview}{suffix}. An Indexed Variant "
+        "Subset indexes the Dense Component's on-panel variants only; remove these "
+        "ALIDs or query them through the ordinary hybrid association path"
+    )
+
+
 def _resolve_inputs(
-    store_path: Path, variant_list_path: str | Path, reference_assembly: str
-) -> tuple[StoreManifest, VariantList, ResolvedVariantList]:
-    """Open the release, check the layout and assembly, and resolve the list."""
-    manifest = open_store(store_path).manifest
+    target_path: Path,
+    manifest: StoreManifest,
+    variant_list_path: str | Path,
+    reference_assembly: str,
+    hybrid_root: Path | None,
+) -> tuple[VariantList, ResolvedVariantList]:
+    """Check the assembly and resolve the list against the owning release.
+
+    On a Hybrid root the list is resolved against the nested Dense Component and
+    any requested ALID that belongs only to the shared/overflow axis is refused
+    (issue #271); an ALID absent from the shared union table is still counted and
+    recorded as absent, because the shared table makes that distinction
+    observable.
+    """
     _check_assembly(manifest, reference_assembly)
     variant_list = read_variant_list(variant_list_path)
-    resolved = resolve_variant_list(store_path, variant_list.alids)
+    resolved = resolve_variant_list(target_path, variant_list.alids)
+    if hybrid_root is not None:
+        _refuse_overflow_only(hybrid_root, target_path, variant_list.alids, resolved)
     if resolved.resolved == 0:
         raise VariantListError(
             f"variant list {variant_list.path} names no Store variants; an Indexed "
@@ -1036,7 +1197,7 @@ def _resolve_inputs(
             resolved.absent,
             resolved.requested,
         )
-    return manifest, variant_list, resolved
+    return variant_list, resolved
 
 
 def _prepare_subset(
@@ -1051,10 +1212,11 @@ def _prepare_subset(
     name = parse_indexed_subset_name(subset_name)
     if band_cells <= 0:
         raise IndexedSubsetError(f"band_cells must be positive, got {band_cells}")
-    manifest, variant_list, resolved = _resolve_inputs(
-        store_path, variant_list_path, reference_assembly
+    target_path, manifest, hybrid_root = _resolve_build_target(store_path)
+    variant_list, resolved = _resolve_inputs(
+        target_path, manifest, variant_list_path, reference_assembly, hybrid_root
     )
-    root = store_arrays.open_group(store_path / "data.zarr")
+    root = store_arrays.open_group(target_path / "data.zarr")
     _check_layout(manifest, root)
     n_analyses = int(root["z"].shape[1])
     n_variants = int(root["z"].shape[0])
@@ -1062,7 +1224,7 @@ def _prepare_subset(
         name, manifest, variant_list, resolved, n_analyses, len(resolved.variant_index)
     )
     return _SubsetPlan(
-        store_path=store_path,
+        store_path=target_path,
         name=name,
         manifest=manifest,
         variant_list=variant_list,
@@ -1070,7 +1232,7 @@ def _prepare_subset(
         root=root,
         n_analyses=n_analyses,
         n_variants=n_variants,
-        fmt=zarr_format_for_version(manifest.format_version, source=f"release at {store_path}"),
+        fmt=zarr_format_for_version(manifest.format_version, source=f"release at {target_path}"),
         completed=manifest.completion_state is CompletionState.REFERENCE_COMPLETED,
         attrs=attrs,
     )
@@ -1172,6 +1334,12 @@ def build_indexed_subset(
 ) -> IndexedSubsetBuild:
     """Build, validate and atomically publish one Indexed Variant Subset.
 
+    `store_path` is a Dense release or a Hybrid release. For a Hybrid release
+    the target is its self-contained Dense Component, so the index is stored at
+    `<root>/dense/data.zarr/indexed_subsets/<name>` and covers only that
+    component's on-panel variants; a requested ALID that exists only on the
+    shared/overflow axis is refused (issue #271).
+
     The input contract (canonical ALIDs, an explicit matching Reference
     Assembly, a nonempty match) is enforced before any group is created; the
     build then stages a unique sibling, validates it against the primary planes,
@@ -1215,7 +1383,9 @@ def _validate_staged(plan: _SubsetPlan, work: Path) -> _SamplePlan | None:
 def remove_indexed_subset(store_path: str | Path, subset_name: str) -> bool:
     """Delete one published subset group, returning whether it existed.
 
-    Removing a derived index changes no authoritative data; a release with none
+    `store_path` may be a Dense release or a Hybrid root; a Hybrid root resolves
+    to its nested Dense Component (issue #271).  Removing a derived index changes
+    no authoritative data; a release with none
     is valid (ADR 0061).  The removal takes the namespace's publication lock
     and first renames the group aside, so it can never interleave with a commit
     of the same name and a reader never sees a half-deleted group: the published
@@ -1226,7 +1396,9 @@ def remove_indexed_subset(store_path: str | Path, subset_name: str) -> bool:
     """
     name = parse_indexed_subset_name(subset_name)
     store_path = Path(store_path)
-    namespace_dir = store_path / "data.zarr" / INDEXED_SUBSETS_GROUP
+    # A Hybrid root keeps its subsets under the nested Dense Component; resolve
+    # once here so removal names the release root and not `<root>/dense` (#271).
+    namespace_dir = indexed_subset_namespace_path(store_path)
     if not namespace_dir.is_dir():
         return False
     dest = namespace_dir / name
@@ -1251,10 +1423,12 @@ def remove_indexed_subset(store_path: str | Path, subset_name: str) -> bool:
 def list_indexed_subsets(store_path: str | Path) -> tuple[str, ...]:
     """The published subset names under one release, sorted.
 
-    Read from the filesystem so a stray entry that is not a group is visible to
-    validation rather than silently absent from the listing.
+    `store_path` may be a Dense release or a Hybrid root; a Hybrid root resolves
+    to its nested Dense Component (issue #271).  Read from the filesystem so a
+    stray entry that is not a group is visible to validation rather than
+    silently absent from the listing.
     """
-    namespace = Path(store_path) / "data.zarr" / INDEXED_SUBSETS_GROUP
+    namespace = indexed_subset_namespace_path(Path(store_path))
     if not namespace.is_dir():
         return ()
     return tuple(
@@ -1572,7 +1746,9 @@ def _require_decodable_subset(
 def open_indexed_subset(store_path: str | Path, subset_name: str) -> IndexedSubset:
     """Open a published subset's metadata and decode seam, or fail loudly.
 
-    The seam refuses a subset whose recorded source identity no longer matches
+    `store_path` may be a Dense release or a Hybrid root; a Hybrid root resolves
+    to its nested Dense Component, and every failure names the path the caller
+    passed (issue #271).  The seam refuses a subset whose recorded source identity no longer matches
     the release it sits in, before returning any object a caller could decode
     through: a stale index would return plausible associations for the wrong
     release, and #265's query path must not be the first place that is noticed.
@@ -1581,11 +1757,15 @@ def open_indexed_subset(store_path: str | Path, subset_name: str) -> IndexedSubs
     release's index, and "this release has no subset" without the release is
     not actionable (issue #265 review).
     """
-    store_path = Path(store_path)
+    requested = Path(store_path)
+    # The index physically belongs to a Dense release or, for a Hybrid root, to
+    # its nested Dense Component; failures name the path the caller passed so an
+    # operator never has to know the nested path (issue #271).
+    target = indexed_subset_store_path(requested)
     try:
-        return _open_indexed_subset(store_path, subset_name)
+        return _open_indexed_subset(target, subset_name)
     except IndexedSubsetError as exc:
-        scoped = _store_scoped(store_path, exc)
+        scoped = _store_scoped(requested, exc)
         if scoped is exc:
             raise
         raise scoped from exc

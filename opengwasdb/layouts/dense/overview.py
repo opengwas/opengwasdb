@@ -28,7 +28,11 @@ import numpy as np
 from scipy.cluster.hierarchy import leaves_list, linkage  # type: ignore[import-untyped]
 from scipy.spatial.distance import squareform  # type: ignore[import-untyped]
 
-from opengwasdb.layouts.dense.indexed_subsets import IndexedSubsetError, open_indexed_subset
+from opengwasdb.layouts.dense.indexed_subsets import (
+    IndexedSubsetError,
+    indexed_subset_namespace_path,
+    open_indexed_subset,
+)
 from opengwasdb.layouts.dense.rho import DenseRhoReader
 from opengwasdb.model.analyses import ANCESTRY_PROP_PREFIX, AnalysesTable
 from opengwasdb.store.arrays import open_group
@@ -750,11 +754,6 @@ def _render_rho_section(output_path: Path, table: AnalysesTable) -> str | None:
 
 # ── Indexed Variant Subsets tab (issue #267, ADR 0061) ──────────────────────
 
-#: The published subsets live under this optional `data.zarr` group. Spelled
-#: here rather than imported so the generic overview renderer stays independent
-#: of the writer module; the attribute names are the store-format §10b keys.
-_INDEXED_SUBSETS_GROUP = "indexed_subsets"
-
 #: The group's own recorded facts, rendered in the order the store-format spec
 #: §10b names them. Overview presents them; it never recomputes a value.
 _INDEXED_SUBSET_FIELDS: tuple[str, ...] = (
@@ -846,7 +845,10 @@ def _published_subset_paths(output_path: Path) -> list[Path]:
     A leading `.` is the module's staging/replacement convention, so those
     entries are skipped rather than rendered as a named subset.
     """
-    namespace = output_path / "data.zarr" / _INDEXED_SUBSETS_GROUP
+    # A Hybrid release keeps its subsets inside the nested Dense Component, so
+    # the namespace is located through the same resolver the writer and reader
+    # use rather than by hand (#271).
+    namespace = indexed_subset_namespace_path(output_path)
     if not namespace.is_dir():
         return []
     return [

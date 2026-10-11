@@ -150,6 +150,25 @@ the end of this file.
 
 ### Changed
 
+- **Indexed Variant Subsets on a Hybrid release target its self-contained Dense
+  Component (issue #271).** `build-indexed-subset <hybrid-root> ...` no longer
+  refuses Hybrid: it resolves the root to `<root>/dense`, indexes that
+  component's on-panel variants only, and stores the group at
+  `dense/data.zarr/indexed_subsets/<name>`, never reading or merging the Ragged
+  Overflow association planes. A requested canonical ALID that exists only on
+  the shared/overflow axis now fails the build and names the ALID, rather than
+  being silently counted absent and dropped; an ALID absent from both axes keeps
+  the existing counted-as-absent handling, which the shared union table makes
+  distinguishable. `query-analysis <hybrid-root> ANALYSIS_ID --indexed-subset
+  NAME` now serves the nested Dense Component's index, remaps its panel-local
+  `variant_index` through `dense_to_shared.npy`, returns the ordinary six
+  arrays, and never reads or appends the Overflow and never falls back; a query
+  without a selector is unchanged. Discovery (`list_indexed_subsets`), removal
+  (`remove_indexed_subset`), validation, overview and the CLI resolve the Hybrid
+  root without the operator naming `/dense`, while a direct nested-Dense target
+  stays compatible. Ragged releases are still refused. ADR 0061 and the store
+  format §10b record the amendment.
+
 - **Indexed Variant Subset overview and benchmark truthfulness (issue #267).**
   `overview.html`'s Indexed Subsets tab now surfaces an unreadable group, or a
   group whose recorded `indexed_subset_name` disagrees with its directory name,
