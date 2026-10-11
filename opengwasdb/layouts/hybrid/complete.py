@@ -57,6 +57,7 @@ from opengwasdb.layouts.hybrid.layout import (
     dense_component_path,
     dense_to_shared_path,
 )
+from opengwasdb.layouts.ragged.by_variant import build_variant_index, with_variant_index
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import (
     RAGGED_ZARR_PATH,
@@ -427,6 +428,7 @@ def _write_shared_tables_and_overflow(
         eaf_baseline=overflow_baseline,
         se_coefficients=_shared_se_coefficients(dense.dir, src_manifest.encoding),
     )
+    build_variant_index(staged.path, n_axis=axis.n_shared)
     return csr.n_associations
 
 
@@ -685,35 +687,69 @@ def _write_completed_manifest(
         completion_state=CompletionState.REFERENCE_COMPLETED,
         reference_assembly=src_manifest.reference_assembly,
         created_at=datetime.now(UTC).isoformat(),
-        provenance={
-            **src_manifest.provenance,
-            "source_release_id": src_manifest.release_id,
-            "hybrid": {
-                **src_manifest.provenance.get("hybrid", {}),
-                "dense_component": DENSE_SUBDIR,
-                "n_panel": n_panel,
-                "n_off_panel": n_off_panel,
-                "n_overflow_associations": n_overflow,
-                **_dense_component_layout(staged.path),
-            },
-            "n_variants": n_variants,
-            "n_analyses": n_analyses,
-            "completion": {
-                # The panel this release was completed against, at the top
-                # level and not only inside the Dense Component: "one panel per
-                # completed store" is load-bearing once `eaf_reference` holds
-                # that panel's frequencies, so it is recorded where a reader of
-                # the Hybrid store looks (issue #116).
-                "method": dense_completion["method"],
-                "ld_panel_id": dense_completion["ld_panel_id"],
-                "ancestry": dense_completion["ancestry"],
-                "component_completed": "dense",
-                "overflow_completion_state": "observed_only",
-                "n_imputed_dense": n_imputed,
-            },
-        },
+        provenance=_completed_hybrid_provenance(
+            staged,
+            src_manifest,
+            variants=n_variants,
+            analyses=n_analyses,
+            panel=n_panel,
+            off_panel=n_off_panel,
+            overflow=n_overflow,
+            imputed=n_imputed,
+            dense_completion=dense_completion,
+        ),
     )
     staged.write_manifest(manifest)
+
+
+def _completed_hybrid_provenance(
+    staged: StagedRelease,
+    src_manifest: StoreManifest,
+    *,
+    dense_completion: Mapping[str, Any],
+    variants: int,
+    analyses: int,
+    panel: int,
+    off_panel: int,
+    overflow: int,
+    imputed: int,
+) -> dict[str, Any]:
+    """A completed Hybrid release's provenance: the source's, restamped."""
+    return {
+        **src_manifest.provenance,
+        "source_release_id": src_manifest.release_id,
+        "hybrid": {
+            **src_manifest.provenance.get("hybrid", {}),
+            "dense_component": DENSE_SUBDIR,
+            "n_panel": panel,
+            "n_off_panel": off_panel,
+            "n_overflow_associations": overflow,
+            **_dense_component_layout(staged.path),
+        },
+        "n_variants": variants,
+        "n_analyses": analyses,
+        "ragged": with_variant_index(
+            staged.path,
+            {
+                key: value
+                for key, value in src_manifest.provenance.get("ragged", {}).items()
+                if key != "by_variant"
+            },
+        ),
+        "completion": {
+            # The panel this release was completed against, at the top
+            # level and not only inside the Dense Component: "one panel per
+            # completed store" is load-bearing once `eaf_reference` holds
+            # that panel's frequencies, so it is recorded where a reader of
+            # the Hybrid store looks (issue #116).
+            "method": dense_completion["method"],
+            "ld_panel_id": dense_completion["ld_panel_id"],
+            "ancestry": dense_completion["ancestry"],
+            "component_completed": "dense",
+            "overflow_completion_state": "observed_only",
+            "n_imputed_dense": imputed,
+        },
+    }
 
 
 def _dense_component_layout(staged_path: Path) -> dict[str, Any]:

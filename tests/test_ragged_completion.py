@@ -1047,6 +1047,19 @@ def _force_imputed_row(store_path: Path, analysis_index: int, variant_vi: int) -
     imputed = ragged["imputed"][:]
     imputed[pos] = 1
     ragged["imputed"][:] = imputed
+    # Keep the variant-centric index consistent with the plane it duplicates:
+    # a query now reads the index's mask (ADR 0060), and validation rejects a
+    # stale one.  A variant's rows are contiguous and Analysis-ascending.
+    if "by_variant" in ragged:
+        index = ragged["by_variant"]
+        by_offsets = index["offsets"][:]
+        block_start, block_end = int(by_offsets[variant_vi]), int(by_offsets[variant_vi + 1])
+        block_ai = index["analysis_index"][block_start:block_end]
+        rel = int(np.searchsorted(block_ai, analysis_index))
+        assert block_ai[rel] == analysis_index, "forced cell must be in the index"
+        index_imputed = index["imputed"][:]
+        index_imputed[block_start + rel] = 1
+        index["imputed"][:] = index_imputed
 
 
 class TestQuery:

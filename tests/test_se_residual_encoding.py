@@ -135,7 +135,8 @@ def test_decision_chooses_smallest_candidate_only_when_all_gates_pass() -> None:
     )
 
 
-def test_dense_plane_writer_exposes_only_physical_se(tmp_path) -> None:
+def _residual_dense_group(tmp_path, *, compressed=False):
+    """A tiny three-variant Dense group with one exact SE exception at (1, 1)."""
     group = zarr.open_group(str(tmp_path / "data.zarr"), mode="w", zarr_format=2)
     eaf = np.array([[0.1, 0.2], [0.3, 0.4], [0.45, 0.49]], dtype=np.float32)
     coefficients = np.array([[-3.0, -0.5], [-2.5, -0.45]], dtype=np.float32)
@@ -145,7 +146,20 @@ def test_dense_plane_writer_exposes_only_physical_se(tmp_path) -> None:
     group.create_array("eaf", data=np.asarray(eaf, dtype="float32"), chunks=(2, 2))
     group.create_array("z", data=np.asarray(np.ones_like(eaf), dtype="float16"), chunks=(2, 2))
     plan = _plan(1.0)
-    write_se_dense(group, StoreCodec(plan), se, eaf, coefficients, chunks=(2, 2))
+    write_se_dense(
+        group,
+        StoreCodec(plan),
+        se,
+        eaf,
+        coefficients,
+        chunks=(2, 2),
+        compressor=compressor() if compressed else None,
+    )
+    return group, se, plan
+
+
+def test_dense_plane_writer_exposes_only_physical_se(tmp_path) -> None:
+    group, se, plan = _residual_dense_group(tmp_path)
 
     plane = DenseSePlane.open(group, plan)
     np.testing.assert_allclose(plane.band(0, 3), se, rtol=0.01)
@@ -385,6 +399,25 @@ def test_a_tiny_codeable_overflow_does_not_force_float16(tmp_path) -> None:
     decoded = DenseSePlane.open(group, selected).band(0, len(dense_se))
     np.testing.assert_allclose(
         decoded, dense_se.astype(np.float16).astype(np.float32), rtol=0.01
+    )
+
+
+def test_patching_a_dense_se_cell_keeps_the_existing_exceptions(tmp_path) -> None:
+    """A patch that touches no exception cell must leave the SE table's entries.
+
+    Review round 2, finding 1, for the SE exception table: completion's
+    crossover fold calls `DenseSePlane.patch`.
+    """
+    group, se, plan = _residual_dense_group(tmp_path, compressed=True)
+    before = np.asarray(group["se_exception_index"][:], dtype=np.int64)
+    assert len(before) >= 1, "fixture must have an SE exception cell to lose"
+
+    plane = DenseSePlane.open(group, plan)
+    plane.patch(np.array([0]), np.array([0]), np.array([se[0, 0]], dtype=np.float32))
+
+    after = np.asarray(group["se_exception_index"][:], dtype=np.int64)
+    assert set(before.tolist()) <= set(after.tolist()), (
+        f"patching an ordinary cell dropped SE exception entries: {before} -> {after}"
     )
 
 

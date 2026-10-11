@@ -760,7 +760,7 @@ class RaggedCSRReader:
         # validation, not decode as whatever the bytes happen to look like.
         if encoding is None:
             encoding = StoreManifest.load(Path(store_path)).encoding
-        self._codec = StoreCodec(encoding, z_overflow=ZOverflowTable.read(self._root))
+        self._codec = StoreCodec(encoding, z_overflow=ZOverflowTable.open(self._root))
         # Every EAF read goes through the plane, which gathers the per-variant
         # baseline (and, on a Reference-Completed release, the panel frequency
         # for imputed cells) onto the cells being read. Absent on stores whose

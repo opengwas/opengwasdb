@@ -36,6 +36,8 @@ from opengwasdb.build.eaf_orientation import (
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
+from opengwasdb.layouts.ragged.by_variant import build_variant_index
+from opengwasdb.layouts.ragged.provenance import ragged_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.model.analyses import PassthroughMetadata, write_analysis_records
@@ -55,9 +57,6 @@ from opengwasdb.model.manifest_columns import (
 from opengwasdb.stats import parse_af
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
 from opengwasdb.variants.axis import (
-    VARIANT_AXIS_FORMAT,
-    VARIANT_TABIX_FILENAME,
-    VARIANT_TABLE_FILENAME,
     write_variant_axis,
 )
 from opengwasdb.variants.normalise import (
@@ -494,6 +493,7 @@ def _encode_ssf_csr(
         )
     )
     csr.flush(output, encoding)
+    build_variant_index(output, n_axis=n_variants)
     return csr, encoding, eaf_scopes
 
 
@@ -605,15 +605,7 @@ def _write_manifest(
             "n_analyses": n_analyses,
             "n_associations": n_associations,
             **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
-            "ragged": {
-                "statistic_arrays": ["z", "se"],
-                "se_dtype": encoding.se.dtype,
-                "variant_axis": {
-                    "format": VARIANT_AXIS_FORMAT,
-                    "table": VARIANT_TABLE_FILENAME,
-                    "tabix_index": VARIANT_TABIX_FILENAME,
-                },
-            },
+            "ragged": ragged_provenance(staged.path, encoding),
         },
     )
     staged.write_manifest(manifest)

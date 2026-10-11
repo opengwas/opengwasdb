@@ -46,7 +46,7 @@ from opengwasdb.layouts.dense.rho import (
     build_dense_rho,
 )
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
-from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from opengwasdb.layouts.hybrid.build import HybridBuildResult, build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
@@ -550,13 +550,13 @@ def build_hybrid_command(
 
     MANIFEST_PATH is a TSV with columns: trait_id, file_path, trait_name, n,
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
-    On-panel variants in --reference-panel fill the Dense Component; off-panel variants
-    go to Ragged Overflow. --variant-reference supplies a precomputed axis and source
-    map, bypassing Pass 1 (#186); a reference that names no rsids runs Pass 1's
+    On-panel variants fill the Dense Component; off-panel variants go to Ragged
+    Overflow. --variant-reference supplies a precomputed axis and source map,
+    bypassing Pass 1 (#186); a reference that names no rsids runs Pass 1's
     harvest, keeping the names the two-pass build gives every variant both axes
-    carry (#255). --source-reader-capability and --source-assembly
-    supply per-release defaults (#174). --checkpoint keeps a resumable record of
-    each phase (#227), and --resume continues the build for OUTPUT_PATH from one.
+    carry (#255). --source-reader-capability and --source-assembly supply
+    per-release defaults (#174). --checkpoint keeps a resumable record of each
+    phase (#227), and --resume continues the build for OUTPUT_PATH from one.
     """
     res = build_hybrid_from_vcf_manifest(
         manifest_path, output_path, reference_panel=reference_panel,
@@ -567,6 +567,11 @@ def build_hybrid_command(
         source_reader_capability=capability, source_assembly=assembly,
         checkpoint=checkpoint, resume=resume,
     )
+    _echo_hybrid_result(res)
+
+
+def _echo_hybrid_result(res: HybridBuildResult) -> None:
+    """Echo one Hybrid build's summary as the CLI's JSON contract."""
     _echo_summary(
         dict(
             output_path=str(res.output_path),
@@ -617,10 +622,8 @@ def build_hybrid_from_catalogue_command(
 
     Row-filters the Catalogue to ``assigned_ancestry == ANCESTRY`` (a manifest the
     unchanged build reads, plus STORED_EFFECT_SCALE and ORIGINAL_SD_METHOD/ORIGINAL_SD
-    stamped onto every kept row -- the Catalogue itself never carries these columns,
-    issues #17/#18), runs build-hybrid, and records per-Analysis Assigned Ancestry +
-    Catalogue provenance in the store sidecar. Non-matching Analyses are absent from
-    the store (still parked in the Catalogue).
+    stamped onto every kept row, issues #17/#18), runs build-hybrid, and records
+    per-Analysis Assigned Ancestry + Catalogue provenance in the sidecar.
     """
     from opengwasdb.ancestry.subset import build_hybrid_from_catalogue
 
@@ -1298,6 +1301,46 @@ def complete_dense_resume_command(
             },
             sort_keys=True,
         )
+    )
+
+
+@app.command("build-variant-index")
+def build_variant_index_command(
+    store_path: Path,
+    force: Annotated[
+        bool, typer.Option("--force", help="Rebuild an index the release already carries")
+    ] = False,
+    spill_dir: Annotated[
+        Path | None,
+        typer.Option(
+            help="Directory for the build's transient spill files (default: beside the store)"
+        ),
+    ] = None,
+) -> None:
+    """Add the variant-centric `by_variant/` index to a 0.2.0 Ragged or Hybrid release.
+
+    The index is a `(variant, analysis)`-ordered duplicate of the component's
+    cell-keyed arrays (ADR 0060), written in place with the release's manifest
+    and any consolidated-metadata record refreshed with it. A release that does
+    not carry one answers every query through the scan it replaces, so this is
+    an acceleration, not a repair: a `0.1.0` release is converted first.
+    """
+    from opengwasdb.layouts.ragged.by_variant import VariantIndexError, add_variant_index
+
+    try:
+        result = add_variant_index(store_path, force=force, spill_dir=spill_dir)
+    except VariantIndexError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    _echo_summary(
+        {
+            "store_path": str(store_path),
+            "n_axis": result.n_axis,
+            "n_rows": result.n_rows,
+            "elapsed_seconds": round(result.elapsed_seconds, 2),
+            "peak_rss_gib": round(result.peak_rss_bytes / 2**30, 2),
+            "disk_bytes": result.disk_bytes,
+        }
     )
 
 
