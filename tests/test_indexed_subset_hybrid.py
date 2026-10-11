@@ -235,9 +235,13 @@ def test_hybrid_build_refuses_an_overflow_only_alid(
     message = str(excinfo.value)
     assert OFF_PANEL_ALID in message, message
     assert "shared/overflow" in message, message
-    assert str(store) in message, (
-        "the refusal must name the release the operator passed, not /dense: " + message
+    # The exact root, not `<root>/dense`: a substring check on `store` would
+    # pass for the nested path because the root is its prefix.
+    assert f"Hybrid release {store} and cannot" in message, (
+        "the refusal must name the exact release root the operator passed, "
+        "not /dense: " + message
     )
+    assert f"Hybrid release {dense_component_path(store)} and cannot" not in message, message
     # Nothing was staged or published by the failed build.
     assert list_indexed_subsets(store) == ()
     namespace = indexed_subset_namespace_path(store)
@@ -636,6 +640,8 @@ def test_cli_hybrid_overflow_only_alid_fails_loudly(tmp_path: Path) -> None:
     assert code == 1, output
     assert OFF_PANEL_ALID in output, output
     assert "shared/overflow" in output, output
+    assert f"Hybrid release {store} and cannot" in output, output
+    assert f"Hybrid release {dense_component_path(store)} and cannot" not in output, output
     assert list_indexed_subsets(store) == ()
 
 
