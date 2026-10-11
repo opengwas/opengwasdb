@@ -290,6 +290,11 @@ def main() -> None:
         print(f"MR {r['exposure_id']} -> {r['outcome_id']}: beta={r['ivw_beta']:.3f} "
               f"se={r['ivw_se']:.3f} p={r['ivw_pval']:.1e} n={r['n_instruments']}", flush=True)
 
+    # HM3 extraction as a routine shape (#272).
+    hm3_extract = _query_shapes.report_hm3_extract(
+        q, EXPOSURE, store_path=args.store, reps=args.reps
+    )
+
     result = {
         "dataset": {
             "store": str(args.store), "n_variants": n_variants, "n_analyses": n_analyses,
@@ -312,6 +317,7 @@ def main() -> None:
         ),
         "timings": timings,
         "memory": memory,
+        "hm3_extract": hm3_extract,
         "source_bulk": source_bulk,
         "known_loci": loci,
         "phewas_top": phewas_top(q, table),

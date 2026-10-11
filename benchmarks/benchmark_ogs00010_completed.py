@@ -746,6 +746,11 @@ def main() -> None:
         f"identical={fidelity['identical']}"
     )
 
+    # The Reference-Completed release's HM3 index, when it publishes one (#272).
+    hm3_extract = _query_shapes.report_hm3_extract(
+        q, EXPOSURE, store_path=args.store, reps=args.reps
+    )
+
     result = {
         "dataset": {
             "release_id": plan.release_id,
@@ -806,6 +811,7 @@ def main() -> None:
         },
         "timings": timings,
         "memory": memory,
+        "hm3_extract": hm3_extract,
         "mr": mr,
         "observed_cell_fidelity": fidelity,
         "labels": {

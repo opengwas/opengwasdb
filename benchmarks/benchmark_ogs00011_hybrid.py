@@ -369,6 +369,11 @@ def main() -> None:
               f"se={r['ivw_se']:.3f} p={r['ivw_pval']:.1e} n={r['n_instruments']} "
               f"(overflow {r['n_instruments_overflow']}) in {r['elapsed_s']} s", flush=True)
 
+    # A Hybrid root's HM3 index lives in its nested Dense Component (#271).
+    hm3_extract = _query_shapes.report_hm3_extract(
+        q, EXPOSURE, store_path=args.store, reps=args.reps
+    )
+
     result = {
         "dataset": {
             "store": str(args.store), "n_variants": n_variants, "n_analyses": n_analyses,
@@ -396,6 +401,7 @@ def main() -> None:
         ),
         "timings": timings,
         "memory": memory,
+        "hm3_extract": hm3_extract,
         "reps": args.reps,
         "slow_shape_seconds": SLOW_SHAPE_SECONDS,
         "source_bulk": source_bulk,

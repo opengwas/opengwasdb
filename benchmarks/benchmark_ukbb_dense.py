@@ -521,6 +521,12 @@ def main() -> None:
     print(f"MR IVW: beta={mr['ivw_beta']:.4f} se={mr['ivw_se']:.4f} "
           f"p={mr['ivw_pval']:.2e}  n_instruments={mr['n_instruments']}")
 
+    # A routine HM3 shape alongside the seven (#272): measured when the Store
+    # publishes a usable `hm3` subset, otherwise a non-failing status.
+    hm3_extract = _query_shapes.report_hm3_extract(
+        q, EXPOSURE, store_path=args.store, reps=args.reps
+    )
+
     result = {
         "dataset": {"n_variants": n_variants, "n_analyses": n_analyses,
                     "reference_assembly": getattr(plan, "reference_assembly", None),
@@ -543,6 +549,7 @@ def main() -> None:
         },
         "timings": timings,
         "memory": memory,
+        "hm3_extract": hm3_extract,
         "mr": mr,
         "regional_imputation_check": regional_imputation_check(q, analyses_by_id),
         "labels": {

@@ -8,6 +8,49 @@ is needed to reproduce or update the report.
 
 ---
 
+## HM3 extraction in the generic benchmarks (#272)
+
+Every generic benchmark built on the shared workload records an `hm3_extract`
+object for each benchmarked Store: the selected Analysis's extraction through
+the Store's **HM3 Indexed Variant Subset** (the conventional `hm3` name,
+ADR 0061). The one seam that produces it is
+`benchmarks._query_shapes.measure_hm3_extract(query, analysis_id,
+store_path=…, reps=…)`; the five full-scale harnesses and
+`benchmark_store_comparison.py` all call it, so the record below is the stable
+contract the release-side report (`opengwas/opengwasdb-stores#212`) consumes.
+HM3 is a *default derived artifact*, not a Store validity requirement, so a
+Store without one must never fail a benchmark run. The object's `status` is one
+of four values, and only `measured` carries a timing:
+
+| `status` | meaning | fields beside `status`/`subset` |
+|---|---|---|
+| `measured` | the Store publishes a structurally valid `hm3` subset and it was read | `analysis_id`, `first_read_ms`, `median_ms`, `p95_ms`, `reps`, `result_count`, `warm_result_count`, and the subset's recorded counts and provenance (`subset_n_variants`, `subset_n_analyses`, `subset_requested_count`, `subset_resolved_count`, `subset_absent_count`, `subset_reference_assembly`, `subset_input_sha256`) |
+| `missing` | the Store has a Dense Component (Dense or Hybrid) and publishes no subset named `hm3` | `detail` names the absent subset |
+| `not_applicable` | the Store is Ragged-only; an Indexed Variant Subset is Dense-only (ADR 0061) | `detail` names the layout reason |
+| `unsupported` | the Store publishes an `hm3` group whose *declared* schema or encoding is one this build cannot read (forward compatibility) | `detail` names the unsupported contract |
+
+The three non-measured states are non-failing: they say *why* no measurement
+exists rather than recording a zero, because absence and a zero-row extraction
+are different facts. `result_count == 0` under `status: measured` is a real
+result (the selected Analysis has no finite cells at the subset's variants),
+never a stand-in for a missing index.
+
+One failure class stays loud by design. A subset that is **present and
+structurally valid** whose extraction then raises is a defect in a valid index;
+the harness propagates the error rather than downgrading it to `missing`,
+because a broken index reported as absent is a wrong answer that looks right.
+The same applies to a present but damaged or stale group: it is surfaced, not
+silently reported as absent. `unsupported` is reserved for the narrow case where
+the group's own declared schema or encoding kind is unknown to this build.
+
+The name `hm3` is the benchmark's only handle on the subset: it detects whether
+a usable subset is published, not whether that subset was built from the
+canonical HapMap3 GRCh38 list. Verifying the list is the maintained Reference
+Resource's job (opengwas/opengwasdb-stores#208), so the benchmark needs no
+HapMap3 ALID list of its own.
+
+---
+
 ## Scripts
 
 ### `benchmark_reader_projection.py`

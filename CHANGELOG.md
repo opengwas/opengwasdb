@@ -202,6 +202,21 @@ the end of this file.
   table from the group, because the codec holds the group's arrays and no
   longer keeps the table in memory.
 
+- **The generic benchmarks report an HM3 extraction record for each benchmarked
+  Store (issue #272).** `benchmarks/_hm3.py` detects whether a Store publishes a
+  usable `hm3` Indexed Variant Subset by name -- no maintained HapMap3 ALID list
+  is needed -- and the shared-workload harnesses (`benchmark_ukbb_dense.py`,
+  `benchmark_finngen_dense.py`, `benchmark_ogs00010_completed.py`,
+  `benchmark_ogs00011_hybrid.py` and `benchmark_store_comparison.py`) record it
+  as `hm3_extract`. A valid, present subset records a timed extraction and its
+  result count; an absent, unsupported or Ragged (inapplicable) subset records a
+  non-failing `missing`, `unsupported` or `not_applicable` status with no timing
+  keys, so a Store without HM3 -- a default derived artifact, not a validity
+  requirement -- never fails a benchmark. A subset that is present and valid but
+  fails to answer, or a present but damaged or stale group, propagates loudly
+  rather than being reported as missing. `benchmarks/README.md` documents how to
+  read the four statuses.
+
 ### Changed
 
 - **Indexed Variant Subsets on a Hybrid release target its self-contained Dense
