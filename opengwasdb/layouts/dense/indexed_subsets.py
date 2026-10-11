@@ -1779,6 +1779,30 @@ def _store_scoped(store_path: Path, exc: IndexedSubsetError) -> IndexedSubsetErr
     return type(exc)(f"{prefix}{exc}")
 
 
+def rescope_indexed_subset_error(
+    caller_path: str | Path, physical_path: str | Path, exc: IndexedSubsetError
+) -> IndexedSubsetError:
+    """Re-point a subset failure from its physical Store to the caller's path.
+
+    A Hybrid root's Indexed Variant Subset lives inside its nested Dense
+    Component, so a query entered through that component scopes the failure to
+    ``<root>/dense``.  The operator named the Hybrid root and must see that
+    path, not the internal component (issue #271 review).  Any leading
+    ``store <physical>: `` prefix is **replaced** rather than prepended, so the
+    message is never double-prefixed, and an existing ``store <caller>: ``
+    prefix is returned untouched.  ``type(exc)`` preserves the subclass, so a
+    stale index stays an ``IndexedSubsetStaleError``.
+    """
+    text = str(exc)
+    caller_prefix = f"store {Path(caller_path)}: "
+    if text.startswith(caller_prefix):
+        return exc
+    physical_prefix = f"store {Path(physical_path)}: "
+    if text.startswith(physical_prefix):
+        text = text[len(physical_prefix):]
+    return type(exc)(f"{caller_prefix}{text}")
+
+
 def _open_subset_group(path: Path, name: str) -> tuple[Any, dict[str, Any]]:
     """Open a published subset's Zarr group, normalising a corrupt store entry.
 

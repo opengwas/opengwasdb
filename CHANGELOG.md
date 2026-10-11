@@ -163,7 +163,10 @@ the end of this file.
   NAME` now serves the nested Dense Component's index, remaps its panel-local
   `variant_index` through `dense_to_shared.npy`, returns the ordinary six
   arrays, and never reads or appends the Overflow and never falls back; a query
-  without a selector is unchanged. Discovery (`list_indexed_subsets`), removal
+  without a selector is unchanged. An unknown, stale, corrupt or unreadable
+  selector failure names the Hybrid root the caller passed, not the internal
+  `<root>/dense`, and preserves the exception subclass. Discovery
+  (`list_indexed_subsets`), removal
   (`remove_indexed_subset`), validation, overview and the CLI resolve the Hybrid
   root without the operator naming `/dense`, while a direct nested-Dense target
   stays compatible. Ragged releases are still refused. ADR 0061 and the store

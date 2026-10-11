@@ -75,8 +75,10 @@ import zarr
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, EafRead
 from opengwasdb.index import AnalysesIndex
 from opengwasdb.layouts.dense.indexed_subsets import (
+    IndexedSubsetError,
     IndexedSubsetLayoutError,
     open_indexed_subset,
+    rescope_indexed_subset_error,
 )
 from opengwasdb.layouts.dense.rho import DenseRhoReader
 from opengwasdb.layouts.dense.top_hits import DenseTopHitReader, TopHitTiers, z_critical
@@ -1342,15 +1344,26 @@ class HybridStoreQuery:
         is built against that self-contained Dense release (issue #271), its
         panel-local `variant_index` is remapped through `dense_to_shared.npy`,
         and the Ragged Overflow is never read or concatenated. An unknown,
-        stale, incomplete, corrupt or unsupported selector raises from the
-        nested Dense path rather than falling back to either ordinary path.
+        stale, incomplete, corrupt or unsupported selector raises rather than
+        falling back to either ordinary path, and the failure names the Hybrid
+        root the caller passed -- not the internal `<root>/dense` -- while
+        preserving the exception subclass.
         """
         if indexed_subset is not None:
-            return self._remap_dense(
-                self._dense.analysis(
-                    analysis_id, observed_only=observed_only, indexed_subset=indexed_subset
+            try:
+                return self._remap_dense(
+                    self._dense.analysis(
+                        analysis_id, observed_only=observed_only, indexed_subset=indexed_subset
+                    )
                 )
-            )
+            except IndexedSubsetError as exc:
+                # The nested Dense facade scopes the failure to `<root>/dense`
+                # because that is the Store it opened; re-point it at the
+                # Hybrid root the operator named, replacing rather than
+                # prepending the prefix (issue #271 review).
+                raise rescope_indexed_subset_error(
+                    self.store.path, self._dense.store.path, exc
+                ) from exc
         dense = self._remap_dense(self._dense.analysis(analysis_id, observed_only=observed_only))
         analysis = self._analyses.by_id(analysis_id)
         overflow = (

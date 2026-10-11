@@ -44,6 +44,7 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     IndexedSubsetError,
     IndexedSubsetExistsError,
     IndexedSubsetLayoutError,
+    IndexedSubsetStaleError,
     build_indexed_subset,
     indexed_subset_namespace_path,
     list_indexed_subsets,
@@ -103,6 +104,32 @@ def _tree_digest(path: Path) -> str:
         digest.update(str(entry.relative_to(path)).encode())
         digest.update(entry.read_bytes())
     return digest.hexdigest()
+
+
+def _damage_subset_entry(store: Path, name: str) -> None:
+    """Put a plain non-Zarr directory at a published subset name."""
+    group_dir = dense_component_path(store) / "data.zarr" / INDEXED_SUBSETS_GROUP / name
+    group_dir.mkdir(parents=True)
+
+
+def _assert_scoped_to_root(store: Path, exc: IndexedSubsetError) -> None:
+    """The failure names the Hybrid root exactly, never the nested Dense path.
+
+    A plain substring check passes for `<root>/dense` because the root is its
+    prefix; this asserts the whole `store <root>: ` prefix, so a failure scoped
+    to `<root>/dense` (or double-prefixed) fails the test.
+    """
+    message = str(exc)
+    dense = dense_component_path(store)
+    assert message.startswith(f"store {store}: "), (
+        f"failure must be scoped to the caller-facing Hybrid root {store}: {message}"
+    )
+    assert not message.startswith(f"store {dense}: "), (
+        f"failure must not be scoped to the nested Dense Component: {message}"
+    )
+    assert not message.startswith(f"store {store}: store "), (
+        f"failure must not be double-prefixed: {message}"
+    )
 
 
 def _shared_indices(store: Path, variant_index: np.ndarray) -> np.ndarray:
@@ -339,18 +366,19 @@ def test_hybrid_observed_only_selector_is_equivalent(indexed_root: Path) -> None
 def test_hybrid_unknown_subset_fails_loudly_naming_the_root(indexed_root: Path) -> None:
     with pytest.raises(IndexedSubsetError) as excinfo:
         _analyse(indexed_root, "trait_a", indexed_subset="nope")
-    message = str(excinfo.value)
-    assert str(indexed_root) in message, message
-    assert "nope" in message, message
+    _assert_scoped_to_root(indexed_root, excinfo.value)
+    assert "nope" in str(excinfo.value)
+    assert not isinstance(excinfo.value, IndexedSubsetStaleError)
 
 
 def test_hybrid_stale_index_is_refused_while_the_ordinary_path_still_answers(
     root_copy: Path,
 ) -> None:
     _subset_group(root_copy).attrs["source_release_id"] = "another-release"
-    with pytest.raises(IndexedSubsetError, match="stale") as excinfo:
+    with pytest.raises(IndexedSubsetStaleError) as excinfo:
         _analyse(root_copy, "trait_a", indexed_subset="hm3")
-    assert str(root_copy) in str(excinfo.value)
+    _assert_scoped_to_root(root_copy, excinfo.value)
+    assert "stale" in str(excinfo.value)
     assert len(_analyse(root_copy, "trait_a")["z"]) > 0
 
 
@@ -359,9 +387,58 @@ def test_hybrid_corrupt_index_is_refused_naming_the_root(root_copy: Path) -> Non
     values = np.asarray(group["variant_index"][:])
     values[-1] = 10_000_000  # sorted, so only the bounds rule can refuse it
     group["variant_index"][:] = values
-    with pytest.raises(IndexedSubsetError, match="out of bounds") as excinfo:
+    with pytest.raises(IndexedSubsetError) as excinfo:
         _analyse(root_copy, "trait_a", indexed_subset="hm3")
-    assert str(root_copy) in str(excinfo.value)
+    _assert_scoped_to_root(root_copy, excinfo.value)
+    assert "out of bounds" in str(excinfo.value)
+
+
+def test_hybrid_unreadable_index_is_refused_naming_the_root(root_copy: Path) -> None:
+    _damage_subset_entry(root_copy, "broken")
+    with pytest.raises(IndexedSubsetError) as excinfo:
+        _analyse(root_copy, "trait_a", indexed_subset="broken")
+    _assert_scoped_to_root(root_copy, excinfo.value)
+    assert "not a readable Zarr group" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("damage", ["unknown", "stale", "corrupt", "unreadable"])
+def test_hybrid_invalid_selector_precedes_unknown_analysis_and_names_the_root(
+    root_copy: Path, damage: str
+) -> None:
+    """The selector is resolved and validated before the Analysis ID is looked up.
+
+    A typo'd, stale or corrupt selector must fail even when the Analysis is also
+    unknown -- and the message must name the Hybrid root, not `<root>/dense`.
+    """
+    subset = "hm3"
+    if damage == "unknown":
+        subset = "nope"
+    elif damage == "stale":
+        _subset_group(root_copy).attrs["source_release_id"] = "another-release"
+    elif damage == "corrupt":
+        group = _subset_group(root_copy)
+        values = np.asarray(group["variant_index"][:])
+        values[-1] = 10_000_000
+        group["variant_index"][:] = values
+    elif damage == "unreadable":
+        _damage_subset_entry(root_copy, "broken")
+        subset = "broken"
+    with pytest.raises(IndexedSubsetError) as excinfo:
+        _analyse(root_copy, "does-not-exist", indexed_subset=subset)
+    _assert_scoped_to_root(root_copy, excinfo.value)
+
+
+def test_direct_nested_dense_failure_names_the_nested_path(tmp_path: Path) -> None:
+    """A direct Dense-Component query keeps naming `<root>/dense` (no re-scope)."""
+    store = _hybrid(tmp_path, tmp_path)
+    dense = dense_component_path(store)
+    with query_store(dense) as query:
+        analysis_id = next(iter(query.analyses_table().values()))["analysis_id"]
+        with pytest.raises(IndexedSubsetError) as excinfo:
+            query.analysis(analysis_id, indexed_subset="nope")
+    message = str(excinfo.value)
+    assert message.startswith(f"store {dense}: "), message
+    assert not message.startswith(f"store {store}: "), message
 
 
 def test_hybrid_unknown_analysis_keeps_the_ordinary_empty_result(indexed_root: Path) -> None:
