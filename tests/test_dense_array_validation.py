@@ -16,9 +16,19 @@ from __future__ import annotations
 import numpy as np
 import zarr
 
-from opengwasdb.encoding import EAF_BASELINE, EAF_REFERENCE
+import opengwasdb.validation.validate as validation_module
+from opengwasdb.encoding import (
+    EAF_BASELINE,
+    EAF_REFERENCE,
+    EafEncoding,
+    SeEncoding,
+    StoreCodec,
+    StoreEncoding,
+    ZEncoding,
+)
 from opengwasdb.validation.validate import (
     _band_marked_positions,
+    _decode_top_hit_band,
     _dense_eaf_side_lengths,
     _dense_plane_shape_errors,
     _dense_required_planes,
@@ -30,13 +40,97 @@ from opengwasdb.validation.validate import (
     _latch_dense_missingness,
     _latch_dense_off_panel_imputed,
     _latch_negative_se,
+    _read_top_hit_arrays,
     _report_dense_band_flags,
     _report_dense_eaf_range,
+    _slices_are_ordered,
+    _validate_dense_arrays,
+    _validate_dense_band,
 )
 
 
 def _band_state(n_analyses: int = 2) -> _DenseBandState:
     return _DenseBandState(n_analyses=n_analyses)
+
+
+class _LogicalDenseArray:
+    """A matrix with a real shape but no allocated cells."""
+
+    def __init__(self, shape: tuple[int, int]) -> None:
+        self.shape = shape
+        self.dtype = np.dtype("float16")
+        self.chunks = (1_000, 64)
+
+
+def test_top_hit_arrays_remain_in_their_compact_contract_dtypes() -> None:
+    group = zarr.group()
+    arrays = {
+        "variant_index": np.array([1, 2], dtype=np.uint32),
+        "analysis_index": np.array([0, 1], dtype=np.uint32),
+        "z": np.array([7.0, 8.0], dtype=np.float32),
+        "se": np.array([0.1, 0.2], dtype=np.float32),
+        "abs_z": np.array([7.0, 8.0], dtype=np.float32),
+        "p_value": np.array([1e-10, 1e-12], dtype=np.float64),
+        "analysis_offsets": np.array([0, 1, 2], dtype=np.uint64),
+        "imputed": np.array([0, 1], dtype=np.uint8),
+        "eaf": np.array([0.3, 0.4], dtype=np.float32),
+    }
+    for name, values in arrays.items():
+        group.create_array(name, data=values)
+
+    loaded = _read_top_hit_arrays("p_5e_08", group, [])
+
+    assert loaded is not None
+    assert loaded["rows"].dtype == np.uint32
+    assert loaded["cols"].dtype == np.uint32
+    assert loaded["offsets"].dtype == np.uint64
+    assert sum(value.nbytes for value in loaded.values() if value is not None) == 74
+
+
+def test_strict_top_hit_slice_order_proves_cell_keys_are_unique() -> None:
+    offsets = np.array([0, 3], dtype=np.uint64)
+    analyses = np.zeros(3, dtype=np.uint32)
+
+    assert _slices_are_ordered(
+        analyses, np.array([1, 2, 3], dtype=np.uint32), offsets, 1
+    )
+    assert not _slices_are_ordered(
+        analyses, np.array([1, 1, 3], dtype=np.uint32), offsets, 1
+    )
+    assert not _slices_are_ordered(
+        analyses, np.array([2, 1, 3], dtype=np.uint32), offsets, 1
+    )
+
+
+def test_dense_array_pass_never_hands_a_band_over_the_memory_budget(monkeypatch) -> None:
+    """Exercise the real loop while replacing only the expensive band body.
+
+    The pre-#254 fixed 250,000-row loop handed the spy 506 million cells and
+    failed this one-GiB assertion; the logical fixture allocates none of them.
+    """
+    n_variants, n_analyses = 250_001, 2_024
+    root = {
+        "z": _LogicalDenseArray((n_variants, n_analyses)),
+        "se": _LogicalDenseArray((n_variants, n_analyses)),
+    }
+    encoding = StoreEncoding(
+        z=ZEncoding(kind="float16"),
+        se=SeEncoding(kind="float16"),
+    )
+    decoded_cells: list[int] = []
+
+    def record_band(*args) -> bool:
+        r0, r1 = args[-3], args[-2]
+        decoded_cells.append((r1 - r0) * n_analyses)
+        return True
+
+    monkeypatch.setattr(validation_module, "_validate_dense_band", record_band)
+    errors: list[str] = []
+    _validate_dense_arrays(root, n_variants, n_analyses, errors, encoding)
+
+    assert decoded_cells, "fixture must reach the Dense array pass"
+    assert errors == []
+    assert max(decoded_cells) * 96 <= 1024**3
 
 
 # ── Guard seams: presence, shapes, per-variant side lengths ───────────────
@@ -249,6 +343,74 @@ def test_eaf_range_latch_marks_undecodable_and_stops_further_decodes():
     assert findings.eaf_undecodable is True
     assert findings.eaf_out_of_range is False
     assert plane.calls == 1
+
+
+class _FakeSePlane:
+    def __init__(self, expected_eaf: np.ndarray) -> None:
+        self.expected_eaf = expected_eaf
+
+    def band(self, r0: int, r1: int, *, eaf: np.ndarray | None = None) -> np.ndarray:
+        assert (r0, r1) == (0, 2)
+        assert eaf is self.expected_eaf
+        return np.ones_like(self.expected_eaf)
+
+
+class _FakeZPlane:
+    def band(self, r0: int, r1: int) -> np.ndarray:
+        assert (r0, r1) == (0, 2)
+        return np.full((2, 2), -7.0, dtype=np.float32)
+
+
+def _residual_eaf_encoding() -> StoreEncoding:
+    return StoreEncoding(
+        z=ZEncoding(kind="float16"),
+        se=SeEncoding(kind="int8_residual", residual_range=1.0),
+        eaf=EafEncoding(kind="float32"),
+    )
+
+
+def test_top_hit_band_reuses_its_one_eaf_decode_for_se() -> None:
+    values = np.full((2, 2), 0.4, dtype=np.float32)
+    eaf_plane = _FakeEafPlane(values=values)
+    encoding = _residual_eaf_encoding()
+
+    z, se, absolute_z, cached_eaf = _decode_top_hit_band(
+        _FakeZPlane(), _FakeSePlane(values), eaf_plane, encoding, 0, 2
+    )
+
+    assert np.array_equal(absolute_z, np.abs(z))
+    assert se.shape == z.shape
+    assert len(cached_eaf) == 1
+    assert cached_eaf[0] is values
+    assert eaf_plane.calls == 1
+
+
+def test_dense_band_reuses_its_one_eaf_decode_for_se() -> None:
+    values = np.full((2, 2), 0.4, dtype=np.float32)
+    eaf_plane = _FakeEafPlane(values=values)
+    encoding = _residual_eaf_encoding()
+    errors: list[str] = []
+
+    completed = _validate_dense_band(
+        np.ones((2, 2), dtype=np.float16),
+        np.ones((2, 2), dtype=np.float16),
+        values,
+        _FakeSePlane(values),
+        StoreCodec(encoding),
+        encoding,
+        eaf_plane,
+        None,
+        None,
+        _band_state(),
+        2,
+        0,
+        2,
+        errors,
+    )
+
+    assert completed is True
+    assert errors == []
+    assert eaf_plane.calls == 1
 
 
 # ── Report seams: fixed diagnostic order, one seam per concern ─────────────
