@@ -84,6 +84,7 @@ from opengwasdb.variants import (
     VariantRecord,
     is_indexable_alid,
     is_indexable_rsid,
+    iter_variant_records,
     variant_alid_bytes_path,
     variant_alid_rows_path,
     variant_offsets_path,
@@ -2510,7 +2511,7 @@ def _validate_analyses_tsv(analyses_path: Path, errors: list[str]) -> int:
 
 
 def _validate_rsid_index(
-    variant_axis: VariantAxis, records: list[VariantRecord], errors: list[str]
+    variant_axis: VariantAxis, named_rsids: int, errors: list[str]
 ) -> None:
     """Every rsid in `variants.tsv.gz` must be resolvable (issue #109).
 
@@ -2528,80 +2529,183 @@ def _validate_rsid_index(
     an rsid-less one of those is not wrong, merely older. That is why the
     index is not in any layout's required-entry list, only its envelope.
     """
-    # Counted through the same predicate `_write_rsid_index` indexes by, so a
-    # correctly-built store cannot fail its own validator over an identifier
-    # that was deliberately left out.
-    named = sum(1 for record in records if is_indexable_rsid(record.rsid))
+    # `named_rsids` is counted through the same predicate `_write_rsid_index`
+    # indexes by, so a correctly-built store cannot fail its own validator over
+    # an identifier that was deliberately left out.
     indexed = variant_axis._rsid_bytes
     if indexed is None:
-        if named:
+        if named_rsids:
             errors.append(
-                f"variants.tsv.gz names {named} rsid(s) but the store has no rsid search "
-                "index — rebuild the store, or every rsid lookup against it returns nothing"
+                f"variants.tsv.gz names {named_rsids} rsid(s) but the store has no rsid "
+                "search index — rebuild the store, or every rsid lookup against it "
+                "returns nothing"
             )
         return
-    if len(indexed) != named:
+    if len(indexed) != named_rsids:
         errors.append(
             f"variant_rsid_bytes.npy has {len(indexed)} entries but variants.tsv.gz "
-            f"names {named} rsid(s)"
+            f"names {named_rsids} rsid(s)"
         )
+
+
+@dataclass
+class _VariantTableScan:
+    """One streaming pass over the Store Variant Table (issue #254)."""
+
+    n_rows: int
+    indexable: int
+    named_rsids: int
+    mismatch: tuple[int, int] | None
+    duplicate_alid: str | None
+
+
+def _scan_variant_table(variant_axis: VariantAxis) -> _VariantTableScan:
+    """Count rows/indexable ALIDs/named rsids and find the first row fault.
+
+    Streams the table rather than materialising ``VariantAxis.all()``'s list of
+    one ``VariantRecord`` per row -- tens of millions of heap objects and the
+    dominant remaining source of the `validate` peak once the Dense band was
+    bounded (issue #254). The table is written ALID-sorted (``_alid_sort_key``),
+    so a duplicate canonical variant is adjacent to its twin.
+    """
+    n_rows = 0
+    indexable = 0
+    named_rsids = 0
+    previous_alid: str | None = None
+    first_issue_row: int | None = None
+    mismatch: tuple[int, int] | None = None
+    duplicate_alid: str | None = None
+
+    for expected_index, record in enumerate(iter_variant_records(variant_axis.table_path)):
+        if first_issue_row is None:
+            if record.variant_index != expected_index:
+                first_issue_row = expected_index
+                mismatch = (expected_index, record.variant_index)
+            elif record.alid == previous_alid:
+                first_issue_row = expected_index
+                duplicate_alid = record.alid
+        previous_alid = record.alid
+        if is_indexable_alid(record.alid):
+            indexable += 1
+        if is_indexable_rsid(record.rsid):
+            named_rsids += 1
+        n_rows += 1
+
+    return _VariantTableScan(
+        n_rows=n_rows,
+        indexable=indexable,
+        named_rsids=named_rsids,
+        mismatch=mismatch,
+        duplicate_alid=duplicate_alid,
+    )
+
+
+def _validate_alid_index(
+    variant_axis: VariantAxis, indexable: int, n_rows: int, errors: list[str]
+) -> None:
+    """The ALID search index covers exactly the indexable ALIDs, collision-free."""
+    if variant_axis._alid_bytes is None:
+        return
+    # One entry per *indexable* ALID, not per variant: an ALID too wide for the
+    # slot is left out rather than truncated into a key it shares with another
+    # variant (issue #127). Those resolve by exact scan.
+    if len(variant_axis._alid_bytes) != indexable:
+        errors.append(
+            f"variant_alid_bytes.npy has {len(variant_axis._alid_bytes)} entries but "
+            f"variants.tsv.gz has {indexable} ALID(s) narrow enough to index "
+            f"(of {n_rows} rows)"
+        )
+    keys = np.asarray(variant_axis._alid_bytes)
+    if len(keys) > 1:
+        collisions = int(np.count_nonzero(keys[1:] == keys[:-1]))
+        if collisions:
+            errors.append(
+                f"variant_alid_bytes.npy holds {collisions} key(s) shared by more than "
+                "one variant: a lookup by one variant's ALID returns another's row. "
+                "This is what silently truncating an over-wide ALID produced before "
+                "issue #127 — rebuild the store"
+            )
 
 
 def _validate_variant_axis(variant_axis: VariantAxis, errors: list[str]) -> int:
-    records = variant_axis.all()
-    if variant_axis.n_variants != len(records):
+    """Stream the Store Variant Table rather than materialising every record.
+
+    ``VariantAxis.all()`` built a list with one ``VariantRecord`` object per row
+    -- tens of millions of heap objects, and the dominant remaining source of
+    the `validate` peak once the Dense band was bounded (issue #254). Every
+    check here is a single-pass count or a per-adjacent-row comparison.
+    """
+    scan = _scan_variant_table(variant_axis)
+    if variant_axis.n_variants != scan.n_rows:
         errors.append(
             f"variant_offsets.npy has {variant_axis.n_variants} rows but "
-            f"variants.tsv.gz has {len(records)} rows"
+            f"variants.tsv.gz has {scan.n_rows} rows"
         )
-    if variant_axis._alid_bytes is not None:
-        # One entry per *indexable* ALID, not per variant: an ALID too wide for
-        # the slot is left out rather than truncated into a key it shares with
-        # another variant (issue #127). Those resolve by exact scan.
-        indexable = sum(1 for record in records if is_indexable_alid(record.alid))
-        if len(variant_axis._alid_bytes) != indexable:
-            errors.append(
-                f"variant_alid_bytes.npy has {len(variant_axis._alid_bytes)} entries but "
-                f"variants.tsv.gz has {indexable} ALID(s) narrow enough to index "
-                f"(of {len(records)} rows)"
-            )
-        keys = np.asarray(variant_axis._alid_bytes)
-        if len(keys) > 1:
-            collisions = int(np.count_nonzero(keys[1:] == keys[:-1]))
-            if collisions:
-                errors.append(
-                    f"variant_alid_bytes.npy holds {collisions} key(s) shared by more than "
-                    "one variant: a lookup by one variant's ALID returns another's row. "
-                    "This is what silently truncating an over-wide ALID produced before "
-                    "issue #127 — rebuild the store"
-                )
-    _validate_rsid_index(variant_axis, records, errors)
-    seen_alids: set[str] = set()
-    for expected_index, record in enumerate(records):
-        if record.variant_index != expected_index:
-            errors.append(
-                f"variant table row {expected_index} has variant_index {record.variant_index}"
-            )
+    _validate_alid_index(variant_axis, scan.indexable, scan.n_rows, errors)
+    _validate_rsid_index(variant_axis, scan.named_rsids, errors)
+    if scan.mismatch is not None:
+        expected_index, found = scan.mismatch
+        errors.append(f"variant table row {expected_index} has variant_index {found}")
+    elif scan.duplicate_alid is not None:
+        errors.append("duplicate canonical variants in variant table")
+    _validate_representative_variants(variant_axis, scan.n_rows, errors)
+    return scan.n_rows
+
+
+def _validate_representative_variants(
+    variant_axis: VariantAxis, n_rows: int, errors: list[str]
+) -> None:
+    """Offset and tabix spot checks at a bounded, representative set of rows.
+
+    The full table is streamed (never materialised) in ``_scan_variant_table``;
+    re-reading a handful of rows here is the random-access spot check the offset
+    sidecar and tabix index exist to serve, and stays O(representatives) memory
+    (issue #254).
+    """
+    representative = _representative_variant_indices(n_rows)
+    if not representative:
+        return
+    table_records = _representative_table_records(variant_axis, set(representative))
+    for expected_index in representative:
+        if not _check_representative_variant(
+            variant_axis, expected_index, table_records[expected_index], errors
+        ):
             break
-        if record.alid in seen_alids:
-            errors.append("duplicate canonical variants in variant table")
-            break
-        seen_alids.add(record.alid)
-    for expected_index in _representative_variant_indices(len(records)):
-        record = records[expected_index]
-        try:
-            offset_record = variant_axis.by_index(expected_index)
-        except ValueError as exc:
-            errors.append(str(exc))
-            break
-        if offset_record != record:
-            errors.append(f"variant offset for row {expected_index} points to a different row")
-            break
-        fetched = variant_axis.range(record.chromosome, record.position, record.position)
-        if record not in fetched:
-            errors.append(f"tabix index cannot fetch variant {record.alid}")
-            break
-    return len(records)
+
+
+def _representative_table_records(
+    variant_axis: VariantAxis, wanted: set[int]
+) -> dict[int, VariantRecord]:
+    """Re-read the table for a bounded set of rows, without materialising all."""
+    table_records: dict[int, VariantRecord] = {}
+    for expected_index, record in enumerate(iter_variant_records(variant_axis.table_path)):
+        if expected_index in wanted:
+            table_records[expected_index] = record
+            if len(table_records) == len(wanted):
+                break
+    return table_records
+
+
+def _check_representative_variant(
+    variant_axis: VariantAxis,
+    expected_index: int,
+    record: VariantRecord,
+    errors: list[str],
+) -> bool:
+    """Offset and tabix spot checks for one row; False stops the sweep."""
+    try:
+        offset_record = variant_axis.by_index(expected_index)
+    except ValueError as exc:
+        errors.append(str(exc))
+        return False
+    if offset_record != record:
+        errors.append(f"variant offset for row {expected_index} points to a different row")
+        return False
+    fetched = variant_axis.range(record.chromosome, record.position, record.position)
+    if record not in fetched:
+        errors.append(f"tabix index cannot fetch variant {record.alid}")
+        return False
+    return True
 
 
 def _representative_variant_indices(n_variants: int) -> list[int]:
@@ -2615,9 +2719,53 @@ def _representative_variant_indices(n_variants: int) -> list[int]:
     return sorted(index for index in anchors if 0 <= index < n_variants)
 
 
-# Row-band height for streaming the dense matrix during validation, so no check
-# ever materialises the full (n_variants × n_analyses) array (issue 045).
+# Dense validation decodes several raw, float32/float64 and boolean views of a
+# cell at once. OGS-00009/10 profiling measured at most 59 bytes per cell in
+# the Dense pass and 47 in the Top-Hit pass; the 96-byte allowance leaves 63%
+# headroom inside this one-GiB decoded working-set budget. Top-Hit Index arrays
+# retain their compact contract dtypes separately. The row cap preserves the
+# old call size for a narrow store, while the byte budget makes a wide Store's
+# band shrink instead of scaling its memory with the number of Analyses
+# (issue #254).
 _VALIDATE_BAND_ROWS = 250_000
+_DENSE_VALIDATE_WORKING_BYTES = 1024**3
+_DENSE_VALIDATE_BYTES_PER_CELL = 96
+
+
+def _dense_validation_band_rows(n_analyses: int, row_chunk: int) -> int:
+    """Rows whose decoded working set fits the Dense validation byte budget.
+
+    Whole inner chunks avoid decoding a physical chunk into two consecutive
+    bands. A single row is the irreducible minimum when an exceptionally wide
+    store exceeds the budget by itself.
+    """
+    if n_analyses <= 0:
+        return _VALIDATE_BAND_ROWS
+    budget_rows = max(
+        1,
+        _DENSE_VALIDATE_WORKING_BYTES
+        // (_DENSE_VALIDATE_BYTES_PER_CELL * n_analyses),
+    )
+    rows = min(_VALIDATE_BAND_ROWS, budget_rows)
+    if row_chunk > 0 and rows >= row_chunk:
+        rows = max(row_chunk, rows // row_chunk * row_chunk)
+    return rows
+
+
+def _dense_validation_bands(
+    n_variants: int, n_analyses: int, row_chunk: int
+) -> Iterator[tuple[int, int]]:
+    """Every Dense row band, exhaustively, under the decoded-byte budget."""
+    rows = _dense_validation_band_rows(n_analyses, row_chunk)
+    for r0 in range(0, n_variants, rows):
+        yield r0, min(r0 + rows, n_variants)
+
+
+def _dense_array_validation_bands(
+    array: Any, n_variants: int, n_analyses: int
+) -> Iterator[tuple[int, int]]:
+    """Byte-bounded bands aligned to a Dense plane's physical read unit."""
+    return _dense_validation_bands(n_variants, n_analyses, inner_chunk_of(array)[0])
 
 
 def _validate_eaf_plan(
@@ -3071,7 +3219,7 @@ def _validate_dense_arrays(
     # not need, and no band is upcast.
     codec = StoreCodec(encoding)
     findings = _DenseBandState(n_analyses)
-    for r0 in range(0, n_variants, _VALIDATE_BAND_ROWS):
+    for r0, r1 in _dense_array_validation_bands(z_arr, n_variants, n_analyses):
         if not _validate_dense_band(
             z_arr,
             se_arr,
@@ -3085,7 +3233,7 @@ def _validate_dense_arrays(
             findings,
             n_analyses,
             r0,
-            min(r0 + _VALIDATE_BAND_ROWS, n_variants),
+            r1,
             errors,
         ):
             return
@@ -3213,8 +3361,12 @@ def _validate_dense_band(
     caller skips every report seam -- because a plane that cannot be decoded is
     not a release to keep reading.
     """
+    # Residual SE decodes against physical EAF. Read that expensive plane once
+    # and share it with the independent frequency-range check instead of
+    # decoding it twice for every band (issue #254).
+    eaf_band = _latch_dense_eaf_range(findings, eaf_plane, r0, r1)
     try:
-        se_band = se_plane.band(r0, r1)
+        se_band = se_plane.band(r0, r1, eaf=eaf_band)
     except ValueError as exc:
         errors.append(f"cannot decode se: {exc}")
         return False
@@ -3233,7 +3385,6 @@ def _validate_dense_band(
         findings.eaf_exception_positions.append(
             _band_marked_positions(eaf_arr[r0:r1], EAF_EXCEPTION, r0, n_analyses)
         )
-    _latch_dense_eaf_range(findings, eaf_plane, r0, r1)
     _latch_dense_missingness(findings, z_missing, se_band)
     imp_mask = _latch_dense_imputed_content(findings, imputed_arr, r0, r1)
     _latch_dense_imputed_missingness(findings, z_missing, se_band, imp_mask)
@@ -3269,8 +3420,8 @@ def _latch_dense_missingness(
 
 def _latch_dense_eaf_range(
     findings: _DenseBandState, eaf_plane: DenseEafPlane | None, r0: int, r1: int
-) -> None:
-    """One band can mark the decoded eaf plane out of range, or undecodable.
+) -> np.ndarray | None:
+    """Decode once, latch an EAF finding, and return the block for SE reuse.
 
     Decoded, not raw: an `int8` residual plane's bytes are codes, and checking
     those for "in [0, 1]" would pass every store while saying nothing about
@@ -3280,15 +3431,16 @@ def _latch_dense_eaf_range(
     further decode attempts.
     """
     if eaf_plane is None or findings.eaf_out_of_range or findings.eaf_undecodable:
-        return
+        return None
     try:
         eaf = eaf_plane.band(r0, r1)
     except ValueError:
         findings.eaf_undecodable = True
-    else:
-        finite = np.isfinite(eaf)
-        if np.any(finite & ((eaf < 0.0) | (eaf > 1.0))):
-            findings.eaf_out_of_range = True
+        return None
+    finite = np.isfinite(eaf)
+    if np.any(finite & ((eaf < 0.0) | (eaf > 1.0))):
+        findings.eaf_out_of_range = True
+    return eaf
 
 
 def _latch_dense_imputed_content(
@@ -3426,18 +3578,29 @@ def _match_dense_se_exceptions(
 
 
 def _read_top_hit_arrays(key: str, group: Any, errors: list[str]) -> dict[str, Any] | None:
-    """One tier's index arrays, or None -- having said what it lacks."""
+    """One tier's index arrays, in their compact contract dtypes, or None.
+
+    ``Array[:]`` already returns an ndarray. ``np.asarray`` therefore avoids
+    ``astype``'s unconditional full-size copy on a valid tier while retaining
+    the coercion that lets the validation logic diagnose malformed contents.
+    Keeping the uint32 coordinates compact is material: OGS-00010's nominal
+    tier alone has 45.7 million hits (issue #254).
+    """
     if _missing_top_hit_arrays(key, group, errors):
         return None
     return {
-        "rows": group["variant_index"][:].astype(np.int64),
-        "cols": group["analysis_index"][:].astype(np.int64),
-        "z_values": group["z"][:].astype("float32"),
-        "se_values": group["se"][:].astype("float32"),
-        "abs_z": group["abs_z"][:].astype("float32"),
-        "offsets": group["analysis_offsets"][:].astype(np.int64),
-        "imputed_values": group["imputed"][:].astype(np.uint8) if "imputed" in group else None,
-        "eaf_values": group["eaf"][:].astype(np.float32) if "eaf" in group else None,
+        "rows": np.asarray(group["variant_index"][:], dtype=np.uint32),
+        "cols": np.asarray(group["analysis_index"][:], dtype=np.uint32),
+        "z_values": np.asarray(group["z"][:], dtype=np.float32),
+        "se_values": np.asarray(group["se"][:], dtype=np.float32),
+        "abs_z": np.asarray(group["abs_z"][:], dtype=np.float32),
+        "offsets": np.asarray(group["analysis_offsets"][:], dtype=np.uint64),
+        "imputed_values": (
+            np.asarray(group["imputed"][:], dtype=np.uint8) if "imputed" in group else None
+        ),
+        "eaf_values": (
+            np.asarray(group["eaf"][:], dtype=np.float32) if "eaf" in group else None
+        ),
     }
 
 
@@ -3502,8 +3665,10 @@ def _top_hit_structural_problem(
         return "has incorrect or non-genomic analysis slices"
     if not _imputed_values_valid(a["imputed_values"]):
         return "has invalid imputed completion status"
-    if len(a["rows"]) and len(np.unique(a["rows"] * n_analyses + a["cols"])) != len(a["rows"]):
-        return "does not match stored z values"
+    # Strictly increasing rows inside slices that each hold only their named
+    # Analysis already prove every (row, column) pair unique. Rebuilding those
+    # pairs as int64 and sorting them with np.unique duplicated hundreds of MB
+    # on production Top-Hit Indexes without checking another invariant (#254).
     return None
 
 
@@ -3622,6 +3787,22 @@ def _report_top_hit_group(key: str, g: dict[str, Any], errors: list[str]) -> Non
         errors.append(f"top-hit index {key} does not match stored z values")
 
 
+def _decode_top_hit_band(
+    z_plane: DenseZPlane,
+    se_plane: DenseSePlane,
+    eaf_plane: DenseEafPlane,
+    encoding: StoreEncoding,
+    r0: int,
+    r1: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[np.ndarray]]:
+    """Decode one Top-Hit validation band, sharing EAF with residual SE."""
+    z_band = z_plane.band(r0, r1)
+    shared_eaf = eaf_plane.band(r0, r1) if encoding.se.is_residual else None
+    se_band = se_plane.band(r0, r1, eaf=shared_eaf)
+    cached_eaf = [] if shared_eaf is None else [shared_eaf]
+    return z_band, se_band, np.abs(z_band), cached_eaf
+
+
 def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) -> None:
     if "top_hits" not in root:
         return
@@ -3647,14 +3828,12 @@ def _validate_top_hits(root: Any, errors: list[str], encoding: StoreEncoding) ->
     # Single streamed pass over the matrix in row-bands: per band, count cells that
     # pass each threshold (completeness) and verify every index cell in that band
     # (matrix z finite, matches the stored index z, and itself clears the cutoff).
-    for r0 in range(0, n_variants, _VALIDATE_BAND_ROWS):
-        r1 = min(r0 + _VALIDATE_BAND_ROWS, n_variants)
-        z_band = z_plane.band(r0, r1)
-        se_band = se_plane.band(r0, r1)
-        abs_band = np.abs(z_band)
+    for r0, r1 in _dense_array_validation_bands(z_arr, n_variants, n_analyses):
+        z_band, se_band, abs_band, cached = _decode_top_hit_band(
+            z_plane, se_plane, eaf_plane, encoding, r0, r1
+        )
         # Decoding the frequency plane is the most expensive read in this pass,
         # and every tier gathers from the same band: decode it at most once.
-        cached: list[np.ndarray] = []
 
         def eaf_band(r0: int = r0, r1: int = r1, cached: list[np.ndarray] = cached) -> np.ndarray:
             if not cached:

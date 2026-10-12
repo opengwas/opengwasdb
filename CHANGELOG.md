@@ -219,6 +219,24 @@ the end of this file.
 
 ### Changed
 
+- **`validate` stays under a four-GiB budget on full-size Dense releases
+  instead of peaking at 34–36 GiB (issue #254).** Profiling split the peak into
+  three sources, each now bounded. (1) The exhaustive statistic and Top-Hit
+  Index cross-checks derive band height from a one-GiB decoded working-set
+  budget, the Analysis count and a 96-byte-per-cell allowance (63% above the
+  measured 59-byte worst case), aligned to whole inner chunks — OGS-00009/10
+  use 5,000-row bands and OGS-00016 4,000-row, rather than every store using
+  250,000 rows — so the decoded working set no longer scales with the number of
+  Analyses. (2) Top-Hit Index validation keeps the contract's compact uint32
+  coordinates and drops a redundant int64 uniqueness sort, since each Analysis
+  slice already names only that Analysis and has strictly increasing Variant
+  Indices. (3) The Store Variant Table is validated by streaming it instead of
+  materialising one `VariantRecord` object per row (9.8M–13.5M rows on these
+  stores). Residual SE also reuses the EAF block decoded for frequency
+  validation rather than reading it twice. Full-run peak RSS fell from 33.7 GiB
+  to 2.35 GiB on OGS-00009 and from 36.5 GiB to 3.01 GiB on OGS-00010, both
+  still validating clean with unchanged results.
+
 - **Indexed Variant Subsets on a Hybrid release target its self-contained Dense
   Component (issue #271).** `build-indexed-subset <hybrid-root> ...` no longer
   refuses Hybrid: it resolves the root to `<root>/dense`, indexes that

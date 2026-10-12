@@ -131,3 +131,33 @@ def test_validation_rejects_an_index_that_truncated_two_variants_together(tmp_pa
     finally:
         va.close()
     assert any("shared by more than one variant" in e for e in errors), errors
+
+
+def test_validation_streams_the_variant_table_instead_of_materialising_it(
+    tmp_path, monkeypatch
+):
+    """`_validate_variant_axis` must not build `VariantAxis.all()`'s list (issue #254).
+
+    Materialising one `VariantRecord` object per row was the dominant remaining
+    source of the `validate` peak once the Dense band was bounded. `.all()` is
+    the one call that builds the full list, so refusing it here pins the fix:
+    on the pre-#254 code this raises, because validation began with
+    ``records = variant_axis.all()``.
+    """
+    from opengwasdb.validation.validate import _validate_variant_axis
+
+    short, long_ = _shared_prefix_pair()
+    write_variant_axis(tmp_path, [short, long_], {})
+    va = VariantAxis(tmp_path)
+    try:
+        monkeypatch.setattr(
+            va,
+            "all",
+            lambda: (_ for _ in ()).throw(AssertionError("must not materialise the table")),
+        )
+        errors: list[str] = []
+        n_rows = _validate_variant_axis(va, errors)
+    finally:
+        va.close()
+    assert n_rows == 2
+    assert errors == []
