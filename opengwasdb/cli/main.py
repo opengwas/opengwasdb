@@ -174,6 +174,37 @@ def _validate_source_assembly(value: str | None) -> str | None:
         raise typer.BadParameter(str(exc)) from exc
 
 
+_REFERENCE_BUILD_OPTION = Annotated[
+    str,
+    typer.Option(
+        "--reference-build",
+        callback=_validate_source_assembly,
+        help="Declared genome build of the Ancestry Reference Panel",
+    ),
+]
+_SOURCE_BUILD_OPTION = Annotated[
+    str | None,
+    typer.Option(
+        "--source-build",
+        callback=_validate_source_assembly,
+        help=(
+            "Fallback source genome build only for manifest rows omitting "
+            "source_genome_build/source_assembly"
+        ),
+    ),
+]
+_CHAIN_FILE_OPTION = Annotated[
+    Path | None,
+    typer.Option(
+        "--chain-file",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Chain file required for supported cross-build source/reference alignment",
+    ),
+]
+
+
 class ReportFormat(StrEnum):
     """Output format for info and validate commands (issue #175)."""
 
@@ -663,12 +694,15 @@ def build_hybrid_from_catalogue_command(
 def assign_ancestry_command(
     manifest_path: Path,
     catalogue_path: Path,
+    reference_build: _REFERENCE_BUILD_OPTION,
     ancestry_reference: Path = typer.Option(
         ..., help="Ancestry Reference Panel: ref_freqs.hg38.tsv.gz"
     ),
     ancestry_groups: Path = typer.Option(
         ..., help="Fine→super-population map: ancestry_groups.tsv"
     ),
+    source_build: _SOURCE_BUILD_OPTION = None,
+    chain_file: _CHAIN_FILE_OPTION = None,
     maf_floor: float = typer.Option(0.01, help="Drop reference variants below this MAF"),
     tau: float = typer.Option(0.50, help="Gate: min dominant super-population proportion"),
     delta: float = typer.Option(0.20, help="Gate: min margin over the runner-up"),
@@ -703,42 +737,52 @@ def assign_ancestry_command(
     without it those sources cannot be checked against reference frequencies at
     all, which is how GCST003566's inverted EAF column went unexamined.
 
+    Every Analysis must declare ``source_genome_build`` (or the normalised
+    ``source_assembly`` alias), unless --source-build supplies an explicit
+    fallback. --reference-build is always explicit. A mismatch is refused
+    before scanning unless GWAS-VCF's supported hg19→hg38 path has a readable
+    --chain-file; builds are never guessed from the VCF header or filename.
+
     Each Analysis's EAF orientation is recorded in the Catalogue
     (eaf_orientation, eaf_orientation_r): an Analysis whose frequencies are
     anti-correlated with the reference is left Unassigned with
     gate_reason=eaf_orientation, which is the signal to exclude the source or
     report it upstream rather than to loosen a threshold.
     """
-    reference = load_reference(ancestry_reference, ancestry_groups, maf_floor=maf_floor)
-    gates = Gates(
-        tau=tau,
-        delta=delta,
-        n_min=n_min,
-        residual_max=residual_max,
-        orientation_flip_r=orientation_flip_r,
+    _run_assign_ancestry(
+        manifest_path, catalogue_path, ancestry_reference, ancestry_groups,
+        reference_build, source_build, chain_file, maf_floor, tau, delta, n_min,
+        residual_max, orientation_flip_r, n_workers, catalogue_version, reference_version,
     )
-    source_rows = read_source_manifest(manifest_path)
+
+
+def _run_assign_ancestry(
+    manifest_path: Path, catalogue_path: Path, ancestry_reference: Path,
+    ancestry_groups: Path, reference_build: str, source_build: str | None,
+    chain_file: Path | None, maf_floor: float, tau: float, delta: float,
+    n_min: int, residual_max: float, orientation_flip_r: float, n_workers: int,
+    catalogue_version: str, reference_version: str,
+) -> None:
+    reference = load_reference(ancestry_reference, ancestry_groups, maf_floor=maf_floor)
+    gates = Gates(tau, delta, n_min, residual_max, orientation_flip_r=orientation_flip_r)
+    source_rows = read_source_manifest(
+        manifest_path, default_source_genome_build=source_build
+    )
     rows = annotate_catalogue(
-        source_rows,
-        reference,
-        gates,
-        catalogue_path,
+        source_rows, reference, gates, catalogue_path,
         catalogue_version=catalogue_version,
         ancestry_reference_version=reference_version or ancestry_reference.name,
-        n_workers=n_workers,
+        reference_build=reference_build, chain_file=chain_file, n_workers=n_workers,
     )
-    n_assigned = sum(1 for r in rows if r.assignment.assigned_ancestry is not None)
-    typer.echo(
-        json.dumps(
-            {
-                "catalogue_path": str(catalogue_path),
-                "n_analyses": len(rows),
-                "n_assigned": n_assigned,
-                "n_parked": len(rows) - n_assigned,
-                "superpops": reference.superpops,
-            },
-            sort_keys=True,
-        )
+    n_assigned = sum(row.assignment.assigned_ancestry is not None for row in rows)
+    _echo_summary(
+        {
+            "catalogue_path": str(catalogue_path),
+            "n_analyses": len(rows),
+            "n_assigned": n_assigned,
+            "n_parked": len(rows) - n_assigned,
+            "superpops": reference.superpops,
+        }
     )
 
 
