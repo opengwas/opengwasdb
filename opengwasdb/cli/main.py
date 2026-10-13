@@ -874,6 +874,9 @@ def resolve_analyses_command(
             readable=True,
         ),
     ],
+    reference_build: _REFERENCE_BUILD_OPTION,
+    source_build: _SOURCE_BUILD_OPTION = None,
+    chain_file: _CHAIN_FILE_OPTION = None,
     extraction_panel: Annotated[
         Path | None,
         typer.Option(
@@ -970,6 +973,11 @@ def resolve_analyses_command(
     panel, gates, and method tiers) match the current run are preserved without
     re-executing. Missing, failed, or stale records are rerun.
 
+    Source and reference builds are explicit and resume-fingerprinted. A manifest
+    row may use source_genome_build (or its conflict-checked source_assembly alias),
+    with --source-build only as an explicit fallback. Cross-build formats without
+    an implemented liftover seam become controlled per-Analysis failures.
+
     The Ancestry Reference Panel and optional Hybrid axis are loaded once in the
     parent and fork-shared across workers. Source/parser/statistical errors are
     isolated to the affected Analysis; setup errors fail the command.
@@ -980,6 +988,9 @@ def resolve_analyses_command(
             records_dir=records_dir,
             ancestry_reference=ancestry_reference,
             ancestry_groups=ancestry_groups,
+            reference_build=reference_build,
+            default_source_build=source_build,
+            chain_file=chain_file,
             extraction_panel=extraction_panel,
             variant_reference=variant_reference,
             af_references=af_reference,

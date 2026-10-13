@@ -16,18 +16,28 @@ formerly duplicated as `opengwasdb.ancestry.extract.extract_af_at_sites`
 (AF-only, no SE). `is_palindromic`, `write_regions_file`, `_parse_af`, and the
 liftover helpers live here too now, rather than in the ancestry package, since
 they are GWAS-VCF/bcftools-specific, not ancestry-specific.
+
+``stream_metric_chunks`` is the bounded one-pass resolver projection (issue
+#278). It makes one streaming record query after a permitted header capability
+probe, preserves EZ-preferred-otherwise-ES/SE semantics, and retains identity
+rows with missing statistics so ancestry and phenotype-SD apply their existing,
+different eligibility rules downstream.
 """
 
 from __future__ import annotations
 
 import contextlib
+import math
 import subprocess
 import tempfile
 from collections.abc import Iterable, Iterator, KeysView
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
+from typing import TYPE_CHECKING, TextIO
 
 from opengwasdb.build.vcf_source import (
+    _derive_z,
     _require_bcftools,
     stream_vcf_associations,
     stream_vcf_variants,
@@ -35,7 +45,14 @@ from opengwasdb.build.vcf_source import (
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
 from opengwasdb.stats import parse_af
-from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
+from opengwasdb.variants.normalise import (
+    Orientation,
+    VariantNormalisationError,
+    orient_to_canonical,
+)
+
+if TYPE_CHECKING:
+    from opengwasdb.readers.tabular import MetricsChunk, TabularMetricsRow
 
 GWAS_VCF_CAPABILITY = "opengwasdb.gwas-vcf"
 
@@ -70,6 +87,7 @@ def write_regions_file(alids: Iterable[str], path: str | Path) -> Path:
     return path
 
 
+@cache
 def load_liftover(
     from_build: str = "hg19", to_build: str = "hg38", chain_file: str | None = None
 ) -> object:
@@ -113,7 +131,117 @@ def _parse_positive_float(value: str) -> float | None:
         parsed = float(value)
     except ValueError:
         return None
-    return parsed if parsed > 0.0 else None
+    return parsed if parsed > 0.0 and math.isfinite(parsed) else None
+
+
+def _format_tags(path: str | Path) -> set[str]:
+    """Read FORMAT capability once; this is not a source-record traversal."""
+    bcftools = _require_bcftools()
+    result = subprocess.run(
+        [bcftools, "view", "-h", str(path)], capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip() or "no diagnostic"
+        raise OSError(f"bcftools header query failed ({result.returncode}): {message}")
+    lines = result.stdout.splitlines()
+    columns = next((line.split("\t") for line in lines if line.startswith("#CHROM\t")), [])
+    sample_count = max(0, len(columns) - 9)
+    if sample_count != 1:
+        raise ValueError(
+            f"GWAS-VCF resolver requires exactly one sample column, found {sample_count}"
+        )
+    prefix = "##FORMAT=<ID="
+    return {
+        line[len(prefix) :].split(",", 1)[0]
+        for line in lines
+        if line.startswith(prefix)
+    }
+
+
+def _metric_query_format(tags: set[str]) -> str:
+    fields = ["%CHROM", "%POS", "%REF", "%ALT"]
+    fields.extend(f"[%{tag}]" if tag in tags else "." for tag in ("EZ", "ES", "SE", "AF"))
+    return "\t".join(fields) + "\n"
+
+
+def _validated_metric_cells(lines: Iterable[str]) -> Iterator[tuple[str, ...]]:
+    for row_number, line in enumerate(lines, start=1):
+        cells = tuple(line.rstrip("\n").split("\t"))
+        if len(cells) != 8:
+            raise ValueError(
+                f"malformed bcftools output at record {row_number}: "
+                f"expected 8 fields, got {len(cells)}"
+            )
+        yield cells
+
+
+def _finish_metric_query(proc: subprocess.Popen[str], errors: TextIO, completed: bool) -> None:
+    if proc.stdout is not None:
+        proc.stdout.close()
+    if not completed and proc.poll() is None:
+        proc.terminate()
+    returncode = proc.wait()
+    if completed and returncode != 0:
+        errors.seek(0)
+        message = errors.read().strip() or "no diagnostic"
+        raise OSError(f"bcftools record query failed ({returncode}): {message}")
+
+
+def _stream_metric_cells(path: str | Path) -> Iterator[tuple[str, ...]]:
+    """Run the one VCF record query used by the bounded resolver (issue #278)."""
+    bcftools = _require_bcftools()
+    query_format = _metric_query_format(_format_tags(path))
+    completed = False
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
+        proc = subprocess.Popen(
+            [bcftools, "query", "-f", query_format, str(path)],
+            stdout=subprocess.PIPE, stderr=errors, text=True,
+        )
+        try:
+            assert proc.stdout is not None
+            yield from _validated_metric_cells(proc.stdout)
+            completed = True
+        finally:
+            _finish_metric_query(proc, errors, completed)
+
+
+def _oriented_site(
+    liftover: object | None, chrom: str, pos: str, ref: str, alt: str
+) -> Orientation | None:
+    if "," in alt:
+        return None
+    if liftover is not None:
+        lifted = _lift(liftover, chrom, pos)
+        if lifted is None:
+            return None
+        chrom, pos = lifted
+    try:
+        return orient_to_canonical(chrom, pos, alt, ref)
+    except VariantNormalisationError:
+        return None
+
+
+def _metric_row(
+    orientation: Orientation,
+    ref: str,
+    alt: str,
+    af: float | None,
+    beta: float | None,
+    se: float | None,
+) -> TabularMetricsRow:
+    from opengwasdb.readers.tabular import TabularMetricsRow
+
+    return TabularMetricsRow(
+        orientation.variant.chromosome,
+        orientation.variant.position,
+        ref,
+        alt,
+        orientation.variant.alid,
+        orientation.flipped,
+        af,
+        beta,
+        se,
+    )
 
 
 @dataclass(frozen=True)
@@ -126,8 +254,9 @@ class GwasVcfReader:
     only ever use `extract_at_sites` (ancestry assignment, phenotype-SD
     estimation) have no effect-scale concept to supply and never read it back.
 
-    `liftover`, `regions_file`, and `region` are `extract_at_sites`-only
-    concerns (issue #21). bcftools rejects ``-r``/``-R`` together, so `region`
+    `regions_file` and `region` are `extract_at_sites`-only concerns (issue
+    #21); `liftover` also applies to the resolver metrics stream (issue #278).
+    bcftools rejects ``-r``/``-R`` together, so `region`
     (bcftools ``-r``, e.g. ``"1"`` -- a cheap chromosome-level restriction)
     takes priority when set, skipping the ``-R`` regions file entirely
     (typical pairing: `region` with `liftover`, since post-lift ALIDs can't
@@ -146,6 +275,11 @@ class GwasVcfReader:
     liftover: object | None = None
     regions_file: str | Path | None = None
     region: str | None = None
+    chunk_rows: int = 50_000
+
+    def __post_init__(self) -> None:
+        if self.chunk_rows <= 0:
+            raise ValueError(f"chunk_rows must be positive, got {self.chunk_rows!r}")
 
     def stream_associations(self) -> Iterator[ReaderAssociation]:
         for chrom, pos, ref, alt, z, se, eaf in stream_vcf_associations(self.path):
@@ -165,6 +299,24 @@ class GwasVcfReader:
             yield SourceVariant(
                 chromosome=chrom, position=pos, ref=ref, alt=alt, rsid=rsid
             )
+
+    def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
+        """Yield bounded resolver metrics from one streaming record query (#278)."""
+        from opengwasdb.readers.tabular import metrics_chunks_from_rows
+
+        yield from metrics_chunks_from_rows(self._stream_metrics(), chunk_rows=self.chunk_rows)
+
+    def _stream_metrics(self) -> Iterator[TabularMetricsRow]:
+        """Project VCF records without dropping ancestry-only AF+SE rows."""
+        for cells in _stream_metric_cells(self.path):
+            chrom, pos, ref, alt, ez_str, es_str, se_str, af_str = cells
+            orientation = _oriented_site(self.liftover, chrom, pos, ref, alt)
+            if orientation is None:
+                continue
+            se = _parse_positive_float(se_str)
+            z = None if se is None else _derive_z(ez_str, es_str, se)
+            beta = z * se if z is not None and math.isfinite(z) else None
+            yield _metric_row(orientation, ref, alt, _parse_af(af_str), beta, se)
 
     def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
         wanted = (
@@ -210,15 +362,10 @@ class GwasVcfReader:
                     se = _parse_positive_float(se_str)
                     if af is None or se is None:
                         continue
-                    chrom, pos = chrom_raw, pos_str
-                    if self.liftover is not None:
-                        lifted = _lift(self.liftover, chrom_raw, pos_str)
-                        if lifted is None:
-                            continue
-                        chrom, pos = lifted
-                    try:
-                        orientation = orient_to_canonical(chrom, pos, alt, ref)
-                    except VariantNormalisationError:
+                    orientation = _oriented_site(
+                        self.liftover, chrom_raw, pos_str, ref, alt
+                    )
+                    if orientation is None:
                         continue
                     alid = orientation.variant.alid
                     if alid not in wanted:

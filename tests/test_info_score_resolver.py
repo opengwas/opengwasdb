@@ -49,9 +49,9 @@ def _manifest(
     path: Path, source: Path, policy: str, analysis_id: str = "GCST_INFO",
     method: str = "source_provided",
 ) -> Path:
-    names = ["analysis_id", "source_file", "source_reader_capability", "stored_effect_scale",
-             "original_sd_method", "sample_size"]
-    values = [analysis_id, str(source), "opengwasdb.gwas-ssf", "sd", method, "1000"]
+    names = ["analysis_id", "source_file", "source_reader_capability", "source_genome_build",
+             "stored_effect_scale", "original_sd_method", "sample_size"]
+    values = [analysis_id, str(source), "opengwasdb.gwas-ssf", "GRCh38", "sd", method, "1000"]
     if policy != "legacy":
         names.append("info_score_threshold")
         values.append(policy)
@@ -70,8 +70,8 @@ def _resolve(tmp_path: Path, sources: tuple[Path, Path, Path, Path], policy: str
     summary = resolve_analyses_manifest(
         _manifest(tmp_path / "manifest.tsv", source or original, policy, method=method),
         tmp_path / "records",
-        ancestry_reference=ref, ancestry_groups=groups, variant_reference=axis,
-        max_rows=max_rows, n_workers=1, resume=resume,
+        ancestry_reference=ref, ancestry_groups=groups, reference_build="GRCh38",
+        variant_reference=axis, max_rows=max_rows, n_workers=1, resume=resume,
     )
     assert summary.n_total == 1
     return json.loads((summary.records_dir / "GCST_INFO.json").read_text())
@@ -196,7 +196,7 @@ def test_ancestry_site_limit_bounds_ancestry_but_whole_stream_scan_reaches_eof(
     manifest = _manifest(tmp_path / "manifest.tsv", source, "0.7")
     summary = resolve_analyses_manifest(
         manifest, tmp_path / "records", ancestry_reference=ref, ancestry_groups=groups,
-        variant_reference=axis, max_ancestry_sites=1, n_workers=1,
+        reference_build="GRCh38", variant_reference=axis, max_ancestry_sites=1, n_workers=1,
     )
     d = json.loads((summary.records_dir / "GCST_INFO.json").read_text())["diagnostics"]
     # The declared INFO policy makes this a whole-stream Analysis, so only
@@ -225,16 +225,19 @@ def test_whole_stream_evidence_stops_the_case_control_early_scan(tmp_path: Path)
             f"1\t{1000 + i}\tA\tC\t0.2\t0.1\t0.3\t0.9" for i in range(6)
         ) + "\n"
     )
-    columns = ["analysis_id", "source_file", "source_reader_capability", "stored_effect_scale",
-               "original_sd_method", "sample_size"]
-    values = ["GCST_CC", str(source), "opengwasdb.gwas-ssf", "log_or", "binary_trait", "1000"]
+    columns = ["analysis_id", "source_file", "source_reader_capability",
+               "source_genome_build", "stored_effect_scale", "original_sd_method", "sample_size"]
+    values = [
+        "GCST_CC", str(source), "opengwasdb.gwas-ssf", "GRCh38",
+        "log_or", "binary_trait", "1000",
+    ]
     manifest = tmp_path / "manifest.tsv"
 
     # Whole-stream evidence requested: the Hybrid variant reference.
     manifest.write_text("\t".join(columns) + "\n" + "\t".join(values) + "\n")
     with_axis = resolve_analyses_manifest(
         manifest, tmp_path / "records_axis", ancestry_reference=ref, ancestry_groups=groups,
-        variant_reference=axis, max_ancestry_sites=2, n_workers=1,
+        reference_build="GRCh38", variant_reference=axis, max_ancestry_sites=2, n_workers=1,
     )
     d = json.loads((with_axis.records_dir / "GCST_CC.json").read_text())["diagnostics"]
     assert d["stop_reason"] == "eof"
@@ -244,7 +247,7 @@ def test_whole_stream_evidence_stops_the_case_control_early_scan(tmp_path: Path)
     # No whole-stream evidence: the pre-#176 bounded early stop is unchanged.
     bare = resolve_analyses_manifest(
         manifest, tmp_path / "records_bare", ancestry_reference=ref, ancestry_groups=groups,
-        max_ancestry_sites=2, n_workers=1,
+        reference_build="GRCh38", max_ancestry_sites=2, n_workers=1,
     )
     d = json.loads((bare.records_dir / "GCST_CC.json").read_text())["diagnostics"]
     assert d["stop_reason"] == d["ancestry_stop_reason"] == "ancestry_site_limit"

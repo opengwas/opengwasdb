@@ -15,6 +15,7 @@ BASE = {
     "analysis_id": "GCST1",
     "source_file": "example.tsv.gz",
     "source_reader_capability": "opengwasdb.gwas-ssf",
+    "source_genome_build": "GRCh38",
     "stored_effect_scale": "sd",
     "sample_size_kind": "total",
     "sample_size_scope": "analysis_level",
@@ -115,7 +116,11 @@ def test_fingerprint_records_policy_and_invalidates_resume(tmp_path):
         ancestry_groups_sha256="groups-sha", extraction_panel_sha256=None,
         extraction_panel_variants=None, variant_reference_sha256=None,
         af_references_fp=[], gates=Gates(), maf_floor=0.01,
-        evidence_sample=100, scan_limit=None,
+        evidence_sample=100, scan_limit=None, reference_build="hg38",
+        chain_fingerprint={
+            "chain_file": None, "chain_sha256": None,
+            "chain_bytes": None, "chain_mtime_ns": None,
+        },
     )
     previous = _build_analysis_fingerprints(old, **kwargs)
     current = _build_analysis_fingerprints(new, **kwargs)

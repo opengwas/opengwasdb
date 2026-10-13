@@ -333,11 +333,9 @@ class MetricsReader(Protocol):
     Narrower than `SourceReader` on purpose. `stream_associations` cannot serve
     this resolver: it carries a `z` rather than the beta behind it, and it drops
     every row whose beta is unusable, which is a row ancestry assignment can
-    still read a frequency from. No single-scan equivalent exists for a GWAS-VCF
-    either -- the cheap read there is a targeted `bcftools -R` at reference sites,
-    not a full-file row scan -- so a tabular reader satisfies this and
-    `GwasVcfReader` does not, and `resolve_analysis` refuses one loudly rather
-    than reading a 100 GB VCF row by row.
+    still read a frequency from. GWAS-SSF provides a projected tabular scan and
+    GWAS-VCF provides one bounded streaming ``bcftools query`` (issue #278).
+    Readers without either explicit metrics projection are refused loudly.
     """
 
     def stream_metric_chunks(self) -> Iterator[MetricsChunk]: ...
@@ -920,7 +918,7 @@ def resolve_analysis(
     if not isinstance(reader, MetricsReader):
         raise TypeError(
             f"{type(reader).__name__} cannot stream source metrics; the one-pass resolver "
-            f"reads tabular sources only (issue #207)"
+            f"requires an explicit bounded metrics projection (issues #207, #278)"
         )
     scan = _Scan()
     evidence = _EvidenceSample(k=evidence_sample, tier=request.original_sd_method)

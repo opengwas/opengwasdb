@@ -42,7 +42,7 @@ import time
 import tracemalloc
 from collections.abc import Collection, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -50,6 +50,7 @@ from uuid import uuid4
 
 from opengwasdb.ancestry.mixture import AncestryAssignment, Gates
 from opengwasdb.ancestry.reference import AncestryReference, load_reference
+from opengwasdb.build.liftover import normalise_build
 from opengwasdb.build.phenotype_sd_pipeline import load_af_reference
 from opengwasdb.build.resolve import (
     DEFAULT_EVIDENCE_SAMPLE,
@@ -69,8 +70,9 @@ from opengwasdb.model.info_score_policy import (
 )
 from opengwasdb.model.maf_policy import MAF_COLUMNS, MafPolicy, parse_maf_policy
 from opengwasdb.model.manifest_columns import resolve_manifest_columns
+from opengwasdb.readers.assembly import assembly_plan, declared_source_build
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
-from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
+from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader, load_liftover
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
 
 logger = logging.getLogger(__name__)
@@ -107,6 +109,7 @@ class ResolveManifestRow:
     analysis_id: str
     source_file: str
     source_reader_capability: str
+    source_genome_build: str
     stored_effect_scale: StoredEffectScale
     original_sd_method: OriginalSdMethod
     sample_size: float | None
@@ -353,6 +356,7 @@ def _parse_manifest_row(
     idx: int,
     cols: Any,
     default_cap: str | None,
+    default_source_build: str | None,
     known: tuple[str, ...],
     path: Path,
     seen_ids: set[str],
@@ -386,6 +390,11 @@ def _parse_manifest_row(
         analysis_id=analysis_id,
         source_file=source_file,
         source_reader_capability=cap,
+        source_genome_build=declared_source_build(
+            raw,
+            default=default_source_build,
+            context=f"analyses manifest {path}: analysis {analysis_id!r}",
+        ),
         stored_effect_scale=scale,
         original_sd_method=method,
         sample_size=sample_size,
@@ -398,7 +407,9 @@ def _parse_manifest_row(
 
 
 def read_resolve_manifest(
-    path: Path | str, default_capability: str | None = None
+    path: Path | str,
+    default_capability: str | None = None,
+    default_source_build: str | None = None,
 ) -> list[ResolveManifestRow]:
     """Read and validate an `analyses.tsv` manifest into resolution rows."""
     manifest_path = Path(path)
@@ -427,7 +438,10 @@ def read_resolve_manifest(
     known = known_capabilities()
     seen_ids: set[str] = set()
     return [
-        _parse_manifest_row(raw, idx, cols, default_capability, known, manifest_path, seen_ids)
+        _parse_manifest_row(
+            raw, idx, cols, default_capability, default_source_build,
+            known, manifest_path, seen_ids,
+        )
         for idx, raw in enumerate(raw_rows)
     ]
 
@@ -652,6 +666,8 @@ def _build_analysis_fingerprints(
     maf_floor: float,
     evidence_sample: int,
     scan_limit: ScanLimit | None,
+    reference_build: str,
+    chain_fingerprint: dict[str, Any],
 ) -> dict[str, Any]:
     file_bytes, file_mtime_ns = _stat_source_file(row.source_file)
     fp = {
@@ -660,6 +676,11 @@ def _build_analysis_fingerprints(
         "source_recorded_bytes": row.size_bytes,
         "source_file_bytes": file_bytes,
         "source_file_mtime_ns": file_mtime_ns,
+        "assembly": {
+            "source_build": row.source_genome_build,
+            "reference_build": reference_build,
+            **chain_fingerprint,
+        },
         "opengwasdb_version": opengwasdb_version,
         "opengwasdb_git_hash": opengwasdb_git_hash,
         "ancestry_reference_id": ancestry_reference_id,
@@ -755,6 +776,9 @@ def _execute_analysis(
     scale: StoredEffectScale,
     method: OriginalSdMethod,
     sample_size: float | None,
+    source_build: str,
+    reference_build: str,
+    chain_file: str | None,
     info_score_policy: InfoScorePolicy | None = None,
     maf_policy: MafPolicy | None = None,
 ) -> tuple[AnalysisResolution, RecordStatus, str | None]:
@@ -778,6 +802,20 @@ def _execute_analysis(
             )
         else:
             reader = resolve_reader(cap, source_file, scale)
+        plan = assembly_plan(
+            capability=cap,
+            source_build=source_build,
+            reference_build=reference_build,
+            chain_file=chain_file,
+        )
+        if plan.requires_liftover:
+            assert isinstance(reader, GwasVcfReader)
+            reader = replace(
+                reader,
+                liftover=load_liftover(
+                    plan.source_build, plan.reference_build, str(plan.chain_file)
+                ),
+            )
         res = resolve_analysis(
             req,
             reader=reader,
@@ -851,6 +889,7 @@ def _worker_resolve_one(task: dict[str, Any]) -> dict[str, Any]:
     t0 = time.monotonic()
     res, status, err_msg = _execute_analysis(
         analysis_id, source_file, cap, scale, method, sample_size,
+        task["source_genome_build"], task["reference_build"], task.get("chain_file"),
         task.get("info_score_policy", InfoScorePolicy()),
         task.get("maf_policy", MafPolicy()),
     )
@@ -863,6 +902,7 @@ def _worker_resolve_one(task: dict[str, Any]) -> dict[str, Any]:
         "analysis_id": analysis_id,
         "status": status.value,
         "fingerprints": fingerprints,
+        "assembly": fingerprints["assembly"],
         "diagnostics": _diagnostics_to_dict(res.diagnostics),
         "ancestry": _ancestry_to_dict(res.ancestry),
         "phenotype_sd": _phenotype_sd_to_dict(res.phenotype_sd),
@@ -988,6 +1028,9 @@ def _build_single_task(
         "analysis_id": row.analysis_id,
         "source_file": row.source_file,
         "source_reader_capability": row.source_reader_capability,
+        "source_genome_build": row.source_genome_build,
+        "reference_build": fp["assembly"]["reference_build"],
+        "chain_file": fp["assembly"]["chain_file"],
         "stored_effect_scale": row.stored_effect_scale.value,
         "original_sd_method": row.original_sd_method.value,
         "sample_size": row.sample_size,
@@ -1119,6 +1162,26 @@ def _setup_worker_globals(
     _WORKER_RECORDS_DIR = out_dir
 
 
+def _chain_fingerprint(chain_file: Path | str | None) -> dict[str, Any]:
+    if chain_file is None:
+        return {
+            "chain_file": None,
+            "chain_sha256": None,
+            "chain_bytes": None,
+            "chain_mtime_ns": None,
+        }
+    chain = Path(chain_file)
+    if not chain.is_file():
+        raise FileNotFoundError(f"liftover chain file not found: {chain}")
+    stat = chain.stat()
+    return {
+        "chain_file": str(chain),
+        "chain_sha256": compute_file_sha256(chain),
+        "chain_bytes": stat.st_size,
+        "chain_mtime_ns": stat.st_mtime_ns,
+    }
+
+
 def _prepare_pipeline_context(
     ancestry_reference: Path | str,
     ancestry_groups: Path | str,
@@ -1136,6 +1199,8 @@ def _prepare_pipeline_context(
     reference_version: str,
     out_dir: Path,
     variant_reference: Path | str | None = None,
+    reference_build: str = "",
+    chain_file: Path | str | None = None,
 ) -> dict[str, Any]:
     (
         ref,
@@ -1181,6 +1246,8 @@ def _prepare_pipeline_context(
         "maf_floor": maf_floor,
         "evidence_sample": evidence_sample,
         "scan_limit": scan_limit,
+        "reference_build": reference_build,
+        "chain_fingerprint": _chain_fingerprint(chain_file),
     }
 
 
@@ -1233,6 +1300,9 @@ def resolve_analyses_manifest(
     *,
     ancestry_reference: Path | str,
     ancestry_groups: Path | str,
+    reference_build: str,
+    default_source_build: str | None = None,
+    chain_file: Path | str | None = None,
     extraction_panel: Path | str | None = None,
     variant_reference: Path | str | None = None,
     af_references: Sequence[str] | None = None,
@@ -1264,12 +1334,17 @@ def resolve_analyses_manifest(
     recorded with its `stop_reason` and bound in the fingerprint, so a record
     produced under one bound can never be resumed as another.
     """
+    reference_build = normalise_build(reference_build)
     scan_limit = None
     if max_ancestry_sites is not None or max_rows is not None:
         scan_limit = ScanLimit(max_rows=max_rows, max_ancestry_sites=max_ancestry_sites)
         scan_limit.validate()
     out_dir = _validate_resolution_params(evidence_sample, n_workers, records_dir)
-    rows = read_resolve_manifest(manifest_path, default_capability=default_source_reader_capability)
+    rows = read_resolve_manifest(
+        manifest_path,
+        default_capability=default_source_reader_capability,
+        default_source_build=default_source_build,
+    )
     fp_kwargs = _prepare_pipeline_context(
         ancestry_reference,
         ancestry_groups,
@@ -1287,6 +1362,8 @@ def resolve_analyses_manifest(
         reference_version,
         out_dir,
         variant_reference,
+        reference_build,
+        chain_file,
     )
     return _execute_resolution_pipeline(
         rows, out_dir, manifest_path, fp_kwargs, resume, largest_first, n_workers

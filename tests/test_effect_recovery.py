@@ -349,11 +349,15 @@ def _manifest(tmp_path: Path, source: Path, *, analysis_id: str, maf: str | None
         "analysis_id",
         "source_file",
         "source_reader_capability",
+        "source_genome_build",
         "stored_effect_scale",
         "original_sd_method",
         "sample_size",
     ]
-    values = [analysis_id, str(source), "opengwasdb.gwas-ssf", "sd", "source_provided", "1000"]
+    values = [
+        analysis_id, str(source), "opengwasdb.gwas-ssf", "GRCh38",
+        "sd", "source_provided", "1000",
+    ]
     if maf is not None:
         columns.append("maf_threshold")
         values.append(maf)
@@ -369,6 +373,7 @@ def _record(tmp_path: Path, source: Path, *, analysis_id: str, maf: str | None) 
         tmp_path / "records",
         ancestry_reference=reference_path,
         ancestry_groups=groups_path,
+        reference_build="GRCh38",
         n_workers=1,
     )
     assert summary.n_total == 1

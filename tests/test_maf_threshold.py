@@ -105,7 +105,8 @@ def _diagnostics(tmp_path: Path, source: Path, maf_cell: str | None) -> dict:
     axis.write_text("alid\n" + "\n".join(f"1:{1000 + i}:A:C" for i in range(50)) + "\n")
     summary = resolve_analyses_manifest(
         _manifest(tmp_path, source, maf_cell), tmp_path / "records",
-        ancestry_reference=ref, ancestry_groups=groups, variant_reference=axis, n_workers=1,
+        ancestry_reference=ref, ancestry_groups=groups, reference_build="GRCh38",
+        variant_reference=axis, n_workers=1,
     )
     return json.loads((summary.records_dir / "GCST_MAF.json").read_text())["diagnostics"]
 
@@ -239,7 +240,7 @@ def test_maf_threshold_binds_the_resume_fingerprint(tmp_path: Path):
     def _run(records: Path) -> dict:
         summary = resolve_analyses_manifest(
             manifest, records, ancestry_reference=ref, ancestry_groups=groups,
-            variant_reference=axis, n_workers=1,
+            reference_build="GRCh38", variant_reference=axis, n_workers=1,
         )
         return json.loads((summary.records_dir / "GCST_MAF.json").read_text())
 

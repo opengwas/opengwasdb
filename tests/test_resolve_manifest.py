@@ -120,6 +120,26 @@ def _write_ssf(path: Path, freqs: np.ndarray, *, beta: float = 0.2, corrupt: boo
     return path
 
 
+def _write_vcf(path: Path, freqs: np.ndarray) -> Path:
+    errors = _se_for(freqs)
+    declarations = [
+        ("EZ", "Z score"), ("ES", "Effect size"),
+        ("SE", "Standard error"), ("AF", "Frequency"),
+    ]
+    header = "##fileformat=VCFv4.2\n" + "".join(
+        f'##FORMAT=<ID={field},Number=1,Type=Float,Description="{description}">\n'
+        for field, description in declarations
+    )
+    header += "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+    rows = [
+        f"1\t{1000 + index}\t.\tC\tA\t.\tPASS\t.\tEZ:ES:SE:AF\t"
+        f"{0.2 / se:.12g}:0.2:{se:.12g}:{frequency:.12g}\n"
+        for index, (frequency, se) in enumerate(zip(freqs, errors, strict=True))
+    ]
+    path.write_text(header + "".join(rows), encoding="utf-8")
+    return path
+
+
 def _write_af_ref(path: Path, freqs: np.ndarray) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["chromosome\tposition\teffect_allele\tother_allele\teaf\n"]
@@ -196,6 +216,8 @@ def _run_standard_resolve(
         "records_dir": records_dir,
         "ancestry_reference": setup["ref_path"],
         "ancestry_groups": setup["grp_path"],
+        "reference_build": "GRCh38",
+        "default_source_build": "GRCh38",
         "n_min": 10,
         "residual_max": 0.25,
         "n_workers": 1,
@@ -219,6 +241,10 @@ def _invoke_cli_resolve(
         str(setup["ref_path"]),
         "--ancestry-groups",
         str(setup["grp_path"]),
+        "--reference-build",
+        "GRCh38",
+        "--source-build",
+        "GRCh38",
     ]
     return runner.invoke(app, [*base_args, *extra_flags])
 
@@ -793,6 +819,104 @@ def test_git_hash_falls_back_to_the_checkout_for_an_unreadable_direct_url(
     _checkout(monkeypatch, _package_dir().parent)
 
     assert resolve_manifest._get_git_hash() == "b" * 40
+
+
+def test_manifest_vcf_resolver_records_coherent_assembly_provenance(
+    test_setup: dict[str, Any]
+) -> None:
+    setup = test_setup
+    frequencies = _mixture(
+        setup["ref"], {"North-West Europe": 0.8, "North-East Europe": 0.2}
+    )
+    source = _write_vcf(setup["tmp_path"] / "raw" / "vcf-study.vcf", frequencies)
+    manifest = setup["tmp_path"] / "vcf-analyses.tsv"
+    manifest.write_text(
+        "analysis_id\tsource_file\tsource_reader_capability\tsource_genome_build\t"
+        "stored_effect_scale\toriginal_sd_method\tsample_size\n"
+        f"VCF1\t{source}\topengwasdb.gwas-vcf\tGRCh38\tsd\t"
+        f"estimated_from_source_maf\t{int(_STUDY_N)}\n",
+        encoding="utf-8",
+    )
+    records = setup["tmp_path"] / "vcf-records"
+
+    summary = resolve_analyses_manifest(
+        manifest, records,
+        ancestry_reference=setup["ref_path"], ancestry_groups=setup["grp_path"],
+        reference_build="GRCh38", n_min=10, residual_max=0.25, n_workers=1,
+    )
+
+    assert summary.n_success == 1
+    record = json.loads((records / "VCF1.json").read_text(encoding="utf-8"))
+    assert record["diagnostics"]["rows_read"] == N_VARIANTS
+    assert record["assembly"] == {
+        "source_build": "hg38",
+        "reference_build": "hg38",
+        "chain_file": None,
+        "chain_sha256": None,
+        "chain_bytes": None,
+        "chain_mtime_ns": None,
+    }
+
+
+def test_manifest_build_is_required_and_conflicting_aliases_are_refused(tmp_path: Path) -> None:
+    missing = tmp_path / "missing-build.tsv"
+    missing.write_text(
+        "analysis_id\tsource_file\tstored_effect_scale\toriginal_sd_method\n"
+        "a\t/source.tsv.gz\tsd\testimated_from_source_maf\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="source_genome_build"):
+        resolve_manifest.read_resolve_manifest(missing)
+
+    conflicting = tmp_path / "conflicting-build.tsv"
+    conflicting.write_text(
+        "analysis_id\tsource_file\tstored_effect_scale\toriginal_sd_method\t"
+        "source_genome_build\tsource_assembly\n"
+        "a\t/source.tsv.gz\tsd\testimated_from_source_maf\tGRCh37\tGRCh38\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="conflicting.*source_genome_build"):
+        resolve_manifest.read_resolve_manifest(conflicting)
+
+
+def test_cross_build_tabular_reader_is_a_controlled_unsupported_configuration(
+    test_setup: dict[str, Any]
+) -> None:
+    records = test_setup["tmp_path"] / "unsupported-cross-build"
+
+    summary = _run_standard_resolve(
+        test_setup, records, default_source_build="GRCh37", reference_build="GRCh38"
+    )
+
+    assert summary.n_success == 0
+    record = json.loads(
+        (records / "GCST_EUR_QUANT.json").read_text(encoding="utf-8")
+    )
+    assert record["status"] == "controlled_failure"
+    assert "unsupported cross-build configuration" in record["error"]
+    assert record["diagnostics"]["rows_read"] == 0
+
+
+def test_chain_content_and_stat_invalidate_resume_fingerprint(
+    test_setup: dict[str, Any]
+) -> None:
+    records = test_setup["tmp_path"] / "chain-resume"
+    chain = test_setup["tmp_path"] / "fixture.chain"
+    chain.write_text("first", encoding="utf-8")
+    first = _run_standard_resolve(test_setup, records, chain_file=chain)
+    resumed = _run_standard_resolve(test_setup, records, chain_file=chain, resume=True)
+    chain.write_text("second-and-different-size", encoding="utf-8")
+    changed = _run_standard_resolve(test_setup, records, chain_file=chain, resume=True)
+
+    assert first.n_success == 4
+    assert resumed.n_resumed == 4
+    assert changed.n_resumed == 0
+    record = json.loads(
+        (records / "GCST_EUR_QUANT.json").read_text(encoding="utf-8")
+    )
+    assert record["assembly"]["chain_sha256"] == resolve_manifest.compute_file_sha256(chain)
+    assert record["assembly"]["chain_bytes"] == chain.stat().st_size
+    assert record["assembly"]["chain_mtime_ns"] == chain.stat().st_mtime_ns
 
 
 def test_git_hash_falls_back_to_the_checkout_when_the_distribution_is_unknown(
