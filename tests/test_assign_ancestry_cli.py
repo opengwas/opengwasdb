@@ -9,6 +9,7 @@ worker count and reproducible.
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -22,6 +23,7 @@ from opengwasdb.ancestry import (
     read_source_manifest,
 )
 from opengwasdb.cli.main import app
+from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 
 GROUPS = ["United Kingdom", "Finland", "Africa (West)", "Asia (East)"]
 GROUP_TO_SUPERPOP = {
@@ -100,10 +102,12 @@ def scenario(tmp_path):
         "admixed": _study_vcf(tmp_path, "mix", freqs, {"United Kingdom": 1, "Asia (East)": 1}),
     }
     manifest = tmp_path / "source_manifest.tsv"
-    lines = ["trait_id\tfile_path\ttrait_name\tn\treported_population"]
-    lines.append(f"eur1\t{studies['eur_clean']}\tEUR study\t1000\tEuropean")
-    lines.append(f"afr1\t{studies['afr_clean']}\tAFR study\t2000\tAfrican")
-    lines.append(f"mix1\t{studies['admixed']}\tMixed study\t3000\tMixed")
+    lines = [
+        "trait_id\tfile_path\ttrait_name\tn\treported_population\tsource_genome_build"
+    ]
+    lines.append(f"eur1\t{studies['eur_clean']}\tEUR study\t1000\tEuropean\tGRCh38")
+    lines.append(f"afr1\t{studies['afr_clean']}\tAFR study\t2000\tAfrican\tGRCh38")
+    lines.append(f"mix1\t{studies['admixed']}\tMixed study\t3000\tMixed\tGRCh38")
     manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return tmp_path, reference, manifest, freqs_path, groups_path
 
@@ -118,6 +122,7 @@ def test_annotate_catalogue_parks_non_eur_and_unassigned(scenario):
         catalogue_version="cat-v1",
         ancestry_reference_version="prive2022-hg38",
         n_workers=1,
+        reference_build="GRCh38",
     )
     by_id = {r.trait_id: r.assignment for r in rows}
     assert len(rows) == 3  # every Analysis retained
@@ -140,6 +145,7 @@ def test_catalogue_independent_of_worker_count(scenario):
             catalogue_version="cat-v1",
             ancestry_reference_version="prive2022-hg38",
             n_workers=workers,
+            reference_build="GRCh38",
         )
     assert serial.read_text() == parallel.read_text()
 
@@ -156,6 +162,8 @@ def _assign_ancestry_args(
         str(freqs_path),
         "--ancestry-groups",
         str(groups_path),
+        "--reference-build",
+        "GRCh38",
         "--maf-floor",
         "0.0",
         "--tau",
@@ -208,8 +216,9 @@ def test_read_source_manifest_accepts_canonical_analyses_tsv_columns(tmp_path):
     ``analyses.tsv`` names (with the legacy spellings still readable)."""
     canonical = tmp_path / "canonical_manifest.tsv"
     canonical.write_text(
-        "analysis_id\tsource_file\tanalysis_label\tsample_size\treported_population\n"
-        "eur1\t/build/eur.vcf.gz\tEUR study\t1000\tEuropean\n",
+        "analysis_id\tsource_file\tanalysis_label\tsample_size\treported_population\t"
+        "source_genome_build\n"
+        "eur1\t/build/eur.vcf.gz\tEUR study\t1000\tEuropean\tGRCh37\n",
         encoding="utf-8",
     )
 
@@ -221,20 +230,137 @@ def test_read_source_manifest_accepts_canonical_analyses_tsv_columns(tmp_path):
     assert rows[0].trait_name == "EUR study"
     assert rows[0].n == 1000
     assert rows[0].reported_population == "European"
+    assert rows[0].source_genome_build == "hg19"
 
 
 def test_read_source_manifest_falls_back_to_analysis_id_when_label_blank(tmp_path):
     """Ancestry manifests fall back to analysis_id when analysis_label is present but blank."""
     manifest = tmp_path / "blank_label.tsv"
     manifest.write_text(
-        "analysis_id\tsource_file\tanalysis_label\tsample_size\n"
-        "eur1\t/build/eur.vcf.gz\t\t1000\n",
+        "analysis_id\tsource_file\tanalysis_label\tsample_size\tsource_genome_build\n"
+        "eur1\t/build/eur.vcf.gz\t\t1000\thg38\n",
         encoding="utf-8",
     )
 
     rows = read_source_manifest(manifest)
     assert len(rows) == 1
     assert rows[0].trait_name == "eur1"
+
+
+def test_source_build_is_required_and_never_guessed_from_vcf_header(tmp_path):
+    manifest = tmp_path / "missing-build.tsv"
+    manifest.write_text(
+        "analysis_id\tsource_file\tsample_size\n"
+        "a1\t/build/study.vcf.gz\t1000\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="source_genome_build"):
+        read_source_manifest(manifest)
+
+    rows = read_source_manifest(manifest, default_source_genome_build="GRCh37")
+    assert rows[0].source_genome_build == "hg19"
+
+
+def test_conflicting_source_build_aliases_are_refused(tmp_path):
+    manifest = tmp_path / "conflicting-build.tsv"
+    manifest.write_text(
+        "analysis_id\tsource_file\tsample_size\tsource_genome_build\tsource_assembly\n"
+        "a1\t/build/study.vcf.gz\t1000\tGRCh37\tGRCh38\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="conflicting.*source_genome_build.*source_assembly"):
+        read_source_manifest(manifest)
+
+
+def test_cross_build_liftover_changes_coordinates_before_ancestry_fit(
+    scenario, tmp_path, monkeypatch
+):
+    """The fixture genuinely has different coordinates on each build.
+
+    Without the configured lift it has zero overlap; with the lift it reaches
+    the existing ancestry fit. This is the silent-as-if-aligned #277 path, not
+    merely an assertion that a CLI option was accepted.
+    """
+    _root, reference, manifest, _fp, _gp = scenario
+    shifted_alids = np.array(
+        [
+            f"{chrom}:{int(pos) + 64620}:{a1}:{a2}"
+            for alid in reference.alids
+            for chrom, pos, a1, a2 in [alid.split(":")]
+        ]
+    )
+    shifted = replace(
+        reference,
+        alids=shifted_alids,
+        index={alid: i for i, alid in enumerate(shifted_alids)},
+    )
+    source = read_source_manifest(manifest)[0]
+    source = replace(source, source_genome_build="hg19")
+
+    class _Shift:
+        def convert_coordinate(self, chrom, pos0):
+            return [(chrom, pos0 + 64620, "+", 0)]
+
+    monkeypatch.setattr("opengwasdb.ancestry.pipeline.load_liftover", lambda **_kwargs: _Shift())
+    chain = tmp_path / "fixture.chain.gz"
+    chain.write_bytes(b"fake chain: loader is replaced by deterministic fixture")
+
+    rows = annotate_catalogue(
+        [source],
+        shifted,
+        _gates(),
+        tmp_path / "lifted.tsv",
+        catalogue_version="cat-v1",
+        ancestry_reference_version="ref-hg38",
+        reference_build="GRCh38",
+        chain_file=chain,
+    )
+
+    assert rows[0].assignment.af_overlap == N_VARIANTS, "fixture must exercise moved sites"
+    assert rows[0].assignment.assigned_ancestry == "EUR"
+
+
+def test_cross_build_requires_configured_supported_liftover(scenario, tmp_path):
+    _root, reference, manifest, _fp, _gp = scenario
+    rows = read_source_manifest(manifest)
+    cross_build = [
+        type(row)(**{**row.__dict__, "source_genome_build": "hg19"}) for row in rows[:1]
+    ]
+
+    with pytest.raises(ValueError, match="--chain-file"):
+        annotate_catalogue(
+            cross_build,
+            reference,
+            _gates(),
+            tmp_path / "missing-chain.tsv",
+            catalogue_version="cat-v1",
+            ancestry_reference_version="ref",
+            reference_build="hg38",
+        )
+
+    unsupported = [
+        type(cross_build[0])(
+            **{
+                **cross_build[0].__dict__,
+                "source_reader_capability": GWAS_SSF_CAPABILITY,
+            }
+        )
+    ]
+    chain = tmp_path / "fake.chain.gz"
+    chain.write_bytes(b"fixture")
+    with pytest.raises(ValueError, match="unsupported.*opengwasdb.gwas-ssf"):
+        annotate_catalogue(
+            unsupported,
+            reference,
+            _gates(),
+            tmp_path / "unsupported.tsv",
+            catalogue_version="cat-v1",
+            ancestry_reference_version="ref",
+            reference_build="hg38",
+            chain_file=chain,
+        )
 
 
 @pytest.mark.parametrize("worker_flag", ["--n-workers", "--workers"])

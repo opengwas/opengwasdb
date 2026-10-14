@@ -35,7 +35,11 @@ from opengwasdb.build.vcf_source import (
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.interface import ReaderAssociation, SiteMetrics, SourceVariant
 from opengwasdb.stats import parse_af
-from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
+from opengwasdb.variants.normalise import (
+    Orientation,
+    VariantNormalisationError,
+    orient_to_canonical,
+)
 
 GWAS_VCF_CAPABILITY = "opengwasdb.gwas-vcf"
 
@@ -79,18 +83,73 @@ def load_liftover(
     return LiftOver(chain_file) if chain_file else LiftOver(from_build, to_build)
 
 
-def _lift(liftover: object, chrom: str, pos_str: str) -> tuple[str, str] | None:
-    """Lift ``(chrom, 1-based pos)`` to the target build; None if unmapped/non-standard."""
+_COMPLEMENT = str.maketrans("ACGTacgt", "TGCAtgca")
+
+
+class LiftoverProjectionError(ValueError):
+    """A coordinate lift cannot identify one allele-aligned target variant."""
+
+
+def _require_snp(effect: str, other: str) -> None:
+    alleles = (effect, other)
+    if any(len(allele) != 1 or allele.upper() not in "ACGT" for allele in alleles):
+        raise LiftoverProjectionError(
+            f"liftover supports one biallelic SNP at a time, got {effect!r}/{other!r}"
+        )
+
+
+def _unique_mapping(
+    mapped: list[tuple[str, float, str, float]], identity: str
+) -> tuple[str, float, str, float] | None:
+    if not mapped:
+        return None
+    if len(mapped) != 1:
+        raise LiftoverProjectionError(
+            f"ambiguous liftover for {identity}: expected one mapping, found {len(mapped)}"
+        )
+    return mapped[0]
+
+
+def _strand_alleles(strand: str, effect: str, other: str, identity: str) -> tuple[str, str]:
+    if strand == "+":
+        return effect, other
+    if strand == "-":
+        return effect.translate(_COMPLEMENT), other.translate(_COMPLEMENT)
+    raise LiftoverProjectionError(f"unsupported liftover strand {strand!r} for {identity}")
+
+
+def _lift_variant(
+    liftover: object, chrom: str, pos_str: str, effect: str, other: str
+) -> tuple[str, str, str, str] | None:
+    """Lift one SNP and project its alleles onto one unambiguous mapping strand."""
+    _require_snp(effect, other)
     bare = chrom[3:] if chrom.lower().startswith("chr") else chrom
+    identity = f"{chrom}:{pos_str}:{effect}:{other}"
     try:
         mapped = liftover.convert_coordinate(f"chr{bare}", int(pos_str) - 1)  # type: ignore[attr-defined]
     except (ValueError, KeyError):
         return None
-    if not mapped:
+    mapping = _unique_mapping(mapped, identity)
+    if mapping is None:
         return None
-    new_chrom = mapped[0][0]
-    new_chrom = new_chrom[3:] if new_chrom.lower().startswith("chr") else new_chrom
-    return new_chrom, str(int(mapped[0][1]) + 1)
+    new_chrom, new_pos, strand, *_rest = mapping
+    effect, other = _strand_alleles(strand, effect, other, identity)
+    bare_target = new_chrom[3:] if new_chrom.lower().startswith("chr") else new_chrom
+    return bare_target, str(int(new_pos) + 1), effect, other
+
+
+def _oriented_variant(
+    liftover: object | None, chrom: str, pos: str, effect: str, other: str
+) -> Orientation | None:
+    if liftover is not None:
+        lifted = _lift_variant(liftover, chrom, pos, effect, other)
+        if lifted is None:
+            return None
+        chrom, pos, effect, other = lifted
+    try:
+        return orient_to_canonical(chrom, pos, effect, other)
+    except VariantNormalisationError:
+        return None
 
 
 def _parse_af(value: str) -> float | None:
@@ -210,15 +269,10 @@ class GwasVcfReader:
                     se = _parse_positive_float(se_str)
                     if af is None or se is None:
                         continue
-                    chrom, pos = chrom_raw, pos_str
-                    if self.liftover is not None:
-                        lifted = _lift(self.liftover, chrom_raw, pos_str)
-                        if lifted is None:
-                            continue
-                        chrom, pos = lifted
-                    try:
-                        orientation = orient_to_canonical(chrom, pos, alt, ref)
-                    except VariantNormalisationError:
+                    orientation = _oriented_variant(
+                        self.liftover, chrom_raw, pos_str, alt, ref
+                    )
+                    if orientation is None:
                         continue
                     alid = orientation.variant.alid
                     if alid not in wanted:
