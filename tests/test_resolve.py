@@ -1139,6 +1139,35 @@ def test_finish_metric_query_cancels_real_writer_before_closing_pipe():
     assert proc.returncode == -signal.SIGTERM
 
 
+def test_finish_metric_query_accepts_term_winning_kill_escalation_race():
+    class _TermExitsAfterKill:
+        def __init__(self):
+            self.stdout = io.StringIO("unread output")
+            self.waits = 0
+            self.killed = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self, timeout=None):
+            self.waits += 1
+            if self.waits == 1:
+                raise subprocess.TimeoutExpired("bcftools", timeout)
+            return -signal.SIGTERM
+
+    proc = cast(subprocess.Popen[str], _TermExitsAfterKill())
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
+        _finish_metric_query(proc, errors, completed=False)
+
+    assert cast(_TermExitsAfterKill, proc).killed is True
+
+
 def test_finish_metric_query_does_not_hide_unexpected_signal():
     class _CrashesWhileBeingCancelled:
         def __init__(self):

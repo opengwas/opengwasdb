@@ -259,8 +259,10 @@ def _finish_metric_query(proc: subprocess.Popen[str], errors: TextIO, completed:
     if proc.stdout is not None:
         proc.stdout.close()
     returncode, killed = _bounded_wait(proc)
-    expected_signal = -signal.SIGKILL if killed else -signal.SIGTERM
-    if returncode != 0 and not (cancelled and returncode == expected_signal):
+    expected_signals = {-signal.SIGTERM}
+    if killed:
+        expected_signals.add(-signal.SIGKILL)
+    if returncode != 0 and not (cancelled and returncode in expected_signals):
         _raise_query_failure(returncode, errors)
 
 
