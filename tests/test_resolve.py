@@ -25,6 +25,7 @@ import tracemalloc
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TextIO, cast
 
 import numpy as np
 import pytest
@@ -1111,18 +1112,30 @@ def test_finish_metric_query_cancels_real_writer_before_closing_pipe():
     command = [
         sys.executable,
         "-c",
-        "import os\nwhile True: os.write(1, b'x' * 4096)",
+        (
+            "import os, signal\n"
+            "signal.signal(signal.SIGPIPE, signal.SIG_DFL)\n"
+            "while True: os.write(1, b'x' * 65536)"
+        ),
     ]
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
         proc = subprocess.Popen(
             command, stdout=subprocess.PIPE, stderr=errors, text=True
         )
         assert proc.stdout is not None
-        assert proc.stdout.read(1) == "x"  # writer is live before intentional cancellation
+        real_stdout = proc.stdout
+        assert real_stdout.read(1) == "x"
+        assert proc.poll() is None
 
+        class _CloseThenScheduleChild:
+            def close(self):
+                real_stdout.close()
+                proc.wait(timeout=2.0)
+
+        proc.stdout = cast(TextIO, _CloseThenScheduleChild())
         _finish_metric_query(proc, errors, completed=False)
 
-    assert proc.returncode in {-15, -9}
+    assert proc.returncode == -15
 
 
 def test_gwas_vcf_chunks_bound_rows_independently_of_file_size(tmp_path, panel):
