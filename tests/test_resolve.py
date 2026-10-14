@@ -18,6 +18,7 @@ import gzip
 import io
 import math
 import random
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1135,7 +1136,28 @@ def test_finish_metric_query_cancels_real_writer_before_closing_pipe():
         proc.stdout = cast(TextIO, _CloseThenScheduleChild())
         _finish_metric_query(proc, errors, completed=False)
 
-    assert proc.returncode == -15
+    assert proc.returncode == -signal.SIGTERM
+
+
+def test_finish_metric_query_does_not_hide_unexpected_signal():
+    class _CrashesWhileBeingCancelled:
+        def __init__(self):
+            self.stdout = io.StringIO("unread output")
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            del timeout
+            return -signal.SIGSEGV
+
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
+        with pytest.raises(OSError, match=r"query failed \(-11\)"):
+            proc = cast(subprocess.Popen[str], _CrashesWhileBeingCancelled())
+            _finish_metric_query(proc, errors, completed=False)
 
 
 def test_gwas_vcf_chunks_bound_rows_independently_of_file_size(tmp_path, panel):

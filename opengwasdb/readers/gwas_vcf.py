@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import contextlib
 import math
+import signal
 import subprocess
 import tempfile
 from collections.abc import Generator, Iterable, Iterator, KeysView
@@ -233,13 +234,13 @@ def _validated_metric_cells(lines: Iterable[str]) -> Iterator[tuple[str, ...]]:
 _QUERY_STOP_TIMEOUT_SECONDS = 5.0
 
 
-def _bounded_wait(proc: subprocess.Popen[str]) -> int:
+def _bounded_wait(proc: subprocess.Popen[str]) -> tuple[int, bool]:
     try:
-        return proc.wait(timeout=_QUERY_STOP_TIMEOUT_SECONDS)
+        return proc.wait(timeout=_QUERY_STOP_TIMEOUT_SECONDS), False
     except subprocess.TimeoutExpired:
         proc.kill()
     try:
-        return proc.wait(timeout=_QUERY_STOP_TIMEOUT_SECONDS)
+        return proc.wait(timeout=_QUERY_STOP_TIMEOUT_SECONDS), True
     except subprocess.TimeoutExpired as exc:
         raise OSError("bcftools query could not be reaped after kill") from exc
 
@@ -257,8 +258,9 @@ def _finish_metric_query(proc: subprocess.Popen[str], errors: TextIO, completed:
         proc.terminate()
     if proc.stdout is not None:
         proc.stdout.close()
-    returncode = _bounded_wait(proc)
-    if returncode != 0 and not (cancelled and returncode < 0):
+    returncode, killed = _bounded_wait(proc)
+    expected_signal = -signal.SIGKILL if killed else -signal.SIGTERM
+    if returncode != 0 and not (cancelled and returncode == expected_signal):
         _raise_query_failure(returncode, errors)
 
 
