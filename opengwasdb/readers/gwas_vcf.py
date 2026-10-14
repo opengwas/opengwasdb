@@ -30,7 +30,7 @@ import contextlib
 import math
 import subprocess
 import tempfile
-from collections.abc import Iterable, Iterator, KeysView
+from collections.abc import Generator, Iterable, Iterator, KeysView
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -112,7 +112,9 @@ def _require_snp(effect: str, other: str) -> None:
         )
 
 
-def _unique_mapping(mapped: list[tuple], identity: str) -> tuple | None:
+def _unique_mapping(
+    mapped: list[tuple[str, float, str, float]], identity: str
+) -> tuple[str, float, str, float] | None:
     if not mapped:
         return None
     if len(mapped) != 1:
@@ -260,7 +262,7 @@ def _finish_metric_query(proc: subprocess.Popen[str], errors: TextIO, completed:
         _raise_query_failure(returncode, errors)
 
 
-def _stream_metric_cells(path: str | Path) -> Iterator[tuple[str, ...]]:
+def _stream_metric_cells(path: str | Path) -> Generator[tuple[str, ...], None, None]:
     """Run the one VCF record query used by the bounded resolver (issue #278)."""
     bcftools = _require_bcftools()
     query_format = _metric_query_format(_format_tags(path))
@@ -357,21 +359,17 @@ class GwasVcfReader:
                 chromosome=chrom, position=pos, ref=ref, alt=alt, rsid=rsid
             )
 
-    def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
+    def stream_metric_chunks(self) -> Generator[MetricsChunk, None, None]:
         """Yield bounded resolver metrics from one streaming record query (#278)."""
         from opengwasdb.readers.tabular import metrics_chunks_from_rows
 
         rows = self._stream_metrics()
-        chunks = metrics_chunks_from_rows(rows, chunk_rows=self.chunk_rows)
         try:
-            try:
-                yield from chunks
-            finally:
-                chunks.close()
+            yield from metrics_chunks_from_rows(rows, chunk_rows=self.chunk_rows)
         finally:
             rows.close()
 
-    def _stream_metrics(self) -> Iterator[TabularMetricsRow]:
+    def _stream_metrics(self) -> Generator[TabularMetricsRow, None, None]:
         """Project VCF records without dropping ancestry-only AF+SE rows."""
         cells_stream = _stream_metric_cells(self.path)
         try:
@@ -382,7 +380,7 @@ class GwasVcfReader:
                     continue
                 se = _parse_positive_float(se_str)
                 z = None if se is None else _derive_z(ez_str, es_str, se)
-                beta = z * se if z is not None and math.isfinite(z) else None
+                beta = z * se if z is not None and se is not None and math.isfinite(z) else None
                 yield _metric_row(orientation, ref, alt, _parse_af(af_str), beta, se)
         finally:
             cells_stream.close()
