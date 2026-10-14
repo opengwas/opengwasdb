@@ -14,10 +14,15 @@ compatibility alias; if both are populated, their normalized builds must agree.
 ancestry reference build is always supplied with `--reference-build`.
 
 Same-build inputs proceed without transformation. A GRCh37/hg19 GWAS-VCF used
-with a GRCh38/hg38 reference requires `--chain-file`. Other build directions,
-and cross-build Source Formats without an implemented liftover projection,
-produce a controlled failure before any source records are read. Builds are not
-inferred from filenames, coordinates, or VCF headers.
+with a GRCh38/hg38 reference requires `--chain-file`. Each lifted SNP must have
+one mapping; a reverse-strand mapping complements both source alleles before
+canonical orientation, so AF and signed effects still name the transformed
+effect allele. Ambiguous mappings and indels (whose target alleles a single
+position lift cannot establish) fail rather than choosing or inventing Variant
+Identity. Other build directions and cross-build Source Formats without an
+implemented liftover projection produce a controlled failure before source
+records are read. Builds are not inferred from filenames, coordinates, or VCF
+headers.
 
 Source build, reference build, chain path, chain SHA-256, chain size and chain
 mtime are stored in each resolution record and its resume fingerprint. Source
@@ -44,7 +49,10 @@ the existing reader exclusions.
 The reader holds at most one metrics chunk (50,000 rows by default); ancestry
 and SD evidence remain bounded by the resolver's extraction panel and evidence
 sample. A non-zero `bcftools` exit or structurally malformed query output is a
-controlled per-Analysis failure, never a successful short EOF.
+controlled per-Analysis failure, never a successful short EOF. When a resolver
+bound closes a still-running query intentionally, cleanup terminates it, waits
+for at most five seconds, then kills and bounded-waits again. A process already
+known to have failed is never treated as that intentional cancellation.
 
 ## Explicit limitations
 

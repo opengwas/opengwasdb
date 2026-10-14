@@ -18,6 +18,7 @@ import gzip
 import io
 import math
 import random
+import subprocess
 import tracemalloc
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -271,13 +272,16 @@ def _resolve_vcf(
     method: OriginalSdMethod = OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
     scale: StoredEffectScale = StoredEffectScale.SD,
     af_references: Mapping[str, AfReference] | None = None,
+    scan_limit: ScanLimit | None = None,
+    chunk_rows: int = 50_000,
 ) -> AnalysisResolution:
     return resolve_analysis(
         AnalysisRequest("GCST000001", path, _STUDY_N, method, scale),
-        reader=GwasVcfReader(path, scale),
+        reader=GwasVcfReader(path, scale, chunk_rows=chunk_rows),
         reference=panel,
         gates=_GATES,
         af_references=af_references,
+        scan_limit=scan_limit,
     )
 
 
@@ -915,34 +919,42 @@ def test_gwas_vcf_case_control_resolves_ancestry_and_skips_sd(tmp_path, panel):
     assert resolution.phenotype_sd.reason is SdReason.NON_QUANTITATIVE
 
 
-def test_gwas_vcf_metrics_apply_liftover_before_coordinate_matching(tmp_path, panel):
+def test_gwas_vcf_reverse_liftover_aligns_alleles_af_and_beta(tmp_path, panel):
     frequencies = _mixture(panel, {"United Kingdom": 1.0})
     path = _write_vcf(tmp_path / "grch37.vcf", frequencies)
     shifted_alids = np.array(
         [
-            f"{chrom}:{int(pos) + 64620}:{a1}:{a2}"
+            f"{chrom}:{int(pos) + 64620}:G:T"
             for alid in panel.alids
-            for chrom, pos, a1, a2 in [alid.split(":")]
+            for chrom, pos, _a1, _a2 in [alid.split(":")]
         ]
     )
     shifted_panel = replace(
         panel,
         alids=shifted_alids,
+        freqs=1.0 - panel.freqs,
         index={alid: index for index, alid in enumerate(shifted_alids)},
     )
 
-    class _Shift:
+    class _ReverseShift:
         def convert_coordinate(self, chrom, pos0):
-            return [(chrom, pos0 + 64620, "+", 0)]
+            return [(chrom, pos0 + 64620, "-", 100)]
+
+    reader = GwasVcfReader(path, liftover=_ReverseShift())
+    first = next(reader.stream_metric_chunks())
+    assert first.alid[0] == "1:65620:G:T"
+    assert bool(first.flipped[0]) is True
+    assert first.af_alt[0] == pytest.approx(frequencies[0])
+    assert first.beta[0] == pytest.approx(0.2, rel=1e-5)
+    assert (1.0 - first.af_alt[0]) == pytest.approx(shifted_panel.freqs[0, 0])
+    assert -first.beta[0] == pytest.approx(-0.2, rel=1e-5)  # canonical G, effect T
 
     resolution = resolve_analysis(
         AnalysisRequest(
             "GCST000001", path, _STUDY_N,
             OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
         ),
-        reader=GwasVcfReader(path, liftover=_Shift()),
-        reference=shifted_panel,
-        gates=_GATES,
+        reader=reader, reference=shifted_panel, gates=_GATES,
     )
 
     assert resolution.ancestry is not None
@@ -985,7 +997,8 @@ def test_gwas_vcf_nonzero_query_is_controlled_not_false_eof(tmp_path, panel, mon
         def terminate(self):
             pass
 
-        def wait(self):
+        def wait(self, timeout=None):
+            del timeout
             return 7
 
     monkeypatch.setattr(
@@ -997,6 +1010,87 @@ def test_gwas_vcf_nonzero_query_is_controlled_not_false_eof(tmp_path, panel, mon
     assert resolution.error.startswith("OSError: bcftools record query failed (7)")
     assert resolution.diagnostics.rows_read == 0
     assert resolution.ancestry is None
+
+
+def test_gwas_vcf_early_close_preserves_already_failed_query(tmp_path, panel, monkeypatch):
+    path = _write_vcf(
+        tmp_path / "failed-before-cap.vcf", _mixture(panel, {"United Kingdom": 1.0})
+    )
+
+    class _AlreadyFailed:
+        def __init__(self, _command, *, stdout, stderr, text):
+            del stdout, text
+            self.stdout = io.StringIO(
+                "1\t1000\tC\tA\t1\t0.2\t0.1\t0.3\n"
+                "1\t1001\tC\tA\t1\t0.2\t0.1\t0.3\n"
+            )
+            stderr.write("failed before resolver cap")
+
+        def poll(self):
+            return 17
+
+        def terminate(self):
+            raise AssertionError("an already-exited process must not be terminated")
+
+        def wait(self, timeout=None):
+            del timeout
+            return 17
+
+    monkeypatch.setattr(
+        "opengwasdb.readers.gwas_vcf._format_tags", lambda _path: {"EZ", "ES", "SE", "AF"}
+    )
+    monkeypatch.setattr("opengwasdb.readers.gwas_vcf.subprocess.Popen", _AlreadyFailed)
+    resolution = _resolve_vcf(
+        path, panel, scan_limit=ScanLimit(max_rows=1), chunk_rows=1
+    )
+
+    assert resolution.error.startswith("OSError: bcftools record query failed (17)")
+    assert resolution.ancestry is None
+
+
+def test_gwas_vcf_capped_close_terminates_then_kills_and_reaps(tmp_path, panel, monkeypatch):
+    path = _write_vcf(
+        tmp_path / "cancel-at-cap.vcf", _mixture(panel, {"United Kingdom": 1.0})
+    )
+    events: list[str] = []
+
+    class _IgnoresTerminate:
+        killed = False
+
+        def __init__(self, _command, *, stdout, stderr, text):
+            del stdout, stderr, text
+            self.stdout = io.StringIO(
+                "1\t1000\tC\tA\t1\t0.2\t0.1\t0.3\n"
+                "1\t1001\tC\tA\t1\t0.2\t0.1\t0.3\n"
+            )
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            events.append("terminate")
+
+        def kill(self):
+            self.killed = True
+            events.append("kill")
+
+        def wait(self, timeout=None):
+            events.append(f"wait:{timeout}")
+            if not self.killed:
+                raise subprocess.TimeoutExpired("bcftools", timeout)
+            return -9
+
+    monkeypatch.setattr(
+        "opengwasdb.readers.gwas_vcf._format_tags", lambda _path: {"EZ", "ES", "SE", "AF"}
+    )
+    monkeypatch.setattr("opengwasdb.readers.gwas_vcf.subprocess.Popen", _IgnoresTerminate)
+    resolution = _resolve_vcf(
+        path, panel, scan_limit=ScanLimit(max_rows=1), chunk_rows=1
+    )
+
+    assert resolution.error == ""
+    assert resolution.diagnostics.rows_read == 1
+    assert events == ["terminate", "wait:5.0", "kill", "wait:5.0"]
 
 
 def test_gwas_vcf_chunks_bound_rows_independently_of_file_size(tmp_path, panel):

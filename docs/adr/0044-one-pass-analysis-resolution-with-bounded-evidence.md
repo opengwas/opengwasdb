@@ -82,7 +82,9 @@ ancestry rule but not to phenotype-SD evidence.
   fallback.
 - **Assembly alignment is declared, never inferred.** Resolver callers provide
   each Analysis's `source_genome_build` and the reference build. Supported
-  hg19→hg38 GWAS-VCF alignment requires an explicit chain. A cross-build reader
+  hg19→hg38 GWAS-VCF alignment requires an explicit chain, one unique SNP
+  mapping, and reverse-strand allele complementation before orientation;
+  ambiguous mappings and position-only indel projection are refused. A cross-build reader
   without an implemented liftover seam is a controlled unsupported
   configuration, not an as-if-aligned result (issues #277 and #278).
 - **The manifest-level CLI is a separate change.** This decision fixes the

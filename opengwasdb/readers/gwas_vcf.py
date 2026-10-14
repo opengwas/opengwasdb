@@ -50,6 +50,7 @@ from opengwasdb.variants.normalise import (
     VariantNormalisationError,
     orient_to_canonical,
 )
+
 if TYPE_CHECKING:
     from opengwasdb.readers.tabular import MetricsChunk, TabularMetricsRow
 
@@ -227,16 +228,36 @@ def _validated_metric_cells(lines: Iterable[str]) -> Iterator[tuple[str, ...]]:
         yield cells
 
 
+_QUERY_STOP_TIMEOUT_SECONDS = 5.0
+
+
+def _bounded_wait(proc: subprocess.Popen[str]) -> int:
+    try:
+        return proc.wait(timeout=_QUERY_STOP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    try:
+        return proc.wait(timeout=_QUERY_STOP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        raise OSError("bcftools query could not be reaped after kill") from exc
+
+
+def _raise_query_failure(returncode: int, errors: TextIO) -> None:
+    errors.seek(0)
+    message = errors.read().strip() or "no diagnostic"
+    raise OSError(f"bcftools record query failed ({returncode}): {message}")
+
+
 def _finish_metric_query(proc: subprocess.Popen[str], errors: TextIO, completed: bool) -> None:
     if proc.stdout is not None:
         proc.stdout.close()
+    cancelled = False
     if not completed and proc.poll() is None:
         proc.terminate()
-    returncode = proc.wait()
-    if completed and returncode != 0:
-        errors.seek(0)
-        message = errors.read().strip() or "no diagnostic"
-        raise OSError(f"bcftools record query failed ({returncode}): {message}")
+        cancelled = True
+    returncode = _bounded_wait(proc)
+    if returncode != 0 and not (cancelled and returncode < 0):
+        _raise_query_failure(returncode, errors)
 
 
 def _stream_metric_cells(path: str | Path) -> Iterator[tuple[str, ...]]:
@@ -340,19 +361,31 @@ class GwasVcfReader:
         """Yield bounded resolver metrics from one streaming record query (#278)."""
         from opengwasdb.readers.tabular import metrics_chunks_from_rows
 
-        yield from metrics_chunks_from_rows(self._stream_metrics(), chunk_rows=self.chunk_rows)
+        rows = self._stream_metrics()
+        chunks = metrics_chunks_from_rows(rows, chunk_rows=self.chunk_rows)
+        try:
+            try:
+                yield from chunks
+            finally:
+                chunks.close()
+        finally:
+            rows.close()
 
     def _stream_metrics(self) -> Iterator[TabularMetricsRow]:
         """Project VCF records without dropping ancestry-only AF+SE rows."""
-        for cells in _stream_metric_cells(self.path):
-            chrom, pos, ref, alt, ez_str, es_str, se_str, af_str = cells
-            orientation = _oriented_variant(self.liftover, chrom, pos, alt, ref)
-            if orientation is None:
-                continue
-            se = _parse_positive_float(se_str)
-            z = None if se is None else _derive_z(ez_str, es_str, se)
-            beta = z * se if z is not None and math.isfinite(z) else None
-            yield _metric_row(orientation, ref, alt, _parse_af(af_str), beta, se)
+        cells_stream = _stream_metric_cells(self.path)
+        try:
+            for cells in cells_stream:
+                chrom, pos, ref, alt, ez_str, es_str, se_str, af_str = cells
+                orientation = _oriented_variant(self.liftover, chrom, pos, alt, ref)
+                if orientation is None:
+                    continue
+                se = _parse_positive_float(se_str)
+                z = None if se is None else _derive_z(ez_str, es_str, se)
+                beta = z * se if z is not None and math.isfinite(z) else None
+                yield _metric_row(orientation, ref, alt, _parse_af(af_str), beta, se)
+        finally:
+            cells_stream.close()
 
     def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
         wanted = (
