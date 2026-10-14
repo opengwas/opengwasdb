@@ -45,12 +45,17 @@ bottom-`k`-by-hash sample (`evidence_sample`, default 20,000) sharing
 `n_evidence_considered`, `n_estimate_inputs` and `evidence_sampled`, so a
 sampled median is never presented as a whole-file one.
 
-**A projection-aware metrics seam carries the rows.** `SourceReader.stream_metrics`
-(`TabularMetricsRow`) yields identity plus `beta`/`standard_error`/`effect_allele_frequency`
-without a dict per row. It is a third projection beside `stream_variants` and
-`extract_at_sites`, not a replacement: `stream_associations` cannot serve this,
-because it carries a `z` rather than the beta behind it and drops rows with an
-unusable beta that ancestry assignment can still read a frequency from.
+**A projection-aware metrics seam carries the rows.** A reader's bounded
+`stream_metric_chunks` projection yields identity plus
+`beta`/`standard_error`/`effect_allele_frequency` without retaining a source's
+rows. It is a third projection beside `stream_variants` and `extract_at_sites`,
+not a replacement: `stream_associations` cannot serve this, because it carries
+a `z` rather than the beta behind it and drops rows with an unusable beta that
+ancestry assignment can still read a frequency from. GWAS-SSF projects parsed
+tabular blocks. GWAS-VCF (issue #278) performs one streaming `bcftools query`
+after a header capability probe, preferring usable EZ and otherwise ES/SE, with
+`beta = z * SE`; a missing effect leaves an AF+SE row available to the unchanged
+ancestry rule but not to phenotype-SD evidence.
 
 ## Consequences
 
@@ -69,10 +74,19 @@ unusable beta that ancestry assignment can still read a frequency from.
   make.** Passing the fixed 10,000-site QC panel bounds ancestry memory to the
   panel, but whether it is interchangeable with the full reference for routing is
   a question for a concordance study, not for the resolver.
-- **Only tabular formats have this path.** A GWAS-VCF's cheap read is a targeted
-  `bcftools -R` at reference sites, not a full-file row scan, so
-  `resolve_analysis` refuses a reader without `stream_metrics` loudly instead of
-  reading a 100 GB VCF row by row.
+- **Only formats with an explicit bounded metrics projection have this path.**
+  GWAS-SSF and GWAS-VCF provide one. A VCF scan is a single streaming records
+  query, blocked at 50,000 rows by default; evidence remains bounded separately
+  by the configured panel and sample sizes. A reader without this seam is
+  refused rather than consumed through an unbounded or semantically weaker
+  fallback.
+- **Assembly alignment is declared, never inferred.** Resolver callers provide
+  each Analysis's `source_genome_build` and the reference build. Supported
+  hg19→hg38 GWAS-VCF alignment requires an explicit chain, one unique SNP
+  mapping, and reverse-strand allele complementation before orientation;
+  ambiguous mappings and position-only indel projection are refused. A cross-build reader
+  without an implemented liftover seam is a controlled unsupported
+  configuration, not an as-if-aligned result (issues #277 and #278).
 - **The manifest-level CLI is a separate change.** This decision fixes the
   per-Analysis seam and its evidence contract; per-Analysis checkpointing,
   resume and a batch entry point are the follow-on interface, and they belong on

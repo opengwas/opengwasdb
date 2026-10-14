@@ -15,12 +15,18 @@ today), both on the same file.
 from __future__ import annotations
 
 import gzip
+import io
 import math
 import random
+import signal
+import subprocess
+import sys
+import tempfile
 import tracemalloc
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TextIO, cast
 
 import numpy as np
 import pytest
@@ -46,7 +52,11 @@ from opengwasdb.build.resolve import (
 )
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
-from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader
+from opengwasdb.readers.gwas_vcf import (
+    GWAS_VCF_CAPABILITY,
+    GwasVcfReader,
+    _finish_metric_query,
+)
 from opengwasdb.readers.tabular import DEFAULT_CHUNK_ROWS, MetricsChunk
 
 N_VARIANTS = 200
@@ -185,6 +195,45 @@ def _write_ssf(
     return path
 
 
+def _write_vcf(
+    path: Path,
+    freqs: np.ndarray,
+    *,
+    beta: float | None = 0.2,
+    missing_se_at: int | None = None,
+    missing_af_at: int | None = None,
+    include_af: bool = True,
+) -> Path:
+    errors = _se_for(freqs)
+    header = (
+        "##fileformat=VCFv4.2\n"
+        '##FORMAT=<ID=EZ,Number=1,Type=Float,Description="Z score">\n'
+        '##FORMAT=<ID=ES,Number=1,Type=Float,Description="Effect size">\n'
+        '##FORMAT=<ID=SE,Number=1,Type=Float,Description="Standard error">\n'
+        + (
+            '##FORMAT=<ID=AF,Number=1,Type=Float,Description="Effect allele frequency">\n'
+            if include_af else ""
+        )
+        + "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+    )
+    rows = []
+    for index, (frequency, se) in enumerate(zip(freqs, errors, strict=True)):
+        se_text = "." if index == missing_se_at else f"{se:.12g}"
+        es_text = "." if beta is None else f"{beta:.12g}"
+        ez_text = "." if beta is None or index == missing_se_at else f"{beta / se:.12g}"
+        value = f"{ez_text}:{es_text}:{se_text}"
+        format_fields = "EZ:ES:SE"
+        if include_af:
+            af_text = "." if index == missing_af_at else f"{frequency:.12g}"
+            value += f":{af_text}"
+            format_fields += ":AF"
+        rows.append(
+            f"1\t{1000 + index}\t.\tC\tA\t.\tPASS\t.\t{format_fields}\t{value}\n"
+        )
+    path.write_text(header + "".join(rows), encoding="utf-8")
+    return path
+
+
 def _study_file(
     tmp_path: Path,
     panel: AncestryReference,
@@ -223,6 +272,38 @@ def _resolve(
         evidence_sample=evidence_sample,
         scan_limit=scan_limit,
     )
+
+
+def _resolve_vcf(
+    path: Path,
+    panel: AncestryReference,
+    method: OriginalSdMethod = OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
+    scale: StoredEffectScale = StoredEffectScale.SD,
+    af_references: Mapping[str, AfReference] | None = None,
+    scan_limit: ScanLimit | None = None,
+    chunk_rows: int = 50_000,
+) -> AnalysisResolution:
+    return resolve_analysis(
+        AnalysisRequest("GCST000001", path, _STUDY_N, method, scale),
+        reader=GwasVcfReader(path, scale, chunk_rows=chunk_rows),
+        reference=panel,
+        gates=_GATES,
+        af_references=af_references,
+        scan_limit=scan_limit,
+    )
+
+
+def _record_query_counter(monkeypatch) -> list[list[str]]:
+    calls: list[list[str]] = []
+    real_popen = __import__("subprocess").Popen
+
+    def counting_popen(command, *args, **kwargs):
+        if command[1] == "query":
+            calls.append(command)
+        return real_popen(command, *args, **kwargs)
+
+    monkeypatch.setattr("opengwasdb.readers.gwas_vcf.subprocess.Popen", counting_popen)
+    return calls
 
 
 @dataclass
@@ -768,21 +849,354 @@ def test_source_missing_an_identity_column_is_a_controlled_error(tmp_path, panel
     assert resolution.ancestry is None
 
 
-def test_reader_without_a_metrics_path_is_refused_loudly(tmp_path, panel):
-    """A GWAS-VCF has no single-scan metrics path, and must not be read as if it had."""
-    reader = GwasVcfReader(tmp_path / "study.vcf", StoredEffectScale.SD)
+def test_gwas_vcf_resolves_ancestry_and_sd_from_one_record_query(
+    tmp_path, panel, monkeypatch
+):
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    path = _write_vcf(tmp_path / "study.vcf", frequencies)
+    queries = _record_query_counter(monkeypatch)
+    resolution = _resolve_vcf(path, panel)
 
-    with pytest.raises(TypeError, match="cannot stream source metrics"):
-        resolve_analysis(
-            AnalysisRequest(
-                "GCST000001",
-                tmp_path / "study.vcf",
-                _STUDY_N,
-                OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
-            ),
-            reader=reader,
-            reference=panel,
+    assert len(queries) == 1, "header probing is allowed; source records traverse once"
+    assert resolution.error == ""
+    assert resolution.ancestry is not None
+    assert resolution.ancestry.assigned_ancestry == "EUR"
+    assert resolution.phenotype_sd is not None
+    assert resolution.phenotype_sd.status is SdStatus.ESTIMATED
+    assert resolution.phenotype_sd.estimate is not None
+    assert resolution.phenotype_sd.estimate.sd == pytest.approx(_TRUE_SD)
+
+
+def test_gwas_vcf_preserves_af_plus_se_ancestry_eligibility(tmp_path, panel):
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    path = _write_vcf(tmp_path / "missing-effect.vcf", frequencies, beta=None)
+    resolution = _resolve_vcf(path, panel)
+
+    assert resolution.ancestry is not None
+    assert resolution.ancestry.af_overlap == N_VARIANTS
+    assert resolution.phenotype_sd is not None
+    assert resolution.phenotype_sd.status is SdStatus.UNAVAILABLE
+    assert resolution.phenotype_sd.n_evidence_considered == 0
+
+
+def test_gwas_vcf_missing_se_is_not_ancestry_evidence(tmp_path, panel):
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    path = _write_vcf(tmp_path / "missing-se.vcf", frequencies, missing_se_at=0)
+    resolution = _resolve_vcf(path, panel)
+
+    assert resolution.ancestry is not None
+    assert resolution.ancestry.af_overlap == N_VARIANTS - 1
+
+
+def test_gwas_vcf_reference_af_is_selected_after_ancestry_without_rescan(
+    tmp_path, panel, monkeypatch
+):
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    path = _write_vcf(tmp_path / "reference-af.vcf", frequencies, missing_af_at=0)
+    queries = _record_query_counter(monkeypatch)
+    reference_af = AfReference(
+        "fixture-eur",
+        {alid: float(frequency) for alid, frequency in zip(panel.alids, frequencies, strict=True)},
+    )
+    resolution = _resolve_vcf(
+        path, panel, OriginalSdMethod.ESTIMATED_FROM_REFERENCE_MAF,
+        af_references={"EUR": reference_af},
+    )
+
+    assert len(queries) == 1
+    assert resolution.ancestry is not None
+    assert resolution.ancestry.assigned_ancestry == "EUR"
+    assert resolution.ancestry.af_overlap == N_VARIANTS - 1
+    assert resolution.phenotype_sd is not None
+    assert resolution.phenotype_sd.reference_id == "fixture-eur"
+    assert resolution.phenotype_sd.status is SdStatus.ESTIMATED
+    assert resolution.phenotype_sd.n_estimate_inputs == N_VARIANTS
+
+
+def test_gwas_vcf_case_control_resolves_ancestry_and_skips_sd(tmp_path, panel):
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    path = _write_vcf(tmp_path / "case-control.vcf", frequencies)
+    resolution = _resolve_vcf(
+        path, panel, OriginalSdMethod.BINARY_TRAIT, StoredEffectScale.LOG_OR
+    )
+
+    assert resolution.ancestry is not None
+    assert resolution.ancestry.assigned_ancestry == "EUR"
+    assert resolution.phenotype_sd is not None
+    assert resolution.phenotype_sd.status is SdStatus.SKIPPED
+    assert resolution.phenotype_sd.reason is SdReason.NON_QUANTITATIVE
+
+
+def test_gwas_vcf_reverse_liftover_aligns_alleles_af_and_beta(tmp_path, panel):
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    path = _write_vcf(tmp_path / "grch37.vcf", frequencies)
+    shifted_alids = np.array(
+        [
+            f"{chrom}:{int(pos) + 64620}:G:T"
+            for alid in panel.alids
+            for chrom, pos, _a1, _a2 in [alid.split(":")]
+        ]
+    )
+    shifted_panel = replace(
+        panel,
+        alids=shifted_alids,
+        freqs=1.0 - panel.freqs,
+        index={alid: index for index, alid in enumerate(shifted_alids)},
+    )
+
+    class _ReverseShift:
+        def convert_coordinate(self, chrom, pos0):
+            return [(chrom, pos0 + 64620, "-", 100)]
+
+    reader = GwasVcfReader(path, liftover=_ReverseShift())
+    first = next(reader.stream_metric_chunks())
+    assert first.alid[0] == "1:65620:G:T"
+    assert bool(first.flipped[0]) is True
+    assert first.af_alt[0] == pytest.approx(frequencies[0])
+    assert first.beta[0] == pytest.approx(0.2, rel=1e-5)
+    assert (1.0 - first.af_alt[0]) == pytest.approx(shifted_panel.freqs[0, 0])
+    assert -first.beta[0] == pytest.approx(-0.2, rel=1e-5)  # canonical G, effect T
+
+    resolution = resolve_analysis(
+        AnalysisRequest(
+            "GCST000001", path, _STUDY_N,
+            OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF,
+        ),
+        reader=reader, reference=shifted_panel, gates=_GATES,
+    )
+
+    assert resolution.ancestry is not None
+    assert resolution.ancestry.af_overlap == N_VARIANTS
+    assert resolution.ancestry.assigned_ancestry == "EUR"
+
+
+def test_gwas_vcf_prefers_ez_and_sets_beta_to_z_times_se(tmp_path):
+    path = tmp_path / "ez-precedence.vcf"
+    path.write_text(
+        "##fileformat=VCFv4.2\n"
+        '##FORMAT=<ID=EZ,Number=1,Type=Float,Description="Z score">\n'
+        '##FORMAT=<ID=ES,Number=1,Type=Float,Description="Effect size">\n'
+        '##FORMAT=<ID=SE,Number=1,Type=Float,Description="Standard error">\n'
+        '##FORMAT=<ID=AF,Number=1,Type=Float,Description="Frequency">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+        "1\t1000\t.\tC\tA\t.\tPASS\t.\tEZ:ES:SE:AF\t2:100:0.5:0.3\n",
+        encoding="utf-8",
+    )
+
+    chunk = next(GwasVcfReader(path).stream_metric_chunks())
+
+    assert chunk.beta.tolist() == [1.0]
+    assert chunk.se.tolist() == [0.5]
+
+
+def test_gwas_vcf_nonzero_query_is_controlled_not_false_eof(tmp_path, panel, monkeypatch):
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    path = _write_vcf(tmp_path / "failed-query.vcf", frequencies)
+
+    class _FailedQuery:
+        def __init__(self, _command, *, stdout, stderr, text):
+            del stdout, text
+            self.stdout = io.StringIO("1\t1000\tC\tA\t1\t0.2\t0.1\t0.3\n")
+            stderr.write("synthetic bcftools failure")
+
+        def poll(self):
+            return 7
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            del timeout
+            return 7
+
+    monkeypatch.setattr(
+        "opengwasdb.readers.gwas_vcf._format_tags", lambda _path: {"EZ", "ES", "SE", "AF"}
+    )
+    monkeypatch.setattr("opengwasdb.readers.gwas_vcf.subprocess.Popen", _FailedQuery)
+    resolution = _resolve_vcf(path, panel)
+
+    assert resolution.error.startswith("OSError: bcftools record query failed (7)")
+    assert resolution.diagnostics.rows_read == 0
+    assert resolution.ancestry is None
+
+
+def test_gwas_vcf_early_close_preserves_already_failed_query(tmp_path, panel, monkeypatch):
+    path = _write_vcf(
+        tmp_path / "failed-before-cap.vcf", _mixture(panel, {"United Kingdom": 1.0})
+    )
+
+    class _AlreadyFailed:
+        def __init__(self, _command, *, stdout, stderr, text):
+            del stdout, text
+            self.stdout = io.StringIO(
+                "1\t1000\tC\tA\t1\t0.2\t0.1\t0.3\n"
+                "1\t1001\tC\tA\t1\t0.2\t0.1\t0.3\n"
+            )
+            stderr.write("failed before resolver cap")
+
+        def poll(self):
+            return 17
+
+        def terminate(self):
+            raise AssertionError("an already-exited process must not be terminated")
+
+        def wait(self, timeout=None):
+            del timeout
+            return 17
+
+    monkeypatch.setattr(
+        "opengwasdb.readers.gwas_vcf._format_tags", lambda _path: {"EZ", "ES", "SE", "AF"}
+    )
+    monkeypatch.setattr("opengwasdb.readers.gwas_vcf.subprocess.Popen", _AlreadyFailed)
+    resolution = _resolve_vcf(
+        path, panel, scan_limit=ScanLimit(max_rows=1), chunk_rows=1
+    )
+
+    assert resolution.error.startswith("OSError: bcftools record query failed (17)")
+    assert resolution.ancestry is None
+
+
+def test_gwas_vcf_capped_close_terminates_then_kills_and_reaps(tmp_path, panel, monkeypatch):
+    path = _write_vcf(
+        tmp_path / "cancel-at-cap.vcf", _mixture(panel, {"United Kingdom": 1.0})
+    )
+    events: list[str] = []
+
+    class _TrackedOutput(io.StringIO):
+        def close(self):
+            events.append("stdout.close")
+            super().close()
+
+    class _IgnoresTerminate:
+        killed = False
+
+        def __init__(self, _command, *, stdout, stderr, text):
+            del stdout, stderr, text
+            self.stdout = _TrackedOutput(
+                "1\t1000\tC\tA\t1\t0.2\t0.1\t0.3\n"
+                "1\t1001\tC\tA\t1\t0.2\t0.1\t0.3\n"
+            )
+
+        def poll(self):
+            events.append("poll")
+            return None
+
+        def terminate(self):
+            events.append("terminate")
+
+        def kill(self):
+            self.killed = True
+            events.append("kill")
+
+        def wait(self, timeout=None):
+            events.append(f"wait:{timeout}")
+            if not self.killed:
+                raise subprocess.TimeoutExpired("bcftools", timeout)
+            return -9
+
+    monkeypatch.setattr(
+        "opengwasdb.readers.gwas_vcf._format_tags", lambda _path: {"EZ", "ES", "SE", "AF"}
+    )
+    monkeypatch.setattr("opengwasdb.readers.gwas_vcf.subprocess.Popen", _IgnoresTerminate)
+    resolution = _resolve_vcf(
+        path, panel, scan_limit=ScanLimit(max_rows=1), chunk_rows=1
+    )
+
+    assert resolution.error == ""
+    assert resolution.diagnostics.rows_read == 1
+    assert events == [
+        "poll", "terminate", "stdout.close", "wait:5.0", "kill", "wait:5.0"
+    ]
+
+
+def test_finish_metric_query_cancels_real_writer_before_closing_pipe():
+    command = [
+        sys.executable,
+        "-c",
+        (
+            "import os, signal\n"
+            "signal.signal(signal.SIGPIPE, signal.SIG_DFL)\n"
+            "while True: os.write(1, b'x' * 65536)"
+        ),
+    ]
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
+        proc = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=errors, text=True
         )
+        assert proc.stdout is not None
+        real_stdout = proc.stdout
+        assert real_stdout.read(1) == "x"
+        assert proc.poll() is None
+
+        class _CloseThenScheduleChild:
+            def close(self):
+                real_stdout.close()
+                proc.wait(timeout=2.0)
+
+        proc.stdout = cast(TextIO, _CloseThenScheduleChild())
+        _finish_metric_query(proc, errors, completed=False)
+
+    assert proc.returncode == -signal.SIGTERM
+
+
+def test_finish_metric_query_accepts_term_winning_kill_escalation_race():
+    class _TermExitsAfterKill:
+        def __init__(self):
+            self.stdout = io.StringIO("unread output")
+            self.waits = 0
+            self.killed = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self, timeout=None):
+            self.waits += 1
+            if self.waits == 1:
+                raise subprocess.TimeoutExpired("bcftools", timeout)
+            return -signal.SIGTERM
+
+    proc = cast(subprocess.Popen[str], _TermExitsAfterKill())
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
+        _finish_metric_query(proc, errors, completed=False)
+
+    assert cast(_TermExitsAfterKill, proc).killed is True
+
+
+def test_finish_metric_query_does_not_hide_unexpected_signal():
+    class _CrashesWhileBeingCancelled:
+        def __init__(self):
+            self.stdout = io.StringIO("unread output")
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            del timeout
+            return -signal.SIGSEGV
+
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
+        with pytest.raises(OSError, match=r"query failed \(-11\)"):
+            proc = cast(subprocess.Popen[str], _CrashesWhileBeingCancelled())
+            _finish_metric_query(proc, errors, completed=False)
+
+
+def test_gwas_vcf_chunks_bound_rows_independently_of_file_size(tmp_path, panel):
+    frequencies = _mixture(panel, {"United Kingdom": 1.0})
+    path = _write_vcf(tmp_path / "chunked.vcf", frequencies)
+
+    chunks = list(GwasVcfReader(path, chunk_rows=7).stream_metric_chunks())
+
+    assert sum(len(chunk) for chunk in chunks) == N_VARIANTS
+    assert max(map(len, chunks)) == 7
 
 
 def test_non_positive_evidence_sample_is_refused_loudly(tmp_path, panel):
