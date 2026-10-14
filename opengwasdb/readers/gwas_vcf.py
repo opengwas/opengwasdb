@@ -251,12 +251,12 @@ def _raise_query_failure(returncode: int, errors: TextIO) -> None:
 
 
 def _finish_metric_query(proc: subprocess.Popen[str], errors: TextIO, completed: bool) -> None:
+    returncode = proc.poll()
+    cancelled = not completed and returncode is None
+    if cancelled:
+        proc.terminate()
     if proc.stdout is not None:
         proc.stdout.close()
-    cancelled = False
-    if not completed and proc.poll() is None:
-        proc.terminate()
-        cancelled = True
     returncode = _bounded_wait(proc)
     if returncode != 0 and not (cancelled and returncode < 0):
         _raise_query_failure(returncode, errors)

@@ -19,6 +19,8 @@ import io
 import math
 import random
 import subprocess
+import sys
+import tempfile
 import tracemalloc
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -48,7 +50,11 @@ from opengwasdb.build.resolve import (
 )
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
-from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader
+from opengwasdb.readers.gwas_vcf import (
+    GWAS_VCF_CAPABILITY,
+    GwasVcfReader,
+    _finish_metric_query,
+)
 from opengwasdb.readers.tabular import DEFAULT_CHUNK_ROWS, MetricsChunk
 
 N_VARIANTS = 200
@@ -1054,17 +1060,23 @@ def test_gwas_vcf_capped_close_terminates_then_kills_and_reaps(tmp_path, panel, 
     )
     events: list[str] = []
 
+    class _TrackedOutput(io.StringIO):
+        def close(self):
+            events.append("stdout.close")
+            super().close()
+
     class _IgnoresTerminate:
         killed = False
 
         def __init__(self, _command, *, stdout, stderr, text):
             del stdout, stderr, text
-            self.stdout = io.StringIO(
+            self.stdout = _TrackedOutput(
                 "1\t1000\tC\tA\t1\t0.2\t0.1\t0.3\n"
                 "1\t1001\tC\tA\t1\t0.2\t0.1\t0.3\n"
             )
 
         def poll(self):
+            events.append("poll")
             return None
 
         def terminate(self):
@@ -1090,7 +1102,27 @@ def test_gwas_vcf_capped_close_terminates_then_kills_and_reaps(tmp_path, panel, 
 
     assert resolution.error == ""
     assert resolution.diagnostics.rows_read == 1
-    assert events == ["terminate", "wait:5.0", "kill", "wait:5.0"]
+    assert events == [
+        "poll", "terminate", "stdout.close", "wait:5.0", "kill", "wait:5.0"
+    ]
+
+
+def test_finish_metric_query_cancels_real_writer_before_closing_pipe():
+    command = [
+        sys.executable,
+        "-c",
+        "import os\nwhile True: os.write(1, b'x' * 4096)",
+    ]
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as errors:
+        proc = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=errors, text=True
+        )
+        assert proc.stdout is not None
+        assert proc.stdout.read(1) == "x"  # writer is live before intentional cancellation
+
+        _finish_metric_query(proc, errors, completed=False)
+
+    assert proc.returncode in {-15, -9}
 
 
 def test_gwas_vcf_chunks_bound_rows_independently_of_file_size(tmp_path, panel):
