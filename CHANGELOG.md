@@ -12,7 +12,7 @@ the end of this file.
 
 ### Added
 
-- **`assign-ancestry` now aligns explicitly declared source and reference genome builds instead of silently treating mismatched coordinates as aligned (issue #277).** `source_genome_build` is authoritative (`source_assembly` remains a conflict-checked alias), `--source-build` is only a fallback for omitted row metadata, and `--reference-build` is required. Supported hg19→hg38 GWAS-VCF assignment requires `--chain-file`; missing declarations, conflicting aliases, unsupported build directions, and cross-build reader formats without a liftover seam fail before source scanning. Same-build assignment and all ancestry gates are unchanged.
+- **`assign-ancestry` now aligns explicitly declared source and reference genome builds instead of silently treating mismatched coordinates as aligned (issue #277).** `source_genome_build` is authoritative (`source_assembly` remains a conflict-checked alias), `--source-build` is only a fallback for omitted row metadata, and `--reference-build` is required. Supported hg19→hg38 GWAS-VCF assignment requires `--chain-file`; lifted SNP alleles are complemented on reverse-strand mappings, while ambiguous mappings and indels without allele-aware projection fail rather than inventing target identity. Missing declarations, conflicting aliases, unsupported build directions, and cross-build reader formats without a liftover seam fail before source scanning. Same-build assignment and all ancestry gates are unchanged.
 
 - **`opengwasdb build-indexed-subset STORE SUBSET_NAME --variant-list
   variants.alid.txt --reference-assembly GRCh38` builds a full-statistic
