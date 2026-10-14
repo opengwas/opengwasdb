@@ -767,6 +767,55 @@ def test_extract_at_sites_applies_liftover(tmp_path):
     assert sites["1:65620:A:C"].af == pytest.approx(0.25)  # unflipped (A is canonical A1)
 
 
+class _ReverseLiftover:
+    def convert_coordinate(self, chrom, pos0):
+        return [(chrom, pos0 + 100, "-", 100)]
+
+
+class _AmbiguousLiftover:
+    def convert_coordinate(self, chrom, pos0):
+        return [(chrom, pos0 + 100, "+", 100), (chrom, pos0 + 200, "+", 99)]
+
+
+def test_extract_at_sites_reverse_liftover_complements_alleles_and_orients_af(tmp_path):
+    vcf = _af_se_vcf(
+        tmp_path,
+        ["1\t1000\t.\tC\tA\t.\tPASS\t.\tAF:SE\t0.25:0.1\n"],
+    )
+    # Source REF=C/ALT=A maps on the reverse strand to REF=G/ALT=T at 1:1100.
+    # Canonical A1=G is now REF, so ALT frequency 0.25 becomes A1 frequency 0.75.
+    sites = GwasVcfReader(vcf, liftover=_ReverseLiftover()).extract_at_sites(
+        {"1:1100:G:T"}
+    )
+
+    assert set(sites) == {"1:1100:G:T"}
+    assert sites["1:1100:G:T"].af == pytest.approx(0.75)
+
+
+def test_extract_at_sites_refuses_ambiguous_liftover_mapping(tmp_path):
+    vcf = _af_se_vcf(
+        tmp_path,
+        ["1\t1000\t.\tC\tA\t.\tPASS\t.\tAF:SE\t0.25:0.1\n"],
+    )
+
+    with pytest.raises(ValueError, match="ambiguous liftover"):
+        GwasVcfReader(vcf, liftover=_AmbiguousLiftover()).extract_at_sites(
+            {"1:1100:G:T"}
+        )
+
+
+def test_extract_at_sites_refuses_indel_liftover_without_allele_projection(tmp_path):
+    vcf = _af_se_vcf(
+        tmp_path,
+        ["1\t1000\t.\tCA\tC\t.\tPASS\t.\tAF:SE\t0.25:0.1\n"],
+    )
+
+    with pytest.raises(ValueError, match="biallelic SNP"):
+        GwasVcfReader(vcf, liftover=_FakeLiftover()).extract_at_sites(
+            {"1:65620:C:CA"}
+        )
+
+
 def test_extract_at_sites_region_restricts_the_scan(tmp_path):
     """``region`` (bcftools -r) is a cheap chromosome-level restriction, kept
     from the pre-#21 API for callers like a genome-wide dev-batch script that
