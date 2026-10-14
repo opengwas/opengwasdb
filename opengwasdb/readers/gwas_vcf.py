@@ -98,7 +98,9 @@ def _require_snp(effect: str, other: str) -> None:
         )
 
 
-def _unique_mapping(mapped: list[tuple], identity: str) -> tuple | None:
+def _unique_mapping(
+    mapped: list[tuple[str, float, str, float]], identity: str
+) -> tuple[str, float, str, float] | None:
     if not mapped:
         return None
     if len(mapped) != 1:
