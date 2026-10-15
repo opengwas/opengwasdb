@@ -40,6 +40,7 @@ from opengwasdb.readers.column_map import (
     ColumnMap,
     ColumnMapError,
     PositionNotation,
+    UnmappedColumns,
 )
 from opengwasdb.readers.effect_source import EffectSource
 from opengwasdb.readers.gwas_ssf import VARIANT_COLUMNS, GwasSsfReader
@@ -238,7 +239,7 @@ def _check_unmapped(
     passthrough: tuple[str, ...],
     source: str,
 ) -> None:
-    if column_map.conventions.unmapped_columns != "refuse":
+    if column_map.conventions.unmapped_columns is not UnmappedColumns.REFUSE:
         return
     known = {*matched.values()}
     unmapped = [

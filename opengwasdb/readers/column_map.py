@@ -35,10 +35,12 @@ __all__ = [
     "BUILTIN_COLUMN_MAPS",
     "COLUMN_MAP_CAPABILITY",
     "AlleleConvention",
+    "ChromosomeSpelling",
     "ColumnMap",
     "ColumnMapError",
     "Conventions",
     "PositionNotation",
+    "UnmappedColumns",
     "as_column_map",
     "check_mapped_rows",
     "load_column_map",
@@ -68,6 +70,22 @@ class AlleleConvention(StrEnum):
     #: `ref`, `alt` and an `effect_allele` column naming one of them; the other
     #: allele is whichever of the two it does not name (dbGaP MVP).
     REF_ALT_AND_EFFECT_ALLELE = "ref_alt_and_effect_allele"
+
+
+class UnmappedColumns(StrEnum):
+    """What a file column the map neither maps nor ignores means."""
+
+    #: Renamed out of the reader's reach and never read (GWAS-SSF, FinnGen).
+    IGNORE = "ignore"
+    #: A new file shape: the file fails, naming the column.
+    REFUSE = "refuse"
+
+
+class ChromosomeSpelling(StrEnum):
+    """What a collection's chromosome labels mean."""
+
+    #: Optional `chr`; `23` = X, `24` = Y, `25`/`26`/`M` = MT (ADR 0052).
+    ADR_0052 = "adr-0052"
 
 
 class PositionNotation(StrEnum):
@@ -115,10 +133,10 @@ _COLUMN_CONVENTIONS: dict[str, tuple[str, ...]] = {
 
 #: The values a closed-vocabulary convention may take and the reader honours.
 _HONOURED: dict[str, frozenset[str]] = {
-    "unmapped_columns": frozenset({"ignore", "refuse"}),
+    "unmapped_columns": frozenset(UnmappedColumns),
     "alleles": frozenset(AlleleConvention),
     "position_notation": frozenset(PositionNotation),
-    "chromosome_spelling": frozenset({"adr-0052"}),
+    "chromosome_spelling": frozenset(ChromosomeSpelling),
     "frequency_allele": frozenset({"effect_allele"}),
     "p_value_form": frozenset({"p"}),
 }
@@ -152,10 +170,10 @@ class Conventions:
     """
 
     missing_values: tuple[str, ...] | None
-    unmapped_columns: str
+    unmapped_columns: UnmappedColumns
     alleles: AlleleConvention
     position_notation: PositionNotation
-    chromosome_spelling: str
+    chromosome_spelling: ChromosomeSpelling
     genome_build: str | None
     frequency_allele: str | None = None
     p_value_form: str | None = None
@@ -354,10 +372,10 @@ def _conventions(table: object, declared_fields: set[str]) -> Conventions:
             _honoured(key, table[key])
     return Conventions(
         missing_values=_missing_values(table["missing_values"]),
-        unmapped_columns=table["unmapped_columns"],
+        unmapped_columns=UnmappedColumns(table["unmapped_columns"]),
         alleles=AlleleConvention(table["alleles"]),
         position_notation=PositionNotation(table["position_notation"]),
-        chromosome_spelling=table["chromosome_spelling"],
+        chromosome_spelling=ChromosomeSpelling(table["chromosome_spelling"]),
         genome_build=_genome_build(table["genome_build"]),
         frequency_allele=table.get("frequency_allele"),
         p_value_form=table.get("p_value_form"),
