@@ -95,6 +95,10 @@ The single ancestry label attached to an **Analysis**, recovered from that Analy
 **Ancestry Composition**:
 The estimated mixture proportions of an Analysis across a set of reference ancestries (summing to one), from which its **Assigned Ancestry** is derived. Retained as provenance so an Unassigned or later-reroutable Analysis keeps the evidence behind its label.
 
+**Source Ancestry Measurement**:
+One **Ancestry Composition** fit, with its allele-orientation check, measured once over a whole source that holds many Analyses and shared unchanged by all of them. A BESD file set reports one effect-allele frequency per variant in its `.esi`, the same for every probe, so the fit is a fact about the file rather than about any one probe; each probe's resolution record carries it under `ancestry_scope = source_file` and a shared `ancestry_measurement_id` (ADR 0062). Its phenotype SD is still the probe's own.
+_Avoid_: per-probe ancestry, for a BESD probe.
+
 **Ancestry Reference Panel**:
 Per-population reference allele frequencies over a common variant set, used to estimate an Analysis's **Ancestry Composition** by matching its summary-statistic allele frequencies. Distinct from the **LD Reference Panel**: this provides population frequencies for ancestry assignment, not LD structure for completion. It may be defined at a finer population granularity than the ancestries an Analysis is ultimately routed by.
 

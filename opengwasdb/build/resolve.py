@@ -46,7 +46,7 @@ from __future__ import annotations
 import heapq
 import math
 from collections.abc import Collection, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -72,6 +72,7 @@ from opengwasdb.readers.tabular import MetricsChunk
 
 __all__ = [
     "AfReference",
+    "AncestryScope",
     "AnalysisRequest",
     "AnalysisResolution",
     "DEFAULT_EVIDENCE_SAMPLE",
@@ -82,7 +83,11 @@ __all__ = [
     "ScanStop",
     "SdReason",
     "SdStatus",
+    "SourceAncestryMeasurement",
+    "measure_source_ancestry",
+    "needs_phenotype_sd",
     "resolve_analysis",
+    "unresolved",
 ]
 
 #: The stopping-rule contract's version (issue #209, issue #212). A caller that
@@ -152,6 +157,18 @@ class ScanLimit:
             "max_rows": self.max_rows,
             "max_ancestry_sites": self.max_ancestry_sites,
         }
+
+
+class AncestryScope(StrEnum):
+    """Which rows an Analysis's ancestry fit was measured over (issue #282).
+
+    `ANALYSIS` is the Analysis's own scan. `SOURCE_FILE` is one measurement of
+    a multi-Analysis source's per-variant frequencies, shared by every Analysis
+    in it -- a BESD file's `.esi` (:class:`SourceAncestryMeasurement`).
+    """
+
+    ANALYSIS = "analysis"
+    SOURCE_FILE = "source_file"
 
 
 class SdStatus(StrEnum):
@@ -278,6 +295,32 @@ class ScanDiagnostics:
     build_eligible_rows_effect_from_odds_ratio_fallback: int = 0
     build_eligible_rows_se_from_ci: int = 0
     build_eligible_rows_se_from_p_value: int = 0
+    #: Whether the `ancestry_*` counts above describe this Analysis's own scan
+    #: or a measurement of its whole source file (issue #282). For
+    #: `source_file`, `rows_read` and every other count stay the Analysis's own.
+    ancestry_scope: AncestryScope = AncestryScope.ANALYSIS
+    #: The shared measurement's identity: equal on every Analysis that shares it.
+    ancestry_measurement_id: str | None = None
+
+
+@dataclass(frozen=True)
+class SourceAncestryMeasurement:
+    """An ancestry fit measured once over a whole multi-Analysis source (issue #282).
+
+    A BESD file reports one frequency per variant, shared by every probe in it,
+    so the fit is a fact about the file. Fitting it per probe would repeat one
+    computation per Analysis over a cis probe's few thousand rows instead of
+    the file's millions, and could label two probes of one cohort with two
+    ancestries. `resolve_analysis` takes this in place of the fit its own scan
+    would make (ADR 0062).
+    """
+
+    assignment: AncestryAssignment
+    measurement_id: str
+    sites: int
+    rows_read: int
+    stop_reason: ScanStop
+    reference_rows_matched: int
 
 
 @dataclass(frozen=True)
@@ -311,9 +354,12 @@ class PhenotypeSdResolution:
 class AnalysisResolution:
     """Everything one source scan produced for one Analysis (issue #207).
 
-    A non-empty `error` means the source could not be read at all: `ancestry` and
-    `phenotype_sd` are then both `None`, and the caller records a controlled
-    failure rather than inventing an outcome. Otherwise both are set -- an
+    A non-empty `error` means the Analysis could not be resolved: `phenotype_sd`
+    is then `None`, and the caller records a controlled failure rather than
+    inventing an outcome. `ancestry` is `None` too, unless the Analysis shares a
+    source measurement that was made (a BESD probe refused for its own reasons,
+    issue #282): every measurement is recorded whether the Analysis passes or
+    not (stores ADR 0036). Otherwise both are set -- an
     ancestry fit that failed its gates is still a fit, with `gate_reason` naming
     why (ADR 0028), and a skipped or unavailable phenotype SD is still a reported
     outcome.
@@ -448,10 +494,35 @@ def _entry_sequence(entry: tuple[int, int, float, float, float, str]) -> int:
     return entry[1]
 
 
-def _diagnostics(request: AnalysisRequest, scan: _Scan) -> ScanDiagnostics:
+def _diagnostics(
+    request: AnalysisRequest, scan: _Scan, source_ancestry: SourceAncestryMeasurement | None = None
+) -> ScanDiagnostics:
     ancestry_rows = (
         scan.ancestry_rows_read if scan.ancestry_rows_read > 0 else scan.rows_read
     )
+    return _with_source_ancestry(_scan_diagnostics(request, scan, ancestry_rows), source_ancestry)
+
+
+def _with_source_ancestry(
+    diagnostics: ScanDiagnostics, source_ancestry: SourceAncestryMeasurement | None
+) -> ScanDiagnostics:
+    """The scan's diagnostics with the shared measurement's ancestry counts, if any."""
+    if source_ancestry is None:
+        return diagnostics
+    return replace(
+        diagnostics,
+        ancestry_sites=source_ancestry.sites,
+        ancestry_rows_read=source_ancestry.rows_read,
+        ancestry_stop_reason=source_ancestry.stop_reason,
+        ancestry_reference_rows_matched=source_ancestry.reference_rows_matched,
+        ancestry_scope=AncestryScope.SOURCE_FILE,
+        ancestry_measurement_id=source_ancestry.measurement_id,
+    )
+
+
+def _scan_diagnostics(
+    request: AnalysisRequest, scan: _Scan, ancestry_rows: int
+) -> ScanDiagnostics:
     return ScanDiagnostics(
         source_file=str(request.source_file),
         rows_read=scan.rows_read,
@@ -706,8 +777,25 @@ def _accumulate_ancestry(
     rows = np.flatnonzero(usable)
     frequencies = np.where(chunk.flipped[rows], 1.0 - chunk.af_alt[rows], chunk.af_alt[rows])
     sites = limit.max_ancestry_sites if limit is not None else None
+    return _record_panel_frequencies(
+        rows, chunk.alid[rows], frequencies, panel, panel_af, sites
+    )
+
+
+def _record_panel_frequencies(
+    rows: np.ndarray,
+    alids: np.ndarray,
+    frequencies: np.ndarray,
+    panel: Collection[str],
+    panel_af: dict[str, float],
+    sites: int | None,
+) -> int | None:
+    """Record A1 frequencies at panel sites, in row order; later rows win an ALID.
+
+    Returns the row at which `sites` distinct sites were reached, else `None`.
+    """
     for row, alid, frequency in zip(
-        rows.tolist(), chunk.alid[rows].tolist(), frequencies.tolist(), strict=True
+        rows.tolist(), alids.tolist(), frequencies.tolist(), strict=True
     ):
         if alid not in panel:
             continue
@@ -715,6 +803,60 @@ def _accumulate_ancestry(
         if sites is not None and len(panel_af) >= sites:
             return int(row)
     return None
+
+
+def measure_source_ancestry(
+    alid: np.ndarray,
+    a1_frequency: np.ndarray,
+    palindromic: np.ndarray,
+    *,
+    reference: AncestryReference,
+    measurement_id: str,
+    extraction_panel: Collection[str] | None = None,
+    gates: Gates | None = None,
+    scan_limit: ScanLimit | None = None,
+) -> SourceAncestryMeasurement:
+    """Fit ancestry once over a source's per-variant frequencies (issue #282).
+
+    The site rule is `_accumulate_ancestry`'s -- a usable A1 frequency, no
+    palindromic pair, a panel site, later rows winning a repeated ALID -- less
+    its standard-error requirement. A tabular row's SE is evidence the row is a
+    real association; a per-variant frequency stands apart from any one
+    association, and no single SE belongs to it. `alid` is `""` on a row naming
+    no usable variant. `scan_limit` bounds the measurement as it bounds a scan:
+    `max_rows` the rows considered, `max_ancestry_sites` the sites recorded.
+    """
+    rows_read, stop = _rows_considered(len(alid), scan_limit)
+    considered = slice(0, rows_read)
+    usable = np.isfinite(a1_frequency[considered]) & ~palindromic[considered]
+    rows = np.flatnonzero(usable & (alid[considered] != ""))
+    panel_af: dict[str, float] = {}
+    stopped = _record_panel_frequencies(
+        rows, alid[rows], a1_frequency[rows],
+        reference.index if extraction_panel is None else extraction_panel,
+        panel_af, scan_limit.max_ancestry_sites if scan_limit is not None else None,
+    )
+    if stopped is not None:
+        rows_read, stop = stopped + 1, ScanStop.ANCESTRY_SITE_LIMIT
+    return SourceAncestryMeasurement(
+        assignment=assign_ancestry(panel_af, reference, gates),
+        measurement_id=measurement_id,
+        sites=len(panel_af),
+        rows_read=rows_read,
+        stop_reason=stop,
+        reference_rows_matched=sum(a in reference.index for a in alid[:rows_read].tolist()),
+    )
+
+
+def _rows_considered(n_rows: int, limit: ScanLimit | None) -> tuple[int, ScanStop]:
+    if limit is None or limit.max_rows is None or limit.max_rows >= n_rows:
+        return n_rows, ScanStop.EOF
+    return limit.max_rows, ScanStop.ROW_LIMIT
+
+
+def needs_phenotype_sd(request: AnalysisRequest) -> bool:
+    """Whether this Analysis's tier asks for a phenotype SD to be estimated."""
+    return _skip_reason(request) is None
 
 
 def _skip_reason(request: AnalysisRequest) -> SdReason | None:
@@ -865,6 +1007,61 @@ def _resolve_phenotype_sd(
     )
 
 
+def unresolved(
+    analysis_id: str,
+    source_file: str | Path,
+    error: str,
+    *,
+    source_ancestry: SourceAncestryMeasurement | None = None,
+    measurement_id: str | None = None,
+) -> AnalysisResolution:
+    """An Analysis that cannot be resolved, keeping any shared measurement it has.
+
+    `source_ancestry` is the source file's ancestry fit when one was made: the
+    record carries it, and its `.esi` counts, rather than zeros under the
+    Analysis's own scope. `measurement_id` alone names a source measurement
+    that was attempted and produced no fit (a `.esi` with no frequencies).
+    """
+    diagnostics = _with_source_ancestry(
+        ScanDiagnostics(source_file=str(source_file), rows_read=0, ancestry_sites=0),
+        source_ancestry,
+    )
+    if source_ancestry is None and measurement_id is not None:
+        diagnostics = replace(
+            diagnostics,
+            ancestry_scope=AncestryScope.SOURCE_FILE,
+            ancestry_measurement_id=measurement_id,
+        )
+    return AnalysisResolution(
+        analysis_id=analysis_id,
+        diagnostics=diagnostics,
+        ancestry=None if source_ancestry is None else source_ancestry.assignment,
+        error=error,
+    )
+
+
+def _ancestry_panel(
+    reference: AncestryReference,
+    extraction_panel: Collection[str] | None,
+    source_ancestry: SourceAncestryMeasurement | None,
+) -> Collection[str]:
+    """The sites this scan records frequencies at: none when the source's fit stands."""
+    if source_ancestry is not None:
+        return frozenset()
+    return reference.index if extraction_panel is None else extraction_panel
+
+
+def _ancestry(
+    scan: _Scan,
+    reference: AncestryReference,
+    gates: Gates | None,
+    source_ancestry: SourceAncestryMeasurement | None,
+) -> AncestryAssignment:
+    if source_ancestry is not None:
+        return source_ancestry.assignment
+    return assign_ancestry(scan.panel_af, reference, gates)
+
+
 def resolve_analysis(
     request: AnalysisRequest,
     *,
@@ -876,6 +1073,7 @@ def resolve_analysis(
     evidence_sample: int = DEFAULT_EVIDENCE_SAMPLE,
     scan_limit: ScanLimit | None = None,
     variant_reference: Collection[str] | None = None,
+    source_ancestry: SourceAncestryMeasurement | None = None,
 ) -> AnalysisResolution:
     """Resolve one Analysis's ancestry and phenotype SD from one source scan.
 
@@ -905,7 +1103,14 @@ def resolve_analysis(
     set rather than as an exception, because one unreadable file in a batch of
     thousands is a per-Analysis outcome (issue #207). A declared score with no
     usable value is *not* such an error (stores #176): every row is retained and
-    the record reports `info_score_state = no_usable_scores`. A caller error -- a
+    the record reports `info_score_state = no_usable_scores`.
+
+    `source_ancestry`, when given, is the Analysis's ancestry: a fit already
+    measured once over its whole multi-Analysis source (a BESD file, issue
+    #282). The scan then records no panel frequencies of its own, and the
+    record's `ancestry_*` diagnostics are the shared measurement's.
+
+    A caller error -- a
     non-positive `evidence_sample`, a reader with no single-scan metrics path --
     raises, because it is a defect in the call, not in the data.
     """
@@ -922,7 +1127,7 @@ def resolve_analysis(
         )
     scan = _Scan()
     evidence = _EvidenceSample(k=evidence_sample, tier=request.original_sd_method)
-    panel: Collection[str] = reference.index if extraction_panel is None else extraction_panel
+    panel = _ancestry_panel(reference, extraction_panel, source_ancestry)
     needs_sd = _skip_reason(request) is None
     whole_stream = (
         variant_reference is not None
@@ -939,13 +1144,13 @@ def resolve_analysis(
     except (OSError, EOFError, ValueError) as exc:
         return AnalysisResolution(
             analysis_id=request.analysis_id,
-            diagnostics=_diagnostics(request, scan),
+            diagnostics=_diagnostics(request, scan, source_ancestry),
             error=f"{type(exc).__name__}: {exc}",
         )
-    ancestry = assign_ancestry(scan.panel_af, reference, gates)
+    ancestry = _ancestry(scan, reference, gates, source_ancestry)
     return AnalysisResolution(
         analysis_id=request.analysis_id,
-        diagnostics=_diagnostics(request, scan),
+        diagnostics=_diagnostics(request, scan, source_ancestry),
         ancestry=ancestry,
         phenotype_sd=_resolve_phenotype_sd(request, ancestry, evidence, af_references or {}),
     )

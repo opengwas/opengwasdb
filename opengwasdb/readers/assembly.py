@@ -13,7 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.build.liftover import normalise_build
+from opengwasdb.readers.besd import BESD_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
+
+#: Readers with an allele-aware hg19->hg38 projection. BESD aligns its `.esi`
+#: rows through the GWAS-VCF projection itself (issue #282).
+_LIFTOVER_CAPABILITIES = frozenset({GWAS_VCF_CAPABILITY, BESD_CAPABILITY})
 
 
 class UnsupportedAssemblyConfiguration(ValueError):
@@ -78,7 +83,7 @@ def assembly_plan(
     reference = normalise_build(reference_build)
     if source == reference:
         return AssemblyPlan(source, reference)
-    if capability != GWAS_VCF_CAPABILITY:
+    if capability not in _LIFTOVER_CAPABILITIES:
         raise UnsupportedAssemblyConfiguration(
             f"unsupported cross-build configuration for {capability!r}: "
             f"{source}->{reference}; this reader has no liftover seam"

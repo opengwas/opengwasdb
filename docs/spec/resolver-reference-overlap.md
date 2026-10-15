@@ -41,3 +41,18 @@ have stopped early. A publication projection over a filtered source must use
 that record's `build_eligible_rows_off_variant_reference` / `build_eligible_rows`
 diagnostics rather than these legacy counts; see
 [`info-score-resolver.md`](../info-score-resolver.md).
+
+## Ancestry measured once per source file (BESD)
+
+Every record's `diagnostics` carries `ancestry_scope` and
+`ancestry_measurement_id` (issue #282, ADR 0062). For every one-Analysis-per-file
+format the scope is `analysis` and the id is null: the `ancestry_*` counts above
+describe the Analysis's own scan. For a BESD probe the scope is `source_file`:
+its ancestry fit and orientation were measured once over its file set's whole
+`.esi` and are shared by every probe of that file set, so `ancestry_sites`,
+`ancestry_rows_read`, `ancestry_stop_reason` and
+`ancestry_reference_rows_matched` describe the `.esi`, while `rows_read`,
+`variant_reference_rows_matched` and the build-eligible counts stay the probe's
+own. Records sharing one measurement carry the same `ancestry_measurement_id`,
+and `index.json`'s `source_measurements` lists each measurement made in that
+invocation once, with its Analyses. See [`besd-resolver.md`](../besd-resolver.md).

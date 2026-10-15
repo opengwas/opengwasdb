@@ -6,7 +6,7 @@ import math
 import struct
 from collections.abc import Iterator
 from pathlib import Path
-from typing import NamedTuple
+from typing import BinaryIO, NamedTuple
 
 import numpy as np
 
@@ -78,18 +78,26 @@ def _iter_index_rows(
 
 
 def read_esi(esi_path: str | Path) -> list[SnpRecord]:
-    """Read an .esi SNP index file into SnpRecord rows.
+    """Read an .esi SNP index file into SnpRecord rows (see :func:`iter_esi`)."""
+    return list(iter_esi(esi_path))
+
+
+def iter_esi(esi_path: str | Path) -> Iterator[SnpRecord]:
+    """Stream an .esi SNP index file as SnpRecord rows, in file order.
 
     A data row must carry 6 columns (chr, snp_id, genetic distance, bp, a1,
-    a2) or 7 with a trailing frequency. Comment and blank lines are
-    ignored. A missing frequency column and a literal ``NA`` frequency both
-    mean the frequency is unknown and parse to ``None`` (issue #130:
-    absence is not a number). Any other malformed data row raises
+    a2) or 7 with a trailing frequency of ``a1``, the effect allele. Comment
+    and blank lines are ignored. A missing frequency column and a literal
+    ``NA`` frequency both mean the frequency is unknown and parse to ``None``
+    (issue #130: absence is not a number). Any other malformed data row raises
     :class:`BESDMetadataError` naming the file and line — a silently
     skipped row would shift every later row index against the `.besd`
     association file.
+
+    A generator so that a caller reducing eQTLGen's 8.9M rows to arrays
+    (the resolver, issue #282) never holds them all as Python tuples.
     """
-    snps: list[SnpRecord] = []
+    row_idx = 0
     for line_no, fields in _iter_index_rows(
         esi_path,
         kind="ESI",
@@ -118,18 +126,16 @@ def read_esi(esi_path: str | Path) -> list[SnpRecord]:
                     f"{esi_path}:{line_no}: ESI frequency column {fields[6]!r} "
                     f"is not a finite number"
                 )
-        snps.append(
-            SnpRecord(
-                row_idx=len(snps),
-                chromosome=fields[0],
-                snp_id=fields[1],
-                bp=bp,
-                a1=fields[4],
-                a2=fields[5],
-                freq=freq,
-            )
+        yield SnpRecord(
+            row_idx=row_idx,
+            chromosome=fields[0],
+            snp_id=fields[1],
+            bp=bp,
+            a1=fields[4],
+            a2=fields[5],
+            freq=freq,
         )
-    return snps
+        row_idx += 1
 
 
 def read_epi(epi_path: str | Path) -> list[ProbeRecord]:
@@ -241,3 +247,73 @@ class BESDReader:
         betas = self._val[beta_start:se_start]
         ses = self._val[se_start: se_start + n]
         return snp_idx, betas, ses
+
+
+def read_besd_probe(
+    besd_path: str | Path, n_probes: int, probe_idx: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One probe's ``(snp_indices, betas, ses)``, read by seeking, not by loading.
+
+    :class:`BESDReader` holds the whole matrix in memory, which a build that
+    visits every probe wants. A resolver visits one probe per Analysis, in
+    worker processes, and eQTLGen's `.besd` is 2 GB (issue #282): each call
+    here reads the header, two column offsets and the probe's own slices.
+    The arrays are exactly :meth:`BESDReader.get_probe_associations`' for the
+    same probe. A probe index outside the file, corrupt column offsets (a
+    negative start, or an SE block before the beta block), or a slice the file
+    is too short to hold raises rather than returning a short or empty answer;
+    only equal offsets are an empty probe.
+    """
+    if not 0 <= probe_idx < n_probes:
+        raise ValueError(f"{besd_path}: probe index {probe_idx} outside 0..{n_probes - 1}")
+    with open(besd_path, "rb") as fh:
+        val_num, cols_offset = _sparse_header(fh, besd_path)
+        fh.seek(cols_offset + 16 * probe_idx)
+        beta_start, se_start = _read_array(fh, np.int64, 2, besd_path).tolist()
+        n = _association_count(besd_path, probe_idx, beta_start, se_start, val_num)
+        if n == 0:
+            empty = np.empty(0, dtype=np.uint32)
+            return empty, np.empty(0, dtype=np.float32), np.empty(0, dtype=np.float32)
+        rowid_offset = cols_offset + 8 * ((n_probes << 1) + 1)
+        val_offset = rowid_offset + 4 * val_num
+        fh.seek(rowid_offset + 4 * beta_start)
+        snp_idx = _read_array(fh, np.uint32, n, besd_path)
+        fh.seek(val_offset + 4 * beta_start)
+        values = _read_array(fh, np.float32, 2 * n, besd_path)
+    return snp_idx, values[:n], values[n:]
+
+
+def _association_count(
+    besd_path: str | Path, probe_idx: int, beta_start: int, se_start: int, val_num: int
+) -> int:
+    """How many associations a probe's column offsets describe; corrupt ones raise.
+
+    Only equal offsets are an empty probe. A negative start, an SE block before
+    the beta block, or one ending past the file's values is a damaged file,
+    which `BESDReader` would silently read as empty.
+    """
+    n = se_start - beta_start
+    if beta_start < 0 or n < 0 or se_start + n > val_num:
+        raise ValueError(
+            f"{besd_path}: probe {probe_idx} has corrupt column offsets "
+            f"(beta_start {beta_start}, se_start {se_start}, {val_num} values)"
+        )
+    return n
+
+
+def _sparse_header(fh: BinaryIO, besd_path: str | Path) -> tuple[int, int]:
+    """``(val_num, byte offset of the column offsets)`` of a sparse BESD file."""
+    magic = struct.unpack("<I", fh.read(4))[0]
+    if magic == _MAGIC_SPARSE_3:
+        fh.seek((_RESERVED_UNITS - 1) * 4, 1)
+    elif magic != _MAGIC_SPARSE_3F:
+        raise ValueError(f"{besd_path}: unsupported BESD magic 0x{magic:08x}")
+    val_num = int(_read_array(fh, np.uint64, 1, besd_path)[0])
+    return val_num, fh.tell()
+
+
+def _read_array(fh: BinaryIO, dtype: type[np.generic], count: int, path: str | Path) -> np.ndarray:
+    data = fh.read(np.dtype(dtype).itemsize * count)
+    if len(data) != np.dtype(dtype).itemsize * count:
+        raise EOFError(f"{path}: truncated BESD file")
+    return np.frombuffer(data, dtype=dtype)
