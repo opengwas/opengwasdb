@@ -666,6 +666,7 @@ def build_hybrid_from_catalogue_command(
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    column_map: _COLUMN_MAP_OPTION = None,
 ) -> None:
     """Subset the Catalogue to one ancestry and build a Hybrid store from it.
 
@@ -692,6 +693,7 @@ def build_hybrid_from_catalogue_command(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        column_map=column_map,
     )
     typer.echo(
         json.dumps(

@@ -82,6 +82,7 @@ from opengwasdb.readers.besd import BESD_CAPABILITY
 from opengwasdb.readers.column_map import (
     COLUMN_MAP_CAPABILITY,
     ColumnMap,
+    MappedRowDeclaration,
     as_column_map,
     check_mapped_rows,
     mapped_row_build,
@@ -502,7 +503,12 @@ def read_resolve_manifest(
         for idx, raw in enumerate(raw_rows)
     ]
     check_mapped_rows(
-        [(row.analysis_id, row.source_reader_capability, row.source_genome_build) for row in rows],
+        [
+            MappedRowDeclaration(
+                row.analysis_id, row.source_reader_capability, row.source_genome_build
+            )
+            for row in rows
+        ],
         column_map,
         f"analyses manifest {manifest_path}",
     )

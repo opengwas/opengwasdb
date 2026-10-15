@@ -30,6 +30,7 @@ from pathlib import Path
 
 from opengwasdb.ancestry.catalogue import UNASSIGNED
 from opengwasdb.model.enums import AncestryAssignmentMethod
+from opengwasdb.readers.column_map import ColumnMap
 from opengwasdb.store.open import open_store
 
 log = logging.getLogger(__name__)
@@ -157,6 +158,7 @@ def build_hybrid_from_catalogue(
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
+    column_map: ColumnMap | str | Path | None = None,
 ) -> SubsetResult:
     """Subset the Catalogue to ``ancestry`` and build a Hybrid store from it.
 
@@ -170,10 +172,9 @@ def build_hybrid_from_catalogue(
     of the build itself -- then folds release-level Catalogue provenance into
     ``manifest.json``.
 
-    ``eaf_reference``/``eaf_reference_ancestry``/``allow_unverified_eaf`` pass
-    straight through to the EAF orientation check (issue #115). This is the
-    path the `gwas-catalog-eur-hybrid` pilot is built by, so it is the one
-    that most needs a reference supplied.
+    ``column_map`` reads a tabular Source Collection through its declared map
+    (issue #281). The EAF options pass through to its orientation check (issue
+    #115), as required by the `gwas-catalog-eur-hybrid` pilot build path.
     """
     # Imported here to keep the ancestry package importable without the heavy
     # build stack (and to avoid a build → ancestry → build import cycle).
@@ -205,6 +206,7 @@ def build_hybrid_from_catalogue(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        column_map=column_map,
     )
     record_catalogue_provenance(output_path, subset)
     return subset

@@ -249,6 +249,24 @@ def _plain_map(tmp_path: Path, text: str = _PLAIN_MAP) -> Path:
     return path
 
 
+def test_a_multi_delimiter_interval_is_not_silently_read_as_missing(tmp_path: Path) -> None:
+    text = _PLAIN_MAP.replace(
+        'standard_error = "se"', 'confidence_interval = "ci"'
+    ).replace(
+        'frequency_allele = "effect_allele"',
+        'frequency_allele = "effect_allele"\nconfidence_interval_separator = ","',
+    )
+    path = tmp_path / "plain.tsv"
+    path.write_text(
+        "chr\tbp\ta1\ta2\tb\tci\n1\t100\tA\tG\t0.2\t0.1,0.2,0.3\n",
+        encoding="utf-8",
+    )
+    reader = ColumnMapReader(path, load_column_map(_plain_map(tmp_path, text)))
+
+    with pytest.raises(ValueError, match="not a lower,upper pair"):
+        list(reader.stream_metric_chunks())
+
+
 def test_an_undeclared_column_is_never_read_even_under_a_gwas_ssf_name(tmp_path: Path) -> None:
     """`standard_error` and `p_value` here are provider columns the map does not
     name; reading either would be a plausible wrong answer."""

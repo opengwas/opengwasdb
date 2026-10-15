@@ -1657,8 +1657,9 @@ A Source Collection whose files are tabular summary statistics may be read
 through a **Column Map** (ADR 0063, issue #281): a TOML file declaring the
 provider column for each field and the conventions its values follow. A
 manifest row opts in with `source_reader_capability = opengwasdb.column-map`;
-`resolve-analyses`, `build-dense-vcf`, `build-hybrid` and
-`extract-variant-reference` take `--column-map PATH|NAME`, where `NAME` is a
+`resolve-analyses`, `build-dense-vcf`, `build-hybrid`,
+`build-hybrid-from-catalogue` and `extract-variant-reference` take
+`--column-map PATH|NAME`, where `NAME` is a
 built-in map (`gwas-ssf`, `finngen-r13`). A built-in name that is also a file
 in the working directory is refused as ambiguous.
 
@@ -1689,8 +1690,12 @@ in the working directory is refused as ambiguous.
   - a column `unmapped_columns = "refuse"` did not expect;
   - a statistic that is neither a number nor a declared missing token;
   - an effect allele naming neither `ref` nor `alt`;
-  - an interval that is not a pair;
+  - an interval that does not contain exactly one declared separator;
   - a row longer than the header.
+
+  A shorter row has omitted trailing empty cells; it is padded at the trailing
+  edge only, so those cells enter the declared missing-value rules exactly as
+  explicitly empty cells do.
 - **Agreement.** These are refused before any source is read:
   - a mapped row with no `--column-map`;
   - a `--column-map` no row reads through;

@@ -129,7 +129,8 @@ ambiguous. The map's `sha256` is the checksum of its file's bytes.
 
 A manifest row reads through a map by declaring
 `source_reader_capability = opengwasdb.column-map`. `resolve-analyses`,
-`build-dense-vcf`, `build-hybrid` and `extract-variant-reference` take
+`build-dense-vcf`, `build-hybrid`, `build-hybrid-from-catalogue` and
+`extract-variant-reference` take
 `--column-map`, which every such row is read through. These are refused before
 any source is read:
 
@@ -180,8 +181,11 @@ Data rows pass through untouched unless a convention needs them. Four do:
 deriving the other allele, splitting an interval, reading an exactly integral
 scientific position, and refusing a statistic that is neither a number nor a
 declared token. A row the MVP converter would abort on fails the same way: an
-effect allele naming neither `ref` nor `alt`, an interval with no separator, or
-a row longer than the header. `rsid_separator` is applied by the variant
+effect allele naming neither `ref` nor `alt`, an interval with other than one
+separator, or a row longer than the header. A shorter row is padded only at its
+trailing edge with missing cells, matching delimited-text semantics and MVP's
+raw files, which omit trailing empty `pval` and `r2` cells. `rsid_separator` is
+applied by the variant
 projection itself, so FinnGen's `rsids` costs nothing per row.
 
 Every rule the GWAS-SSF reader carries then holds for every mapped collection:
@@ -239,15 +243,12 @@ format: GWAS-VCF, and BESD (opengwasdb #282).
 - dbGaP MVP's acquisition can stop rewriting files: its Release Bundle carries
   a map. stores ADR 0036 requires the bundle to carry the map, checksummed, and
   the checksum is what the Resolution Record and the build record.
-- A map with row conventions costs Python time per row. On 1,000,000 MVP-shaped
-  rows, `stream_metric_chunks` took 4.5 s through the map on the raw file and
-  1.6 s on the converter's output through the GWAS-SSF reader. The `gwas-ssf`
-  built-in on the converter's output took 1.6 s, the same as the dedicated
-  reader. The rewrite it replaces read and wrote every file once more.
+- A map with row conventions costs Python translation time per row. The rewrite
+  it replaces reads and writes every file once more. No performance figure is
+  claimed until a committed measurement harness can reproduce it.
 - **Known gaps.**
-  - `assign-ancestry`, `estimate-phenotype-sd` and
-    `build-hybrid-from-catalogue` take no map yet. They refuse a mapped row,
-    because the registry will not build its reader without one.
+  - `assign-ancestry` and `estimate-phenotype-sd` take no map yet. They refuse a
+    mapped row, because the registry will not build its reader without one.
   - The variant-reference artifact records no map (see Provenance).
 - Read through a map, malformed files fail where the dedicated readers were
   quiet. A FinnGen file lacking `beta`, a header with both `#chrom` and

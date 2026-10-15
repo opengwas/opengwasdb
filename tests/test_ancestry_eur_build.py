@@ -15,6 +15,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+import opengwasdb.ancestry.subset as subset_module
 from opengwasdb.ancestry.subset import build_hybrid_from_catalogue, subset_catalogue
 from opengwasdb.cli.main import app
 from opengwasdb.model.analyses import read_analyses
@@ -186,6 +187,36 @@ def test_build_eur_hybrid_records_provenance_and_validates(tmp_path):
     assert prov["subset_filter"] == "assigned_ancestry == EUR"
     assert prov["ancestry_reference_version"] == "prive2022-hg38"
     assert prov["n_analyses"] == 2
+
+
+def test_build_hybrid_from_catalogue_forwards_a_column_map(
+    tmp_path: Path, monkeypatch
+) -> None:
+    received: dict[str, object] = {}
+
+    def capture_build(*args: object, **kwargs: object) -> None:
+        received.update(kwargs)
+
+    monkeypatch.setattr(
+        "opengwasdb.layouts.hybrid.build.build_hybrid_from_vcf_manifest", capture_build
+    )
+    monkeypatch.setattr(subset_module, "record_catalogue_provenance", lambda *_args: None)
+
+    build_hybrid_from_catalogue(
+        _catalogue(tmp_path),
+        tmp_path / "mapped.opengwasdb",
+        reference_panel=_panel(tmp_path),
+        store_id="mapped",
+        release_id="v1",
+        stored_effect_scale="sd",
+        original_sd_method="declared_standardised",
+        column_map="gwas-ssf",
+    )
+
+    assert received["column_map"] == "gwas-ssf"
+    result = CliRunner().invoke(app, ["build-hybrid-from-catalogue", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--column-map" in result.output
 
 
 def test_build_hybrid_from_catalogue_cli(tmp_path):

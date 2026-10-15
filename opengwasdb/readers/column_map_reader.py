@@ -31,6 +31,7 @@ import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
 from decimal import Decimal
+from functools import cached_property
 from pathlib import Path
 from typing import IO, Any
 
@@ -304,6 +305,8 @@ def _translate_row(line: bytes, plan: _RowPlan, number: int) -> bytes:
         raise ColumnMapError(
             f"{plan.source}: line {number} has {len(cells)} fields; the header has {plan.width}"
         )
+    # Provider tables may omit trailing empty cells (the MVP deposit does). They
+    # are missing values under the same contract as explicitly empty cells.
     cells += [b""] * (plan.width - len(cells))
     where = f"{plan.source}: line {number}"
     if plan.alleles is not None:
@@ -374,10 +377,12 @@ def _interval(cell: bytes, plan: _RowPlan, where: str) -> list[bytes]:
     if expected is None:
         raise ColumnMapError(f"{where}: the Column Map declares no confidence_interval_separator")
     stripped = cell.strip()
-    if _is_missing(stripped, plan.missing):
+    # Under `any_non_numeric`, the interval as a whole is necessarily
+    # non-numeric; only its two bounds are classified after the shape check.
+    if plan.missing is not None and stripped in plan.missing:
         return [b"", b""]
     lower, separator, upper = stripped.partition(expected)
-    if not separator:
+    if not separator or expected in upper:
         raise ColumnMapError(
             f"{where}: confidence interval {cell.decode('utf-8', 'replace')!r} is not a "
             f"lower{expected.decode()}upper pair"
@@ -448,7 +453,9 @@ class ColumnMapReader:
         passthrough = () if declaration is None else (declaration.column_name,)
         return MappedSource(self.path, self.column_map, passthrough)
 
-    def _reader(self) -> GwasSsfReader:
+    @cached_property
+    def _delegate(self) -> GwasSsfReader:
+        """The one GWAS-SSF reader that applies the translated source's rules."""
         return GwasSsfReader(
             self._source(),
             self.stored_effect_scale,
@@ -459,14 +466,14 @@ class ColumnMapReader:
     @property
     def effect_source(self) -> EffectSource | None:
         """The effect column this file resolves to, named as the map presents it."""
-        return self._reader().effect_source
+        return self._delegate.effect_source
 
     @property
     def imputation_score_column(self) -> str | None:
-        return self._reader().imputation_score_column
+        return self._delegate.imputation_score_column
 
     def stream_associations(self) -> Iterator[ReaderAssociation]:
-        yield from self._reader().stream_associations()
+        yield from self._delegate.stream_associations()
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         separator = self.column_map.conventions.rsid_separator
@@ -474,11 +481,11 @@ class ColumnMapReader:
         yield from stream_projected_variants(self._source(), columns)
 
     def stream_metrics(self) -> Iterator[TabularMetricsRow]:
-        yield from self._reader().stream_metrics()
+        yield from self._delegate.stream_metrics()
 
     def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
-        yield from self._reader().stream_metric_chunks()
+        yield from self._delegate.stream_metric_chunks()
 
     def extract_at_sites(self, alids: Iterable[str]) -> dict[str, SiteMetrics]:
-        return self._reader().extract_at_sites(alids)
+        return self._delegate.extract_at_sites(alids)
 

@@ -39,6 +39,7 @@ __all__ = [
     "ColumnMap",
     "ColumnMapError",
     "Conventions",
+    "MappedRowDeclaration",
     "PositionNotation",
     "UnmappedColumns",
     "as_column_map",
@@ -58,6 +59,15 @@ _FORMAT_VERSION = 1
 
 class ColumnMapError(ValueError):
     """A Column Map that cannot be read as declared, or a source it cannot read."""
+
+
+@dataclass(frozen=True)
+class MappedRowDeclaration:
+    """The manifest facts needed to verify a row against a Column Map."""
+
+    analysis_id: str
+    source_reader_capability: str
+    source_build: str
 
 
 class AlleleConvention(StrEnum):
@@ -369,7 +379,7 @@ def _conventions(table: object, declared_fields: set[str]) -> Conventions:
     _require_keys(table, required, (), "convention")
     for key in table:
         if key in _HONOURED:
-            _honoured(key, table[key])
+            _require_honoured(key, table[key])
     return Conventions(
         missing_values=_missing_values(table["missing_values"]),
         unmapped_columns=UnmappedColumns(table["unmapped_columns"]),
@@ -393,7 +403,7 @@ def _column_conventions(declared_fields: set[str]) -> tuple[str, ...]:
     )
 
 
-def _honoured(key: str, value: object) -> None:
+def _require_honoured(key: str, value: object) -> None:
     if isinstance(value, str) and value in _HONOURED[key]:
         return
     reason = _UNHONOURED.get(key, {}).get(value) if isinstance(value, str) else None
@@ -462,24 +472,27 @@ def mapped_row_build(
 
 
 def check_mapped_rows(
-    rows: Sequence[tuple[str, str, str]], column_map: ColumnMap | None, context: str
+    rows: Sequence[MappedRowDeclaration], column_map: ColumnMap | None, context: str
 ) -> None:
     """Refuse a manifest whose rows and Column Map do not agree (issue #281).
 
-    `rows` are `(analysis_id, source_reader_capability, source build)`. A row
+    `rows` carry each Analysis's reader capability and source build. A row
     read through a map needs one; a map no row reads through is a run that
     looks mapped and is not; and a row declaring another build than its map
     declares is two authorities disagreeing, which is refused, never resolved.
     """
-    mapped = [row for row in rows if row[1] == COLUMN_MAP_CAPABILITY]
+    mapped = [
+        row for row in rows if row.source_reader_capability == COLUMN_MAP_CAPABILITY
+    ]
     _require_map_and_rows(len(mapped), column_map, context)
     declared = None if column_map is None else column_map.conventions.genome_build
     if column_map is None or declared is None:
         return
-    for analysis_id, _capability, build in mapped:
-        if normalise_build(build) != declared:
+    for row in mapped:
+        if normalise_build(row.source_build) != declared:
             raise ColumnMapError(
-                f"{context}: analysis {analysis_id!r} declares source build {build!r} but "
+                f"{context}: analysis {row.analysis_id!r} declares source build "
+                f"{row.source_build!r} but "
                 f"Column Map {column_map.name!r} declares genome_build {declared!r}"
             )
 

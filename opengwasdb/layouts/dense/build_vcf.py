@@ -90,6 +90,7 @@ from opengwasdb.model.manifest_columns import (
 from opengwasdb.readers.column_map import (
     COLUMN_MAP_CAPABILITY,
     ColumnMap,
+    MappedRowDeclaration,
     as_column_map,
     check_mapped_rows,
     mapped_row_build,
@@ -2465,7 +2466,12 @@ def _read_manifest(
         for row in rows
     ]
     check_mapped_rows(
-        [(row.trait_id, row.source_reader_capability, row.source_assembly) for row in parsed],
+        [
+            MappedRowDeclaration(
+                row.trait_id, row.source_reader_capability, row.source_assembly
+            )
+            for row in parsed
+        ],
         loaded_map,
         f"manifest {manifest_path}",
     )
