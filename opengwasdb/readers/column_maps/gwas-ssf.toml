@@ -1,0 +1,44 @@
+# Built-in Column Map: EBI GWAS Summary Statistics Format (GWAS-SSF).
+#
+# The columns and rules the dedicated `opengwasdb.gwas-ssf` reader has always
+# read, stated as data (issue #281, ADR 0062). Reading a file through this map
+# gives the rows that reader gives, field for field.
+column_map_version = 1
+name = "gwas-ssf"
+description = "EBI GWAS-SSF, harmonised or not: the spellings opengwasdb.gwas-ssf reads"
+
+[columns]
+chromosome = "chromosome"
+position = "base_pair_location"
+effect_allele = "effect_allele"
+other_allele = "other_allele"
+
+[optional_columns]
+# GWAS-SSF permits the effect as a beta, an odds ratio or a signed z; a file
+# carries any of them and the reader resolves which (ADR 0049-0051).
+beta = ["beta", "BETA"]
+odds_ratio = "odds_ratio"
+z_score = ["z_score", "Zscore", "ZScore", "z"]
+# Read only to derive an effect from a signed z (ADR 0051).
+sample_size = ["n", "N"]
+standard_error = "standard_error"
+frequency = "effect_allele_frequency"
+# Recovery columns: a standard error from the 95% interval or the p-value (ADR 0055).
+ci_lower = "ci_lower"
+ci_upper = "ci_upper"
+p_value = "p_value"
+rsid = "rsid"
+variant_id = "variant_id"
+
+[conventions]
+# The legacy rule: any statistic that is not a number is missing.
+missing_values = "any_non_numeric"
+unmapped_columns = "ignore"
+alleles = "effect_and_other"
+frequency_allele = "effect_allele"
+p_value_form = "p"
+position_notation = "integer"
+chromosome_spelling = "adr-0052"
+# GWAS-SSF records the build in its metadata, not the table.
+genome_build = "per_analysis"
+rsid_separator = "none"

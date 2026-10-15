@@ -1,0 +1,34 @@
+# Built-in Column Map: FinnGen R13 endpoint summary statistics.
+#
+# The columns and rules the dedicated `opengwasdb.finngen-r13` reader has
+# always read, stated as data (issue #281, ADR 0062). FinnGen publishes one
+# bgzipped file per endpoint on GRCh38, with the effect on the `alt` allele.
+column_map_version = 1
+name = "finngen-r13"
+description = "FinnGen R13 endpoint files: the columns opengwasdb.finngen-r13 reads"
+
+[columns]
+# R13 writes `#chrom`; earlier captured releases wrote `chrom`.
+chromosome = ["#chrom", "chrom"]
+position = "pos"
+ref = "ref"
+alt = "alt"
+beta = "beta"
+standard_error = "sebeta"
+frequency = "af_alt"
+
+[optional_columns]
+rsid = "rsids"
+
+[conventions]
+missing_values = "any_non_numeric"
+unmapped_columns = "ignore"
+alleles = "ref_alt_effect_is_alt"
+# af_alt is the alt allele's frequency, and alt is the effect allele.
+frequency_allele = "effect_allele"
+position_notation = "integer"
+# FinnGen spells X as 23, which ADR 0052 reads as X.
+chromosome_spelling = "adr-0052"
+genome_build = "GRCh38"
+# `rsids` lists every dbSNP name at a position, comma-separated; the first is read.
+rsid_separator = ","
