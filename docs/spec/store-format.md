@@ -1651,6 +1651,58 @@ tolerance, or whether a disagreement blocks a release. Those remain registry
 acceptance policy per ADR 0029, and the manifest column is read, never inferred
 from whichever arrays happen to be present.
 
+### 20.3 Column Map: reading a tabular collection
+
+A Source Collection whose files are tabular summary statistics may be read
+through a **Column Map** (ADR 0063, issue #281): a TOML file declaring the
+provider column for each field and the conventions its values follow. A
+manifest row opts in with `source_reader_capability = opengwasdb.column-map`;
+`resolve-analyses`, `build-dense-vcf`, `build-hybrid` and
+`extract-variant-reference` take `--column-map PATH|NAME`, where `NAME` is a
+built-in map (`gwas-ssf`, `finngen-r13`). A built-in name that is also a file
+in the working directory is refused as ambiguous.
+
+- **Keys.** `column_map_version` (`1`), `name`, `[columns]` and
+  `[conventions]` are required; `description`, `[optional_columns]` and
+  `ignored_columns` are optional. Anything else is refused.
+- **Fields.** `chromosome`, `position`, `effect_allele`, `other_allele`, `ref`,
+  `alt`, `beta`, `odds_ratio`, `z_score`, `standard_error`, `frequency`,
+  `p_value`, `ci_lower`, `ci_upper`, `confidence_interval`, `sample_size`,
+  `rsid`, `variant_id`. A value is one column name or a list of spellings, of
+  which a file carries at most one. `[columns]` must be present in every file,
+  and `[optional_columns]` are read when present. `chromosome`, `position` and
+  the allele convention's fields are required, and at least one of `beta`,
+  `odds_ratio` and `z_score` must be declared. The field a column maps to is its
+  effect type.
+- **Conventions.** `missing_values`, `unmapped_columns`, `alleles`,
+  `position_notation`, `chromosome_spelling` and `genome_build` are always
+  declared. `frequency_allele`, `p_value_form`, `confidence_interval_separator`
+  and `rsid_separator` are declared exactly when their column is. Every value
+  comes from a closed vocabulary (ADR 0063 lists them). A value the reader
+  cannot honour (`plink`, `neg_log10_p`, `other_allele`) is refused with its
+  reason. Nothing is defaulted.
+- **Reading.** The file is presented to the GWAS-SSF reader in GWAS-SSF's
+  columns, and every undeclared column is renamed out of reach. These are
+  failures, never skipped rows:
+  - a declared column the file lacks;
+  - a field the file names twice;
+  - a column `unmapped_columns = "refuse"` did not expect;
+  - a statistic that is neither a number nor a declared missing token;
+  - an effect allele naming neither `ref` nor `alt`;
+  - an interval that is not a pair;
+  - a row longer than the header.
+- **Agreement.** These are refused before any source is read:
+  - a mapped row with no `--column-map`;
+  - a `--column-map` no row reads through;
+  - a row whose build is not the map's `genome_build`.
+
+  A row omitting its build, with no CLI fallback, takes the map's.
+- **Provenance.** A Resolution Record's fingerprint carries
+  `resolution_config.column_map = {"name", "sha256"}` for a mapped row and
+  `null` otherwise. `sha256` is the checksum of the map file's bytes. A
+  checkpointed Hybrid build records the map and refuses to resume once it has
+  changed.
+
 ## 21. Compatibility
 
 `format_version` describes compatibility of the store representation. It does not describe biological data release version or source publication version. The **package version and `format_version` are independent**: a package release may change neither, one, or both. Which package reads and writes which format is recorded in the package's `CHANGELOG.md` compatibility table.
