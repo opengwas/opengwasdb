@@ -59,13 +59,34 @@ assembly plan admits BESD beside GWAS-VCF.
    For a tabular source a missing `N` is recorded as `phenotype_sd.status =
    unavailable`; for BESD it is refused outright, because nothing in the format
    can ever supply one, so its absence is always a manifest omission rather than
-   a fact about the source. A probe whose tier needs no estimate
-   (`declared_standardised`, `binary_trait`, a log-OR scale) needs no `N`.
+   a fact about the source. The refusal is scoped to tiers that estimate an
+   SD: a probe whose tier needs no estimate (`declared_standardised`,
+   `source_provided`, `binary_trait`, a log-OR or log-hazard scale) needs no
+   `N` and is not refused.
+
+**A refused probe still records its file's measurement.** "Every Analysis's
+measurements are recorded whether it passes or not" (stores ADR 0036): a probe
+refused for its missing sample size, or for its own damaged slice, carries the
+file set's ancestry fit, `ancestry_scope = source_file`, the shared
+`ancestry_measurement_id` and the `.esi` counts, and only `phenotype_sd` is
+null. A file set whose measurement itself failed (no frequencies, unreadable,
+unalignable) has no fit to carry; its probes record the attempted
+`ancestry_measurement_id` under `source_file` scope with zero counts, never an
+Analysis-scope record of zero sites.
 
 **Resume binds the file set and the probe.** `source_file` is a prefix, so a
 BESD fingerprint adds each member file's size and mtime and the probe ID. Both
 keys appear only on BESD fingerprints; every other format's digest is
-unchanged.
+unchanged. The member files are stat'ed once per row, and the measurement id
+reuses those stats, so a fingerprint and the id it travels with cannot disagree.
+
+**"Once" is counted.** `besd_measurement_count()` reports how many file sets
+the process has measured. A run measures each file set it resolves exactly once
+in the parent — a per-probe measurement would count one per probe, and one made
+in a forked worker would not be counted at all — and a fully resumed run
+measures none. A probe whose file set was not measured is a defect in the run
+and raises, rather than being recorded as a failure of the data. The parent
+drops the measurements, and their arrays, when the run's probes are done.
 
 ## Consequences
 
@@ -115,5 +136,10 @@ unchanged.
   default is the plausible wrong answer this project exists to refuse; and
   `unavailable` would record as a property of the source what is in fact a gap
   in the manifest.
+- **Dispatch BESD through the reader registry.** The registry maps a
+  capability to a one-Analysis-per-file reader factory, `(path, scale)`. A
+  BESD probe needs a parent-made measurement and a probe ID, so the registry
+  would have to grow a second factory shape for one format; the manifest
+  resolver checks the capability where it branches instead.
 - **Satisfy the tabular ancestry rule with a placeholder SE.** It would pass
   every row the rule exists to filter and hide that the rule had been bypassed.

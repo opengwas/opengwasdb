@@ -61,7 +61,13 @@ names no canonical variant.
 
 ## Refusals
 
-Each is a `controlled_failure` record, with `ancestry` and `phenotype_sd` null:
+Each is a `controlled_failure` record with `phenotype_sd` null. A probe refused
+for its own reasons still carries its file set's measurement — the ancestry fit,
+`ancestry_scope = source_file`, the shared `ancestry_measurement_id` and the
+`.esi` counts — because every measurement is recorded whether the Analysis
+passes or not (stores ADR 0036). When the file set's measurement itself failed,
+`ancestry` is null and the diagnostics name the attempted measurement under
+`source_file` scope with zero counts.
 
 - **No frequencies.** A `.esi` with no usable frequency on any row — no seventh
   column, or `NA` throughout — fails every probe in its file set. A file whose
@@ -69,12 +75,17 @@ Each is a `controlled_failure` record, with `ancestry` and `phenotype_sd` null:
 - **No sample size.** A probe whose `original_sd_method` estimates an SD
   (`estimated_from_*`, on a quantitative scale) and whose row has no usable
   `sample_size`. BESD records no per-variant N, so nothing can stand in for it.
-  A `declared_standardised` or case-control probe needs no N and is not refused.
+  Only tiers that estimate an SD are refused: a `declared_standardised`,
+  `source_provided` or case-control probe needs no N.
 - **A file set that cannot be read or aligned**: a missing member, a malformed
   `.esi`/`.epi` row (`BESDMetadataError`), a repeated probe ID, an unsupported
   build pair, or an indel under a lift. Every probe in it fails with the reason.
-- **A probe the `.epi` does not list**, or a `.besd` slice past the end of the
-  file or naming a row past the end of the `.esi`. That probe fails.
+- **A probe the `.epi` does not list**, corrupt column offsets for it (a
+  negative start, or an SE block before the beta block), or a `.besd` slice
+  past the end of the file or naming a row past the end of the `.esi`. That
+  probe fails; the file's other probes resolve.
+- **A missing or blank `source_probe_id` on a BESD row**, or one set on any
+  other format's row, is a manifest error: the command fails before resolving.
 
 ## Resume
 
