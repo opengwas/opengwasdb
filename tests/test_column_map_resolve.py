@@ -199,3 +199,60 @@ def test_a_mapped_row_with_no_build_anywhere_is_refused(setup: dict[str, Any]) -
 
     assert result.exit_code == 1
     assert "per_analysis" in result.output
+
+
+#: The digest origin/dev (c4f4bc9, before #281) computes for the fixed inputs
+#: below. A literal, not a recomputation: what it guards is that a record
+#: resolved before Column Maps existed is still resumable after them.
+_PRE_281_DIGEST = "a83af7e22d517816e28578b7289320eeb38153d24f96992efdbb25f5d7c2abe1"
+
+
+def test_an_unmapped_record_s_fingerprint_is_unchanged_by_column_maps() -> None:
+    from opengwasdb.ancestry.mixture import Gates
+    from opengwasdb.build import resolve_manifest as rm
+    from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
+
+    row = rm.ResolveManifestRow(
+        manifest_index=0, analysis_id="GCST_FIXED",
+        source_file="/nonexistent/GCST_FIXED.h.tsv.gz",
+        source_reader_capability="opengwasdb.gwas-ssf", source_genome_build="hg38",
+        stored_effect_scale=StoredEffectScale.SD,
+        original_sd_method=OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF, sample_size=10000.0,
+        size_bytes=123, checksum="ab" * 32, checksum_algorithm="sha256",
+    )
+    fingerprint = rm._build_analysis_fingerprints(
+        row, opengwasdb_version="0.3.0", opengwasdb_git_hash="c" * 40,
+        ancestry_reference_id="ref-v1", ancestry_reference_sha256="1" * 64,
+        ancestry_groups_sha256="2" * 64, extraction_panel_sha256=None,
+        extraction_panel_variants=None, variant_reference_sha256=None, af_references_fp=[],
+        gates=Gates(tau=0.5, delta=0.2, n_min=5000, residual_max=0.06, orientation_flip_r=-0.5),
+        maf_floor=0.01, evidence_sample=1000, scan_limit=None, reference_build="hg38",
+        chain_fingerprint={
+            "chain_file": None, "chain_sha256": None, "chain_bytes": None, "chain_mtime_ns": None,
+        },
+    )
+
+    assert "column_map" not in fingerprint["resolution_config"]
+    assert fingerprint["fingerprint_digest"] == _PRE_281_DIGEST
+
+
+def test_a_built_in_named_by_name_or_by_path_records_the_same_fingerprint(
+    setup: dict[str, Any],
+) -> None:
+    """The record names the map's content, not how the caller spelled it."""
+    import opengwasdb.readers as readers
+
+    builtin_file = Path(readers.__file__).parent / "column_maps" / "gwas-ssf.toml"
+    manifest = setup["tmp"] / "builtin.tsv"
+    manifest.write_text(
+        setup["reference"].read_text().replace("opengwasdb.gwas-ssf", "opengwasdb.column-map"),
+        encoding="utf-8",
+    )
+    recorded = {}
+    for label, spec in (("name", "gwas-ssf"), ("path", str(builtin_file))):
+        result = _resolve(setup, manifest, setup["tmp"] / label, "--column-map", spec)
+        assert result.exit_code == 0, result.output
+        recorded[label] = _record(setup["tmp"] / label)["fingerprints"]
+
+    assert recorded["name"]["resolution_config"]["column_map"]["name"] == "gwas-ssf"
+    assert recorded["path"] == recorded["name"]

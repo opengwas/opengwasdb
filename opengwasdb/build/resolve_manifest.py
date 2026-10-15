@@ -726,14 +726,6 @@ def _build_analysis_fingerprints(
             "stored_effect_scale": row.stored_effect_scale.value,
             "sample_size": row.sample_size,
             "source_reader_capability": row.source_reader_capability,
-            # Issue #281: the map a mapped source was read through, by checksum,
-            # so a record measured under one map is never resumed under another.
-            "column_map": (
-                column_map.fingerprint()
-                if column_map is not None
-                and row.source_reader_capability == COLUMN_MAP_CAPABILITY
-                else None
-            ),
             "info_score_threshold": row.info_score_policy.info_score_threshold,
             "info_score_state": row.info_score_policy.state.value,
             "maf_threshold": row.maf_policy.maf_threshold,
@@ -766,6 +758,11 @@ def _build_analysis_fingerprints(
             },
         },
     }
+    if column_map is not None and row.source_reader_capability == COLUMN_MAP_CAPABILITY:
+        # Issue #281: the map a mapped source was read through, by checksum, so a
+        # record measured under one map is never resumed under another. Absent,
+        # not null, for every other row, so their digests are what they were.
+        fp["resolution_config"]["column_map"] = column_map.fingerprint()
     fp["fingerprint_digest"] = compute_fingerprint_digest(fp)
     return fp
 
