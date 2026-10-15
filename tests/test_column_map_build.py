@@ -256,3 +256,34 @@ def test_a_checkpoint_resumes_a_relative_map_path_from_another_directory(
     hybrid_build.resume_hybrid_build(checkpoint_dir_for(store))
 
     assert _store_contents(store, ["finngen"])["variants"], "the resumed store must be built"
+
+
+def _provenance(store: Path) -> dict[str, Any]:
+    import json
+
+    provenance: dict[str, Any] = json.loads((store / "manifest.json").read_text())["provenance"]
+    return provenance
+
+
+def test_a_store_records_the_map_it_was_built_through(tmp_path: Path) -> None:
+    """ADR 0036: resolution and the build must provably read every file the same way."""
+    from opengwasdb.readers.column_map import load_column_map
+
+    expected = load_column_map("finngen-r13").fingerprint()
+    panel = tmp_path / "panel.txt"
+    panel.write_text("1:13668:A:G\n1:19234:A:G\n", encoding="utf-8")
+    common = ("--store-id", "f", "--release-id", "r")
+    commands = (("build-dense-vcf", ()), ("build-hybrid", ("--reference-panel", str(panel))))
+    for command, extra in commands:
+        for capability, flags in (
+            ("opengwasdb.finngen-r13", ()),
+            ("opengwasdb.column-map", ("--column-map", "finngen-r13")),
+        ):
+            store = tmp_path / f"{command}-{capability}.opengwasdb"
+            manifest = _finngen_manifest(tmp_path / f"{command}-{capability}.tsv", capability)
+            result = _invoke(command, str(manifest), str(store), *common, *extra, *flags)
+            assert result.exit_code == 0, result.output
+
+            recorded = _provenance(store).get("column_map")
+
+            assert recorded == (expected if flags else None), (command, capability)

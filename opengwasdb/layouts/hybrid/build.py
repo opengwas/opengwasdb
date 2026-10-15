@@ -81,6 +81,7 @@ from opengwasdb.layouts.dense.build_vcf import (
     _sorted_alids,
     _write_dense_bands,
     _write_index,
+    column_map_provenance,
     survey_eaf_spills,
 )
 from opengwasdb.layouts.dense.constants import (
@@ -2753,6 +2754,7 @@ def _write_shared_metadata(
         variant_reference=(
             str(options.variant_reference) if options.variant_reference is not None else None
         ),
+        column_map=column_map_provenance(prepared.manifest_rows),
     )
     dense_counted = add_hit_counts(prepared.dense_dir, components.analyses)
     shared_analyses = add_hit_counts(prepared.staged.path, dense_counted)
@@ -3803,6 +3805,7 @@ def _write_hybrid_manifest(
     info_score: dict[str, Any] | None = None,
     maf: dict[str, Any] | None = None,
     variant_reference: str | None = None,
+    column_map: dict[str, str] | None = None,
 ) -> None:
     provenance: dict[str, Any] = {
         "builder": (
@@ -3822,14 +3825,11 @@ def _write_hybrid_manifest(
             **dense_layout_records((n_panel, n_analyses), hint=chunk_shape),
         },
     }
-    if eaf_provenance is not None:
-        provenance["eaf_orientation"] = eaf_provenance
-    if info_score is not None:
-        provenance["info_score"] = info_score
-    if maf is not None:
-        provenance["maf"] = maf
-    if variant_reference is not None:
-        provenance["variant_reference"] = variant_reference
+    optional_blocks = {
+        "eaf_orientation": eaf_provenance, "info_score": info_score, "maf": maf,
+        "variant_reference": variant_reference, "column_map": column_map,
+    }
+    provenance.update({key: value for key, value in optional_blocks.items() if value is not None})
     block = recorded_provenance(staged.path)
     if block is not None:
         provenance["ragged"] = {**provenance.get("ragged", {}), "by_variant": block}

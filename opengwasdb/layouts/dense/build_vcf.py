@@ -1656,6 +1656,9 @@ class _PreparedBuild:
     #: the inline two-pass build. Recorded in the store manifest's provenance
     #: so the axis's origin is auditable (issue #185).
     variant_reference: str | None = None
+    #: The Column Map mapped rows were read through, as `column_map_provenance`
+    #: records it, so the store names it as a Resolution Record does (#281).
+    column_map: dict[str, str] | None = None
 
 
 def _axis_metadata(
@@ -2009,6 +2012,7 @@ def _prepare_axis(
         keys_sorted=keys_sorted,
         rows_sorted=rows_sorted,
         variant_reference=str(variant_reference) if variant_reference is not None else None,
+        column_map=column_map_provenance(manifest_rows),
     )
 
 
@@ -2272,6 +2276,7 @@ def _finalize_store(
         encoding=encoded.encoding,
         eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
         variant_reference=prepared.variant_reference,
+        column_map=prepared.column_map,
     )
     write_top_hit_indexes_for_store(
         staged.path, encoded.hits.rows, encoded.hits.cols, encoded.hits.z, encoded.hits.se,
@@ -2465,6 +2470,19 @@ def _read_manifest(
         f"manifest {manifest_path}",
     )
     return parsed
+
+
+def column_map_provenance(rows: Iterable[_ManifestRow]) -> dict[str, str] | None:
+    """The Column Map a build's mapped rows were read through, as a store records it.
+
+    `{"name", "sha256"}` -- the fingerprint a Resolution Record carries -- or
+    `None` when no row was mapped, so an unmapped store's provenance is
+    unchanged (#281). `_read_manifest` gives every mapped row the same map.
+    """
+    for row in rows:
+        if row.column_map is not None:
+            return row.column_map.fingerprint()
+    return None
 
 
 def _with_column_map(
@@ -3347,6 +3365,7 @@ def _write_manifest(
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
     variant_reference: str | None = None,
+    column_map: dict[str, str] | None = None,
 ) -> None:
     manifest = StoreManifest(
         encoding=encoding,
@@ -3379,6 +3398,7 @@ def _write_manifest(
                 if variant_reference is not None
                 else {}
             ),
+            **({"column_map": column_map} if column_map is not None else {}),
         },
     )
     staged.write_manifest(manifest)
