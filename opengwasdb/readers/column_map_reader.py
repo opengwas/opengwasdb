@@ -108,7 +108,8 @@ class _RowPlan:
     alleles: tuple[int, int, int] | None
     position: int | None
     interval: int | None
-    interval_separator: bytes
+    #: Declared by the map whenever `interval` is set; never a default.
+    interval_separator: bytes | None
 
     @property
     def needed(self) -> bool:
@@ -178,8 +179,12 @@ class MappedSource:
             alleles=_derived_allele_indexes(matched, conventions.alleles),
             position=matched["position"] if scientific else None,
             interval=matched.get("confidence_interval"),
-            interval_separator=(conventions.confidence_interval_separator or ",").encode(),
+            interval_separator=_encoded(conventions.confidence_interval_separator),
         )
+
+
+def _encoded(separator: str | None) -> bytes | None:
+    return None if separator is None else separator.encode()
 
 
 def _checked_statistics(
@@ -364,14 +369,17 @@ def _statistic(cell: bytes, missing: frozenset[bytes] | None, where: str) -> byt
 
 def _interval(cell: bytes, plan: _RowPlan, where: str) -> list[bytes]:
     """A `lower<sep>upper` cell as its two bounds; a missing interval as two empty cells."""
+    expected = plan.interval_separator
+    if expected is None:
+        raise ColumnMapError(f"{where}: the Column Map declares no confidence_interval_separator")
     stripped = cell.strip()
     if _is_missing(stripped, plan.missing):
         return [b"", b""]
-    lower, separator, upper = stripped.partition(plan.interval_separator)
+    lower, separator, upper = stripped.partition(expected)
     if not separator:
         raise ColumnMapError(
             f"{where}: confidence interval {cell.decode('utf-8', 'replace')!r} is not a "
-            f"lower{plan.interval_separator.decode()}upper pair"
+            f"lower{expected.decode()}upper pair"
         )
     return [_statistic(lower, plan.missing, where), _statistic(upper, plan.missing, where)]
 

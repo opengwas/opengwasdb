@@ -357,7 +357,9 @@ def _conventions(table: object, declared_fields: set[str]) -> Conventions:
         genome_build=_genome_build(table["genome_build"]),
         frequency_allele=table.get("frequency_allele"),
         p_value_form=table.get("p_value_form"),
-        confidence_interval_separator=_separator(table, "confidence_interval_separator"),
+        confidence_interval_separator=_separator(
+            table, "confidence_interval_separator", may_be_none=False
+        ),
         rsid_separator=_separator(table, "rsid_separator"),
     )
 
@@ -398,12 +400,20 @@ def _genome_build(value: object) -> str | None:
         raise ColumnMapError(f"genome_build {value!r}: {exc}; or 'per_analysis'") from exc
 
 
-def _separator(table: Mapping[str, Any], key: str) -> str | None:
-    if key not in table or table[key] == "none":
+def _separator(table: Mapping[str, Any], key: str, *, may_be_none: bool = True) -> str | None:
+    """A one-character separator; `'none'` only where a cell may hold one value.
+
+    An interval column always holds two bounds, so it has no `'none'`: a map
+    that maps one must say what separates them rather than be given a comma.
+    """
+    if key not in table:
         return None
     value = table[key]
+    if value == "none" and may_be_none:
+        return None
     if not isinstance(value, str) or len(value) != 1 or value in "\t\r\n":
-        raise ColumnMapError(f"{key} must be one character or 'none', got {value!r}")
+        allowed = "one character or 'none'" if may_be_none else "one character"
+        raise ColumnMapError(f"{key} must be {allowed}, got {value!r}")
     return value
 
 

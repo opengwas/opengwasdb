@@ -135,6 +135,10 @@ _REFUSALS = {
         _replace('odds_ratio = "or"', 'odds_ratio = "beta"'),
         "'beta'",
     ),
+    "an interval with no separator": (
+        _replace('confidence_interval_separator = ","', 'confidence_interval_separator = "none"'),
+        "confidence_interval_separator",
+    ),
     "unsupported version": (_replace("column_map_version = 1", "column_map_version = 2"), "2"),
     "not toml": ("column_map_version = \n", "TOML"),
 }
