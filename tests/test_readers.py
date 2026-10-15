@@ -19,6 +19,7 @@ import opengwasdb.readers.tabular as tabular_module
 from opengwasdb.build.phenotype_sd import estimate_phenotype_sd
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.readers import (
+    COLUMN_MAP_CAPABILITY,
     FINNGEN_R13_CAPABILITY,
     GWAS_SSF_CAPABILITY,
     GWAS_VCF_CAPABILITY,
@@ -146,7 +147,9 @@ def test_known_capabilities_returns_sorted_registered_set():
     """known_capabilities() returns a sorted tuple of all registered capabilities."""
     caps = known_capabilities()
     assert isinstance(caps, tuple)
-    assert caps == (FINNGEN_R13_CAPABILITY, GWAS_SSF_CAPABILITY, GWAS_VCF_CAPABILITY)
+    assert caps == (
+        COLUMN_MAP_CAPABILITY, FINNGEN_R13_CAPABILITY, GWAS_SSF_CAPABILITY, GWAS_VCF_CAPABILITY
+    )
 
 
 def test_resolve_reader_rejects_unknown_capability(tmp_path):
@@ -154,7 +157,8 @@ def test_resolve_reader_rejects_unknown_capability(tmp_path):
         ValueError,
         match=(
             r"unknown source reader capability '.*'; "
-            r"known: opengwasdb\.finngen-r13, opengwasdb\.gwas-ssf, opengwasdb\.gwas-vcf"
+            r"known: opengwasdb\.column-map, opengwasdb\.finngen-r13, "
+            r"opengwasdb\.gwas-ssf, opengwasdb\.gwas-vcf"
         ),
     ):
         resolve_reader(

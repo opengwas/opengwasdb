@@ -154,6 +154,19 @@ _VARIANT_REFERENCE_HELP = (
 )
 
 
+_COLUMN_MAP_OPTION = Annotated[
+    str | None,
+    typer.Option(
+        "--column-map",
+        help=(
+            "Column Map that Analyses declaring source_reader_capability "
+            "opengwasdb.column-map are read through: a map file path, or a built-in "
+            "map's name (gwas-ssf, finngen-r13). Its checksum is recorded (#281)."
+        ),
+    ),
+]
+
+
 def _validate_source_reader_capability(value: str | None) -> str | None:
     if value is None:
         return None
@@ -960,6 +973,7 @@ def resolve_analyses_command(
         str,
         typer.Option(help="Ancestry reference version stamp (default: reference filename)"),
     ] = "",
+    column_map: _COLUMN_MAP_OPTION = None,
 ) -> None:
     """Resolve an entire analyses.tsv manifest into versioned per-Analysis records.
 
@@ -977,6 +991,9 @@ def resolve_analyses_command(
     row may use source_genome_build (or its conflict-checked source_assembly alias),
     with --source-build only as an explicit fallback. Cross-build formats without
     an implemented liftover seam become controlled per-Analysis failures.
+
+    Rows declaring source_reader_capability opengwasdb.column-map are read
+    through --column-map, whose checksum joins their fingerprints (#281).
 
     The Ancestry Reference Panel and optional Hybrid axis are loaded once in the
     parent and fork-shared across workers. Source/parser/statistical errors are
@@ -1009,6 +1026,7 @@ def resolve_analyses_command(
             resume=resume,
             largest_first=largest_first,
             reference_version=reference_version,
+            column_map=column_map,
         )
     except (ValueError, FileNotFoundError, TypeError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)

@@ -13,6 +13,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from opengwasdb.model.enums import StoredEffectScale
+from opengwasdb.readers.column_map import COLUMN_MAP_CAPABILITY, ColumnMap
+from opengwasdb.readers.column_map_reader import ColumnMapReader
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY, FinnGenR13Reader
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY, GwasSsfReader
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader
@@ -27,12 +29,13 @@ _READERS: dict[str, Callable[[str | Path, StoredEffectScale], SourceReader]] = {
 
 def known_capabilities() -> tuple[str, ...]:
     """Return all registered source reader capabilities in sorted order."""
-    return tuple(sorted(_READERS))
+    return tuple(sorted([*_READERS, COLUMN_MAP_CAPABILITY]))
 
 
 def resolve_reader(
     capability: str, path: str | Path, stored_effect_scale: StoredEffectScale,
     *, imputation_score_declaration: ImputationScoreDeclaration | None = None,
+    column_map: ColumnMap | None = None,
 ) -> SourceReader:
     """Return a SourceReader for `path`, given its Source Collection's
     `source_reader_capability` string.
@@ -41,9 +44,17 @@ def resolve_reader(
     (issue #17): every reader needs it, since no Source Format's own header
     is authoritative for it.
 
+    `column_map` is the Column Map an `opengwasdb.column-map` Analysis is read
+    through (issue #281). It is required for that capability and refused for
+    every other, so a map can neither be forgotten nor silently not used.
+
     Raises ValueError for an unknown capability, naming the ones this
     package knows about.
     """
+    if capability == COLUMN_MAP_CAPABILITY or column_map is not None:
+        return _column_map_reader(
+            capability, path, stored_effect_scale, imputation_score_declaration, column_map
+        )
     try:
         reader_factory = _READERS[capability]
     except KeyError:
@@ -58,3 +69,24 @@ def resolve_reader(
             path, stored_effect_scale, imputation_score_declaration=imputation_score_declaration
         )
     return reader_factory(path, stored_effect_scale)
+
+
+def _column_map_reader(
+    capability: str,
+    path: str | Path,
+    stored_effect_scale: StoredEffectScale,
+    imputation_score_declaration: ImputationScoreDeclaration | None,
+    column_map: ColumnMap | None,
+) -> ColumnMapReader:
+    if capability != COLUMN_MAP_CAPABILITY:
+        raise ValueError(
+            f"a Column Map reads only {COLUMN_MAP_CAPABILITY!r} sources, not {capability!r}"
+        )
+    if column_map is None:
+        raise ValueError(f"{COLUMN_MAP_CAPABILITY!r} source {path} needs a Column Map")
+    return ColumnMapReader(
+        path,
+        column_map,
+        stored_effect_scale,
+        imputation_score_declaration=imputation_score_declaration,
+    )

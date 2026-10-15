@@ -22,10 +22,11 @@ from test_projected_metric_chunks import _HEADER, _Z_HEADER, _ordinary_rows, _wr
 from test_readers import _METRICS_FIXTURE_ROWS, _write_metrics_fixture
 
 from opengwasdb.model.enums import StoredEffectScale
-from opengwasdb.readers.column_map import load_column_map
+from opengwasdb.readers.column_map import COLUMN_MAP_CAPABILITY, load_column_map
 from opengwasdb.readers.column_map_reader import ColumnMapReader
-from opengwasdb.readers.finngen import FinnGenR13Reader
+from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY, FinnGenR13Reader
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
+from opengwasdb.readers.registry import resolve_reader
 from opengwasdb.readers.tabular import MetricsChunk
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -327,3 +328,21 @@ def test_unmapped_columns_refuse_rejects_a_column_the_map_did_not_expect(
 
     with pytest.raises(ValueError, match="'new'"):
         list(reader.stream_variants())
+
+
+def test_the_registry_reads_a_column_map_source_only_through_its_map(tmp_path: Path) -> None:
+    """A map can be neither forgotten nor handed to a reader that would not use it."""
+    path = _FIXTURES / "finngen_r13.tsv"
+    column_map = load_column_map("finngen-r13")
+
+    reader = resolve_reader(
+        COLUMN_MAP_CAPABILITY, path, StoredEffectScale.LOG_OR, column_map=column_map
+    )
+
+    assert isinstance(reader, ColumnMapReader)
+    with pytest.raises(ValueError, match="needs a Column Map"):
+        resolve_reader(COLUMN_MAP_CAPABILITY, path, StoredEffectScale.LOG_OR)
+    with pytest.raises(ValueError, match="reads only"):
+        resolve_reader(
+            FINNGEN_R13_CAPABILITY, path, StoredEffectScale.LOG_OR, column_map=column_map
+        )

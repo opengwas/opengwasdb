@@ -71,6 +71,7 @@ from opengwasdb.model.info_score_policy import (
 from opengwasdb.model.maf_policy import MAF_COLUMNS, MafPolicy, parse_maf_policy
 from opengwasdb.model.manifest_columns import resolve_manifest_columns
 from opengwasdb.readers.assembly import assembly_plan, declared_source_build
+from opengwasdb.readers.column_map import COLUMN_MAP_CAPABILITY, ColumnMap, load_column_map
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader, load_liftover
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
@@ -360,11 +361,16 @@ def _parse_manifest_row(
     known: tuple[str, ...],
     path: Path,
     seen_ids: set[str],
+    column_map: ColumnMap | None = None,
 ) -> ResolveManifestRow:
     analysis_id, source_file = _validate_manifest_ids(raw, cols, idx, path, seen_ids)
     cap = _parse_capability(
         raw.get("source_reader_capability"), default_cap, source_file, known, analysis_id, path
     )
+    if cap == COLUMN_MAP_CAPABILITY and column_map is not None:
+        # The map's own build stands in only where neither the row nor the
+        # caller declares one; a disagreement is refused below, never resolved.
+        default_source_build = default_source_build or column_map.conventions.genome_build
     scale = _parse_effect_scale(raw.get("stored_effect_scale"))
     method = _parse_sd_method(raw.get("original_sd_method"), scale)
     sample_size = _parse_sample_size_val(
@@ -410,8 +416,13 @@ def read_resolve_manifest(
     path: Path | str,
     default_capability: str | None = None,
     default_source_build: str | None = None,
+    column_map: ColumnMap | None = None,
 ) -> list[ResolveManifestRow]:
-    """Read and validate an `analyses.tsv` manifest into resolution rows."""
+    """Read and validate an `analyses.tsv` manifest into resolution rows.
+
+    `column_map` is the Column Map the manifest's `opengwasdb.column-map` rows
+    are read through (issue #281); see `check_column_map_rows`.
+    """
     manifest_path = Path(path)
     if not manifest_path.is_file():
         raise FileNotFoundError(f"analyses manifest not found: {manifest_path}")
@@ -437,13 +448,51 @@ def read_resolve_manifest(
     cols = resolve_manifest_columns(fieldnames, manifest_path)
     known = known_capabilities()
     seen_ids: set[str] = set()
-    return [
+    rows = [
         _parse_manifest_row(
             raw, idx, cols, default_capability, default_source_build,
-            known, manifest_path, seen_ids,
+            known, manifest_path, seen_ids, column_map,
         )
         for idx, raw in enumerate(raw_rows)
     ]
+    check_column_map_rows(
+        [(row.analysis_id, row.source_reader_capability, row.source_genome_build) for row in rows],
+        column_map,
+        f"analyses manifest {manifest_path}",
+    )
+    return rows
+
+
+def check_column_map_rows(
+    rows: Sequence[tuple[str, str, str]], column_map: ColumnMap | None, context: str
+) -> None:
+    """Refuse a manifest whose rows and Column Map do not agree (issue #281).
+
+    `rows` are `(analysis_id, source_reader_capability, source build)`. A row
+    read through a map needs one; a map no row reads through is a run that
+    looks mapped and is not; and a row declaring another build than its map
+    declares is two authorities disagreeing, which is refused, never resolved.
+    """
+    mapped = [row for row in rows if row[1] == COLUMN_MAP_CAPABILITY]
+    if mapped and column_map is None:
+        raise ValueError(
+            f"{context}: {len(mapped)} Analyses declare source_reader_capability "
+            f"{COLUMN_MAP_CAPABILITY!r}; supply their Column Map with --column-map"
+        )
+    if column_map is None:
+        return
+    if not mapped:
+        raise ValueError(
+            f"{context}: Column Map {column_map.name!r} was supplied but no Analysis "
+            f"declares source_reader_capability {COLUMN_MAP_CAPABILITY!r}"
+        )
+    declared = column_map.conventions.genome_build
+    for analysis_id, _capability, build in mapped:
+        if declared is not None and normalise_build(build) != declared:
+            raise ValueError(
+                f"{context}: analysis {analysis_id!r} declares source build {build!r} but "
+                f"Column Map {column_map.name!r} declares genome_build {declared!r}"
+            )
 
 
 def _get_opengwasdb_version() -> str:
@@ -668,6 +717,7 @@ def _build_analysis_fingerprints(
     scan_limit: ScanLimit | None,
     reference_build: str,
     chain_fingerprint: dict[str, Any],
+    column_map: ColumnMap | None = None,
 ) -> dict[str, Any]:
     file_bytes, file_mtime_ns = _stat_source_file(row.source_file)
     fp = {
@@ -695,6 +745,14 @@ def _build_analysis_fingerprints(
             "stored_effect_scale": row.stored_effect_scale.value,
             "sample_size": row.sample_size,
             "source_reader_capability": row.source_reader_capability,
+            # Issue #281: the map a mapped source was read through, by checksum,
+            # so a record measured under one map is never resumed under another.
+            "column_map": (
+                column_map.fingerprint()
+                if column_map is not None
+                and row.source_reader_capability == COLUMN_MAP_CAPABILITY
+                else None
+            ),
             "info_score_threshold": row.info_score_policy.info_score_threshold,
             "info_score_state": row.info_score_policy.state.value,
             "maf_threshold": row.maf_policy.maf_threshold,
@@ -781,6 +839,7 @@ def _execute_analysis(
     chain_file: str | None,
     info_score_policy: InfoScorePolicy | None = None,
     maf_policy: MafPolicy | None = None,
+    column_map: ColumnMap | None = None,
 ) -> tuple[AnalysisResolution, RecordStatus, str | None]:
     assert _WORKER_ANCESTRY_REFERENCE is not None
     assert _WORKER_GATES is not None
@@ -795,13 +854,11 @@ def _execute_analysis(
         maf_policy=maf_policy or MafPolicy(),
     )
     try:
-        if info_score_policy.imputation_score_declaration is not None:
-            reader = resolve_reader(
-                cap, source_file, scale,
-                imputation_score_declaration=info_score_policy.imputation_score_declaration,
-            )
-        else:
-            reader = resolve_reader(cap, source_file, scale)
+        reader = resolve_reader(
+            cap, source_file, scale,
+            imputation_score_declaration=info_score_policy.imputation_score_declaration,
+            column_map=column_map,
+        )
         plan = assembly_plan(
             capability=cap,
             source_build=source_build,
@@ -892,6 +949,7 @@ def _worker_resolve_one(task: dict[str, Any]) -> dict[str, Any]:
         task["source_genome_build"], task["reference_build"], task.get("chain_file"),
         task.get("info_score_policy", InfoScorePolicy()),
         task.get("maf_policy", MafPolicy()),
+        task.get("column_map"),
     )
     elapsed = time.monotonic() - t0
     _current, peak = tracemalloc.get_traced_memory()
@@ -1015,7 +1073,10 @@ def _load_resumed_summary(rec_path: Path, row: ResolveManifestRow) -> dict[str, 
 
 
 def _build_single_task(
-    row: ResolveManifestRow, fp: dict[str, Any], rec_path: Path
+    row: ResolveManifestRow,
+    fp: dict[str, Any],
+    rec_path: Path,
+    column_map: ColumnMap | None = None,
 ) -> dict[str, Any]:
     size_weight = row.size_bytes or 0
     if size_weight <= 0:
@@ -1036,6 +1097,9 @@ def _build_single_task(
         "sample_size": row.sample_size,
         "info_score_policy": row.info_score_policy,
         "maf_policy": row.maf_policy,
+        "column_map": (
+            column_map if row.source_reader_capability == COLUMN_MAP_CAPABILITY else None
+        ),
         "fingerprints": fp,
         "record_path": str(rec_path),
         "size_weight": size_weight,
@@ -1058,7 +1122,7 @@ def _prepare_tasks(
             if summary is not None:
                 resumed[row.analysis_id] = summary
                 continue
-        tasks.append(_build_single_task(row, fp, rec_path))
+        tasks.append(_build_single_task(row, fp, rec_path, fp_kwargs.get("column_map")))
     return tasks, resumed
 
 
@@ -1321,8 +1385,13 @@ def resolve_analyses_manifest(
     resume: bool = False,
     largest_first: bool = True,
     reference_version: str = "",
+    column_map: ColumnMap | str | Path | None = None,
 ) -> ManifestResolutionSummary:
     """Resolve an entire manifest with atomic checkpointed records and resume.
+
+    `column_map` is the Column Map -- loaded, a file path, or a built-in name --
+    that the manifest's `opengwasdb.column-map` Analyses are read through
+    (issue #281). Its checksum is part of each such record's fingerprint.
 
     `max_ancestry_sites` bounds ancestry evidence accumulation (issue #209, issue #212):
     ancestry accumulation stops once that many distinct usable reference sites have
@@ -1340,10 +1409,13 @@ def resolve_analyses_manifest(
         scan_limit = ScanLimit(max_rows=max_rows, max_ancestry_sites=max_ancestry_sites)
         scan_limit.validate()
     out_dir = _validate_resolution_params(evidence_sample, n_workers, records_dir)
+    if column_map is not None and not isinstance(column_map, ColumnMap):
+        column_map = load_column_map(column_map)
     rows = read_resolve_manifest(
         manifest_path,
         default_capability=default_source_reader_capability,
         default_source_build=default_source_build,
+        column_map=column_map,
     )
     fp_kwargs = _prepare_pipeline_context(
         ancestry_reference,
@@ -1365,6 +1437,7 @@ def resolve_analyses_manifest(
         reference_build,
         chain_file,
     )
+    fp_kwargs["column_map"] = column_map
     return _execute_resolution_pipeline(
         rows, out_dir, manifest_path, fp_kwargs, resume, largest_first, n_workers
     )
