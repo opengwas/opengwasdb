@@ -418,22 +418,26 @@ def check_mapped_rows(
     declares is two authorities disagreeing, which is refused, never resolved.
     """
     mapped = [row for row in rows if row[1] == COLUMN_MAP_CAPABILITY]
-    if mapped and column_map is None:
-        raise ColumnMapError(
-            f"{context}: {len(mapped)} Analyses declare source_reader_capability "
-            f"{COLUMN_MAP_CAPABILITY!r}; supply their Column Map with --column-map"
-        )
-    if column_map is None:
+    _require_map_and_rows(len(mapped), column_map, context)
+    declared = None if column_map is None else column_map.conventions.genome_build
+    if column_map is None or declared is None:
         return
-    if not mapped:
-        raise ColumnMapError(
-            f"{context}: Column Map {column_map.name!r} was supplied but no Analysis "
-            f"declares source_reader_capability {COLUMN_MAP_CAPABILITY!r}"
-        )
-    declared = column_map.conventions.genome_build
     for analysis_id, _capability, build in mapped:
-        if declared is not None and normalise_build(build) != declared:
+        if normalise_build(build) != declared:
             raise ColumnMapError(
                 f"{context}: analysis {analysis_id!r} declares source build {build!r} but "
                 f"Column Map {column_map.name!r} declares genome_build {declared!r}"
             )
+
+
+def _require_map_and_rows(n_mapped: int, column_map: ColumnMap | None, context: str) -> None:
+    if n_mapped and column_map is None:
+        raise ColumnMapError(
+            f"{context}: {n_mapped} Analyses declare source_reader_capability "
+            f"{COLUMN_MAP_CAPABILITY!r}; supply their Column Map with --column-map"
+        )
+    if column_map is not None and not n_mapped:
+        raise ColumnMapError(
+            f"{context}: Column Map {column_map.name!r} was supplied but no Analysis "
+            f"declares source_reader_capability {COLUMN_MAP_CAPABILITY!r}"
+        )

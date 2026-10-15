@@ -365,22 +365,20 @@ def _resolve_column(
     stored_effect_scale: str = StoredEffectScale.SD.value,
     column_map: ColumnMap | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Stream one source file, resolve each association's variant to a row via
-    the sorted key lookup, and return deduped
-    ``(rows int64, z f32, se f32, eaf f32)`` for the column. ``eaf`` is NaN
-    where the source reports no frequency (ADR 0036).
+    """Stream one source file, resolve each association's variant to a row via the sorted
+    key lookup, and return deduped ``(rows int64, z f32, se f32, eaf f32)`` for the column.
+    ``eaf`` is NaN where the source reports no frequency (ADR 0036).
 
-    The stream is processed in ``_RESOLVE_BATCH``-sized batches (vectorised
-    searchsorted per batch), so worker peak memory is bounded by one batch rather
-    than the whole file. Batches are matched in stream order and concatenated, so
-    the final last-wins dedup by row is identical to processing the whole file at
-    once: when two source variants lift to the same row, the later stream
-    occurrence wins, making the scattered matrix cell deterministic.
+    The stream is processed in ``_RESOLVE_BATCH``-sized batches (vectorised searchsorted
+    per batch), so worker peak memory is bounded by one batch rather than the whole file.
+    Batches are matched in stream order and concatenated, so the final last-wins dedup by
+    row is identical to processing the whole file at once: when two source variants lift to
+    the same row, the later stream occurrence wins, so the scattered matrix cell is fixed.
 
-    ``capability`` resolves a ``SourceReader`` (issue #20) rather than this
-    module streaming a VCF itself -- ``stored_effect_scale`` is required to
-    construct one but unused past construction here (it is a Pass-2 concern
-    only for readers that attach it to each yielded association).
+    ``capability`` (with ``column_map`` for a mapped row, issue #281) resolves a
+    ``SourceReader`` (issue #20) rather than this module streaming a VCF itself --
+    ``stored_effect_scale`` is required to construct one but unused past construction
+    here (it is a Pass-2 concern only for readers that attach it to each association).
 
     ``se_divisor`` divides the returned ``se`` (continuous-trait phenotype-SD
     standardisation, issue #18: ``stored_se = original_se / sd``). ``z`` is left
@@ -388,9 +386,8 @@ def _resolve_column(
     constant, so only ``se`` needs rescaling. Defaults to 1.0 (no-op) for
     binary-trait analyses and callers that pre-date issue #18.
     """
-    reader = resolve_reader(
-        capability, file_path, StoredEffectScale(stored_effect_scale), column_map=column_map
-    )
+    scale = StoredEffectScale(stored_effect_scale)
+    reader = resolve_reader(capability, file_path, scale, column_map=column_map)
     rows_parts: list[np.ndarray] = []
     z_parts: list[np.ndarray] = []
     se_parts: list[np.ndarray] = []
@@ -1554,8 +1551,7 @@ def build_dense_from_vcf_manifest(
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None, allow_unverified_eaf: bool = False,
     source_reader_capability: str | None = None, source_assembly: str | None = None,
-    variant_reference: str | Path | None = None,
-    column_map: ColumnMap | str | Path | None = None,
+    variant_reference: str | Path | None = None, column_map: ColumnMap | str | Path | None = None,
 ) -> DenseBuildResult:
     """Build a Dense Observed-Only Store from a manifest of GWAS-VCF files.
 
@@ -1569,14 +1565,12 @@ def build_dense_from_vcf_manifest(
     ``allow_unverified_eaf`` with EAF orientation verification (issue #115, ADR 0037 §6).
     ``variant_reference`` (issue #185) supplies a precomputed axis
     (``*.variant-ref.tsv.gz``, an ALID list, or a store ``variants.tsv.gz``);
-    Pass 1 and liftover are bypassed save its rsid harvest (#255).
-    ``column_map`` reads the manifest's ``opengwasdb.column-map`` rows (#281).
+    Pass 1 and liftover are bypassed save its rsid harvest (#255). ``column_map`` reads
+    ``opengwasdb.column-map`` rows (#281).
     """
     manifest_rows = _read_manifest(
-        manifest_path,
-        default_source_reader_capability=source_reader_capability,
-        default_source_assembly=source_assembly,
-        column_map=column_map,
+        manifest_path, default_source_reader_capability=source_reader_capability,
+        default_source_assembly=source_assembly, column_map=column_map,
     )
     if not manifest_rows:
         raise ValueError(f"manifest {manifest_path} contains no rows")

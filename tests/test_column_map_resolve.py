@@ -8,12 +8,10 @@ another map.
 
 from __future__ import annotations
 
-import gzip
 import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pytest
 from test_resolve_manifest import _STUDY_N, _mixture, _se_for, _write_panel, _write_ssf
 from typer.testing import CliRunner
@@ -25,13 +23,13 @@ column_map_version = 1
 name = "plain-provider"
 
 [columns]
-chromosome = "chr"
-position = "bp"
-effect_allele = "a1"
-other_allele = "a2"
-beta = "b"
-standard_error = "se"
 frequency = "freq"
+standard_error = "se"
+beta = "b"
+other_allele = "a2"
+effect_allele = "a1"
+position = "bp"
+chromosome = "chr"
 
 [conventions]
 missing_values = ["", "NA"]
@@ -47,13 +45,12 @@ _HEADER = "analysis_id\tsource_file\tsource_reader_capability\tstored_effect_sca
 _HEADER += "original_sd_method\tsample_size\n"
 
 
-def _write_provider(path: Path, freqs: np.ndarray) -> Path:
+def _write_provider(path: Path, freqs: Any) -> Path:
     """The `_write_ssf` source, in a provider's own column names and order."""
     lines = ["se\tfreq\tchr\tbp\ta2\ta1\tb\n"]
     for index, (frequency, se) in enumerate(zip(freqs, _se_for(freqs), strict=True)):
         lines.append(f"{se:.6g}\t{frequency:.6g}\t1\t{1000 + index}\tC\tA\t0.2\n")
-    with gzip.open(path, "wt", encoding="utf-8") as fh:
-        fh.writelines(lines)
+    path.write_text("".join(lines), encoding="utf-8")
     return path
 
 
@@ -61,7 +58,7 @@ def _write_provider(path: Path, freqs: np.ndarray) -> Path:
 def setup(tmp_path: Path) -> dict[str, Any]:
     ref_path, grp_path, ref = _write_panel(tmp_path / "reference")
     freqs = _mixture(ref, {"North-West Europe": 0.8, "North-East Europe": 0.2})
-    provider = _write_provider(tmp_path / "provider.tsv.gz", freqs)
+    provider = _write_provider(tmp_path / "provider.tsv", freqs)
     ssf = _write_ssf(tmp_path / "same.h.tsv.gz", freqs)
     column_map = tmp_path / "provider.toml"
     column_map.write_text(_MAP, encoding="utf-8")

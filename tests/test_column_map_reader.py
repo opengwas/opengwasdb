@@ -61,18 +61,17 @@ def _ssf_streams(reader: GwasSsfReader | ColumnMapReader) -> dict[str, object]:
 
 
 def _legacy_hm_file(tmp_path: Path) -> Path:
-    header = [
-        "hm_variant_id", "hm_rsid", "hm_chrom", "hm_pos", "hm_other_allele",
-        "hm_effect_allele", "hm_beta", "hm_effect_allele_frequency", "hm_code",
-        "chromosome", "base_pair_location", "variant_id", "effect_allele", "beta",
-        "standard_error", "other_allele", "effect_allele_frequency",
+    # The legacy `hm_*` layout, its readable plain columns after the harmonised ones.
+    harmonised = ["hm_code", "hm_variant_id", "hm_rsid", "hm_beta"]
+    plain = [
+        "variant_id", "chromosome", "base_pair_location", "other_allele", "effect_allele",
+        "effect_allele_frequency", "beta", "standard_error",
     ]
     rows = [
-        ["10_1_A_G", "rs1", "10", "1", "A", "G", "0.1", "0.2", "7",
-         "10", "1", "rs1", "G", "0.1", "0.03", "A", "0.2"],
-        ["10_2_C_T", "rs2", "10", "2", "C", "T", "0.2", "0.3", "7",
-         "10", "2", "10_2_C_T", "T", "0.2", "0.04", "C", "0.3"],
+        ["7", "4_11_A_G", "rs11", "0.15", "rs11", "4", "11", "A", "G", "0.25", "0.15", "0.03"],
+        ["7", "4_12_C_T", "rs12", "-0.2", "4_12_C_T", "4", "12", "C", "T", "0.35", "-0.2", "0.05"],
     ]
+    header = [*harmonised, *plain]
     return _write(tmp_path / "legacy.tsv.gz", header, rows)
 
 

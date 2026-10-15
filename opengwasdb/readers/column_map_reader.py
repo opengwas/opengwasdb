@@ -168,26 +168,36 @@ class MappedSource:
     def _row_plan(self, names: list[str], matched: dict[str, int]) -> _RowPlan:
         conventions = self.column_map.conventions
         missing = conventions.missing_values
-        derive = conventions.alleles is AlleleConvention.REF_ALT_AND_EFFECT_ALLELE
         scientific = conventions.position_notation is PositionNotation.INTEGER_OR_EXACT_SCIENTIFIC
         return _RowPlan(
             source=str(self),
             width=len(names),
             names=("ci_lower", "ci_upper") if "confidence_interval" in matched else (),
             missing=None if missing is None else frozenset(t.encode() for t in missing),
-            statistics=(
-                ()
-                if missing is None
-                else tuple(matched[field] for field in _STATISTIC_FIELDS if field in matched)
-            ),
-            alleles=(
-                (matched["effect_allele"], matched["ref"], matched["alt"]) if derive else None
-            ),
+            statistics=_checked_statistics(matched, missing),
+            alleles=_derived_allele_indexes(matched, conventions.alleles),
             position=matched["position"] if scientific else None,
             interval=matched.get("confidence_interval"),
             interval_separator=(conventions.confidence_interval_separator or ",").encode(),
         )
 
+
+def _checked_statistics(
+    matched: dict[str, int], missing: tuple[str, ...] | None
+) -> tuple[int, ...]:
+    """The statistic cells a closed missing-value vocabulary checks; none under the legacy rule."""
+    if missing is None:
+        return ()
+    return tuple(matched[field] for field in _STATISTIC_FIELDS if field in matched)
+
+
+def _derived_allele_indexes(
+    matched: dict[str, int], alleles: AlleleConvention
+) -> tuple[int, int, int] | None:
+    """`(effect_allele, ref, alt)` when the other allele is derived from them."""
+    if alleles is not AlleleConvention.REF_ALT_AND_EFFECT_ALLELE:
+        return None
+    return matched["effect_allele"], matched["ref"], matched["alt"]
 
 
 def _match_fields(names: list[str], column_map: ColumnMap, source: str) -> dict[str, int]:

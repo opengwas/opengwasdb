@@ -3212,8 +3212,7 @@ def build_hybrid_from_vcf_manifest(
     are assumed hg19 and lifted inline unless the manifest declares
     ``source_assembly=hg38`` (#85); ``source_reader_capability`` supplies the
     per-release default (#174), and ``eaf_reference`` drives the orientation check.
-    ``column_map`` reads the manifest's ``opengwasdb.column-map`` rows (#281), and a
-    checkpoint records its checksum.
+    ``column_map`` reads ``opengwasdb.column-map`` rows (#281); a checkpoint records it.
 
     ``checkpoint=True`` opts the build into phase-granularity resume; ``resume=True``
     continues one from the checkpoint this call's ``output_path`` implies (issue #227;
@@ -3237,9 +3236,8 @@ def build_hybrid_from_vcf_manifest(
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
     )
-    defaults = _ManifestDefaults(
-        source_reader_capability, source_assembly, as_column_map(column_map)
-    )
+    column_map = as_column_map(column_map)
+    defaults = _ManifestDefaults(source_reader_capability, source_assembly, column_map)
     return _dispatch_build(manifest_path, options, defaults, overwrite, checkpoint, resume)
 
 
