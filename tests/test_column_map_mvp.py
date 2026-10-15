@@ -18,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from test_column_map_reader import _ssf_streams
+from column_map_fixtures import ssf_streams
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.column_map import ColumnMap, load_column_map
@@ -41,12 +41,12 @@ def _mvp_map() -> ColumnMap:
 def test_raw_files_read_through_the_map_give_the_rewrite_s_rows(shape: str) -> None:
     scale = _SHAPES[shape]
     rewritten = GwasSsfReader(_FIXTURES / "gwas_ssf" / f"{shape}.tsv", scale, chunk_rows=2)
-    reference = _ssf_streams(rewritten)
+    reference = ssf_streams(rewritten)
     assert reference["associations"] != "[]", "the fixture must yield associations"
 
     raw = ColumnMapReader(_FIXTURES / "raw" / f"{shape}.tsv", _mvp_map(), scale, chunk_rows=2)
 
-    assert _ssf_streams(raw) == reference
+    assert ssf_streams(raw) == reference
 
 
 def test_the_fixture_reaches_every_convention_the_rewrite_handles() -> None:

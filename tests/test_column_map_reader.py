@@ -13,8 +13,8 @@ import gzip
 from collections.abc import Callable
 from pathlib import Path
 
-import numpy as np
 import pytest
+from column_map_fixtures import ssf_streams
 from test_effect_recovery import _beta_file, _odds_ratio_file
 from test_imputation_score_reader import _declared
 from test_imputation_score_reader import _file as _scored_file
@@ -27,37 +27,8 @@ from opengwasdb.readers.column_map_reader import ColumnMapReader
 from opengwasdb.readers.finngen import FINNGEN_R13_CAPABILITY, FinnGenR13Reader
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.readers.registry import resolve_reader
-from opengwasdb.readers.tabular import MetricsChunk
 
 _FIXTURES = Path(__file__).parent / "fixtures"
-
-
-def _chunk_bytes(chunks: list[MetricsChunk]) -> list[bytes]:
-    """Every chunk array as bytes: dtype and values, so `0.0` and `-0.0` differ."""
-    out: list[bytes] = []
-    for chunk in chunks:
-        for name in (
-            "alid", "flipped", "palindromic", "af_alt", "beta", "se", "imputation_score",
-            "imputation_score_status", "effect_from_odds_ratio_fallback", "se_from_ci",
-            "se_from_p_value",
-        ):
-            array: np.ndarray = getattr(chunk, name)
-            body = repr(array.tolist()).encode() if array.dtype == object else array.tobytes()
-            out.append(f"{name}:{array.dtype.str}:".encode() + body)
-    return out
-
-
-def _ssf_streams(reader: GwasSsfReader | ColumnMapReader) -> dict[str, object]:
-    metrics = list(reader.stream_metrics())
-    alids = [row.alid for row in metrics]
-    return {
-        "associations": repr(list(reader.stream_associations())),
-        "variants": repr(list(reader.stream_variants())),
-        "metrics": repr(metrics),
-        "chunks": _chunk_bytes(list(reader.stream_metric_chunks())),
-        "sites": repr(sorted(reader.extract_at_sites(alids).items())),
-        "effect_kind": None if reader.effect_source is None else reader.effect_source.kind,
-    }
 
 
 def _legacy_hm_file(tmp_path: Path) -> Path:
@@ -142,12 +113,12 @@ def test_the_gwas_ssf_built_in_map_reads_what_the_gwas_ssf_reader_reads(
     tmp_path: Path, fixture: str, scale: StoredEffectScale
 ) -> None:
     path = _SSF_FIXTURES[fixture](tmp_path)
-    reference = _ssf_streams(GwasSsfReader(path, scale, chunk_rows=2))
+    reference = ssf_streams(GwasSsfReader(path, scale, chunk_rows=2))
     assert reference["associations"] != "[]", "the fixture must yield associations"
 
     mapped = ColumnMapReader(path, load_column_map("gwas-ssf"), scale, chunk_rows=2)
 
-    assert _ssf_streams(mapped) == reference
+    assert ssf_streams(mapped) == reference
 
 
 def test_a_signed_z_is_refused_on_a_case_control_scale_through_the_map(tmp_path: Path) -> None:
@@ -162,7 +133,7 @@ def test_a_declared_imputation_score_reads_identically_through_the_map(tmp_path:
     values = ["0", "0.6", "1", "", "NA", "#NA", "bogus", "inf", "-0.1", "1.01"]
     path = _scored_file(tmp_path / "quality.tsv", "info", values)
     declared = _declared()
-    reference = _ssf_streams(
+    reference = ssf_streams(
         GwasSsfReader(path, chunk_rows=3, imputation_score_declaration=declared)
     )
     assert "usable" in repr(reference["metrics"]), "the fixture must carry a usable score"
@@ -171,7 +142,7 @@ def test_a_declared_imputation_score_reads_identically_through_the_map(tmp_path:
         path, load_column_map("gwas-ssf"), chunk_rows=3, imputation_score_declaration=declared
     )
 
-    assert _ssf_streams(mapped) == reference
+    assert ssf_streams(mapped) == reference
 
 
 def _finngen_streams(reader: FinnGenR13Reader | ColumnMapReader) -> dict[str, str]:

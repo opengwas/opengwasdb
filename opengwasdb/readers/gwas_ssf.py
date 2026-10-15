@@ -113,7 +113,9 @@ from opengwasdb.readers.tabular import (
 from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
 
 GWAS_SSF_CAPABILITY = "opengwasdb.gwas-ssf"
-_VARIANT_COLUMNS = VariantProjectionColumns(
+#: GWAS-SSF's identity and alias columns, the variant projection's declaration.
+#: Public because a Column Map's translation is read in these columns (#281).
+VARIANT_COLUMNS = VariantProjectionColumns(
     chromosome=(b"chromosome",),
     position=b"base_pair_location",
     ref=b"other_allele",
@@ -303,7 +305,7 @@ def _iter_rows(
 
 
 def _iter_variants(path: SourcePath) -> Iterator[SourceVariant]:
-    yield from stream_projected_variants(path, _VARIANT_COLUMNS)
+    yield from stream_projected_variants(path, VARIANT_COLUMNS)
 
 
 def _header(path: SourcePath) -> list[str]:

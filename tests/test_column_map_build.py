@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from column_map_fixtures import array_bytes
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
@@ -47,12 +48,6 @@ def _invoke(*args: str) -> Any:
     return CliRunner().invoke(app, list(args))
 
 
-def _array_bytes(array: np.ndarray) -> bytes:
-    """An array's dtype and values; an object array by value, not by pointer."""
-    body = repr(array.tolist()).encode() if array.dtype == object else array.tobytes()
-    return array.dtype.str.encode() + body
-
-
 def _store_contents(store: Path, analyses: list[str]) -> dict[str, Any]:
     query = query_store(store)
     try:
@@ -63,7 +58,7 @@ def _store_contents(store: Path, analyses: list[str]) -> dict[str, Any]:
         for analysis_id in analyses:
             result = query.analysis(analysis_id)
             contents[analysis_id] = {
-                key: _array_bytes(value)
+                key: array_bytes(value)
                 for key, value in sorted(result.items())
                 if isinstance(value, np.ndarray)
             }

@@ -42,7 +42,7 @@ from opengwasdb.readers.column_map import (
     PositionNotation,
 )
 from opengwasdb.readers.effect_source import EffectSource
-from opengwasdb.readers.gwas_ssf import _VARIANT_COLUMNS, GwasSsfReader
+from opengwasdb.readers.gwas_ssf import VARIANT_COLUMNS, GwasSsfReader
 from opengwasdb.readers.interface import (
     ImputationScoreDeclaration,
     ReaderAssociation,
@@ -469,7 +469,7 @@ class ColumnMapReader:
 
     def stream_variants(self) -> Iterator[SourceVariant]:
         separator = self.column_map.conventions.rsid_separator
-        columns = replace(_VARIANT_COLUMNS, alias_separator=separator)
+        columns = replace(VARIANT_COLUMNS, alias_separator=separator)
         yield from stream_projected_variants(self._source(), columns)
 
     def stream_metrics(self) -> Iterator[TabularMetricsRow]:
