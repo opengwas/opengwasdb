@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from typer.main import get_command
 from typer.testing import CliRunner
 
 import opengwasdb.ancestry.subset as subset_module
@@ -214,9 +215,8 @@ def test_build_hybrid_from_catalogue_forwards_a_column_map(
     )
 
     assert received["column_map"] == "gwas-ssf"
-    result = CliRunner().invoke(app, ["build-hybrid-from-catalogue", "--help"])
-    assert result.exit_code == 0, result.output
-    assert "--column-map" in result.output
+    command = get_command(app).commands["build-hybrid-from-catalogue"]
+    assert any("--column-map" in parameter.opts for parameter in command.params)
 
 
 def test_build_hybrid_from_catalogue_cli(tmp_path):
