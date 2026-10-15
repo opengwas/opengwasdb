@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import struct
 from pathlib import Path
 
 import numpy as np
 import pytest
+from besd_fixtures import write_besd_sparse_3f, write_epi, write_esi
 
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -14,61 +14,6 @@ from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.store.open import open_store
 
 # ── Synthetic BESD fixture ────────────────────────────────────────────────────
-
-def _write_esi(path: Path, snps: list[dict]) -> None:
-    with open(path, "w") as fh:
-        for s in snps:
-            freq = s.get("freq", "NA")
-            fh.write(f"{s['chr']}\t{s['snp_id']}\t0\t{s['bp']}\t{s['a1']}\t{s['a2']}\t{freq}\n")
-
-
-def _write_epi(path: Path, probes: list[dict]) -> None:
-    with open(path, "w") as fh:
-        for p in probes:
-            gene = p.get("gene", "NA")
-            fh.write(f"{p['chr']}\t{p['probe_id']}\t0\t{p['bp']}\t{gene}\t+\n")
-
-
-def _write_besd_sparse_3f(
-    path: Path,
-    n_probes: int,
-    probe_assocs: list[list[tuple[int, float, float]]],
-) -> None:
-    """Write a minimal SPARSE_FILE_TYPE_3F BESD file.
-
-    BESD layout: for each probe p, val contains [betas | SEs] and rowid contains
-    [snp_indices | zeros] at the same offsets. cols[2p]=beta_start, cols[2p+1]=se_start.
-    """
-    rowid: list[int] = []
-    val: list[float] = []
-    cols: list[int] = []
-    offset = 0
-
-    for assocs in probe_assocs:
-        n = len(assocs)
-        cols.append(offset)          # beta_start for this probe
-        cols.append(offset + n)      # se_start for this probe
-        # Beta positions: meaningful snp_idx and beta values
-        for snp_idx, beta, _ in assocs:
-            rowid.append(snp_idx)
-            val.append(beta)
-        # SE positions: snp_idx is don't-care; SE values follow immediately
-        for _, _, se in assocs:
-            rowid.append(0)
-            val.append(se)
-        offset += 2 * n
-
-    cols.append(offset)   # final sentinel
-    val_num = len(val)
-    col_num = (n_probes << 1) + 1
-
-    with open(path, "wb") as fh:
-        fh.write(struct.pack("<I", 0x40400000))         # magic 3F
-        fh.write(struct.pack("<Q", val_num))             # val_num
-        fh.write(struct.pack(f"<{col_num}Q", *cols))    # column offsets
-        fh.write(struct.pack(f"<{val_num}I", *rowid))   # row indices
-        fh.write(struct.pack(f"<{val_num}f", *val))     # beta/SE values
-
 
 def _make_besd_fixture(tmp_path: Path) -> Path:
     """Create a 3-probe synthetic BESD dataset in tmp_path/fixture/."""
@@ -96,9 +41,9 @@ def _make_besd_fixture(tmp_path: Path) -> Path:
         [(3, 0.3, 0.04), (4, -0.15, 0.025)],
     ]
 
-    _write_esi(fixture / "test.esi", snps)
-    _write_epi(fixture / "test.epi", probes)
-    _write_besd_sparse_3f(fixture / "test.besd", len(probes), probe_assocs)
+    write_esi(fixture / "test.esi", snps)
+    write_epi(fixture / "test.epi", probes)
+    write_besd_sparse_3f(fixture / "test.besd", len(probes), probe_assocs)
     return fixture / "test"
 
 
@@ -454,9 +399,9 @@ def test_hg19_source_build_lifts_variant_coordinates(tmp_path):
     # Both ESI rows lift to distinct hg38 positions (100000 vs 1064620); the
     # fixture must span a real translation or the assertion proves nothing.
     assert snps[1]["bp"] != 1_064_620
-    _write_esi(fixture / "test.esi", snps)
-    _write_epi(fixture / "test.epi", probes)
-    _write_besd_sparse_3f(fixture / "test.besd", len(probes), [[(0, 0.1, 0.02), (1, -0.2, 0.03)]])
+    write_esi(fixture / "test.esi", snps)
+    write_epi(fixture / "test.epi", probes)
+    write_besd_sparse_3f(fixture / "test.besd", len(probes), [[(0, 0.1, 0.02), (1, -0.2, 0.03)]])
 
     result = build_ragged_from_besd(
         fixture / "test",
@@ -494,9 +439,9 @@ def test_hg19_source_build_fails_loudly_when_liftover_loses_a_variant(tmp_path):
     probes = [
         {"chr": "1", "probe_id": "ENSG00000000001", "bp": 150_000, "gene": "GENE1"}
     ]
-    _write_esi(fixture / "test.esi", snps)
-    _write_epi(fixture / "test.epi", probes)
-    _write_besd_sparse_3f(fixture / "test.besd", len(probes), [[(0, 0.1, 0.02), (1, -0.2, 0.03)]])
+    write_esi(fixture / "test.esi", snps)
+    write_epi(fixture / "test.epi", probes)
+    write_besd_sparse_3f(fixture / "test.besd", len(probes), [[(0, 0.1, 0.02), (1, -0.2, 0.03)]])
 
     with pytest.raises(LiftoverFailureError):
         build_ragged_from_besd(
