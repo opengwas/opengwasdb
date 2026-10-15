@@ -154,6 +154,19 @@ _VARIANT_REFERENCE_HELP = (
 )
 
 
+_COLUMN_MAP_OPTION = Annotated[
+    str | None,
+    typer.Option(
+        "--column-map",
+        help=(
+            "Column Map that Analyses declaring source_reader_capability "
+            "opengwasdb.column-map are read through: a map file path, or a built-in "
+            "map's name (gwas-ssf, finngen-r13). Its checksum is recorded (#281)."
+        ),
+    ),
+]
+
+
 def _validate_source_reader_capability(value: str | None) -> str | None:
     if value is None:
         return None
@@ -478,6 +491,7 @@ def extract_variant_reference_command(
             help="Variants a map worker buffers before spilling its window shards"
         ),
     ] = DEFAULT_MAP_SPILL_RECORDS,
+    column_map: _COLUMN_MAP_OPTION = None,
 ) -> None:
     """Extract, lift and canonicalise a manifest's variant axis (#187) into the
     *.variant-ref.tsv.gz artifact `build-dense-vcf --variant-reference`
@@ -490,7 +504,7 @@ def extract_variant_reference_command(
         liftover_failure_threshold=liftover_failure_threshold, n_workers=n_workers,
         source_reader_capability=source_reader_capability, source_assembly=source_assembly,
         window_size_mb=window_size_mb, reduction_batch_size=reduction_batch_size,
-        map_spill_records=map_spill_records,
+        map_spill_records=map_spill_records, column_map=column_map,
     )
     _echo_summary(
         {
@@ -522,6 +536,7 @@ def build_dense_vcf_command(
         None, callback=_validate_source_assembly, help=_SOURCE_ASSEMBLY_HELP
     ),
     variant_reference: Annotated[Path | None, typer.Option(help=_VARIANT_REFERENCE_HELP)] = None,
+    column_map: _COLUMN_MAP_OPTION = None,
 ) -> None:
     """Build a Dense Observed-Only store from a manifest of GWAS-VCF files.
 
@@ -531,6 +546,7 @@ def build_dense_vcf_command(
     --source-reader-capability and --source-assembly supply per-release defaults (#174).
     --variant-reference supplies a precomputed axis, bypassing Pass 1 (#185);
     a reference that names no rsids runs Pass 1's harvest for them (#255).
+    --column-map reads opengwasdb.column-map rows through a Column Map (#281).
     """
     result = build_dense_from_vcf_manifest(
         manifest_path, output_path, store_id=store_id, release_id=release_id,
@@ -538,7 +554,7 @@ def build_dense_vcf_command(
         eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=source_reader_capability, source_assembly=source_assembly,
-        variant_reference=variant_reference,
+        variant_reference=variant_reference, column_map=column_map,
     )
     _echo_summary({
         "output_path": str(result.output_path),
@@ -576,6 +592,7 @@ def build_hybrid_command(
         None, "--source-assembly", callback=_validate_source_assembly,
         help=_SOURCE_ASSEMBLY_HELP,
     ),
+    column_map: _COLUMN_MAP_OPTION = None,
 ) -> None:
     """Build a Hybrid store (Dense Component + Ragged Overflow) from a VCF manifest.
 
@@ -588,6 +605,7 @@ def build_hybrid_command(
     carry (#255). --source-reader-capability and --source-assembly supply
     per-release defaults (#174). --checkpoint keeps a resumable record of each
     phase (#227), and --resume continues the build for OUTPUT_PATH from one.
+    --column-map reads opengwasdb.column-map rows through a Column Map (#281).
     """
     res = build_hybrid_from_vcf_manifest(
         manifest_path, output_path, reference_panel=reference_panel,
@@ -596,7 +614,7 @@ def build_hybrid_command(
         chunk_shape=(chunk_variants, chunk_analyses), eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=capability, source_assembly=assembly,
-        checkpoint=checkpoint, resume=resume,
+        checkpoint=checkpoint, resume=resume, column_map=column_map,
     )
     _echo_hybrid_result(res)
 
@@ -648,6 +666,7 @@ def build_hybrid_from_catalogue_command(
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
+    column_map: _COLUMN_MAP_OPTION = None,
 ) -> None:
     """Subset the Catalogue to one ancestry and build a Hybrid store from it.
 
@@ -674,6 +693,7 @@ def build_hybrid_from_catalogue_command(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        column_map=column_map,
     )
     typer.echo(
         json.dumps(
@@ -960,6 +980,7 @@ def resolve_analyses_command(
         str,
         typer.Option(help="Ancestry reference version stamp (default: reference filename)"),
     ] = "",
+    column_map: _COLUMN_MAP_OPTION = None,
 ) -> None:
     """Resolve an entire analyses.tsv manifest into versioned per-Analysis records.
 
@@ -977,6 +998,9 @@ def resolve_analyses_command(
     row may use source_genome_build (or its conflict-checked source_assembly alias),
     with --source-build only as an explicit fallback. Cross-build formats without
     an implemented liftover seam become controlled per-Analysis failures.
+
+    Rows declaring source_reader_capability opengwasdb.column-map are read
+    through --column-map, whose checksum joins their fingerprints (#281).
 
     The Ancestry Reference Panel and optional Hybrid axis are loaded once in the
     parent and fork-shared across workers. Source/parser/statistical errors are
@@ -1009,6 +1033,7 @@ def resolve_analyses_command(
             resume=resume,
             largest_first=largest_first,
             reference_version=reference_version,
+            column_map=column_map,
         )
     except (ValueError, FileNotFoundError, TypeError, OSError) as exc:
         typer.echo(f"error: {exc}", err=True)

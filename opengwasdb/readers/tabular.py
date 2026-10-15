@@ -6,9 +6,10 @@ import csv
 import gzip
 import math
 from collections.abc import Callable, Iterable, Iterator
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 import numpy as np
 import pandas as pd
@@ -70,10 +71,13 @@ def parse_positive_float(value: str | None) -> float | None:
 
 __all__ = [
     "MetricsProjectionColumns",
+    "SourcePath",
+    "TabularSource",
     "TabularMetricsRow",
     "TabularRow",
     "VariantProjectionColumns",
     "extract_at_sites",
+    "open_binary",
     # Re-exported: the readers built on this module import their column
     # parsing from here, but the allele-frequency rule itself is shared with
     # every other source path (ADR 0036), so it lives in opengwasdb.stats.
@@ -92,15 +96,47 @@ __all__ = [
 ]
 
 
+@runtime_checkable
+class TabularSource(Protocol):
+    """A tabular source read through something other than its own file's bytes.
+
+    A Column Map's translation of a provider file is one (issue #281): the
+    projections below read the canonical columns it presents, exactly as they
+    read a GWAS-SSF file from disk. `str()` names the source in every error.
+    """
+
+    def open_binary(self) -> IO[bytes]:
+        """The source's bytes, decompressed, header first."""
+        ...
+
+
+#: What every scan in this module reads: a file on disk, or a translated source.
+SourcePath = str | Path | TabularSource
+
+
+def open_binary(path: SourcePath) -> IO[bytes]:
+    """One source's decompressed bytes; `.gz`/`.bgz` files are gunzipped."""
+    if isinstance(path, TabularSource):
+        return path.open_binary()
+    if str(path).endswith((".gz", ".bgz")):
+        return cast(IO[bytes], gzip.open(path, "rb"))
+    return open(path, "rb")
+
+
 @dataclass(frozen=True)
 class VariantProjectionColumns:
-    """Provider column names needed by a variant-only tabular scan."""
+    """Provider column names needed by a variant-only tabular scan.
+
+    `alias_separator` is set when an alias cell may list several identifiers --
+    FinnGen's `rsids` (issue #281) -- and the first is the row's rsid.
+    """
 
     chromosome: tuple[bytes, ...]
     position: bytes
     ref: bytes
     alt: bytes
     aliases: tuple[bytes, ...] = ()
+    alias_separator: str | None = None
 
 
 @dataclass(frozen=True)
@@ -184,6 +220,7 @@ class _ResolvedProjection:
     second_alias: int | None
     last_required: int
     split_limit: int
+    alias_separator: str | None = None
 
 
 def _normalise_projected_chromosome(value: bytes) -> str:
@@ -309,23 +346,30 @@ def _resolve_projection(
         second_alias=aliases[1],
         last_required=max(chromosome, position, ref, alt),
         split_limit=last_selected + (last_selected < len(header) - 1),
+        alias_separator=columns.alias_separator,
     )
+
+
+def _alias_cell(row: list[bytes], index: int | None, separator: str | None) -> str:
+    """One alias cell's identifier: the first of a list when the cell lists several."""
+    if index is None or index >= len(row):
+        return ""
+    value = row[index].decode("utf-8")
+    if separator is not None:
+        value = value.split(separator, 1)[0]
+    return value.strip()
 
 
 def _fallback_rsid(
-    row: list[bytes], first_alias: int | None, second_alias: int | None
+    row: list[bytes],
+    first_alias: int | None,
+    second_alias: int | None,
+    separator: str | None = None,
 ) -> str:
-    first = (
-        row[first_alias].decode("utf-8").strip()
-        if first_alias is not None and first_alias < len(row)
-        else ""
-    )
-    if first.startswith("rs"):
-        return first
-    if second_alias is not None and second_alias < len(row):
-        second = row[second_alias].decode("utf-8").strip()
-        if second.startswith("rs"):
-            return second
+    for index in (first_alias, second_alias):
+        candidate = _alias_cell(row, index, separator)
+        if candidate.startswith("rs"):
+            return candidate
     return ""
 
 
@@ -338,14 +382,14 @@ def _header_cells(header_line: bytes) -> list[bytes]:
     return header
 
 
-def _missing_columns(path: str | Path, expected: tuple[bytes, ...]) -> ValueError:
+def _missing_columns(path: SourcePath, expected: tuple[bytes, ...]) -> ValueError:
     """The loud failure for a file that does not name the columns a scan needs."""
     names = ", ".join(name.decode("ascii") for name in expected)
     return ValueError(f"{path}: missing required variant columns; expected {names}")
 
 
 def _required_projection(
-    path: str | Path,
+    path: SourcePath,
     header_line: bytes,
     columns: VariantProjectionColumns,
 ) -> _ResolvedProjection:
@@ -364,7 +408,7 @@ def _projected_variant(
 ) -> tuple[SourceVariant, ...]:
     try:
         rsid = _fallback_rsid(
-            row, projection.first_alias, projection.second_alias
+            row, projection.first_alias, projection.second_alias, projection.alias_separator
         )
     except UnicodeDecodeError:
         return ()
@@ -379,12 +423,11 @@ def _projected_variant(
 
 
 def stream_projected_variants(
-    path: str | Path,
+    path: SourcePath,
     columns: VariantProjectionColumns,
 ) -> Iterator[SourceVariant]:
     """Stream header-indexed identity fields without parsing statistics."""
-    opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
-    with opener(path, "rb") as fh:
+    with open_binary(path) as fh:
         projection = _required_projection(path, fh.readline(), columns)
         last_required = projection.last_required
         split_limit = projection.split_limit
@@ -565,7 +608,7 @@ def resolve_imputation_score_column(header: list[bytes], column_name: str | None
 
 
 def _required_metrics_projection(
-    path: str | Path,
+    path: SourcePath,
     header_line: bytes,
     columns: MetricsProjectionColumns,
     score_column: str | None = None,
@@ -742,7 +785,7 @@ def _metrics_fields(line: bytes, split_limit: int) -> list[bytes]:
     return row
 
 
-def require_signed_z_score(path: str | Path, column_name: str) -> None:
+def require_signed_z_score(path: SourcePath, column_name: str) -> None:
     """Refuse a z-score column that carries no negative value.
 
     A signed z has both directions; a `|z|` or chi-square statistic has the same
@@ -760,41 +803,62 @@ def require_signed_z_score(path: str | Path, column_name: str) -> None:
     *whether* a z-score source is admissible at all lives with the reader
     (`GwasSsfReader`), which is where `stored_effect_scale` is known.
     """
-    frames = pd.read_csv(
-        path,
-        sep="\t",
-        usecols=[column_name],
-        # The same missing-value vocabulary and float rule the projections use,
-        # so a value this guard sees is a value they would see.
-        keep_default_na=False,
-        na_values={column_name: _MISSING_TOKENS},
-        chunksize=DEFAULT_CHUNK_ROWS,
-        engine="c",
-    )
-    seen = False
-    with frames:
-        for frame in frames:
-            column = frame[column_name]
-            values = (
-                column.to_numpy(dtype="float64", copy=False)
-                if column.dtype.kind == "f"
-                else _floats_from_text(column)
-            )
-            finite = np.isfinite(values)
-            if not finite.any():
-                continue
-            seen = True
-            if bool((values[finite] < 0.0).any()):
-                return
-    if seen:
+    with ExitStack() as stack:
+        frames = pd.read_csv(
+            _pandas_input(path, stack),
+            sep="\t",
+            usecols=[column_name],
+            # The same missing-value vocabulary and float rule the projections
+            # use, so a value this guard sees is a value they would see.
+            keep_default_na=False,
+            na_values={column_name: _MISSING_TOKENS},
+            chunksize=DEFAULT_CHUNK_ROWS,
+            engine="c",
+        )
+        signs = _column_signs(stack.enter_context(frames), column_name)
+    if signs == "unsigned":
         raise UnsignedZScoreError(
             f"{path}: z-score column {column_name!r} carries no negative value; "
             "an unsigned statistic is not a signed z"
         )
 
 
+def _column_signs(frames: Iterable[pd.DataFrame], column_name: str) -> str:
+    """`"signed"` at the first negative value, else `"unsigned"` or `"empty"`.
+
+    `"empty"` is a column with no finite value at all, which is unusable rather
+    than unsigned.
+    """
+    seen = False
+    for frame in frames:
+        column = frame[column_name]
+        values = (
+            column.to_numpy(dtype="float64", copy=False)
+            if column.dtype.kind == "f"
+            else _floats_from_text(column)
+        )
+        finite = np.isfinite(values)
+        if not finite.any():
+            continue
+        seen = True
+        if bool((values[finite] < 0.0).any()):
+            return "signed"
+    return "unsigned" if seen else "empty"
+
+
+def _pandas_input(path: SourcePath, stack: ExitStack) -> str | Path | IO[bytes]:
+    """What `pd.read_csv` reads: the file itself, or a translated source's stream.
+
+    A file is handed to pandas by name, exactly as before issue #281; a
+    translated source is opened here and closed with `stack`.
+    """
+    if isinstance(path, TabularSource):
+        return stack.enter_context(path.open_binary())
+    return path
+
+
 def stream_projected_metrics(
-    path: str | Path, columns: MetricsProjectionColumns, *, score_column: str | None = None
+    path: SourcePath, columns: MetricsProjectionColumns, *, score_column: str | None = None
 ) -> Iterator[TabularMetricsRow]:
     """Stream every row's variant identity and statistics, column-projected.
 
@@ -804,8 +868,7 @@ def stream_projected_metrics(
     materialising a dict per row. Rows naming no usable variant are dropped, as
     the full-row parser drops them; everything else is yielded in file order.
     """
-    opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
-    with opener(path, "rb") as fh:
+    with open_binary(path) as fh:
         projection = _required_metrics_projection(path, fh.readline(), columns, score_column)
         for line in fh:
             row = _metrics_fields(line, projection.split_limit)
@@ -1284,7 +1347,7 @@ def _projected_chunk(
 
 
 def _metric_frame_reader(
-    path: str | Path, names: dict[str, str], chunk_rows: int
+    path: str | Path | IO[bytes], names: dict[str, str], chunk_rows: int
 ) -> pd.io.parsers.TextFileReader:
     """The chunked pandas reader for one metrics projection.
 
@@ -1321,7 +1384,7 @@ def _metric_frame_reader(
 
 
 def stream_projected_metric_chunks(
-    path: str | Path,
+    path: SourcePath,
     columns: MetricsProjectionColumns,
     *,
     chunk_rows: int = DEFAULT_CHUNK_ROWS,
@@ -1345,14 +1408,13 @@ def stream_projected_metric_chunks(
     `chunk_rows` bounds memory, not semantics: the projection of a source does
     not depend on how it is blocked, which is what the parity tests assert.
     """
-    opener = gzip.open if str(path).endswith((".gz", ".bgz")) else open
-    with opener(path, "rb") as fh:
+    with open_binary(path) as fh:
         header_line = fh.readline()
     projection = _required_metrics_projection(path, header_line, columns, score_column)
     names = _projected_column_names(_header_cells(header_line), projection)
-    frames = _metric_frame_reader(path, names, chunk_rows)
-    with frames:
-        for frame in frames:
+    with ExitStack() as stack:
+        frames = _metric_frame_reader(_pandas_input(path, stack), names, chunk_rows)
+        for frame in stack.enter_context(frames):
             yield _projected_chunk(frame, names, projection.effect_source)
 
 

@@ -87,6 +87,14 @@ from opengwasdb.model.manifest_columns import (
     require_columns,
     resolve_manifest_columns,
 )
+from opengwasdb.readers.column_map import (
+    COLUMN_MAP_CAPABILITY,
+    ColumnMap,
+    MappedRowDeclaration,
+    as_column_map,
+    check_mapped_rows,
+    mapped_row_build,
+)
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.interface import SourceVariant
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
@@ -152,6 +160,10 @@ class _ManifestRow:
     # own (a gene ID, ADR 0035) rather than copying a manifest column.
     trait_ontology_id: str = ""
     trait_ontology_label: str = ""
+    # The Column Map an `opengwasdb.column-map` row is read through (issue
+    # #281); `None` for every other capability. Carried on the row so every
+    # pass that resolves this row's reader resolves the same one.
+    column_map: ColumnMap | None = None
 
 
 def _manifest_row_to_analysis(row: _ManifestRow) -> Analysis:
@@ -353,23 +365,22 @@ def _resolve_column(
     *,
     capability: str = GWAS_VCF_CAPABILITY,
     stored_effect_scale: str = StoredEffectScale.SD.value,
+    column_map: ColumnMap | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Stream one source file, resolve each association's variant to a row via
-    the sorted key lookup, and return deduped
-    ``(rows int64, z f32, se f32, eaf f32)`` for the column. ``eaf`` is NaN
-    where the source reports no frequency (ADR 0036).
+    """Stream one source file, resolve each association's variant to a row via the sorted
+    key lookup, and return deduped ``(rows int64, z f32, se f32, eaf f32)`` for the column.
+    ``eaf`` is NaN where the source reports no frequency (ADR 0036).
 
-    The stream is processed in ``_RESOLVE_BATCH``-sized batches (vectorised
-    searchsorted per batch), so worker peak memory is bounded by one batch rather
-    than the whole file. Batches are matched in stream order and concatenated, so
-    the final last-wins dedup by row is identical to processing the whole file at
-    once: when two source variants lift to the same row, the later stream
-    occurrence wins, making the scattered matrix cell deterministic.
+    The stream is processed in ``_RESOLVE_BATCH``-sized batches (vectorised searchsorted
+    per batch), so worker peak memory is bounded by one batch rather than the whole file.
+    Batches are matched in stream order and concatenated, so the final last-wins dedup by
+    row is identical to processing the whole file at once: when two source variants lift to
+    the same row, the later stream occurrence wins, so the scattered matrix cell is fixed.
 
-    ``capability`` resolves a ``SourceReader`` (issue #20) rather than this
-    module streaming a VCF itself -- ``stored_effect_scale`` is required to
-    construct one but unused past construction here (it is a Pass-2 concern
-    only for readers that attach it to each yielded association).
+    ``capability`` (with ``column_map`` for a mapped row, issue #281) resolves a
+    ``SourceReader`` (issue #20) rather than this module streaming a VCF itself --
+    ``stored_effect_scale`` is required to construct one but unused past construction
+    here (it is a Pass-2 concern only for readers that attach it to each association).
 
     ``se_divisor`` divides the returned ``se`` (continuous-trait phenotype-SD
     standardisation, issue #18: ``stored_se = original_se / sd``). ``z`` is left
@@ -377,7 +388,8 @@ def _resolve_column(
     constant, so only ``se`` needs rescaling. Defaults to 1.0 (no-op) for
     binary-trait analyses and callers that pre-date issue #18.
     """
-    reader = resolve_reader(capability, file_path, StoredEffectScale(stored_effect_scale))
+    scale = StoredEffectScale(stored_effect_scale)
+    reader = resolve_reader(capability, file_path, scale, column_map=column_map)
     rows_parts: list[np.ndarray] = []
     z_parts: list[np.ndarray] = []
     se_parts: list[np.ndarray] = []
@@ -461,13 +473,18 @@ def _spill_column(
     tmp.replace(final)
 
 
-def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
+#: One Pass 2 task: column index, source file, SE divisor, reader capability,
+#: stored effect scale, and the row's Column Map (issue #281).
+Pass2Task = tuple[int, str, float, str, str, ColumnMap | None]
+
+
+def _pass2_worker(task: Pass2Task) -> int:
     """Resolve one column against the fork-inherited numpy lookup and spill it.
     Returns col_idx only — the compact result stays on disk, never in a pipe."""
     assert _pass2_keys_sorted is not None
     assert _pass2_rows_sorted is not None
     assert _pass2_spill_dir is not None
-    col_idx, file_path, se_divisor, capability, stored_effect_scale = task
+    col_idx, file_path, se_divisor, capability, stored_effect_scale, column_map = task
     rows, z, se, eaf = _resolve_column(
         file_path,
         _pass2_keys_sorted,
@@ -475,6 +492,7 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
         se_divisor,
         capability=capability,
         stored_effect_scale=stored_effect_scale,
+        column_map=column_map,
     )
     _spill_column(_pass2_spill_dir, col_idx, rows, z, se, eaf)
     return col_idx
@@ -483,9 +501,9 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> int:
 def _pass2_worker_tasks(
     manifest_rows: Sequence[_ManifestRow],
     analysis_index: Mapping[str, int],
-) -> list[tuple[int, str, float, str, str]]:
+) -> list[Pass2Task]:
     """One fork-pool task per manifest row, in manifest order: the column
-    index from ``analysis_index`` followed by the four source fields
+    index from ``analysis_index`` followed by the five source fields
     ``_pass2_worker`` needs to resolve the row's file.
 
     The Dense and Hybrid builders submit identical task tuples to their own
@@ -499,6 +517,7 @@ def _pass2_worker_tasks(
             row.se_divisor,
             row.source_reader_capability,
             row.stored_effect_scale,
+            row.column_map,
         )
         for row in manifest_rows
     ]
@@ -986,7 +1005,8 @@ def _pass1_worker(task: tuple[int, list[_ManifestRow], str, int, int]) -> list[_
     shard_idx = 0
     for row in rows:
         reader = resolve_reader(
-            row.source_reader_capability, row.file_path, StoredEffectScale(row.stored_effect_scale)
+            row.source_reader_capability, row.file_path,
+            StoredEffectScale(row.stored_effect_scale), column_map=row.column_map,
         )
         for variant in reader.stream_variants():
             key = (row.source_assembly, window_key(variant.chromosome, variant.position, size_bp))
@@ -1533,7 +1553,7 @@ def build_dense_from_vcf_manifest(
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None, allow_unverified_eaf: bool = False,
     source_reader_capability: str | None = None, source_assembly: str | None = None,
-    variant_reference: str | Path | None = None,
+    variant_reference: str | Path | None = None, column_map: ColumnMap | str | Path | None = None,
 ) -> DenseBuildResult:
     """Build a Dense Observed-Only Store from a manifest of GWAS-VCF files.
 
@@ -1547,12 +1567,12 @@ def build_dense_from_vcf_manifest(
     ``allow_unverified_eaf`` with EAF orientation verification (issue #115, ADR 0037 §6).
     ``variant_reference`` (issue #185) supplies a precomputed axis
     (``*.variant-ref.tsv.gz``, an ALID list, or a store ``variants.tsv.gz``);
-    Pass 1 and liftover are bypassed save its rsid harvest (#255).
+    Pass 1 and liftover are bypassed save its rsid harvest (#255). ``column_map`` reads
+    ``opengwasdb.column-map`` rows (#281).
     """
     manifest_rows = _read_manifest(
-        manifest_path,
-        default_source_reader_capability=source_reader_capability,
-        default_source_assembly=source_assembly,
+        manifest_path, default_source_reader_capability=source_reader_capability,
+        default_source_assembly=source_assembly, column_map=column_map,
     )
     if not manifest_rows:
         raise ValueError(f"manifest {manifest_path} contains no rows")
@@ -1637,6 +1657,9 @@ class _PreparedBuild:
     #: the inline two-pass build. Recorded in the store manifest's provenance
     #: so the axis's origin is auditable (issue #185).
     variant_reference: str | None = None
+    #: The Column Map mapped rows were read through, as `column_map_provenance`
+    #: records it, so the store names it as a Resolution Record does (#281).
+    column_map: dict[str, str] | None = None
 
 
 def _axis_metadata(
@@ -1990,6 +2013,7 @@ def _prepare_axis(
         keys_sorted=keys_sorted,
         rows_sorted=rows_sorted,
         variant_reference=str(variant_reference) if variant_reference is not None else None,
+        column_map=column_map_provenance(manifest_rows),
     )
 
 
@@ -2018,6 +2042,7 @@ def _spill_columns_serial(
             row.se_divisor,
             capability=row.source_reader_capability,
             stored_effect_scale=row.stored_effect_scale,
+            column_map=row.column_map,
         )
         _spill_column(spill_dir, col_idx, rows, z, se, eaf)
         _log_progress(
@@ -2252,6 +2277,7 @@ def _finalize_store(
         encoding=encoded.encoding,
         eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
         variant_reference=prepared.variant_reference,
+        column_map=prepared.column_map,
     )
     write_top_hit_indexes_for_store(
         staged.path, encoded.hits.rows, encoded.hits.cols, encoded.hits.z, encoded.hits.se,
@@ -2404,6 +2430,7 @@ def _read_manifest(
     *,
     default_source_reader_capability: str | None = None,
     default_source_assembly: str | None = None,
+    column_map: ColumnMap | str | Path | None = None,
 ) -> list[_ManifestRow]:
     """Read the build manifest with canonical names, aliases, and option defaults.
 
@@ -2415,6 +2442,11 @@ def _read_manifest(
     Optional ``source_reader_capability`` (#20, #174) and ``source_assembly`` (#85, #174)
     fall back to CLI defaults (or GWAS-VCF/hg19). Note harmonised SSF is already hg38 and
     must declare so or coordinates liftover twice (issue #85 double-liftover warning).
+
+    ``column_map`` is the Column Map ``opengwasdb.column-map`` rows are read
+    through (#281). Its declared genome build stands in for a row omitting
+    ``source_assembly`` when no CLI default is given, and must agree with every
+    such row's build otherwise.
     """
     fallback_assembly, fallback_capability = _resolve_manifest_defaults(
         default_source_reader_capability, default_source_assembly
@@ -2425,10 +2457,60 @@ def _read_manifest(
         rows = list(reader)
     require_columns(fieldnames, manifest_path, "stored_effect_scale", "original_sd_method")
     cols = resolve_manifest_columns(fieldnames, manifest_path)
-    return [
-        _parse_manifest_row(row, cols, manifest_path, fallback_assembly, fallback_capability)
+    loaded_map = as_column_map(column_map)
+    parsed = [
+        _with_column_map(
+            _parse_manifest_row(row, cols, manifest_path, fallback_assembly, fallback_capability),
+            row, loaded_map, default_source_assembly, f"manifest {manifest_path}",
+        )
         for row in rows
     ]
+    check_mapped_rows(
+        [
+            MappedRowDeclaration(
+                row.trait_id, row.source_reader_capability, row.source_assembly
+            )
+            for row in parsed
+        ],
+        loaded_map,
+        f"manifest {manifest_path}",
+    )
+    return parsed
+
+
+def column_map_provenance(rows: Iterable[_ManifestRow]) -> dict[str, str] | None:
+    """The Column Map a build's mapped rows were read through, as a store records it.
+
+    `{"name", "sha256"}` -- the fingerprint a Resolution Record carries -- or
+    `None` when no row was mapped, so an unmapped store's provenance is
+    unchanged (#281). `_read_manifest` gives every mapped row the same map.
+    """
+    for row in rows:
+        if row.column_map is not None:
+            return row.column_map.fingerprint()
+    return None
+
+
+def _with_column_map(
+    row: _ManifestRow,
+    raw: Mapping[str, str],
+    column_map: ColumnMap | None,
+    default_assembly: str | None,
+    context: str,
+) -> _ManifestRow:
+    """A mapped row with its Column Map, in the build `mapped_row_build` gives it.
+
+    The row's own build is re-derived through the shared rule rather than taken
+    from `_parse_manifest_row`, which falls back to hg19 -- a default a mapped
+    row must never inherit (#281).
+    """
+    if row.source_reader_capability != COLUMN_MAP_CAPABILITY or column_map is None:
+        return row
+    declared = row.source_assembly if raw.get("source_assembly") else None
+    build = mapped_row_build(
+        declared, default_assembly, column_map, f"{context}: analysis {row.trait_id!r}"
+    )
+    return replace(row, column_map=column_map, source_assembly=normalise_build(build))
 
 
 def _alid_sort_key(alid: str) -> tuple[tuple[int, str], int, str, str]:
@@ -3289,6 +3371,7 @@ def _write_manifest(
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
     variant_reference: str | None = None,
+    column_map: dict[str, str] | None = None,
 ) -> None:
     manifest = StoreManifest(
         encoding=encoding,
@@ -3321,6 +3404,7 @@ def _write_manifest(
                 if variant_reference is not None
                 else {}
             ),
+            **({"column_map": column_map} if column_map is not None else {}),
         },
     )
     staged.write_manifest(manifest)

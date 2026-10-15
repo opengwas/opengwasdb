@@ -4,6 +4,14 @@
 
 from __future__ import annotations
 
+from opengwasdb.readers.column_map import (
+    BUILTIN_COLUMN_MAPS,
+    COLUMN_MAP_CAPABILITY,
+    ColumnMap,
+    ColumnMapError,
+    load_column_map,
+)
+from opengwasdb.readers.column_map_reader import ColumnMapReader
 from opengwasdb.readers.effect_source import (
     CaseControlZScoreError,
     EffectSource,
@@ -37,10 +45,15 @@ from opengwasdb.readers.interface import (
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
 
 __all__ = [
+    "BUILTIN_COLUMN_MAPS",
+    "COLUMN_MAP_CAPABILITY",
     "FINNGEN_R13_CAPABILITY",
     "GWAS_SSF_CAPABILITY",
     "GWAS_VCF_CAPABILITY",
     "CaseControlZScoreError",
+    "ColumnMap",
+    "ColumnMapError",
+    "ColumnMapReader",
     "EffectSource",
     "EffectSourceKind",
     "FakeReader",
@@ -57,6 +70,7 @@ __all__ = [
     "derive_z_score_effect",
     "is_palindromic",
     "known_capabilities",
+    "load_column_map",
     "load_liftover",
     "refuse_case_control_z_score",
     "resolve_effect_source",

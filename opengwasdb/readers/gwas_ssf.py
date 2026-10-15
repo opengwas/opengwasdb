@@ -66,9 +66,11 @@ from __future__ import annotations
 
 import csv
 import gzip
+import io
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
 from opengwasdb.model.enums import StoredEffectScale
 from opengwasdb.readers.effect_source import (
@@ -92,8 +94,10 @@ from opengwasdb.readers.tabular import (
     DEFAULT_CHUNK_ROWS,
     MetricsChunk,
     MetricsProjectionColumns,
+    SourcePath,
     TabularMetricsRow,
     TabularRow,
+    TabularSource,
     VariantProjectionColumns,
     extract_at_sites,
     parse_af,
@@ -109,7 +113,9 @@ from opengwasdb.readers.tabular import (
 from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
 
 GWAS_SSF_CAPABILITY = "opengwasdb.gwas-ssf"
-_VARIANT_COLUMNS = VariantProjectionColumns(
+#: GWAS-SSF's identity and alias columns, the variant projection's declaration.
+#: Public because a Column Map's translation is read in these columns (#281).
+VARIANT_COLUMNS = VariantProjectionColumns(
     chromosome=(b"chromosome",),
     position=b"base_pair_location",
     ref=b"other_allele",
@@ -262,8 +268,20 @@ def _validated_score_column(fieldnames: Sequence[str] | None, name: str | None) 
     return name
 
 
+def _open_text(path: SourcePath) -> IO[str]:
+    """One source as text: a file by its own opener rule, a translated source as UTF-8.
+
+    The file rule is unchanged by issue #281 -- only `.gz` is gunzipped here --
+    so a file read by name gives exactly what it always gave.
+    """
+    if isinstance(path, TabularSource):
+        return io.TextIOWrapper(path.open_binary(), encoding="utf-8", newline="")
+    opener = gzip.open if str(path).endswith(".gz") else open
+    return opener(path, "rt", encoding="utf-8", newline="")
+
+
 def _iter_rows(
-    path: str | Path,
+    path: SourcePath,
     *,
     effect_source: EffectSource | None = None,
     score_column: str | None = None,
@@ -275,8 +293,7 @@ def _iter_rows(
     what keeps `stream_full_row_metrics` a faithful reference for the
     projection's effect handling.
     """
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", newline="") as fh:
+    with _open_text(path) as fh:
         reader = csv.DictReader(fh, delimiter="\t")
         source = effect_source or resolve_effect_source(reader.fieldnames or ())
         sample_size_column = _sample_size_column(reader.fieldnames, source)
@@ -287,23 +304,22 @@ def _iter_rows(
                 yield parsed
 
 
-def _iter_variants(path: str | Path) -> Iterator[SourceVariant]:
-    yield from stream_projected_variants(path, _VARIANT_COLUMNS)
+def _iter_variants(path: SourcePath) -> Iterator[SourceVariant]:
+    yield from stream_projected_variants(path, VARIANT_COLUMNS)
 
 
-def _header(path: str | Path) -> list[str]:
+def _header(path: SourcePath) -> list[str]:
     """A GWAS-SSF file's header names, reading no data row.
 
     Shares `_iter_rows`' opener rule so the effect source `GwasSsfReader`
     reports is the one its row parser would resolve for the same file.
     """
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", newline="") as fh:
+    with _open_text(path) as fh:
         return next(csv.reader(fh, delimiter="\t"), [])
 
 
 def require_z_score_usable(
-    path: str | Path,
+    path: SourcePath,
     effect_source: EffectSource | None,
     stored_effect_scale: StoredEffectScale,
 ) -> None:
@@ -351,9 +367,14 @@ class GwasSsfReader:
     resolver worker costs against a genome-wide source: a block's ALIDs, not the
     file's (issue #209). It is on the reader because that is where the caller
     running sixty-four of these can reach it.
+
+    `path` may be a `TabularSource` rather than a file: a Column Map's
+    translation of a provider file into these columns (issue #281), which is
+    how the generic tabular reader reads every mapped collection by this
+    reader's rules.
     """
 
-    path: str | Path
+    path: SourcePath
     stored_effect_scale: StoredEffectScale = StoredEffectScale.SD
     chunk_rows: int = DEFAULT_CHUNK_ROWS
     imputation_score_declaration: ImputationScoreDeclaration | None = None

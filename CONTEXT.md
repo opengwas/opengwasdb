@@ -202,6 +202,10 @@ The source-reported imputation quality or information score for a variant associ
 **INFO Scope**:
 Where an Imputation INFO value applies: Variant when one value is shared for a Store variant, Association when values may differ by Analysis-variant association, or Absent when INFO is not stored.
 
+**Column Map**:
+A data file that says how one Source Collection's tabular summary statistics are read: the provider column holding each field, and the collection's conventions. The conventions cover missing-value tokens, which allele the effect and frequency refer to, how positions and chromosomes are written, and the genome build. A collection is read through one when its Analyses declare the `opengwasdb.column-map` Source Reader Capability; the caller names the map by path or by a built-in's name (`gwas-ssf`, `finngen-r13`). Every convention is declared, and nothing is defaulted. A value the reader cannot honour is refused, and the map's checksum is part of every Resolution Record read through it (ADR 0063). A dedicated reader remains only for a format a map cannot describe (GWAS-VCF, BESD).
+_Avoid_: reader config, schema, converter — a map replaces the converter; it is not one.
+
 ## Example dialogue
 
 Developer: "This UK Biobank biomarker batch has 1,000 Analyses sharing a variant axis. Should it be Dense?"

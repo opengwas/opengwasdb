@@ -1,0 +1,4 @@
+chromosome	base_pair_location	effect_allele	other_allele	beta	standard_error	effect_allele_frequency	p_value	rsid	alt	n	q_pval	i2	direction
+1	1000	G	A	0.012	0.004	0.25	0.0027	rs31	G	150000	0.5	0	++-
+1	2000	T	C	-0.02	0.005	0.4	6e-05	rs32	T	150000	#NA	#NA	?+-
+7	3100000	C	G	0.004	0.002	0.2	0.045	rs33	C	150000	0.2	12.5	+++

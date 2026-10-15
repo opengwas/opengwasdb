@@ -52,6 +52,7 @@ if TYPE_CHECKING:
         _ShardSpec,
         _WindowShards,
     )
+    from opengwasdb.readers.column_map import ColumnMap
     from opengwasdb.variants.windows import WindowKey
 
 log = logging.getLogger(__name__)
@@ -218,6 +219,7 @@ def extract_variant_reference(
     window_size_mb: float = DEFAULT_WINDOW_SIZE_MB,
     reduction_batch_size: int = DEFAULT_REDUCTION_BATCH_SIZE,
     map_spill_records: int = DEFAULT_MAP_SPILL_RECORDS,
+    column_map: ColumnMap | str | Path | None = None,
 ) -> VariantReferenceExtraction:
     """Extract, lift and canonicalise a manifest's variant axis into an artifact.
     The standalone front end to the build's Pass 1 (issue #187): every source is
@@ -231,7 +233,8 @@ def extract_variant_reference(
     ``map_spill_records`` bounds how many variants a map worker buffers before
     spilling to disk, so a worker's peak memory tracks that threshold rather
     than the size of its manifest slice (issue #194). A non-positive value
-    fails loudly before any source is read.
+    fails loudly before any source is read. ``column_map`` reads the manifest's
+    ``opengwasdb.column-map`` rows, as the build that consumes the artifact does (#281).
     """
     from opengwasdb.layouts.dense.build_vcf import _Pass1Stats, _read_manifest
 
@@ -239,6 +242,7 @@ def extract_variant_reference(
         manifest_path,
         default_source_reader_capability=source_reader_capability,
         default_source_assembly=source_assembly,
+        column_map=column_map,
     )
     if len(manifest_rows) == 0:
         raise ValueError(f"manifest {manifest_path} contains no rows to extract a reference from")
