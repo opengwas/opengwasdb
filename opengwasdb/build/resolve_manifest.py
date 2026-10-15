@@ -701,7 +701,7 @@ def _build_analysis_fingerprints(
     column_map: ColumnMap | None = None,
 ) -> dict[str, Any]:
     file_bytes, file_mtime_ns = _stat_source_file(row.source_file)
-    fp = {
+    fp: dict[str, Any] = {
         "source_file": str(row.source_file),
         "source_recorded_sha256": row.checksum,
         "source_recorded_bytes": row.size_bytes,
