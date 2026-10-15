@@ -20,8 +20,15 @@ from typing import Any
 
 import numpy as np
 import pytest
-from besd_fixtures import NO_FREQUENCY_COLUMN, write_besd_sparse_3f, write_epi, write_esi
+from besd_fixtures import (
+    NO_FREQUENCY_COLUMN,
+    EsiRow,
+    write_besd_sparse_3f,
+    write_epi,
+    write_esi,
+)
 
+import opengwasdb.build.resolve_manifest as resolve_manifest_module
 from opengwasdb.build.resolve_manifest import besd_measurement_count, resolve_analyses_manifest
 from opengwasdb.layouts.ragged.besd_reader import BESDReader, read_besd_probe
 
@@ -89,9 +96,9 @@ def _write_chain(path: Path) -> Path:
     return path
 
 
-def _esi_rows(freqs: np.ndarray, *, offset: int, frequency: str) -> list[dict]:
+def _esi_rows(freqs: np.ndarray, *, offset: int, frequency: str) -> list[EsiRow]:
     """Odd rows name `G` as the effect allele and report `G`'s frequency."""
-    rows = []
+    rows: list[EsiRow] = []
     for i, f_a in enumerate(freqs):
         flipped = i % 2 == 1
         reported = 1.0 - f_a if flipped else f_a
@@ -442,10 +449,56 @@ def test_a_damaged_probe_is_a_controlled_failure(
     records = _resolve(tmp_path, manifest)
 
     damaged = _record(records, "eqtl_bad")
+    measured = _record(records, "eqtl_p1")
     assert damaged["status"] == "controlled_failure"
     assert expected in damaged["error"]
     assert damaged["phenotype_sd"] is None
-    assert _record(records, "eqtl_p1")["status"] == "success", "the file's other probe resolves"
+    assert measured["status"] == "success", "the file's other probe resolves"
+    assert damaged["ancestry"] == measured["ancestry"]
+    for key in ("ancestry_scope", "ancestry_measurement_id", "ancestry_sites",
+                "ancestry_rows_read", "ancestry_reference_rows_matched"):
+        assert damaged["diagnostics"][key] == measured["diagnostics"][key], key
+
+
+def test_an_unexpected_probe_error_retains_the_source_measurement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = _two_probe_file(tmp_path)
+    manifest = _write_manifest(tmp_path / "analyses.tsv", [
+        _besd_row("eqtl_p1", prefix, _P1), _besd_row("eqtl_bad", prefix, _P2),
+    ])
+    original = resolve_manifest_module.resolve_besd_analysis
+
+    def fail_one_probe(*args: Any, **kwargs: Any) -> Any:
+        if args[1] == _P2:
+            raise RuntimeError("injected probe failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(resolve_manifest_module, "resolve_besd_analysis", fail_one_probe)
+    records = _resolve(tmp_path, manifest)
+
+    damaged = _record(records, "eqtl_bad")
+    measured = _record(records, "eqtl_p1")
+    assert damaged["status"] == "controlled_failure"
+    assert "injected probe failure" in damaged["error"]
+    assert damaged["ancestry"] == measured["ancestry"]
+    assert damaged["diagnostics"]["ancestry_scope"] == "source_file"
+    assert damaged["diagnostics"]["ancestry_measurement_id"] == (
+        measured["diagnostics"]["ancestry_measurement_id"]
+    )
+
+
+def test_a_single_analysis_run_omits_shared_source_measurements(tmp_path: Path) -> None:
+    ssf = _write_ssf(tmp_path / "eur.h.tsv", _EUR_MIX, _P1_SD)
+    manifest = _write_manifest(tmp_path / "analyses.tsv", [
+        ("gwas", str(ssf), "opengwasdb.gwas-ssf", "", "sd",
+         "estimated_from_source_maf", str(STUDY_N), "GRCh38"),
+    ])
+
+    records = _resolve(tmp_path, manifest)
+
+    index = json.loads((records / "index.json").read_text(encoding="utf-8"))
+    assert "source_measurements" not in index
 
 
 # ── The seeking probe reader ─────────────────────────────────────────────────
