@@ -1694,14 +1694,21 @@ in the working directory is refused as ambiguous.
 - **Agreement.** These are refused before any source is read:
   - a mapped row with no `--column-map`;
   - a `--column-map` no row reads through;
-  - a row whose build is not the map's `genome_build`.
+  - a row whose build is not the map's `genome_build`;
+  - a row with no build of its own, no CLI fallback, and a `per_analysis` map.
 
-  A row omitting its build, with no CLI fallback, takes the map's.
-- **Provenance.** A Resolution Record's fingerprint carries
-  `resolution_config.column_map = {"name", "sha256"}` for a mapped row and
-  `null` otherwise. `sha256` is the checksum of the map file's bytes. A
-  checkpointed Hybrid build records the map and refuses to resume once it has
-  changed.
+  A mapped row's build is its own, else the CLI fallback, else the map's; no
+  builder default applies to it.
+- **Provenance.**
+  - A mapped Resolution Record's fingerprint carries
+    `resolution_config.column_map = {"name", "sha256"}`; an unmapped record
+    omits the key, so its digest is unchanged.
+  - A Dense or Hybrid store built through a map carries the same object as
+    `manifest.json` `provenance.column_map`.
+  - `sha256` is the checksum of the map file's bytes.
+  - A checkpointed Hybrid build records the map (a built-in's name or a file's
+    absolute path) and refuses to resume once it has changed.
+  - The variant-reference artifact records no map.
 
 ## 21. Compatibility
 

@@ -94,7 +94,7 @@ carry exactly one. The fields are `chromosome`, `position`, `effect_allele`,
 | `genome_build` | `GRCh37`/`hg19`, `GRCh38`/`hg38`, or `per_analysis` | always |
 | `frequency_allele` | `effect_allele`; `other_allele` is refused | with `frequency` |
 | `p_value_form` | `p`; `neg_log10_p` is refused | with `p_value` |
-| `confidence_interval_separator` | one character | with `confidence_interval` |
+| `confidence_interval_separator` | one character; never `none`, since an interval cell always holds two bounds, and the reader has no fallback | with `confidence_interval` |
 | `rsid_separator` | `none`, or one character: the first of a list is the rsid | with `rsid` or `variant_id` |
 
 Loading refuses an unknown key, field, convention or value; a required field
@@ -109,8 +109,16 @@ collection-wide convention: `beta` is an effect on the Analysis's stored scale
 (a beta, or a log-odds or log-hazard ratio), `odds_ratio` is exponentiated and
 read as its log, and `z_score` is a signed z (ADR 0049–0051). MVP's deposit has
 a `beta` in its quantitative files and an `or` in its binary ones, so a single
-value could not describe it. Whether a `beta` is a log-OR remains the Analysis's
-`stored_effect_scale`, which the manifest owns (ADR 0004).
+value could not describe it.
+
+A map that declares several effect columns, as both MVP and `gwas-ssf` do,
+does not pick one for the collection. Each file's effect is chosen from the
+columns that file carries, by ADR 0049–0051's precedence: `beta`, then
+`odds_ratio`, then `z_score`. An `odds_ratio` beside a `beta` is the per-row
+fallback of ADR 0055.
+
+A log-OR is a `beta` column plus the Analysis's `stored_effect_scale = log_or`.
+The manifest owns that scale (ADR 0004); the map never declares it.
 
 ### Naming a map
 
@@ -130,13 +138,32 @@ any source is read:
 - a row whose declared build is not the map's `genome_build`.
 
 The registry refuses the capability without a map and a map with any other
-capability. A row that omits its build, with no CLI fallback, takes the map's.
+capability.
 
-`resolve-analyses` records `{"name", "sha256"}` in each mapped record's
-fingerprint as `resolution_config.column_map` (`null` for every other row), so
-`--resume` never reuses a record measured under another map. A checkpointed
-Hybrid build records the map's spec and checksum, and refuses to resume once
-the map has changed.
+**One rule gives a mapped row its build**, in resolution and in every build
+(`mapped_row_build`): the row's own build, else the caller's explicit fallback
+(`--source-build` / `--source-assembly`), else the map's `genome_build`. Under
+`per_analysis`, a row with none of the three is refused. It is never read as
+hg19 because that is a builder's default for an unmapped row.
+
+**Provenance.**
+
+- **Resolution Records.** `resolve-analyses` records `{"name", "sha256"}` in a
+  mapped record's fingerprint as `resolution_config.column_map`. Every other
+  record omits the key, so its digest is what it was before Column Maps and
+  `--resume` keeps reusing it. A mapped record is never resumed under another
+  map.
+- **Stores.** `build-dense-vcf` and `build-hybrid` write the same
+  `{"name", "sha256"}` to `manifest.json` as `provenance.column_map`, again
+  only when a row was mapped. It is a provenance key like `variant_reference`,
+  not a format change.
+- **Checkpoints.** A checkpointed Hybrid build records the map's spec and
+  checksum, and refuses to resume once the map has changed. The spec is a
+  built-in's bare name or a file's absolute path, so `./gwas-ssf` stays that
+  file and a resume from another directory finds it.
+- **Variant references.** The `*.variant-ref.tsv.gz` artifact has no
+  provenance slot: its first line is the column header its readers detect it
+  by. It records no map. A build that consumes it records its own.
 
 ### Reading
 
@@ -217,9 +244,11 @@ format: GWAS-VCF, and BESD (opengwasdb #282).
   1.6 s on the converter's output through the GWAS-SSF reader. The `gwas-ssf`
   built-in on the converter's output took 1.6 s, the same as the dedicated
   reader. The rewrite it replaces read and wrote every file once more.
-- Some commands do not take `--column-map`: `assign-ancestry`,
-  `estimate-phenotype-sd` and `build-hybrid-from-catalogue`. They refuse a
-  mapped row, because the registry will not build its reader without a map.
+- **Known gaps.**
+  - `assign-ancestry`, `estimate-phenotype-sd` and
+    `build-hybrid-from-catalogue` take no map yet. They refuse a mapped row,
+    because the registry will not build its reader without one.
+  - The variant-reference artifact records no map (see Provenance).
 - Read through a map, malformed files fail where the dedicated readers were
   quiet. A FinnGen file lacking `beta`, a header with both `#chrom` and
   `chrom`, and a duplicated identity column are all refused. Today's readers
