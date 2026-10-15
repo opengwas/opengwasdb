@@ -71,7 +71,12 @@ from opengwasdb.model.info_score_policy import (
 from opengwasdb.model.maf_policy import MAF_COLUMNS, MafPolicy, parse_maf_policy
 from opengwasdb.model.manifest_columns import resolve_manifest_columns
 from opengwasdb.readers.assembly import assembly_plan, declared_source_build
-from opengwasdb.readers.column_map import COLUMN_MAP_CAPABILITY, ColumnMap, load_column_map
+from opengwasdb.readers.column_map import (
+    COLUMN_MAP_CAPABILITY,
+    ColumnMap,
+    as_column_map,
+    check_mapped_rows,
+)
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader, load_liftover
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
@@ -421,7 +426,7 @@ def read_resolve_manifest(
     """Read and validate an `analyses.tsv` manifest into resolution rows.
 
     `column_map` is the Column Map the manifest's `opengwasdb.column-map` rows
-    are read through (issue #281); see `check_column_map_rows`.
+    are read through (issue #281); see `check_mapped_rows`.
     """
     manifest_path = Path(path)
     if not manifest_path.is_file():
@@ -455,44 +460,12 @@ def read_resolve_manifest(
         )
         for idx, raw in enumerate(raw_rows)
     ]
-    check_column_map_rows(
+    check_mapped_rows(
         [(row.analysis_id, row.source_reader_capability, row.source_genome_build) for row in rows],
         column_map,
         f"analyses manifest {manifest_path}",
     )
     return rows
-
-
-def check_column_map_rows(
-    rows: Sequence[tuple[str, str, str]], column_map: ColumnMap | None, context: str
-) -> None:
-    """Refuse a manifest whose rows and Column Map do not agree (issue #281).
-
-    `rows` are `(analysis_id, source_reader_capability, source build)`. A row
-    read through a map needs one; a map no row reads through is a run that
-    looks mapped and is not; and a row declaring another build than its map
-    declares is two authorities disagreeing, which is refused, never resolved.
-    """
-    mapped = [row for row in rows if row[1] == COLUMN_MAP_CAPABILITY]
-    if mapped and column_map is None:
-        raise ValueError(
-            f"{context}: {len(mapped)} Analyses declare source_reader_capability "
-            f"{COLUMN_MAP_CAPABILITY!r}; supply their Column Map with --column-map"
-        )
-    if column_map is None:
-        return
-    if not mapped:
-        raise ValueError(
-            f"{context}: Column Map {column_map.name!r} was supplied but no Analysis "
-            f"declares source_reader_capability {COLUMN_MAP_CAPABILITY!r}"
-        )
-    declared = column_map.conventions.genome_build
-    for analysis_id, _capability, build in mapped:
-        if declared is not None and normalise_build(build) != declared:
-            raise ValueError(
-                f"{context}: analysis {analysis_id!r} declares source build {build!r} but "
-                f"Column Map {column_map.name!r} declares genome_build {declared!r}"
-            )
 
 
 def _get_opengwasdb_version() -> str:
@@ -1409,13 +1382,12 @@ def resolve_analyses_manifest(
         scan_limit = ScanLimit(max_rows=max_rows, max_ancestry_sites=max_ancestry_sites)
         scan_limit.validate()
     out_dir = _validate_resolution_params(evidence_sample, n_workers, records_dir)
-    if column_map is not None and not isinstance(column_map, ColumnMap):
-        column_map = load_column_map(column_map)
+    loaded_map = as_column_map(column_map)
     rows = read_resolve_manifest(
         manifest_path,
         default_capability=default_source_reader_capability,
         default_source_build=default_source_build,
-        column_map=column_map,
+        column_map=loaded_map,
     )
     fp_kwargs = _prepare_pipeline_context(
         ancestry_reference,
@@ -1437,7 +1409,7 @@ def resolve_analyses_manifest(
         reference_build,
         chain_file,
     )
-    fp_kwargs["column_map"] = column_map
+    fp_kwargs["column_map"] = loaded_map
     return _execute_resolution_pipeline(
         rows, out_dir, manifest_path, fp_kwargs, resume, largest_first, n_workers
     )

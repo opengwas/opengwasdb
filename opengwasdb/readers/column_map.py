@@ -2,7 +2,7 @@
 
 A Column Map tells the generic tabular reader which provider column holds each
 field it reads and which conventions the collection's values follow (stores
-ADR 0036, ADR 0062). It replaces a reader written per format, or a rewrite of
+ADR 0036, ADR 0063). It replaces a reader written per format, or a rewrite of
 every provider file into GWAS-SSF before it can be read.
 
 Every way a map can be wrong is refused here, before any source is opened:
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib import resources
@@ -39,6 +39,8 @@ __all__ = [
     "ColumnMapError",
     "Conventions",
     "PositionNotation",
+    "as_column_map",
+    "check_mapped_rows",
     "load_column_map",
 ]
 
@@ -185,6 +187,11 @@ class ColumnMap:
         """What a Resolution Record or a checkpoint records about this map."""
         return {"name": self.name, "sha256": self.sha256}
 
+    @property
+    def spec(self) -> str:
+        """What `load_column_map` loads this map from again: a name or a path."""
+        return self.origin.removeprefix("builtin:")
+
 
 def load_column_map(spec: str | Path) -> ColumnMap:
     """Load and validate a Column Map named by a file path or a built-in name.
@@ -209,6 +216,13 @@ def load_column_map(spec: str | Path) -> ColumnMap:
             f"Column Map {str(spec)!r} is neither a file nor a built-in map ({builtins})"
         )
     return parse_column_map(path.read_bytes(), origin=str(path))
+
+
+def as_column_map(spec: ColumnMap | str | Path | None) -> ColumnMap | None:
+    """A caller's Column Map argument, loaded when it names one."""
+    if spec is None or isinstance(spec, ColumnMap):
+        return spec
+    return load_column_map(spec)
 
 
 def parse_column_map(content: bytes, *, origin: str) -> ColumnMap:
@@ -391,3 +405,35 @@ def _separator(table: Mapping[str, Any], key: str) -> str | None:
     if not isinstance(value, str) or len(value) != 1 or value in "\t\r\n":
         raise ColumnMapError(f"{key} must be one character or 'none', got {value!r}")
     return value
+
+
+def check_mapped_rows(
+    rows: Sequence[tuple[str, str, str]], column_map: ColumnMap | None, context: str
+) -> None:
+    """Refuse a manifest whose rows and Column Map do not agree (issue #281).
+
+    `rows` are `(analysis_id, source_reader_capability, source build)`. A row
+    read through a map needs one; a map no row reads through is a run that
+    looks mapped and is not; and a row declaring another build than its map
+    declares is two authorities disagreeing, which is refused, never resolved.
+    """
+    mapped = [row for row in rows if row[1] == COLUMN_MAP_CAPABILITY]
+    if mapped and column_map is None:
+        raise ColumnMapError(
+            f"{context}: {len(mapped)} Analyses declare source_reader_capability "
+            f"{COLUMN_MAP_CAPABILITY!r}; supply their Column Map with --column-map"
+        )
+    if column_map is None:
+        return
+    if not mapped:
+        raise ColumnMapError(
+            f"{context}: Column Map {column_map.name!r} was supplied but no Analysis "
+            f"declares source_reader_capability {COLUMN_MAP_CAPABILITY!r}"
+        )
+    declared = column_map.conventions.genome_build
+    for analysis_id, _capability, build in mapped:
+        if declared is not None and normalise_build(build) != declared:
+            raise ColumnMapError(
+                f"{context}: analysis {analysis_id!r} declares source build {build!r} but "
+                f"Column Map {column_map.name!r} declares genome_build {declared!r}"
+            )

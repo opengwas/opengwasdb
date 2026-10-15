@@ -60,6 +60,7 @@ from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
     _RESOLVE_BATCH,
     EafSpillSurvey,
+    Pass2Task,
     _apply_eaf_scope,
     _apply_se_divisor,
     _candidates_by_routing_key,
@@ -176,6 +177,7 @@ from opengwasdb.model.info_score_policy import (
 )
 from opengwasdb.model.maf_policy import MafPolicy, MafState, parse_maf_policy
 from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_map
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.interface import ImputationScoreStatus
 from opengwasdb.readers.registry import resolve_reader
@@ -462,6 +464,7 @@ def _resolve_column_hybrid(
     stored_effect_scale: str = StoredEffectScale.SD.value,
     info_score_policy: InfoScorePolicy | None = None,
     maf_policy: MafPolicy | None = None,
+    column_map: ColumnMap | None = None,
 ) -> tuple[
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
@@ -499,6 +502,7 @@ def _resolve_column_hybrid(
         file_path,
         StoredEffectScale(stored_effect_scale),
         imputation_score_declaration=info_score_policy.imputation_score_declaration,
+        column_map=column_map,
     )
     d_idx: list[np.ndarray] = []
     d_z: list[np.ndarray] = []
@@ -666,14 +670,14 @@ def _spill_hybrid_column(
             _write_unknown_side_file(spill_dir, col_idx, u_hashed_raw)
 
 
-def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, AdmissionCounts]:
+def _pass2_worker(task: Pass2Task) -> tuple[int, AdmissionCounts]:
     assert _pass2_keys_sorted is not None
     assert _pass2_targets_sorted is not None
     assert _pass2_ispanel_sorted is not None
     assert _pass2_spill_dir is not None
     assert _pass2_info_policies is not None
     assert _pass2_maf_policies is not None
-    col_idx, file_path, se_divisor, capability, stored_effect_scale = task
+    col_idx, file_path, se_divisor, capability, stored_effect_scale, column_map = task
     dense, overflow, off_reference, counts = _resolve_column_hybrid(
         file_path,
         _pass2_keys_sorted,
@@ -684,6 +688,7 @@ def _pass2_worker(task: tuple[int, str, float, str, str]) -> tuple[int, Admissio
         stored_effect_scale=stored_effect_scale,
         info_score_policy=_pass2_info_policies[col_idx],
         maf_policy=_pass2_maf_policies[col_idx],
+        column_map=column_map,
     )
     _spill_hybrid_column(_pass2_spill_dir, col_idx, dense, overflow, off_reference)
     return col_idx, counts
@@ -1064,6 +1069,7 @@ def _load_manifest(
     *,
     default_source_reader_capability: str | None = None,
     default_source_assembly: str | None = None,
+    column_map: ColumnMap | None = None,
 ) -> tuple[list[_ManifestRow], DeclaredPolicies]:
     """Read the build manifest, failing loudly on an empty one rather than
     building a store with no Analyses (a plausible empty answer), alongside each
@@ -1073,6 +1079,7 @@ def _load_manifest(
         manifest_path,
         default_source_reader_capability=default_source_reader_capability,
         default_source_assembly=default_source_assembly,
+        column_map=column_map,
     )
     if not manifest_rows:
         raise ValueError(f"manifest {manifest_path} contains no rows")
@@ -2267,6 +2274,7 @@ def _route_serial(
             stored_effect_scale=row.stored_effect_scale,
             info_score_policy=prepared.info_score_policies[row.trait_id],
             maf_policy=prepared.maf_policies[row.trait_id],
+            column_map=row.column_map,
         )
         info_counts[row.trait_id] = counts
         _spill_hybrid_column(
@@ -3180,7 +3188,7 @@ def build_hybrid_from_vcf_manifest(
     eaf_reference: str | Path | None = None, eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False, source_reader_capability: str | None = None,
     source_assembly: str | None = None, checkpoint: bool = False,
-    resume: bool = False,
+    resume: bool = False, column_map: ColumnMap | str | Path | None = None,
 ) -> HybridBuildResult:
     """Build a Hybrid store from a manifest of GWAS-VCF files and a reference
     panel or precomputed variant reference. A thin orchestrator over three deep
@@ -3204,6 +3212,8 @@ def build_hybrid_from_vcf_manifest(
     are assumed hg19 and lifted inline unless the manifest declares
     ``source_assembly=hg38`` (#85); ``source_reader_capability`` supplies the
     per-release default (#174), and ``eaf_reference`` drives the orientation check.
+    ``column_map`` reads the manifest's ``opengwasdb.column-map`` rows (#281), and a
+    checkpoint records its checksum.
 
     ``checkpoint=True`` opts the build into phase-granularity resume; ``resume=True``
     continues one from the checkpoint this call's ``output_path`` implies (issue #227;
@@ -3227,7 +3237,9 @@ def build_hybrid_from_vcf_manifest(
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
     )
-    defaults = _ManifestDefaults(source_reader_capability, source_assembly)
+    defaults = _ManifestDefaults(
+        source_reader_capability, source_assembly, as_column_map(column_map)
+    )
     return _dispatch_build(manifest_path, options, defaults, overwrite, checkpoint, resume)
 
 
@@ -3263,6 +3275,7 @@ def _run_checkpointed_build(
         manifest_path,
         default_source_reader_capability=defaults.source_reader_capability,
         default_source_assembly=defaults.source_assembly,
+        column_map=defaults.column_map,
     )
     state = None
     if checkpoint:
@@ -3311,6 +3324,29 @@ class _ManifestDefaults:
 
     source_reader_capability: str | None
     source_assembly: str | None
+    column_map: ColumnMap | None = None
+
+
+def _column_map_param(column_map: ColumnMap | None) -> dict[str, str] | None:
+    """What a checkpoint records about the build's Column Map (issue #281)."""
+    if column_map is None:
+        return None
+    return {"spec": column_map.spec, **column_map.fingerprint()}
+
+
+def _recorded_column_map(params: Mapping[str, Any]) -> ColumnMap | None:
+    """The Column Map a checkpoint was built with, refused if it has changed since."""
+    recorded = params.get("column_map")
+    if recorded is None:
+        return None
+    column_map = load_column_map(recorded["spec"])
+    if column_map.sha256 != recorded["sha256"]:
+        raise ValueError(
+            f"The checkpoint at {params['output_path']} was built through Column Map "
+            f"{recorded['spec']} with sha256 {recorded['sha256']}, which has changed since. "
+            "Resume it only with the map it was started with."
+        )
+    return column_map
 
 
 # ── Checkpointed build and resume (issue #227) ──────────────────────────────
@@ -3359,12 +3395,15 @@ def resume_hybrid_build(
     _require_unchanged_inputs(params)
     options = _options_from_params(params, n_workers)
     defaults = _ManifestDefaults(
-        params.get("source_reader_capability"), params.get("source_assembly")
+        params.get("source_reader_capability"),
+        params.get("source_assembly"),
+        _recorded_column_map(params),
     )
     rows, policies = _load_manifest(
         params["manifest_path"],
         default_source_reader_capability=defaults.source_reader_capability,
         default_source_assembly=defaults.source_assembly,
+        column_map=defaults.column_map,
     )
     state = CheckpointState(path=path, params=params, completed=completed_phases(path))
     if not state.staged_dir.exists():
@@ -3585,6 +3624,7 @@ def _build_params(
         "overwrite": bool(overwrite),
         "source_reader_capability": defaults.source_reader_capability,
         "source_assembly": defaults.source_assembly,
+        "column_map": _column_map_param(defaults.column_map),
         "inputs": input_identities(
             {
                 "manifest": manifest_path,

@@ -4,7 +4,7 @@ A Column Map (`opengwasdb.readers.column_map`) declares which provider column
 holds each field and which conventions the values follow. This module reads a
 provider file through one, by presenting the file to the GWAS-SSF reader as the
 GWAS-SSF columns the map says it holds -- in the stream, not on disk (issue
-#281, ADR 0062). Every rule that reader carries (effect resolution, recovery of
+#281, ADR 0063). Every rule that reader carries (effect resolution, recovery of
 a standard error, z-score derivation, the projections' parity) therefore holds
 for every mapped collection, and there is one tabular reader rather than one
 per format.

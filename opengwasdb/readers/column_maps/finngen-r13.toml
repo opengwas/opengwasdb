@@ -1,7 +1,7 @@
 # Built-in Column Map: FinnGen R13 endpoint summary statistics.
 #
 # The columns and rules the dedicated `opengwasdb.finngen-r13` reader has
-# always read, stated as data (issue #281, ADR 0062). FinnGen publishes one
+# always read, stated as data (issue #281, ADR 0063). FinnGen publishes one
 # bgzipped file per endpoint on GRCh38, with the effect on the `alt` allele.
 column_map_version = 1
 name = "finngen-r13"

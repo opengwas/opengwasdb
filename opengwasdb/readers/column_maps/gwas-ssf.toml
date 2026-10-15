@@ -1,7 +1,7 @@
 # Built-in Column Map: EBI GWAS Summary Statistics Format (GWAS-SSF).
 #
 # The columns and rules the dedicated `opengwasdb.gwas-ssf` reader has always
-# read, stated as data (issue #281, ADR 0062). Reading a file through this map
+# read, stated as data (issue #281, ADR 0063). Reading a file through this map
 # gives the rows that reader gives, field for field.
 column_map_version = 1
 name = "gwas-ssf"
