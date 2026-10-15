@@ -191,3 +191,29 @@ def test_a_checkpointed_hybrid_resumes_only_with_the_map_it_started_with(
 
     with pytest.raises(ValueError, match="has changed since"):
         hybrid_build.resume_hybrid_build(checkpoint_dir_for(store))
+
+
+def test_a_mapped_row_with_no_build_anywhere_is_refused_by_the_build(tmp_path: Path) -> None:
+    """The build's own fallback is hg19; a `per_analysis` map must not inherit it."""
+    column_map = tmp_path / "per-analysis.toml"
+    column_map.write_text(
+        (_MVP / "mvp-gia.toml").read_text(encoding="utf-8")
+        .replace('genome_build = "GRCh38"', 'genome_build = "per_analysis"'),
+        encoding="utf-8",
+    )
+    manifest = _mvp_manifest(tmp_path / "raw.tsv", raw=True)
+    manifest.write_text(
+        "\n".join(line.rsplit("\t", 1)[0] for line in manifest.read_text().splitlines()) + "\n",
+        encoding="utf-8",
+    )
+    assert "source_assembly" not in manifest.read_text(), "the rows must declare no build"
+    store = tmp_path / "raw.opengwasdb"
+
+    result = _invoke(
+        "build-dense-vcf", str(manifest), str(store), "--store-id", "mvp", "--release-id", "r1",
+        "--column-map", str(column_map),
+    )
+
+    assert result.exit_code != 0
+    assert "per_analysis" in str(result.exception) + result.output
+    assert not store.exists()

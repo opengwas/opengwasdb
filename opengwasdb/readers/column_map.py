@@ -42,6 +42,7 @@ __all__ = [
     "as_column_map",
     "check_mapped_rows",
     "load_column_map",
+    "mapped_row_build",
 ]
 
 #: The Source Reader Capability of a collection read through a Column Map.
@@ -415,6 +416,28 @@ def _separator(table: Mapping[str, Any], key: str, *, may_be_none: bool = True) 
         allowed = "one character or 'none'" if may_be_none else "one character"
         raise ColumnMapError(f"{key} must be {allowed}, got {value!r}")
     return value
+
+
+def mapped_row_build(
+    declared: str | None, fallback: str | None, column_map: ColumnMap, context: str
+) -> str:
+    """The source build a mapped row is read in (issue #281).
+
+    The one rule resolution and Store Release Build both apply: the row's own
+    build, else the caller's explicit fallback, else the map's `genome_build`.
+    A `per_analysis` map leaves the build to the manifest, so a row that
+    declares none, with no fallback, is refused -- never read as hg19 because
+    that is a builder's default.
+    """
+    if declared:
+        return declared
+    build = fallback or column_map.conventions.genome_build
+    if build is None:
+        raise ColumnMapError(
+            f"{context} declares no source build, and Column Map {column_map.name!r} "
+            "declares genome_build = 'per_analysis'; declare the row's build or a CLI fallback"
+        )
+    return build
 
 
 def check_mapped_rows(

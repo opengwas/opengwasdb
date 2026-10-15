@@ -76,6 +76,7 @@ from opengwasdb.readers.column_map import (
     ColumnMap,
     as_column_map,
     check_mapped_rows,
+    mapped_row_build,
 )
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader, load_liftover
@@ -373,9 +374,10 @@ def _parse_manifest_row(
         raw.get("source_reader_capability"), default_cap, source_file, known, analysis_id, path
     )
     if cap == COLUMN_MAP_CAPABILITY and column_map is not None:
-        # The map's own build stands in only where neither the row nor the
-        # caller declares one; a disagreement is refused below, never resolved.
-        default_source_build = default_source_build or column_map.conventions.genome_build
+        default_source_build = mapped_row_build(
+            _declared_build(raw), default_source_build, column_map,
+            f"analyses manifest {path}: analysis {analysis_id!r}",
+        )
     scale = _parse_effect_scale(raw.get("stored_effect_scale"))
     method = _parse_sd_method(raw.get("original_sd_method"), scale)
     sample_size = _parse_sample_size_val(
@@ -415,6 +417,12 @@ def _parse_manifest_row(
         info_score_policy=info_score_policy,
         maf_policy=maf_policy,
     )
+
+
+def _declared_build(raw: dict[str, str]) -> str | None:
+    """The build a row names itself, under either spelling; `declared_source_build` checks them."""
+    value = raw.get("source_genome_build") or raw.get("source_assembly") or ""
+    return value.strip() or None
 
 
 def read_resolve_manifest(

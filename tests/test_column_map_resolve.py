@@ -181,3 +181,21 @@ def test_a_built_in_map_is_named_by_name(setup: dict[str, Any]) -> None:
     assert result.exit_code == 0, result.output
     recorded = _record(setup["tmp"] / "b")["fingerprints"]["resolution_config"]["column_map"]
     assert recorded["name"] == "gwas-ssf"
+
+
+def test_a_mapped_row_with_no_build_anywhere_is_refused(setup: dict[str, Any]) -> None:
+    """`per_analysis` means the manifest says; a row that does not is not hg19."""
+    setup["map"].write_text(
+        _MAP.replace('genome_build = "GRCh38"', 'genome_build = "per_analysis"'), encoding="utf-8"
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "resolve-analyses", str(setup["mapped"]), str(setup["tmp"] / "m"),
+            "--ancestry-reference", str(setup["ref"]), "--ancestry-groups", str(setup["groups"]),
+            "--reference-build", "GRCh38", "--column-map", str(setup["map"]),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "per_analysis" in result.output

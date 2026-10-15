@@ -92,6 +92,7 @@ from opengwasdb.readers.column_map import (
     ColumnMap,
     as_column_map,
     check_mapped_rows,
+    mapped_row_build,
 )
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.interface import SourceVariant
@@ -2454,7 +2455,7 @@ def _read_manifest(
     parsed = [
         _with_column_map(
             _parse_manifest_row(row, cols, manifest_path, fallback_assembly, fallback_capability),
-            row, loaded_map, default_source_assembly,
+            row, loaded_map, default_source_assembly, f"manifest {manifest_path}",
         )
         for row in rows
     ]
@@ -2471,15 +2472,21 @@ def _with_column_map(
     raw: Mapping[str, str],
     column_map: ColumnMap | None,
     default_assembly: str | None,
+    context: str,
 ) -> _ManifestRow:
-    """A mapped row with its Column Map, and the map's build where nothing else declares one."""
+    """A mapped row with its Column Map, in the build `mapped_row_build` gives it.
+
+    The row's own build is re-derived through the shared rule rather than taken
+    from `_parse_manifest_row`, which falls back to hg19 -- a default a mapped
+    row must never inherit (#281).
+    """
     if row.source_reader_capability != COLUMN_MAP_CAPABILITY or column_map is None:
         return row
-    build = row.source_assembly
-    declared = column_map.conventions.genome_build
-    if not raw.get("source_assembly") and default_assembly is None and declared is not None:
-        build = declared
-    return replace(row, column_map=column_map, source_assembly=build)
+    declared = row.source_assembly if raw.get("source_assembly") else None
+    build = mapped_row_build(
+        declared, default_assembly, column_map, f"{context}: analysis {row.trait_id!r}"
+    )
+    return replace(row, column_map=column_map, source_assembly=normalise_build(build))
 
 
 def _alid_sort_key(alid: str) -> tuple[tuple[int, str], int, str, str]:
