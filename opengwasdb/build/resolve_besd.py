@@ -34,12 +34,12 @@ from opengwasdb.build.resolve import (
     AfReference,
     AnalysisRequest,
     AnalysisResolution,
-    ScanDiagnostics,
     ScanLimit,
-    SourceAncestry,
+    SourceAncestryMeasurement,
     measure_source_ancestry,
     needs_phenotype_sd,
     resolve_analysis,
+    unresolved,
 )
 from opengwasdb.readers.assembly import assembly_plan
 from opengwasdb.readers.besd import (
@@ -63,14 +63,24 @@ __all__ = [
 class BesdMeasurement:
     """One BESD file set, read and measured once; or why it could not be.
 
-    Exactly one of (`source` and `ancestry`) or `error` is set. An `error` is
-    every probe's controlled failure: a file set that cannot be read, aligned
-    or measured cannot resolve any Analysis in it.
+    Exactly one of (`source` and `ancestry`) or `error` is set, and the
+    constructor refuses anything else. An `error` is every probe's controlled
+    failure: a file set that cannot be read, aligned or measured cannot resolve
+    any Analysis in it. `measurement_id` names the attempt either way.
     """
 
-    source: BesdSource | None
-    ancestry: SourceAncestry | None
-    error: str = ""
+    measurement_id: str
+    source: BesdSource | None = None
+    ancestry: SourceAncestryMeasurement | None = None
+    error: str | None = None
+
+    def __post_init__(self) -> None:
+        measured = self.source is not None and self.ancestry is not None
+        partial = (self.source is None) != (self.ancestry is None)
+        if partial or measured == (self.error is not None):
+            raise ValueError(
+                "a BESD measurement is either a source and its ancestry, or an error"
+            )
 
 
 def besd_member_stats(prefix: str | Path) -> dict[str, dict[str, int | None]]:
@@ -106,9 +116,9 @@ def measure_besd_source(
     try:
         source = _load_aligned(prefix, source_build, reference_build, chain_file)
     except (OSError, ValueError) as exc:
-        return BesdMeasurement(None, None, f"{type(exc).__name__}: {exc}")
+        return BesdMeasurement(measurement_id, error=f"{type(exc).__name__}: {exc}")
     if source.n_frequencies == 0:
-        return BesdMeasurement(None, None, (
+        return BesdMeasurement(measurement_id, error=(
             f"BESD source {prefix}.esi reports no usable allele frequency on any of its "
             f"{source.n_rows} rows (no frequency column, or NA throughout): ancestry and "
             f"allele orientation cannot be measured, and no frequency is substituted"
@@ -118,7 +128,7 @@ def measure_besd_source(
         reference=reference, measurement_id=measurement_id,
         extraction_panel=extraction_panel, gates=gates, scan_limit=scan_limit,
     )
-    return BesdMeasurement(source, ancestry)
+    return BesdMeasurement(measurement_id, source, ancestry)
 
 
 def _load_aligned(
@@ -152,13 +162,13 @@ def resolve_besd_analysis(
 ) -> AnalysisResolution:
     """Resolve one probe against its file's shared measurement."""
     refusal = _refusal(request, measurement)
-    if refusal:
-        return AnalysisResolution(
-            analysis_id=request.analysis_id,
-            diagnostics=ScanDiagnostics(
-                source_file=str(request.source_file), rows_read=0, ancestry_sites=0
-            ),
-            error=refusal,
+    if refusal is not None:
+        # The file's measurement is recorded even on a refused probe (stores
+        # ADR 0036): every Analysis's measurements, whether it passes or not.
+        return unresolved(
+            request.analysis_id, request.source_file, refusal,
+            source_ancestry=measurement.ancestry,
+            measurement_id=measurement.measurement_id,
         )
     assert measurement.source is not None
     return resolve_analysis(
@@ -174,8 +184,12 @@ def resolve_besd_analysis(
     )
 
 
-def _refusal(request: AnalysisRequest, measurement: BesdMeasurement) -> str:
-    """Why this probe cannot be resolved at all, or `""`."""
+def _refusal(request: AnalysisRequest, measurement: BesdMeasurement) -> str | None:
+    """Why this probe cannot be resolved at all, or `None`.
+
+    A missing sample size is refused only when the probe's tier estimates an
+    SD; a declared-standardised or case-control probe needs no N (ADR 0062).
+    """
     if needs_phenotype_sd(request) and not has_usable_sample_size(request.sample_size):
         return (
             f"Analysis {request.analysis_id}: original_sd_method "

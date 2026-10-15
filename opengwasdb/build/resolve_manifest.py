@@ -61,6 +61,7 @@ from opengwasdb.build.resolve import (
     ScanDiagnostics,
     ScanLimit,
     resolve_analysis,
+    unresolved,
 )
 from opengwasdb.build.resolve_besd import (
     BesdMeasurement,
@@ -80,6 +81,7 @@ from opengwasdb.readers.assembly import assembly_plan, declared_source_build
 from opengwasdb.readers.besd import BESD_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader, load_liftover
+from opengwasdb.readers.interface import SourceReader
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
 
 logger = logging.getLogger(__name__)
@@ -815,55 +817,47 @@ _REFERENCE_LOAD_CALLS: int = 0
 #: Each BESD file set measured once in the parent, keyed by
 #: `(source_file, source_genome_build)` (issue #282, ADR 0062).
 _WORKER_BESD_MEASUREMENTS: dict[tuple[str, str], BesdMeasurement] = {}
+_BESD_MEASUREMENT_CALLS: int = 0
+
+
+def besd_measurement_count() -> int:
+    """BESD file sets measured by this process so far (issue #282).
+
+    The measure-once contract made observable: a run measures each file set it
+    resolves exactly once, in this (parent) process, never per probe or per
+    worker.
+    """
+    return _BESD_MEASUREMENT_CALLS
+
+
+_Outcome = tuple[AnalysisResolution, RecordStatus, str | None]
+
+
+def _analysis_request(task: dict[str, Any]) -> AnalysisRequest:
+    """One task's Analysis, as the resolver takes it, for every format."""
+    return AnalysisRequest(
+        analysis_id=task["analysis_id"],
+        source_file=task["source_file"],
+        sample_size=task["sample_size"],
+        original_sd_method=OriginalSdMethod(task["original_sd_method"]),
+        stored_effect_scale=StoredEffectScale(task["stored_effect_scale"]),
+        info_score_policy=task.get("info_score_policy", InfoScorePolicy()),
+        maf_policy=task.get("maf_policy", MafPolicy()),
+    )
 
 
 def _execute_analysis(
-    analysis_id: str,
-    source_file: str,
+    req: AnalysisRequest,
     cap: str,
-    scale: StoredEffectScale,
-    method: OriginalSdMethod,
-    sample_size: float | None,
     source_build: str,
     reference_build: str,
     chain_file: str | None,
-    info_score_policy: InfoScorePolicy | None = None,
-    maf_policy: MafPolicy | None = None,
-) -> tuple[AnalysisResolution, RecordStatus, str | None]:
+) -> _Outcome:
     assert _WORKER_ANCESTRY_REFERENCE is not None
     assert _WORKER_GATES is not None
-    info_score_policy = info_score_policy or InfoScorePolicy()
-    req = AnalysisRequest(
-        analysis_id=analysis_id,
-        source_file=source_file,
-        sample_size=sample_size,
-        original_sd_method=method,
-        stored_effect_scale=scale,
-        info_score_policy=info_score_policy,
-        maf_policy=maf_policy or MafPolicy(),
-    )
+    declaration = req.info_score_policy.imputation_score_declaration
     try:
-        if info_score_policy.imputation_score_declaration is not None:
-            reader = resolve_reader(
-                cap, source_file, scale,
-                imputation_score_declaration=info_score_policy.imputation_score_declaration,
-            )
-        else:
-            reader = resolve_reader(cap, source_file, scale)
-        plan = assembly_plan(
-            capability=cap,
-            source_build=source_build,
-            reference_build=reference_build,
-            chain_file=chain_file,
-        )
-        if plan.requires_liftover:
-            assert isinstance(reader, GwasVcfReader)
-            reader = replace(
-                reader,
-                liftover=load_liftover(
-                    plan.source_build, plan.reference_build, str(plan.chain_file)
-                ),
-            )
+        reader = _resolved_reader(req, cap, source_build, reference_build, chain_file)
         res = resolve_analysis(
             req,
             reader=reader,
@@ -875,51 +869,76 @@ def _execute_analysis(
             evidence_sample=_WORKER_EVIDENCE_SAMPLE,
             scan_limit=_WORKER_SCAN_LIMIT,
         )
-        if res.error:
-            # A declared score's failure must name its Analysis, whether it was
-            # raised by the scan or by the no-usable-scores check above.
-            error = res.error
-            if (info_score_policy.imputation_score_declaration is not None
-                    and not error.startswith(f"Analysis {analysis_id}:")):
-                error = f"Analysis {analysis_id}: {error}"
-            return res, RecordStatus.CONTROLLED_FAILURE, error
-        return res, RecordStatus.SUCCESS, None
     except Exception as exc:
-        return _failed_resolution(analysis_id, source_file, exc)
+        return _failed_resolution(req, exc)
+    # A declared score's failure must name its Analysis, whether it was
+    # raised by the scan or by the no-usable-scores check above.
+    if (res.error and declaration is not None
+            and not res.error.startswith(f"Analysis {req.analysis_id}:")):
+        res = replace(res, error=f"Analysis {req.analysis_id}: {res.error}")
+    return _outcome(res)
 
 
-def _failed_resolution(
-    analysis_id: str, source_file: str, exc: Exception
-) -> tuple[AnalysisResolution, RecordStatus, str | None]:
-    """An unexpected per-Analysis error, isolated as that Analysis's controlled failure."""
-    err_msg = f"{type(exc).__name__}: {exc}"
-    res = AnalysisResolution(
-        analysis_id=analysis_id,
-        diagnostics=ScanDiagnostics(source_file=source_file, rows_read=0, ancestry_sites=0),
-        error=err_msg,
+def _resolved_reader(
+    req: AnalysisRequest,
+    cap: str,
+    source_build: str,
+    reference_build: str,
+    chain_file: str | None,
+) -> SourceReader:
+    """The Analysis's reader, lifted onto the reference build when its plan requires."""
+    declaration = req.info_score_policy.imputation_score_declaration
+    scale = req.stored_effect_scale
+    if declaration is not None:
+        reader = resolve_reader(
+            cap, req.source_file, scale, imputation_score_declaration=declaration
+        )
+    else:
+        reader = resolve_reader(cap, req.source_file, scale)
+    plan = assembly_plan(
+        capability=cap,
+        source_build=source_build,
+        reference_build=reference_build,
+        chain_file=chain_file,
     )
-    return res, RecordStatus.CONTROLLED_FAILURE, err_msg
+    if plan.requires_liftover:
+        assert isinstance(reader, GwasVcfReader)
+        reader = replace(
+            reader,
+            liftover=load_liftover(
+                plan.source_build, plan.reference_build, str(plan.chain_file)
+            ),
+        )
+    return reader
 
 
-def _execute_besd_analysis(
-    task: dict[str, Any],
-) -> tuple[AnalysisResolution, RecordStatus, str | None]:
+def _outcome(res: AnalysisResolution) -> _Outcome:
+    if res.error:
+        return res, RecordStatus.CONTROLLED_FAILURE, res.error
+    return res, RecordStatus.SUCCESS, None
+
+
+def _failed_resolution(req: AnalysisRequest, exc: Exception) -> _Outcome:
+    """An unexpected per-Analysis error, isolated as that Analysis's controlled failure."""
+    return _outcome(
+        unresolved(req.analysis_id, req.source_file, f"{type(exc).__name__}: {exc}")
+    )
+
+
+def _execute_besd_analysis(req: AnalysisRequest, task: dict[str, Any]) -> _Outcome:
     """One BESD probe against its file set's parent-measured `.esi` (issue #282)."""
     assert _WORKER_ANCESTRY_REFERENCE is not None
-    request = AnalysisRequest(
-        analysis_id=task["analysis_id"],
-        source_file=task["source_file"],
-        sample_size=task["sample_size"],
-        original_sd_method=OriginalSdMethod(task["original_sd_method"]),
-        stored_effect_scale=StoredEffectScale(task["stored_effect_scale"]),
-        info_score_policy=task["info_score_policy"],
-        maf_policy=task["maf_policy"],
-    )
+    key = (task["source_file"], task["source_genome_build"])
+    measurement = _WORKER_BESD_MEASUREMENTS.get(key)
+    if measurement is None:
+        # A defect in the run, not in the data: the parent measures every file
+        # set before any probe of it runs. Raised, never recorded as a failure.
+        raise RuntimeError(f"BESD file set {key} was not measured before its probes ran")
     try:
         res = resolve_besd_analysis(
-            request,
+            req,
             task["source_probe_id"],
-            _WORKER_BESD_MEASUREMENTS[(task["source_file"], task["source_genome_build"])],
+            measurement,
             reference=_WORKER_ANCESTRY_REFERENCE,
             gates=_WORKER_GATES,
             af_references=_WORKER_AF_REFERENCES,
@@ -928,10 +947,8 @@ def _execute_besd_analysis(
             variant_reference=_WORKER_VARIANT_REFERENCE,
         )
     except Exception as exc:
-        return _failed_resolution(task["analysis_id"], task["source_file"], exc)
-    if res.error:
-        return res, RecordStatus.CONTROLLED_FAILURE, res.error
-    return res, RecordStatus.SUCCESS, None
+        return _failed_resolution(req, exc)
+    return _outcome(res)
 
 
 def _extract_worker_summary(
@@ -965,24 +982,20 @@ def _extract_worker_summary(
 def _worker_resolve_one(task: dict[str, Any]) -> dict[str, Any]:
     """Worker task: resolve one Analysis and write its atomic JSON record."""
     analysis_id = task["analysis_id"]
-    source_file = task["source_file"]
     cap = task["source_reader_capability"]
-    scale = StoredEffectScale(task["stored_effect_scale"])
     method = OriginalSdMethod(task["original_sd_method"])
-    sample_size = task["sample_size"]
     fingerprints = task["fingerprints"]
     record_path = Path(task["record_path"])
+    request = _analysis_request(task)
 
     tracemalloc.start()
     t0 = time.monotonic()
     if cap == BESD_CAPABILITY:
-        res, status, err_msg = _execute_besd_analysis(task)
+        res, status, err_msg = _execute_besd_analysis(request, task)
     else:
         res, status, err_msg = _execute_analysis(
-            analysis_id, source_file, cap, scale, method, sample_size,
+            request, cap,
             task["source_genome_build"], task["reference_build"], task.get("chain_file"),
-            task.get("info_score_policy", InfoScorePolicy()),
-            task.get("maf_policy", MafPolicy()),
         )
     elapsed = time.monotonic() - t0
     _current, peak = tracemalloc.get_traced_memory()
@@ -1354,22 +1367,24 @@ def _measure_besd_sources(
     file set, naming the Analyses that share it, in manifest order.
     """
     _WORKER_BESD_MEASUREMENTS.clear()
-    groups: dict[tuple[str, str], list[str]] = {}
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for task in sorted(tasks, key=lambda t: t["manifest_index"]):
         if task["source_reader_capability"] == BESD_CAPABILITY:
             key = (task["source_file"], task["source_genome_build"])
-            groups.setdefault(key, []).append(task["analysis_id"])
+            groups.setdefault(key, []).append(task)
     entries: list[dict[str, Any]] = []
-    for (source_file, build), analyses in groups.items():
-        measurement_id = _besd_measurement_id(source_file, build, fp_kwargs)
+    for (source_file, build), members in groups.items():
+        # The member files were stat'ed once, for the first probe's fingerprint.
+        stats = members[0]["fingerprints"]["source_member_files"]
+        measurement_id = _besd_measurement_id(source_file, build, stats, fp_kwargs)
         measurement = _measure_one_besd(source_file, build, measurement_id, fp_kwargs)
         _WORKER_BESD_MEASUREMENTS[(source_file, build)] = measurement
         entries.append({
             "measurement_id": measurement_id,
             "source_file": source_file,
             "source_genome_build": build,
-            "analyses": analyses,
-            "error": measurement.error or None,
+            "analyses": [task["analysis_id"] for task in members],
+            "error": measurement.error,
         })
     return entries
 
@@ -1377,7 +1392,9 @@ def _measure_besd_sources(
 def _measure_one_besd(
     source_file: str, build: str, measurement_id: str, fp_kwargs: dict[str, Any]
 ) -> BesdMeasurement:
+    global _BESD_MEASUREMENT_CALLS
     assert _WORKER_ANCESTRY_REFERENCE is not None
+    _BESD_MEASUREMENT_CALLS += 1
     return measure_besd_source(
         source_file,
         source_build=build,
@@ -1391,7 +1408,9 @@ def _measure_one_besd(
     )
 
 
-def _besd_measurement_id(source_file: str, build: str, fp_kwargs: dict[str, Any]) -> str:
+def _besd_measurement_id(
+    source_file: str, build: str, member_stats: dict[str, Any], fp_kwargs: dict[str, Any]
+) -> str:
     """A digest of everything one file set's measurement depends on.
 
     Equal across runs for the same inputs, so serial, parallel and resumed
@@ -1402,7 +1421,7 @@ def _besd_measurement_id(source_file: str, build: str, fp_kwargs: dict[str, Any]
     identity = {
         "source_file": source_file,
         "source_genome_build": build,
-        "source_member_files": besd_member_stats(source_file),
+        "source_member_files": member_stats,
         "gates": asdict(fp_kwargs["gates"]),
         "scan_limit": None if scan_limit is None else scan_limit.as_fingerprint(),
         **{key: fp_kwargs[key] for key in _MEASUREMENT_IDENTITY_KEYS},
@@ -1418,6 +1437,8 @@ _MEASUREMENT_IDENTITY_KEYS = (
     "extraction_panel_sha256",
     "reference_build",
     "chain_fingerprint",
+    # The Ancestry Reference Panel is loaded with this floor, which decides
+    # which of its sites exist to be fitted against: the fit depends on it.
     "maf_floor",
 )
 
@@ -1436,7 +1457,12 @@ def _execute_resolution_pipeline(
     if largest_first:
         tasks.sort(key=lambda t: (-t["size_weight"], t["manifest_index"]))
 
-    executed = _run_tasks(tasks, n_workers)
+    try:
+        executed = _run_tasks(tasks, n_workers)
+    finally:
+        # The measurements hold every file set's per-variant arrays; nothing
+        # needs them once the run's probes are resolved.
+        _WORKER_BESD_MEASUREMENTS.clear()
     all_summaries, n_success, n_failed, failed_ids = _assemble_index(rows, resumed, executed)
 
     index_data = {

@@ -37,8 +37,13 @@ def write_besd_sparse_3f(
     path: Path,
     n_probes: int,
     probe_assocs: list[list[tuple[int, float, float]]],
+    *,
+    file_type: str = "3F",
 ) -> None:
-    """Write a minimal SPARSE_FILE_TYPE_3F BESD file.
+    """Write a minimal SPARSE_FILE_TYPE_3F (or `file_type="3"`) BESD file.
+
+    Type 3 differs only in its header: magic `3` and 15 reserved int32s
+    before `val_num`. eQTLGen's `.besd` is type 3.
 
     BESD layout: for each probe p, val contains [betas | SEs] and rowid contains
     [snp_indices | zeros] at the same offsets. cols[2p]=beta_start, cols[2p+1]=se_start.
@@ -67,7 +72,10 @@ def write_besd_sparse_3f(
     col_num = (n_probes << 1) + 1
 
     with open(path, "wb") as fh:
-        fh.write(struct.pack("<I", 0x40400000))         # magic 3F
+        if file_type == "3":
+            fh.write(struct.pack("<16i", 3, *([0] * 15)))  # magic 3 + reserved
+        else:
+            fh.write(struct.pack("<I", 0x40400000))     # magic 3F
         fh.write(struct.pack("<Q", val_num))             # val_num
         fh.write(struct.pack(f"<{col_num}Q", *cols))    # column offsets
         fh.write(struct.pack(f"<{val_num}I", *rowid))   # row indices

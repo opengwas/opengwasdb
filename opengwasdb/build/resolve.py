@@ -83,10 +83,11 @@ __all__ = [
     "ScanStop",
     "SdReason",
     "SdStatus",
-    "SourceAncestry",
+    "SourceAncestryMeasurement",
     "measure_source_ancestry",
     "needs_phenotype_sd",
     "resolve_analysis",
+    "unresolved",
 ]
 
 #: The stopping-rule contract's version (issue #209, issue #212). A caller that
@@ -163,7 +164,7 @@ class AncestryScope(StrEnum):
 
     `ANALYSIS` is the Analysis's own scan. `SOURCE_FILE` is one measurement of
     a multi-Analysis source's per-variant frequencies, shared by every Analysis
-    in it -- a BESD file's `.esi` (:class:`SourceAncestry`).
+    in it -- a BESD file's `.esi` (:class:`SourceAncestryMeasurement`).
     """
 
     ANALYSIS = "analysis"
@@ -303,7 +304,7 @@ class ScanDiagnostics:
 
 
 @dataclass(frozen=True)
-class SourceAncestry:
+class SourceAncestryMeasurement:
     """An ancestry fit measured once over a whole multi-Analysis source (issue #282).
 
     A BESD file reports one frequency per variant, shared by every probe in it,
@@ -353,9 +354,12 @@ class PhenotypeSdResolution:
 class AnalysisResolution:
     """Everything one source scan produced for one Analysis (issue #207).
 
-    A non-empty `error` means the source could not be read at all: `ancestry` and
-    `phenotype_sd` are then both `None`, and the caller records a controlled
-    failure rather than inventing an outcome. Otherwise both are set -- an
+    A non-empty `error` means the Analysis could not be resolved: `phenotype_sd`
+    is then `None`, and the caller records a controlled failure rather than
+    inventing an outcome. `ancestry` is `None` too, unless the Analysis shares a
+    source measurement that was made (a BESD probe refused for its own reasons,
+    issue #282): every measurement is recorded whether the Analysis passes or
+    not (stores ADR 0036). Otherwise both are set -- an
     ancestry fit that failed its gates is still a fit, with `gate_reason` naming
     why (ADR 0028), and a skipped or unavailable phenotype SD is still a reported
     outcome.
@@ -491,7 +495,7 @@ def _entry_sequence(entry: tuple[int, int, float, float, float, str]) -> int:
 
 
 def _diagnostics(
-    request: AnalysisRequest, scan: _Scan, source_ancestry: SourceAncestry | None = None
+    request: AnalysisRequest, scan: _Scan, source_ancestry: SourceAncestryMeasurement | None = None
 ) -> ScanDiagnostics:
     ancestry_rows = (
         scan.ancestry_rows_read if scan.ancestry_rows_read > 0 else scan.rows_read
@@ -500,7 +504,7 @@ def _diagnostics(
 
 
 def _with_source_ancestry(
-    diagnostics: ScanDiagnostics, source_ancestry: SourceAncestry | None
+    diagnostics: ScanDiagnostics, source_ancestry: SourceAncestryMeasurement | None
 ) -> ScanDiagnostics:
     """The scan's diagnostics with the shared measurement's ancestry counts, if any."""
     if source_ancestry is None:
@@ -811,7 +815,7 @@ def measure_source_ancestry(
     extraction_panel: Collection[str] | None = None,
     gates: Gates | None = None,
     scan_limit: ScanLimit | None = None,
-) -> SourceAncestry:
+) -> SourceAncestryMeasurement:
     """Fit ancestry once over a source's per-variant frequencies (issue #282).
 
     The site rule is `_accumulate_ancestry`'s -- a usable A1 frequency, no
@@ -834,7 +838,7 @@ def measure_source_ancestry(
     )
     if stopped is not None:
         rows_read, stop = stopped + 1, ScanStop.ANCESTRY_SITE_LIMIT
-    return SourceAncestry(
+    return SourceAncestryMeasurement(
         assignment=assign_ancestry(panel_af, reference, gates),
         measurement_id=measurement_id,
         sites=len(panel_af),
@@ -1003,10 +1007,43 @@ def _resolve_phenotype_sd(
     )
 
 
+def unresolved(
+    analysis_id: str,
+    source_file: str | Path,
+    error: str,
+    *,
+    source_ancestry: SourceAncestryMeasurement | None = None,
+    measurement_id: str | None = None,
+) -> AnalysisResolution:
+    """An Analysis that cannot be resolved, keeping any shared measurement it has.
+
+    `source_ancestry` is the source file's ancestry fit when one was made: the
+    record carries it, and its `.esi` counts, rather than zeros under the
+    Analysis's own scope. `measurement_id` alone names a source measurement
+    that was attempted and produced no fit (a `.esi` with no frequencies).
+    """
+    diagnostics = _with_source_ancestry(
+        ScanDiagnostics(source_file=str(source_file), rows_read=0, ancestry_sites=0),
+        source_ancestry,
+    )
+    if source_ancestry is None and measurement_id is not None:
+        diagnostics = replace(
+            diagnostics,
+            ancestry_scope=AncestryScope.SOURCE_FILE,
+            ancestry_measurement_id=measurement_id,
+        )
+    return AnalysisResolution(
+        analysis_id=analysis_id,
+        diagnostics=diagnostics,
+        ancestry=None if source_ancestry is None else source_ancestry.assignment,
+        error=error,
+    )
+
+
 def _ancestry_panel(
     reference: AncestryReference,
     extraction_panel: Collection[str] | None,
-    source_ancestry: SourceAncestry | None,
+    source_ancestry: SourceAncestryMeasurement | None,
 ) -> Collection[str]:
     """The sites this scan records frequencies at: none when the source's fit stands."""
     if source_ancestry is not None:
@@ -1018,7 +1055,7 @@ def _ancestry(
     scan: _Scan,
     reference: AncestryReference,
     gates: Gates | None,
-    source_ancestry: SourceAncestry | None,
+    source_ancestry: SourceAncestryMeasurement | None,
 ) -> AncestryAssignment:
     if source_ancestry is not None:
         return source_ancestry.assignment
@@ -1036,7 +1073,7 @@ def resolve_analysis(
     evidence_sample: int = DEFAULT_EVIDENCE_SAMPLE,
     scan_limit: ScanLimit | None = None,
     variant_reference: Collection[str] | None = None,
-    source_ancestry: SourceAncestry | None = None,
+    source_ancestry: SourceAncestryMeasurement | None = None,
 ) -> AnalysisResolution:
     """Resolve one Analysis's ancestry and phenotype SD from one source scan.
 

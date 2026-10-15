@@ -259,8 +259,10 @@ def read_besd_probe(
     worker processes, and eQTLGen's `.besd` is 2 GB (issue #282): each call
     here reads the header, two column offsets and the probe's own slices.
     The arrays are exactly :meth:`BESDReader.get_probe_associations`' for the
-    same probe. A probe index outside the file, or a slice the file is too
-    short to hold, raises rather than returning a short or empty answer.
+    same probe. A probe index outside the file, corrupt column offsets (a
+    negative start, or an SE block before the beta block), or a slice the file
+    is too short to hold raises rather than returning a short or empty answer;
+    only equal offsets are an empty probe.
     """
     if not 0 <= probe_idx < n_probes:
         raise ValueError(f"{besd_path}: probe index {probe_idx} outside 0..{n_probes - 1}")
@@ -268,12 +270,10 @@ def read_besd_probe(
         val_num, cols_offset = _sparse_header(fh, besd_path)
         fh.seek(cols_offset + 16 * probe_idx)
         beta_start, se_start = _read_array(fh, np.int64, 2, besd_path).tolist()
-        n = se_start - beta_start
-        if n <= 0:
+        n = _association_count(besd_path, probe_idx, beta_start, se_start, val_num)
+        if n == 0:
             empty = np.empty(0, dtype=np.uint32)
             return empty, np.empty(0, dtype=np.float32), np.empty(0, dtype=np.float32)
-        if se_start + n > val_num:
-            raise ValueError(f"{besd_path}: probe {probe_idx} slice ends past {val_num} values")
         rowid_offset = cols_offset + 8 * ((n_probes << 1) + 1)
         val_offset = rowid_offset + 4 * val_num
         fh.seek(rowid_offset + 4 * beta_start)
@@ -281,6 +281,24 @@ def read_besd_probe(
         fh.seek(val_offset + 4 * beta_start)
         values = _read_array(fh, np.float32, 2 * n, besd_path)
     return snp_idx, values[:n], values[n:]
+
+
+def _association_count(
+    besd_path: str | Path, probe_idx: int, beta_start: int, se_start: int, val_num: int
+) -> int:
+    """How many associations a probe's column offsets describe; corrupt ones raise.
+
+    Only equal offsets are an empty probe. A negative start, an SE block before
+    the beta block, or one ending past the file's values is a damaged file,
+    which `BESDReader` would silently read as empty.
+    """
+    n = se_start - beta_start
+    if beta_start < 0 or n < 0 or se_start + n > val_num:
+        raise ValueError(
+            f"{besd_path}: probe {probe_idx} has corrupt column offsets "
+            f"(beta_start {beta_start}, se_start {se_start}, {val_num} values)"
+        )
+    return n
 
 
 def _sparse_header(fh: BinaryIO, besd_path: str | Path) -> tuple[int, int]:

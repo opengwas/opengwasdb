@@ -22,7 +22,8 @@ import numpy as np
 import pytest
 from besd_fixtures import NO_FREQUENCY_COLUMN, write_besd_sparse_3f, write_epi, write_esi
 
-from opengwasdb.build.resolve_manifest import resolve_analyses_manifest
+from opengwasdb.build.resolve_manifest import besd_measurement_count, resolve_analyses_manifest
+from opengwasdb.layouts.ragged.besd_reader import BESDReader, read_besd_probe
 
 N_SITES = 60
 STUDY_N = 20_000
@@ -278,6 +279,11 @@ def test_besd_without_frequencies_is_a_controlled_failure_per_analysis(
         assert "frequenc" in record["error"]
         assert record["ancestry"] is None
         assert record["phenotype_sd"] is None
+        # The attempted measurement is named, not dressed as the Analysis's own scan.
+        assert record["diagnostics"]["ancestry_scope"] == "source_file"
+        assert record["diagnostics"]["ancestry_sites"] == 0
+    assert len({_record(records, a)["diagnostics"]["ancestry_measurement_id"]
+                for a in ("eqtl_p1", "eqtl_p2")} - {None}) == 1
 
 
 # ── Seam 3: no sample size is refused ────────────────────────────────────────
@@ -294,11 +300,19 @@ def test_besd_analysis_without_sample_size_is_refused(tmp_path: Path) -> None:
 
     records = _resolve(tmp_path, manifest)
 
-    refused = _record(records, "eqtl_p1")
+    refused, measured = _record(records, "eqtl_p1"), _record(records, "eqtl_p2")
     assert refused["status"] == "controlled_failure"
     assert "sample_size" in refused["error"]
     assert refused["phenotype_sd"] is None
-    assert _record(records, "eqtl_p2")["status"] == "success"
+    assert measured["status"] == "success"
+    # Refused, but its file's measurement is still recorded (stores ADR 0036).
+    assert refused["ancestry"] == measured["ancestry"]
+    assert refused["ancestry"]["assigned_ancestry"] == "EUR"
+    for key in ("ancestry_scope", "ancestry_measurement_id", "ancestry_sites",
+                "ancestry_rows_read", "ancestry_reference_rows_matched"):
+        assert refused["diagnostics"][key] == measured["diagnostics"][key], key
+    assert refused["diagnostics"]["ancestry_scope"] == "source_file"
+    assert refused["diagnostics"]["ancestry_sites"] == N_SITES
     declared = _record(records, "eqtl_p2_std")
     assert declared["status"] == "success"
     assert declared["phenotype_sd"]["status"] == "skipped"
@@ -317,8 +331,12 @@ def test_frequencies_are_measured_once_per_source_file(tmp_path: Path) -> None:
         _besd_row("eqtl_p2", eur, _P2),
     ])
 
+    before = besd_measurement_count()
     records = _resolve(tmp_path, manifest, n_workers=2)
 
+    # Counted in the parent: one per file set. Per-probe measurement counts 3,
+    # and measuring in each forked worker counts 0 here.
+    assert besd_measurement_count() - before == 2
     p1, p2, p3 = (_record(records, a) for a in ("eqtl_p1", "eqtl_p2", "eqtl_p3"))
     assert p3["ancestry"]["assigned_ancestry"] == "EAS", "each file is its own measurement"
     for record in (p1, p2, p3):
@@ -338,3 +356,139 @@ def test_frequencies_are_measured_once_per_source_file(tmp_path: Path) -> None:
         entry["source_file"]: entry["analyses"] for entry in index["source_measurements"]
     }
     assert measured == {str(eur): ["eqtl_p1", "eqtl_p2"], str(eas): ["eqtl_p3"]}
+
+
+# ── Resume binds the file set and the probe ──────────────────────────────────
+
+
+def test_resume_is_invalidated_by_a_rewritten_esi_or_a_changed_probe(tmp_path: Path) -> None:
+    prefix = _two_probe_file(tmp_path)
+    rows = [_besd_row("eqtl_p1", prefix, _P1), _besd_row("eqtl_p2", prefix, _P2)]
+    manifest = _write_manifest(tmp_path / "analyses.tsv", rows)
+    reference, mapping = _write_reference(tmp_path / "reference")
+    params: dict[str, Any] = {
+        "ancestry_reference": reference, "ancestry_groups": mapping,
+        "reference_build": "GRCh38", "n_min": 10, "residual_max": 0.25, "delta": 0.10,
+        "resume": True,
+    }
+    records = tmp_path / "records"
+
+    def run() -> tuple[int, int]:
+        before = besd_measurement_count()
+        summary = resolve_analyses_manifest(manifest, records, **params)
+        return summary.n_resumed, besd_measurement_count() - before
+
+    assert run() == (0, 1)
+    assert run() == (2, 0), "unchanged: resumed, and the file set is not re-measured"
+
+    _write_manifest(manifest, [_besd_row("eqtl_p1", prefix, _P2), rows[1]])
+    assert run() == (1, 1), "a changed source_probe_id reruns that Analysis only"
+
+    esi = prefix.with_suffix(".esi")
+    esi.write_text(esi.read_text(encoding="utf-8").replace("\t0\t", "\t0.0\t"),
+                   encoding="utf-8")
+    assert run() == (0, 1), "a rewritten .esi reruns every probe of its file set"
+
+
+# ── Refusals of the declaration and of a damaged file set ────────────────────
+
+
+@pytest.mark.parametrize("probe_id", ["", "   "])
+def test_besd_row_without_a_probe_id_is_a_manifest_error(tmp_path: Path, probe_id: str) -> None:
+    prefix = _two_probe_file(tmp_path)
+    manifest = _write_manifest(tmp_path / "analyses.tsv", [_besd_row("a", prefix, probe_id)])
+
+    with pytest.raises(ValueError, match="source_probe_id"):
+        _resolve(tmp_path, manifest)
+
+
+def test_a_probe_id_on_a_tabular_row_is_a_manifest_error(tmp_path: Path) -> None:
+    ssf = _write_ssf(tmp_path / "eur.h.tsv", _EUR_MIX, _P1_SD)
+    manifest = _write_manifest(tmp_path / "analyses.tsv", [
+        ("gwas", str(ssf), "opengwasdb.gwas-ssf", _P1, "sd", "estimated_from_source_maf",
+         str(STUDY_N), "GRCh38"),
+    ])
+
+    with pytest.raises(ValueError, match="source_probe_id"):
+        _resolve(tmp_path, manifest)
+
+
+def _truncate(path: Path, n_bytes: int) -> None:
+    path.write_bytes(path.read_bytes()[:-n_bytes])
+
+
+@pytest.mark.parametrize(("case", "expected"), [
+    ("probe_not_in_epi", "is not in"),
+    ("row_past_esi_end", "past the"),
+    ("truncated_besd", "truncated"),
+])
+def test_a_damaged_probe_is_a_controlled_failure(
+    tmp_path: Path, case: str, expected: str
+) -> None:
+    prefix = _two_probe_file(tmp_path)
+    probe = "ENSG00000000999" if case == "probe_not_in_epi" else _P2
+    if case == "row_past_esi_end":
+        freqs = _mix(_EUR_MIX)
+        write_besd_sparse_3f(prefix.with_suffix(".besd"), 2, [
+            _probe_rows(freqs, range(0, 30), _P1_SD),
+            [*_probe_rows(freqs, range(30, N_SITES), _P2_SD), (N_SITES + 5, 0.01, 0.02)],
+        ])
+    if case == "truncated_besd":
+        _truncate(prefix.with_suffix(".besd"), 8)
+    manifest = _write_manifest(tmp_path / "analyses.tsv", [
+        _besd_row("eqtl_p1", prefix, _P1), _besd_row("eqtl_bad", prefix, probe),
+    ])
+
+    records = _resolve(tmp_path, manifest)
+
+    damaged = _record(records, "eqtl_bad")
+    assert damaged["status"] == "controlled_failure"
+    assert expected in damaged["error"]
+    assert damaged["phenotype_sd"] is None
+    assert _record(records, "eqtl_p1")["status"] == "success", "the file's other probe resolves"
+
+
+# ── The seeking probe reader ─────────────────────────────────────────────────
+
+
+_ASSOCIATIONS = [
+    [(0, 0.1, 0.02), (3, -0.2, 0.03)],
+    [],
+    [(1, 0.5, 0.05), (2, -0.15, 0.025), (4, 0.3, 0.04)],
+]
+
+
+@pytest.mark.parametrize("file_type", ["3", "3F"])
+def test_seeking_probe_reader_equals_the_loading_reader(tmp_path: Path, file_type: str) -> None:
+    besd = tmp_path / "x.besd"
+    write_besd_sparse_3f(besd, len(_ASSOCIATIONS), _ASSOCIATIONS, file_type=file_type)
+    loaded = BESDReader(besd, len(_ASSOCIATIONS))
+    assert loaded.format_type == file_type
+
+    for probe in range(len(_ASSOCIATIONS)):
+        expected = loaded.get_probe_associations(probe)
+        assert len(expected[0]) == len(_ASSOCIATIONS[probe]), "fixture must be read back"
+        for want, got in zip(expected, read_besd_probe(besd, len(_ASSOCIATIONS), probe),
+                             strict=True):
+            np.testing.assert_array_equal(got, want)
+            assert got.dtype == want.dtype
+
+
+@pytest.mark.parametrize(("probe", "offsets"), [
+    (2, (8, 6)),     # se_start before beta_start: a negative association count
+    (0, (-2, 2)),    # a negative beta_start
+])
+def test_seeking_probe_reader_refuses_corrupt_column_offsets(
+    tmp_path: Path, probe: int, offsets: tuple[int, int]
+) -> None:
+    besd = tmp_path / "x.besd"
+    write_besd_sparse_3f(besd, len(_ASSOCIATIONS), _ASSOCIATIONS)
+    data = bytearray(besd.read_bytes())
+    cols_offset = 4 + 8  # 3F: magic, val_num
+    data[cols_offset + 16 * probe: cols_offset + 16 * probe + 16] = np.asarray(
+        offsets, dtype="<i8"
+    ).tobytes()
+    besd.write_bytes(bytes(data))
+
+    with pytest.raises(ValueError, match="offset"):
+        read_besd_probe(besd, len(_ASSOCIATIONS), probe)
