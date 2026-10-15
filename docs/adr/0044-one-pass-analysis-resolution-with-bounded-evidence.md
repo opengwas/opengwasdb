@@ -79,7 +79,10 @@ ancestry rule but not to phenotype-SD evidence.
   query, blocked at 50,000 rows by default; evidence remains bounded separately
   by the configured panel and sample sizes. A reader without this seam is
   refused rather than consumed through an unbounded or semantically weaker
-  fallback.
+  fallback. BESD provides one per probe, and takes its ancestry fit from one
+  measurement of its file set's `.esi` rather than from the probe's own scan
+  (ADR 0062, which extends this decision without changing it for one-file
+  formats).
 - **Assembly alignment is declared, never inferred.** Resolver callers provide
   each Analysis's `source_genome_build` and the reference build. Supported
   hg19→hg38 GWAS-VCF alignment requires an explicit chain, one unique SNP

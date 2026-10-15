@@ -506,9 +506,14 @@ def _map_probe_rows(
 
 def _decide_encoding(csr: RaggedCSRWriter, n_analyses: int) -> StoreEncoding:
     """One encoding plan per build, decided from what the build holds
-    (ADR 0037, issue #119). BESD carries no frequencies, so this settles on
-    ``eaf: absent`` — stated by the plan rather than left to be inferred from
-    a missing array.
+    (ADR 0037, issue #119). This builder stores no frequencies, so this
+    settles on ``eaf: absent`` — stated by the plan rather than left to be
+    inferred from a missing array.
+
+    That is the builder's choice, not the format's: a `.esi` may carry the
+    effect allele's frequency on every row (eQTLGen's does), `read_esi`
+    parses it, and `resolve-analyses` measures ancestry and orientation from
+    it (issue #282). Storing it as per-association EAF is not implemented.
     """
     eaf_measurements = csr.eaf_measurements()
     preliminary = StoreEncoding.decide(

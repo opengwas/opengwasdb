@@ -153,9 +153,17 @@ def _lift_variant(
     return bare_target, str(int(new_pos) + 1), effect, other
 
 
-def _oriented_variant(
+def oriented_variant(
     liftover: object | None, chrom: str, pos: str, effect: str, other: str
 ) -> Orientation | None:
+    """One source row's canonical orientation, lifted first when `liftover` is set.
+
+    `None` when the row names no usable variant: unnormalisable alleles, or a
+    lift that did not land. An indel or an ambiguous mapping under a lift
+    raises `LiftoverProjectionError` instead, because no single position lift
+    can establish its target identity (ADR 0044). Shared with the BESD resolver
+    (issue #282), which aligns `.esi` rows by the same rule.
+    """
     if liftover is not None:
         lifted = _lift_variant(liftover, chrom, pos, effect, other)
         if lifted is None:
@@ -379,7 +387,7 @@ class GwasVcfReader:
         try:
             for cells in cells_stream:
                 chrom, pos, ref, alt, ez_str, es_str, se_str, af_str = cells
-                orientation = _oriented_variant(self.liftover, chrom, pos, alt, ref)
+                orientation = oriented_variant(self.liftover, chrom, pos, alt, ref)
                 if orientation is None:
                     continue
                 se = _parse_positive_float(se_str)
@@ -433,7 +441,7 @@ class GwasVcfReader:
                     se = _parse_positive_float(se_str)
                     if af is None or se is None:
                         continue
-                    orientation = _oriented_variant(
+                    orientation = oriented_variant(
                         self.liftover, chrom_raw, pos_str, alt, ref
                     )
                     if orientation is None:

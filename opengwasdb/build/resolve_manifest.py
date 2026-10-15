@@ -42,7 +42,7 @@ import time
 import tracemalloc
 from collections.abc import Collection, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -61,6 +61,13 @@ from opengwasdb.build.resolve import (
     ScanDiagnostics,
     ScanLimit,
     resolve_analysis,
+    unresolved,
+)
+from opengwasdb.build.resolve_besd import (
+    BesdMeasurement,
+    besd_member_stats,
+    measure_besd_source,
+    resolve_besd_analysis,
 )
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
 from opengwasdb.model.info_score_policy import (
@@ -71,8 +78,10 @@ from opengwasdb.model.info_score_policy import (
 from opengwasdb.model.maf_policy import MAF_COLUMNS, MafPolicy, parse_maf_policy
 from opengwasdb.model.manifest_columns import resolve_manifest_columns
 from opengwasdb.readers.assembly import assembly_plan, declared_source_build
+from opengwasdb.readers.besd import BESD_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader, load_liftover
+from opengwasdb.readers.interface import SourceReader
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
 
 logger = logging.getLogger(__name__)
@@ -118,6 +127,8 @@ class ResolveManifestRow:
     checksum_algorithm: str | None = None
     info_score_policy: InfoScorePolicy = InfoScorePolicy()
     maf_policy: MafPolicy = MafPolicy()
+    #: The `.epi` probe a BESD Analysis is; `None` for every other format.
+    source_probe_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -315,6 +326,27 @@ def _parse_capability(
     return cap
 
 
+def _parse_probe_id(raw: dict[str, str], cap: str, analysis_id: str, path: Path) -> str | None:
+    """A BESD row's `source_probe_id` (issue #282): required there, refused elsewhere.
+
+    A BESD file holds one Analysis per probe, so the row must say which; it is
+    never inferred from `analysis_id`. Any other format holds one Analysis per
+    file, and a probe ID on its row would be silently meaningless.
+    """
+    probe = (raw.get("source_probe_id") or "").strip() or None
+    if cap == BESD_CAPABILITY and probe is None:
+        raise ValueError(
+            f"analyses manifest {path}: BESD analysis {analysis_id!r} has no "
+            f"source_probe_id naming its .epi probe"
+        )
+    if cap != BESD_CAPABILITY and probe is not None:
+        raise ValueError(
+            f"analyses manifest {path}: analysis {analysis_id!r} sets source_probe_id, "
+            f"which only source_reader_capability {BESD_CAPABILITY!r} reads"
+        )
+    return probe
+
+
 def _extract_manifest_checksum(raw: dict[str, str]) -> tuple[str | None, str | None]:
     checksum = (raw.get("checksum") or raw.get("sha256") or "").strip() or None
     algo = (raw.get("checksum_algorithm") or "").strip() or None
@@ -403,6 +435,7 @@ def _parse_manifest_row(
         checksum_algorithm=algo,
         info_score_policy=info_score_policy,
         maf_policy=maf_policy,
+        source_probe_id=_parse_probe_id(raw, cap, analysis_id, path),
     )
 
 
@@ -435,7 +468,7 @@ def read_resolve_manifest(
         )
 
     cols = resolve_manifest_columns(fieldnames, manifest_path)
-    known = known_capabilities()
+    known = (*known_capabilities(), BESD_CAPABILITY)
     seen_ids: set[str] = set()
     return [
         _parse_manifest_row(
@@ -636,6 +669,8 @@ def _diagnostics_to_dict(d: ScanDiagnostics) -> dict[str, Any]:
         ),
         "build_eligible_rows_se_from_ci": d.build_eligible_rows_se_from_ci,
         "build_eligible_rows_se_from_p_value": d.build_eligible_rows_se_from_p_value,
+        "ancestry_scope": d.ancestry_scope.value,
+        "ancestry_measurement_id": d.ancestry_measurement_id,
     }
 
 
@@ -670,7 +705,7 @@ def _build_analysis_fingerprints(
     chain_fingerprint: dict[str, Any],
 ) -> dict[str, Any]:
     file_bytes, file_mtime_ns = _stat_source_file(row.source_file)
-    fp = {
+    fp: dict[str, Any] = {
         "source_file": str(row.source_file),
         "source_recorded_sha256": row.checksum,
         "source_recorded_bytes": row.size_bytes,
@@ -727,8 +762,20 @@ def _build_analysis_fingerprints(
             },
         },
     }
+    _bind_besd_identity(fp, row)
     fp["fingerprint_digest"] = compute_fingerprint_digest(fp)
     return fp
+
+
+def _bind_besd_identity(fp: dict[str, Any], row: ResolveManifestRow) -> None:
+    """A BESD source is three files and its Analysis one probe (issue #282).
+
+    Added only to BESD fingerprints, so every other format's digest is unchanged.
+    """
+    if row.source_probe_id is None:
+        return
+    fp["source_member_files"] = besd_member_stats(row.source_file)
+    fp["resolution_config"]["source_probe_id"] = row.source_probe_id
 
 
 def _is_record_resumable(record_path: Path, expected_digest: str) -> bool:
@@ -767,55 +814,57 @@ _WORKER_EVIDENCE_SAMPLE: int = DEFAULT_EVIDENCE_SAMPLE
 _WORKER_SCAN_LIMIT: ScanLimit | None = None
 _WORKER_RECORDS_DIR: Path | None = None
 _REFERENCE_LOAD_CALLS: int = 0
+@dataclass(frozen=True)
+class _BesdSourceKey:
+    """Identity of one BESD file set under one declared Reference Assembly."""
+
+    source_file: str
+    source_genome_build: str
+
+
+#: Each BESD file set measured once in the parent (issue #282, ADR 0062).
+_WORKER_BESD_MEASUREMENTS: dict[_BesdSourceKey, BesdMeasurement] = {}
+_BESD_MEASUREMENT_CALLS: int = 0
+
+
+def besd_measurement_count() -> int:
+    """BESD file sets measured by this process so far (issue #282).
+
+    The measure-once contract made observable: a run measures each file set it
+    resolves exactly once, in this (parent) process, never per probe or per
+    worker.
+    """
+    return _BESD_MEASUREMENT_CALLS
+
+
+_Outcome = tuple[AnalysisResolution, RecordStatus, str | None]
+
+
+def _analysis_request(task: dict[str, Any]) -> AnalysisRequest:
+    """One task's Analysis, as the resolver takes it, for every format."""
+    return AnalysisRequest(
+        analysis_id=task["analysis_id"],
+        source_file=task["source_file"],
+        sample_size=task["sample_size"],
+        original_sd_method=OriginalSdMethod(task["original_sd_method"]),
+        stored_effect_scale=StoredEffectScale(task["stored_effect_scale"]),
+        info_score_policy=task.get("info_score_policy", InfoScorePolicy()),
+        maf_policy=task.get("maf_policy", MafPolicy()),
+    )
 
 
 def _execute_analysis(
-    analysis_id: str,
-    source_file: str,
+    req: AnalysisRequest,
     cap: str,
-    scale: StoredEffectScale,
-    method: OriginalSdMethod,
-    sample_size: float | None,
     source_build: str,
     reference_build: str,
     chain_file: str | None,
-    info_score_policy: InfoScorePolicy | None = None,
-    maf_policy: MafPolicy | None = None,
-) -> tuple[AnalysisResolution, RecordStatus, str | None]:
+) -> _Outcome:
     assert _WORKER_ANCESTRY_REFERENCE is not None
     assert _WORKER_GATES is not None
-    info_score_policy = info_score_policy or InfoScorePolicy()
-    req = AnalysisRequest(
-        analysis_id=analysis_id,
-        source_file=source_file,
-        sample_size=sample_size,
-        original_sd_method=method,
-        stored_effect_scale=scale,
-        info_score_policy=info_score_policy,
-        maf_policy=maf_policy or MafPolicy(),
-    )
+    declaration = req.info_score_policy.imputation_score_declaration
     try:
-        if info_score_policy.imputation_score_declaration is not None:
-            reader = resolve_reader(
-                cap, source_file, scale,
-                imputation_score_declaration=info_score_policy.imputation_score_declaration,
-            )
-        else:
-            reader = resolve_reader(cap, source_file, scale)
-        plan = assembly_plan(
-            capability=cap,
-            source_build=source_build,
-            reference_build=reference_build,
-            chain_file=chain_file,
-        )
-        if plan.requires_liftover:
-            assert isinstance(reader, GwasVcfReader)
-            reader = replace(
-                reader,
-                liftover=load_liftover(
-                    plan.source_build, plan.reference_build, str(plan.chain_file)
-                ),
-            )
+        reader = _resolved_reader(req, cap, source_build, reference_build, chain_file)
         res = resolve_analysis(
             req,
             reader=reader,
@@ -827,23 +876,94 @@ def _execute_analysis(
             evidence_sample=_WORKER_EVIDENCE_SAMPLE,
             scan_limit=_WORKER_SCAN_LIMIT,
         )
-        if res.error:
-            # A declared score's failure must name its Analysis, whether it was
-            # raised by the scan or by the no-usable-scores check above.
-            error = res.error
-            if (info_score_policy.imputation_score_declaration is not None
-                    and not error.startswith(f"Analysis {analysis_id}:")):
-                error = f"Analysis {analysis_id}: {error}"
-            return res, RecordStatus.CONTROLLED_FAILURE, error
-        return res, RecordStatus.SUCCESS, None
     except Exception as exc:
-        err_msg = f"{type(exc).__name__}: {exc}"
-        res = AnalysisResolution(
-            analysis_id=analysis_id,
-            diagnostics=ScanDiagnostics(source_file=source_file, rows_read=0, ancestry_sites=0),
-            error=err_msg,
+        return _failed_resolution(req, exc)
+    # A declared score's failure must name its Analysis, whether it was
+    # raised by the scan or by the no-usable-scores check above.
+    if (res.error and declaration is not None
+            and not res.error.startswith(f"Analysis {req.analysis_id}:")):
+        res = replace(res, error=f"Analysis {req.analysis_id}: {res.error}")
+    return _outcome(res)
+
+
+def _resolved_reader(
+    req: AnalysisRequest,
+    cap: str,
+    source_build: str,
+    reference_build: str,
+    chain_file: str | None,
+) -> SourceReader:
+    """The Analysis's reader, lifted onto the reference build when its plan requires."""
+    declaration = req.info_score_policy.imputation_score_declaration
+    scale = req.stored_effect_scale
+    if declaration is not None:
+        reader = resolve_reader(
+            cap, req.source_file, scale, imputation_score_declaration=declaration
         )
-        return res, RecordStatus.CONTROLLED_FAILURE, err_msg
+    else:
+        reader = resolve_reader(cap, req.source_file, scale)
+    plan = assembly_plan(
+        capability=cap,
+        source_build=source_build,
+        reference_build=reference_build,
+        chain_file=chain_file,
+    )
+    if plan.requires_liftover:
+        assert isinstance(reader, GwasVcfReader)
+        reader = replace(
+            reader,
+            liftover=load_liftover(
+                plan.source_build, plan.reference_build, str(plan.chain_file)
+            ),
+        )
+    return reader
+
+
+def _outcome(res: AnalysisResolution) -> _Outcome:
+    if res.error:
+        return res, RecordStatus.CONTROLLED_FAILURE, res.error
+    return res, RecordStatus.SUCCESS, None
+
+
+def _failed_resolution(
+    req: AnalysisRequest,
+    exc: Exception,
+    measurement: BesdMeasurement | None = None,
+) -> _Outcome:
+    """An unexpected per-Analysis error, retaining any shared source measurement."""
+    return _outcome(unresolved(
+        req.analysis_id,
+        req.source_file,
+        f"{type(exc).__name__}: {exc}",
+        source_ancestry=None if measurement is None else measurement.ancestry,
+        measurement_id=None if measurement is None else measurement.measurement_id,
+    ))
+
+
+def _execute_besd_analysis(req: AnalysisRequest, task: dict[str, Any]) -> _Outcome:
+    """One BESD probe against its file set's parent-measured `.esi` (issue #282)."""
+    assert _WORKER_ANCESTRY_REFERENCE is not None
+    key = _BesdSourceKey(task["source_file"], task["source_genome_build"])
+    measurement = _WORKER_BESD_MEASUREMENTS.get(key)
+    if measurement is None:
+        # A defect in the run, not in the data: the parent measures every file
+        # set before any probe of it runs. Raised, never recorded as a failure.
+        raise RuntimeError(f"BESD file set {key} was not measured before its probes ran")
+    try:
+        res = resolve_besd_analysis(
+            req,
+            task["source_probe_id"],
+            measurement,
+            reference=_WORKER_ANCESTRY_REFERENCE,
+            gates=_WORKER_GATES,
+            af_references=_WORKER_AF_REFERENCES,
+            evidence_sample=_WORKER_EVIDENCE_SAMPLE,
+            scan_limit=_WORKER_SCAN_LIMIT,
+            variant_reference=_WORKER_VARIANT_REFERENCE,
+        )
+    except Exception as exc:
+        return _failed_resolution(req, exc, measurement)
+    return _outcome(res)
 
 
 def _extract_worker_summary(
@@ -877,22 +997,21 @@ def _extract_worker_summary(
 def _worker_resolve_one(task: dict[str, Any]) -> dict[str, Any]:
     """Worker task: resolve one Analysis and write its atomic JSON record."""
     analysis_id = task["analysis_id"]
-    source_file = task["source_file"]
     cap = task["source_reader_capability"]
-    scale = StoredEffectScale(task["stored_effect_scale"])
     method = OriginalSdMethod(task["original_sd_method"])
-    sample_size = task["sample_size"]
     fingerprints = task["fingerprints"]
     record_path = Path(task["record_path"])
+    request = _analysis_request(task)
 
     tracemalloc.start()
     t0 = time.monotonic()
-    res, status, err_msg = _execute_analysis(
-        analysis_id, source_file, cap, scale, method, sample_size,
-        task["source_genome_build"], task["reference_build"], task.get("chain_file"),
-        task.get("info_score_policy", InfoScorePolicy()),
-        task.get("maf_policy", MafPolicy()),
-    )
+    if cap == BESD_CAPABILITY:
+        res, status, err_msg = _execute_besd_analysis(request, task)
+    else:
+        res, status, err_msg = _execute_analysis(
+            request, cap,
+            task["source_genome_build"], task["reference_build"], task.get("chain_file"),
+        )
     elapsed = time.monotonic() - t0
     _current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -1036,6 +1155,7 @@ def _build_single_task(
         "sample_size": row.sample_size,
         "info_score_policy": row.info_score_policy,
         "maf_policy": row.maf_policy,
+        "source_probe_id": row.source_probe_id,
         "fingerprints": fp,
         "record_path": str(rec_path),
         "size_weight": size_weight,
@@ -1251,6 +1371,97 @@ def _prepare_pipeline_context(
     }
 
 
+def _measure_besd_sources(
+    tasks: list[dict[str, Any]], fp_kwargs: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Measure each BESD file set this run resolves, once, before workers fork.
+
+    The measurement -- the `.esi` read, aligned and fitted -- lands in a
+    module global the forked workers inherit, as the Ancestry Reference Panel
+    does (ADR 0045), so no worker re-reads it. Returns one index entry per
+    file set, naming the Analyses that share it, in manifest order.
+    """
+    _WORKER_BESD_MEASUREMENTS.clear()
+    groups: dict[_BesdSourceKey, list[dict[str, Any]]] = {}
+    for task in sorted(tasks, key=lambda t: t["manifest_index"]):
+        if task["source_reader_capability"] == BESD_CAPABILITY:
+            key = _BesdSourceKey(task["source_file"], task["source_genome_build"])
+            groups.setdefault(key, []).append(task)
+    entries: list[dict[str, Any]] = []
+    for key, members in groups.items():
+        # The member files were stat'ed once, for the first probe's fingerprint.
+        stats = members[0]["fingerprints"]["source_member_files"]
+        measurement_id = _besd_measurement_id(
+            key.source_file, key.source_genome_build, stats, fp_kwargs
+        )
+        measurement = _measure_one_besd(
+            key.source_file, key.source_genome_build, measurement_id, fp_kwargs
+        )
+        _WORKER_BESD_MEASUREMENTS[key] = measurement
+        entries.append({
+            "measurement_id": measurement_id,
+            "source_file": key.source_file,
+            "source_genome_build": key.source_genome_build,
+            "analyses": [task["analysis_id"] for task in members],
+            "error": measurement.error,
+        })
+    return entries
+
+
+def _measure_one_besd(
+    source_file: str, build: str, measurement_id: str, fp_kwargs: dict[str, Any]
+) -> BesdMeasurement:
+    global _BESD_MEASUREMENT_CALLS
+    assert _WORKER_ANCESTRY_REFERENCE is not None
+    _BESD_MEASUREMENT_CALLS += 1
+    return measure_besd_source(
+        source_file,
+        source_build=build,
+        reference_build=fp_kwargs["reference_build"],
+        chain_file=fp_kwargs["chain_fingerprint"]["chain_file"],
+        reference=_WORKER_ANCESTRY_REFERENCE,
+        measurement_id=measurement_id,
+        extraction_panel=_WORKER_EXTRACTION_PANEL,
+        gates=_WORKER_GATES,
+        scan_limit=_WORKER_SCAN_LIMIT,
+    )
+
+
+def _besd_measurement_id(
+    source_file: str, build: str, member_stats: dict[str, Any], fp_kwargs: dict[str, Any]
+) -> str:
+    """A digest of everything one file set's measurement depends on.
+
+    Equal across runs for the same inputs, so serial, parallel and resumed
+    records agree; different whenever the `.esi`, the panel, the gates, the
+    bound, the alignment or the code is.
+    """
+    scan_limit: ScanLimit | None = fp_kwargs["scan_limit"]
+    identity = {
+        "source_file": source_file,
+        "source_genome_build": build,
+        "source_member_files": member_stats,
+        "gates": asdict(fp_kwargs["gates"]),
+        "scan_limit": None if scan_limit is None else scan_limit.as_fingerprint(),
+        **{key: fp_kwargs[key] for key in _MEASUREMENT_IDENTITY_KEYS},
+    }
+    return compute_fingerprint_digest(identity)
+
+
+_MEASUREMENT_IDENTITY_KEYS = (
+    "opengwasdb_version",
+    "opengwasdb_git_hash",
+    "ancestry_reference_sha256",
+    "ancestry_groups_sha256",
+    "extraction_panel_sha256",
+    "reference_build",
+    "chain_fingerprint",
+    # The Ancestry Reference Panel is loaded with this floor, which decides
+    # which of its sites exist to be fitted against: the fit depends on it.
+    "maf_floor",
+)
+
+
 def _execute_resolution_pipeline(
     rows: list[ResolveManifestRow],
     out_dir: Path,
@@ -1261,10 +1472,16 @@ def _execute_resolution_pipeline(
     n_workers: int,
 ) -> ManifestResolutionSummary:
     tasks, resumed = _prepare_tasks(rows, out_dir, resume, fp_kwargs)
+    source_measurements = _measure_besd_sources(tasks, fp_kwargs)
     if largest_first:
         tasks.sort(key=lambda t: (-t["size_weight"], t["manifest_index"]))
 
-    executed = _run_tasks(tasks, n_workers)
+    try:
+        executed = _run_tasks(tasks, n_workers)
+    finally:
+        # The measurements hold every file set's per-variant arrays; nothing
+        # needs them once the run's probes are resolved.
+        _WORKER_BESD_MEASUREMENTS.clear()
     all_summaries, n_success, n_failed, failed_ids = _assemble_index(rows, resumed, executed)
 
     index_data = {
@@ -1280,6 +1497,10 @@ def _execute_resolution_pipeline(
         "failed_analyses": failed_ids,
         "analyses": all_summaries,
     }
+    if source_measurements:
+        # Each multi-Analysis source measured in this invocation, once
+        # (issue #282): its records share `diagnostics.ancestry_measurement_id`.
+        index_data["source_measurements"] = source_measurements
     index_path = out_dir / "index.json"
     _atomic_write_json(index_path, index_data)
 
