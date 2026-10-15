@@ -190,7 +190,8 @@ class ColumnMap:
 
     @property
     def spec(self) -> str:
-        """What `load_column_map` loads this map from again: a name or a path."""
+        """What `load_column_map` loads this map from again, from any directory:
+        a built-in's bare name, or a file's absolute path."""
         return self.origin.removeprefix("builtin:")
 
 
@@ -216,7 +217,9 @@ def load_column_map(spec: str | Path) -> ColumnMap:
         raise ColumnMapError(
             f"Column Map {str(spec)!r} is neither a file nor a built-in map ({builtins})"
         )
-    return parse_column_map(path.read_bytes(), origin=str(path))
+    # Absolute, so `spec` reloads this file from any directory -- and a file
+    # named like a built-in (`./gwas-ssf`) is never reloaded as the built-in.
+    return parse_column_map(path.read_bytes(), origin=str(path.resolve()))
 
 
 def as_column_map(spec: ColumnMap | str | Path | None) -> ColumnMap | None:
