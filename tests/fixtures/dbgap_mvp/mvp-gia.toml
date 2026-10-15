@@ -1,0 +1,45 @@
+# Column Map for dbGaP phs002453 (MVP GIA, PMID 39024449) raw deposit files.
+#
+# Test fixture for issue #281: the columns and conventions the stores GWAS-SSF
+# rewrite (resources/scripts/acquire-dbgap-phs002453.py, CONVERTER_AWK) handles,
+# declared instead of rewritten. The deposit comes in three shapes -- quantitative
+# (beta, sebeta), binary (or, ci) and META (q_pval, i2, direction) -- which is
+# why the effect and interval columns are optional.
+column_map_version = 1
+name = "dbgap-phs002453-mvp-gia"
+description = "MVP GIA summary statistics as deposited on dbGaP"
+# Every deposit column the rewrite knows and does not read.
+ignored_columns = [
+  "case_af", "num_cases", "control_af", "num_controls", "r2", "q_pval", "i2", "direction",
+]
+
+[columns]
+rsid = "SNP_ID"
+chromosome = "chrom"
+position = "pos"
+ref = "ref"
+alt = "alt"
+effect_allele = "ea"
+frequency = "af"
+sample_size = "num_samples"
+p_value = "pval"
+
+[optional_columns]
+beta = "beta"
+standard_error = "sebeta"
+odds_ratio = "or"
+confidence_interval = "ci"
+
+[conventions]
+missing_values = ["", "NA"]
+# The rewrite aborts a file with a column it does not recognise.
+unmapped_columns = "refuse"
+alleles = "ref_alt_and_effect_allele"
+frequency_allele = "effect_allele"
+p_value_form = "p"
+# R writes a round position as 2.4e+07.
+position_notation = "integer_or_exact_scientific"
+chromosome_spelling = "adr-0052"
+genome_build = "GRCh38"
+confidence_interval_separator = ","
+rsid_separator = "none"

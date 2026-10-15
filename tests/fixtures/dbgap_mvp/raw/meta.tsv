@@ -1,0 +1,4 @@
+SNP_ID	chrom	pos	ref	alt	ea	af	num_samples	beta	sebeta	pval	q_pval	i2	direction
+rs31	1	1000	A	G	G	0.25	150000	0.012	0.004	0.0027	0.5	0	++-
+rs32	1	2000	C	T	T	0.4	150000	-0.02	0.005	6e-05	NA	NA	?+-
+rs33	7	3.1e+06	G	C	C	0.2	150000	0.004	0.002	0.045	0.2	12.5	+++
