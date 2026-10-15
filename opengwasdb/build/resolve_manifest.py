@@ -850,9 +850,16 @@ _WORKER_EVIDENCE_SAMPLE: int = DEFAULT_EVIDENCE_SAMPLE
 _WORKER_SCAN_LIMIT: ScanLimit | None = None
 _WORKER_RECORDS_DIR: Path | None = None
 _REFERENCE_LOAD_CALLS: int = 0
-#: Each BESD file set measured once in the parent, keyed by
-#: `(source_file, source_genome_build)` (issue #282, ADR 0062).
-_WORKER_BESD_MEASUREMENTS: dict[tuple[str, str], BesdMeasurement] = {}
+@dataclass(frozen=True)
+class _BesdSourceKey:
+    """Identity of one BESD file set under one declared Reference Assembly."""
+
+    source_file: str
+    source_genome_build: str
+
+
+#: Each BESD file set measured once in the parent (issue #282, ADR 0062).
+_WORKER_BESD_MEASUREMENTS: dict[_BesdSourceKey, BesdMeasurement] = {}
 _BESD_MEASUREMENT_CALLS: int = 0
 
 
@@ -958,17 +965,25 @@ def _outcome(res: AnalysisResolution) -> _Outcome:
     return res, RecordStatus.SUCCESS, None
 
 
-def _failed_resolution(req: AnalysisRequest, exc: Exception) -> _Outcome:
-    """An unexpected per-Analysis error, isolated as that Analysis's controlled failure."""
-    return _outcome(
-        unresolved(req.analysis_id, req.source_file, f"{type(exc).__name__}: {exc}")
-    )
+def _failed_resolution(
+    req: AnalysisRequest,
+    exc: Exception,
+    measurement: BesdMeasurement | None = None,
+) -> _Outcome:
+    """An unexpected per-Analysis error, retaining any shared source measurement."""
+    return _outcome(unresolved(
+        req.analysis_id,
+        req.source_file,
+        f"{type(exc).__name__}: {exc}",
+        source_ancestry=None if measurement is None else measurement.ancestry,
+        measurement_id=None if measurement is None else measurement.measurement_id,
+    ))
 
 
 def _execute_besd_analysis(req: AnalysisRequest, task: dict[str, Any]) -> _Outcome:
     """One BESD probe against its file set's parent-measured `.esi` (issue #282)."""
     assert _WORKER_ANCESTRY_REFERENCE is not None
-    key = (task["source_file"], task["source_genome_build"])
+    key = _BesdSourceKey(task["source_file"], task["source_genome_build"])
     measurement = _WORKER_BESD_MEASUREMENTS.get(key)
     if measurement is None:
         # A defect in the run, not in the data: the parent measures every file
@@ -987,7 +1002,7 @@ def _execute_besd_analysis(req: AnalysisRequest, task: dict[str, Any]) -> _Outco
             variant_reference=_WORKER_VARIANT_REFERENCE,
         )
     except Exception as exc:
-        return _failed_resolution(req, exc)
+        return _failed_resolution(req, exc, measurement)
     return _outcome(res)
 
 
@@ -1414,22 +1429,26 @@ def _measure_besd_sources(
     file set, naming the Analyses that share it, in manifest order.
     """
     _WORKER_BESD_MEASUREMENTS.clear()
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    groups: dict[_BesdSourceKey, list[dict[str, Any]]] = {}
     for task in sorted(tasks, key=lambda t: t["manifest_index"]):
         if task["source_reader_capability"] == BESD_CAPABILITY:
-            key = (task["source_file"], task["source_genome_build"])
+            key = _BesdSourceKey(task["source_file"], task["source_genome_build"])
             groups.setdefault(key, []).append(task)
     entries: list[dict[str, Any]] = []
-    for (source_file, build), members in groups.items():
+    for key, members in groups.items():
         # The member files were stat'ed once, for the first probe's fingerprint.
         stats = members[0]["fingerprints"]["source_member_files"]
-        measurement_id = _besd_measurement_id(source_file, build, stats, fp_kwargs)
-        measurement = _measure_one_besd(source_file, build, measurement_id, fp_kwargs)
-        _WORKER_BESD_MEASUREMENTS[(source_file, build)] = measurement
+        measurement_id = _besd_measurement_id(
+            key.source_file, key.source_genome_build, stats, fp_kwargs
+        )
+        measurement = _measure_one_besd(
+            key.source_file, key.source_genome_build, measurement_id, fp_kwargs
+        )
+        _WORKER_BESD_MEASUREMENTS[key] = measurement
         entries.append({
             "measurement_id": measurement_id,
-            "source_file": source_file,
-            "source_genome_build": build,
+            "source_file": key.source_file,
+            "source_genome_build": key.source_genome_build,
             "analyses": [task["analysis_id"] for task in members],
             "error": measurement.error,
         })
@@ -1524,10 +1543,11 @@ def _execute_resolution_pipeline(
         "n_failed": n_failed,
         "failed_analyses": failed_ids,
         "analyses": all_summaries,
+    }
+    if source_measurements:
         # Each multi-Analysis source measured in this invocation, once
         # (issue #282): its records share `diagnostics.ancestry_measurement_id`.
-        "source_measurements": source_measurements,
-    }
+        index_data["source_measurements"] = source_measurements
     index_path = out_dir / "index.json"
     _atomic_write_json(index_path, index_data)
 

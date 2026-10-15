@@ -9,18 +9,38 @@ from __future__ import annotations
 
 import struct
 from pathlib import Path
+from typing import NotRequired, TypedDict
+
+
+class NoFrequencyColumn:
+    """Sentinel type for a synthetic `.esi` row with six columns."""
+
 
 #: Passed as an `.esi` row's `freq` to write a six-column row with no
 #: frequency column at all, which `read_esi` must read as "unknown".
-NO_FREQUENCY_COLUMN = object()
+NO_FREQUENCY_COLUMN = NoFrequencyColumn()
 
 
-def write_esi(path: Path, snps: list[dict]) -> None:
-    """One `.esi` row per dict; `freq` defaults to the literal `NA`."""
+class EsiRow(TypedDict):
+    """One source variant row accepted by the synthetic `.esi` writer."""
+
+    chr: str
+    snp_id: str
+    bp: int
+    a1: str
+    a2: str
+    freq: NotRequired[str | NoFrequencyColumn]
+
+
+def write_esi(path: Path, variants: list[EsiRow]) -> None:
+    """One `.esi` row per variant; `freq` defaults to the literal `NA`."""
     with open(path, "w") as fh:
-        for s in snps:
-            freq = s.get("freq", "NA")
-            cells = [s["chr"], s["snp_id"], "0", s["bp"], s["a1"], s["a2"]]
+        for variant in variants:
+            freq = variant.get("freq", "NA")
+            cells = [
+                variant["chr"], variant["snp_id"], "0", variant["bp"],
+                variant["a1"], variant["a2"],
+            ]
             if freq is not NO_FREQUENCY_COLUMN:
                 cells.append(freq)
             fh.write("\t".join(str(cell) for cell in cells) + "\n")

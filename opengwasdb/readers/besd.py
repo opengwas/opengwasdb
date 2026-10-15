@@ -73,18 +73,43 @@ class BesdSource:
 
     @property
     def n_frequencies(self) -> int:
-        """Rows with a usable variant and a usable frequency."""
-        return int(np.count_nonzero(self.usable & np.isfinite(self.af)))
+        """Rows with a canonical variant and a usable frequency."""
+        return int(np.count_nonzero(self.has_canonical_variant & np.isfinite(self.af)))
 
     @property
-    def usable(self) -> np.ndarray:
-        usable: np.ndarray = self.alid != ""
-        return usable
+    def has_canonical_variant(self) -> np.ndarray:
+        present: np.ndarray = self.alid != ""
+        return present
 
     def a1_frequencies(self) -> np.ndarray:
         """Each row's frequency of its canonical A1, the orientation ancestry reads."""
         oriented: np.ndarray = np.where(self.flipped, 1.0 - self.af, self.af)
         return oriented
+
+    def read_probe_metrics(self, probe_id: str) -> MetricsChunk:
+        """Read one probe's slice and join it to this file set's variant facts."""
+        probe_idx = self.probes.get(probe_id)
+        if probe_idx is None:
+            raise ValueError(f"probe {probe_id!r} is not in {self.prefix}.epi")
+        _esi, _epi, besd = besd_member_files(self.prefix)
+        rows, betas, ses = read_besd_probe(besd, len(self.probes), probe_idx)
+        if rows.size and int(rows.max()) >= self.n_rows:
+            raise ValueError(
+                f"{besd}: probe {probe_id!r} names .esi row {int(rows.max())}, "
+                f"past the {self.n_rows} rows of {self.prefix}.esi"
+            )
+        keep = self.has_canonical_variant[rows]
+        rows = rows[keep]
+        beta = betas[keep].astype(np.float64)
+        se = ses[keep].astype(np.float64)
+        return MetricsChunk(
+            alid=self.alid[rows],
+            flipped=self.flipped[rows],
+            palindromic=self.palindromic[rows],
+            af_alt=self.af[rows],
+            beta=np.where(np.isfinite(beta), beta, np.nan),
+            se=np.where(np.isfinite(se) & (se > 0), se, np.nan),
+        )
 
 
 def load_besd_source(prefix: str | Path, *, liftover: object | None = None) -> BesdSource:
@@ -100,13 +125,15 @@ def load_besd_source(prefix: str | Path, *, liftover: object | None = None) -> B
     alids: list[str] = []
     flipped, palindromic = bytearray(), bytearray()
     frequencies = array("d")
-    for snp in iter_esi(esi):
-        a1, a2 = snp.a1 or "", snp.a2 or ""
-        orientation = oriented_variant(liftover, snp.chromosome, str(snp.bp), a1, a2)
+    for variant in iter_esi(esi):
+        a1, a2 = variant.a1 or "", variant.a2 or ""
+        orientation = oriented_variant(
+            liftover, variant.chromosome, str(variant.bp), a1, a2
+        )
         alids.append("" if orientation is None else orientation.variant.alid)
         flipped.append(orientation is not None and orientation.flipped)
         palindromic.append(is_palindromic(a1, a2))
-        af = parse_af(snp.freq)
+        af = parse_af(variant.freq)
         frequencies.append(math.nan if af is None else af)
     return BesdSource(
         prefix=Path(prefix),
@@ -144,25 +171,4 @@ class BesdProbeReader:
     probe_id: str
 
     def stream_metric_chunks(self) -> Iterator[MetricsChunk]:
-        probe_idx = self.source.probes.get(self.probe_id)
-        if probe_idx is None:
-            raise ValueError(f"probe {self.probe_id!r} is not in {self.source.prefix}.epi")
-        _esi, _epi, besd = besd_member_files(self.source.prefix)
-        rows, betas, ses = read_besd_probe(besd, len(self.source.probes), probe_idx)
-        if rows.size and int(rows.max()) >= self.source.n_rows:
-            raise ValueError(
-                f"{besd}: probe {self.probe_id!r} names .esi row {int(rows.max())}, "
-                f"past the {self.source.n_rows} rows of {self.source.prefix}.esi"
-            )
-        keep = self.source.usable[rows]
-        rows = rows[keep]
-        beta = betas[keep].astype(np.float64)
-        se = ses[keep].astype(np.float64)
-        yield MetricsChunk(
-            alid=self.source.alid[rows],
-            flipped=self.source.flipped[rows],
-            palindromic=self.source.palindromic[rows],
-            af_alt=self.source.af[rows],
-            beta=np.where(np.isfinite(beta), beta, np.nan),
-            se=np.where(np.isfinite(se) & (se > 0), se, np.nan),
-        )
+        yield self.source.read_probe_metrics(self.probe_id)

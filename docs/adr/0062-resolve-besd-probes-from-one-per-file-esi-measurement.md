@@ -46,7 +46,7 @@ resolver (ADR 0044): the same evidence sample, tiers and estimator, with the
 manifest's `sample_size`. The record has the same shape as a GWAS-SSF record.
 
 **An hg19 file set lifts through the GWAS-VCF projection.** `--chain-file`,
-one unique mapping per SNP, alleles complemented on a reverse-strand mapping,
+one unique mapping per variant, alleles complemented on a reverse-strand mapping,
 and an indel or ambiguous mapping refused (ADR 0044's assembly rules). The
 assembly plan admits BESD beside GWAS-VCF.
 
@@ -118,7 +118,7 @@ drops the measurements, and their arrays, when the run's probes are done.
   absent`; storing the `.esi` frequency per association is separate work.
   The builder's own hg19 lift (`build_liftover_lookup`) does not complement
   alleles on a reverse-strand mapping, which this resolver does; the two agree
-  on every forward-strand SNP.
+  on every forward-strand variant.
 
 ## Rejected
 

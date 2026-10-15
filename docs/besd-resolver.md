@@ -26,7 +26,7 @@ A declared INFO filter is refused for BESD, as for every non-GWAS-SSF format.
 **Ancestry and orientation: once per file set.** The `.esi`'s seventh column is
 the frequency of `a1`, the effect allele. Before any worker starts, the parent
 reads each file set's `.esi` once, aligns every row to the reference build
-(lifting GRCh37 rows by the GWAS-VCF projection: one unique mapping per SNP,
+(lifting GRCh37 rows by the GWAS-VCF projection: one unique mapping per variant,
 alleles complemented on a reverse-strand mapping, indels and ambiguous mappings
 refused), orients each frequency to canonical A1, and fits the Ancestry
 Reference Panel. A row contributes a site when its frequency is usable

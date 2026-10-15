@@ -1145,6 +1145,7 @@ def resolve_analysis(
         return AnalysisResolution(
             analysis_id=request.analysis_id,
             diagnostics=_diagnostics(request, scan, source_ancestry),
+            ancestry=None if source_ancestry is None else source_ancestry.assignment,
             error=f"{type(exc).__name__}: {exc}",
         )
     ancestry = _ancestry(scan, reference, gates, source_ancestry)
