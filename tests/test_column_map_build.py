@@ -154,40 +154,6 @@ def test_a_mapped_analysis_without_a_map_is_refused_before_building(tmp_path: Pa
     assert not store.exists()
 
 
-def test_a_checkpointed_hybrid_resumes_only_with_the_map_it_started_with(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from opengwasdb.layouts.hybrid import build as hybrid_build
-    from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-    from opengwasdb.layouts.hybrid.checkpoint import checkpoint_dir_for
-
-    column_map = tmp_path / "finngen.toml"
-    column_map.write_text(
-        (Path(hybrid_build.__file__).parents[2] / "readers/column_maps/finngen-r13.toml")
-        .read_text(encoding="utf-8").replace('name = "finngen-r13"', 'name = "finngen-copy"'),
-        encoding="utf-8",
-    )
-    panel = tmp_path / "panel.txt"
-    panel.write_text("1:13668:A:G\n1:19234:A:G\n", encoding="utf-8")
-    store = tmp_path / "store.opengwasdb"
-    manifest = _finngen_manifest(tmp_path / "m.tsv", "opengwasdb.column-map")
-
-    def _explode(*_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("simulated crash in the joint SE fit")
-
-    with monkeypatch.context() as patched:
-        patched.setattr(hybrid_build, "_fit_joint_se", _explode)
-        with pytest.raises(RuntimeError, match="simulated"):
-            build_hybrid_from_vcf_manifest(
-                manifest, store, reference_panel=panel, store_id="f", release_id="r",
-                checkpoint=True, column_map=column_map,
-            )
-    column_map.write_text(column_map.read_text() + "# edited\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="has changed since"):
-        hybrid_build.resume_hybrid_build(checkpoint_dir_for(store))
-
-
 def test_a_mapped_row_with_no_build_anywhere_is_refused_by_the_build(tmp_path: Path) -> None:
     """The build's own fallback is hg19; a `per_analysis` map must not inherit it."""
     column_map = tmp_path / "per-analysis.toml"
@@ -212,45 +178,6 @@ def test_a_mapped_row_with_no_build_anywhere_is_refused_by_the_build(tmp_path: P
     assert result.exit_code != 0
     assert "per_analysis" in str(result.exception) + result.output
     assert not store.exists()
-
-
-def test_a_checkpoint_resumes_a_relative_map_path_from_another_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`./gwas-ssf` is a file, not the built-in, and stays that file on resume."""
-    from opengwasdb.layouts.hybrid import build as hybrid_build
-    from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
-    from opengwasdb.layouts.hybrid.checkpoint import checkpoint_dir_for
-
-    started, elsewhere = tmp_path / "started", tmp_path / "elsewhere"
-    started.mkdir()
-    elsewhere.mkdir()
-    (started / "gwas-ssf").write_text(
-        (Path(hybrid_build.__file__).parents[2] / "readers/column_maps/finngen-r13.toml")
-        .read_text(encoding="utf-8").replace('name = "finngen-r13"', 'name = "finngen-local"'),
-        encoding="utf-8",
-    )
-    panel = tmp_path / "panel.txt"
-    panel.write_text("1:13668:A:G\n1:19234:A:G\n", encoding="utf-8")
-    store = tmp_path / "store.opengwasdb"
-    manifest = _finngen_manifest(tmp_path / "m.tsv", "opengwasdb.column-map")
-
-    def _explode(*_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("simulated crash in the joint SE fit")
-
-    monkeypatch.chdir(started)
-    with monkeypatch.context() as patched:
-        patched.setattr(hybrid_build, "_fit_joint_se", _explode)
-        with pytest.raises(RuntimeError, match="simulated"):
-            build_hybrid_from_vcf_manifest(
-                manifest, store, reference_panel=panel, store_id="f", release_id="r",
-                checkpoint=True, column_map="./gwas-ssf",
-            )
-    monkeypatch.chdir(elsewhere)
-
-    hybrid_build.resume_hybrid_build(checkpoint_dir_for(store))
-
-    assert _store_contents(store, ["finngen"])["variants"], "the resumed store must be built"
 
 
 def _provenance(store: Path) -> dict[str, Any]:
@@ -282,3 +209,73 @@ def test_a_store_records_the_map_it_was_built_through(tmp_path: Path) -> None:
             recorded = _provenance(store).get("column_map")
 
             assert recorded == (expected if flags else None), (command, capability)
+
+
+def _finngen_map_copy(path: Path) -> Path:
+    """The built-in FinnGen map's text in a file of the caller's choosing."""
+    import opengwasdb.readers as readers
+
+    text = Path(readers.__file__).parent / "column_maps" / "finngen-r13.toml"
+    path.write_text(
+        text.read_text(encoding="utf-8").replace('name = "finngen-r13"', 'name = "finngen-copy"'),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _crashed_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, column_map: str | Path
+) -> Path:
+    """A checkpointed mapped Hybrid build, crashed in the joint SE fit; its store path."""
+    from opengwasdb.layouts.hybrid import build as hybrid_build
+
+    panel = tmp_path / "panel.txt"
+    panel.write_text("1:13668:A:G\n1:19234:A:G\n", encoding="utf-8")
+    store = tmp_path / "store.opengwasdb"
+    manifest = _finngen_manifest(tmp_path / "m.tsv", "opengwasdb.column-map")
+
+    def _explode(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated crash in the joint SE fit")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(hybrid_build, "_fit_joint_se", _explode)
+        with pytest.raises(RuntimeError, match="simulated"):
+            hybrid_build.build_hybrid_from_vcf_manifest(
+                manifest, store, reference_panel=panel, store_id="f", release_id="r",
+                checkpoint=True, column_map=column_map,
+            )
+    return store
+
+
+def test_a_checkpointed_hybrid_resumes_only_with_the_map_it_started_with(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from opengwasdb.layouts.hybrid.build import resume_hybrid_build
+    from opengwasdb.layouts.hybrid.checkpoint import checkpoint_dir_for
+
+    column_map = _finngen_map_copy(tmp_path / "finngen.toml")
+    store = _crashed_checkpoint(tmp_path, monkeypatch, column_map)
+    column_map.write_text(column_map.read_text() + "# edited\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="has changed since"):
+        resume_hybrid_build(checkpoint_dir_for(store))
+
+
+def test_a_checkpoint_resumes_a_relative_map_path_from_another_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`./gwas-ssf` is a file, not the built-in, and stays that file on resume."""
+    from opengwasdb.layouts.hybrid.build import resume_hybrid_build
+    from opengwasdb.layouts.hybrid.checkpoint import checkpoint_dir_for
+
+    started, elsewhere = tmp_path / "started", tmp_path / "elsewhere"
+    started.mkdir()
+    elsewhere.mkdir()
+    _finngen_map_copy(started / "gwas-ssf")
+    monkeypatch.chdir(started)
+    store = _crashed_checkpoint(tmp_path, monkeypatch, "./gwas-ssf")
+    monkeypatch.chdir(elsewhere)
+
+    resume_hybrid_build(checkpoint_dir_for(store))
+
+    assert _store_contents(store, ["finngen"])["variants"], "the resumed store must be built"
