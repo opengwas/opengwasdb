@@ -216,6 +216,24 @@ _CHAIN_FILE_OPTION = Annotated[
         help="Chain file required for supported cross-build source/reference alignment",
     ),
 ]
+_LIFT_VARIANT_REFERENCE_HELP = (
+    "A Variant Reference on the target assembly -- a plain ALID list, a "
+    "*.variant-ref.tsv.gz artifact, or a Store Variant Table -- that every lifted "
+    "variant's alleles are checked against. A lifted variant whose alleles disagree "
+    "with the reference at its hg38 position fails the build, naming the variant "
+    "(issue #284). With none supplied the lift is recorded as unchecked and the "
+    "build warns; it is never silently treated as verified."
+)
+_LIFT_VARIANT_REFERENCE_OPTION = Annotated[
+    Path | None,
+    typer.Option(
+        "--variant-reference",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help=_LIFT_VARIANT_REFERENCE_HELP,
+    ),
+]
 
 
 class ReportFormat(StrEnum):
@@ -1192,6 +1210,8 @@ def build_ragged_besd_command(
     ),
     tissue: str | None = typer.Option(None),
     source_build: str = typer.Option("hg38"),
+    chain_file: _CHAIN_FILE_OPTION = None,
+    variant_reference: _LIFT_VARIANT_REFERENCE_OPTION = None,
     overwrite: bool = typer.Option(False),
 ) -> None:
     """Build a Ragged Observed-Only store from BESD files.
@@ -1209,6 +1229,8 @@ def build_ragged_besd_command(
         tissue=tissue or None,
         source_build=source_build,
         overwrite=overwrite,
+        chain_file=chain_file,
+        variant_reference=variant_reference,
     )
     _echo_summary(
         {

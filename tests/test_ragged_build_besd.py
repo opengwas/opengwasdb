@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from besd_fixtures import write_besd_sparse_3f, write_epi, write_esi
+from liftover_fixtures import STRAND_CHAIN_SIZE, write_two_strand_chain
 
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -656,3 +657,143 @@ def test_cli_build_ragged_besd_accepts_analyses_option(tmp_path):
     assert table.rows[0]["sample_size"] == "5000"
     assert table.rows[0]["license"] == "CC0"
 
+
+
+# ── hg19 lift: the mapping's strand (issue #284) ──────────────────────────────
+#
+# The chain fixture mirrors chr2 (1-based p -> STRIDE - p + 1, alleles
+# complemented) and leaves chr3 alone, so the expected values below come from
+# the chain's own arithmetic and the hand-built ESI rows, not from the code.
+
+_REVERSE_SNP = {"chr": "2", "snp_id": "rs284001", "bp": 1_000, "a1": "A", "a2": "G"}
+_FORWARD_SNP = {"chr": "3", "snp_id": "rs284002", "bp": 1_000, "a1": "C", "a2": "T"}
+_REVERSE_SNP_HG38_ALID = f"2:{STRAND_CHAIN_SIZE - 1_000 + 1}:C:T"
+_FORWARD_SNP_HG38_ALID = "3:1000:C:T"
+#: The reverse-strand row's hg38 position carrying its *hg19* alleles: what the
+#: strand-blind lift stored there, and what a reference may report instead.
+_REVERSE_SNP_HG19_ALLELES_AT_HG38 = f"2:{STRAND_CHAIN_SIZE - 1_000 + 1}:A:G"
+
+
+def _write_strand_fixture(root: Path) -> Path:
+    """One reverse-strand and one forward-strand SNP, each in one Analysis."""
+    fixture = root / "fixture_hg19_strand"
+    fixture.mkdir()
+    write_esi(fixture / "test.esi", [_REVERSE_SNP, _FORWARD_SNP])
+    write_epi(
+        fixture / "test.epi",
+        [{"chr": "2", "probe_id": "ENSG00000028401", "bp": 1_000, "gene": "GENE284"}],
+    )
+    # beta/se = +2 for the reverse-strand row, -3 for the forward one.
+    write_besd_sparse_3f(fixture / "test.besd", 1, [[(0, 0.2, 0.1), (1, -0.3, 0.1)]])
+    return fixture / "test"
+
+
+def _write_reference_alleles(root: Path, alids: list[str]) -> Path:
+    reference = root / "reference-alleles.txt"
+    reference.write_text("".join(f"{alid}\n" for alid in alids), encoding="utf-8")
+    return reference
+
+
+def test_reverse_strand_hg19_snp_is_stored_as_the_resolver_orients_it(tmp_path):
+    """The builder and the resolver must share one lift (issue #284).
+
+    A reverse-strand hg19 SNP's alleles are complemented before its ALID is
+    formed, so the Store holds the variant the resolver's `oriented_variant`
+    holds -- and its z-score is signed against the allele the canonical ALID
+    calls A1, which changes too: the ESI's effect allele `A` becomes `T`, the
+    canonical A1 is `C`, so the sign flips.
+    """
+    from opengwasdb.readers.gwas_vcf import load_liftover, oriented_variant
+    from opengwasdb.variants.axis import VariantAxis, iter_variant_records
+
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    prefix = _write_strand_fixture(tmp_path)
+    reference = _write_reference_alleles(
+        tmp_path, [_REVERSE_SNP_HG38_ALID, _FORWARD_SNP_HG38_ALID]
+    )
+    out = tmp_path / "out.opengwasdb"
+
+    build_ragged_from_besd(
+        prefix, out,
+        store_id="test", release_id="v1",
+        source_build="hg19", chain_file=chain, variant_reference=reference,
+    )
+
+    stored = {r.alid for r in iter_variant_records(out / "variants.tsv.gz")}
+    assert len(stored) == 2, "both fixture rows must reach the Store for this to mean anything"
+    resolver = load_liftover("hg19", "hg38", str(chain))
+    beta_by_alid = {_REVERSE_SNP_HG38_ALID: 2.0, _FORWARD_SNP_HG38_ALID: -3.0}
+    expected_z: dict[str, float] = {}
+    for snp in (_REVERSE_SNP, _FORWARD_SNP):
+        orientation = oriented_variant(
+            resolver, snp["chr"], str(snp["bp"]), snp["a1"], snp["a2"]
+        )
+        assert orientation is not None, "the fixture row must lift to be compared"
+        assert orientation.variant.alid in stored, (
+            f"the builder stored {sorted(stored)}, the resolver orients "
+            f"{snp['snp_id']} to {orientation.variant.alid}"
+        )
+        sign = -1.0 if orientation.flipped else 1.0
+        expected_z[orientation.variant.alid] = sign * beta_by_alid[orientation.variant.alid]
+
+    axis = VariantAxis(out)
+    try:
+        associations = RaggedCSRReader(out).get_analysis(0)
+        z_by_alid = {
+            axis.by_index(int(index)).alid: float(z)
+            for index, z in zip(associations.variant_index, associations.z, strict=True)
+        }
+    finally:
+        axis.close()
+    assert set(z_by_alid) == stored
+    for alid, expected in expected_z.items():
+        assert z_by_alid[alid] == pytest.approx(expected, abs=1e-3), alid
+
+
+def test_hg19_lift_disagreeing_with_the_reference_fails_the_build_by_name(tmp_path):
+    """The rule that would have caught #284: alleles must agree with the hg38
+    reference at the lifted position. The reference here carries the hg19-strand
+    alleles at that position -- exactly the variant the strand-blind lift wrote."""
+    from opengwasdb.build.liftover import LiftedAlleleMismatchError
+
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    prefix = _write_strand_fixture(tmp_path)
+    reference = _write_reference_alleles(
+        tmp_path, [_REVERSE_SNP_HG19_ALLELES_AT_HG38, _FORWARD_SNP_HG38_ALID]
+    )
+    assert _REVERSE_SNP_HG19_ALLELES_AT_HG38 != _REVERSE_SNP_HG38_ALID, (
+        "the fixture reference must disagree with the correct lift for this to test anything"
+    )
+    out = tmp_path / "out.opengwasdb"
+
+    with pytest.raises(LiftedAlleleMismatchError, match=_REVERSE_SNP_HG38_ALID):
+        build_ragged_from_besd(
+            prefix, out,
+            store_id="test", release_id="v1",
+            source_build="hg19", chain_file=chain, variant_reference=reference,
+        )
+
+    assert not out.exists(), "a failed build must not leave a release at the destination"
+
+
+def test_hg19_lift_without_a_reference_records_that_nothing_was_checked(tmp_path, caplog):
+    """No reference is a warning and a recorded absence, never a silent pass:
+    a store must say whether its lifted alleles were checked."""
+    import json
+
+    chain = write_two_strand_chain(tmp_path / "hg19ToHg38.chain")
+    prefix = _write_strand_fixture(tmp_path)
+    out = tmp_path / "out.opengwasdb"
+
+    with caplog.at_level("WARNING"):
+        build_ragged_from_besd(
+            prefix, out,
+            store_id="test", release_id="v1",
+            source_build="hg19", chain_file=chain,
+        )
+
+    assert "variant-reference" in caplog.text
+    lift = json.loads((out / "manifest.json").read_text())["provenance"]["lift"]
+    assert lift["reference"] is None
+    assert lift["n_reference_absent"] is None
+    assert lift["n_lifted"] == 2

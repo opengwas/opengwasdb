@@ -133,6 +133,20 @@ def _strand_alleles(strand: str, effect: str, other: str, identity: str) -> tupl
     raise LiftoverProjectionError(f"unsupported liftover strand {strand!r} for {identity}")
 
 
+def project_lifted_alleles(strand: str, effect: str, other: str) -> tuple[str, str]:
+    """The `(effect, other)` alleles as they read on the target assembly.
+
+    A chain block's orientation says which strand of the target a source region
+    landed on, so a reverse-strand mapping's alleles are complemented before any
+    identity is formed from them. Every lift in the package projects through
+    this one rule -- the resolver's `oriented_variant` (issue #282) and the
+    builders' `opengwasdb.build.liftover` (issue #284) -- because two lifts that
+    each complement on their own are two answers to the same question, and the
+    builder's answer was missing the complement entirely.
+    """
+    return _strand_alleles(strand, effect, other, "the lifted variant")
+
+
 def _lift_variant(
     liftover: object, chrom: str, pos_str: str, effect: str, other: str
 ) -> tuple[str, str, str, str] | None:
