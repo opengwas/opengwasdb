@@ -33,8 +33,9 @@ HEADER = tdc.SOURCE_HEADER + "\teaf"
 EAFS = ["0.30", "0.31", "0.32", "0.34", "0.36", "0.38"]
 ROWS = [f"{row}\t{eaf}" for row, eaf in zip(tdc.SOURCE_ROWS, EAFS, strict=True)]
 # The LD panel adds 1:1050000:C:T between the source rows 1:1000000 and 1:1100000, and two
-# chr2 rows after every source row. Only the first lies inside a source chunk-row's span.
-N_PARENT, N_CHILD, N_ANALYSES, N_OBSERVED, N_INSERTED_IN_SPAN = 5, 8, 2, 6, 1
+# chr2 rows after every source row. One chunk-row holds the whole source, so its span is the
+# whole child and all three inserted rows are examined.
+N_PARENT, N_CHILD, N_ANALYSES, N_OBSERVED, N_INSERTED = 5, 8, 2, 6, 3
 
 
 def _build_pair(root: Path, rows: list[str], panel: Path) -> tuple[Path, Path]:
@@ -136,7 +137,7 @@ def test_a_completed_fixture_pair_passes_with_hand_counted_totals(tmp_path, pair
     totals = verdict["totals"]
     assert totals["cells_compared"] == N_PARENT * N_ANALYSES
     assert totals["parent_observed"] == N_OBSERVED
-    assert totals["inserted_rows"] == N_INSERTED_IN_SPAN
+    assert totals["inserted_rows"] == N_INSERTED
     assert all(totals[name] == 0 for name in (
         "z_mismatch", "se_mismatch", "eaf_mismatch", "observed_marked_imputed",
         "observed_missing_in_child", "missing_became_observed", "inserted_observed_cells",
@@ -193,6 +194,20 @@ def _observe_an_inserted_row(store: Path) -> None:
     _plane(store, DenseSePlane).patch(rows, cols, np.array([0.3], dtype=np.float32))
 
 
+def _write_invalid_imputed(store: Path) -> None:
+    open_store(store).arrays(mode="r+")["imputed"][_row_of(store, "1:900000:A:G"), 1] = 2
+
+
+def _z_without_se_on_a_missing_cell(store: Path) -> None:
+    rows, cols = np.array([_row_of(store, "1:900000:A:G")]), np.array([1])
+    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
+
+
+def _z_without_se_on_an_inserted_row(store: Path) -> None:
+    rows, cols = np.array([_row_of(store, "1:1050000:C:T")]), np.array([1])
+    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
+
+
 @pytest.mark.parametrize(
     ("perturb", "counter"),
     [
@@ -203,6 +218,9 @@ def _observe_an_inserted_row(store: Path) -> None:
         (_blank_observed_cell, "observed_missing_in_child"),
         (_observe_a_missing_cell, "missing_became_observed"),
         (_observe_an_inserted_row, "inserted_observed_cells"),
+        (_write_invalid_imputed, "imputed_mask_invalid"),
+        (_z_without_se_on_a_missing_cell, "z_se_missingness_mismatch"),
+        (_z_without_se_on_an_inserted_row, "z_se_missingness_mismatch"),
     ],
     ids=lambda value: getattr(value, "__name__", value),
 )
@@ -219,9 +237,20 @@ def test_a_perturbed_completed_store_fails_on_the_right_counter(tmp_path, pair, 
     assert verdict["totals"][counter] == 1
     assert counter in verdict["failures"]
     assert verdict["bands_with_mismatch"] == [0]
-    if counter.endswith("_mismatch") and counter != "missing_became_observed":
+    if counter in ("z_mismatch", "se_mismatch", "eaf_mismatch"):
         plane = counter.removesuffix("_mismatch")
         assert verdict["max_abs_diff"][plane] > 0.0
+
+
+def test_a_source_cell_with_z_but_no_se_fails(tmp_path, pair):
+    observed, completed = pair
+    _z_without_se_on_a_missing_cell(observed)  # the source itself is inconsistent
+    out = tmp_path / "verdict.json"
+
+    result = _run(observed, completed, out)
+
+    assert result.exit_code == 1, result.output
+    assert _verdict(result, out)["totals"]["z_se_missingness_mismatch"] == 1
 
 
 def test_imputed_cells_are_not_failures(tmp_path, pair):
@@ -363,8 +392,9 @@ _STRATA_POSITIONS = [900_000 + 20_000 * i for i in range(10)] + [1_110_000, 1_12
 _STRATA_PARENT_TO_CHILD = [0, 1, 2, 4, 5, 6, 7, 8, 10, 11, 13, 14]
 
 
-@pytest.fixture
-def small_chunked_pair(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+def _small_chunked_pair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, positions: list[int]
+) -> tuple[Path, Path]:
     """The geometry of `test_a_dense_completion_writes_whole_shards`, with a wider axis.
 
     Parent chunk-rows of 2 rows; the child shard is 4 rows and the writer's memory target
@@ -382,7 +412,7 @@ def small_chunked_pair(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple
     monkeypatch.setattr(complete_module, "_BAND_ROWS", 6)
     rows = [
         f"a1\tp1\tTrait\tTrait primary\t1\t{pos}\tA\tG\t2.0\t0.1\trs{i}\tsd\t0.3"
-        for i, pos in enumerate(_STRATA_POSITIONS)
+        for i, pos in enumerate(positions)
     ]
     source = tmp_path / "associations.tsv"
     source.write_text(HEADER + "\n" + "\n".join(rows) + "\n", encoding="utf-8")
@@ -444,10 +474,52 @@ def test_the_same_seed_gives_the_same_verdict_and_the_whole_grid_when_it_is_smal
     assert first["bands_by_stratum"]["random"] == 3
     assert everything["bands_by_stratum"]["random"] == 6  # fewer chunk-rows than asked: all
     assert everything["totals"]["cells_compared"] == len(_STRATA_POSITIONS)
-    # Only 1:950000 lies inside a chunk-row's span. 1:1050000 and 1:1100000 fall between two
-    # chunk-rows (child rows 9 and 12), which no span covers, as in the prototype's counts.
-    assert everything["totals"]["inserted_rows"] == 1
+    # Every child row belongs to exactly one chunk-row's span: the 5 inserted rows are all seen.
+    assert everything["totals"]["inserted_rows"] == 5
     assert everything["passed"], everything["failures"]
+
+
+@pytest.fixture
+def small_chunked_pair(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+    return _small_chunked_pair(monkeypatch, tmp_path, _STRATA_POSITIONS)
+
+
+@pytest.fixture
+def leading_gap_pair(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+    # Without 1:900000 the panel's first row precedes every source row.
+    return _small_chunked_pair(monkeypatch, tmp_path, _STRATA_POSITIONS[1:])
+
+
+def _observe_child_row(store: Path, row: int) -> None:
+    rows, cols = np.array([row]), np.array([0])
+    _plane(store, DenseZPlane).patch(rows, cols, np.array([2.5], dtype=np.float32))
+    _plane(store, DenseSePlane).patch(rows, cols, np.array([0.3], dtype=np.float32))
+
+
+# Child rows 3, 9, 12, 15, 16 are inserted. Chunk-rows of two source rows put 9 and 12 between
+# chunk-rows and 15, 16 after the last source row, where a span ending at a chunk-row's last
+# mapped row never looks.
+@pytest.mark.parametrize("row", [3, 9, 12, 15, 16])
+def test_sampling_the_whole_grid_examines_every_inserted_row(small_chunked_pair, row):
+    observed, completed = small_chunked_pair
+    assert _row_of(completed, "1:950000:A:C") == 3, "fixture must interleave panel rows"
+    _observe_child_row(completed, row)
+
+    verdict = check_observed_view(observed, completed, seed=1, n_random=1000).record
+
+    assert verdict["totals"]["inserted_observed_cells"] == 1
+    assert "inserted_observed_cells" in verdict["failures"]
+
+
+def test_an_inserted_row_before_the_first_source_row_is_examined(leading_gap_pair):
+    observed, completed = leading_gap_pair
+    assert _row_of(completed, "1:900000:A:G") == 0, "fixture must insert before the source"
+    _observe_child_row(completed, 0)
+
+    verdict = check_observed_view(observed, completed, seed=1, n_random=1000).record
+
+    assert verdict["totals"]["inserted_observed_cells"] == 1
+    assert "inserted_observed_cells" in verdict["failures"]
 
 
 # --- seam 5: wide ALIDs ----------------------------------------------------
@@ -478,16 +550,18 @@ def test_a_parent_row_wider_than_the_alid_index_is_mapped_not_unmapped(tmp_path)
     assert verdict["passed"], verdict["failures"]
 
 
-def test_stores_with_no_alid_index_are_still_checked(tmp_path, pair):
+@pytest.mark.parametrize("absent", ["source", "target", "both"])
+def test_a_store_with_no_alid_index_is_still_checked(pair, absent):
     observed, completed = pair
-    for store in pair:
+    stores = {"source": [observed], "target": [completed], "both": [observed, completed]}[absent]
+    for store in stores:
         (store / "variant_alid_bytes.npy").unlink()
         (store / "variant_alid_rows.npy").unlink()
 
     verdict = check_observed_view(observed, completed, seed=1).record
 
-    assert verdict["axis"]["parent_rows_unindexed"] == N_PARENT
-    assert verdict["axis"]["child_rows_unindexed"] == N_CHILD
+    assert verdict["axis"]["parent_rows_unindexed"] == (N_PARENT if observed in stores else 0)
+    assert verdict["axis"]["child_rows_unindexed"] == (N_CHILD if completed in stores else 0)
     assert verdict["axis"]["parent_rows_unmapped"] == 0
     assert verdict["totals"]["parent_observed"] == N_OBSERVED
     assert verdict["passed"], verdict["failures"]

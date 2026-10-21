@@ -45,6 +45,7 @@ from opengwasdb.store.arrays import inner_chunk_of
 from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.variants import (
     VariantAxis,
+    is_indexable_alid,
     variant_alid_bytes_path,
     variant_alid_rows_path,
 )
@@ -69,6 +70,8 @@ FAILING_COUNTERS = (
     "observed_missing_in_child",
     "missing_became_observed",
     "inserted_observed_cells",
+    "imputed_mask_invalid",
+    "z_se_missingness_mismatch",
 )
 _INFORMATIONAL_COUNTERS = (
     "missing_now_imputed",
@@ -373,7 +376,7 @@ def _map_axis(source_path: Path, target_path: Path, n_source: int, n_target: int
             for row, record in axis.by_indices(source_loose.tolist()).items():
                 source_alids[row] = record.alid
                 chromosome[row] = _chromosome_bytes(record.chromosome)
-    _map_residual(mapped, source_index, source_alids, target_path, target_loose)
+    _map_residual(mapped, source_index, source_alids, target_index, target_path, target_loose)
     found = mapped >= 0
     return _AxisMap(
         source_to_target=mapped,
@@ -412,14 +415,19 @@ def _map_residual(
     mapped: np.ndarray,
     source_index: _AlidIndex,
     source_alids: dict[int, str],
+    target_index: _AlidIndex,
     target_path: Path,
     target_loose: np.ndarray,
 ) -> None:
-    """Resolve, by ALID string, the rows the index did not map.
+    """Resolve, by ALID string, the rows the index fast path did not map.
 
-    Only a target row the index leaves out can be found this way, so the target's
-    table is read only when there are such rows *and* source rows still unmapped.
+    A source ALID recovered by scanning can name a target row the target's index
+    covers *or* one it leaves out, so both are searched. Rows of an indexed source
+    that an indexed target does not contain are genuinely unmapped, so the
+    target's table is read only when a scanned source row or an unindexed target
+    row makes there something to find.
     """
+    _map_scanned_through_index(mapped, source_alids, target_index)
     residual = np.flatnonzero(mapped < 0)
     if not (residual.size and target_loose.size):
         return
@@ -429,6 +437,18 @@ def _map_residual(
     for row in residual.tolist():
         if alids[row] in target_row_of:
             mapped[row] = target_row_of[alids[row]]
+
+
+def _map_scanned_through_index(
+    mapped: np.ndarray, source_alids: dict[int, str], target: _AlidIndex
+) -> None:
+    rows = [row for row, alid in source_alids.items() if is_indexable_alid(alid)]
+    if not (rows and target.alids.size):
+        return
+    keys = np.array([source_alids[row].encode("utf-8") for row in rows], dtype=target.alids.dtype)
+    slot = np.minimum(np.searchsorted(target.alids, keys), target.alids.size - 1)
+    hit = target.alids[slot] == keys
+    mapped[np.asarray(rows, dtype="int64")[hit]] = np.asarray(target.rows)[slot[hit]]
 
 
 def _unmapped_source_alids(
@@ -473,12 +493,33 @@ def _choose_bands(
         add(last // chunk_rows, "chrom_edge")
     add(n_bands - 1, "final_partial")
     for boundary in range(band_rows, n_target, band_rows):
-        # The first source row mapping at or after the boundary, and the one before it.
-        first = int(np.searchsorted(axis.source_to_target, boundary))
-        if 0 < first < n_source:
-            add(first // chunk_rows, "writer_band_boundary")
-            add((first - 1) // chunk_rows, "writer_band_boundary")
+        # The chunk-rows whose spans hold the child rows either side of the boundary.
+        for child_row in (boundary - 1, boundary):
+            add(_span_owner(axis.source_to_target, child_row, chunk_rows, n_bands),
+                "writer_band_boundary")
     return bands
+
+
+def _span_owner(source_to_target: np.ndarray, child_row: int, chunk_rows: int, n_bands: int) -> int:
+    """The chunk-row whose span holds `child_row`: the first whose last row maps at or after it.
+
+    Rows past the last source row belong to the final chunk-row.
+    """
+    first_source = int(np.searchsorted(source_to_target, child_row))
+    return min(first_source // chunk_rows, n_bands - 1)
+
+
+def _child_span(source_to_target: np.ndarray, r0: int, r1: int, n_child: int) -> tuple[int, int]:
+    """Child rows `[c0, c1)` of the chunk-row of source rows `[r0, r1)`.
+
+    The spans partition the child axis: a span starts after the previous chunk-row's
+    last mapped row and ends at its own, the first starts at row 0 and the last runs
+    to the end. Every child row, inserted ones included, is then in exactly one
+    chunk-row's span, so sampling the whole grid examines the whole child.
+    """
+    c0 = 0 if r0 == 0 else int(source_to_target[r0 - 1]) + 1
+    c1 = n_child if r1 == len(source_to_target) else int(source_to_target[r1 - 1]) + 1
+    return c0, c1
 
 
 def _sample_and_compare(
@@ -500,7 +541,8 @@ def _sample_and_compare(
     dirty: list[int] = []
     for band in sorted(bands):
         r0, r1 = band * chunk_rows, min((band + 1) * chunk_rows, parent.n_rows)
-        counts, diffs = _check_band(axis.source_to_target[r0:r1], r0, r1, parent, child)
+        span = _child_span(axis.source_to_target, r0, r1, child.n_rows)
+        counts, diffs = _check_band(axis.source_to_target[r0:r1], (r0, r1), span, parent, child)
         for key in totals:
             totals[key] += counts[key]
         for plane in _DIFF_PLANES:
@@ -547,24 +589,29 @@ def _failures(record: Mapping[str, Any], axis: _AxisMap) -> list[str]:
 
 
 def _check_band(
-    rows: np.ndarray, r0: int, r1: int, parent: _Planes, child: _Planes
+    rows: np.ndarray,
+    source_rows: tuple[int, int],
+    span: tuple[int, int],
+    parent: _Planes,
+    child: _Planes,
 ) -> tuple[dict[str, int], dict[str, float]]:
-    """Compare one source chunk-row with the completed rows it maps to.
-
-    The completed span is `rows[0]` to `rows[-1]`, so the inserted panel rows
-    that fall *between* source rows are checked and ones outside every source
-    row are not.
-    """
-    c0, c1 = int(rows[0]), int(rows[-1]) + 1
+    """Compare one source chunk-row with the completed span it owns (see `_child_span`)."""
+    (r0, r1), (c0, c1) = source_rows, span
     assert child.imputed is not None  # checked before sampling began
-    imputed = np.asarray(child.imputed[c0:c1]).astype(np.uint8)
-    return _compare(parent.read(r0, r1), child.read(c0, c1), imputed, rows - c0)
+    raw_imputed = np.asarray(child.imputed[c0:c1])
+    return _compare(parent.read(r0, r1), child.read(c0, c1), raw_imputed, rows - c0)
 
 
 def _compare(
-    parent: _Cells, child: _Cells, imputed: np.ndarray, local: np.ndarray
+    parent: _Cells, child: _Cells, raw_imputed: np.ndarray, local: np.ndarray
 ) -> tuple[dict[str, int], dict[str, float]]:
-    """The cell checks. `local` maps each source row to its row within the span."""
+    """The cell checks. `local` maps each source row to its row within the span.
+
+    Missingness and the imputed mask's domain are checked *before* cells are
+    classified, so a cell that is neither observed nor missing, or neither imputed
+    nor not, is a counted failure rather than being read as the nearest category.
+    """
+    imputed = raw_imputed.astype(np.uint8)
     mapped = _Cells(child.z[local], child.se[local], child.eaf[local])
     mapped_imputed = imputed[local]
     observed = _observed(parent)
@@ -575,6 +622,8 @@ def _compare(
     counts = {
         "cells_compared": int(parent.z.size),
         "parent_observed": int(observed.sum()),
+        "imputed_mask_invalid": int(((raw_imputed != 0) & (raw_imputed != 1)).sum()),
+        "z_se_missingness_mismatch": _partial_cells(parent) + _partial_cells(child),
         "observed_marked_imputed": int((mapped_imputed[observed] != 0).sum()),
         "observed_missing_in_child": int((~child_observed[observed]).sum()),
         "missing_became_observed": int((child_observed & ~observed & (mapped_imputed == 0)).sum()),
@@ -595,6 +644,11 @@ def _observed(cells: _Cells) -> np.ndarray:
     """An observed cell has a finite Z and SE; EAF is carried, not what makes it observed."""
     observed: np.ndarray = np.isfinite(cells.z) & np.isfinite(cells.se)
     return observed
+
+
+def _partial_cells(cells: _Cells) -> int:
+    """Cells with a Z but no SE, or the reverse: their missingness must agree (spec section 20)."""
+    return int((np.isfinite(cells.z) != np.isfinite(cells.se)).sum())
 
 
 def _plane_difference(parent: np.ndarray, child: np.ndarray) -> tuple[int, float]:

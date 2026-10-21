@@ -1730,7 +1730,9 @@ replaces its Store under the same id, so this check gates the swap.
   same Analyses in the same order (compared by `analysis_id`, not by every column, since
   completion rewrites `analyses.tsv`). The map is exact: the mmap'd ALID index is used where
   it covers a row, and an ALID wider than its key (§1, issue #127), or a release with no index,
-  is read from the variant table, so a long indel is mapped and never reported unmapped.
+  is read from the variant table, so a long indel is mapped and never reported unmapped. A
+  row recovered from the table is searched against both the other release's index and its
+  unindexed rows, so either release, or both, may lack the index.
 - **Sampled cell check.** Whole `SOURCE` chunk-rows (the inner chunk height of `SOURCE`'s `z`,
   across all Analyses), compared against the `TARGET` rows they map to. A chunk-row is chosen by
   one or more strata:
@@ -1738,17 +1740,22 @@ replaces its Store under the same id, so this check gates the swap.
     grid with fewer chunk-rows is sampled whole;
   - `chrom_edge`: the first and last chunk-row of every run of one chromosome;
   - `final_partial`: the last chunk-row;
-  - `writer_band_boundary`: the chunk-rows either side of every row where the completion
-    writer's band starts, whose height is derived from `TARGET`'s `z` by the writer's own rule
+  - `writer_band_boundary`: the chunk-rows whose spans hold the `TARGET` rows either side of
+    every row where the completion writer's band starts, whose height is derived from `TARGET`'s `z` by the writer's own rule
     (`completion_band_rows` over the shard height, or the inner chunk height when unsharded).
     Neither height is a constant of this check.
 
-  Per chunk-row, over its completed span (from the first mapped row to the last): each
-  source-observed cell (finite Z and SE) has identical decoded Z, SE and EAF (NaN equals NaN) and
-  is not marked imputed; no source-missing cell is observed with `imputed == 0`; and no inserted
-  panel row carries an observed cell with `imputed == 0`. Inserted rows outside every sampled
-  span (between two chunk-rows, or before the first or after the last source row) are not
-  examined, so sampling can miss a defect confined to them.
+  Each chunk-row owns a **span** of `TARGET` rows. The spans partition the completed axis: a
+  span starts after the previous chunk-row's last mapped row and ends at its own, the first
+  starts at row 0 and the last runs to the end. Every `TARGET` row, inserted panel rows
+  included, is therefore in exactly one chunk-row's span, and sampling every chunk-row examines
+  every `TARGET` row. Per chunk-row, over its span: each source-observed cell (finite Z and SE)
+  has identical decoded Z, SE and EAF (NaN equals NaN) and is not marked imputed; no
+  source-missing cell is observed with `imputed == 0`; and no inserted panel row carries an
+  observed cell with `imputed == 0`. Before cells are classified, every sampled `imputed` value
+  must be 0 or 1 (`imputed_mask_invalid`) and every sampled cell, in `SOURCE` or `TARGET`
+  and on inserted rows, must have Z and SE both finite or both missing
+  (`z_se_missingness_mismatch`, §20).
 - **Verdict.** One JSON object, written to `--output` (which must be in an existing directory)
   and printed on `stdout`. `seed` is required so every verdict is reproducible from its record.
 
@@ -1769,7 +1776,8 @@ replaces its Store under the same id, so this check gates the swap.
 
   `totals`: `cells_compared`, `parent_observed`, the failing counters `z_mismatch`,
   `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_child`,
-  `missing_became_observed`, `inserted_observed_cells`, and the informational
+  `missing_became_observed`, `inserted_observed_cells`, `imputed_mask_invalid`,
+  `z_se_missingness_mismatch`, and the informational
   `missing_now_imputed`, `inserted_rows`, `parent_rows_without_finite`. A nonzero failing
   counter, `parent_rows_unmapped > 0`, an order that is not preserved, and differing Analyses
   each fail the check (`failures` names `parent_rows_unmapped`, `order_not_preserved`,
