@@ -1339,6 +1339,8 @@ Reference-Completed releases MUST:
 
 There is no Z-only completion mode.
 
+Completion preserves every observed association exactly: a source-observed cell has the same decoded Z, SE and EAF in the Reference-Completed release and is not marked imputed, and no source-missing cell is observed in it. `check-observed-view` (§20.4) re-derives that from the two releases' arrays.
+
 ## 13. LD Reference Panel requirements
 
 An LD Reference Panel used for Reference Completion MUST define:
@@ -1714,6 +1716,75 @@ in the working directory is refused as ambiguous.
   - A checkpointed Hybrid build records the map (a built-in's name or a file's
     absolute path) and refuses to resume once it has changed.
   - The variant-reference artifact records no map.
+
+### 20.4 Observed-view check CLI interface
+
+`opengwasdb check-observed-view SOURCE TARGET --seed N --output verdict.json [--n-random 1000]`
+(the **Observed-View Check**, issue #289, stores ADR 0037) compares an Observed-Only Dense
+release `SOURCE` with the Reference-Completed Dense release `TARGET` completed from it, and
+confirms every observed association survived completion unchanged. Reference completion
+replaces its Store under the same id, so this check gates the swap.
+
+- **Exhaustive axis check.** Every `SOURCE` variant is mapped to `TARGET` by its ALID, and the
+  map must be complete and strictly increasing (order preserved). Both releases must list the
+  same Analyses in the same order (compared by `analysis_id`, not by every column, since
+  completion rewrites `analyses.tsv`). The map is exact: the mmap'd ALID index is used where
+  it covers a row, and an ALID wider than its key (§1, issue #127), or a release with no index,
+  is read from the variant table, so a long indel is mapped and never reported unmapped.
+- **Sampled cell check.** Whole `SOURCE` chunk-rows (the inner chunk height of `SOURCE`'s `z`,
+  across all Analyses), compared against the `TARGET` rows they map to. A chunk-row is chosen by
+  one or more strata:
+  - `random`: `--n-random` rows drawn uniformly with `numpy.random.default_rng(--seed)`; a
+    grid with fewer chunk-rows is sampled whole;
+  - `chrom_edge`: the first and last chunk-row of every run of one chromosome;
+  - `final_partial`: the last chunk-row;
+  - `writer_band_boundary`: the chunk-rows either side of every row where the completion
+    writer's band starts, whose height is derived from `TARGET`'s `z` by the writer's own rule
+    (`completion_band_rows` over the shard height, or the inner chunk height when unsharded).
+    Neither height is a constant of this check.
+
+  Per chunk-row, over its completed span (from the first mapped row to the last): each
+  source-observed cell (finite Z and SE) has identical decoded Z, SE and EAF (NaN equals NaN) and
+  is not marked imputed; no source-missing cell is observed with `imputed == 0`; and no inserted
+  panel row carries an observed cell with `imputed == 0`. Inserted rows outside every sampled
+  span (between two chunk-rows, or before the first or after the last source row) are not
+  examined, so sampling can miss a defect confined to them.
+- **Verdict.** One JSON object, written to `--output` (which must be in an existing directory)
+  and printed on `stdout`. `seed` is required so every verdict is reproducible from its record.
+
+  | key | meaning |
+  |---|---|
+  | `seed`, `n_random` | the sample's inputs |
+  | `source`, `target` | `store_id`, `release_id` and `path` of each release |
+  | `analyses` | `n_parent`, `n_child`, `identical` |
+  | `axis` | `n_parent`, `n_child`, `parent_rows_unmapped`, `order_preserved`, and `parent_rows_unindexed` / `child_rows_unindexed` (rows read from the variant table) |
+  | `geometry` | `parent_chunk_rows`, `n_parent_chunk_rows`, `completion_band_rows` |
+  | `bands_checked`, `bands_by_stratum` | distinct chunk-rows; per stratum, overlap-inclusive |
+  | `bands` | each checked chunk-row: `band`, `parent_rows`, `strata` |
+  | `bands_with_mismatch` | chunk-rows with a nonzero failing counter |
+  | `totals` | below |
+  | `max_abs_diff` | `z`, `se`, `eaf`: the largest gap over cells where both sides are finite; a NaN against a number is counted in `*_mismatch`, not here |
+  | `failures`, `passed` | the failing names, and whether there are none |
+  | `seconds` | timing; informational |
+
+  `totals`: `cells_compared`, `parent_observed`, the failing counters `z_mismatch`,
+  `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_child`,
+  `missing_became_observed`, `inserted_observed_cells`, and the informational
+  `missing_now_imputed`, `inserted_rows`, `parent_rows_without_finite`. A nonzero failing
+  counter, `parent_rows_unmapped > 0`, an order that is not preserved, and differing Analyses
+  each fail the check (`failures` names `parent_rows_unmapped`, `order_not_preserved`,
+  `analyses_mismatch`, or the counter). After an axis or Analyses failure the sample is skipped
+  (`bands_checked` is 0) and the verdict says why.
+- **Exit codes.** `0` pass; `1` the check ran and found a mismatch (the verdict is still
+  written, and each failure is named on `stderr`); `2` refused: nothing was checked, so no
+  verdict is written and the reason is on `stderr`. Refused are a non-Dense layout (a Ragged
+  release, or a Hybrid root: Hybrid Dense Components are not supported yet), a `SOURCE` that is
+  not Observed-Only, a `TARGET` that is not Reference-Completed, a release that cannot be opened,
+  a `TARGET` with no `imputed` mask, a release whose `z` plane and variant axis disagree in length
+  or are empty.
+
+The check does not compare `TARGET`'s `source_release_id` with `SOURCE`'s `release_id`: a wrong
+pairing fails the axis or cell checks.
 
 ## 21. Compatibility
 
