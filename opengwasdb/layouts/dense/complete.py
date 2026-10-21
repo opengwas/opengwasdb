@@ -639,7 +639,7 @@ def _merge_checkpoint_fills(
         src_has_eaf=src_has_eaf,
         eaf_reference=eaf_reference,
     )
-    band_rows = _completion_band_rows(_dense_shard_rows(staged, effective_chunks))
+    band_rows = completion_band_rows(_dense_shard_rows(staged, effective_chunks))
     fill_shard_dir, quality_count = _shard_checkpoint_fills_by_band(
         blocks_dir,
         staged,
@@ -923,7 +923,7 @@ _FILL_RECORD_DTYPE = np.dtype(
 _FILL_RECORD_READ_COUNT = 5_000_000
 
 
-def _completion_band_rows(shard_rows: int) -> int:
+def completion_band_rows(shard_rows: int) -> int:
     """Rows per completion band: whole Dense shards, about `_BAND_ROWS` of them.
 
     The completion band writer sets ``z_arr[r0:r1]`` and the same for se,
@@ -933,6 +933,11 @@ def _completion_band_rows(shard_rows: int) -> int:
     """
     rows = max(int(shard_rows), 1)
     return max(rows, (_BAND_ROWS // rows) * rows)
+
+
+# The observed-view check derives the same band from a completed Store's `z`
+# (issue #289), so the rule is public; tests have always imported this name.
+_completion_band_rows = completion_band_rows
 
 
 def _dense_shard_rows(staged: StagedRelease, effective_chunks: tuple[int, int]) -> int:
@@ -1482,7 +1487,7 @@ def _write_completed_bands(
     root = staged.arrays(mode="a")
     codec = StoreCodec(encoding)
     overflow = ZOverflowBuilder()
-    band_rows = _completion_band_rows(_dense_shard_rows(staged, effective_chunks))
+    band_rows = completion_band_rows(_dense_shard_rows(staged, effective_chunks))
 
     n_missing_off_panel = np.zeros(n_analyses, dtype=np.int64)
 

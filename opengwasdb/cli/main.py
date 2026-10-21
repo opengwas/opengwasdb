@@ -441,6 +441,51 @@ def audit_eaf_orientation_command(
     raise typer.Exit(1)
 
 
+@app.command("check-observed-view")
+def check_observed_view_command(
+    source_path: Path,
+    target_path: Path,
+    seed: Annotated[
+        int, typer.Option(help="Seed of the chunk-row sample, recorded for reproducibility")
+    ],
+    output: Annotated[Path, typer.Option(help="Where to write the JSON verdict")],
+    n_random: Annotated[
+        int,
+        typer.Option(min=0, help="Random chunk-rows to compare, besides the fixed strata"),
+    ] = 1000,
+) -> None:
+    """Check that a Reference-Completed Store reproduces the Observed-Only Store it came from.
+
+    Maps every source variant into the completed axis (exhaustive), then compares
+    whole source chunk-rows across all Analyses (sampled): each observed cell must
+    have identical Z, SE and EAF and not be marked imputed, no missing cell may be
+    observed, and no inserted panel row may carry an observed cell (stores ADR 0037).
+
+    Exits 0 when everything agrees and 1 when anything does not; the verdict is
+    written to --output either way. Exits 2 without a verdict when the pair cannot
+    be checked: a non-Dense layout, a source that is not Observed-Only, or a target
+    that is not Reference-Completed.
+    """
+    from opengwasdb.validation.observed_view import ObservedViewRefused, check_observed_view
+
+    if not output.parent.is_dir():
+        # Checked up front: the comparison takes minutes, and its verdict must not be lost.
+        raise typer.BadParameter(f"{output.parent} is not a directory", param_hint="--output")
+    try:
+        verdict = check_observed_view(source_path, target_path, seed=seed, n_random=n_random)
+    except ObservedViewRefused as refusal:
+        typer.echo(f"error: refused: {refusal}", err=True)
+        raise typer.Exit(2) from refusal
+    text = json.dumps(verdict.record, indent=2)
+    output.write_text(text + "\n", encoding="utf-8")
+    typer.echo(text)
+    if verdict.passed:
+        return
+    for failure in verdict.failures:
+        typer.echo(f"error: observed-view check failed: {failure}", err=True)
+    raise typer.Exit(1)
+
+
 @app.command("build-dense")
 def build_dense_command(
     source_path: Path,
