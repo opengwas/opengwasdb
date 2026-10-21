@@ -11,6 +11,7 @@ fail-loud rules each phase applies live beside the code that applies them.
 from __future__ import annotations
 
 import csv
+import logging
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,7 +19,12 @@ from pathlib import Path
 
 import numpy as np
 
-from opengwasdb.build.liftover import build_liftover_lookup
+from opengwasdb.build.liftover import (
+    LiftedRow,
+    lift_hg19_to_hg38,
+    normalise_build,
+    require_lifted_alleles_match_reference,
+)
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
@@ -42,20 +48,25 @@ from opengwasdb.model.enums import (
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import manifest_column
 from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
-from opengwasdb.variants.axis import (
-    write_variant_axis,
-)
-from opengwasdb.variants.normalise import (
+from opengwasdb.variants import (
     CanonicalVariant,
+    Orientation,
     VariantNormalisationError,
     chromosome_sort_key,
     normalise_chromosome,
     orient_to_canonical,
+    write_variant_axis,
 )
+
+log = logging.getLogger(__name__)
 
 _REFERENCE_ASSEMBLY = "GRCh38"
 # Build names whose coordinates already are (or claim) hg38 — no liftover.
 _BUILDS_ALREADY_HG38 = ("hg38", "grch38", "b38", "38")
+#: The fraction of a lift's rows that may fail before the build stops: the
+#: default `build_liftover_lookup` applies, now applied to the richer per-row
+#: lift this builder needs for its strand.
+_LIFTOVER_FAILURE_THRESHOLD = 0.01
 
 
 @dataclass(frozen=True)
@@ -76,32 +87,38 @@ def build_ragged_from_besd(
     tissue: str | None = None,
     source_build: str = "hg38",
     overwrite: bool = False,
+    chain_file: str | Path | None = None,
+    variant_reference: str | Path | None = None,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from BESD files.
 
     besd_prefix: path without extension (.esi, .epi, .besd are appended).
     source_build: input assembly, "hg38" or "hg19" (hg19 is lifted inline).
+    chain_file: the hg19→hg38 chain to lift by; the downloaded UCSC chain for
+        the build pair when omitted. The resolver requires one explicitly, so a
+        pilot can name the same chain its Resolution Records were made with.
+    variant_reference: a Variant Reference on the target assembly -- a plain
+        ALID list, a ``*.variant-ref.tsv.gz`` artifact, or a Store Variant
+        Table -- that every lifted variant's alleles are checked against. A
+        disagreement fails the build naming the variant (issue #284); with none
+        supplied the lift is recorded as unchecked, and the build warns.
     When analyses_path is supplied, Analytical and Attribution Metadata are overlaid
     onto the EPI-derived analyses while keeping BESD coordinates authoritative (issue #173).
     """
     prefix = Path(besd_prefix)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        # Phase 1 — source reading (ESI/EPI); Phase 2 — canonical variant axis
-        # (liftover first: a row that fails the lift never reaches the axis,
-        # so no association can sit at a wrong coordinate).
-        snps, probes = _read_sources(prefix)
-        lifted = _lifted_coordinates(snps, source_build)
-        variants, rsid_by_alid, esi_to_variant = _canonical_variants(snps, lifted)
-        print(f"Canonical variants: {len(variants)} (from {len(snps)} ESI entries)")
-        write_variant_axis(staged.path, variants, rsid_by_alid)
-
+        # Phases 1-2 — source reading and the canonical variant axis.
+        axis = _esi_axis(
+            prefix, source_build, chain_file=chain_file, variant_reference=variant_reference
+        )
+        write_variant_axis(staged.path, axis.variants, axis.rsid_by_alid)
         # Phase 3 — Analysis metadata from the EPI records (with optional manifest overlay).
-        analyses = _analysis_records(probes, tissue, analyses_path)
+        analyses = _analysis_records(axis.probes, tissue, analyses_path)
         staged.index_connection().close()
         # Phase 4 — CSR ingestion and the encoding plan it decides.
         csr, encoding = _ingest_besd(
-            prefix, probes, esi_to_variant, len(variants), staged.path,
+            prefix, axis.probes, axis.esi_to_variant, len(axis.variants), staged.path,
         )
         # Phase 5 — indexes and manifest output.
         _write_besd_outputs(staged, analyses, encoding)
@@ -109,20 +126,59 @@ def build_ragged_from_besd(
             staged,
             store_id,
             release_id,
-            n_variants=len(variants),
-            n_analyses=len(probes),
+            n_variants=len(axis.variants),
+            n_analyses=len(axis.probes),
             n_associations=csr.n_associations,
             besd_prefix=str(prefix),
             source_build=source_build,
             encoding=encoding,
+            lift=axis.lift,
         )
-        result = RaggedBuildResult(out, len(variants), len(probes), csr.n_associations)
-        print(
-            f"Build complete: {result.n_variants:,} variants, "
-            f"{result.n_analyses:,} analyses, "
-            f"{result.n_associations:,} associations"
-        )
+        result = _summarise(out, axis, csr.n_associations)
     return result
+
+
+def _summarise(out: Path, axis: _EsiAxis, n_associations: int) -> RaggedBuildResult:
+    """The build's totals, printed once and returned to the caller."""
+    result = RaggedBuildResult(out, len(axis.variants), len(axis.probes), n_associations)
+    print(
+        f"Build complete: {result.n_variants:,} variants, "
+        f"{result.n_analyses:,} analyses, "
+        f"{result.n_associations:,} associations"
+    )
+    return result
+
+
+@dataclass(frozen=True)
+class _EsiAxis:
+    """Phases 1-2 of a BESD build: the source rows and the canonical axis.
+
+    The lift runs before the axis exists, so a row that fails it never reaches
+    the axis and no association can sit at a wrong coordinate.
+    """
+
+    probes: list[ProbeRecord]
+    variants: list[CanonicalVariant]
+    rsid_by_alid: dict[str, str]
+    esi_to_variant: dict[int, tuple[int, bool]]
+    lift: dict[str, object] | None
+
+
+def _esi_axis(
+    prefix: Path,
+    source_build: str,
+    *,
+    chain_file: str | Path | None,
+    variant_reference: str | Path | None,
+) -> _EsiAxis:
+    """Read one file set's `.esi`/`.epi` and canonicalise the ESI rows."""
+    snps, probes = _read_sources(prefix)
+    lifted, lift_provenance = _lifted_coordinates(
+        snps, source_build, chain_file=chain_file, variant_reference=variant_reference
+    )
+    variants, rsid_by_alid, esi_to_variant = _canonical_variants(snps, lifted)
+    print(f"Canonical variants: {len(variants)} (from {len(snps)} ESI entries)")
+    return _EsiAxis(probes, variants, rsid_by_alid, esi_to_variant, lift_provenance)
 
 
 def _write_besd_outputs(
@@ -146,59 +202,159 @@ def _read_sources(prefix: Path) -> tuple[list[SnpRecord], list[ProbeRecord]]:
 
 
 def _lifted_coordinates(
-    snps: list[SnpRecord], source_build: str
-) -> dict[int, tuple[str, int]] | None:
-    """Map ESI row indices to hg38 ``(chromosome, bp)`` when ``source_build``
-    is not an hg38 alias.
+    snps: list[SnpRecord],
+    source_build: str,
+    *,
+    chain_file: str | Path | None = None,
+    variant_reference: str | Path | None = None,
+) -> tuple[dict[int, Orientation] | None, dict[str, object] | None]:
+    """Lift every ESI row and return its orientation plus the lift's record.
 
-    Returns ``{esi row_idx: (hg38 chrom, hg38 bp)}`` for the rows the lift
-    landed on, or ``None`` when no lift is needed. A row the lift failed is
-    omitted and therefore excluded from the store — never stored at a wrong
-    coordinate (its absence is loud: the canonical-variant count and the
-    per-probe association counts both fall, and the printed liftover report
-    says how many failed).
+    Returns ``({esi row_idx: Orientation}, provenance)`` for the rows the lift
+    landed on, or ``(None, None)`` when no lift is needed. The orientation is
+    the resolver's for the same row: the alleles are projected onto the
+    chain block's strand, so a reverse-strand SNP's ALID is the complemented
+    variant rather than an hg38 position carrying hg19-strand alleles
+    (issue #284), and the flip a probe's z-score is signed by is measured
+    against the same pair.
+
+    A row the lift failed is omitted and therefore excluded from the store --
+    never stored at a wrong coordinate (its absence is loud: the
+    canonical-variant count and the per-probe association counts both fall,
+    and the printed liftover report says how many failed).
+
+    ``variant_reference`` makes the lift checkable: every lifted variant the
+    reference holds at its hg38 position must carry the same alleles, and a
+    disagreement raises `LiftedAlleleMismatchError` naming the variant. With
+    no reference the build says so loudly -- and records `reference: null` in
+    provenance -- rather than letting an unchecked lift look like a checked one.
     """
     if source_build.lower().strip() in _BUILDS_ALREADY_HG38:
-        return None
+        return None, None
+    # Refused before any lift runs: this builder knows one cross-build direction
+    # (hg19→hg38), and an unrecognised build must not be silently lifted as hg19.
+    normalise_build(source_build)
     print(f"Lifting over {source_build} → hg38 ...")
-    rows = []
-    for s in snps:
-        if s.a1 is not None and s.a2 is not None:
-            rows.append((s.row_idx, s.chromosome, s.bp, s.a1, s.a2))
-    lo_lookup = build_liftover_lookup(
+    rows = [
+        (s.row_idx, s.chromosome, s.bp, s.a1, s.a2)
+        for s in snps
+        if s.a1 is not None and s.a2 is not None
+    ]
+    lifted_by_source = lift_hg19_to_hg38(
         [(chrom, bp, a1, a2) for _row_idx, chrom, bp, a1, a2 in rows],
-        from_build=source_build,
-        to_build="hg38",
+        chain_file=chain_file,
+        failure_threshold=_LIFTOVER_FAILURE_THRESHOLD,
     )
-    lifted = {}
+    lifted = _orient_lifted_rows(rows, lifted_by_source)
+    print(
+        f"Liftover {source_build}→hg38: {len(rows) - len(lifted)}/{len(snps)} "
+        f"variants failed"
+    )
+    return lifted, _lift_provenance(
+        source_build, chain_file, variant_reference, lifted_by_source
+    )
+
+
+def _orient_lifted_rows(
+    rows: list[tuple[int, str, int, str, str]],
+    lifted_by_source: dict[tuple[str, int, str, str], LiftedRow],
+) -> dict[int, Orientation]:
+    """One canonical orientation per ESI row the lift produced.
+
+    A row whose projected alleles will not canonicalise (identical or
+    unsupported alleles) is left out, as it was before #284: it can carry no
+    variant, so it can carry no association either.
+    """
+    lifted: dict[int, Orientation] = {}
     for row_idx, chrom, bp, a1, a2 in rows:
-        alid = lo_lookup.get((chrom, bp, a1, a2))
-        if alid is None:
+        row = lifted_by_source.get((chrom, bp, a1, a2))
+        if row is None:
             continue
-        parts = alid.split(":")
-        lifted[row_idx] = (parts[0], int(parts[1]))
-    n_failed = len(rows) - len(lifted)
-    print(f"Liftover {source_build}→hg38: {n_failed}/{len(snps)} variants failed")
+        try:
+            lifted[row_idx] = _orientation_of(row)
+        except VariantNormalisationError:
+            continue
     return lifted
 
 
-def _usable_esi_position(
-    snp: SnpRecord, lifted: dict[int, tuple[str, int]] | None
-) -> tuple[tuple[str, int], str, str] | None:
-    """The ``((chrom, bp), a1, a2)`` an ESI row is held at — its lifted hg38
-    position when a lift was performed, else its own coordinate. ``None`` when
-    the row must not enter the axis: no alleles, or a lift that did not land."""
+def _orientation_of(row: LiftedRow) -> Orientation:
+    """The canonical orientation of one lifted row, its alleles in source order.
+
+    `LiftedRow` keeps the source's `(ref, alt)` order rather than the canonical
+    one precisely so `orient_to_canonical` can report the flip: a probe's beta
+    is for the source's a1, and after a reverse-strand complement that allele
+    may no longer be the canonical A1.
+    """
+    return orient_to_canonical(
+        row.chromosome, row.position, row.effect_allele, row.other_allele
+    )
+
+
+def _lift_provenance(
+    source_build: str,
+    chain_file: str | Path | None,
+    variant_reference: str | Path | None,
+    lifted_by_source: dict[tuple[str, int, str, str], LiftedRow],
+) -> dict[str, object]:
+    """What the lift was performed with, and what its allele check found.
+
+    `reference: null` is the record of an unchecked lift; `n_reference_absent`
+    counts the lifted variants the reference says nothing about, so a reference
+    that overlaps the build by nothing is visible instead of reassuring.
+    """
+    provenance: dict[str, object] = {
+        "source_build": normalise_build(source_build),
+        "chain_file": str(chain_file) if chain_file is not None else None,
+        "n_lifted": len(lifted_by_source),
+        "reference": str(variant_reference) if variant_reference is not None else None,
+        "n_alleles_verified": None,
+        "n_reference_other_variant": None,
+        "n_reference_absent": None,
+    }
+    if variant_reference is None:
+        log.warning(
+            "Lift %s→hg38: no --variant-reference supplied, so the lifted alleles were "
+            "not checked against a reference. Pass one -- a Variant Reference on hg38 -- "
+            "to make the lift verifiable (issue #284).",
+            source_build,
+        )
+        return provenance
+    check = require_lifted_alleles_match_reference(lifted_by_source, variant_reference)
+    provenance["n_alleles_verified"] = check.n_verified
+    provenance["n_reference_other_variant"] = check.n_other_variant
+    provenance["n_reference_absent"] = check.n_absent
+    print(
+        f"Lift alleles checked against {variant_reference}: {check.n_verified}/"
+        f"{check.n_lifted} variants confirmed at their hg38 position; "
+        f"{check.n_other_variant} positions carry a different reference variant and "
+        f"{check.n_absent} are absent from the reference"
+    )
+    return provenance
+
+
+def _esi_orientation(
+    snp: SnpRecord, lifted: dict[int, Orientation] | None
+) -> Orientation | None:
+    """The canonical orientation one ESI row is held at.
+
+    A lifted row's orientation was computed from its *lifted* alleles, so its
+    variant and its flip are the resolver's for the same row; an unlifted row's
+    comes from its own coordinate. ``None`` when the row must not enter the
+    axis: no alleles, or a lift that did not land.
+    """
     if snp.a1 is None or snp.a2 is None:
         return None
-    position = (snp.chromosome, snp.bp) if lifted is None else lifted.get(snp.row_idx)
-    if position is None:
+    if lifted is not None:
+        return lifted.get(snp.row_idx)
+    try:
+        return orient_to_canonical(snp.chromosome, snp.bp, snp.a1, snp.a2)
+    except VariantNormalisationError:
         return None
-    return position, snp.a1, snp.a2
 
 
 def _canonical_variants(
     snps: list[SnpRecord],
-    lifted: dict[int, tuple[str, int]] | None,
+    lifted: dict[int, Orientation] | None,
 ) -> tuple[list[CanonicalVariant], dict[str, str], dict[int, tuple[int, bool]]]:
     """Deduplicate ESI rows onto a position-ordered canonical variant axis.
 
@@ -219,13 +375,8 @@ def _canonical_variants(
     ] = []
 
     for snp in snps:
-        usable = _usable_esi_position(snp, lifted)
-        if usable is None:
-            continue
-        (chrom, bp), a1, a2 = usable
-        try:
-            ori = orient_to_canonical(chrom, bp, a1, a2)
-        except VariantNormalisationError:
+        ori = _esi_orientation(snp, lifted)
+        if ori is None:
             continue
         sort_key = (chromosome_sort_key(ori.variant.chromosome), ori.variant.position)
         rsid = snp.snp_id if snp.snp_id.startswith("rs") else None
@@ -597,7 +748,21 @@ def _write_manifest(
     besd_prefix: str,
     encoding: StoreEncoding,
     source_build: str = "hg38",
+    lift: dict[str, object] | None = None,
 ) -> None:
+    provenance: dict[str, object] = {
+        "builder": "opengwasdb.v0.1_ragged_observed_besd",
+        "source_besd_prefix": besd_prefix,
+        "source_build": source_build,
+        "n_variants": n_variants,
+        "n_analyses": n_analyses,
+        "n_associations": n_associations,
+        "ragged": ragged_provenance(staged.path, encoding),
+    }
+    if lift is not None:
+        # Only a build that lifted carries it: a same-assembly release has no
+        # lift to describe, and inventing an empty record would say it had one.
+        provenance["lift"] = lift
     manifest = StoreManifest(
         encoding=encoding,
         store_id=store_id,
@@ -608,14 +773,6 @@ def _write_manifest(
         completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly=_REFERENCE_ASSEMBLY,
         created_at=datetime.now(UTC).isoformat(),
-        provenance={
-            "builder": "opengwasdb.v0.1_ragged_observed_besd",
-            "source_besd_prefix": besd_prefix,
-            "source_build": source_build,
-            "n_variants": n_variants,
-            "n_analyses": n_analyses,
-            "n_associations": n_associations,
-            "ragged": ragged_provenance(staged.path, encoding),
-        },
+        provenance=provenance,
     )
     staged.write_manifest(manifest)

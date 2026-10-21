@@ -116,9 +116,33 @@ drops the measurements, and their arrays, when the run's probes are done.
   each probe's rows.
 - **The builder still stores no EAF.** `build-ragged-besd` declares `eaf:
   absent`; storing the `.esi` frequency per association is separate work.
-  The builder's own hg19 lift (`build_liftover_lookup`) does not complement
-  alleles on a reverse-strand mapping, which this resolver does; the two agree
-  on every forward-strand variant.
+- **The builder and this resolver now share one lift (issue #284).**
+  `build_liftover_lookup` projects a lifted variant's alleles onto the chain
+  block's strand through the same helper `oriented_variant` uses
+  (`readers.gwas_vcf.project_lifted_alleles`), so the two cannot disagree about a
+  reverse-strand SNP. Until #284 they did: the builder kept the source's alleles,
+  so every reverse-strand row was stored under an hg38 position carrying
+  hg19-strand alleles. Over eQTLGen's 8,932,843 `.esi` rows that was 8,200
+  variants whose ALID changes and 9,314 reverse-strand rows; 1,654 of the
+  variants were contradicted by the EUR alid panel, and the projected lift
+  contradicts it nowhere. The builder now also *checks* the lift:
+  `--variant-reference` must not spell a reverse-strand variant on the other
+  strand, which fails the build naming the variant, and `provenance.lift`
+  records the reference used or that none was supplied. It keeps one thing this
+  resolver does not: where a position maps under more than one chain block it
+  takes the highest-scoring mapping, because a batch lift of nine million rows
+  cannot fail the way one Analysis can (ADR 0044).
+- **Dense and Hybrid re-orient, but do not check.** Both ingest the projected
+  alleles' orientation from the same lift -- a swapped canonical order negates z
+  and inverts EAF (`statistics_swap`) -- because the rename #284 introduced
+  would otherwise leave them storing source-signed statistics under the
+  projected allele pair. Neither records a `provenance.lift` or runs the
+  reference check; adding that to them is a separate decision, not a
+  consequence of the shared lift. One Hybrid path still refuses rather than
+  guesses: a single-pass build's off-reference rows are lifted in the fold,
+  which carries no orientation, so such a build fails loudly
+  (`UnorientedOffReferenceLiftError`) when that lift lands on the reverse
+  strand. A two-pass build lifts in Pass 1 and is unaffected.
 
 ## Rejected
 

@@ -962,7 +962,7 @@ def _materialising_writer_output(
     from opengwasdb.variants.reference import write_variant_reference
 
     rows = _read_manifest(manifest)
-    source_lookup, rsid_by_alid = _lift_manifest_variants(
+    source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
         rows,
         chain_file=None,
         liftover_failure_threshold=liftover_failure_threshold,
@@ -992,7 +992,7 @@ def test_all_hg38_streaming_matches_the_materialising_writer(tmp_path, window_si
     from opengwasdb.variants.reference import write_variant_reference
 
     rows = _read_manifest(manifest)
-    source_lookup, rsid_by_alid = _lift_manifest_variants(
+    source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
         rows, chain_file=None, liftover_failure_threshold=0.01,
         n_workers=2, window_size_mb=window_size_mb, reduction_batch_size=batch,
     )

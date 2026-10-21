@@ -160,6 +160,30 @@ where:
 - `A1` is alphabetically first;
 - `A2` is the other allele.
 
+A build that lifts a source variant from another Reference Assembly MUST project
+the variant onto the release's assembly using the chain block's orientation: on a
+reverse-strand block the alleles are complemented before the ALID is formed, so
+the stored ALID names the variant the release's assembly carries rather than the
+source's allele string at a moved coordinate. Signed statistics follow the
+projected alleles, so a lift that swaps which allele is `A1` flips them
+(§5).
+
+The BESD builder (`build-ragged-besd`) checks its lift, and records that it
+did. Given `--variant-reference`, a reverse-strand lifted variant whose alleles
+the reference spells on the other strand fails the build naming the variant; a
+variant the reference names with a *different* allele pair, or does not name at
+all, is counted rather than failed — a Variant Reference is a variant list, not
+a genome, and cannot say that a variant it omits does not exist. A lift with no
+reference warns and is recorded as unchecked rather than passing as verified.
+That release's `manifest.json` `provenance.lift` records the source Reference
+Assembly, the chain, the reference (or `null` when none was supplied) and the
+verified / other-variant / absent counts (issue #284, ADR 0062).
+
+The Dense and Hybrid builders lift through the same projection and re-orient
+their statistics from it, but they do not perform this allele check and record
+no `provenance.lift`; nothing in this section requires them to until one is
+added deliberately.
+
 Cross-Store identity is:
 
 ```text

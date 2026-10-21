@@ -26,7 +26,7 @@ import logging
 import shutil
 import tempfile
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from concurrent.futures import as_completed
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -267,6 +267,7 @@ def read_reference_panel_alids(panel_path: str | Path) -> set[str]:
 _pass2_keys_sorted: np.ndarray | None = None
 _pass2_targets_sorted: np.ndarray | None = None  # int64: dense row (panel) or shared idx (off)
 _pass2_ispanel_sorted: np.ndarray | None = None  # bool: True = on-panel target
+_pass2_swaps_sorted: np.ndarray | None = None  # bool: the lift re-oriented this key
 _pass2_spill_dir: Path | None = None
 # Column index -> that Analysis's declared INFO policy (stores #175), so a
 # worker applies the policy of the row its task came from without the task
@@ -295,17 +296,20 @@ def _build_routing_index(
     source_lookup: dict[tuple[str, int, str, str], str],
     dense_row: dict[str, int],
     shared_index: dict[str, int],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    swapped: Collection[tuple[str, int, str, str]] = (),
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Compose the liftover + partition into a single fork-safe sorted lookup.
 
-    Returns ``(keys_sorted, targets_sorted, ispanel_sorted)``: for every source
-    variant that resolves to a stored variant, its byte key, the target index
-    (dense row when on-panel, shared variant_index when off-panel), and whether
-    it is on-panel. Workers binary-search this once per association.
+    Returns ``(keys_sorted, targets_sorted, ispanel_sorted, swaps_sorted)``: for
+    every source variant that resolves to a stored variant, its byte key, the
+    target index (dense row when on-panel, shared variant_index when off-panel),
+    whether it is on-panel, and whether a reverse-strand lift re-oriented its
+    statistics (issue #284). Workers binary-search this once per association.
     """
     keys_list: list[bytes] = []
     targets: list[int] = []
     ispanel: list[bool] = []
+    swaps: list[bool] = []
     for site, alid in source_lookup.items():
         row = dense_row.get(alid)
         if row is not None:
@@ -318,14 +322,18 @@ def _build_routing_index(
             targets.append(sidx)
             ispanel.append(False)
         keys_list.append(_routed_site_key(site).encode())
+        swaps.append(site in swapped)
     keys = np.array(keys_list, dtype=object)
     del keys_list
     targets_arr = np.array(targets, dtype=np.int64)
     ispanel_arr = np.array(ispanel, dtype=bool)
+    swaps_arr = np.array(swaps, dtype=bool)
+    del swaps
     order = np.argsort(keys, kind="stable")
     sorted_keys = keys[order]
     sorted_targets = targets_arr[order]
     sorted_panel = ispanel_arr[order]
+    sorted_swaps = swaps_arr[order]
     # Two artifact keys differing only in case must not route to different
     # stored variants after folding: that would make searchsorted's choice
     # dependent on insertion order and silently misplace an association.
@@ -337,7 +345,7 @@ def _build_routing_index(
     if np.any(conflicting):
         key = sorted_keys[1:][conflicting][0]
         raise ValueError(f"source key {key!r} maps to conflicting variants after case folding")
-    return sorted_keys, sorted_targets, sorted_panel
+    return sorted_keys, sorted_targets, sorted_panel, sorted_swaps
 
 
 def _dedup_last_wins(
@@ -362,6 +370,7 @@ def _match_hybrid_batch(
     zs: list[float],
     ses: list[float],
     eafs: list[float],
+    swaps_sorted: np.ndarray | None = None,
 ) -> tuple[
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
     tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
@@ -402,6 +411,14 @@ def _match_hybrid_batch(
     panel = ispanel_sorted[idx_clip[matched]]
     tgt = targets_sorted[idx_clip[matched]]
     z_m, se_m, eaf_m = z_arr[matched], se_arr[matched], eaf_arr[matched]
+    if swaps_sorted is not None:
+        # A reverse-strand lift stored the projected allele pair, so a matched
+        # variant's z and EAF follow it, not the source's (issue #284). Applied
+        # before the on-panel/off-panel split so both components agree.
+        swapped = swaps_sorted[idx_clip[matched]]
+        if swapped.any():
+            z_m = np.where(swapped, -z_m, z_m)
+            eaf_m = np.where(swapped, np.float32(1.0) - eaf_m, eaf_m)
     unmatched = ~matched
     keys = np.array(
         [
@@ -460,6 +477,7 @@ def _resolve_column_hybrid(
     targets_sorted: np.ndarray,
     ispanel_sorted: np.ndarray,
     se_divisor: float = 1.0,
+    swaps_sorted: np.ndarray | None = None,
     *,
     capability: str = GWAS_VCF_CAPABILITY,
     stored_effect_scale: str = StoredEffectScale.SD.value,
@@ -564,6 +582,7 @@ def _resolve_column_hybrid(
                 zs,
                 ses,
                 eafs,
+                swaps_sorted,
             )
             _extend((d_idx, d_z, d_se, d_eaf), dense)
             _extend((o_idx, o_z, o_se, o_eaf), overflow)
@@ -675,6 +694,7 @@ def _pass2_worker(task: Pass2Task) -> tuple[int, AdmissionCounts]:
     assert _pass2_keys_sorted is not None
     assert _pass2_targets_sorted is not None
     assert _pass2_ispanel_sorted is not None
+    assert _pass2_swaps_sorted is not None
     assert _pass2_spill_dir is not None
     assert _pass2_info_policies is not None
     assert _pass2_maf_policies is not None
@@ -685,6 +705,7 @@ def _pass2_worker(task: Pass2Task) -> tuple[int, AdmissionCounts]:
         _pass2_targets_sorted,
         _pass2_ispanel_sorted,
         se_divisor,
+        _pass2_swaps_sorted,
         capability=capability,
         stored_effect_scale=stored_effect_scale,
         info_score_policy=_pass2_info_policies[col_idx],
@@ -851,6 +872,9 @@ class _SourceAxis:
     keys_sorted: np.ndarray
     targets_sorted: np.ndarray
     ispanel_sorted: np.ndarray
+    #: Whether a reverse-strand lift re-oriented that key's statistics, parallel
+    #: to ``keys_sorted`` (issue #284).
+    swaps_sorted: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -883,6 +907,7 @@ class _PreparedBuild:
     keys_sorted: np.ndarray
     targets_sorted: np.ndarray
     ispanel_sorted: np.ndarray
+    swaps_sorted: np.ndarray
     n_analyses: int
 
 
@@ -1140,6 +1165,7 @@ def _axis_source(
     dict[SourceKey, str],
     dict[str, str],
     bool,
+    Collection[SourceKey],
 ]:
     """Open the Dense staging dir and resolve the source-coordinate routing.
 
@@ -1174,15 +1200,26 @@ def _axis_source(
             candidates,
             candidate_routing,
             reference_named,
+            (),
         )
     panel_alids = _panel_alids(options)
-    source_lookup, rsid_by_alid = _lift_manifest_variants(
+    source_lookup, rsid_by_alid, swapped = _lift_manifest_variants(
         manifest_rows,
         chain_file=options.chain_file,
         liftover_failure_threshold=options.liftover_failure_threshold,
         n_workers=options.n_workers,
     )
-    return dense_dir, dense_staged, source_lookup, rsid_by_alid, panel_alids, {}, {}, False
+    return (
+        dense_dir,
+        dense_staged,
+        source_lookup,
+        rsid_by_alid,
+        panel_alids,
+        {},
+        {},
+        False,
+        swapped,
+    )
 
 
 def _single_pass_rsids(
@@ -1206,7 +1243,7 @@ def _single_pass_rsids(
         # (issue #255 round 4, finding 3).
         warn_reference_left_rows_blank(reference)
         return {}, {}, dict(reference.rsid_by_alid), True
-    pass1_lookup, rsid_by_site, _ = _harvest_manifest_variants(
+    pass1_lookup, rsid_by_site, _rsid_by_alid, _swapped = _harvest_manifest_variants(
         manifest_rows,
         chain_file=options.chain_file,
         liftover_failure_threshold=options.liftover_failure_threshold,
@@ -1259,6 +1296,7 @@ def _lift_and_partition(
         candidates,
         candidate_routing,
         reference_named,
+        swapped,
     ) = _axis_source(staged, manifest_rows, options)
     partition = _partition_variants(
         source_lookup,
@@ -1267,10 +1305,11 @@ def _lift_and_partition(
     )
     analyses: list[Analysis] = [_manifest_row_to_analysis(row) for row in manifest_rows]
     hg38_to_source = _source_origin_map(source_lookup)
-    keys_sorted, targets_sorted, ispanel_sorted = _build_routing_index(
+    keys_sorted, targets_sorted, ispanel_sorted, swaps_sorted = _build_routing_index(
         source_lookup,
         {alid: i for i, alid in enumerate(partition.panel_sorted)},
         {alid: i for i, alid in enumerate(partition.shared_sorted)},
+        swapped,
     )
     # The routing index is built: the source union (and the ALID -> index
     # dicts, which lived only for that call) are freed before Pass 2.
@@ -1288,6 +1327,7 @@ def _lift_and_partition(
         keys_sorted=keys_sorted,
         targets_sorted=targets_sorted,
         ispanel_sorted=ispanel_sorted,
+        swaps_sorted=swaps_sorted,
     )
 
 
@@ -1672,6 +1712,7 @@ _EMPTY_CANONICAL = CanonicalRawKeys(
 _NO_ROUTING = (
     np.empty(0, dtype=object),
     np.empty(0, dtype=np.int64),
+    np.empty(0, dtype=bool),
     np.empty(0, dtype=bool),
 )
 
@@ -2271,6 +2312,7 @@ def _route_serial(
             prepared.targets_sorted,
             prepared.ispanel_sorted,
             row.se_divisor,
+            prepared.swaps_sorted,
             capability=row.source_reader_capability,
             stored_effect_scale=row.stored_effect_scale,
             info_score_policy=prepared.info_score_policies[row.trait_id],
@@ -2301,10 +2343,11 @@ def _route_parallel(
     policies (stores #175, #176) and returns its dispositions for the shared
     manifest."""
     global _pass2_keys_sorted, _pass2_targets_sorted, _pass2_ispanel_sorted
-    global _pass2_spill_dir, _pass2_info_policies, _pass2_maf_policies
+    global _pass2_swaps_sorted, _pass2_spill_dir, _pass2_info_policies, _pass2_maf_policies
     _pass2_keys_sorted = prepared.keys_sorted
     _pass2_targets_sorted = prepared.targets_sorted
     _pass2_ispanel_sorted = prepared.ispanel_sorted
+    _pass2_swaps_sorted = prepared.swaps_sorted
     _pass2_spill_dir = prepared.spill_dir
     _pass2_info_policies = {
         column: prepared.info_score_policies[row.trait_id]
@@ -2329,6 +2372,7 @@ def _route_parallel(
         _pass2_keys_sorted = None
         _pass2_targets_sorted = None
         _pass2_ispanel_sorted = None
+        _pass2_swaps_sorted = None
         _pass2_spill_dir = None
         _pass2_info_policies = None
         _pass2_maf_policies = None
@@ -2834,6 +2878,7 @@ def _prepare_build(
         keys_sorted=axis.keys_sorted,
         targets_sorted=axis.targets_sorted,
         ispanel_sorted=axis.ispanel_sorted,
+        swaps_sorted=axis.swaps_sorted,
         n_analyses=len(manifest_rows),
     )
 
@@ -3503,6 +3548,7 @@ def _recorded_prepared(
         keys_sorted=_NO_ROUTING[0],
         targets_sorted=_NO_ROUTING[1],
         ispanel_sorted=_NO_ROUTING[2],
+        swaps_sorted=_NO_ROUTING[3],
         n_analyses=len(manifest_rows),
     )
 
