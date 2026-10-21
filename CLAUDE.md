@@ -84,3 +84,15 @@ Do not edit `quality.json`, anything under `quality/`, or the hooks to make a
 gate pass, and do not run `--write-baseline`: the baselines record debt a
 person accepted, and only a person loosens them, in a reviewed commit. The
 gates only ever tighten; that is the point.
+
+## Agent skills
+
+**Issue tracker.** GitHub issues, here and in `opengwas/opengwasdb-stores`.
+Status lives only on the [OpenGWASDB project board](https://github.com/orgs/opengwas/projects/1).
+Its README holds the conventions: workstreams, milestones, epics, tickets as
+sub-issues, and triage labels. Read it with
+`gh project view 1 --owner opengwas --format json --jq .readme` and follow it.
+Don't copy it here.
+
+**Domain docs.** Single-context: [CONTEXT.md](./CONTEXT.md) and
+[docs/adr/](./docs/adr/).
