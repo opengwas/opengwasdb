@@ -1774,11 +1774,24 @@ replaces its Store under the same id, so this check gates the swap.
   | `failures`, `passed` | the failing names, and whether there are none |
   | `seconds` | timing; informational |
 
-  `totals`: `cells_compared`, `parent_observed`, the failing counters `z_mismatch`,
-  `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_child`,
-  `missing_became_observed`, `inserted_observed_cells`, `imputed_mask_invalid`,
-  `z_se_missingness_mismatch`, and the informational
-  `missing_now_imputed`, `inserted_rows`, `parent_rows_without_finite`. A nonzero failing
+  `totals` sums over the sampled chunk-rows. Informational fields never fail the check:
+  - `cells_compared` (informational): sampled `SOURCE` rows × Analyses. It excludes inserted
+    `TARGET` rows, which `inserted_rows` counts, so it is comparable across spans.
+  - `parent_observed` (informational): the sampled `SOURCE` cells with finite Z and SE.
+  - `inserted_rows` (informational): the inserted `TARGET` rows (not mapped from any `SOURCE`
+    row) in the sampled spans.
+  - `missing_now_imputed` (informational): source-missing cells that `TARGET` holds finite and
+    flagged imputed, which is what completion is for.
+  - `parent_rows_without_finite` (informational): sampled `SOURCE` rows with no observed cell.
+  - Failing, each over the sampled cells: `z_mismatch`, `se_mismatch`, `eaf_mismatch` (a
+    source-observed cell whose decoded value differs, NaN equal to NaN);
+    `observed_marked_imputed`; `observed_missing_in_child`; `missing_became_observed`
+    (a source-missing cell observed with `imputed == 0`); `inserted_observed_cells`;
+    `imputed_mask_invalid` (an `imputed` value outside 0 and 1);
+    `z_se_missingness_mismatch` (a cell, in `SOURCE` or `TARGET`, with only one of Z and SE
+    finite).
+
+  A nonzero failing
   counter, `parent_rows_unmapped > 0`, an order that is not preserved, and differing Analyses
   each fail the check (`failures` names `parent_rows_unmapped`, `order_not_preserved`,
   `analyses_mismatch`, or the counter). After an axis or Analyses failure the sample is skipped
