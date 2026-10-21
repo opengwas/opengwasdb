@@ -24,6 +24,7 @@ import pytest
 import zarr
 from cli_output import normalize_cli_output
 from liftover_fixtures import (
+    STRAND_ROWS,
     assert_strand_statistics,
     strand_vcf_rows,
     write_two_strand_chain,
@@ -2485,20 +2486,60 @@ class TestVariantReferenceRsids:
 #
 # As in test_dense_vcf_build.py: the fixture chain mirrors chr2 and leaves chr3
 # alone, and `liftover_fixtures.STRAND_ROWS` states what each row must store.
-# The panel holds the two reverse-strand variants, so the forward one routes to
-# the overflow and both components' orientation is exercised in one build.
+# The panel is parameterised so that each *swapping* row -- the reverse
+# non-palindromic and the reverse palindromic variant -- is routed through the
+# Overflow in one case and through the Dense Component in another: a panel that
+# holds both leaves only the forward, non-swapping row off-panel, and a correction
+# applied after the on/off-panel split would then go untested.
+
+_HYBRID_STRAND_CASES = [
+    # (case, panel ALIDs, rows expected in the Ragged Overflow)
+    ("both_reverse_rows_on_panel", ["2:999001:C:T", "2:998001:A:T"], ["forward"]),
+    ("non_palindromic_in_overflow", ["2:998001:A:T"], ["reverse", "forward"]),
+    ("palindromic_in_overflow", ["2:999001:C:T"], ["reverse_palindromic", "forward"]),
+]
 
 
-def test_hybrid_build_reorients_statistics_a_reverse_strand_lift_renames(tmp_path):
+def _components_by_alid(store_path: Path) -> dict[str, str]:
+    """Which component each Store variant is stored in: `dense` or `overflow`.
+
+    On-panel is the Dense Component's own axis (`dense/dense_to_shared.npy`
+    names the shared index of every dense row); everything else that carries
+    associations is in the Ragged Overflow's cell-keyed variant indices.
+    """
+    with query_store(store_path) as query:
+        alid_by_shared = {index: v["alid"] for index, v in query.variants_table().items()}
+    dense_shared = {int(index) for index in np.load(store_path / "dense" / "dense_to_shared.npy")}
+    overflow = open_store(store_path).arrays(mode="r")["ragged"]
+    overflow_shared = {int(index) for index in np.unique(overflow["variant_index"][:])}
+    return {
+        alid: ("dense" if index in dense_shared else "overflow")
+        for index, alid in alid_by_shared.items()
+        if index in dense_shared or index in overflow_shared
+    }
+
+
+@pytest.mark.parametrize(
+    ("case", "panel_alids", "overflow_rows"),
+    _HYBRID_STRAND_CASES,
+    ids=[case for case, _panel, _overflow in _HYBRID_STRAND_CASES],
+)
+def test_hybrid_build_reorients_statistics_a_reverse_strand_lift_renames(
+    tmp_path, case, panel_alids, overflow_rows
+):
     """issue #284: both components must sign a lifted variant's statistics
-    against the alleles the lift stored, not the ones the source reported."""
+    against the alleles the lift stored, not the ones the source reported.
+
+    The routing is asserted first, so the case that puts a swapping row in the
+    Overflow is shown to do so before anything is claimed about its statistics.
+    """
     from residual_fixtures import write_gwas_vcf_with_eaf
 
     vcf = write_gwas_vcf_with_eaf(tmp_path / "strand.vcf", strand_vcf_rows())
     manifest = _make_manifest(tmp_path, [("trait", vcf, "Trait")])
     panel = tmp_path / "panel.txt"
-    panel.write_text("2:999001:C:T\n2:998001:A:T\n", encoding="utf-8")
-    store_path = tmp_path / "store.opengwasdb"
+    panel.write_text("".join(f"{alid}\n" for alid in panel_alids), encoding="utf-8")
+    store_path = tmp_path / f"store-{case}.opengwasdb"
 
     build_hybrid_from_vcf_manifest(
         manifest, store_path, reference_panel=panel,
@@ -2506,13 +2547,18 @@ def test_hybrid_build_reorients_statistics_a_reverse_strand_lift_renames(tmp_pat
         chain_file=write_two_strand_chain(tmp_path / "hg19ToHg38.chain"),
     )
 
+    assert {name for name, *_rest in STRAND_ROWS if name in overflow_rows} == set(
+        overflow_rows
+    ), "the case must name rows the fixture actually has"
+    components = _components_by_alid(store_path)
+    for name, _chrom, _pos, _ref, _alt, alid, _z, _eaf in STRAND_ROWS:
+        expected = "overflow" if name in overflow_rows else "dense"
+        assert components.get(alid) == expected, (
+            f"{case}: {name} ({alid}) routed to {components.get(alid)}, expected {expected}"
+        )
+
     with query_store(store_path) as query:
         assert_strand_statistics(query, "trait")
-    with query_store(store_path / "dense") as dense:
-        dense_alids = {v["alid"] for v in dense.variants_table().values()}
-    assert dense_alids == {"2:999001:C:T", "2:998001:A:T"}, (
-        "the fixture must span both components: the forward variant belongs to the overflow"
-    )
 
 
 def test_single_pass_off_reference_lift_refuses_to_store_unoriented_statistics(tmp_path):
