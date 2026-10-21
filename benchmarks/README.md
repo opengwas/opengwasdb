@@ -440,6 +440,29 @@ instruments. `--skip-rss` drops the memory probes for a timings-only run.
 
 ---
 
+### `check-observed-view` on OGS-00009 -> OGS-00010 (#289)
+
+No script: the benchmark is the command, run on the published pair (both
+read-only, format 0.1.0) and its verdict committed unedited as
+`docs/benchmark-output/ogs00009_ogs00010_check_observed_view.json`:
+
+```sh
+pixi run -e dev opengwasdb check-observed-view \
+  /data/opengwasdb/stores/OGS-00009/store.opengwasdb \
+  /data/opengwasdb/stores/OGS-00010/store.opengwasdb \
+  --seed 20261021 --n-random 1000 \
+  --output docs/benchmark-output/ogs00009_ogs00010_check_observed_view.json
+```
+
+It reproduces the stores prototype behind stores ADR 0037 exactly: 1,077
+chunk-rows (random 1000, chromosome edge 24, final partial 1, writer band
+boundary 54), 2,179,242,824 cells compared, 1,250,967,477 observed, every
+mismatch counter 0. The run took 607 s (10:41-10:51 BST, outside the nightly
+snapshot of `/data`); the prototype took 684 s. Re-run it, never edit it, when
+the command, completion's band rule or either Store changes.
+
+---
+
 ### `benchmark_indexed_subset.py` (#267)
 
 Promotes the issue-262 prototype into the maintained, reproducible measurement
