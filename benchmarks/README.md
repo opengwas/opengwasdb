@@ -454,11 +454,15 @@ pixi run -e dev opengwasdb check-observed-view \
   --output docs/benchmark-output/ogs00009_ogs00010_check_observed_view.json
 ```
 
-It reproduces the stores prototype behind stores ADR 0037 exactly: 1,077
-chunk-rows (random 1000, chromosome edge 24, final partial 1, writer band
+It reproduces the stores prototype behind stores ADR 0037 on every source cell:
+1,077 chunk-rows (random 1000, chromosome edge 24, final partial 1, writer band
 boundary 54), 2,179,242,824 cells compared, 1,250,967,477 observed, every
-mismatch counter 0. The run took 607 s (10:41-10:51 BST, outside the nightly
-snapshot of `/data`); the prototype took 684 s. Re-run it, never edit it, when
+mismatch counter 0, and the two mask and missingness counters (`imputed_mask_invalid`,
+`z_se_missingness_mismatch`) 0. `inserted_rows` is 530,711 against the
+prototype's 530,140: the spans now partition the completed axis, so 571 inserted
+rows that fell between two sampled chunk-rows' old spans are examined too. The
+run took 632 s (11:02-11:13 BST, outside the nightly snapshot of `/data`); the
+prototype took 684 s. Re-run it, never edit it, when
 the command, completion's band rule or either Store changes.
 
 ---

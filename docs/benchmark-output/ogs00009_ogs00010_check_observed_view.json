@@ -10821,8 +10821,10 @@
     "observed_missing_in_child": 0,
     "missing_became_observed": 0,
     "inserted_observed_cells": 0,
+    "imputed_mask_invalid": 0,
+    "z_se_missingness_mismatch": 0,
     "missing_now_imputed": 330861006,
-    "inserted_rows": 530140,
+    "inserted_rows": 530711,
     "parent_rows_without_finite": 0
   },
   "max_abs_diff": {
@@ -10833,7 +10835,7 @@
   "failures": [],
   "passed": true,
   "seconds": {
-    "axis": 3.7,
-    "total": 606.8
+    "axis": 3.2,
+    "total": 632.3
   }
 }
