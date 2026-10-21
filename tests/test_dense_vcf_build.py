@@ -18,6 +18,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 from cli_output import normalize_cli_output
+from liftover_fixtures import (
+    assert_strand_statistics,
+    strand_vcf_rows,
+    write_two_strand_chain,
+)
 from residual_fixtures import write_gwas_vcf_with_eaf
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
@@ -1266,7 +1271,7 @@ class TestForkSafeLookup:
 
         # Both hg19 keys map to the same hg38 ALID → same row 0.
         hg19_lookup = {("1", 100, "A", "G"): "1:100:A:G", ("1", 200, "A", "G"): "1:100:A:G"}
-        keys, rows = _build_variant_key_index(hg19_lookup, {"1:100:A:G": 0})
+        keys, rows, _swaps = _build_variant_key_index(hg19_lookup, {"1:100:A:G": 0})
 
         vcf = _make_vcf(
             tmp_path,
@@ -1288,7 +1293,7 @@ class TestForkSafeLookup:
         )
 
         hg19_lookup = {("1", 100, "A", "G"): "1:100:A:G", ("1", 300, "A", "G"): "1:300:A:G"}
-        keys, rows = _build_variant_key_index(
+        keys, rows, _swaps = _build_variant_key_index(
             hg19_lookup, {"1:100:A:G": 0, "1:300:A:G": 1}
         )
         vcf = _make_vcf(
@@ -1313,9 +1318,10 @@ class TestForkSafeLookup:
             ("1", 200, "A", "G"): "1:100:A:G",
             ("1", 300, "C", "T"): "1:300:C:T",
         }
-        keys, rows = bv._build_variant_key_index(
+        keys, rows, swaps = bv._build_variant_key_index(
             hg19_lookup, {"1:100:A:G": 0, "1:300:C:T": 1}
         )
+        assert not swaps.any(), "this fixture lifts no reverse-strand variant"
         vcf = _make_vcf(
             tmp_path,
             "t",
@@ -1420,7 +1426,7 @@ def test_build_variant_key_index_long_keys_sorted_and_searchable():
         "1:20:C:G": 4,
     }
 
-    keys, rows = _build_variant_key_index(source_lookup, variant_index)
+    keys, rows, _swaps = _build_variant_key_index(source_lookup, variant_index)
 
     # Variable-length Python bytes, not an S array padded to the 300-byte max.
     assert keys.dtype == object
@@ -1945,7 +1951,7 @@ def _write_reference_from_manifest(
     )
 
     rows = _read_manifest(manifest)
-    source_lookup, rsid_by_alid = _lift_manifest_variants(
+    source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
         rows, chain_file=None, liftover_failure_threshold=0.01
     )
     path = tmp_path / name
@@ -2452,7 +2458,7 @@ def _source_union_lookup(manifest: Path) -> tuple[dict, list[str]]:
     )
 
     rows = _read_manifest(manifest)
-    source_lookup, _ = _lift_manifest_variants(
+    source_lookup, _rsid_by_alid, _swapped = _lift_manifest_variants(
         rows, chain_file=None, liftover_failure_threshold=0.01
     )
     return source_lookup, _sorted_alids(source_lookup.values())
@@ -2733,3 +2739,28 @@ class TestPlainAlidReferenceRsids:
 
         assert validate_store(store).ok
         assert _axis_rsids(store) == {HG38_ALID_1: ""}
+
+
+# ── The lift's strand, and the statistics it re-orients (issue #284) ─────────
+#
+# The chain fixture mirrors chr2 (1-based p -> size - p + 1, alleles
+# complemented) and leaves chr3 alone; `liftover_fixtures.STRAND_ROWS` states
+# the ALID, z and EAF each row's projected alleles require.
+
+
+def test_dense_build_reorients_statistics_a_reverse_strand_lift_renames(tmp_path):
+    """issue #284: a lifted variant's stored alleles are the projected ones, so
+    its z and EAF must follow them. In the first row the source's effect allele
+    `A` becomes `T`, which is `A2` of `2:999001:C:T`, so z negates and the
+    frequency inverts; the palindromic row keeps its ALID and still re-signs."""
+    vcf = write_gwas_vcf_with_eaf(tmp_path / "strand.vcf", strand_vcf_rows())
+    manifest = _make_manifest(tmp_path, [("trait", vcf, "Trait")])
+    store_path = tmp_path / "store.opengwasdb"
+
+    build_dense_from_vcf_manifest(
+        manifest, store_path, store_id="s", release_id="r",
+        chain_file=write_two_strand_chain(tmp_path / "hg19ToHg38.chain"),
+    )
+
+    with query_store(store_path) as query:
+        assert_strand_statistics(query, "trait")

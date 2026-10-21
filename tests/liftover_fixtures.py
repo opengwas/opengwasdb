@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from opengwasdb.query import StoreQuery
+
 #: Length of both fixture chromosomes, in bp. Positions are held inside it.
 STRAND_CHAIN_SIZE = 1_000_000
 
@@ -29,3 +31,36 @@ def write_two_strand_chain(path: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+#: One fixture row per orientation case: name, source contig, hg19 position,
+#: REF, ALT, the hg38 ALID the chain arithmetic gives, and the z and EAF the
+#: projected alleles require. ES/SE is 0.2/0.1 for the effect allele `A`, and
+#: AF is its frequency 0.2, so the source-canonical statistic is z = +2, eaf =
+#: 0.2 in every row; the reverse-strand rows store -2 and 0.8 because `A`
+#: becomes `T`, which is `A2` of the projected pair.
+STRAND_ROWS: tuple[tuple[str, str, int, str, str, str, float, float], ...] = (
+    ("reverse", "2", 1_000, "G", "A", "2:999001:C:T", -2.0, 0.8),
+    ("reverse_palindromic", "2", 2_000, "T", "A", "2:998001:A:T", -2.0, 0.8),
+    ("forward", "3", 1_000, "G", "A", "3:1000:A:G", 2.0, 0.2),
+)
+
+
+def strand_vcf_rows() -> list[str]:
+    """`STRAND_ROWS` as GWAS-VCF body rows (REF, ALT, `ES:SE:AF`)."""
+    return [
+        f"{chrom}\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t.\tES:SE:AF\t0.2:0.1:0.2\n"
+        for _name, chrom, pos, ref, alt, _alid, _z, _eaf in STRAND_ROWS
+    ]
+
+
+def assert_strand_statistics(query: StoreQuery, analysis_id: str) -> None:
+    """Assert each `STRAND_ROWS` ALID is stored in `query`'s store as the
+    projection requires."""
+    table = {variant["alid"] for variant in query.variants_table().values()}
+    for name, _chrom, _pos, _ref, _alt, alid, expected_z, expected_eaf in STRAND_ROWS:
+        assert alid in table, f"{name}: {alid} missing from {sorted(table)}"
+        result = query.lookup([alid], [analysis_id])
+        assert len(result["z"]) == 1, f"{name}: no association at {alid}"
+        assert abs(float(result["z"][0]) - expected_z) < 0.01, name
+        assert abs(float(result["eaf"][0]) - expected_eaf) < 0.01, name

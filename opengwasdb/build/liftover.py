@@ -17,6 +17,7 @@ by construction rather than by coincidence.
 from __future__ import annotations
 
 import gzip
+import itertools
 import logging
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
@@ -93,6 +94,26 @@ class LiftedRow:
         return f"{self.chromosome}:{self.position}:{a1}:{a2}"
 
 
+def statistics_swap(source: SourceVariantKey, row: LiftedRow) -> bool:
+    """Whether the lift swapped which allele is canonical, so z and EAF must follow.
+
+    A source reader signs a statistic against the source-assembly canonical A1
+    (``min(ref, alt)``, see `stream_vcf_associations`). A reverse-strand block
+    complements both alleles, and a complement reverses their alphabetical
+    order -- or, for a palindromic pair, maps A1 onto A2 -- so the projected
+    alleles a Dense or Hybrid build stores may call the *other* allele A1. The
+    stored z is then the negation of the source's and the stored frequency is
+    ``1 - eaf``, exactly as BESD orients a probe (issue #284).
+
+    Computed from the row's projected alleles in source order, so it is exact
+    for an indel too rather than assuming complement always reverses order.
+    """
+    ref, alt = source[2], source[3]
+    source_first = min(ref, alt)
+    projected_first = row.effect_allele if source_first == ref else row.other_allele
+    return projected_first != min(row.effect_allele, row.other_allele)
+
+
 def build_liftover_lookup(
     variants: Iterable[SourceVariantKey],
     from_build: str = "hg19",
@@ -137,6 +158,32 @@ def build_liftover_lookup(
         failure_threshold=failure_threshold,
     )
     return {key: row.alid for key, row in lifted.items()}
+
+
+def lift_hg19_to_hg38(
+    variants: Iterable[SourceVariantKey],
+    *,
+    chain_file: str | Path | None = None,
+    failure_threshold: float = 0.01,
+) -> dict[SourceVariantKey, LiftedRow]:
+    """`lifted_rows` for the hg19→hg38 lift every builder performs, threshold applied.
+
+    The pair -- lift, then refuse a batch whose failure rate exceeds the
+    threshold -- is one operation for every caller that lifts a source union
+    (the Dense and Hybrid Pass 1, the Hybrid off-reference fold and the BESD
+    builder), so it lives here rather than being spelled out four times.
+    """
+    rows, attempts, failures = lifted_rows(
+        variants, from_build="hg19", to_build="hg38", chain_file=chain_file
+    )
+    enforce_liftover_threshold(
+        attempts,
+        failures,
+        from_build="hg19",
+        to_build="hg38",
+        failure_threshold=failure_threshold,
+    )
+    return rows
 
 
 def enforce_liftover_threshold(
@@ -288,9 +335,15 @@ def read_reference_alleles(
         return pairs
     reference_path = Path(path)
     with _open_text(reference_path) as handle:
-        alid_column = _alid_column(handle.readline(), reference_path)
-        handle.seek(0)
-        for line_number, line in enumerate(handle, start=1):
+        first_line = handle.readline()
+        # A tab-separated first line is a header, commented or not (that is how
+        # `read_variant_reference` classifies these shapes). It is consumed
+        # here, once: rewinding and re-reading it would offer "alid" to the
+        # parser as a variant.
+        header = "\t" in first_line
+        alid_column = _alid_column(first_line, reference_path) if header else None
+        lines = handle if header else itertools.chain([first_line], handle)
+        for line_number, line in enumerate(lines, start=2 if header else 1):
             token = _reference_alid_token(line, alid_column)
             if token is None:
                 continue
@@ -314,16 +367,13 @@ def _open_text(path: Path) -> Any:
     return open(path, encoding="utf-8")
 
 
-def _alid_column(first_line: str, path: Path) -> int | None:
-    """Which field holds the ALID, or ``None`` for a headerless ALID list.
+def _alid_column(first_line: str, path: Path) -> int:
+    """Which field of a tab-separated header holds the ALID.
 
-    A header is a first line carrying a tab *and* the word ``alid``; every other
-    first line is a variant. A tab-separated table with no ``alid`` column is
-    refused rather than read positionally, because guessing which column holds
-    the identity is how a build checks itself against the wrong thing.
+    A tab-separated table with no ``alid`` column is refused rather than read
+    positionally, because guessing which column holds the identity is how a
+    build checks itself against the wrong thing.
     """
-    if "\t" not in first_line:
-        return None
     header = [field.lstrip("#").strip() for field in first_line.rstrip("\n").split("\t")]
     if "alid" not in header:
         raise ValueError(

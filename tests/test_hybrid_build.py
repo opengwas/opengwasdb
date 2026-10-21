@@ -23,6 +23,11 @@ import numpy as np
 import pytest
 import zarr
 from cli_output import normalize_cli_output
+from liftover_fixtures import (
+    assert_strand_statistics,
+    strand_vcf_rows,
+    write_two_strand_chain,
+)
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
 from opengwasdb.ancestry.reference import AncestryReference
@@ -959,7 +964,9 @@ def test_build_routing_index_long_keys_sorted_and_searchable():
     dense_row = {"1:10:A:G": 0, "2:5:C:T": 1}
     shared_index = {f"1:10:A:{long_alt}": 0, "1:20:C:G": 1}
 
-    keys, targets, ispanel = _build_routing_index(source_lookup, dense_row, shared_index)
+    keys, targets, ispanel, swaps = _build_routing_index(
+        source_lookup, dense_row, shared_index
+    )
 
     assert keys.dtype == object
     assert list(keys) == sorted(keys)
@@ -978,6 +985,7 @@ def test_build_routing_index_long_keys_sorted_and_searchable():
     assert list(keys) == [key for key, _, _ in expected]
     assert targets.tolist() == [target for _, target, _ in expected]
     assert ispanel.tolist() == [panel for _, _, panel in expected]
+    assert not swaps.any(), "this fixture lifts no reverse-strand variant"
 
     long_key = b"1:10:A:" + long_alt.encode()
     missing_key = b"22:9:C:T"
@@ -1031,7 +1039,7 @@ def _write_reference_artifact(
     from opengwasdb.variants.reference import write_variant_reference
 
     rows = _read_manifest(manifest)
-    source_lookup, rsid_by_alid = _lift_manifest_variants(
+    source_lookup, rsid_by_alid, _swapped = _lift_manifest_variants(
         rows, chain_file=None, liftover_failure_threshold=0.01
     )
     if panel_only:
@@ -2471,3 +2479,65 @@ class TestVariantReferenceRsids:
         )
         assert validate_store(store).ok
         assert set(_hybrid_axis_rsids(store).values()) == {""}
+
+
+# ── The lift's strand, and the statistics it re-orients (issue #284) ─────────
+#
+# As in test_dense_vcf_build.py: the fixture chain mirrors chr2 and leaves chr3
+# alone, and `liftover_fixtures.STRAND_ROWS` states what each row must store.
+# The panel holds the two reverse-strand variants, so the forward one routes to
+# the overflow and both components' orientation is exercised in one build.
+
+
+def test_hybrid_build_reorients_statistics_a_reverse_strand_lift_renames(tmp_path):
+    """issue #284: both components must sign a lifted variant's statistics
+    against the alleles the lift stored, not the ones the source reported."""
+    from residual_fixtures import write_gwas_vcf_with_eaf
+
+    vcf = write_gwas_vcf_with_eaf(tmp_path / "strand.vcf", strand_vcf_rows())
+    manifest = _make_manifest(tmp_path, [("trait", vcf, "Trait")])
+    panel = tmp_path / "panel.txt"
+    panel.write_text("2:999001:C:T\n2:998001:A:T\n", encoding="utf-8")
+    store_path = tmp_path / "store.opengwasdb"
+
+    build_hybrid_from_vcf_manifest(
+        manifest, store_path, reference_panel=panel,
+        store_id="hybrid-strand", release_id="v1",
+        chain_file=write_two_strand_chain(tmp_path / "hg19ToHg38.chain"),
+    )
+
+    with query_store(store_path) as query:
+        assert_strand_statistics(query, "trait")
+    with query_store(store_path / "dense") as dense:
+        dense_alids = {v["alid"] for v in dense.variants_table().values()}
+    assert dense_alids == {"2:999001:C:T", "2:998001:A:T"}, (
+        "the fixture must span both components: the forward variant belongs to the overflow"
+    )
+
+
+def test_single_pass_off_reference_lift_refuses_to_store_unoriented_statistics(tmp_path):
+    """issue #284: a single-pass build's off-reference variants are lifted during
+    the fold, which carries no orientation, so a reverse-strand row there would be
+    stored under the projected alleles carrying the source's sign. Until the fold
+    carries the lift's orientation, that build must fail rather than publish it.
+
+    The reference names only the forward variant, so both chr2 rows -- the
+    reverse-strand pair -- are off-reference and reach the fold's lift."""
+    from residual_fixtures import write_gwas_vcf_with_eaf
+
+    from opengwasdb.layouts.hybrid.key_table import UnorientedOffReferenceLiftError
+
+    vcf = write_gwas_vcf_with_eaf(tmp_path / "strand.vcf", strand_vcf_rows())
+    manifest = _make_manifest(tmp_path, [("trait", vcf, "Trait")])
+    reference = tmp_path / "axis.alid.txt"
+    reference.write_text("3:1000:A:G\n", encoding="utf-8")
+    store_path = tmp_path / "store.opengwasdb"
+
+    with pytest.raises(UnorientedOffReferenceLiftError, match="2:1000:G:A"):
+        build_hybrid_from_vcf_manifest(
+            manifest, store_path, variant_reference=reference,
+            store_id="hybrid-strand-single", release_id="v1",
+            chain_file=write_two_strand_chain(tmp_path / "hg19ToHg38.chain"),
+        )
+
+    assert not store_path.exists(), "a failed build must not leave a release behind"

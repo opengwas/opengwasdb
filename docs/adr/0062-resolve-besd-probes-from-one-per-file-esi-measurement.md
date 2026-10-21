@@ -132,6 +132,17 @@ drops the measurements, and their arrays, when the run's probes are done.
   resolver does not: where a position maps under more than one chain block it
   takes the highest-scoring mapping, because a batch lift of nine million rows
   cannot fail the way one Analysis can (ADR 0044).
+- **Dense and Hybrid re-orient, but do not check.** Both ingest the projected
+  alleles' orientation from the same lift -- a swapped canonical order negates z
+  and inverts EAF (`statistics_swap`) -- because the rename #284 introduced
+  would otherwise leave them storing source-signed statistics under the
+  projected allele pair. Neither records a `provenance.lift` or runs the
+  reference check; adding that to them is a separate decision, not a
+  consequence of the shared lift. One Hybrid path still refuses rather than
+  guesses: a single-pass build's off-reference rows are lifted in the fold,
+  which carries no orientation, so such a build fails loudly
+  (`UnorientedOffReferenceLiftError`) when that lift lands on the reverse
+  strand. A two-pass build lifts in Pass 1 and is unaffected.
 
 ## Rejected
 

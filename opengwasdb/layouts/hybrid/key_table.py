@@ -31,7 +31,7 @@ from typing import cast
 
 import numpy as np
 
-from opengwasdb.build.liftover import build_liftover_lookup
+from opengwasdb.build.liftover import LiftedRow, lift_hg19_to_hg38, statistics_swap
 from opengwasdb.layouts.hybrid.key_runs import HG19, HG38
 from opengwasdb.layouts.hybrid.unknown_keys import (
     UnknownKeyEncodingError,
@@ -44,6 +44,7 @@ __all__ = [
     "HG19",
     "HG38",
     "RAW_KEY_DTYPE",
+    "UnorientedOffReferenceLiftError",
     "AlidIndex",
     "CanonicalRawKeys",
     "DistinctKeys",
@@ -387,16 +388,45 @@ def _lift_hg19(
     )
     if not tuples:
         return
-    lifted = build_liftover_lookup(
+    lifted = lift_hg19_to_hg38(
         tuples,
-        from_build="hg19",
-        to_build="hg38",
-        failure_threshold=liftover_failure_threshold,
         chain_file=chain_file,
+        failure_threshold=liftover_failure_threshold,
     )
-    positions = np.concatenate([packed_positions, hashed_positions])
-    for position, tup in zip(positions.tolist(), tuples, strict=True):
-        alids[position] = lifted.get(tup)
+    _require_oriented(lifted)
+    lift_positions = np.concatenate([packed_positions, hashed_positions])
+    for position, tup in zip(lift_positions.tolist(), tuples, strict=True):
+        row = lifted.get(tup)
+        alids[position] = None if row is None else row.alid
+
+
+class UnorientedOffReferenceLiftError(ValueError):
+    """A single-pass build must lift an off-reference variant on the reverse strand.
+
+    The fold resolves those variants' ALIDs once per distinct key and rewrites
+    their shared indices, but it moves their z and EAF through untouched. A
+    reverse-strand lift swaps which allele those statistics are signed against
+    (issue #284), so publishing one would mean a plausible, wrong sign -- the
+    failure this package exists to refuse. Until the fold carries the lift's
+    orientation, a build is asked to run two-pass (which lifts everything in
+    Pass 1, where orientation is applied) instead.
+    """
+
+
+def _require_oriented(lifted: dict[tuple[str, int, str, str], LiftedRow]) -> None:
+    """Refuse a fold whose lift re-oriented any variant's statistics."""
+    reoriented = [key for key, row in lifted.items() if statistics_swap(key, row)]
+    if not reoriented:
+        return
+    first = reoriented[0]
+    raise UnorientedOffReferenceLiftError(
+        f"{len(reoriented)} off-reference variant(s) lift onto the reverse strand, "
+        f"which re-orients their statistics (first: hg19 "
+        f"{first[0]}:{first[1]}:{first[2]}:{first[3]} -> {lifted[first].alid}); this "
+        f"single-pass build's fold cannot carry that orientation, so it would store "
+        f"a wrong sign. Build this source two-pass (a --reference-panel axis, or no "
+        f"--variant-reference) so the lift happens in Pass 1 (issue #284)."
+    )
 
 
 def _split_source_key(key: str) -> tuple[str, int, str, str]:

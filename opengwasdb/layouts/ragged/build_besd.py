@@ -21,8 +21,7 @@ import numpy as np
 
 from opengwasdb.build.liftover import (
     LiftedRow,
-    enforce_liftover_threshold,
-    lifted_rows,
+    lift_hg19_to_hg38,
     normalise_build,
     require_lifted_alleles_match_reference,
 )
@@ -232,23 +231,18 @@ def _lifted_coordinates(
     """
     if source_build.lower().strip() in _BUILDS_ALREADY_HG38:
         return None, None
+    # Refused before any lift runs: this builder knows one cross-build direction
+    # (hg19→hg38), and an unrecognised build must not be silently lifted as hg19.
+    normalise_build(source_build)
     print(f"Lifting over {source_build} → hg38 ...")
     rows = [
         (s.row_idx, s.chromosome, s.bp, s.a1, s.a2)
         for s in snps
         if s.a1 is not None and s.a2 is not None
     ]
-    lifted_by_source, attempts, failures = lifted_rows(
+    lifted_by_source = lift_hg19_to_hg38(
         [(chrom, bp, a1, a2) for _row_idx, chrom, bp, a1, a2 in rows],
-        from_build=source_build,
-        to_build="hg38",
         chain_file=chain_file,
-    )
-    enforce_liftover_threshold(
-        attempts,
-        failures,
-        from_build=normalise_build(source_build),
-        to_build="hg38",
         failure_threshold=_LIFTOVER_FAILURE_THRESHOLD,
     )
     lifted = _orient_lifted_rows(rows, lifted_by_source)

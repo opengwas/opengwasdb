@@ -10,8 +10,10 @@ from opengwasdb.build.liftover import (
     LiftedRow,
     LiftoverFailureError,
     build_liftover_lookup,
+    read_reference_alleles,
     require_lifted_alleles_match_reference,
 )
+from opengwasdb.variants.reference import read_variant_reference
 
 # Known good positions: hg19 1:100000 → hg38 1:100000 (identity in this region)
 # hg19 1:1000000 → hg38 1:1064620
@@ -182,3 +184,76 @@ def test_a_reference_naming_another_variant_at_the_site_is_counted_not_failed(tm
     assert check.n_verified == 0
     assert check.n_other_variant == 2
     assert check.n_absent == 0
+
+
+# ── The reference shapes the checker must accept (issue #284) ────────────────
+
+_REFERENCE_POSITION = ("2", 999_001)
+
+
+def test_read_reference_alleles_accepts_an_uncommented_alid_header(tmp_path):
+    """`read_variant_reference` accepts a tab-separated table whose header is not
+    commented, so the checker must too -- it must consume the header once, not
+    parse it as a variant."""
+    reference = tmp_path / "reference.tsv"
+    reference.write_text(
+        "alid\tchromosome\tposition\teffect_allele\tother_allele\trsid\n"
+        "2:999001:C:T\t2\t999001\tC\tT\trs1\n",
+        encoding="utf-8",
+    )
+    assert read_variant_reference(reference).alids == ["2:999001:C:T"], (
+        "the fixture must be a reference `read_variant_reference` accepts"
+    )
+
+    pairs = read_reference_alleles(reference, [_REFERENCE_POSITION])
+
+    assert pairs == {_REFERENCE_POSITION: {frozenset({"C", "T"})}}
+
+
+def test_read_reference_alleles_accepts_a_commented_store_table_header(tmp_path):
+    reference = tmp_path / "variants.tsv"
+    reference.write_text(
+        "#chromosome\tposition\tvariant_index\teffect_allele\tother_allele\talid\trsid"
+        "\tsource_alid\n"
+        "2\t999001\t0\tC\tT\t2:999001:C:T\t.\t.\n"
+        "2\t999002\t1\tA\tC\t2:999002:A:C\t.\t.\n",
+        encoding="utf-8",
+    )
+    assert read_variant_reference(reference).alids == ["2:999001:C:T", "2:999002:A:C"], (
+        "the fixture must be a reference `read_variant_reference` accepts"
+    )
+
+    pairs = read_reference_alleles(reference, [_REFERENCE_POSITION, ("2", 999_002)])
+
+    assert pairs == {
+        _REFERENCE_POSITION: {frozenset({"C", "T"})},
+        ("2", 999_002): {frozenset({"A", "C"})},
+    }
+
+
+def test_read_reference_alleles_accepts_an_artifact_header(tmp_path):
+    reference = tmp_path / "axis.variant-ref.tsv"
+    reference.write_text(
+        "#alid\tchromosome\tposition\ta1\ta2\trsid\tsource_keys\n"
+        "2:999001:C:T\t2\t999001\tC\tT\trs1\t2:1000:A:G\n",
+        encoding="utf-8",
+    )
+    assert read_variant_reference(reference).alids == ["2:999001:C:T"], (
+        "the fixture must be a reference `read_variant_reference` accepts"
+    )
+
+    pairs = read_reference_alleles(reference, [_REFERENCE_POSITION])
+
+    assert pairs == {_REFERENCE_POSITION: {frozenset({"C", "T"})}}
+
+
+def test_read_reference_alleles_accepts_a_plain_alid_list(tmp_path):
+    reference = tmp_path / "variants.alid.txt"
+    reference.write_text("2:999001:C:T\n2:999002:A:C\n", encoding="utf-8")
+    assert read_variant_reference(reference).alids == ["2:999001:C:T", "2:999002:A:C"], (
+        "the fixture must be a reference `read_variant_reference` accepts"
+    )
+
+    pairs = read_reference_alleles(reference, [_REFERENCE_POSITION])
+
+    assert pairs == {_REFERENCE_POSITION: {frozenset({"C", "T"})}}

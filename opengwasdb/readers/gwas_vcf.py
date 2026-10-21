@@ -125,15 +125,9 @@ def _unique_mapping(
     return mapped[0]
 
 
-def _strand_alleles(strand: str, effect: str, other: str, identity: str) -> tuple[str, str]:
-    if strand == "+":
-        return effect, other
-    if strand == "-":
-        return effect.translate(_COMPLEMENT), other.translate(_COMPLEMENT)
-    raise LiftoverProjectionError(f"unsupported liftover strand {strand!r} for {identity}")
-
-
-def project_lifted_alleles(strand: str, effect: str, other: str) -> tuple[str, str]:
+def project_lifted_alleles(
+    strand: str, effect: str, other: str, identity: str = "the lifted variant"
+) -> tuple[str, str]:
     """The `(effect, other)` alleles as they read on the target assembly.
 
     A chain block's orientation says which strand of the target a source region
@@ -143,8 +137,16 @@ def project_lifted_alleles(strand: str, effect: str, other: str) -> tuple[str, s
     builders' `opengwasdb.build.liftover` (issue #284) -- because two lifts that
     each complement on their own are two answers to the same question, and the
     builder's answer was missing the complement entirely.
+
+    `identity` names the variant in the refusal of an unrecognised strand: the
+    resolver passes its own `chrom:pos:effect:other` spelling, so a bad chain
+    fails naming the row it was reading.
     """
-    return _strand_alleles(strand, effect, other, "the lifted variant")
+    if strand == "+":
+        return effect, other
+    if strand == "-":
+        return effect.translate(_COMPLEMENT), other.translate(_COMPLEMENT)
+    raise LiftoverProjectionError(f"unsupported liftover strand {strand!r} for {identity}")
 
 
 def _lift_variant(
@@ -162,7 +164,7 @@ def _lift_variant(
     if mapping is None:
         return None
     new_chrom, new_pos, strand, *_rest = mapping
-    effect, other = _strand_alleles(strand, effect, other, identity)
+    effect, other = project_lifted_alleles(strand, effect, other, identity)
     bare_target = new_chrom[3:] if new_chrom.lower().startswith("chr") else new_chrom
     return bare_target, str(int(new_pos) + 1), effect, other
 
