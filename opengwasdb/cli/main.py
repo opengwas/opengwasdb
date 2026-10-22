@@ -451,7 +451,11 @@ def check_observed_view_command(
     output: Annotated[Path, typer.Option(help="Where to write the JSON verdict")],
     n_random: Annotated[
         int,
-        typer.Option(min=0, help="Random chunk-rows to compare, besides the fixed strata"),
+        typer.Option(
+            min=0,
+            help="Random chunk-rows to compare, besides the fixed strata; for a Hybrid, "
+            "also the Overflow Analyses to compare",
+        ),
     ] = 1000,
 ) -> None:
     """Check that a Reference-Completed Store reproduces the Observed-Only Store it came from.
@@ -463,7 +467,8 @@ def check_observed_view_command(
 
     Exits 0 when everything agrees and 1 when anything does not; the verdict is
     written to --output either way. Exits 2 without a verdict when the pair cannot
-    be checked: a non-Dense layout, a source that is not Observed-Only, or a target
+    be checked: a mixed-layout pair, or a layout the check does not support (it
+    checks Dense and Hybrid pairs), a source that is not Observed-Only, or a target
     that is not Reference-Completed.
     """
     from opengwasdb.validation.observed_view import ObservedViewRefused, check_observed_view
