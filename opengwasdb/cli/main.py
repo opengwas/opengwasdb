@@ -453,6 +453,14 @@ def check_observed_view_command(
         int,
         typer.Option(min=0, help="Random chunk-rows to compare, besides the fixed strata"),
     ] = 1000,
+    ld_panel: Annotated[
+        Path | None,
+        typer.Option(help="Ragged only: the LD panel root complete-ragged was run with"),
+    ] = None,
+    ancestry: Annotated[
+        str | None,
+        typer.Option(help="Ragged only: the panel ancestry; default is the one the target records"),
+    ] = None,
 ) -> None:
     """Check that a Reference-Completed Store reproduces the Observed-Only Store it came from.
 
@@ -472,7 +480,10 @@ def check_observed_view_command(
         # Checked up front: the comparison takes minutes, and its verdict must not be lost.
         raise typer.BadParameter(f"{output.parent} is not a directory", param_hint="--output")
     try:
-        verdict = check_observed_view(source_path, target_path, seed=seed, n_random=n_random)
+        verdict = check_observed_view(
+            source_path, target_path, seed=seed, n_random=n_random,
+            ld_panel=ld_panel, ancestry=ancestry,
+        )
     except ObservedViewRefused as refusal:
         typer.echo(f"error: refused: {refusal}", err=True)
         raise typer.Exit(2) from refusal

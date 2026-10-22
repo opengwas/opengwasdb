@@ -168,6 +168,8 @@ def check_observed_view(
     *,
     seed: int,
     n_random: int = 1000,
+    ld_panel: str | Path | None = None,
+    ancestry: str | None = None,
 ) -> ObservedViewVerdict:
     """Compare an Observed-Only Dense Store with the Reference-Completed one made from it.
 
@@ -182,6 +184,17 @@ def check_observed_view(
     """
     if n_random < 0:
         raise ValueError(f"n_random must be >= 0, got {n_random}")
+    # --- Ragged dispatch (#296): replaced by the layout dispatcher of #295 ---
+    from opengwasdb.validation import observed_view_ragged
+
+    if observed_view_ragged.involves_ragged(Path(source_path), Path(target_path)):
+        return observed_view_ragged.check(
+            source_path, target_path, seed=seed, n_random=n_random,
+            ld_panel=ld_panel, ancestry=ancestry,
+        )
+    if ld_panel is not None or ancestry is not None:
+        raise ObservedViewRefused("--ld-panel and --ancestry are only for a Ragged pair")
+    # --- end Ragged dispatch ---
     started = time.time()
     pair = _open_pair(Path(source_path), Path(target_path))
     analyses = _analyses_record(pair)
