@@ -890,3 +890,84 @@ def test_hg19_lift_collision_drops_every_entry_and_association_in_the_group(
 
     validated = validate_store(out)
     assert validated.ok, validated.errors
+
+
+# ── same assembly: one variant listed twice (issue #304) ─────────────────────
+#
+# No lift is involved, so the ambiguity is not a chain's: the file set simply
+# lists one variant under two entries (here with the allele pair swapped, which
+# is also what a second spelling of a variant looks like). Both go, because a
+# Ragged CSR cannot hold one Analysis twice at one variant, and a probe's
+# association cannot be attributed to one of two entries that name it.
+
+_SAME_ASSEMBLY_SURVIVOR = "1:1100000:C:T"
+
+
+def _write_same_assembly_duplicate_fixture(root: Path) -> Path:
+    """An hg38 file set that lists one variant twice, and one variant once.
+
+    Probe 30401 holds associations at all three rows; probe 30402 only at the
+    two duplicated ones, so it must come out empty rather than keep a row.
+    """
+    fixture = root / "fixture_hg38_duplicate"
+    fixture.mkdir()
+    write_esi(fixture / "test.esi", [
+        {"chr": "1", "snp_id": "rs304201", "bp": 1_000_000, "a1": "A", "a2": "G"},
+        {"chr": "1", "snp_id": "rs304202", "bp": 1_000_000, "a1": "G", "a2": "A"},
+        {"chr": "1", "snp_id": "rs304203", "bp": 1_100_000, "a1": "C", "a2": "T"},
+    ])
+    write_epi(fixture / "test.epi", [
+        {"chr": "1", "probe_id": "ENSG00000030401", "bp": 1_000_000, "gene": "GENE304A"},
+        {"chr": "1", "probe_id": "ENSG00000030402", "bp": 2_000_000, "gene": "GENE304B"},
+    ])
+    write_besd_sparse_3f(fixture / "test.besd", 2, [
+        [(0, 0.2, 0.1), (1, 0.4, 0.1), (2, 0.6, 0.1)],
+        [(0, 0.2, 0.1)],
+    ])
+    return fixture / "test"
+
+
+def test_same_assembly_duplicate_variant_is_dropped_and_counted_at_the_root(
+    tmp_path, capsys
+):
+    """A duplicate variant with no lift involved is refused the same way, and
+    recorded where a build with no lift record can hold it: the provenance's
+    root, beside no `lift` block at all -- inventing one would claim a lift
+    that never happened."""
+    import json
+
+    from opengwasdb.validation import validate_store
+    from opengwasdb.variants.axis import VariantAxis
+
+    prefix = _write_same_assembly_duplicate_fixture(tmp_path)
+    out = tmp_path / "out.opengwasdb"
+
+    result = build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1",
+    )
+
+    printed = capsys.readouterr().out
+    assert "Variant collisions: 2 ESI entries in 1 group(s)" in printed, printed
+
+    axis = VariantAxis(out)
+    try:
+        stored = [axis.by_index(i).alid for i in range(axis.n_variants)]
+    finally:
+        axis.close()
+    assert stored == [_SAME_ASSEMBLY_SURVIVOR], stored
+    assert result.n_variants == 1
+    assert result.n_associations == 1, "the duplicated entries' associations must go too"
+
+    reader = RaggedCSRReader(out)
+    assert len(reader.get_analysis(0).z) == 1
+    assert len(reader.get_analysis(1).z) == 0, "a probe with only duplicated rows is empty"
+
+    provenance = json.loads((out / "manifest.json").read_text())["provenance"]
+    assert "lift" not in provenance, (
+        f"a build that never lifted must not record a lift block: {sorted(provenance)}"
+    )
+    assert provenance["n_collisions"] == 2, provenance
+    assert provenance["n_collision_groups"] == 1, provenance
+
+    validated = validate_store(out)
+    assert validated.ok, validated.errors

@@ -56,17 +56,31 @@ position, and when their projected alleles agree they become one canonical
 variant claimed by two ESI entries. Nothing in the file set says which entry a
 probe's association belongs to, so every entry in the colliding group is
 dropped, with its associations, exactly as a liftover failure is — never a
-winner chosen by position, by allele order or by row order. The Dense VCF
-builder takes the same view of a cross-assembly collision (`layouts/dense/
-build_vcf.py`, `hg38_to_source[hg38_alid] = None  # collision → ambiguous`);
-this is that policy where the layout cannot absorb it, because a Ragged CSR
-that held both would put one `variant_index` twice inside one Analysis's
-segment, and `(variant, Analysis)` resolution cannot tell the two rows apart.
+winner chosen by position, by allele order or by row order.
+
+**That drop is this builder's own policy, not a Dense rule it inherits.** The
+Dense VCF builder meets the same collapse and answers differently, because a
+dense column can hold both source variants' associations against one row:
+`_source_alids_by_alid` blanks the ambiguous source-coordinate provenance
+(`hg38_to_source[hg38_alid] = None  # collision → ambiguous`) and the column
+keeps the last stream occurrence for that row (`tests/test_dense_vcf_build.py::
+test_last_wins_dedup_on_collision`). Its only association-dropping collision is
+a different one — `_drop_cross_assembly_collisions` drops raw tuples declared
+under *both* assemblies, which is one string naming two physical loci rather
+than two loci resolving to one variant. What BESD borrows from Dense is the
+refusal to guess: Dense will not invent which source coordinate a collapsed
+row came from, and BESD will not invent which entry a collapsed variant's
+association came from. BESD has to go further because a Ragged CSR cannot
+absorb the collapse at all — holding both would put one `variant_index` twice
+inside one Analysis's segment, and `(variant, Analysis)` resolution cannot tell
+the two rows apart.
+
 The build says how many entries went, on stdout and as
 `provenance.lift.n_collisions` / `n_collision_groups` beside `n_lifted`. The
 same refusal covers a source that lists one variant twice with no lift
-involved, since it is the store's invariant rather than the chain's (issue
-#304).
+involved, since it is the store's invariant rather than the chain's; such a
+build has no lift record to hold the counts, so it records them at the
+provenance's root (issue #304).
 
 On eQTLGen's full file set (8,932,823 `.esi` rows, 19,250 probes) 5,736 rows
 fail the lift and 26 of the remaining 8,927,087 landings claim 13 canonical
@@ -185,12 +199,13 @@ drops the measurements, and their arrays, when the run's probes are done.
 
 ## Rejected
 
-- **Keep the first entry and drop the rest of a colliding group.** Which of two
-  hg19 loci "wins" a shared hg38 coordinate is decided by row order, which is
-  not evidence about the data. The Dense builder already treats the collision
-  as ambiguous rather than choosing, and the associations at the dropped
-  variants are the ones the ambiguity is *about*: keeping either entry would
-  store one locus's association under the other's provenance.
+- **Keep one entry of a colliding group and drop the rest.** Which of two hg19
+  loci "wins" a shared hg38 coordinate would be decided by row order, which is
+  not evidence about the data. Dense can keep last-wins for such a pair because
+  its column is one row and no `(variant, Analysis)` key changes meaning; a
+  Ragged segment cannot, and the ambiguity is exactly about which entry the
+  association belongs to, so keeping either would attribute one locus's
+  association to the other.
 - **Fail the build on a collision.** Nine million `.esi` rows are not one
   Analysis: a batch lift cannot refuse the way ADR 0044's per-Analysis
   resolution can, and 13 ambiguous variants in 8.9M is not a reason to have no

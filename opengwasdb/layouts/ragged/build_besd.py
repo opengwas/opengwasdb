@@ -430,7 +430,9 @@ def _esi_orientation(
 _Candidate = tuple[tuple[tuple[int, str], int], int, CanonicalVariant, bool, str | None]
 
 
-def _axis_candidates(snps: list[SnpRecord], lifted: dict[int, Orientation] | None) -> list[_Candidate]:
+def _axis_candidates(
+    snps: list[SnpRecord], lifted: dict[int, Orientation] | None
+) -> list[_Candidate]:
     """The entries that can carry a variant, in position order.
 
     Rows without alleles, unlifted hg19 rows, and rows whose alleles fail

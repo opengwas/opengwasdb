@@ -761,9 +761,12 @@ def test_segment_first_break_detects_a_cross_window_decrease(
     """A decrease at the start of a window is caught by the carried value."""
     monkeypatch.setattr(validate_module, "_ORDER_WINDOW", 3)
     values = np.array([1, 2, 3, 2], dtype=np.int32)
-    failure, kind, read = validate_module._segment_first_break(values, 0, 4)
-    assert failure == 3, "the first row of the second window is below the first window's last"
-    assert kind == validate_module._DECREASE
+    failure, read = validate_module._segment_first_break(values, 0, 4)
+    assert failure is not None
+    assert failure.offset == 3, (
+        "the first row of the second window is below the first window's last"
+    )
+    assert failure.kind == validate_module._DECREASE
     assert read == 4
 
 
@@ -778,9 +781,10 @@ def test_segment_first_break_detects_a_repeat_at_its_own_offset(
     """
     monkeypatch.setattr(validate_module, "_ORDER_WINDOW", 3)
     values = np.array([1, 2, 3, 3, 2], dtype=np.int32)
-    failure, kind, read = validate_module._segment_first_break(values, 0, 5)
-    assert failure == 3, "offset 3 repeats offset 2's variant"
-    assert kind == validate_module._REPEAT
+    failure, read = validate_module._segment_first_break(values, 0, 5)
+    assert failure is not None
+    assert failure.offset == 3, "offset 3 repeats offset 2's variant"
+    assert failure.kind == validate_module._REPEAT
     assert read == 5
 
 
@@ -790,8 +794,8 @@ def test_segment_first_break_resets_at_analysis_boundaries(
     """A lower first value in the next Analysis is not a decrease."""
     monkeypatch.setattr(validate_module, "_ORDER_WINDOW", 3)
     values = np.array([5, 6, 1, 2], dtype=np.int32)
-    assert validate_module._segment_first_break(values, 0, 2) == (None, None, 2)
-    assert validate_module._segment_first_break(values, 2, 4) == (None, None, 2)
+    assert validate_module._segment_first_break(values, 0, 2) == (None, 2)
+    assert validate_module._segment_first_break(values, 2, 4) == (None, 2)
 
 
 def test_validation_rejects_a_variant_held_twice_in_one_analysis_slice(tmp_path: Path) -> None:
