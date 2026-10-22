@@ -1932,7 +1932,9 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
 - **Refused (exit 2)**: a mixed-layout pair, a Ragged pair without `--ld-panel`, an LD panel
   with no chromosomes for the ancestry, an ancestry other than the one recorded, a `TARGET`
   completed against an ancestry other than the panel's, a `TARGET` with no completion ancestry
-  or `cis_window_bp` recorded, a release whose arrays cannot be decoded.
+  or `cis_window_bp` recorded, a release that cannot be opened or decoded (a missing array
+  group or EAF array included), and either `--ld-panel` or `--ancestry` for a Dense or Hybrid
+  pair.
 - **Known limit: residual-coded SE.** SE is compared for exact equality, as the contract in
   section 12 states. Ragged completion refits `se_coefficients` over the completed Analysis, so
   when SE is `int8_residual` (ADR 0037 section 3) every observed SE of an Analysis that was

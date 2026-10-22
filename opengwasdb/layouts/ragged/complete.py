@@ -46,7 +46,6 @@ from opengwasdb.completion.checkpoint import (
 )
 from opengwasdb.completion.ld_panel import (
     LDBlock,
-    blocks_over_variants,
     canonical_panel_alid,
     check_panel_has_chromosomes,
 )
@@ -56,7 +55,11 @@ from opengwasdb.completion.manifest import (
 )
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
-from opengwasdb.completion.regions import blocks_for_analysis, has_trait_position
+from opengwasdb.completion.regions import (
+    blocks_for_analysis,
+    has_trait_position,
+    trait_less_blocks,
+)
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
     EAF_BASELINE,
@@ -547,17 +550,19 @@ def _gene_target_less_blocks(
     ]
     if not gene_target_less:
         return {}
-    analyses_by_alid: dict[str, list[int]] = {}
-    chromosomes: set[str] = set()
-    for i, _a in gene_target_less:
-        for vi in src_csr.variant_indices(i).tolist():
-            analyses_by_alid.setdefault(state.src_alids[vi], []).append(i)
-            chromosomes.add(state.src_variants[vi].chromosome)
+    held = {
+        i: [
+            (state.src_alids[vi], state.src_variants[vi].chromosome)
+            for vi in src_csr.variant_indices(i).tolist()
+        ]
+        for i, _a in gene_target_less
+    }
+    chromosomes = {chromosome for pairs in held.values() for _alid, chromosome in pairs}
     print(
         f"  {len(gene_target_less):,} analyses have no Trait position; scanning "
         f"{len(chromosomes)} chromosome(s) of panel blocks for regions they hold"
     )
-    return blocks_over_variants(ld_dir, ancestry, analyses_by_alid, sorted(chromosomes))
+    return trait_less_blocks(held, ld_dir, ancestry)
 
 
 def _canonical_alids(block: LDBlock) -> list[str | None]:

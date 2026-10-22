@@ -441,18 +441,20 @@ def audit_eaf_orientation_command(
     raise typer.Exit(1)
 
 
-_OBSERVED_VIEW_SEED_HELP = "Seed of the sample (chunk-rows; Ragged: Analyses), kept in the verdict"
+_OBSERVED_VIEW_SEED_HELP = (
+    "Seed of the sample (chunk-rows for Dense and Hybrid, Analyses for Ragged), kept in the verdict"
+)
 _OBSERVED_VIEW_RANDOM_HELP = (
     "Random chunk-rows to compare, besides the fixed strata; for a Hybrid, also the Overflow "
     "Analyses to compare; for a Ragged, the Analyses to compare"
 )
 _OBSERVED_VIEW_PANEL_HELP = (
     "Ragged only, required for a Ragged pair: the --ld-panel root complete-ragged was run "
-    "with; retained regions are rebuilt from it. Refused for a Dense pair"
+    "with; retained regions are rebuilt from it. Refused (exit 2) for a Dense or Hybrid pair"
 )
 _OBSERVED_VIEW_ANCESTRY_HELP = (
     "Ragged only: the --ancestry complete-ragged was run with; defaults to the target "
-    "manifest's, and is refused if it differs"
+    "manifest's, and is refused if it differs. Refused (exit 2) for a Dense or Hybrid pair"
 )
 
 
@@ -484,7 +486,8 @@ def check_observed_view_command(
     retained regions (a non-admitted Analysis holds none). Those regions are
     rebuilt from the LD panel, so --ld-panel (the root complete-ragged was given)
     is required for a Ragged pair, and --ancestry, if given, must be the one the
-    target records (the default). Neither option is accepted for another layout.
+    target records (the default). Neither option is accepted for a Dense or Hybrid
+    pair: it is refused (exit 2), not ignored.
 
     Exits 0 when everything agrees and 1 when anything does not; the verdict is
     written to --output either way; a Ragged pair also exits 1 on se_mismatch when

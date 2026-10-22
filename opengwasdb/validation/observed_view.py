@@ -174,7 +174,8 @@ def check_observed_view(
     """Compare an Observed-Only Store with the Reference-Completed one made from it.
 
     Both Stores must have one layout, which picks the check: Dense here, Hybrid
-    in `observed_view_hybrid` (issue #295). Raises `ObservedViewRefused` when
+    in `observed_view_hybrid` (issue #295), Ragged in `observed_view_ragged`
+    (issue #296). Raises `ObservedViewRefused` when
     the pair cannot be checked (a mixed-layout pair, a layout the check does not
     support, a source that is not Observed-Only, a target that is not
     Reference-Completed, or a Store whose arrays do not agree with its own
@@ -182,8 +183,10 @@ def check_observed_view(
 
     `seed` is required so that every verdict can be reproduced from its record.
     `n_random` chunk-rows are drawn uniformly; a grid with fewer is sampled in
-    full (for a Ragged pair, Analyses: `observed_view_ragged`, issue #296, which
-    alone takes `ld_panel` and `ancestry`).
+    full (a Hybrid pair also compares `n_random` Overflow Analyses; a Ragged pair
+    samples `n_random` Analyses). `ld_panel` and `ancestry` belong to a Ragged pair
+    alone, whose retained regions are rebuilt from them: a Dense or Hybrid pair
+    given either is refused, not ignored.
     """
     if n_random < 0:
         raise ValueError(f"n_random must be >= 0, got {n_random}")

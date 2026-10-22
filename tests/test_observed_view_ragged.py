@@ -405,18 +405,64 @@ def test_a_target_that_is_not_reference_completed_is_refused(tmp_path, pair):
     )
 
 
-def test_an_ld_panel_given_for_a_dense_pair_is_refused(tmp_path, pair):
-    _, _, panel = pair
+def _dense_pair(tmp_path: Path) -> tuple[Path, Path]:
     root = tmp_path / "dense"
     root.mkdir()
-    dense_observed, dense_completed = tcov._build_pair(
-        root, tcov.ROWS, tdc._make_ld_panel(root)
+    return tcov._build_pair(root, tcov.ROWS, tdc._make_ld_panel(root))
+
+
+def _hybrid_pair(tmp_path: Path) -> tuple[Path, Path]:
+    import test_observed_view_hybrid as toh
+
+    root = tmp_path / "hybrid"
+    root.mkdir()
+    observed = toh._build_observed(root, chunk_shape=(2, 1))
+    return observed, toh._complete(observed, root)
+
+
+@pytest.mark.parametrize("layout", ["dense", "hybrid"])
+@pytest.mark.parametrize("option", ["--ld-panel", "--ancestry"])
+def test_a_ragged_only_option_is_refused_for_a_dense_or_hybrid_pair(
+    tmp_path, pair, layout, option
+):
+    _, _, panel = pair
+    source, target = (_dense_pair if layout == "dense" else _hybrid_pair)(tmp_path)
+    out = tmp_path / "verdict.json"
+    value = str(panel) if option == "--ld-panel" else "EUR"
+
+    result = CliRunner().invoke(
+        app,
+        ["check-observed-view", str(source), str(target), "--seed", "7", "--output", str(out),
+         option, value],
     )
+
+    _assert_refused(result, out, "only for a Ragged pair")
+
+
+def test_a_target_without_its_ragged_group_is_refused(tmp_path, pair):
+    observed, completed, panel = pair
+    shutil.rmtree(completed / RAGGED_ZARR_PATH)
     out = tmp_path / "verdict.json"
 
-    _assert_refused(
-        _run(dense_observed, dense_completed, out, panel=panel), out, "only for a Ragged pair"
-    )
+    _assert_refused(_run(observed, completed, out, panel=panel), out, "cannot be opened")
+
+
+@pytest.mark.parametrize("role", ["source", "target"])
+@pytest.mark.parametrize("array", ["eaf_baseline", "eaf"])
+def test_a_store_missing_an_eaf_array_is_refused(tmp_path, pair, role, array):
+    observed, completed, panel = pair
+    shutil.rmtree((observed if role == "source" else completed) / RAGGED_ZARR_PATH / array)
+    out = tmp_path / "verdict.json"
+
+    _assert_refused(_run(observed, completed, out, panel=panel), out, "cannot be opened")
+
+
+def test_a_target_without_the_reference_eaf_is_refused(tmp_path, pair):
+    observed, completed, panel = pair
+    shutil.rmtree(completed / RAGGED_ZARR_PATH / "eaf_reference")
+    out = tmp_path / "verdict.json"
+
+    _assert_refused(_run(observed, completed, out, panel=panel), out, "cannot be opened")
 
 
 def test_a_target_missing_an_array_is_refused_with_the_reason(tmp_path, pair):
@@ -462,18 +508,24 @@ def test_the_same_seed_gives_the_same_verdict(tmp_path, pair):
 
 # --- retained regions on a multi-block panel, expected regions written by hand -----------------
 #
-# Four chr1 blocks, named for their extent, each with five panel SNPs (positions below). The cis
-# window is 50,000 bp, so a Trait at 250,000 reaches [200,000, 300,000]:
-#   1/100000-199999  ends one base short of the window      -> outside
-#   1/200000-280000  inside the window                      -> region
-#   1/300000-380000  starts exactly at the window's end      -> region (the bounds are inclusive)
-#   1/400000-480000  far outside                             -> outside
+# Six chr1 blocks, named for their extent, each with five panel SNPs (positions below). The cis
+# window is 50,000 bp, so a Trait at 250,000 reaches [200,000, 300,000]. The bounds are
+# inclusive, and each is tested from both sides, so a window shifted by one base either way
+# changes the regions:
+#   1/100000-199999  ends one base before the window starts     -> outside
+#   1/150000-200000  ends exactly where the window starts       -> region
+#   1/220000-280000  inside the window                          -> region
+#   1/300000-380000  starts exactly where the window ends       -> region
+#   1/300001-350001  starts one base after the window ends      -> outside
+#   1/400000-480000  far outside                                -> outside
 # Without a Trait position a block is a region once the Analysis holds `min_observed_points()`
 # = 4 observations at its panel SNPs.
 BLOCKS = {
-    "100000-199999": [100_000, 120_000, 140_000, 160_000, 199_999],
-    "200000-280000": [200_000, 220_000, 240_000, 260_000, 280_000],
+    "100000-199999": [100_000, 110_000, 130_000, 190_000, 199_999],
+    "150000-200000": [150_000, 160_000, 170_000, 180_000, 200_000],
+    "220000-280000": [220_000, 235_000, 250_000, 265_000, 280_000],
     "300000-380000": [300_000, 320_000, 340_000, 360_000, 380_000],
+    "300001-350001": [300_001, 310_001, 320_001, 330_001, 350_001],
     "400000-480000": [400_000, 420_000, 440_000, 460_000, 480_000],
 }
 CIS_WINDOW_BP = 50_000
@@ -491,17 +543,17 @@ def _snps(positions: list[int]) -> list[tuple[int, str, str]]:
 
 
 REGION_SOURCES = {
-    "cis": _snps(BLOCKS["200000-280000"]),
+    "cis": _snps(BLOCKS["220000-280000"]),
     # 4 panel SNPs of the first block: exactly at the threshold
     "tl_at_threshold": _snps(BLOCKS["100000-199999"][:4]),
     # 3 panel SNPs of the first block: one below it
     "tl_below_threshold": _snps(BLOCKS["100000-199999"][:3]),
     # 3 panel SNPs of the last block plus one variant inside its extent that is not a panel SNP
     "tl_off_panel": _snps([*BLOCKS["400000-480000"][:3], 450_000]),
-    NO_EAF: _snps(BLOCKS["200000-280000"]),
+    NO_EAF: _snps(BLOCKS["220000-280000"]),
 }
 EXPECTED_BLOCKS = {
-    "cis": ["1/200000-280000", "1/300000-380000"],
+    "cis": ["1/150000-200000", "1/220000-280000", "1/300000-380000"],
     "tl_at_threshold": ["1/100000-199999"],
     "tl_below_threshold": [],
     "tl_off_panel": [],
@@ -547,7 +599,7 @@ def test_retained_regions_follow_the_hand_derived_block_table(tmp_path, _region_
     assert result.exit_code == 0, verdict["failures"]
     blocks = {a["analysis_id"]: a["blocks"] for a in verdict["sample"]["analyses"]}
     assert blocks == EXPECTED_BLOCKS
-    assert verdict["totals"]["regions"] == 3
+    assert verdict["totals"]["regions"] == 4
 
 
 def test_completion_used_no_block_outside_the_hand_derived_table(_region_pair_seed):

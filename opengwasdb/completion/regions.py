@@ -10,12 +10,13 @@ in one pass.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-from opengwasdb.completion.ld_panel import LDBlock, find_blocks
+from opengwasdb.completion.ld_panel import LDBlock, blocks_over_variants, find_blocks
 from opengwasdb.model.analyses import Analysis
 
-__all__ = ["blocks_for_analysis", "cis_window_blocks", "has_trait_position"]
+__all__ = ["blocks_for_analysis", "cis_window_blocks", "has_trait_position", "trait_less_blocks"]
 
 
 def has_trait_position(a: Analysis) -> bool:
@@ -44,3 +45,21 @@ def blocks_for_analysis(
     if has_trait_position(a):
         return cis_window_blocks(a, ld_dir, ancestry, cis_window_bp)
     return own_variant_blocks
+
+
+def trait_less_blocks(
+    held: Mapping[int, Iterable[tuple[str, str]]], ld_dir: str | Path, ancestry: str
+) -> dict[int, list[LDBlock]]:
+    """The blocks each Analysis with no Trait position already holds enough observations in.
+
+    `held` maps an Analysis index to the `(ALID, chromosome)` of every association it holds.
+    They are resolved in one ALID-keyed pass, so the panel is read once rather than once per
+    Analysis (issue #102). An Analysis holding too few at any block is absent from the result.
+    """
+    analyses_by_alid: dict[str, list[int]] = {}
+    chromosomes: set[str] = set()
+    for index, associations in held.items():
+        for alid, chromosome in associations:
+            analyses_by_alid.setdefault(alid, []).append(index)
+            chromosomes.add(chromosome)
+    return blocks_over_variants(ld_dir, ancestry, analyses_by_alid, sorted(chromosomes))

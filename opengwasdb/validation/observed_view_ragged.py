@@ -48,18 +48,20 @@ import numpy as np
 from opengwasdb.completion.ld_panel import (
     LDBlock,
     LdPanelNotFoundError,
-    blocks_over_variants,
     canonical_panel_alid,
     check_panel_has_chromosomes,
 )
-from opengwasdb.completion.regions import cis_window_blocks, has_trait_position
+from opengwasdb.completion.regions import (
+    blocks_for_analysis,
+    has_trait_position,
+    trait_less_blocks,
+)
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.model.analyses import Analysis, read_analysis_records
-from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
+from opengwasdb.model.enums import CompletionState
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.open import OpenGWASDBStore, open_store
+from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.validation.observed_view import (
-    _STATE_NAMES,
     ObservedViewRefused,
     ObservedViewVerdict,
     _AlidIndex,
@@ -67,6 +69,7 @@ from opengwasdb.validation.observed_view import (
     _Cells,
     _map_axis,
     _observed,
+    _open_checked,
     _partial_cells,
     _plane_difference,
     _store_record,
@@ -165,17 +168,9 @@ class _Pair:
 
 
 def _open_pair(source_path: Path, target_path: Path) -> _Pair:
-    source, target = _open(source_path, "source"), _open(target_path, "target")
-    layouts = {source.manifest.primary_layout, target.manifest.primary_layout}
-    if layouts != {PrimaryStorageLayout.RAGGED}:
-        raise ObservedViewRefused(
-            f"the pair mixes layouts (source primary_layout={source.manifest.primary_layout.value}"
-            f", target primary_layout={target.manifest.primary_layout.value}); the check "
-            "compares two Stores of one layout"
-        )
-    _require_state(source, source_path, "source", CompletionState.OBSERVED_ONLY)
-    _require_state(target, target_path, "target", CompletionState.REFERENCE_COMPLETED)
-    if "imputed" not in store_arrays.open_group(target_path / RAGGED_ZARR_PATH):
+    source = _open_checked(source_path, "source", CompletionState.OBSERVED_ONLY)
+    target = _open_checked(target_path, "target", CompletionState.REFERENCE_COMPLETED)
+    if "imputed" not in _open_group(target_path, "target"):
         raise ObservedViewRefused(f"target store {target_path} has no `imputed` mask to check")
     rows = []
     for path in (source_path, target_path):
@@ -189,28 +184,20 @@ def _open_pair(source_path: Path, target_path: Path) -> _Pair:
     )
 
 
-def _reader(path: Path, role: str) -> RaggedCSRReader:
+def _open_group(path: Path, role: str) -> Any:
+    """The Store's Ragged array group; whatever stops it opening is a refusal."""
     try:
-        return RaggedCSRReader(path)
-    except (OSError, ValueError, KeyError) as exc:
+        return store_arrays.open_group(path / RAGGED_ZARR_PATH)
+    except Exception as exc:
         raise ObservedViewRefused(f"{role} store {path} cannot be opened: {exc!r}") from exc
 
 
-def _open(path: Path, role: str) -> OpenGWASDBStore:
+def _reader(path: Path, role: str) -> RaggedCSRReader:
+    """The reader, which opens every array and decodes the encoding's side tables."""
     try:
-        return open_store(path)
-    except (OSError, ValueError, KeyError) as exc:
-        raise ObservedViewRefused(f"cannot open {role} store {path}: {exc}") from exc
-
-
-def _require_state(
-    store: OpenGWASDBStore, path: Path, role: str, wanted: CompletionState
-) -> None:
-    state = store.manifest.completion_state
-    if state is not wanted:
-        raise ObservedViewRefused(
-            f"{role} store {path} is not {_STATE_NAMES[wanted]} (completion_state={state.value})"
-        )
+        return RaggedCSRReader(path)
+    except Exception as exc:
+        raise ObservedViewRefused(f"{role} store {path} cannot be opened: {exc!r}") from exc
 
 
 def _completion_provenance(target: OpenGWASDBStore, path: Path) -> dict[str, Any]:
@@ -336,46 +323,46 @@ def _retained_blocks(
     pair: _Pair, analyses: Sequence[Analysis], sampled: Sequence[int],
     admitted: np.ndarray, panel: _Panel,
 ) -> dict[int, list[LDBlock]]:
-    """Each sampled admitted Analysis's retained blocks, chosen as completion chose them.
+    """Each sampled admitted Analysis's retained blocks, from the derivation completion uses.
 
-    An Analysis with a Trait position is completed against the blocks touching its cis
-    window; one without, against the blocks holding enough of its own observations, which
-    is resolved for all of them in one ALID-keyed pass so the panel is read once.
+    The trait-less ones are resolved together first (`trait_less_blocks`, one pass over the
+    panel); `blocks_for_analysis` then picks, per Analysis, its cis window or those blocks.
     """
-    blocks: dict[int, list[LDBlock]] = {}
-    by_window: dict[tuple[str, int, int], list[LDBlock]] = {}
-    trait_less: list[int] = []
-    for i in sampled:
-        if not admitted[i]:
-            continue
-        a = analyses[i]
-        if has_trait_position(a):
-            window = (a.trait_chr, int(a.trait_bp), panel.cis_window_bp)
-            if window not in by_window:
-                by_window[window] = cis_window_blocks(a, panel.path, panel.ancestry, window[2])
-            blocks[i] = by_window[window]
-        else:
-            trait_less.append(i)
-    if trait_less:
-        blocks.update(_blocks_over_own_variants(pair, trait_less, panel))
-    return blocks
+    wanted = [i for i in sampled if admitted[i]]
+    held = _held_associations(pair, [i for i in wanted if not has_trait_position(analyses[i])])
+    own = trait_less_blocks(held, panel.path, panel.ancestry) if held else {}
+    by_window: dict[tuple[str, int], list[LDBlock]] = {}
+    return {i: _blocks_of(analyses[i], own.get(i, []), panel, by_window) for i in wanted}
 
 
-def _blocks_over_own_variants(
-    pair: _Pair, indices: Sequence[int], panel: _Panel
-) -> dict[int, list[LDBlock]]:
-    source_rows = {i: pair.source_reader.variant_indices(i) for i in indices}
-    wanted = sorted({int(v) for rows in source_rows.values() for v in rows})
+def _blocks_of(
+    a: Analysis,
+    own: list[LDBlock],
+    panel: _Panel,
+    by_window: dict[tuple[str, int], list[LDBlock]],
+) -> list[LDBlock]:
+    """One Analysis's blocks; Analyses sharing a Trait position share one panel scan."""
+    if not has_trait_position(a):
+        return blocks_for_analysis(a, own, panel.path, panel.ancestry, panel.cis_window_bp)
+    window = (a.trait_chr, int(a.trait_bp))
+    if window not in by_window:
+        by_window[window] = blocks_for_analysis(
+            a, [], panel.path, panel.ancestry, panel.cis_window_bp
+        )
+    return by_window[window]
+
+
+def _held_associations(
+    pair: _Pair, indices: Sequence[int]
+) -> dict[int, list[tuple[str, str]]]:
+    """The `(ALID, chromosome)` of every source association of the given Analyses."""
+    rows = {i: pair.source_reader.variant_indices(i) for i in indices}
+    wanted = sorted({int(v) for r in rows.values() for v in r})
     with closing(VariantAxis(pair.source_path)) as axis:
         records = axis.by_indices(wanted)
-    analyses_by_alid: dict[str, list[int]] = {}
-    chromosomes: set[str] = set()
-    for i, rows in source_rows.items():
-        for v in rows.tolist():
-            analyses_by_alid.setdefault(records[v].alid, []).append(i)
-            chromosomes.add(records[v].chromosome)
-    found = blocks_over_variants(panel.path, panel.ancestry, analyses_by_alid, sorted(chromosomes))
-    return {i: found.get(i, []) for i in indices}
+    return {
+        i: [(records[v].alid, records[v].chromosome) for v in r.tolist()] for i, r in rows.items()
+    }
 
 
 class _RegionRows:
@@ -536,7 +523,7 @@ def _decoded(reader: RaggedCSRReader, analysis: int, path: Path) -> Any:
     """An Analysis's decoded cells; one that cannot be decoded cannot be compared."""
     try:
         return reader.get_analysis(analysis)
-    except ValueError as exc:
+    except Exception as exc:
         raise ObservedViewRefused(
             f"store {path} analysis {analysis} cannot be decoded: {exc}"
         ) from exc
