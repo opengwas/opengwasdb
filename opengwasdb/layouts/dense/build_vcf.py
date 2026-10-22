@@ -117,6 +117,7 @@ from opengwasdb.variants.reference import (
     require_written_rsids_match,
     warn_reference_left_rows_blank,
 )
+from opengwasdb.variants.rsid import RsidConflictPolicy, withhold_disputed
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
     DEFAULT_REDUCTION_BATCH_SIZE,
@@ -1919,37 +1920,67 @@ def _resolve_axis_source(
 
 
 def _candidates_by_routing_key(
-    rsid_by_site: Mapping[SourceKey, str], key: SiteKeyFn, *, label: str
-) -> dict[str, str]:
-    """The harvest's candidates keyed as the build routes them, order kept.
+    rsid_by_site: Mapping[SourceKey, str],
+    key: SiteKeyFn,
+    *,
+    label: str,
+    on_conflict: RsidConflictPolicy = RsidConflictPolicy.REFUSE,
+) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """The harvest's candidates keyed as the build routes them, order kept, and
+    the keys whose sources name them differently.
 
     A key function need not be injective -- a Hybrid routing case-folds -- and
     two raw sites that collapse onto one key are one stored variant, so the
     first non-empty rsid in `(rank, site)` order wins. Two *different* non-empty
-    names for one key cannot be resolved honestly: the two-pass build refuses
-    such an input (its routing index sees conflicting targets), so this refuses
-    too rather than pick one (issue #255 round 4).
+    names for one key cannot be resolved honestly, so this never picks one:
+    under ``refuse`` the first such key fails the build (issue #255 round 4);
+    under ``drop`` every such key's candidate is "", and the second value maps
+    each to its distinct names in `(rank, site)` order, for the build to report
+    and for `withhold_disputed` to unname the variants they reach (issue
+    #306). A Dense routing key is the identity, so two sites never share one
+    and it is always empty.
     """
     candidates: dict[str, str] = {}
     first_site: dict[str, SourceKey] = {}
+    conflicts: dict[str, list[str]] = {}
     for site, rsid in rsid_by_site.items():
         folded = key(site)
-        if folded not in candidates:
+        existing = candidates.get(folded)
+        if existing is None:
             candidates[folded] = rsid
             first_site[folded] = site
-            continue
-        existing = candidates[folded]
-        if rsid and existing and rsid != existing:
-            raise ValueError(
-                f"{label}: two source variants case-fold to one routing key "
-                f"{folded!r} with different rsids: {first_site[folded]!r} names "
-                f"{existing!r} but {site!r} names {rsid!r}; both associations route "
-                "to one stored variant, so refusing to choose a name -- a wrong "
-                "answer indistinguishable from a right one"
-            )
-        if not existing:
+        elif not existing:
             candidates[folded] = rsid
-    return candidates
+        elif rsid and rsid != existing:
+            if on_conflict is RsidConflictPolicy.REFUSE:
+                raise _rsid_conflict_error(label, folded, first_site[folded], existing, site, rsid)
+            _note_conflict(conflicts, folded, existing, rsid)
+    # Blanked only now: a key blanked mid-walk would take the next name it met.
+    for folded in conflicts:
+        candidates[folded] = ""
+    return candidates, conflicts
+
+
+def _note_conflict(
+    conflicts: dict[str, list[str]], folded: str, existing: str, rsid: str
+) -> None:
+    """Add ``rsid`` to the distinct names ``folded``'s sources gave it."""
+    names = conflicts.setdefault(folded, [existing])
+    if rsid not in names:
+        names.append(rsid)
+
+
+def _rsid_conflict_error(
+    label: str, folded: str, first: SourceKey, existing: str, site: SourceKey, rsid: str
+) -> ValueError:
+    """The refusal for two names on one routing key (issue #255 round 4)."""
+    return ValueError(
+        f"{label}: two source variants case-fold to one routing key "
+        f"{folded!r} with different rsids: {first!r} names "
+        f"{existing!r} but {site!r} names {rsid!r}; both associations route "
+        "to one stored variant, so refusing to choose a name -- a wrong "
+        "answer indistinguishable from a right one"
+    )
 
 
 def _routing_lookup(
@@ -2001,7 +2032,8 @@ def _rekey_and_verify(
     *,
     key: SiteKeyFn = _source_site_key,
     label: str = "Single-pass build",
-) -> dict[str, str]:
+    on_conflict: RsidConflictPolicy = RsidConflictPolicy.REFUSE,
+) -> tuple[dict[str, str], set[str]]:
     """Rekey harvested candidates ONCE through ONE routing, and verify exactly.
 
     ``routing`` must be the build's own key form and the *final* routing -- a
@@ -2013,15 +2045,21 @@ def _rekey_and_verify(
     The oracle walks the **raw** ``rsid_by_site`` through ``key`` itself rather
     than reading the keyed candidates, so the key preparation is checked: a
     collapse that keeps the wrong name disagrees with the raw walk and fails
-    (issue #255 round 4).
+    (issue #255 round 4). Under ``drop`` it finds the disputed keys itself too,
+    so a variant one reaches that kept a name fails as well (issue #306).
+    Returns the resolved map and the variants left unnamed under ``drop``.
     """
-    candidates = _candidates_by_routing_key(rsid_by_site, key, label=label)
+    candidates, conflicts = _candidates_by_routing_key(
+        rsid_by_site, key, label=label, on_conflict=on_conflict
+    )
     _log_routing_disagreements(candidates, routing, pass1_lookup, key, label=label)
     resolved = _rekey_rsids_to_alids(routing, candidates)
-    require_rsids_match_expected(
-        resolved, expected_rsids_by_routed_key(rsid_by_site, routing, key)
+    withheld = withhold_disputed(resolved, routing, conflicts)
+    expected = expected_rsids_by_routed_key(
+        rsid_by_site, routing, key, drop_disputed=on_conflict is RsidConflictPolicy.DROP
     )
-    return resolved
+    require_rsids_match_expected(resolved, expected)
+    return resolved, withheld
 
 
 def _reference_axis_rsids(
@@ -2055,7 +2093,7 @@ def _reference_axis_rsids(
         liftover_failure_threshold=liftover_failure_threshold,
         n_workers=n_workers,
     )
-    resolved = _rekey_and_verify(
+    resolved, _withheld = _rekey_and_verify(
         rsid_by_site,
         _routing_lookup(reference.source_lookup, _source_site_key),
         pass1_lookup,

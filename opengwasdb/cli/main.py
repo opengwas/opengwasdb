@@ -60,6 +60,7 @@ from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.reference import extract_variant_reference
+from opengwasdb.variants.rsid import RsidConflictPolicy
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
     DEFAULT_REDUCTION_BATCH_SIZE,
@@ -102,6 +103,14 @@ _RESUME_HELP = (
     "Continue the checkpointed build for OUTPUT_PATH (#227). Every other parameter "
     "is compared against the ones that build was started with, and a difference is "
     "refused; use resume_hybrid_build(checkpoint_dir) to resume without restating them."
+)
+_ON_RSID_CONFLICT_HELP = (
+    "What to do when sources that spell one variant's alleles in different case name "
+    "it with different rsids, as the rsid harvest of a --variant-reference build "
+    "finds (#306): refuse fails the build, naming the variant; drop stores it with no "
+    "rsid, even where its other allele order names it, so it is found by ALID and "
+    "position but by no name. The counts of such keys and variants, and the first 20 "
+    "keys, are always printed under rsid_conflicts."
 )
 _ALLOW_UNVERIFIED_HELP = (
     "Accept Analyses the supplied --eaf-reference could not verify (too little "
@@ -691,6 +700,9 @@ def build_hybrid_command(
         help=_SOURCE_ASSEMBLY_HELP,
     ),
     column_map: _COLUMN_MAP_OPTION = None,
+    on_rsid_conflict: Annotated[
+        RsidConflictPolicy, typer.Option(help=_ON_RSID_CONFLICT_HELP)
+    ] = RsidConflictPolicy.REFUSE,
 ) -> None:
     """Build a Hybrid store (Dense Component + Ragged Overflow) from a VCF manifest.
 
@@ -704,6 +716,7 @@ def build_hybrid_command(
     per-release defaults (#174). --checkpoint keeps a resumable record of each
     phase (#227), and --resume continues the build for OUTPUT_PATH from one.
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
+    --on-rsid-conflict decides a variant its sources name differently (#306).
     """
     res = build_hybrid_from_vcf_manifest(
         manifest_path, output_path, reference_panel=reference_panel,
@@ -713,6 +726,7 @@ def build_hybrid_command(
         eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=capability, source_assembly=assembly,
         checkpoint=checkpoint, resume=resume, column_map=column_map,
+        on_rsid_conflict=on_rsid_conflict,
     )
     _echo_hybrid_result(res)
 
@@ -727,6 +741,7 @@ def _echo_hybrid_result(res: HybridBuildResult) -> None:
             n_panel=res.n_panel,
             n_off_panel=res.n_off_panel,
             n_overflow=res.n_overflow,
+            rsid_conflicts=res.rsid_conflicts.as_dict(),
         )
     )
 

@@ -209,7 +209,51 @@ is part of the contract (issue #255):
   source's different name for the same variant does not replace it, and a `.`
   or empty cell names nothing and never clears an earlier name. Several source
   coordinates that canonicalise to one ALID therefore take the answer of the
-  one that sorts first, not of the one that appears first in a file.
+  one that sorts first, not of the one that appears first in a file. The one
+  exception is a Hybrid build's routing key that its sources name differently,
+  below.
+- A GWAS-SSF source, read directly or through a Column Map, names a variant by
+  the first of its `rsid` and `variant_id` cells that names an rs identifier,
+  normalised before any name is compared (issue #306): a `;`-separated list
+  names its first item that begins `rs`, and an rs identifier ends at its first
+  `:`, so the compound `rsN:pos:a:b` names `rsN`. A cell with no such item names
+  nothing. Harmonised GWAS Catalog files write one name both ways —
+  `rs199633771:13122834:C:T` in one Analysis and `rs199633771` in another for
+  the same variant — and the normalisation makes them one name. The GWAS-VCF
+  reader's `ID` and the FinnGen reader's first comma-separated `rsids` item are
+  read as before.
+- A Hybrid routing key upper-cases alleles, so source coordinates spelt in
+  different case are one stored variant. When their sources name it with
+  different (normalised) rsids, nothing in the sources says which is right, and
+  `build-hybrid --on-rsid-conflict` decides (issue #306). `refuse`, the default,
+  fails the build and names the routing key and both names. `drop` gives **no
+  rsid** to every stored variant such a key routes to, over the build's final
+  combined routing — even when a second routing key reaches the same variant
+  with a name of its own (the same site reported in the other allele order),
+  because the variant's sources still disagree on its name. (A variant whose
+  routing keys are each named consistently, but differently from each other, is
+  reached by no disputed key and keeps the first name, by the rule above.) The
+  variant is
+  written with `rsid` `.` and left out of the rsid search index, exactly as a
+  variant no source names: a lookup by any of its names finds nothing, and
+  lookups by ALID and position find the variant and all of its associations.
+  Either way the build's JSON summary carries `rsid_conflicts`: the `policy`;
+  `n_keys`, the number of such routing keys among the harvested sites, stored or
+  not; `n_variants`, the number of stored variants they reach, which `drop`
+  leaves unnamed; and `sample`, the first 20 keys in genomic order, each with
+  its distinct names in `(rank, site)` order. A build that compared names and
+  found none disputed — even one whose sources name nothing — reports `0` and
+  `0`. `n_keys` and `n_variants` are `null`, never `0`, for a build that
+  compared no names across sources — a
+  `--reference-panel` build, or one whose reference names its variants — and a
+  build with no `--variant-reference` refuses `drop`, which it could not apply. A
+  checkpointed build records the policy and the counts, and resuming it under
+  the other policy is refused. A resume past the fold does not harvest again, so
+  one whose recorded counts are missing is refused too, unless its checkpoint
+  predates the option (records no `on_rsid_conflict`); its counts are then
+  `null`. A Dense routing key is the source's own spelling,
+  so two source coordinates never share one and a Dense build never meets this
+  case.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`
   column blank simply because the reference it was given is a plain ALID list.
   When the reference names none of its variants, the build runs the same Pass 1
@@ -246,8 +290,10 @@ is part of the contract (issue #255):
   publication: the resolved ALID → rsid map is compared exactly with an
   independently computed expectation — the raw harvest candidates walked
   through the build's own key function over the *same final combined* routing,
-  first non-empty per ALID — so a wrong value, a missing entry, a key-
-  normalisation collapse that keeps the wrong name, or an extra entry fails;
+  first non-empty per ALID, and under `--on-rsid-conflict drop` with every ALID
+  that a routing key it finds named differently reaches expecting no name — so a
+  wrong value, a missing entry, a key-normalisation collapse that keeps the wrong
+  name, a disputed variant left named, or an extra entry fails;
   and the written table is read back row for row against that map, so a stale
   map or a table lost in the write fails too. Neither check runs on the
   reference-named path above. A release whose sources genuinely name no variants

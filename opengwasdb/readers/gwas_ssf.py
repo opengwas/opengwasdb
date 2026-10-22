@@ -111,6 +111,7 @@ from opengwasdb.readers.tabular import (
     stream_variants,
 )
 from opengwasdb.variants.normalise import VariantNormalisationError, orient_to_canonical
+from opengwasdb.variants.rsid import normalise_rsid
 
 GWAS_SSF_CAPABILITY = "opengwasdb.gwas-ssf"
 #: GWAS-SSF's identity and alias columns, the variant projection's declaration.
@@ -147,11 +148,12 @@ def _rsid(rsid: str | None, variant_id: str | None) -> str:
     harmonised (usually non-rs) identifier and is only a fallback, mirroring
     `opengwasdb.layouts.ragged.build_ssf._read_filtered`. Anything that is not
     an rs identifier is dropped: it is not something a user can look the
-    variant up by (issue #109).
+    variant up by (issue #109). A compound or listed id is read through
+    `normalise_rsid`, exactly as the variant projection reads it (issue #306).
     """
     for candidate in (rsid, variant_id):
-        value = (candidate or "").strip()
-        if value.startswith("rs"):
+        value = normalise_rsid(candidate or "")
+        if value:
             return value
     return ""
 
