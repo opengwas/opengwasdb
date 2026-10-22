@@ -227,7 +227,7 @@ Use the Pixi-managed commands unless you have installed the package and native t
 No rows can mean several different things:
 
 - the variant identifier is not present in this Store Release;
-- the Analysis did not retain that association, especially in a `cis_and_signals` Store Release;
+- the Analysis did not retain that association, especially in a Store Release whose `association_coverage` is narrower than `gwas` (`cis`, `cis_and_signals` or `signals_only` — `ogdb info` prints it);
 - the Store Release is Reference-Completed and the requested observed-only mode excludes imputed associations;
 - the identifier is an ALID in a different allele order or Reference Assembly.
 
