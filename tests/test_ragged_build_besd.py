@@ -7,7 +7,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 from besd_fixtures import write_besd_sparse_3f, write_epi, write_esi
-from liftover_fixtures import STRAND_CHAIN_SIZE, write_two_strand_chain
+from liftover_fixtures import (
+    STRAND_CHAIN_SIZE,
+    write_collision_chain,
+    write_two_strand_chain,
+)
 
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -797,3 +801,92 @@ def test_hg19_lift_without_a_reference_records_that_nothing_was_checked(tmp_path
     assert lift["reference"] is None
     assert lift["n_reference_absent"] is None
     assert lift["n_lifted"] == 2
+
+
+# ── hg19 lift: two entries collapsing onto one hg38 variant (issue #304) ──────
+#
+# The chain fixture's two chains image overlapping target intervals, so hg19
+# 501 and 1001 both land on hg38 5501. Which of them owns an association there
+# is unknowable, so the policy is the Dense VCF builder's: an ambiguous lift is
+# dropped, never resolved by a guess. Two more rows lift clear of the collision
+# and must survive, or the drop would be indistinguishable from a lift that
+# simply lost everything.
+
+_COLLIDING_ALID = "1:5501:A:G"
+_SURVIVING_ALIDS = ("1:6001:C:T", "1:6101:A:C")
+
+
+def _write_collision_fixture(root: Path) -> Path:
+    """Two hg19 rows that lift onto one hg38 variant, and two that do not.
+
+    Probe 28201 holds associations at all four rows; probe 28202 only at the two
+    colliding ones, so it must come out empty rather than keep a row.
+    """
+    fixture = root / "fixture_hg19_collision"
+    fixture.mkdir()
+    write_esi(fixture / "test.esi", [
+        {"chr": "1", "snp_id": "rs296001", "bp": 501, "a1": "A", "a2": "G"},
+        {"chr": "1", "snp_id": "rs296002", "bp": 1001, "a1": "A", "a2": "G"},
+        {"chr": "1", "snp_id": "rs296003", "bp": 1501, "a1": "C", "a2": "T"},
+        {"chr": "1", "snp_id": "rs296004", "bp": 1601, "a1": "A", "a2": "C"},
+    ])
+    write_epi(fixture / "test.epi", [
+        {"chr": "1", "probe_id": "ENSG00000029601", "bp": 1_000, "gene": "GENE296A"},
+        {"chr": "1", "probe_id": "ENSG00000029602", "bp": 2_000, "gene": "GENE296B"},
+    ])
+    write_besd_sparse_3f(fixture / "test.besd", 2, [
+        [(0, 0.2, 0.1), (1, 0.4, 0.1), (2, 0.6, 0.1), (3, 0.8, 0.1)],
+        [(0, 0.2, 0.1), (1, 0.4, 0.1)],
+    ])
+    return fixture / "test"
+
+
+def test_hg19_lift_collision_drops_every_entry_and_association_in_the_group(
+    tmp_path, capsys
+):
+    """Both entries and every association that reaches the collided variant go,
+    the rest of the file set builds, the drop is reported, and the Store
+    validates -- the collision must not survive as a duplicate `variant_index`
+    in one Analysis's CSR segment."""
+    import json
+
+    from opengwasdb.validation import validate_store
+    from opengwasdb.variants.axis import VariantAxis
+
+    chain = write_collision_chain(tmp_path / "hg19ToHg38.chain")
+    prefix = _write_collision_fixture(tmp_path)
+    out = tmp_path / "out.opengwasdb"
+
+    result = build_ragged_from_besd(
+        prefix, out,
+        store_id="test", release_id="v1",
+        source_build="hg19", chain_file=chain,
+    )
+
+    printed = capsys.readouterr().out
+    assert "collision" in printed.lower(), "the drop must be reported on stdout"
+    assert "2 ESI entries" in printed, printed
+
+    axis = VariantAxis(out)
+    try:
+        stored = [axis.by_index(i).alid for i in range(axis.n_variants)]
+    finally:
+        axis.close()
+    assert _COLLIDING_ALID not in stored, (
+        f"an ambiguous lift must not enter the axis: {stored}"
+    )
+    assert stored == list(_SURVIVING_ALIDS), stored
+    assert result.n_variants == 2
+    assert result.n_associations == 2, "the colliding rows' associations must go too"
+
+    reader = RaggedCSRReader(out)
+    assert len(reader.get_analysis(0).z) == 2
+    assert len(reader.get_analysis(1).z) == 0, "a probe with only colliding rows is empty"
+
+    lift = json.loads((out / "manifest.json").read_text())["provenance"]["lift"]
+    assert lift["n_collisions"] == 2, lift
+    assert lift["n_collision_groups"] == 1, lift
+    assert lift["n_lifted"] == 4, lift
+
+    validated = validate_store(out)
+    assert validated.ok, validated.errors
