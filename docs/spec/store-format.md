@@ -210,6 +210,16 @@ is part of the contract (issue #255):
   or empty cell names nothing and never clears an earlier name. Several source
   coordinates that canonicalise to one ALID therefore take the answer of the
   one that sorts first, not of the one that appears first in a file.
+- A GWAS-SSF source, read directly or through a Column Map, names a variant by
+  the first of its `rsid` and `variant_id` cells that names an rs identifier,
+  normalised before any name is compared (issue #306): a `;`-separated list
+  names its first item that begins `rs`, and an rs identifier ends at its first
+  `:`, so the compound `rsN:pos:a:b` names `rsN`. A cell with no such item names
+  nothing. Harmonised GWAS Catalog files write one name both ways —
+  `rs199633771:13122834:C:T` in one Analysis and `rs199633771` in another for
+  the same variant — and the normalisation makes them one name. The GWAS-VCF
+  reader's `ID` and the FinnGen reader's first comma-separated `rsids` item are
+  read as before.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`
   column blank simply because the reference it was given is a plain ALID list.
   When the reference names none of its variants, the build runs the same Pass 1

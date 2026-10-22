@@ -233,6 +233,8 @@ the end of this file.
 
 ### Changed
 
+- **A GWAS-SSF source's compound or listed variant id names its plain rs identifier (issue #306).** The GWAS-SSF reader, directly or through a Column Map, reads a `;`-separated `rsid`/`variant_id` cell as its first item beginning `rs`, and an rs identifier as ending at its first `:`, so `rs199633771:13122834:C:T` names `rs199633771` and `rs34994416;rs199928265` names `rs34994416` (`opengwasdb.variants.rsid.normalise_rsid`). Before, such a cell was stored verbatim as the variant's rsid, where no lookup by the real identifier could find it, and two sources writing one name both ways disagreed: 304 of OGS-00011's 99,577 conflicting keys were exactly that. The rule runs in the reader, so the variant projection, the full-row parser and every Dense and Hybrid build see one name. The GWAS-VCF reader, the native FinnGen reader and the Ragged SSF builder are unchanged.
+
 - **`validate` stays under a four-GiB budget on full-size Dense releases
   instead of peaking at 34–36 GiB (issue #254).** Profiling split the peak into
   three sources, each now bounded. (1) The exhaustive statistic and Top-Hit
