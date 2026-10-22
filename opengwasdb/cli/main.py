@@ -441,22 +441,32 @@ def audit_eaf_orientation_command(
     raise typer.Exit(1)
 
 
+_OBSERVED_VIEW_SEED_HELP = (
+    "Seed of the sample (chunk-rows for Dense and Hybrid, Analyses for Ragged), kept in the verdict"
+)
+_OBSERVED_VIEW_RANDOM_HELP = (
+    "Random chunk-rows to compare, besides the fixed strata; for a Hybrid, also the Overflow "
+    "Analyses to compare; for a Ragged, the Analyses to compare"
+)
+_OBSERVED_VIEW_PANEL_HELP = (
+    "Ragged only, required for a Ragged pair: the --ld-panel root complete-ragged was run "
+    "with; retained regions are rebuilt from it. Refused (exit 2) for a Dense or Hybrid pair"
+)
+_OBSERVED_VIEW_ANCESTRY_HELP = (
+    "Ragged only: the --ancestry complete-ragged was run with; defaults to the target "
+    "manifest's, and is refused if it differs. Refused (exit 2) for a Dense or Hybrid pair"
+)
+
+
 @app.command("check-observed-view")
 def check_observed_view_command(
     source_path: Path,
     target_path: Path,
-    seed: Annotated[
-        int, typer.Option(help="Seed of the chunk-row sample, recorded for reproducibility")
-    ],
+    seed: Annotated[int, typer.Option(help=_OBSERVED_VIEW_SEED_HELP)],
     output: Annotated[Path, typer.Option(help="Where to write the JSON verdict")],
-    n_random: Annotated[
-        int,
-        typer.Option(
-            min=0,
-            help="Random chunk-rows to compare, besides the fixed strata; for a Hybrid, "
-            "also the Overflow Analyses to compare",
-        ),
-    ] = 1000,
+    n_random: Annotated[int, typer.Option(min=0, help=_OBSERVED_VIEW_RANDOM_HELP)] = 1000,
+    ld_panel: Annotated[Path | None, typer.Option(help=_OBSERVED_VIEW_PANEL_HELP)] = None,
+    ancestry: Annotated[str | None, typer.Option(help=_OBSERVED_VIEW_ANCESTRY_HELP)] = None,
 ) -> None:
     """Check that a Reference-Completed Store reproduces the Observed-Only Store it came from.
 
@@ -469,11 +479,24 @@ def check_observed_view_command(
     association that completion moved onto a panel row it added, which must equal
     its source value through the Dense Component's codec.
 
+    A Ragged pair is compared by ALID over a seeded sample of Analyses, not
+    chunk-rows: each source-observed association must be in the target with
+    identical Z, SE and EAF, the target must hold no observed association the
+    source lacks, and every imputed association must lie in one of its Analysis's
+    retained regions (a non-admitted Analysis holds none). Those regions are
+    rebuilt from the LD panel, so --ld-panel (the root complete-ragged was given)
+    is required for a Ragged pair, and --ancestry, if given, must be the one the
+    target records (the default). Neither option is accepted for a Dense or Hybrid
+    pair: it is refused (exit 2), not ignored.
+
     Exits 0 when everything agrees and 1 when anything does not; the verdict is
-    written to --output either way. Exits 2 without a verdict when the pair cannot
-    be checked: a mixed-layout pair, or a layout the check does not support (it
-    checks Dense and Hybrid pairs), a source that is not Observed-Only, or a target
-    that is not Reference-Completed.
+    written to --output either way; a Ragged pair also exits 1 on se_mismatch when
+    SE is residual-coded, because complete-ragged refits it (#301). Exits 2 without
+    a verdict when the pair cannot be checked: a mixed-layout pair, or a layout the
+    check does not support (it checks Dense, Hybrid and Ragged pairs), a source
+    that is not Observed-Only, a target that is not Reference-Completed, a Store
+    whose arrays cannot be opened or decoded, or, for a Ragged pair, no --ld-panel,
+    or a panel or ancestry the target does not record.
     """
     from opengwasdb.validation.observed_view import ObservedViewRefused, check_observed_view
 
@@ -481,7 +504,10 @@ def check_observed_view_command(
         # Checked up front: the comparison takes minutes, and its verdict must not be lost.
         raise typer.BadParameter(f"{output.parent} is not a directory", param_hint="--output")
     try:
-        verdict = check_observed_view(source_path, target_path, seed=seed, n_random=n_random)
+        verdict = check_observed_view(
+            source_path, target_path, seed=seed, n_random=n_random,
+            ld_panel=ld_panel, ancestry=ancestry,
+        )
     except ObservedViewRefused as refusal:
         typer.echo(f"error: refused: {refusal}", err=True)
         raise typer.Exit(2) from refusal

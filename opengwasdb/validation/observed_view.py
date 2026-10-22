@@ -168,11 +168,14 @@ def check_observed_view(
     *,
     seed: int,
     n_random: int = 1000,
+    ld_panel: str | Path | None = None,
+    ancestry: str | None = None,
 ) -> ObservedViewVerdict:
     """Compare an Observed-Only Store with the Reference-Completed one made from it.
 
     Both Stores must have one layout, which picks the check: Dense here, Hybrid
-    in `observed_view_hybrid` (issue #295). Raises `ObservedViewRefused` when
+    in `observed_view_hybrid` (issue #295), Ragged in `observed_view_ragged`
+    (issue #296). Raises `ObservedViewRefused` when
     the pair cannot be checked (a mixed-layout pair, a layout the check does not
     support, a source that is not Observed-Only, a target that is not
     Reference-Completed, or a Store whose arrays do not agree with its own
@@ -180,7 +183,10 @@ def check_observed_view(
 
     `seed` is required so that every verdict can be reproduced from its record.
     `n_random` chunk-rows are drawn uniformly; a grid with fewer is sampled in
-    full.
+    full (a Hybrid pair also compares `n_random` Overflow Analyses; a Ragged pair
+    samples `n_random` Analyses). `ld_panel` and `ancestry` belong to a Ragged pair
+    alone, whose retained regions are rebuilt from them: a Dense or Hybrid pair
+    given either is refused, not ignored.
     """
     if n_random < 0:
         raise ValueError(f"n_random must be >= 0, got {n_random}")
@@ -188,14 +194,23 @@ def check_observed_view(
     layout = _pair_layout(source, target)
     # The layout dispatch: one entry per layout. A layout's own module is
     # imported here, not at the top, because it imports this one's helpers.
+    if layout is PrimaryStorageLayout.RAGGED:
+        from opengwasdb.validation.observed_view_ragged import check_ragged
+
+        return check_ragged(
+            source, target, seed=seed, n_random=n_random, ld_panel=ld_panel, ancestry=ancestry
+        )
+    if ld_panel is not None or ancestry is not None:
+        raise ObservedViewRefused(
+            "--ld-panel and --ancestry are only for a Ragged pair, "
+            f"not a {_LAYOUT_NAMES[layout]} one"
+        )
     if layout is PrimaryStorageLayout.DENSE:
         return _check_dense(source, target, seed=seed, n_random=n_random)
     if layout is PrimaryStorageLayout.HYBRID:
         from opengwasdb.validation.observed_view_hybrid import check_hybrid
 
         return check_hybrid(source, target, seed=seed, n_random=n_random)
-    if layout is PrimaryStorageLayout.RAGGED:
-        raise ObservedViewRefused(f"{source} and {target} are Ragged: not yet supported (#296)")
     assert_never(layout)
 
 

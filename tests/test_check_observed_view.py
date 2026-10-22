@@ -336,7 +336,7 @@ def _assert_refused(result, out: Path, reason: str) -> None:
     assert not out.exists(), "nothing was checked, so no verdict is written"
 
 
-def test_a_ragged_store_is_refused(tmp_path, pair):
+def test_a_ragged_source_with_a_dense_target_is_refused(tmp_path, pair):
     import test_ragged_completion as trc
 
     from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
@@ -347,7 +347,7 @@ def test_a_ragged_store_is_refused(tmp_path, pair):
     )
     out = tmp_path / "verdict.json"
 
-    _assert_refused(_run(ragged, pair[1], out), out, "is not Dense (primary_layout=ragged)")
+    _assert_refused(_run(ragged, pair[1], out), out, "mixed-layout pair")
 
 
 def test_a_hybrid_root_is_checked_rather_than_refused(tmp_path):

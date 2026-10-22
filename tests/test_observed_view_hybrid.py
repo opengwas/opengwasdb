@@ -644,25 +644,6 @@ def test_a_hybrid_target_that_is_not_reference_completed_is_refused(tmp_path, pa
     )
 
 
-def test_a_ragged_pair_is_still_refused(tmp_path):
-    import test_ragged_completion as trc
-
-    from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
-    from opengwasdb.layouts.ragged.complete import complete_ragged_store
-
-    observed, completed = tmp_path / "obs.opengwasdb", tmp_path / "comp.opengwasdb"
-    build_ragged_from_besd(
-        trc._make_besd_fixture(tmp_path), observed, store_id="r", release_id="r1", tissue="Blood"
-    )
-    complete_ragged_store(
-        observed, completed, trc._make_ld_panel(tmp_path, "1", 900_000, 1_300_000),
-        ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
-    )
-    out = tmp_path / "verdict.json"
-
-    _assert_refused(_run(observed, completed, out), out, "Ragged: not yet supported (#296)")
-
-
 # --- seam 4: the sample ------------------------------------------------------
 
 # The completion writer's bands start at child rows 4, 8 and 12; the chunk-rows owning

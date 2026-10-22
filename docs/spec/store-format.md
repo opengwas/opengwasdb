@@ -1822,8 +1822,8 @@ replaces its Store under the same id, so this check gates the swap.
   (`bands_checked` is 0) and the verdict says why.
 - **Exit codes.** `0` pass; `1` the check ran and found a mismatch (the verdict is still
   written, and each failure is named on `stderr`); `2` refused: nothing was checked, so no
-  verdict is written and the reason is on `stderr`. Refused are a mixed-layout pair, or a layout
-  the check does not support, a `SOURCE` that is
+  verdict is written and the reason is on `stderr`. Refused are a mixed-layout pair, a layout
+  the check does not support (it checks Dense, Hybrid and Ragged pairs), a `SOURCE` that is
   not Observed-Only, a `TARGET` that is not Reference-Completed, a release that cannot be opened,
   a `TARGET` with no `imputed` mask, a release whose `z` plane and variant axis disagree in length
   or are empty.
@@ -1883,6 +1883,66 @@ replaces its Store under the same id, so this check gates the swap.
 
 The check does not compare `TARGET`'s `source_release_id` with `SOURCE`'s `release_id`: a wrong
 pairing fails the axis or cell checks.
+
+#### Ragged scope
+
+`check-observed-view SOURCE TARGET --seed N --output verdict.json --ld-panel DIR [--ancestry EUR]
+[--n-random 1000]` also checks an Observed-Only **Ragged** release `SOURCE` against the
+`complete-ragged` output `TARGET` (issue #296). A Ragged release has no grid to sample, and
+completion rebuilds the union variant axis, so every comparison is by variant identity (ALID),
+never by index. The exit codes, the required `--seed` and the verdict's `seed`, `n_random`,
+`source`, `target`, `analyses`, `failures`, `passed` and `seconds` are those of the Dense check.
+
+- **Axis.** The exact `SOURCE` -> `TARGET` ALID map of the Dense check; an unmapped source
+  variant (`parent_rows_unmapped`) or differing Analyses fail the check and skip the sample.
+  Order is not required: `axis.order_preserved` is reported, not failed, because the associations
+  are compared by ALID.
+- **Sample.** Whole Analyses, each compared completely: `--n-random` drawn uniformly with
+  `numpy.random.default_rng(--seed)` (a store with fewer is sampled whole), plus the strata
+  `non_admitted` (every Analysis the ancestry filter did not admit, up to 100, drawn with
+  `default_rng((seed, 1))` beyond that), `largest` (the 5 with most associations), `empty` (up to
+  5 with none) and `trait_less` (the first 5 without a Trait position). An Analysis is
+  *not admitted* when its `TARGET` `completed_against` is empty (ADR 0028).
+- **Per Analysis.** Each source-observed association (finite Z and SE) is in `TARGET` with
+  identical decoded Z, SE and EAF (NaN equal to NaN) and `imputed == 0`; `TARGET` holds no
+  association with finite Z and SE and `imputed == 0` that `SOURCE` lacks
+  (`target_observed_not_in_source`); every `imputed` value is 0 or 1; every imputed association
+  lies inside one of the Analysis's **retained regions**; a non-admitted Analysis holds no imputed
+  cell (`imputed_in_non_admitted`). Rows that are neither observed nor imputed (NaN: panel
+  positions inside a region that completion could not fill) are counted as `nan_rows` and fail
+  nothing.
+- **Retained regions need the LD panel.** A release stores no region coordinates, only block ids
+  and counts in `completion_quality`; block extents live in the panel. The check rebuilds each
+  sampled admitted Analysis's blocks as `complete-ragged` chose them (ADR 0014, ADR 0039): the
+  blocks touching its Trait position plus or minus the manifest's
+  `provenance.completion.cis_window_bp`, or, with no Trait position, the blocks holding enough of
+  its own observations; a region is the panel positions of those blocks. `--ld-panel` (the
+  directory `complete-ragged` was given) is therefore required for a Ragged pair, and `--ancestry`
+  must equal `provenance.completion.ancestry` when given. There is no panel-free fallback.
+  A `completion_quality` block the rebuilt regions lack is `quality_blocks_not_in_regions`, so a
+  panel other than the one used is noticed. `--ld-panel` for a Dense or Hybrid pair is refused.
+- **Totals.** `observed_in_source`, `imputed`, `nan_rows` and `regions` (retained
+  Analysis-by-block regions) are informational. Failing: `z_mismatch`, `se_mismatch`,
+  `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_target`,
+  `target_observed_not_in_source`, `imputed_outside_retained`, `imputed_in_non_admitted`,
+  `imputed_mask_invalid`, `z_se_missingness_mismatch`, `target_variants_unordered` (an Analysis's
+  variant indices not strictly increasing) and `quality_blocks_not_in_regions`. `sample` lists
+  each checked Analysis with its strata, admission, the ids of its retained `blocks` and counts, and `by_stratum` counts
+  them.
+- **Refused (exit 2)**: a mixed-layout pair, a Ragged pair without `--ld-panel`, an LD panel
+  with no chromosomes for the ancestry, an ancestry other than the one recorded, a `TARGET`
+  completed against an ancestry other than the panel's, a `TARGET` with no completion ancestry
+  or `cis_window_bp` recorded, a release that cannot be opened or decoded (a missing array
+  group or EAF array included), and either `--ld-panel` or `--ancestry` for a Dense or Hybrid
+  pair.
+- **Known limit: residual-coded SE.** SE is compared for exact equality, as the contract in
+  section 12 states. Ragged completion refits `se_coefficients` over the completed Analysis, so
+  when SE is `int8_residual` (ADR 0037 section 3) every observed SE of an Analysis that was
+  completed is re-quantised and differs from its source (on three real Chen 2023 Analyses completed with
+  `--cis-window-bp 1000000`: all 135,596 observed SE differ, by a median of 0.09% and at most
+  0.14%, with Z and EAF identical); such a pair fails with `se_mismatch`. Where SE is `float16`
+  the pair is exact. The check stays strict (owner ruling, 2026-10-22): the re-quantisation is
+  completion's defect, and opengwasdb#301 owns fixing the refit, not this check.
 
 ## 21. Compatibility
 
