@@ -451,7 +451,11 @@ def check_observed_view_command(
     output: Annotated[Path, typer.Option(help="Where to write the JSON verdict")],
     n_random: Annotated[
         int,
-        typer.Option(min=0, help="Random chunk-rows to compare, besides the fixed strata"),
+        typer.Option(
+            min=0,
+            help="Random chunk-rows to compare, besides the fixed strata; for a Hybrid, "
+            "also the Overflow Analyses to compare",
+        ),
     ] = 1000,
 ) -> None:
     """Check that a Reference-Completed Store reproduces the Observed-Only Store it came from.
@@ -460,10 +464,15 @@ def check_observed_view_command(
     whole source chunk-rows across all Analyses (sampled): each observed cell must
     have identical Z, SE and EAF and not be marked imputed, no missing cell may be
     observed, and no inserted panel row may carry an observed cell (stores ADR 0037).
+    A Hybrid pair is compared across its Dense Component and Overflow. There, an
+    inserted row may carry an observed cell only as a crossover: a source Overflow
+    association that completion moved onto a panel row it added, which must equal
+    its source value through the Dense Component's codec.
 
     Exits 0 when everything agrees and 1 when anything does not; the verdict is
     written to --output either way. Exits 2 without a verdict when the pair cannot
-    be checked: a non-Dense layout, a source that is not Observed-Only, or a target
+    be checked: a mixed-layout pair, or a layout the check does not support (it
+    checks Dense and Hybrid pairs), a source that is not Observed-Only, or a target
     that is not Reference-Completed.
     """
     from opengwasdb.validation.observed_view import ObservedViewRefused, check_observed_view
