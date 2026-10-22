@@ -36,7 +36,7 @@ completed axis interleaves the three inserted rows:
 
 from __future__ import annotations
 
-import dataclasses
+from collections.abc import Callable
 from pathlib import Path
 from shutil import copytree
 
@@ -48,7 +48,6 @@ from test_check_observed_view import _assert_refused, _run, _verdict
 from test_hybrid_completion import _write_ld_block
 
 import opengwasdb.layouts.dense.complete as dense_complete
-import opengwasdb.layouts.hybrid.complete as hybrid_complete
 import opengwasdb.store.arrays as arrays_module
 from opengwasdb.encoding import (
     DenseEafPlane,
@@ -60,6 +59,12 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+from opengwasdb.layouts.ragged.by_variant import build_variant_index
+from opengwasdb.layouts.ragged.zarr_csr import (
+    AnalysisAssociations,
+    RaggedCSRReader,
+    RaggedCSRWriter,
+)
 from opengwasdb.query import query_store
 from opengwasdb.store.open import open_store
 from opengwasdb.validation.observed_view import check_observed_view
@@ -204,14 +209,26 @@ def _overflow(store: Path):
     return open_store(store).arrays(mode="r+")["ragged"]
 
 
-def _overflow_position(store: Path, position: int, analysis: str) -> int:
+def _shared_row(store: Path, position: int) -> int:
     axis = VariantAxis(store)
     try:
         record = axis.by_identifier(_alid(position))
         assert record is not None, f"fixture must hold {_alid(position)}"
-        shared = record.variant_index
+        return int(record.variant_index)
     finally:
         axis.close()
+
+
+def _n_shared(store: Path) -> int:
+    axis = VariantAxis(store)
+    try:
+        return int(axis.n_variants)
+    finally:
+        axis.close()
+
+
+def _overflow_position(store: Path, position: int, analysis: str) -> int:
+    shared = _shared_row(store, position)
     group = _overflow(store)
     column = ANALYSES.index(analysis)
     lo, hi = (int(v) for v in group["offsets"][column : column + 2])
@@ -399,9 +416,9 @@ def _blank_a_crossover(store: Path) -> None:
     _dense_plane(store, DenseZPlane).patch(rows, cols, np.array([np.nan], dtype=np.float32))
 
 
-def _failed_verdict(observed: Path, completed: Path, out: Path) -> dict:
+def _failed_verdict(observed: Path, completed: Path, out: Path, *extra: str) -> dict:
     """Run the CLI on a pair that must fail, and the verdict it still wrote."""
-    result = _run(observed, completed, out)
+    result = _run(observed, completed, out, *extra)
     assert result.exit_code == 1, result.output
     verdict = _verdict(result, out)
     assert verdict["passed"] is False
@@ -433,58 +450,100 @@ def test_a_perturbed_completed_hybrid_fails_on_the_right_counter(
     assert _counter(verdict, failure) == 1
 
 
-def _drop_the_first_overflow_association(monkeypatch: pytest.MonkeyPatch) -> None:
-    rebuild = hybrid_complete._remapped_analysis_arrays
+def _rewrite_overflow(
+    store: Path, edit: Callable[[str, AnalysisAssociations], AnalysisAssociations]
+) -> None:
+    """Rewrite `store`'s Overflow through the Ragged writer, each Analysis edited first.
 
-    def dropping(analysis_index, overflow, axis):
-        vi, z, se, eaf = rebuild(analysis_index, overflow, axis)
-        if analysis_index != 0:
-            return vi, z, se, eaf
-        return vi[1:], z[1:], se[1:], None if eaf is None else eaf[1:]
+    Every association is encoded again from its decoded value, under the Store's own
+    plan and `eaf_baseline`, so one the edit leaves alone decodes as it did
+    (`test_rewriting_the_overflow_unchanged_keeps_the_pair_passing`). The variant index
+    is rebuilt, as completion builds it, so the Store can still be queried.
+    """
+    reader = RaggedCSRReader(store)
+    edited = [edit(name, reader.get_analysis(i)) for i, name in enumerate(ANALYSES)]
+    baseline = np.asarray(_overflow(store)["eaf_baseline"][:], dtype=np.float32)
+    writer = RaggedCSRWriter(_n_shared(store))
+    for rows in edited:
+        order = np.argsort(rows.variant_index, kind="stable")
+        writer.add_analysis(*(np.asarray(column)[order] for column in rows))
+    writer.flush(store, open_store(store).manifest.encoding, eaf_baseline=baseline)
+    build_variant_index(store, n_axis=_n_shared(store))
 
-    monkeypatch.setattr(hybrid_complete, "_remapped_analysis_arrays", dropping)
+
+def _without(analysis: str, shared_row: int):
+    def edit(name: str, rows: AnalysisAssociations) -> AnalysisAssociations:
+        if name != analysis:
+            return rows
+        keep = np.asarray(rows.variant_index) != shared_row
+        return AnalysisAssociations(*(np.asarray(column)[keep] for column in rows))
+
+    return edit
 
 
-def _add_an_overflow_association(monkeypatch: pytest.MonkeyPatch) -> None:
-    rebuild = hybrid_complete._remapped_analysis_arrays
-
-    def adding(analysis_index, overflow, axis):
-        vi, z, se, eaf = rebuild(analysis_index, overflow, axis)
-        if analysis_index != ANALYSES.index("trait_c"):
-            return vi, z, se, eaf
-        # 1:100000 sorts before trait_c's one association, 1:105000.
-        extra = np.int32(axis.index[_alid(100_000)])
-        assert eaf is not None and vi.tolist() > [extra]
-        return (
-            np.r_[extra, vi].astype(np.int32), np.r_[1.5, z].astype(np.float32),
-            np.r_[0.07, se].astype(np.float32), np.r_[0.3, eaf].astype(np.float32),
+def _with(added: dict[str, list[tuple[int, dict[str, np.ndarray]]]]):
+    def edit(name: str, rows: AnalysisAssociations) -> AnalysisAssociations:
+        if name not in added:
+            return rows
+        shared = np.array([row for row, _ in added[name]], dtype=np.int32)
+        values = [value for _, value in added[name]]
+        return AnalysisAssociations(
+            np.r_[rows.variant_index, shared],
+            *(np.r_[getattr(rows, p), [v[p][0] for v in values]] for p in ("z", "se", "eaf")),
         )
 
-    monkeypatch.setattr(hybrid_complete, "_remapped_analysis_arrays", adding)
+    return edit
 
 
-def _keep_the_crossovers_in_the_overflow(monkeypatch: pytest.MonkeyPatch) -> None:
-    remap = hybrid_complete._remap_shared_axis
+def _drop_an_overflow_association(store: Path) -> None:
+    # trait_a's 1:100000, which is not a crossover.
+    _rewrite_overflow(store, _without("trait_a", _shared_row(store, 100_000)))
 
-    def keeping(dense, overflow, source_encoding):
-        axis = remap(dense, overflow, source_encoding)
-        return dataclasses.replace(axis, is_crossover=np.zeros_like(axis.is_crossover))
 
-    monkeypatch.setattr(hybrid_complete, "_remap_shared_axis", keeping)
+def _add_an_overflow_association(store: Path) -> None:
+    # trait_c gains 1:100000, which the source holds for trait_a and trait_b only.
+    value = {"z": np.array([1.5]), "se": np.array([0.07]), "eaf": np.array([0.3])}
+    _rewrite_overflow(store, _with({"trait_c": [(_shared_row(store, 100_000), value)]}))
+
+
+def _keep_the_crossovers_in_the_overflow(store: Path) -> None:
+    # Each crossover stays in the Overflow as well as being folded into the Dense Component.
+    added: dict[str, list[tuple[int, dict[str, np.ndarray]]]] = {}
+    for position, analysis in CROSSOVER_CELLS:
+        value = _lookup(store, position, analysis)
+        added.setdefault(analysis, []).append((_shared_row(store, position), value))
+    _rewrite_overflow(store, _with(added))
+
+
+def _move_an_overflow_observation_onto_an_existing_dense_row(store: Path) -> None:
+    # trait_c's one Overflow association, 1:105000, leaves the Overflow and lands in
+    # trait_c's cell at 1:11000, a row of the source Dense axis and not one the panel added.
+    moved = _lookup(store, 105_000, "trait_c")
+    _rewrite_overflow(store, _without("trait_c", _shared_row(store, 105_000)))
+    rows, cols = _dense_cell(store, 11_000, "trait_c")
+    _imputed(store)[int(rows[0]), int(cols[0])] = 0
+    for cls, plane in ((DenseZPlane, "z"), (DenseEafPlane, "eaf"), (DenseSePlane, "se")):
+        _dense_plane(store, cls).patch(rows, cols, moved[plane])
+
+
+def test_rewriting_the_overflow_unchanged_keeps_the_pair_passing(tmp_path, pair):
+    observed, completed = pair
+    _rewrite_overflow(completed, lambda name, rows: rows)
+
+    result = _run(observed, completed, tmp_path / "verdict.json")
+
+    assert result.exit_code == 0, result.output
 
 
 @pytest.mark.parametrize(
     ("defect", "counts"),
     [
-        # trait_a's first association, 1:100000, is not a crossover.
-        (_drop_the_first_overflow_association, {
+        (_drop_an_overflow_association, {
             "overflow.observed_missing_in_child": 1, "overflow.analyses_count_mismatch": 1,
         }),
-        # trait_c gains 1:100000, observed in the source by trait_a and trait_b only.
         (_add_an_overflow_association, {
             "overflow.missing_became_observed": 1, "overflow.analyses_count_mismatch": 1,
         }),
-        # Each crossover is folded into the Dense Component and also left in the Overflow:
         # trait_a then holds 6 Overflow associations where 4 belong, trait_b 4 where 3 do.
         (_keep_the_crossovers_in_the_overflow, {
             "overflow.observed_in_both": N_CROSSOVERS, "overflow.analyses_count_mismatch": 2,
@@ -492,17 +551,58 @@ def _keep_the_crossovers_in_the_overflow(monkeypatch: pytest.MonkeyPatch) -> Non
     ],
     ids=lambda value: getattr(value, "__name__", ""),
 )
-def test_a_completion_that_mishandles_the_overflow_fails(
-    monkeypatch, tmp_path, _pair_seed, defect, counts
-):
-    defect(monkeypatch)
-    observed = copytree(_pair_seed[0], tmp_path / "obs.opengwasdb")
-    completed = _complete(observed, tmp_path)
+def test_an_overflow_that_differs_from_the_sources_fails(tmp_path, pair, defect, counts):
+    observed, completed = pair
+    defect(completed)
 
     verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
 
     assert {failure: _counter(verdict, failure) for failure in counts} == counts
     assert set(counts) <= set(verdict["failures"])
+
+
+@pytest.mark.parametrize(
+    ("defect", "failure", "count"),
+    [
+        (_drop_an_overflow_association, "overflow.analyses_count_mismatch", 1),
+        (_keep_the_crossovers_in_the_overflow, "overflow.observed_in_both", N_CROSSOVERS),
+        (_mark_an_overflow_association_imputed, "overflow.imputed_cells", 1),
+    ],
+    ids=lambda value: getattr(value, "__name__", value),
+)
+def test_an_overflow_defect_outside_the_sample_still_fails(
+    tmp_path, pair, defect, failure, count
+):
+    observed, completed = pair
+    defect(completed)
+
+    verdict = _failed_verdict(
+        observed, completed, tmp_path / "verdict.json", "--n-random", "0"
+    )
+
+    overflow = verdict["components"]["overflow"]
+    assert overflow["analyses"] == [], "no Overflow Analysis may be sampled"
+    assert not any(overflow["totals"].values())
+    assert failure in verdict["failures"]
+    assert _counter(verdict, failure) == count
+
+
+def test_an_overflow_observation_moved_onto_an_existing_dense_row_fails(tmp_path, pair):
+    observed, completed = pair
+    assert _alid(11_000) in _dense_alids(observed), "the row must be a source Dense row"
+    found = query_store(observed).lookup([_alid(11_000)], ["trait_c"])
+    assert len(found["z"]) == 0, "trait_c must not observe 1:11000 in the source"
+    _move_an_overflow_observation_onto_an_existing_dense_row(completed)
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert {failure: _counter(verdict, failure) for failure in (
+        "dense.missing_became_observed", "dense.inserted_observed_cells",
+        "overflow.observed_missing_in_child", "overflow.analyses_count_mismatch",
+    )} == {
+        "dense.missing_became_observed": 1, "dense.inserted_observed_cells": 0,
+        "overflow.observed_missing_in_child": 1, "overflow.analyses_count_mismatch": 1,
+    }
 
 
 # --- seam 3: refusals --------------------------------------------------------

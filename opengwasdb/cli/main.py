@@ -464,6 +464,10 @@ def check_observed_view_command(
     whole source chunk-rows across all Analyses (sampled): each observed cell must
     have identical Z, SE and EAF and not be marked imputed, no missing cell may be
     observed, and no inserted panel row may carry an observed cell (stores ADR 0037).
+    A Hybrid pair is compared across its Dense Component and Overflow. There, an
+    inserted row may carry an observed cell only as a crossover: a source Overflow
+    association that completion moved onto a panel row it added, which must equal
+    its source value through the Dense Component's codec.
 
     Exits 0 when everything agrees and 1 when anything does not; the verdict is
     written to --output either way. Exits 2 without a verdict when the pair cannot
