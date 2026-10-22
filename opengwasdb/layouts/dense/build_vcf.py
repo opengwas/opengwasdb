@@ -83,6 +83,7 @@ from opengwasdb.model.enums import (
     OriginalSdMethod,
     PrimaryStorageLayout,
     StoredEffectScale,
+    coverage_for_layout,
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import (
@@ -1664,6 +1665,7 @@ def build_dense_from_vcf_manifest(
     eaf_reference_ancestry: str | None = None, allow_unverified_eaf: bool = False,
     source_reader_capability: str | None = None, source_assembly: str | None = None,
     variant_reference: str | Path | None = None, column_map: ColumnMap | str | Path | None = None,
+    association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
 ) -> DenseBuildResult:
     """Build a Dense Observed-Only Store from a manifest of GWAS-VCF files.
 
@@ -1678,8 +1680,11 @@ def build_dense_from_vcf_manifest(
     ``variant_reference`` (issue #185) supplies a precomputed axis
     (``*.variant-ref.tsv.gz``, an ALID list, or a store ``variants.tsv.gz``);
     Pass 1 and liftover are bypassed save its rsid harvest (#255). ``column_map`` reads
-    ``opengwasdb.column-map`` rows (#281).
+    ``opengwasdb.column-map`` rows (#281). ``association_coverage`` is a build input
+    (issue #298) and a Dense matrix can carry only ``gwas``, its default; any other
+    value is refused before a source is read (ADR 0064).
     """
+    coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
     manifest_rows = _read_manifest(
         manifest_path, default_source_reader_capability=source_reader_capability,
         default_source_assembly=source_assembly, column_map=column_map,
@@ -1702,7 +1707,7 @@ def build_dense_from_vcf_manifest(
         # Phase 8: top-hit indexes, manifest and analyses.tsv metadata.
         _finalize_store(
             staged, prepared, encoded, eaf_report, store_id, release_id, chain_file,
-            chunk_shape, dtype, allow_unverified_eaf, n_workers,
+            chunk_shape, dtype, allow_unverified_eaf, n_workers, coverage,
         )
         log.info(
             "Build complete: %d variants × %d analyses",
@@ -2383,6 +2388,7 @@ def _finalize_store(
     dtype: str,
     allow_unverified_eaf: bool,
     n_workers: int,
+    association_coverage: AssociationCoverage,
 ) -> None:
     """Phase 8: write the store's final metadata.
 
@@ -2406,6 +2412,7 @@ def _finalize_store(
         eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
         variant_reference=prepared.variant_reference,
         column_map=prepared.column_map,
+        association_coverage=association_coverage,
     )
     write_top_hit_indexes_for_store(
         staged.path, encoded.hits.rows, encoded.hits.cols, encoded.hits.z, encoded.hits.se,
@@ -3497,6 +3504,7 @@ def _write_manifest(
     chunk_shape: tuple[int, int],
     dtype: str,
     encoding: StoreEncoding,
+    association_coverage: AssociationCoverage,
     eaf_orientation: dict[str, Any] | None = None,
     variant_reference: str | None = None,
     column_map: dict[str, str] | None = None,
@@ -3507,7 +3515,7 @@ def _write_manifest(
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
         primary_layout=PrimaryStorageLayout.DENSE,
-        association_coverage=AssociationCoverage.GWAS,
+        association_coverage=association_coverage,
         completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly="GRCh38",
         created_at=datetime.now(UTC).isoformat(),

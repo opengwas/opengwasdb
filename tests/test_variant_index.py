@@ -67,7 +67,9 @@ def _build_ssf_store(
     kwargs.setdefault("store_id", "idx")
     kwargs.setdefault("release_id", "v1")
     store = root / name
-    build_ragged_from_ssf(manifest, filtered, store, **kwargs)
+    build_ragged_from_ssf(
+        manifest, filtered, store, **kwargs, association_coverage="cis_and_signals",
+    )
     return store
 
 
@@ -93,7 +95,10 @@ def observed_besd(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("variant_index_besd")
     prefix = _make_besd_fixture(root)
     store = root / "ragged.opengwasdb"
-    build_ragged_from_besd(prefix, store, store_id="idx-besd", release_id="v1", tissue="Blood")
+    build_ragged_from_besd(
+        prefix, store, store_id="idx-besd", release_id="v1", tissue="Blood",
+        association_coverage="cis_and_signals",
+    )
     return store
 
 

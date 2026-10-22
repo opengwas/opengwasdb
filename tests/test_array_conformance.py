@@ -205,7 +205,10 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
     d.mkdir()
     manifest, filtered = trs._make_fixture(d)
     ssf = d / "store.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered, ssf, store_id="test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered, ssf, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
     build_ragged_top_hit_indexes(ssf)
     stores.append(_BuiltStore("ragged-ssf", ssf, dense_planes_whole=False))
 
@@ -216,7 +219,8 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
     d.mkdir()
     besd = d / "store.opengwasdb"
     build_ragged_from_besd(
-        trb._make_besd_fixture(d), besd, store_id="test", release_id="v1", tissue="Whole_Blood"
+        trb._make_besd_fixture(d), besd, store_id="test", release_id="v1", tissue="Whole_Blood",
+        association_coverage="cis_and_signals",
     )
     stores.append(_BuiltStore("ragged-besd", besd, dense_planes_whole=False))
 
@@ -227,7 +231,8 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
     d.mkdir()
     observed = d / "obs.opengwasdb"
     build_ragged_from_besd(
-        trc._make_besd_fixture(d), observed, store_id="test", release_id="obs-v1", tissue="Blood"
+        trc._make_besd_fixture(d), observed, store_id="test", release_id="obs-v1", tissue="Blood",
+        association_coverage="cis_and_signals",
     )
     completed = d / "comp.opengwasdb"
     complete_ragged_store(

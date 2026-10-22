@@ -47,6 +47,7 @@ from opengwasdb.model.enums import (
     EafScope,
     PrimaryStorageLayout,
     StoredEffectScale,
+    coverage_for_layout,
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import (
@@ -76,6 +77,7 @@ class RaggedBuildResult:
     n_variants: int
     n_analyses: int
     n_associations: int
+    association_coverage: AssociationCoverage
 
 
 @dataclass
@@ -273,6 +275,7 @@ def build_ragged_from_ssf(
     *,
     store_id: str,
     release_id: str,
+    association_coverage: AssociationCoverage | str,
     stored_effect_scale: str = StoredEffectScale.SD.value,
     overwrite: bool = False,
     eaf_reference: str | Path | None = None,
@@ -284,7 +287,13 @@ def build_ragged_from_ssf(
     A thin orchestrator over six private phases (issue #130); the EAF
     check (issue #115) runs before anything is written, and `unverified`
     is a normal Ragged outcome, recorded per Analysis, never passed over.
+
+    ``association_coverage`` has no default (issue #298): one Ragged command
+    builds a cis-eQTL release, a significant-signals metabolite release and a
+    full sum-statistics release, so the layout's old constant
+    (`cis_and_signals`) was a claim about the Store made by the wrong party.
     """
+    coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     _validate_stored_effect_scale(stored_effect_scale)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
@@ -320,18 +329,23 @@ def build_ragged_from_ssf(
             n_associations=csr.n_associations,
             manifest_path=str(manifest_path),
             stored_effect_scale=stored_effect_scale,
+            association_coverage=coverage,
             mhc_analyses=[a.analysis_id for a in analytes if a.mhc],
             encoding=encoding,
             eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
         )
-        return _finalise_result(out, len(variants), len(analytes), csr.n_associations)
+        return _finalise_result(out, len(variants), len(analytes), csr.n_associations, coverage)
 
 
 def _finalise_result(
-    out: Path, n_variants: int, n_analyses: int, n_associations: int
+    out: Path,
+    n_variants: int,
+    n_analyses: int,
+    n_associations: int,
+    association_coverage: AssociationCoverage,
 ) -> RaggedBuildResult:
     """Build the result record and print the completion summary it carries."""
-    result = RaggedBuildResult(out, n_variants, n_analyses, n_associations)
+    result = RaggedBuildResult(out, n_variants, n_analyses, n_associations, association_coverage)
     print(
         f"Build complete: {result.n_variants:,} variants, "
         f"{result.n_analyses:,} analyses, {result.n_associations:,} associations"
@@ -582,6 +596,7 @@ def _write_manifest(
     n_associations: int,
     manifest_path: str,
     stored_effect_scale: str,
+    association_coverage: AssociationCoverage,
     mhc_analyses: list[str],
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
@@ -592,7 +607,7 @@ def _write_manifest(
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
         primary_layout=PrimaryStorageLayout.RAGGED,
-        association_coverage=AssociationCoverage.CIS_AND_SIGNALS,
+        association_coverage=association_coverage,
         completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly=_REFERENCE_ASSEMBLY,
         created_at=datetime.now(UTC).isoformat(),

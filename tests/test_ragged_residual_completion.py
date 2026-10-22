@@ -155,12 +155,8 @@ def build_residual_ssf_source(root: Path) -> tuple[Path, dict[str, np.ndarray]]:
 
     store = root / "obs.opengwasdb"
     build_ragged_from_ssf(
-        root / "manifest.tsv",
-        filtered_dir,
-        store,
-        store_id="residual-rag",
-        release_id="obs",
-        allow_unverified_eaf=True,
+        root / "manifest.tsv", filtered_dir, store, store_id="residual-rag", release_id="obs",
+        allow_unverified_eaf=True, association_coverage="cis_and_signals",
     )
     return store, per_analysis_se
 

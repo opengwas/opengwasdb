@@ -11,6 +11,33 @@ from opengwasdb.store.open import open_store
 from opengwasdb.validation import validate_store
 
 
+def test_dense_observed_build_declares_gwas_coverage(dense_store_path):
+    """The small-source Dense builder states `gwas` too (issue #298)."""
+    import json
+
+    manifest = json.loads((dense_store_path / "manifest.json").read_text())
+    assert manifest["association_coverage"] == "gwas"
+
+
+def test_dense_observed_build_refuses_a_coverage_it_cannot_hold(tmp_path, source_path):
+    """Issue #298: the library refuses, not only the CLI."""
+    from opengwasdb.build.observed import build_dense_observed_from_sources
+
+    out = tmp_path / "refused.opengwasdb"
+
+    with pytest.raises(ValueError, match="cannot carry association_coverage=cis_and_signals"):
+        build_dense_observed_from_sources(
+            [source_path],
+            out,
+            store_id="fixture-store",
+            release_id="observed-v1",
+            reference_assembly="GRCh37",
+            association_coverage="cis_and_signals",
+        )
+
+    assert not out.exists()
+
+
 def test_dense_build_writes_standard_envelope_and_metadata(dense_store_path):
     assert (dense_store_path / "manifest.json").exists()
     assert (dense_store_path / "index.sqlite").exists()

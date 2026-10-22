@@ -45,6 +45,7 @@ from opengwasdb.model.enums import (
     AssociationCoverage,
     CompletionState,
     PrimaryStorageLayout,
+    coverage_for_layout,
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import manifest_column
@@ -76,6 +77,7 @@ class RaggedBuildResult:
     n_variants: int
     n_analyses: int
     n_associations: int
+    association_coverage: AssociationCoverage
 
 
 def build_ragged_from_besd(
@@ -84,6 +86,7 @@ def build_ragged_from_besd(
     *,
     store_id: str,
     release_id: str,
+    association_coverage: AssociationCoverage | str,
     analyses_path: str | Path | None = None,
     tissue: str | None = None,
     source_build: str = "hg38",
@@ -105,7 +108,13 @@ def build_ragged_from_besd(
         supplied the lift is recorded as unchecked, and the build warns.
     When analyses_path is supplied, Analytical and Attribution Metadata are overlaid
     onto the EPI-derived analyses while keeping BESD coordinates authoritative (issue #173).
+
+    ``association_coverage`` has no default (issue #298): a BESD file set is the
+    eQTLGen-style cis case as often as it is a genome-wide one, and the layout
+    cannot tell which. The two eQTLGen cis Stores in the pilot catalogue are
+    what the old constant produced.
     """
+    coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     prefix = Path(besd_prefix)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
@@ -132,17 +141,25 @@ def build_ragged_from_besd(
             n_associations=csr.n_associations,
             besd_prefix=str(prefix),
             source_build=source_build,
+            association_coverage=coverage,
             encoding=encoding,
             lift=axis.lift,
             collisions=axis.collisions,
         )
-        result = _summarise(out, axis, csr.n_associations)
+        result = _summarise(out, axis, csr.n_associations, coverage)
     return result
 
 
-def _summarise(out: Path, axis: _EsiAxis, n_associations: int) -> RaggedBuildResult:
+def _summarise(
+    out: Path,
+    axis: _EsiAxis,
+    n_associations: int,
+    association_coverage: AssociationCoverage,
+) -> RaggedBuildResult:
     """The build's totals, printed once and returned to the caller."""
-    result = RaggedBuildResult(out, len(axis.variants), len(axis.probes), n_associations)
+    result = RaggedBuildResult(
+        out, len(axis.variants), len(axis.probes), n_associations, association_coverage
+    )
     print(
         f"Build complete: {result.n_variants:,} variants, "
         f"{result.n_analyses:,} analyses, "
@@ -838,6 +855,7 @@ def _write_manifest(
     n_associations: int,
     besd_prefix: str,
     encoding: StoreEncoding,
+    association_coverage: AssociationCoverage,
     source_build: str = "hg38",
     lift: dict[str, object] | None = None,
     collisions: _VariantCollisions | None = None,
@@ -867,7 +885,7 @@ def _write_manifest(
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
         primary_layout=PrimaryStorageLayout.RAGGED,
-        association_coverage=AssociationCoverage.CIS_AND_SIGNALS,
+        association_coverage=association_coverage,
         completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly=_REFERENCE_ASSEMBLY,
         created_at=datetime.now(UTC).isoformat(),

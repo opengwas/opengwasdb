@@ -75,7 +75,10 @@ def ragged_observed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("ragged-observed")
     manifest, filtered = _make_ragged_ssf_fixture(root)
     built = root / "ragged-obs-built.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered, built, store_id="ragged-test", release_id="obs-v1")
+    build_ragged_from_ssf(
+        manifest, filtered, built, store_id="ragged-test", release_id="obs-v1",
+        association_coverage="cis_and_signals",
+    )
     return relayout_as_0_1_0(built, root / "ragged-obs.opengwasdb")
 
 
@@ -85,7 +88,8 @@ def ragged_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     prefix = _make_besd_fixture(root)
     observed = root / "ragged-obs.opengwasdb"
     build_ragged_from_besd(
-        prefix, observed, store_id="ragged-rc", release_id="obs-v1", tissue="Blood"
+        prefix, observed, store_id="ragged-rc", release_id="obs-v1", tissue="Blood",
+        association_coverage="cis_and_signals",
     )
     panel = _make_ragged_ld_panel(root, "1", 900_000, 1_300_000)
     completed = root / "ragged-rc-built.opengwasdb"

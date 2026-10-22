@@ -41,6 +41,7 @@ from opengwasdb.model.enums import (
     EafOrientationOutcome,
     EafScope,
     PrimaryStorageLayout,
+    coverage_for_layout,
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
@@ -110,8 +111,16 @@ def build_dense_observed_store(
     chunk_shape: tuple[int, int] = DEFAULT_CHUNK_SHAPE,
     dtype: str = DEFAULT_DTYPE,
     overwrite: bool = False,
+    association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
 ) -> DenseBuildResult:
-    """Write a Dense Observed-Only Store Release from normalised associations."""
+    """Write a Dense Observed-Only Store Release from normalised associations.
+
+    ``association_coverage`` is a build input (issue #298), and a Dense matrix can
+    carry only ``gwas``: every cell it holds is a (variant, Analysis) the source
+    either reported or did not, so a narrower coverage has no representation
+    here (`coverage_for_layout`, ADR 0064).
+    """
+    coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
 
     if not records:
         raise ValueError("cannot build a store with no association records")
@@ -136,6 +145,7 @@ def build_dense_observed_store(
             chunk_shape,
             dtype,
             encoding,
+            coverage,
         )
         write_variant_axis(staged.path, variants, rsid_by_alid)
         _write_index(staged, variants, analyses, records, chunk_shape)
@@ -305,6 +315,7 @@ def _write_manifest(
     chunk_shape: tuple[int, int],
     dtype: str,
     encoding: StoreEncoding,
+    association_coverage: AssociationCoverage,
 ) -> None:
     manifest = StoreManifest(
         encoding=encoding,
@@ -312,7 +323,7 @@ def _write_manifest(
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
         primary_layout=PrimaryStorageLayout.DENSE,
-        association_coverage=AssociationCoverage.GWAS,
+        association_coverage=association_coverage,
         completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly=reference_assembly,
         created_at=datetime.now(UTC).isoformat(),

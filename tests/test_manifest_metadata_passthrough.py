@@ -129,7 +129,8 @@ def test_ragged_manifest_analytical_metadata_passes_through_unchanged(tmp_path: 
     store = tmp_path / "ragged.opengwasdb"
 
     build_ragged_from_ssf(
-        manifest, filtered_dir, store, store_id="metadata-test", release_id="r1"
+        manifest, filtered_dir, store, store_id="metadata-test", release_id="r1",
+        association_coverage="cis_and_signals",
     )
 
     row = read_analyses(store / "analyses.tsv").rows[0]
@@ -163,7 +164,8 @@ def test_ragged_manifest_without_optional_columns_leaves_them_blank(tmp_path: Pa
     store = tmp_path / "bare.opengwasdb"
 
     build_ragged_from_ssf(
-        manifest, filtered_dir, store, store_id="metadata-test", release_id="r1"
+        manifest, filtered_dir, store, store_id="metadata-test", release_id="r1",
+        association_coverage="cis_and_signals",
     )
 
     row = read_analyses(store / "analyses.tsv").rows[0]

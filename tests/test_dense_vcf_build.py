@@ -155,6 +155,34 @@ def test_manifest_json_has_grch38_assembly(two_trait_store):
     assert manifest["completion_state"] == "observed_only"
 
 
+def test_manifest_declares_gwas_coverage_by_default(two_trait_store):
+    """A Dense release has a cell for every (variant, Analysis), so `gwas` is
+    the only coverage it can carry and the default a build states (#298)."""
+    manifest = json.loads((two_trait_store / "manifest.json").read_text())
+    assert manifest["association_coverage"] == "gwas"
+
+
+def test_build_refuses_a_coverage_a_dense_matrix_cannot_hold(tmp_path):
+    """Issue #298: refuse rather than write a manifest whose missing cells
+    would mean two different things."""
+    vcf = _make_vcf(
+        tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE\t2.0:0.5\n"]
+    )
+    manifest = _make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
+    store_path = tmp_path / "store.opengwasdb"
+
+    with pytest.raises(ValueError, match="cannot carry association_coverage=cis"):
+        build_dense_from_vcf_manifest(
+            manifest,
+            store_path,
+            store_id="test-store",
+            release_id="v1",
+            association_coverage="cis",
+        )
+
+    assert not store_path.exists()
+
+
 def test_store_has_correct_dimensions(two_trait_store):
     root = open_store(two_trait_store).arrays(mode="r")
     assert root["z"].shape == (3, 2)

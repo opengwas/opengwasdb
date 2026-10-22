@@ -74,7 +74,8 @@ def _build(tmp_path: Path, layout: str) -> Path:
             encoding="utf-8",
         )
         build_ragged_from_ssf(
-            manifest, _ssf_source(tmp_path), store, store_id="rsid-test", release_id="r1"
+            manifest, _ssf_source(tmp_path), store, store_id="rsid-test", release_id="r1",
+            association_coverage="cis_and_signals",
         )
         return store
 

@@ -228,6 +228,28 @@ def test_cli_regenerate_overview_rewrites_from_persisted_data_only(tmp_path, sou
     assert (store_path / "analyses.tsv").read_text(encoding="utf-8") == analyses_tsv_before
 
 
+def test_cli_build_dense_refuses_a_coverage_a_dense_matrix_cannot_hold(tmp_path, source_path):
+    """Issue #298: `--association-coverage cis` is refused before any build runs,
+    as a CLI error naming the option rather than a traceback out of the builder.
+    """
+    from cli_output import normalize_cli_output
+
+    store_path = tmp_path / "refused.opengwasdb"
+
+    build = CliRunner().invoke(
+        app,
+        [
+            "build-dense", str(source_path), str(store_path),
+            "--store-id", "cf", "--release-id", "ov1",
+            "--association-coverage", "cis",
+        ],
+    )
+
+    assert build.exit_code != 0
+    assert "can carry only gwas" in normalize_cli_output(build.output)
+    assert not store_path.exists()
+
+
 def _hybrid_vcf(tmp_path, name, rows):
     header = (
         "##fileformat=VCFv4.2\n"
@@ -274,6 +296,9 @@ def test_cli_build_hybrid_validate_and_query(tmp_path):
     assert build.exit_code == 0, build.output
     out = json.loads(build.output.strip().splitlines()[-1])
     assert out["n_panel"] == 2 and out["n_off_panel"] == 1
+    # #294's contract for the reader in opengwasdb-stores: a Hybrid release can
+    # only be `gwas`, and the command says so (#298).
+    assert out["association_coverage"] == "gwas"
 
     validate = runner.invoke(app, ["validate", str(store)])
     assert validate.exit_code == 0, validate.output
@@ -304,6 +329,8 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
         ],
     )
     assert build.exit_code == 0, build.output
+    build_summary = json.loads(build.output.strip().splitlines()[-1])
+    assert build_summary["association_coverage"] == "gwas"
 
     # 1. info default text output vs --format json
     info_text = runner.invoke(app, ["info", str(store_path)])
@@ -355,12 +382,8 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
     )
     warn_store_path = tmp_path / "warn-store.opengwasdb"
     build_ragged_from_ssf(
-        warn_manifest,
-        warn_filtered_dir,
-        warn_store_path,
-        store_id="warn_store",
-        release_id="v1",
-        allow_unverified_eaf=True,
+        warn_manifest, warn_filtered_dir, warn_store_path, store_id="warn_store", release_id="v1",
+        allow_unverified_eaf=True, association_coverage="cis_and_signals",
     )
 
     val_warn = runner.invoke(app, ["validate", str(warn_store_path), "--format", "json"])

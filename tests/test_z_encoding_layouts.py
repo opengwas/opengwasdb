@@ -334,7 +334,7 @@ def ragged_store(tmp_path: Path) -> Path:
     out = tmp_path / "ragged.opengwasdb"
     build_ragged_from_ssf(
         manifest, filtered_dir, out, store_id="enc-ragged", release_id="v1",
-        allow_unverified_eaf=True,
+        allow_unverified_eaf=True, association_coverage="cis_and_signals",
     )
     return out
 

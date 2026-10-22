@@ -96,7 +96,10 @@ def _build(tmp_path: Path, layout: str, *, with_af: bool = True) -> Path:
     store = tmp_path / f"{layout}-{suffix}.opengwasdb"
     if layout == "ragged":
         manifest, filtered_dir = _ssf(tmp_path, with_af=with_af)
-        build_ragged_from_ssf(manifest, filtered_dir, store, store_id="eaf", release_id="r1")
+        build_ragged_from_ssf(
+            manifest, filtered_dir, store, store_id="eaf", release_id="r1",
+            association_coverage="cis_and_signals",
+        )
         return store
     manifest = _vcf_manifest(tmp_path, _vcf(tmp_path, with_af=with_af))
     if layout == "dense":

@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.ancestry.catalogue import UNASSIGNED
-from opengwasdb.model.enums import AncestryAssignmentMethod
+from opengwasdb.model.enums import AncestryAssignmentMethod, AssociationCoverage
 from opengwasdb.readers.column_map import ColumnMap
 from opengwasdb.store.open import open_store
 
@@ -159,6 +159,7 @@ def build_hybrid_from_catalogue(
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
     column_map: ColumnMap | str | Path | None = None,
+    association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
 ) -> SubsetResult:
     """Subset the Catalogue to ``ancestry`` and build a Hybrid store from it.
 
@@ -175,6 +176,8 @@ def build_hybrid_from_catalogue(
     ``column_map`` reads a tabular Source Collection through its declared map
     (issue #281). The EAF options pass through to its orientation check (issue
     #115), as required by the `gwas-catalog-eur-hybrid` pilot build path.
+    ``association_coverage`` is the built Hybrid release's (issue #298); the
+    build refuses anything but ``gwas``, its default.
     """
     # Imported here to keep the ancestry package importable without the heavy
     # build stack (and to avoid a build → ancestry → build import cycle).
@@ -207,6 +210,7 @@ def build_hybrid_from_catalogue(
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
         column_map=column_map,
+        association_coverage=association_coverage,
     )
     record_catalogue_provenance(output_path, subset)
     return subset

@@ -192,8 +192,8 @@ def _ragged_store_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     manifest, filtered = _ssf(seed_path)
     out = seed_path / "ragged.opengwasdb"
     build_ragged_from_ssf(
-        manifest, filtered, out, store_id="eafenc", release_id="v1",
-        allow_unverified_eaf=True,
+        manifest, filtered, out, store_id="eafenc", release_id="v1", allow_unverified_eaf=True,
+        association_coverage="cis_and_signals",
     )
     return out
 
@@ -891,8 +891,8 @@ def _ragged_store_with_no_frequencies_seed(
     manifest.write_text("\n".join(manifest_rows) + "\n", encoding="utf-8")
     out = seed_path / "ragged-nofreq.opengwasdb"
     build_ragged_from_ssf(
-        manifest, filtered, out, store_id="nofreq", release_id="v1",
-        allow_unverified_eaf=True,
+        manifest, filtered, out, store_id="nofreq", release_id="v1", allow_unverified_eaf=True,
+        association_coverage="cis_and_signals",
     )
     return out
 

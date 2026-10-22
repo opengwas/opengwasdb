@@ -144,6 +144,34 @@ def completed_hybrid(
     )
 
 
+def test_cli_complete_hybrid_reports_the_sources_coverage(tmp_path: Path) -> None:
+    """#294's `register` reads `association_coverage` off the completion's stdout
+    JSON, so the command prints the value the completed release carries (#298).
+    """
+    import json
+
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    source = _build_source(tmp_path)
+    panel = _make_ld_panel(tmp_path)
+    out = tmp_path / "completed.opengwasdb"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "complete-hybrid", str(source), str(out),
+            "--ld-panel", str(panel), "--min-cor", "0.0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output.strip().splitlines()[-1])
+    assert payload["association_coverage"] == "gwas"
+    assert StoreManifest.load(out).association_coverage.value == "gwas"
+
+
 def test_completion_keeps_a_populated_dense_overflow_table(tmp_path):
     """A populated Dense exception table must survive the crossover fold.
 

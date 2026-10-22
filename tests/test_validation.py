@@ -43,7 +43,10 @@ def ragged_store_path(tmp_path):
         encoding="utf-8",
     )
     store_path = tmp_path / "ragged.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered_dir, store_path, store_id="fixture", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered_dir, store_path, store_id="fixture", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
     return store_path
 
 

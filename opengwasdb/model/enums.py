@@ -16,11 +16,12 @@ class PrimaryStorageLayout(StrEnum):
 class AssociationCoverage(StrEnum):
     """Which of a source Analysis's associations a Store Release retains.
 
-    A property of the Store Release, not of its layout (ADR 0009, #298): two
-    Ragged releases of the same Source Collection can hold different amounts of
-    it, and a manifest that says `cis_and_signals` for a Store holding only
-    significant signals is a wrong answer that looks like a right one. So the
-    value is a build input, never a layout constant (#298).
+    A property of the Store Release, not of its layout (ADR 0009): two Ragged
+    releases of the same Source Collection can hold different amounts of it, and
+    a manifest that says `cis_and_signals` for a Store holding only significant
+    signals is a wrong answer that looks like a right one. So the value is a
+    build input, never a layout default (#298); which values a layout can
+    *represent* is `COVERAGES_BY_LAYOUT` (ADR 0064).
     """
 
     #: Every association the source reports, genome-wide.

@@ -170,6 +170,7 @@ from opengwasdb.model.enums import (
     CompletionState,
     PrimaryStorageLayout,
     StoredEffectScale,
+    coverage_for_layout,
 )
 from opengwasdb.model.info_score_policy import (
     InfoScorePolicy,
@@ -825,6 +826,7 @@ class _BuildOptions:
     eaf_reference: str | Path | None
     eaf_reference_ancestry: str | None
     allow_unverified_eaf: bool
+    association_coverage: AssociationCoverage
 
 
 @dataclass(frozen=True)
@@ -2657,6 +2659,7 @@ def _finish_dense_component(
         options.chunk_shape,
         encoding=encoding,
         eaf_orientation=eaf_provenance,
+        association_coverage=options.association_coverage,
     )
     write_analyses_tsv(prepared.dense_dir, add_hit_counts(prepared.dense_dir, analyses))
     return eaf_provenance
@@ -2799,6 +2802,7 @@ def _write_shared_metadata(
             str(options.variant_reference) if options.variant_reference is not None else None
         ),
         column_map=column_map_provenance(prepared.manifest_rows),
+        association_coverage=options.association_coverage,
     )
     dense_counted = add_hit_counts(prepared.dense_dir, components.analyses)
     shared_analyses = add_hit_counts(prepared.staged.path, dense_counted)
@@ -3236,6 +3240,7 @@ def build_hybrid_from_vcf_manifest(
     allow_unverified_eaf: bool = False, source_reader_capability: str | None = None,
     source_assembly: str | None = None, checkpoint: bool = False,
     resume: bool = False, column_map: ColumnMap | str | Path | None = None,
+    association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
 ) -> HybridBuildResult:
     """Build a Hybrid store from a manifest of GWAS-VCF files and a reference
     panel or precomputed variant reference. A thin orchestrator over three deep
@@ -3265,9 +3270,15 @@ def build_hybrid_from_vcf_manifest(
     continues one from the checkpoint this call's ``output_path`` implies (issue #227;
     `_run_checkpointed_build`, `_resume_requested`), and a destination whose checkpoint
     is still there is refused unless ``overwrite=True`` discards it.
+
+    ``association_coverage`` is a build input (issue #298): a Hybrid release can
+    carry only ``gwas``, its default, because its missing cells already mean the
+    source did not report the association and are what completion imputes
+    (ADR 0064). Any other value is refused before a source is read.
     """
     if reference_panel is None and variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
+    coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.HYBRID)
     options = _BuildOptions(
         out=Path(output_path),
         reference_panel=reference_panel,
@@ -3282,6 +3293,7 @@ def build_hybrid_from_vcf_manifest(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        association_coverage=coverage,
     )
     column_map = as_column_map(column_map)
     defaults = _ManifestDefaults(source_reader_capability, source_assembly, column_map)
@@ -3667,6 +3679,9 @@ def _build_params(
         "eaf_reference": _text(options.eaf_reference),
         "eaf_reference_ancestry": options.eaf_reference_ancestry,
         "allow_unverified_eaf": options.allow_unverified_eaf,
+        # Recorded so a resume cannot change what the release claims to retain
+        # (#227, #298).
+        "association_coverage": options.association_coverage.value,
         "overwrite": bool(overwrite),
         "source_reader_capability": defaults.source_reader_capability,
         "source_assembly": defaults.source_assembly,
@@ -3687,7 +3702,9 @@ def _options_from_params(params: Mapping[str, Any], n_workers: int | None) -> _B
     """Rebuild the build options a checkpoint recorded.
 
     ``n_workers`` comes from the caller: it is the one parameter a resume may
-    change (ADR 0023).
+    change (ADR 0023). ``association_coverage`` is read back, not defaulted: a
+    resume continues the build a checkpoint recorded, and the coverage is part
+    of what that build was (#298).
     """
     return _BuildOptions(
         out=Path(params["output_path"]),
@@ -3703,6 +3720,7 @@ def _options_from_params(params: Mapping[str, Any], n_workers: int | None) -> _B
         eaf_reference=params["eaf_reference"],
         eaf_reference_ancestry=params["eaf_reference_ancestry"],
         allow_unverified_eaf=params["allow_unverified_eaf"],
+        association_coverage=AssociationCoverage(params["association_coverage"]),
     )
 
 
@@ -3808,6 +3826,7 @@ def _write_dense_manifest(
     dtype: str,
     chunk_shape: tuple[int, int],
     encoding: StoreEncoding,
+    association_coverage: AssociationCoverage,
     eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
     manifest = StoreManifest(
@@ -3816,7 +3835,7 @@ def _write_dense_manifest(
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
         primary_layout=PrimaryStorageLayout.DENSE,
-        association_coverage=AssociationCoverage.GWAS,
+        association_coverage=association_coverage,
         completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly="GRCh38",
         created_at=datetime.now(UTC).isoformat(),
@@ -3847,6 +3866,7 @@ def _write_hybrid_manifest(
     chunk_shape: tuple[int, int],
     dtype: str,
     encoding: StoreEncoding,
+    association_coverage: AssociationCoverage,
     eaf_provenance: dict[str, Any] | None = None,
     info_score: dict[str, Any] | None = None,
     maf: dict[str, Any] | None = None,
@@ -3885,7 +3905,7 @@ def _write_hybrid_manifest(
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
         primary_layout=PrimaryStorageLayout.HYBRID,
-        association_coverage=AssociationCoverage.GWAS,
+        association_coverage=association_coverage,
         completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly="GRCh38",
         created_at=datetime.now(UTC).isoformat(),

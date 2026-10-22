@@ -426,12 +426,8 @@ def _make_ssf_store(tmp_path: Path, *, with_eaf: bool) -> Path:
     _write_manifest(manifest, manifest_rows)
     out = tmp_path / "store.opengwasdb"
     build_ragged_from_ssf(
-        manifest,
-        filtered,
-        out,
-        store_id="s",
-        release_id="r",
-        allow_unverified_eaf=True,
+        manifest, filtered, out, store_id="s", release_id="r", allow_unverified_eaf=True,
+        association_coverage="cis_and_signals",
     )
     return out
 

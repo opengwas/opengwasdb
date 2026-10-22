@@ -913,6 +913,59 @@ class TestQuery:
 
 
 class TestResume:
+    def test_cli_complete_dense_and_its_resume_report_the_coverage(
+        self, tmp_path, observed_store, ld_panel, monkeypatch
+    ):
+        """Both completion commands print the coverage the completed release
+        carries (#294, #298): the source's, since completion never re-decides it.
+        """
+        import json
+
+        from typer.testing import CliRunner
+
+        from opengwasdb.cli.main import app
+
+        dst = tmp_path / "cli-completed.opengwasdb"
+        runner = CliRunner()
+        completed = runner.invoke(
+            app,
+            [
+                "complete-dense", str(observed_store), str(dst),
+                "--ld-panel", str(ld_panel), "--min-cor", "0.0",
+            ],
+        )
+        assert completed.exit_code == 0, completed.output
+        payload = json.loads(completed.output.strip().splitlines()[-1])
+        assert payload["association_coverage"] == "gwas"
+        assert json.loads((dst / "manifest.json").read_text())[
+            "association_coverage"
+        ] == "gwas"
+
+        # The resume path reports the same field from the release it finished.
+        resumed_dst = tmp_path / "cli-resumed.opengwasdb"
+        calls = {"n": 0}
+        real_run_block = complete_module._run_block
+
+        def flaky_run_block(task):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("simulated crash")
+            return real_run_block(task)
+
+        monkeypatch.setattr(complete_module, "_run_block", flaky_run_block)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            complete_dense_store(
+                observed_store, resumed_dst, ld_panel, ancestry="EUR", min_cor=0.0
+            )
+        monkeypatch.undo()
+
+        resumed = runner.invoke(
+            app, ["complete-dense-resume", str(checkpoint_dir_for(resumed_dst))]
+        )
+        assert resumed.exit_code == 0, resumed.output
+        resumed_payload = json.loads(resumed.output.strip().splitlines()[-1])
+        assert resumed_payload["association_coverage"] == "gwas"
+
     def test_resume_completes_after_simulated_crash(
         self, tmp_path, observed_store, ld_panel, monkeypatch
     ):

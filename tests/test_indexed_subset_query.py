@@ -495,7 +495,10 @@ def test_indexed_query_never_reads_the_primary_planes(
 def test_ragged_release_refuses_a_subset_selector(tmp_path: Path) -> None:
     manifest, filtered = _make_fixture(tmp_path)
     store = tmp_path / "ragged.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered, store, store_id="ragged-test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered, store, store_id="ragged-test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
     with query_store(store) as query:
         analysis_id = next(iter(query.analyses_table().values()))["analysis_id"]
         with pytest.raises(IndexedSubsetLayoutError) as excinfo:
@@ -636,7 +639,10 @@ def test_cli_out_of_bounds_variant_index_fails_loudly(indexed_copy: Path) -> Non
 def test_cli_unsupported_layout_fails_loudly(tmp_path: Path) -> None:
     manifest, filtered = _make_fixture(tmp_path)
     store = tmp_path / "ragged.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered, store, store_id="ragged-test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered, store, store_id="ragged-test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
     with query_store(store) as query:
         analysis_id = next(iter(query.analyses_table().values()))["analysis_id"]
     code, output = _invoke(store, analysis_id, "--indexed-subset", "hm3")
