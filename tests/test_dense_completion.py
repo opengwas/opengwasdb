@@ -235,6 +235,18 @@ class TestCompletionFiles:
         assert m["completion_state"] == "reference_completed"
         assert "completion" in m["provenance"]
 
+    def test_completion_keeps_its_source_association_coverage(
+        self, completed_store, observed_store
+    ):
+        import json
+        source = json.loads((observed_store / "manifest.json").read_text())
+        completed = json.loads((completed_store / "manifest.json").read_text())
+        # A completion writes imputed cells into its source's matrix; it does
+        # not change how much of the source's association set the release
+        # retains, so the coverage is the source's, not re-decided (#298).
+        assert source["association_coverage"] == "gwas"
+        assert completed["association_coverage"] == source["association_coverage"]
+
     def test_variant_table_larger_than_source(self, completed_store, observed_store):
         from opengwasdb.variants.axis import VariantAxis
         obs_ax = VariantAxis(observed_store)
@@ -256,6 +268,27 @@ class TestCompletionFiles:
         on_panel = root["on_panel"][:]
         imputed = root["imputed"][:]
         assert not np.any(imputed[on_panel == 0, :] == 1)
+
+    def test_refuses_a_source_whose_coverage_is_not_gwas(
+        self, tmp_path, observed_store, ld_panel
+    ):
+        """Dense reference completion is defined over a `gwas` source (#298).
+
+        A Dense build can only write `gwas`, but the precondition is checked
+        against the manifest the command is given rather than assumed, so a
+        hand-edited or foreign release is refused before an hour of imputation.
+        """
+        import json
+
+        manifest_path = observed_store / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["association_coverage"] = "cis"
+        manifest_path.write_text(json.dumps(manifest))
+
+        with pytest.raises(ValueError, match="association_coverage=cis"):
+            complete_dense_store(
+                observed_store, tmp_path / "comp.opengwasdb", ld_panel, min_cor=0.0
+            )
 
     def test_completion_quality_table_exists(self, completed_store):
         import sqlite3

@@ -181,6 +181,10 @@ def test_hybrid_completion(completed_hybrid) -> None:
     manifest = StoreManifest.load(dst)
     assert manifest.completion_state.value == "reference_completed"
     assert manifest.primary_layout.value == "hybrid"
+    # The source's coverage, carried through: a completion fills the Dense
+    # Component's missing cells, it does not change what the release retains
+    # (#298).
+    assert manifest.association_coverage is StoreManifest.load(src).association_coverage
 
     # Dense Component carries imputed + on_panel arrays.
     dense_root = open_store(dst).dense_component().arrays(mode="r")

@@ -48,6 +48,7 @@ from opengwasdb.model.analyses import (
     read_analyses,
 )
 from opengwasdb.model.enums import (
+    COVERAGES_BY_LAYOUT,
     AncestryAssignmentMethod,
     CompletionState,
     EafOrientationOutcome,
@@ -774,6 +775,7 @@ def _validate_dense_store(
     if not _validate_dense_envelope(store, envelope, errors):
         return ValidationResult(errors=errors)
     manifest = store.manifest
+    _require_layout_coverage(manifest, errors)
     try:
         with store.index_connection() as connection:
             variant_axis = VariantAxis(store.path, connection)
@@ -1985,14 +1987,23 @@ def _validate_ragged_top_hits(
                 errors.append(f"top-hit index {key} eaf value inconsistent with CSR")
 
 
-def _require_hybrid_full_coverage(manifest: Any, errors: list[str]) -> None:
-    """A Hybrid release partitions one Analysis's associations across two components."""
-    from opengwasdb.model.enums import AssociationCoverage
+def _require_layout_coverage(manifest: Any, errors: list[str]) -> None:
+    """The coverage this release declares must be one its layout can carry.
 
-    if manifest.association_coverage is not AssociationCoverage.FULL:
+    A Dense or Hybrid release has a cell for every (variant, Analysis), so a
+    coverage narrower than `gwas` would leave cells whose absence means
+    "filtered out" while every other missing cell means "the source did not
+    report it" -- two answers with one representation (issue #298). The set of
+    values each layout can carry is `COVERAGES_BY_LAYOUT`, the same one every
+    builder is held to, so a release no builder could have written is refused
+    rather than reported as a Store of a different kind.
+    """
+    accepted = COVERAGES_BY_LAYOUT[manifest.primary_layout]
+    if manifest.association_coverage not in accepted:
         errors.append(
-            "hybrid store must have association_coverage=full "
-            f"(got {manifest.association_coverage.value})"
+            f"a {manifest.primary_layout.value} store cannot carry "
+            f"association_coverage={manifest.association_coverage.value} "
+            f"(it accepts {', '.join(sorted(c.value for c in accepted))})"
         )
 
 
@@ -2005,7 +2016,7 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
     """
     store_path = store.path
     manifest = store.manifest
-    _require_hybrid_full_coverage(manifest, errors)
+    _require_layout_coverage(manifest, errors)
 
     dense_dir = dense_component_path(store_path)
     ragged_path = store_path / "data.zarr" / "ragged"

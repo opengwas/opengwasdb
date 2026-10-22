@@ -3507,7 +3507,7 @@ def _write_manifest(
         release_id=release_id,
         format_version=CURRENT_FORMAT_VERSION,
         primary_layout=PrimaryStorageLayout.DENSE,
-        association_coverage=AssociationCoverage.FULL,
+        association_coverage=AssociationCoverage.GWAS,
         completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly="GRCh38",
         created_at=datetime.now(UTC).isoformat(),

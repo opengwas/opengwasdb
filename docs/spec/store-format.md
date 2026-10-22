@@ -112,7 +112,7 @@ Required fields:
 | `release_id` | Identity of this immutable release |
 | `format_version` | Store format version |
 | `primary_layout` | `dense`, `ragged`, or `hybrid` |
-| `association_coverage` | `full` or `cis_and_signals` |
+| `association_coverage` | What the release retains of each source Analysis's associations: `gwas`, `cis`, `cis_and_signals` or `signals_only` (§2a) |
 | `completion_state` | `observed_only` or `reference_completed` |
 | `reference_assembly` | One genome assembly for all coordinates in the release |
 | `created_at` | Release creation timestamp |
@@ -131,6 +131,29 @@ Observed-Only and Reference-Completed releases for the same source collection SH
 A release derived from another one — by migration or reference completion — is a new immutable release with its own identity: it MUST NOT reuse the source's `release_id`, and MUST record a fresh `created_at`. The restamp migration additionally records the source `release_id` in its provenance (§21.4).
 
 Published releases are immutable. Enhancing an Observed-Only release to Reference-Completed produces a new release.
+
+### 2a. Association Coverage
+
+`association_coverage` states **what the release retains**, independently of its
+Primary Storage Layout and Completion State (ADR 0009, ADR 0064):
+
+| value | the release retains |
+|---|---|
+| `gwas` | every association the source reports, genome-wide |
+| `cis` | a cis window around each Analysis's target, and nothing else |
+| `cis_and_signals` | a cis window plus significant signals elsewhere |
+| `signals_only` | significant signals and their flanks, with no cis window |
+
+`full` is the pre-#298 spelling of `gwas`. A reader MUST accept it and report
+`gwas`; a build MUST NOT write it.
+
+A `dense` or `hybrid` release has a cell for every (variant, Analysis), and a
+missing cell there means the source did not report the association — which is
+what Reference Completion imputes. So a `dense` or `hybrid` release MUST
+declare `gwas`, and a release declaring anything else is invalid. A `ragged`
+release is the list of associations kept, so absence states itself and it MAY
+declare any of the four. Validators reject a release outside this rule (ADR
+0064).
 
 ## 3. Identity and terminology
 
@@ -1356,7 +1379,7 @@ sequences the `ASSOCIATION_SEQUENCE` role, and the re-keyed tables the
 `RAGGED_EXCEPTION_TABLE` role. The hint is a fact about the path, so the
 converter and the builders reproduce the same inner chunk.
 
-Ragged layout is used when Analyses do not share one dense source variant axis or when Association Coverage is Cis-and-Signals.
+Ragged layout is used when Analyses do not share one dense source variant axis, or when Association Coverage is narrower than `gwas` and cannot be represented as a Dense matrix (§2a, ADR 0064).
 
 For Observed-Only Ragged stores, absence from an Analysis sequence means the association is not retained by that Store Release.
 
@@ -1652,7 +1675,7 @@ Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide b
     "release_id": "...",
     "format_version": "0.2.0",
     "primary_layout": "dense",
-    "association_coverage": "full",
+    "association_coverage": "gwas",
     "completion_state": "observed_only",
     "reference_assembly": "GRCh38",
     "encoding": {

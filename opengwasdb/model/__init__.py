@@ -15,6 +15,7 @@ from opengwasdb.model.analyses import (
     write_analysis_records,
 )
 from opengwasdb.model.enums import (
+    COVERAGES_BY_LAYOUT,
     AncestryAssignmentMethod,
     AssociationCoverage,
     CompletionState,
@@ -25,6 +26,7 @@ from opengwasdb.model.enums import (
     SampleSizeKind,
     SampleSizeScope,
     StoredEffectScale,
+    coverage_for_layout,
 )
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import (
@@ -40,6 +42,7 @@ from opengwasdb.model.manifest_columns import (
 
 __all__ = [
     "ANALYSIS_COLUMNS",
+    "COVERAGES_BY_LAYOUT",
     "AnalysesTable",
     "Analysis",
     "AncestryAssignmentMethod",
@@ -58,6 +61,7 @@ __all__ = [
     "StoredEffectScale",
     "analyses_table_from_records",
     "classify_column",
+    "coverage_for_layout",
     "manifest_column",
     "manifest_n",
     "manifest_trait_name",

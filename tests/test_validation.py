@@ -449,6 +449,63 @@ def test_validator_rejects_stray_file_in_hybrid_dense_component(hybrid_store_pat
     )
 
 
+def test_validator_rejects_coverage_the_layout_cannot_carry(
+    dense_store_path, hybrid_store_path
+):
+    # Issue #298: a Dense or Hybrid release has a cell for every (variant,
+    # Analysis), so a coverage narrower than `gwas` would leave cells that are
+    # indistinguishable from associations the source never reported. No builder
+    # may write one, so a release that declares one is invalid rather than a
+    # release whose missing cells mean something else.
+    import json
+
+    for store_path, layout in ((dense_store_path, "dense"), (hybrid_store_path, "hybrid")):
+        manifest_path = store_path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["association_coverage"] = "cis"
+        manifest_path.write_text(json.dumps(manifest))
+
+        result = validate_store(store_path)
+
+        assert not result.ok
+        assert any(
+            "cannot carry association_coverage=cis" in error
+            and layout in error
+            for error in result.errors
+        ), result.errors
+
+
+def test_validator_accepts_a_ragged_release_declaring_cis(ragged_store_path):
+    # The same rule must not reject a Ragged release, whose sequence states its
+    # own absences: all four coverages are representable there (issue #298).
+    import json
+
+    manifest_path = ragged_store_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["association_coverage"] = "cis"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = validate_store(ragged_store_path)
+
+    assert result.ok, result.errors
+
+
+def test_validator_accepts_a_release_still_spelling_full(dense_store_path):
+    # Every release built before #298 says `full` outside the two-valued
+    # vocabulary. It still opens and validates, as `gwas` (issue #298).
+    import json
+
+    manifest_path = dense_store_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["association_coverage"] = "full"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = validate_store(dense_store_path)
+
+    assert result.ok, result.errors
+    assert open_store(dense_store_path).manifest.association_coverage.value == "gwas"
+
+
 def test_validator_accepts_clean_dense_ragged_hybrid_stores(
     dense_store_path, ragged_store_path, hybrid_store_path
 ):

@@ -164,7 +164,7 @@ def hybrid_store(tmp_path: Path, _hybrid_store_seed: Path) -> Path:
 def test_manifest_is_hybrid(hybrid_store):
     manifest = StoreManifest.load(hybrid_store)
     assert manifest.primary_layout.value == "hybrid"
-    assert manifest.association_coverage.value == "full"
+    assert manifest.association_coverage.value == "gwas"
 
 
 def test_analyses_tsv_has_no_phenotype_columns_and_carries_analysis_label(hybrid_store):
