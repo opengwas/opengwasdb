@@ -1023,14 +1023,22 @@ def _csr_parallel_length_errors(root: Any, n_assoc: int, errors: list[str]) -> N
 #: per-Analysis offsets (8 bytes each), independent of the association count.
 _ORDER_WINDOW = 1_000_000
 
+#: The two ways one Analysis's `variant_index` slice can break its invariant.
+_DECREASE = "decrease"
+_REPEAT = "repeat"
 
-def _segment_first_decrease(variant_index: Any, start: int, end: int) -> tuple[int | None, int]:
-    """First row in `[start, end)` below its predecessor, and rows read to find it.
+
+def _segment_first_break(
+    variant_index: Any, start: int, end: int
+) -> tuple[int | None, str | None, int]:
+    """First row in `[start, end)` that does not increase, its kind, and rows read.
 
     Bounded: `_ORDER_WINDOW` cells at a time, the preceding cell carried across
-    a window boundary. Returns `(failure offset or None, entries read)` so a
-    caller can report what was actually checked rather than what the offsets
-    imply.
+    a window boundary. The comparison is `<=`, so a repeat is found at the same
+    offset a decrease would be, and the first offending row is always the one
+    reported (the kind is read off the pair, not from which test ran first).
+    Returns `(failure offset or None, kind, entries read)` so a caller can
+    report what was actually checked rather than what the offsets imply.
     """
     previous: int | None = None
     read = 0
@@ -1038,27 +1046,56 @@ def _segment_first_decrease(variant_index: Any, start: int, end: int) -> tuple[i
         hi = min(lo + _ORDER_WINDOW, end)
         window = np.asarray(variant_index[lo:hi], dtype=np.int32)
         read += len(window)
-        if previous is not None and int(window[0]) < previous:
-            return lo, read
-        decreasing = window[1:] < window[:-1]
-        if decreasing.any():
-            return lo + int(np.argmax(decreasing)) + 1, read
+        if previous is not None and int(window[0]) <= previous:
+            return lo, _REPEAT if int(window[0]) == previous else _DECREASE, read
+        breaks = np.flatnonzero(window[1:] <= window[:-1])
+        if len(breaks):
+            failure = lo + int(breaks[0]) + 1
+            repeated = int(window[failure - lo]) == int(window[failure - lo - 1])
+            return failure, _REPEAT if repeated else _DECREASE, read
         previous = int(window[-1])
-    return None, read
+    return None, None, read
+
+
+def _segment_order_error(
+    label: str, analysis: int, variant_index: Any, failure: int, kind: str
+) -> str:
+    """Name the Analysis whose segment broke the ordering invariant, and how.
+
+    A repeat and a decrease are different defects and are reported differently:
+    a repeat is two associations at one variant of one Analysis (a post-lift
+    collision, or a duplicate source row), which no reader can resolve; a
+    decrease is a segment out of genomic order, on which the variant-side
+    binary search answers with a plausible, wrong row.
+    """
+    previous = int(variant_index[failure - 1])
+    held = int(variant_index[failure])
+    if kind == _REPEAT:
+        return (
+            f"{label}/variant_index repeats variant {held} within Analysis "
+            f"{analysis}'s segment: offsets {failure - 1} and {failure} both hold it, "
+            f"so one Analysis carries two associations at one variant"
+        )
+    return (
+        f"{label}/variant_index is not non-decreasing within Analysis "
+        f"{analysis}'s segment: offset {failure} holds {held} after {previous}"
+    )
 
 
 def _segment_order_errors(
     root: Any, offsets: np.ndarray, n_assoc: int, errors: list[str], label: str
 ) -> int:
-    """Require `variant_index` non-decreasing within every Analysis's segment.
+    """Require `variant_index` strictly increasing within every Analysis's segment.
 
     The variant-side binary search (`RaggedCSRReader.segment_positions`) is
-    correct only on a non-decreasing segment, so the invariant is checked on
-    every release, not only on the ones this build wrote. The read is bounded:
-    `_ORDER_WINDOW` cells at a time, the preceding cell carried across a
-    window boundary, the comparison reset at each Analysis boundary. Returns
-    the number of entries actually read, so an evidence runner can report a
-    counted total and not an offset-implied one.
+    correct only on an ordered segment, and a repeated `variant_index` is two
+    associations at one variant, which `(variant, Analysis)` resolution cannot
+    represent; so the invariant is checked on every release, not only on the
+    ones this build wrote. The read is bounded: `_ORDER_WINDOW` cells at a
+    time, the preceding cell carried across a window boundary, the comparison
+    reset at each Analysis boundary. Returns the number of entries actually
+    read, so an evidence runner can report a counted total and not an
+    offset-implied one.
     """
     if array_length(root["variant_index"]) != n_assoc:
         return 0  # the parallel-length rule reports this
@@ -1068,15 +1105,10 @@ def _segment_order_errors(
         start, end = int(offsets[analysis]), int(offsets[analysis + 1])
         if end <= start:
             continue
-        failure, read = _segment_first_decrease(variant_index, start, end)
+        failure, kind, read = _segment_first_break(variant_index, start, end)
         checked += read
         if failure is not None:
-            errors.append(
-                f"{label}/variant_index is not non-decreasing within Analysis "
-                f"{analysis}'s segment: offset {failure} holds "
-                f"{int(variant_index[failure])} after "
-                f"{int(variant_index[failure - 1])}"
-            )
+            errors.append(_segment_order_error(label, analysis, variant_index, failure, kind))
             return checked
     return checked
 

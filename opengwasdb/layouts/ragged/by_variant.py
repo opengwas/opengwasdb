@@ -182,10 +182,12 @@ def _record_dtype(source: Any) -> np.dtype:
 def _destination_ordinals(variant_index: np.ndarray, next_destination: np.ndarray) -> np.ndarray:
     """Each cell's destination ordinal, consuming one slot per cell.
 
-    `variant_index` is non-decreasing (the CSR's format invariant), so equal
-    variants form runs; a run of `L` cells of variant `v` takes the next `L`
-    destination ordinals after `next_destination[v]`.  Within a variant the
-    source order is ascending Analysis, which is exactly the `(variant,
+    `variant_index` is non-decreasing across the component and strictly
+    increasing within each Analysis's segment (§11), so equal variants form
+    runs: legitimately across two Analyses that both hold the variant, and only
+    at a defect inside one segment. A run of `L` cells of variant `v` takes the
+    next `L` destination ordinals after `next_destination[v]`.  Within a variant
+    the source order is ascending Analysis, which is exactly the `(variant,
     analysis)` order the index requires, so no comparison sort is needed -- the
     counting sort is this running cursor.
     """

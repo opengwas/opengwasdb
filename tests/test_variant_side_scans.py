@@ -721,8 +721,12 @@ def _tiny_ragged(tmp_path: Path) -> Path:
     return store
 
 
-def test_validation_rejects_an_unsorted_persisted_segment(tmp_path: Path) -> None:
-    """A persisted segment out of order must fail validation, not answer wrongly."""
+def _second_segment_mutated(tmp_path: Path, mutate: Any) -> Path:
+    """A validated tiny store with the second Analysis's segment rewritten.
+
+    `mutate` receives that segment's `variant_index` and returns what to store
+    in its place, so each caller states only the defect it is testing for.
+    """
     store = _tiny_ragged(tmp_path)
     result = validate_store(store)
     assert result.ok, result.errors
@@ -732,10 +736,18 @@ def test_validation_rejects_an_unsorted_persisted_segment(tmp_path: Path) -> Non
     start, end = int(offsets[1]), int(offsets[2])
     assert end - start >= 2, "the second Analysis must hold at least two rows"
     original = np.asarray(group["variant_index"][start:end], dtype=np.int32)
-    swapped = original.copy()
-    swapped[0], swapped[1] = swapped[1], swapped[0]
-    assert swapped[0] > swapped[1], "the swap must actually decrease the first row"
-    group["variant_index"][start:end] = swapped
+    group["variant_index"][start:end] = mutate(original.copy())
+    return store
+
+
+def test_validation_rejects_an_unsorted_persisted_segment(tmp_path: Path) -> None:
+    """A persisted segment out of order must fail validation, not answer wrongly."""
+    def swap_first_two(segment: np.ndarray) -> np.ndarray:
+        segment[0], segment[1] = segment[1], segment[0]
+        assert segment[0] > segment[1], "the swap must actually decrease the first row"
+        return segment
+
+    store = _second_segment_mutated(tmp_path, swap_first_two)
 
     mutated = validate_store(store)
     assert not mutated.ok, "an unsorted persisted segment must fail validation"
@@ -743,22 +755,68 @@ def test_validation_rejects_an_unsorted_persisted_segment(tmp_path: Path) -> Non
     assert any("Analysis 1's segment" in error for error in mutated.errors), mutated.errors
 
 
-def test_segment_first_decrease_detects_a_cross_window_decrease(
+def test_segment_first_break_detects_a_cross_window_decrease(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A decrease at the start of a window is caught by the carried value."""
     monkeypatch.setattr(validate_module, "_ORDER_WINDOW", 3)
     values = np.array([1, 2, 3, 2], dtype=np.int32)
-    failure, read = validate_module._segment_first_decrease(values, 0, 4)
+    failure, kind, read = validate_module._segment_first_break(values, 0, 4)
     assert failure == 3, "the first row of the second window is below the first window's last"
+    assert kind == validate_module._DECREASE
     assert read == 4
 
 
-def test_segment_first_decrease_resets_at_analysis_boundaries(
+def test_segment_first_break_detects_a_repeat_at_its_own_offset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repeated variant is a break, and the first break is the one reported.
+
+    The repeat here starts a new window and the decrease after it is inside
+    that window: if the scan looked for one kind before the other, it would
+    report the later row and name the wrong offset.
+    """
+    monkeypatch.setattr(validate_module, "_ORDER_WINDOW", 3)
+    values = np.array([1, 2, 3, 3, 2], dtype=np.int32)
+    failure, kind, read = validate_module._segment_first_break(values, 0, 5)
+    assert failure == 3, "offset 3 repeats offset 2's variant"
+    assert kind == validate_module._REPEAT
+    assert read == 5
+
+
+def test_segment_first_break_resets_at_analysis_boundaries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A lower first value in the next Analysis is not a decrease."""
     monkeypatch.setattr(validate_module, "_ORDER_WINDOW", 3)
     values = np.array([5, 6, 1, 2], dtype=np.int32)
-    assert validate_module._segment_first_decrease(values, 0, 2) == (None, 2)
-    assert validate_module._segment_first_decrease(values, 2, 4) == (None, 2)
+    assert validate_module._segment_first_break(values, 0, 2) == (None, None, 2)
+    assert validate_module._segment_first_break(values, 2, 4) == (None, None, 2)
+
+
+def test_validation_rejects_a_variant_held_twice_in_one_analysis_slice(tmp_path: Path) -> None:
+    """One Analysis must not hold two associations at one variant.
+
+    Two ESI entries that lift onto one canonical variant put the same
+    `variant_index` in one segment. The segment stays non-decreasing, so the
+    ordering rule passes it, and the top-hit index can only show it when the
+    duplicated variant happens to clear a p-value tier. The CSR rule must
+    catch it wherever it is, naming the Analysis.
+    """
+    def repeat_last(segment: np.ndarray) -> np.ndarray:
+        segment[-1] = segment[-2]
+        assert np.all(np.diff(segment) >= 0), (
+            "the mutation must keep the segment non-decreasing, so only the "
+            "duplicate rule can catch it"
+        )
+        return segment
+
+    store = _second_segment_mutated(tmp_path, repeat_last)
+
+    mutated = validate_store(store)
+    assert not mutated.ok, "a duplicated variant in a segment must fail validation"
+    assert any(
+        "data.zarr/ragged/variant_index" in error and "repeats variant" in error
+        for error in mutated.errors
+    ), mutated.errors
+    assert any("Analysis 1's segment" in error for error in mutated.errors), mutated.errors
