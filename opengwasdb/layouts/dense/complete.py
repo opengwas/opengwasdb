@@ -1,7 +1,7 @@
 """Dense Reference Completion — enhancement pipeline.
 
 Builds a Dense Reference-Completed Store Release from a Dense Observed-Only
-Full Coverage source, per ADR 0022 (dense axis = source ∪ reference panel)
+`gwas`-coverage source, per ADR 0022 (dense axis = source ∪ reference panel)
 and ADR 0023 (LD-block process-pool parallelism with checkpointed resume).
 
 Pipeline shape:
@@ -220,10 +220,10 @@ def complete_dense_store(
     overwrite: bool = False,
     impute_analysis_ids: set[str] | None = None,
 ) -> CompletionResult:
-    """Produce a Dense Reference-Completed Store Release from a Full Coverage
+    """Produce a Dense Reference-Completed Store Release from a `gwas`-coverage
     Dense Observed-Only source.
 
-    source_path: existing Dense Observed-Only, Full Coverage store.
+    source_path: existing Dense Observed-Only, `gwas`-coverage store.
     dest_path:   new store directory to create.
     ld_dir:      root of LD panel; blocks at ld_dir/{ancestry}/{chr}/{block}.*
     impute_analysis_ids: if given, only these analyses are imputed (the

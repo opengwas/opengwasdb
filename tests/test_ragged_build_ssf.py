@@ -315,7 +315,7 @@ def test_ragged_build_requires_an_association_coverage(tmp_path):
     out = tmp_path / "out.opengwasdb"
 
     with pytest.raises(TypeError, match="association_coverage"):
-        build_ragged_from_ssf(  # type: ignore[call-arg]
+        build_ragged_from_ssf(
             manifest, filtered_dir, out, store_id="test", release_id="v1"
         )
 
@@ -661,6 +661,26 @@ def test_duplicate_canonical_variant_within_analysis_is_resolved(tmp_path):
     assert validate_store(out).ok
 
 
+def _invoke_cli_build(manifest, filtered_dir, out, *extra: str):
+    """Run `build-ragged-ssf` through the CLI, with whatever options a test adds."""
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    return CliRunner().invoke(
+        app,
+        [
+            "build-ragged-ssf",
+            str(manifest),
+            str(filtered_dir),
+            str(out),
+            "--store-id", "cli-test",
+            "--release-id", "v1",
+            *extra,
+        ],
+    )
+
+
 def test_cli_build_ragged_ssf(tmp_path):
     from typer.testing import CliRunner
 
@@ -668,22 +688,9 @@ def test_cli_build_ragged_ssf(tmp_path):
 
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    runner = CliRunner()
 
-    result = runner.invoke(
-        app,
-        [
-            "build-ragged-ssf",
-            str(manifest),
-            str(filtered_dir),
-            str(out),
-            "--store-id",
-            "cli-test",
-            "--release-id",
-            "v1",
-            "--association-coverage",
-            "cis_and_signals",
-        ],
+    result = _invoke_cli_build(
+        manifest, filtered_dir, out, "--association-coverage", "cis_and_signals"
     )
     assert result.exit_code == 0, result.output
     import json
@@ -695,31 +702,15 @@ def test_cli_build_ragged_ssf(tmp_path):
     # because `register` records what the command prints.
     assert summary["association_coverage"] == "cis_and_signals"
 
-    validate = runner.invoke(app, ["validate", str(out)])
+    validate = CliRunner().invoke(app, ["validate", str(out)])
     assert validate.exit_code == 0, validate.output
 
 
 def test_cli_build_ragged_ssf_refuses_to_guess_the_coverage(tmp_path):
-    from typer.testing import CliRunner
-
-    from opengwasdb.cli.main import app
-
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "build-ragged-ssf",
-            str(manifest),
-            str(filtered_dir),
-            str(out),
-            "--store-id",
-            "cli-test",
-            "--release-id",
-            "v1",
-        ],
-    )
+    result = _invoke_cli_build(manifest, filtered_dir, out)
 
     assert result.exit_code != 0
     assert "--association-coverage" in result.output
@@ -738,27 +729,12 @@ def test_cli_build_ragged_ssf_reports_the_coverage_it_wrote(tmp_path, coverage):
 
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    runner = CliRunner()
 
-    build = runner.invoke(
-        app,
-        [
-            "build-ragged-ssf",
-            str(manifest),
-            str(filtered_dir),
-            str(out),
-            "--store-id",
-            "cli-test",
-            "--release-id",
-            "v1",
-            "--association-coverage",
-            coverage,
-        ],
-    )
+    build = _invoke_cli_build(manifest, filtered_dir, out, "--association-coverage", coverage)
     assert build.exit_code == 0, build.output
     stdout = json.loads(build.output.strip().splitlines()[-1])
     on_disk = json.loads((out / "manifest.json").read_text())
-    info = runner.invoke(app, ["info", str(out), "--format", "json"])
+    info = CliRunner().invoke(app, ["info", str(out), "--format", "json"])
     assert info.exit_code == 0, info.output
 
     assert stdout["association_coverage"] == coverage

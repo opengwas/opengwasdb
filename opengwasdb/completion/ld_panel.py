@@ -266,7 +266,7 @@ def check_panel_has_chromosomes(ld_dir: str | Path, ancestry: str) -> None:
 def list_all_blocks(ld_dir: str | Path, ancestry: str, chrom: str) -> list[LDBlock]:
     """Return every LD block for one chromosome, genome-wide (no region filter).
 
-    Used for Full Coverage Dense completion, where the block set is the
+    Used for `gwas`-coverage Dense completion, where the block set is the
     reference panel's entire block list rather than a per-analysis cis window.
     """
     panel_dir = Path(ld_dir) / ancestry / chrom

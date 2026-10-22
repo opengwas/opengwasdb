@@ -38,6 +38,24 @@ from opengwasdb.validation.validate import validate_store
 from opengwasdb.variants import VariantAxis
 
 
+def _crash_on_the_second_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the second LD block's completion raise, leaving a checkpoint.
+
+    The first block finishes, so the checkpoint holds exactly one, which is the
+    state both a resume test and the CLI's `complete-dense-resume` need.
+    """
+    calls = {"n": 0}
+    real_run_block = complete_module._run_block
+
+    def flaky_run_block(task):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("simulated crash")
+        return real_run_block(task)
+
+    monkeypatch.setattr(complete_module, "_run_block", flaky_run_block)
+
+
 def _assert_stores_identical(dst_a: Path, dst_b: Path) -> None:
     """Assert two completed stores hold byte-identical z/se/imputed arrays.
 
@@ -943,16 +961,7 @@ class TestResume:
 
         # The resume path reports the same field from the release it finished.
         resumed_dst = tmp_path / "cli-resumed.opengwasdb"
-        calls = {"n": 0}
-        real_run_block = complete_module._run_block
-
-        def flaky_run_block(task):
-            calls["n"] += 1
-            if calls["n"] == 2:
-                raise RuntimeError("simulated crash")
-            return real_run_block(task)
-
-        monkeypatch.setattr(complete_module, "_run_block", flaky_run_block)
+        _crash_on_the_second_block(monkeypatch)
         with pytest.raises(RuntimeError, match="simulated crash"):
             complete_dense_store(
                 observed_store, resumed_dst, ld_panel, ancestry="EUR", min_cor=0.0
@@ -970,16 +979,7 @@ class TestResume:
         self, tmp_path, observed_store, ld_panel, monkeypatch
     ):
         dst = tmp_path / "resumed.opengwasdb"
-        calls = {"n": 0}
-        real_run_block = complete_module._run_block
-
-        def flaky_run_block(task):
-            calls["n"] += 1
-            if calls["n"] == 2:
-                raise RuntimeError("simulated crash")
-            return real_run_block(task)
-
-        monkeypatch.setattr(complete_module, "_run_block", flaky_run_block)
+        _crash_on_the_second_block(monkeypatch)
         with pytest.raises(RuntimeError, match="simulated crash"):
             complete_dense_store(observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0)
 

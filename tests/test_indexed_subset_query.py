@@ -638,7 +638,7 @@ def test_cli_out_of_bounds_variant_index_fails_loudly(indexed_copy: Path) -> Non
 
 def test_cli_unsupported_layout_fails_loudly(tmp_path: Path) -> None:
     manifest, filtered = _make_fixture(tmp_path)
-    store = tmp_path / "ragged.opengwasdb"
+    store = tmp_path / "ragged-subset-cli.opengwasdb"
     build_ragged_from_ssf(
         manifest, filtered, store, store_id="ragged-test", release_id="v1",
         association_coverage="cis_and_signals",

@@ -176,8 +176,6 @@ def build_hybrid_from_catalogue(
     ``column_map`` reads a tabular Source Collection through its declared map
     (issue #281). The EAF options pass through to its orientation check (issue
     #115), as required by the `gwas-catalog-eur-hybrid` pilot build path.
-    ``association_coverage`` is the built Hybrid release's (issue #298); the
-    build refuses anything but ``gwas``, its default.
     """
     # Imported here to keep the ancestry package importable without the heavy
     # build stack (and to avoid a build → ancestry → build import cycle).
@@ -185,9 +183,8 @@ def build_hybrid_from_catalogue(
     from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 
     output_path = Path(output_path)
-    if manifest_path is None:
-        manifest_path = output_path.with_suffix(".manifest.tsv")
-    manifest_path = Path(manifest_path)
+    # The filtered manifest sits beside the store unless the caller names one.
+    manifest_path = Path(manifest_path or output_path.with_suffix(".manifest.tsv"))
 
     subset = subset_catalogue(
         catalogue_path,

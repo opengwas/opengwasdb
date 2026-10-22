@@ -818,22 +818,13 @@ def build_hybrid_from_catalogue_command(
     from opengwasdb.ancestry.subset import build_hybrid_from_catalogue
 
     subset = build_hybrid_from_catalogue(
-        catalogue_path,
-        output_path,
-        reference_panel=reference_panel,
-        store_id=store_id,
-        release_id=release_id,
-        stored_effect_scale=stored_effect_scale,
-        original_sd_method=original_sd_method,
-        ancestry=ancestry,
-        original_sd=original_sd,
-        overwrite=overwrite,
-        n_workers=n_workers,
-        chunk_shape=(chunk_variants, chunk_analyses),
-        eaf_reference=eaf_reference,
-        eaf_reference_ancestry=eaf_reference_ancestry,
-        allow_unverified_eaf=allow_unverified_eaf,
-        column_map=column_map,
+        catalogue_path, output_path,
+        reference_panel=reference_panel, store_id=store_id, release_id=release_id,
+        stored_effect_scale=stored_effect_scale, original_sd_method=original_sd_method,
+        ancestry=ancestry, original_sd=original_sd, overwrite=overwrite,
+        n_workers=n_workers, chunk_shape=(chunk_variants, chunk_analyses),
+        eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf, column_map=column_map,
         association_coverage=association_coverage,
     )
     typer.echo(
@@ -1470,6 +1461,27 @@ def complete_ragged_command(
     )
 
 
+def _echo_dense_completion_result(result: Any, elapsed: float) -> None:
+    """Echo one Dense completion's summary as the CLI's JSON contract.
+
+    One helper for `complete-dense` and `complete-dense-resume`: the two print
+    the same contract, and a key added to one of two copied payloads is a
+    consumer reading `null` (#294).
+    """
+    _echo_summary(
+        {
+            "output_path": str(result.output_path),
+            "n_variants": result.n_variants,
+            "n_analyses": result.n_analyses,
+            "n_imputed": result.n_imputed,
+            "n_missing_off_panel": result.n_missing_off_panel,
+            "n_missing_imputation_failed": result.n_missing_imputation_failed,
+            "association_coverage": _written_association_coverage(result.output_path),
+            "elapsed_s": round(elapsed, 1),
+        }
+    )
+
+
 @app.command("complete-dense")
 def complete_dense_command(
     source_path: Path,
@@ -1482,7 +1494,7 @@ def complete_dense_command(
     n_workers: int = typer.Option(1, help="LD-block process-pool size"),
     overwrite: bool = typer.Option(False),
 ) -> None:
-    """Produce a Reference-Completed Dense store from a Full Coverage observed-only store."""
+    """Produce a Reference-Completed Dense store from a `gwas`-coverage observed-only store."""
     import time
     t0 = time.time()
     result = complete_dense_store(
@@ -1497,21 +1509,7 @@ def complete_dense_command(
         overwrite=overwrite,
     )
     elapsed = time.time() - t0
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-                "n_imputed": result.n_imputed,
-                "n_missing_off_panel": result.n_missing_off_panel,
-                "n_missing_imputation_failed": result.n_missing_imputation_failed,
-                "association_coverage": _written_association_coverage(result.output_path),
-                "elapsed_s": round(elapsed, 1),
-            },
-            sort_keys=True,
-        )
-    )
+    _echo_dense_completion_result(result, elapsed)
 
 
 @app.command("complete-dense-resume")
@@ -1528,21 +1526,7 @@ def complete_dense_resume_command(
     t0 = time.time()
     result = resume_dense_completion(checkpoint_dir, n_workers=n_workers)
     elapsed = time.time() - t0
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-                "n_imputed": result.n_imputed,
-                "n_missing_off_panel": result.n_missing_off_panel,
-                "n_missing_imputation_failed": result.n_missing_imputation_failed,
-                "association_coverage": _written_association_coverage(result.output_path),
-                "elapsed_s": round(elapsed, 1),
-            },
-            sort_keys=True,
-        )
-    )
+    _echo_dense_completion_result(result, elapsed)
 
 
 @app.command("build-variant-index")

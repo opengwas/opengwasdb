@@ -15,7 +15,6 @@ import logging
 import math
 from collections import Counter
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +27,7 @@ from opengwasdb.build.liftover import (
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.dense.build import add_hit_counts
+from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.besd_reader import (
     BESDReader,
@@ -40,16 +40,15 @@ from opengwasdb.layouts.ragged.by_variant import build_variant_index
 from opengwasdb.layouts.ragged.provenance import ragged_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata, write_analysis_records
 from opengwasdb.model.enums import (
     AssociationCoverage,
-    CompletionState,
     PrimaryStorageLayout,
     coverage_for_layout,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import manifest_column
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
+from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import (
     CanonicalVariant,
     Orientation,
@@ -62,22 +61,12 @@ from opengwasdb.variants import (
 
 log = logging.getLogger(__name__)
 
-_REFERENCE_ASSEMBLY = "GRCh38"
 # Build names whose coordinates already are (or claim) hg38 — no liftover.
 _BUILDS_ALREADY_HG38 = ("hg38", "grch38", "b38", "38")
 #: The fraction of a lift's rows that may fail before the build stops: the
 #: default `build_liftover_lookup` applies, now applied to the richer per-row
 #: lift this builder needs for its strand.
 _LIFTOVER_FAILURE_THRESHOLD = 0.01
-
-
-@dataclass(frozen=True)
-class RaggedBuildResult:
-    output_path: Path
-    n_variants: int
-    n_analyses: int
-    n_associations: int
-    association_coverage: AssociationCoverage
 
 
 def build_ragged_from_besd(
@@ -110,44 +99,80 @@ def build_ragged_from_besd(
     onto the EPI-derived analyses while keeping BESD coordinates authoritative (issue #173).
 
     ``association_coverage`` has no default (issue #298): a BESD file set is the
-    eQTLGen-style cis case as often as it is a genome-wide one, and the layout
-    cannot tell which. The two eQTLGen cis Stores in the pilot catalogue are
-    what the old constant produced.
+    eQTLGen-style cis case as often as it is a genome-wide one, so the layout
+    cannot tell which (ADR 0064).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     prefix = Path(besd_prefix)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        # Phases 1-2 — source reading and the canonical variant axis.
-        axis = _esi_axis(
-            prefix, source_build, chain_file=chain_file, variant_reference=variant_reference
-        )
-        write_variant_axis(staged.path, axis.variants, axis.rsid_by_alid)
-        # Phase 3 — Analysis metadata from the EPI records (with optional manifest overlay).
-        analyses = _analysis_records(axis.probes, tissue, analyses_path)
-        staged.index_connection().close()
-        # Phase 4 — CSR ingestion and the encoding plan it decides.
-        csr, encoding = _ingest_besd(
-            prefix, axis.probes, axis.esi_to_variant, len(axis.variants), staged.path,
-        )
-        # Phase 5 — indexes and manifest output.
-        _write_besd_outputs(staged, analyses, encoding)
-        _write_manifest(
+        axis, csr = _build_besd_release(
             staged,
-            store_id,
-            release_id,
-            n_variants=len(axis.variants),
-            n_analyses=len(axis.probes),
-            n_associations=csr.n_associations,
-            besd_prefix=str(prefix),
-            source_build=source_build,
-            association_coverage=coverage,
-            encoding=encoding,
-            lift=axis.lift,
-            collisions=axis.collisions,
+            prefix,
+            _BesdBuildRequest(
+                store_id=store_id,
+                release_id=release_id,
+                coverage=coverage,
+                analyses_path=analyses_path,
+                tissue=tissue,
+                source_build=source_build,
+                chain_file=chain_file,
+                variant_reference=variant_reference,
+            ),
         )
-        result = _summarise(out, axis, csr.n_associations, coverage)
-    return result
+        return _summarise(out, axis, csr.n_associations, coverage)
+
+
+@dataclass(frozen=True)
+class _BesdBuildRequest:
+    """The scalar configuration one BESD build's phases run under."""
+
+    store_id: str
+    release_id: str
+    coverage: AssociationCoverage
+    analyses_path: str | Path | None
+    tissue: str | None
+    source_build: str
+    chain_file: str | Path | None
+    variant_reference: str | Path | None
+
+
+def _build_besd_release(
+    staged: StagedRelease, prefix: Path, request: _BesdBuildRequest
+) -> tuple[_EsiAxis, RaggedCSRWriter]:
+    """Phases 1-5 of a BESD build, inside one Staged Release's lifetime."""
+    # Phases 1-2 — source reading and the canonical variant axis.
+    axis = _esi_axis(
+        prefix,
+        request.source_build,
+        chain_file=request.chain_file,
+        variant_reference=request.variant_reference,
+    )
+    write_variant_axis(staged.path, axis.variants, axis.rsid_by_alid)
+    # Phase 3 — Analysis metadata from the EPI records (optional manifest overlay).
+    analyses = _analysis_records(axis.probes, request.tissue, request.analyses_path)
+    staged.index_connection().close()
+    # Phase 4 — CSR ingestion and the encoding plan it decides.
+    csr, encoding = _ingest_besd(
+        prefix, axis.probes, axis.esi_to_variant, len(axis.variants), staged.path,
+    )
+    # Phase 5 — indexes and manifest output.
+    _write_besd_outputs(staged, analyses, encoding)
+    _write_manifest(
+        staged,
+        request.store_id,
+        request.release_id,
+        n_variants=len(axis.variants),
+        n_analyses=len(axis.probes),
+        n_associations=csr.n_associations,
+        besd_prefix=str(prefix),
+        source_build=request.source_build,
+        association_coverage=request.coverage,
+        encoding=encoding,
+        lift=axis.lift,
+        collisions=axis.collisions,
+    )
+    return axis, csr
 
 
 def _summarise(
@@ -879,16 +904,14 @@ def _write_manifest(
         # that lists one variant twice still loses entries to the collision rule.
         provenance["n_collisions"] = collisions.n_entries
         provenance["n_collision_groups"] = collisions.n_groups
-    manifest = StoreManifest(
-        encoding=encoding,
-        store_id=store_id,
-        release_id=release_id,
-        format_version=CURRENT_FORMAT_VERSION,
-        primary_layout=PrimaryStorageLayout.RAGGED,
-        association_coverage=association_coverage,
-        completion_state=CompletionState.OBSERVED_ONLY,
-        reference_assembly=_REFERENCE_ASSEMBLY,
-        created_at=datetime.now(UTC).isoformat(),
-        provenance=provenance,
+    staged.write_manifest(
+        observed_only_release_manifest(
+            PrimaryStorageLayout.RAGGED,
+            provenance=provenance,
+            reference_assembly=RAGGED_REFERENCE_ASSEMBLY,
+            store_id=store_id,
+            release_id=release_id,
+            encoding=encoding,
+            association_coverage=association_coverage,
+        )
     )
-    staged.write_manifest(manifest)

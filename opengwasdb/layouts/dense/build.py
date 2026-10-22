@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,18 +33,17 @@ from opengwasdb.layouts.dense.constants import (
 )
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, read_top_hit_counts
+from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, analyses_table_from_records, write_analyses
 from opengwasdb.model.enums import (
     AssociationCoverage,
-    CompletionState,
     EafOrientationOutcome,
     EafScope,
     PrimaryStorageLayout,
     coverage_for_layout,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
+from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import (
     VARIANT_AXIS_FORMAT,
     VARIANT_OFFSETS_FILENAME,
@@ -317,16 +315,13 @@ def _write_manifest(
     encoding: StoreEncoding,
     association_coverage: AssociationCoverage,
 ) -> None:
-    manifest = StoreManifest(
-        encoding=encoding,
+    manifest = observed_only_release_manifest(
+        PrimaryStorageLayout.DENSE,
         store_id=store_id,
         release_id=release_id,
-        format_version=CURRENT_FORMAT_VERSION,
-        primary_layout=PrimaryStorageLayout.DENSE,
+        encoding=encoding,
         association_coverage=association_coverage,
-        completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly=reference_assembly,
-        created_at=datetime.now(UTC).isoformat(),
         provenance={
             "builder": "opengwasdb.v0.1_dense_observed",
             "source_record_count": len(records),

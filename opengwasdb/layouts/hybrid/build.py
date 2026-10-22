@@ -164,6 +164,7 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis
 from opengwasdb.model.enums import (
     AssociationCoverage,
@@ -3276,10 +3277,45 @@ def build_hybrid_from_vcf_manifest(
     source did not report the association and are what completion imputes
     (ADR 0064). Any other value is refused before a source is read.
     """
+    options = _new_build_options(
+        output_path=output_path, reference_panel=reference_panel,
+        variant_reference=variant_reference, store_id=store_id, release_id=release_id,
+        chain_file=chain_file, liftover_failure_threshold=liftover_failure_threshold,
+        chunk_shape=chunk_shape, dtype=dtype, n_workers=n_workers,
+        eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf, association_coverage=association_coverage,
+    )
+    defaults = _ManifestDefaults(source_reader_capability, source_assembly,
+                                 as_column_map(column_map))
+    return _dispatch_build(manifest_path, options, defaults, overwrite, checkpoint, resume)
+
+
+def _new_build_options(
+    *,
+    output_path: str | Path,
+    reference_panel: str | Path | None,
+    variant_reference: str | Path | None,
+    store_id: str,
+    release_id: str,
+    chain_file: str | Path | None,
+    liftover_failure_threshold: float,
+    chunk_shape: tuple[int, int],
+    dtype: str,
+    n_workers: int,
+    eaf_reference: str | Path | None,
+    eaf_reference_ancestry: str | None,
+    allow_unverified_eaf: bool,
+    association_coverage: AssociationCoverage | str,
+) -> _BuildOptions:
+    """The build's options, refusing what no Hybrid release can honour.
+
+    The axis source is required, and the coverage is `gwas` or nothing (issue
+    #298): both refusals belong here, before a single Manifest Row is read,
+    rather than at the first phase that needs the axis (ADR 0064).
+    """
     if reference_panel is None and variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
-    coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.HYBRID)
-    options = _BuildOptions(
+    return _BuildOptions(
         out=Path(output_path),
         reference_panel=reference_panel,
         variant_reference=variant_reference,
@@ -3293,11 +3329,10 @@ def build_hybrid_from_vcf_manifest(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
-        association_coverage=coverage,
+        association_coverage=coverage_for_layout(
+            association_coverage, PrimaryStorageLayout.HYBRID
+        ),
     )
-    column_map = as_column_map(column_map)
-    defaults = _ManifestDefaults(source_reader_capability, source_assembly, column_map)
-    return _dispatch_build(manifest_path, options, defaults, overwrite, checkpoint, resume)
 
 
 def _dispatch_build(
@@ -3829,16 +3864,13 @@ def _write_dense_manifest(
     association_coverage: AssociationCoverage,
     eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
-    manifest = StoreManifest(
-        encoding=encoding,
+    manifest = observed_only_release_manifest(
+        PrimaryStorageLayout.DENSE,
         store_id=f"{store_id}-dense",
         release_id=release_id,
-        format_version=CURRENT_FORMAT_VERSION,
-        primary_layout=PrimaryStorageLayout.DENSE,
+        encoding=encoding,
         association_coverage=association_coverage,
-        completion_state=CompletionState.OBSERVED_ONLY,
         reference_assembly="GRCh38",
-        created_at=datetime.now(UTC).isoformat(),
         provenance={
             "builder": "opengwasdb.v0.1_hybrid_dense_component",
             "chain_file": str(chain_file) if chain_file else "pyliftover_builtin_hg19_hg38",

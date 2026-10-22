@@ -21,7 +21,6 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, TypeVar
@@ -75,17 +74,16 @@ from opengwasdb.layouts.dense.top_hits import (
     write_top_hit_indexes_for_store,
     z_critical,
 )
+from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata
 from opengwasdb.model.enums import (
     AssociationCoverage,
-    CompletionState,
     EafScope,
     OriginalSdMethod,
     PrimaryStorageLayout,
     StoredEffectScale,
     coverage_for_layout,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import (
     ManifestColumns,
     manifest_n,
@@ -105,7 +103,7 @@ from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY
 from opengwasdb.readers.interface import SourceVariant
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
+from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromosome
 from opengwasdb.variants.reference import (
@@ -1681,16 +1679,13 @@ def build_dense_from_vcf_manifest(
     (``*.variant-ref.tsv.gz``, an ALID list, or a store ``variants.tsv.gz``);
     Pass 1 and liftover are bypassed save its rsid harvest (#255). ``column_map`` reads
     ``opengwasdb.column-map`` rows (#281). ``association_coverage`` is a build input
-    (issue #298) and a Dense matrix can carry only ``gwas``, its default; any other
-    value is refused before a source is read (ADR 0064).
+    (issue #298) and a Dense matrix can carry only ``gwas``, its default (ADR 0064).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
     manifest_rows = _read_manifest(
         manifest_path, default_source_reader_capability=source_reader_capability,
         default_source_assembly=source_assembly, column_map=column_map,
     )
-    if not manifest_rows:
-        raise ValueError(f"manifest {manifest_path} contains no rows")
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
@@ -1714,11 +1709,7 @@ def build_dense_from_vcf_manifest(
             len(prepared.axis.alids), len(prepared.axis.analyses),
         )
 
-    return DenseBuildResult(
-        output_path=out,
-        n_variants=len(prepared.axis.alids),
-        n_analyses=len(prepared.axis.analyses),
-    )
+    return DenseBuildResult(out, len(prepared.axis.alids), len(prepared.axis.analyses))
 
 
 @dataclass(frozen=True)
@@ -2571,7 +2562,8 @@ def _read_manifest(
 
     Accepts canonical ``analyses.tsv`` names (``analysis_id``/``source_file``/
     ``analysis_label``/``sample_size``, ADR 0034, #170) or legacy aliases
-    (``trait_id``/``file_path``/``trait_name``/``n``). Requires ``stored_effect_scale``
+    (``trait_id``/``file_path``/``trait_name``/``n``). An empty manifest is refused
+    here, with the path a caller needs. Requires ``stored_effect_scale``
     (#17) and ``original_sd_method`` (#18; ``original_sd`` required for rescaling tiers).
 
     Optional ``source_reader_capability`` (#20, #174) and ``source_assembly`` (#85, #174)
@@ -2610,6 +2602,8 @@ def _read_manifest(
         loaded_map,
         f"manifest {manifest_path}",
     )
+    if not parsed:
+        raise ValueError(f"manifest {manifest_path} contains no rows")
     return parsed
 
 
@@ -3509,16 +3503,8 @@ def _write_manifest(
     variant_reference: str | None = None,
     column_map: dict[str, str] | None = None,
 ) -> None:
-    manifest = StoreManifest(
-        encoding=encoding,
-        store_id=store_id,
-        release_id=release_id,
-        format_version=CURRENT_FORMAT_VERSION,
-        primary_layout=PrimaryStorageLayout.DENSE,
-        association_coverage=association_coverage,
-        completion_state=CompletionState.OBSERVED_ONLY,
-        reference_assembly="GRCh38",
-        created_at=datetime.now(UTC).isoformat(),
+    manifest = observed_only_release_manifest(
+        PrimaryStorageLayout.DENSE,
         provenance={
             "builder": (
                 "opengwasdb.v0.1_dense_vcf_single_pass"
@@ -3542,5 +3528,10 @@ def _write_manifest(
             ),
             **({"column_map": column_map} if column_map is not None else {}),
         },
+        store_id=store_id,
+        release_id=release_id,
+        encoding=encoding,
+        association_coverage=association_coverage,
+        reference_assembly="GRCh38",
     )
     staged.write_manifest(manifest)

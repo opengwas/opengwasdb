@@ -78,6 +78,22 @@ def test_build_creates_store_files(tmp_path):
     assert result.n_analyses == 3
 
 
+def _build_store(tmp_path: Path, name: str = "out.opengwasdb") -> Path:
+    """Build the fixture's Observed-Only store, stating what it retains.
+
+    A BESD fixture is a cis-eQTL-style file set, so `cis_and_signals` is what
+    these tests describe; a Ragged build has no default to fall back on
+    (issue #298).
+    """
+    prefix = _make_besd_fixture(tmp_path)
+    out = tmp_path / name
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+    return out
+
+
 def test_manifest_primary_layout(tmp_path):
     import json
     prefix = _make_besd_fixture(tmp_path)
@@ -102,7 +118,7 @@ def test_besd_build_requires_an_association_coverage(tmp_path):
     out = tmp_path / "out.opengwasdb"
 
     with pytest.raises(TypeError, match="association_coverage"):
-        build_ragged_from_besd(  # type: ignore[call-arg]
+        build_ragged_from_besd(
             prefix, out, store_id="test", release_id="v1"
         )
 
@@ -147,11 +163,7 @@ def test_analyses_tsv_carries_probe_identities(tmp_path):
 
 
 def test_zarr_csr_associations(tmp_path):
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(
-        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
-    )
+    out = _build_store(tmp_path)
 
     csr = RaggedCSRReader(out)
     assert csr.n_analyses == 3
@@ -171,11 +183,7 @@ def test_zarr_csr_associations(tmp_path):
 
 
 def test_z_scores_computed_correctly(tmp_path):
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(
-        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
-    )
+    out = _build_store(tmp_path)
 
     csr = RaggedCSRReader(out)
     # Probe 1: single assoc beta=0.5, se=0.05 → z=10.0
@@ -186,11 +194,7 @@ def test_z_scores_computed_correctly(tmp_path):
 
 def test_top_hit_index_built_inline(tmp_path):
     """build_ragged_from_besd auto-builds the top-hit index."""
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(
-        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
-    )
+    out = _build_store(tmp_path)
 
     root = open_store(out).arrays(mode="r")
     assert "top_hits" in root
@@ -200,11 +204,7 @@ def test_top_hit_index_built_inline(tmp_path):
 
 def test_top_hit_index_schema(tmp_path):
     """Each threshold group has the expected arrays and attribute."""
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(
-        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
-    )
+    out = _build_store(tmp_path)
     build_ragged_top_hit_indexes(out)  # idempotent rebuild
 
     root = open_store(out).arrays(mode="r")
@@ -220,11 +220,7 @@ def test_top_hit_index_schema(tmp_path):
 
 def test_top_hit_z_values_match_csr(tmp_path):
     """Top-hit z values round-trip through the stored CSR correctly."""
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(
-        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
-    )
+    out = _build_store(tmp_path)
 
     csr = RaggedCSRReader(out)
     root = open_store(out).arrays(mode="r")
@@ -250,11 +246,7 @@ def test_top_hit_z_values_match_csr(tmp_path):
 def test_top_hits_query_uses_index(tmp_path):
     """RaggedStoreQuery.top_hits reads from the precomputed index."""
     from opengwasdb.query import query_store
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(
-        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
-    )
+    out = _build_store(tmp_path)
 
     q = query_store(out)
     # Threshold 5e-4 should return all 5 associations (all have |z| > 3.48)
@@ -266,11 +258,7 @@ def test_top_hits_query_uses_index(tmp_path):
 def test_top_hits_query_selects_one_analysis_from_index(tmp_path):
     from opengwasdb.query import query_store
 
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(
-        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
-    )
+    out = _build_store(tmp_path)
 
     q = query_store(out)
     global_result = q.top_hits(threshold=5e-4)
@@ -284,11 +272,7 @@ def test_top_hits_query_selects_one_analysis_from_index(tmp_path):
 def test_validation_rejects_ragged_top_hit_offsets(tmp_path):
     from opengwasdb.validation import validate_store
 
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(
-        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
-    )
+    out = _build_store(tmp_path)
     root = open_store(out).arrays(mode="r+")
     offsets = root["top_hits/p_5e_04/analysis_offsets"][:]
     offsets[-1] -= 1
@@ -355,11 +339,7 @@ def test_top_hit_counts_in_analyses_tsv_match_top_hit_index(tmp_path):
     from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
     from opengwasdb.model.analyses import read_analyses
 
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(
-        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
-    )
+    out = _build_store(tmp_path)
 
     table = read_analyses(out / "analyses.tsv")
     rows = sorted(table.rows, key=lambda r: int(r["analysis_index"]))
@@ -379,11 +359,7 @@ def test_analyses_table_groups_by_gene(tmp_path):
     columns)."""
     from opengwasdb.query import query_store
 
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(
-        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
-    )
+    out = _build_store(tmp_path)
 
     q = query_store(out)
     analyses = q.analyses_table()
@@ -407,11 +383,7 @@ def test_range_by_analysis_matches_trait_position(tmp_path):
     the sole source of truth `range_by_analysis()` scans."""
     from opengwasdb.query import query_store
 
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(
-        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
-    )
+    out = _build_store(tmp_path)
 
     from opengwasdb.model.analyses import read_analyses
 
