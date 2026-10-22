@@ -493,6 +493,35 @@ def test_validator_accepts_a_ragged_release_declaring_cis(ragged_store_path):
     assert result.ok, result.errors
 
 
+def test_a_fixture_0_1_0_release_still_spelling_full_opens_and_validates(
+    tmp_path, dense_store_path
+):
+    """The brief's case, on a real 0.1.0 release: every release built before
+    #298 says `full`, and none of them needs rewriting.
+
+    `relayout_as_0_1_0` writes a genuine 0.1.0 (Zarr v2) release from a current
+    build, so this exercises the version a published Store actually carries
+    rather than a hand-edited manifest.
+    """
+    import json
+
+    from legacy_fixtures import relayout_as_0_1_0
+
+    legacy = relayout_as_0_1_0(dense_store_path, tmp_path / "legacy-0.1.0.opengwasdb")
+    manifest_path = legacy / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["format_version"] == "0.1.0"
+    # The fixture must be the thing under test: an old release that says `full`.
+    manifest["association_coverage"] = "full"
+    manifest_path.write_text(json.dumps(manifest))
+
+    store = open_store(legacy)
+    assert store.manifest.association_coverage.value == "gwas"
+
+    result = validate_store(legacy)
+    assert result.ok, result.errors
+
+
 def test_validator_accepts_a_release_still_spelling_full(dense_store_path):
     # Every release built before #298 says `full` outside the two-valued
     # vocabulary. It still opens and validates, as `gwas` (issue #298).
