@@ -199,7 +199,8 @@ def check_observed_view(
         )
     if ld_panel is not None or ancestry is not None:
         raise ObservedViewRefused(
-            f"--ld-panel and --ancestry are only for a Ragged pair, not a {_LAYOUT_NAMES[layout]} one"
+            "--ld-panel and --ancestry are only for a Ragged pair, "
+            f"not a {_LAYOUT_NAMES[layout]} one"
         )
     if layout is PrimaryStorageLayout.DENSE:
         return _check_dense(source, target, seed=seed, n_random=n_random)
