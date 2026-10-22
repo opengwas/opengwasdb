@@ -117,7 +117,7 @@ from opengwasdb.variants.reference import (
     require_written_rsids_match,
     warn_reference_left_rows_blank,
 )
-from opengwasdb.variants.rsid import RsidConflictPolicy
+from opengwasdb.variants.rsid import RsidConflictPolicy, withhold_disputed
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
     DEFAULT_REDUCTION_BATCH_SIZE,
@@ -1936,7 +1936,7 @@ def _candidates_by_routing_key(
     under ``refuse`` the first such key fails the build (issue #255 round 4);
     under ``drop`` every such key's candidate is "", and the second value maps
     each to its distinct names in `(rank, site)` order, for the build to report
-    and for `_withhold_disputed` to unname the variants they reach (issue
+    and for `withhold_disputed` to unname the variants they reach (issue
     #306). A Dense routing key is the identity, so two sites never share one
     and it is always empty.
     """
@@ -1959,21 +1959,6 @@ def _candidates_by_routing_key(
     for folded in conflicts:
         candidates[folded] = ""
     return candidates, conflicts
-
-
-def _withhold_disputed(
-    resolved: dict[str, str], routing: Mapping[str, str], disputed: Collection[str]
-) -> set[str]:
-    """Unname every variant a disputed key routes to, and return those variants.
-
-    A blank candidate is not enough: another key reaching the same variant --
-    the other allele order -- would still name it by the first-name rule, and
-    the variant's sources disagree on its name all the same (issue #306).
-    """
-    reached = {alid for folded in disputed if (alid := routing.get(folded))}
-    for alid in reached:
-        resolved.pop(alid, None)
-    return reached
 
 
 def _note_conflict(
@@ -2069,7 +2054,7 @@ def _rekey_and_verify(
     )
     _log_routing_disagreements(candidates, routing, pass1_lookup, key, label=label)
     resolved = _rekey_rsids_to_alids(routing, candidates)
-    withheld = _withhold_disputed(resolved, routing, conflicts)
+    withheld = withhold_disputed(resolved, routing, conflicts)
     expected = expected_rsids_by_routed_key(
         rsid_by_site, routing, key, drop_disputed=on_conflict is RsidConflictPolicy.DROP
     )

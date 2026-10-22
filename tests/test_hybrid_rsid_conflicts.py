@@ -29,6 +29,7 @@ from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.checkpoint import (
     BUILD_PARAMS,
+    RSID_CONFLICTS,
     checkpoint_dir_for,
     read_json,
     write_json,
@@ -323,6 +324,29 @@ def test_conflict_free_build_is_identical_under_both_policies(tmp_path):
         assert (refused / name).read_bytes() == (dropped / name).read_bytes(), name
 
 
+@pytest.mark.parametrize("policy", ["refuse", "drop"])
+def test_harvest_that_finds_no_names_counts_zero(tmp_path, policy):
+    """A harvest that ran and found no names compared them all and found no
+    dispute: 0 keys and 0 variants, not the null of a comparison never made."""
+    source = _write_ssf(
+        tmp_path / "unnamed.tsv.gz",
+        [
+            ("1", 100000, "A", "G", 0.5, 0.1, "."),
+            ("1", 1564620, "a", "g", 0.2, 0.1, "."),
+        ],
+    )
+    manifest = _manifest(tmp_path, [("unnamed", source)])
+    store = tmp_path / "unnamed.opengwasdb"
+
+    result = _cli(manifest, _reference(tmp_path), store, "--on-rsid-conflict", policy)
+
+    assert result.exit_code == 0, result.output
+    assert _summary(result.output)["rsid_conflicts"] == {
+        "policy": policy, "n_keys": 0, "n_variants": 0, "sample": []
+    }
+    assert _hybrid_axis_rsids(store) == {CONFLICT_ON: "", AGREED: ""}
+
+
 def test_reference_panel_build_refuses_drop(tmp_path):
     """The legacy two-pass build has no harvest for the policy to govern, so
     asking it to drop is refused rather than silently ignored."""
@@ -445,8 +469,9 @@ class TestCheckpointedConflicts:
     def test_checkpoint_recorded_before_the_option_resumes_as_refuse(
         self, tmp_path, monkeypatch
     ):
-        """A checkpoint written before the option existed records no policy;
-        every harvest that compared names until then refused a conflict."""
+        """A checkpoint written before the option existed records no policy and
+        no counts; every harvest that compared names until then refused a
+        conflict, and the counts it never kept are unknown, not zero."""
         manifest, reference = _agreeing_fixture(tmp_path)
         store = tmp_path / "old.opengwasdb"
         _crash_after_the_fold(monkeypatch, manifest, reference, store)
@@ -454,6 +479,7 @@ class TestCheckpointedConflicts:
         params = read_json(checkpoint / BUILD_PARAMS)
         assert params.pop("on_rsid_conflict") == "refuse"
         write_json(checkpoint / BUILD_PARAMS, params)
+        (checkpoint / RSID_CONFLICTS).unlink()
 
         with pytest.raises(ValueError, match="Differing: on_rsid_conflict"):
             _build(
@@ -461,5 +487,28 @@ class TestCheckpointedConflicts:
             )
         resumed = _build(manifest, reference, store, checkpoint=True, resume=True)
 
-        assert resumed.rsid_conflicts.policy == "refuse"
+        assert resumed.rsid_conflicts.as_dict() == {
+            "policy": "refuse", "n_keys": None, "n_variants": None, "sample": []
+        }
         assert validate_store(store).ok
+
+    @pytest.mark.parametrize("policy", ["refuse", "drop"])
+    def test_modern_checkpoint_without_its_counts_is_refused(
+        self, tmp_path, monkeypatch, policy
+    ):
+        """A checkpoint that records the policy wrote its counts at the fold, so
+        their absence is lost evidence: the resume refuses rather than report a
+        count it no longer has."""
+        manifest, reference = _conflict_fixture(tmp_path, CONFLICT_OFF)
+        if policy == "refuse":
+            manifest, reference = _agreeing_fixture(tmp_path)
+        store = tmp_path / "lost.opengwasdb"
+        _crash_after_the_fold(monkeypatch, manifest, reference, store, on_rsid_conflict=policy)
+        (checkpoint_dir_for(store) / RSID_CONFLICTS).unlink()
+
+        with pytest.raises(FileNotFoundError, match=RSID_CONFLICTS):
+            _build(
+                manifest, reference, store, on_rsid_conflict=policy, checkpoint=True,
+                resume=True,
+            )
+        assert not store.exists()

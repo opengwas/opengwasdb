@@ -241,12 +241,17 @@ is part of the contract (issue #255):
   `n_keys`, the number of such routing keys among the harvested sites, stored or
   not; `n_variants`, the number of stored variants they reach, which `drop`
   leaves unnamed; and `sample`, the first 20 keys in genomic order, each with
-  its distinct names in `(rank, site)` order. `n_keys` and `n_variants` are
-  `null`, never `0`, for a build that compared no names across sources — a
+  its distinct names in `(rank, site)` order. A build that compared names and
+  found none disputed — even one whose sources name nothing — reports `0` and
+  `0`. `n_keys` and `n_variants` are `null`, never `0`, for a build that
+  compared no names across sources — a
   `--reference-panel` build, or one whose reference names its variants — and a
   build with no `--variant-reference` refuses `drop`, which it could not apply. A
   checkpointed build records the policy and the counts, and resuming it under
-  the other policy is refused. A Dense routing key is the source's own spelling,
+  the other policy is refused. A resume past the fold does not harvest again, so
+  one whose recorded counts are missing is refused too, unless its checkpoint
+  predates the option (records no `on_rsid_conflict`); its counts are then
+  `null`. A Dense routing key is the source's own spelling,
   so two source coordinates never share one and a Dense build never meets this
   case.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`

@@ -9,7 +9,7 @@ variant with different rs identifiers.
 from __future__ import annotations
 
 import heapq
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
@@ -76,7 +76,8 @@ class RsidConflicts:
     unnamed. Both are ``None`` when the build compared no source names -- a
     ``--reference-panel`` build, or a reference that names its own variants --
     so a count that was never taken cannot be read as a count of zero.
-    ``n_variants`` is known only once the fold has routed every key.
+    ``n_variants`` is known only once the fold has routed every key, unless
+    there is no disputed key, which reaches no variant.
     """
 
     policy: RsidConflictPolicy
@@ -93,6 +94,9 @@ class RsidConflicts:
         return cls(
             policy=policy,
             n_keys=len(conflicts),
+            # A harvest with nothing disputed is finished counting variants too:
+            # one that found no names at all is never rekeyed after the fold.
+            n_variants=None if conflicts else 0,
             sample=tuple(RsidConflict(key, tuple(conflicts[key])) for key in first),
         )
 
@@ -120,6 +124,23 @@ class RsidConflicts:
             "n_variants": self.n_variants,
             "sample": [{"key": item.key, "names": list(item.names)} for item in self.sample],
         }
+
+
+def withhold_disputed(
+    resolved: dict[str, str], routing: Mapping[str, str], disputed: Collection[str]
+) -> set[str]:
+    """Unname every variant a disputed routing key reaches, and return those variants.
+
+    ``resolved`` is an ALID -> rsid map rekeyed through ``routing``. A blank
+    candidate for the disputed key is not enough: another key reaching the same
+    variant -- the other allele order -- would still name it by the first-name
+    rule, and the variant's sources disagree on its name all the same (issue
+    #306). Shared by the Dense rekey seam and the Hybrid build's Dense skeleton.
+    """
+    reached = {alid for key in disputed if (alid := routing.get(key))}
+    for alid in reached:
+        resolved.pop(alid, None)
+    return reached
 
 
 def _genomic_order(key: str) -> tuple[tuple[int, str], int, str, str]:

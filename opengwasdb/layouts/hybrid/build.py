@@ -79,7 +79,6 @@ from opengwasdb.layouts.dense.build_vcf import (
     _rekey_rsids_to_alids,
     _routing_lookup,
     _sorted_alids,
-    _withhold_disputed,
     _write_dense_bands,
     _write_index,
     column_map_provenance,
@@ -192,7 +191,7 @@ from opengwasdb.variants.reference import (
     require_written_rsids_match,
     warn_reference_left_rows_blank,
 )
-from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts
+from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts, withhold_disputed
 
 if TYPE_CHECKING:
     from opengwasdb.variants.reference import VariantReference
@@ -1280,7 +1279,7 @@ def _single_pass_rsids(
     )
     on_reference = _rekey_rsids_to_alids(candidate_routing, candidates)
     # The Dense skeleton's names; the combined rekey after the fold finishes this.
-    _withhold_disputed(on_reference, candidate_routing, conflicts)
+    withhold_disputed(on_reference, candidate_routing, conflicts)
     log.info(
         "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "
         "on-reference rsid(s)",
@@ -3624,13 +3623,24 @@ def _recorded_prepared(
 def _recorded_rsid_conflicts(state: CheckpointState) -> RsidConflicts:
     """What the first run's harvest found named differently (issue #306).
 
-    A fold recorded before the count was kept left no record of it: the count
-    is then unknown, never zero.
+    A checkpoint records ``on_rsid_conflict`` in its build parameters from the
+    moment the option exists, and its fold writes the counts beside them; a
+    resumed run past the fold does not harvest again. So a missing record is
+    accepted only from a checkpoint whose parameters predate the option, whose
+    counts are then unknown, never zero. From any other checkpoint it is lost
+    evidence, and the resume is refused rather than publish a count it lacks.
     """
     path = state.path / RSID_CONFLICTS
     if path.exists():
         return RsidConflicts.from_dict(read_json(path))
-    return RsidConflicts(RsidConflictPolicy(state.params["on_rsid_conflict"]), None)
+    if "on_rsid_conflict" in read_build_params(state.path):
+        raise FileNotFoundError(
+            f"The checkpoint at {state.path} recorded its fold but holds no "
+            f"{RSID_CONFLICTS}: the rsid conflict counts its harvest found are lost, and "
+            "a run resumed after the fold does not harvest again. Start the build "
+            "again with --checkpoint."
+        )
+    return RsidConflicts(RsidConflictPolicy.REFUSE, None)
 
 
 def _require_intact_plates(state: CheckpointState, n_analyses: int) -> None:

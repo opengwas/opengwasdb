@@ -59,11 +59,14 @@ with every association, and by no name.
 (the stored variants they reach, left unnamed under `drop`) and the first 20
 keys in genomic order with their names in `(rank, site)` order — whatever the
 policy and whatever the counts, so a release's step record shows them even when
-they are 0. A build that compared no names (a `--reference-panel` build, or a
-reference that names its variants) reports both as `null`, not 0. A checkpoint
-records the policy and the counts, so a run resumed after the fold reports the
-first run's, and a resume under the other policy is refused like any changed
-parameter.
+they are 0, including a harvest whose sources name nothing. A build that
+compared no names (a `--reference-panel` build, or a reference that names its
+variants) reports both as `null`, not 0. A checkpoint records the policy and
+the counts, so a run resumed after the fold reports the first run's, and a
+resume under the other policy is refused like any changed parameter. A resume
+past the fold whose recorded counts are missing is refused as lost evidence,
+unless the checkpoint predates the option (its parameters record no
+`on_rsid_conflict`), when the counts are `null`.
 
 **The build's own check finds the disputed variants again.** Under `drop` the
 pre-publication oracle (`expected_rsids_by_routed_key`) works out from the raw
@@ -129,6 +132,28 @@ Analysis names most of these keys first.
   did, and a recipe must choose `drop` to lose a name.
 - A Dense build never meets this: its routing key is the source's own
   spelling, so two sites never share one, and the option is Hybrid-only.
+- Reading every identifier cell through the rule costs the GWAS-SSF variant
+  projection, which every harvest runs over every source row, about 4.8%. On
+  GCST004988 (11,629,203 rows) `stream_variants()` took 37.5 s and 38.6 s,
+  against 35.8 s and 36.8 s on the parent commit `32f47b3`. Those are two runs
+  each on a shared compute node, interleaved, with run-to-run variation of
+  about a second; a later run of the change took 36.3 s. Measure it from each
+  tree with:
+
+  ```bash
+  pixi run -e dev python - /data/opengwasdb/raw/ebi-gwas-catalog/GCST004001-GCST005000/GCST004988/harmonised/29059683-GCST004988-EFO_0000305.h.tsv.gz <<'EOF'
+  import sys, time
+  from opengwasdb.readers.gwas_ssf import GwasSsfReader
+  start = time.perf_counter()
+  rows = sum(1 for _ in GwasSsfReader(sys.argv[1]).stream_variants())
+  print(rows, f"{time.perf_counter() - start:.1f} s")
+  EOF
+  ```
+
+  The cost buys a name a user can look the variant up by, in place of a
+  compound id no lookup finds. The committed
+  `benchmark_reader_projection.py` artifact was measured at `b688892`, before
+  this change, and was not re-run for it.
 - The normalisation changes the stored rsid of any GWAS-SSF source that writes
   compound or listed ids, in Dense and Hybrid builds alike. The GWAS-VCF
   reader's `ID`, the native FinnGen reader and the Ragged SSF builder keep their
