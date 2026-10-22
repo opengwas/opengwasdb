@@ -136,6 +136,31 @@ def _summary(output: str) -> dict:
     return json.loads(output.strip().splitlines()[-1])
 
 
+def _assert_one_variant_unnamed(
+    result, store: Path, key: str, names: tuple[str, ...], alid: str
+) -> None:
+    """A `drop` build that met one disputed key reaching one variant: it says
+    so, and the variant answers to its ALID, with both sources' associations,
+    but to none of the names."""
+    assert result.exit_code == 0, result.output
+    assert _summary(result.output)["rsid_conflicts"] == {
+        "policy": "drop",
+        "n_keys": 1,
+        "n_variants": 1,
+        "sample": [{"key": key, "names": list(names)}],
+    }
+    assert validate_store(store).ok, validate_store(store).errors
+    axis = VariantAxis(store)
+    try:
+        assert all(axis.by_identifier(name) is None for name in names)
+        assert axis.by_identifier(alid) is not None
+    finally:
+        axis.close()
+    with query_store(store) as query:
+        hit = query.lookup([alid], ["upper", "lower"])
+    assert len(hit["z"]) == 2
+
+
 @pytest.mark.parametrize("conflict", [CONFLICT_ON, CONFLICT_OFF], ids=["reference", "fold"])
 class TestConflictingNames:
     def test_refuse_is_the_default_and_names_the_key_and_both_rsids(self, tmp_path, conflict):
@@ -157,13 +182,7 @@ class TestConflictingNames:
 
         result = _cli(manifest, reference, store, "--on-rsid-conflict", "drop")
 
-        assert result.exit_code == 0, result.output
-        assert _summary(result.output)["rsid_conflicts"] == {
-            "policy": "drop",
-            "n_keys": 1,
-            "sample": [{"key": conflict, "names": [UPPER_NAME, LOWER_NAME]}],
-        }
-        assert validate_store(store).ok, validate_store(store).errors
+        _assert_one_variant_unnamed(result, store, conflict, (UPPER_NAME, LOWER_NAME), conflict)
         # The fixture is meaningful: the agreed variant keeps its name, so the
         # store does carry rsids and only the disputed one is missing. The
         # reference's variants are stored whether or not a source observes them.
@@ -171,19 +190,11 @@ class TestConflictingNames:
         assert _hybrid_axis_rsids(store) == expected
         # "No rsid" is the table's own `.`, as for a variant no source names.
         assert _table_rsid_cells(store)[conflict] == "."
-
         axis = VariantAxis(store)
         try:
             assert axis.by_identifier("rs3") == axis.by_identifier(AGREED) is not None
-            assert axis.by_identifier(UPPER_NAME) is None
-            assert axis.by_identifier(LOWER_NAME) is None
-            assert axis.by_identifier(conflict) is not None
         finally:
             axis.close()
-        with query_store(store) as query:
-            hit = query.lookup([conflict], ["upper", "lower"])
-        # Both sources' associations are on the unnamed variant.
-        assert len(hit["z"]) == 2
 
 
 class TestNormalisedNamesDoNotConflict:
@@ -218,9 +229,53 @@ class TestNormalisedNamesDoNotConflict:
         assert _summary(result.output)["rsid_conflicts"] == {
             "policy": policy,
             "n_keys": 0,
+            "n_variants": 0,
             "sample": [],
         }
         assert _hybrid_axis_rsids(store) == {CONFLICT_ON: stored, AGREED: ""}
+
+
+#: GCST004988 reports this indel in both allele orders under different names;
+#: GCST010723 names the `TTTTG`/`T` order as the other one does (stores #225).
+INDEL_ALID = "1:154311889:T:TTTTG"
+
+
+@pytest.mark.parametrize("on_reference", [True, False], ids=["reference", "fold"])
+def test_drop_blanks_a_variant_another_allele_order_still_names(tmp_path, on_reference):
+    """The variant, not just the disputed key, stores no rsid: here the
+    `TTTTG`/`T` key is disputed (rs376674031 against rs113800458) while the
+    `T`/`TTTTG` key, which routes to the same variant, names rs113800458 alone.
+    Before the variant was blanked it kept that name."""
+    upper = _write_ssf(
+        tmp_path / "upper.tsv.gz",
+        [
+            ("1", 154311889, "T", "TTTTG", 0.5, 0.1, "rs113800458:154284365:T:TTTTG"),
+            ("1", 154311889, "TTTTG", "T", -0.5, 0.1, "rs376674031:154284365:TTTTG:T"),
+            ("1", 1564620, "A", "G", 0.2, 0.1, "rs3"),
+        ],
+    )
+    lower = _write_ssf(
+        tmp_path / "lower.tsv.gz",
+        [
+            ("1", 154311889, "ttttg", "t", 0.4, 0.1, "rs113800458"),
+            ("1", 1564620, "a", "g", 0.3, 0.1, "rs3"),
+        ],
+    )
+    manifest = _manifest(tmp_path, [("upper", upper), ("lower", lower)])
+    reference = tmp_path / "reference.txt"
+    alids = [INDEL_ALID, AGREED] if on_reference else [AGREED]
+    reference.write_text("".join(f"{alid}\n" for alid in alids), encoding="utf-8")
+    store = tmp_path / "indel.opengwasdb"
+
+    result = _cli(manifest, reference, store, "--on-rsid-conflict", "drop")
+
+    names = ("rs376674031", "rs113800458")
+    _assert_one_variant_unnamed(result, store, "1:154311889:TTTTG:T", names, INDEL_ALID)
+    assert _hybrid_axis_rsids(store) == {INDEL_ALID: "", AGREED: "rs3"}
+    if on_reference:
+        # The disputed order is off the reference, so the fold reaches this
+        # Dense row after the skeleton was named: the Dense table is rewritten.
+        assert _table_rsid_cells(store / "dense")[INDEL_ALID] == "."
 
 
 def _agreeing_fixture(tmp_path: Path) -> tuple[Path, Path]:
@@ -255,10 +310,10 @@ def test_conflict_free_build_is_identical_under_both_policies(tmp_path):
     assert by_refuse.exit_code == 0, by_refuse.output
     assert by_drop.exit_code == 0, by_drop.output
     assert _summary(by_refuse.output)["rsid_conflicts"] == {
-        "policy": "refuse", "n_keys": 0, "sample": []
+        "policy": "refuse", "n_keys": 0, "n_variants": 0, "sample": []
     }
     assert _summary(by_drop.output)["rsid_conflicts"] == {
-        "policy": "drop", "n_keys": 0, "sample": []
+        "policy": "drop", "n_keys": 0, "n_variants": 0, "sample": []
     }
     expected = {CONFLICT_ON: "rs1", AGREED: "rs3", CONFLICT_OFF: "rs4"}
     assert _hybrid_axis_rsids(refused) == expected
@@ -293,7 +348,9 @@ def test_build_that_reads_no_source_names_reports_no_count(tmp_path):
     )
 
     assert _hybrid_axis_rsids(store)[CONFLICT_ON] == "rs1"
-    assert result.rsid_conflicts.as_dict() == {"policy": "refuse", "n_keys": None, "sample": []}
+    assert result.rsid_conflicts.as_dict() == {
+        "policy": "refuse", "n_keys": None, "n_variants": None, "sample": []
+    }
 
 
 def test_sample_is_the_first_keys_in_genomic_order(tmp_path):
@@ -327,6 +384,8 @@ def test_sample_is_the_first_keys_in_genomic_order(tmp_path):
 
     report = result.rsid_conflicts.as_dict()
     assert report["n_keys"] == len(positions) + 1
+    # Every disputed key is one off-reference variant of its own.
+    assert report["n_variants"] == len(positions) + 1
     expected_keys = [f"2:{pos}:A:G" for pos in positions][:RSID_CONFLICT_SAMPLE_SIZE]
     assert [entry["key"] for entry in report["sample"]] == expected_keys
     assert report["sample"][0]["names"] == ["rsU100001", "rsL100001"]

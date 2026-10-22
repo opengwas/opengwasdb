@@ -108,8 +108,9 @@ _ON_RSID_CONFLICT_HELP = (
     "What to do when sources that spell one variant's alleles in different case name "
     "it with different rsids, as the rsid harvest of a --variant-reference build "
     "finds (#306): refuse fails the build, naming the variant; drop stores it with no "
-    "rsid, so it is found by ALID and position but by neither name. The count and the "
-    "first 20 such variants are always printed under rsid_conflicts."
+    "rsid, even where its other allele order names it, so it is found by ALID and "
+    "position but by no name. The counts of such keys and variants, and the first 20 "
+    "keys, are always printed under rsid_conflicts."
 )
 _ALLOW_UNVERIFIED_HELP = (
     "Accept Analyses the supplied --eaf-reference could not verify (too little "

@@ -1934,10 +1934,11 @@ def _candidates_by_routing_key(
     first non-empty rsid in `(rank, site)` order wins. Two *different* non-empty
     names for one key cannot be resolved honestly, so this never picks one:
     under ``refuse`` the first such key fails the build (issue #255 round 4);
-    under ``drop`` every such key's candidate is "" -- the variant is stored
-    with no rsid -- and the second value maps each to its distinct names in
-    `(rank, site)` order, for the build to report (issue #306). A Dense routing
-    key is the identity, so two sites never share one and it is always empty.
+    under ``drop`` every such key's candidate is "", and the second value maps
+    each to its distinct names in `(rank, site)` order, for the build to report
+    and for `_withhold_disputed` to unname the variants they reach (issue
+    #306). A Dense routing key is the identity, so two sites never share one
+    and it is always empty.
     """
     candidates: dict[str, str] = {}
     first_site: dict[str, SourceKey] = {}
@@ -1958,6 +1959,21 @@ def _candidates_by_routing_key(
     for folded in conflicts:
         candidates[folded] = ""
     return candidates, conflicts
+
+
+def _withhold_disputed(
+    resolved: dict[str, str], routing: Mapping[str, str], disputed: Collection[str]
+) -> set[str]:
+    """Unname every variant a disputed key routes to, and return those variants.
+
+    A blank candidate is not enough: another key reaching the same variant --
+    the other allele order -- would still name it by the first-name rule, and
+    the variant's sources disagree on its name all the same (issue #306).
+    """
+    reached = {alid for folded in disputed if (alid := routing.get(folded))}
+    for alid in reached:
+        resolved.pop(alid, None)
+    return reached
 
 
 def _note_conflict(
@@ -2032,7 +2048,7 @@ def _rekey_and_verify(
     key: SiteKeyFn = _source_site_key,
     label: str = "Single-pass build",
     on_conflict: RsidConflictPolicy = RsidConflictPolicy.REFUSE,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], set[str]]:
     """Rekey harvested candidates ONCE through ONE routing, and verify exactly.
 
     ``routing`` must be the build's own key form and the *final* routing -- a
@@ -2045,18 +2061,20 @@ def _rekey_and_verify(
     than reading the keyed candidates, so the key preparation is checked: a
     collapse that keeps the wrong name disagrees with the raw walk and fails
     (issue #255 round 4). Under ``drop`` it finds the disputed keys itself too,
-    so one that kept a name fails as well (issue #306).
+    so a variant one reaches that kept a name fails as well (issue #306).
+    Returns the resolved map and the variants left unnamed under ``drop``.
     """
-    candidates, _conflicts = _candidates_by_routing_key(
+    candidates, conflicts = _candidates_by_routing_key(
         rsid_by_site, key, label=label, on_conflict=on_conflict
     )
     _log_routing_disagreements(candidates, routing, pass1_lookup, key, label=label)
     resolved = _rekey_rsids_to_alids(routing, candidates)
+    withheld = _withhold_disputed(resolved, routing, conflicts)
     expected = expected_rsids_by_routed_key(
         rsid_by_site, routing, key, drop_disputed=on_conflict is RsidConflictPolicy.DROP
     )
     require_rsids_match_expected(resolved, expected)
-    return resolved
+    return resolved, withheld
 
 
 def _reference_axis_rsids(
@@ -2090,7 +2108,7 @@ def _reference_axis_rsids(
         liftover_failure_threshold=liftover_failure_threshold,
         n_workers=n_workers,
     )
-    resolved = _rekey_and_verify(
+    resolved, _withheld = _rekey_and_verify(
         rsid_by_site,
         _routing_lookup(reference.source_lookup, _source_site_key),
         pass1_lookup,

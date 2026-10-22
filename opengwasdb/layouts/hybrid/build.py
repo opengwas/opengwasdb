@@ -79,6 +79,7 @@ from opengwasdb.layouts.dense.build_vcf import (
     _rekey_rsids_to_alids,
     _routing_lookup,
     _sorted_alids,
+    _withhold_disputed,
     _write_dense_bands,
     _write_index,
     column_map_provenance,
@@ -1278,13 +1279,14 @@ def _single_pass_rsids(
         label="Hybrid single-pass build",
     )
     on_reference = _rekey_rsids_to_alids(candidate_routing, candidates)
+    # The Dense skeleton's names; the combined rekey after the fold finishes this.
+    _withhold_disputed(on_reference, candidate_routing, conflicts)
     log.info(
         "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "
         "on-reference rsid(s)",
         len(on_reference),
     )
     found = RsidConflicts.found(options.on_rsid_conflict, conflicts)
-    _log_dropped_rsids(found)
     return _RsidHarvest(on_reference, rsid_by_site, candidate_routing, False, found)
 
 
@@ -1295,8 +1297,10 @@ def _log_dropped_rsids(conflicts: RsidConflicts) -> None:
     first = conflicts.sample[0]
     log.warning(
         "Hybrid single-pass build: %d routing key(s) are named differently by their "
-        "sources and are stored with no rsid (--on-rsid-conflict drop), e.g. %s named %s",
+        "sources, and the %d stored variant(s) they reach have no rsid "
+        "(--on-rsid-conflict drop), e.g. %s named %s",
         conflicts.n_keys,
+        conflicts.n_variants,
         first.key,
         " and ".join(first.names),
     )
@@ -2075,13 +2079,16 @@ def _merge_off_reference_rsids(
         _warn_fold_left_rows_blank(prepared, fold)
         return prepared
     combined = {**prepared.candidate_routing, **_fold_routing_for_candidates(prepared, fold)}
-    merged = _rekey_and_verify(
+    merged, withheld = _rekey_and_verify(
         prepared.rsid_by_site,
         combined,
         key=_routed_site_key,
         label="Hybrid single-pass build",
         on_conflict=prepared.rsid_conflicts.policy,
     )
+    # Only the combined routing says which stored variant each disputed key reaches.
+    prepared = replace(prepared, rsid_conflicts=prepared.rsid_conflicts.reaching(len(withheld)))
+    _log_dropped_rsids(prepared.rsid_conflicts)
     if merged == prepared.rsid_by_alid:
         return prepared
     log.info(

@@ -46,24 +46,37 @@ agreement, and a variant that only a compound id names is stored under its
 plain rs identifier, which is what a user looks it up by.
 
 **`build-hybrid --on-rsid-conflict {refuse,drop}`, default `refuse`.**
-`refuse` is the issue #255 behaviour, unchanged. `drop` gives a disputed
-routing key no rsid: the variant it routes to is written with `rsid` `.` and
-left out of the rsid search index, as a variant no source names is. It is
-found by ALID and by position, with every association, and by neither name.
+`refuse` is the issue #255 behaviour, unchanged. `drop` gives no rsid to every
+stored variant a disputed routing key reaches over the build's final combined
+routing, including one that a second key — the same site in the other allele
+order — reaches with a name of its own: the variant's sources disagree on its
+name either way. It is written with `rsid` `.` and left out of the rsid search
+index, as a variant no source names is, and is found by ALID and by position,
+with every association, and by no name.
 
-**The count is always reported.** The build's JSON summary carries
-`rsid_conflicts` — `policy`, `n_keys`, and the first 20 keys in genomic order
-with their names in `(rank, site)` order — whatever the policy and whatever the
-count, so a release's step record shows the number even when it is 0. A build
-that compared no names (a `--reference-panel` build, or a reference that names
-its variants) reports `n_keys: null`, not 0. A checkpoint records the policy
-and the count, so a run resumed after the fold reports the first run's count,
-and a resume under the other policy is refused like any changed parameter.
+**The counts are always reported.** The build's JSON summary carries
+`rsid_conflicts` — `policy`, `n_keys` (disputed routing keys), `n_variants`
+(the stored variants they reach, left unnamed under `drop`) and the first 20
+keys in genomic order with their names in `(rank, site)` order — whatever the
+policy and whatever the counts, so a release's step record shows them even when
+they are 0. A build that compared no names (a `--reference-panel` build, or a
+reference that names its variants) reports both as `null`, not 0. A checkpoint
+records the policy and the counts, so a run resumed after the fold reports the
+first run's, and a resume under the other policy is refused like any changed
+parameter.
 
-**The build's own check finds the disputed keys again.** Under `drop` the
+**The build's own check finds the disputed variants again.** Under `drop` the
 pre-publication oracle (`expected_rsids_by_routed_key`) works out from the raw
-harvest which keys are disputed rather than taking the build's list, so a build
-that kept a disputed name fails instead of publishing it.
+harvest which keys are disputed rather than taking the build's list, and
+expects no name on any variant they reach, so a build that left one named fails
+instead of publishing it.
+
+**Out of scope: two allele orders that each agree internally.** A variant whose
+keys are each named consistently, but differently from each other, is not
+reached by a disputed key and keeps the first name, as in a Dense or two-pass
+build (issue #192). In the two-Analysis build below that is 61,406 variants,
+59,963 of them indels written `C`/`CT` in one source and `CT`/`C` in the other
+under different rs numbers; they are not counted in `n_variants`.
 
 ## Considered options
 
@@ -80,35 +93,35 @@ that kept a disputed name fails instead of publishing it.
   lower-case Analyses that win lets another lower-case one win. Clean removal
   is all 133 lower-case Analyses, a membership change.
 - **Normalisation alone.** Removes 304 of 99,577 keys.
-- **Withhold the name of every variant any two sources name differently.** A
-  variant reached by two routing keys — the same site in the other allele
-  order — would then also lose a name the two orders disagree on. That is the
-  first-name rule of issue #192, shared with Dense and with the two-pass build,
-  and changing it is a separate decision; this one withholds only what a
-  routing key's own sources dispute. Measured on the two Analyses of the 1:905
-  case built alone (below), it is 83 of 89,580 disputed keys: GCST004988
-  reports some indels in both allele orders under different names, and the
-  other order's name stays on the variant.
+- **Withhold only the disputed key's names.** The first implementation: the
+  disputed key contributed no name, but a second key reaching the variant still
+  named it by the first-name rule. Built on the two Analyses of the 1:905 case
+  alone (below), 83 of the 89,580 disputed variants kept a name that way — 39 one
+  of the disputed names, 44 a third — because GCST004988 reports some indels in
+  both allele orders under different names. Rejected by the opengwasdb-stores
+  owner on 2026-10-22: where the sources disagree on a variant's name, the
+  variant stores none.
 
 ## Verification
 
 A `drop` build of GCST004988 and GCST010723 alone against the gnomAD v4 EUR
-reference (`EUR-variants.txt.gz`, 13,415,936 ALIDs; 23,040,587 harvested
-sites) reports `n_keys` 89,580. An independent scan of the two files, sharing
-no code with the build, finds the same 89,580 disputed keys after
-normalisation and 129,843 before it: 40,263 of the pair's disagreements are
-compound against plain with the same rs number (GCST004988 writes 526,194
-compound ids; neither file writes a `;` list). In the Store, 89,497 of the
-89,580 are written with rsid `.`, and the other 83 are named through their
-other-allele-order key. The `refuse` build of the same pair now stops at
-1:8170 (`rs184698020` against `rs28517440`) rather than at 1:905. The pairwise
-counts exceed the release-wide scan's because in the full manifest an
-earlier-ranked Analysis names most of these keys first.
+reference (`EUR-variants.txt.gz`, 13,415,936 ALIDs; 23,040,587 harvested sites)
+reports `n_keys` 89,580 and `n_variants` 89,580, and writes every one of those
+variants with rsid `.`; none has both allele orders disputed. The first 200 are
+found by ALID and by neither disputed name, and the Store validates. An
+independent scan of the two files, sharing no code with the build, finds the
+same 89,580 disputed keys and variants after normalisation, and 129,843 keys
+before it: 40,263 of the pair's disagreements are compound against plain with
+the same rs number (GCST004988 writes 526,194 compound ids; neither file writes
+a `;` list). The `refuse` build of the same pair now stops at 1:8170
+(`rs184698020` against `rs28517440`) rather than at 1:905. The pairwise counts
+exceed the release-wide scan's because in the full manifest an earlier-ranked
+Analysis names most of these keys first.
 
 ## Consequences
 
 - OGS-00011 can be rebuilt with `on-rsid-conflict: drop` in its Build Recipe;
-  the stores side records the count from the step's stdout.
+  the stores side records the counts from the step's stdout.
 - A variant stored unnamed because of a dispute looks, in the Store, like one
   no source named. The Store records no per-variant reason; the release's build
   record carries the count and the sample.

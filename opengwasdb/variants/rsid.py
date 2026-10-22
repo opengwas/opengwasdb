@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import heapq
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -48,9 +48,10 @@ class RsidConflictPolicy(StrEnum):
     """What a Hybrid build does with a routing key its sources name differently.
 
     ``refuse`` fails the build, naming the key and both names (issue #255).
-    ``drop`` stores that variant with no rsid and reports the key: absence is
-    kept distinct from a name that may be wrong, and the variant is still found
-    by ALID and by position (issue #306).
+    ``drop`` stores every variant such a key reaches with no rsid -- even when
+    another key, the other allele order, names it -- and reports the keys and
+    the variants: absence is kept distinct from a name that may be wrong, and
+    the variant is still found by ALID and by position (issue #306).
     """
 
     REFUSE = "refuse"
@@ -70,13 +71,17 @@ class RsidConflict:
 class RsidConflicts:
     """What a build's rsid harvest found, for the build's summary.
 
-    ``n_keys`` is ``None`` when the build compared no source names -- a
+    ``n_keys`` counts the routing keys whose sources name them differently and
+    ``n_variants`` the stored variants those keys reach, which ``drop`` leaves
+    unnamed. Both are ``None`` when the build compared no source names -- a
     ``--reference-panel`` build, or a reference that names its own variants --
     so a count that was never taken cannot be read as a count of zero.
+    ``n_variants`` is known only once the fold has routed every key.
     """
 
     policy: RsidConflictPolicy
     n_keys: int | None
+    n_variants: int | None = None
     sample: tuple[RsidConflict, ...] = ()
 
     @classmethod
@@ -91,12 +96,17 @@ class RsidConflicts:
             sample=tuple(RsidConflict(key, tuple(conflicts[key])) for key in first),
         )
 
+    def reaching(self, n_variants: int) -> RsidConflicts:
+        """The same report, with the stored variants the keys were routed to."""
+        return replace(self, n_variants=n_variants)
+
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> RsidConflicts:
         """Read back what `as_dict` wrote (a checkpoint's record)."""
         return cls(
             policy=RsidConflictPolicy(payload["policy"]),
             n_keys=payload["n_keys"],
+            n_variants=payload["n_variants"],
             sample=tuple(
                 RsidConflict(entry["key"], tuple(entry["names"])) for entry in payload["sample"]
             ),
@@ -107,6 +117,7 @@ class RsidConflicts:
         return {
             "policy": self.policy.value,
             "n_keys": self.n_keys,
+            "n_variants": self.n_variants,
             "sample": [{"key": item.key, "names": list(item.names)} for item in self.sample],
         }
 
