@@ -209,7 +209,9 @@ is part of the contract (issue #255):
   source's different name for the same variant does not replace it, and a `.`
   or empty cell names nothing and never clears an earlier name. Several source
   coordinates that canonicalise to one ALID therefore take the answer of the
-  one that sorts first, not of the one that appears first in a file.
+  one that sorts first, not of the one that appears first in a file. The one
+  exception is a Hybrid build's routing key that its sources name differently,
+  below.
 - A GWAS-SSF source, read directly or through a Column Map, names a variant by
   the first of its `rsid` and `variant_id` cells that names an rs identifier,
   normalised before any name is compared (issue #306): a `;`-separated list
@@ -220,6 +222,28 @@ is part of the contract (issue #255):
   the same variant — and the normalisation makes them one name. The GWAS-VCF
   reader's `ID` and the FinnGen reader's first comma-separated `rsids` item are
   read as before.
+- A Hybrid routing key upper-cases alleles, so source coordinates spelt in
+  different case are one stored variant. When their sources name it with
+  different (normalised) rsids, nothing in the sources says which is right, and
+  `build-hybrid --on-rsid-conflict` decides (issue #306). `refuse`, the default,
+  fails the build and names the routing key and both names. `drop` gives that
+  routing key **no rsid**, so the variant it routes to is written with `rsid`
+  `.` and left out of the rsid search index, exactly as a variant no source
+  names: a lookup by either name finds nothing, and lookups by ALID and position
+  find the variant and all of its associations. (A variant that a second routing
+  key also reaches — the same site reported in the other allele order — takes
+  that key's name by the first-non-empty rule above; only the disputed key's
+  names are withheld.) Either way the build's JSON summary carries
+  `rsid_conflicts`: the `policy`; `n_keys`, the number of such routing keys
+  among the harvested sites, stored or not; and `sample`, the first 20 of them in
+  genomic order, each with its distinct names in `(rank, site)` order. `n_keys`
+  is `null`, never `0`, for a build that compared no names across sources — a
+  `--reference-panel` build, or one whose reference names its variants — and a
+  build with no `--variant-reference` refuses `drop`, which it could not apply. A
+  checkpointed build records the policy and the count, and resuming it under
+  the other policy is refused. A Dense routing key is the source's own spelling,
+  so two source coordinates never share one and a Dense build never meets this
+  case.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`
   column blank simply because the reference it was given is a plain ALID list.
   When the reference names none of its variants, the build runs the same Pass 1
@@ -256,8 +280,10 @@ is part of the contract (issue #255):
   publication: the resolved ALID → rsid map is compared exactly with an
   independently computed expectation — the raw harvest candidates walked
   through the build's own key function over the *same final combined* routing,
-  first non-empty per ALID — so a wrong value, a missing entry, a key-
-  normalisation collapse that keeps the wrong name, or an extra entry fails;
+  first non-empty per ALID, and under `--on-rsid-conflict drop` with the routing
+  keys it finds named differently contributing no name — so a wrong value, a
+  missing entry, a key-normalisation collapse that keeps the wrong name, a
+  disputed name kept, or an extra entry fails;
   and the written table is read back row for row against that map, so a stale
   map or a table lost in the write fails too. Neither check runs on the
   reference-named path above. A release whose sources genuinely name no variants

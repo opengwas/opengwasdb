@@ -105,6 +105,7 @@ from opengwasdb.layouts.hybrid.checkpoint import (
     PROVENANCE_RSID,
     PROVENANCE_SOURCE,
     RESUME_FUNCTION,
+    RSID_CONFLICTS,
     CheckpointState,
     checkpoint_dir_for,
     completed_phases,
@@ -190,6 +191,7 @@ from opengwasdb.variants.reference import (
     require_written_rsids_match,
     warn_reference_left_rows_blank,
 )
+from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts
 
 if TYPE_CHECKING:
     from opengwasdb.variants.reference import VariantReference
@@ -219,6 +221,9 @@ class HybridBuildResult:
     n_panel: int  # Dense Component rows
     n_off_panel: int  # off-panel observed variants (overflow variant axis)
     n_overflow: int  # overflow associations
+    #: Routing keys the sources named differently, and the policy that met them
+    #: (issue #306); a count of `None` means no source names were compared.
+    rsid_conflicts: RsidConflicts
 
 
 # ── Reference panel input ────────────────────────────────────────────────────
@@ -825,6 +830,7 @@ class _BuildOptions:
     eaf_reference: str | Path | None
     eaf_reference_ancestry: str | None
     allow_unverified_eaf: bool
+    on_rsid_conflict: RsidConflictPolicy
 
 
 @dataclass(frozen=True)
@@ -852,6 +858,25 @@ class _VariantPartition:
 
 
 @dataclass(frozen=True)
+class _RsidHarvest:
+    """Where the axis's rsids come from, as `_axis_source` resolves them.
+
+    ``rsid_by_alid`` is what the Dense skeleton is written with. The raw
+    candidates and their on-reference routing travel on for the fold to finish
+    rekeying (issue #255), and are empty unless the build harvested;
+    ``reference_named`` says the reference named its own variants and no
+    source was read; ``conflicts`` is what the harvest found named differently
+    (issue #306).
+    """
+
+    rsid_by_alid: dict[str, str]
+    rsid_by_site: dict[SourceKey, str]
+    candidate_routing: dict[str, str]
+    reference_named: bool
+    conflicts: RsidConflicts
+
+
+@dataclass(frozen=True)
 class _SourceAxis:
     """The lifted union axis: every phase between Pass 1 and the Dense
     skeleton consumes this and nothing else."""
@@ -869,6 +894,7 @@ class _SourceAxis:
     rsid_by_site: dict[SourceKey, str]
     candidate_routing: dict[str, str]
     reference_named_rsids: bool
+    rsid_conflicts: RsidConflicts
     keys_sorted: np.ndarray
     targets_sorted: np.ndarray
     ispanel_sorted: np.ndarray
@@ -902,6 +928,8 @@ class _PreparedBuild:
     rsid_by_site: dict[SourceKey, str]
     candidate_routing: dict[str, str]
     reference_named_rsids: bool
+    #: What the harvest found named differently across sources (issue #306).
+    rsid_conflicts: RsidConflicts
     dense_to_shared: np.ndarray
     spill_dir: Path
     keys_sorted: np.ndarray
@@ -1160,11 +1188,8 @@ def _axis_source(
     Path,
     StagedRelease,
     dict[tuple[str, int, str, str], str],
-    dict[str, str],
     set[str],
-    dict[SourceKey, str],
-    dict[str, str],
-    bool,
+    _RsidHarvest,
     Collection[SourceKey],
 ]:
     """Open the Dense staging dir and resolve the source-coordinate routing.
@@ -1173,35 +1198,23 @@ def _axis_source(
     ``source_lookup`` is the routing and its ALIDs define the Dense axis. Without
     one, the legacy Pass 1 reads every source once and lifts hg19 rows.
 
-    The last two elements are the harvest's candidates (keyed as the routing
-    keys them) and their on-reference routing, when the reference names no
-    rsids: the fold finishes the routing and the rekey happens once, globally
+    The harvest carries the candidates (keyed as the routing keys them) and
+    their on-reference routing when the reference names no rsids: the fold
+    finishes the routing and the rekey happens once, globally
     (`_merge_off_reference_rsids`, issue #255). Empty on every other path.
     """
     dense_dir, dense_staged = _open_dense_component(staged)
     if options.variant_reference is not None:
         reference = read_variant_reference(options.variant_reference)
         panel_alids = _resolve_reference_panel(options, reference)
-        candidates, candidate_routing, rsid_by_alid, reference_named = _single_pass_rsids(
-            reference, manifest_rows, options
-        )
+        harvest = _single_pass_rsids(reference, manifest_rows, options)
         log.info(
             "Single-pass build: variant axis loaded from %s (%d panel variants); "
             "Pass 1 variant discovery bypassed",
             options.variant_reference,
             len(panel_alids),
         )
-        return (
-            dense_dir,
-            dense_staged,
-            reference.source_lookup,
-            rsid_by_alid,
-            panel_alids,
-            candidates,
-            candidate_routing,
-            reference_named,
-            (),
-        )
+        return dense_dir, dense_staged, reference.source_lookup, panel_alids, harvest, ()
     panel_alids = _panel_alids(options)
     source_lookup, rsid_by_alid, swapped = _lift_manifest_variants(
         manifest_rows,
@@ -1209,40 +1222,34 @@ def _axis_source(
         liftover_failure_threshold=options.liftover_failure_threshold,
         n_workers=options.n_workers,
     )
-    return (
-        dense_dir,
-        dense_staged,
-        source_lookup,
-        rsid_by_alid,
-        panel_alids,
-        {},
-        {},
-        False,
-        swapped,
+    # The two-pass build compares no names across sources: it keeps the first.
+    harvest = _RsidHarvest(
+        rsid_by_alid, {}, {}, False, RsidConflicts(options.on_rsid_conflict, None)
     )
+    return dense_dir, dense_staged, source_lookup, panel_alids, harvest, swapped
 
 
 def _single_pass_rsids(
     reference: VariantReference, manifest_rows: list[_ManifestRow], options: _BuildOptions
-) -> tuple[dict[SourceKey, str], dict[str, str], dict[str, str], bool]:
+) -> _RsidHarvest:
     """The on-reference rsids the Dense skeleton needs, and what the fold will
     finish rekeying (issue #255).
 
     A reference that carries rsids is its own authority and nothing is read.
     Otherwise the build runs Pass 1's harvest for the candidate rows and their
     ``(rank, site)`` order and rekeys the on-reference subset once for the Dense
-    skeleton. Returns ``(rsid_by_site, candidate_routing, on_reference_rsids,
-    reference_named_rsids)``. The raw candidates travel on -- not a keyed copy --
-    so the global oracle can walk them through the build's key function itself
-    after the fold; the last flag says the reference already named rsids and the
-    sources were not read, which is out of #255's scope and only warned about.
+    skeleton. The raw candidates travel on -- not a keyed copy -- so the global
+    oracle can walk them through the build's key function itself after the fold.
+    A key its sources name differently is refused or stored unnamed, as
+    ``--on-rsid-conflict`` says, and counted either way (issue #306).
     """
     if reference.rsid_by_alid:
         # A reference that names rsids is used as-is (out of #255's scope); warn
         # about the axis rows it leaves blank, split by where they came from
         # (issue #255 round 4, finding 3).
         warn_reference_left_rows_blank(reference)
-        return {}, {}, dict(reference.rsid_by_alid), True
+        unchecked = RsidConflicts(options.on_rsid_conflict, None)
+        return _RsidHarvest(dict(reference.rsid_by_alid), {}, {}, True, unchecked)
     pass1_lookup, rsid_by_site, _rsid_by_alid, _swapped = _harvest_manifest_variants(
         manifest_rows,
         chain_file=options.chain_file,
@@ -1253,8 +1260,11 @@ def _single_pass_rsids(
         site_key=_routed_site_key,
         refuse_cross_assembly_conflicts=True,
     )
-    candidates = _candidates_by_routing_key(
-        rsid_by_site, _routed_site_key, label="Hybrid single-pass build"
+    candidates, conflicts = _candidates_by_routing_key(
+        rsid_by_site,
+        _routed_site_key,
+        label="Hybrid single-pass build",
+        on_conflict=options.on_rsid_conflict,
     )
     reference_routing = _routing_lookup(reference.source_lookup, _routed_site_key)
     candidate_routing = {
@@ -1273,7 +1283,25 @@ def _single_pass_rsids(
         "on-reference rsid(s)",
         len(on_reference),
     )
-    return rsid_by_site, candidate_routing, on_reference, False
+    found = RsidConflicts.found(options.on_rsid_conflict, conflicts)
+    _log_dropped_rsids(found)
+    return _RsidHarvest(on_reference, rsid_by_site, candidate_routing, False, found)
+
+
+def _log_dropped_rsids(conflicts: RsidConflicts) -> None:
+    """Say how many variants were left unnamed because their sources disagree."""
+    if not conflicts.n_keys:
+        return
+    first = conflicts.sample[0]
+    log.warning(
+        "Hybrid single-pass build: %d routing key(s) are named differently by their "
+        "sources and are stored with no rsid (--on-rsid-conflict drop), e.g. %s named %s",
+        conflicts.n_keys,
+        first.key,
+        " and ".join(first.names),
+    )
+
+
 def _lift_and_partition(
     staged: StagedRelease,
     manifest_rows: list[_ManifestRow],
@@ -1287,17 +1315,9 @@ def _lift_and_partition(
     Source coordinates the reference does not hold are not known until Pass 2;
     ``_finalise_reference_partition`` adds them to the shared axis there.
     """
-    (
-        dense_dir,
-        dense_staged,
-        source_lookup,
-        rsid_by_alid,
-        panel_alids,
-        candidates,
-        candidate_routing,
-        reference_named,
-        swapped,
-    ) = _axis_source(staged, manifest_rows, options)
+    dense_dir, dense_staged, source_lookup, panel_alids, harvest, swapped = _axis_source(
+        staged, manifest_rows, options
+    )
     partition = _partition_variants(
         source_lookup,
         panel_alids,
@@ -1320,10 +1340,11 @@ def _lift_and_partition(
         partition=partition,
         analyses=analyses,
         hg38_to_source=hg38_to_source,
-        rsid_by_alid=rsid_by_alid,
-        rsid_by_site=candidates,
-        candidate_routing=candidate_routing,
-        reference_named_rsids=reference_named,
+        rsid_by_alid=harvest.rsid_by_alid,
+        rsid_by_site=harvest.rsid_by_site,
+        candidate_routing=harvest.candidate_routing,
+        reference_named_rsids=harvest.reference_named,
+        rsid_conflicts=harvest.conflicts,
         keys_sorted=keys_sorted,
         targets_sorted=targets_sorted,
         ispanel_sorted=ispanel_sorted,
@@ -2055,7 +2076,11 @@ def _merge_off_reference_rsids(
         return prepared
     combined = {**prepared.candidate_routing, **_fold_routing_for_candidates(prepared, fold)}
     merged = _rekey_and_verify(
-        prepared.rsid_by_site, combined, key=_routed_site_key, label="Hybrid single-pass build"
+        prepared.rsid_by_site,
+        combined,
+        key=_routed_site_key,
+        label="Hybrid single-pass build",
+        on_conflict=prepared.rsid_conflicts.policy,
     )
     if merged == prepared.rsid_by_alid:
         return prepared
@@ -2250,6 +2275,8 @@ def _record_axis(
     write_lines(state.path / AXIS_SHARED, inputs.shared_sorted)
     write_str_map(state.path / PROVENANCE_SOURCE, inputs.hg38_to_source)
     write_str_map(state.path / PROVENANCE_RSID, prepared.rsid_by_alid)
+    # A run resumed after the fold harvests nothing, so the count is kept here.
+    write_json(state.path / RSID_CONFLICTS, prepared.rsid_conflicts.as_dict())
 
 
 def _recorded_axis(state: CheckpointState | None) -> _FoldInputs | None:
@@ -2873,6 +2900,7 @@ def _prepare_build(
         rsid_by_site=axis.rsid_by_site,
         candidate_routing=axis.candidate_routing,
         reference_named_rsids=axis.reference_named_rsids,
+        rsid_conflicts=axis.rsid_conflicts,
         dense_to_shared=dense_to_shared,
         spill_dir=spill_dir,
         keys_sorted=axis.keys_sorted,
@@ -3220,6 +3248,7 @@ def _finalise_store(
         n_panel=prepared.partition.n_panel,
         n_off_panel=prepared.partition.n_off_panel,
         n_overflow=n_overflow,
+        rsid_conflicts=prepared.rsid_conflicts,
     )
 
 
@@ -3234,8 +3263,8 @@ def build_hybrid_from_vcf_manifest(
     dtype: str = DEFAULT_DTYPE, overwrite: bool = False, n_workers: int = 1,
     eaf_reference: str | Path | None = None, eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False, source_reader_capability: str | None = None,
-    source_assembly: str | None = None, checkpoint: bool = False,
-    resume: bool = False, column_map: ColumnMap | str | Path | None = None,
+    source_assembly: str | None = None, checkpoint: bool = False, resume: bool = False,
+    column_map: ColumnMap | str | Path | None = None, on_rsid_conflict: str = "refuse",
 ) -> HybridBuildResult:
     """Build a Hybrid store from a manifest of GWAS-VCF files and a reference
     panel or precomputed variant reference. A thin orchestrator over three deep
@@ -3260,14 +3289,13 @@ def build_hybrid_from_vcf_manifest(
     ``source_assembly=hg38`` (#85); ``source_reader_capability`` supplies the
     per-release default (#174), and ``eaf_reference`` drives the orientation check.
     ``column_map`` reads ``opengwasdb.column-map`` rows (#281); a checkpoint records it.
+    ``on_rsid_conflict`` is the policy for a key its sources name differently (#306).
 
     ``checkpoint=True`` opts the build into phase-granularity resume; ``resume=True``
     continues one from the checkpoint this call's ``output_path`` implies (issue #227;
     `_run_checkpointed_build`, `_resume_requested`), and a destination whose checkpoint
     is still there is refused unless ``overwrite=True`` discards it.
     """
-    if reference_panel is None and variant_reference is None:
-        raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
     options = _BuildOptions(
         out=Path(output_path),
         reference_panel=reference_panel,
@@ -3282,10 +3310,28 @@ def build_hybrid_from_vcf_manifest(
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
+        on_rsid_conflict=RsidConflictPolicy(on_rsid_conflict),
     )
     column_map = as_column_map(column_map)
     defaults = _ManifestDefaults(source_reader_capability, source_assembly, column_map)
     return _dispatch_build(manifest_path, options, defaults, overwrite, checkpoint, resume)
+
+
+def _require_axis_source(options: _BuildOptions) -> None:
+    """Refuse a build with no axis source, or a policy its axis source ignores.
+
+    Only the single-pass harvest compares names across sources; a
+    ``--reference-panel`` build keeps the first name per variant and refuses
+    mixed-case sources in its routing index, so a ``drop`` it would ignore is
+    refused rather than accepted in silence (issue #306).
+    """
+    if options.reference_panel is None and options.variant_reference is None:
+        raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
+    if options.variant_reference is None and options.on_rsid_conflict is RsidConflictPolicy.DROP:
+        raise ValueError(
+            "--on-rsid-conflict drop applies to the rsid harvest of a --variant-reference "
+            "build; a --reference-panel build compares no names across sources"
+        )
 
 
 def _dispatch_build(
@@ -3297,6 +3343,7 @@ def _dispatch_build(
     resume: bool,
 ) -> HybridBuildResult:
     """Start a resumed, checkpointed or ordinary build from the same options."""
+    _require_axis_source(options)
     if resume:
         return _resume_requested(manifest_path, options, defaults, overwrite)
     return _run_checkpointed_build(manifest_path, options, defaults, overwrite, checkpoint)
@@ -3411,7 +3458,7 @@ def _resume_requested(
     one configuration with the rest of a store built under another.
     """
     checkpoint_dir = checkpoint_dir_for(options.out)
-    recorded = read_build_params(checkpoint_dir)
+    recorded = _read_params(checkpoint_dir)
     require_matching_params(recorded, _build_params(manifest_path, options, defaults, overwrite))
     return resume_hybrid_build(checkpoint_dir, n_workers=options.n_workers)
 
@@ -3436,7 +3483,7 @@ def resume_hybrid_build(
     checkpoint once the release is published.
     """
     path = Path(checkpoint_dir)
-    params = read_build_params(path)
+    params = _read_params(path)
     _require_unchanged_inputs(params)
     options = _options_from_params(params, n_workers)
     defaults = _ManifestDefaults(
@@ -3472,6 +3519,19 @@ def resume_hybrid_build(
         raise
     state.discard()
     return result
+
+
+def _read_params(checkpoint_dir: Path) -> dict[str, Any]:
+    """A checkpoint's build parameters, as a resume compares and reloads them.
+
+    A checkpoint written before ``on_rsid_conflict`` was a parameter (issue
+    #306) records none. Every harvest that compared names before then refused
+    a conflict, so that is what it records; a resume asking to drop is then a
+    changed parameter, and refused like any other.
+    """
+    params = read_build_params(checkpoint_dir)
+    params.setdefault("on_rsid_conflict", RsidConflictPolicy.REFUSE.value)
+    return params
 
 
 def _resume_prepared(
@@ -3543,6 +3603,7 @@ def _recorded_prepared(
         rsid_by_site={},
         candidate_routing={},
         reference_named_rsids=False,
+        rsid_conflicts=_recorded_rsid_conflicts(state),
         dense_to_shared=dense_to_shared,
         spill_dir=state.spill_dir,
         keys_sorted=_NO_ROUTING[0],
@@ -3551,6 +3612,18 @@ def _recorded_prepared(
         swaps_sorted=_NO_ROUTING[3],
         n_analyses=len(manifest_rows),
     )
+
+
+def _recorded_rsid_conflicts(state: CheckpointState) -> RsidConflicts:
+    """What the first run's harvest found named differently (issue #306).
+
+    A fold recorded before the count was kept left no record of it: the count
+    is then unknown, never zero.
+    """
+    path = state.path / RSID_CONFLICTS
+    if path.exists():
+        return RsidConflicts.from_dict(read_json(path))
+    return RsidConflicts(RsidConflictPolicy(state.params["on_rsid_conflict"]), None)
 
 
 def _require_intact_plates(state: CheckpointState, n_analyses: int) -> None:
@@ -3667,6 +3740,7 @@ def _build_params(
         "eaf_reference": _text(options.eaf_reference),
         "eaf_reference_ancestry": options.eaf_reference_ancestry,
         "allow_unverified_eaf": options.allow_unverified_eaf,
+        "on_rsid_conflict": options.on_rsid_conflict.value,
         "overwrite": bool(overwrite),
         "source_reader_capability": defaults.source_reader_capability,
         "source_assembly": defaults.source_assembly,
@@ -3703,6 +3777,7 @@ def _options_from_params(params: Mapping[str, Any], n_workers: int | None) -> _B
         eaf_reference=params["eaf_reference"],
         eaf_reference_ancestry=params["eaf_reference_ancestry"],
         allow_unverified_eaf=params["allow_unverified_eaf"],
+        on_rsid_conflict=RsidConflictPolicy(params["on_rsid_conflict"]),
     )
 
 
