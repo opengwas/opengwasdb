@@ -1363,7 +1363,7 @@ Reference-Completed releases MUST:
 
 There is no Z-only completion mode.
 
-Completion preserves every observed association exactly: a source-observed cell has the same decoded Z, SE and EAF in the Reference-Completed release and is not marked imputed, and no source-missing cell is observed in it. `check-observed-view` (§20.4) re-derives that from the two releases' arrays.
+Completion preserves every observed association exactly: a source-observed cell has the same decoded Z, SE and EAF in the Reference-Completed release and is not marked imputed, and no source-missing cell is observed in it. In a Hybrid release a Dense cell becomes observed only as a crossover, a source Overflow association moved into the Dense Component when the LD panel extends its axis; it holds what that component's own codec gives for the source value. `check-observed-view` (§20.4) re-derives that from the two releases' arrays.
 
 ## 13. LD Reference Panel requirements
 
@@ -1822,11 +1822,64 @@ replaces its Store under the same id, so this check gates the swap.
   (`bands_checked` is 0) and the verdict says why.
 - **Exit codes.** `0` pass; `1` the check ran and found a mismatch (the verdict is still
   written, and each failure is named on `stderr`); `2` refused: nothing was checked, so no
-  verdict is written and the reason is on `stderr`. Refused are a mixed-layout pair, a Hybrid
-  root (Hybrid Dense Components are not supported yet), a `SOURCE` that is
+  verdict is written and the reason is on `stderr`. Refused are a mixed-layout pair, a layout
+  the check does not support (it checks Dense, Hybrid and Ragged pairs), a `SOURCE` that is
   not Observed-Only, a `TARGET` that is not Reference-Completed, a release that cannot be opened,
   a `TARGET` with no `imputed` mask, a release whose `z` plane and variant axis disagree in length
   or are empty.
+- **Hybrid scope.** A Hybrid pair (issue #295) is an Observed-Only Hybrid `SOURCE` and the
+  `complete-hybrid` output made from it. Completion changes both components: it completes the
+  Dense Component, folds each `SOURCE` Overflow association at a variant the LD panel added to
+  the Dense axis into the Dense Component as an observed cell (`imputed == 0`), and rebuilds the
+  Overflow on the completed shared axis without it (a **crossover**, issue #99). So the check
+  compares the observed view across both components, by ALID:
+  - *Axes, exhaustively.* The Dense Components' axes and the shared axes are each mapped as
+    above, and every `TARGET` Dense row must be on `TARGET`'s shared axis.
+  - *Every crossover.* `complete-hybrid` records none, so they are derived from the axes: a
+    `SOURCE` Overflow association whose ALID is a `TARGET` Dense row. Each must be an observed
+    Dense cell, not marked imputed, whose decoded Z, SE and EAF equal the `SOURCE` value encoded
+    and decoded with the `TARGET` Dense Component's own codec: Z, then EAF against that row's
+    `eaf_baseline`, then SE against that EAF, as the fold writes it. A crossover is coded against
+    the Dense Component's baseline, not the Overflow's, so bit-identity with `SOURCE` is not the
+    rule; the round trip is exact, and a moved or altered value still differs from it. Every
+    crossover is read, so the cost grows with the `TARGET` chunk-rows that hold one.
+  - *The Dense Component, sampled.* The chunk-row sample above, over the two Dense Components,
+    with the crossover cells on inserted rows set aside for the crossover check: they are the
+    only observed, unflagged cells an inserted row may hold.
+  - *The Overflow, sampled.* `--n-random` Analyses (all of them when there are fewer), drawn
+    with their own `numpy.random.default_rng(--seed)`. Every association of each is matched with
+    `TARGET`'s by shared-axis ALID, in both directions, and must have bit-identical decoded Z, SE
+    and EAF. `SOURCE` crossovers are left to the crossover check, and `TARGET` associations at a
+    Dense variant to `observed_in_both`.
+  - *The Overflow, every Analysis.* `TARGET`'s Overflow holds `SOURCE`'s association count less
+    that Analysis's crossovers, none of them at a `TARGET` Dense variant and none marked imputed.
+
+  The verdict carries `"layout": "hybrid"`, then `seed`, `n_random`, `source`, `target` and
+  `analyses` as above; `analyses.identical` also needs both Overflows to have one offset per
+  Analysis.
+
+  | key | meaning |
+  |---|---|
+  | `components.dense` | the Dense verdict's `axis`, `geometry`, `bands_checked`, `bands_by_stratum`, `bands`, `bands_with_mismatch`, `totals` and `max_abs_diff`, over the Dense Components; `totals.crossover_cells` (informational) counts the crossover cells set aside in the sampled spans |
+  | `components.overflow` | `axis` (the shared-axis map, with `child_dense_rows_unshared` and `child_dense_order_preserved`), `n_parent_associations`, `n_child_associations`, `analyses_checked`, `analyses`, `analyses_with_mismatch`, `totals`, `max_abs_diff`, `all_analyses` |
+  | `crossovers` | `n` associations on `rows` Dense rows (null when the comparison was skipped), `totals`, `max_abs_diff` (`TARGET` against the round trip) and `reencoding_max_abs_diff` (the round trip against `SOURCE`; informational) |
+
+  `components.overflow.totals` sums over the sampled Analyses: `parent_associations`,
+  `crossovers` and `child_associations` are informational; `z_mismatch`, `se_mismatch`,
+  `eaf_mismatch` (a matched association whose decoded value differs, NaN equal to NaN),
+  `observed_missing_in_child` (a `SOURCE` association that `TARGET`'s Overflow lacks),
+  `missing_became_observed` (a `TARGET` association that `SOURCE` lacks) and
+  `z_se_missingness_mismatch` fail. `components.overflow.all_analyses` covers every Analysis and
+  all fail: `observed_in_both`, `imputed_cells`, and `analyses_count_mismatch` (Analyses whose
+  count is not `SOURCE`'s less its crossovers). `crossovers.totals` all fail: `z_mismatch`,
+  `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_child`.
+  `failures` names each nonzero failing counter with the part that counted it
+  (`dense.inserted_observed_cells`, `overflow.observed_in_both`, `crossovers.z_mismatch`), and
+  `dense.parent_rows_unmapped`, `dense.order_not_preserved`, the same two for `overflow.` (the
+  shared axes), `overflow.child_dense_rows_not_on_shared_axis` and `analyses_mismatch`; after
+  any of these last the comparison is skipped. Also refused: a Dense Component that is not Dense
+  or not in its root's completion state, a `TARGET` Dense Component with no `imputed` mask, and
+  an Overflow that cannot be opened or holds a variant index off its shared axis.
 
 The check does not compare `TARGET`'s `source_release_id` with `SOURCE`'s `release_id`: a wrong
 pairing fails the axis or cell checks.
@@ -1867,7 +1920,7 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   directory `complete-ragged` was given) is therefore required for a Ragged pair, and `--ancestry`
   must equal `provenance.completion.ancestry` when given. There is no panel-free fallback.
   A `completion_quality` block the rebuilt regions lack is `quality_blocks_not_in_regions`, so a
-  panel other than the one used is noticed. `--ld-panel` for a Dense pair is refused.
+  panel other than the one used is noticed. `--ld-panel` for a Dense or Hybrid pair is refused.
 - **Totals.** `observed_in_source`, `imputed`, `nan_rows` and `regions` (retained
   Analysis-by-block regions) are informational. Failing: `z_mismatch`, `se_mismatch`,
   `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_target`,

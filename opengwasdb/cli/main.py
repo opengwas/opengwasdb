@@ -443,7 +443,8 @@ def audit_eaf_orientation_command(
 
 _OBSERVED_VIEW_SEED_HELP = "Seed of the sample (chunk-rows; Ragged: Analyses), kept in the verdict"
 _OBSERVED_VIEW_RANDOM_HELP = (
-    "Random chunk-rows (Ragged: Analyses) to compare, besides the fixed strata"
+    "Random chunk-rows to compare, besides the fixed strata; for a Hybrid, also the Overflow "
+    "Analyses to compare; for a Ragged, the Analyses to compare"
 )
 _OBSERVED_VIEW_PANEL_HELP = (
     "Ragged only, required for a Ragged pair: the --ld-panel root complete-ragged was run "
@@ -471,11 +472,28 @@ def check_observed_view_command(
     whole source chunk-rows across all Analyses (sampled): each observed cell must
     have identical Z, SE and EAF and not be marked imputed, no missing cell may be
     observed, and no inserted panel row may carry an observed cell (stores ADR 0037).
+    A Hybrid pair is compared across its Dense Component and Overflow. There, an
+    inserted row may carry an observed cell only as a crossover: a source Overflow
+    association that completion moved onto a panel row it added, which must equal
+    its source value through the Dense Component's codec.
+
+    A Ragged pair is compared by ALID over a seeded sample of Analyses, not
+    chunk-rows: each source-observed association must be in the target with
+    identical Z, SE and EAF, the target must hold no observed association the
+    source lacks, and every imputed association must lie in one of its Analysis's
+    retained regions (a non-admitted Analysis holds none). Those regions are
+    rebuilt from the LD panel, so --ld-panel (the root complete-ragged was given)
+    is required for a Ragged pair, and --ancestry, if given, must be the one the
+    target records (the default). Neither option is accepted for another layout.
 
     Exits 0 when everything agrees and 1 when anything does not; the verdict is
-    written to --output either way. Exits 2 without a verdict when the pair cannot
-    be checked: a non-Dense layout, a source that is not Observed-Only, or a target
-    that is not Reference-Completed.
+    written to --output either way; a Ragged pair also exits 1 on se_mismatch when
+    SE is residual-coded, because complete-ragged refits it (#301). Exits 2 without
+    a verdict when the pair cannot be checked: a mixed-layout pair, or a layout the
+    check does not support (it checks Dense, Hybrid and Ragged pairs), a source
+    that is not Observed-Only, a target that is not Reference-Completed, a Store
+    whose arrays cannot be opened or decoded, or, for a Ragged pair, no --ld-panel,
+    or a panel or ancestry the target does not record.
     """
     from opengwasdb.validation.observed_view import ObservedViewRefused, check_observed_view
 

@@ -73,7 +73,7 @@ from opengwasdb.validation.observed_view import (
 )
 from opengwasdb.variants import VariantAxis, is_indexable_alid
 
-__all__ = ["FAILING_COUNTERS", "STRATA", "check", "involves_ragged"]
+__all__ = ["FAILING_COUNTERS", "STRATA", "check_ragged"]
 
 STRATA = ("random", "non_admitted", "largest", "empty", "trait_less")
 # Analyses each deterministic stratum adds; non-admitted ones are all included up to a cap,
@@ -100,19 +100,7 @@ _TOTAL_KEYS = (*_INFORMATIONAL_COUNTERS, *FAILING_COUNTERS)
 _DIFF_PLANES = ("z", "se", "eaf")
 
 
-def involves_ragged(source_path: Path, target_path: Path) -> bool:
-    """Whether either Store is Ragged, so this module owns the pair (a mixed one is refused)."""
-    for path in (source_path, target_path):
-        try:
-            layout = open_store(path).manifest.primary_layout
-        except (OSError, ValueError, KeyError):
-            continue  # the Dense path reports a Store it cannot open
-        if layout is PrimaryStorageLayout.RAGGED:
-            return True
-    return False
-
-
-def check(
+def check_ragged(
     source_path: str | Path,
     target_path: str | Path,
     *,

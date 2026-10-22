@@ -381,8 +381,8 @@ def test_a_mixed_layout_pair_is_refused(tmp_path, pair):
     dense_observed, dense_completed = tcov._build_pair(root, tcov.ROWS, tdc._make_ld_panel(root))
     out = tmp_path / "verdict.json"
 
-    _assert_refused(_run(observed, dense_completed, out, panel=panel), out, "mixes layouts")
-    _assert_refused(_run(dense_observed, completed, out, panel=panel), out, "mixes layouts")
+    _assert_refused(_run(observed, dense_completed, out, panel=panel), out, "mixed-layout pair")
+    _assert_refused(_run(dense_observed, completed, out, panel=panel), out, "mixed-layout pair")
 
 
 def test_a_source_that_is_not_observed_only_is_refused(tmp_path, pair):
