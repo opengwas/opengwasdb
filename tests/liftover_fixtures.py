@@ -33,6 +33,33 @@ def write_two_strand_chain(path: Path) -> Path:
     return path
 
 
+def write_collision_chain(path: Path) -> Path:
+    """A real chain file whose two chains image overlapping target intervals.
+
+    The lift cannot be injective across chains, and a real UCSC chain set is not:
+    two source loci may both map into one target interval, so two hg19 variants
+    can land on one hg38 position. Chain A maps source ``[0, 1000)`` onto the
+    target's ``[5000, 6000)``; chain B maps source ``[1000, 2000)`` onto
+    ``[5500, 6500)``. A query point sits inside exactly one chain, so
+    `pyliftover` has nothing to choose between and the collision is the chain's
+    arithmetic, not a tie-break:
+
+    * hg19 501 (0-based 500) maps to hg38 5501;
+    * hg19 1001 (0-based 1000) also maps to hg38 5501 -- the collision;
+    * hg19 1501 maps to hg38 6001, clear of both.
+
+    Both chains are forward, so no allele is complemented.
+    """
+    path.write_text(
+        f"chain 1000 chr1 {STRAND_CHAIN_SIZE} + 0 1000 "
+        f"chr1 {STRAND_CHAIN_SIZE} + 5000 6000 1\n1000\n\n"
+        f"chain 900 chr1 {STRAND_CHAIN_SIZE} + 1000 2000 "
+        f"chr1 {STRAND_CHAIN_SIZE} + 5500 6500 2\n1000\n\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 #: One fixture row per orientation case: name, source contig, hg19 position,
 #: REF, ALT, the hg38 ALID the chain arithmetic gives, and the z and EAF the
 #: projected alleles require. ES/SE is 0.2/0.1 for the effect allele `A`, and

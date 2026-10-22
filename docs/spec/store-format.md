@@ -179,6 +179,20 @@ That release's `manifest.json` `provenance.lift` records the source Reference
 Assembly, the chain, the reference (or `null` when none was supplied) and the
 verified / other-variant / absent counts (issue #284, ADR 0062).
 
+A lift that lands two ESI entries on one canonical variant is ambiguous, and
+MUST be dropped, not resolved: a source of 9,000,000 rows cannot fail the way
+one Analysis can, and nothing in the file set says which of the two entries a
+probe's association belongs to. Every entry in such a group is dropped, with
+its associations — never one of them kept, chosen by position, allele order or
+row order — so no Analysis holds one `variant_index` twice (§11). The same
+refusal applies to a source that lists one variant under two entries without a
+lift, because it is the store's invariant that is at stake rather than the
+chain's. `build-ragged-besd` reports the drop on stdout and in
+`provenance.lift` as `n_collisions` (entries dropped) and `n_collision_groups`
+(contested variants), beside `n_lifted`; a same-assembly build has no lift
+record to hold them, and carries the same two fields in the provenance's root
+(issue #304).
+
 The Dense and Hybrid builders lift through the same projection and re-orient
 their statistics from it, but they do not perform this allele check and record
 no `provenance.lift`; nothing in this section requires them to until one is
@@ -1293,11 +1307,13 @@ ordinal in the concatenated CSR arrays.
 
 The CSR is analysis-major: `data.zarr/ragged/offsets` bounds one contiguous
 segment per Analysis, and within every segment `variant_index` MUST be
-**non-decreasing**. The ordering is a format invariant, not a builder
-convention: a reader locates a `(variant, Analysis)` pair by binary-searching
-that Analysis's segment, and a segment out of order would answer with a
-plausible, wrong row rather than an error. Validation therefore checks the
-ordering on every release, including ones this build did not write (§20).
+**strictly increasing** — a repeated `variant_index` is two associations at one
+variant of one Analysis, which `(variant, Analysis)` resolution cannot tell
+apart. The ordering is a format invariant, not a builder convention: a reader
+locates a `(variant, Analysis)` pair by binary-searching that Analysis's
+segment, and a segment out of order would answer with a plausible, wrong row
+rather than an error. Validation therefore checks the ordering on every
+release, including ones this build did not write (§20).
 
 `eaf` (ADR 0036) is an optional fourth parallel array (`data.zarr/ragged/eaf`,
 `float32`), aligned with the CSR `z`/`se` and absent when no Analysis in the
@@ -1607,7 +1623,7 @@ Validators MUST check at least:
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
-- `variant_index` is **non-decreasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11). It is checked on every release, not only on ones this build wrote, because a stored segment out of order makes the variant-side binary search answer with a plausible, wrong row. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows (1,000,000 int32, 4 MB), carries the preceding value across a window boundary and resets at each Analysis boundary, so peak memory is the window, its comparison bool and the per-Analysis offsets (`O(n_analyses)`), independent of the association count;
+- `variant_index` is **strictly increasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11): an out-of-order segment makes the variant-side binary search answer with a plausible, wrong row, and a repeated one is a second association at a variant that Analysis already holds. It is checked on every release, not only on ones this build wrote. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows (1,000,000 int32, 4 MB), carries the preceding value across a window boundary and resets at each Analysis boundary, so peak memory is the window, its comparison bool and the per-Analysis offsets (`O(n_analyses)`), independent of the association count. The error names the first offending Analysis and says which of the two it found — a decrease, or a repeat;
 - the variant-centric index MUST be present on every Ragged component (a Ragged Store Release or a Hybrid Overflow) in `format_version` 0.2.0, agrees with the Analysis-sorted component and is recorded in `provenance.ragged.by_variant`: its `offsets` array is `n_axis + 1` direct offsets spanning `[0, N)`, each variant holds exactly as many index rows as the component holds at that variant, `analysis_index` is non-decreasing within each variant's block and names a real Analysis, `eaf`/`imputed` are present on both sides or neither, and the cell contents match the Analysis-sorted planes (§11.1, ADR 0060);
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
 - the `se` plane, its `se_coefficients` and its exception table agree with the plan the manifest declares (§6a): a residual-coded plane has finite `float32` coefficients of shape `(n_analyses, 2)`, a sorted duplicate-free exception table whose positions lie inside the plane and whose entries are exactly the cells marked `-127`, and a complete `eaf` plane beside it; a `float16` plane has none of those arrays, and carrying one is a failure rather than a harmless relic;
