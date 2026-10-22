@@ -441,26 +441,29 @@ def audit_eaf_orientation_command(
     raise typer.Exit(1)
 
 
+_OBSERVED_VIEW_SEED_HELP = "Seed of the sample (chunk-rows; Ragged: Analyses), kept in the verdict"
+_OBSERVED_VIEW_RANDOM_HELP = (
+    "Random chunk-rows (Ragged: Analyses) to compare, besides the fixed strata"
+)
+_OBSERVED_VIEW_PANEL_HELP = (
+    "Ragged only, required for a Ragged pair: the --ld-panel root complete-ragged was run "
+    "with; retained regions are rebuilt from it. Refused for a Dense pair"
+)
+_OBSERVED_VIEW_ANCESTRY_HELP = (
+    "Ragged only: the --ancestry complete-ragged was run with; defaults to the target "
+    "manifest's, and is refused if it differs"
+)
+
+
 @app.command("check-observed-view")
 def check_observed_view_command(
     source_path: Path,
     target_path: Path,
-    seed: Annotated[
-        int, typer.Option(help="Seed of the chunk-row sample, recorded for reproducibility")
-    ],
+    seed: Annotated[int, typer.Option(help=_OBSERVED_VIEW_SEED_HELP)],
     output: Annotated[Path, typer.Option(help="Where to write the JSON verdict")],
-    n_random: Annotated[
-        int,
-        typer.Option(min=0, help="Random chunk-rows to compare, besides the fixed strata"),
-    ] = 1000,
-    ld_panel: Annotated[
-        Path | None,
-        typer.Option(help="Ragged only: the LD panel root complete-ragged was run with"),
-    ] = None,
-    ancestry: Annotated[
-        str | None,
-        typer.Option(help="Ragged only: the panel ancestry; default is the one the target records"),
-    ] = None,
+    n_random: Annotated[int, typer.Option(min=0, help=_OBSERVED_VIEW_RANDOM_HELP)] = 1000,
+    ld_panel: Annotated[Path | None, typer.Option(help=_OBSERVED_VIEW_PANEL_HELP)] = None,
+    ancestry: Annotated[str | None, typer.Option(help=_OBSERVED_VIEW_ANCESTRY_HELP)] = None,
 ) -> None:
     """Check that a Reference-Completed Store reproduces the Observed-Only Store it came from.
 

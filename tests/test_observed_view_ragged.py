@@ -85,7 +85,11 @@ def _write_filtered(path: Path, rows: list[tuple[int, str, str]], *, with_eaf: b
             fh.write("\t".join(str(cell) for cell in cells) + "\n")
 
 
-def _build_source(root: Path, sources: dict[str, list[tuple[int, str, str]]]) -> Path:
+def _build_source(
+    root: Path,
+    sources: dict[str, list[tuple[int, str, str]]],
+    analyses: list[dict] = ANALYSES,
+) -> Path:
     filtered = root / "filtered"
     filtered.mkdir(parents=True)
     for name, rows in sources.items():
@@ -98,7 +102,7 @@ def _build_source(root: Path, sources: dict[str, list[tuple[int, str, str]]]) ->
             "n": 5000, "mhc": "FALSE", "filtered_file": f"{a['analysis_id']}.tsv.gz",
             "assigned_ancestry": a["ancestry"],
         }
-        for i, a in enumerate(ANALYSES)
+        for i, a in enumerate(analyses)
     ])
     observed = root / "obs.opengwasdb"
     build_ragged_from_ssf(manifest, filtered, observed, store_id="test", release_id="obs-v1")
@@ -415,6 +419,30 @@ def test_an_ld_panel_given_for_a_dense_pair_is_refused(tmp_path, pair):
     )
 
 
+def test_a_target_missing_an_array_is_refused_with_the_reason(tmp_path, pair):
+    observed, completed, panel = pair
+    shutil.rmtree(completed / RAGGED_ZARR_PATH / "se")
+    out = tmp_path / "verdict.json"
+
+    _assert_refused(_run(observed, completed, out, panel=panel), out, "cannot be opened")
+
+
+def test_an_analysis_emptied_in_the_target_reports_its_associations_as_missing(tmp_path, pair):
+    """`afr_other` is the last Analysis, so dropping its five rows is a truncation."""
+    _, completed, _ = pair
+    root = _target_group(completed)
+    offsets = root["offsets"][:]
+    assert offsets[-1] - offsets[-2] == 5
+    for name in ("variant_index", "z", "se", "eaf", "imputed"):
+        root[name].resize((int(offsets[-2]),))
+    root["offsets"][-1] = offsets[-2]
+    root.attrs["n_associations"] = int(offsets[-2])
+
+    verdict = _failing(pair, tmp_path, "observed_missing_in_target", expected=5)
+
+    assert verdict["totals"]["observed_in_source"] == 18
+
+
 # --- seam 4: reproducibility ------------------------------------------------
 
 
@@ -430,3 +458,112 @@ def test_the_same_seed_gives_the_same_verdict(tmp_path, pair):
 
     assert _without_timing(verdicts[0]) == _without_timing(verdicts[1])
     assert verdicts[0]["seed"] == 7 and verdicts[0]["n_random"] == 2
+
+
+# --- retained regions on a multi-block panel, expected regions written by hand -----------------
+#
+# Four chr1 blocks, named for their extent, each with five panel SNPs (positions below). The cis
+# window is 50,000 bp, so a Trait at 250,000 reaches [200,000, 300,000]:
+#   1/100000-199999  ends one base short of the window      -> outside
+#   1/200000-280000  inside the window                      -> region
+#   1/300000-380000  starts exactly at the window's end      -> region (the bounds are inclusive)
+#   1/400000-480000  far outside                             -> outside
+# Without a Trait position a block is a region once the Analysis holds `min_observed_points()`
+# = 4 observations at its panel SNPs.
+BLOCKS = {
+    "100000-199999": [100_000, 120_000, 140_000, 160_000, 199_999],
+    "200000-280000": [200_000, 220_000, 240_000, 260_000, 280_000],
+    "300000-380000": [300_000, 320_000, 340_000, 360_000, 380_000],
+    "400000-480000": [400_000, 420_000, 440_000, 460_000, 480_000],
+}
+CIS_WINDOW_BP = 50_000
+REGION_ANALYSES = [
+    {"analysis_id": "cis", "trait_chr": "1", "trait_bp": 250_000, "ancestry": "EUR"},
+    {"analysis_id": "tl_at_threshold", "ancestry": "EUR"},
+    {"analysis_id": "tl_below_threshold", "ancestry": "EUR"},
+    {"analysis_id": "tl_off_panel", "ancestry": "EUR"},
+    {"analysis_id": NO_EAF, "trait_chr": "1", "trait_bp": 250_000, "ancestry": "AFR"},
+]
+
+
+def _snps(positions: list[int]) -> list[tuple[int, str, str]]:
+    return [(bp, "A", "G") for bp in positions]
+
+
+REGION_SOURCES = {
+    "cis": _snps(BLOCKS["200000-280000"]),
+    # 4 panel SNPs of the first block: exactly at the threshold
+    "tl_at_threshold": _snps(BLOCKS["100000-199999"][:4]),
+    # 3 panel SNPs of the first block: one below it
+    "tl_below_threshold": _snps(BLOCKS["100000-199999"][:3]),
+    # 3 panel SNPs of the last block plus one variant inside its extent that is not a panel SNP
+    "tl_off_panel": _snps([*BLOCKS["400000-480000"][:3], 450_000]),
+    NO_EAF: _snps(BLOCKS["200000-280000"]),
+}
+EXPECTED_BLOCKS = {
+    "cis": ["1/200000-280000", "1/300000-380000"],
+    "tl_at_threshold": ["1/100000-199999"],
+    "tl_below_threshold": [],
+    "tl_off_panel": [],
+    NO_EAF: [],
+}
+
+
+def _write_multi_block_panel(root: Path) -> Path:
+    directory = root / "multi_panel" / "EUR" / "1"
+    directory.mkdir(parents=True)
+    for name, positions in BLOCKS.items():
+        lines = ["CHR\tSNP\tOA\tEA\tEAF\tBP"]
+        lines += [f"1\t1:{bp}_A_G\tG\tA\t0.{30 + i}\t{bp}" for i, bp in enumerate(positions)]
+        (directory / f"{name}.tsv").write_text("\n".join(lines) + "\n")
+        rng = np.random.default_rng(0)
+        matrix = rng.standard_normal((5, 5))
+        ld = matrix @ matrix.T + np.eye(5) * 0.5
+        with gzip.open(directory / f"{name}.unphased.vcor1.gz", "wt") as fh:
+            fh.writelines("\t".join(f"{v:.6f}" for v in row) + "\n" for row in ld)
+    return root / "multi_panel"
+
+
+@pytest.fixture(scope="module")
+def _region_pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, Path]:
+    root = tmp_path_factory.mktemp("observed-view-ragged-regions")
+    observed = _build_source(root, REGION_SOURCES, REGION_ANALYSES)
+    panel = _write_multi_block_panel(root)
+    completed = root / "comp.opengwasdb"
+    complete_ragged_store(
+        observed, completed, panel, ancestry="EUR", cis_window_bp=CIS_WINDOW_BP, min_cor=0.0,
+        release_id="comp-v1",
+    )
+    return observed, completed, panel
+
+
+def test_retained_regions_follow_the_hand_derived_block_table(tmp_path, _region_pair_seed):
+    observed, completed, panel = _region_pair_seed
+    out = tmp_path / "verdict.json"
+
+    result = _run(observed, completed, out, panel=panel)
+
+    verdict = _verdict(result, out)
+    assert result.exit_code == 0, verdict["failures"]
+    blocks = {a["analysis_id"]: a["blocks"] for a in verdict["sample"]["analyses"]}
+    assert blocks == EXPECTED_BLOCKS
+    assert verdict["totals"]["regions"] == 3
+
+
+def test_completion_used_no_block_outside_the_hand_derived_table(_region_pair_seed):
+    """The completed Store's own record of its blocks agrees with the hand table, independently
+    of the check: neither the 199,999 block nor the 3-observation blocks were completed."""
+    _, completed, _ = _region_pair_seed
+    ids = [a.analysis_id for a in read_analysis_records(completed / "analyses.tsv")]
+    root = completed / "index.sqlite"
+    import sqlite3
+
+    with sqlite3.connect(root) as db:
+        rows = db.execute("SELECT analysis_index, block_id FROM completion_quality").fetchall()
+    used: dict[str, set[str]] = {name: set() for name in ids}
+    for index, block_id in rows:
+        used[ids[index]].add(block_id)
+    for name, expected in EXPECTED_BLOCKS.items():
+        assert used[name] <= set(expected), (name, used[name])
+    assert used["cis"] == set(EXPECTED_BLOCKS["cis"])
+    assert used["tl_at_threshold"] == set(EXPECTED_BLOCKS["tl_at_threshold"])

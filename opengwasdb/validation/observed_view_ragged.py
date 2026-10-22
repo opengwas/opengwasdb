@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,7 +52,7 @@ from opengwasdb.completion.ld_panel import (
     canonical_panel_alid,
     check_panel_has_chromosomes,
 )
-from opengwasdb.layouts.ragged.complete import _cis_window_blocks, _has_trait_position
+from opengwasdb.completion.regions import cis_window_blocks, has_trait_position
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
@@ -197,8 +197,15 @@ def _open_pair(source_path: Path, target_path: Path) -> _Pair:
             raise ObservedViewRefused(f"store {path} has no variants to check")
     return _Pair(
         source_path, target_path, source, target,
-        RaggedCSRReader(source_path), RaggedCSRReader(target_path), rows[0], rows[1],
+        _reader(source_path, "source"), _reader(target_path, "target"), rows[0], rows[1],
     )
+
+
+def _reader(path: Path, role: str) -> RaggedCSRReader:
+    try:
+        return RaggedCSRReader(path)
+    except (OSError, ValueError, KeyError) as exc:
+        raise ObservedViewRefused(f"{role} store {path} cannot be opened: {exc!r}") from exc
 
 
 def _open(path: Path, role: str) -> OpenGWASDBStore:
@@ -307,7 +314,7 @@ def _choose_analyses(
     add(not_admitted, "non_admitted")
     add(np.argsort(-n_associations, kind="stable")[:STRATUM_SIZE], "largest")
     add(np.flatnonzero(n_associations == 0)[:STRATUM_SIZE], "empty")
-    trait_less = [i for i, a in enumerate(analyses) if not _has_trait_position(a)]
+    trait_less = [i for i, a in enumerate(analyses) if not has_trait_position(a)]
     add(trait_less[:STRATUM_SIZE], "trait_less")
     return chosen
 
@@ -354,10 +361,10 @@ def _retained_blocks(
         if not admitted[i]:
             continue
         a = analyses[i]
-        if _has_trait_position(a):
+        if has_trait_position(a):
             window = (a.trait_chr, int(a.trait_bp), panel.cis_window_bp)
             if window not in by_window:
-                by_window[window] = _cis_window_blocks(a, panel.path, panel.ancestry, window[2])
+                by_window[window] = cis_window_blocks(a, panel.path, panel.ancestry, window[2])
             blocks[i] = by_window[window]
         else:
             trait_less.append(i)
@@ -473,7 +480,9 @@ def _sample_and_compare(
             totals[key] += counts[key]
         for plane in _DIFF_PLANES:
             max_diff[plane] = max(max_diff[plane], diffs[plane])
-        listing.append(_listing_entry(source[i], i, chosen[i], bool(admitted[i]), counts))
+        entry = _listing_entry(source[i], i, chosen[i], bool(admitted[i]), counts)
+        entry["blocks"] = sorted(b.block_id for b in sample.blocks.get(i, []))
+        listing.append(entry)
     return {
         "sample": {
             "analyses_checked": len(sampled),
@@ -545,6 +554,28 @@ def _decoded(reader: RaggedCSRReader, analysis: int, path: Path) -> Any:
         ) from exc
 
 
+def _locate(
+    target_vi: np.ndarray, mapped: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, Callable[[np.ndarray], np.ndarray]]:
+    """Where each source association (by its completed-axis row) sits in the target's rows.
+
+    Returns whether it is present, its position, and a gather of a target-row array at those
+    positions. An Analysis emptied in the target has nothing to gather: every source cell is
+    absent and the gather is zeros, which `present` masks.
+    """
+    order = np.argsort(target_vi, kind="stable")
+    if not len(order):
+        absent = np.zeros(len(mapped), dtype=np.int64)
+        return (
+            np.zeros(len(mapped), dtype=bool),
+            absent,
+            lambda values: np.zeros(len(mapped), dtype=values.dtype),
+        )
+    slot = np.minimum(np.searchsorted(target_vi[order], mapped), len(order) - 1)
+    at = order[slot]
+    return target_vi[order][slot] == mapped, at, lambda values: values[at]
+
+
 def _check_analysis(
     pair: _Pair,
     axis: _AxisMap,
@@ -564,11 +595,8 @@ def _check_analysis(
     source_cells = _Cells(src.z, src.se, src.eaf)
     target_cells = _Cells(tgt.z, tgt.se, tgt.eaf)
     target_vi = np.asarray(tgt.variant_index, dtype=np.int64)
-    order = np.argsort(target_vi, kind="stable")
     mapped = axis.source_to_target[np.asarray(src.variant_index, dtype=np.int64)]
-    slot = np.minimum(np.searchsorted(target_vi[order], mapped), max(len(order) - 1, 0))
-    present = (target_vi[order][slot] == mapped) if len(order) else np.zeros(len(mapped), bool)
-    at = order[slot] if len(order) else np.zeros(len(mapped), dtype=np.int64)
+    present, at, gather = _locate(target_vi, mapped)
 
     imputed = raw_imputed.astype(np.uint8)
     source_observed = _observed(source_cells)
@@ -586,9 +614,9 @@ def _check_analysis(
         "z_se_missingness_mismatch": _partial_cells(source_cells) + _partial_cells(target_cells),
         "target_variants_unordered": int((np.diff(target_vi) <= 0).sum()),
         "observed_missing_in_target": int(
-            (source_observed & ~(present & target_observed[at])).sum()
+            (source_observed & ~(present & gather(target_observed))).sum()
         ),
-        "observed_marked_imputed": int((both & (imputed[at] != 0)).sum()),
+        "observed_marked_imputed": int((both & (gather(imputed) != 0)).sum()),
         "target_observed_not_in_source": int((clean & ~matched).sum()),
         "imputed_in_non_admitted": 0 if admitted else int(is_imputed.sum()),
         "imputed_outside_retained": (

@@ -1874,7 +1874,7 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   `target_observed_not_in_source`, `imputed_outside_retained`, `imputed_in_non_admitted`,
   `imputed_mask_invalid`, `z_se_missingness_mismatch`, `target_variants_unordered` (an Analysis's
   variant indices not strictly increasing) and `quality_blocks_not_in_regions`. `sample` lists
-  each checked Analysis with its strata, admission, regions and counts, and `by_stratum` counts
+  each checked Analysis with its strata, admission, the ids of its retained `blocks` and counts, and `by_stratum` counts
   them.
 - **Refused (exit 2)**: a mixed-layout pair, a Ragged pair without `--ld-panel`, an LD panel
   with no chromosomes for the ancestry, an ancestry other than the one recorded, a `TARGET`
@@ -1886,8 +1886,8 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   completed is re-quantised and differs from its source (on three real Chen 2023 Analyses completed with
   `--cis-window-bp 1000000`: all 135,596 observed SE differ, by a median of 0.09% and at most
   0.14%, with Z and EAF identical); such a pair fails with `se_mismatch`. Where SE is `float16`
-  the pair is exact. Whether completion should keep observed SE exactly, or the check tolerate
-  the re-quantisation, is not decided here.
+  the pair is exact. The check stays strict (owner ruling, 2026-10-22): the re-quantisation is
+  completion's defect, and opengwasdb#301 owns fixing the refit, not this check.
 
 ## 21. Compatibility
 
