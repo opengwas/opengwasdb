@@ -27,12 +27,22 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
-from test_hybrid_build import HG38_ALID_1, HG38_ALID_2, HG38_ALID_3
+from test_hybrid_build import (
+    HG38_ALID_1,
+    HG38_ALID_2,
+    HG38_ALID_3,
+    _make_vcf,
+    _manifest_with_source_assembly,
+    _panel,
+)
 from test_hybrid_completion import (
     _residual_hybrid_crossover_source,
     _residual_ld_panel_with_crossover,
 )
 from test_indexed_subset_query import _assert_results_equal, _ordinary_filtered
+from test_indexed_subsets import ABSENT_ALID as DENSE_ABSENT_ALID
+from test_indexed_subsets import alid as dense_alid
+from test_indexed_subsets import build_rich_store
 from test_query_metadata_reads import _hybrid
 from typer.testing import CliRunner
 
@@ -45,13 +55,16 @@ from opengwasdb.layouts.dense.indexed_subsets import (
     IndexedSubsetExistsError,
     IndexedSubsetLayoutError,
     IndexedSubsetStaleError,
+    OverflowOnlyPolicy,
     build_indexed_subset,
     indexed_subset_namespace_path,
     list_indexed_subsets,
     open_indexed_subset,
     remove_indexed_subset,
+    resolve_variant_list,
 )
 from opengwasdb.layouts.dense.overview import write_overview_html
+from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.model.analyses import read_analyses
@@ -235,6 +248,16 @@ def test_hybrid_build_refuses_an_overflow_only_alid(
     message = str(excinfo.value)
     assert OFF_PANEL_ALID in message, message
     assert "shared/overflow" in message, message
+    # The exact text, because it is user-facing: an exact match makes a later
+    # edit to the remedy (or to the quoting of the named ALIDs) deliberate.
+    assert message == (
+        f"1 requested canonical ALID(s) belong only to the shared/overflow axis of "
+        f"Hybrid release {store} and cannot be indexed by its Dense Component's "
+        f"Indexed Variant Subset: {OFF_PANEL_ALID!r}. An Indexed Variant Subset "
+        "indexes the Dense Component's on-panel variants only; remove these ALIDs, "
+        "pass --overflow-only skip to leave them out and count them, or query them "
+        "through the ordinary hybrid association path"
+    )
     # The exact root, not `<root>/dense`: a substring check on `store` would
     # pass for the nested path because the root is its prefix.
     assert f"Hybrid release {store} and cannot" in message, (
@@ -279,6 +302,169 @@ def test_hybrid_build_list_with_an_overflow_only_alid_writes_nothing(
         )
     assert sorted(p.name for p in before.rglob("*")) == before_snapshot
     assert list_indexed_subsets(store) == ("hm3",)
+
+
+# ── Overflow-only skip on request (#324) ────────────────────────────────────
+
+
+def test_hybrid_build_skips_an_overflow_only_alid_on_request(tmp_path: Path) -> None:
+    """`skip` leaves the Overflow-only ALID out, and counts it separately.
+
+    The three ALIDs exercise the three classes at once: one Dense Component
+    variant, one present only on the shared/Overflow axis, and one absent from
+    both. The truly absent count must stay separate from the skipped count.
+    """
+    store = _hybrid(tmp_path, tmp_path)
+    result = _build(
+        store,
+        "hm3",
+        _write_list(tmp_path / "hm3.txt", [HG38_ALID_1, OFF_PANEL_ALID, ABSENT_ALID]),
+        overflow_only="skip",
+    )
+
+    assert result.requested_count == 3
+    assert result.resolved_count == 1
+    assert result.absent_count == 1, "the truly absent ALID keeps its own count"
+    assert result.overflow_only.policy is OverflowOnlyPolicy.SKIP
+    assert result.overflow_only.count == 1
+    assert result.overflow_only.sample == (OFF_PANEL_ALID,)
+
+    subset = open_indexed_subset(store, "hm3")
+    assert subset.n_subset_variants == 1
+    assert subset.absent_count == 1
+    assert subset.n_overflow_only == 1
+    assert subset.overflow_only_sample == (OFF_PANEL_ALID,)
+    expected = resolve_variant_list(dense_component_path(store), [HG38_ALID_1])
+    np.testing.assert_array_equal(subset.variant_index, expected.variant_index)
+
+    attrs = dict(_subset_group(store).attrs)
+    assert attrs["overflow_only_count"] == 1
+    assert list(attrs["overflow_only_sample"]) == [OFF_PANEL_ALID]
+    assert attrs["absent_count"] == 1
+
+
+def test_hybrid_build_without_overflow_only_alids_is_identical_under_both_policies(
+    tmp_path: Path,
+) -> None:
+    """With nothing on the overflow axis, `skip` is indistinguishable from `refuse`."""
+    store = _hybrid(tmp_path, tmp_path)
+    alid_list = _write_list(tmp_path / "hm3.txt", [*ON_PANEL, ABSENT_ALID])
+    refused = _build(store, "refused", alid_list)
+    skipped = _build(store, "skipped", alid_list, overflow_only="skip")
+
+    for result in (refused, skipped):
+        assert result.requested_count == len(ON_PANEL) + 1
+        assert result.resolved_count == len(ON_PANEL)
+        assert result.absent_count == 1
+        assert result.overflow_only.count == 0
+        assert result.overflow_only.sample == ()
+
+    np.testing.assert_array_equal(
+        open_indexed_subset(store, "refused").variant_index,
+        open_indexed_subset(store, "skipped").variant_index,
+    )
+    for name in ("refused", "skipped"):
+        attrs = dict(_subset_group(store, name).attrs)
+        assert attrs["overflow_only_count"] == 0
+        assert list(attrs["overflow_only_sample"]) == []
+
+
+def test_hybrid_sample_is_the_first_twenty_in_variant_list_order(tmp_path: Path) -> None:
+    """More than 20 Overflow-only ALIDs: all are counted, the first 20 kept.
+
+    The list names them in descending genomic order, so a sample that was
+    sorted, truncated from the wrong end or capped at the wrong size could not
+    match: the recorded sample must be the first 20 entries of the list.
+    """
+    positions = [2_000_000 + 1_000 * row for row in range(25)]
+    vcf = _make_vcf(
+        tmp_path,
+        "trait_many",
+        [f"1\t{position}\t.\tA\tG\t.\tPASS\t.\tES:SE\t1.0:0.2\n" for position in positions],
+    )
+    manifest = _manifest_with_source_assembly(
+        tmp_path, [("trait_many", vcf, "Trait Many", "hg38")]
+    )
+    store = tmp_path / "many.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest,
+        store,
+        reference_panel=_panel(tmp_path),
+        store_id="many",
+        release_id="v1",
+    )
+    overflow_only = [f"1:{position}:A:G" for position in positions]
+    listed = [HG38_ALID_1, *reversed(overflow_only)]
+    result = _build(
+        store,
+        "hm3",
+        _write_list(tmp_path / "hm3.txt", listed),
+        overflow_only="skip",
+    )
+
+    assert (result.requested_count, result.resolved_count, result.absent_count) == (26, 1, 0)
+    assert result.overflow_only.count == 25
+    assert result.overflow_only.alids == tuple(listed[1:])
+    assert result.overflow_only.sample == tuple(listed[1:21])
+    attrs = dict(_subset_group(store).attrs)
+    assert attrs["overflow_only_count"] == 25
+    assert list(attrs["overflow_only_sample"]) == listed[1:21]
+
+
+def test_dense_root_accepts_overflow_only_skip_and_is_unchanged(tmp_path: Path) -> None:
+    """A Dense root has no Overflow axis, so the option is accepted and changes nothing."""
+    store = build_rich_store(tmp_path / "dense.opengwasdb")
+    alid_list = _write_list(tmp_path / "hm3.txt", [dense_alid(42), DENSE_ABSENT_ALID])
+    default = _build(store, "default", alid_list)
+    skipped = _build(store, "skipped", alid_list, overflow_only="skip")
+
+    assert default.overflow_only.count == 0
+    assert skipped.overflow_only.count == 0
+    assert skipped.resolved_count == default.resolved_count
+    assert skipped.absent_count == default.absent_count == 1
+    np.testing.assert_array_equal(
+        open_indexed_subset(store, "default").variant_index,
+        open_indexed_subset(store, "skipped").variant_index,
+    )
+    attrs = dict(zarr.open_group(
+        str(store / "data.zarr" / INDEXED_SUBSETS_GROUP / "skipped"), mode="r"
+    ).attrs)
+    assert attrs["overflow_only_count"] == 0
+    assert list(attrs["overflow_only_sample"]) == []
+
+
+def _build_skipping_overflow(store: Path, tmp_path: Path) -> None:
+    """Build ``hm3`` from one Dense ALID and one the Overflow alone carries."""
+    _build(
+        store,
+        "hm3",
+        _write_list(tmp_path / "hm3.txt", [HG38_ALID_1, OFF_PANEL_ALID]),
+        overflow_only="skip",
+    )
+
+
+def test_hybrid_validation_refuses_a_group_whose_overflow_count_was_removed(
+    tmp_path: Path,
+) -> None:
+    """The recorded count is what keeps a skipped ALID from reading as resolved."""
+    store = _hybrid(tmp_path, tmp_path)
+    _build_skipping_overflow(store, tmp_path)
+    del _subset_group(store).attrs["overflow_only_count"]
+
+    result = validate_store(store)
+    assert not result.ok
+    assert any("do not add up" in error for error in result.errors), result.errors
+
+
+def test_hybrid_validation_refuses_a_tampered_overflow_only_sample(tmp_path: Path) -> None:
+    """The sample is part of the record: a count without its sample is not one."""
+    store = _hybrid(tmp_path, tmp_path)
+    _build_skipping_overflow(store, tmp_path)
+    _subset_group(store).attrs["overflow_only_sample"] = []
+
+    result = validate_store(store)
+    assert not result.ok
+    assert any("entries" in error for error in result.errors), result.errors
 
 
 def test_ragged_release_is_still_refused_for_build_and_query(tmp_path: Path) -> None:
@@ -603,7 +789,7 @@ def _invoke(*args: str) -> tuple[int, str]:
     return result.exit_code, result.output
 
 
-def _invoke_build(store: Path, alid_list: Path) -> tuple[int, str]:
+def _invoke_build(store: Path, alid_list: Path, *flags: str) -> tuple[int, str]:
     return _invoke(
         "build-indexed-subset",
         str(store),
@@ -612,6 +798,7 @@ def _invoke_build(store: Path, alid_list: Path) -> tuple[int, str]:
         str(alid_list),
         "--reference-assembly",
         ASSEMBLY,
+        *flags,
     )
 
 
@@ -648,6 +835,26 @@ def test_cli_hybrid_overflow_only_alid_fails_loudly(tmp_path: Path) -> None:
     assert list_indexed_subsets(store) == ()
 
 
+def test_cli_skip_reports_the_count_and_sample(tmp_path: Path) -> None:
+    store = _hybrid(tmp_path, tmp_path)
+    alid_list = _write_list(
+        tmp_path / "hm3.txt", [HG38_ALID_1, OFF_PANEL_ALID, ABSENT_ALID]
+    )
+    code, output = _invoke_build(store, alid_list, "--overflow-only", "skip")
+    assert code == 0, output
+    assert "overflow-only 1" in output, output
+    assert OFF_PANEL_ALID in output, output
+    summary = json.loads(output.strip().splitlines()[-1])
+    assert summary["requested_count"] == 3
+    assert summary["resolved_count"] == 1
+    assert summary["absent_count"] == 1
+    assert summary["overflow_only"] == {
+        "policy": "skip",
+        "n_overflow_only": 1,
+        "sample": [OFF_PANEL_ALID],
+    }
+
+
 def test_cli_help_describes_hybrid_root_support() -> None:
     runner = CliRunner()
     build_help = runner.invoke(app, ["build-indexed-subset", "--help"])
@@ -656,3 +863,5 @@ def test_cli_help_describes_hybrid_root_support() -> None:
     assert query_help.exit_code == 0, query_help.output
     assert "Hybrid" in build_help.output
     assert "Hybrid" in query_help.output
+    assert "--overflow-only" in build_help.output
+    assert "no effect" in build_help.output

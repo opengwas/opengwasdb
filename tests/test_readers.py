@@ -706,6 +706,42 @@ def test_gwas_ssf_projection_preserves_quoted_final_projected_column(
     assert projected == legacy == expected
 
 
+@pytest.mark.parametrize(
+    ("rsid", "variant_id", "expected"),
+    [
+        # GCST004988 names 1:905 this way; GCST010723 names it plain rs199633771.
+        ("", "rs199633771:13122834:C:T", "rs199633771"),
+        ("rs5:100:A:G", "", "rs5"),
+        # GCST004030 at 21:16858252.
+        ("", "rs34994416;rs199928265", "rs34994416"),
+        ("", "esv3585612;rs7", "rs7"),
+        ("", " rs8 ; rs9 ", "rs8"),
+        ("", "rs10:100:A:G;rs11", "rs10"),
+        ("rs12", "rs13:100:A:G", "rs12"),
+        ("", "rs14", "rs14"),
+        ("", "1:100:A:G", ""),
+        ("", "esv1;nsv2", ""),
+    ],
+)
+def test_gwas_ssf_names_a_variant_by_its_plain_rs_identifier(
+    tmp_path, rsid, variant_id, expected
+):
+    """Issue #306: a compound `rsN:pos:a:b` id names `rsN`, and a `;` list names
+    its first rs item, in the projection a build harvests and the full-row
+    parser alike -- so two sources writing one name two ways agree on it."""
+    path = tmp_path / "study.tsv"
+    path.write_text(
+        "chromosome\tbase_pair_location\tother_allele\teffect_allele\trsid\tvariant_id\n"
+        f"1\t100\tA\tG\t{rsid}\t{variant_id}\n",
+        encoding="utf-8",
+    )
+
+    projected = [variant.rsid for variant in GwasSsfReader(path).stream_variants()]
+    legacy = [variant.rsid for variant in gwas_ssf_module.stream_full_row_variants(path)]
+
+    assert projected == legacy == [expected]
+
+
 # --- Site extraction: orientation, palindromes, liftover (issue #21) ---
 
 

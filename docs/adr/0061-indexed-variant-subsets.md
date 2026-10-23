@@ -113,7 +113,9 @@ overlay makes it reachable from the release root.
   plausible-wrong-answer class the project refuses. An ALID absent from both the
   Dense Component and the shared union table keeps the existing counted-as-absent
   handling; the shared table makes the two distinguishable, and that is the only
-  reason the existing handling is preserved.
+  reason the existing handling is preserved. ADR 0065 adds an opt-in `skip`
+  policy that leaves such an ALID out and records it; `refuse` remains the
+  default and this rule is unchanged for it.
 - `query-analysis <hybrid-root> ANALYSIS_ID --indexed-subset <name>` delegates
   to the nested Dense Component's index, remaps the panel-local `variant_index`
   through `dense_to_shared.npy`, and returns the ordinary six arrays over the

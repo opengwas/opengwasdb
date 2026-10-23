@@ -36,6 +36,7 @@ from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE
 from opengwasdb.layouts.dense.indexed_subsets import (
     DEFAULT_BAND_CELLS,
     IndexedSubsetError,
+    OverflowOnlyPolicy,
     build_indexed_subset,
 )
 from opengwasdb.layouts.dense.overview import write_overview_html
@@ -66,6 +67,7 @@ from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store import open_store
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.reference import extract_variant_reference
+from opengwasdb.variants.rsid import RsidConflictPolicy
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
     DEFAULT_REDUCTION_BATCH_SIZE,
@@ -108,6 +110,14 @@ _RESUME_HELP = (
     "Continue the checkpointed build for OUTPUT_PATH (#227). Every other parameter "
     "is compared against the ones that build was started with, and a difference is "
     "refused; use resume_hybrid_build(checkpoint_dir) to resume without restating them."
+)
+_ON_RSID_CONFLICT_HELP = (
+    "What to do when sources that spell one variant's alleles in different case name "
+    "it with different rsids, as the rsid harvest of a --variant-reference build "
+    "finds (#306): refuse fails the build, naming the variant; drop stores it with no "
+    "rsid, even where its other allele order names it, so it is found by ALID and "
+    "position but by no name. The counts of such keys and variants, and the first 20 "
+    "keys, are always printed under rsid_conflicts."
 )
 _ALLOW_UNVERIFIED_HELP = (
     "Accept Analyses the supplied --eaf-reference could not verify (too little "
@@ -191,6 +201,36 @@ def _validate_source_assembly(value: str | None) -> str | None:
         return normalise_build(value)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+#: The options only `build-hybrid` takes, declared as types so its signature stays
+#: one line each: the command carries every other build's option too, and a
+#: signature that grows past the length gate hides the parameters in a wall of
+#: default expressions.
+_REFERENCE_PANEL_OPTION = Annotated[
+    Path | None,
+    typer.Option(
+        help="Dense Component axis: reference-panel ALIDs (legacy; see --variant-reference)"
+    ),
+]
+_CHECKPOINT_OPTION = Annotated[bool, typer.Option("--checkpoint", help=_CHECKPOINT_HELP)]
+_SOURCE_READER_CAPABILITY_OPTION = Annotated[
+    str | None,
+    typer.Option(
+        "--source-reader-capability",
+        callback=_validate_source_reader_capability,
+        help=_SOURCE_READER_CAPABILITY_HELP,
+    ),
+]
+_SOURCE_ASSEMBLY_OPTION = Annotated[
+    str | None,
+    typer.Option(
+        "--source-assembly", callback=_validate_source_assembly, help=_SOURCE_ASSEMBLY_HELP
+    ),
+]
+_ON_RSID_CONFLICT_OPTION = Annotated[
+    RsidConflictPolicy, typer.Option(help=_ON_RSID_CONFLICT_HELP)
+]
 
 
 _REFERENCE_BUILD_OPTION = Annotated[
@@ -505,18 +545,32 @@ def audit_eaf_orientation_command(
     raise typer.Exit(1)
 
 
+_OBSERVED_VIEW_SEED_HELP = (
+    "Seed of the sample (chunk-rows for Dense and Hybrid, Analyses for Ragged), kept in the verdict"
+)
+_OBSERVED_VIEW_RANDOM_HELP = (
+    "Random chunk-rows to compare, besides the fixed strata; for a Hybrid, also the Overflow "
+    "Analyses to compare; for a Ragged, the Analyses to compare"
+)
+_OBSERVED_VIEW_PANEL_HELP = (
+    "Ragged only, required for a Ragged pair: the --ld-panel root complete-ragged was run "
+    "with; retained regions are rebuilt from it. Refused (exit 2) for a Dense or Hybrid pair"
+)
+_OBSERVED_VIEW_ANCESTRY_HELP = (
+    "Ragged only: the --ancestry complete-ragged was run with; defaults to the target "
+    "manifest's, and is refused if it differs. Refused (exit 2) for a Dense or Hybrid pair"
+)
+
+
 @app.command("check-observed-view")
 def check_observed_view_command(
     source_path: Path,
     target_path: Path,
-    seed: Annotated[
-        int, typer.Option(help="Seed of the chunk-row sample, recorded for reproducibility")
-    ],
+    seed: Annotated[int, typer.Option(help=_OBSERVED_VIEW_SEED_HELP)],
     output: Annotated[Path, typer.Option(help="Where to write the JSON verdict")],
-    n_random: Annotated[
-        int,
-        typer.Option(min=0, help="Random chunk-rows to compare, besides the fixed strata"),
-    ] = 1000,
+    n_random: Annotated[int, typer.Option(min=0, help=_OBSERVED_VIEW_RANDOM_HELP)] = 1000,
+    ld_panel: Annotated[Path | None, typer.Option(help=_OBSERVED_VIEW_PANEL_HELP)] = None,
+    ancestry: Annotated[str | None, typer.Option(help=_OBSERVED_VIEW_ANCESTRY_HELP)] = None,
 ) -> None:
     """Check that a Reference-Completed Store reproduces the Observed-Only Store it came from.
 
@@ -524,11 +578,29 @@ def check_observed_view_command(
     whole source chunk-rows across all Analyses (sampled): each observed cell must
     have identical Z, SE and EAF and not be marked imputed, no missing cell may be
     observed, and no inserted panel row may carry an observed cell (stores ADR 0037).
+    A Hybrid pair is compared across its Dense Component and Overflow. There, an
+    inserted row may carry an observed cell only as a crossover: a source Overflow
+    association that completion moved onto a panel row it added, which must equal
+    its source value through the Dense Component's codec.
+
+    A Ragged pair is compared by ALID over a seeded sample of Analyses, not
+    chunk-rows: each source-observed association must be in the target with
+    identical Z, SE and EAF, the target must hold no observed association the
+    source lacks, and every imputed association must lie in one of its Analysis's
+    retained regions (a non-admitted Analysis holds none). Those regions are
+    rebuilt from the LD panel, so --ld-panel (the root complete-ragged was given)
+    is required for a Ragged pair, and --ancestry, if given, must be the one the
+    target records (the default). Neither option is accepted for a Dense or Hybrid
+    pair: it is refused (exit 2), not ignored.
 
     Exits 0 when everything agrees and 1 when anything does not; the verdict is
-    written to --output either way. Exits 2 without a verdict when the pair cannot
-    be checked: a non-Dense layout, a source that is not Observed-Only, or a target
-    that is not Reference-Completed.
+    written to --output either way; a Ragged pair also exits 1 on se_mismatch when
+    SE is residual-coded, because complete-ragged refits it (#301). Exits 2 without
+    a verdict when the pair cannot be checked: a mixed-layout pair, or a layout the
+    check does not support (it checks Dense, Hybrid and Ragged pairs), a source
+    that is not Observed-Only, a target that is not Reference-Completed, a Store
+    whose arrays cannot be opened or decoded, or, for a Ragged pair, no --ld-panel,
+    or a panel or ancestry the target does not record.
     """
     from opengwasdb.validation.observed_view import ObservedViewRefused, check_observed_view
 
@@ -536,7 +608,10 @@ def check_observed_view_command(
         # Checked up front: the comparison takes minutes, and its verdict must not be lost.
         raise typer.BadParameter(f"{output.parent} is not a directory", param_hint="--output")
     try:
-        verdict = check_observed_view(source_path, target_path, seed=seed, n_random=n_random)
+        verdict = check_observed_view(
+            source_path, target_path, seed=seed, n_random=n_random,
+            ld_panel=ld_panel, ancestry=ancestry,
+        )
     except ObservedViewRefused as refusal:
         typer.echo(f"error: refused: {refusal}", err=True)
         raise typer.Exit(2) from refusal
@@ -703,16 +778,12 @@ def build_hybrid_command(
     manifest_path: Path,
     output_path: Path,
     association_coverage: AssociationCoverage = GWAS_ONLY_COVERAGE_OPTION,
-    reference_panel: Path | None = typer.Option(
-        None, help="Dense Component axis: reference-panel ALIDs (legacy; see --variant-reference)"
-    ),
+    reference_panel: _REFERENCE_PANEL_OPTION = None,
     variant_reference: Annotated[Path | None, typer.Option(help=_VARIANT_REFERENCE_HELP)] = None,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
-    checkpoint: Annotated[
-        bool, typer.Option("--checkpoint", help=_CHECKPOINT_HELP)
-    ] = False,
+    checkpoint: _CHECKPOINT_OPTION = False,
     resume: Annotated[bool, typer.Option("--resume", help=_RESUME_HELP)] = False,
     n_workers: int = typer.Option(1, help="Fork-based process pool size for Pass 1 and Pass 2"),
     eaf_reference: Path | None = typer.Option(None, help=_EAF_REFERENCE_HELP),
@@ -720,15 +791,10 @@ def build_hybrid_command(
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
     chunk_variants: _CHUNK_VARIANTS_OPTION = DEFAULT_CHUNK_SHAPE[0],
     chunk_analyses: _CHUNK_ANALYSES_OPTION = DEFAULT_CHUNK_SHAPE[1],
-    capability: str | None = typer.Option(
-        None, "--source-reader-capability", callback=_validate_source_reader_capability,
-        help=_SOURCE_READER_CAPABILITY_HELP,
-    ),
-    assembly: str | None = typer.Option(
-        None, "--source-assembly", callback=_validate_source_assembly,
-        help=_SOURCE_ASSEMBLY_HELP,
-    ),
+    capability: _SOURCE_READER_CAPABILITY_OPTION = None,
+    assembly: _SOURCE_ASSEMBLY_OPTION = None,
     column_map: _COLUMN_MAP_OPTION = None,
+    on_rsid_conflict: _ON_RSID_CONFLICT_OPTION = RsidConflictPolicy.REFUSE,
 ) -> None:
     """Build a Hybrid store (Dense Component + Ragged Overflow) from a VCF manifest.
 
@@ -742,6 +808,7 @@ def build_hybrid_command(
     per-release defaults (#174). --checkpoint keeps a resumable record of each
     phase (#227), and --resume continues the build for OUTPUT_PATH from one.
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
+    --on-rsid-conflict decides a variant its sources name differently (#306).
     --association-coverage states what the release retains: a Hybrid release can
     carry only `gwas`, its default (issue #298).
     """
@@ -753,6 +820,7 @@ def build_hybrid_command(
         eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
         source_reader_capability=capability, source_assembly=assembly,
         checkpoint=checkpoint, resume=resume, column_map=column_map,
+        on_rsid_conflict=on_rsid_conflict,
     )
     _echo_hybrid_result(res)
 
@@ -767,6 +835,7 @@ def _echo_hybrid_result(res: HybridBuildResult) -> None:
             n_panel=res.n_panel,
             n_off_panel=res.n_off_panel,
             n_overflow=res.n_overflow,
+            rsid_conflicts=res.rsid_conflicts.as_dict(),
             association_coverage=_written_association_coverage(res.output_path),
         )
     )
@@ -1635,6 +1704,20 @@ _INDEXED_SUBSET_BAND_CELLS_OPTION = typer.Option(
         "physical output unit); it is not a whole-process RSS target"
     ),
 )
+_INDEXED_SUBSET_OVERFLOW_ONLY_OPTION = Annotated[
+    OverflowOnlyPolicy,
+    typer.Option(
+        "--overflow-only",
+        help=(
+            "What to do with a requested ALID that only a Hybrid release's "
+            "shared/Overflow axis carries (#324). refuse fails the build and names "
+            "them; skip leaves them out of the Dense Component's index and records "
+            "how many, beside the absent count. Accepted on a Dense root, where it "
+            "has no effect: a Dense release has no Overflow axis. The count and the "
+            "first 20 skipped ALIDs are always printed under overflow_only."
+        ),
+    ),
+]
 
 
 @app.command("build-indexed-subset")
@@ -1645,12 +1728,14 @@ def build_indexed_subset_command(
     reference_assembly: str = _INDEXED_SUBSET_ASSEMBLY_OPTION,
     overwrite: bool = _INDEXED_SUBSET_OVERWRITE_OPTION,
     band_cells: int = _INDEXED_SUBSET_BAND_CELLS_OPTION,
+    overflow_only: _INDEXED_SUBSET_OVERFLOW_ONLY_OPTION = OverflowOnlyPolicy.REFUSE,
 ) -> None:
     """Build one full-statistic Indexed Variant Subset for a Dense store.
 
     A Hybrid root is accepted and targets its self-contained Dense Component:
     the index is stored under ``<root>/dense/data.zarr/indexed_subsets`` and
     indexes only that component's on-panel variants (issue #271).
+    --overflow-only decides an ALID only the Overflow carries (#324).
     """
     try:
         result = build_indexed_subset(
@@ -1660,6 +1745,7 @@ def build_indexed_subset_command(
             reference_assembly=reference_assembly,
             overwrite=overwrite,
             band_cells=band_cells,
+            overflow_only=overflow_only,
         )
     except IndexedSubsetError as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -1667,12 +1753,26 @@ def build_indexed_subset_command(
     typer.echo(f"built indexed subset {result.name!r} at {result.path}")
     typer.echo(
         f"requested {result.requested_count}, resolved {result.resolved_count}, "
-        f"absent {result.absent_count}"
+        f"absent {result.absent_count}, overflow-only {result.overflow_only.count}"
     )
+    if result.overflow_only.sample:
+        sample = ", ".join(repr(alid) for alid in result.overflow_only.sample)
+        typer.echo(f"overflow-only sample: {sample}")
     typer.echo(
         f"publication gate: {result.validation_mode}, {result.sample_cells} decoded "
         f"sample cells (seed {result.sample_seed}) in {result.validate_seconds:.1f} s; "
         "standalone validate remains exhaustive"
+    )
+    _echo_summary(
+        {
+            "name": result.name,
+            "path": str(result.path),
+            "n_subset_variants": result.n_subset_variants,
+            "requested_count": result.requested_count,
+            "resolved_count": result.resolved_count,
+            "absent_count": result.absent_count,
+            "overflow_only": result.overflow_only.as_dict(),
+        }
     )
 
 
