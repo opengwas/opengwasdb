@@ -66,7 +66,6 @@ from opengwasdb.layouts.ragged.zarr_csr import (
 )
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.enums import (
-    AssociationCoverage,
     CompletionState,
     PrimaryStorageLayout,
 )
@@ -683,7 +682,10 @@ def _write_completed_manifest(
         # which checked it writable before any work began.
         format_version=src_manifest.format_version,
         primary_layout=PrimaryStorageLayout.HYBRID,
-        association_coverage=AssociationCoverage.FULL,
+        # Preserved, not re-decided: a completion fills the Dense Component's
+        # missing cells, so it neither widens nor narrows what the release
+        # retains -- the source's coverage is the completed release's (#298).
+        association_coverage=src_manifest.association_coverage,
         completion_state=CompletionState.REFERENCE_COMPLETED,
         reference_assembly=src_manifest.reference_assembly,
         created_at=datetime.now(UTC).isoformat(),

@@ -1,6 +1,6 @@
 # Dense Reference-Completion build: process pool over LD blocks, no thread layer, checkpointed resume
 
-Builds on ADR 0022. For a Full Coverage Dense store (e.g. UKB-B), reference completion runs elastic-net imputation once per (LD block, Analysis) pair across the genome-wide reference panel — roughly 1,700 blocks × n_analyses fits, a long-running batch job with no incremental write path in the existing `_write_zarr` (builds the whole array in memory, one final write).
+Builds on ADR 0022. For a `gwas`-coverage Dense store (e.g. UKB-B), reference completion runs elastic-net imputation once per (LD block, Analysis) pair across the genome-wide reference panel — roughly 1,700 blocks × n_analyses fits, a long-running batch job with no incremental write path in the existing `_write_zarr` (builds the whole array in memory, one final write).
 
 ## Decision
 
@@ -19,5 +19,5 @@ Consequence for the completion-quality schema: `n_missing_off_panel` is computed
 ## Consequences
 
 - `n_workers` is a pure runtime knob with no effect on computed results, so it can be freely changed between runs, including on resume.
-- The main process enumerates the full genome-wide LD block list up front (glob-based); unlike the Ragged pipeline, there is no per-analysis cis-window scan, since a Full Coverage Dense store's block set is simply the reference panel's entire block list.
+- The main process enumerates the full genome-wide LD block list up front (glob-based); unlike the Ragged pipeline, there is no per-analysis cis-window scan, since a `gwas`-coverage Dense store's block set is simply the reference panel's entire block list.
 - Off-panel missingness bookkeeping lives on the analyses table as a per-Analysis scalar rather than in `completion_quality`, which stays a clean LD-block × Analysis grain (see CONTEXT.md `Reference Completion Quality`).

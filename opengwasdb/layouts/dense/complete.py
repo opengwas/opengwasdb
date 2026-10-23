@@ -1,7 +1,7 @@
 """Dense Reference Completion — enhancement pipeline.
 
 Builds a Dense Reference-Completed Store Release from a Dense Observed-Only
-Full Coverage source, per ADR 0022 (dense axis = source ∪ reference panel)
+`gwas`-coverage source, per ADR 0022 (dense axis = source ∪ reference panel)
 and ADR 0023 (LD-block process-pool parallelism with checkpointed resume).
 
 Pipeline shape:
@@ -220,10 +220,10 @@ def complete_dense_store(
     overwrite: bool = False,
     impute_analysis_ids: set[str] | None = None,
 ) -> CompletionResult:
-    """Produce a Dense Reference-Completed Store Release from a Full Coverage
+    """Produce a Dense Reference-Completed Store Release from a `gwas`-coverage
     Dense Observed-Only source.
 
-    source_path: existing Dense Observed-Only, Full Coverage store.
+    source_path: existing Dense Observed-Only, `gwas`-coverage store.
     dest_path:   new store directory to create.
     ld_dir:      root of LD panel; blocks at ld_dir/{ancestry}/{chr}/{block}.*
     impute_analysis_ids: if given, only these analyses are imputed (the
@@ -704,7 +704,9 @@ def _checked_dense_source(manifest: StoreManifest, src: Path) -> str:
     rather than at manifest-write time: a completion that cannot honour its
     source's format should fail before it spends an hour imputing (ADR 0038
     §4), and Dense reference completion is only defined over a Dense,
-    Observed-Only, Full Coverage source."""
+    Observed-Only, GWAS Coverage source: completion fills the cells a source
+    left missing, and only `gwas` makes every such cell mean \"the source did
+    not report this\" rather than \"this was filtered out\" (issue #298)."""
     source_format_version = check_writable_format_version(
         manifest.format_version, source=f"source release {src}"
     )
@@ -714,10 +716,10 @@ def _checked_dense_source(manifest: StoreManifest, src: Path) -> str:
         raise ValueError(
             f"source store is not Observed-Only (completion_state={manifest.completion_state})"
         )
-    if manifest.association_coverage is not AssociationCoverage.FULL:
+    if manifest.association_coverage is not AssociationCoverage.GWAS:
         raise ValueError(
-            "Dense reference completion only supports Full Coverage sources "
-            f"(association_coverage={manifest.association_coverage})"
+            "Dense reference completion only supports GWAS Coverage sources "
+            f"(association_coverage={manifest.association_coverage.value})"
         )
     return source_format_version
 

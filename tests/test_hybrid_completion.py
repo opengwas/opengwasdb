@@ -144,6 +144,34 @@ def completed_hybrid(
     )
 
 
+def test_cli_complete_hybrid_reports_the_sources_coverage(tmp_path: Path) -> None:
+    """#294's `register` reads `association_coverage` off the completion's stdout
+    JSON, so the command prints the value the completed release carries (#298).
+    """
+    import json
+
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    source = _build_source(tmp_path)
+    panel = _make_ld_panel(tmp_path)
+    out = tmp_path / "completed.opengwasdb"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "complete-hybrid", str(source), str(out),
+            "--ld-panel", str(panel), "--min-cor", "0.0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output.strip().splitlines()[-1])
+    assert payload["association_coverage"] == "gwas"
+    assert StoreManifest.load(out).association_coverage.value == "gwas"
+
+
 def test_completion_keeps_a_populated_dense_overflow_table(tmp_path):
     """A populated Dense exception table must survive the crossover fold.
 
@@ -181,6 +209,10 @@ def test_hybrid_completion(completed_hybrid) -> None:
     manifest = StoreManifest.load(dst)
     assert manifest.completion_state.value == "reference_completed"
     assert manifest.primary_layout.value == "hybrid"
+    # The source's coverage, carried through: a completion fills the Dense
+    # Component's missing cells, it does not change what the release retains
+    # (#298).
+    assert manifest.association_coverage is StoreManifest.load(src).association_coverage
 
     # Dense Component carries imputed + on_panel arrays.
     dense_root = open_store(dst).dense_component().arrays(mode="r")

@@ -315,12 +315,8 @@ def test_ragged_build_from_a_flipped_source_fails(tmp_path, freqs, reference_pat
 
     with pytest.raises(EafOrientationError) as excinfo:
         build_ragged_from_ssf(
-            manifest,
-            filtered,
-            store,
-            store_id="s",
-            release_id="r",
-            eaf_reference=reference_path,
+            manifest, filtered, store, store_id="s", release_id="r", eaf_reference=reference_path,
+            association_coverage="cis_and_signals",
         )
     assert "GCST003566" in str(excinfo.value)
     # The check runs before the variant axis or CSR exist, so a refused build
@@ -336,7 +332,8 @@ def test_ragged_build_records_passing_evidence(tmp_path, freqs, reference_path):
     store = tmp_path / "store.opengwasdb"
 
     build_ragged_from_ssf(
-        manifest, filtered, store, store_id="s", release_id="r", eaf_reference=reference_path
+        manifest, filtered, store, store_id="s", release_id="r", eaf_reference=reference_path,
+        association_coverage="cis_and_signals",
     )
 
     rows = {r["analysis_id"]: r for r in read_analyses(store / "analyses.tsv").rows}

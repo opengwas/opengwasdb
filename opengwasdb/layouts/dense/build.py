@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,17 +33,17 @@ from opengwasdb.layouts.dense.constants import (
 )
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, read_top_hit_counts
+from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, analyses_table_from_records, write_analyses
 from opengwasdb.model.enums import (
     AssociationCoverage,
-    CompletionState,
     EafOrientationOutcome,
     EafScope,
     PrimaryStorageLayout,
+    coverage_for_layout,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
+from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import (
     VARIANT_AXIS_FORMAT,
     VARIANT_OFFSETS_FILENAME,
@@ -110,8 +109,16 @@ def build_dense_observed_store(
     chunk_shape: tuple[int, int] = DEFAULT_CHUNK_SHAPE,
     dtype: str = DEFAULT_DTYPE,
     overwrite: bool = False,
+    association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
 ) -> DenseBuildResult:
-    """Write a Dense Observed-Only Store Release from normalised associations."""
+    """Write a Dense Observed-Only Store Release from normalised associations.
+
+    ``association_coverage`` is a build input (issue #298), and a Dense matrix can
+    carry only ``gwas``: every cell it holds is a (variant, Analysis) the source
+    either reported or did not, so a narrower coverage has no representation
+    here (`coverage_for_layout`, ADR 0064).
+    """
+    coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.DENSE)
 
     if not records:
         raise ValueError("cannot build a store with no association records")
@@ -136,6 +143,7 @@ def build_dense_observed_store(
             chunk_shape,
             dtype,
             encoding,
+            coverage,
         )
         write_variant_axis(staged.path, variants, rsid_by_alid)
         _write_index(staged, variants, analyses, records, chunk_shape)
@@ -305,17 +313,15 @@ def _write_manifest(
     chunk_shape: tuple[int, int],
     dtype: str,
     encoding: StoreEncoding,
+    association_coverage: AssociationCoverage,
 ) -> None:
-    manifest = StoreManifest(
-        encoding=encoding,
+    manifest = observed_only_release_manifest(
+        PrimaryStorageLayout.DENSE,
         store_id=store_id,
         release_id=release_id,
-        format_version=CURRENT_FORMAT_VERSION,
-        primary_layout=PrimaryStorageLayout.DENSE,
-        association_coverage=AssociationCoverage.FULL,
-        completion_state=CompletionState.OBSERVED_ONLY,
+        encoding=encoding,
+        association_coverage=association_coverage,
         reference_assembly=reference_assembly,
-        created_at=datetime.now(UTC).isoformat(),
         provenance={
             "builder": "opengwasdb.v0.1_dense_observed",
             "source_record_count": len(records),

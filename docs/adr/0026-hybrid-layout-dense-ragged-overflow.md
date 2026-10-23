@@ -81,8 +81,10 @@ deciding boundary is the ratio of source-union to reference-panel size.
 
 - A new `PrimaryStorageLayout = hybrid`; the manifest describes two components over
   one Store Variant Table (union of panel ∪ off-panel-observed variants).
-- **Association Coverage is Full**: the overflow retains every off-panel source
-  association, so nothing is dropped.
+- **Association Coverage is `gwas`**: the overflow retains every off-panel source
+  association, so nothing is dropped. (ADR 0064 renamed the value from `full` and
+  made it a build input; a Hybrid release can still carry only `gwas`, because
+  its missing cells already mean the source did not report the association.)
 - Reference Completion touches only the Dense Component; the overflow is permanently
   observed-only, and its associations always carry Association Status = Observed.
 - Query dispatches by panel membership (on-panel → dense row/column, off-panel →

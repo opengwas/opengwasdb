@@ -114,7 +114,10 @@ def ragged_completion_n2(out: Path) -> None:
     d.mkdir()
     observed = d / "obs.opengwasdb"
     prefix = trc._make_besd_fixture(d)
-    build_ragged_from_besd(prefix, observed, store_id="test", release_id="obs-v1", tissue="Blood")
+    build_ragged_from_besd(
+        prefix, observed, store_id="test", release_id="obs-v1", tissue="Blood",
+        association_coverage="cis_and_signals",
+    )
     panel = trc._make_ld_panel(d, "1", 900_000, 1_300_000)
     kwargs = {"ancestry": "EUR", "cis_window_bp": 500_000, "min_cor": 0.0, "release_id": "comp-v1"}
     complete_ragged_store(observed, d / "comp.opengwasdb", panel, n_workers=2, **kwargs)

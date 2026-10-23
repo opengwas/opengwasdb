@@ -38,6 +38,24 @@ from opengwasdb.validation.validate import validate_store
 from opengwasdb.variants import VariantAxis
 
 
+def _crash_on_the_second_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the second LD block's completion raise, leaving a checkpoint.
+
+    The first block finishes, so the checkpoint holds exactly one, which is the
+    state both a resume test and the CLI's `complete-dense-resume` need.
+    """
+    calls = {"n": 0}
+    real_run_block = complete_module._run_block
+
+    def flaky_run_block(task):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("simulated crash")
+        return real_run_block(task)
+
+    monkeypatch.setattr(complete_module, "_run_block", flaky_run_block)
+
+
 def _assert_stores_identical(dst_a: Path, dst_b: Path) -> None:
     """Assert two completed stores hold byte-identical z/se/imputed arrays.
 
@@ -235,6 +253,18 @@ class TestCompletionFiles:
         assert m["completion_state"] == "reference_completed"
         assert "completion" in m["provenance"]
 
+    def test_completion_keeps_its_source_association_coverage(
+        self, completed_store, observed_store
+    ):
+        import json
+        source = json.loads((observed_store / "manifest.json").read_text())
+        completed = json.loads((completed_store / "manifest.json").read_text())
+        # A completion writes imputed cells into its source's matrix; it does
+        # not change how much of the source's association set the release
+        # retains, so the coverage is the source's, not re-decided (#298).
+        assert source["association_coverage"] == "gwas"
+        assert completed["association_coverage"] == source["association_coverage"]
+
     def test_variant_table_larger_than_source(self, completed_store, observed_store):
         from opengwasdb.variants.axis import VariantAxis
         obs_ax = VariantAxis(observed_store)
@@ -256,6 +286,27 @@ class TestCompletionFiles:
         on_panel = root["on_panel"][:]
         imputed = root["imputed"][:]
         assert not np.any(imputed[on_panel == 0, :] == 1)
+
+    def test_refuses_a_source_whose_coverage_is_not_gwas(
+        self, tmp_path, observed_store, ld_panel
+    ):
+        """Dense reference completion is defined over a `gwas` source (#298).
+
+        A Dense build can only write `gwas`, but the precondition is checked
+        against the manifest the command is given rather than assumed, so a
+        hand-edited or foreign release is refused before an hour of imputation.
+        """
+        import json
+
+        manifest_path = observed_store / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["association_coverage"] = "cis"
+        manifest_path.write_text(json.dumps(manifest))
+
+        with pytest.raises(ValueError, match="association_coverage=cis"):
+            complete_dense_store(
+                observed_store, tmp_path / "comp.opengwasdb", ld_panel, min_cor=0.0
+            )
 
     def test_completion_quality_table_exists(self, completed_store):
         import sqlite3
@@ -880,20 +931,55 @@ class TestQuery:
 
 
 class TestResume:
+    def test_cli_complete_dense_and_its_resume_report_the_coverage(
+        self, tmp_path, observed_store, ld_panel, monkeypatch
+    ):
+        """Both completion commands print the coverage the completed release
+        carries (#294, #298): the source's, since completion never re-decides it.
+        """
+        import json
+
+        from typer.testing import CliRunner
+
+        from opengwasdb.cli.main import app
+
+        dst = tmp_path / "cli-completed.opengwasdb"
+        runner = CliRunner()
+        completed = runner.invoke(
+            app,
+            [
+                "complete-dense", str(observed_store), str(dst),
+                "--ld-panel", str(ld_panel), "--min-cor", "0.0",
+            ],
+        )
+        assert completed.exit_code == 0, completed.output
+        payload = json.loads(completed.output.strip().splitlines()[-1])
+        assert payload["association_coverage"] == "gwas"
+        assert json.loads((dst / "manifest.json").read_text())[
+            "association_coverage"
+        ] == "gwas"
+
+        # The resume path reports the same field from the release it finished.
+        resumed_dst = tmp_path / "cli-resumed.opengwasdb"
+        _crash_on_the_second_block(monkeypatch)
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            complete_dense_store(
+                observed_store, resumed_dst, ld_panel, ancestry="EUR", min_cor=0.0
+            )
+        monkeypatch.undo()
+
+        resumed = runner.invoke(
+            app, ["complete-dense-resume", str(checkpoint_dir_for(resumed_dst))]
+        )
+        assert resumed.exit_code == 0, resumed.output
+        resumed_payload = json.loads(resumed.output.strip().splitlines()[-1])
+        assert resumed_payload["association_coverage"] == "gwas"
+
     def test_resume_completes_after_simulated_crash(
         self, tmp_path, observed_store, ld_panel, monkeypatch
     ):
         dst = tmp_path / "resumed.opengwasdb"
-        calls = {"n": 0}
-        real_run_block = complete_module._run_block
-
-        def flaky_run_block(task):
-            calls["n"] += 1
-            if calls["n"] == 2:
-                raise RuntimeError("simulated crash")
-            return real_run_block(task)
-
-        monkeypatch.setattr(complete_module, "_run_block", flaky_run_block)
+        _crash_on_the_second_block(monkeypatch)
         with pytest.raises(RuntimeError, match="simulated crash"):
             complete_dense_store(observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0)
 

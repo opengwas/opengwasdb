@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from opengwasdb.ancestry.catalogue import UNASSIGNED
-from opengwasdb.model.enums import AncestryAssignmentMethod
+from opengwasdb.model.enums import AncestryAssignmentMethod, AssociationCoverage
 from opengwasdb.readers.column_map import ColumnMap
 from opengwasdb.store.open import open_store
 
@@ -159,6 +159,7 @@ def build_hybrid_from_catalogue(
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
     column_map: ColumnMap | str | Path | None = None,
+    association_coverage: AssociationCoverage | str = AssociationCoverage.GWAS,
 ) -> SubsetResult:
     """Subset the Catalogue to ``ancestry`` and build a Hybrid store from it.
 
@@ -182,9 +183,8 @@ def build_hybrid_from_catalogue(
     from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 
     output_path = Path(output_path)
-    if manifest_path is None:
-        manifest_path = output_path.with_suffix(".manifest.tsv")
-    manifest_path = Path(manifest_path)
+    # The filtered manifest sits beside the store unless the caller names one.
+    manifest_path = Path(manifest_path or output_path.with_suffix(".manifest.tsv"))
 
     subset = subset_catalogue(
         catalogue_path,
@@ -207,6 +207,7 @@ def build_hybrid_from_catalogue(
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
         column_map=column_map,
+        association_coverage=association_coverage,
     )
     record_catalogue_provenance(output_path, subset)
     return subset

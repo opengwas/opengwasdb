@@ -68,7 +68,10 @@ def _dense(tmp_path: Path, dense_store_path: Path) -> Path:
 def _ragged(tmp_path: Path, dense_store_path: Path) -> Path:
     manifest, filtered = _make_fixture(tmp_path)
     store = tmp_path / "ragged.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered, store, store_id="test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered, store, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
     build_ragged_top_hit_indexes(store)
     return store
 

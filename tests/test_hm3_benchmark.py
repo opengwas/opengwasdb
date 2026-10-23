@@ -103,7 +103,10 @@ def ragged_store(tmp_path_factory: pytest.TempPathFactory) -> Path:
     tmp = tmp_path_factory.mktemp("hm3_ragged")
     manifest, filtered = _make_fixture(tmp)
     store = tmp / "ragged.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered, store, store_id="test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered, store, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
     build_ragged_top_hit_indexes(store)
     return store
 

@@ -530,7 +530,8 @@ def wide_ragged(tmp_path_factory: pytest.TempPathFactory) -> Path:
     filtered, manifest = _prepare_wide_sources(root)
     out = root / "wide.opengwasdb"
     build_ragged_from_ssf(
-        manifest, filtered, out, store_id="wide", release_id="wide", allow_unverified_eaf=True
+        manifest, filtered, out, store_id="wide", release_id="wide", allow_unverified_eaf=True,
+        association_coverage="cis_and_signals",
     )
     return out
 
@@ -587,7 +588,7 @@ def wide_small_chunks(tmp_path_factory: pytest.TempPathFactory) -> Path:
         patch.setattr(store_arrays, "ASSOCIATION_SEQUENCE_CHUNK", _SMALL_CHUNK)
         build_ragged_from_ssf(
             manifest, filtered, out, store_id="small", release_id="small",
-            allow_unverified_eaf=True,
+            allow_unverified_eaf=True, association_coverage="cis_and_signals",
         )
     return out
 
@@ -715,8 +716,8 @@ def _tiny_ragged(tmp_path: Path) -> Path:
     )
     store = tmp_path / "tiny.opengwasdb"
     build_ragged_from_ssf(
-        manifest, filtered, store, store_id="tiny", release_id="tiny",
-        allow_unverified_eaf=True,
+        manifest, filtered, store, store_id="tiny", release_id="tiny", allow_unverified_eaf=True,
+        association_coverage="cis_and_signals",
     )
     return store
 

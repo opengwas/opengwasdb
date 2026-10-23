@@ -53,6 +53,12 @@ from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.model.analyses import read_analyses
+from opengwasdb.model.enums import (
+    COVERAGES_BY_LAYOUT,
+    AssociationCoverage,
+    PrimaryStorageLayout,
+)
+from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.query.facade import HybridStoreQuery, RaggedStoreQuery, StoreQuery
 from opengwasdb.readers import known_capabilities
@@ -243,6 +249,52 @@ class ReportFormat(StrEnum):
     json = "json"
 
 
+_COVERAGE_HELP = (
+    "What the release retains of each source Analysis's associations (issue #298): "
+    "gwas (every association the source reports), cis (a cis window around each "
+    "Analysis's target and nothing else), cis_and_signals (a cis window plus "
+    "significant signals elsewhere) or signals_only (significant signals and their "
+    "flanks, with no cis window). A Ragged release is the only layout that can hold "
+    "any of the four, so its builders require it; a Dense or Hybrid release holds "
+    "gwas and is refused any other value."
+)
+#: `--association-coverage` for the Ragged builders, which have no defensible
+#: default (issue #298): the same command builds a cis-eQTL release, a
+#: significant-signals metabolite release and a full sum-statistics release.
+REQUIRED_COVERAGE_OPTION = Annotated[
+    AssociationCoverage,
+    typer.Option(help=_COVERAGE_HELP),
+]
+def _gwas_only_coverage(value: AssociationCoverage) -> AssociationCoverage:
+    """Refuse, before the build starts, a coverage a Dense or Hybrid release
+    cannot carry (issue #298).
+
+    `COVERAGES_BY_LAYOUT` states the rule and every builder applies it too, so a
+    library caller is refused just the same; this only turns that refusal into a
+    CLI error naming the option instead of a traceback out of the build.
+    """
+    allowed = COVERAGES_BY_LAYOUT[PrimaryStorageLayout.DENSE]
+    if value not in allowed:
+        accepted = ", ".join(sorted(c.value for c in allowed))
+        raise typer.BadParameter(
+            f"--association-coverage {value.value}: a Dense or Hybrid Store Release "
+            f"can carry only {accepted}, because a missing cell there already means "
+            "the source did not report the association (issue #298)"
+        )
+    return value
+
+
+#: `--association-coverage` for the Dense and Hybrid builders, whose only
+#: representable value is `gwas`, so the default is the only value they take.
+#: A module-level `typer.Option` used as the parameter's default, like the other
+#: option singletons here rather than an `Annotated` alias: this Typer reads a
+#: default carried inside `Annotated[...]` as a second declaration of the option.
+GWAS_ONLY_COVERAGE_OPTION = typer.Option(
+    AssociationCoverage.GWAS,
+    callback=_gwas_only_coverage,
+    help=_COVERAGE_HELP,
+)
+
 _REPORT_FORMAT_OPTION = typer.Option(
     ReportFormat.text,
     "--format",
@@ -297,6 +349,18 @@ _MAX_ROWS_OPTION = typer.Option(
 
 def _echo_summary(payload: dict[str, Any]) -> None:
     typer.echo(json.dumps(payload, sort_keys=True))
+
+
+def _written_association_coverage(store_path: Path) -> str:
+    """The Association Coverage the release at ``store_path`` declares (#298).
+
+    Read back from the Store Release rather than echoed from the command's
+    arguments: the stdout JSON is what `opengwasdb-stores`' `register` records
+    as the release's coverage (#294), so what is printed must be what is on
+    disk -- including for a completion, which has no argument to echo.
+    """
+    manifest = cast(StoreManifest, open_store(store_path).manifest)
+    return manifest.association_coverage.value
 
 
 @app.command()
@@ -490,6 +554,7 @@ def check_observed_view_command(
 def build_dense_command(
     source_path: Path,
     output_path: Path,
+    association_coverage: AssociationCoverage = GWAS_ONLY_COVERAGE_OPTION,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     reference_assembly: str = typer.Option("GRCh37"),
@@ -504,6 +569,7 @@ def build_dense_command(
         release_id=release_id,
         reference_assembly=reference_assembly,
         overwrite=overwrite,
+        association_coverage=association_coverage,
     )
     typer.echo(
         json.dumps(
@@ -511,6 +577,7 @@ def build_dense_command(
                 "output_path": str(result.output_path),
                 "n_variants": result.n_variants,
                 "n_analyses": result.n_analyses,
+                "association_coverage": _written_association_coverage(result.output_path),
             },
             sort_keys=True,
         )
@@ -583,6 +650,7 @@ def extract_variant_reference_command(
 def build_dense_vcf_command(
     manifest_path: Path,
     output_path: Path,
+    association_coverage: AssociationCoverage = GWAS_ONLY_COVERAGE_OPTION,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     overwrite: bool = typer.Option(False),
@@ -610,9 +678,12 @@ def build_dense_vcf_command(
     --variant-reference supplies a precomputed axis, bypassing Pass 1 (#185);
     a reference that names no rsids runs Pass 1's harvest for them (#255).
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
+    --association-coverage states what the release retains: a Dense release can
+    carry only `gwas`, its default (issue #298).
     """
     result = build_dense_from_vcf_manifest(
         manifest_path, output_path, store_id=store_id, release_id=release_id,
+        association_coverage=association_coverage,
         overwrite=overwrite, n_workers=n_workers, chunk_shape=(chunk_variants, chunk_analyses),
         eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,
@@ -623,6 +694,7 @@ def build_dense_vcf_command(
         "output_path": str(result.output_path),
         "n_variants": result.n_variants,
         "n_analyses": result.n_analyses,
+        "association_coverage": _written_association_coverage(result.output_path),
     })
 
 
@@ -630,6 +702,7 @@ def build_dense_vcf_command(
 def build_hybrid_command(
     manifest_path: Path,
     output_path: Path,
+    association_coverage: AssociationCoverage = GWAS_ONLY_COVERAGE_OPTION,
     reference_panel: Path | None = typer.Option(
         None, help="Dense Component axis: reference-panel ALIDs (legacy; see --variant-reference)"
     ),
@@ -669,10 +742,12 @@ def build_hybrid_command(
     per-release defaults (#174). --checkpoint keeps a resumable record of each
     phase (#227), and --resume continues the build for OUTPUT_PATH from one.
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
+    --association-coverage states what the release retains: a Hybrid release can
+    carry only `gwas`, its default (issue #298).
     """
     res = build_hybrid_from_vcf_manifest(
         manifest_path, output_path, reference_panel=reference_panel,
-        variant_reference=variant_reference,
+        variant_reference=variant_reference, association_coverage=association_coverage,
         store_id=store_id, release_id=release_id, overwrite=overwrite, n_workers=n_workers,
         chunk_shape=(chunk_variants, chunk_analyses), eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
@@ -692,6 +767,7 @@ def _echo_hybrid_result(res: HybridBuildResult) -> None:
             n_panel=res.n_panel,
             n_off_panel=res.n_off_panel,
             n_overflow=res.n_overflow,
+            association_coverage=_written_association_coverage(res.output_path),
         )
     )
 
@@ -700,6 +776,7 @@ def _echo_hybrid_result(res: HybridBuildResult) -> None:
 def build_hybrid_from_catalogue_command(
     catalogue_path: Path,
     output_path: Path,
+    association_coverage: AssociationCoverage = GWAS_ONLY_COVERAGE_OPTION,
     reference_panel: Path = typer.Option(..., help="Dense Component axis: reference-panel ALIDs"),
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
@@ -741,27 +818,20 @@ def build_hybrid_from_catalogue_command(
     from opengwasdb.ancestry.subset import build_hybrid_from_catalogue
 
     subset = build_hybrid_from_catalogue(
-        catalogue_path,
-        output_path,
-        reference_panel=reference_panel,
-        store_id=store_id,
-        release_id=release_id,
-        stored_effect_scale=stored_effect_scale,
-        original_sd_method=original_sd_method,
-        ancestry=ancestry,
-        original_sd=original_sd,
-        overwrite=overwrite,
-        n_workers=n_workers,
-        chunk_shape=(chunk_variants, chunk_analyses),
-        eaf_reference=eaf_reference,
-        eaf_reference_ancestry=eaf_reference_ancestry,
-        allow_unverified_eaf=allow_unverified_eaf,
-        column_map=column_map,
+        catalogue_path, output_path,
+        reference_panel=reference_panel, store_id=store_id, release_id=release_id,
+        stored_effect_scale=stored_effect_scale, original_sd_method=original_sd_method,
+        ancestry=ancestry, original_sd=original_sd, overwrite=overwrite,
+        n_workers=n_workers, chunk_shape=(chunk_variants, chunk_analyses),
+        eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf, column_map=column_map,
+        association_coverage=association_coverage,
     )
     typer.echo(
         json.dumps(
             {
                 "output_path": str(output_path),
+                "association_coverage": _written_association_coverage(output_path),
                 "ancestry": subset.ancestry,
                 "subset_filter": subset.subset_filter,
                 "n_total": subset.n_total,
@@ -1237,6 +1307,7 @@ def complete_hybrid_command(
                 "n_off_panel": result.n_off_panel,
                 "n_overflow": result.n_overflow,
                 "n_imputed": result.n_imputed,
+                "association_coverage": _written_association_coverage(result.output_path),
                 "elapsed_s": round(elapsed, 1),
             },
             sort_keys=True,
@@ -1248,6 +1319,7 @@ def complete_hybrid_command(
 def build_ragged_besd_command(
     besd_prefix: Path,
     output_path: Path,
+    association_coverage: REQUIRED_COVERAGE_OPTION,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     analyses: Path | None = typer.Option(
@@ -1264,12 +1336,15 @@ def build_ragged_besd_command(
     BESD_PREFIX is the path without extension (.esi, .epi, .besd are appended).
     Use --source-build hg19 to liftover coordinates to hg38 inline.
     Optionally, --analyses overlays Analytical and Attribution Metadata from a manifest.
+    --association-coverage is required: the file set says nothing about which of
+    its associations were retained (issue #298).
     """
     result = build_ragged_from_besd(
         besd_prefix,
         output_path,
         store_id=store_id,
         release_id=release_id,
+        association_coverage=association_coverage,
         analyses_path=analyses,
         tissue=tissue or None,
         source_build=source_build,
@@ -1283,6 +1358,7 @@ def build_ragged_besd_command(
             "n_variants": result.n_variants,
             "n_analyses": result.n_analyses,
             "n_associations": result.n_associations,
+            "association_coverage": _written_association_coverage(result.output_path),
         }
     )
 
@@ -1292,6 +1368,7 @@ def build_ragged_ssf_command(
     manifest_path: Path,
     filtered_dir: Path,
     output_path: Path,
+    association_coverage: REQUIRED_COVERAGE_OPTION,
     store_id: str = typer.Option(...),
     release_id: str = typer.Option(...),
     stored_effect_scale: str = typer.Option("sd", help="sd, log_or, or log_hazard"),
@@ -1311,6 +1388,9 @@ def build_ragged_ssf_command(
     produced by the opengwasdb-stores download+filter step). Relative
     source_file paths are joined to FILTERED_DIR; absolute paths are used
     directly.
+
+    --association-coverage is required: the filter that produced FILTERED_DIR
+    decided what the release retains, and the manifest cannot recover it (#298).
     """
     result = build_ragged_from_ssf(
         manifest_path,
@@ -1318,6 +1398,7 @@ def build_ragged_ssf_command(
         output_path,
         store_id=store_id,
         release_id=release_id,
+        association_coverage=association_coverage,
         stored_effect_scale=stored_effect_scale,
         overwrite=overwrite,
         eaf_reference=eaf_reference,
@@ -1331,6 +1412,7 @@ def build_ragged_ssf_command(
                 "n_variants": result.n_variants,
                 "n_analyses": result.n_analyses,
                 "n_associations": result.n_associations,
+                "association_coverage": _written_association_coverage(result.output_path),
             },
             sort_keys=True,
         )
@@ -1371,10 +1453,32 @@ def complete_ragged_command(
                 "n_associations": result.n_associations,
                 "n_imputed": result.n_imputed,
                 "n_missing": result.n_missing,
+                "association_coverage": _written_association_coverage(result.output_path),
                 "elapsed_s": round(elapsed, 1),
             },
             sort_keys=True,
         )
+    )
+
+
+def _echo_dense_completion_result(result: Any, elapsed: float) -> None:
+    """Echo one Dense completion's summary as the CLI's JSON contract.
+
+    One helper for `complete-dense` and `complete-dense-resume`: the two print
+    the same contract, and a key added to one of two copied payloads is a
+    consumer reading `null` (#294).
+    """
+    _echo_summary(
+        {
+            "output_path": str(result.output_path),
+            "n_variants": result.n_variants,
+            "n_analyses": result.n_analyses,
+            "n_imputed": result.n_imputed,
+            "n_missing_off_panel": result.n_missing_off_panel,
+            "n_missing_imputation_failed": result.n_missing_imputation_failed,
+            "association_coverage": _written_association_coverage(result.output_path),
+            "elapsed_s": round(elapsed, 1),
+        }
     )
 
 
@@ -1390,7 +1494,7 @@ def complete_dense_command(
     n_workers: int = typer.Option(1, help="LD-block process-pool size"),
     overwrite: bool = typer.Option(False),
 ) -> None:
-    """Produce a Reference-Completed Dense store from a Full Coverage observed-only store."""
+    """Produce a Reference-Completed Dense store from a `gwas`-coverage observed-only store."""
     import time
     t0 = time.time()
     result = complete_dense_store(
@@ -1405,20 +1509,7 @@ def complete_dense_command(
         overwrite=overwrite,
     )
     elapsed = time.time() - t0
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-                "n_imputed": result.n_imputed,
-                "n_missing_off_panel": result.n_missing_off_panel,
-                "n_missing_imputation_failed": result.n_missing_imputation_failed,
-                "elapsed_s": round(elapsed, 1),
-            },
-            sort_keys=True,
-        )
-    )
+    _echo_dense_completion_result(result, elapsed)
 
 
 @app.command("complete-dense-resume")
@@ -1435,20 +1526,7 @@ def complete_dense_resume_command(
     t0 = time.time()
     result = resume_dense_completion(checkpoint_dir, n_workers=n_workers)
     elapsed = time.time() - t0
-    typer.echo(
-        json.dumps(
-            {
-                "output_path": str(result.output_path),
-                "n_variants": result.n_variants,
-                "n_analyses": result.n_analyses,
-                "n_imputed": result.n_imputed,
-                "n_missing_off_panel": result.n_missing_off_panel,
-                "n_missing_imputation_failed": result.n_missing_imputation_failed,
-                "elapsed_s": round(elapsed, 1),
-            },
-            sort_keys=True,
-        )
-    )
+    _echo_dense_completion_result(result, elapsed)
 
 
 @app.command("build-variant-index")

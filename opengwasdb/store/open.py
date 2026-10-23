@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 import zarr
 
 from opengwasdb.model.enums import PrimaryStorageLayout
-from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.model.manifest import StoreManifest, normalise_coverage
 from opengwasdb.store.arrays import open_group
 
 if TYPE_CHECKING:
@@ -615,6 +615,12 @@ class OpenGWASDBStore(_ReleasePaths):
         """
         data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         data["provenance"] = {**data.get("provenance", {}), **patch}
+        # The amendment rewrites the manifest as JSON, so the coverage it leaves
+        # behind is whatever the source said. Editing a published release's
+        # metadata to the written vocabulary is the one in-place edit the
+        # pre-release rule allows (ADR 0064 §5), and it keeps `full` from
+        # surviving in a manifest this build just wrote (#298).
+        normalise_coverage(data)
         self.manifest_path.write_text(
             json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )

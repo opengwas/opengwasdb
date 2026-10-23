@@ -65,6 +65,9 @@ def main() -> None:
             args.store,
             store_id=args.store.stem,
             release_id="ragged-observed-v1",
+            # Required, and the layout cannot tell (issue #298): this harness
+            # measures a build, so the coverage it declares must be stated.
+            association_coverage=args.association_coverage,
             tissue=args.tissue or None,
             source_build=args.source_build,
         )
@@ -456,6 +459,9 @@ def _parse_args() -> argparse.Namespace:
                         help="Assembly of BESD input (hg38 or hg19)")
     parser.add_argument("--tissue", default=None,
                         help="Tissue label for analysis IDs")
+    parser.add_argument("--association-coverage", default="cis_and_signals",
+                        choices=["gwas", "cis", "cis_and_signals", "signals_only"],
+                        help="Association Coverage the built release declares (issue #298)")
     parser.add_argument("--rebuild", action="store_true", default=False,
                         help="Tear down and rebuild the store before benchmarking")
     parser.add_argument("--reps", type=int, default=5,

@@ -164,7 +164,36 @@ def hybrid_store(tmp_path: Path, _hybrid_store_seed: Path) -> Path:
 def test_manifest_is_hybrid(hybrid_store):
     manifest = StoreManifest.load(hybrid_store)
     assert manifest.primary_layout.value == "hybrid"
-    assert manifest.association_coverage.value == "full"
+    # `gwas` is the only coverage a Hybrid release can carry (issue #298): its
+    # missing cells already mean "not observed", which completion imputes.
+    assert manifest.association_coverage.value == "gwas"
+    assert StoreManifest.load(hybrid_store / "dense").association_coverage.value == "gwas"
+
+
+def test_hybrid_build_refuses_a_coverage_it_cannot_hold(hybrid_store, tmp_path):
+    """Issue #298: a Hybrid release states `gwas` or refuses, it does not
+    write a manifest that claims a narrower coverage than it can mean."""
+    import pytest
+
+    from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+
+    vcf = _make_vcf(
+        tmp_path, "trait_a", [f"1\t{HG19_POS_1}\t.\tA\tG\t.\tPASS\t.\tES:SE:AF\t2.0:0.5:0.2\n"]
+    )
+    manifest = _make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
+    out = tmp_path / "refused.opengwasdb"
+
+    with pytest.raises(ValueError, match="cannot carry association_coverage=signals_only"):
+        build_hybrid_from_vcf_manifest(
+            manifest,
+            out,
+            reference_panel=_panel(tmp_path),
+            store_id="hybrid-test",
+            release_id="v1",
+            association_coverage="signals_only",
+        )
+
+    assert not out.exists()
 
 
 def test_analyses_tsv_has_no_phenotype_columns_and_carries_analysis_label(hybrid_store):

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from cli_output import normalize_cli_output
 
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -219,7 +220,10 @@ def test_build_creates_store_files(tmp_path):
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
 
-    result = build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    result = build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
 
     assert out.exists()
     assert (out / "manifest.json").exists()
@@ -275,12 +279,8 @@ def test_ssf_build_queries_and_validates_residual_se(tmp_path):
     out = tmp_path / "out.opengwasdb"
 
     build_ragged_from_ssf(
-        manifest,
-        filtered_dir,
-        out,
-        store_id="test",
-        release_id="v1",
-        allow_unverified_eaf=True,
+        manifest, filtered_dir, out, store_id="test", release_id="v1", allow_unverified_eaf=True,
+        association_coverage="cis_and_signals",
     )
 
     assert StoreManifest.load(out).encoding.se.is_residual
@@ -295,7 +295,10 @@ def test_manifest_fields(tmp_path):
 
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
 
     data = json.loads((out / "manifest.json").read_text())
     assert data["primary_layout"] == "ragged"
@@ -303,6 +306,42 @@ def test_manifest_fields(tmp_path):
     assert data["association_coverage"] == "cis_and_signals"
     assert data["reference_assembly"] == "GRCh38"
     assert data["provenance"]["stored_effect_scale"] == "sd"
+
+
+def test_ragged_build_requires_an_association_coverage(tmp_path):
+    """A Ragged Store is the only layout that can hold any of the four values,
+    so no default is right: the layout constant `cis_and_signals` is what
+    mislabelled OGS-00006 and the eQTLGen cis Stores (issue #298)."""
+    manifest, filtered_dir = _make_fixture(tmp_path)
+    out = tmp_path / "out.opengwasdb"
+
+    with pytest.raises(TypeError, match="association_coverage"):
+        build_ragged_from_ssf(
+            manifest, filtered_dir, out, store_id="test", release_id="v1"
+        )
+
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("coverage", ["signals_only", "cis"])
+def test_ragged_build_writes_the_coverage_it_is_given(tmp_path, coverage):
+    """The SSF builder is the same command for a cis-eQTL release, a
+    significant-signals metabolite release and a full sum-statistics release
+    (issue #298)."""
+    import json
+
+    source_manifest, filtered_dir = _make_fixture(tmp_path)
+    out = tmp_path / f"out-{coverage}.opengwasdb"
+
+    result = build_ragged_from_ssf(
+        source_manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage=coverage,
+    )
+
+    data = json.loads((out / "manifest.json").read_text())
+    assert data["association_coverage"] == coverage
+    assert StoreManifest.load(out).association_coverage.value == coverage
+    assert result.association_coverage.value == coverage
 
 
 def test_stored_effect_scale_populated_per_analysis(tmp_path):
@@ -313,12 +352,8 @@ def test_stored_effect_scale_populated_per_analysis(tmp_path):
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
     build_ragged_from_ssf(
-        manifest,
-        filtered_dir,
-        out,
-        store_id="test",
-        release_id="v1",
-        stored_effect_scale="log_or",
+        manifest, filtered_dir, out, store_id="test", release_id="v1", stored_effect_scale="log_or",
+        association_coverage="cis_and_signals",
     )
 
     table = read_analyses(out / "analyses.tsv")
@@ -337,7 +372,10 @@ def test_analyses_tsv_carries_trait_positions(tmp_path):
 
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
     assert not (out / "traits.tsv.gz").exists()
 
     table = read_analyses(out / "analyses.tsv")
@@ -352,7 +390,10 @@ def test_analyses_tsv_carries_trait_positions(tmp_path):
 def test_zarr_csr_associations_and_z_values(tmp_path):
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
 
     csr = RaggedCSRReader(out)
     assert csr.n_analyses == 2
@@ -385,7 +426,10 @@ def test_zarr_csr_associations_and_z_values(tmp_path):
 def test_rsid_prefers_rsid_column_falls_back_to_variant_id(tmp_path):
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
 
     variants = VariantAxis(out).all()
     rsid_by_alid = {v.alid: v.rsid for v in variants}
@@ -397,7 +441,10 @@ def test_rsid_prefers_rsid_column_falls_back_to_variant_id(tmp_path):
 def test_top_hit_index_built_inline(tmp_path):
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
 
     root = open_store(out).arrays(mode="r")
     assert "top_hits" in root
@@ -409,7 +456,10 @@ def test_validate_store_passes(tmp_path):
 
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
 
     result = validate_store(out)
     assert result.ok, result.errors
@@ -419,12 +469,19 @@ def test_overwrite_flag(tmp_path):
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
 
-    build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
     with pytest.raises(FileExistsError):
-        build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+        build_ragged_from_ssf(
+            manifest, filtered_dir, out, store_id="test", release_id="v1",
+            association_coverage="cis_and_signals",
+        )
 
     build_ragged_from_ssf(
-        manifest, filtered_dir, out, store_id="test", release_id="v1", overwrite=True
+        manifest, filtered_dir, out, store_id="test", release_id="v1", overwrite=True,
+        association_coverage="cis_and_signals",
     )
     assert out.exists()
 
@@ -435,12 +492,8 @@ def test_invalid_stored_effect_scale_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="stored_effect_scale"):
         build_ragged_from_ssf(
-            manifest,
-            filtered_dir,
-            out,
-            store_id="test",
-            release_id="v1",
-            stored_effect_scale="sd_units",
+            manifest, filtered_dir, out, store_id="test", release_id="v1",
+            stored_effect_scale="sd_units", association_coverage="cis_and_signals",
         )
     assert not out.exists()  # fails before any I/O
 
@@ -471,7 +524,10 @@ def test_non_dense_analysis_index_fails_loudly(tmp_path):
     out = tmp_path / "out.opengwasdb"
 
     with pytest.raises(ValueError, match="analysis_index must be 0..n-1"):
-        build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+        build_ragged_from_ssf(
+            manifest, filtered_dir, out, store_id="test", release_id="v1",
+            association_coverage="cis_and_signals",
+        )
 
 
 def test_manifest_without_trait_id_builds(tmp_path):
@@ -499,7 +555,10 @@ def test_manifest_without_trait_id_builds(tmp_path):
         fh.write("\t".join(str(row.get(col, "")) for col in header) + "\n")
     out = tmp_path / "out.opengwasdb"
 
-    result = build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    result = build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
 
     assert result.n_analyses == 1
     assert result.n_variants == 1
@@ -583,7 +642,10 @@ def test_duplicate_canonical_variant_within_analysis_is_resolved(tmp_path):
     )
     out = tmp_path / "out.opengwasdb"
 
-    result = build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    result = build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
 
     # 1:100000 (collapsed) + 1:300000 (control) survive; 1:200000 (conflict) dropped.
     assert result.n_associations == 2
@@ -600,6 +662,26 @@ def test_duplicate_canonical_variant_within_analysis_is_resolved(tmp_path):
     assert validate_store(out).ok
 
 
+def _invoke_cli_build(manifest, filtered_dir, out, *extra: str):
+    """Run `build-ragged-ssf` through the CLI, with whatever options a test adds."""
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    return CliRunner().invoke(
+        app,
+        [
+            "build-ragged-ssf",
+            str(manifest),
+            str(filtered_dir),
+            str(out),
+            "--store-id", "cli-test",
+            "--release-id", "v1",
+            *extra,
+        ],
+    )
+
+
 def test_cli_build_ragged_ssf(tmp_path):
     from typer.testing import CliRunner
 
@@ -607,20 +689,9 @@ def test_cli_build_ragged_ssf(tmp_path):
 
     manifest, filtered_dir = _make_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    runner = CliRunner()
 
-    result = runner.invoke(
-        app,
-        [
-            "build-ragged-ssf",
-            str(manifest),
-            str(filtered_dir),
-            str(out),
-            "--store-id",
-            "cli-test",
-            "--release-id",
-            "v1",
-        ],
+    result = _invoke_cli_build(
+        manifest, filtered_dir, out, "--association-coverage", "cis_and_signals"
     )
     assert result.exit_code == 0, result.output
     import json
@@ -628,9 +699,49 @@ def test_cli_build_ragged_ssf(tmp_path):
     summary = json.loads(result.output.strip().splitlines()[-1])
     assert summary["n_variants"] == 3
     assert summary["n_analyses"] == 2
+    # #294's contract: the stdout JSON states the coverage the release carries,
+    # because `register` records what the command prints.
+    assert summary["association_coverage"] == "cis_and_signals"
 
-    validate = runner.invoke(app, ["validate", str(out)])
+    validate = CliRunner().invoke(app, ["validate", str(out)])
     assert validate.exit_code == 0, validate.output
+
+
+def test_cli_build_ragged_ssf_refuses_to_guess_the_coverage(tmp_path):
+    manifest, filtered_dir = _make_fixture(tmp_path)
+    out = tmp_path / "out.opengwasdb"
+
+    result = _invoke_cli_build(manifest, filtered_dir, out)
+
+    assert result.exit_code != 0
+    # Rich wraps and styles the missing-option error under CI's colour terminal.
+    assert "--association-coverage" in normalize_cli_output(result.output)
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("coverage", ["signals_only", "cis"])
+def test_cli_build_ragged_ssf_reports_the_coverage_it_wrote(tmp_path, coverage):
+    """Manifest, `info --format json` and the command's stdout JSON all say the
+    value the build was given (issue #298)."""
+    import json
+
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    manifest, filtered_dir = _make_fixture(tmp_path)
+    out = tmp_path / "out.opengwasdb"
+
+    build = _invoke_cli_build(manifest, filtered_dir, out, "--association-coverage", coverage)
+    assert build.exit_code == 0, build.output
+    stdout = json.loads(build.output.strip().splitlines()[-1])
+    on_disk = json.loads((out / "manifest.json").read_text())
+    info = CliRunner().invoke(app, ["info", str(out), "--format", "json"])
+    assert info.exit_code == 0, info.output
+
+    assert stdout["association_coverage"] == coverage
+    assert on_disk["association_coverage"] == coverage
+    assert json.loads(info.output)["association_coverage"] == coverage
 
 
 def test_emptied_analysis_keeps_its_slot_and_scope(tmp_path):
@@ -680,7 +791,10 @@ def test_emptied_analysis_keeps_its_slot_and_scope(tmp_path):
         ],
     )
     out = tmp_path / "out.opengwasdb"
-    result = build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test", release_id="v1")
+    result = build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
     assert result.n_analyses == 2
     assert result.n_associations == 1  # only the healthy analysis survives
     csr = RaggedCSRReader(out)
@@ -720,10 +834,12 @@ def test_canonical_analyses_tsv_columns_build_identical_to_legacy(tmp_path):
     canonical_out = tmp_path / "canonical.opengwasdb"
 
     build_ragged_from_ssf(
-        legacy_manifest, filtered_dir, legacy_out, store_id="test_store", release_id="v1"
+        legacy_manifest, filtered_dir, legacy_out, store_id="test_store", release_id="v1",
+        association_coverage="cis_and_signals",
     )
     build_ragged_from_ssf(
-        canonical_manifest, filtered_dir, canonical_out, store_id="test_store", release_id="v1"
+        canonical_manifest, filtered_dir, canonical_out, store_id="test_store", release_id="v1",
+        association_coverage="cis_and_signals",
     )
 
     legacy_analyses = (legacy_out / "analyses.tsv").read_bytes()
@@ -748,7 +864,10 @@ def test_canonical_sample_size_wins_over_legacy_n(tmp_path):
     )
 
     out = tmp_path / "out.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered_dir, out, store_id="test_store", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered_dir, out, store_id="test_store", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
 
     table = read_analyses(out / "analyses.tsv")
     assert len(table.rows) == 1
@@ -776,7 +895,8 @@ def test_absolute_source_file_used_as_is(tmp_path):
 
     out = tmp_path / "out.opengwasdb"
     result = build_ragged_from_ssf(
-        manifest, empty_filtered_dir, out, store_id="test_store", release_id="v1"
+        manifest, empty_filtered_dir, out, store_id="test_store", release_id="v1",
+        association_coverage="cis_and_signals",
     )
     assert result.n_variants == 1
     assert result.n_associations == 1
@@ -806,7 +926,8 @@ def test_legacy_file_path_column_builds_successfully(tmp_path):
 
     out = tmp_path / "out.opengwasdb"
     result = build_ragged_from_ssf(
-        manifest, filtered_dir, out, store_id="test_store", release_id="v1"
+        manifest, filtered_dir, out, store_id="test_store", release_id="v1",
+        association_coverage="cis_and_signals",
     )
     assert result.n_variants == 1
     assert result.n_associations == 1
@@ -858,7 +979,8 @@ def test_source_file_alias_precedence_deterministic(tmp_path):
     )
     out_legacy = tmp_path / "out_legacy.opengwasdb"
     build_ragged_from_ssf(
-        manifest_legacy, filtered_dir, out_legacy, store_id="test_store", release_id="v1"
+        manifest_legacy, filtered_dir, out_legacy, store_id="test_store", release_id="v1",
+        association_coverage="cis_and_signals",
     )
     with query_store(out_legacy) as query:
         rows_legacy = list(query.resolve(query.phewas("1:100000:A:G")))
@@ -876,7 +998,8 @@ def test_source_file_alias_precedence_deterministic(tmp_path):
     )
     out_all = tmp_path / "out_all.opengwasdb"
     build_ragged_from_ssf(
-        manifest_all, filtered_dir, out_all, store_id="test_store", release_id="v1"
+        manifest_all, filtered_dir, out_all, store_id="test_store", release_id="v1",
+        association_coverage="cis_and_signals",
     )
     with query_store(out_all) as query:
         rows_all = list(query.resolve(query.phewas("1:100000:A:G")))
