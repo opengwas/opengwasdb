@@ -36,6 +36,7 @@ from opengwasdb.layouts.dense.constants import DEFAULT_CHUNK_SHAPE
 from opengwasdb.layouts.dense.indexed_subsets import (
     DEFAULT_BAND_CELLS,
     IndexedSubsetError,
+    OverflowOnlyPolicy,
     build_indexed_subset,
 )
 from opengwasdb.layouts.dense.overview import write_overview_html
@@ -1607,6 +1608,20 @@ _INDEXED_SUBSET_BAND_CELLS_OPTION = typer.Option(
         "physical output unit); it is not a whole-process RSS target"
     ),
 )
+_INDEXED_SUBSET_OVERFLOW_ONLY_OPTION = Annotated[
+    OverflowOnlyPolicy,
+    typer.Option(
+        "--overflow-only",
+        help=(
+            "What to do with a requested ALID that only a Hybrid release's "
+            "shared/Overflow axis carries (#324). refuse fails the build and names "
+            "them; skip leaves them out of the Dense Component's index and records "
+            "how many, beside the absent count. Accepted on a Dense root, where it "
+            "has no effect: a Dense release has no Overflow axis. The count and the "
+            "first 20 skipped ALIDs are always printed under overflow_only."
+        ),
+    ),
+]
 
 
 @app.command("build-indexed-subset")
@@ -1617,12 +1632,14 @@ def build_indexed_subset_command(
     reference_assembly: str = _INDEXED_SUBSET_ASSEMBLY_OPTION,
     overwrite: bool = _INDEXED_SUBSET_OVERWRITE_OPTION,
     band_cells: int = _INDEXED_SUBSET_BAND_CELLS_OPTION,
+    overflow_only: _INDEXED_SUBSET_OVERFLOW_ONLY_OPTION = OverflowOnlyPolicy.REFUSE,
 ) -> None:
     """Build one full-statistic Indexed Variant Subset for a Dense store.
 
     A Hybrid root is accepted and targets its self-contained Dense Component:
     the index is stored under ``<root>/dense/data.zarr/indexed_subsets`` and
     indexes only that component's on-panel variants (issue #271).
+    --overflow-only decides an ALID only the Overflow carries (#324).
     """
     try:
         result = build_indexed_subset(
@@ -1632,6 +1649,7 @@ def build_indexed_subset_command(
             reference_assembly=reference_assembly,
             overwrite=overwrite,
             band_cells=band_cells,
+            overflow_only=overflow_only,
         )
     except IndexedSubsetError as exc:
         typer.echo(f"error: {exc}", err=True)
@@ -1639,12 +1657,26 @@ def build_indexed_subset_command(
     typer.echo(f"built indexed subset {result.name!r} at {result.path}")
     typer.echo(
         f"requested {result.requested_count}, resolved {result.resolved_count}, "
-        f"absent {result.absent_count}"
+        f"absent {result.absent_count}, overflow-only {result.overflow_only.count}"
     )
+    if result.overflow_only.sample:
+        sample = ", ".join(repr(alid) for alid in result.overflow_only.sample)
+        typer.echo(f"overflow-only sample: {sample}")
     typer.echo(
         f"publication gate: {result.validation_mode}, {result.sample_cells} decoded "
         f"sample cells (seed {result.sample_seed}) in {result.validate_seconds:.1f} s; "
         "standalone validate remains exhaustive"
+    )
+    _echo_summary(
+        {
+            "name": result.name,
+            "path": str(result.path),
+            "n_subset_variants": result.n_subset_variants,
+            "requested_count": result.requested_count,
+            "resolved_count": result.resolved_count,
+            "absent_count": result.absent_count,
+            "overflow_only": result.overflow_only.as_dict(),
+        }
     )
 
 

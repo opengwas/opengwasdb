@@ -158,8 +158,11 @@ pixi run -e dev opengwasdb query-analysis \
 A requested canonical ALID that belongs **only to a Hybrid release's
 shared/overflow axis** fails the build and is named: the index covers the Dense
 Component's on-panel variants, and silently counting an off-panel ALID as absent
-would return a plausible, incomplete answer. An ALID absent from the shared
-union table as well is still counted and recorded as absent.
+would return a plausible, incomplete answer. `--overflow-only skip` leaves those
+ALIDs out instead and records how many, beside the absent count (the first 20
+skipped ALIDs are sampled in the summary and the subset's own metadata). An ALID
+absent from the shared union table as well is still counted and recorded as
+absent. On a Dense release the option is accepted and has no effect.
 
 `--overwrite` atomically replaces an existing subset of the same name.
 `--band-cells` bounds the Analysis tile a build materialises: the variant band
