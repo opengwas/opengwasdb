@@ -1139,13 +1139,26 @@ list's Reference Assembly, and a mismatch with the release's
 assembly plus ALID (ADR 0061).
 
 On a Hybrid root, an ALID present in the shared union table but absent from the
-Dense Component is an **overflow-only** request: it MUST be refused and named,
-because resolving against the Dense Component alone would otherwise count it
-absent and silently drop it. An ALID absent from the shared union table as well
-keeps the counted-as-absent handling; the shared table makes the two
-observable, and that is what licenses preserving the existing handling. A direct
-nested-Dense build names only the Dense Component, so an off-panel ALID there is
-absent-and-counted as before.
+Dense Component is an **overflow-only** request: it names a variant the release
+carries at a Variant Index this index cannot address, so resolving against the
+Dense Component alone would count it absent and silently drop it. `--overflow-only`
+decides it. `refuse` (the default) MUST fail the build and name the ALIDs.
+`skip` MUST leave them out of the subset and record `overflow_only_count` (the
+number skipped, always written, `0` when none) and `overflow_only_sample`
+(the deterministic first 20 in variant-list order) beside the absent count, and
+MUST report both in the command's summary as `overflow_only` (`policy`,
+`n_overflow_only`, `sample`).  The metadata key matches `absent_count`; only
+the summary's field is `n_overflow_only`.  The skipped count is never folded
+into `absent_count`: `absent_count` keeps its meaning of "the release does not
+carry this ALID". The recorded counts MUST satisfy `requested_count ==
+resolved_count + absent_count + overflow_only_count`, and a group recording
+neither Overflow-only attribute is read as `0` because the builder that wrote
+it could only refuse such a request. An ALID absent from the shared union
+table as well keeps the counted-as-absent handling; the shared table makes the
+two observable, and that is what licenses preserving the existing handling. A
+direct nested-Dense build names only the Dense Component, so an off-panel ALID
+there is absent-and-counted as before; a Dense release has no Overflow axis, so
+there `--overflow-only` is accepted and has no effect.
 
 A subset name MUST match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. A leading `.` is
 reserved so a name cannot collide with the `.{name}.tmp.*` staging groups or the
@@ -1217,14 +1230,21 @@ A published group self-describes; validation rejects a group missing any of
 `encoding` (the release's block, §6a), `reference_assembly` (normalised),
 `source_store_id`, `source_release_id`, `source_format_version`, `n_analyses`,
 `n_subset_variants`, `input_sha256` (the variant list's bytes),
-`requested_count`, `resolved_count`, `absent_count`, `builder_version`,
-`created_at` and `order` (`analysis,variant`). On a Hybrid release the
+`requested_count`, `resolved_count`, `absent_count`, `overflow_only_count`,
+`overflow_only_sample`, `builder_version`,
+`created_at` and `order` (`analysis,variant`). `overflow_only_count` is the
+number of requested ALIDs present only on a Hybrid release's shared/Overflow
+axis that a `--overflow-only skip` build left out (`0` when none were, and on a
+Dense release, which has no Overflow axis), and `overflow_only_sample` is the
+first 20 of them in variant-list order; a group written before the option
+existed records neither and is read as `0` (ADR 0065). On a Hybrid release the
 `source_store_id`/`source_release_id`/`source_format_version` attributes record
 the nested Dense Component, the self-contained release the index physically
 belongs to and the one the read seam validates it against.
 
 A regenerated `overview.html` lists every published subset: the name, the
-requested/resolved/absent counts, the input checksum, the Reference Assembly and
+requested/resolved/absent/Overflow-only counts, the input checksum, the
+Reference Assembly and
 the build provenance are read from the group's own recorded metadata, while the
 physical size is computed from the group's files at render time (it is not
 recorded as an attribute). A named directory that cannot be read, whose
@@ -1295,7 +1315,7 @@ stale or corrupt selector always fails even when the Analysis ID is also unknown
 a *valid* subset with an unknown Analysis ID keeps the ordinary empty result.
 Before decoding any value, independent of whether `validate` has been run, the
 read path re-checks the declared name, schema, profile and `order`, the declared
-Analysis and requested/resolved/absent counts, the exact array set, every plane's
+Analysis and requested/resolved/absent/Overflow-only counts, the exact array set, every plane's
 declared dtype and shape, the `int32` storage dtype of `variant_index`, every
 array's inner chunk and shard against the format's role policy, and that
 `variant_index` is non-empty, sorted, unique and in bounds `[0, n_variants)`. A malformed encoding block is refused as a malformed
