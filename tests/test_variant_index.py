@@ -388,6 +388,23 @@ def test_augment_adds_the_index_and_records_provenance(tmp_path: Path) -> None:
         add_variant_index(store)
 
 
+def test_augment_never_leaves_the_retired_coverage_spelling(tmp_path: Path) -> None:
+    """The augment rewrites `manifest.json` as JSON to record the index, so the
+    coverage it leaves behind is the source's spelling. Writing an in-place
+    edit in the retired vocabulary would keep `full` alive in a manifest this
+    build just wrote (#298)."""
+    store = _strip_variant_index(_build_ssf_store(tmp_path / "coverage", store_id="cov"))
+    manifest_path = store / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["association_coverage"] = "full"
+    manifest_path.write_text(json.dumps(manifest))
+
+    add_variant_index(store)
+
+    assert json.loads(manifest_path.read_text())["association_coverage"] == "gwas"
+    assert validate_store(store).ok, validate_store(store).errors
+
+
 def test_augment_is_idempotent(tmp_path: Path) -> None:
     """Rebuilding an already-indexed store with force=True produces a valid release."""
     store = _strip_variant_index(_build_ssf_store(tmp_path / "idempotent", store_id="idx"))

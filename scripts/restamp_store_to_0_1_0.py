@@ -61,6 +61,7 @@ from pathlib import Path
 from opengwasdb.encoding import ENCODING_VERSION
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.model.analyses import read_analyses
+from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.store.open import OpenGWASDBStore
 from opengwasdb.validation import validate_store
 
@@ -170,6 +171,9 @@ def _restamp_manifests(staged_path: Path) -> str:
                 ),
             },
         }
+        # A restamped release is a new release: it states the coverage
+        # vocabulary this build writes, not the retired `full` (#298).
+        normalise_coverage(data)
         path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"  restamped {path.relative_to(staged_path)}", flush=True)
     return release_id

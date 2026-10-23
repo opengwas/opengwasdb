@@ -76,6 +76,27 @@ def test_manifest_reading_full_gives_gwas_without_rewriting_it(tmp_path):
     assert loaded.to_dict()["association_coverage"] == "gwas"
 
 
+def test_a_provenance_amendment_writes_the_coverage_vocabulary(dense_store_path):
+    """`amend_provenance` is the one in-place edit of a built release, and it
+    rewrites the manifest as JSON: the coverage it leaves behind is the
+    source's spelling unless it normalises. An in-place edit that keeps `full`
+    alive is the retired spelling surviving a write this build made (#298)."""
+    import json
+
+    from opengwasdb.store import open_store
+
+    manifest_path = dense_store_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["association_coverage"] = "full"
+    manifest_path.write_text(json.dumps(manifest))
+
+    open_store(dense_store_path).amend_provenance({"amended_by": "test"})
+
+    written = json.loads(manifest_path.read_text())
+    assert written["association_coverage"] == "gwas"
+    assert written["provenance"]["amended_by"] == "test"
+
+
 def test_unknown_association_coverage_is_refused(tmp_path):
     """The vocabulary is closed: a value outside it is an error, never a
     default standing in for it."""

@@ -58,7 +58,7 @@ from opengwasdb.encoding.codec import (
 )
 from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
-from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.model.manifest import StoreManifest, normalise_coverage
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import ArrayRole, array_length
 
@@ -1014,6 +1014,9 @@ def _record_index_in_manifest(store_path: str | Path, result: VariantIndexResult
     ragged["by_variant"] = result.provenance()
     provenance["ragged"] = ragged
     data["provenance"] = provenance
+    # In-place, so the release keeps whatever it declared -- written in the
+    # vocabulary this build writes, never the retired `full` (#298).
+    normalise_coverage(data)
     temporary = path.with_name(f"{path.name}.variant-index.tmp")
     temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, path)

@@ -260,6 +260,31 @@ def test_the_fixture_source_is_zarr_v2_and_the_conversion_is_zarr_v3(
     )
 
 
+def test_a_conversion_never_writes_the_retired_coverage_spelling(
+    dense_source: Path, tmp_path: Path
+):
+    """A converted release states `gwas`, even when its source says `full` (#298).
+
+    The converter rewrites manifest JSON directly, so `AssociationCoverage`'s
+    legacy read never runs on this path: a 0.1.0 release stamped `full` was
+    republished as a fresh 0.2.0 release still saying `full`, which is the one
+    thing #298 promises no build or derivation does.
+    """
+    stamped = _copy_release(dense_source, tmp_path / "stamped-full.opengwasdb")
+    manifest_path = stamped / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    # The fixture must be the thing under test: a 0.1.0 release saying `full`.
+    assert manifest["format_version"] == "0.1.0"
+    manifest["association_coverage"] = "full"
+    manifest_path.write_text(json.dumps(manifest))
+
+    converted = convert_release(stamped, tmp_path / "converted-from-full.opengwasdb")
+
+    written = json.loads((converted / "manifest.json").read_text())
+    assert written["format_version"] == "0.2.0"
+    assert written["association_coverage"] == "gwas"
+
+
 # ── the top-hit shard width is a parameter (#246) ────────────────────────────
 
 #: A top-hit tier with more than one shard's worth of hits: 2,000,000 hits is
