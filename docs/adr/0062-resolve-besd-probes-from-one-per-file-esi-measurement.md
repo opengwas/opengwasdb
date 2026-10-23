@@ -50,6 +50,49 @@ one unique mapping per variant, alleles complemented on a reverse-strand mapping
 and an indel or ambiguous mapping refused (ADR 0044's assembly rules). The
 assembly plan admits BESD beside GWAS-VCF.
 
+**A post-lift collision is ambiguous, and all of it is dropped.** A chain set
+does not have to be injective: two hg19 loci can both map into one hg38
+position, and when their projected alleles agree they become one canonical
+variant claimed by two ESI entries. Nothing in the file set says which entry a
+probe's association belongs to, so every entry in the colliding group is
+dropped, with its associations, exactly as a liftover failure is — never a
+winner chosen by position, by allele order or by row order.
+
+**That drop is this builder's own policy, not a Dense rule it inherits.** The
+Dense VCF builder meets the same collapse and answers differently, because a
+dense column can hold both source variants' associations against one row:
+`_source_alids_by_alid` blanks the ambiguous source-coordinate provenance
+(`hg38_to_source[hg38_alid] = None  # collision → ambiguous`) and the column
+keeps the last stream occurrence for that row (`tests/test_dense_vcf_build.py::
+test_last_wins_dedup_on_collision`). Its only association-dropping collision is
+a different one — `_drop_cross_assembly_collisions` drops raw tuples declared
+under *both* assemblies, which is one string naming two physical loci rather
+than two loci resolving to one variant. What BESD borrows from Dense is the
+refusal to guess: Dense will not invent which source coordinate a collapsed
+row came from, and BESD will not invent which entry a collapsed variant's
+association came from. BESD has to go further because a Ragged CSR cannot
+absorb the collapse at all — holding both would put one `variant_index` twice
+inside one Analysis's segment, and `(variant, Analysis)` resolution cannot tell
+the two rows apart.
+
+The build says how many entries went, on stdout and as
+`provenance.lift.n_collisions` / `n_collision_groups` beside `n_lifted`. The
+same refusal covers a source that lists one variant twice with no lift
+involved, since it is the store's invariant rather than the chain's; such a
+build has no lift record to hold the counts, so it records them at the
+provenance's root (issue #304).
+
+On eQTLGen's full file set (8,932,823 `.esi` rows, 19,250 probes) 5,736 rows
+fail the lift and 26 of the remaining 8,927,087 landings claim 13 canonical
+variants between them — so the axis holds 8,927,061 variants, 13 fewer than the
+8,927,074 the colliding build stored, and 341 associations go with them
+(127,112,772 against 127,113,113). The 13 collapsed variants are the difference
+that build's log had been reporting without a reason. None of them is a
+duplicated source row — no two `.esi` rows share a `(chrom, bp, allele pair)` —
+so every one is two hg19 loci landing on one hg38 coordinate. The whole build
+takes 12m01s, against 15m25s for the same file set with the collision left in,
+and validates `ok`.
+
 **Two refusals, each a controlled failure of the Analysis, never a value:**
 
 1. **A `.esi` with no usable frequency** — no seventh column, or `NA` on every
@@ -132,6 +175,16 @@ drops the measurements, and their arrays, when the run's probes are done.
   resolver does not: where a position maps under more than one chain block it
   takes the highest-scoring mapping, because a batch lift of nine million rows
   cannot fail the way one Analysis can (ADR 0044).
+- **The Ragged segment invariant tightened to catch it (issue #304).** A
+  repeated `variant_index` inside one Analysis's segment is a duplicate
+  association, not an ordered one, so §11/§20 now require each segment to be
+  *strictly* increasing and validation reports a repeat separately from a
+  decrease, naming the Analysis. Before this the collision was visible only
+  through a p-value tier's top-hit index: on OGS-00027's partial release
+  `validate` failed with `top-hit index p_5e_08 has incorrect or non-genomic
+  analysis slices` (likewise `p_5e_06`, `p_5e_04`) while the CSR rule passed
+  the same 103 duplicated `variant_index` values in 74 of 19,250 Analyses. A
+  10-probe pilot hits no collision, so the defect only appeared at full scale.
 - **Dense and Hybrid re-orient, but do not check.** Both ingest the projected
   alleles' orientation from the same lift -- a swapped canonical order negates z
   and inverts EAF (`statistics_swap`) -- because the rename #284 introduced
@@ -146,6 +199,17 @@ drops the measurements, and their arrays, when the run's probes are done.
 
 ## Rejected
 
+- **Keep one entry of a colliding group and drop the rest.** Which of two hg19
+  loci "wins" a shared hg38 coordinate would be decided by row order, which is
+  not evidence about the data. Dense can keep last-wins for such a pair because
+  its column is one row and no `(variant, Analysis)` key changes meaning; a
+  Ragged segment cannot, and the ambiguity is exactly about which entry the
+  association belongs to, so keeping either would attribute one locus's
+  association to the other.
+- **Fail the build on a collision.** Nine million `.esi` rows are not one
+  Analysis: a batch lift cannot refuse the way ADR 0044's per-Analysis
+  resolution can, and 13 ambiguous variants in 8.9M is not a reason to have no
+  eQTLGen store. It is a reason to drop them loudly and record the count.
 - **Fit ancestry per probe from the probe's own rows.** It reads the same
   frequencies 19,250 times, each time over a cis window of a few thousand sites
   instead of the file's millions — most probes would fail the 5,000-site

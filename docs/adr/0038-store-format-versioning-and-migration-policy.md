@@ -1,5 +1,16 @@
 # Store format versioning, reader obligations, and migration expectations
 
+> **Amended by [ADR 0064](0064-association-coverage-is-a-build-input.md)
+> (issue #298, spec §21.0):** before `format_version` 1.0, a change confined to
+> a manifest vocabulary or to required metadata does **not** move the version.
+> It is applied by editing existing Stores' metadata in place, as one coherent
+> step across this package, `opengwasdb-stores` and the published Stores,
+> recorded in `CHANGELOG.md` — and an older package may refuse the new values,
+> because a closed vocabulary is refused by name rather than guessed at. §1's
+> classification and §2's "MUST accept a newer remainder" therefore apply from
+> `1.0.0`; below it, spec §21.0 governs a vocabulary change. ADR 0064's rename
+> of `association_coverage`'s `full` to `gwas` is the first case.
+>
 > **Superseded in part by [ADR 0041](0041-reset-format-version-and-drop-pre-release-formats.md)**
 > (issue #143), which resets `format_version` to `0.1.0` and makes it semantic
 > versioning, `MAJOR.MINOR.PATCH`. Two components are no longer a valid shape,

@@ -148,7 +148,10 @@ def _observed_store_seed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("ragged-completion-observed")
     prefix = _make_besd_fixture(root)
     out = root / "obs.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="obs-v1", tissue="Blood")
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="obs-v1", tissue="Blood",
+        association_coverage="cis_and_signals",
+    )
     return out
 
 
@@ -328,6 +331,73 @@ class TestCompletionFiles:
         assert m["completion_state"] == "reference_completed"
         assert "completion" in m["provenance"]
 
+    def test_completion_keeps_a_narrower_sources_coverage(self, tmp_path, ld_panel):
+        """A Ragged release can hold any of the four coverages, and completion
+        fills imputed cells without changing what the release retains, so the
+        source's value is the completed release's -- not a layout default
+        (issue #298)."""
+        import json
+
+        prefix = _make_besd_fixture(tmp_path)
+        source = tmp_path / "signals.opengwasdb"
+        build_ragged_from_besd(
+            prefix, source, store_id="test", release_id="obs-v1",
+            association_coverage="signals_only",
+        )
+        # The fixture must reach the completion path this test is about -- a
+        # source at the default would pass whether or not the value is copied.
+        assert json.loads((source / "manifest.json").read_text())[
+            "association_coverage"
+        ] == "signals_only"
+
+        completed = tmp_path / "completed.opengwasdb"
+        complete_ragged_store(
+            source, completed, ld_panel,
+            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+        )
+
+        manifest = json.loads((completed / "manifest.json").read_text())
+        assert manifest["completion_state"] == "reference_completed"
+        assert manifest["association_coverage"] == "signals_only"
+
+    def test_cli_complete_ragged_reports_the_narrower_coverage_it_kept(
+        self, tmp_path, ld_panel
+    ):
+        """The ragged capacity is the whole point: a `signals_only` source stays
+        `signals_only` through completion, and the command says so (#294, #298)."""
+        import json
+
+        from typer.testing import CliRunner
+
+        from opengwasdb.cli.main import app
+
+        prefix = _make_besd_fixture(tmp_path)
+        source = tmp_path / "signals.opengwasdb"
+        build_ragged_from_besd(
+            prefix, source, store_id="test", release_id="obs-v1",
+            association_coverage="signals_only",
+        )
+        assert json.loads((source / "manifest.json").read_text())[
+            "association_coverage"
+        ] == "signals_only"
+
+        completed = tmp_path / "completed.opengwasdb"
+        result = CliRunner().invoke(
+            app,
+            [
+                "complete-ragged", str(source), str(completed),
+                "--ld-panel", str(ld_panel), "--min-cor", "0.0",
+                "--cis-window-bp", "500000",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output.strip().splitlines()[-1])
+        assert payload["association_coverage"] == "signals_only"
+        assert json.loads((completed / "manifest.json").read_text())[
+            "association_coverage"
+        ] == "signals_only"
+
     def test_imputed_array_present(self, completed_store):
         root = open_store(completed_store).arrays(mode="r")["ragged"]
         assert "imputed" in root
@@ -402,7 +472,10 @@ class TestCompletionFiles:
             encoding="utf-8",
         )
         observed = tmp_path / "ssf_obs.opengwasdb"
-        build_ragged_from_ssf(manifest, filtered_dir, observed, store_id="t", release_id="obs")
+        build_ragged_from_ssf(
+            manifest, filtered_dir, observed, store_id="t", release_id="obs",
+            association_coverage="cis_and_signals",
+        )
 
         obs_reader = RaggedCSRReader(observed)
         observed_eaf = {
@@ -530,7 +603,8 @@ class TestPanelAlidCanonicalisation:
 
         observed_store = tmp_path / "obs.opengwasdb"
         build_ragged_from_besd(
-            fixture / "test", observed_store, store_id="test", release_id="obs-v1", tissue="Blood"
+            fixture / "test", observed_store, store_id="test", release_id="obs-v1", tissue="Blood",
+            association_coverage="cis_and_signals",
         )
 
         panel_dir = tmp_path / "ld_panel_us" / "EUR" / "1"
@@ -719,7 +793,10 @@ class TestCompletedStoreKeepsObservedStatistics:
         ])
 
         observed = tmp_path / "obs.opengwasdb"
-        build_ragged_from_ssf(manifest, filtered_dir, observed, store_id="test", release_id="obs")
+        build_ragged_from_ssf(
+            manifest, filtered_dir, observed, store_id="test", release_id="obs",
+            association_coverage="cis_and_signals",
+        )
 
         src = RaggedCSRReader(observed).get_analysis(0)
         obs_axis = VariantAxis(observed)
@@ -818,7 +895,8 @@ class TestAncestryMatchedRaggedCompletion:
 
         observed_store = tmp_path / "obs.opengwasdb"
         build_ragged_from_ssf(
-            manifest, filtered_dir, observed_store, store_id="test", release_id="obs-v1"
+            manifest, filtered_dir, observed_store, store_id="test", release_id="obs-v1",
+            association_coverage="cis_and_signals",
         )
 
         obs_table = read_analyses(observed_store / "analyses.tsv")
@@ -1477,7 +1555,10 @@ class TestGeneTargetLessAnalyses:
     def rich_observed_store(self, tmp_path):
         prefix = _make_rich_besd_fixture(tmp_path)
         out = tmp_path / "rich_obs.opengwasdb"
-        build_ragged_from_besd(prefix, out, store_id="test", release_id="obs-v1", tissue="Blood")
+        build_ragged_from_besd(
+            prefix, out, store_id="test", release_id="obs-v1", tissue="Blood",
+            association_coverage="cis_and_signals",
+        )
         return out
 
     @pytest.fixture
@@ -1579,7 +1660,8 @@ class TestGeneTargetLessAnalyses:
         )
         thin_store = tmp_path / "thin_obs.opengwasdb"
         build_ragged_from_besd(
-            thin / "test", thin_store, store_id="test", release_id="obs-v1", tissue="Blood"
+            thin / "test", thin_store, store_id="test", release_id="obs-v1", tissue="Blood",
+            association_coverage="cis_and_signals",
         )
         table = read_analyses(thin_store / "analyses.tsv")
         write_analyses(

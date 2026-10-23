@@ -67,7 +67,9 @@ def _build_ssf_store(
     kwargs.setdefault("store_id", "idx")
     kwargs.setdefault("release_id", "v1")
     store = root / name
-    build_ragged_from_ssf(manifest, filtered, store, **kwargs)
+    build_ragged_from_ssf(
+        manifest, filtered, store, **kwargs, association_coverage="cis_and_signals",
+    )
     return store
 
 
@@ -93,7 +95,10 @@ def observed_besd(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("variant_index_besd")
     prefix = _make_besd_fixture(root)
     store = root / "ragged.opengwasdb"
-    build_ragged_from_besd(prefix, store, store_id="idx-besd", release_id="v1", tissue="Blood")
+    build_ragged_from_besd(
+        prefix, store, store_id="idx-besd", release_id="v1", tissue="Blood",
+        association_coverage="cis_and_signals",
+    )
     return store
 
 
@@ -381,6 +386,23 @@ def test_augment_adds_the_index_and_records_provenance(tmp_path: Path) -> None:
     assert validate_store(store).ok, validate_store(store).errors
     with pytest.raises(VariantIndexError):
         add_variant_index(store)
+
+
+def test_augment_never_leaves_the_retired_coverage_spelling(tmp_path: Path) -> None:
+    """The augment rewrites `manifest.json` as JSON to record the index, so the
+    coverage it leaves behind is the source's spelling. Writing an in-place
+    edit in the retired vocabulary would keep `full` alive in a manifest this
+    build just wrote (#298)."""
+    store = _strip_variant_index(_build_ssf_store(tmp_path / "coverage", store_id="cov"))
+    manifest_path = store / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["association_coverage"] = "full"
+    manifest_path.write_text(json.dumps(manifest))
+
+    add_variant_index(store)
+
+    assert json.loads(manifest_path.read_text())["association_coverage"] == "gwas"
+    assert validate_store(store).ok, validate_store(store).errors
 
 
 def test_augment_is_idempotent(tmp_path: Path) -> None:

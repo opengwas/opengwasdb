@@ -63,6 +63,7 @@ import numpy as np
 from opengwasdb.index.sqlite import connect, get_metadata, set_metadata
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.model.analyses import read_analyses
+from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.store.arrays import (
     COMPRESSOR_RECORD,
     DENSE_CHUNK_SHAPE,
@@ -637,6 +638,43 @@ def _dense_plane(plans: list[_ArrayPlan]) -> _ArrayPlan | None:
     return None
 
 
+def _conversion_provenance(
+    *,
+    component: _Component,
+    plans: list[_ArrayPlan],
+    dense_analysis_chunk: int,
+    dense_shard: tuple[int, int],
+    top_hit_shard_chunks: int,
+    now: str,
+    source_release_id: str,
+) -> dict[str, Any]:
+    """The `zarr_v3_conversion` block one converted component records.
+
+    It states what the conversion did to the release, which is what makes a
+    converted Store's provenance a record rather than a claim (issue #248).
+    """
+    return {
+        "source_release_id": source_release_id,
+        "from_format_version": SOURCE_FORMAT_VERSION,
+        "to_format_version": CURRENT_FORMAT_VERSION,
+        "source_zarr_format": 2,
+        "target_zarr_format": 3,
+        "tool": "scripts/convert_store_to_0_2_0.py",
+        "at": now,
+        "opengwasdb_git_hash": _installed_commit(),
+        "dense_analysis_chunk": dense_analysis_chunk,
+        "dense_shard": list(dense_shard),
+        "top_hit_shard_chunks": top_hit_shard_chunks,
+        "component": component.zarr_rel,
+        "layouts": _recorded_layouts(plans),
+        "note": (
+            "Derived by scripts/convert_store_to_0_2_0.py: every array was re-written "
+            "as Zarr v3 with the sharding codec, holding the same stored codes as the "
+            "source. The source release was not modified."
+        ),
+    }
+
+
 def _rewrite_manifest(
     staged_path: Path,
     component: _Component,
@@ -673,27 +711,19 @@ def _rewrite_manifest(
         block["compressor"] = SHARDED_COMPRESSOR_RECORD
         block["zarr_format"] = 3
         provenance[key] = block
-    provenance["zarr_v3_conversion"] = {
-        "source_release_id": source_release_id,
-        "from_format_version": SOURCE_FORMAT_VERSION,
-        "to_format_version": CURRENT_FORMAT_VERSION,
-        "source_zarr_format": 2,
-        "target_zarr_format": 3,
-        "tool": "scripts/convert_store_to_0_2_0.py",
-        "at": now,
-        "opengwasdb_git_hash": _installed_commit(),
-        "dense_analysis_chunk": dense_analysis_chunk,
-        "dense_shard": list(dense_shard),
-        "top_hit_shard_chunks": top_hit_shard_chunks,
-        "component": component.zarr_rel,
-        "layouts": _recorded_layouts(plans),
-        "note": (
-            "Derived by scripts/convert_store_to_0_2_0.py: every array was re-written "
-            "as Zarr v3 with the sharding codec, holding the same stored codes as the "
-            "source. The source release was not modified."
-        ),
-    }
+    provenance["zarr_v3_conversion"] = _conversion_provenance(
+        component=component,
+        plans=plans,
+        dense_analysis_chunk=dense_analysis_chunk,
+        dense_shard=dense_shard,
+        top_hit_shard_chunks=top_hit_shard_chunks,
+        now=now,
+        source_release_id=source_release_id,
+    )
     data["provenance"] = provenance
+    # A converted release is a new release, so it states the coverage vocabulary
+    # this build writes rather than carrying `full` forward (issue #298).
+    normalise_coverage(data)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 

@@ -43,7 +43,10 @@ def ragged_store_path(tmp_path):
         encoding="utf-8",
     )
     store_path = tmp_path / "ragged.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered_dir, store_path, store_id="fixture", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered_dir, store_path, store_id="fixture", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
     return store_path
 
 
@@ -447,6 +450,92 @@ def test_validator_rejects_stray_file_in_hybrid_dense_component(hybrid_store_pat
     assert any(
         "unexpected store entry" in error and "stray.txt" in error for error in result.errors
     )
+
+
+def test_validator_rejects_coverage_the_layout_cannot_carry(
+    dense_store_path, hybrid_store_path
+):
+    # Issue #298: a Dense or Hybrid release has a cell for every (variant,
+    # Analysis), so a coverage narrower than `gwas` would leave cells that are
+    # indistinguishable from associations the source never reported. No builder
+    # may write one, so a release that declares one is invalid rather than a
+    # release whose missing cells mean something else.
+    import json
+
+    for store_path, layout in ((dense_store_path, "dense"), (hybrid_store_path, "hybrid")):
+        manifest_path = store_path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["association_coverage"] = "cis"
+        manifest_path.write_text(json.dumps(manifest))
+
+        result = validate_store(store_path)
+
+        assert not result.ok
+        assert any(
+            "cannot carry association_coverage=cis" in error
+            and layout in error
+            for error in result.errors
+        ), result.errors
+
+
+def test_validator_accepts_a_ragged_release_declaring_cis(ragged_store_path):
+    # The same rule must not reject a Ragged release, whose sequence states its
+    # own absences: all four coverages are representable there (issue #298).
+    import json
+
+    manifest_path = ragged_store_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["association_coverage"] = "cis"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = validate_store(ragged_store_path)
+
+    assert result.ok, result.errors
+
+
+def test_a_fixture_0_1_0_release_still_spelling_full_opens_and_validates(
+    tmp_path, dense_store_path
+):
+    """The brief's case, on a real 0.1.0 release: every release built before
+    #298 says `full`, and none of them needs rewriting.
+
+    `relayout_as_0_1_0` writes a genuine 0.1.0 (Zarr v2) release from a current
+    build, so this exercises the version a published Store actually carries
+    rather than a hand-edited manifest.
+    """
+    import json
+
+    from legacy_fixtures import relayout_as_0_1_0
+
+    legacy = relayout_as_0_1_0(dense_store_path, tmp_path / "legacy-0.1.0.opengwasdb")
+    manifest_path = legacy / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["format_version"] == "0.1.0"
+    # The fixture must be the thing under test: an old release that says `full`.
+    manifest["association_coverage"] = "full"
+    manifest_path.write_text(json.dumps(manifest))
+
+    store = open_store(legacy)
+    assert store.manifest.association_coverage.value == "gwas"
+
+    result = validate_store(legacy)
+    assert result.ok, result.errors
+
+
+def test_validator_accepts_a_release_still_spelling_full(dense_store_path):
+    # Every release built before #298 says `full` outside the two-valued
+    # vocabulary. It still opens and validates, as `gwas` (issue #298).
+    import json
+
+    manifest_path = dense_store_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["association_coverage"] = "full"
+    manifest_path.write_text(json.dumps(manifest))
+
+    result = validate_store(dense_store_path)
+
+    assert result.ok, result.errors
+    assert open_store(dense_store_path).manifest.association_coverage.value == "gwas"
 
 
 def test_validator_accepts_clean_dense_ragged_hybrid_stores(

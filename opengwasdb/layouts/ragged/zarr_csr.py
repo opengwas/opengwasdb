@@ -1001,10 +1001,13 @@ class RaggedCSRReader:
         chunk may hold the next Analysis's rows, whose variant indices are
         unrelated.
 
-        A duplicate variant (the writer accepts a non-decreasing sequence) is
-        found by walking the equal run forward (`_run_end`); every chunk it
-        spans is read at most once through the cache. The returned positions
-        are ascending and in segment order, matching `analysis()` row for row.
+        A duplicate variant is found by walking the equal run forward
+        (`_run_end`); every chunk it spans is read at most once through the
+        cache. The writer accepts a non-decreasing sequence, but a release that
+        held a repeat inside one Analysis's segment is invalid (§11), so this
+        scan is a defensive read of a store validation refuses, not a shape a
+        builder produces. The returned positions are ascending and in segment
+        order, matching `analysis()` row for row.
         """
         wanted = np.unique(np.asarray(wanted, dtype=np.int32))
         if len(wanted) == 0:

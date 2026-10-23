@@ -152,7 +152,8 @@ def test_build_ragged_from_besd_surfaces_malformed_esi(tmp_path):
     (tmp_path / "bad.epi").write_text("# no probes\n")
     with pytest.raises(BESDMetadataError) as excinfo:
         build_ragged_from_besd(
-            tmp_path / "bad", tmp_path / "out.opengwasdb", store_id="s", release_id="r"
+            tmp_path / "bad", tmp_path / "out.opengwasdb", store_id="s", release_id="r",
+            association_coverage="cis_and_signals",
         )
     msg = str(excinfo.value)
     assert "bad.esi" in msg and ":2" in msg

@@ -183,7 +183,7 @@ def _observed_alid_maps(obs: Any, src_alids: list[str]) -> _ObservedAlidMaps:
 
 def _make_reader(task: _BlockTask):
     """ragged's half of the ``run_block`` seam: read one Analysis's observed
-    z/se at a time from its CSR row, since (unlike dense's Full Coverage
+    z/se at a time from its CSR row, since (unlike dense's `gwas`-coverage
     matrix) only the Analyses this task was assigned even have a cis window
     touching this block.
     """

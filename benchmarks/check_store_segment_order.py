@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Check one store-format rule over registered stores: segment ordering (#252).
 
-`variant_index` must be non-decreasing within every Analysis's segment of a
-standalone Ragged CSR or a Hybrid Overflow CSR (spec §11, §20). This is the
+`variant_index` must be strictly increasing within every Analysis's segment of a
+standalone Ragged CSR or a Hybrid Overflow CSR (spec §11, §20): a repeated value
+is a second association at a variant the Analysis already holds, and a decrease
+is a segment the variant-side binary search cannot answer from. This is the
 release-evidence runner for that rule: it runs **only** the ordering check --
 not the whole of `validate_store` -- over every Ragged and Hybrid Store Release
 under a root, and reports per Store the segments checked, the entries read, the
@@ -128,7 +130,10 @@ def main() -> None:
         return
 
     artifact: dict[str, object] = {
-        "rule": "variant_index is non-decreasing within every Analysis's segment (spec §11, §20)",
+        "rule": (
+            "variant_index is strictly increasing within every Analysis's segment "
+            "(spec §11, §20)"
+        ),
         "root": str(args.root),
         "note": (
             "Runs only the segment-ordering rule, not the whole of validate_store. "

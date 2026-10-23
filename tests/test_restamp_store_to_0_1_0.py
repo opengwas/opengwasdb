@@ -103,6 +103,25 @@ def test_restamp_publishes_a_0_1_0_release_and_leaves_the_source_untouched(
     assert validate_store(destination).ok
 
 
+def test_a_restamped_release_never_writes_the_retired_coverage_spelling(
+    pre_reset_store: Path, tmp_path: Path
+) -> None:
+    """The restamp edits manifest JSON directly, so it never meets
+    `AssociationCoverage`'s legacy read: a source saying `full` was republished
+    still saying `full`. It is a new release, so it states `gwas` (#298)."""
+    manifest_path = pre_reset_store / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["association_coverage"] = "full"
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    destination = tmp_path / "restamped-full.opengwasdb"
+
+    assert restamp_module.restamp(pre_reset_store, destination) == 0
+
+    assert json.loads((destination / "manifest.json").read_text())[
+        "association_coverage"
+    ] == "gwas"
+
+
 def test_the_stamp_is_the_only_thing_that_changes(pre_reset_store: Path, tmp_path: Path) -> None:
     """The claim the whole tool rests on. Every byte outside `manifest.json`
     and the release's own page is identical to the source's: no array, index or

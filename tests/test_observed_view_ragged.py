@@ -105,7 +105,13 @@ def _build_source(
         for i, a in enumerate(analyses)
     ])
     observed = root / "obs.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered, observed, store_id="test", release_id="obs-v1")
+    # A Ragged build states its Association Coverage (issue #298). `cis_and_signals`
+    # is what the builder wrote before the coverage was a build input, so the
+    # fixture keeps the manifest it had when the check was written.
+    build_ragged_from_ssf(
+        manifest, filtered, observed, store_id="test", release_id="obs-v1",
+        association_coverage="cis_and_signals",
+    )
     return observed
 
 

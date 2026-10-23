@@ -9,7 +9,7 @@ import sqlite3
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -48,6 +48,7 @@ from opengwasdb.model.analyses import (
     read_analyses,
 )
 from opengwasdb.model.enums import (
+    COVERAGES_BY_LAYOUT,
     AncestryAssignmentMethod,
     CompletionState,
     EafOrientationOutcome,
@@ -774,6 +775,7 @@ def _validate_dense_store(
     if not _validate_dense_envelope(store, envelope, errors):
         return ValidationResult(errors=errors)
     manifest = store.manifest
+    _require_layout_coverage(manifest, errors)
     try:
         with store.index_connection() as connection:
             variant_axis = VariantAxis(store.path, connection)
@@ -1023,14 +1025,36 @@ def _csr_parallel_length_errors(root: Any, n_assoc: int, errors: list[str]) -> N
 #: per-Analysis offsets (8 bytes each), independent of the association count.
 _ORDER_WINDOW = 1_000_000
 
+#: The two ways one Analysis's `variant_index` slice can break its invariant.
+_BreakKind = Literal["decrease", "repeat"]
+_DECREASE: _BreakKind = "decrease"
+_REPEAT: _BreakKind = "repeat"
 
-def _segment_first_decrease(variant_index: Any, start: int, end: int) -> tuple[int | None, int]:
-    """First row in `[start, end)` below its predecessor, and rows read to find it.
+
+@dataclass(frozen=True)
+class _SegmentBreak:
+    """The first row of one Analysis's segment that is not above its predecessor.
+
+    One object rather than a bare offset and a separately-typed kind: the kind
+    decides what the failure means, so it cannot be optional where the failure
+    is not, and a caller that has a `_SegmentBreak` has both.
+    """
+
+    offset: int
+    kind: _BreakKind
+
+
+def _segment_first_break(
+    variant_index: Any, start: int, end: int
+) -> tuple[_SegmentBreak | None, int]:
+    """First break in `[start, end)`, and the rows read to find it.
 
     Bounded: `_ORDER_WINDOW` cells at a time, the preceding cell carried across
-    a window boundary. Returns `(failure offset or None, entries read)` so a
-    caller can report what was actually checked rather than what the offsets
-    imply.
+    a window boundary. The comparison is `<=`, so a repeat is found at the same
+    offset a decrease would be, and the first offending row is always the one
+    reported (the kind is read off the pair, not from which test ran first).
+    Returns `(break or None, entries read)` so a caller can report what was
+    actually checked rather than what the offsets imply.
     """
     previous: int | None = None
     read = 0
@@ -1038,27 +1062,58 @@ def _segment_first_decrease(variant_index: Any, start: int, end: int) -> tuple[i
         hi = min(lo + _ORDER_WINDOW, end)
         window = np.asarray(variant_index[lo:hi], dtype=np.int32)
         read += len(window)
-        if previous is not None and int(window[0]) < previous:
-            return lo, read
-        decreasing = window[1:] < window[:-1]
-        if decreasing.any():
-            return lo + int(np.argmax(decreasing)) + 1, read
+        if previous is not None and int(window[0]) <= previous:
+            kind: _BreakKind = _REPEAT if int(window[0]) == previous else _DECREASE
+            return _SegmentBreak(lo, kind), read
+        breaks = np.flatnonzero(window[1:] <= window[:-1])
+        if len(breaks):
+            failure = lo + int(breaks[0]) + 1
+            repeated = int(window[failure - lo]) == int(window[failure - lo - 1])
+            return _SegmentBreak(failure, _REPEAT if repeated else _DECREASE), read
         previous = int(window[-1])
     return None, read
+
+
+def _segment_order_error(
+    label: str, analysis: int, variant_index: Any, failure: _SegmentBreak
+) -> str:
+    """Name the Analysis whose segment broke the ordering invariant, and how.
+
+    A repeat and a decrease are different defects and are reported differently:
+    a repeat is two associations at one variant of one Analysis (a post-lift
+    collision, or a duplicate source row), which no reader can resolve; a
+    decrease is a segment out of genomic order, on which the variant-side
+    binary search answers with a plausible, wrong row.
+    """
+    offset = failure.offset
+    previous = int(variant_index[offset - 1])
+    held = int(variant_index[offset])
+    if failure.kind == _REPEAT:
+        return (
+            f"{label}/variant_index repeats variant {held} within Analysis "
+            f"{analysis}'s segment: offsets {offset - 1} and {offset} both hold it, "
+            f"so one Analysis carries two associations at one variant"
+        )
+    return (
+        f"{label}/variant_index is not non-decreasing within Analysis "
+        f"{analysis}'s segment: offset {offset} holds {held} after {previous}"
+    )
 
 
 def _segment_order_errors(
     root: Any, offsets: np.ndarray, n_assoc: int, errors: list[str], label: str
 ) -> int:
-    """Require `variant_index` non-decreasing within every Analysis's segment.
+    """Require `variant_index` strictly increasing within every Analysis's segment.
 
     The variant-side binary search (`RaggedCSRReader.segment_positions`) is
-    correct only on a non-decreasing segment, so the invariant is checked on
-    every release, not only on the ones this build wrote. The read is bounded:
-    `_ORDER_WINDOW` cells at a time, the preceding cell carried across a
-    window boundary, the comparison reset at each Analysis boundary. Returns
-    the number of entries actually read, so an evidence runner can report a
-    counted total and not an offset-implied one.
+    correct only on an ordered segment, and a repeated `variant_index` is two
+    associations at one variant, which `(variant, Analysis)` resolution cannot
+    represent; so the invariant is checked on every release, not only on the
+    ones this build wrote. The read is bounded: `_ORDER_WINDOW` cells at a
+    time, the preceding cell carried across a window boundary, the comparison
+    reset at each Analysis boundary. Returns the number of entries actually
+    read, so an evidence runner can report a counted total and not an
+    offset-implied one.
     """
     if array_length(root["variant_index"]) != n_assoc:
         return 0  # the parallel-length rule reports this
@@ -1068,15 +1123,10 @@ def _segment_order_errors(
         start, end = int(offsets[analysis]), int(offsets[analysis + 1])
         if end <= start:
             continue
-        failure, read = _segment_first_decrease(variant_index, start, end)
+        failure, read = _segment_first_break(variant_index, start, end)
         checked += read
         if failure is not None:
-            errors.append(
-                f"{label}/variant_index is not non-decreasing within Analysis "
-                f"{analysis}'s segment: offset {failure} holds "
-                f"{int(variant_index[failure])} after "
-                f"{int(variant_index[failure - 1])}"
-            )
+            errors.append(_segment_order_error(label, analysis, variant_index, failure))
             return checked
     return checked
 
@@ -1937,14 +1987,23 @@ def _validate_ragged_top_hits(
                 errors.append(f"top-hit index {key} eaf value inconsistent with CSR")
 
 
-def _require_hybrid_full_coverage(manifest: Any, errors: list[str]) -> None:
-    """A Hybrid release partitions one Analysis's associations across two components."""
-    from opengwasdb.model.enums import AssociationCoverage
+def _require_layout_coverage(manifest: Any, errors: list[str]) -> None:
+    """The coverage this release declares must be one its layout can carry.
 
-    if manifest.association_coverage is not AssociationCoverage.FULL:
+    A Dense or Hybrid release has a cell for every (variant, Analysis), so a
+    coverage narrower than `gwas` would leave cells whose absence means
+    "filtered out" while every other missing cell means "the source did not
+    report it" -- two answers with one representation (issue #298). The set of
+    values each layout can carry is `COVERAGES_BY_LAYOUT`, the same one every
+    builder is held to, so a release no builder could have written is refused
+    rather than reported as a Store of a different kind.
+    """
+    accepted = COVERAGES_BY_LAYOUT[manifest.primary_layout]
+    if manifest.association_coverage not in accepted:
         errors.append(
-            "hybrid store must have association_coverage=full "
-            f"(got {manifest.association_coverage.value})"
+            f"a {manifest.primary_layout.value} store cannot carry "
+            f"association_coverage={manifest.association_coverage.value} "
+            f"(it accepts {', '.join(sorted(c.value for c in accepted))})"
         )
 
 
@@ -1957,7 +2016,7 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
     """
     store_path = store.path
     manifest = store.manifest
-    _require_hybrid_full_coverage(manifest, errors)
+    _require_layout_coverage(manifest, errors)
 
     dense_dir = dense_component_path(store_path)
     ragged_path = store_path / "data.zarr" / "ragged"

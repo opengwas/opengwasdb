@@ -112,7 +112,7 @@ Required fields:
 | `release_id` | Identity of this immutable release |
 | `format_version` | Store format version |
 | `primary_layout` | `dense`, `ragged`, or `hybrid` |
-| `association_coverage` | `full` or `cis_and_signals` |
+| `association_coverage` | What the release retains of each source Analysis's associations: `gwas`, `cis`, `cis_and_signals` or `signals_only` (§2a) |
 | `completion_state` | `observed_only` or `reference_completed` |
 | `reference_assembly` | One genome assembly for all coordinates in the release |
 | `created_at` | Release creation timestamp |
@@ -131,6 +131,31 @@ Observed-Only and Reference-Completed releases for the same source collection SH
 A release derived from another one — by migration or reference completion — is a new immutable release with its own identity: it MUST NOT reuse the source's `release_id`, and MUST record a fresh `created_at`. The restamp migration additionally records the source `release_id` in its provenance (§21.4).
 
 Published releases are immutable. Enhancing an Observed-Only release to Reference-Completed produces a new release.
+
+### 2a. Association Coverage
+
+`association_coverage` states **what the release retains**, independently of its
+Primary Storage Layout and Completion State (ADR 0009, ADR 0064):
+
+| value | the release retains |
+|---|---|
+| `gwas` | every association the source reports, genome-wide |
+| `cis` | a cis window around each Analysis's target, and nothing else |
+| `cis_and_signals` | a cis window plus significant signals elsewhere |
+| `signals_only` | significant signals and their flanks, with no cis window |
+
+`full` is the pre-#298 spelling of `gwas`. A reader MUST accept it and report
+`gwas`; a build MUST NOT write it, and neither MUST a derivation — a converted,
+restamped or amended release states the vocabulary the deriving package writes,
+not the spelling it read (§21.0).
+
+A `dense` or `hybrid` release has a cell for every (variant, Analysis), and a
+missing cell there means the source did not report the association — which is
+what Reference Completion imputes. So a `dense` or `hybrid` release MUST
+declare `gwas`, and a release declaring anything else is invalid. A `ragged`
+release is the list of associations kept, so absence states itself and it MAY
+declare any of the four. Validators reject a release outside this rule (ADR
+0064).
 
 ## 3. Identity and terminology
 
@@ -178,6 +203,20 @@ reference warns and is recorded as unchecked rather than passing as verified.
 That release's `manifest.json` `provenance.lift` records the source Reference
 Assembly, the chain, the reference (or `null` when none was supplied) and the
 verified / other-variant / absent counts (issue #284, ADR 0062).
+
+A lift that lands two ESI entries on one canonical variant is ambiguous, and
+MUST be dropped, not resolved: a source of 9,000,000 rows cannot fail the way
+one Analysis can, and nothing in the file set says which of the two entries a
+probe's association belongs to. Every entry in such a group is dropped, with
+its associations — never one of them kept, chosen by position, allele order or
+row order — so no Analysis holds one `variant_index` twice (§11). The same
+refusal applies to a source that lists one variant under two entries without a
+lift, because it is the store's invariant that is at stake rather than the
+chain's. `build-ragged-besd` reports the drop on stdout and in
+`provenance.lift` as `n_collisions` (entries dropped) and `n_collision_groups`
+(contested variants), beside `n_lifted`; a same-assembly build has no lift
+record to hold them, and carries the same two fields in the provenance's root
+(issue #304).
 
 The Dense and Hybrid builders lift through the same projection and re-orient
 their statistics from it, but they do not perform this allele check and record
@@ -1359,11 +1398,13 @@ ordinal in the concatenated CSR arrays.
 
 The CSR is analysis-major: `data.zarr/ragged/offsets` bounds one contiguous
 segment per Analysis, and within every segment `variant_index` MUST be
-**non-decreasing**. The ordering is a format invariant, not a builder
-convention: a reader locates a `(variant, Analysis)` pair by binary-searching
-that Analysis's segment, and a segment out of order would answer with a
-plausible, wrong row rather than an error. Validation therefore checks the
-ordering on every release, including ones this build did not write (§20).
+**strictly increasing** — a repeated `variant_index` is two associations at one
+variant of one Analysis, which `(variant, Analysis)` resolution cannot tell
+apart. The ordering is a format invariant, not a builder convention: a reader
+locates a `(variant, Analysis)` pair by binary-searching that Analysis's
+segment, and a segment out of order would answer with a plausible, wrong row
+rather than an error. Validation therefore checks the ordering on every
+release, including ones this build did not write (§20).
 
 `eaf` (ADR 0036) is an optional fourth parallel array (`data.zarr/ragged/eaf`,
 `float32`), aligned with the CSR `z`/`se` and absent when no Analysis in the
@@ -1406,7 +1447,7 @@ sequences the `ASSOCIATION_SEQUENCE` role, and the re-keyed tables the
 `RAGGED_EXCEPTION_TABLE` role. The hint is a fact about the path, so the
 converter and the builders reproduce the same inner chunk.
 
-Ragged layout is used when Analyses do not share one dense source variant axis or when Association Coverage is Cis-and-Signals.
+Ragged layout is used when Analyses do not share one dense source variant axis, or when Association Coverage is narrower than `gwas` and cannot be represented as a Dense matrix (§2a, ADR 0064).
 
 For Observed-Only Ragged stores, absence from an Analysis sequence means the association is not retained by that Store Release.
 
@@ -1673,7 +1714,7 @@ Validators MUST check at least:
 - `original_sd_method`, `ancestry_assignment_method` and `eaf_scope` values are in their controlled vocabularies (ADR 0029, ADR 0030, ADR 0036);
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
-- `variant_index` is **non-decreasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11). It is checked on every release, not only on ones this build wrote, because a stored segment out of order makes the variant-side binary search answer with a plausible, wrong row. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows (1,000,000 int32, 4 MB), carries the preceding value across a window boundary and resets at each Analysis boundary, so peak memory is the window, its comparison bool and the per-Analysis offsets (`O(n_analyses)`), independent of the association count;
+- `variant_index` is **strictly increasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11): an out-of-order segment makes the variant-side binary search answer with a plausible, wrong row, and a repeated one is a second association at a variant that Analysis already holds. It is checked on every release, not only on ones this build wrote. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows (1,000,000 int32, 4 MB), carries the preceding value across a window boundary and resets at each Analysis boundary, so peak memory is the window, its comparison bool and the per-Analysis offsets (`O(n_analyses)`), independent of the association count. The error names the first offending Analysis and says which of the two it found — a decrease, or a repeat;
 - the variant-centric index MUST be present on every Ragged component (a Ragged Store Release or a Hybrid Overflow) in `format_version` 0.2.0, agrees with the Analysis-sorted component and is recorded in `provenance.ragged.by_variant`: its `offsets` array is `n_axis + 1` direct offsets spanning `[0, N)`, each variant holds exactly as many index rows as the component holds at that variant, `analysis_index` is non-decreasing within each variant's block and names a real Analysis, `eaf`/`imputed` are present on both sides or neither, and the cell contents match the Analysis-sorted planes (§11.1, ADR 0060);
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
 - the `se` plane, its `se_coefficients` and its exception table agree with the plan the manifest declares (§6a): a residual-coded plane has finite `float32` coefficients of shape `(n_analyses, 2)`, a sorted duplicate-free exception table whose positions lie inside the plane and whose entries are exactly the cells marked `-127`, and a complete `eaf` plane beside it; a `float16` plane has none of those arrays, and carrying one is a failure rather than a harmless relic;
@@ -1702,7 +1743,7 @@ Command-line validation (`ogdb validate`) and inspection (`ogdb info`) provide b
     "release_id": "...",
     "format_version": "0.2.0",
     "primary_layout": "dense",
-    "association_coverage": "full",
+    "association_coverage": "gwas",
     "completion_state": "observed_only",
     "reference_assembly": "GRCh38",
     "encoding": {
@@ -2018,11 +2059,43 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
 
 **The leftmost non-zero component carries an incompatible change.** Below `1.0.0` a format declares itself unsettled, so it is `MINOR` that breaks compatibility and `PATCH` that does not; from `1.0.0` it is `MAJOR`, and `MINOR` joins the compatible remainder. The components left of and including the breaking one are a release's **series**.
 
+### 21.0 Before 1.0, a metadata or vocabulary change is applied in place
+
+A format below `1.0.0` declares itself unsettled. Before then, a change to a
+**manifest vocabulary or required metadata** — a value added, renamed or
+re-spelled in a required field, with no array, encoding or required entry
+touched — is applied by **editing the existing Stores' metadata in place**, as
+one coherent step across this package, `opengwasdb-stores` and every published
+Store. Such a change:
+
+- **does not move `format_version`**;
+- MUST be recorded in `CHANGELOG.md`, naming the old and new value, so a reader
+  of an old Store knows what it will now be reported as;
+- MAY leave an older package unable to read a release written after it, because
+  a closed vocabulary is refused by name rather than guessed at (§21.2). Below
+  `1.0.0` that refusal is the accepted consequence of one coherent vocabulary,
+  not a compatibility break in the sense of §21.1 — which is why the in-place
+  edit, not a version bump and a rebuild, is the migration.
+
+This rule exists because the alternative was tried first: ADR 0064 §5 required
+the rename of `association_coverage`'s `full` to `gwas` without a version bump,
+and had to justify it against §21.1 and §21.2's "MUST accept". The owner's
+decision of 23 Oct 2026 is that one vocabulary across all three repositories is
+worth more than an old package reading a new release, and that this rule is
+what says so. From `1.0.0` the usual rule returns: a vocabulary change is
+incompatible and moves the series (§21.1), because a released format is a
+contract with readers outside this project.
+
+An in-place metadata edit still follows §21.4: it is a **Provenance Amendment**
+only when it touches `provenance`; a change to a required field is a recorded,
+reviewed edit of the release's `manifest.json`, made as part of the same
+coherent step, and every edited Store is re-validated afterwards.
+
 ### 21.1 What breaks compatibility, and what does not
 
 The distinction is defined by **what a reader that does not know about the change would do**, not by the size of the change:
 
-- **Incompatible** (moves the series) — a reader that does not know about the change would *misinterpret* the store: the encoding of an existing array changes; a required entry is removed, renamed, or restructured; the meaning of an existing field changes while its name and type do not.
+- **Incompatible** (moves the series) — a reader that does not know about the change would *misinterpret* the store: the encoding of an existing array changes; a required entry is removed, renamed, or restructured; the meaning of an existing field changes while its name and type do not. **Before `1.0.0`, a change confined to a controlled vocabulary is the §21.0 exception**: it is applied by editing existing Stores' metadata in place and does not move the version.
 - **Compatible** (moves the remainder) — a reader that does not know about the change still reads correctly everything it already knew, and the new thing is discoverable through the manifest: a new optional array, index, or sidecar; a new `analyses.tsv` column; a new `provenance` block.
 
 | change | bump (at `0.x.y`) |
@@ -2054,7 +2127,7 @@ Accepting a newer remainder follows from the definition of a compatible change: 
 
 This build reads two series, `0.1` (Zarr v2, readable but no longer written) and `0.2` (Zarr v3 with sharding, §10a, what every builder writes since #247). `0.2.0` is the only 0.2 release and `0.1.0` the only 0.1 release; a second remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
 
-A reader meeting a feature it does not implement — an encoding kind, an index type — MUST reject the release rather than guess or fall back.
+A reader meeting a feature it does not implement — an encoding kind, an index type, or a value in a controlled vocabulary it does not know — MUST reject the release rather than guess or fall back. Before `1.0.0` that refusal is exactly what a §21.0 vocabulary change produces in an older package: the "MUST accept a newer remainder" rows above govern a release whose *content* a reader understands, and §21.0 is the pre-release substitute for the version bump those rows would otherwise require.
 
 Future format versions may add fields, arrays, or indexes, but MUST preserve explicit manifest-based feature discovery.
 
@@ -2067,6 +2140,12 @@ A build writes exactly one `format_version` and reads every series it implements
 ### 21.4 I have an old store — now what?
 
 Store Releases are immutable. Reference Completion, re-indexing and migration all produce a **new release**, with one narrow exception: a **Provenance Amendment** may fold additional facts into an existing release's `provenance` dict in place, including a format migration recording what it did to that release. Anything that changes association data or Analytical Metadata is outside the exception.
+
+Before `1.0.0` there is one further in-place case, §21.0's coherent vocabulary
+sweep: a change of spelling in a required manifest field is applied by editing
+the existing Stores' metadata, not by deriving or rebuilding them. It touches no
+association data and no Analytical Metadata, and every edited Store is
+re-validated.
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
 2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), and a Hybrid without its nested Dense Component. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).

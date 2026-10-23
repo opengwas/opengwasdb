@@ -7,7 +7,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 from besd_fixtures import write_besd_sparse_3f, write_epi, write_esi
-from liftover_fixtures import STRAND_CHAIN_SIZE, write_two_strand_chain
+from cli_output import normalize_cli_output
+from liftover_fixtures import (
+    STRAND_CHAIN_SIZE,
+    write_collision_chain,
+    write_two_strand_chain,
+)
 
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -55,9 +60,8 @@ def test_build_creates_store_files(tmp_path):
     out = tmp_path / "out.opengwasdb"
 
     result = build_ragged_from_besd(
-        prefix, out,
-        store_id="test", release_id="v1",
-        tissue="Whole_Blood",
+        prefix, out, store_id="test", release_id="v1", tissue="Whole_Blood",
+        association_coverage="cis_and_signals",
     )
 
     assert out.exists()
@@ -75,16 +79,71 @@ def test_build_creates_store_files(tmp_path):
     assert result.n_analyses == 3
 
 
+def _build_store(tmp_path: Path, name: str = "out.opengwasdb") -> Path:
+    """Build the fixture's Observed-Only store, stating what it retains.
+
+    A BESD fixture is a cis-eQTL-style file set, so `cis_and_signals` is what
+    these tests describe; a Ragged build has no default to fall back on
+    (issue #298).
+    """
+    prefix = _make_besd_fixture(tmp_path)
+    out = tmp_path / name
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
+    return out
+
+
 def test_manifest_primary_layout(tmp_path):
     import json
     prefix = _make_besd_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1",
+        association_coverage="cis",
+    )
 
     manifest = json.loads((out / "manifest.json").read_text())
     assert manifest["primary_layout"] == "ragged"
     assert manifest["completion_state"] == "observed_only"
     assert manifest["reference_assembly"] == "GRCh38"
+    assert manifest["association_coverage"] == "cis"
+
+
+def test_besd_build_requires_an_association_coverage(tmp_path):
+    """A Ragged Store can hold any of the four coverages, so the builder cannot
+    choose one: the eQTLGen cis Stores that say `cis_and_signals` are what the
+    layout default produced (issue #298)."""
+    prefix = _make_besd_fixture(tmp_path)
+    out = tmp_path / "out.opengwasdb"
+
+    with pytest.raises(TypeError, match="association_coverage"):
+        build_ragged_from_besd(
+            prefix, out, store_id="test", release_id="v1"
+        )
+
+    assert not out.exists()
+
+
+def test_cli_build_ragged_besd_refuses_to_guess_the_coverage(tmp_path):
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    prefix = _make_besd_fixture(tmp_path)
+    out = tmp_path / "cli_out.opengwasdb"
+
+    result = CliRunner().invoke(
+        app,
+        ["build-ragged-besd", str(prefix), str(out),
+         "--store-id", "cli-test", "--release-id", "v1"],
+    )
+
+    assert result.exit_code != 0
+    # Rich wraps and styles the missing-option error under CI's colour terminal.
+    assert "--association-coverage" in normalize_cli_output(result.output)
+    assert not out.exists()
 
 
 def test_analyses_tsv_carries_probe_identities(tmp_path):
@@ -92,7 +151,10 @@ def test_analyses_tsv_carries_probe_identities(tmp_path):
 
     prefix = _make_besd_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1", tissue="Whole_Blood")
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", tissue="Whole_Blood",
+        association_coverage="cis_and_signals",
+    )
 
     table = read_analyses(out / "analyses.tsv")
     assert len(table.rows) == 3
@@ -103,9 +165,7 @@ def test_analyses_tsv_carries_probe_identities(tmp_path):
 
 
 def test_zarr_csr_associations(tmp_path):
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    out = _build_store(tmp_path)
 
     csr = RaggedCSRReader(out)
     assert csr.n_analyses == 3
@@ -125,9 +185,7 @@ def test_zarr_csr_associations(tmp_path):
 
 
 def test_z_scores_computed_correctly(tmp_path):
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    out = _build_store(tmp_path)
 
     csr = RaggedCSRReader(out)
     # Probe 1: single assoc beta=0.5, se=0.05 → z=10.0
@@ -138,9 +196,7 @@ def test_z_scores_computed_correctly(tmp_path):
 
 def test_top_hit_index_built_inline(tmp_path):
     """build_ragged_from_besd auto-builds the top-hit index."""
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    out = _build_store(tmp_path)
 
     root = open_store(out).arrays(mode="r")
     assert "top_hits" in root
@@ -150,9 +206,7 @@ def test_top_hit_index_built_inline(tmp_path):
 
 def test_top_hit_index_schema(tmp_path):
     """Each threshold group has the expected arrays and attribute."""
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    out = _build_store(tmp_path)
     build_ragged_top_hit_indexes(out)  # idempotent rebuild
 
     root = open_store(out).arrays(mode="r")
@@ -168,9 +222,7 @@ def test_top_hit_index_schema(tmp_path):
 
 def test_top_hit_z_values_match_csr(tmp_path):
     """Top-hit z values round-trip through the stored CSR correctly."""
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    out = _build_store(tmp_path)
 
     csr = RaggedCSRReader(out)
     root = open_store(out).arrays(mode="r")
@@ -196,9 +248,7 @@ def test_top_hit_z_values_match_csr(tmp_path):
 def test_top_hits_query_uses_index(tmp_path):
     """RaggedStoreQuery.top_hits reads from the precomputed index."""
     from opengwasdb.query import query_store
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    out = _build_store(tmp_path)
 
     q = query_store(out)
     # Threshold 5e-4 should return all 5 associations (all have |z| > 3.48)
@@ -210,9 +260,7 @@ def test_top_hits_query_uses_index(tmp_path):
 def test_top_hits_query_selects_one_analysis_from_index(tmp_path):
     from opengwasdb.query import query_store
 
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    out = _build_store(tmp_path)
 
     q = query_store(out)
     global_result = q.top_hits(threshold=5e-4)
@@ -226,9 +274,7 @@ def test_top_hits_query_selects_one_analysis_from_index(tmp_path):
 def test_validation_rejects_ragged_top_hit_offsets(tmp_path):
     from opengwasdb.validation import validate_store
 
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    out = _build_store(tmp_path)
     root = open_store(out).arrays(mode="r+")
     offsets = root["top_hits/p_5e_04/analysis_offsets"][:]
     offsets[-1] -= 1
@@ -244,7 +290,9 @@ def test_validation_checks_threshold_for_legacy_index_without_eaf(tmp_path):
 
     prefix = _make_besd_fixture(tmp_path)
     out = tmp_path / "store.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="s", release_id="r")
+    build_ragged_from_besd(
+        prefix, out, store_id="s", release_id="r", association_coverage="cis_and_signals",
+    )
     root = open_store(out).arrays(mode="a")
     group = root["top_hits/p_5e_04"]
     assert "eaf" not in group
@@ -266,7 +314,10 @@ def test_analyses_tsv_has_no_sql_table_and_carries_molecular_columns(tmp_path):
 
     prefix = _make_besd_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1", tissue="Blood")
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", tissue="Blood",
+        association_coverage="cis_and_signals",
+    )
 
     conn = sqlite3.connect(str(out / "index.sqlite"))
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -290,9 +341,7 @@ def test_top_hit_counts_in_analyses_tsv_match_top_hit_index(tmp_path):
     from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
     from opengwasdb.model.analyses import read_analyses
 
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    out = _build_store(tmp_path)
 
     table = read_analyses(out / "analyses.tsv")
     rows = sorted(table.rows, key=lambda r: int(r["analysis_index"]))
@@ -312,9 +361,7 @@ def test_analyses_table_groups_by_gene(tmp_path):
     columns)."""
     from opengwasdb.query import query_store
 
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    out = _build_store(tmp_path)
 
     q = query_store(out)
     analyses = q.analyses_table()
@@ -338,9 +385,7 @@ def test_range_by_analysis_matches_trait_position(tmp_path):
     the sole source of truth `range_by_analysis()` scans."""
     from opengwasdb.query import query_store
 
-    prefix = _make_besd_fixture(tmp_path)
-    out = tmp_path / "out.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    out = _build_store(tmp_path)
 
     from opengwasdb.model.analyses import read_analyses
 
@@ -368,12 +413,19 @@ def test_overwrite_flag(tmp_path):
     prefix = _make_besd_fixture(tmp_path)
     out = tmp_path / "out.opengwasdb"
 
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
+    )
     with pytest.raises(FileExistsError):
-        build_ragged_from_besd(prefix, out, store_id="test", release_id="v1")
+        build_ragged_from_besd(
+            prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
+        )
 
     # With overwrite=True should succeed
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1", overwrite=True)
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", overwrite=True,
+        association_coverage="cis_and_signals",
+    )
     assert out.exists()
 
 
@@ -405,11 +457,8 @@ def test_hg19_source_build_lifts_variant_coordinates(tmp_path):
     write_besd_sparse_3f(fixture / "test.besd", len(probes), [[(0, 0.1, 0.02), (1, -0.2, 0.03)]])
 
     result = build_ragged_from_besd(
-        fixture / "test",
-        tmp_path / "out.opengwasdb",
-        store_id="test",
-        release_id="v1",
-        source_build="hg19",
+        fixture / "test", tmp_path / "out.opengwasdb", store_id="test", release_id="v1",
+        source_build="hg19", association_coverage="cis_and_signals",
     )
 
     assert result.n_variants == 2
@@ -446,11 +495,8 @@ def test_hg19_source_build_fails_loudly_when_liftover_loses_a_variant(tmp_path):
 
     with pytest.raises(LiftoverFailureError):
         build_ragged_from_besd(
-            fixture / "test",
-            tmp_path / "out.opengwasdb",
-            store_id="test",
-            release_id="v1",
-            source_build="hg19",
+            fixture / "test", tmp_path / "out.opengwasdb", store_id="test", release_id="v1",
+            source_build="hg19", association_coverage="cis_and_signals",
         )
 
 
@@ -460,8 +506,14 @@ def test_no_analyses_manifest_build_is_byte_identical(tmp_path):
     out1 = tmp_path / "out1.opengwasdb"
     out2 = tmp_path / "out2.opengwasdb"
 
-    build_ragged_from_besd(prefix, out1, store_id="test", release_id="v1", tissue="Blood")
-    build_ragged_from_besd(prefix, out2, store_id="test", release_id="v1", tissue="Blood")
+    build_ragged_from_besd(
+        prefix, out1, store_id="test", release_id="v1", tissue="Blood",
+        association_coverage="cis_and_signals",
+    )
+    build_ragged_from_besd(
+        prefix, out2, store_id="test", release_id="v1", tissue="Blood",
+        association_coverage="cis_and_signals",
+    )
 
     assert (out1 / "analyses.tsv").read_bytes() == (out2 / "analyses.tsv").read_bytes()
 
@@ -487,7 +539,8 @@ def test_analyses_overlay_applies_passthrough_metadata_and_attributes(tmp_path):
     )
     out = tmp_path / "out_overlay.opengwasdb"
     result = build_ragged_from_besd(
-        prefix, out, store_id="eqtlgen", release_id="v1", analyses_path=manifest
+        prefix, out, store_id="eqtlgen", release_id="v1", analyses_path=manifest,
+        association_coverage="cis_and_signals",
     )
     assert result.n_analyses == 3
 
@@ -526,7 +579,7 @@ def test_analyses_overlay_malformed_sample_size_fails_loudly(tmp_path):
     ):
         build_ragged_from_besd(
             prefix, tmp_path / "out_bad_n.opengwasdb", store_id="t", release_id="v1",
-            analyses_path=manifest
+            analyses_path=manifest, association_coverage="cis_and_signals",
         )
 
 
@@ -545,12 +598,8 @@ def test_analyses_overlay_with_tissue_suffix_joins_correctly(tmp_path):
     )
     out = tmp_path / "out_tissue_overlay.opengwasdb"
     build_ragged_from_besd(
-        prefix,
-        out,
-        store_id="eqtlgen",
-        release_id="v1",
-        tissue="Whole_Blood",
-        analyses_path=manifest,
+        prefix, out, store_id="eqtlgen", release_id="v1", tissue="Whole_Blood",
+        analyses_path=manifest, association_coverage="cis_and_signals",
     )
 
     table = read_analyses(out / "analyses.tsv")
@@ -576,7 +625,10 @@ def test_besd_derived_trait_position_stays_authoritative(tmp_path):
         encoding="utf-8",
     )
     out = tmp_path / "out_pos.opengwasdb"
-    build_ragged_from_besd(prefix, out, store_id="test", release_id="v1", analyses_path=manifest)
+    build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", analyses_path=manifest,
+        association_coverage="cis_and_signals",
+    )
 
     table = read_analyses(out / "analyses.tsv")
     # Position from EPI probe: probe 1 is chr1:1050000, probe 2 is chr1:1150000
@@ -605,7 +657,7 @@ def test_analyses_manifest_mismatch_fails_loudly_in_both_directions(tmp_path):
     with pytest.raises(ValueError, match="ENSG00000099999"):
         build_ragged_from_besd(
             prefix, tmp_path / "out_extra.opengwasdb", store_id="t", release_id="v1",
-            analyses_path=manifest_extra
+            analyses_path=manifest_extra, association_coverage="cis_and_signals",
         )
 
     # 2. Manifest is missing an ID that exists in BESD EPI
@@ -619,7 +671,7 @@ def test_analyses_manifest_mismatch_fails_loudly_in_both_directions(tmp_path):
     with pytest.raises(ValueError, match="ENSG00000000003"):
         build_ragged_from_besd(
             prefix, tmp_path / "out_missing.opengwasdb", store_id="t", release_id="v1",
-            analyses_path=manifest_missing
+            analyses_path=manifest_missing, association_coverage="cis_and_signals",
         )
 
 
@@ -650,6 +702,7 @@ def test_cli_build_ragged_besd_accepts_analyses_option(tmp_path):
             "--store-id", "cli-test",
             "--release-id", "v1",
             "--analyses", str(manifest),
+            "--association-coverage", "cis_and_signals",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -714,9 +767,8 @@ def test_reverse_strand_hg19_snp_is_stored_as_the_resolver_orients_it(tmp_path):
     out = tmp_path / "out.opengwasdb"
 
     build_ragged_from_besd(
-        prefix, out,
-        store_id="test", release_id="v1",
-        source_build="hg19", chain_file=chain, variant_reference=reference,
+        prefix, out, store_id="test", release_id="v1", source_build="hg19", chain_file=chain,
+        variant_reference=reference, association_coverage="cis_and_signals",
     )
 
     stored = {r.alid for r in iter_variant_records(out / "variants.tsv.gz")}
@@ -768,9 +820,8 @@ def test_hg19_lift_disagreeing_with_the_reference_fails_the_build_by_name(tmp_pa
 
     with pytest.raises(LiftedAlleleMismatchError, match=_REVERSE_SNP_HG38_ALID):
         build_ragged_from_besd(
-            prefix, out,
-            store_id="test", release_id="v1",
-            source_build="hg19", chain_file=chain, variant_reference=reference,
+            prefix, out, store_id="test", release_id="v1", source_build="hg19", chain_file=chain,
+            variant_reference=reference, association_coverage="cis_and_signals",
         )
 
     assert not out.exists(), "a failed build must not leave a release at the destination"
@@ -787,9 +838,8 @@ def test_hg19_lift_without_a_reference_records_that_nothing_was_checked(tmp_path
 
     with caplog.at_level("WARNING"):
         build_ragged_from_besd(
-            prefix, out,
-            store_id="test", release_id="v1",
-            source_build="hg19", chain_file=chain,
+            prefix, out, store_id="test", release_id="v1", source_build="hg19", chain_file=chain,
+            association_coverage="cis_and_signals",
         )
 
     assert "variant-reference" in caplog.text
@@ -797,3 +847,172 @@ def test_hg19_lift_without_a_reference_records_that_nothing_was_checked(tmp_path
     assert lift["reference"] is None
     assert lift["n_reference_absent"] is None
     assert lift["n_lifted"] == 2
+
+
+# ── hg19 lift: two entries collapsing onto one hg38 variant (issue #304) ──────
+#
+# The chain fixture's two chains image overlapping target intervals, so hg19
+# 501 and 1001 both land on hg38 5501. Which of them owns an association there
+# is unknowable, so the policy is the Dense VCF builder's: an ambiguous lift is
+# dropped, never resolved by a guess. Two more rows lift clear of the collision
+# and must survive, or the drop would be indistinguishable from a lift that
+# simply lost everything.
+
+_COLLIDING_ALID = "1:5501:A:G"
+_SURVIVING_ALIDS = ("1:6001:C:T", "1:6101:A:C")
+
+
+def _write_collision_fixture(root: Path) -> Path:
+    """Two hg19 rows that lift onto one hg38 variant, and two that do not.
+
+    Probe 28201 holds associations at all four rows; probe 28202 only at the two
+    colliding ones, so it must come out empty rather than keep a row.
+    """
+    fixture = root / "fixture_hg19_collision"
+    fixture.mkdir()
+    write_esi(fixture / "test.esi", [
+        {"chr": "1", "snp_id": "rs296001", "bp": 501, "a1": "A", "a2": "G"},
+        {"chr": "1", "snp_id": "rs296002", "bp": 1001, "a1": "A", "a2": "G"},
+        {"chr": "1", "snp_id": "rs296003", "bp": 1501, "a1": "C", "a2": "T"},
+        {"chr": "1", "snp_id": "rs296004", "bp": 1601, "a1": "A", "a2": "C"},
+    ])
+    write_epi(fixture / "test.epi", [
+        {"chr": "1", "probe_id": "ENSG00000029601", "bp": 1_000, "gene": "GENE296A"},
+        {"chr": "1", "probe_id": "ENSG00000029602", "bp": 2_000, "gene": "GENE296B"},
+    ])
+    write_besd_sparse_3f(fixture / "test.besd", 2, [
+        [(0, 0.2, 0.1), (1, 0.4, 0.1), (2, 0.6, 0.1), (3, 0.8, 0.1)],
+        [(0, 0.2, 0.1), (1, 0.4, 0.1)],
+    ])
+    return fixture / "test"
+
+
+def test_hg19_lift_collision_drops_every_entry_and_association_in_the_group(
+    tmp_path, capsys
+):
+    """Both entries and every association that reaches the collided variant go,
+    the rest of the file set builds, the drop is reported, and the Store
+    validates -- the collision must not survive as a duplicate `variant_index`
+    in one Analysis's CSR segment."""
+    import json
+
+    from opengwasdb.validation import validate_store
+    from opengwasdb.variants.axis import VariantAxis
+
+    chain = write_collision_chain(tmp_path / "hg19ToHg38.chain")
+    prefix = _write_collision_fixture(tmp_path)
+    out = tmp_path / "out.opengwasdb"
+
+    result = build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", source_build="hg19", chain_file=chain,
+        association_coverage="cis_and_signals",
+    )
+
+    printed = capsys.readouterr().out
+    assert "collision" in printed.lower(), "the drop must be reported on stdout"
+    assert "2 ESI entries" in printed, printed
+
+    axis = VariantAxis(out)
+    try:
+        stored = [axis.by_index(i).alid for i in range(axis.n_variants)]
+    finally:
+        axis.close()
+    assert _COLLIDING_ALID not in stored, (
+        f"an ambiguous lift must not enter the axis: {stored}"
+    )
+    assert stored == list(_SURVIVING_ALIDS), stored
+    assert result.n_variants == 2
+    assert result.n_associations == 2, "the colliding rows' associations must go too"
+
+    reader = RaggedCSRReader(out)
+    assert len(reader.get_analysis(0).z) == 2
+    assert len(reader.get_analysis(1).z) == 0, "a probe with only colliding rows is empty"
+
+    lift = json.loads((out / "manifest.json").read_text())["provenance"]["lift"]
+    assert lift["n_collisions"] == 2, lift
+    assert lift["n_collision_groups"] == 1, lift
+    assert lift["n_lifted"] == 4, lift
+
+    validated = validate_store(out)
+    assert validated.ok, validated.errors
+
+
+# ── same assembly: one variant listed twice (issue #304) ─────────────────────
+#
+# No lift is involved, so the ambiguity is not a chain's: the file set simply
+# lists one variant under two entries (here with the allele pair swapped, which
+# is also what a second spelling of a variant looks like). Both go, because a
+# Ragged CSR cannot hold one Analysis twice at one variant, and a probe's
+# association cannot be attributed to one of two entries that name it.
+
+_SAME_ASSEMBLY_SURVIVOR = "1:1100000:C:T"
+
+
+def _write_same_assembly_duplicate_fixture(root: Path) -> Path:
+    """An hg38 file set that lists one variant twice, and one variant once.
+
+    Probe 30401 holds associations at all three rows; probe 30402 only at the
+    two duplicated ones, so it must come out empty rather than keep a row.
+    """
+    fixture = root / "fixture_hg38_duplicate"
+    fixture.mkdir()
+    write_esi(fixture / "test.esi", [
+        {"chr": "1", "snp_id": "rs304201", "bp": 1_000_000, "a1": "A", "a2": "G"},
+        {"chr": "1", "snp_id": "rs304202", "bp": 1_000_000, "a1": "G", "a2": "A"},
+        {"chr": "1", "snp_id": "rs304203", "bp": 1_100_000, "a1": "C", "a2": "T"},
+    ])
+    write_epi(fixture / "test.epi", [
+        {"chr": "1", "probe_id": "ENSG00000030401", "bp": 1_000_000, "gene": "GENE304A"},
+        {"chr": "1", "probe_id": "ENSG00000030402", "bp": 2_000_000, "gene": "GENE304B"},
+    ])
+    write_besd_sparse_3f(fixture / "test.besd", 2, [
+        [(0, 0.2, 0.1), (1, 0.4, 0.1), (2, 0.6, 0.1)],
+        [(0, 0.2, 0.1)],
+    ])
+    return fixture / "test"
+
+
+def test_same_assembly_duplicate_variant_is_dropped_and_counted_at_the_root(
+    tmp_path, capsys
+):
+    """A duplicate variant with no lift involved is refused the same way, and
+    recorded where a build with no lift record can hold it: the provenance's
+    root, beside no `lift` block at all -- inventing one would claim a lift
+    that never happened."""
+    import json
+
+    from opengwasdb.validation import validate_store
+    from opengwasdb.variants.axis import VariantAxis
+
+    prefix = _write_same_assembly_duplicate_fixture(tmp_path)
+    out = tmp_path / "out.opengwasdb"
+
+    result = build_ragged_from_besd(
+        prefix, out, store_id="test", release_id="v1", association_coverage="cis_and_signals",
+    )
+
+    printed = capsys.readouterr().out
+    assert "Variant collisions: 2 ESI entries in 1 group(s)" in printed, printed
+
+    axis = VariantAxis(out)
+    try:
+        stored = [axis.by_index(i).alid for i in range(axis.n_variants)]
+    finally:
+        axis.close()
+    assert stored == [_SAME_ASSEMBLY_SURVIVOR], stored
+    assert result.n_variants == 1
+    assert result.n_associations == 1, "the duplicated entries' associations must go too"
+
+    reader = RaggedCSRReader(out)
+    assert len(reader.get_analysis(0).z) == 1
+    assert len(reader.get_analysis(1).z) == 0, "a probe with only duplicated rows is empty"
+
+    provenance = json.loads((out / "manifest.json").read_text())["provenance"]
+    assert "lift" not in provenance, (
+        f"a build that never lifted must not record a lift block: {sorted(provenance)}"
+    )
+    assert provenance["n_collisions"] == 2, provenance
+    assert provenance["n_collision_groups"] == 1, provenance
+
+    validated = validate_store(out)
+    assert validated.ok, validated.errors

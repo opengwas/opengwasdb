@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from opengwasdb.model.enums import (
     AssociationCoverage,
     CompletionState,
@@ -42,8 +44,66 @@ def test_manifest_loads_from_store_directory(tmp_path):
 
     assert loaded.store_id == "example"
     assert loaded.primary_layout is PrimaryStorageLayout.DENSE
-    assert loaded.association_coverage is AssociationCoverage.FULL
+    assert loaded.association_coverage is AssociationCoverage.GWAS
     assert loaded.completion_state is CompletionState.OBSERVED_ONLY
+
+
+# The four Association Coverages a Store Release can declare (issue #298).
+# `full` is not one of them: it is the pre-#298 spelling of `gwas`, and the
+# manifest below is the fixture that proves a published Store still opens.
+@pytest.mark.parametrize(
+    "written",
+    ["gwas", "cis", "cis_and_signals", "signals_only"],
+)
+def test_manifest_round_trips_every_association_coverage(tmp_path, written):
+    _write_manifest(tmp_path, association_coverage=written)
+
+    loaded = StoreManifest.load(tmp_path)
+
+    assert loaded.association_coverage.value == written
+    assert loaded.to_dict()["association_coverage"] == written
+
+
+def test_manifest_reading_full_gives_gwas_without_rewriting_it(tmp_path):
+    """Every release built before #298 says `full`. It still opens, and reads
+    as the value #298 renamed it to, so no published Store needs a rewrite."""
+    _write_manifest(tmp_path, association_coverage="full")
+
+    loaded = StoreManifest.load(tmp_path)
+
+    assert loaded.association_coverage is AssociationCoverage.GWAS
+    # A build writes `gwas`; the legacy spelling is read, never propagated.
+    assert loaded.to_dict()["association_coverage"] == "gwas"
+
+
+def test_a_provenance_amendment_writes_the_coverage_vocabulary(dense_store_path):
+    """`amend_provenance` is the one in-place edit of a built release, and it
+    rewrites the manifest as JSON: the coverage it leaves behind is the
+    source's spelling unless it normalises. An in-place edit that keeps `full`
+    alive is the retired spelling surviving a write this build made (#298)."""
+    import json
+
+    from opengwasdb.store import open_store
+
+    manifest_path = dense_store_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["association_coverage"] = "full"
+    manifest_path.write_text(json.dumps(manifest))
+
+    open_store(dense_store_path).amend_provenance({"amended_by": "test"})
+
+    written = json.loads(manifest_path.read_text())
+    assert written["association_coverage"] == "gwas"
+    assert written["provenance"]["amended_by"] == "test"
+
+
+def test_unknown_association_coverage_is_refused(tmp_path):
+    """The vocabulary is closed: a value outside it is an error, never a
+    default standing in for it."""
+    _write_manifest(tmp_path, association_coverage="something_else")
+
+    with pytest.raises(ValueError, match="something_else"):
+        StoreManifest.load(tmp_path)
 
 
 def test_open_store_opens_exact_path_supplied(tmp_path):

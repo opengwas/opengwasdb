@@ -343,7 +343,8 @@ def test_a_ragged_source_with_a_dense_target_is_refused(tmp_path, pair):
 
     ragged = tmp_path / "ragged.opengwasdb"
     build_ragged_from_besd(
-        trc._make_besd_fixture(tmp_path), ragged, store_id="r", release_id="r1", tissue="Blood"
+        trc._make_besd_fixture(tmp_path), ragged, store_id="r", release_id="r1", tissue="Blood",
+        association_coverage="cis_and_signals",
     )
     out = tmp_path / "verdict.json"
 

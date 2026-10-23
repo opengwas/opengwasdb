@@ -13,8 +13,8 @@ from __future__ import annotations
 import csv
 import logging
 import math
+from collections import Counter
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +27,7 @@ from opengwasdb.build.liftover import (
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.dense.build import add_hit_counts
+from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.besd_reader import (
     BESDReader,
@@ -39,15 +40,15 @@ from opengwasdb.layouts.ragged.by_variant import build_variant_index
 from opengwasdb.layouts.ragged.provenance import ragged_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata, write_analysis_records
 from opengwasdb.model.enums import (
     AssociationCoverage,
-    CompletionState,
     PrimaryStorageLayout,
+    coverage_for_layout,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import manifest_column
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
+from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.variants import (
     CanonicalVariant,
     Orientation,
@@ -60,7 +61,6 @@ from opengwasdb.variants import (
 
 log = logging.getLogger(__name__)
 
-_REFERENCE_ASSEMBLY = "GRCh38"
 # Build names whose coordinates already are (or claim) hg38 — no liftover.
 _BUILDS_ALREADY_HG38 = ("hg38", "grch38", "b38", "38")
 #: The fraction of a lift's rows that may fail before the build stops: the
@@ -69,20 +69,13 @@ _BUILDS_ALREADY_HG38 = ("hg38", "grch38", "b38", "38")
 _LIFTOVER_FAILURE_THRESHOLD = 0.01
 
 
-@dataclass(frozen=True)
-class RaggedBuildResult:
-    output_path: Path
-    n_variants: int
-    n_analyses: int
-    n_associations: int
-
-
 def build_ragged_from_besd(
     besd_prefix: str | Path,
     output_path: str | Path,
     *,
     store_id: str,
     release_id: str,
+    association_coverage: AssociationCoverage | str,
     analyses_path: str | Path | None = None,
     tissue: str | None = None,
     source_build: str = "hg38",
@@ -104,49 +97,161 @@ def build_ragged_from_besd(
         supplied the lift is recorded as unchecked, and the build warns.
     When analyses_path is supplied, Analytical and Attribution Metadata are overlaid
     onto the EPI-derived analyses while keeping BESD coordinates authoritative (issue #173).
+
+    ``association_coverage`` has no default (issue #298): a BESD file set is the
+    eQTLGen-style cis case as often as it is a genome-wide one, so the layout
+    cannot tell which (ADR 0064).
     """
+    coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     prefix = Path(besd_prefix)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        # Phases 1-2 — source reading and the canonical variant axis.
-        axis = _esi_axis(
-            prefix, source_build, chain_file=chain_file, variant_reference=variant_reference
-        )
-        write_variant_axis(staged.path, axis.variants, axis.rsid_by_alid)
-        # Phase 3 — Analysis metadata from the EPI records (with optional manifest overlay).
-        analyses = _analysis_records(axis.probes, tissue, analyses_path)
-        staged.index_connection().close()
-        # Phase 4 — CSR ingestion and the encoding plan it decides.
-        csr, encoding = _ingest_besd(
-            prefix, axis.probes, axis.esi_to_variant, len(axis.variants), staged.path,
-        )
-        # Phase 5 — indexes and manifest output.
-        _write_besd_outputs(staged, analyses, encoding)
-        _write_manifest(
+        axis, csr = _build_besd_release(
             staged,
-            store_id,
-            release_id,
-            n_variants=len(axis.variants),
-            n_analyses=len(axis.probes),
-            n_associations=csr.n_associations,
-            besd_prefix=str(prefix),
-            source_build=source_build,
-            encoding=encoding,
-            lift=axis.lift,
+            prefix,
+            _BesdBuildRequest(
+                store_id=store_id,
+                release_id=release_id,
+                coverage=coverage,
+                analyses_path=analyses_path,
+                tissue=tissue,
+                source_build=source_build,
+                chain_file=chain_file,
+                variant_reference=variant_reference,
+            ),
         )
-        result = _summarise(out, axis, csr.n_associations)
-    return result
+        return _summarise(out, axis, csr.n_associations, coverage)
 
 
-def _summarise(out: Path, axis: _EsiAxis, n_associations: int) -> RaggedBuildResult:
+@dataclass(frozen=True)
+class _BesdBuildRequest:
+    """The scalar configuration one BESD build's phases run under."""
+
+    store_id: str
+    release_id: str
+    coverage: AssociationCoverage
+    analyses_path: str | Path | None
+    tissue: str | None
+    source_build: str
+    chain_file: str | Path | None
+    variant_reference: str | Path | None
+
+
+def _build_besd_release(
+    staged: StagedRelease, prefix: Path, request: _BesdBuildRequest
+) -> tuple[_EsiAxis, RaggedCSRWriter]:
+    """Phases 1-5 of a BESD build, inside one Staged Release's lifetime."""
+    # Phases 1-2 — source reading and the canonical variant axis.
+    axis = _esi_axis(
+        prefix,
+        request.source_build,
+        chain_file=request.chain_file,
+        variant_reference=request.variant_reference,
+    )
+    write_variant_axis(staged.path, axis.variants, axis.rsid_by_alid)
+    # Phase 3 — Analysis metadata from the EPI records (optional manifest overlay).
+    analyses = _analysis_records(axis.probes, request.tissue, request.analyses_path)
+    staged.index_connection().close()
+    # Phase 4 — CSR ingestion and the encoding plan it decides.
+    csr, encoding = _ingest_besd(
+        prefix, axis.probes, axis.esi_to_variant, len(axis.variants), staged.path,
+    )
+    # Phase 5 — indexes and manifest output.
+    _write_besd_outputs(staged, analyses, encoding)
+    _write_manifest(
+        staged,
+        request.store_id,
+        request.release_id,
+        n_variants=len(axis.variants),
+        n_analyses=len(axis.probes),
+        n_associations=csr.n_associations,
+        besd_prefix=str(prefix),
+        source_build=request.source_build,
+        association_coverage=request.coverage,
+        encoding=encoding,
+        lift=axis.lift,
+        collisions=axis.collisions,
+    )
+    return axis, csr
+
+
+def _summarise(
+    out: Path,
+    axis: _EsiAxis,
+    n_associations: int,
+    association_coverage: AssociationCoverage,
+) -> RaggedBuildResult:
     """The build's totals, printed once and returned to the caller."""
-    result = RaggedBuildResult(out, len(axis.variants), len(axis.probes), n_associations)
+    result = RaggedBuildResult(
+        out, len(axis.variants), len(axis.probes), n_associations, association_coverage
+    )
     print(
         f"Build complete: {result.n_variants:,} variants, "
         f"{result.n_analyses:,} analyses, "
         f"{result.n_associations:,} associations"
     )
     return result
+
+
+@dataclass(frozen=True)
+class _VariantCollisions:
+    """ESI entries dropped because another entry claims their canonical variant.
+
+    Two entries that lift onto one hg38 variant are ambiguous, and every entry
+    in the group is dropped rather than one of them kept, so the count is of
+    *entries*: a group of three drops three. `n_groups` is the number of
+    canonical variants that were contested, so `n_entries - n_groups` is how
+    many more entries the source has than variants the axis can carry -- the
+    difference a build log's "canonical variants (from N ESI entries)" line
+    shows.
+    """
+
+    n_entries: int
+    n_groups: int
+    example: str | None
+
+    def __bool__(self) -> bool:
+        return self.n_entries > 0
+
+    def report(self) -> None:
+        """Say on stdout what was dropped, and that it was dropped on purpose."""
+        if not self:
+            return
+        print(
+            f"Variant collisions: {self.n_entries} ESI entries in {self.n_groups} "
+            f"group(s) claim a canonical variant another entry also claims "
+            f"(e.g. {self.example}); every entry in each group is dropped as "
+            f"ambiguous, with its associations"
+        )
+
+    def record(self, lift: dict[str, object] | None) -> dict[str, object] | None:
+        """The `provenance.lift` block, with this build's collision counts in it.
+
+        Beside `n_lifted`, because on a cross-assembly build the collision *is*
+        a lift outcome. A same-assembly build has no lift block to describe, and
+        inventing one would say a lift happened; `_write_manifest` records the
+        same two fields at the top level there instead.
+        """
+        if lift is None or not self:
+            return lift
+        lift["n_collisions"] = self.n_entries
+        lift["n_collision_groups"] = self.n_groups
+        return lift
+
+
+@dataclass(frozen=True)
+class _CanonicalAxis:
+    """Phase 2 of a BESD build: the ESI rows that make the variant axis.
+
+    ``esi_to_variant`` maps each surviving ESI row to ``(variant_index,
+    flipped)``; a row absent from it reaches no Analysis, because BESD
+    association rows enter the store only through this map.
+    """
+
+    variants: list[CanonicalVariant]
+    rsid_by_alid: dict[str, str]
+    esi_to_variant: dict[int, tuple[int, bool]]
+    collisions: _VariantCollisions
 
 
 @dataclass(frozen=True)
@@ -161,6 +266,7 @@ class _EsiAxis:
     variants: list[CanonicalVariant]
     rsid_by_alid: dict[str, str]
     esi_to_variant: dict[int, tuple[int, bool]]
+    collisions: _VariantCollisions
     lift: dict[str, object] | None
 
 
@@ -176,9 +282,18 @@ def _esi_axis(
     lifted, lift_provenance = _lifted_coordinates(
         snps, source_build, chain_file=chain_file, variant_reference=variant_reference
     )
-    variants, rsid_by_alid, esi_to_variant = _canonical_variants(snps, lifted)
-    print(f"Canonical variants: {len(variants)} (from {len(snps)} ESI entries)")
-    return _EsiAxis(probes, variants, rsid_by_alid, esi_to_variant, lift_provenance)
+    canonical = _canonical_variants(snps, lifted)
+    canonical.collisions.report()
+    print(f"Canonical variants: {len(canonical.variants)} (from {len(snps)} ESI entries)")
+    lift_provenance = canonical.collisions.record(lift_provenance)
+    return _EsiAxis(
+        probes,
+        canonical.variants,
+        canonical.rsid_by_alid,
+        canonical.esi_to_variant,
+        canonical.collisions,
+        lift_provenance,
+    )
 
 
 def _write_besd_outputs(
@@ -352,28 +467,21 @@ def _esi_orientation(
         return None
 
 
-def _canonical_variants(
-    snps: list[SnpRecord],
-    lifted: dict[int, Orientation] | None,
-) -> tuple[list[CanonicalVariant], dict[str, str], dict[int, tuple[int, bool]]]:
-    """Deduplicate ESI rows onto a position-ordered canonical variant axis.
+#: One ESI entry that survived orientation: its position sort key, its row, its
+#: canonical variant, the flip its statistics need, and its rsid when it has one.
+_Candidate = tuple[tuple[tuple[int, str], int], int, CanonicalVariant, bool, str | None]
 
-    Returns ``(variants, rsid_by_alid, esi_to_variant)`` where
-    ``esi_to_variant`` maps each surviving ESI row to ``(variant_index,
-    flipped)``. Rows without alleles, unlifted hg19 rows, or rows whose
-    alleles fail canonical orientation (``VariantNormalisationError``) are
-    excluded from the axis — and therefore from every Analysis, because BESD
-    association rows reach the store only through ``esi_to_variant``.
+
+def _axis_candidates(
+    snps: list[SnpRecord], lifted: dict[int, Orientation] | None
+) -> list[_Candidate]:
+    """The entries that can carry a variant, in position order.
+
+    Rows without alleles, unlifted hg19 rows, and rows whose alleles fail
+    canonical orientation (``VariantNormalisationError``) are left out: they can
+    carry no variant, so they can carry no association either.
     """
-    esi_to_variant: dict[int, tuple[int, bool]] = {}
-    variants: list[CanonicalVariant] = []
-    rsid_by_alid: dict[str, str] = {}
-    alid_to_idx: dict[str, int] = {}
-    # (chromosome_sort_key, esi row_idx, variant, flipped, rsid)
-    candidate: list[
-        tuple[tuple[tuple[int, str], int], int, CanonicalVariant, bool, str | None]
-    ] = []
-
+    candidate: list[_Candidate] = []
     for snp in snps:
         ori = _esi_orientation(snp, lifted)
         if ori is None:
@@ -381,24 +489,49 @@ def _canonical_variants(
         sort_key = (chromosome_sort_key(ori.variant.chromosome), ori.variant.position)
         rsid = snp.snp_id if snp.snp_id.startswith("rs") else None
         candidate.append((sort_key, snp.row_idx, ori.variant, ori.flipped, rsid))
-
-    # Sort by genomic position so variant_index is position-ordered.
     candidate.sort(key=lambda x: x[0])
+    return candidate
 
-    for _sort_key, esi_row_idx, variant, flipped, rsid in candidate:
-        alid = variant.alid
-        existing_idx = alid_to_idx.get(alid)
-        if existing_idx is not None:
-            # Duplicate ALID — map to the same variant_index.
-            esi_to_variant[esi_row_idx] = (existing_idx, flipped)
-            continue
-        variant_index = len(variants)
-        alid_to_idx[alid] = variant_index
-        variants.append(variant)
-        esi_to_variant[esi_row_idx] = (variant_index, flipped)
-        if rsid:
-            rsid_by_alid[alid] = rsid
-    return variants, rsid_by_alid, esi_to_variant
+
+def _contested_variants(candidate: list[_Candidate]) -> tuple[set[str], _VariantCollisions]:
+    """The ALIDs more than one entry claims, and the collision counts."""
+    claims = Counter(entry[2].alid for entry in candidate)
+    contested = {alid for alid, n_claims in claims.items() if n_claims > 1}
+    return contested, _VariantCollisions(
+        n_entries=sum(claims[alid] for alid in contested),
+        n_groups=len(contested),
+        example=min(contested) if contested else None,
+    )
+
+
+def _canonical_variants(
+    snps: list[SnpRecord], lifted: dict[int, Orientation] | None
+) -> _CanonicalAxis:
+    """Canonicalise ESI rows onto a position-ordered variant axis, dropping collisions.
+
+    Returns the axis plus the collisions it refused. Entries that cannot carry a
+    variant are excluded (`_axis_candidates`), and so is every entry whose
+    canonical variant another entry also claims.
+
+    Two ESI entries that lift onto one hg38 variant are one coordinate with two
+    sources, and nothing in the file set says which of them a probe's
+    association belongs to; a shared ``variant_index`` would instead store both
+    associations at one variant of one Analysis, which no Ragged reader can
+    answer correctly. All entries in such a group go, exactly as a liftover
+    failure does -- never a winner picked by position, by allele order or by
+    which row came first. A source that lists one variant under two entries
+    without a lift is refused the same way, because it is the store's invariant
+    at stake rather than the chain's.
+    """
+    candidate = _axis_candidates(snps, lifted)
+    contested, collisions = _contested_variants(candidate)
+    survivors = [entry for entry in candidate if entry[2].alid not in contested]
+    return _CanonicalAxis(
+        variants=[entry[2] for entry in survivors],
+        rsid_by_alid={entry[2].alid: entry[4] for entry in survivors if entry[4]},
+        esi_to_variant={entry[1]: (idx, entry[3]) for idx, entry in enumerate(survivors)},
+        collisions=collisions,
+    )
 
 
 def _opt(value: str | None) -> str | None:
@@ -747,8 +880,10 @@ def _write_manifest(
     n_associations: int,
     besd_prefix: str,
     encoding: StoreEncoding,
+    association_coverage: AssociationCoverage,
     source_build: str = "hg38",
     lift: dict[str, object] | None = None,
+    collisions: _VariantCollisions | None = None,
 ) -> None:
     provenance: dict[str, object] = {
         "builder": "opengwasdb.v0.1_ragged_observed_besd",
@@ -762,17 +897,21 @@ def _write_manifest(
     if lift is not None:
         # Only a build that lifted carries it: a same-assembly release has no
         # lift to describe, and inventing an empty record would say it had one.
+        # The collision counts travel inside it (`_VariantCollisions.record`).
         provenance["lift"] = lift
-    manifest = StoreManifest(
-        encoding=encoding,
-        store_id=store_id,
-        release_id=release_id,
-        format_version=CURRENT_FORMAT_VERSION,
-        primary_layout=PrimaryStorageLayout.RAGGED,
-        association_coverage=AssociationCoverage.CIS_AND_SIGNALS,
-        completion_state=CompletionState.OBSERVED_ONLY,
-        reference_assembly=_REFERENCE_ASSEMBLY,
-        created_at=datetime.now(UTC).isoformat(),
-        provenance=provenance,
+    elif collisions:
+        # Nothing lifted, so there is no lift block to hold them, but a source
+        # that lists one variant twice still loses entries to the collision rule.
+        provenance["n_collisions"] = collisions.n_entries
+        provenance["n_collision_groups"] = collisions.n_groups
+    staged.write_manifest(
+        observed_only_release_manifest(
+            PrimaryStorageLayout.RAGGED,
+            provenance=provenance,
+            reference_assembly=RAGGED_REFERENCE_ASSEMBLY,
+            store_id=store_id,
+            release_id=release_id,
+            encoding=encoding,
+            association_coverage=association_coverage,
+        )
     )
-    staged.write_manifest(manifest)

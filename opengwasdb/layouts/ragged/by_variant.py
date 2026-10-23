@@ -58,7 +58,7 @@ from opengwasdb.encoding.codec import (
 )
 from opengwasdb.encoding.planes import SE_COEFFICIENTS
 from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
-from opengwasdb.model.manifest import StoreManifest
+from opengwasdb.model.manifest import StoreManifest, normalise_coverage
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import ArrayRole, array_length
 
@@ -182,10 +182,12 @@ def _record_dtype(source: Any) -> np.dtype:
 def _destination_ordinals(variant_index: np.ndarray, next_destination: np.ndarray) -> np.ndarray:
     """Each cell's destination ordinal, consuming one slot per cell.
 
-    `variant_index` is non-decreasing (the CSR's format invariant), so equal
-    variants form runs; a run of `L` cells of variant `v` takes the next `L`
-    destination ordinals after `next_destination[v]`.  Within a variant the
-    source order is ascending Analysis, which is exactly the `(variant,
+    `variant_index` is non-decreasing across the component and strictly
+    increasing within each Analysis's segment (§11), so equal variants form
+    runs: legitimately across two Analyses that both hold the variant, and only
+    at a defect inside one segment. A run of `L` cells of variant `v` takes the
+    next `L` destination ordinals after `next_destination[v]`.  Within a variant
+    the source order is ascending Analysis, which is exactly the `(variant,
     analysis)` order the index requires, so no comparison sort is needed -- the
     counting sort is this running cursor.
     """
@@ -1012,6 +1014,9 @@ def _record_index_in_manifest(store_path: str | Path, result: VariantIndexResult
     ragged["by_variant"] = result.provenance()
     provenance["ragged"] = ragged
     data["provenance"] = provenance
+    # In-place, so the release keeps whatever it declared -- written in the
+    # vocabulary this build writes, never the retired `full` (#298).
+    normalise_coverage(data)
     temporary = path.with_name(f"{path.name}.variant-index.tmp")
     temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, path)

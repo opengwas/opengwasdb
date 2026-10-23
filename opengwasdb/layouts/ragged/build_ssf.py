@@ -19,7 +19,6 @@ import csv
 import gzip
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -35,27 +34,28 @@ from opengwasdb.build.eaf_orientation import (
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.dense.build import add_hit_counts
+from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
 from opengwasdb.layouts.ragged.provenance import ragged_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
+from opengwasdb.layouts.release_manifest import observed_only_release_manifest
+from opengwasdb.model import coverage_for_layout
 from opengwasdb.model.analyses import PassthroughMetadata, write_analysis_records
 from opengwasdb.model.enums import (
     AssociationCoverage,
-    CompletionState,
     EafScope,
     PrimaryStorageLayout,
     StoredEffectScale,
 )
-from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.model.manifest_columns import (
     ManifestColumns,
     require_columns,
     resolve_manifest_columns,
 )
 from opengwasdb.stats import parse_af
-from opengwasdb.store.open import CURRENT_FORMAT_VERSION, OpenGWASDBStore, StagedRelease
+from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
 from opengwasdb.variants.axis import (
     write_variant_axis,
 )
@@ -66,16 +66,7 @@ from opengwasdb.variants.normalise import (
     orient_to_canonical,
 )
 
-_REFERENCE_ASSEMBLY = "GRCh38"
 _MISSING = {"", ".", "NA", "NaN", "nan", "None"}
-
-
-@dataclass(frozen=True)
-class RaggedBuildResult:
-    output_path: Path
-    n_variants: int
-    n_analyses: int
-    n_associations: int
 
 
 @dataclass
@@ -273,6 +264,7 @@ def build_ragged_from_ssf(
     *,
     store_id: str,
     release_id: str,
+    association_coverage: AssociationCoverage | str,
     stored_effect_scale: str = StoredEffectScale.SD.value,
     overwrite: bool = False,
     eaf_reference: str | Path | None = None,
@@ -281,57 +273,109 @@ def build_ragged_from_ssf(
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs.
 
-    A thin orchestrator over six private phases (issue #130); the EAF
-    check (issue #115) runs before anything is written, and `unverified`
-    is a normal Ragged outcome, recorded per Analysis, never passed over.
+    A thin orchestrator: the Staged Release's lifetime here, the six phases in
+    `_build_ssf_release`. ``association_coverage`` has no default (issue #298)
+    -- the same command builds a cis-eQTL release, a signals-only metabolite
+    release and a genome-wide one, so the layout cannot choose it (ADR 0064).
     """
+    coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     _validate_stored_effect_scale(stored_effect_scale)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        analytes = _read_manifest(manifest_path, filtered_dir)
-        print(f"Manifest: {len(analytes)} analyses")
-        per_analysis, alid_variant, rsid_by_alid = _ingest_ssf_sources(analytes)
-        # Phase 2 — EAF orientation (issue #115), before anything is written.
-        eaf_report = _verify_eaf_orientation(
-            analytes, per_analysis, alid_variant,
-            eaf_reference=eaf_reference,
-            eaf_reference_ancestry=eaf_reference_ancestry,
-            allow_unverified_eaf=allow_unverified_eaf,
-        )
-        variants, alid_to_idx = _build_variant_axis(staged, alid_variant, rsid_by_alid)
-        csr, encoding, eaf_scopes = _encode_ssf_csr(
-            per_analysis, alid_to_idx, len(analytes),
-            len(variants), staged.path,
-        )
-        _write_indexes_and_metadata(
+        return _build_ssf_release(
             staged,
-            analytes,
-            eaf_scopes,
-            encoding=encoding,
-            eaf_report=eaf_report,
-            stored_effect_scale=stored_effect_scale,
+            out,
+            (manifest_path, filtered_dir),
+            _SsfBuildRequest(
+                store_id=store_id,
+                release_id=release_id,
+                stored_effect_scale=stored_effect_scale,
+                coverage=coverage,
+                eaf_reference=eaf_reference,
+                eaf_reference_ancestry=eaf_reference_ancestry,
+                allow_unverified_eaf=allow_unverified_eaf,
+            ),
         )
-        _write_manifest(
-            staged,
-            store_id,
-            release_id,
-            n_variants=len(variants),
-            n_analyses=len(analytes),
-            n_associations=csr.n_associations,
-            manifest_path=str(manifest_path),
-            stored_effect_scale=stored_effect_scale,
-            mhc_analyses=[a.analysis_id for a in analytes if a.mhc],
-            encoding=encoding,
-            eaf_orientation=eaf_report.provenance(allow_unverified=allow_unverified_eaf),
-        )
-        return _finalise_result(out, len(variants), len(analytes), csr.n_associations)
+
+
+@dataclass(frozen=True)
+class _SsfBuildRequest:
+    """The scalar configuration one SSF build's phases run under."""
+
+    store_id: str
+    release_id: str
+    stored_effect_scale: str
+    coverage: AssociationCoverage
+    eaf_reference: str | Path | None
+    eaf_reference_ancestry: str | None
+    allow_unverified_eaf: bool
+
+
+def _build_ssf_release(
+    staged: StagedRelease,
+    out: Path,
+    sources: tuple[str | Path, str | Path],
+    request: _SsfBuildRequest,
+) -> RaggedBuildResult:
+    """Phases 1-6 of an SSF build, inside one Staged Release's lifetime.
+
+    The EAF check (issue #115) runs before anything is written, and
+    `unverified` is a normal Ragged outcome, recorded per Analysis, never
+    passed over.
+    """
+    manifest_path, filtered_dir = sources
+    analytes = _read_manifest(manifest_path, filtered_dir)
+    print(f"Manifest: {len(analytes)} analyses")
+    per_analysis, alid_variant, rsid_by_alid = _ingest_ssf_sources(analytes)
+    eaf_report = _verify_eaf_orientation(
+        analytes, per_analysis, alid_variant,
+        eaf_reference=request.eaf_reference,
+        eaf_reference_ancestry=request.eaf_reference_ancestry,
+        allow_unverified_eaf=request.allow_unverified_eaf,
+    )
+    variants, alid_to_idx = _build_variant_axis(staged, alid_variant, rsid_by_alid)
+    csr, encoding, eaf_scopes = _encode_ssf_csr(
+        per_analysis, alid_to_idx, len(analytes),
+        len(variants), staged.path,
+    )
+    _write_indexes_and_metadata(
+        staged,
+        analytes,
+        eaf_scopes,
+        encoding=encoding,
+        eaf_report=eaf_report,
+        stored_effect_scale=request.stored_effect_scale,
+    )
+    _write_manifest(
+        staged,
+        request.store_id,
+        request.release_id,
+        n_variants=len(variants),
+        n_analyses=len(analytes),
+        n_associations=csr.n_associations,
+        manifest_path=str(manifest_path),
+        stored_effect_scale=request.stored_effect_scale,
+        association_coverage=request.coverage,
+        mhc_analyses=[a.analysis_id for a in analytes if a.mhc],
+        encoding=encoding,
+        eaf_orientation=eaf_report.provenance(
+            allow_unverified=request.allow_unverified_eaf
+        ),
+    )
+    return _finalise_result(
+        out, len(variants), len(analytes), csr.n_associations, request.coverage
+    )
 
 
 def _finalise_result(
-    out: Path, n_variants: int, n_analyses: int, n_associations: int
+    out: Path,
+    n_variants: int,
+    n_analyses: int,
+    n_associations: int,
+    association_coverage: AssociationCoverage,
 ) -> RaggedBuildResult:
     """Build the result record and print the completion summary it carries."""
-    result = RaggedBuildResult(out, n_variants, n_analyses, n_associations)
+    result = RaggedBuildResult(out, n_variants, n_analyses, n_associations, association_coverage)
     print(
         f"Build complete: {result.n_variants:,} variants, "
         f"{result.n_analyses:,} analyses, {result.n_associations:,} associations"
@@ -582,30 +626,29 @@ def _write_manifest(
     n_associations: int,
     manifest_path: str,
     stored_effect_scale: str,
+    association_coverage: AssociationCoverage,
     mhc_analyses: list[str],
     encoding: StoreEncoding,
     eaf_orientation: dict[str, Any] | None = None,
 ) -> None:
-    manifest = StoreManifest(
-        encoding=encoding,
-        store_id=store_id,
-        release_id=release_id,
-        format_version=CURRENT_FORMAT_VERSION,
-        primary_layout=PrimaryStorageLayout.RAGGED,
-        association_coverage=AssociationCoverage.CIS_AND_SIGNALS,
-        completion_state=CompletionState.OBSERVED_ONLY,
-        reference_assembly=_REFERENCE_ASSEMBLY,
-        created_at=datetime.now(UTC).isoformat(),
-        provenance={
-            "builder": "opengwasdb.v0.1_ragged_observed_ssf",
-            "source_manifest": manifest_path,
-            "stored_effect_scale": stored_effect_scale,
-            "mhc_analyses": mhc_analyses,
-            "n_variants": n_variants,
-            "n_analyses": n_analyses,
-            "n_associations": n_associations,
-            **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
-            "ragged": ragged_provenance(staged.path, encoding),
-        },
+    staged.write_manifest(
+        observed_only_release_manifest(
+            PrimaryStorageLayout.RAGGED,
+            reference_assembly=RAGGED_REFERENCE_ASSEMBLY,
+            store_id=store_id,
+            release_id=release_id,
+            encoding=encoding,
+            association_coverage=association_coverage,
+            provenance={
+                "builder": "opengwasdb.v0.1_ragged_observed_ssf",
+                "source_manifest": manifest_path,
+                "stored_effect_scale": stored_effect_scale,
+                "mhc_analyses": mhc_analyses,
+                "n_variants": n_variants,
+                "n_analyses": n_analyses,
+                "n_associations": n_associations,
+                **({"eaf_orientation": eaf_orientation} if eaf_orientation is not None else {}),
+                "ragged": ragged_provenance(staged.path, encoding),
+            },
+        )
     )
-    staged.write_manifest(manifest)

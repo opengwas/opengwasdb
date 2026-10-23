@@ -474,7 +474,10 @@ def test_ragged_release_is_still_refused_for_build_and_query(tmp_path: Path) -> 
 
     manifest, filtered = _make_fixture(tmp_path)
     store = tmp_path / "ragged.opengwasdb"
-    build_ragged_from_ssf(manifest, filtered, store, store_id="ragged-test", release_id="v1")
+    build_ragged_from_ssf(
+        manifest, filtered, store, store_id="ragged-test", release_id="v1",
+        association_coverage="cis_and_signals",
+    )
     with pytest.raises(IndexedSubsetError, match="Dense"):
         _build(store, "hm3", _write_list(tmp_path / "hm3.txt", ON_PANEL))
     with query_store(store) as query:
