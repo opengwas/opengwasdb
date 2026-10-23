@@ -9,6 +9,15 @@ Roadmap 1 (#88).
 > non-authoritative query index that can be deleted without changing any
 > existing query answer does not move `format_version`; it is not the optional
 > Store-format content classified as a compatible change here.
+>
+> **Amended by [ADR 0064](0064-association-coverage-is-a-build-input.md)
+> (issue #298, spec §21.0):** the reader table in §2 — "series known, remainder
+> `> k`: MUST accept" — governs a release whose *content* the reader
+> understands. Before `1.0.0`, a change confined to a manifest vocabulary is
+> applied by editing existing Stores' metadata in place instead of moving the
+> series, and an older package refusing the new value is the accepted
+> consequence. From `1.0.0` nothing changes: a vocabulary change moves the
+> series.
 
 ## Context
 

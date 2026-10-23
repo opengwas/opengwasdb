@@ -50,9 +50,16 @@ matrix", which it is not.
 
 `full` is **read** as `gwas` and never written again. `AssociationCoverage`
 implements this in `_missing_`, the one place a manifest string becomes a
-value, so every reader — `StoreManifest.load`, `info`, validation, the
-converters — gets the mapping without repeating it. A published release needs
-no rewrite: it opens, validates and reports `gwas`.
+value, so every reader — `StoreManifest.load`, `info`, validation — gets the
+mapping without repeating it. A published release needs no rewrite: it opens,
+validates and reports `gwas`. The alias is **transitional** (§5a): it exists
+only while a supported pin still writes `full`.
+
+A writer that edits `manifest.json` as JSON — the converter, the restamp, the
+Provenance Amendment, the variant-index build — never constructs a
+`StoreManifest`, so `_missing_` never runs for it. Each of them normalises the
+value through `normalise_coverage` instead, which is why "never written again"
+holds on those paths too rather than only on the enum's.
 
 ### 2. Every build states its coverage; only the Ragged layouts may state any of them
 
@@ -104,28 +111,50 @@ just wrote rather than echoing an argument: the recorded value is then the one
 on disk, including for a resumed or a completed build where the argument does
 not exist.
 
-### 5. This does not move `format_version`
+### 5. This does not move `format_version`, under the pre-release rule
 
-`format_version` records whether a reader that does not know about a change
-would *misinterpret* a release (ADR 0038 §1, ADR 0041 §1, spec §21.1). Here it
-would not: `association_coverage` is a closed vocabulary, and a reader that met
-a value outside its own copy refuses the release by name rather than guessing —
-the required behaviour for a feature a reader does not implement (spec §21.2).
-No association data decodes differently and no required entry disappears. All
-manifests a `0.1.0` or `0.2.0` build wrote stay readable, and the field is not
-restructured.
+`format_version` is `0.2.0`, below `1.0.0`, and **spec §21.0 decides this case**:
+before `1.0.0`, a change confined to a manifest vocabulary or to required
+metadata is applied by editing the existing Stores' metadata in place, as one
+coherent step across this package, `opengwasdb-stores` and the published Stores;
+it does not move the format version, it is recorded in `CHANGELOG.md`, and an
+older package may refuse the new values.
 
-The alternative — moving `CURRENT_FORMAT_VERSION` — has a cost that decides it.
-Completion preserves its source's version and refuses a source it cannot write
-(ADR 0038 §4, `check_writable_format_version`). Bumping the format for this
-change would therefore make every existing `0.2.0` release un-completable and
-require a converter, to record a rename of one manifest string. That is a
-disproportionate and *riskier* change than the one being made.
+That last consequence is real here, so it is stated plainly rather than argued
+away. A package built before this change meets `association_coverage: gwas` and
+refuses the release, because the vocabulary is closed and an unknown value is
+refused by name instead of guessed at (spec §21.2). The owner's decision of
+23 Oct 2026 accepts that: one coherent vocabulary across the three repositories
+and the published Stores is worth more than an old package reading a release
+written after it, and the alternative — a series bump plus a rebuild or
+converter for every Store — buys only the opposite direction of compatibility,
+for a project that has not released `1.0` and will change the format again.
 
-What the rename does break is the other direction: a `0.2.0` release written
-after this change declares `gwas`, which a package built before it cannot parse.
-That is a package-version fact, recorded in `CHANGELOG.md`, not a store-format
-one. The compatibility table gains the row.
+From `1.0.0` the rule returns to ADR 0038 §1 / ADR 0041 §2: a vocabulary change
+is incompatible and moves the series, because a released format is a contract
+with readers outside this project. ADRs 0038 and 0041 carry a banner naming
+this decision, and spec §21.1/§21.2 point at §21.0 for it.
+
+What the rename does **not** need is a conversion. Every `0.1.0` and `0.2.0`
+release stays readable, because `full` is read as `gwas` (§1); the in-place
+metadata edit that brings a published Store's own manifest onto the new
+vocabulary is a stores-side sweep, run once, and every edited Store is
+re-validated. Completion is untouched: it preserves its source's coverage either
+way, so no release becomes un-completable (which the alternative — moving
+`CURRENT_FORMAT_VERSION` — would have caused, since completion refuses a source
+it cannot write: ADR 0038 §4).
+
+### 5a. The `full` read is transitional
+
+`AssociationCoverage._missing_` maps `full` to `gwas` for a limited time, and
+for two reasons: Stores built at the pin in use keep writing `full` until
+`opengwasdb-stores` re-pins past this change, and the in-place metadata sweep has
+not run yet. Both are transitional.
+
+It is removed — with the `full` case in `_missing_`, and nothing else — once no
+published Store says `full` and no supported pin writes it. So that this is not
+forgotten, `CHANGELOG.md` records it as transitional, and removing it is a
+`no-changelog`-exempt-able change of one method plus a test.
 
 ## Rejected options
 
@@ -143,8 +172,15 @@ one. The compatibility table gains the row.
   constraining it.** Rejected: the field is required by spec §2 and read by
   consumers that do not know a release's layout; `gwas` states the guarantee
   explicitly and keeps one schema.
-- **Move `format_version`.** Rejected above: no misinterpretation, and every
-  existing release would need converting before it could be completed.
+- **Move `format_version` to `0.3.0`.** Rejected under spec §21.0: it is not
+  what a below-1.0 vocabulary change does, and it would force a converter on
+  every published Store — completion preserves its source's version and refuses
+  one it cannot write (ADR 0038 §4), so nothing could be completed until it was
+  converted, to record a rename of one manifest string.
+- **Keep `full` forever, and let both spellings mean `gwas`.** Rejected: the
+  read alias is transitional (§5a) because two spellings of one fact is the
+  ambiguity the rename removes; a distinct value in a closed vocabulary is read
+  by everyone forever.
 
 ## Consequences
 
