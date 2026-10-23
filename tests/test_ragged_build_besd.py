@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from besd_fixtures import write_besd_sparse_3f, write_epi, write_esi
+from cli_output import normalize_cli_output
 from liftover_fixtures import (
     STRAND_CHAIN_SIZE,
     write_collision_chain,
@@ -140,7 +141,8 @@ def test_cli_build_ragged_besd_refuses_to_guess_the_coverage(tmp_path):
     )
 
     assert result.exit_code != 0
-    assert "--association-coverage" in result.output
+    # Rich wraps and styles the missing-option error under CI's colour terminal.
+    assert "--association-coverage" in normalize_cli_output(result.output)
     assert not out.exists()
 
 

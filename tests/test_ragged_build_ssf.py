@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from cli_output import normalize_cli_output
 
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
@@ -713,7 +714,8 @@ def test_cli_build_ragged_ssf_refuses_to_guess_the_coverage(tmp_path):
     result = _invoke_cli_build(manifest, filtered_dir, out)
 
     assert result.exit_code != 0
-    assert "--association-coverage" in result.output
+    # Rich wraps and styles the missing-option error under CI's colour terminal.
+    assert "--association-coverage" in normalize_cli_output(result.output)
     assert not out.exists()
 
 
