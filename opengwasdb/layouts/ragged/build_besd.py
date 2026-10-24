@@ -7,10 +7,10 @@ ingestion and encoding, and the indexes + manifest output. The split exists so
 no single function carries the whole build's branching (issue #130); the
 fail-loud rules each phase applies live beside the code that applies them.
 
-Two per-association annotations ride the CSR beside `z`/`se` (issue #302, ADR
-0067): the `.esi` frequency, whenever the `.esi` reports one, and -- opt-in --
-each pair's sample size from a `--sample-size-table`. A build given neither
-writes exactly the release it wrote before either existed.
+Two opt-in per-association annotations ride the CSR beside `z`/`se` (issue
+#302, ADR 0067): the `.esi` frequency, with `--store-esi-eaf`, and each pair's
+sample size from a `--sample-size-table`. A build given neither writes exactly
+the release it wrote before either existed, whatever its `.esi` reports.
 """
 
 from __future__ import annotations
@@ -98,6 +98,7 @@ def build_ragged_from_besd(
     chain_file: str | Path | None = None,
     variant_reference: str | Path | None = None,
     sample_size_table: str | Path | None = None,
+    store_esi_eaf: bool = False,
     eaf_reference: str | Path | None = None,
     eaf_reference_ancestry: str | None = None,
     allow_unverified_eaf: bool = False,
@@ -124,9 +125,9 @@ def build_ragged_from_besd(
     sample_size_table: per-pair N (`probe_id`, `snp_id`, `n`, grouped by probe in
         `.epi` order) stored as an `n` plane; a pair it omits is missing, never
         estimated (`sample_size_table` module, ADR 0067). None writes no plane.
-    eaf_reference, eaf_reference_ancestry, allow_unverified_eaf: what the `.esi`
-        frequency, stored per association when the `.esi` has one, is checked
-        against, once (ADR 0067); with no reference it is recorded `unverified`.
+    store_esi_eaf: store the `.esi` frequency per association (opt-in, ADR 0067);
+        eaf_reference, eaf_reference_ancestry, allow_unverified_eaf: what it is
+        checked against, once -- refused without the flag.
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     prefix = Path(besd_prefix)
@@ -136,8 +137,8 @@ def build_ragged_from_besd(
             store_id=store_id, release_id=release_id, coverage=coverage,
             analyses_path=analyses_path, tissue=tissue, source_build=source_build,
             chain_file=chain_file, variant_reference=variant_reference,
-            sample_size_table=sample_size_table, eaf_reference=eaf_reference,
-            eaf_reference_ancestry=eaf_reference_ancestry,
+            sample_size_table=sample_size_table, store_esi_eaf=store_esi_eaf,
+            eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
             allow_unverified_eaf=allow_unverified_eaf,
         )
         axis, csr = _build_besd_release(staged, prefix, request)
@@ -157,9 +158,31 @@ class _BesdBuildRequest:
     chain_file: str | Path | None
     variant_reference: str | Path | None
     sample_size_table: str | Path | None = None
+    store_esi_eaf: bool = False
     eaf_reference: str | Path | None = None
     eaf_reference_ancestry: str | None = None
     allow_unverified_eaf: bool = False
+
+    def __post_init__(self) -> None:
+        """An orientation option without the frequency it orients is refused.
+
+        Ignoring it would let a build that named a reference look checked while
+        storing no frequency at all (ADR 0067).
+        """
+        named = [
+            name
+            for name, value in (
+                ("eaf_reference", self.eaf_reference),
+                ("eaf_reference_ancestry", self.eaf_reference_ancestry),
+                ("allow_unverified_eaf", self.allow_unverified_eaf),
+            )
+            if value
+        ]
+        if named and not self.store_esi_eaf:
+            raise ValueError(
+                f"{', '.join(named)} apply only with store_esi_eaf: without it the build "
+                "stores no .esi frequency, so there is nothing to check (ADR 0067)"
+            )
 
 
 def _build_besd_release(
@@ -173,6 +196,7 @@ def _build_besd_release(
         chain_file=request.chain_file,
         variant_reference=request.variant_reference,
         keep_snp_ids=request.sample_size_table is not None,
+        keep_frequencies=request.store_esi_eaf,
     )
     # Checked before anything is written: a build that is going to fail on a
     # flipped `.esi` fails before it spends the ingest (issue #115).
@@ -317,6 +341,7 @@ def _esi_axis(
     chain_file: str | Path | None,
     variant_reference: str | Path | None,
     keep_snp_ids: bool = False,
+    keep_frequencies: bool = False,
 ) -> _EsiAxis:
     """Read one file set's `.esi`/`.epi` and canonicalise the ESI rows."""
     snps, probes = _read_sources(prefix)
@@ -335,7 +360,9 @@ def _esi_axis(
         canonical.esi_to_variant,
         canonical.collisions,
         lift_provenance,
-        eaf_by_esi=stored_esi_frequencies(snps, canonical.esi_to_variant),
+        eaf_by_esi=(
+            stored_esi_frequencies(snps, canonical.esi_to_variant) if keep_frequencies else None
+        ),
         snp_ids=snp_ids,
     )
 
@@ -362,9 +389,18 @@ def _unique_snp_ids(
 
 
 def _verify_eaf(axis: _EsiAxis, request: _BesdBuildRequest) -> EafOrientationReport | None:
-    """The one orientation check of the `.esi` frequencies, or `None` without any."""
-    if axis.eaf_by_esi is None:
+    """The one orientation check of the `.esi` frequencies, or `None` when not asked.
+
+    Asked for and absent is a failure, not an empty plane: a build that requested
+    the frequency and quietly stored none would look like a source without one.
+    """
+    if not request.store_esi_eaf:
         return None
+    if axis.eaf_by_esi is None:
+        raise ValueError(
+            "store_esi_eaf was requested but the .esi reports no usable frequency on any "
+            "row that reaches the variant axis (ADR 0067)"
+        )
     return verify_esi_orientation(
         axis.variants,
         axis.esi_to_variant,
@@ -880,23 +916,27 @@ def _decide_encoding(csr: RaggedCSRWriter, n_analyses: int, *, n_plane: bool) ->
     """One encoding plan per build, decided from what the build holds
     (ADR 0037, issue #119).
 
-    `eaf` is measured from the `.esi` frequencies the CSR now carries, and is
-    `absent` -- stated by the plan rather than left to be inferred from a
-    missing array -- when the `.esi` reports none. Every probe at a variant
+    `eaf` is measured from the `.esi` frequencies the CSR carries when the
+    build stores them, and is `absent` -- stated by the plan rather than left to
+    be inferred from a missing array -- otherwise. Every probe at a variant
     holds the same frequency, so the residual coding's baseline is that
     frequency and its residuals are zero. Where every association has one, `se`
-    may take the EAF-complete residual coding (ADR 0037 §3). `n` follows the
-    opt-in sample-size input (ADR 0067).
+    may take the EAF-complete residual coding (ADR 0037 §3) -- but never beside
+    an `n` plane, so the SE fit and its byte measurement, a pass over every
+    cell, are not run for one (ADR 0067).
     """
     eaf_measurements = csr.eaf_measurements()
-    preliminary = StoreEncoding.decide(
-        EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measurements)
-    )
+    se_measurements = None
+    if not n_plane:
+        preliminary = StoreEncoding.decide(
+            EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measurements)
+        )
+        se_measurements = csr.se_measurements(preliminary)
     return StoreEncoding.decide(
         EncodingMeasurements(
             n_analyses=n_analyses,
             eaf=eaf_measurements,
-            se=csr.se_measurements(preliminary),
+            se=se_measurements,
             n_plane=n_plane,
         )
     )

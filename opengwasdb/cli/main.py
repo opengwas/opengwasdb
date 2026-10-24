@@ -257,6 +257,18 @@ _SAMPLE_SIZE_TABLE_OPTION = Annotated[
 _BESD_EAF_REFERENCE_OPTION = Annotated[
     Path | None, typer.Option("--eaf-reference", help=_EAF_REFERENCE_HELP)
 ]
+_STORE_ESI_EAF_OPTION = Annotated[
+    bool,
+    typer.Option(
+        "--store-esi-eaf",
+        help=(
+            "Store the .esi allele frequency per association, oriented to the stored "
+            "effect allele and checked once against --eaf-reference (ADR 0067). "
+            "Without it the .esi frequency is not stored, and the --eaf-* options "
+            "are refused."
+        ),
+    ),
+]
 
 
 class ReportFormat(StrEnum):
@@ -1351,6 +1363,7 @@ def build_ragged_besd_command(
     variant_reference: _LIFT_VARIANT_REFERENCE_OPTION = None,
     overwrite: bool = typer.Option(False),
     sample_size_table: _SAMPLE_SIZE_TABLE_OPTION = None,
+    store_esi_eaf: _STORE_ESI_EAF_OPTION = False,
     eaf_reference: _BESD_EAF_REFERENCE_OPTION = None,
     eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
     allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
@@ -1362,8 +1375,8 @@ def build_ragged_besd_command(
     Optionally, --analyses overlays Analytical and Attribution Metadata from a manifest.
     --association-coverage is required: the file set says nothing about which of
     its associations were retained (issue #298).
-    The .esi frequency is stored per association whenever the .esi reports one,
-    checked once against --eaf-reference (ADR 0067).
+    --store-esi-eaf stores the .esi frequency per association, checked once
+    against --eaf-reference (ADR 0067).
     """
     result = build_ragged_from_besd(
         besd_prefix,
@@ -1378,6 +1391,7 @@ def build_ragged_besd_command(
         chain_file=chain_file,
         variant_reference=variant_reference,
         sample_size_table=sample_size_table,
+        store_esi_eaf=store_esi_eaf,
         eaf_reference=eaf_reference,
         eaf_reference_ancestry=eaf_reference_ancestry,
         allow_unverified_eaf=allow_unverified_eaf,

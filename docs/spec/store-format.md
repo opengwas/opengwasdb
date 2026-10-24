@@ -447,7 +447,11 @@ Builders try ranges ±0.5, ±1, and ±2 in order, accepting one only when every
 finite SE has decodable EAF, exact exceptions are at most 2% **in every
 Analysis** — not pooled over the plane — ordinary-cell relative error is at
 most 1%, and measured compressed bytes decrease after codes, coefficients, and
-side tables are charged. Otherwise the entire plane is `float16`. Zero SE,
+side tables are charged. Otherwise the entire plane is `float16`. A release
+carrying an `n` plane keeps `se` in `float16` unconditionally: the residual
+model has one intercept per Analysis and so assumes one N per Analysis, and
+with per-pair N spanning 2.5 decades it measured a 0.79% worst-case SE error on
+eQTLGen against `float16`'s 0.049% (ADR 0067 §4). Zero SE,
 non-finite predictions, and out-of-range residuals are exact exceptions, never
 clips.
 
@@ -908,8 +912,9 @@ disagree but not which is right, so an inconsistent build fails rather than
 dropping a study.
 
 A BESD file set is the one source whose Analyses share their frequencies: the
-`.esi` reports one per variant, and every probe stores that one value at that
-variant (`1 − f` where the canonical orientation flipped the allele). Its check
+`.esi` reports one per variant, and a build asked to store it
+(`--store-esi-eaf`, opt-in) stores that one value at that variant for every
+probe (`1 − f` where the canonical orientation flipped the allele). Its check
 is therefore run **once, over the `.esi`**, against the supplied reference, and
 the one outcome is recorded against every probe that stores a frequency, under
 `provenance.eaf_orientation.scope = "source_file"` (ADR 0067). It MUST NOT fall
@@ -1384,7 +1389,8 @@ release, including ones this build did not write (§20).
 `eaf` (ADR 0036) is an optional fourth parallel array (`data.zarr/ragged/eaf`,
 `float32`), aligned with the CSR `z`/`se` and absent when no Analysis in the
 release carries a frequency. A BESD build stores the `.esi` frequency there
-whenever the `.esi` reports one (§9.1, ADR 0067).
+only when asked (`--store-esi-eaf`, §9.1, ADR 0067); without the flag it stores
+none, whatever the `.esi` reports.
 
 `n` (ADR 0067) is an optional fifth parallel array (`data.zarr/ragged/n`,
 `uint32`, §6a), present exactly when the `encoding` block declares it, and

@@ -34,7 +34,11 @@ The owner's scope decisions (issue #302, 2026-10-24) are binding here: Ragged
 only; the N source is eQTLGen's published per-pair `NrSamples`, not the
 formula; pairs absent from the input are missing, never estimated; the `.esi`
 frequency is stored per association with the orientation evidence `validate`
-requires.
+requires. After the first implementation was measured, the owner ruled further
+(same day): the `.esi` frequency is **opt-in**, behind its own flag, as
+per-Analysis EAF is in ADR 0036; `se` stays **`float16`** in a Store that
+carries an `n` plane; and eQTLGen's frequencies are checked against the UK
+Biobank ancestry-mixture reference, not the hgdp1kgp-hg38 panel.
 
 ## Decision
 
@@ -119,14 +123,26 @@ Analysis holding a per-association N is stamped `variant_level`. A manifest
 overlay declaring `analysis_level` for such an Analysis is refused rather than
 overwritten, because it claims one N describes every association.
 
-### 3. The `.esi` frequency is stored per association
+### 3. The `.esi` frequency is stored per association, on request
 
-Whenever the `.esi` reports a usable frequency (`parse_af`: present, in range,
-not exactly 0 or 1), every association at that variant stores it, oriented to
-the stored effect allele: `1 − f` where the canonical orientation flipped the
-allele, the rule `z`'s sign follows (ADR 0036 §2). A probe holding such an
-association is `eaf_scope=association`, otherwise `absent`; an `.esi` with no
-frequency leaves the release exactly as before.
+`build-ragged-besd --store-esi-eaf` stores the `.esi`'s usable frequency
+(`parse_af`: present, in range, not exactly 0 or 1) on every association at its
+variant, oriented to the stored effect allele: `1 − f` where the canonical
+orientation flipped the allele, the rule `z`'s sign follows (ADR 0036 §2). A
+probe holding such an association is `eaf_scope=association`, otherwise
+`absent`.
+
+**It is opt-in.** Without the flag a BESD build stores no frequency whatever its
+`.esi` reports, and is byte-identical to the build before this decision --
+measured below on pilot-10 *with* its frequency column. This is ADR 0036's
+precedent, where EAF is stored for the Analyses that ask for it: storing a
+frequency changes a release's planes, its `se` encoding and its validation
+evidence, which no existing build should acquire by upgrading the package. With
+the flag, an `.esi` with no usable frequency on any row that reaches the axis
+fails the build rather than writing an empty plane, and `--eaf-reference`,
+`--eaf-reference-ancestry` and `--allow-unverified-eaf` without the flag are
+refused rather than ignored, because a build that named a reference would
+otherwise look checked while storing nothing.
 
 **Orientation is checked once, over the `.esi`, and the one outcome is recorded
 against every probe.** The check is `build/eaf_orientation.py`'s, run on a
@@ -138,13 +154,39 @@ frequency at a shared variant -- they would agree by construction and certify
 one another whatever the `.esi` reports. Without a reference the outcome is
 therefore `unverified` (a validation warning), never a consensus `passed`.
 `provenance.eaf_orientation` records `scope: source_file`, and each probe's
-evidence carries the one measurement's `n_overlap` and `r`.
+evidence carries the one measurement's `n_overlap` and `r`. For eQTLGen the
+reference is the UK Biobank ancestry-mixture reference's `United Kingdom`
+column (stores resource `ukb-ancestry-mixture-hg38`).
 
-Every association of a frequency-complete `.esi` now has a frequency, so `se`
-becomes eligible for the EAF-complete residual coding (ADR 0037 §3), which the
-tree takes where it passes its gates and saves bytes.
+A frequency-complete `.esi` makes every association's `se` eligible for the
+EAF-complete residual coding (ADR 0037 §3), which the tree takes where it passes
+its gates and saves bytes -- unless the Store carries an `n` plane (§4).
 
-### 4. Validation, queries and completion
+### 4. `se` stays `float16` beside an `n` plane
+
+`StoreEncoding.decide` never chooses `int8_residual` for a release that carries
+per-association sample sizes, and the builder does not run the SE fit or its
+byte measurement for one. The residual coding predicts
+`log(se) = a + b·log(2f(1−f))` with one intercept per Analysis, which assumes
+one N per Analysis. Where N varies by pair the residual absorbs `−½ log N`; on
+eQTLGen, whose N spans 2.5 decades, that forced the widest range, ±2.0. Measured
+with the first implementation, which allowed it:
+
+| | SE error against the BESD source | SE bytes |
+|---|---|---|
+| `float16` (pilot-10) | median 0.018%, max 0.049% | 132,598 |
+| `int8_residual` ±2.0 (pilot-10) | median 0.394%, max 0.7905% | 80,787 (−39%) |
+| `int8_residual` ±2.0 vs OGS-00027's `float16` (full, 127,112,772 cells) | shift median 0.393%, max 0.839% | 113,516,047 vs 192,098,865 (−40.9%) |
+
+The ±2.0 range's half-step bound is `exp(step/2) − 1` = 0.7905% with
+`step = 2/127`, so the measured maximum is the bound. ADR 0037's gates bound
+ordinary-cell error at 1% and would pass it; the rule is stated in the tree
+rather than left to the measurements because a 16-fold loss of SE precision is
+not a trade a Store carrying per-pair N should make for 40% of one plane's
+bytes. A Store whose `.esi` frequency is stored and which has no `n` plane keeps
+the measured choice.
+
+### 5. Validation, queries and completion
 
 `validate` requires the `n` plane exactly when the plan declares one, in its
 declared dtype; its length equal to the CSR's; every code a count or
@@ -168,35 +210,37 @@ planes and would drop `n`, and an imputed cell has no N of its own.
 On eQTLGen pilot-10 (`/data/opengwasdb/raw/eqtlgen/pilot-10`, hg19 lifted with
 the UCSC chain, 10 probes, 86,373 stored associations), with a table extracted
 from the published cis file (3,880,187,026 bytes, sha256
-`1133a89fe33b795dde7e480e39841fbd0787bfdb5d18ef19058fa749a936f814`):
+`1133a89fe33b795dde7e480e39841fbd0787bfdb5d18ef19058fa749a936f814`), built with
+`--sample-size-table`, `--store-esi-eaf` and the UK reference:
 
 - **Every one of the 86,373 stored N equals the published `NrSamples`.** Each
   stored |z| is within 0.00069 of the published |Zscore|, so the key reached the
   right association. The 123 unmatched table rows are 120 SNPs that do not lift
   to hg38 and 3 pairs whose BESD SE is `inf`, which the build already drops.
   No stored association lacks an N.
-- `validate` passes with no warnings. Orientation passes against the Ancestry
-  Reference Panel's `United Kingdom` frequencies at r = 0.996 over 10,320 sites.
+- `validate` passes with no warnings. Orientation passes against the UK
+  reference at r = 0.996 over 10,320 sites.
+- `se` is `float16` (§4) and identical to the base build's on every cell: the
+  shift is 0 at the median, p99 and maximum, and the error against the BESD
+  source is median 0.018%, max 0.0487%, inside `float16`'s half-ulp bound of
+  2⁻¹¹ = 0.0488%.
 - Planes on disk: `n` 149,413 B (1.730 B/cell) and its by-variant copy 149,600;
   `eaf` 283,090 B (3.278 B/cell, `float32`: at one cell per variant the
   residual coding's per-variant baseline costs more than it saves, ADR 0037 §2)
-  and its copy 283,055. The release grows from 8,717,723 to 9,678,041 bytes
-  (+11.0%).
-- **SE moves to `int8_residual` at ±2.0**: 80,787 against 132,598 bytes
-  (−39%). Against the base build's `float16`, decoded SE changes by a median
-  0.395%, p99 0.791%, max 0.832%. Against the BESD source SE, the residual
-  plane's error is median 0.394%, max 0.7905% -- the ±2.0 range's half-step
-  bound, `exp(step/2) − 1` with `step = 2/127`, is 0.7905% -- where
-  `float16`'s was median 0.018%, max 0.049%. eQTLGen needs the widest range
-  because the residual of
-  `log(se) ~ log(2f(1−f))` absorbs `−½ log N`, and N spans 2.5 decades.
-- Without the opt-ins -- the pilot with its frequency column removed, no table,
-  one Blosc thread -- the build is byte-identical to `origin/dev`'s: all 83
-  files, `manifest.json` equal but for `created_at`.
+  and its copy 283,055; `se` 132,598, as before. The release grows from
+  8,717,721 to 9,721,187 bytes (+11.5%). The build takes 28.9 s at a 1.97 GB
+  peak, most of it reading the 5.8-million-row reference.
+
+- Without the flags -- pilot-10 **with** its frequency column, no table, one
+  Blosc thread -- the build is byte-identical to `origin/dev`'s, from a
+  `git archive`: all 83 files, `manifest.json` equal but for `created_at`.
 
 On the full file set (`full-19250`: 19,250 probes, 8,927,061 variants,
 127,112,772 associations), with a table of all 127,341,798 published rows
-(1.0 GB gzipped, put in `.epi` order by one `sort` in 4m23s):
+(1.0 GB gzipped, put in `.epi` order by one `sort` in 4m23s). These figures were
+taken with the first implementation, which stored the frequency unasked and
+coded `se` as a residual; the `n` and reader figures do not depend on either,
+and the build's time and size are not re-measured here:
 
 - 127,112,772 table rows matched and **no stored association lacks an N**. An
   independent check of 500 random probes, joined to rows taken straight from the
@@ -207,18 +251,10 @@ On the full file set (`full-19250`: 19,250 probes, 8,927,061 variants,
   each of 2,115 probes; no probe's BESD holds a pair the file lacks.
 - The table reader alone streams the 127 million rows in 90.7 s (1.40 M rows a
   second) at a 193 MB peak; the largest probe block is 33,744 rows.
-- The build takes 19m57s at a 26.3 GB peak (ADR 0062 measured 12m01s without
-  either annotation, on another day; not re-run side by side), and `validate`
-  passes in 4m05s.
 - `n` costs 200,856,344 B (1.580 B/cell) and its copy 166,542,912; `eaf` is
-  `int8_residual` ±0.5 here -- 14 cells a variant, every residual zero --
-  at 29,172,682 B (0.230 B/cell) with a 63,387 B copy; `se` is
-  `int8_residual` ±2.0, 113,516,047 B against OGS-00027's `float16`
-  192,098,865 (−40.9%). The release grows from OGS-00027's 2,130,324,681 to
-  2,522,755,284 bytes (+18.4%).
-- Against OGS-00027, whose CSR is identical, decoded SE shifts by a median
-  0.393%, p99 0.790%, max 0.839% -- the residual's half-step plus `float16`'s
-  own rounding. Orientation passes at r = 0.997 over 9,996 sites.
+  `int8_residual` ±0.5 there -- 14 cells a variant, every residual zero --
+  at 29,172,682 B (0.230 B/cell) with a 63,387 B copy. Orientation passes at
+  r = 0.997 over 9,996 sites.
 
 ## Rejected
 
@@ -241,6 +277,10 @@ On the full file set (`full-19250`: 19,250 probes, 8,927,061 variants,
   published file already is.
 - **Writing `NA` rows for unknown N.** Omission is the one way to say "unknown",
   so a placeholder is refused rather than interpreted.
+- **Storing the `.esi` frequency whenever the `.esi` has one.** The first
+  implementation did; the owner ruled it opt-in (§3).
+- **Residual `se` beside per-pair N.** The first implementation allowed it, and
+  the measurements in §4 are why the owner ruled it out.
 - **A consensus orientation check across probes.** Every probe shares the
   `.esi` frequency, so the consensus is the `.esi` agreeing with itself.
 - **Overwriting a manifest's `analysis_level`.** It would replace a claim the
@@ -254,20 +294,27 @@ On the full file set (`full-19250`: 19,250 probes, 8,927,061 variants,
   reader before this change ignores `encoding.n` and the plane; its validator
   refuses `ragged/by_variant/n` ("no ArrayRole is registered for this path").
   The stores side must pin a package with this change before it builds one.
-- **Every BESD build whose `.esi` reports frequencies changes**, opt-in or not:
-  it gains an `eaf` plane, orientation evidence and, where it saves bytes, a
-  residual `se` whose round-trip error rises from float16's ~0.05% to the
-  chosen range's half-step (0.79% on eQTLGen). A build without
-  `--eaf-reference` records `unverified`, which `validate` warns about.
-- **The hgdp1kgp-hg38 LD panel's block tables are not a usable EAF reference.**
-  Measured while verifying this: their `EAF` column correlates at r = −0.990
-  with eQTLGen's `.esi` and −0.992 with the Ancestry Reference Panel, so it is
-  the frequency of `OA`, not `EA`; the build refuses the `.esi` against it as
-  flipped. The pilot was checked against the Ancestry Reference Panel instead.
-  The panel is built in opengwasdb-stores and is a separate defect.
+- **A BESD build changes only when asked.** Without `--sample-size-table` and
+  `--store-esi-eaf` it is byte-identical to the build before this decision. With
+  `--store-esi-eaf` alone it gains an `eaf` plane, orientation evidence and,
+  where it saves bytes, a residual `se`; with `--sample-size-table` its `se`
+  stays `float16`. A `--store-esi-eaf` build without `--eaf-reference` records
+  `unverified`, which `validate` warns about.
+- **A reference's orientation must be verified before it is used.** The
+  hgdp1kgp-hg38 LD panel's block tables are not a usable EAF reference: their
+  `EAF` column is the frequency of `OA`, not `EA`. Measured while verifying this
+  ADR, it correlates at r = −0.990 with eQTLGen's `.esi` and −0.992 with the
+  Ancestry Reference Panel, and the owner measured r = −0.981 against UK Biobank
+  on 46,003 variants. Read as an EAF reference it refuses a correct `.esi` as
+  flipped -- and would certify a flipped one. The orientation check exists to
+  catch a source reported against the other allele; it cannot catch a reference
+  that is, so a reference is checked against an independent one before a build
+  names it. The panel is being rebuilt in opengwasdb-stores #348 and is not
+  changed here.
 - **A sample-size table is a build input with lineage.** The stores side
   produces it from the published file, grouped in `.epi` order, and its sha256
   travels in the Store's provenance.
-- **The SE residual model does not use N.** With per-pair N stored, `log(se) ~
-  log(2f(1−f)) − ½ log N` would leave much narrower residuals than the ±2.0 the
-  pilot needed; that is a format change of its own and is not made here.
+- **Future work, not decided here: an SE residual model that uses N.** With
+  per-pair N stored, `log(se) ~ log(2f(1−f)) − ½ log N` would leave much
+  narrower residuals than the ±2.0 eQTLGen needed, and might earn the residual
+  coding back beside an `n` plane. It is a format change of its own.

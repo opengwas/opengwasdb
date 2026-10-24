@@ -3,9 +3,10 @@
 A BESD file set reports one frequency per variant -- the `.esi`'s seventh
 column, the frequency of `a1`, the effect allele -- and every probe's
 associations at that variant share it. ADR 0062 measured ancestry and
-orientation from it and stored none of it; a build now stores it on every
-association, oriented to the stored effect allele as ADR 0036 §2 requires:
-where the canonical orientation flipped the allele, the cell holds `1 - f`.
+orientation from it and stored none of it; a build asked to
+(`--store-esi-eaf`, opt-in) now stores it on every association, oriented to the
+stored effect allele as ADR 0036 §2 requires: where the canonical orientation
+flipped the allele, the cell holds `1 - f`.
 
 **Orientation is checked once, against the `.esi`, and the one outcome serves
 every probe.** The per-Analysis check the other builders run would correlate

@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 from besd_fixtures import write_besd_sparse_3f, write_epi, write_esi, write_sample_size_table
 
-from opengwasdb.encoding import N_MISSING, EncodingMeasurements, StoreEncoding
+from opengwasdb.encoding import N_MISSING, EncodingMeasurements, SeMeasurements, StoreEncoding
 from opengwasdb.encoding.plan import NEncoding, UnsupportedEncoding
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 
@@ -68,7 +68,14 @@ def _table(root: Path, rows: list[tuple[str, str, str]] = TABLE, name: str = "n.
     return path
 
 
-def _build(root: Path, *, table: Path | None, name: str = "out.opengwasdb") -> Path:
+def _build(
+    root: Path,
+    *,
+    table: Path | None,
+    name: str = "out.opengwasdb",
+    analyses_path: Path | None = None,
+    store_esi_eaf: bool = False,
+) -> Path:
     out = root / name
     fixture = root / "fixture"
     build_ragged_from_besd(
@@ -78,6 +85,8 @@ def _build(root: Path, *, table: Path | None, name: str = "out.opengwasdb") -> P
         release_id="v1",
         association_coverage="cis",
         sample_size_table=table,
+        analyses_path=analyses_path,
+        store_esi_eaf=store_esi_eaf,
     )
     return out
 
@@ -435,7 +444,7 @@ def test_validate_rejects_a_by_variant_index_without_the_n_copy(
     assert any("by_variant/n is present on one side only" in e for e in errors), errors
 
 
-# ── The `.esi` frequency, stored per association ────────────────────────────
+# ── The `.esi` frequency, stored per association when asked ─────────────────
 
 #: 600 variants: enough overlap (>= 500) and spread for the orientation check
 #: to read a direction. Odd rows list the alleles against canonical order, so
@@ -495,15 +504,35 @@ def _reference(root: Path, *, against_other_allele: bool = False) -> Path:
     return path
 
 
-def _build_frequencies(root: Path, *, eaf_reference: Path | None = None) -> Path:
-    out = root / "freq.opengwasdb"
+def _frequency_table(root: Path) -> Path:
+    """A sample size for every pair of the frequency fixture, varying by pair."""
+    rows = [
+        (f"ENSG0000000010{k}", f"rs{9000 + i}", str(1000 + 10 * i))
+        for k in range(3)
+        for i in range(k, N_FREQUENCY_SNPS, 3)
+    ]
+    return _table(root, rows, name="freq-n.tsv.gz")
+
+
+def _build_frequencies(
+    root: Path,
+    *,
+    eaf_reference: Path | None = None,
+    store_esi_eaf: bool = True,
+    sample_size_table: Path | None = None,
+    name: str = "freq.opengwasdb",
+) -> Path:
+    out = root / name
+    fixture = root / "freq-fixture"
     build_ragged_from_besd(
-        _frequency_fixture(root / "freq-fixture"),
+        fixture / "test" if (fixture / "test.besd").exists() else _frequency_fixture(fixture),
         out,
         store_id="test",
         release_id="v1",
         association_coverage="cis",
+        store_esi_eaf=store_esi_eaf,
         eaf_reference=eaf_reference,
+        sample_size_table=sample_size_table,
     )
     return out
 
@@ -577,6 +606,97 @@ def test_an_esi_reported_against_the_other_allele_fails_the_build(tmp_path: Path
     assert not (tmp_path / "freq.opengwasdb").exists()
 
 
+def test_without_the_flag_a_frequency_bearing_esi_stores_no_eaf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `.esi` frequency is opt-in: an `.esi` that reports one builds the
+    release a frequency-less `.esi` builds, byte for byte (ADR 0067)."""
+    from opengwasdb.store import arrays as store_arrays
+
+    monkeypatch.setenv("BLOSC_NTHREADS", "1")
+    store = _build_frequencies(tmp_path, store_esi_eaf=False)
+    assert any(snp["freq"] != "NA" for snp in _frequency_snps()), "the .esi must report some"
+    manifest = json.loads((store / "manifest.json").read_text())
+    assert manifest["encoding"]["eaf"] == {"kind": "absent"}
+    assert "eaf_orientation" not in manifest["provenance"]
+    assert "eaf" not in store_arrays.open_group(store / "data.zarr" / "ragged")
+    blank = tmp_path / "blank"
+    blank.mkdir()
+    for suffix in ("epi", "besd"):
+        (blank / f"test.{suffix}").write_bytes(
+            (tmp_path / "freq-fixture" / f"test.{suffix}").read_bytes()
+        )
+    write_esi(blank / "test.esi", [{**snp, "freq": "NA"} for snp in _frequency_snps()])
+    plain = blank / "plain.opengwasdb"
+    build_ragged_from_besd(
+        blank / "test", plain, store_id="test", release_id="v1", association_coverage="cis"
+    )
+    with_frequencies, without = _tree(store), _tree(plain)
+    assert with_frequencies.keys() == without.keys()
+    differ = [path for path in without if with_frequencies[path] != without[path]]
+    assert differ == ["manifest.json"], differ
+    before, after = (json.loads(tree["manifest.json"]) for tree in (with_frequencies, without))
+    for record in (before, after):
+        record.pop("created_at")
+        record["provenance"].pop("source_besd_prefix")
+    assert before == after
+
+
+def test_the_flag_on_an_esi_without_frequencies_fails(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="store_esi_eaf was requested but the .esi reports no"):
+        _build(tmp_path, table=None, store_esi_eaf=True)
+    assert not (tmp_path / "out.opengwasdb").exists()
+
+
+def test_an_eaf_reference_without_the_flag_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="only with store_esi_eaf"):
+        _build_frequencies(tmp_path, store_esi_eaf=False, eaf_reference=_reference(tmp_path))
+    assert not (tmp_path / "freq.opengwasdb").exists()
+
+
+# ── SE stays float16 beside an `n` plane ────────────────────────────────────
+
+
+def _se_measurements_that_choose_a_residual() -> SeMeasurements:
+    return SeMeasurements(
+        eligible=True,
+        exception_fraction={0.5: 0.0},
+        worst_relative_error={0.5: 0.002},
+        compressed_bytes={0.5: 100},
+        float16_compressed_bytes=1000,
+    )
+
+
+def test_an_n_plan_keeps_se_float16_whatever_the_measurements_say() -> None:
+    measured = _se_measurements_that_choose_a_residual()
+    without = StoreEncoding.decide(EncodingMeasurements(n_analyses=1, se=measured))
+    assert without.se.is_residual, "the measurements must choose a residual to mean anything"
+    with_n = StoreEncoding.decide(EncodingMeasurements(n_analyses=1, se=measured, n_plane=True))
+    assert with_n.se.kind == "float16"
+
+
+def test_a_build_with_n_and_stored_eaf_keeps_se_float16(tmp_path: Path) -> None:
+    """The residual model assumes one N per Analysis; per-pair N breaks it (ADR 0067)."""
+    reference = _reference(tmp_path)
+    without_n = _build_frequencies(tmp_path, eaf_reference=reference, name="eaf.opengwasdb")
+    with_n = _build_frequencies(
+        tmp_path,
+        eaf_reference=reference,
+        sample_size_table=_frequency_table(tmp_path),
+        name="eaf-n.opengwasdb",
+    )
+    plans = {
+        store.name: json.loads((store / "manifest.json").read_text())["encoding"]
+        for store in (without_n, with_n)
+    }
+    assert plans["eaf.opengwasdb"]["se"]["kind"] == "int8_residual", (
+        "the same frequencies without n must choose the residual for this to mean anything"
+    )
+    assert plans["eaf-n.opengwasdb"]["se"] == {"kind": "float16"}
+    assert plans["eaf-n.opengwasdb"]["eaf"]["kind"] != "absent"
+    assert "n" in plans["eaf-n.opengwasdb"]
+
+
 # ── The table's format is enforced, not guessed at ──────────────────────────
 
 
@@ -640,15 +760,7 @@ def test_a_manifest_declaring_analysis_level_scope_for_a_sampled_probe_fails(
         f"{P1}\t31684\tanalysis_level\n{P2}\t31684\t\n"
     )
     with pytest.raises(ValueError, match="declares sample_size_scope='analysis_level'"):
-        build_ragged_from_besd(
-            _fixture(tmp_path / "fixture"),
-            tmp_path / "out.opengwasdb",
-            store_id="test",
-            release_id="v1",
-            association_coverage="cis",
-            analyses_path=manifest,
-            sample_size_table=_table(tmp_path),
-        )
+        _build(tmp_path, table=_table(tmp_path), analyses_path=manifest)
 
 
 # ── Completion and the CLI ──────────────────────────────────────────────────
@@ -701,3 +813,32 @@ def test_query_output_has_no_n_column_without_the_plane(tmp_path: Path) -> None:
     assert "\tn\t" not in queried.output.splitlines()[0]
     described = CliRunner().invoke(app, ["info", str(store)])
     assert "encoding: z=" in described.output and "n=" not in described.output
+
+
+def test_the_cli_stores_the_esi_frequency_only_with_its_flag(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    from opengwasdb.cli.main import app
+
+    prefix = _frequency_fixture(tmp_path / "freq-fixture")
+    reference = _reference(tmp_path)
+    base = [
+        "build-ragged-besd", str(prefix), "--association-coverage", "cis",
+        "--store-id", "cli", "--release-id", "v1",
+    ]
+    runner = CliRunner()
+    stored = runner.invoke(
+        app,
+        [*base[:2], str(tmp_path / "eaf.opengwasdb"), *base[2:], "--store-esi-eaf",
+         "--eaf-reference", str(reference)],
+    )
+    assert stored.exit_code == 0, stored.output
+    plan = json.loads((tmp_path / "eaf.opengwasdb" / "manifest.json").read_text())["encoding"]
+    assert plan["eaf"]["kind"] != "absent"
+    refused = runner.invoke(
+        app, [*base[:2], str(tmp_path / "ref.opengwasdb"), *base[2:], "--eaf-reference",
+              str(reference)],
+    )
+    assert refused.exit_code != 0
+    assert "only with store_esi_eaf" in str(refused.exception)
+    assert not (tmp_path / "ref.opengwasdb").exists()

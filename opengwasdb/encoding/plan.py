@@ -433,7 +433,8 @@ class StoreEncoding:
         needs uniform precision, and the sparse overflow table means no data
         property can make that choice wrong.
         R2 -- `se` uses the smallest measured residual range that passes every
-        gate, otherwise the entire plane remains `float16`.
+        gate, otherwise the entire plane remains `float16` -- and stays
+        `float16`, unmeasured, beside an `n` plane (`_decide_se`).
         R3..R5 -- `eaf` is decided by `_decide_eaf` below, from measured
         residual spread and measured bytes.
         R6 -- `n` is `uint32` when the build supplies per-association sample
@@ -441,7 +442,7 @@ class StoreEncoding:
         """
         return cls(
             z=ZEncoding(kind="int16_fixed", scale=DEFAULT_Z_SCALE),
-            se=_decide_se(measurements.se),
+            se=_decide_se(measurements.se, n_plane=measurements.n_plane),
             eaf=_decide_eaf(measurements.eaf),
             n=NEncoding() if measurements.n_plane else None,
         )
@@ -574,8 +575,18 @@ def _decide_eaf(measurements: EafMeasurements | None) -> EafEncoding:
     return EafEncoding(kind="int8_residual", residual_range=chosen)
 
 
-def _decide_se(measurements: SeMeasurements | None) -> SeEncoding:
-    if measurements is None or not measurements.eligible:
+def _decide_se(measurements: SeMeasurements | None, *, n_plane: bool = False) -> SeEncoding:
+    """`int8_residual` where it passes every gate, `float16` otherwise.
+
+    Never residual beside a per-association `n` plane (ADR 0067). The residual
+    predicts `log(se)` from `log(2f(1 - f))` with one intercept per Analysis,
+    which assumes one N per Analysis; where N varies by pair the residual
+    absorbs `-1/2 log N`. On eQTLGen, whose N spans 2.5 decades, that forced the
+    widest range and a 0.79% worst-case SE error against `float16`'s 0.049%.
+    The gates would still pass it -- they bound the error at 1% -- so the rule
+    is stated here rather than left to the measurements.
+    """
+    if n_plane or measurements is None or not measurements.eligible:
         return SeEncoding("float16")
     for candidate in SE_RANGE_CANDIDATES:
         if (
