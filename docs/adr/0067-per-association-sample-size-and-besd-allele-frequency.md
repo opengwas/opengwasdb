@@ -6,7 +6,7 @@ Additive to [ADR 0036](0036-store-effect-allele-frequency-per-association.md)
 and [ADR 0037](0037-statistic-array-encodings.md); completes what
 [ADR 0062](0062-resolve-besd-probes-from-one-per-file-esi-measurement.md) left
 undone ("storing the `.esi` frequency per association is separate work").
-ADR numbers 0065 and 0066 belong to the open PR #303.
+It is the exception to ADR 0037 §3's `se` selection recorded in §4 below.
 
 ## Context
 
@@ -166,7 +166,10 @@ its gates and saves bytes -- unless the Store carries an `n` plane (§4).
 
 `StoreEncoding.decide` never chooses `int8_residual` for a release that carries
 per-association sample sizes, and the builder does not run the SE fit or its
-byte measurement for one. The residual coding predicts
+byte measurement for one. The pairing is also refused where a release is read:
+`StoreEncoding.from_manifest` rejects an `encoding` block that declares `n`
+beside `int8_residual` `se`, and `validate` names it, so a release written by
+anything else cannot be certified with it. The residual coding predicts
 `log(se) = a + b·log(2f(1−f))` with one intercept per Analysis, which assumes
 one N per Analysis. Where N varies by pair the residual absorbs `−½ log N`; on
 eQTLGen, whose N spans 2.5 decades, that forced the widest range, ±2.0. Measured

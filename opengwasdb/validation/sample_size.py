@@ -28,8 +28,14 @@ _WINDOW = 1_000_000
 
 
 def validate_n_plan(group: Any, encoding: StoreEncoding, errors: list[str], *, label: str) -> None:
-    """The `n` plane is present exactly when the plan declares it, in its dtype."""
+    """The `n` plane is present exactly when the plan declares it, in its dtype,
+    and only beside a `float16` `se` plane (ADR 0067 §4)."""
     present = "n" in group
+    if encoding.n is not None and encoding.se.is_residual:
+        errors.append(
+            f"{label} declares an n plane beside se {encoding.se.kind}, but an n plane "
+            "requires float16 se (ADR 0067 §4)"
+        )
     if encoding.n is None:
         if present:
             errors.append(

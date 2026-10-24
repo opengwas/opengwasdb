@@ -606,6 +606,32 @@ def test_an_esi_reported_against_the_other_allele_fails_the_build(tmp_path: Path
     assert not (tmp_path / "freq.opengwasdb").exists()
 
 
+def test_the_orientation_sample_is_the_whole_axis_sample_without_holding_the_axis() -> None:
+    """Sampling a stream of ALIDs, then gathering only the sampled sites, is the
+    sample the whole-axis dict gave -- including two variants at one position
+    and rows with no frequency."""
+    from opengwasdb.build.eaf_orientation import select_sites
+    from opengwasdb.layouts.ragged.besd_eaf import sampled_frequencies
+    from opengwasdb.variants import orient_to_canonical
+
+    variants = [
+        orient_to_canonical("1", str(1_000 + 10 * (i // 2)), "A", "G" if i % 2 else "C").variant
+        for i in range(30_000)
+    ]
+    assert variants[0].position == variants[1].position, "the fixture must share positions"
+    esi_to_variant = {row: (row, False) for row in range(len(variants))}
+    eaf_by_esi = np.linspace(0.01, 0.99, len(variants)).astype(np.float32)
+    eaf_by_esi[::7] = np.nan
+    whole_axis = {
+        variants[index].alid: float(eaf_by_esi[row])
+        for row, (index, _flipped) in esi_to_variant.items()
+        if np.isfinite(eaf_by_esi[row])
+    }
+    expected = {alid: whole_axis[alid] for alid in select_sites(whole_axis)}
+    assert len(expected) == 20_000, "the axis must be larger than the sample to test sampling"
+    assert sampled_frequencies(variants, esi_to_variant, eaf_by_esi) == expected
+
+
 def test_without_the_flag_a_frequency_bearing_esi_stores_no_eaf(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -695,6 +721,103 @@ def test_a_build_with_n_and_stored_eaf_keeps_se_float16(tmp_path: Path) -> None:
     assert plans["eaf-n.opengwasdb"]["se"] == {"kind": "float16"}
     assert plans["eaf-n.opengwasdb"]["eaf"]["kind"] != "absent"
     assert "n" in plans["eaf-n.opengwasdb"]
+
+
+def _residual_se_release_with_n(tmp_path: Path) -> Path:
+    """Review round 1's reproduction: a valid residual-SE release given a
+    consistent `n` plane -- both copies, the plan, and the scope -- after the fact."""
+    from opengwasdb.validation import validate_store
+
+    store = _build_frequencies(tmp_path, eaf_reference=_reference(tmp_path))
+    manifest = json.loads((store / "manifest.json").read_text())
+    assert manifest["encoding"]["se"]["kind"] == "int8_residual", (
+        "the release must code se as a residual for this to mean anything"
+    )
+    assert validate_store(store).ok, "the release must be valid before n is added"
+    codes = np.full(len(_plane(store, "variant_index")), 1000, dtype=np.uint32)
+    _rewrite(store, "n", codes)
+    _rewrite(store, "by_variant/n", codes)
+    manifest["encoding"]["n"] = {"kind": "uint32"}
+    (store / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    tsv = store / "analyses.tsv"
+    header, *rows = (line.split("\t") for line in tsv.read_text().splitlines())
+    scope = header.index("sample_size_scope")
+    for row in rows:
+        row[scope] = "variant_level"
+    tsv.write_text("".join("\t".join(row) + "\n" for row in [header, *rows]))
+    return store
+
+
+def test_validate_rejects_residual_se_beside_an_n_plane(tmp_path: Path) -> None:
+    errors = _errors(_residual_se_release_with_n(tmp_path))
+    assert any("n plane requires float16 se" in e and "int8_residual" in e for e in errors), (
+        errors
+    )
+
+
+def test_the_loader_refuses_residual_se_beside_an_n_plan() -> None:
+    block = StoreEncoding.decide(EncodingMeasurements(n_analyses=1, n_plane=True)).to_manifest()
+    block["se"] = {"kind": "int8_residual", "residual_range": 0.5}
+    with pytest.raises(UnsupportedEncoding, match="n plane requires float16 se"):
+        StoreEncoding.from_manifest(block)
+
+
+def test_the_validation_rule_names_residual_se_beside_an_n_plan() -> None:
+    """The rule itself, for a plan that reached validation without the loader."""
+    from dataclasses import replace
+
+    from opengwasdb.encoding import SeEncoding
+    from opengwasdb.validation.sample_size import validate_n_plan
+
+    plan = replace(
+        StoreEncoding.decide(EncodingMeasurements(n_analyses=1, n_plane=True)),
+        se=SeEncoding("int8_residual", 0.5),
+    )
+    errors: list[str] = []
+    validate_n_plan({"n": np.ones(1, dtype=np.uint32)}, plan, errors, label="data.zarr/ragged")
+    assert errors == [
+        "data.zarr/ragged declares an n plane beside se int8_residual, but an n plane "
+        "requires float16 se (ADR 0067 §4)"
+    ]
+
+
+# ── N is exact at the precision boundaries ──────────────────────────────────
+
+#: Literals, not derived: the first count `float32` cannot hold (2**24 + 1),
+#: the largest count the plane holds (2**32 - 2), and the missing code (2**32 - 1).
+BEYOND_FLOAT32 = 16_777_217
+LARGEST_COUNT = 4_294_967_294
+MISSING_CODE = 4_294_967_295
+
+
+def test_counts_past_float32_round_trip_exactly_through_the_codec() -> None:
+    from opengwasdb.encoding import StoreCodec, encode_sample_sizes
+
+    codes = encode_sample_sizes(np.array([BEYOND_FLOAT32, LARGEST_COUNT, np.nan]))
+    assert codes.dtype == np.uint32
+    assert codes.tolist() == [16_777_217, 4_294_967_294, 4_294_967_295]
+    plan = StoreEncoding.decide(EncodingMeasurements(n_analyses=1, n_plane=True))
+    decoded = StoreCodec(plan).decode_n(codes)
+    assert decoded[:2].tolist() == [16_777_217.0, 4_294_967_294.0]
+    assert np.isnan(decoded[2])
+
+
+def test_counts_past_float32_round_trip_exactly_through_a_build(tmp_path: Path) -> None:
+    rows = [(P1, "rs1", "16777217"), (P1, "rs3", "4294967294"), (P2, "rs2", "2100")]
+    store = _build(tmp_path, table=_table(tmp_path, rows))
+    assert _plane(store).tolist() == [16_777_217, N_MISSING, 4_294_967_294, 2100, N_MISSING]
+    stored = _analysis_n(store, P1)
+    assert stored[0] == 16_777_217.0 and stored[2] == 4_294_967_294.0, stored.tolist()
+
+
+def test_the_missing_code_is_refused_as_an_observed_count(tmp_path: Path) -> None:
+    from opengwasdb.encoding import encode_sample_sizes
+    from opengwasdb.layouts.ragged.sample_size_table import SampleSizeTableError
+
+    with pytest.raises(ValueError, match="4294967295.0"):
+        encode_sample_sizes(np.array([MISSING_CODE], dtype=np.float64))
+    with pytest.raises(SampleSizeTableError, match="n '4294967295' is not a whole number"):
+        _build(tmp_path, table=_table(tmp_path, [(P1, "rs1", "4294967295")]))
 
 
 # ── The table's format is enforced, not guessed at ──────────────────────────

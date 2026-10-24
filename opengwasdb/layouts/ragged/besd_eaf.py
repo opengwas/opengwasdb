@@ -20,8 +20,7 @@ whatever the `.esi` reports. With no reference the outcome is therefore
 
 from __future__ import annotations
 
-import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -86,13 +85,8 @@ def verify_esi_orientation(
     an `unverified` one against a supplied reference unless `allow_unverified`
     (`enforce_eaf_orientation`).
     """
-    by_alid = {
-        variants[variant_index].alid: float(eaf_by_esi[row])
-        for row, (variant_index, _flipped) in esi_to_variant.items()
-        if math.isfinite(float(eaf_by_esi[row]))
-    }
-    sites = select_sites(by_alid)
-    observations = {alid: by_alid[alid] for alid in sites}
+    observations = sampled_frequencies(variants, esi_to_variant, eaf_by_esi)
+    sites = list(observations)
     if eaf_reference is None:
         report = _unreferenced(len(sites))
     else:
@@ -102,6 +96,37 @@ def verify_esi_orientation(
         )
     enforce_eaf_orientation(report, allow_unverified=allow_unverified)
     return report
+
+
+def sampled_frequencies(
+    variants: Sequence[CanonicalVariant],
+    esi_to_variant: dict[int, tuple[int, bool]],
+    eaf_by_esi: np.ndarray,
+) -> dict[str, float]:
+    """`select_sites`' sample of the frequency-bearing variants, `{alid: eaf}`.
+
+    The sample is drawn from a stream of ALIDs and only the sampled sites'
+    frequencies are gathered, so the check holds the sample (at most 20,000
+    sites) and never a dict over the axis -- nine million entries, each an ALID
+    string, on eQTLGen. The gathering pass compares positions before it formats
+    an ALID, and a variant sharing a sampled site's position is dropped by the
+    final selection. In `select_sites`' order, as the whole-axis dict gave it.
+    """
+    finite = np.isfinite(eaf_by_esi)
+
+    def carrying() -> Iterator[tuple[int, CanonicalVariant]]:
+        for row, (variant_index, _flipped) in esi_to_variant.items():
+            if finite[row]:
+                yield row, variants[variant_index]
+
+    sites = select_sites(variant.alid for _row, variant in carrying())
+    positions = {(alid.split(":")[0], int(alid.split(":")[1])) for alid in sites}
+    gathered = {
+        variant.alid: float(eaf_by_esi[row])
+        for row, variant in carrying()
+        if (variant.chromosome, variant.position) in positions
+    }
+    return {alid: gathered[alid] for alid in sites}
 
 
 def _unreferenced(n_sites: int) -> EafOrientationReport:

@@ -515,7 +515,7 @@ class StoreEncoding:
                 "not; this release cannot be read without inferring one, which is what "
                 "the declared plan exists to prevent (spec §21)"
             )
-        return cls(
+        plan = cls(
             z=ZEncoding.from_manifest(data["z"]),
             se=SeEncoding.from_manifest(data["se"]),
             eaf=EafEncoding.from_manifest(data["eaf"]),
@@ -525,6 +525,15 @@ class StoreEncoding:
             # was given no sample-size input (ADR 0067).
             n=NEncoding.from_manifest(data["n"]) if "n" in data else None,
         )
+        if plan.n is not None and plan.se.is_residual:
+            # `decide` never writes this pairing; a block that declares it was
+            # written by something else, and decoding it would hand out SEs coded
+            # under a model that assumes one N per Analysis (ADR 0067 §4).
+            raise UnsupportedEncoding(
+                f"encoding block declares an n plane beside se {plan.se.kind}, but an n "
+                "plane requires float16 se (ADR 0067 §4); this release cannot be read"
+            )
+        return plan
 
 
 def _eaf_residual_bytes(measurements: EafMeasurements, residual_range: float) -> int:
