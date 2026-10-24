@@ -240,6 +240,35 @@ _LIFT_VARIANT_REFERENCE_OPTION = Annotated[
         help=_LIFT_VARIANT_REFERENCE_HELP,
     ),
 ]
+_SAMPLE_SIZE_TABLE_OPTION = Annotated[
+    Path | None,
+    typer.Option(
+        "--sample-size-table",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help=(
+            "Per-pair sample sizes to store as a per-association n plane: a TSV(.gz) "
+            "with probe_id, snp_id and n columns, grouped by probe in .epi order. A "
+            "pair it omits is stored as missing, never estimated (ADR 0067)."
+        ),
+    ),
+]
+_BESD_EAF_REFERENCE_OPTION = Annotated[
+    Path | None, typer.Option("--eaf-reference", help=_EAF_REFERENCE_HELP)
+]
+_STORE_ESI_EAF_OPTION = Annotated[
+    bool,
+    typer.Option(
+        "--store-esi-eaf",
+        help=(
+            "Store the .esi allele frequency per association, oriented to the stored "
+            "effect allele and checked once against --eaf-reference (ADR 0067). "
+            "Without it the .esi frequency is not stored, and the --eaf-* options "
+            "are refused."
+        ),
+    ),
+]
 
 
 class ReportFormat(StrEnum):
@@ -403,8 +432,11 @@ def info(
         eaf += f" (range +/-{encoding.eaf.residual_range:g})"
     if encoding.eaf.reference:
         eaf += " + reference"
+    # Named only when the release has the plane, so every other release's line
+    # reads as it always did (ADR 0067).
+    n = "" if encoding.n is None else f", n={encoding.n.kind}"
     typer.echo(
-        f"encoding: z={encoding.z.kind}{scale}, se={encoding.se.kind}, eaf={eaf}"
+        f"encoding: z={encoding.z.kind}{scale}, se={encoding.se.kind}, eaf={eaf}{n}"
     )
 
 
@@ -1330,6 +1362,11 @@ def build_ragged_besd_command(
     chain_file: _CHAIN_FILE_OPTION = None,
     variant_reference: _LIFT_VARIANT_REFERENCE_OPTION = None,
     overwrite: bool = typer.Option(False),
+    sample_size_table: _SAMPLE_SIZE_TABLE_OPTION = None,
+    store_esi_eaf: _STORE_ESI_EAF_OPTION = False,
+    eaf_reference: _BESD_EAF_REFERENCE_OPTION = None,
+    eaf_reference_ancestry: str | None = typer.Option(None, help=_EAF_ANCESTRY_HELP),
+    allow_unverified_eaf: bool = typer.Option(False, help=_ALLOW_UNVERIFIED_HELP),
 ) -> None:
     """Build a Ragged Observed-Only store from BESD files.
 
@@ -1338,6 +1375,8 @@ def build_ragged_besd_command(
     Optionally, --analyses overlays Analytical and Attribution Metadata from a manifest.
     --association-coverage is required: the file set says nothing about which of
     its associations were retained (issue #298).
+    --store-esi-eaf stores the .esi frequency per association, checked once
+    against --eaf-reference (ADR 0067).
     """
     result = build_ragged_from_besd(
         besd_prefix,
@@ -1351,6 +1390,11 @@ def build_ragged_besd_command(
         overwrite=overwrite,
         chain_file=chain_file,
         variant_reference=variant_reference,
+        sample_size_table=sample_size_table,
+        store_esi_eaf=store_esi_eaf,
+        eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry,
+        allow_unverified_eaf=allow_unverified_eaf,
     )
     _echo_summary(
         {
@@ -1814,7 +1858,7 @@ def _emit(
 
 
 def _emit_json(result: dict[str, np.ndarray]) -> None:
-    rows = [
+    rows: list[dict[str, object]] = [
         {
             "variant_index": int(vi),
             "analysis_index": int(ai),
@@ -1829,6 +1873,11 @@ def _emit_json(result: dict[str, np.ndarray]) -> None:
             strict=True,
         )
     ]
+    # Only from a release with a per-association sample-size plane (ADR 0067);
+    # null where the build was given no N for the pair.
+    if "n" in result:
+        for row, n in zip(rows, result["n"], strict=True):
+            row["n"] = int(n) if math.isfinite(float(n)) else None
     typer.echo(json.dumps(rows, sort_keys=True))
 
 
@@ -1895,7 +1944,14 @@ def _emit_tsv(
     # by contrast, came back in the query result itself, so it is always a
     # column now (issue #136) and never costs a new read.
     writer = csv.writer(sys.stdout, delimiter="\t", lineterminator="\n")
-    writer.writerow(_TSV_COLUMNS_WITH_VARIANT_INFO if include_variant_info else _TSV_COLUMNS)
+    header = list(_TSV_COLUMNS_WITH_VARIANT_INFO if include_variant_info else _TSV_COLUMNS)
+    # `n` is a column only for a release carrying per-association sample sizes,
+    # just before association_status (ADR 0067); every other release's output
+    # is unchanged.
+    with_n = "n" in result
+    if with_n:
+        header.insert(len(header) - 1, "n")
+    writer.writerow(header)
     for row in query.resolve(result, include_variant_info=include_variant_info):
         fields: list[object] = [
             row["analysis_id"],
@@ -1913,5 +1969,7 @@ def _emit_tsv(
             fields.insert(2, row["rsid"])
         # eaf always sits before association_status, which stays the last column.
         fields.append(_format_eaf(row.get("eaf")))
+        if with_n:
+            fields.append(row["n"])
         fields.append(row["association_status"])
         writer.writerow(fields)

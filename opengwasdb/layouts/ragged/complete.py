@@ -262,10 +262,10 @@ def complete_ragged_store(
         when it is not (no behaviour change for sources with no ancestry
         information).
     """
+    _check_completion_inputs(Path(source_path), ld_dir, ancestry)
     dst = Path(dest_path)
     checkpoint_dir = checkpoint_dir_for(dst)
     require_fresh_destination(dst, checkpoint_dir, overwrite, "resume_ragged_completion")
-    check_panel_has_chromosomes(ld_dir, ancestry)
 
     if impute_analysis_ids is None:
         impute_analysis_ids = derive_impute_analysis_ids(
@@ -473,9 +473,38 @@ class _FlatCsr:
     imp: np.ndarray
 
 
+def _check_completion_inputs(src: Path, ld_dir: str | Path, ancestry: str) -> None:
+    """The refusals that need no side effect, run before any is taken.
+
+    Ahead of `require_fresh_destination`, which under `overwrite` deletes a
+    previous checkpoint: a run that is going to be refused for its source or its
+    panel must not first discard what an earlier run left.
+    """
+    _refuse_sample_size_source(src)
+    check_panel_has_chromosomes(ld_dir, ancestry)
+
+
+def _refuse_sample_size_source(src: Path) -> None:
+    """Refuse a source carrying a per-association sample-size plane (ADR 0067).
+
+    Completion rewrites the whole CSR from decoded `z`/`se`/`eaf`, so an `n`
+    plane would be dropped from the completed release while its Analyses still
+    declared variant-level N -- and an imputed cell has no N of its own to
+    carry. Carrying N through completion is not built, so it is refused by
+    name, before any destination or checkpoint exists.
+    """
+    if StoreManifest.load(src).encoding.n is not None:
+        raise ValueError(
+            f"source release {src} carries a per-association sample-size plane "
+            "(data.zarr/ragged/n); Ragged completion does not carry N through, and "
+            "would drop it (ADR 0067)"
+        )
+
+
 def _open_source(src: Path) -> tuple[StoreManifest, str]:
     """Open the observed-only source and refuse a format this build cannot
     write, before any of the work (ADR 0038 §4)."""
+    _refuse_sample_size_source(src)
     source = open_store(src)
     manifest = source.manifest
     # See the dense path: refused before the work, not after it (ADR 0038 §4).

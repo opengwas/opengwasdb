@@ -24,12 +24,14 @@ from opengwasdb.encoding import (
     ZOverflowBuilder,
     ZOverflowTable,
     eaf_baseline_from_sorted_runs,
+    encode_sample_sizes,
     fit_se,
     measure_eaf,
     positions_at,
     positions_flat,
     write_eaf_baseline,
 )
+from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
@@ -113,6 +115,11 @@ class RaggedCSRWriter:
         self._zscores: list[np.ndarray] = []
         self._ses: list[np.ndarray] = []
         self._eafs: list[np.ndarray] = []
+        #: Each Analysis's `n` codes, or `None` for one given no sample size.
+        #: Held lazily: a build that supplies none -- every SSF build, every
+        #: Hybrid Overflow -- must not pay four bytes a cell for a plane it
+        #: will never write (ADR 0067).
+        self._ns: list[np.ndarray | None] = []
         self._offsets: list[int] = [0]
         #: The baseline this writer has already derived, or `None` before the
         #: first ask. `None` can only mean "not derived": a derivation under a
@@ -132,6 +139,7 @@ class RaggedCSRWriter:
         z: np.ndarray,
         se: np.ndarray,
         eaf: np.ndarray | None = None,
+        n: np.ndarray | None = None,
     ) -> None:
         """Append one analysis. Arrays must be parallel and the same length.
 
@@ -140,8 +148,12 @@ class RaggedCSRWriter:
         aligned with `z`/`se` whatever mix of Analyses a build spans. If *no*
         Analysis supplies one, `flush` writes no `eaf` array at all and the
         store looks exactly as it did before EAF existed.
+
+        `n` is the per-association sample size, NaN where it is unknown (ADR
+        0067). It is encoded as it arrives, so a malformed N fails at the
+        Analysis that carries it; the plane is written only when the plan
+        declares one.
         """
-        n = len(variant_index)
         vi = np.asarray(variant_index, dtype=np.int32)
         # Every builder sorts an Analysis's associations by variant_index before
         # adding them (build_besd, build_ssf, Hybrid's `_assemble_overflow_column`
@@ -163,10 +175,16 @@ class RaggedCSRWriter:
         self._zscores.append(np.asarray(z, dtype=np.float32))
         self._ses.append(np.asarray(se, dtype=np.float32))
         if eaf is None:
-            self._eafs.append(np.full(n, np.nan, dtype=np.float32))
+            self._eafs.append(np.full(len(vi), np.nan, dtype=np.float32))
         else:
             self._eafs.append(np.asarray(eaf, dtype=np.float32))
-        self._offsets.append(self._offsets[-1] + n)
+        if n is not None and len(n) != len(vi):
+            raise ValueError(
+                f"an Analysis's n has {len(n)} entries for {len(vi)} associations; the "
+                "per-association sample size must be parallel to variant_index"
+            )
+        self._ns.append(None if n is None else encode_sample_sizes(n))
+        self._offsets.append(self._offsets[-1] + len(vi))
         # A baseline is a median over every cell at its variant, so a new cell
         # can move one: a held baseline must never outlive the cells it came
         # from. Only `add_analysis` changes those cells.
@@ -730,19 +748,60 @@ class RaggedCSRWriter:
         se_coefficients: np.ndarray | None = None,
         region_cells: int = DEFAULT_FLUSH_REGION_CELLS,
     ) -> None:
-        """Write the whole CSR: the frequency half, then the SE half.
+        """Write the whole CSR: the frequency half, the `n` plane, then the SE half.
 
         One call for callers that hold every cell already -- the standalone
         Ragged builders and Reference Completion's overflow rebuild -- for whom
         splitting the write in two buys nothing. A Hybrid build calls the two
-        halves itself, because its joint SE fit sits between them (issue #232).
+        halves itself, because its joint SE fit sits between them (issue #232),
+        and never carries `n` (ADR 0067). `n` sits before the SE half because
+        that half writes the completion marker, which must come last.
         """
         self.write_eaf_plane(
             store_path, encoding, eaf_baseline=eaf_baseline, region_cells=region_cells
         )
+        self._write_n_plane(store_path, encoding, region_cells)
         self.flush_se(
             store_path, encoding, se_coefficients=se_coefficients, region_cells=region_cells
         )
+
+    def _write_n_plane(
+        self, store_path: str | Path, encoding: StoreEncoding, region_cells: int
+    ) -> None:
+        """The per-association sample-size plane, when the plan declares one.
+
+        A writer holding sample sizes for a plan that declares none would drop
+        them silently, so that is refused; a plan declaring a plane for a writer
+        given none writes it all-missing, which is what such a build holds.
+        """
+        holds_n = any(codes is not None for codes in self._ns)
+        if encoding.n is None:
+            if holds_n:
+                raise ValueError(
+                    "this writer holds per-association sample sizes but the plan declares "
+                    "no n plane; flushing would drop them (ADR 0067)"
+                )
+            return
+        root = store_arrays.open_group_for_write(Path(store_path) / RAGGED_ZARR_PATH, "a")
+        total = self.n_associations
+        plane = self._plane(root, "n", total, encoding.n.dtype)
+        offsets = np.asarray(self._offsets, dtype=np.int64)
+        for lo, hi in self._flat_regions(total, region_cells):
+            plane[lo:hi] = self._gather_n(offsets, lo, hi)
+
+    def _gather_n(self, offsets: np.ndarray, lo: int, hi: int) -> np.ndarray:
+        """The `n` codes for flat cells `[lo, hi)`; missing for an Analysis given none."""
+        parts: list[np.ndarray] = []
+        for analysis in self._analyses_spanning(offsets, lo, hi):
+            start = int(offsets[analysis])
+            head, tail = max(lo, start) - start, min(hi, int(offsets[analysis + 1])) - start
+            codes = self._ns[analysis]
+            parts.append(
+                np.full(tail - head, N_MISSING, dtype=np.uint32)
+                if codes is None
+                else codes[head:tail]
+            )
+        return np.concatenate(parts) if parts else np.empty(0, dtype=np.uint32)
 
 
 class RaggedCSRReader:
@@ -771,6 +830,14 @@ class RaggedCSRReader:
             imputed=self._root["imputed"] if "imputed" in self._root else None,
         )
         self._se_plane = RaggedSePlane.open(self._root, encoding, self._eaf_plane)
+        # The plan, not the array's presence, says whether there is a plane: one
+        # declared and missing is a damaged release, not a release without N.
+        if encoding.n is not None and "n" not in self._root:
+            raise ValueError(
+                f"{path}: the manifest declares an n plane but the component carries no "
+                "n array (ADR 0067)"
+            )
+        self._n: zarr.Array | None = self._root["n"] if encoding.n is not None else None
 
     @property
     def n_analyses(self) -> int:
@@ -1075,11 +1142,9 @@ class RaggedCSRReader:
         """EAF for elementwise (variant, analysis) pairs (ADR 0036).
 
         All-NaN when this component stores no `eaf` array -- built before ADR
-        0036, or from sources reporting no frequency. Each Analysis's CSR slice
-        is sorted by variant_index (every builder sorts before writing), so one
-        `searchsorted` per distinct Analysis resolves its pairs; a pair whose
-        variant is absent from that Analysis stays NaN rather than silently
-        taking a neighbour's frequency.
+        0036, or from sources reporting no frequency. A pair whose variant is
+        absent from that Analysis stays NaN rather than silently taking a
+        neighbour's frequency (`_pair_positions`).
         """
         out = np.full(len(variant_index), np.nan, dtype=np.float32)
         # The plane's own answer, not `has_eaf`: a release carrying only the
@@ -1087,10 +1152,65 @@ class RaggedCSRReader:
         # report on its imputed cells (issue #113).
         if not self._eaf_plane.can_report_frequencies or len(variant_index) == 0:
             return out
-        offsets = self._offsets[:]
         # Resolve every pair to a flat CSR position first, then decode once:
         # the plane needs the position to resolve an exception cell, and a
         # per-Analysis decode would gather the baseline slice by slice.
+        slots, positions = self._pair_positions(variant_index, analysis_index)
+        if len(slots):
+            out[slots] = self.eaf_at(positions)
+        return out
+
+    @property
+    def has_n(self) -> bool:
+        """Whether this component stores per-association sample sizes (ADR 0067)."""
+        return self._n is not None
+
+    def _require_n(self) -> zarr.Array:
+        if self._n is None:
+            raise ValueError(
+                "this component stores no n plane; a caller asks has_n before reading one"
+            )
+        return self._n
+
+    def n_slice(self, start: int, end: int) -> np.ndarray:
+        """Decoded `n[start:end]`, NaN where the build was given no N for the pair."""
+        return self._codec.decode_n(np.asarray(self._require_n()[int(start) : int(end)]))
+
+    def n_at(self, positions: np.ndarray) -> np.ndarray:
+        """Decoded `n` at arbitrary flat CSR positions, read through `oindex`."""
+        plane = self._require_n()
+        positions = np.asarray(positions, dtype=np.int64)
+        if len(positions) == 0:
+            return np.empty(0, dtype=np.float64)
+        return self._codec.decode_n(np.asarray(plane.oindex[positions]))
+
+    def n_pairs(self, variant_index: np.ndarray, analysis_index: np.ndarray) -> np.ndarray:
+        """`n` for elementwise (variant, analysis) pairs, gathered as `eaf_pairs` is.
+
+        The top-hit tiers carry no `n` (ADR 0067), so an indexed top-hit query
+        resolves each hit back to its CSR cell. A pair the component does not
+        hold is NaN.
+        """
+        self._require_n()
+        out = np.full(len(variant_index), np.nan, dtype=np.float64)
+        slots, positions = self._pair_positions(variant_index, analysis_index)
+        if len(slots):
+            out[slots] = self.n_at(positions)
+        return out
+
+    def _pair_positions(
+        self, variant_index: np.ndarray, analysis_index: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """`(slots, flat positions)` for the pairs this component holds.
+
+        Each Analysis's CSR slice is sorted by variant_index (every builder sorts
+        before writing), so one `searchsorted` per distinct Analysis resolves its
+        pairs. `slots` index the request; a pair whose variant is absent from its
+        Analysis has no slot, so a caller leaves it missing.
+        """
+        variant_index = np.asarray(variant_index)
+        analysis_index = np.asarray(analysis_index)
+        offsets = self._offsets[:]
         slots: list[np.ndarray] = []
         found: list[np.ndarray] = []
         for ai in np.unique(analysis_index):
@@ -1109,9 +1229,9 @@ class RaggedCSRReader:
             if hit.any():
                 slots.append(slot[hit])
                 found.append(pos[hit].astype(np.int64) + start)
-        if slots:
-            out[np.concatenate(slots)] = self.eaf_at(np.concatenate(found))
-        return out
+        if not slots:
+            return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+        return np.concatenate(slots), np.concatenate(found)
 
     def get_analyses(self, analysis_indices: list[int]) -> list[AnalysisAssociations]:
         """Return associations for multiple analyses."""

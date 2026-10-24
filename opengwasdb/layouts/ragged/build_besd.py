@@ -6,6 +6,11 @@ variant axis (with inline hg19→hg38 liftover), Analysis metadata, CSR
 ingestion and encoding, and the indexes + manifest output. The split exists so
 no single function carries the whole build's branching (issue #130); the
 fail-loud rules each phase applies live beside the code that applies them.
+
+Two opt-in per-association annotations ride the CSR beside `z`/`se` (issue
+#302, ADR 0067): the `.esi` frequency, with `--store-esi-eaf`, and each pair's
+sample size from a `--sample-size-table`. A build given neither writes exactly
+the release it wrote before either existed, whatever its `.esi` reports.
 """
 
 from __future__ import annotations
@@ -14,11 +19,13 @@ import csv
 import logging
 import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import numpy as np
 
+from opengwasdb.build.eaf_orientation import EafOrientationReport, apply_orientation_evidence
 from opengwasdb.build.liftover import (
     LiftedRow,
     lift_hg19_to_hg38,
@@ -29,6 +36,11 @@ from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
+from opengwasdb.layouts.ragged.besd_eaf import (
+    per_probe_report,
+    stored_esi_frequencies,
+    verify_esi_orientation,
+)
 from opengwasdb.layouts.ragged.besd_reader import (
     BESDReader,
     ProbeRecord,
@@ -38,13 +50,16 @@ from opengwasdb.layouts.ragged.besd_reader import (
 )
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
 from opengwasdb.layouts.ragged.provenance import ragged_provenance
+from opengwasdb.layouts.ragged.sample_size_table import SampleSizeTable, SampleSizeTableError
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata, write_analysis_records
 from opengwasdb.model.enums import (
     AssociationCoverage,
+    EafScope,
     PrimaryStorageLayout,
+    SampleSizeScope,
     coverage_for_layout,
 )
 from opengwasdb.model.manifest_columns import manifest_column
@@ -82,6 +97,11 @@ def build_ragged_from_besd(
     overwrite: bool = False,
     chain_file: str | Path | None = None,
     variant_reference: str | Path | None = None,
+    sample_size_table: str | Path | None = None,
+    store_esi_eaf: bool = False,
+    eaf_reference: str | Path | None = None,
+    eaf_reference_ancestry: str | None = None,
+    allow_unverified_eaf: bool = False,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from BESD files.
 
@@ -101,25 +121,27 @@ def build_ragged_from_besd(
     ``association_coverage`` has no default (issue #298): a BESD file set is the
     eQTLGen-style cis case as often as it is a genome-wide one, so the layout
     cannot tell which (ADR 0064).
+
+    sample_size_table: per-pair N (`probe_id`, `snp_id`, `n`, grouped by probe in
+        `.epi` order) stored as an `n` plane; a pair it omits is missing, never
+        estimated (`sample_size_table` module, ADR 0067). None writes no plane.
+    store_esi_eaf: store the `.esi` frequency per association (opt-in, ADR 0067);
+        eaf_reference, eaf_reference_ancestry, allow_unverified_eaf: what it is
+        checked against, once -- refused without the flag.
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     prefix = Path(besd_prefix)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
-        axis, csr = _build_besd_release(
-            staged,
-            prefix,
-            _BesdBuildRequest(
-                store_id=store_id,
-                release_id=release_id,
-                coverage=coverage,
-                analyses_path=analyses_path,
-                tissue=tissue,
-                source_build=source_build,
-                chain_file=chain_file,
-                variant_reference=variant_reference,
-            ),
+        request = _BesdBuildRequest(
+            store_id=store_id, release_id=release_id, coverage=coverage,
+            analyses_path=analyses_path, tissue=tissue, source_build=source_build,
+            chain_file=chain_file, variant_reference=variant_reference,
+            sample_size_table=sample_size_table, store_esi_eaf=store_esi_eaf,
+            eaf_reference=eaf_reference, eaf_reference_ancestry=eaf_reference_ancestry,
+            allow_unverified_eaf=allow_unverified_eaf,
         )
+        axis, csr = _build_besd_release(staged, prefix, request)
         return _summarise(out, axis, csr.n_associations, coverage)
 
 
@@ -135,6 +157,32 @@ class _BesdBuildRequest:
     source_build: str
     chain_file: str | Path | None
     variant_reference: str | Path | None
+    sample_size_table: str | Path | None = None
+    store_esi_eaf: bool = False
+    eaf_reference: str | Path | None = None
+    eaf_reference_ancestry: str | None = None
+    allow_unverified_eaf: bool = False
+
+    def __post_init__(self) -> None:
+        """An orientation option without the frequency it orients is refused.
+
+        Ignoring it would let a build that named a reference look checked while
+        storing no frequency at all (ADR 0067).
+        """
+        named = [
+            name
+            for name, value in (
+                ("eaf_reference", self.eaf_reference),
+                ("eaf_reference_ancestry", self.eaf_reference_ancestry),
+                ("allow_unverified_eaf", self.allow_unverified_eaf),
+            )
+            if value
+        ]
+        if named and not self.store_esi_eaf:
+            raise ValueError(
+                f"{', '.join(named)} apply only with store_esi_eaf: without it the build "
+                "stores no .esi frequency, so there is nothing to check (ADR 0067)"
+            )
 
 
 def _build_besd_release(
@@ -147,15 +195,24 @@ def _build_besd_release(
         request.source_build,
         chain_file=request.chain_file,
         variant_reference=request.variant_reference,
+        keep_snp_ids=request.sample_size_table is not None,
+        keep_frequencies=request.store_esi_eaf,
     )
+    # Checked before anything is written: a build that is going to fail on a
+    # flipped `.esi` fails before it spends the ingest (issue #115).
+    eaf_report = _verify_eaf(axis, request)
     write_variant_axis(staged.path, axis.variants, axis.rsid_by_alid)
     # Phase 3 — Analysis metadata from the EPI records (optional manifest overlay).
     analyses = _analysis_records(axis.probes, request.tissue, request.analyses_path)
     staged.index_connection().close()
     # Phase 4 — CSR ingestion and the encoding plan it decides.
-    csr, encoding = _ingest_besd(
-        prefix, axis.probes, axis.esi_to_variant, len(axis.variants), staged.path,
+    sample_sizes = (
+        None
+        if request.sample_size_table is None
+        else SampleSizeTable(Path(request.sample_size_table), [p.probe_id for p in axis.probes])
     )
+    csr, encoding, scopes = _ingest_besd(prefix, axis, staged.path, sample_sizes)
+    analyses, eaf_report = _stamp_probe_scopes(analyses, scopes, axis, eaf_report)
     # Phase 5 — indexes and manifest output.
     _write_besd_outputs(staged, analyses, encoding)
     _write_manifest(
@@ -171,6 +228,7 @@ def _build_besd_release(
         encoding=encoding,
         lift=axis.lift,
         collisions=axis.collisions,
+        annotations=_annotation_provenance(eaf_report, request, sample_sizes),
     )
     return axis, csr
 
@@ -260,6 +318,10 @@ class _EsiAxis:
 
     The lift runs before the axis exists, so a row that fails it never reaches
     the axis and no association can sit at a wrong coordinate.
+
+    ``eaf_by_esi`` is each ESI row's stored-allele frequency (`None` when the
+    `.esi` reports none), and ``snp_ids`` each row's SNP ID, kept only for a
+    build that joins a sample-size table on it (ADR 0067).
     """
 
     probes: list[ProbeRecord]
@@ -268,6 +330,8 @@ class _EsiAxis:
     esi_to_variant: dict[int, tuple[int, bool]]
     collisions: _VariantCollisions
     lift: dict[str, object] | None
+    eaf_by_esi: np.ndarray | None = None
+    snp_ids: list[str] | None = None
 
 
 def _esi_axis(
@@ -276,6 +340,8 @@ def _esi_axis(
     *,
     chain_file: str | Path | None,
     variant_reference: str | Path | None,
+    keep_snp_ids: bool = False,
+    keep_frequencies: bool = False,
 ) -> _EsiAxis:
     """Read one file set's `.esi`/`.epi` and canonicalise the ESI rows."""
     snps, probes = _read_sources(prefix)
@@ -286,6 +352,7 @@ def _esi_axis(
     canonical.collisions.report()
     print(f"Canonical variants: {len(canonical.variants)} (from {len(snps)} ESI entries)")
     lift_provenance = canonical.collisions.record(lift_provenance)
+    snp_ids = _unique_snp_ids(snps, canonical.esi_to_variant) if keep_snp_ids else None
     return _EsiAxis(
         probes,
         canonical.variants,
@@ -293,6 +360,54 @@ def _esi_axis(
         canonical.esi_to_variant,
         canonical.collisions,
         lift_provenance,
+        eaf_by_esi=(
+            stored_esi_frequencies(snps, canonical.esi_to_variant) if keep_frequencies else None
+        ),
+        snp_ids=snp_ids,
+    )
+
+
+def _unique_snp_ids(
+    snps: list[SnpRecord], esi_to_variant: dict[int, tuple[int, bool]]
+) -> list[str]:
+    """Every ESI row's SNP ID, once no two rows on the axis share one.
+
+    A sample-size table names a pair by `(probe_id, snp_id)`, so a SNP ID two
+    stored ESI rows share is a key that cannot say which association it
+    describes. That fails the build rather than giving both the same N.
+    """
+    snp_ids = [snp.snp_id for snp in snps]
+    on_axis = [snp_ids[row] for row in esi_to_variant]
+    if len(set(on_axis)) != len(on_axis):
+        repeated, _count = Counter(on_axis).most_common(1)[0]
+        raise SampleSizeTableError(
+            f"the .esi lists SNP ID {repeated!r} on more than one row that reaches the "
+            "variant axis; a sample-size table keyed by (probe_id, snp_id) cannot say "
+            "which association it describes (ADR 0067)"
+        )
+    return snp_ids
+
+
+def _verify_eaf(axis: _EsiAxis, request: _BesdBuildRequest) -> EafOrientationReport | None:
+    """The one orientation check of the `.esi` frequencies, or `None` when not asked.
+
+    Asked for and absent is a failure, not an empty plane: a build that requested
+    the frequency and quietly stored none would look like a source without one.
+    """
+    if not request.store_esi_eaf:
+        return None
+    if axis.eaf_by_esi is None:
+        raise ValueError(
+            "store_esi_eaf was requested but the .esi reports no usable frequency on any "
+            "row that reaches the variant axis (ADR 0067)"
+        )
+    return verify_esi_orientation(
+        axis.variants,
+        axis.esi_to_variant,
+        axis.eaf_by_esi,
+        eaf_reference=request.eaf_reference,
+        eaf_reference_ancestry=request.eaf_reference_ancestry,
+        allow_unverified=request.allow_unverified_eaf,
     )
 
 
@@ -753,23 +868,31 @@ def _add_empty_analysis(csr: RaggedCSRWriter) -> None:
     )
 
 
+class _ProbeRows(NamedTuple):
+    """One probe's usable BESD rows: parallel lists, in BESD order."""
+
+    variant_index: list[int]
+    z: list[float]
+    se: list[float]
+    esi_row: list[int]
+
+
 def _map_probe_rows(
     raw_snp_idx: np.ndarray,
     betas: np.ndarray,
     ses: np.ndarray,
     esi_to_variant: dict[int, tuple[int, bool]],
-) -> tuple[list[int], list[float], list[float]]:
-    """Map one probe's raw BESD rows onto ``(variant_index, z, se)`` lists.
+) -> _ProbeRows:
+    """Map one probe's raw BESD rows onto ``(variant_index, z, se, esi_row)`` lists.
 
     A row whose ESI index never made the variant axis, or whose statistics
     are unusable (``se <= 0``, a non-finite beta or se), is dropped for that
     Analysis: the store must not carry a z-score the source did not vouch
     for. Rows that survive are oriented — ``z`` flips sign when the stored
-    canonical allele is the flipped one.
+    canonical allele is the flipped one. The ESI row travels with each so its
+    frequency and SNP ID can be joined after the sort (ADR 0067).
     """
-    vi_list: list[int] = []
-    z_list: list[float] = []
-    se_list: list[float] = []
+    rows = _ProbeRows([], [], [], [])
     for esi_idx, beta, se in zip(
         raw_snp_idx.tolist(), betas.tolist(), ses.tolist(), strict=True
     ):
@@ -782,92 +905,253 @@ def _map_probe_rows(
         z = beta / se
         if flipped:
             z = -z
-        vi_list.append(variant_index)
-        z_list.append(z)
-        se_list.append(se)
-    return vi_list, z_list, se_list
+        rows.variant_index.append(variant_index)
+        rows.z.append(z)
+        rows.se.append(se)
+        rows.esi_row.append(int(esi_idx))
+    return rows
 
 
-def _decide_encoding(csr: RaggedCSRWriter, n_analyses: int) -> StoreEncoding:
+def _decide_encoding(csr: RaggedCSRWriter, n_analyses: int, *, n_plane: bool) -> StoreEncoding:
     """One encoding plan per build, decided from what the build holds
-    (ADR 0037, issue #119). This builder stores no frequencies, so this
-    settles on ``eaf: absent`` — stated by the plan rather than left to be
-    inferred from a missing array.
+    (ADR 0037, issue #119).
 
-    That is the builder's choice, not the format's: a `.esi` may carry the
-    effect allele's frequency on every row (eQTLGen's does), `read_esi`
-    parses it, and `resolve-analyses` measures ancestry and orientation from
-    it (issue #282). Storing it as per-association EAF is not implemented.
+    `eaf` is measured from the `.esi` frequencies the CSR carries when the
+    build stores them, and is `absent` -- stated by the plan rather than left to
+    be inferred from a missing array -- otherwise. Every probe at a variant
+    holds the same frequency, so the residual coding's baseline is that
+    frequency and its residuals are zero. Where every association has one, `se`
+    may take the EAF-complete residual coding (ADR 0037 §3) -- but never beside
+    an `n` plane, so the SE fit and its byte measurement, a pass over every
+    cell, are not run for one (ADR 0067).
     """
     eaf_measurements = csr.eaf_measurements()
-    preliminary = StoreEncoding.decide(
-        EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measurements)
-    )
+    se_measurements = None
+    if not n_plane:
+        preliminary = StoreEncoding.decide(
+            EncodingMeasurements(n_analyses=n_analyses, eaf=eaf_measurements)
+        )
+        se_measurements = csr.se_measurements(preliminary)
     return StoreEncoding.decide(
         EncodingMeasurements(
             n_analyses=n_analyses,
             eaf=eaf_measurements,
-            se=csr.se_measurements(preliminary),
+            se=se_measurements,
+            n_plane=n_plane,
         )
     )
 
 
+@dataclass(frozen=True)
+class _ProbeScopes:
+    """What one probe's stored associations carry, for its `analyses.tsv` row."""
+
+    has_eaf: bool
+    has_n: bool
+
+    @classmethod
+    def of(cls, eaf: np.ndarray | None, n: np.ndarray | None) -> _ProbeScopes:
+        """Whether any stored association carries a frequency, and an N."""
+
+        def carries(values: np.ndarray | None) -> bool:
+            return values is not None and bool(np.isfinite(values).any())
+
+        return cls(has_eaf=carries(eaf), has_n=carries(n))
+
+
+def _ingest_probe(
+    csr: RaggedCSRWriter,
+    besd: BESDReader,
+    probe: ProbeRecord,
+    axis: _EsiAxis,
+    sample_sizes: SampleSizeTable | None,
+) -> tuple[_ProbeScopes, bool]:
+    """Add one probe's associations, with their frequency and sample size.
+
+    Returns what the probe carries and whether every one of its BESD rows was
+    filtered out. The table is asked for every probe, in `.epi` order, which is
+    the order it must be grouped in (`SampleSizeTable.sizes_for`).
+    """
+    raw_snp_idx, betas, ses = besd.get_probe_associations(probe.row_idx)
+    sizes = None if sample_sizes is None else sample_sizes.sizes_for(probe.probe_id)
+    rows = _map_probe_rows(raw_snp_idx, betas, ses, axis.esi_to_variant)
+    if not rows.variant_index:
+        _add_empty_analysis(csr)
+        return _ProbeScopes(has_eaf=False, has_n=False), len(raw_snp_idx) > 0
+    # Sort by variant_index for consistent ordering within each analysis.
+    order = np.argsort(rows.variant_index)
+    esi = np.asarray(rows.esi_row, dtype=np.int64)[order]
+    eaf = None if axis.eaf_by_esi is None else axis.eaf_by_esi[esi]
+    n = None if sample_sizes is None else _pair_sample_sizes(esi, axis, sample_sizes, sizes)
+    csr.add_analysis(
+        np.array(rows.variant_index, dtype=np.int32)[order],
+        np.array(rows.z, dtype=np.float32)[order],
+        np.array(rows.se, dtype=np.float32)[order],
+        eaf=eaf,
+        n=n,
+    )
+    return _ProbeScopes.of(eaf, n), False
+
+
+def _pair_sample_sizes(
+    esi: np.ndarray,
+    axis: _EsiAxis,
+    sample_sizes: SampleSizeTable,
+    sizes: dict[str, int] | None,
+) -> np.ndarray:
+    """Each association's table N, NaN for a pair the table does not name.
+
+    Missing, never estimated: a pair the published file omits has no N, and
+    recovering one from `se` and the frequency is the formula ADR 0067 declines.
+    """
+    if axis.snp_ids is None or sizes is None:
+        raise RuntimeError("a sample-size join needs the axis's SNP IDs and the probe's rows")
+    snp_ids = axis.snp_ids
+    n = np.fromiter(
+        (sizes.get(snp_ids[row], math.nan) for row in esi.tolist()),
+        dtype=np.float64,
+        count=len(esi),
+    )
+    sample_sizes.record_matches(len(esi), int(np.isfinite(n).sum()))
+    return n
+
+
 def _ingest_besd(
     prefix: Path,
-    probes: list[ProbeRecord],
-    esi_to_variant: dict[int, tuple[int, bool]],
-    n_variants: int,
+    axis: _EsiAxis,
     staged_path: Path,
-) -> tuple[RaggedCSRWriter, StoreEncoding]:
+    sample_sizes: SampleSizeTable | None,
+) -> tuple[RaggedCSRWriter, StoreEncoding, list[_ProbeScopes]]:
     """Stream the BESD file into a CSR store under ``staged_path``.
 
-    Returns the writer (for association counts) and the encoding plan the
-    flush was performed under. Associations are sorted by variant_index per
-    Analysis (every builder sorts before writing), so readers can resolve
-    ``(variant, analysis)`` pairs with one ``searchsorted`` per Analysis.
+    Returns the writer (for association counts), the encoding plan the flush
+    was performed under, and what each probe's associations carry. Associations
+    are sorted by variant_index per Analysis (every builder sorts before
+    writing), so readers can resolve ``(variant, analysis)`` pairs with one
+    ``searchsorted`` per Analysis.
     """
     print(f"Reading BESD: {prefix}.besd")
-    besd = BESDReader(f"{prefix}.besd", len(probes))
+    besd = BESDReader(f"{prefix}.besd", len(axis.probes))
     print(f"BESD format: SPARSE_FILE_TYPE_{besd.format_type}")
 
-    csr = RaggedCSRWriter(n_variants)
+    csr = RaggedCSRWriter(len(axis.variants))
+    scopes: list[_ProbeScopes] = []
     skipped_probes = 0
-
-    for probe in probes:
-        raw_snp_idx, betas, ses = besd.get_probe_associations(probe.row_idx)
-
-        if len(raw_snp_idx) == 0:
-            _add_empty_analysis(csr)
-            continue
-
-        vi_list, z_list, se_list = _map_probe_rows(
-            raw_snp_idx, betas, ses, esi_to_variant
-        )
-
-        if not vi_list:
-            skipped_probes += 1
-            _add_empty_analysis(csr)
-            continue
-
-        # Sort by variant_index for consistent ordering within each analysis.
-        order = np.argsort(vi_list)
-        csr.add_analysis(
-            np.array(vi_list, dtype=np.int32)[order],
-            np.array(z_list, dtype=np.float32)[order],
-            np.array(se_list, dtype=np.float32)[order],
-        )
-
+    for probe in axis.probes:
+        scope, skipped = _ingest_probe(csr, besd, probe, axis, sample_sizes)
+        scopes.append(scope)
+        skipped_probes += skipped
         if (probe.row_idx + 1) % 1000 == 0:
-            print(f"  Processed {probe.row_idx + 1} / {len(probes)} probes")
+            print(f"  Processed {probe.row_idx + 1} / {len(axis.probes)} probes")
+    _require_a_matching_table(sample_sizes)
 
-    encoding = _decide_encoding(csr, len(probes))
+    encoding = _decide_encoding(csr, len(axis.probes), n_plane=sample_sizes is not None)
     print(f"Flushing zarr CSR ({csr.n_associations:,} associations) ...")
     csr.flush(staged_path, encoding)
-    build_variant_index(staged_path, n_axis=n_variants)
+    build_variant_index(staged_path, n_axis=len(axis.variants))
 
     if skipped_probes:
         print(f"  {skipped_probes} probes had no valid associations after filtering")
-    return csr, encoding
+    return csr, encoding, scopes
+
+
+def _require_a_matching_table(sample_sizes: SampleSizeTable | None) -> None:
+    """A table that gives no stored association an N is the wrong table.
+
+    Its plane would be all-missing, which is indistinguishable from a release
+    whose source genuinely lacks N -- so it fails, rather than writing one.
+    """
+    if sample_sizes is None:
+        return
+    record = sample_sizes.provenance()
+    print(
+        f"Sample sizes: {record['n_rows_matched']:,} of {record['n_rows']:,} table rows "
+        f"matched; {record['n_associations_missing']:,} of {record['n_associations']:,} "
+        "associations have no N"
+    )
+    if record["n_rows_matched"] == 0:
+        raise SampleSizeTableError(
+            f"sample-size table {sample_sizes.path} gives none of the build's "
+            f"{record['n_associations']:,} associations an N; it does not describe "
+            "this file set's (probe_id, snp_id) pairs (ADR 0067)"
+        )
+
+
+def _stamp_probe_scopes(
+    analyses: list[Analysis],
+    scopes: list[_ProbeScopes],
+    axis: _EsiAxis,
+    eaf_report: EafOrientationReport | None,
+) -> tuple[list[Analysis], EafOrientationReport | None]:
+    """Each probe's `eaf_scope`, `sample_size_scope` and orientation evidence.
+
+    Derived from what the build stored, never copied from the manifest (ADR
+    0036 §4): `eaf_scope` is `association` for a probe holding a `.esi`
+    frequency and `absent` otherwise, and stays blank, as it always was, for a
+    `.esi` with none. The one `.esi` orientation outcome is recorded against
+    every probe (`per_probe_report`).
+    """
+    stamped = [
+        _stamped_analysis(analysis, scope, stores_frequencies=axis.eaf_by_esi is not None)
+        for analysis, scope in zip(analyses, scopes, strict=True)
+    ]
+    if eaf_report is None:
+        return stamped, None
+    report = per_probe_report(
+        eaf_report, [a.analysis_id for a in stamped], [scope.has_eaf for scope in scopes]
+    )
+    return apply_orientation_evidence(stamped, report), report
+
+
+def _stamped_analysis(
+    analysis: Analysis, scope: _ProbeScopes, *, stores_frequencies: bool
+) -> Analysis:
+    """One probe's derived scopes, refusing a manifest that contradicts its N.
+
+    A probe holding per-association N is `variant_level` by construction. A
+    manifest that declared it `analysis_level` said one N describes every
+    association, which the stored plane contradicts, so the build stops rather
+    than overwrite the claim or store the contradiction (ADR 0067).
+    """
+    if stores_frequencies:
+        analysis = replace(
+            analysis,
+            eaf_scope=EafScope.ASSOCIATION.value if scope.has_eaf else EafScope.ABSENT.value,
+        )
+    if scope.has_n:
+        declared = analysis.sample_size_scope
+        if declared not in ("", SampleSizeScope.VARIANT_LEVEL.value):
+            raise ValueError(
+                f"analysis {analysis.analysis_id!r} declares sample_size_scope="
+                f"{declared!r}, but the sample-size table gives it a per-association N; "
+                "per-association sample sizes are variant_level (ADR 0067)"
+            )
+        analysis = replace(analysis, sample_size_scope=SampleSizeScope.VARIANT_LEVEL.value)
+    return analysis
+
+
+def _annotation_provenance(
+    eaf_report: EafOrientationReport | None,
+    request: _BesdBuildRequest,
+    sample_sizes: SampleSizeTable | None,
+) -> dict[str, object]:
+    """The provenance blocks the two per-association annotations add, if any.
+
+    Empty for a build given neither, so its manifest is the one it wrote
+    before either existed. The orientation block says its evidence is one
+    file-level measurement, which a per-Analysis block from another builder
+    is not (ADR 0067).
+    """
+    blocks: dict[str, object] = {}
+    if eaf_report is not None:
+        record: dict[str, Any] = eaf_report.provenance(
+            allow_unverified=request.allow_unverified_eaf
+        )
+        record["scope"] = "source_file"
+        blocks["eaf_orientation"] = record
+    if sample_sizes is not None:
+        blocks["sample_size_table"] = sample_sizes.provenance()
+    return blocks
 
 
 def _write_manifest(
@@ -884,6 +1168,7 @@ def _write_manifest(
     source_build: str = "hg38",
     lift: dict[str, object] | None = None,
     collisions: _VariantCollisions | None = None,
+    annotations: dict[str, object] | None = None,
 ) -> None:
     provenance: dict[str, object] = {
         "builder": "opengwasdb.v0.1_ragged_observed_besd",
@@ -892,6 +1177,7 @@ def _write_manifest(
         "n_variants": n_variants,
         "n_analyses": n_analyses,
         "n_associations": n_associations,
+        **(annotations or {}),
         "ragged": ragged_provenance(staged.path, encoding),
     }
     if lift is not None:

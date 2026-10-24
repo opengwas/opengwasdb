@@ -16,7 +16,8 @@ This module is that index's one implementation:
   ordered so an interrupted run leaves either no index or a complete one.
 
 Nothing here decodes or re-encodes a statistic: the index copies the stored
-codes (`z`, `se`, `eaf`, `imputed`) and re-keys only what is keyed on the flat
+codes (`z`, `se`, `eaf`, `imputed`, and `n` where the component carries
+per-association sample sizes, ADR 0067) and re-keys only what is keyed on the flat
 CSR ordinal -- `analysis_index` (derived from the source `offsets`) and the
 three exception/overflow tables.  The per-variant `eaf_baseline`, the
 `eaf_reference` and the `se_coefficients` are shared, never duplicated
@@ -91,7 +92,13 @@ _PAYLOAD_FIELDS: dict[str, str] = {
     "se": "se",
     "eaf": "eaf",
     "imputed": "imp",
+    "n": "n",
 }
+
+#: The cell-keyed arrays a component may carry beside `z` and `se`, each copied
+#: only when present.  `n` has no exception table to re-key: its codes are the
+#: values (ADR 0067).
+_OPTIONAL_CELL_ARRAYS = ("eaf", "imputed", "n")
 
 
 @dataclass(frozen=True)
@@ -151,7 +158,7 @@ def _read_offsets(source: Any) -> np.ndarray:
 def _cell_arrays(source: Any) -> list[str]:
     """The cell-keyed arrays to duplicate, in creation order, present ones only."""
     names = ["analysis_index"]
-    names.extend(name for name in ("z", "se", "eaf", "imputed") if name in source)
+    names.extend(name for name in ("z", "se", *_OPTIONAL_CELL_ARRAYS) if name in source)
     return names
 
 
@@ -176,6 +183,8 @@ def _record_dtype(source: Any) -> np.dtype:
         fields.append(("eaf", np.dtype(source["eaf"].dtype)))
     if _has_imputed(source):
         fields.append(("imp", "u1"))
+    if "n" in source:
+        fields.append(("n", np.dtype(source["n"].dtype)))
     return np.dtype(fields, align=False)
 
 
@@ -303,6 +312,8 @@ def _partition_segment(
         payload["eaf"] = np.asarray(source["eaf"][start:stop])
     if _has_imputed(source):
         payload["imp"] = np.asarray(source["imputed"][start:stop])
+    if "n" in source:
+        payload["n"] = np.asarray(source["n"][start:stop])
     for b in np.unique(band):
         mask = band == b
         chunk = np.empty(int(mask.sum()), dtype=record)
@@ -359,7 +370,7 @@ def _write_index_arrays(source: Any, index: Any, by_offsets: np.ndarray, n_rows:
         fill_value=0,
         compressor=compressor,
     )
-    for name in ("z", "se", "eaf", "imputed"):
+    for name in ("z", "se", *_OPTIONAL_CELL_ARRAYS):
         if name in source:
             store_arrays.create_array(
                 index,
@@ -582,6 +593,11 @@ def with_variant_index(store_path: str | Path, ragged: dict[str, Any]) -> dict[s
     return ragged if block is None else {**ragged, "by_variant": block}
 
 
+def _member(group: Any, name: str) -> Any:
+    """An optional array of `group`, or `None` when the group does not carry it."""
+    return group[name] if name in group else None
+
+
 class ByVariantReader:
     """Read a Ragged component's by-variant index (ADR 0060).
 
@@ -618,13 +634,12 @@ class ByVariantReader:
         self._analysis_index = self._index["analysis_index"]
         self._z = self._index["z"]
         self._se = self._index["se"]
-        self._eaf = self._index["eaf"] if "eaf" in self._index else None
-        self._imputed = self._index["imputed"] if "imputed" in self._index else None
-        self._baseline = self._ragged[EAF_BASELINE] if EAF_BASELINE in self._ragged else None
-        self._reference = self._ragged[EAF_REFERENCE] if EAF_REFERENCE in self._ragged else None
-        self._coefficients = (
-            self._ragged[SE_COEFFICIENTS] if SE_COEFFICIENTS in self._ragged else None
-        )
+        self._eaf = _member(self._index, "eaf")
+        self._imputed = _member(self._index, "imputed")
+        self._n = _member(self._index, "n")
+        self._baseline = _member(self._ragged, EAF_BASELINE)
+        self._reference = _member(self._ragged, EAF_REFERENCE)
+        self._coefficients = _member(self._ragged, SE_COEFFICIENTS)
         self._codec_cache: StoreCodec | None = None
 
     def _require_arrays(self) -> None:
@@ -654,7 +669,7 @@ class ByVariantReader:
                 "variant index carries no imputed mask; without it an indexed read "
                 "would read every imputed cell as observed (spec §9, §15)"
             )
-        for name in ("eaf", "imputed"):
+        for name in _OPTIONAL_CELL_ARRAYS:
             if (name in self._index) != (name in self._ragged):
                 raise ValueError(
                     f"{self._index.name}/{name} is present on one side only; the "
@@ -758,7 +773,8 @@ class ByVariantReader:
 
         Returns the six result arrays' raw parts: `variant_index`,
         `analysis_index`, decoded `z`/`se`/`eaf` and the `imputed` mask (all
-        zeros on an observed-only component).
+        zeros on an observed-only component) -- and decoded `n` when the
+        component carries per-association sample sizes (ADR 0067).
         """
         start, end = int(start), int(end)
         empty = {
@@ -769,6 +785,8 @@ class ByVariantReader:
             "eaf": np.empty(0, dtype="float32"),
             "imputed": np.empty(0, dtype="uint8"),
         }
+        if self._n is not None:
+            empty["n"] = np.empty(0, dtype="float64")
         if end <= start:
             return empty
         variants = self._row_variants(first_variant, last_variant, start, end)
@@ -779,7 +797,7 @@ class ByVariantReader:
         z = self._codec.decode_z(
             np.asarray(self._z[start:end]), positions=positions_flat(start)
         )
-        return {
+        block = {
             "variant_index": variants.astype("int32"),
             "analysis_index": analysis_index,
             "z": z,
@@ -787,6 +805,9 @@ class ByVariantReader:
             "eaf": eaf,
             "imputed": imputed,
         }
+        if self._n is not None:
+            block["n"] = self._codec.decode_n(np.asarray(self._n[start:end]))
+        return block
 
     def _row_variants(self, first: int, last: int, start: int, end: int) -> np.ndarray:
         """The variant of every row in `[start, end)`, from the offsets.
