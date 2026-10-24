@@ -297,6 +297,41 @@ def compressor_of(array: Any) -> Any:
     return codecs[0]
 
 
+def blosc_like(codec: BloscCodec, *, typesize: int) -> Blosc:
+    """A numcodecs `Blosc` matching a zarr `BloscCodec`, at an explicit `typesize`.
+
+    The re-encode dry run re-compresses decoded shards at the stored and the
+    corrected element sizes to estimate the byte saving; a zarr `BloscCodec`
+    has no `encode` for a bare buffer, so the estimate needs the numcodecs
+    spelling with the same cname/clevel/shuffle and a fixed `typesize`.
+    """
+    return Blosc(
+        cname=str(codec.cname),
+        clevel=int(codec.clevel),
+        shuffle=_SHUFFLE_CODES[str(codec.shuffle)],
+        typesize=typesize,
+        blocksize=int(codec.blocksize),
+    )
+
+
+def sharded_compressor_like(codec: BloscCodec, *, typesize: int) -> BloscCodec:
+    """A v3 `BloscCodec` matching `codec`, with only `typesize` changed.
+
+    The retrospective re-encode writes a fresh array whose codec differs from
+    the source's in exactly one field: `typesize` moves to the stored dtype's
+    item size.  cname, clevel and shuffle are the source's own, so a Store that
+    was written with a non-default compressor is preserved rather than silently
+    normalised to the seam defaults.
+    """
+    return BloscCodec(
+        cname=codec.cname,
+        clevel=int(codec.clevel),
+        shuffle=codec.shuffle,
+        typesize=typesize,
+        blocksize=int(codec.blocksize),
+    )
+
+
 #: `create_array`'s `compressor=` parameter would otherwise shadow the function
 #: inside that function's body.
 _new_compressor = compressor
