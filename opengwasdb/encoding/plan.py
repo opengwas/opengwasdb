@@ -16,8 +16,9 @@ Four properties, each load-bearing:
    meeting an encoding it does not implement rejects the release rather than
    guessing.
 
-Scope note: `z`, `se` and `eaf`. Format 3.0 adds #118's residual SE kind; older
-plans continue to declare the unchanged float16 representation.
+Scope note: `z`, `se`, `eaf` and the optional `n` (ADR 0067). Format 3.0 adds
+#118's residual SE kind; older plans continue to declare the unchanged float16
+representation.
 """
 
 from __future__ import annotations
@@ -212,6 +213,48 @@ SE_CODE_MIN = -126
 SE_CODE_MAX = 127
 
 
+#: `n` is missing for this association: the build's sample-size input names no
+#: N for the pair. Decodes to NaN. The top code, not 0, because absence and zero
+#: are different and 0 is an invalid sample size rather than a missing one
+#: (ADR 0067). Every code from 1 to `N_MAX` is that many participants.
+N_MISSING = 2**32 - 1
+N_MAX = N_MISSING - 1
+
+
+@dataclass(frozen=True)
+class NEncoding:
+    """How the optional per-association sample-size plane is stored (ADR 0067).
+
+    One kind, `uint32`, chosen by measurement on eQTLGen's pilot-10: its 86,373
+    published N (99..31,684, 14,936 distinct) cost 1.730 B/cell compressed,
+    against 1.731 for `uint16` -- bitshuffle already discards the zero high
+    bytes -- and 1.889 for `float32` with NaN. A sample size is a count, so an
+    integer plane holds every value exactly, which `float32` does only below
+    2**24. There is no "absent" kind: a release without the plane declares no
+    `n` at all, which keeps such a release's manifest byte-identical to one
+    written before the plane existed.
+    """
+
+    kind: str = "uint32"
+
+    @property
+    def dtype(self) -> str:
+        return "uint32"
+
+    def to_manifest(self) -> dict[str, Any]:
+        return {"kind": self.kind}
+
+    @classmethod
+    def from_manifest(cls, data: dict[str, Any]) -> NEncoding:
+        kind = str(data["kind"])
+        if kind == "uint32":
+            return cls(kind=kind)
+        raise UnsupportedEncoding(
+            f"n encoding kind {kind!r} is not implemented by this build; "
+            "this release cannot be read (spec §21)"
+        )
+
+
 class EafBaselineError(Exception):
     """A baseline array is missing, or does not describe the cells given."""
 
@@ -353,6 +396,10 @@ class EncodingMeasurements:
     n_analyses: int
     eaf: EafMeasurements | None = None
     se: SeMeasurements | None = None
+    #: Whether the build was given a per-association sample size. An opt-in
+    #: input rather than a measured property, so a build without one writes
+    #: exactly the release it wrote before the plane existed (ADR 0067).
+    n_plane: bool = False
 
 
 @dataclass(frozen=True)
@@ -374,6 +421,9 @@ class StoreEncoding:
     se: SeEncoding
     eaf: EafEncoding = EafEncoding(kind="absent")
     version: int = ENCODING_VERSION
+    #: The optional per-association sample-size plane; `None` when the release
+    #: has none, and then omitted from the manifest entirely (ADR 0067).
+    n: NEncoding | None = None
 
     @classmethod
     def decide(cls, measurements: EncodingMeasurements) -> StoreEncoding:
@@ -386,11 +436,14 @@ class StoreEncoding:
         gate, otherwise the entire plane remains `float16`.
         R3..R5 -- `eaf` is decided by `_decide_eaf` below, from measured
         residual spread and measured bytes.
+        R6 -- `n` is `uint32` when the build supplies per-association sample
+        sizes and absent otherwise (ADR 0067).
         """
         return cls(
             z=ZEncoding(kind="int16_fixed", scale=DEFAULT_Z_SCALE),
             se=_decide_se(measurements.se),
             eaf=_decide_eaf(measurements.eaf),
+            n=NEncoding() if measurements.n_plane else None,
         )
 
     def with_eaf_reference(self, present: bool) -> StoreEncoding:
@@ -417,15 +470,19 @@ class StoreEncoding:
                 reference=present,
             ),
             version=self.version,
+            n=self.n,
         )
 
     def to_manifest(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "version": self.version,
             "z": self.z.to_manifest(),
             "se": self.se.to_manifest(),
             "eaf": self.eaf.to_manifest(),
         }
+        if self.n is not None:
+            payload["n"] = self.n.to_manifest()
+        return payload
 
     @classmethod
     def from_manifest(cls, data: dict[str, Any]) -> StoreEncoding:
@@ -462,6 +519,10 @@ class StoreEncoding:
             se=SeEncoding.from_manifest(data["se"]),
             eaf=EafEncoding.from_manifest(data["eaf"]),
             version=version,
+            # Optional, unlike `eaf`: a block without `n` is every release
+            # written before the plane existed, and every release since that
+            # was given no sample-size input (ADR 0067).
+            n=NEncoding.from_manifest(data["n"]) if "n" in data else None,
         )
 
 

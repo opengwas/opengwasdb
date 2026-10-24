@@ -1,5 +1,12 @@
 # Resolve BESD probes from one per-file `.esi` measurement
 
+> **Amended by [ADR 0067](0067-per-association-sample-size-and-besd-allele-frequency.md)**
+> (issue #302). The consequence "the builder still stores no EAF" no longer
+> holds: `build-ragged-besd` now stores the `.esi` frequency per association,
+> checked once against a reference as this ADR's resolver measures it once, and
+> can store each pair's sample size from a `--sample-size-table`. The
+> resolution decisions below are unchanged.
+
 Every Analysis is resolved; there is no declared-only path (stores ADR 0036).
 A BESD file set is the one Source Format with many Analyses in one source:
 eQTLGen's cis-eQTL release is one `.esi` of 8,932,843 variants, one `.epi` of
@@ -159,6 +166,7 @@ drops the measurements, and their arrays, when the run's probes are done.
   each probe's rows.
 - **The builder still stores no EAF.** `build-ragged-besd` declares `eaf:
   absent`; storing the `.esi` frequency per association is separate work.
+  *(Since ADR 0067 it does store it.)*
 - **The builder and this resolver now share one lift (issue #284).**
   `build_liftover_lookup` projects a lifted variant's alleles onto the chain
   block's strand through the same helper `oriented_variant` uses

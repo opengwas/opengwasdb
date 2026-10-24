@@ -23,7 +23,9 @@ rather than the variant table, so a store that carries none yields `.` per
 cell rather than paying for a lookup. The
 analysis side comes from `analyses.all()`, already fully loaded at
 store-open (ADR 0030, no extra I/O). Rows are yielded lazily, so the CLI's
-CSV writer streams rather than materialising the whole resolved table.
+CSV writer streams rather than materialising the whole resolved table. `n`
+rides the row the same way, but only from a result that carries it -- a Ragged
+release with a per-association sample-size plane (ADR 0067).
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ import numpy as np
 
 from opengwasdb.index import AnalysesIndex
 from opengwasdb.stats import log10_p_two_sided
-from opengwasdb.variants import VariantAxis
+from opengwasdb.variants import VariantAxis, VariantRecord
 
 
 def resolve_rows(
@@ -69,41 +71,60 @@ def resolve_rows(
 
     for i in range(len(variant_index)):
         vi = int(variant_index[i])
-        if identity is not None:
-            chromosome = identity["chromosome"][i]
-            position = int(identity["position"][i])
-            effect_allele = identity["effect_allele"][i]
-            other_allele = identity["other_allele"][i]
-            alid = identity["alid"][i]
-        else:
-            assert variant_rows is not None
-            variant = variant_rows[vi]
-            chromosome = variant.chromosome
-            position = variant.position
-            effect_allele = variant.effect_allele
-            other_allele = variant.other_allele
-            alid = variant.alid
-
         analysis = analysis_rows[int(result["analysis_index"][i])]
         row: dict[str, object] = {
             "analysis_id": analysis["analysis_id"],
             "analysis_label": analysis.get("analysis_label", ""),
-            "chromosome": chromosome,
-            "position": position,
-            "alid": alid,
-            "effect_allele": effect_allele,
-            "other_allele": other_allele,
+            **_variant_identity(identity, variant_rows, i, vi),
             "z": float(result["z"][i]),
             "se": float(result["se"][i]),
             "log10_p": float(log10_p[i]),
             "eaf": _eaf_or_missing(result, i),
             "association_status": str(result["association_status"][i]),
         }
+        if "n" in result:
+            row["n"] = _n_or_missing(result["n"], i)
         if include_variant_info:
             assert variant_rows is not None
             rsid_record = variant_rows.get(vi)
             row["rsid"] = (rsid_record.rsid or ".") if rsid_record is not None else "."
         yield row
+
+
+def _variant_identity(
+    identity: dict[str, np.ndarray] | None,
+    variant_rows: dict[int, VariantRecord] | None,
+    i: int,
+    vi: int,
+) -> dict[str, object]:
+    """One row's chromosome, position, ALID and alleles, in the row's column order.
+
+    From the ALID search index when it could answer (`identity`), otherwise from
+    the Store Variant Table rows `resolve_rows` already fetched.
+    """
+    if identity is not None:
+        return {
+            "chromosome": identity["chromosome"][i],
+            "position": int(identity["position"][i]),
+            "alid": identity["alid"][i],
+            "effect_allele": identity["effect_allele"][i],
+            "other_allele": identity["other_allele"][i],
+        }
+    assert variant_rows is not None
+    variant = variant_rows[vi]
+    return {
+        "chromosome": variant.chromosome,
+        "position": variant.position,
+        "alid": variant.alid,
+        "effect_allele": variant.effect_allele,
+        "other_allele": variant.other_allele,
+    }
+
+
+def _n_or_missing(n: np.ndarray, i: int) -> object:
+    """This association's stored sample size as an `int`, or "." where it has none."""
+    value = float(n[i])
+    return "." if not np.isfinite(value) else int(value)
 
 
 def _eaf_or_missing(result: dict[str, np.ndarray], i: int) -> object:

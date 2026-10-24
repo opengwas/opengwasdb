@@ -46,6 +46,22 @@ def write_esi(path: Path, variants: list[EsiRow]) -> None:
             fh.write("\t".join(str(cell) for cell in cells) + "\n")
 
 
+def write_sample_size_table(path: Path, rows: list[tuple[str, str, str]]) -> None:
+    """A `build-ragged-besd --sample-size-table` input: `probe_id`, `snp_id`, `n`.
+
+    Gzipped when `path` ends in `.gz`. Rows are written in the order given, so a
+    test states the grouping it means to exercise (ADR 0067).
+    """
+    import gzip
+
+    text = "probe_id\tsnp_id\tn\n" + "".join("\t".join(row) + "\n" for row in rows)
+    if path.name.endswith(".gz"):
+        with gzip.open(path, "wt", encoding="utf-8") as fh:
+            fh.write(text)
+    else:
+        path.write_text(text, encoding="utf-8")
+
+
 def write_epi(path: Path, probes: list[dict]) -> None:
     with open(path, "w") as fh:
         for p in probes:

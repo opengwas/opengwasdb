@@ -80,6 +80,7 @@ from opengwasdb.store.open import (
     open_store,
     zarr_format_for_version,
 )
+from opengwasdb.validation.sample_size import validate_n_plan, validate_ragged_n
 from opengwasdb.variants import (
     VariantAxis,
     VariantRecord,
@@ -1359,8 +1360,8 @@ def _validate_index_analyses(
 def _validate_variant_index_members(
     index: Any, root: Any, errors: list[str], label: str
 ) -> None:
-    """`eaf` and `imputed` must be present on exactly both sides or neither."""
-    for name in ("eaf", "imputed"):
+    """`eaf`, `imputed` and `n` must be present on exactly both sides or neither."""
+    for name in ("eaf", "imputed", "n"):
         if (name in index) != (name in root):
             errors.append(
                 f"{label}/{_BY_VARIANT_GROUP}/{name} is present on one side only; the "
@@ -1452,14 +1453,16 @@ def _check_cell_codes(
     b_imp: Any,
     tag: str,
     src_idx: int,
+    b_n: Any = None,
 ) -> str | None:
     """Compare raw stored codes for equality, returning an error string on mismatch."""
     if _code_differs(b_z, root["z"][src_idx]):
         return f"{tag} z code {b_z!r} != source {root['z'][src_idx]!r}"
     if _code_differs(b_se, root["se"][src_idx]):
         return f"{tag} se code {b_se!r} != source {root['se'][src_idx]!r}"
-    if b_eaf is not None and _code_differs(b_eaf, root["eaf"][src_idx]):
-        return f"{tag} eaf code {b_eaf!r} != source {root['eaf'][src_idx]!r}"
+    for name, code in (("eaf", b_eaf), ("n", b_n)):
+        if code is not None and _code_differs(code, root[name][src_idx]):
+            return f"{tag} {name} code {code!r} != source {root[name][src_idx]!r}"
     if b_imp is not None and b_imp != root["imputed"][src_idx]:
         return f"{tag} imputed {b_imp!r} != source {root['imputed'][src_idx]!r}"
     return None
@@ -1485,7 +1488,7 @@ def _validate_one_cell(
     label: str,
     v: int,
     a: int,
-    codes: tuple[Any, Any, Any, Any],
+    codes: tuple[Any, Any, Any, Any, Any],
     ordinal: int,
 ) -> str | None:
     cs, ce = int(offsets[a]), int(offsets[a + 1])
@@ -1495,8 +1498,8 @@ def _validate_one_cell(
         return err
     src_pos = cs + pos
     tag = f"{label}/{_BY_VARIANT_GROUP}: (variant={v}, analysis={a})"
-    b_z, b_se, b_eaf, b_imp = codes
-    err = _check_cell_codes(root, b_z, b_se, b_eaf, b_imp, tag, src_pos)
+    b_z, b_se, b_eaf, b_imp, b_n = codes
+    err = _check_cell_codes(root, b_z, b_se, b_eaf, b_imp, tag, src_pos, b_n)
     if err is not None:
         return err
     return _check_cell_exceptions(root, index, encoding, b_z, b_se, b_eaf, tag, ordinal, src_pos)
@@ -1504,12 +1507,13 @@ def _validate_one_cell(
 
 def _load_optional_columns(
     root: Any, index: Any, s: int, e: int
-) -> tuple[np.ndarray | None, np.ndarray | None]:
-    has_eaf = "eaf" in index and "eaf" in root
-    has_imp = "imputed" in index and "imputed" in root
-    b_eaf = np.asarray(index["eaf"][s:e]) if has_eaf else None
-    b_imp = np.asarray(index["imputed"][s:e]) if has_imp else None
-    return b_eaf, b_imp
+) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+    """`eaf`, `imputed` and `n` for index rows `[s, e)`, each `None` unless both sides hold it."""
+
+    def column(name: str) -> np.ndarray | None:
+        return np.asarray(index[name][s:e]) if name in index and name in root else None
+
+    return column("eaf"), column("imputed"), column("n")
 
 
 def _cell_codes_tuple(
@@ -1518,10 +1522,12 @@ def _cell_codes_tuple(
     b_eaf: np.ndarray | None,
     b_imp: np.ndarray | None,
     i: int,
-) -> tuple[Any, Any, Any, Any]:
+    b_n: np.ndarray | None = None,
+) -> tuple[Any, Any, Any, Any, Any]:
     eaf_val = b_eaf[i] if b_eaf is not None else None
     imp_val = b_imp[i] if b_imp is not None else None
-    return (b_z[i], b_se[i], eaf_val, imp_val)
+    n_val = b_n[i] if b_n is not None else None
+    return (b_z[i], b_se[i], eaf_val, imp_val, n_val)
 
 
 def _validate_variant_cells(
@@ -1537,9 +1543,9 @@ def _validate_variant_cells(
     s, e = int(by_offsets[v]), int(by_offsets[v + 1])
     b_analyses = np.asarray(index["analysis_index"][s:e], dtype=np.int32)
     b_z, b_se = np.asarray(index["z"][s:e]), np.asarray(index["se"][s:e])
-    b_eaf, b_imp = _load_optional_columns(root, index, s, e)
+    b_eaf, b_imp, b_n = _load_optional_columns(root, index, s, e)
     for i, a_val in enumerate(b_analyses):
-        codes = _cell_codes_tuple(b_z, b_se, b_eaf, b_imp, i)
+        codes = _cell_codes_tuple(b_z, b_se, b_eaf, b_imp, i, b_n)
         err = _validate_one_cell(
             root, index, offsets, encoding, label, v, int(a_val), codes, s + i
         )
@@ -1743,6 +1749,7 @@ def _validate_ragged_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
         if not _validate_ragged_csr_values(root, store.manifest.encoding, n_assoc, errors):
             return ValidationResult(errors=errors)
         _validate_ragged_analyses(store, n_analyses_csr, errors)
+        validate_ragged_n(store, root, store.manifest.encoding, errors)
         _validate_ragged_downstream_seams(store, ragged_path, n_assoc, n_analyses_csr, errors)
     except Exception as exc:  # noqa: BLE001
         errors.append(f"validation failed: {exc}")
@@ -3146,6 +3153,7 @@ def _validate_encoding_plan(
             )
     _validate_per_variant_chunking(group, errors, label=label)
     _validate_eaf_plan(group, encoding, errors, label=label)
+    validate_n_plan(group, encoding, errors, label=label)
     _validate_se_plan(group, encoding, errors, label=label)
     if errors or "z" not in group:
         return
