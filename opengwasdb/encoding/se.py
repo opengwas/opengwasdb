@@ -37,7 +37,6 @@ from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
 from opengwasdb.store.arrays import (
     ArrayRole,
     compressor,
-    compressor_of,
     create_array,
     move_in_group,
 )
@@ -690,10 +689,13 @@ def _empty_exception_arrays(
 
     Sized from the rewrite's codes-only count pass rather than grown: the
     rewrite visits row chunks in order, so the exceptions arrive already sorted
-    and can be written straight into their final slots.  `role` names the
-    component's table policy explicitly; a Ragged CSR component opened directly
-    at `data.zarr/ragged` reports `path == ""`, so the caller that knows its
-    component must say so (#247 review round 1).
+    and can be written straight into their final slots.  `compressor` must be a
+    fresh seam codec, not a codec read off the float32 scratch plane: `create_array`
+    resolves its Blosc `typesize` per array, so the `int64` index and `float32`
+    value each get their own itemsize rather than the scratch plane's (issue #326).
+    `role` names the component's table policy explicitly; a Ragged CSR component
+    opened directly at `data.zarr/ragged` reports `path == ""`, so the caller that
+    knows its component must say so (#247 review round 1).
     """
 
     def one(name: str, dtype: str) -> Any:
@@ -922,13 +924,14 @@ def _rewrite_arrays(
 ) -> tuple[Any, Any, Any, Any]:
     """The `int8` pending plane and the two exception tables the rewrite fills.
 
-    `compressor_of(source)` is the source plane's own codec, so the plane and
-    side tables that replace it are stored as the plane they replace (the
-    manifest publishes one compressor configuration).  The exception tables are
-    allocated to the exact count the codes-only pass produced, which is what lets
+    The plane and side tables that replace the float32 scratch plane are written
+    with the seam's one compressor configuration, resolved afresh for each
+    array's own dtype so a Blosc `typesize` never inherits the scratch plane's
+    float32 itemsize (issue #326).  The exception tables are allocated to the
+    exact count the codes-only pass produced, which is what lets
     `_write_exception_tables` write each once.
     """
-    compressor = compressor_of(source)
+    seam = compressor()
     pending = create_array(
         group,
         "se_pending",
@@ -936,11 +939,11 @@ def _rewrite_arrays(
         shape=source.shape,
         dtype="int8",
         fill_value=SE_MISSING,
-        compressor=compressor,
+        compressor=seam,
         hint=source.chunks,
     )
-    exception_index, exception_value = _empty_exception_arrays(group, exception_count, compressor)
-    return pending, exception_index, exception_value, compressor
+    exception_index, exception_value = _empty_exception_arrays(group, exception_count, seam)
+    return pending, exception_index, exception_value, seam
 
 
 def _rewrite_dense(
@@ -1639,7 +1642,7 @@ def _narrow_dense_se_to_float16(group: Any, timer: PhaseTimer | None = None) -> 
         shape=source.shape,
         dtype="float16",
         fill_value=np.nan,
-        compressor=compressor_of(source),
+        compressor=compressor(),
         hint=source.chunks,
     )
     started = time.monotonic()
