@@ -56,7 +56,7 @@ from opengwasdb.store.arrays import (
     create_array,
     inner_chunk_of,
     role_for_array_path,
-    sharded_compressor,
+    sharded_compressor_like,
 )
 from opengwasdb.store.swap import recover_interrupted_swap, swap_staged
 
@@ -185,12 +185,24 @@ def _slices(
     )
 
 
+def _staged_compressor(source: Any) -> BloscCodec:
+    """The codec a re-encoded copy is written with: the source's, typesize fixed.
+
+    The retrospective re-encode changes exactly one codec field -- ``typesize``
+    moves to the stored dtype's item size.  cname, clevel and shuffle are the
+    source's own, so a Store written with a non-default compressor keeps it
+    rather than being silently normalised to the seam defaults.
+    """
+    codec = _single_blosc_codec(source)
+    return sharded_compressor_like(codec, typesize=np.dtype(source.dtype).itemsize)
+
+
 def _stage_reencoded(group: Any, source: Any, temporary: str) -> Any:
     """Create `temporary` beside `source` and copy every shard, decoded, into it.
 
-    The new array is created through the seam with the tunable compressor, so
-    its Blosc ``typesize`` resolves to the target dtype's item size rather than
-    inheriting the source's resolved codec.
+    The new array is written with the source's own Blosc configuration except
+    that `typesize` is the target dtype's item size, so the re-encode changes
+    exactly the codec field the defect got wrong and nothing else.
     """
     role = role_for_array_path(source.path)
     if role is None:
@@ -204,7 +216,7 @@ def _stage_reencoded(group: Any, source: Any, temporary: str) -> Any:
         shape=source.shape,
         dtype=source.dtype,
         fill_value=source.fill_value,
-        compressor=sharded_compressor(),
+        compressor=_staged_compressor(source),
         inner_chunk=inner_chunk_of(source),
         shards=tuple(int(size) for size in source.shards),
         filters=source.filters,
@@ -262,6 +274,22 @@ def _verify_reencoded(source: Any, target: Any) -> int:
 def _reencode_names(name: str) -> tuple[str, str]:
     """The staged copy's name and the original's name while they are swapped."""
     return f".{name}.reencoding", f".{name}.old"
+
+
+def _refuse_plan_leftovers(group: Any, name: str, label: str) -> None:
+    """Refuse a read-only plan while an interrupted swap's artifacts remain.
+
+    Planning must not settle a half-done swap the way `reencode_se_codecs`
+    does, and returning a plan that omits an array hidden under a backup name
+    would be silently incomplete.  Any staged copy or backup is reported.
+    """
+    temporary, backup = _reencode_names(name)
+    leftovers = [entry for entry in (temporary, backup) if entry in group]
+    if leftovers:
+        raise SeReencodeError(
+            f"{label}/{name}: found {', '.join(leftovers)}; an interrupted re-encode "
+            "must be settled by reencode_se_codecs before planning"
+        )
 
 
 def _reencode_array(group: Any, name: str, label: str) -> SeReencodeResult | None:
@@ -389,10 +417,13 @@ def plan_se_reencode(
     that needs nothing yields an empty list.  The estimated saving is a
     reproducible extrapolation from at most `max_shards` decoded shards.
     """
+    if max_shards < 1:
+        raise SeReencodeError(f"max_shards must be >= 1, got {max_shards}")
     store = open_store(store_path)
     plans: list[SeReencodePlan] = []
     for label, group in _dense_groups(store, "r"):
         for name in _TARGET_ARRAYS:
+            _refuse_plan_leftovers(group, name, label)
             if name not in group:
                 continue
             array = group[name]

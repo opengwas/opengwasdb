@@ -314,6 +314,24 @@ def blosc_like(codec: BloscCodec, *, typesize: int) -> Blosc:
     )
 
 
+def sharded_compressor_like(codec: BloscCodec, *, typesize: int) -> BloscCodec:
+    """A v3 `BloscCodec` matching `codec`, with only `typesize` changed.
+
+    The retrospective re-encode writes a fresh array whose codec differs from
+    the source's in exactly one field: `typesize` moves to the stored dtype's
+    item size.  cname, clevel and shuffle are the source's own, so a Store that
+    was written with a non-default compressor is preserved rather than silently
+    normalised to the seam defaults.
+    """
+    return BloscCodec(
+        cname=codec.cname,
+        clevel=int(codec.clevel),
+        shuffle=codec.shuffle,
+        typesize=typesize,
+        blocksize=int(codec.blocksize),
+    )
+
+
 #: `create_array`'s `compressor=` parameter would otherwise shadow the function
 #: inside that function's body.
 _new_compressor = compressor

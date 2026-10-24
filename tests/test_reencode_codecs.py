@@ -34,13 +34,13 @@ SE_TEMPORARY = ".se.reencoding"
 SE_BACKUP = ".se.old"
 
 
-def _write_manifest(tmp_path: Path) -> None:
-    """A minimal 0.2.0 Dense manifest, so `open_store` reads the fixture."""
+def _write_manifest(tmp_path: Path, *, primary_layout: str = "dense") -> None:
+    """A minimal 0.2.0 manifest, so `open_store` reads the fixture."""
     manifest = {
         "store_id": "example",
         "release_id": "observed-1",
         "format_version": "0.2.0",
-        "primary_layout": "dense",
+        "primary_layout": primary_layout,
         "association_coverage": "gwas",
         "completion_state": "observed_only",
         "reference_assembly": "GRCh37",
@@ -59,8 +59,15 @@ def _buggy_codec(typesize: int) -> BloscCodec:
     return BloscCodec(cname="zstd", clevel=3, shuffle="bitshuffle", typesize=typesize)
 
 
-def make_store_needing_se_reencode(tmp_path: Path) -> tuple[Path, np.ndarray, np.ndarray]:
-    """A Dense fixture with a buggy `se`/`se_exception_index` and a correct `z`."""
+def _non_default_codec(typesize: int) -> BloscCodec:
+    """A non-seam Blosc config with a fixed wrong `typesize` (fix 4)."""
+    return BloscCodec(cname="lz4", clevel=5, shuffle="shuffle", typesize=typesize)
+
+
+def _make_store_with_codec(
+    tmp_path: Path, se_codec: BloscCodec, index_codec: BloscCodec
+) -> tuple[Path, np.ndarray, np.ndarray]:
+    """A Dense fixture whose `se`/`se_exception_index` use the given codecs."""
     _write_manifest(tmp_path)
     group = open_group(tmp_path / "data.zarr", "w")
     rng = np.random.default_rng(0)
@@ -71,14 +78,14 @@ def make_store_needing_se_reencode(tmp_path: Path) -> tuple[Path, np.ndarray, np
         "se",
         ArrayRole.DENSE_STATISTIC_PLANE,
         data=se,
-        compressor=_buggy_codec(4),
+        compressor=se_codec,
     )
     create_array(
         group,
         "se_exception_index",
         ArrayRole.EXCEPTION_TABLE,
         data=exception_index,
-        compressor=_buggy_codec(4),
+        compressor=index_codec,
     )
     create_array(
         group,
@@ -88,6 +95,11 @@ def make_store_needing_se_reencode(tmp_path: Path) -> tuple[Path, np.ndarray, np
         compressor=sharded_compressor(),
     )
     return tmp_path, se, exception_index
+
+
+def make_store_needing_se_reencode(tmp_path: Path) -> tuple[Path, np.ndarray, np.ndarray]:
+    """A Dense fixture with a buggy `se`/`se_exception_index` and a correct `z`."""
+    return _make_store_with_codec(tmp_path, _buggy_codec(4), _buggy_codec(4))
 
 
 def _se(store: Path) -> np.ndarray:
@@ -116,6 +128,15 @@ def _die_between_renames(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         die_on_second_move(patch)
         with pytest.raises(ProcessDeath):
             reencode_se_codecs(store)
+
+
+def _build_leftover_state(store: Path, names: tuple[str, ...]) -> None:
+    """Rearrange `se` into one leftover-state set (copy/backup/canonical)."""
+    data = store / "data.zarr"
+    for extra in names[1:]:
+        copytree(data / "se", data / extra)
+    if names[0] != "se":
+        (data / "se").rename(data / names[0])
 
 
 def test_plan_reports_only_the_two_buggy_arrays(tmp_path: Path) -> None:
@@ -296,16 +317,151 @@ IMPOSSIBLE_STATES = {
 @pytest.mark.parametrize("state", sorted(IMPOSSIBLE_STATES))
 def test_a_state_no_single_death_leaves_is_refused_untouched(tmp_path: Path, state: str) -> None:
     store, se, _ = make_store_needing_se_reencode(tmp_path)
-    data = store / "data.zarr"
-    names = IMPOSSIBLE_STATES[state]
-    for extra in names[1:]:
-        copytree(data / "se", data / extra)
-    if names[0] != "se":
-        (data / "se").rename(data / names[0])
-    assert {"se", SE_TEMPORARY, SE_BACKUP} & _entries(store) == set(names)
+    _build_leftover_state(store, IMPOSSIBLE_STATES[state])
+    assert {"se", SE_TEMPORARY, SE_BACKUP} & _entries(store) == set(IMPOSSIBLE_STATES[state])
     before = _file_snapshot(store)
 
     with pytest.raises(reencode.SeReencodeError, match="no single interrupted re-encode leaves"):
         reencode_se_codecs(store)
 
     assert _file_snapshot(store) == before
+
+
+def test_plan_refuses_a_death_between_the_renames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, _, _ = make_store_needing_se_reencode(tmp_path)
+    _die_between_renames(store, monkeypatch)
+    entries = _entries(store)
+    assert "se" not in entries and SE_BACKUP in entries and SE_TEMPORARY in entries
+
+    with pytest.raises(
+        reencode.SeReencodeError, match="an interrupted re-encode must be settled"
+    ):
+        plan_se_reencode(store)
+
+    # Planning is read-only: the half-done swap is left for apply mode to settle.
+    assert _entries(store) == entries
+
+
+@pytest.mark.parametrize("state", sorted(IMPOSSIBLE_STATES))
+def test_plan_refuses_leftover_swap_artifacts(tmp_path: Path, state: str) -> None:
+    store, _, _ = make_store_needing_se_reencode(tmp_path)
+    _build_leftover_state(store, IMPOSSIBLE_STATES[state])
+    before = _file_snapshot(store)
+
+    with pytest.raises(
+        reencode.SeReencodeError, match="an interrupted re-encode must be settled"
+    ):
+        plan_se_reencode(store)
+
+    assert _file_snapshot(store) == before
+
+
+@pytest.mark.parametrize("max_shards", [0, -1])
+def test_plan_rejects_nonpositive_max_shards(tmp_path: Path, max_shards: int) -> None:
+    store, _, _ = make_store_needing_se_reencode(tmp_path)
+
+    with pytest.raises(reencode.SeReencodeError, match="max_shards must be >= 1"):
+        plan_se_reencode(store, max_shards=max_shards)
+
+
+def test_reencode_preserves_a_non_default_compressor(tmp_path: Path) -> None:
+    store, se, exception_index = _make_store_with_codec(
+        tmp_path, _non_default_codec(4), _non_default_codec(4)
+    )
+
+    results = reencode_se_codecs(store)
+
+    assert [r.array for r in results] == ["se", "se_exception_index"]
+    group = open_store(store).arrays()
+    for name, itemsize in (("se", 1), ("se_exception_index", 8)):
+        codec = group[name].compressors[0]
+        assert int(codec.typesize) == itemsize, (name, codec.typesize)
+        assert str(codec.cname) == "lz4", (name, codec.cname)
+        assert int(codec.clevel) == 5, (name, codec.clevel)
+        assert str(codec.shuffle) == "shuffle", (name, codec.shuffle)
+    assert np.array_equal(_se(store), se)
+    assert np.array_equal(_exception_index(store), exception_index)
+
+
+def _make_hybrid_store_needing_se_reencode(
+    tmp_path: Path,
+) -> tuple[Path, np.ndarray, np.ndarray, np.ndarray]:
+    """A Hybrid release: a buggy nested Dense Component and a correct Ragged Overflow."""
+    _write_manifest(tmp_path, primary_layout="hybrid")
+    dense = tmp_path / "dense"
+    dense.mkdir()
+    _write_manifest(dense, primary_layout="dense")
+
+    dgroup = open_group(dense / "data.zarr", "w")
+    rng = np.random.default_rng(0)
+    se = rng.integers(-128, 128, size=(2100, 5)).astype(np.int8)
+    exception_index = np.arange(12, dtype=np.int64)
+    create_array(
+        dgroup, "se", ArrayRole.DENSE_STATISTIC_PLANE, data=se, compressor=_buggy_codec(4)
+    )
+    create_array(
+        dgroup,
+        "se_exception_index",
+        ArrayRole.EXCEPTION_TABLE,
+        data=exception_index,
+        compressor=_buggy_codec(4),
+    )
+    create_array(
+        dgroup,
+        "z",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        data=np.zeros((2100, 5), dtype=np.float16),
+        compressor=sharded_compressor(),
+    )
+
+    (tmp_path / "data.zarr").mkdir(parents=True, exist_ok=True)
+    rgroup = open_group(tmp_path / "data.zarr" / "ragged", "w")
+    ragged_se = np.zeros(50, dtype=np.float16)
+    ragged_z = np.ones(50, dtype=np.float16)
+    ragged_variant_index = np.arange(50, dtype=np.int32)
+    for name, role, values in (
+        ("se", ArrayRole.ASSOCIATION_SEQUENCE, ragged_se),
+        ("z", ArrayRole.ASSOCIATION_SEQUENCE, ragged_z),
+        ("variant_index", ArrayRole.ASSOCIATION_SEQUENCE, ragged_variant_index),
+    ):
+        create_array(rgroup, name, role, data=values, compressor=sharded_compressor())
+    return tmp_path, se, exception_index, ragged_se
+
+
+def test_hybrid_plans_and_applies_the_nested_dense_component_only(tmp_path: Path) -> None:
+    store, se, exception_index, ragged_se = _make_hybrid_store_needing_se_reencode(tmp_path)
+    dense_group = open_store(store / "dense").arrays()
+    dense_z_before = np.asarray(dense_group["z"][:])
+    ragged = store / "data.zarr" / "ragged"
+    ragged_snapshot = _file_snapshot(ragged)
+    ragged_before = {
+        name: np.asarray(open_group(ragged, "r")[name][:])
+        for name in ("se", "z", "variant_index")
+    }
+
+    plans = plan_se_reencode(store)
+
+    assert [(p.group, p.array, p.current_typesize, p.expected_typesize) for p in plans] == [
+        ("dense/data.zarr", "se", 4, 1),
+        ("dense/data.zarr", "se_exception_index", 4, 8),
+    ]
+
+    results = reencode_se_codecs(store)
+
+    assert [r.array for r in results] == ["se", "se_exception_index"]
+    dense_group = open_store(store / "dense").arrays()
+    assert int(dense_group["se"].compressors[0].typesize) == 1
+    assert int(dense_group["se_exception_index"].compressors[0].typesize) == 8
+    assert np.array_equal(np.asarray(dense_group["se"][:]), se)
+    assert np.array_equal(np.asarray(dense_group["se_exception_index"][:]), exception_index)
+    assert np.array_equal(np.asarray(dense_group["z"][:]), dense_z_before)
+
+    # The Ragged Overflow and its non-target arrays are byte-for-byte untouched.
+    assert _file_snapshot(ragged) == ragged_snapshot
+    for name, expected in ragged_before.items():
+        assert np.array_equal(np.asarray(open_group(ragged, "r")[name][:]), expected), name
+    assert np.array_equal(
+        np.asarray(open_group(ragged, "r")["se"][:]), ragged_se
+    )
