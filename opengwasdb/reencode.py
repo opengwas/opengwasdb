@@ -39,12 +39,9 @@ under ``<store>/replaced/`` are out of scope and never walked.
 from __future__ import annotations
 
 import itertools
-import logging
 import math
-from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 import numcodecs
@@ -55,14 +52,13 @@ from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.model.enums import PrimaryStorageLayout
 from opengwasdb.store import open_store
 from opengwasdb.store.arrays import (
+    blosc_like,
     create_array,
     inner_chunk_of,
-    move_in_group,
     role_for_array_path,
     sharded_compressor,
 )
-
-log = logging.getLogger(__name__)
+from opengwasdb.store.swap import recover_interrupted_swap, swap_staged
 
 __all__ = [
     "SeReencodeError",
@@ -81,15 +77,6 @@ _TARGET_ARRAYS = ("se", "se_exception_index")
 #: number mirrors the issue's "200 sampled chunks"; the estimate extrapolates
 #: the sampled compressed-size ratio to the array's measured on-disk bytes.
 DEFAULT_ESTIMATE_SHARDS = 200
-
-#: numcodecs' shuffle codes, keyed by zarr's `BloscCodec` spelling.
-_SHUFFLE_CODES: Mapping[str, int] = MappingProxyType(
-    {
-        "noshuffle": numcodecs.Blosc.NOSHUFFLE,
-        "shuffle": numcodecs.Blosc.SHUFFLE,
-        "bitshuffle": numcodecs.Blosc.BITSHUFFLE,
-    }
-)
 
 
 class SeReencodeError(RuntimeError):
@@ -277,83 +264,17 @@ def _reencode_names(name: str) -> tuple[str, str]:
     return f".{name}.reencoding", f".{name}.old"
 
 
-def _drop_copy(group: Any, name: str, label: str) -> None:
-    """Died while writing the copy: the original is untouched, so drop the copy."""
-    temporary, _ = _reencode_names(name)
-    del group[temporary]
-    log.warning("%s/%s: removed the unfinished re-encode copy %s", label, name, temporary)
-
-
-def _restore_backup(group: Any, name: str, label: str) -> None:
-    """Died between the renames: the backup is the whole original, so restore it."""
-    temporary, backup = _reencode_names(name)
-    move_in_group(group, backup, name)
-    del group[temporary]
-    log.warning("%s/%s: restored the original from %s (a dead re-encode)", label, name, backup)
-
-
-def _drop_backup(group: Any, name: str, label: str) -> None:
-    """Died after the swap: `name` is the whole re-encoded copy, so drop the backup."""
-    _, backup = _reencode_names(name)
-    del group[backup]
-    log.warning("%s/%s: removed %s left after a completed swap", label, name, backup)
-
-
-def _nothing_left(group: Any, name: str, label: str) -> None:
-    """No leftover: the array is absent, or present on its own."""
-
-
-#: Every state a single interrupted re-encode can leave, keyed by which of the
-#: array, its staged copy and its backup are present, mapped to the step that
-#: settles it.  The swap is: write the copy, rename the array to the backup,
-#: rename the copy to the array, delete the backup.  Of the eight possible
-#: states, the other three cannot come from one interruption and are refused.
-_RECOVERY: Mapping[frozenset[str], Callable[[Any, str, str], None]] = MappingProxyType(
-    {
-        frozenset(): _nothing_left,
-        frozenset({"array"}): _nothing_left,
-        frozenset({"array", "copy"}): _drop_copy,
-        frozenset({"copy", "backup"}): _restore_backup,
-        frozenset({"array", "backup"}): _drop_backup,
-    }
-)
-
-
-def _recover_interrupted_reencode(group: Any, name: str, label: str) -> None:
-    """Put `name` back in one piece after a re-encode interrupted mid-swap.
-
-    Each rename is atomic but the pair is not, and no exception handler runs
-    for a process that died.  `_RECOVERY` names the one safe reading of each
-    state a death leaves; any other state is refused with nothing touched.
-    """
-    temporary, backup = _reencode_names(name)
-    roles = {"array": name, "copy": temporary, "backup": backup}
-    present = frozenset(role for role, entry in roles.items() if entry in group)
-    settle = _RECOVERY.get(present)
-    if settle is None:
-        found = ", ".join(roles[role] for role in sorted(present))
-        raise SeReencodeError(
-            f"{label}/{name}: found {found}, a state no single interrupted re-encode "
-            "leaves; the re-encode cannot tell which is the original. Inspect them "
-            "and remove the stale ones."
-        )
-    settle(group, name, label)
-
-
-def _swap_staged(group: Any, name: str, temporary: str, backup: str) -> None:
-    """Swap `temporary` into `name`, keeping `name` under `backup` until it lands."""
-    move_in_group(group, name, backup)
-    try:
-        move_in_group(group, temporary, name)
-    except Exception:
-        move_in_group(group, backup, name)
-        raise
-    del group[backup]
-
-
 def _reencode_array(group: Any, name: str, label: str) -> SeReencodeResult | None:
     """Re-encode one array, or return `None` when it needs no re-encode."""
-    _recover_interrupted_reencode(group, name, label)
+    recover_interrupted_swap(
+        group,
+        name,
+        label,
+        swap_names=_reencode_names,
+        refusal=SeReencodeError,
+        copied="re-encoded",
+        operation="re-encode",
+    )
     if name not in group:
         return None
     source = group[name]
@@ -369,7 +290,7 @@ def _reencode_array(group: Any, name: str, label: str) -> SeReencodeResult | Non
         if temporary in group:
             del group[temporary]
         raise
-    _swap_staged(group, name, temporary, backup)
+    swap_staged(group, name, temporary, backup)
     after = _array_bytes(group, name)
     return SeReencodeResult(
         group=label,
@@ -378,17 +299,6 @@ def _reencode_array(group: Any, name: str, label: str) -> SeReencodeResult | Non
         after_bytes=after,
         equality=True,
         chunks=chunks,
-    )
-
-
-def _blosc_for(codec: BloscCodec, typesize: int) -> numcodecs.Blosc:
-    """A numcodecs `Blosc` in `codec`'s configuration, at the given `typesize`."""
-    return numcodecs.Blosc(
-        cname=str(codec.cname),
-        clevel=int(codec.clevel),
-        shuffle=_SHUFFLE_CODES[str(codec.shuffle)],
-        typesize=typesize,
-        blocksize=int(codec.blocksize),
     )
 
 
@@ -407,6 +317,36 @@ def _full_shard(array: Any, starts: tuple[int, ...], shards: tuple[int, ...]) ->
     return np.pad(piece, pads, mode="constant", constant_values=array.fill_value)
 
 
+def _single_blosc_codec(array: Any) -> BloscCodec:
+    """The array's one Blosc codec; a caller has already found a mismatch."""
+    codecs = tuple(array.compressors)
+    codec = codecs[0]
+    if not isinstance(codec, BloscCodec):
+        raise SeReencodeError(f"array {array.name!r} has no Blosc codec")
+    return codec
+
+
+def _sample_compressed_ratio(
+    array: Any,
+    current: numcodecs.Blosc,
+    corrected: numcodecs.Blosc,
+    shards: tuple[int, ...],
+    positions: list[tuple[int, ...]],
+    max_shards: int,
+) -> tuple[int, int]:
+    """The summed old/new compressed sizes over a bounded shard sample."""
+    step = max(1, math.ceil(len(positions) / max(1, max_shards)))
+    sampled = positions[::step]
+    old_total = 0
+    new_total = 0
+    for starts in sampled:
+        block = _full_shard(array, tuple(starts), shards)
+        contiguous = np.ascontiguousarray(block)
+        old_total += len(current.encode(contiguous))
+        new_total += len(corrected.encode(contiguous))
+    return old_total, new_total
+
+
 def _estimated_after_bytes(array: Any, before_bytes: int, max_shards: int) -> int:
     """Estimated on-disk bytes after re-encoding `array`, from a shard sample.
 
@@ -423,25 +363,16 @@ def _estimated_after_bytes(array: Any, before_bytes: int, max_shards: int) -> in
     if mismatch is None:
         return before_bytes
     current_typesize, expected_typesize = mismatch
-    codecs = tuple(array.compressors)
-    assert len(codecs) == 1
-    codec = codecs[0]
-    assert isinstance(codec, BloscCodec)
-    current = _blosc_for(codec, current_typesize)
-    corrected = _blosc_for(codec, expected_typesize)
+    codec = _single_blosc_codec(array)
+    current = blosc_like(codec, typesize=current_typesize)
+    corrected = blosc_like(codec, typesize=expected_typesize)
     shards = tuple(int(size) for size in array.shards)
     positions = list(itertools.product(*_axes(shape, shards)))
     if not positions:
         return 0
-    step = max(1, math.ceil(len(positions) / max(1, max_shards)))
-    sampled = positions[::step]
-    old_total = 0
-    new_total = 0
-    for starts in sampled:
-        block = _full_shard(array, tuple(starts), shards)
-        contiguous = np.ascontiguousarray(block)
-        old_total += len(current.encode(contiguous))
-        new_total += len(corrected.encode(contiguous))
+    old_total, new_total = _sample_compressed_ratio(
+        array, current, corrected, shards, positions, max_shards
+    )
     if old_total == 0:
         return before_bytes
     return max(0, int(math.ceil(before_bytes * new_total / old_total)))

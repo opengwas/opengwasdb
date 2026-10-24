@@ -16,25 +16,22 @@ primitive those will call.
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
+from shutil import copytree
 from typing import Any
 
 import numpy as np
 import pytest
+from swap_interruption import ProcessDeath, die_on_second_move
 from zarr.codecs import BloscCodec
 
 import opengwasdb.reencode as reencode
 from opengwasdb.reencode import plan_se_reencode, reencode_se_codecs
-from opengwasdb.store import open_store
+from opengwasdb.store import open_store, swap
 from opengwasdb.store.arrays import ArrayRole, create_array, open_group, sharded_compressor
 
 SE_TEMPORARY = ".se.reencoding"
 SE_BACKUP = ".se.old"
-
-
-class _ProcessDeath(BaseException):
-    """Stands in for a process dying: `except Exception` rollbacks do not see it."""
 
 
 def _write_manifest(tmp_path: Path) -> None:
@@ -113,18 +110,12 @@ def _file_snapshot(store: Path) -> dict[str, bytes]:
     }
 
 
-def _die_on_second_move(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Kill the run before the second rename, i.e. between the two renames."""
-    calls: list[tuple[str, str]] = []
-    real = reencode.move_in_group  # type: ignore[attr-defined]
-
-    def move(group: Any, source: str, dest: str) -> None:
-        calls.append((source, dest))
-        if len(calls) == 2:
-            raise _ProcessDeath(f"killed before moving {source} -> {dest}")
-        real(group, source, dest)
-
-    monkeypatch.setattr(reencode, "move_in_group", move)
+def _die_between_renames(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the re-encode and kill it between the two swap renames."""
+    with monkeypatch.context() as patch:
+        die_on_second_move(patch)
+        with pytest.raises(ProcessDeath):
+            reencode_se_codecs(store)
 
 
 def test_plan_reports_only_the_two_buggy_arrays(tmp_path: Path) -> None:
@@ -232,11 +223,7 @@ def test_a_death_between_the_renames_is_recovered_on_the_next_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store, se, exception_index = make_store_needing_se_reencode(tmp_path)
-
-    with monkeypatch.context() as patch:
-        _die_on_second_move(patch)
-        with pytest.raises(_ProcessDeath):
-            reencode_se_codecs(store)
+    _die_between_renames(store, monkeypatch)
     # The state a death between the renames leaves: no canonical `se`, the
     # original under its backup name and the staged copy still beside it.
     entries = _entries(store)
@@ -254,24 +241,21 @@ def test_a_death_inside_the_recovery_leaves_a_state_the_next_run_settles(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store, se, exception_index = make_store_needing_se_reencode(tmp_path)
-    with monkeypatch.context() as patch:
-        _die_on_second_move(patch)
-        with pytest.raises(_ProcessDeath):
-            reencode_se_codecs(store)
+    _die_between_renames(store, monkeypatch)
     names = {"se", SE_TEMPORARY, SE_BACKUP}
     assert names & _entries(store) == {SE_TEMPORARY, SE_BACKUP}, "the run must stop between renames"
 
     # The recovery restores the backup first; killing after that move leaves the
     # array and its copy, which the next run settles by dropping the copy.
-    real_move = reencode.move_in_group  # type: ignore[attr-defined]
+    real_move = swap.move_in_group
 
     def move_then_die(group: Any, source: str, dest: str) -> None:
         real_move(group, source, dest)
-        raise _ProcessDeath(f"killed after moving {source} -> {dest}")
+        raise ProcessDeath(f"killed after moving {source} -> {dest}")
 
     with monkeypatch.context() as patch:
-        patch.setattr(reencode, "move_in_group", move_then_die)
-        with pytest.raises(_ProcessDeath):
+        patch.setattr(swap, "move_in_group", move_then_die)
+        with pytest.raises(ProcessDeath):
             reencode_se_codecs(store)
     assert names & _entries(store) == {"se", SE_TEMPORARY}
 
@@ -286,12 +270,12 @@ def test_a_death_inside_the_recovery_leaves_a_state_the_next_run_settles(
 def test_a_death_after_the_swap_leaves_a_backup_the_next_run_removes(tmp_path: Path) -> None:
     store, se, exception_index = make_store_needing_se_reencode(tmp_path)
     data = store / "data.zarr"
-    shutil.copytree(data / "se", tmp_path / "original-se")
+    copytree(data / "se", tmp_path / "original-se")
     reencode_se_codecs(store)
     reencoded = _se(store)
     # The state a death after the second rename leaves: the re-encoded array in
     # place, the original still under its backup name.
-    shutil.copytree(tmp_path / "original-se", data / SE_BACKUP)
+    copytree(tmp_path / "original-se", data / SE_BACKUP)
 
     assert reencode_se_codecs(store) == []
 
@@ -315,7 +299,7 @@ def test_a_state_no_single_death_leaves_is_refused_untouched(tmp_path: Path, sta
     data = store / "data.zarr"
     names = IMPOSSIBLE_STATES[state]
     for extra in names[1:]:
-        shutil.copytree(data / "se", data / extra)
+        copytree(data / "se", data / extra)
     if names[0] != "se":
         (data / "se").rename(data / names[0])
     assert {"se", SE_TEMPORARY, SE_BACKUP} & _entries(store) == set(names)

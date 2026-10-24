@@ -19,20 +19,16 @@ from typing import Any
 
 import numpy as np
 import pytest
+from swap_interruption import ProcessDeath, die_on_second_move
 from test_eaf_encoding_layouts import make_store_needing_eaf_repair
 
-import opengwasdb.repair as repair
 from opengwasdb.encoding import EAF_BASELINE
 from opengwasdb.repair import repair_eaf_chunks
-from opengwasdb.store import open_store
+from opengwasdb.store import open_store, swap
 from opengwasdb.validation import validate_store
 
 TEMPORARY = f".{EAF_BASELINE}.rechunking"
 BACKUP = f".{EAF_BASELINE}.old"
-
-
-class _ProcessDeath(BaseException):
-    """Stands in for a process dying: `except Exception` rollbacks do not see it."""
 
 
 def _baseline(store: Path) -> np.ndarray:
@@ -41,19 +37,6 @@ def _baseline(store: Path) -> np.ndarray:
 
 def _entries(store: Path) -> set[str]:
     return {p.name for p in (store / "data.zarr").iterdir()}
-
-
-def _die_on_second_move(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, str]] = []
-    real = repair.move_in_group
-
-    def move(group: Any, source: str, dest: str) -> None:
-        calls.append((source, dest))
-        if len(calls) == 2:
-            raise _ProcessDeath(f"killed before moving {source} -> {dest}")
-        real(group, source, dest)
-
-    monkeypatch.setattr(repair, "move_in_group", move)
 
 
 def _die_after_the_first_step(monkeypatch: pytest.MonkeyPatch, store: Path) -> list[str]:
@@ -65,21 +48,21 @@ def _die_after_the_first_step(monkeypatch: pytest.MonkeyPatch, store: Path) -> l
     repair opens. Returns the steps that completed.
     """
     steps: list[str] = []
-    real_move = repair.move_in_group
+    real_move = swap.move_in_group
     group_class = type(open_store(store).arrays())
     real_delete = group_class.__delitem__
 
     def move(group: Any, source: str, dest: str) -> None:
         real_move(group, source, dest)
         steps.append(f"move {source} -> {dest}")
-        raise _ProcessDeath(f"killed after moving {source} -> {dest}")
+        raise ProcessDeath(f"killed after moving {source} -> {dest}")
 
     def delete(group: Any, key: str) -> None:
         real_delete(group, key)
         steps.append(f"delete {key}")
-        raise _ProcessDeath(f"killed after deleting {key}")
+        raise ProcessDeath(f"killed after deleting {key}")
 
-    monkeypatch.setattr(repair, "move_in_group", move)
+    monkeypatch.setattr(swap, "move_in_group", move)
     monkeypatch.setattr(group_class, "__delitem__", delete)
     return steps
 
@@ -92,8 +75,8 @@ def test_a_death_between_the_renames_is_recovered_on_the_next_run(
     assert np.isfinite(original).any()
 
     with monkeypatch.context() as patch:
-        _die_on_second_move(patch)
-        with pytest.raises(_ProcessDeath):
+        die_on_second_move(patch)
+        with pytest.raises(ProcessDeath):
             repair_eaf_chunks(store)
     # The state a death leaves: no canonical array, the original under its backup name.
     entries = _entries(store)
@@ -119,15 +102,15 @@ def test_a_death_inside_the_recovery_leaves_a_state_the_next_run_settles(
     store = make_store_needing_eaf_repair(tmp_path)
     original = _baseline(store)
     with monkeypatch.context() as patch:
-        _die_on_second_move(patch)
-        with pytest.raises(_ProcessDeath):
+        die_on_second_move(patch)
+        with pytest.raises(ProcessDeath):
             repair_eaf_chunks(store)
     names = {EAF_BASELINE, TEMPORARY, BACKUP}
     assert names & _entries(store) == {TEMPORARY, BACKUP}, "the run must stop between renames"
 
     with monkeypatch.context() as patch:
         steps = _die_after_the_first_step(patch, store)
-        with pytest.raises(_ProcessDeath):
+        with pytest.raises(ProcessDeath):
             repair_eaf_chunks(store)
     assert names & _entries(store) == {EAF_BASELINE, TEMPORARY}
     assert steps == [f"move {BACKUP} -> {EAF_BASELINE}"]
