@@ -1,0 +1,327 @@
+"""`reencode_se_codecs` re-encodes the SE plane and its exception index (#326).
+
+The retrospective re-encode fixes a Blosc `typesize` that was inherited from
+the float32 scratch plane: `se` (int8) and `se_exception_index` (int64) are
+stored at `typesize: 4` where 1 and 8 are correct.  The re-encode is verified
+by full decoded equality (each inner chunk, byte for byte, with the shard-index
+CRC validated by the decode itself), staged beside the live array and swapped
+in only after verification.  A process that dies at any step leaves a state the
+next run settles: the original or the re-encoded array, never a torn mix.
+
+The stores lane owns the release-lock/marker refusal, the
+`records/se-reencode.json` writer and the CLI; these tests cover the core
+primitive those will call.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pytest
+from zarr.codecs import BloscCodec
+
+import opengwasdb.reencode as reencode
+from opengwasdb.reencode import plan_se_reencode, reencode_se_codecs
+from opengwasdb.store import open_store
+from opengwasdb.store.arrays import ArrayRole, create_array, open_group, sharded_compressor
+
+SE_TEMPORARY = ".se.reencoding"
+SE_BACKUP = ".se.old"
+
+
+class _ProcessDeath(BaseException):
+    """Stands in for a process dying: `except Exception` rollbacks do not see it."""
+
+
+def _write_manifest(tmp_path: Path) -> None:
+    """A minimal 0.2.0 Dense manifest, so `open_store` reads the fixture."""
+    manifest = {
+        "store_id": "example",
+        "release_id": "observed-1",
+        "format_version": "0.2.0",
+        "primary_layout": "dense",
+        "association_coverage": "gwas",
+        "completion_state": "observed_only",
+        "reference_assembly": "GRCh37",
+        "encoding": {
+            "version": 3,
+            "z": {"kind": "float16"},
+            "se": {"kind": "int8_residual", "residual_range": 2.0},
+            "eaf": {"kind": "absent"},
+        },
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _buggy_codec(typesize: int) -> BloscCodec:
+    """The codec the defect writes: the seam config with a fixed wrong `typesize`."""
+    return BloscCodec(cname="zstd", clevel=3, shuffle="bitshuffle", typesize=typesize)
+
+
+def make_store_needing_se_reencode(tmp_path: Path) -> tuple[Path, np.ndarray, np.ndarray]:
+    """A Dense fixture with a buggy `se`/`se_exception_index` and a correct `z`."""
+    _write_manifest(tmp_path)
+    group = open_group(tmp_path / "data.zarr", "w")
+    rng = np.random.default_rng(0)
+    se = rng.integers(-128, 128, size=(2100, 5)).astype(np.int8)
+    exception_index = np.arange(12, dtype=np.int64)
+    create_array(
+        group,
+        "se",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        data=se,
+        compressor=_buggy_codec(4),
+    )
+    create_array(
+        group,
+        "se_exception_index",
+        ArrayRole.EXCEPTION_TABLE,
+        data=exception_index,
+        compressor=_buggy_codec(4),
+    )
+    create_array(
+        group,
+        "z",
+        ArrayRole.DENSE_STATISTIC_PLANE,
+        data=np.zeros((2100, 5), dtype=np.float16),
+        compressor=sharded_compressor(),
+    )
+    return tmp_path, se, exception_index
+
+
+def _se(store: Path) -> np.ndarray:
+    return np.asarray(open_store(store).arrays()["se"][:])
+
+
+def _exception_index(store: Path) -> np.ndarray:
+    return np.asarray(open_store(store).arrays()["se_exception_index"][:])
+
+
+def _entries(store: Path) -> set[str]:
+    return {path.name for path in (store / "data.zarr").iterdir()}
+
+
+def _file_snapshot(store: Path) -> dict[str, bytes]:
+    return {
+        str(path.relative_to(store)): path.read_bytes()
+        for path in sorted((store).rglob("*"))
+        if path.is_file()
+    }
+
+
+def _die_on_second_move(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kill the run before the second rename, i.e. between the two renames."""
+    calls: list[tuple[str, str]] = []
+    real = reencode.move_in_group  # type: ignore[attr-defined]
+
+    def move(group: Any, source: str, dest: str) -> None:
+        calls.append((source, dest))
+        if len(calls) == 2:
+            raise _ProcessDeath(f"killed before moving {source} -> {dest}")
+        real(group, source, dest)
+
+    monkeypatch.setattr(reencode, "move_in_group", move)
+
+
+def test_plan_reports_only_the_two_buggy_arrays(tmp_path: Path) -> None:
+    store, se, exception_index = make_store_needing_se_reencode(tmp_path)
+
+    plans = plan_se_reencode(store)
+
+    assert [(p.array, p.current_typesize, p.expected_typesize) for p in plans] == [
+        ("se", 4, 1),
+        ("se_exception_index", 4, 8),
+    ]
+    assert all(p.group == "data.zarr" for p in plans)
+    assert [p.dtype for p in plans] == ["int8", "int64"]
+    assert all(p.before_bytes > 0 for p in plans)
+    assert all(p.estimated_after_bytes >= 0 for p in plans)
+    assert all(
+        p.estimated_saving_bytes == max(0, p.before_bytes - p.estimated_after_bytes)
+        for p in plans
+    )
+    # Planning must not have touched the store.
+    assert np.array_equal(_se(store), se)
+    assert np.array_equal(_exception_index(store), exception_index)
+
+
+def test_reencode_is_lossless_and_only_the_two_arrays_change(tmp_path: Path) -> None:
+    store, se, exception_index = make_store_needing_se_reencode(tmp_path)
+    before = _file_snapshot(store)
+
+    results = reencode_se_codecs(store)
+
+    assert [(r.array, r.before_bytes, r.after_bytes, r.equality, r.chunks) for r in results] == [
+        ("se", results[0].before_bytes, results[0].after_bytes, True, 3),
+        ("se_exception_index", results[1].before_bytes, results[1].after_bytes, True, 1),
+    ]
+    assert all(r.equality for r in results)
+    assert np.array_equal(_se(store), se)
+    assert np.array_equal(_exception_index(store), exception_index)
+    group = open_store(store).arrays()
+    assert group["se"].compressors[0].typesize == 1
+    assert group["se_exception_index"].compressors[0].typesize == 8
+
+    after = _file_snapshot(store)
+    changed = {path for path in before if before[path] != after.get(path)}
+    assert changed, "the re-encoded arrays' bytes must change"
+    assert all(
+        path.startswith(("data.zarr/se/", "data.zarr/se_exception_index/")) for path in changed
+    )
+    # No staged or backup names may survive a completed swap.
+    assert not _entries(store) & {SE_TEMPORARY, SE_BACKUP}
+
+
+def test_reencode_is_idempotent(tmp_path: Path) -> None:
+    store, se, exception_index = make_store_needing_se_reencode(tmp_path)
+
+    assert len(reencode_se_codecs(store)) == 2
+    after_first = _file_snapshot(store)
+    assert reencode_se_codecs(store) == []
+    assert _file_snapshot(store) == after_first
+    assert np.array_equal(_se(store), se)
+    assert np.array_equal(_exception_index(store), exception_index)
+
+
+def test_an_already_correct_store_needs_nothing(tmp_path: Path) -> None:
+    store, _, _ = make_store_needing_se_reencode(tmp_path)
+    reencode_se_codecs(store)
+
+    assert plan_se_reencode(store) == []
+    assert reencode_se_codecs(store) == []
+
+
+def test_verification_rejects_a_corrupted_staged_array(tmp_path: Path) -> None:
+    store, se, _ = make_store_needing_se_reencode(tmp_path)
+    group = open_store(store).arrays(mode="r+")
+    source = group["se"]
+    target = reencode._stage_reencoded(group, source, SE_TEMPORARY)
+    target[0:1, 0:1] = np.asarray(se[0:1, 0:1]) + 1
+
+    with pytest.raises(reencode.SeReencodeError, match="not bit-identical"):
+        reencode._verify_reencoded(source, target)
+
+    # The live array is untouched; the failed copy is left for the caller to drop.
+    assert np.array_equal(np.asarray(source[:]), se)
+
+
+def test_verification_reads_the_shard_index_crc(tmp_path: Path) -> None:
+    store, se, _ = make_store_needing_se_reencode(tmp_path)
+    group = open_store(store).arrays(mode="r+")
+    source = group["se"]
+    target = reencode._stage_reencoded(group, source, SE_TEMPORARY)
+    staged_dir = reencode._array_directory(group, SE_TEMPORARY)
+    chunk_file = next(
+        path for path in staged_dir.rglob("*") if path.is_file() and path.name != "zarr.json"
+    )
+    corrupted = bytearray(chunk_file.read_bytes())
+    corrupted[-1] ^= 0xFF
+    chunk_file.write_bytes(corrupted)
+
+    with pytest.raises(ValueError, match="checksum"):
+        reencode._verify_reencoded(source, target)
+
+    assert np.array_equal(np.asarray(source[:]), se)
+
+
+def test_a_death_between_the_renames_is_recovered_on_the_next_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, se, exception_index = make_store_needing_se_reencode(tmp_path)
+
+    with monkeypatch.context() as patch:
+        _die_on_second_move(patch)
+        with pytest.raises(_ProcessDeath):
+            reencode_se_codecs(store)
+    # The state a death between the renames leaves: no canonical `se`, the
+    # original under its backup name and the staged copy still beside it.
+    entries = _entries(store)
+    assert "se" not in entries and SE_BACKUP in entries and SE_TEMPORARY in entries
+
+    results = reencode_se_codecs(store)
+
+    assert [r.array for r in results] == ["se", "se_exception_index"]
+    assert not _entries(store) & {SE_TEMPORARY, SE_BACKUP}
+    assert np.array_equal(_se(store), se)
+    assert np.array_equal(_exception_index(store), exception_index)
+
+
+def test_a_death_inside_the_recovery_leaves_a_state_the_next_run_settles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, se, exception_index = make_store_needing_se_reencode(tmp_path)
+    with monkeypatch.context() as patch:
+        _die_on_second_move(patch)
+        with pytest.raises(_ProcessDeath):
+            reencode_se_codecs(store)
+    names = {"se", SE_TEMPORARY, SE_BACKUP}
+    assert names & _entries(store) == {SE_TEMPORARY, SE_BACKUP}, "the run must stop between renames"
+
+    # The recovery restores the backup first; killing after that move leaves the
+    # array and its copy, which the next run settles by dropping the copy.
+    real_move = reencode.move_in_group  # type: ignore[attr-defined]
+
+    def move_then_die(group: Any, source: str, dest: str) -> None:
+        real_move(group, source, dest)
+        raise _ProcessDeath(f"killed after moving {source} -> {dest}")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(reencode, "move_in_group", move_then_die)
+        with pytest.raises(_ProcessDeath):
+            reencode_se_codecs(store)
+    assert names & _entries(store) == {"se", SE_TEMPORARY}
+
+    results = reencode_se_codecs(store)
+
+    assert [r.array for r in results] == ["se", "se_exception_index"]
+    assert not _entries(store) & {SE_TEMPORARY, SE_BACKUP}
+    assert np.array_equal(_se(store), se)
+    assert np.array_equal(_exception_index(store), exception_index)
+
+
+def test_a_death_after_the_swap_leaves_a_backup_the_next_run_removes(tmp_path: Path) -> None:
+    store, se, exception_index = make_store_needing_se_reencode(tmp_path)
+    data = store / "data.zarr"
+    shutil.copytree(data / "se", tmp_path / "original-se")
+    reencode_se_codecs(store)
+    reencoded = _se(store)
+    # The state a death after the second rename leaves: the re-encoded array in
+    # place, the original still under its backup name.
+    shutil.copytree(tmp_path / "original-se", data / SE_BACKUP)
+
+    assert reencode_se_codecs(store) == []
+
+    assert SE_BACKUP not in _entries(store)
+    assert np.array_equal(_se(store), reencoded)
+    assert np.array_equal(_exception_index(store), exception_index)
+
+
+#: The leftover states a single death cannot leave, as the names present.  Each
+#: is built from the canonical array, and the re-encode must refuse it untouched.
+IMPOSSIBLE_STATES = {
+    "copy only": (SE_TEMPORARY,),
+    "backup only": (SE_BACKUP,),
+    "array, copy and backup": ("se", SE_TEMPORARY, SE_BACKUP),
+}
+
+
+@pytest.mark.parametrize("state", sorted(IMPOSSIBLE_STATES))
+def test_a_state_no_single_death_leaves_is_refused_untouched(tmp_path: Path, state: str) -> None:
+    store, se, _ = make_store_needing_se_reencode(tmp_path)
+    data = store / "data.zarr"
+    names = IMPOSSIBLE_STATES[state]
+    for extra in names[1:]:
+        shutil.copytree(data / "se", data / extra)
+    if names[0] != "se":
+        (data / "se").rename(data / names[0])
+    assert {"se", SE_TEMPORARY, SE_BACKUP} & _entries(store) == set(names)
+    before = _file_snapshot(store)
+
+    with pytest.raises(reencode.SeReencodeError, match="no single interrupted re-encode leaves"):
+        reencode_se_codecs(store)
+
+    assert _file_snapshot(store) == before
