@@ -94,14 +94,19 @@ def common_query_patterns(
     region: tuple[str, int, int],
     random_alids: list[str],
     random_analyses: list[str],
+    regional: list[str] | None = None,
 ) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
     """The seven shapes every full-scale dense benchmark times.
 
     The region is resolved against `q` here, but the random selections are
     captured rather than drawn, so the OGS-00010 harness can pass the ALIDs it
-    re-derived from the source release.
+    re-derived from the source release. `regional` overrides the region's
+    ALIDs for `regional_one_analysis`: two Stores with different axes resolve
+    one window to different variants, so a two-Store comparison passes the
+    ALIDs both carry (#312).
     """
-    regional = regional_alids(q._variant_axis, region)
+    if regional is None:
+        regional = regional_alids(q._variant_axis, region)
     return {
         "bulk": lambda: q.analysis(exposure),
         "phewas": lambda: q.phewas(phewas_alid),

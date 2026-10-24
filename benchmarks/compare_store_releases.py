@@ -44,7 +44,14 @@ BLOCK_CELLS = 1 << 22
 
 
 def _codec_record(metadata: dict[str, Any]) -> dict[str, Any]:
-    """The compressor configuration a v3 array's `zarr.json` names, or a note."""
+    """The compressor configuration an array's metadata names, or a note.
+
+    A v2 `.zarray` names one `compressor` and cannot shard; a v3 `zarr.json`
+    lists `codecs`, the compressor nested inside `sharding_indexed` when sharded.
+    """
+    if metadata.get("zarr_format") == 2:
+        compressor = metadata.get("compressor")
+        return {"sharding": None, **compressor} if compressor else {"sharding": None, "codecs": []}
     for codec in metadata.get("codecs", []):
         if codec.get("name") == "sharding_indexed":
             inner = codec["configuration"]["codecs"]
@@ -57,11 +64,16 @@ def _codec_record(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 def discover_arrays(root: Path) -> dict[str, dict[str, Any]]:
-    """Every Zarr v3 array under `root`, keyed by its path relative to `root`."""
+    """Every Zarr array under `root`, keyed by its path relative to `root`.
+
+    Found by `zarr.json` (v3) **or** `.zarray` (v2), so a format 0.1.0 release
+    is described by the same record as a 0.2.0 one: the OGS-00009/OGS-00010
+    comparison (#312) sets the two formats side by side.
+    """
     found: dict[str, dict[str, Any]] = {}
-    for meta_path in sorted(root.rglob("zarr.json")):
+    for meta_path in sorted([*root.rglob("zarr.json"), *root.rglob(".zarray")]):
         raw = json.loads(meta_path.read_text(encoding="utf-8"))
-        if raw.get("node_type") != "array":
+        if meta_path.name == "zarr.json" and raw.get("node_type") != "array":
             continue
         rel = meta_path.parent.relative_to(root).as_posix()
         array = zarr.open_array(meta_path.parent)
