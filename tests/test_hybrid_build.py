@@ -627,6 +627,99 @@ def test_gwas_ssf_capability_builds_a_hybrid_store_alongside_gwas_vcf(tmp_path):
     assert set(np.round(analysis["z"], 1).tolist()) == {-4.0, -5.0, 3.0}
 
 
+def test_a_monomorphic_frequency_row_does_not_enter_a_maf_filtered_store(tmp_path):
+    """Opengwas #331: `effect_allele_frequency = 0.0` is MAF 0, not missing.
+
+    A common-variant Store (ADR 0033) declaring `maf_threshold: 0.005` must not
+    admit a monomorphic row -- nor one whose frequency is blank, nor one at 1.0:
+    every one of them is a row the filter cannot call common, and admitting them
+    as `maf_missing` is how 192M associations of rare and unjudgeable variation
+    reached a shared variant axis (stores #371).
+
+    What admission removes is the row's *association*: the variant keeps the
+    name Pass 1 harvested for it (issue #255), so this asserts the stored
+    associations, the queries they answer and the build's MAF dispositions
+    rather than axis membership.
+    """
+    header = [
+        "chromosome", "base_pair_location", "effect_allele", "other_allele",
+        "beta", "standard_error", "effect_allele_frequency",
+    ]
+    # (position, alleles, beta, se, frequency cell). The dropped rows carry a
+    # distinctive |z| of 10 so a row that slipped through is visible in the
+    # stored statistics, not merely in a count.
+    rows = [
+        (100_000, "A", "G", "2.0", "0.5", "0.3"),     # kept: MAF 0.3, dense
+        (1_064_620, "C", "T", "10.0", "1.0", "0.0"),  # dropped: monomorphic
+        (1_564_620, "A", "G", "10.0", "1.0", "0.001"),  # dropped: MAF 0.001
+        (2_000_000, "C", "T", "10.0", "1.0", "1.0"),  # dropped: monomorphic
+        (4_000_000, "C", "G", "10.0", "1.0", ""),     # dropped: blank cell
+        (3_000_000, "G", "A", "1.5", "0.3", "0.4"),    # kept: MAF 0.4, overflow
+    ]
+    ssf_path = tmp_path / "monomorphic.tsv.gz"
+    with gzip.open(ssf_path, "wt", encoding="utf-8") as handle:
+        handle.write("\t".join(header) + "\n")
+        for position, effect, other, beta, se, af in rows:
+            handle.write(
+                "\t".join(["1", str(position), effect, other, beta, se, af]) + "\n"
+            )
+
+    panel = tmp_path / "panel.txt"
+    panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale"
+        "\toriginal_sd_method\toriginal_sd\tsource_reader_capability"
+        "\tsource_assembly\tmaf_threshold\n"
+        f"trait_ssf\t{ssf_path}\tTrait SSF\t1000\tsd\tdeclared_standardised\t\t"
+        f"{GWAS_SSF_CAPABILITY}\thg38\t0.005\n",
+        encoding="utf-8",
+    )
+    store_path = tmp_path / "store.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, store_path, reference_panel=panel,
+        store_id="maf-filtered", release_id="v1",
+    )
+
+    result = validate_store(store_path)
+    assert result.ok, result.errors
+
+    provenance = json.loads((store_path / "manifest.json").read_text())["provenance"]
+    maf = provenance["maf"]["analyses"][0]
+    # Asserted meaningful first: exactly the four rows the filter must reject
+    # were rejected, for the reasons the fixture gave them.
+    assert maf["maf_state"] == "filtered"
+    assert (maf["associations_below_threshold"], maf["associations_missing"]) == (1, 3)
+
+    q = query_store(store_path)
+    try:
+        analysis = q.analysis("trait_ssf")
+        # Positive control: the two rows the filter must keep answer a query.
+        kept = q.lookup([HG38_ALID_1, "1:3000000:A:G"], ["trait_ssf"])
+        rejected = q.lookup(
+            [HG38_ALID_2, "1:2000000:C:T", "1:4000000:C:G", HG38_ALID_3], ["trait_ssf"]
+        )
+    finally:
+        q.close()
+
+    assert sorted(np.round(analysis["z"], 1).tolist()) == [-5.0, 4.0]
+    assert np.isfinite(analysis["z"]).all()
+    assert sorted(np.round(kept["z"], 1).tolist()) == [-5.0, 4.0]
+    assert set(kept["association_status"]) == {"observed"}
+    # Not one rejected row answers a query, on-panel or off: the two monomorphic
+    # rows, the blank-frequency row and the below-threshold row left no
+    # association behind.
+    assert len(rejected["z"]) == 0
+
+    from opengwasdb.variants.axis import iter_variant_records
+
+    dense_alids = [
+        record.alid
+        for record in iter_variant_records(store_path / "dense" / "variants.tsv.gz")
+    ]
+    assert HG38_ALID_3 in dense_alids, "the panel variant keeps its Pass-1 name (#255)"
+
+
 # --- source_assembly (issue #85): per-row declared source genome build ---
 
 

@@ -6,15 +6,23 @@ record and the store a Hybrid build writes are compared to each other, so a
 divergence between the two callers would be a silent mismatch the tests exist to
 catch. `admit_rows` is that one rule: `keep = ~info_drop & ~maf_drop`.
 
-MAF is `min(af, 1 - af)` for a finite `af` strictly inside `(0, 1)`. A row
-whose `af` is missing, non-finite, outside `[0, 1]`, or exactly `0.0`/`1.0` is
-retained and counted `maf_missing` -- the MAF rule has no frequency to judge it
-by. A row is dropped by MAF only when the policy is `FILTERED`, the MAF is
-available, and `MAF < maf_threshold`; equality passes.
+MAF is `min(af, 1 - af)` for a finite `af` inside `[0, 1]`. A row whose `af`
+is missing, non-finite, or outside `[0, 1]` carries no frequency evidence: it is
+counted `maf_missing`, and under a `FILTERED` policy it is dropped, because a
+common-variant Store cannot admit a row whose MAF it cannot read. Exactly `0.0`
+and exactly `1.0` *are* frequencies here -- a monomorphic site, MAF `0` -- so a
+`FILTERED` policy judges them and drops them as below any positive threshold;
+they are dropped for the filter's reason, not treated as absent. (The reader's
+`parse_af` still maps them to no stored EAF, ADR 0036: a Store holding no
+frequency for a monomorphic association is a different question from whether a
+common-variant filter admits it.) The rest of the rule: a row is dropped by MAF
+when the policy is `FILTERED` and `MAF < maf_threshold`; equality passes.
 
 When both filters would drop a row it is counted once, under INFO (INFO first):
 `maf_below_threshold` never counts a row `info` already dropped, so the two
 below-threshold tallies sum to the rows dropped by at most one filter each.
+`maf_missing` counts every row with no usable frequency, independently of INFO,
+and under `FILTERED` those are rows the rule drops.
 """
 
 from __future__ import annotations
@@ -45,7 +53,7 @@ class AdmissionCounts:
     `associations_retained` (builder) report -- not `info.retained`, which is the
     rows INFO alone keeps. `maf_below_threshold` counts rows dropped by MAF that
     INFO did not already drop; `maf_missing` counts rows with no usable
-    frequency, which are retained.
+    frequency, which a `FILTERED` policy drops and `DISABLED`/`UNAVAILABLE` keep.
     """
 
     info: InfoScoreCounts = field(default_factory=InfoScoreCounts)
@@ -100,26 +108,33 @@ def admit_rows(
     the other keeps too.
     """
     info_keep = retained_mask(scores, statuses, info_policy)
-    # Exactly 0 and exactly 1 are missing, not usable zeroes, as the reader's own
-    # `parse_af` says (stores #176): a frequency of either describes a
-    # monomorphic site and a file reporting one on every row is reporting a
-    # placeholder. Such a row is retained and counted `maf_missing`, never
-    # dropped for a MAF it does not have.
-    available = np.isfinite(af) & (af > 0.0) & (af < 1.0)
+    # A frequency is usable evidence when it is finite and inside `[0, 1]`.
+    # Exactly 0 and exactly 1 are usable frequencies: they describe a monomorphic
+    # site whose MAF is 0, so a `FILTERED` policy judges and drops them. The
+    # reader's `parse_af` still reports no stored EAF for those cells (ADR 0036);
+    # that is the stored column's rule, not this admission rule's. What arrives
+    # here as NaN, non-finite or out of range is a row with no frequency evidence
+    # at all, and a common-variant Store must not admit it (opengwasdb#331).
+    usable_frequency = np.isfinite(af) & (af >= 0.0) & (af <= 1.0)
     maf_below_threshold = 0
     # A state that declared no MAF filter records no MAF dispositions, exactly as
     # an undeclared INFO policy records none; `DISABLED` still reads the column,
     # so it counts the rows with no usable frequency while dropping none.
     maf_missing = 0 if maf_policy.state is MafState.UNAVAILABLE else int(
-        np.count_nonzero(~available)
+        np.count_nonzero(~usable_frequency)
     )
     if maf_policy.state is MafState.FILTERED:
         threshold = maf_policy.maf_threshold
         assert threshold is not None, "a FILTERED MAF policy carries its threshold"
         maf = np.minimum(af, 1.0 - af)
-        maf_drop = available & (maf < threshold)
+        below = usable_frequency & (maf < threshold)
+        # Unusable frequencies are dropped, not retained: retaining them let
+        # monomorphic and blank-frequency rows bypass the filter entirely, which
+        # is how rare variation flooded a common-variant Store. They are counted
+        # `maf_missing`, never below-threshold -- no threshold was compared.
+        maf_drop = ~usable_frequency | below
         # INFO first: a row both filters would drop is counted there, not here.
-        maf_below_threshold = int(np.count_nonzero(maf_drop & info_keep))
+        maf_below_threshold = int(np.count_nonzero(below & info_keep))
     else:
         maf_drop = np.zeros(len(af), dtype=bool)
     keep = info_keep & ~maf_drop
