@@ -69,6 +69,13 @@ early physical stop at the ancestry bound.
 - When both filters would drop a row it is counted once, under
   `info_rows_below_threshold` (INFO first), never also under
   `maf_rows_below_threshold`.
+- **Scope.** The rule is the Hybrid builder's Pass 2 and this record. A
+  standalone Dense build (`build-dense-vcf`) writes a fixed reference-panel axis
+  and applies no row admission, so a MAF floor has no admission decision to make
+  there; the Ragged builders ignore a declared `maf_threshold` altogether today
+  (ADR 0054's scope amendment says both plainly).
+- **Resume.** `build-hybrid --checkpoint` records `CHECKPOINT_FORMAT_VERSION`
+  2; a format-1 checkpoint predates this rule and is refused rather than resumed.
 
 ## One admission rule
 
