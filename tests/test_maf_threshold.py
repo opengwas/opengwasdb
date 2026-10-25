@@ -42,18 +42,19 @@ ROWS: tuple[tuple[int, str, str, str, str], ...] = (
     (1003, "0.5", "0.1", "0.3", "NA"),  # kept: unscored
     (1004, "0.4", "0.1", "0.3", "0.5"),  # INFO below threshold
     (1005, "0.3", "0.1", "0.3", "1.2"),  # kept: usable, out of range
-    (2000, "1.0", "0.2", "", "0.9"),  # kept: AF missing
+    (2000, "1.0", "0.2", "", "0.9"),  # dropped: AF missing under a floor
+    (2001, "1.0", "0.2", "0.0", "0.9"),  # dropped: monomorphic, MAF 0 (opengwasdb#331)
     (1006, "0.3", "0.1", "0.001", "0.5"),  # both would drop: counted under INFO
 )
 PANEL_ALIDS = tuple(f"1:{position}:A:C" for position in (1000, 1001, 1002, 1003, 1004, 1005, 1006))
 EXPECTED = {
-    "canonical_rows_retained": 5,
+    "canonical_rows_retained": 4,
     "info_rows_below_threshold": 2,
     "info_rows_missing": 1,
     "info_rows_out_of_range": 1,
-    "info_rows_usable": 7,
+    "info_rows_usable": 8,
     "maf_rows_below_threshold": 1,
-    "maf_rows_missing": 1,
+    "maf_rows_missing": 2,
 }
 
 _HEADER = (
@@ -174,19 +175,68 @@ def test_analyses_validator_accepts_nan_and_rejects_above_half(tmp_path: Path):
 # --- the shared rule -------------------------------------------------------
 
 
-def test_admit_rows_treats_out_of_range_and_missing_frequencies_as_retained():
-    scores = np.array([0.9, 0.9, 0.9, 0.9])
-    statuses = np.array([ImputationScoreStatus.USABLE] * 4, dtype=object)
-    af = np.array([0.001, 0.01, 1.5, np.nan])
+def test_admit_rows_drops_monomorphic_and_boundary_frequencies_under_filtered():
+    """A frequency of exactly 0 or exactly 1 is a frequency, and its MAF is 0.
+
+    Opengwas #331: a monomorphic row under a `filtered` policy carries a MAF of
+    0, which is below any positive threshold, so it must be dropped -- and
+    counted below-threshold, because the threshold was compared. Treating it as
+    an absent frequency let tens of millions of monomorphic rows into a
+    common-variant Store. The boundary stays: `0.0049` drops, `0.005` passes.
+    """
+    af = np.array([0.0, 1.0, 0.0049, 0.005, 0.5])
+    scores = np.full(af.shape, 0.9)
+    statuses = np.array([ImputationScoreStatus.USABLE] * af.size, dtype=object)
     admission = admit_rows(
         scores, statuses, af, InfoScorePolicy(), MafPolicy(0.005, MafState.FILTERED)
     )
-    # Only the in-range below-threshold row drops; 1.5 and NaN carry no MAF.
-    assert admission.keep.tolist() == [False, True, True, True]
+
+    assert admission.keep.tolist() == [False, False, False, True, True]
+    assert admission.counts.admitted == 2
+    assert admission.counts.maf_below_threshold == 3
+    assert admission.counts.maf_missing == 0
+
+
+def test_admit_rows_drops_unusable_frequencies_under_filtered():
+    """Under `filtered`, a row with no usable frequency cannot bypass admission.
+
+    A NaN, an infinity and an out-of-range value are all "no frequency
+    evidence": a common-variant Store cannot admit a row whose MAF it cannot
+    read, or the filter is defeated by blanks. They are dropped and counted
+    `maf_missing` -- not below-threshold, because no threshold was compared.
+    """
+    af = np.array([np.nan, np.inf, -0.1, 1.5, 0.001, 0.01])
+    scores = np.full(af.shape, 0.9)
+    statuses = np.array([ImputationScoreStatus.USABLE] * af.size, dtype=object)
+    admission = admit_rows(
+        scores, statuses, af, InfoScorePolicy(), MafPolicy(0.005, MafState.FILTERED)
+    )
+
+    assert admission.keep.tolist() == [False, False, False, False, False, True]
     assert admission.counts.maf_below_threshold == 1
-    assert admission.counts.maf_missing == 2
-    # No declared MAF filter records no MAF dispositions at all.
+    assert admission.counts.maf_missing == 4
+
+
+def test_admit_rows_preserves_frequencies_when_no_filter_is_applied():
+    """`disabled` and `unavailable` drop no row and preserve its frequency.
+
+    Only a declared positive threshold admits the "no frequency evidence"
+    reading; `0` asked for no filtering and an undeclared column records no MAF
+    dispositions at all.
+    """
+    af = np.array([0.0, 1.0, 0.001, np.nan])
+    scores = np.full(af.shape, 0.9)
+    statuses = np.array([ImputationScoreStatus.USABLE] * af.size, dtype=object)
+
+    disabled = admit_rows(
+        scores, statuses, af, InfoScorePolicy(), MafPolicy(0.0, MafState.DISABLED)
+    )
+    assert disabled.keep.tolist() == [True, True, True, True]
+    assert disabled.counts.maf_below_threshold == 0
+    assert disabled.counts.maf_missing == 1
+
     undeclared = admit_rows(scores, statuses, af, InfoScorePolicy(), MafPolicy())
+    assert undeclared.keep.tolist() == [True, True, True, True]
     assert undeclared.counts.maf_below_threshold == undeclared.counts.maf_missing == 0
 
 
@@ -214,10 +264,15 @@ def test_resolver_zero_disables_and_absent_or_nan_is_unavailable(tmp_path: Path)
     zero = _diagnostics(tmp_path, source, "0")
     assert zero["maf_state"] == "disabled"
     assert zero["maf_rows_below_threshold"] == 0
-    assert zero["maf_rows_missing"] == 1
-    # 0 restores the one row a 0.005 threshold dropped (the other no-MAF row is
+    # Both no-frequency cells -- the blank one and the `0.0` one -- reach
+    # `admit_rows` as no frequency at all, because the reader maps exactly 0 and
+    # 1 to no stored EAF (ADR 0036). Nothing is dropped here because `0` asked
+    # for no filtering.
+    assert zero["maf_rows_missing"] == 2
+    # 0 restores the three rows a positive threshold dropped: the MAF-0.001 row,
+    # the blank-frequency row and the monomorphic one (the other two are
     # INFO-dropped either way).
-    assert zero["canonical_rows_retained"] == EXPECTED["canonical_rows_retained"] + 1
+    assert zero["canonical_rows_retained"] == EXPECTED["canonical_rows_retained"] + 3
 
     nan = _diagnostics(tmp_path, source, "NaN")
     assert nan["maf_state"] == "unavailable"

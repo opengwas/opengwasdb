@@ -394,7 +394,12 @@ def test_the_builder_retains_exactly_the_rows_the_resolver_counts_eligible(tmp_p
     diagnostics = _record(tmp_path, source, analysis_id="GCST_RECOVERY", maf="0.005")
 
     retained = list(GwasSsfReader(source).stream_associations())
-    assert diagnostics["build_eligible_rows"] == len(retained) == 8, (
+    # The reader yields 8 of the fixture's 13 rows. Two of those 8 report a
+    # frequency of exactly 0 or 1, which is no stored EAF (ADR 0036) and so no
+    # frequency evidence for a declared floor: a build admits 6 of them
+    # (opengwasdb#331), and that is the count the resolver reports.
+    assert len(retained) == 8
+    assert diagnostics["build_eligible_rows"] == 6, (
         "the builder's rows and the resolver's count must be the same rows"
     )
     assert (
@@ -409,12 +414,13 @@ def test_the_builder_retains_exactly_the_rows_the_resolver_counts_eligible(tmp_p
     ):
         assert 0 <= diagnostics[field] <= diagnostics["build_eligible_rows"], field
     assert diagnostics["stop_reason"] == "eof"
-    # A frequency of exactly 0 or 1 is missing-frequency: the row is kept and
-    # counted `maf_rows_missing`, never dropped for a MAF it does not have.
+    # A frequency of exactly 0 or 1 is no stored EAF (ADR 0036), so under a
+    # declared floor those rows carry no frequency evidence and are not
+    # admitted: they are counted `maf_rows_missing` and dropped (opengwasdb#331).
     assert diagnostics["maf_state"] == "filtered"
     assert diagnostics["maf_rows_missing"] == 2
     assert diagnostics["maf_rows_below_threshold"] == 0
-    assert diagnostics["canonical_rows_retained"] == len(_ROWS)
+    assert diagnostics["canonical_rows_retained"] == len(_ROWS) - 2
 
 
 def test_a_plain_beta_file_reports_no_recovery(tmp_path: Path):

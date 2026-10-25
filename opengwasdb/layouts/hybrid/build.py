@@ -2752,8 +2752,10 @@ def _maf_provenance(
     `None` when no Analysis's row carried a numeric MAF threshold, so a table
     that never declares one builds exactly as it did before this filter
     existed. The counts are the associations the Source Reader yielded, the same
-    population as the INFO block beside it; a row both filters would drop is
-    counted under INFO, not here.
+    population as the INFO block beside it; a row both filters would drop for a
+    threshold is counted under INFO, not here. `associations_missing` counts the
+    rows with no usable frequency, and under a `filtered` policy those are rows
+    the build dropped (opengwasdb#331): it is not a retained-but-unjudged tally.
     """
     policies = prepared.maf_policies
     if all(policy.state is MafState.UNAVAILABLE for policy in policies.values()):

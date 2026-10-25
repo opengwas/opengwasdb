@@ -52,16 +52,30 @@ early physical stop at the ancestry bound.
   (`legacy_absent`) retain all canonical rows; their `info_score_state` and
   fingerprints differ.
 
-## MAF semantics (stores #176)
+## MAF semantics (stores #176, opengwasdb#331)
 
-- MAF is `min(af, 1 - af)` from the reader's `effect_allele_frequency`. A row
-  whose `af` is missing, non-finite, outside [0, 1], or exactly `0.0`/`1.0` is
-  **retained** and counted `maf_rows_missing`.
-- A row is dropped by MAF only when the policy is `filtered` (> 0), the MAF is
-  available, and `MAF < maf_threshold` (equality passes). `0` disables.
+- MAF is `min(af, 1 - af)` from the reader's `effect_allele_frequency`. A
+  frequency is usable evidence when it is finite and inside `[0, 1]`; exactly
+  `0.0` and `1.0` are frequencies, so their MAF is `0` and a declared floor
+  drops them. A NaN, an infinity or an out-of-range value is no evidence: such
+  a row is counted `maf_rows_missing` and, under `filtered`, **dropped** -- a
+  common-variant Store must not admit a row whose MAF it cannot read.
+- The reader still stores no EAF for exactly `0.0`/`1.0` (ADR 0036,
+  `stats.parse_af`), so those rows also reach admission as "no frequency" and
+  are dropped under `filtered` for that reason.
+- A row is dropped by MAF when the policy is `filtered` (> 0) and either its
+  MAF is below `maf_threshold` (equality passes) or it has no usable frequency.
+  `0` (`disabled`) and `unavailable` drop nothing and preserve every frequency.
 - When both filters would drop a row it is counted once, under
   `info_rows_below_threshold` (INFO first), never also under
   `maf_rows_below_threshold`.
+- **Scope.** The rule is the Hybrid builder's Pass 2 and this record. A
+  standalone Dense build (`build-dense-vcf`) writes a fixed reference-panel axis
+  and applies no row admission, so a MAF floor has no admission decision to make
+  there; the Ragged builders ignore a declared `maf_threshold` altogether today
+  (ADR 0054's scope amendment says both plainly).
+- **Resume.** `build-hybrid --checkpoint` records `CHECKPOINT_FORMAT_VERSION`
+  2; a format-1 checkpoint predates this rule and is refused rather than resumed.
 
 ## One admission rule
 
@@ -85,8 +99,9 @@ Ancestry/SD evidence and `build_eligible_rows*` see admitted rows only.
   zero.
 - `maf_state` is `unavailable` (`NaN`/absent), `disabled` (0) or `filtered` (> 0).
   `maf_rows_below_threshold` counts rows dropped by MAF that INFO did not already
-  drop; `maf_rows_missing` counts rows with no usable frequency, all retained.
-  Both are zero when no MAF filter is declared.
+  drop; `maf_rows_missing` counts rows with no usable frequency, which `filtered`
+  drops and `disabled`/`unavailable` retain. Both are zero when no MAF filter is
+  declared.
 - `build_eligible_rows` counts admitted rows with a finite beta and strictly
   positive finite SE yielding a finite z. With `--variant-reference`,
   `build_eligible_rows_on_variant_reference` and
