@@ -627,39 +627,39 @@ def test_gwas_ssf_capability_builds_a_hybrid_store_alongside_gwas_vcf(tmp_path):
     assert set(np.round(analysis["z"], 1).tolist()) == {-4.0, -5.0, 3.0}
 
 
-def test_a_monomorphic_frequency_row_does_not_enter_a_maf_filtered_store(tmp_path):
-    """Opengwas #331: `effect_allele_frequency = 0.0` is MAF 0, not missing.
+#: The MAF fixture's rows: `(position, effect, other, beta, se, frequency cell)`,
+#: all hg38. The rejected rows carry a distinctive |z| of 10, so a row that
+#: slipped through admission is visible in the stored statistics, not merely in
+#: a count.
+_MAF_FIXTURE_ROWS: tuple[tuple[int, str, str, str, str, str], ...] = (
+    (100_000, "A", "G", "2.0", "0.5", "0.3"),  # kept: MAF 0.3, on the panel
+    (1_064_620, "C", "T", "10.0", "1.0", "0.0"),  # rejected: monomorphic
+    (1_564_620, "A", "G", "10.0", "1.0", "0.001"),  # rejected: MAF 0.001
+    (2_000_000, "C", "T", "10.0", "1.0", "1.0"),  # rejected: monomorphic
+    (4_000_000, "C", "G", "10.0", "1.0", ""),  # rejected: blank cell
+    (3_000_000, "G", "A", "1.5", "0.3", "0.4"),  # kept: MAF 0.4, off panel
+)
 
-    A common-variant Store (ADR 0033) declaring `maf_threshold: 0.005` must not
-    admit a monomorphic row -- nor one whose frequency is blank, nor one at 1.0:
-    every one of them is a row the filter cannot call common, and admitting them
-    as `maf_missing` is how 192M associations of rare and unjudgeable variation
-    reached a shared variant axis (stores #371).
+#: The off-panel variants whose only row the filter must reject.
+_MAF_REJECTED_OFF_PANEL_ALIDS = (HG38_ALID_2, "1:2000000:C:T", "1:4000000:C:G")
+#: The off-panel variant whose row it keeps -- the axis/query positive control.
+_MAF_KEPT_OFF_PANEL_ALID = "1:3000000:A:G"
 
-    What admission removes is the row's *association*: the variant keeps the
-    name Pass 1 harvested for it (issue #255), so this asserts the stored
-    associations, the queries they answer and the build's MAF dispositions
-    rather than axis membership.
+
+def _maf_filtered_manifest(tmp_path: Path) -> tuple[Path, Path]:
+    """A GWAS-SSF source declaring `maf_threshold: 0.005`, and its 2-ALID panel.
+
+    Two of the six rows are common enough to keep (MAF 0.3 on the panel, 0.4 off
+    it); four are not (`0.0`, `1.0`, a blank cell and MAF 0.001).
     """
     header = [
         "chromosome", "base_pair_location", "effect_allele", "other_allele",
         "beta", "standard_error", "effect_allele_frequency",
     ]
-    # (position, alleles, beta, se, frequency cell). The dropped rows carry a
-    # distinctive |z| of 10 so a row that slipped through is visible in the
-    # stored statistics, not merely in a count.
-    rows = [
-        (100_000, "A", "G", "2.0", "0.5", "0.3"),     # kept: MAF 0.3, dense
-        (1_064_620, "C", "T", "10.0", "1.0", "0.0"),  # dropped: monomorphic
-        (1_564_620, "A", "G", "10.0", "1.0", "0.001"),  # dropped: MAF 0.001
-        (2_000_000, "C", "T", "10.0", "1.0", "1.0"),  # dropped: monomorphic
-        (4_000_000, "C", "G", "10.0", "1.0", ""),     # dropped: blank cell
-        (3_000_000, "G", "A", "1.5", "0.3", "0.4"),    # kept: MAF 0.4, overflow
-    ]
     ssf_path = tmp_path / "monomorphic.tsv.gz"
     with gzip.open(ssf_path, "wt", encoding="utf-8") as handle:
         handle.write("\t".join(header) + "\n")
-        for position, effect, other, beta, se, af in rows:
+        for position, effect, other, beta, se, af in _MAF_FIXTURE_ROWS:
             handle.write(
                 "\t".join(["1", str(position), effect, other, beta, se, af]) + "\n"
             )
@@ -675,6 +675,25 @@ def test_a_monomorphic_frequency_row_does_not_enter_a_maf_filtered_store(tmp_pat
         f"{GWAS_SSF_CAPABILITY}\thg38\t0.005\n",
         encoding="utf-8",
     )
+    return manifest, panel
+
+
+def test_a_monomorphic_frequency_row_does_not_enter_a_maf_filtered_store(tmp_path):
+    """Opengwas #331: `effect_allele_frequency = 0.0` is MAF 0, not missing.
+
+    A common-variant Store declaring `maf_threshold: 0.005` must not admit a
+    monomorphic row -- nor one whose frequency is blank, nor one at 1.0: every
+    one of them is a row the filter cannot call common, and admitting them as
+    `maf_missing` is how 192M associations of rare and unjudgeable variation
+    reached a shared variant axis (stores #371).
+
+    What admission removes is the row's *association*: in a two-pass build the
+    variant keeps the name Pass 1 harvested for it (issue #255), so this asserts
+    the stored associations, the queries they answer and the build's MAF
+    dispositions rather than axis membership. Single-pass is the other case --
+    `test_a_single_pass_build_leaves_no_variant_for_a_rejected_row`.
+    """
+    manifest, panel = _maf_filtered_manifest(tmp_path)
     store_path = tmp_path / "store.opengwasdb"
     build_hybrid_from_vcf_manifest(
         manifest, store_path, reference_panel=panel,
@@ -695,9 +714,9 @@ def test_a_monomorphic_frequency_row_does_not_enter_a_maf_filtered_store(tmp_pat
     try:
         analysis = q.analysis("trait_ssf")
         # Positive control: the two rows the filter must keep answer a query.
-        kept = q.lookup([HG38_ALID_1, "1:3000000:A:G"], ["trait_ssf"])
+        kept = q.lookup([HG38_ALID_1, _MAF_KEPT_OFF_PANEL_ALID], ["trait_ssf"])
         rejected = q.lookup(
-            [HG38_ALID_2, "1:2000000:C:T", "1:4000000:C:G", HG38_ALID_3], ["trait_ssf"]
+            [*_MAF_REJECTED_OFF_PANEL_ALIDS, HG38_ALID_3], ["trait_ssf"]
         )
     finally:
         q.close()
@@ -718,6 +737,46 @@ def test_a_monomorphic_frequency_row_does_not_enter_a_maf_filtered_store(tmp_pat
         for record in iter_variant_records(store_path / "dense" / "variants.tsv.gz")
     ]
     assert HG38_ALID_3 in dense_alids, "the panel variant keeps its Pass-1 name (#255)"
+
+
+def test_a_single_pass_build_leaves_no_variant_for_a_rejected_row(tmp_path):
+    """Opengwas #331 in OGS-00011's shape: single-pass with `--variant-reference`.
+
+    A single-pass build bypasses Pass 1, so an off-panel variant reaches the
+    shared axis only through Pass 2's unknown-key fold -- and therefore only
+    from an association admission kept. A row the MAF floor rejects must leave
+    no variant behind, or the axis names a site whose frequency the Store
+    refused; on OGS-00011 that was 101,098,177 off-panel variants.
+
+    The reference's own ALIDs stay whatever happens to their rows: the axis is
+    the reference, and a rejected row is not a reason to drop a variant the
+    reference names (#255).
+    """
+    from opengwasdb.variants.axis import iter_variant_records
+
+    manifest, panel = _maf_filtered_manifest(tmp_path)
+    store_path = tmp_path / "single-pass.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, store_path, variant_reference=panel,
+        store_id="maf-single", release_id="v1",
+    )
+
+    result = validate_store(store_path)
+    assert result.ok, result.errors
+
+    provenance = json.loads((store_path / "manifest.json").read_text())["provenance"]
+    maf = provenance["maf"]["analyses"][0]
+    # Asserted meaningful first: the four rejected rows were really there.
+    assert (maf["associations_below_threshold"], maf["associations_missing"]) == (1, 3)
+
+    shipped = {record.alid for record in iter_variant_records(store_path / "variants.tsv.gz")}
+    assert _MAF_KEPT_OFF_PANEL_ALID in shipped, (
+        "the kept off-panel row is what puts a variant on the axis at all"
+    )
+    assert {HG38_ALID_1, HG38_ALID_3} <= shipped, "the reference's ALIDs are the axis"
+    assert shipped & set(_MAF_REJECTED_OFF_PANEL_ALIDS) == set(), (
+        "a rejected row must not name a variant on a single-pass axis"
+    )
 
 
 # --- source_assembly (issue #85): per-row declared source genome build ---
