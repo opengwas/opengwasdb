@@ -188,8 +188,10 @@ absent value is *missing*, never clamped and never substituted -- and the same
 value is never replaced by 0.5 or by a panel's frequency. The consequences,
 which are the point of writing it down:
 
-- `opengwasdb.build.row_admission.admit_rows` retains such a row and counts it
-  `maf_missing`, exactly as it counts a NaN.
+- `opengwasdb.build.row_admission.admit_rows` counts such a row `maf_missing`,
+  exactly as it counts a NaN. (Under a declared MAF floor it now *drops* it:
+  opengwasdb#331, ADR 0054's amendment. The stored-EAF rule this section
+  records is unchanged.)
 - Ancestry accumulation ignores it, and both phenotype-SD tiers already did
   (`se_scale_samples` requires a frequency strictly inside `(0, 1)`).
 - The blocked metrics projection and GWAS-VCF's `AF` cell apply the same rule.
@@ -207,3 +209,10 @@ reported nothing" for that cell, because both are NaN. Treating a reported `0`
 as a frequency was worse -- MAF admission would have computed a MAF of 0 and
 dropped the row for a filter it cannot be judged by -- but the loss is real and
 is recorded here rather than left implicit.
+
+**Amendment (opengwasdb#331).** The parenthetical above is now the rule rather
+than the objection: a declared MAF floor *does* judge a frequency the source
+reports as `0`, and drops the row, because a Store declaring a common-variant
+floor cannot hold a monomorphic site. That is admission's decision, recorded in
+ADR 0054's amendment; what this section decides -- that `parse_af` reports no
+EAF for exactly `0`/`1` -- stands unchanged.

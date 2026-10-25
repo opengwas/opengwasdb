@@ -77,3 +77,52 @@ Analysis with none can still be built honestly by retaining every row.
 - **The stores sibling must emit `maf_threshold` on resolver evidence and
   `NaN` otherwise**, and must stop excluding a declared-INFO Analysis with no
   usable scores (opengwasdb-stores #176).
+
+## Amendment: a MAF floor admits only rows whose MAF it can read (opengwasdb#331)
+
+Decision 3 said a row with no usable frequency is **retained** and counted
+`maf_missing`. That is wrong for a `filtered` policy, and the review that
+prompted it found real input: the forensic audit of OGS-00011 (opengwasdb-stores
+#371) found 192,435,653 associations and 101,098,177 off-panel variants admitted
+as `maf_missing`, 83% of the off-panel variants from five publications whose
+`effect_allele_frequency` is `0.0` or blank across tens of millions of
+monomorphic and ultra-rare rows. A declared floor is a statement that the Store
+holds common variation; a row whose frequency cannot be read cannot demonstrate
+that, and retaining it defeated the filter exactly where it mattered.
+
+`admit_rows` therefore reads a source frequency as evidence when it is finite
+and inside `[0, 1]`, and drops a row under `filtered` when it has none. Exactly
+`0.0` and exactly `1.0` are frequencies inside that domain: their MAF is `0`,
+which is below any positive threshold, so a `filtered` policy drops them for the
+filter's own reason. `0` (`disabled`) and an undeclared column (`unavailable`)
+still drop nothing, and a row they keep keeps its frequency.
+
+This amends decision 3's retention clause only. The domain of a *stored*
+association's effect allele frequency is still ADR 0036's: `stats.parse_af`
+reports no EAF for exactly `0` and exactly `1`, so in the pipeline those cells
+reach `admit_rows` as "no usable frequency" and are dropped as such, counted
+`maf_missing` rather than below-threshold. A caller that hands `admit_rows` a
+raw `0.0` or `1.0` gets the below-threshold disposition; no reader does that
+today and this amendment does not change `parse_af`.
+
+Consequences, which are the point of writing it down:
+
+- **`maf_rows_missing` now counts rows a declared floor dropped.** It keeps its
+  meaning as a disposition among observed rows -- no usable frequency -- and
+  gains a consequence. `maf_rows_below_threshold` keeps counting only rows a
+  threshold was actually compared against, so the two are never both true of one
+  row and neither is a synonym for "retained".
+- **A common-variant Store built from a source that reports no frequency at all
+  now admits nothing.** That is the declared contract rather than a regression:
+  an Analysis that declares a floor over a file with no frequency column cannot
+  satisfy it, and the record says so through its counts and its empty store
+  rather than through a full one.
+- **opengwasdb-stores must read `maf_rows_missing` as rows the floor dropped**,
+  and must not present it as a retained-but-unjudged tally.
+- **`parse_af` is deliberately unchanged.** Reversing ADR 0036's amendment would
+  store a frequency of `0` for every monomorphic association -- a Store-format
+  change (spec §EAF: no EAF means no frequency) with consequences in ancestry,
+  phenotype-SD and EAF encoding, none of which this admission fix is about. The
+  two rules answer different questions, and the cost of keeping them apart is
+  only that the pipeline reports these rows as `maf_missing` rather than
+  below-threshold.
