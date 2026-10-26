@@ -336,7 +336,7 @@ def _assert_refused(result, out: Path, reason: str) -> None:
     assert not out.exists(), "nothing was checked, so no verdict is written"
 
 
-def test_a_ragged_store_is_refused(tmp_path, pair):
+def test_a_ragged_source_with_a_dense_target_is_refused(tmp_path, pair):
     import test_ragged_completion as trc
 
     from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
@@ -348,18 +348,26 @@ def test_a_ragged_store_is_refused(tmp_path, pair):
     )
     out = tmp_path / "verdict.json"
 
-    _assert_refused(_run(ragged, pair[1], out), out, "is not Dense (primary_layout=ragged)")
+    _assert_refused(_run(ragged, pair[1], out), out, "mixed-layout pair")
 
 
-def test_a_hybrid_root_is_refused_as_not_supported_yet(tmp_path, pair):
+def test_a_hybrid_root_is_checked_rather_than_refused(tmp_path):
+    # A Hybrid pair with no crossover and one Overflow association that stays put; the
+    # Hybrid check itself is tested in `test_observed_view_hybrid`.
     import test_hybrid_completion as thc
 
-    hybrid = thc._build_source(tmp_path)
+    from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
+
+    hybrid, completed = thc._build_source(tmp_path), tmp_path / "comp.opengwasdb"
+    complete_hybrid_store(hybrid, completed, thc._make_ld_panel(tmp_path), min_cor=0.0)
     out = tmp_path / "verdict.json"
 
-    result = _run(hybrid, pair[1], out)
+    result = _run(hybrid, completed, out)
 
-    _assert_refused(result, out, "Hybrid Dense Components are not supported yet")
+    assert result.exit_code == 0, result.output
+    verdict = _verdict(result, out)
+    assert verdict["layout"] == "hybrid"
+    assert verdict["components"]["overflow"]["n_child_associations"] == 1
 
 
 def test_an_observed_only_target_is_refused(tmp_path, pair):

@@ -48,6 +48,11 @@ index does not need, and neither may be inferred from another Analysis:
    it through the same codec the primary plane uses, so an imputed cell reads
    the panel's value and an observed cell whose source reported none stays NaN
    -- never the panel's (ADR 0037 §4).
+6. **A Hybrid root's Overflow-only ALIDs are refused by default and counted
+   when skipped.**  An Indexed Variant Subset indexes the Dense Component, so an
+   ALID only the shared/Overflow axis carries cannot be resolved; under
+   ``--overflow-only skip`` it is left out and its count and a sample are
+   recorded beside the absent count, never folded into it (issue #324, ADR 0065).
 """
 
 from __future__ import annotations
@@ -61,7 +66,8 @@ import shutil
 import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -179,6 +185,13 @@ ATTR_INPUT_SHA256 = "input_sha256"
 ATTR_REQUESTED_COUNT = "requested_count"
 ATTR_RESOLVED_COUNT = "resolved_count"
 ATTR_ABSENT_COUNT = "absent_count"
+#: The Overflow-only record (#324).  Deliberately outside `_REQUIRED_ATTRS`: a
+#: group built before the option existed records neither key, and its true count
+#: is 0 because that builder could only refuse such an ALID.  `_overflow_only_record`
+#: reads that case, and the counts-sum rule still refuses a group whose recorded
+#: skip was removed from the sum.
+ATTR_OVERFLOW_ONLY_COUNT = "overflow_only_count"
+ATTR_OVERFLOW_ONLY_SAMPLE = "overflow_only_sample"
 ATTR_BUILDER_VERSION = "builder_version"
 ATTR_CREATED_AT = "created_at"
 ATTR_ORDER = "order"
@@ -295,6 +308,59 @@ class ResolvedVariantList:
     absent: int
 
 
+#: How many of the skipped Overflow-only ALIDs a build records and reports.  A
+#: deterministic prefix in variant-list order, so a reader can see which requests
+#: the index could not answer without carrying the whole list (#324).
+OVERFLOW_ONLY_SAMPLE_SIZE = 20
+
+
+class OverflowOnlyPolicy(StrEnum):
+    """What a Hybrid-root build does with an ALID only the Overflow axis carries.
+
+    An Indexed Variant Subset indexes the Dense Component's on-panel variants
+    (#271), and an ALID present in the shared union table but absent from that
+    component is a request the index cannot answer.  ``refuse`` fails the build
+    and names them, which is what this project does with a request whose
+    plausible answer would be an incomplete one; ``skip`` leaves them out and
+    records the count and a sample, so the omission is counted rather than
+    silent (issue #324).
+    """
+
+    REFUSE = "refuse"
+    SKIP = "skip"
+
+
+@dataclass(frozen=True)
+class OverflowOnly:
+    """The requested ALIDs one build left out because only the Overflow carries them.
+
+    ``alids`` is every skipped ALID, in variant-list order; ``sample`` is the
+    deterministic first `OVERFLOW_ONLY_SAMPLE_SIZE` of them, which is what the
+    group records and the command reports.  ``refuse`` skips nothing, and a
+    Dense root has no Overflow axis, so both record a count of 0 -- a count that
+    was taken, not one that was unknown.
+    """
+
+    policy: OverflowOnlyPolicy
+    alids: tuple[str, ...] = ()
+
+    @property
+    def count(self) -> int:
+        return len(self.alids)
+
+    @property
+    def sample(self) -> tuple[str, ...]:
+        return self.alids[:OVERFLOW_ONLY_SAMPLE_SIZE]
+
+    def as_dict(self) -> dict[str, Any]:
+        """The JSON form a build result and the CLI summary carry."""
+        return {
+            "policy": self.policy.value,
+            "n_overflow_only": self.count,
+            "sample": list(self.sample),
+        }
+
+
 @dataclass(frozen=True)
 class IndexedSubsetAnalysis:
     """One Analysis's decoded subset column, in Store Variant Index order.
@@ -336,6 +402,8 @@ class IndexedSubset:
     requested_count: int
     resolved_count: int
     absent_count: int
+    n_overflow_only: int
+    overflow_only_sample: tuple[str, ...]
     builder_version: str
     created_at: str
     has_eaf: bool
@@ -384,6 +452,7 @@ class IndexedSubsetBuild:
     requested_count: int
     resolved_count: int
     absent_count: int
+    overflow_only: OverflowOnly
     input_sha256: str
     write_seconds: float = 0.0
     validate_seconds: float = 0.0
@@ -443,6 +512,7 @@ class _SubsetPlan:
     manifest: StoreManifest
     variant_list: VariantList
     resolved: ResolvedVariantList
+    overflow_only: OverflowOnly
     root: Any
     n_analyses: int
     n_variants: int
@@ -1027,6 +1097,7 @@ def _build_attributes(
     resolved: ResolvedVariantList,
     n_analyses: int,
     n_subset: int,
+    overflow_only: OverflowOnly,
 ) -> dict[str, Any]:
     return {
         ATTR_SCHEMA: INDEXED_SUBSET_SCHEMA_VERSION,
@@ -1043,6 +1114,8 @@ def _build_attributes(
         ATTR_REQUESTED_COUNT: int(resolved.requested),
         ATTR_RESOLVED_COUNT: int(resolved.resolved),
         ATTR_ABSENT_COUNT: int(resolved.absent),
+        ATTR_OVERFLOW_ONLY_COUNT: int(overflow_only.count),
+        ATTR_OVERFLOW_ONLY_SAMPLE: list(overflow_only.sample),
         ATTR_BUILDER_VERSION: _builder_version(),
         ATTR_CREATED_AT: dt.datetime.now(dt.UTC).isoformat(),
         ATTR_ORDER: _SUBSET_ORDER,
@@ -1118,7 +1191,8 @@ def _overflow_only_alids(hybrid_root: Path, candidates: list[str]) -> list[str]:
     """The candidates present in the shared union table -- off-panel, not absent.
 
     One batched pass short-circuits the common all-absent case; only when
-    something is present does the per-ALID pass pay for names to report.
+    something is present does the per-ALID pass pay for names to report.  The
+    result keeps the candidate order, which is the variant list's order.
     """
     shared_axis = VariantAxis(hybrid_root)
     try:
@@ -1129,40 +1203,43 @@ def _overflow_only_alids(hybrid_root: Path, candidates: list[str]) -> list[str]:
         shared_axis.close()
 
 
-def _refuse_overflow_only(
+def _overflow_only_request(
     hybrid_root: Path,
     dense_path: Path,
     alids: tuple[str, ...],
     dense_resolved: ResolvedVariantList,
-) -> None:
-    """Refuse requested ALIDs that exist only on a Hybrid release's overflow axis.
+    policy: OverflowOnlyPolicy,
+) -> tuple[str, ...]:
+    """The requested ALIDs that exist only on a Hybrid release's overflow axis.
 
     An Indexed Variant Subset built from a Hybrid root indexes its Dense
     Component only (ADR 0061, issue #271).  An off-panel ALID is present in the
     shared union table but has no Dense row, so resolving against the Dense
     Component alone would count it as "absent from this Store Release" and drop
-    it silently -- the plausible-wrong-answer class this project refuses.
+    it silently -- the plausible-wrong-answer class this project refuses.  The
+    shared union table makes the distinction observable, so the existing absent
+    handling is preserved only for an ALID absent from *both* axes.
 
-    The shared union table makes the distinction observable, so the existing
-    absent handling is preserved only for an ALID absent from *both* axes; one
-    present in the shared table but not the Dense Component fails the build and
-    is named.
+    Under `refuse` a non-empty result fails the build, naming the ALIDs.  Under
+    `skip` the caller leaves them out and records them; this function only
+    classifies them (issue #324).
     """
     candidates = _off_panel_candidates(dense_path, alids, dense_resolved)
     if not candidates:
-        return
+        return ()
     overflow = _overflow_only_alids(hybrid_root, candidates)
-    if not overflow:
-        return
-    preview = ", ".join(repr(alid) for alid in overflow[:5])
-    suffix = f" (and {len(overflow) - 5} more)" if len(overflow) > 5 else ""
-    raise IndexedSubsetError(
-        f"{len(overflow)} requested canonical ALID(s) belong only to the shared/overflow "
-        f"axis of Hybrid release {hybrid_root} and cannot be indexed by its Dense "
-        f"Component's Indexed Variant Subset: {preview}{suffix}. An Indexed Variant "
-        "Subset indexes the Dense Component's on-panel variants only; remove these "
-        "ALIDs or query them through the ordinary hybrid association path"
-    )
+    if overflow and policy is OverflowOnlyPolicy.REFUSE:
+        preview = ", ".join(repr(alid) for alid in overflow[:5])
+        suffix = f" (and {len(overflow) - 5} more)" if len(overflow) > 5 else ""
+        raise IndexedSubsetError(
+            f"{len(overflow)} requested canonical ALID(s) belong only to the shared/overflow "
+            f"axis of Hybrid release {hybrid_root} and cannot be indexed by its Dense "
+            f"Component's Indexed Variant Subset: {preview}{suffix}. An Indexed Variant "
+            "Subset indexes the Dense Component's on-panel variants only; remove these "
+            "ALIDs, pass --overflow-only skip to leave them out and count them, or query "
+            "them through the ordinary hybrid association path"
+        )
+    return tuple(overflow)
 
 
 def _resolve_inputs(
@@ -1171,20 +1248,41 @@ def _resolve_inputs(
     variant_list_path: str | Path,
     reference_assembly: str,
     hybrid_root: Path | None,
-) -> tuple[VariantList, ResolvedVariantList]:
+    overflow_only: OverflowOnlyPolicy,
+) -> tuple[VariantList, ResolvedVariantList, OverflowOnly]:
     """Check the assembly and resolve the list against the owning release.
 
     On a Hybrid root the list is resolved against the nested Dense Component and
-    any requested ALID that belongs only to the shared/overflow axis is refused
-    (issue #271); an ALID absent from the shared union table is still counted and
+    any requested ALID that belongs only to the shared/overflow axis is refused,
+    or under ``overflow_only=skip`` left out and counted separately (#271,
+    #324).  An ALID absent from the shared union table is still counted and
     recorded as absent, because the shared table makes that distinction
-    observable.
+    observable; the skipped count is recorded beside it, never folded into it.
     """
     _check_assembly(manifest, reference_assembly)
     variant_list = read_variant_list(variant_list_path)
     resolved = resolve_variant_list(target_path, variant_list.alids)
+    overflow = OverflowOnly(overflow_only)
     if hybrid_root is not None:
-        _refuse_overflow_only(hybrid_root, target_path, variant_list.alids, resolved)
+        skipped = _overflow_only_request(
+            hybrid_root, target_path, variant_list.alids, resolved, overflow_only
+        )
+        if skipped:
+            if len(skipped) > resolved.absent:
+                raise IndexedSubsetError(
+                    f"internal error resolving the variant list against Dense Component "
+                    f"{target_path}: {len(skipped)} ALIDs were classified as "
+                    f"overflow-only but only {resolved.absent} of the requested ALIDs "
+                    "were not resolved; refusing to guess which counts they belong to"
+                )
+            resolved = replace(resolved, absent=resolved.absent - len(skipped))
+            overflow = OverflowOnly(overflow_only, skipped)
+            log.warning(
+                "%d of %d requested ALIDs belong only to the shared/overflow axis and "
+                "were not indexed (--overflow-only skip)",
+                len(skipped),
+                resolved.requested,
+            )
     if resolved.resolved == 0:
         raise VariantListError(
             f"variant list {variant_list.path} names no Store variants; an Indexed "
@@ -1197,7 +1295,7 @@ def _resolve_inputs(
             resolved.absent,
             resolved.requested,
         )
-    return variant_list, resolved
+    return variant_list, resolved, overflow
 
 
 def _prepare_subset(
@@ -1206,6 +1304,7 @@ def _prepare_subset(
     variant_list_path: str | Path,
     reference_assembly: str,
     band_cells: int,
+    overflow_only: OverflowOnlyPolicy,
 ) -> _SubsetPlan:
     """Validate the whole input contract and open the release, before any write."""
     store_path = Path(store_path)
@@ -1213,15 +1312,26 @@ def _prepare_subset(
     if band_cells <= 0:
         raise IndexedSubsetError(f"band_cells must be positive, got {band_cells}")
     target_path, manifest, hybrid_root = _resolve_build_target(store_path)
-    variant_list, resolved = _resolve_inputs(
-        target_path, manifest, variant_list_path, reference_assembly, hybrid_root
+    variant_list, resolved, overflow = _resolve_inputs(
+        target_path,
+        manifest,
+        variant_list_path,
+        reference_assembly,
+        hybrid_root,
+        overflow_only,
     )
     root = store_arrays.open_group(target_path / "data.zarr")
     _check_layout(manifest, root)
     n_analyses = int(root["z"].shape[1])
     n_variants = int(root["z"].shape[0])
     attrs = _build_attributes(
-        name, manifest, variant_list, resolved, n_analyses, len(resolved.variant_index)
+        name,
+        manifest,
+        variant_list,
+        resolved,
+        n_analyses,
+        len(resolved.variant_index),
+        overflow,
     )
     return _SubsetPlan(
         store_path=target_path,
@@ -1229,6 +1339,7 @@ def _prepare_subset(
         manifest=manifest,
         variant_list=variant_list,
         resolved=resolved,
+        overflow_only=overflow,
         root=root,
         n_analyses=n_analyses,
         n_variants=n_variants,
@@ -1298,6 +1409,20 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
             validate_seconds = time.perf_counter() - started
     except DestinationExistsError as exc:
         raise IndexedSubsetExistsError(str(exc)) from exc
+    return _published_build(
+        plan, dest, sample, write_stats, write_seconds, validate_seconds
+    )
+
+
+def _published_build(
+    plan: _SubsetPlan,
+    dest: Path,
+    sample: _SamplePlan | None,
+    write_stats: _WriteStats,
+    write_seconds: float,
+    validate_seconds: float,
+) -> IndexedSubsetBuild:
+    """The result record for one published group, from what the build measured."""
     return IndexedSubsetBuild(
         name=plan.name,
         path=dest,
@@ -1306,6 +1431,7 @@ def _publish_subset(plan: _SubsetPlan, overwrite: bool, band_cells: int) -> Inde
         requested_count=plan.resolved.requested,
         resolved_count=plan.resolved.resolved,
         absent_count=plan.resolved.absent,
+        overflow_only=plan.overflow_only,
         input_sha256=plan.variant_list.sha256,
         write_seconds=write_seconds,
         validate_seconds=validate_seconds,
@@ -1331,6 +1457,7 @@ def build_indexed_subset(
     reference_assembly: str,
     overwrite: bool = False,
     band_cells: int = DEFAULT_BAND_CELLS,
+    overflow_only: str = OverflowOnlyPolicy.REFUSE.value,
 ) -> IndexedSubsetBuild:
     """Build, validate and atomically publish one Indexed Variant Subset.
 
@@ -1340,15 +1467,37 @@ def build_indexed_subset(
     component's on-panel variants; a requested ALID that exists only on the
     shared/overflow axis is refused (issue #271).
 
+    ``overflow_only`` decides that last case: ``refuse`` (the default) fails the
+    build and names the ALIDs; ``skip`` leaves them out and records their count
+    and a sample beside the absent count (issue #324).  A Dense release has no
+    overflow axis, so the option is accepted there and changes nothing.
+
     The input contract (canonical ALIDs, an explicit matching Reference
     Assembly, a nonempty match) is enforced before any group is created; the
     build then stages a unique sibling, validates it against the primary planes,
     and publishes it under the namespace's advisory lock (ADR 0043).
     """
+    policy = _overflow_only_policy(overflow_only)
     plan = _prepare_subset(
-        store_path, subset_name, variant_list_path, reference_assembly, band_cells
+        store_path,
+        subset_name,
+        variant_list_path,
+        reference_assembly,
+        band_cells,
+        policy,
     )
     return _publish_subset(plan, overwrite=overwrite, band_cells=band_cells)
+
+
+def _overflow_only_policy(value: str | OverflowOnlyPolicy) -> OverflowOnlyPolicy:
+    """The requested policy, or a failure naming every accepted value."""
+    try:
+        return OverflowOnlyPolicy(value)
+    except ValueError as exc:
+        accepted = ", ".join(policy.value for policy in OverflowOnlyPolicy)
+        raise IndexedSubsetError(
+            f"overflow_only must be one of {accepted}; got {value!r}"
+        ) from exc
 
 
 def _validate_staged(plan: _SubsetPlan, work: Path) -> _SamplePlan | None:
@@ -1459,6 +1608,78 @@ def _require_attr_int(name: str, attrs: dict[str, Any], key: str) -> int:
     return int(value)
 
 
+def _overflow_only_record(
+    name: str, attrs: dict[str, Any]
+) -> tuple[int, tuple[str, ...], list[str]]:
+    """The recorded Overflow-only count and sample, with findings for a bad record.
+
+    Every group this writer publishes records both attributes (#324).  A group
+    recording neither was built before the ``--overflow-only`` option existed,
+    when an ALID only the Overflow carries could do nothing but fail the build:
+    its count is zero by construction, not an unknown read as zero.  The
+    requested/resolved/absent sum still has to hold, so a group whose recorded
+    count was removed or forged fails validation rather than hiding a skip.
+    """
+    has_count = ATTR_OVERFLOW_ONLY_COUNT in attrs
+    has_sample = ATTR_OVERFLOW_ONLY_SAMPLE in attrs
+    if not has_count and not has_sample:
+        return 0, (), []
+    if has_count != has_sample:
+        missing = ATTR_OVERFLOW_ONLY_SAMPLE if has_count else ATTR_OVERFLOW_ONLY_COUNT
+        return 0, (), [f"indexed subset {name!r} records no {missing}"]
+    count, errors = _recorded_overflow_count(name, attrs)
+    sample, sample_errors = _recorded_overflow_sample(name, attrs, count)
+    return count, sample, [*errors, *sample_errors]
+
+
+def _recorded_overflow_count(name: str, attrs: dict[str, Any]) -> tuple[int, list[str]]:
+    """The recorded count, or the reason it cannot be one."""
+    raw = attrs[ATTR_OVERFLOW_ONLY_COUNT]
+    if isinstance(raw, bool) or not isinstance(raw, (int, np.integer)):
+        return 0, [
+            f"indexed subset {name!r} records a non-integer "
+            f"{ATTR_OVERFLOW_ONLY_COUNT}: {raw!r}"
+        ]
+    count = int(raw)
+    if count < 0:
+        return count, [
+            f"indexed subset {name!r} records a negative {ATTR_OVERFLOW_ONLY_COUNT}: {count}"
+        ]
+    return count, []
+
+
+def _recorded_overflow_sample(
+    name: str, attrs: dict[str, Any], count: int
+) -> tuple[tuple[str, ...], list[str]]:
+    """The recorded sample, or the reason it is not the deterministic prefix."""
+    raw = attrs[ATTR_OVERFLOW_ONLY_SAMPLE]
+    if not isinstance(raw, (list, tuple)) or any(
+        not isinstance(alid, str) for alid in raw
+    ):
+        return (), [
+            f"indexed subset {name!r} records a malformed "
+            f"{ATTR_OVERFLOW_ONLY_SAMPLE}: {raw!r}"
+        ]
+    sample = tuple(raw)
+    if len(sample) != min(max(count, 0), OVERFLOW_ONLY_SAMPLE_SIZE):
+        return sample, [
+            f"indexed subset {name!r} records {len(sample)} "
+            f"{ATTR_OVERFLOW_ONLY_SAMPLE} entries for {count} skipped ALIDs; the "
+            f"sample is the first {OVERFLOW_ONLY_SAMPLE_SIZE} in list order"
+        ]
+    return sample, []
+
+
+def _require_overflow_only_record(
+    name: str, attrs: dict[str, Any]
+) -> tuple[int, tuple[str, ...]]:
+    """The recorded Overflow-only count and sample, or a subset-naming failure."""
+    count, sample, errors = _overflow_only_record(name, attrs)
+    if errors:
+        raise IndexedSubsetError(errors[0])
+    return count, sample
+
+
 def _parse_subset_encoding(
     name: str, attrs: dict[str, Any], errors: list[str]
 ) -> StoreEncoding | None:
@@ -1567,9 +1788,11 @@ def _require_declared_metadata(name: str, attrs: dict[str, Any]) -> None:
 def _require_declared_counts(name: str, attrs: dict[str, Any], n_analyses: int) -> None:
     """The recorded Analysis count matches the release, and the counts add up.
 
-    Mirrors validation's `_check_identity_attrs`.  Cheap (four attributes) and
-    validation-visible, so the read path runs it rather than letting a
-    wrong-width index decode under the release's shape by coincidence.
+    Mirrors validation's `_check_identity_attrs`.  Cheap (a handful of
+    attributes) and validation-visible, so the read path runs it rather than
+    letting a wrong-width index decode under the release's shape by coincidence.
+    The Overflow-only count is part of the sum: a requested ALID is either
+    indexed, absent, or carried only by the Overflow (issue #324).
     """
     if _require_attr_int(name, attrs, ATTR_N_ANALYSES) != n_analyses:
         raise IndexedSubsetError(
@@ -1579,10 +1802,14 @@ def _require_declared_counts(name: str, attrs: dict[str, Any], n_analyses: int) 
     requested = _require_attr_int(name, attrs, ATTR_REQUESTED_COUNT)
     resolved = _require_attr_int(name, attrs, ATTR_RESOLVED_COUNT)
     absent = _require_attr_int(name, attrs, ATTR_ABSENT_COUNT)
-    if requested != resolved + absent:
+    overflow_only, _sample, errors = _overflow_only_record(name, attrs)
+    if errors:
+        raise IndexedSubsetError(errors[0])
+    if requested != resolved + absent + overflow_only:
         raise IndexedSubsetError(
             f"Indexed Variant Subset {name!r} records requested={requested}, "
-            f"resolved={resolved}, absent={absent}, which do not add up"
+            f"resolved={resolved}, absent={absent}, overflow_only={overflow_only}, "
+            "which do not add up"
         )
 
 
@@ -1826,6 +2053,36 @@ def _open_subset_group(path: Path, name: str) -> tuple[Any, dict[str, Any]]:
     return group, attrs
 
 
+def _require_release_bound_axis(
+    store_path: Path,
+    name: str,
+    group: Any,
+    attrs: dict[str, Any],
+    encoding: StoreEncoding,
+) -> np.ndarray:
+    """Refuse a stale subset and bound its Variant Index against the release's axis."""
+    release = open_store(store_path)
+    _refuse_stale_subset(name, attrs, encoding, release.manifest)
+    # Bound the subset against the release's own axis: an out-of-range Variant
+    # Index would name a variant the Store does not have, and `resolve_rows`
+    # would index the Store Variant Table out of bounds.  The Analysis width is
+    # read from the same primary plane so a wrong-width index is refused too.
+    primary_z = release.arrays(mode="r")["z"]
+    completed = release.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
+    return _require_decodable_subset(
+        name,
+        group,
+        encoding,
+        attrs,
+        int(primary_z.shape[0]),
+        int(primary_z.shape[1]),
+        zarr_format_for_version(
+            release.manifest.format_version, source=f"release at {store_path}"
+        ),
+        completed=completed,
+    )
+
+
 def _open_indexed_subset(store_path: Path, subset_name: str) -> IndexedSubset:
     name = parse_indexed_subset_name(subset_name)
     path = store_path / "data.zarr" / INDEXED_SUBSETS_GROUP / name
@@ -1841,26 +2098,8 @@ def _open_indexed_subset(store_path: Path, subset_name: str) -> IndexedSubset:
     encoding = _parse_subset_encoding(name, attrs, errors)
     if encoding is None:
         raise IndexedSubsetError(errors[0])
-    release = open_store(store_path)
-    _refuse_stale_subset(name, attrs, encoding, release.manifest)
-    # Bound the subset against the release's own axis: an out-of-range Variant
-    # Index would name a variant the Store does not have, and `resolve_rows`
-    # would index the Store Variant Table out of bounds.  The Analysis width is
-    # read from the same primary plane so a wrong-width index is refused too.
-    primary_z = release.arrays(mode="r")["z"]
-    completed = release.manifest.completion_state is CompletionState.REFERENCE_COMPLETED
-    variant_index = _require_decodable_subset(
-        name,
-        group,
-        encoding,
-        attrs,
-        int(primary_z.shape[0]),
-        int(primary_z.shape[1]),
-        zarr_format_for_version(
-            release.manifest.format_version, source=f"release at {store_path}"
-        ),
-        completed=completed,
-    )
+    variant_index = _require_release_bound_axis(store_path, name, group, attrs, encoding)
+    overflow_only, overflow_only_sample = _require_overflow_only_record(name, attrs)
     return IndexedSubset(
         store_path=store_path,
         name=name,
@@ -1877,6 +2116,8 @@ def _open_indexed_subset(store_path: Path, subset_name: str) -> IndexedSubset:
         requested_count=_require_attr_int(name, attrs, ATTR_REQUESTED_COUNT),
         resolved_count=_require_attr_int(name, attrs, ATTR_RESOLVED_COUNT),
         absent_count=_require_attr_int(name, attrs, ATTR_ABSENT_COUNT),
+        n_overflow_only=overflow_only,
+        overflow_only_sample=overflow_only_sample,
         builder_version=str(attrs[ATTR_BUILDER_VERSION]),
         created_at=str(attrs[ATTR_CREATED_AT]),
         has_eaf="eaf" in group,
@@ -2503,10 +2744,12 @@ def _check_identity_attrs(
     requested = int(attrs[ATTR_REQUESTED_COUNT])
     resolved = int(attrs[ATTR_RESOLVED_COUNT])
     absent = int(attrs[ATTR_ABSENT_COUNT])
-    if requested != resolved + absent:
+    overflow_only, _sample, findings = _overflow_only_record(name, attrs)
+    errors.extend(findings)
+    if requested != resolved + absent + overflow_only:
         errors.append(
             f"indexed subset {name!r} records requested={requested}, resolved={resolved}, "
-            f"absent={absent}, which do not add up"
+            f"absent={absent}, overflow_only={overflow_only}, which do not add up"
         )
 
 

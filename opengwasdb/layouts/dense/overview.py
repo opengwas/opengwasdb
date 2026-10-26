@@ -827,6 +827,7 @@ def _indexed_subset_row(path: Path, attrs: dict[str, Any], size: int) -> dict[st
         "Requested": _indexed_subset_value(attrs, "requested_count"),
         "Resolved": _indexed_subset_value(attrs, "resolved_count"),
         "Absent": _indexed_subset_value(attrs, "absent_count"),
+        "Overflow-only": _indexed_subset_value(attrs, "overflow_only_count"),
         "Analyses": _indexed_subset_value(attrs, "n_analyses"),
         "Physical bytes": f"{size:,} B ({_human_bytes(size)})",
         "Input SHA-256": _indexed_subset_value(attrs, "input_sha256"),

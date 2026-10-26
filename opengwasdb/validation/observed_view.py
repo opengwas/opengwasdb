@@ -33,7 +33,7 @@ from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, assert_never
 
 import numpy as np
 
@@ -168,22 +168,78 @@ def check_observed_view(
     *,
     seed: int,
     n_random: int = 1000,
+    ld_panel: str | Path | None = None,
+    ancestry: str | None = None,
 ) -> ObservedViewVerdict:
-    """Compare an Observed-Only Dense Store with the Reference-Completed one made from it.
+    """Compare an Observed-Only Store with the Reference-Completed one made from it.
 
-    Raises `ObservedViewRefused` when the pair cannot be checked (a non-Dense
-    layout, a source that is not Observed-Only, a target that is not
+    Both Stores must have one layout, which picks the check: Dense here, Hybrid
+    in `observed_view_hybrid` (issue #295), Ragged in `observed_view_ragged`
+    (issue #296). Raises `ObservedViewRefused` when
+    the pair cannot be checked (a mixed-layout pair, a layout the check does not
+    support, a source that is not Observed-Only, a target that is not
     Reference-Completed, or a Store whose arrays do not agree with its own
     axis). A mismatch is not an error: it is a verdict with `passed` false.
 
     `seed` is required so that every verdict can be reproduced from its record.
     `n_random` chunk-rows are drawn uniformly; a grid with fewer is sampled in
-    full.
+    full (a Hybrid pair also compares `n_random` Overflow Analyses; a Ragged pair
+    samples `n_random` Analyses). `ld_panel` and `ancestry` belong to a Ragged pair
+    alone, whose retained regions are rebuilt from them: a Dense or Hybrid pair
+    given either is refused, not ignored.
     """
     if n_random < 0:
         raise ValueError(f"n_random must be >= 0, got {n_random}")
+    source, target = Path(source_path), Path(target_path)
+    layout = _pair_layout(source, target)
+    # The layout dispatch: one entry per layout. A layout's own module is
+    # imported here, not at the top, because it imports this one's helpers.
+    if layout is PrimaryStorageLayout.RAGGED:
+        from opengwasdb.validation.observed_view_ragged import check_ragged
+
+        return check_ragged(
+            source, target, seed=seed, n_random=n_random, ld_panel=ld_panel, ancestry=ancestry
+        )
+    if ld_panel is not None or ancestry is not None:
+        raise ObservedViewRefused(
+            "--ld-panel and --ancestry are only for a Ragged pair, "
+            f"not a {_LAYOUT_NAMES[layout]} one"
+        )
+    if layout is PrimaryStorageLayout.DENSE:
+        return _check_dense(source, target, seed=seed, n_random=n_random)
+    if layout is PrimaryStorageLayout.HYBRID:
+        from opengwasdb.validation.observed_view_hybrid import check_hybrid
+
+        return check_hybrid(source, target, seed=seed, n_random=n_random)
+    assert_never(layout)
+
+
+def _pair_layout(source_path: Path, target_path: Path) -> PrimaryStorageLayout:
+    """The layout the two Stores share: a pair of two layouts has nothing to line up."""
+    source = _open_checked(source_path, "source", CompletionState.OBSERVED_ONLY)
+    target = _open_checked(target_path, "target", CompletionState.REFERENCE_COMPLETED)
+    layout = target.manifest.primary_layout
+    if source.manifest.primary_layout is not layout:
+        raise ObservedViewRefused(
+            f"source store {source_path} is not {_LAYOUT_NAMES[layout]} "
+            f"(primary_layout={source.manifest.primary_layout.value}) as target store "
+            f"{target_path} is; a mixed-layout pair cannot be checked"
+        )
+    return layout
+
+
+_LAYOUT_NAMES = {
+    PrimaryStorageLayout.DENSE: "Dense",
+    PrimaryStorageLayout.RAGGED: "Ragged",
+    PrimaryStorageLayout.HYBRID: "Hybrid",
+}
+
+
+def _check_dense(
+    source_path: Path, target_path: Path, *, seed: int, n_random: int
+) -> ObservedViewVerdict:
     started = time.time()
-    pair = _open_pair(Path(source_path), Path(target_path))
+    pair = _open_pair(source_path, target_path)
     analyses = _analyses_record(pair)
     axis = _map_axis(pair.source_path, pair.target_path, pair.parent.n_rows, pair.child.n_rows)
     chunk_rows = int(inner_chunk_of(pair.parent.z.array)[0])
@@ -261,17 +317,6 @@ def _open_checked(path: Path, role: str, wanted: CompletionState) -> OpenGWASDBS
         store = open_store(path)
     except (OSError, ValueError, KeyError) as exc:
         raise ObservedViewRefused(f"cannot open {role} store {path}: {exc}") from exc
-    layout = store.manifest.primary_layout
-    if layout is not PrimaryStorageLayout.DENSE:
-        hybrid = (
-            "; Hybrid Dense Components are not supported yet"
-            if layout is PrimaryStorageLayout.HYBRID
-            else ""
-        )
-        raise ObservedViewRefused(
-            f"{role} store {path} is not Dense (primary_layout={layout.value}); "
-            f"the Observed-View Check covers Dense Stores only{hybrid}"
-        )
     state = store.manifest.completion_state
     if state is not wanted:
         raise ObservedViewRefused(
