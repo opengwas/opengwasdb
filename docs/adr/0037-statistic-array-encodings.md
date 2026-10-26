@@ -8,6 +8,14 @@
 > version reference below as a historical name for what is now the one readable
 > format.
 
+> **Excepted by [ADR 0067](0067-per-association-sample-size-and-besd-allele-frequency.md) §4**
+> (issue #302) for `se` selection. A Ragged release carrying a per-association
+> `n` plane keeps `se` in `float16` whatever §3's measurements choose: the
+> residual model's one intercept per Analysis assumes one N per Analysis, and
+> with eQTLGen's per-pair N it cost up to 0.79% SE error against `float16`'s
+> 0.049%. `decide()` applies the exception, and the loader and `validate` refuse
+> a release that declares `n` beside `int8_residual`. §3 is otherwise unchanged.
+
 Supersedes ADR 0036's Decision 3 (`float32` for `eaf`) and refines its Decision 5
 (Reference Completion). Leaves ADR 0036's semantics intact: EAF is still per
 (variant, Analysis), still oriented to the stored effect allele, still declared

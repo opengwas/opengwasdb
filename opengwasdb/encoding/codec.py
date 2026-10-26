@@ -41,6 +41,8 @@ from opengwasdb.encoding.plan import (
     EAF_CODE_MAX,
     EAF_CODE_MIN,
     EAF_EXCEPTION,
+    N_MAX,
+    N_MISSING,
     SE_CODE_MAX,
     SE_CODE_MIN,
     SE_EXCEPTION,
@@ -1337,6 +1339,51 @@ class StoreCodec:
         if not self.encoding.eaf.is_residual:
             return np.asarray(np.isnan(codes), dtype=bool)
         return np.asarray(codes == EAF_ABSENT, dtype=bool)
+
+    # ---- n ---------------------------------------------------------------
+
+    def decode_n(self, raw: np.ndarray) -> np.ndarray:
+        """Decoded per-association sample sizes (ADR 0067).
+
+        `float64`, which holds every `uint32` count exactly, with NaN for the
+        reserved missing code -- the result contract's one missing marker. A
+        release that declares no `n` plane has nothing to decode, and asking
+        is a caller defect rather than a request for an all-missing column.
+        """
+        if self.encoding.n is None:
+            raise ValueError("this release declares no n plane, so there is no n to decode")
+        codes = np.asarray(raw)
+        if codes.dtype != np.dtype(self.encoding.n.dtype):
+            raise ValueError(
+                f"n codes have dtype {codes.dtype} but the plan declares {self.encoding.n.dtype}"
+            )
+        out = codes.astype(np.float64)
+        out[codes == N_MISSING] = np.nan
+        return out
+
+
+def encode_sample_sizes(values: np.ndarray) -> np.ndarray:
+    """Per-association sample sizes as the `uint32` codes the `n` plane stores.
+
+    NaN is missing and becomes `N_MISSING`. Anything that is not a whole number
+    from 1 to `N_MAX` is refused rather than rounded or clipped: a sample size
+    of 0, a fraction, or one that would collide with the reserved code is a
+    broken input, not a nearly-right count (ADR 0067). A module function, not a
+    codec method, because the plane has one kind and the Ragged writer encodes
+    each Analysis as it arrives, before the plan exists.
+    """
+    v = np.asarray(values, dtype=np.float64)
+    missing = np.isnan(v)
+    present = v[~missing]
+    bad = ~np.isfinite(present) | (present < 1) | (present > N_MAX) | (present != np.floor(present))
+    if np.any(bad):
+        raise ValueError(
+            f"cannot store sample size {float(present[bad][0])!r}: an n cell holds a whole "
+            f"number from 1 to {N_MAX}, or is missing"
+        )
+    out = np.full(v.shape, N_MISSING, dtype=np.uint32)
+    out[~missing] = present.astype(np.uint32)
+    return out
 
 
 # ── Flat-position helpers ───────────────────────────────────────────────────

@@ -417,7 +417,8 @@ read from that declaration rather than inferred from a dtype.
 ## 6a. Statistic encodings
 
 Every Store Release MUST declare an `encoding` object in `manifest.json`,
-stating `version` 3 and a plan for each of `z`, `se` and `eaf`:
+stating `version` 3 and a plan for each of `z`, `se` and `eaf` -- and, for a
+Ragged release carrying per-association sample sizes, `n`:
 
 ```json
 "encoding": {
@@ -492,7 +493,13 @@ Builders try ranges ±0.5, ±1, and ±2 in order, accepting one only when every
 finite SE has decodable EAF, exact exceptions are at most 2% **in every
 Analysis** — not pooled over the plane — ordinary-cell relative error is at
 most 1%, and measured compressed bytes decrease after codes, coefficients, and
-side tables are charged. Otherwise the entire plane is `float16`. Zero SE,
+side tables are charged. Otherwise the entire plane is `float16`. A release
+carrying an `n` plane keeps `se` in `float16` unconditionally: the residual
+model has one intercept per Analysis and so assumes one N per Analysis, and
+with per-pair N spanning 2.5 decades it measured a 0.79% worst-case SE error on
+eQTLGen against `float16`'s 0.049% (ADR 0067 §4). A reader MUST reject an
+`encoding` block that declares `n` beside `int8_residual`, and validation
+names it (§20). Zero SE,
 non-finite predictions, and out-of-range residuals are exact exceptions, never
 clips.
 
@@ -669,6 +676,24 @@ completion pipeline today, but load-bearing here, so it is recorded in
 release records it at the top level as well as inside its Dense Component —
 the component is where the imputation happened, but the release is what a
 reader opens.
+
+**`n` — the optional per-association sample size** (ADR 0067). A Ragged
+release MAY carry a fifth CSR plane, `data.zarr/ragged/n`, and declares it as
+`"n": {"kind": "uint32"}`. A release without the plane declares **no** `n` key
+at all: unlike `eaf`, there is no `absent` kind, and a block without the key
+is every release written before the plane existed and every release since
+that was given no sample-size input. A reader meeting an `n` kind it does not
+implement MUST reject the release (§21).
+
+| code | meaning |
+|---|---|
+| `4294967295` (`2³² − 1`) | missing — the build was given no N for this pair; decodes to NaN |
+| `1 … 4294967294` | that many participants |
+| `0` | invalid — never written; a release holding one fails validation |
+
+`n` has no side table: its codes are its values. It is written only by
+Ragged builds, never by a Dense build or a Hybrid component, and is decoded to
+`float64` (exact for every code) with NaN for missing.
 
 Derived artifacts that hold their own copies of `z` — top-hit indexes (§18)
 and the Rho Matrix — remain decoded `float32` and are explicitly rebuildable
@@ -854,6 +879,18 @@ variant_level
 
 OpenGWASDB MUST NOT present sample size inferred from effect statistics as an observed participant count.
 
+A Ragged release MAY store a sample size **per association**, in the `n` plane
+(§6a, §11, ADR 0067). It is a build input -- for a BESD build, a per-pair table
+keyed by `.epi` probe ID and `.esi` SNP ID, such as eQTLGen's published
+`NrSamples` -- and never a value recovered from `z`, `se` and EAF: a pair the
+input does not name is stored as missing, not estimated. The input's path,
+sha256 and match counts are recorded in `manifest.json`'s
+`provenance.sample_size_table` (`n_rows`, `n_rows_matched`,
+`n_rows_unmatched`, `n_associations`, `n_associations_missing`). An Analysis
+holding at least one per-association N declares
+`sample_size_scope=variant_level`; its `sample_size` column keeps whatever
+per-Analysis figure its manifest supplied.
+
 Physical sample-size encoding is an implementation detail. Builders SHOULD choose the smallest lossless representation compatible with source data, including scalar counts, total N plus constant case fraction, sparse residuals, or full per-variant counts.
 
 ## 9. EAF and INFO metadata
@@ -921,6 +958,17 @@ panel where one is supplied; otherwise, for a build of three or more Analyses,
 it is the consensus of the other Analyses — which can establish that Analyses
 disagree but not which is right, so an inconsistent build fails rather than
 dropping a study.
+
+A BESD file set is the one source whose Analyses share their frequencies: the
+`.esi` reports one per variant, and a build asked to store it
+(`--store-esi-eaf`, opt-in) stores that one value at that variant for every
+probe (`1 − f` where the canonical orientation flipped the allele). Its check
+is therefore run **once, over the `.esi`**, against the supplied reference, and
+the one outcome is recorded against every probe that stores a frequency, under
+`provenance.eaf_orientation.scope = "source_file"` (ADR 0067). It MUST NOT fall
+back to a consensus of probes: they agree by construction, so a consensus would
+certify the `.esi` against itself. With no reference, every such probe records
+`unverified`.
 
 The check MUST NOT be interpreted where it cannot be. Below a minimum overlap,
 or below a minimum frequency variance on either side, the Analysis records
@@ -1408,7 +1456,15 @@ release, including ones this build did not write (§20).
 
 `eaf` (ADR 0036) is an optional fourth parallel array (`data.zarr/ragged/eaf`,
 `float32`), aligned with the CSR `z`/`se` and absent when no Analysis in the
-release carries a frequency.
+release carries a frequency. A BESD build stores the `.esi` frequency there
+only when asked (`--store-esi-eaf`, §9.1, ADR 0067); without the flag it stores
+none, whatever the `.esi` reports.
+
+`n` (ADR 0067) is an optional fifth parallel array (`data.zarr/ragged/n`,
+`uint32`, §6a), present exactly when the `encoding` block declares it, and
+written only when the build is given a per-association sample size (§8). The
+top-hit indexes do not carry it; a top-hit query resolves each hit to its CSR
+cell for `n`, as it does for `eaf` when an index carries none.
 
 ### 11.1 The variant-centric index (`ragged/by_variant/`)
 
@@ -1427,6 +1483,7 @@ one row per association of the Analysis-sorted component, ordered
 | `z`, `se` | the component's `z`/`se` dtypes | the same stored codes, re-keyed |
 | `eaf` | the component's `eaf` dtype | the same codes, re-keyed; present only when the component has an `eaf` array |
 | `imputed` | uint8 | the imputed mask, present only when the component has one |
+| `n` | uint32 | the same per-association sample-size codes, re-keyed; present only when the component has an `n` plane (ADR 0067) |
 | `z_overflow_index` / `_value` | int64 / float32 | the re-keyed `z` overflow table |
 | `eaf_exception_index` / `_value` | int64 / float32 | the re-keyed EAF exception table |
 | `se_exception_index` / `_value` | int64 / float32 | the re-keyed SE exception table, under `int8_residual` |
@@ -1685,6 +1742,13 @@ Query results SHOULD expose:
 | info | when stored/requested |
 | sample size | when stored/requested |
 
+A Ragged release with an `n` plane (§6a) adds `n` to **every** query result --
+`float64`, NaN where the build was given no N for the pair, and present on an
+empty result too, so "this release holds no sample sizes" and "no rows" never
+read alike. A release without the plane never has the key. The CLI's resolved
+output prints an `n` column immediately before `association_status` (`.` where
+missing) only for such a release (ADR 0067).
+
 Reference-Completed queries include imputed associations by default. Query APIs MUST provide an Observed-Only mode that excludes imputed associations.
 
 Detailed Reference Completion Quality is not joined onto every imputed association by default. Query APIs MAY expose it when requested.
@@ -1715,8 +1779,9 @@ Validators MUST check at least:
 - every rsid in the Store Variant Table is resolvable through the rsid search index (§1) — a release that carries rsids it cannot resolve fails silently at query time, so the check is on coverage, not merely presence (issue #109);
 - `eaf`, when present, has the same shape/length as `z`/`se`, and its **decoded** values hold no finite value outside `[0, 1]` (ADR 0036) — decoded, because an `int8` residual plane's raw bytes are codes and checking those would pass every store while saying nothing about what a query returns;
 - `variant_index` is **strictly increasing within every Analysis's segment** in a standalone Ragged or a Hybrid Overflow CSR (§11): an out-of-order segment makes the variant-side binary search answer with a plausible, wrong row, and a repeated one is a second association at a variant that Analysis already holds. It is checked on every release, not only on ones this build wrote. The check MUST be bounded and MUST NOT materialise the array: it reads the sequence in windows (1,000,000 int32, 4 MB), carries the preceding value across a window boundary and resets at each Analysis boundary, so peak memory is the window, its comparison bool and the per-Analysis offsets (`O(n_analyses)`), independent of the association count. The error names the first offending Analysis and says which of the two it found — a decrease, or a repeat;
-- the variant-centric index MUST be present on every Ragged component (a Ragged Store Release or a Hybrid Overflow) in `format_version` 0.2.0, agrees with the Analysis-sorted component and is recorded in `provenance.ragged.by_variant`: its `offsets` array is `n_axis + 1` direct offsets spanning `[0, N)`, each variant holds exactly as many index rows as the component holds at that variant, `analysis_index` is non-decreasing within each variant's block and names a real Analysis, `eaf`/`imputed` are present on both sides or neither, and the cell contents match the Analysis-sorted planes (§11.1, ADR 0060);
+- the variant-centric index MUST be present on every Ragged component (a Ragged Store Release or a Hybrid Overflow) in `format_version` 0.2.0, agrees with the Analysis-sorted component and is recorded in `provenance.ragged.by_variant`: its `offsets` array is `n_axis + 1` direct offsets spanning `[0, N)`, each variant holds exactly as many index rows as the component holds at that variant, `analysis_index` is non-decreasing within each variant's block and names a real Analysis, `eaf`/`imputed`/`n` are present on both sides or neither, and the cell contents match the Analysis-sorted planes (§11.1, ADR 0060);
 - the `eaf` plane, its `eaf_baseline`, its exception table and its `eaf_reference` agree with the plan the manifest declares (§6a): a residual-coded plane has a baseline the length of its component's variant axis and an exception table, a plane of any other kind has neither, every exception cell has an entry and the table describes no other cell, and a component carrying `eaf_reference` declares it, carries an imputed mask, holds one entry per variant of its axis, and holds only frequencies in `[0, 1]`;
+- the `n` plane is present exactly when the `encoding` block declares one, in the declared dtype, and only beside a `float16` `se` plane; its length equals the CSR's; every code is a count from 1 to `2³² − 2` or the missing code; the plane holds at least one N, since an all-missing plane reads exactly like a release without one; every Analysis holding an N declares `sample_size_scope=variant_level`; and the by-variant copy is present on both sides or neither and its sampled cells equal the CSR's (§6a, §11, ADR 0067). The read is windowed, never the whole plane;
 - the `se` plane, its `se_coefficients` and its exception table agree with the plan the manifest declares (§6a): a residual-coded plane has finite `float32` coefficients of shape `(n_analyses, 2)`, a sorted duplicate-free exception table whose positions lie inside the plane and whose entries are exactly the cells marked `-127`, and a complete `eaf` plane beside it; a `float16` plane has none of those arrays, and carrying one is a failure rather than a harmless relic;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
 - each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;

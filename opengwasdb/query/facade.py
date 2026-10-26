@@ -7,7 +7,10 @@ the store manifest: `StoreQuery` (Dense), `RaggedStoreQuery` (Ragged),
 
 Result shape -- every association-returning method returns
 ``{"variant_index", "analysis_index", "z", "se", "eaf", "association_status"}`` as
-parallel arrays (int32, int32, float32, float32, object; ADR-0020).
+parallel arrays (int32, int32, float32, float32, object; ADR-0020). A Ragged
+release carrying per-association sample sizes adds ``"n"`` (float64, NaN where
+the build was given no N for the pair) to every result, empty ones included,
+and a release without the plane never has the key (ADR 0067).
 
 Ordering -- `analysis()`, `phewas()`, `range_phewas()`, `range_by_analysis()`,
 and `lookup()` make no ordering guarantee beyond grouping (rows for one scan
@@ -95,8 +98,8 @@ from opengwasdb.store.open import OpenGWASDBStore, open_store
 from opengwasdb.variants import VariantAxis
 
 
-def _empty_result() -> dict[str, np.ndarray]:
-    return {
+def _empty_result(*, with_n: bool = False) -> dict[str, np.ndarray]:
+    result = {
         "variant_index": np.empty(0, dtype="int32"),
         "analysis_index": np.empty(0, dtype="int32"),
         "z": np.empty(0, dtype="float32"),
@@ -104,6 +107,9 @@ def _empty_result() -> dict[str, np.ndarray]:
         "eaf": np.empty(0, dtype="float32"),
         "association_status": np.empty(0, dtype=object),
     }
+    if with_n:
+        result["n"] = np.empty(0, dtype="float64")
+    return result
 
 
 def _status_array(imputed_flags: np.ndarray, z_vals: np.ndarray, se_vals: np.ndarray) -> np.ndarray:
@@ -124,38 +130,35 @@ def _top_hits_result(
     *,
     observed_only: bool,
     limit: int | None,
+    n: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     """Shared indexed top-hit finalizer: filter, then cap, then assemble.
 
     The Dense and Ragged indexed paths resolve their parallel arrays their own
     way, then both finish identically (ADR 0033): `observed_only` runs before
     `limit` so an imputed leading hit can never crowd an observed one out of
-    the cap, and the six parallel arrays are filtered and sliced together so a
-    misaligned array can never slip into the returned result.
+    the cap, and the parallel arrays -- `n` among them when the release has
+    the plane (ADR 0067) -- are filtered and sliced together so a misaligned
+    array can never slip into the returned result.
     """
-    if observed_only:
-        keep = imputed == 0
-        variant_index = variant_index[keep]
-        analysis_index = analysis_index[keep]
-        z = z[keep]
-        se = se[keep]
-        eaf = eaf[keep]
-        imputed = imputed[keep]
-    if limit is not None:
-        variant_index = variant_index[:limit]
-        analysis_index = analysis_index[:limit]
-        z = z[:limit]
-        se = se[:limit]
-        eaf = eaf[:limit]
-        imputed = imputed[:limit]
-    return {
+    columns = {
         "variant_index": variant_index,
         "analysis_index": analysis_index,
         "z": z,
         "se": se,
         "eaf": eaf,
-        "association_status": _status_array(imputed, z, se),
+        "imputed": imputed,
     }
+    if n is not None:
+        columns["n"] = n
+    if observed_only:
+        keep = imputed == 0
+        columns = {name: values[keep] for name, values in columns.items()}
+    if limit is not None:
+        columns = {name: values[:limit] for name, values in columns.items()}
+    kept_imputed = columns.pop("imputed")
+    columns["association_status"] = _status_array(kept_imputed, columns["z"], columns["se"])
+    return columns
 
 
 def _empty_rho_result() -> dict[str, np.ndarray]:
@@ -741,6 +744,7 @@ def _by_variant_block_result(
         block["imputed"],
         observed_only=observed_only,
         limit=None,
+        n=block.get("n"),
     )
 
 
@@ -770,6 +774,15 @@ class RaggedStoreQuery:
         self._by_variant: ByVariantReader = _open_by_variant(store, self._variant_axis)
         self._analyses = AnalysesIndex(store.path)
         self._top_hits = TopHitTiers(store.arrays(mode="r"))
+        # Every result carries `n` exactly when the release has the plane, so a
+        # caller can tell "no sample sizes here" from "no rows" (ADR 0067).
+        self._has_n = self._csr.has_n
+
+    def _empty(self) -> dict[str, np.ndarray]:
+        return _empty_result(with_n=self._has_n)
+
+    def _n_slice(self, start: int, end: int) -> np.ndarray | None:
+        return self._csr.n_slice(start, end) if self._has_n else None
 
     def close(self) -> None:
         self._variant_axis.close()
@@ -843,28 +856,27 @@ class RaggedStoreQuery:
             _refuse_indexed_subset(self.store.path, "Ragged", indexed_subset)
         idx = self._resolve_analysis_id(analysis_id)
         if idx is None:
-            return _empty_result()
+            return self._empty()
         offsets = self._csr._offsets[idx : idx + 2]
         start, end = int(offsets[0]), int(offsets[1])
         if start == end:
-            return _empty_result()
+            return self._empty()
         vi = self._csr._variant_index[start:end].astype("int32")
         # One frequency read for the whole Analysis, shared by SE decoding and
         # the result's `eaf` column (#253) -- the plane used to be read once by
         # `se_slice` and again by `eaf_slice`.
         z, se, eaf, imp = self._decoded_slice(start, end, idx)
-        if observed_only:
-            mask = imp == 0
-            vi, z, se, eaf, imp = vi[mask], z[mask], se[mask], eaf[mask], imp[mask]
-        status = _status_array(imp, z, se)
-        return {
-            "variant_index": vi,
-            "analysis_index": np.full(len(z), idx, dtype="int32"),
-            "z": z,
-            "se": se,
-            "eaf": eaf,
-            "association_status": status,
-        }
+        return _top_hits_result(
+            vi,
+            np.full(len(z), idx, dtype="int32"),
+            z,
+            se,
+            eaf,
+            imp,
+            observed_only=observed_only,
+            limit=None,
+            n=self._n_slice(start, end),
+        )
 
     def range_phewas(
         self,
@@ -877,7 +889,7 @@ class RaggedStoreQuery:
         """All associations where the variant falls in [start, end] (regional PheWAS)."""
         variant_indices = self._variant_axis.range_indices(chromosome, start, end)
         if len(variant_indices) == 0:
-            return _empty_result()
+            return self._empty()
 
         return self._indexed_variant_result(
             np.asarray(variant_indices, dtype=np.int32), observed_only=observed_only
@@ -895,7 +907,7 @@ class RaggedStoreQuery:
         low, high = int(variant_indices.min()), int(variant_indices.max())
         first, last = self._by_variant.rows_for_variant_range(low, high)
         if first == last:
-            return _empty_result()
+            return self._empty()
         block = self._by_variant.decode(low, high, first, last)
         block = _filter_block_to_variants(
             block, np.asarray(variant_indices, dtype=np.int32), low, high
@@ -924,7 +936,7 @@ class RaggedStoreQuery:
         once and the parity tests pin both methods to it.
         """
         if len(hit_positions) == 0:
-            return _empty_result()
+            return self._empty()
         hit_positions = np.asarray(hit_positions, dtype=np.int64)
         # The full `offsets` array is one int64 per Analysis (not per
         # association), so this is the one array the scan may hold whole.
@@ -954,6 +966,7 @@ class RaggedStoreQuery:
             imp,
             observed_only=observed_only,
             limit=limit,
+            n=self._csr.n_at(hit_positions) if self._has_n else None,
         )
 
     def _analysis_indices_in_range(self, chromosome: str, start: int, end: int) -> list[int]:
@@ -980,15 +993,9 @@ class RaggedStoreQuery:
         """All associations for analyses whose probe/TSS falls in [start, end]."""
         analysis_indices = self._analysis_indices_in_range(chromosome, start, end)
         if not analysis_indices:
-            return _empty_result()
+            return self._empty()
 
-        all_vi: list[np.ndarray] = []
-        all_ai: list[np.ndarray] = []
-        all_z: list[np.ndarray] = []
-        all_se: list[np.ndarray] = []
-        all_eaf: list[np.ndarray] = []
-        all_status: list[np.ndarray] = []
-
+        parts: list[dict[str, np.ndarray]] = []
         for ai in analysis_indices:
             offsets = self._csr._offsets[ai : ai + 2]
             s, e = int(offsets[0]), int(offsets[1])
@@ -996,39 +1003,31 @@ class RaggedStoreQuery:
                 continue
             vi = self._csr._variant_index[s:e].astype("int32")
             z, se, eaf, imp = self._decoded_slice(s, e, ai)
-            if observed_only:
-                keep = imp == 0
-                vi, z, se, eaf, imp = vi[keep], z[keep], se[keep], eaf[keep], imp[keep]
-            if len(z) == 0:
-                continue
-            all_vi.append(vi)
-            all_ai.append(np.full(len(z), ai, dtype="int32"))
-            all_z.append(z)
-            all_se.append(se)
-            all_eaf.append(eaf)
-            all_status.append(_status_array(imp, z, se))
-
-        if not all_vi:
-            return _empty_result()
-        return {
-            "variant_index": np.concatenate(all_vi),
-            "analysis_index": np.concatenate(all_ai),
-            "z": np.concatenate(all_z),
-            "se": np.concatenate(all_se),
-            "eaf": np.concatenate(all_eaf),
-            "association_status": np.concatenate(all_status),
-        }
+            parts.append(
+                _top_hits_result(
+                    vi,
+                    np.full(len(z), ai, dtype="int32"),
+                    z,
+                    se,
+                    eaf,
+                    imp,
+                    observed_only=observed_only,
+                    limit=None,
+                    n=self._n_slice(s, e),
+                )
+            )
+        return _concat_results(parts, with_n=self._has_n)
 
     def phewas(self, identifier: str, *, observed_only: bool = False) -> dict[str, np.ndarray]:
         """All analyses that have an association for a given variant identifier."""
         variant = self._variant_axis.by_identifier(identifier)
         if variant is None:
-            return _empty_result()
+            return self._empty()
 
         target_variant = int(variant.variant_index)
         first, last = self._by_variant.rows_for_variant(target_variant)
         if first == last:
-            return _empty_result()
+            return self._empty()
         block = self._by_variant.decode(target_variant, target_variant, first, last)
         return _by_variant_block_result(block, observed_only=observed_only)
 
@@ -1057,7 +1056,7 @@ class RaggedStoreQuery:
             if analysis_id is not None:
                 analysis_index = self._resolve_analysis_id(analysis_id)
                 if analysis_index is None or not reader.has("analysis_offsets"):
-                    return _empty_result()
+                    return self._empty()
             bounds = reader.bounds(analysis_index)
             vi = reader.read("variant_index", bounds, "int32")
             ai = reader.read("analysis_index", bounds, "int32")
@@ -1067,8 +1066,11 @@ class RaggedStoreQuery:
                 "imputed", bounds, "uint8", lambda: np.zeros(len(vi), dtype=np.uint8)
             )
             eaf = reader.read_or("eaf", bounds, "float32", lambda: self._csr.eaf_pairs(vi, ai))
+            # The tiers carry no `n`; each hit is resolved back to its CSR cell,
+            # the way an index without `eaf` is (ADR 0067).
+            n = self._csr.n_pairs(vi, ai) if self._has_n else None
             return _top_hits_result(
-                vi, ai, z, se, eaf, imp, observed_only=observed_only, limit=limit
+                vi, ai, z, se, eaf, imp, observed_only=observed_only, limit=limit, n=n
             )
 
         return self._top_hits_by_scan(
@@ -1118,7 +1120,7 @@ class RaggedStoreQuery:
         if analysis_id is not None:
             analysis_index = self._resolve_analysis_id(analysis_id)
             if analysis_index is None:
-                return _empty_result()
+                return self._empty()
         else:
             analysis_index = None
 
@@ -1129,7 +1131,7 @@ class RaggedStoreQuery:
             lo, hi = int(offsets[analysis_index]), int(offsets[analysis_index + 1])
         hit_positions = self._scan_threshold_hits(lo, hi, threshold)
         if len(hit_positions) == 0:
-            return _empty_result()
+            return self._empty()
         return self._hit_rows_result(
             hit_positions,
             self._csr.variant_index_at(hit_positions),
@@ -1157,7 +1159,7 @@ class RaggedStoreQuery:
             v for id_ in identifiers if (v := self._variant_axis.by_identifier(id_)) is not None
         ]
         if not variants:
-            return _empty_result()
+            return self._empty()
 
         wanted = np.array(sorted({v.variant_index for v in variants}), dtype=np.int32)
         parts = []
@@ -1175,21 +1177,32 @@ class RaggedStoreQuery:
                     observed_only=observed_only,
                 )
             )
-        return _concat_results(parts)
+        return _concat_results(parts, with_n=self._has_n)
 
 
-def _concat_results(parts: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
-    """Concatenate query-result dicts (each a plain component read)."""
+def _concat_results(
+    parts: list[dict[str, np.ndarray]], *, with_n: bool = False
+) -> dict[str, np.ndarray]:
+    """Concatenate query-result dicts (each a plain component read).
+
+    `with_n` says the release carries per-association sample sizes, so every
+    part does and so must the result, empty or not (ADR 0067).
+    """
     parts = [p for p in parts if len(p["z"])]
     if not parts:
-        return _empty_result()
+        return _empty_result(with_n=with_n)
+    dtypes = {
+        "variant_index": "int32",
+        "analysis_index": "int32",
+        "z": "float32",
+        "se": "float32",
+        "eaf": "float32",
+        **({"n": "float64"} if with_n else {}),
+        "association_status": "object",
+    }
     return {
-        "variant_index": np.concatenate([p["variant_index"] for p in parts]).astype("int32"),
-        "analysis_index": np.concatenate([p["analysis_index"] for p in parts]).astype("int32"),
-        "z": np.concatenate([p["z"] for p in parts]).astype("float32"),
-        "se": np.concatenate([p["se"] for p in parts]).astype("float32"),
-        "eaf": np.concatenate([p["eaf"] for p in parts]).astype("float32"),
-        "association_status": np.concatenate([p["association_status"] for p in parts]),
+        name: np.concatenate([p[name] for p in parts]).astype(dtype)
+        for name, dtype in dtypes.items()
     }
 
 

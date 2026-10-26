@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import zarr
+from cli_output import normalize_cli_output
 from test_hybrid_build import (
     HG38_ALID_1,
     HG38_ALID_2,
@@ -861,7 +862,9 @@ def test_cli_help_describes_hybrid_root_support() -> None:
     query_help = runner.invoke(app, ["query-analysis", "--help"])
     assert build_help.exit_code == 0, build_help.output
     assert query_help.exit_code == 0, query_help.output
-    assert "Hybrid" in build_help.output
-    assert "Hybrid" in query_help.output
-    assert "--overflow-only" in build_help.output
-    assert "no effect" in build_help.output
+    build_output = normalize_cli_output(build_help.output)
+    query_output = normalize_cli_output(query_help.output)
+    assert "Hybrid" in build_output
+    assert "Hybrid" in query_output
+    assert "--overflow-only" in build_output
+    assert "no effect" in build_output

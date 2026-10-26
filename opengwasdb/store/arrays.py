@@ -1468,8 +1468,9 @@ _DENSE_ROLES_BY_NAME: Mapping[str, ArrayRole] = MappingProxyType(
 
 
 #: The Ragged CSR group's arrays, by their leaf name under `ragged/` (#248).
-#: `z`, `se`, `variant_index`, `eaf` and `imputed` are the CSR's parallel
-#: sequences; `offsets` indexes them by Analysis; `eaf_baseline` and
+#: `z`, `se`, `variant_index`, `eaf`, `imputed` and the optional per-association
+#: sample size `n` (ADR 0067) are the CSR's parallel sequences; `offsets`
+#: indexes them by Analysis; `eaf_baseline` and
 #: `eaf_reference` are per-variant side arrays; the `*_exception_*` and
 #: `z_overflow_*` tables are the exact-value tables.  The roles are the Ragged
 #: ones so their shards follow #248's element caps, not #246's Dense shapes.
@@ -1480,6 +1481,7 @@ _RAGGED_ROLES_BY_NAME: Mapping[str, ArrayRole] = MappingProxyType(
         "variant_index": ArrayRole.ASSOCIATION_SEQUENCE,
         "eaf": ArrayRole.ASSOCIATION_SEQUENCE,
         "imputed": ArrayRole.ASSOCIATION_SEQUENCE,
+        "n": ArrayRole.ASSOCIATION_SEQUENCE,
         "offsets": ArrayRole.ASSOCIATION_OFFSETS,
         "eaf_baseline": ArrayRole.RAGGED_PER_VARIANT,
         "eaf_reference": ArrayRole.RAGGED_PER_VARIANT,
@@ -1500,8 +1502,8 @@ _RAGGED_ROLES_BY_NAME: Mapping[str, ArrayRole] = MappingProxyType(
 #: `RAGGED_PER_VARIANT` array (with its own inner-chunk hint, see
 #: `inner_chunk_hint_for_path`), the cell sequences and the imputed mask are
 #: `ASSOCIATION_SEQUENCE`, and the re-keyed exception tables are
-#: `RAGGED_EXCEPTION_TABLE`.  `imputed`, `eaf` and the `se_exception_*` pair are
-#: present only when the Analysis-sorted component carries them; that coupling
+#: `RAGGED_EXCEPTION_TABLE`.  `imputed`, `eaf`, `n` and the `se_exception_*` pair
+#: are present only when the Analysis-sorted component carries them; that coupling
 #: is checked by validation, not here, so a one-sided member is a release error
 #: rather than a mapper guess.
 _BY_VARIANT_ROLES_BY_LEAF: Mapping[str, ArrayRole] = MappingProxyType(
@@ -1512,6 +1514,7 @@ _BY_VARIANT_ROLES_BY_LEAF: Mapping[str, ArrayRole] = MappingProxyType(
         "se": ArrayRole.ASSOCIATION_SEQUENCE,
         "eaf": ArrayRole.ASSOCIATION_SEQUENCE,
         "imputed": ArrayRole.ASSOCIATION_SEQUENCE,
+        "n": ArrayRole.ASSOCIATION_SEQUENCE,
         "z_overflow_index": ArrayRole.RAGGED_EXCEPTION_TABLE,
         "z_overflow_value": ArrayRole.RAGGED_EXCEPTION_TABLE,
         "eaf_exception_index": ArrayRole.RAGGED_EXCEPTION_TABLE,
