@@ -1251,6 +1251,25 @@ def test_invalid_group_attributes_fail_validation(indexed_store: Path) -> None:
     assert any("input_sha256" in error for error in errors), errors
 
 
+def test_a_group_without_the_overflow_only_record_stays_valid(indexed_store: Path) -> None:
+    """A subset built before #324 records neither attribute, and its count is zero.
+
+    The builder that wrote such a group could only refuse an Overflow-only ALID,
+    so its absent count already covers every requested ALID it did not index.
+    The published Dense subsets in service are this shape and must keep reading.
+    """
+    store = indexed_store
+    group = _index_group(store, "hm3")
+    assert group.attrs["overflow_only_count"] == 0
+    del group.attrs["overflow_only_count"]
+    del group.attrs["overflow_only_sample"]
+
+    assert _errors_for(store) == []
+    subset = open_indexed_subset(store, "hm3")
+    assert subset.n_overflow_only == 0
+    assert subset.overflow_only_sample == ()
+
+
 def test_validation_rejects_an_explicit_empty_group(indexed_store: Path) -> None:
     """An empty directory-turned-group is not a published subset."""
     store = indexed_store

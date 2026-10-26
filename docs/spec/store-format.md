@@ -248,7 +248,51 @@ is part of the contract (issue #255):
   source's different name for the same variant does not replace it, and a `.`
   or empty cell names nothing and never clears an earlier name. Several source
   coordinates that canonicalise to one ALID therefore take the answer of the
-  one that sorts first, not of the one that appears first in a file.
+  one that sorts first, not of the one that appears first in a file. The one
+  exception is a Hybrid build's routing key that its sources name differently,
+  below.
+- A GWAS-SSF source, read directly or through a Column Map, names a variant by
+  the first of its `rsid` and `variant_id` cells that names an rs identifier,
+  normalised before any name is compared (issue #306): a `;`-separated list
+  names its first item that begins `rs`, and an rs identifier ends at its first
+  `:`, so the compound `rsN:pos:a:b` names `rsN`. A cell with no such item names
+  nothing. Harmonised GWAS Catalog files write one name both ways —
+  `rs199633771:13122834:C:T` in one Analysis and `rs199633771` in another for
+  the same variant — and the normalisation makes them one name. The GWAS-VCF
+  reader's `ID` and the FinnGen reader's first comma-separated `rsids` item are
+  read as before.
+- A Hybrid routing key upper-cases alleles, so source coordinates spelt in
+  different case are one stored variant. When their sources name it with
+  different (normalised) rsids, nothing in the sources says which is right, and
+  `build-hybrid --on-rsid-conflict` decides (issue #306). `refuse`, the default,
+  fails the build and names the routing key and both names. `drop` gives **no
+  rsid** to every stored variant such a key routes to, over the build's final
+  combined routing — even when a second routing key reaches the same variant
+  with a name of its own (the same site reported in the other allele order),
+  because the variant's sources still disagree on its name. (A variant whose
+  routing keys are each named consistently, but differently from each other, is
+  reached by no disputed key and keeps the first name, by the rule above.) The
+  variant is
+  written with `rsid` `.` and left out of the rsid search index, exactly as a
+  variant no source names: a lookup by any of its names finds nothing, and
+  lookups by ALID and position find the variant and all of its associations.
+  Either way the build's JSON summary carries `rsid_conflicts`: the `policy`;
+  `n_keys`, the number of such routing keys among the harvested sites, stored or
+  not; `n_variants`, the number of stored variants they reach, which `drop`
+  leaves unnamed; and `sample`, the first 20 keys in genomic order, each with
+  its distinct names in `(rank, site)` order. A build that compared names and
+  found none disputed — even one whose sources name nothing — reports `0` and
+  `0`. `n_keys` and `n_variants` are `null`, never `0`, for a build that
+  compared no names across sources — a
+  `--reference-panel` build, or one whose reference names its variants — and a
+  build with no `--variant-reference` refuses `drop`, which it could not apply. A
+  checkpointed build records the policy and the counts, and resuming it under
+  the other policy is refused. A resume past the fold does not harvest again, so
+  one whose recorded counts are missing is refused too, unless its checkpoint
+  predates the option (records no `on_rsid_conflict`); its counts are then
+  `null`. A Dense routing key is the source's own spelling,
+  so two source coordinates never share one and a Dense build never meets this
+  case.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`
   column blank simply because the reference it was given is a plain ALID list.
   When the reference names none of its variants, the build runs the same Pass 1
@@ -285,8 +329,10 @@ is part of the contract (issue #255):
   publication: the resolved ALID → rsid map is compared exactly with an
   independently computed expectation — the raw harvest candidates walked
   through the build's own key function over the *same final combined* routing,
-  first non-empty per ALID — so a wrong value, a missing entry, a key-
-  normalisation collapse that keeps the wrong name, or an extra entry fails;
+  first non-empty per ALID, and under `--on-rsid-conflict drop` with every ALID
+  that a routing key it finds named differently reaches expecting no name — so a
+  wrong value, a missing entry, a key-normalisation collapse that keeps the wrong
+  name, a disputed variant left named, or an extra entry fails;
   and the written table is read back row for row against that map, so a stale
   map or a table lost in the write fails too. Neither check runs on the
   reference-named path above. A release whose sources genuinely name no variants
@@ -1180,13 +1226,26 @@ list's Reference Assembly, and a mismatch with the release's
 assembly plus ALID (ADR 0061).
 
 On a Hybrid root, an ALID present in the shared union table but absent from the
-Dense Component is an **overflow-only** request: it MUST be refused and named,
-because resolving against the Dense Component alone would otherwise count it
-absent and silently drop it. An ALID absent from the shared union table as well
-keeps the counted-as-absent handling; the shared table makes the two
-observable, and that is what licenses preserving the existing handling. A direct
-nested-Dense build names only the Dense Component, so an off-panel ALID there is
-absent-and-counted as before.
+Dense Component is an **overflow-only** request: it names a variant the release
+carries at a Variant Index this index cannot address, so resolving against the
+Dense Component alone would count it absent and silently drop it. `--overflow-only`
+decides it. `refuse` (the default) MUST fail the build and name the ALIDs.
+`skip` MUST leave them out of the subset and record `overflow_only_count` (the
+number skipped, always written, `0` when none) and `overflow_only_sample`
+(the deterministic first 20 in variant-list order) beside the absent count, and
+MUST report both in the command's summary as `overflow_only` (`policy`,
+`n_overflow_only`, `sample`).  The metadata key matches `absent_count`; only
+the summary's field is `n_overflow_only`.  The skipped count is never folded
+into `absent_count`: `absent_count` keeps its meaning of "the release does not
+carry this ALID". The recorded counts MUST satisfy `requested_count ==
+resolved_count + absent_count + overflow_only_count`, and a group recording
+neither Overflow-only attribute is read as `0` because the builder that wrote
+it could only refuse such a request. An ALID absent from the shared union
+table as well keeps the counted-as-absent handling; the shared table makes the
+two observable, and that is what licenses preserving the existing handling. A
+direct nested-Dense build names only the Dense Component, so an off-panel ALID
+there is absent-and-counted as before; a Dense release has no Overflow axis, so
+there `--overflow-only` is accepted and has no effect.
 
 A subset name MUST match `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. A leading `.` is
 reserved so a name cannot collide with the `.{name}.tmp.*` staging groups or the
@@ -1258,14 +1317,21 @@ A published group self-describes; validation rejects a group missing any of
 `encoding` (the release's block, §6a), `reference_assembly` (normalised),
 `source_store_id`, `source_release_id`, `source_format_version`, `n_analyses`,
 `n_subset_variants`, `input_sha256` (the variant list's bytes),
-`requested_count`, `resolved_count`, `absent_count`, `builder_version`,
-`created_at` and `order` (`analysis,variant`). On a Hybrid release the
+`requested_count`, `resolved_count`, `absent_count`, `overflow_only_count`,
+`overflow_only_sample`, `builder_version`,
+`created_at` and `order` (`analysis,variant`). `overflow_only_count` is the
+number of requested ALIDs present only on a Hybrid release's shared/Overflow
+axis that a `--overflow-only skip` build left out (`0` when none were, and on a
+Dense release, which has no Overflow axis), and `overflow_only_sample` is the
+first 20 of them in variant-list order; a group written before the option
+existed records neither and is read as `0` (ADR 0065). On a Hybrid release the
 `source_store_id`/`source_release_id`/`source_format_version` attributes record
 the nested Dense Component, the self-contained release the index physically
 belongs to and the one the read seam validates it against.
 
 A regenerated `overview.html` lists every published subset: the name, the
-requested/resolved/absent counts, the input checksum, the Reference Assembly and
+requested/resolved/absent/Overflow-only counts, the input checksum, the
+Reference Assembly and
 the build provenance are read from the group's own recorded metadata, while the
 physical size is computed from the group's files at render time (it is not
 recorded as an attribute). A named directory that cannot be read, whose
@@ -1336,7 +1402,7 @@ stale or corrupt selector always fails even when the Analysis ID is also unknown
 a *valid* subset with an unknown Analysis ID keeps the ordinary empty result.
 Before decoding any value, independent of whether `validate` has been run, the
 read path re-checks the declared name, schema, profile and `order`, the declared
-Analysis and requested/resolved/absent counts, the exact array set, every plane's
+Analysis and requested/resolved/absent/Overflow-only counts, the exact array set, every plane's
 declared dtype and shape, the `int32` storage dtype of `variant_index`, every
 array's inner chunk and shard against the format's role policy, and that
 `variant_index` is non-empty, sorted, unique and in bounds `[0, n_variants)`. A malformed encoding block is refused as a malformed
@@ -1461,7 +1527,7 @@ Reference-Completed releases MUST:
 
 There is no Z-only completion mode.
 
-Completion preserves every observed association exactly: a source-observed cell has the same decoded Z, SE and EAF in the Reference-Completed release and is not marked imputed, and no source-missing cell is observed in it. `check-observed-view` (§20.4) re-derives that from the two releases' arrays.
+Completion preserves every observed association exactly: a source-observed cell has the same decoded Z, SE and EAF in the Reference-Completed release and is not marked imputed, and no source-missing cell is observed in it. In a Hybrid release a Dense cell becomes observed only as a crossover, a source Overflow association moved into the Dense Component when the LD panel extends its axis; it holds what that component's own codec gives for the source value. `check-observed-view` (§20.4) re-derives that from the two releases' arrays.
 
 ## 13. LD Reference Panel requirements
 
@@ -1928,14 +1994,127 @@ replaces its Store under the same id, so this check gates the swap.
   (`bands_checked` is 0) and the verdict says why.
 - **Exit codes.** `0` pass; `1` the check ran and found a mismatch (the verdict is still
   written, and each failure is named on `stderr`); `2` refused: nothing was checked, so no
-  verdict is written and the reason is on `stderr`. Refused are a non-Dense layout (a Ragged
-  release, or a Hybrid root: Hybrid Dense Components are not supported yet), a `SOURCE` that is
+  verdict is written and the reason is on `stderr`. Refused are a mixed-layout pair, a layout
+  the check does not support (it checks Dense, Hybrid and Ragged pairs), a `SOURCE` that is
   not Observed-Only, a `TARGET` that is not Reference-Completed, a release that cannot be opened,
   a `TARGET` with no `imputed` mask, a release whose `z` plane and variant axis disagree in length
   or are empty.
+- **Hybrid scope.** A Hybrid pair (issue #295) is an Observed-Only Hybrid `SOURCE` and the
+  `complete-hybrid` output made from it. Completion changes both components: it completes the
+  Dense Component, folds each `SOURCE` Overflow association at a variant the LD panel added to
+  the Dense axis into the Dense Component as an observed cell (`imputed == 0`), and rebuilds the
+  Overflow on the completed shared axis without it (a **crossover**, issue #99). So the check
+  compares the observed view across both components, by ALID:
+  - *Axes, exhaustively.* The Dense Components' axes and the shared axes are each mapped as
+    above, and every `TARGET` Dense row must be on `TARGET`'s shared axis.
+  - *Every crossover.* `complete-hybrid` records none, so they are derived from the axes: a
+    `SOURCE` Overflow association whose ALID is a `TARGET` Dense row. Each must be an observed
+    Dense cell, not marked imputed, whose decoded Z, SE and EAF equal the `SOURCE` value encoded
+    and decoded with the `TARGET` Dense Component's own codec: Z, then EAF against that row's
+    `eaf_baseline`, then SE against that EAF, as the fold writes it. A crossover is coded against
+    the Dense Component's baseline, not the Overflow's, so bit-identity with `SOURCE` is not the
+    rule; the round trip is exact, and a moved or altered value still differs from it. Every
+    crossover is read, so the cost grows with the `TARGET` chunk-rows that hold one.
+  - *The Dense Component, sampled.* The chunk-row sample above, over the two Dense Components,
+    with the crossover cells on inserted rows set aside for the crossover check: they are the
+    only observed, unflagged cells an inserted row may hold.
+  - *The Overflow, sampled.* `--n-random` Analyses (all of them when there are fewer), drawn
+    with their own `numpy.random.default_rng(--seed)`. Every association of each is matched with
+    `TARGET`'s by shared-axis ALID, in both directions, and must have bit-identical decoded Z, SE
+    and EAF. `SOURCE` crossovers are left to the crossover check, and `TARGET` associations at a
+    Dense variant to `observed_in_both`.
+  - *The Overflow, every Analysis.* `TARGET`'s Overflow holds `SOURCE`'s association count less
+    that Analysis's crossovers, none of them at a `TARGET` Dense variant and none marked imputed.
+
+  The verdict carries `"layout": "hybrid"`, then `seed`, `n_random`, `source`, `target` and
+  `analyses` as above; `analyses.identical` also needs both Overflows to have one offset per
+  Analysis.
+
+  | key | meaning |
+  |---|---|
+  | `components.dense` | the Dense verdict's `axis`, `geometry`, `bands_checked`, `bands_by_stratum`, `bands`, `bands_with_mismatch`, `totals` and `max_abs_diff`, over the Dense Components; `totals.crossover_cells` (informational) counts the crossover cells set aside in the sampled spans |
+  | `components.overflow` | `axis` (the shared-axis map, with `child_dense_rows_unshared` and `child_dense_order_preserved`), `n_parent_associations`, `n_child_associations`, `analyses_checked`, `analyses`, `analyses_with_mismatch`, `totals`, `max_abs_diff`, `all_analyses` |
+  | `crossovers` | `n` associations on `rows` Dense rows (null when the comparison was skipped), `totals`, `max_abs_diff` (`TARGET` against the round trip) and `reencoding_max_abs_diff` (the round trip against `SOURCE`; informational) |
+
+  `components.overflow.totals` sums over the sampled Analyses: `parent_associations`,
+  `crossovers` and `child_associations` are informational; `z_mismatch`, `se_mismatch`,
+  `eaf_mismatch` (a matched association whose decoded value differs, NaN equal to NaN),
+  `observed_missing_in_child` (a `SOURCE` association that `TARGET`'s Overflow lacks),
+  `missing_became_observed` (a `TARGET` association that `SOURCE` lacks) and
+  `z_se_missingness_mismatch` fail. `components.overflow.all_analyses` covers every Analysis and
+  all fail: `observed_in_both`, `imputed_cells`, and `analyses_count_mismatch` (Analyses whose
+  count is not `SOURCE`'s less its crossovers). `crossovers.totals` all fail: `z_mismatch`,
+  `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_child`.
+  `failures` names each nonzero failing counter with the part that counted it
+  (`dense.inserted_observed_cells`, `overflow.observed_in_both`, `crossovers.z_mismatch`), and
+  `dense.parent_rows_unmapped`, `dense.order_not_preserved`, the same two for `overflow.` (the
+  shared axes), `overflow.child_dense_rows_not_on_shared_axis` and `analyses_mismatch`; after
+  any of these last the comparison is skipped. Also refused: a Dense Component that is not Dense
+  or not in its root's completion state, a `TARGET` Dense Component with no `imputed` mask, and
+  an Overflow that cannot be opened or holds a variant index off its shared axis.
 
 The check does not compare `TARGET`'s `source_release_id` with `SOURCE`'s `release_id`: a wrong
 pairing fails the axis or cell checks.
+
+#### Ragged scope
+
+`check-observed-view SOURCE TARGET --seed N --output verdict.json --ld-panel DIR [--ancestry EUR]
+[--n-random 1000]` also checks an Observed-Only **Ragged** release `SOURCE` against the
+`complete-ragged` output `TARGET` (issue #296). A Ragged release has no grid to sample, and
+completion rebuilds the union variant axis, so every comparison is by variant identity (ALID),
+never by index. The exit codes, the required `--seed` and the verdict's `seed`, `n_random`,
+`source`, `target`, `analyses`, `failures`, `passed` and `seconds` are those of the Dense check.
+
+- **Axis.** The exact `SOURCE` -> `TARGET` ALID map of the Dense check; an unmapped source
+  variant (`parent_rows_unmapped`) or differing Analyses fail the check and skip the sample.
+  Order is not required: `axis.order_preserved` is reported, not failed, because the associations
+  are compared by ALID.
+- **Sample.** Whole Analyses, each compared completely: `--n-random` drawn uniformly with
+  `numpy.random.default_rng(--seed)` (a store with fewer is sampled whole), plus the strata
+  `non_admitted` (every Analysis the ancestry filter did not admit, up to 100, drawn with
+  `default_rng((seed, 1))` beyond that), `largest` (the 5 with most associations), `empty` (up to
+  5 with none) and `trait_less` (the first 5 without a Trait position). An Analysis is
+  *not admitted* when its `TARGET` `completed_against` is empty (ADR 0028).
+- **Per Analysis.** Each source-observed association (finite Z and SE) is in `TARGET` with
+  identical decoded Z, SE and EAF (NaN equal to NaN) and `imputed == 0`; `TARGET` holds no
+  association with finite Z and SE and `imputed == 0` that `SOURCE` lacks
+  (`target_observed_not_in_source`); every `imputed` value is 0 or 1; every imputed association
+  lies inside one of the Analysis's **retained regions**; a non-admitted Analysis holds no imputed
+  cell (`imputed_in_non_admitted`). Rows that are neither observed nor imputed (NaN: panel
+  positions inside a region that completion could not fill) are counted as `nan_rows` and fail
+  nothing.
+- **Retained regions need the LD panel.** A release stores no region coordinates, only block ids
+  and counts in `completion_quality`; block extents live in the panel. The check rebuilds each
+  sampled admitted Analysis's blocks as `complete-ragged` chose them (ADR 0014, ADR 0039): the
+  blocks touching its Trait position plus or minus the manifest's
+  `provenance.completion.cis_window_bp`, or, with no Trait position, the blocks holding enough of
+  its own observations; a region is the panel positions of those blocks. `--ld-panel` (the
+  directory `complete-ragged` was given) is therefore required for a Ragged pair, and `--ancestry`
+  must equal `provenance.completion.ancestry` when given. There is no panel-free fallback.
+  A `completion_quality` block the rebuilt regions lack is `quality_blocks_not_in_regions`, so a
+  panel other than the one used is noticed. `--ld-panel` for a Dense or Hybrid pair is refused.
+- **Totals.** `observed_in_source`, `imputed`, `nan_rows` and `regions` (retained
+  Analysis-by-block regions) are informational. Failing: `z_mismatch`, `se_mismatch`,
+  `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_target`,
+  `target_observed_not_in_source`, `imputed_outside_retained`, `imputed_in_non_admitted`,
+  `imputed_mask_invalid`, `z_se_missingness_mismatch`, `target_variants_unordered` (an Analysis's
+  variant indices not strictly increasing) and `quality_blocks_not_in_regions`. `sample` lists
+  each checked Analysis with its strata, admission, the ids of its retained `blocks` and counts, and `by_stratum` counts
+  them.
+- **Refused (exit 2)**: a mixed-layout pair, a Ragged pair without `--ld-panel`, an LD panel
+  with no chromosomes for the ancestry, an ancestry other than the one recorded, a `TARGET`
+  completed against an ancestry other than the panel's, a `TARGET` with no completion ancestry
+  or `cis_window_bp` recorded, a release that cannot be opened or decoded (a missing array
+  group or EAF array included), and either `--ld-panel` or `--ancestry` for a Dense or Hybrid
+  pair.
+- **Known limit: residual-coded SE.** SE is compared for exact equality, as the contract in
+  section 12 states. Ragged completion refits `se_coefficients` over the completed Analysis, so
+  when SE is `int8_residual` (ADR 0037 section 3) every observed SE of an Analysis that was
+  completed is re-quantised and differs from its source (on three real Chen 2023 Analyses completed with
+  `--cis-window-bp 1000000`: all 135,596 observed SE differ, by a median of 0.09% and at most
+  0.14%, with Z and EAF identical); such a pair fails with `se_mismatch`. Where SE is `float16`
+  the pair is exact. The check stays strict (owner ruling, 2026-10-22): the re-quantisation is
+  completion's defect, and opengwasdb#301 owns fixing the refit, not this check.
 
 ## 21. Compatibility
 

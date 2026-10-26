@@ -86,7 +86,16 @@ __all__ = [
 #: the build parameters a resumed run reloads (issue #202). A record written
 #: without it, or under a different number, is refused before anything in it is
 #: read: a resumed run may not reinterpret records its writer did not mean.
-CHECKPOINT_FORMAT_VERSION = 1
+#:
+#: **2** (opengwasdb#331): a declared MAF floor now drops the rows it cannot
+#: judge -- exactly ``0.0``/``1.0`` and every unusable frequency -- where format 1
+#: retained them. A format-1 directory's Pass 2 spills can therefore hold
+#: associations (and unknown off-panel keys) a resumed build must not publish
+#: into a common-variant Store, and nothing in the spills says which rule wrote
+#: them. There is no reinterpretation that is safe, so format 1 is refused
+#: outright and the build starts again: the alternative is a store that looks
+#: filtered and is not.
+CHECKPOINT_FORMAT_VERSION = 2
 
 #: The function a refusal tells an operator to call.
 RESUME_FUNCTION = "resume_hybrid_build"
@@ -111,6 +120,7 @@ AXIS_OFF_PANEL = "axis_off_panel.txt"
 AXIS_SHARED = "axis_shared.txt"
 PROVENANCE_SOURCE = "provenance_source.tsv"
 PROVENANCE_RSID = "provenance_rsid.tsv"
+RSID_CONFLICTS = "rsid_conflicts.json"
 SPILL_DIR = "spill"
 STAGED_DIR = "staged"
 FOLD_DIR = "fold"

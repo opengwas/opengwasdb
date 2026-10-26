@@ -1,0 +1,1105 @@
+---
+title: "OGS-00009 rebuilt against OGS-00010"
+subtitle: "The 0.2.0 ukb-b Reference-Completed Store against the 0.1.0 one it replaces · size, structure, query time, MR controls, regions and observed-cell fidelity"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.special import log_ndtr
+
+HERE = Path(".")
+b = json.loads((HERE / "opengwasdb_ogs00009_vs_ogs00010.json").read_text())
+qa = json.loads((HERE / b["queries"]["artifact"]).read_text())
+# The format-only reference: the same (old) observed OGS-00009 data in the
+# 0.1.0 shape and the adopted 0.2.0 shape, measured in opengwas/opengwasdb#246.
+fmt = json.loads((HERE / "opengwasdb_246_shapes/opengwasdb_store_comparison_ogs00009_shapes.json").read_text())
+
+LABELS = ["new", "old"]
+ST = b["stores"]
+NAME = {
+    "new": f"OGS-00009 · {ST['new']['manifest']['format_version']}",
+    "old": f"OGS-00010 · {ST['old']['manifest']['format_version']}",
+}
+SHORT = {"new": "new OGS-00009", "old": "old OGS-00010"}
+# Two Stores: violet and green (validated as a pair). Cell provenance keeps the
+# earlier reports' blue observed / orange imputed, plus aqua for panel-only rows.
+COL = {"new": "#6250d6", "old": "#008300"}
+COL_OBS, COL_IMP, COL_PANEL, COL_MISS = "#2a78d6", "#eb6834", "#1baf7a", "#b9b9b9"
+INK, INK2 = "#0b0b0b", "#52514e"
+plt.rcParams.update({
+    "axes.spines.top": False, "axes.spines.right": False, "axes.edgecolor": "#9a9a96",
+    "axes.labelcolor": INK2, "xtick.color": INK2, "ytick.color": INK2,
+    "axes.titlesize": 9.5, "axes.labelsize": 8.5, "xtick.labelsize": 8, "ytick.labelsize": 8,
+    "legend.fontsize": 7.5, "legend.frameon": False, "axes.grid": False,
+})
+
+
+def md_table(headers, rows, align=None):
+    align = align or ["---"] + ["---:"] * (len(headers) - 1)
+    out = ["| " + " | ".join(headers) + " |", "|" + "|".join(align) + "|"]
+    out += ["| " + " | ".join(str(c) for c in row) + " |" for row in rows]
+    return "\n".join(out)
+
+
+def fmt_ms(v):
+    return f"{v:,.1f} ms" if v < 1_000 else f"{v / 1_000:,.2f} s"
+
+
+def gb(v):
+    return f"{v / 1e9:,.2f} GB"
+
+
+def bn(v):
+    return f"{v / 1e9:,.2f} bn"
+
+
+def pct(part, whole):
+    return f"{100 * part / whole:.1f}%"
+
+
+def sig_figs(a, b):
+    """How many leading significant figures two values share."""
+    n = 0
+    for k in range(1, 16):
+        if float(f"{a:.{k}g}") != float(f"{b:.{k}g}"):
+            break
+        n = k
+    return n
+
+
+def neglog10p(z):
+    """Two-sided -log10 p from z, in log space so |z| > 38 is not capped."""
+    return -(np.log(2.0) + log_ndtr(-np.abs(np.asarray(z, dtype=float)))) / np.log(10.0)
+
+
+SIZE = b["size"]
+HM3_BYTES = {s: sum(a["apparent_bytes"] for a in SIZE[s]["arrays"]
+                    if a["node"].startswith("data.zarr/indexed_subsets/")) for s in LABELS}
+QT = {(s["label"], t["query"]): t for s in qa["stores"] for t in s["timings"]}
+MEM = {(s["label"], m["query"]): m for s in qa["stores"] for m in s["memory"]}
+HM3 = {s["label"]: s["hm3_extract"] for s in qa["stores"]}
+FID = b["fidelity"]
+LIFT = b["lift_axis"]
+MR = {p["key"]: p for p in b["mr"]}
+AGREE = {r["key"]: r for r in b["mr_observed_agreement"]}
+```
+
+::: {.callout-important}
+## What changed, and the headline numbers
+
+```{python}
+#| echo: false
+#| output: asis
+mem = b["membership"]
+pn, po = ST["new"]["panel"], ST["old"]["panel"]
+fs = FID["strata"]
+c_total = sum(s["summary"]["c_unexplained"] for s in fs.values())
+ratio = SIZE["new"]["apparent_bytes"] / SIZE["old"]["apparent_bytes"]
+BC = b["build_collisions"]
+
+
+def collisions_line(s):
+    c = BC["stores"][s]
+    return (f"{c['n_rows']} rows × {c['n_analyses']:,} Analyses ({c['cells']:,} cells, "
+            f"{c['observed_cells']:,} observed) in the {SHORT[s]}")
+
+
+def q(s, shape):
+    t = QT[(s, shape)]
+    return f"{fmt_ms(t['median_ms'])} ({t['result_count']:,} results)"
+
+
+print(f"""
+The rebuilt **OGS-00009** replaces **OGS-00010**. They are both Reference-Completed
+UK Biobank `ukb-b` Dense Stores, and they differ in **five independent ways**. Every
+section below says which of the five it measures:
+
+1. **Membership**: {mem['added']} Analyses added, {mem['removed']} removed
+   ({ST['new']['n_analyses']:,} against {ST['old']['n_analyses']:,}).
+2. **Completion panel**: the {pn['name']} ({pn['n_variants']:,} panel variants) against the
+   {po['name']} ({po['n_variants']:,}).
+3. **hg19 lift**: opengwas/opengwasdb#288 projects reverse-strand variants onto the hg38 strand, which
+   renames {LIFT['renamed_pairs']:,} observed variants and re-orients
+   {LIFT['expected_reoriented_total']:,} reverse-strand palindromes.
+4. **Format**: {ST['new']['manifest']['format_version']} (Zarr v3, inner chunk
+   {ST['new']['dense']['chunk_shape']}, shard {ST['new']['dense']['shard_shape']}) against
+   {ST['old']['manifest']['format_version']} (Zarr v2, {ST['old']['dense']['chunk_shape']} chunks).
+5. **Identity model**: single-id (`store_id` {ST['new']['manifest']['store_id']},
+   `release_id` {ST['new']['manifest']['release_id']}) against a two-id child (`store_id`
+   {ST['old']['manifest']['store_id']}, `release_id` {ST['old']['manifest']['release_id']}).
+
+* **Build collisions, both Stores:** {collisions_line('new')}, and
+  {collisions_line('old')}, hold one of two colliding source variants' statistics
+  ({BC['issue']}). See [Build collisions](#build-collisions).
+* **Size:** {gb(SIZE['new']['apparent_bytes'])} against {gb(SIZE['old']['apparent_bytes'])}
+  ({ratio:.2f}x), **{SIZE['new']['bytes_per_cell']:.3f}** against
+  **{SIZE['old']['bytes_per_cell']:.3f} bytes per cell**. The new Store holds
+  {bn(SIZE['new']['cells']['total'])} cells against {bn(SIZE['old']['cells']['total'])}, and
+  fewer of them are empty.
+* **Query time** (median of {QT[('new', 'bulk')]['repetitions']} warm calls): one Analysis
+  genome-wide, observed cells only, takes {q('new', 'bulk_observed_only')} against
+  {q('old', 'bulk_observed_only')}. With all of each Store's own cells, it takes
+  {q('new', 'bulk')} against {q('old', 'bulk')}. A PheWAS over the shared Analyses takes
+  {q('new', 'phewas_shared_analyses')} against {q('old', 'phewas_shared_analyses')}.
+* **MR, observed-only variants:** {sum(r['same_sign'] and r['same_significance'] for r in AGREE.values())}
+  of {len(AGREE)} positive controls keep their sign and their significance across the
+  Stores: """ + "; ".join(
+    f"{k} {r['new_beta']:+.4f} ({r['new_instruments']} instruments) against "
+    f"{r['old_beta']:+.4f} ({r['old_instruments']}), agreeing to "
+    f"{sig_figs(r['new_beta'], r['old_beta'])} significant figures"
+    for k, r in AGREE.items()) + f""".
+* **Observed-cell fidelity**, by ALID over the {mem['shared']:,} shared Analyses, in two
+  strata that overlap:
+  * {fs['random_windows']['old_observed_cells']:,} old observed cells at
+    {fs['random_windows']['old_observed_variants']:,} variants in seeded windows
+    ({pct(fs['random_windows']['old_observed_variants'], FID['design']['old_observed_axis'])}
+    of the observed axis);
+  * {fs['targeted']['old_observed_cells']:,} cells at every observed variant the lift could
+    have touched and at every build-collision row.
+
+  **{c_total} cells are unexplained** in either stratum. That holds beside **the cells at build
+  collisions (d)**: {fs['targeted']['summary']['d_build_collision']:,} in the second stratum
+  ({fs['random_windows']['summary']['d_build_collision']:,} of them also fall in the windows).
+  In the second stratum, {fs['targeted']['summary']['a_reoriented']:,} cells are re-oriented by
+  opengwas/opengwasdb#288 (a), and {fs['targeted']['summary']['b_one_store_renamed']:,} sit under a variant that
+  only one Store spells that way (b).
+""")
+```
+:::
+
+## The two Stores
+
+```{python}
+#| echo: false
+#| output: asis
+def row(label, fn):
+    return [label] + [fn(ST[s]) for s in LABELS]
+
+rows = [
+    row("Store path", lambda s: f"`{s['store']}`"),
+    row("`store_id` / `release_id`", lambda s: f"{s['manifest']['store_id']} / {s['manifest']['release_id']}"),
+    row("`format_version`", lambda s: s["manifest"]["format_version"]),
+    row("Completion state", lambda s: s["manifest"]["completion_state"]),
+    row("Analyses", lambda s: f"{s['n_analyses']:,}"),
+    row("Variants (completed axis)", lambda s: f"{s['completion']['n_variants_total']:,}"),
+    row("Encoding", lambda s: f"z `{s['encoding']['z']['kind']}`, se `{s['encoding']['se']['kind']}`, eaf `{s['encoding']['eaf']['kind']}` (v{s['encoding']['version']})"),
+    row("Dense chunk / shard", lambda s: f"{s['dense']['chunk_shape']} / {s['dense'].get('shard_shape', '—')}"),
+    row("Completion panel", lambda s: f"{s['panel']['name']}, {s['panel']['ancestry']} (`{s['panel']['path']}`)"),
+    row("Panel blocks / variants", lambda s: f"{s['panel']['n_blocks']:,} / {s['panel']['n_variants']:,}"),
+    row("Manifest `ld_panel_id`", lambda s: f"`{s['panel']['manifest_ld_panel_id']}`"),
+    row("Build revision", lambda s: f"`{s['runtime']['build']['opengwasdb_rev'][:7]}` ({s['runtime']['build']['elapsed_seconds'] / 3600:.1f} h)"),
+    row("Completion revision", lambda s: f"`{s['runtime']['complete']['opengwasdb_rev'][:7]}` ({s['runtime']['complete']['elapsed_seconds'] / 3600:.1f} h, {s['runtime']['complete']['n_workers']} workers)"),
+    row("Chain (manifest)", lambda s: f"`{s['chain_file']}`"),
+    row("HM3 subset / top hits", lambda s: f"{'yes' if s['derived']['hm3_subset'] else 'no'} / {'yes' if s['derived']['top_hits'] else 'no'}"),
+]
+print(md_table(["", NAME["new"], NAME["old"]], rows, ["---", "---", "---"]))
+```
+
+::: {.callout-warning}
+## The manifest cannot say which panel completed a Store
+
+Both manifests record `ld_panel_id` as
+`{python} ST['new']['panel']['manifest_ld_panel_id']`, but the two Stores were
+completed against different panels. The identifier is a constant in the completion
+code, and `complete-dense` has no flag that sets it. The only provenance that tells
+the panels apart is the completion step record (`records/complete.json`: its argv and
+its `LD panel:` line), and that is where the table above reads them from.
+:::
+
+`{python} SHORT['new']`'s parent is the observed-only release it was completed
+from (`{python} ST['new']['parent_store']`). `{python} SHORT['old']`'s parent is the
+old OGS-00009 (`{python} ST['old']['parent_store']`). Each parent's variant table is
+that Store's **observed axis**, and the fidelity and regional sections use it to
+separate observed variants from the panel-only rows that completion added. The package
+version and a Store Release's `format_version` are different things and move
+independently.
+
+## Size
+
+```{python}
+#| echo: false
+#| output: asis
+def cells_row(label, key):
+    return [label] + [f"{SIZE[s]['cells'][key]:,} ({pct(SIZE[s]['cells'][key], SIZE[s]['cells']['total'])})" for s in LABELS]
+
+print(md_table(
+    ["", NAME["new"], NAME["old"]],
+    [
+        ["Bytes on disk (apparent)"] + [f"{SIZE[s]['apparent_bytes']:,} ({gb(SIZE[s]['apparent_bytes'])}, {SIZE[s]['apparent_bytes'] / 2**30:.1f} GiB)" for s in LABELS],
+        ["  of which Zarr arrays"] + [gb(SIZE[s]["array_apparent_bytes"]) for s in LABELS],
+        ["  of which envelope (variant table, index, manifest)"] + [gb(SIZE[s]["envelope_apparent_bytes"]) for s in LABELS],
+        ["Files"] + [f"{SIZE[s]['n_files']:,}" for s in LABELS],
+        ["Variants × Analyses (cells)"] + [f"{SIZE[s]['variant_axis']['n_variants']:,} × {ST[s]['n_analyses']:,} = {SIZE[s]['cells']['total']:,}" for s in LABELS],
+        cells_row("Observed cells", "observed"),
+        cells_row("Imputed cells", "imputed"),
+        cells_row("Missing: imputation failed", "missing_imputation_failed"),
+        cells_row("Missing: off-panel", "missing_off_panel"),
+        ["**Bytes per cell**"] + [f"**{SIZE[s]['bytes_per_cell']:.3f}**" for s in LABELS],
+        ["  without the HM3 subset (a derived index only the new Store has)"] + [f"{(SIZE[s]['apparent_bytes'] - HM3_BYTES[s]) / SIZE[s]['cells']['total']:.3f} ({gb(SIZE[s]['apparent_bytes'] - HM3_BYTES[s])})" for s in LABELS],
+        ["Bytes per non-missing cell"] + [f"{SIZE[s]['bytes_per_non_missing_cell']:.3f}" for s in LABELS],
+        ["Array bytes per cell"] + [f"{SIZE[s]['array_bytes_per_cell']:.3f}" for s in LABELS],
+        ["Variant axis: observed rows"] + [f"{SIZE[s]['variant_axis']['observed_rows']:,}" for s in LABELS],
+        ["Variant axis: panel rows (added by completion)"] + [f"{SIZE[s]['variant_axis']['panel_rows']:,}" for s in LABELS],
+    ],
+    ["---", "---:", "---:"],
+))
+```
+
+```{python}
+#| echo: false
+def node_group(node):
+    name = node.removeprefix("data.zarr/")
+    if name.startswith("top_hits"):
+        return "top_hits/*"
+    if name.startswith("indexed_subsets"):
+        return "indexed_subsets/hm3/*"
+    if name in ("z", "se", "eaf", "imputed"):
+        return name
+    return "per-variant & side tables"
+
+groups = ["z", "se", "eaf", "imputed", "top_hits/*", "indexed_subsets/hm3/*", "per-variant & side tables", "envelope"]
+by = {s: dict.fromkeys(groups, 0) for s in LABELS}
+for s in LABELS:
+    for a in SIZE[s]["arrays"]:
+        by[s][node_group(a["node"])] += a["apparent_bytes"]
+    by[s]["envelope"] = SIZE[s]["envelope_apparent_bytes"]
+
+fig, axes = plt.subplots(1, 3, figsize=(11, 3.6), gridspec_kw={"width_ratios": [2.2, 1, 1]})
+ax = axes[0]
+y = np.arange(len(groups))[::-1]
+for k, s in enumerate(LABELS):
+    vals = np.array([by[s][g] for g in groups]) / 1e9
+    ax.barh(y + (0.2 if k == 0 else -0.2), vals, height=0.38, color=COL[s], label=NAME[s])
+    for yy, v in zip(y, vals):
+        if v > 0:
+            ax.text(v + 0.3, yy + (0.2 if k == 0 else -0.2), f"{v:.1f}", va="center", fontsize=6.5, color=INK2)
+ax.set_yticks(y, groups)
+ax.set_xlabel("GB on disk")
+ax.set_title("Bytes by array")
+ax.legend(loc="lower right")
+
+ax = axes[1]
+parts = [("observed", COL_OBS), ("imputed", COL_IMP), ("missing_imputation_failed", "#8f8f8f"), ("missing_off_panel", COL_MISS)]
+for k, s in enumerate(LABELS):
+    left = 0.0
+    for key, c in parts:
+        v = SIZE[s]["cells"][key] / 1e9
+        ax.barh([1 - k], [v], left=left, color=c, edgecolor="white", linewidth=1.5,
+                label=key.replace("missing_", "missing: ").replace("_", " ") if k == 0 else None)
+        left += v
+ax.set_yticks([1, 0], [SHORT[s] for s in LABELS])
+ax.set_xlabel("billion cells")
+ax.set_title("Cells by state")
+ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=2)
+
+ax = axes[2]
+for k, s in enumerate(LABELS):
+    va = SIZE[s]["variant_axis"]
+    ax.barh([1 - k], [va["observed_rows"] / 1e6], color=COL_OBS, edgecolor="white", linewidth=1.5,
+            label="observed rows" if k == 0 else None)
+    ax.barh([1 - k], [va["panel_rows"] / 1e6], left=va["observed_rows"] / 1e6, color=COL_PANEL,
+            edgecolor="white", linewidth=1.5, label="panel rows" if k == 0 else None)
+    ax.text(va["n_variants"] / 1e6 + 0.2, 1 - k, f"{va['n_variants'] / 1e6:.2f} M", va="center", fontsize=7, color=INK2)
+ax.set_yticks([1, 0], [SHORT[s] for s in LABELS])
+ax.set_xlabel("million variants")
+ax.set_xlim(0, max(SIZE[s]["variant_axis"]["n_variants"] for s in LABELS) / 1e6 * 1.25)
+ax.set_title("Variant axis")
+ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.25), ncol=2)
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| echo: false
+#| output: asis
+fp = {s["label"]: s["footprint"]["apparent_bytes"] for s in fmt["stores"]}
+fmt_ratio = fp["v3-c64"] / fp["v2-c1000"]
+excess = sum(r["recompressed"]["plane_bytes_on_disk"]
+             - r["recompressed"]["plane_bytes_at_element_size_estimate"]
+             for r in b["typesize"]["new"] if "recompressed" in r)
+k_chunks = next((r["recompressed"]["chunks"] for r in b["typesize"]["new"] if "recompressed" in r), 0)
+gap = (SIZE["new"]["apparent_bytes"] - HM3_BYTES["new"]) - (SIZE["old"]["apparent_bytes"] - HM3_BYTES["old"])
+print(f"""
+**Reading the size difference.** Of the new Store's {gb(SIZE['new']['apparent_bytes'])},
+{gb(HM3_BYTES['new'])} is the HM3 Indexed Variant Subset. That is a derived query index
+(ADR 0061) the old Store does not carry. Without it the Stores are
+{gb(SIZE['new']['apparent_bytes'] - HM3_BYTES['new'])} against
+{gb(SIZE['old']['apparent_bytes'] - HM3_BYTES['old'])}. Three things make up that
+difference.
+
+* **Content.** The new Store has {SIZE['new']['cells']['total'] / SIZE['old']['cells']['total']:.2f}x the
+  cells ({ST['new']['n_analyses']:,} Analyses on {SIZE['new']['variant_axis']['n_variants'] / 1e6:.2f} M
+  variants, against {ST['old']['n_analyses']:,} on {SIZE['old']['variant_axis']['n_variants'] / 1e6:.2f} M).
+  Its panel adds {SIZE['new']['variant_axis']['panel_rows'] / 1e6:.2f} M rows where the old one added
+  {SIZE['old']['variant_axis']['panel_rows'] / 1e6:.2f} M, and fewer of its cells are empty: off-panel
+  cells are {pct(SIZE['new']['cells']['missing_off_panel'], SIZE['new']['cells']['total'])} of the
+  grid against {pct(SIZE['old']['cells']['missing_off_panel'], SIZE['old']['cells']['total'])}. An empty
+  cell compresses to almost nothing, so a fuller grid costs more bytes per cell.
+* **Format.** This comparison cannot isolate the format, because no other variable is
+  held fixed. opengwas/opengwasdb#246 did isolate it: the same old observed OGS-00009 data, converted
+  rather than rebuilt, took **{fp['v2-c1000'] / 1e9:.2f} GB** in the 0.1.0 shape and
+  **{fp['v3-c64'] / 1e9:.2f} GB** in the adopted 0.2.0 shape ({fmt_ratio:.3f}x; measured at
+  `{fmt['commit']}` on {fmt['measured_at'][:10]}). So the 0.2.0 layout itself accounts for
+  about {100 * (fmt_ratio - 1):+.1f}% of the size.
+* **A codec setting.** Neither content nor layout: an estimated {gb(excess)} of the new
+  Store, from {k_chunks} sampled chunks, is its SE plane's Blosc typesize (next callout).
+
+Of the {gb(gap)} gap without HM3, then, an estimated {gb(excess)} is the codec setting, roughly
+{gb(SIZE['old']['array_apparent_bytes'] * (fmt_ratio - 1))} is the layout, and the remaining
+~{gb(gap - excess - SIZE['old']['array_apparent_bytes'] * (fmt_ratio - 1))} is content.
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+flagged = [(s, r) for s in LABELS for r in b["typesize"][s] if "recompressed" in r]
+for s, r in flagged:
+    rc = r["recompressed"]
+    print(f"""
+::: {{.callout-warning}}
+## The {SHORT[s]}'s `{r['plane']}` plane is compressed as if its cells were {r['stored_typesize']} bytes wide
+
+`{r['plane']}` is `{r['dtype']}` ({r['itemsize']} byte per cell), but its Blosc codec records
+`typesize: {r['stored_typesize']}`. Zarr v3 stores the typesize and Blosc bit-shuffles by
+it, so the bits of {r['stored_typesize']} neighbouring cells are interleaved rather than
+each cell's own. Re-encoding {rc['chunks']} seeded inner chunks with the stored codec's
+parameters takes **{rc['ratio']:.2f}x** the bytes at typesize {r['stored_typesize']} that it
+takes at typesize {r['itemsize']}. Scaled by that ratio, the plane would be about
+{gb(rc['plane_bytes_at_element_size_estimate'])} instead of {gb(rc['plane_bytes_on_disk'])}: an
+estimated **{gb(rc['plane_bytes_on_disk'] - rc['plane_bytes_at_element_size_estimate'])}** of
+this Store, from {rc['chunks']} sampled chunks, is the codec setting. The values decode correctly; only the size is affected.
+
+The cause is in the writer, not this Store. `opengwasdb.encoding.se._rewrite_arrays`
+creates the int8 SE plane, and its exception tables, with `compressor_of(source)`: the
+codec of the float32 scratch plane it replaces, whose typesize zarr has already fixed
+at 4. Zarr v2 took the typesize from the buffer at encode time, so 0.1.0 Stores never
+showed this, and any 0.2.0 Dense Store with residual-coded SE written this way will.
+:::
+""")
+```
+
+## Structure: format 0.2.0 against 0.1.0
+
+Every Zarr array in each Store, read back from its own metadata
+(`compare_store_releases.discover_arrays`). A 0.1.0 array is Zarr v2 with one Blosc
+compressor and no shard. A 0.2.0 array is Zarr v3 whose Blosc codec sits inside
+`sharding_indexed`: the inner chunk is the read unit and the shard is the file.
+
+```{python}
+#| echo: false
+#| output: asis
+def short_codec(c):
+    if not c:
+        return "—"
+    name = c.get("cname") or c.get("id") or ",".join(c.get("codecs", []))
+    shuffle = c.get("shuffle")
+    lvl = c.get("clevel")
+    s = f"{name} {lvl}" if lvl is not None else str(name)
+    if shuffle not in (None, "noshuffle", 0):
+        s += f", {'bitshuffle' if shuffle in (2, 'bitshuffle') else shuffle}"
+    if c.get("typesize") is not None:
+        s += f", typesize {c['typesize']}"
+    return s + (" in shard" if c.get("sharding") else "")
+
+def shp(v):
+    return "×".join(f"{x:,}" for x in v) if v else "—"
+
+arrays = sorted(set(b["structure"]["new"]) | set(b["structure"]["old"]),
+                key=lambda k: (k.count("/"), k))
+rows = []
+for name in arrays:
+    cells = [f"`{name.removeprefix('data.zarr/')}`"]
+    for s in LABELS:
+        a = b["structure"][s].get(name)
+        if a is None:
+            cells += ["absent", "", "", ""]
+            continue
+        cells += [f"{shp(a['shape'])} {a['dtype']}",
+                  f"{shp(a['inner_chunk'])} / {shp(a['shard'])}",
+                  f"v{a['zarr_format']}, {short_codec(a['compressor'])}",
+                  f"{a['nbytes_on_disk'] / 1e9:,.3f}"]
+    rows.append(cells)
+print(md_table(
+    ["Array", "new: shape, dtype", "new: chunk / shard", "new: format, codec", "new GB",
+     "old: shape, dtype", "old: chunk / shard", "old: format, codec", "old GB"],
+    rows, ["---"] + ["---"] * 3 + ["---:"] + ["---"] * 3 + ["---:"],
+))
+```
+
+## Query time
+
+```{python}
+#| echo: false
+#| output: asis
+sel = b["selection"]
+REGION_TEXT = (f"chr{sel['region']['chrom']}:{sel['region']['start'] / 1e6:g}–"
+               f"{sel['region']['end'] / 1e6:g} Mb")
+src = b["queries"]["selection_source"]
+print(f"""
+Both Stores were timed by the generic store-comparison harness
+(`benchmarks/benchmark_store_comparison.py`), the same instrument opengwas/opengwasdb#240 and opengwas/opengwasdb#246
+measured with. The selection was resolved once, before either Store was timed. It is
+recorded in `{src['artifact']}` under `selection`; that file's sha256 is
+`{src['sha256'][:12]}…`.
+
+* The exposure is statin use (`{sel['exposure_analysis_id']}`), and the PheWAS variant is
+  `{sel['phewas_alid']}` (APOE).
+* The region is {REGION_TEXT}, using only the {len(sel['regional_alids']):,} ALIDs both
+  axes carry.
+* The {len(sel['random_alids'])} random variants are drawn from the
+  {sel['resolved_from']['n_alids_on_both_axes']:,} ALIDs on both axes. The
+  {len(sel['random_analyses'])} random Analyses are drawn from the
+  {len(sel['shared_analyses']):,} shared Analyses.
+
+**Not every shape is the same query on both Stores.**
+
+* `bulk` reads one Analysis on each Store's own axis: {QT[('new', 'bulk')]['result_count']:,}
+  against {QT[('old', 'bulk')]['result_count']:,} results.
+* `tophits` reads each Store's own genome-wide hits: {QT[('new', 'tophits')]['result_count']:,}
+  against {QT[('old', 'tophits')]['result_count']:,}.
+* Their observed-only twins nearly match:
+  {QT[('new', 'bulk_observed_only')]['result_count']:,} against
+  {QT[('old', 'bulk_observed_only')]['result_count']:,}, and
+  {QT[('new', 'tophits_observed_only')]['result_count']:,} against
+  {QT[('old', 'tophits_observed_only')]['result_count']:,}. They are the like-for-like
+  timings.
+* `phewas` and `regional` keep their historical meaning: every Analysis a Store holds.
+  They therefore return wider results on the new Store. Their `_shared_analyses` and
+  `_shared` twins ask both Stores the same question.
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+ORDER = [
+    ("tophits", "Top hits, one Analysis (p < 5e-8)"),
+    ("tophits_observed_only", "Top hits, observed only"),
+    ("phewas", "PheWAS, every Analysis"),
+    ("phewas_shared_analyses", "PheWAS, shared Analyses"),
+    ("regional_one_analysis", "Region, one Analysis"),
+    ("random_lookup_10_variants_100_analyses", "Lookup 10 variants × 100 Analyses"),
+    ("random_lookup_100_variants_10_analyses", "Lookup 100 variants × 10 Analyses"),
+    ("regional", "Region, every Analysis"),
+    ("regional_shared", "Region, shared Analyses"),
+    ("bulk", "One Analysis, genome-wide"),
+    ("bulk_observed_only", "One Analysis genome-wide, observed only"),
+]
+ORDER = [(k, l) for k, l in ORDER if ("new", k) in QT]
+rows = []
+for key, label in ORDER:
+    cells = [label]
+    for s in LABELS:
+        t = QT[(s, key)]
+        cells += [f"**{fmt_ms(t['median_ms'])}**",
+                  f"{fmt_ms(min(t['warm_ms']))}–{fmt_ms(max(t['warm_ms']))}",
+                  fmt_ms(t["first_call_ms"]),
+                  f"{t['result_count']:,}"]
+    cells.append(f"{QT[('new', key)]['median_ms'] / QT[('old', key)]['median_ms']:.2f}x")
+    rows.append(cells)
+print(md_table(
+    ["Shape", "new median", "new warm range", "new first call", "new results",
+     "old median", "old warm range", "old first call", "old results", "new / old"],
+    rows,
+))
+```
+
+```{python}
+#| echo: false
+keys = [k for k, _ in ORDER]
+x = np.arange(len(keys))
+fig, ax = plt.subplots(figsize=(11, 3.8))
+for k, s in enumerate(LABELS):
+    med = np.array([QT[(s, key)]["median_ms"] for key in keys])
+    lo = med - np.array([min(QT[(s, key)]["warm_ms"]) for key in keys])
+    hi = np.array([max(QT[(s, key)]["warm_ms"]) for key in keys]) - med
+    first = np.array([QT[(s, key)]["first_call_ms"] for key in keys])
+    off = -0.2 if k == 0 else 0.2
+    ax.bar(x + off, med, width=0.38, color=COL[s], label=f"{NAME[s]}: median of warm calls")
+    ax.errorbar(x + off, med, yerr=[lo, hi], fmt="none", ecolor=INK, elinewidth=1, capsize=2)
+    ax.scatter(x + off, first, marker="D", s=14, facecolor="white", edgecolor=COL[s], zorder=3,
+               label=f"{NAME[s]}: first call")
+ax.set_yscale("log")
+TICK = {
+    "tophits": "top hits", "tophits_observed_only": "top hits\nobserved", "phewas": "phewas\nall",
+    "phewas_shared_analyses": "phewas\nshared", "regional_one_analysis": "region\n1 Analysis",
+    "random_lookup_10_variants_100_analyses": "lookup\n10×100",
+    "random_lookup_100_variants_10_analyses": "lookup\n100×10", "regional": "region\nall",
+    "regional_shared": "region\nshared", "bulk": "bulk", "bulk_observed_only": "bulk\nobserved",
+}
+ax.set_xticks(x, [TICK[k] for k in keys], fontsize=7.5)
+ax.set_ylabel("ms (log)")
+ax.set_title("Warm median with min–max of the warm calls; the diamond is the first call")
+ax.legend(ncol=2, loc="upper left")
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for s_rec in qa["stores"]:
+    s = s_rec["label"]
+    loads = [t["load_average_before"][0] for t in s_rec["timings"]] + [t["load_average_after"][0] for t in s_rec["timings"]]
+    rows.append([NAME[s], f"{s_rec['load_average_1m_before']:.1f} → {s_rec['load_average_1m_after']:.1f}",
+                 f"{min(loads):.1f}–{max(loads):.1f}", f"{s_rec['waited_for_load_s']:.0f} s"])
+print(md_table(["Store", "1-min load, column start → end", "1-min load across its shapes", "waited for load"], rows))
+env = qa["environment"]
+print(f"""
+
+The harness times one Store's column, then the next. Each column waited for the
+1-minute load to fall below {b['queries']['command'][b['queries']['command'].index('--max-start-load') + 1]}
+before starting (the node has {env['nproc']} cores and is shared with other builds), and
+every shape records the load average before and after it. Blosc decodes with
+{b['environment']['blosc_nthreads']} threads through zarr's `{env['effective_reader']['pipeline']}`
+at `max_workers={env['effective_reader']['max_workers']}`, the package's pinned reader.
+{env['cache']}
+""")
+```
+
+**What to make of the timings.** The format moves them most. The 1000×64 inner chunk
+makes one-Analysis reads over many variants (`bulk`, `regional_one_analysis`) much
+cheaper. Random lookups, and reads across every Analysis (`phewas`, `regional`), pay for
+more chunks. The indexed top-hit reads are close in both Stores. opengwas/opengwasdb#246 measured that effect on identical data; the same seven shapes are
+reproduced here from its artifact, so the format effect can be read without the
+content change:
+
+```{python}
+#| echo: false
+#| output: asis
+ft = {(s["label"], t["query"]): t for s in fmt["stores"] for t in s["timings"]}
+rows = []
+for key, label in ORDER:
+    if ("v2-c1000", key) not in ft:
+        continue
+    a, c = ft[("v2-c1000", key)]["median_ms"], ft[("v3-c64", key)]["median_ms"]
+    here = QT[("new", key)]["median_ms"] / QT[("old", key)]["median_ms"]
+    rows.append([label, fmt_ms(a), fmt_ms(c), f"{c / a:.2f}x", f"{here:.2f}x"])
+print(md_table(["Shape", "opengwas/opengwasdb#246 0.1.0 shape", "opengwas/opengwasdb#246 0.2.0 shape", "format only", "this comparison (new / old)"], rows))
+print(f"\nopengwas/opengwasdb#246: the old observed OGS-00009 converted to each shape, `{fmt['commit']}`, {fmt['measured_at'][:10]}.")
+```
+
+### Memory
+
+```{python}
+#| echo: false
+#| output: asis
+if MEM:
+    rows = []
+    for key, label in ORDER:
+        if ("new", key) not in MEM:
+            continue
+        rows.append([label] + [f"{MEM[(s, key)]['baseline_mb']:,.0f} → {MEM[(s, key)]['peak_mb']:,.0f} MB (+{MEM[(s, key)]['delta_mb']:,.0f})" for s in LABELS])
+    print("Each shape runs in a fresh interpreter. The first number is RSS with the "
+          "Store open before the query, the second is the peak sampled every 5 ms "
+          "during it.\n")
+    print(md_table(["Shape", NAME["new"], NAME["old"]], rows))
+else:
+    print("This run skipped the RSS probes.")
+```
+
+### HM3 extraction
+
+```{python}
+#| echo: false
+#| output: asis
+h = HM3["new"]
+if h["status"] == "measured":
+    print(f"The new Store publishes the HM3 Indexed Variant Subset "
+          f"({h['subset_n_variants']:,} variants; {h['subset_resolved_count']:,} of "
+          f"{h['subset_requested_count']:,} requested ALIDs resolved). Extracting "
+          f"`{h['analysis_id']}` from it takes **{fmt_ms(h['median_ms'])}** (first call "
+          f"{fmt_ms(h['first_read_ms'])}, {h['result_count']:,} cells), against "
+          f"{fmt_ms(QT[('new', 'bulk')]['median_ms'])} for the whole Analysis genome-wide. "
+          f"The old Store has none (status `{HM3['old']['status']}`: {HM3['old']['detail']}).")
+else:
+    print(f"HM3 status on the new Store: `{h['status']}` — {h['detail']}.")
+```
+
+## MR positive controls
+
+Each pair runs on each Store under three conditions:
+
+* **all**: every instrument and outcome cell the Store holds;
+* **observed**: `observed_only=True` throughout;
+* **imputed**: instruments imputed in both the exposure and the outcome.
+
+The method is unchanged from the OGS-00010 report: p < 5e-8, greedy 1 Mb pruning,
+then IVW. **Observed-only estimates measure the lift and the membership, not the
+panel**, and should agree. All and imputed estimates also carry the panel.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for pair in b["mr"]:
+    for cond in ("all", "observed", "imputed"):
+        cells = [pair["label"] if cond == "all" else "", cond]
+        for s in LABELS:
+            c = pair["stores"][s][cond]
+            cells += [f"{c['n_instruments']:,}", f"{c['ivw_beta']:+.4f}", f"{c['ivw_se']:.4f}", f"{c['ivw_pval']:.2g}"]
+        rows.append(cells)
+print(md_table(
+    ["Pair", "Variants", "new n", "new beta", "new se", "new p", "old n", "old beta", "old se", "old p"],
+    rows, ["---", "---"] + ["---:"] * 8,
+))
+print()
+print(md_table(
+    ["Observed-only check", "new beta (n)", "old beta (n)", "agree to (significant figures)",
+     "same sign", "same significance (p < 0.05)"],
+    [[r["key"], f"{r['new_beta']:+.6g} ({r['new_instruments']})", f"{r['old_beta']:+.6g} ({r['old_instruments']})",
+      f"{sig_figs(r['new_beta'], r['old_beta'])}",
+      "yes" if r["same_sign"] else "**NO**", "yes" if r["same_significance"] else "**NO**"]
+     for r in b["mr_observed_agreement"]],
+))
+```
+
+```{python}
+#| echo: false
+CONDS = ["all", "observed", "imputed"]
+fig, axes = plt.subplots(1, 3, figsize=(11, 3.4))
+for ax, pair in zip(axes, b["mr"]):
+    ticks, labels = [], []
+    for ci, cond in enumerate(CONDS):
+        for k, s in enumerate(LABELS):
+            yy = (len(CONDS) - ci) * 3 - k
+            c = pair["stores"][s][cond]
+            ax.plot([c["ivw_beta"] - 1.96 * c["ivw_se"], c["ivw_beta"] + 1.96 * c["ivw_se"]], [yy, yy],
+                    color=COL[s], lw=2, solid_capstyle="round")
+            ax.plot(c["ivw_beta"], yy, "o", color=COL[s], ms=5, label=NAME[s] if ci == 0 else None)
+            ax.text(c["ivw_beta"], yy + 0.35, f"n={c['n_instruments']:,}", ha="center", fontsize=6, color=INK2)
+        ticks.append((len(CONDS) - ci) * 3 - 0.5)
+        labels.append(cond)
+    ax.axvline(0, color="#7a7a76", lw=0.8)
+    ax.set_yticks(ticks, labels)
+    ax.set_title(pair["label"].split(" (")[0].replace("->", "→") if "proxy" not in pair["label"] else "Statin use (LDL proxy) → CHD")
+    ax.set_xlabel("IVW estimate, 95% CI")
+axes[0].legend(loc="lower left")
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| echo: false
+def pair_scatter(pair):
+    fig, axes = plt.subplots(2, 3, figsize=(11, 6.2), sharex="col")
+    for col, cond in enumerate(CONDS):
+        for r, s in enumerate(LABELS):
+            ax = axes[r, col]
+            c = pair["stores"][s][cond]
+            sc = c["scatter"]
+            be, bo, so = (np.array(sc[k]) for k in ("beta_exp", "beta_out", "se_out"))
+            both_obs = np.array([e == "observed" and o == "observed" for e, o in zip(sc["status_exp"], sc["status_out"])])
+            both_imp = np.array([e == "imputed" and o == "imputed" for e, o in zip(sc["status_exp"], sc["status_out"])])
+            mixed = ~both_obs & ~both_imp
+            for m, colr, mk, lab in ((both_obs, COL_OBS, "o", "observed"), (mixed, "#8a7a3a", "s", "mixed"), (both_imp, COL_IMP, "^", "imputed")):
+                if m.any():
+                    ax.errorbar(be[m], bo[m], yerr=1.96 * so[m], fmt=mk, ms=3, lw=0.5, alpha=0.75, color=colr, label=lab)
+            xs = np.array([be.min(), be.max()])
+            ax.plot(xs, c["ivw_beta"] * xs, color=INK, lw=0.9, ls="--", label=f"IVW {c['ivw_beta']:+.3f}")
+            ax.axhline(0, color="#b0b0ab", lw=0.6)
+            ax.axvline(0, color="#b0b0ab", lw=0.6)
+            ax.set_title(f"{SHORT[s]} · {cond} · {c['n_instruments']:,} instruments", fontsize=8.5, color=COL[s])
+            ax.legend(fontsize=6.5)
+            if r == 1:
+                ax.set_xlabel("exposure beta")
+            if col == 0:
+                ax.set_ylabel("outcome beta")
+    fig.suptitle(pair["label"].replace("->", "→"), fontsize=10)
+    plt.tight_layout()
+    plt.show()
+
+for pair in b["mr"]:
+    pair_scatter(pair)
+```
+
+::: {.callout-note}
+## Two of the three pairs are proxies (unchanged from the OGS-00010 report)
+
+ukb-b has no LDL biomarker, so the "LDL" exposure is statin use, which is confounded
+by indication. It also has no lung-cancer incidence trait: the outcome is the ICD-10
+C34.1 cancer-site field, which is coded only among cancer cases, so it is a collider
+endpoint. These pairs check the pipeline and the Stores against each other. They are
+not causal estimates.
+:::
+
+## Regional profiles
+
+Each window shows one exposure's −log10 p over every variant of each Store's axis,
+side by side.
+
+* Points are coloured by provenance: **observed**, **imputed** at a variant of the
+  observed axis, and **panel** (imputed at a panel-only row that completion added).
+  Variants that are still missing are ticks on the floor.
+* The windows are centred on each exposure's strongest imputed genome-wide hit in each
+  Store. The APOE window (`{python} REGION_TEXT`) is added for statin use.
+
+The observed points are the same data in both Stores, apart from the variants the lift
+renamed. The imputed and panel points differ because the panels differ.
+
+```{python}
+#| echo: false
+STATUS = [("o", "observed", COL_OBS, "o", 9), ("i", "imputed", COL_IMP, "o", 9), ("p", "panel", COL_PANEL, "o", 9), ("m", "missing", COL_MISS, "|", 22)]
+P_LINE = -np.log10(5e-8)
+
+def window_plot(w):
+    fig, axes = plt.subplots(1, 2, figsize=(11, 3.4), sharey=True)
+    ymax = 0
+    prepared = {}
+    for s in LABELS:
+        d = w["stores"][s]
+        pos = (np.array(d["pos"]) + w["start"]) / 1e6
+        status = np.array(list(d["status"]))
+        z = np.array(d["z"])
+        lp = np.where(status == "m", 0.0, neglog10p(z))
+        prepared[s] = (pos, status, lp)
+        ymax = max(ymax, lp.max())
+    floor = -max(1.0, ymax * 0.04)
+    for ax, s in zip(axes, LABELS):
+        pos, status, lp = prepared[s]
+        d = w["stores"][s]
+        for code, label, colr, mk, size in STATUS:
+            m = status == code
+            if not m.any():
+                continue
+            yv = np.full(m.sum(), floor) if code == "m" else lp[m]
+            ax.scatter(pos[m], yv, s=size if code == "m" else 7, c=colr, marker=mk, alpha=0.8,
+                       linewidths=0.6 if code == "m" else 0, label=f"{label} ({m.sum():,})")
+        ax.axhline(P_LINE, color="#e34948", lw=0.8, ls=":")
+        for cs, cen in w["centre"].items():
+            ax.axvline(cen["pos"] / 1e6, color=COL[cs], lw=0.8, ls="--")
+        ax.set_title(f"{NAME[s]} · {len(d['status']):,} variants", color=COL[s])
+        ax.set_xlabel(f"chr{w['chrom']} (Mb, GRCh38)")
+        ax.legend(loc="upper right", fontsize=6.5)
+    axes[0].set_ylabel("−log10 p")
+    kind = "APOE window" if w["kind"] == "apoe" else "strongest imputed hit in " + " and ".join(SHORT[s] for s in w["defined_by"])
+    fig.suptitle(f"{w['trait']} ({w['exposure_id']}) · {kind}", fontsize=10)
+    plt.tight_layout()
+    plt.show()
+
+for w in b["regions"]:
+    window_plot(w)
+```
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for w in b["regions"]:
+    centre = "; ".join(f"{SHORT[s]}: `{c['alid']}` z={c['z']:+.1f}" for s, c in w["centre"].items()) or "fixed window"
+    cells = [f"{w['trait']} (`{w['exposure_id']}`), chr{w['chrom']}:{w['start'] / 1e6:.2f}–{w['end'] / 1e6:.2f} Mb", centre]
+    for s in LABELS:
+        k = w["stores"][s]["counts"]
+        cells.append(f"{k['o']:,} / {k['i']:,} / {k['p']:,} / {k['m']:,}")
+    rows.append(cells)
+print(md_table(["Window", "Centre", "new: observed / imputed / panel / missing", "old: observed / imputed / panel / missing"], rows, ["---", "---", "---:", "---:"]))
+```
+
+## Build collisions
+
+When the hg19 → hg38 lift puts two source variants on one ALID, `build-dense-vcf` writes
+both into that ALID's row. The row keeps one rsid and one source's statistics, and its
+`source_alid` is blanked as ambiguous. Nothing fails: `validate` and the observed-view
+check both pass ([`{python} b['build_collisions']['issue']`](https://github.com/opengwas/opengwasdb/issues/325)).
+
+This section reads each Store on its own, because a collision both Stores share is
+invisible to any comparison between them.
+
+* Rows are the blank `source_alid`s of the Store's observed-only parent, each confirmed on
+  the published completed axis under the same rsid.
+* Sources are the source GWAS-VCF's records that the Store's own lift puts on the ALID.
+* Whose statistics the row holds is decided by comparing the stored z with each
+  source's z, in `{python} ' and '.join(b['build_collisions']['analyses_checked'])`.
+
+```{python}
+#| echo: false
+#| output: asis
+BC = b["build_collisions"]
+
+
+def other_store_text(r, s):
+    """Where the row's variant stands in the other Store, from the recorded lookup."""
+    other = SHORT["old" if s == "new" else "new"]
+    renamed = r["other_store_alid"] not in (None, r["alid"])
+    spelled = f" as `{r['other_store_alid']}`" if renamed else ""
+    rsid = f" ({r['other_store_rsid']})" if r["other_store_rsid"] else ""
+    if r["other_store_alid"] is None:
+        return f"**{r['relation']}**: {other} does not have it"
+    if r["other_store_collision"]:
+        via = ", renamed by opengwas/opengwasdb#288" if renamed else ""
+        return f"collision in both{via}: {other} has it{spelled}{rsid}"
+    held = "uncollided" if r["other_store_row"] == "observed" else "only as a panel row"
+    return f"**{r['relation'].split(',')[0]} collision**: {other} held it {held}{spelled}{rsid}"
+
+
+for s in LABELS:
+    c = BC["stores"][s]
+    lift = BC["lift"][s]
+    table = []
+    for r in c["rows"]:
+        donor = next((x for x in r["sources"] if x["source"] == r["statistics_from"]), None)
+        srcs = "; ".join(f"`{x['source']}` {x['rsid']} ({x['chain_strand']})" for x in r["sources"])
+        held = "not determined" if donor is None else f"**`{donor['source']}`** {donor['rsid']}"
+        rel = other_store_text(r, s)
+        rsid = r["rsid"]
+        mismatch = "" if r["rsid_names_statistics_source"] in (None, True) else " ⚠ rsid names the other source"
+        table.append([f"`{r['alid']}`", rsid, srcs, held + mismatch, rel, f"{r['observed_cells']:,}"])
+    named_other = sum(r["rsid_names_statistics_source"] is False for r in c["rows"])
+    print(f"""
+### {NAME[s]}: {c['n_rows']} rows × {c['n_analyses']:,} Analyses = {c['cells']:,} cells
+
+Lift: {lift['how']}. In {named_other} of {c['n_rows']} rows, the rsid names a different source
+from the one whose statistics the row holds.
+
+{md_table(["Row", "rsid", "hg19 sources (chain strand)", "Statistics held", "In the other Store", "Observed cells"], table, ["---", "---", "---", "---", "---", "---:"])}
+""")
+shared = sum(r["relation"].startswith("shared") for r in BC["stores"]["new"]["rows"])
+new_rows = [r for r in BC["stores"]["new"]["rows"] if r["relation"].startswith("new")]
+held = [r for r in new_rows if r["other_store_row"] == "observed"]
+gone = sum(r["relation"].startswith("gone") for r in BC["stores"]["old"]["rows"])
+print(f"""
+**The class predates opengwas/opengwasdb#288.** Of the new Store's
+{BC['stores']['new']['n_rows']} collisions, {shared} are carried over from the old Store and
+{len(new_rows)} are new: opengwas/opengwasdb#288's complement lands a renamed reverse-strand variant on an ALID
+another source already holds. {len(held)} of the {len(new_rows)} new ones sit at an ALID the
+old Store held uncollided, so a lookup that used to return that variant's own association
+now returns another variant's: """ + "; ".join(
+    f"`{r['alid']}` was {r['other_store_rsid']} and now holds `{r['statistics_from']}`'s statistics "
+    f"under {r['rsid']}" for r in held) + f""". {gone} of the old Store's collisions are gone. Every row holds exactly one source's statistics: a lookup
+returns that source's association at the position, and the other source's is lost.
+The cross-Store view of the {len(LIFT['collapsed'])} new collisions (`lift_axis.collapsed`)
+points here.
+""")
+```
+
+## Observed-cell fidelity
+
+This section asks whether the two Stores hold the same observed cells. A cell is an
+Analysis × variant pair, matched by ALID, over the
+`{python} f"{b['membership']['shared']:,}"` shared Analyses. Every observed cell of the
+old Store gets exactly one category:
+
+* **identical:** z bit-identical; SE and EAF within the encoding's tolerance (below).
+* **(a) re-oriented by opengwas/opengwasdb#288:** a palindromic SNP the chain lifts through a reverse-strand
+  block, decided from the chain alone. Its ALID is unchanged, z is exactly negated, EAF
+  becomes 1 − EAF, and SE is unchanged.
+* **(b) present in only one Store:** opengwas/opengwasdb#288 *renamed* the variant (its alleles
+  complemented), and its cells reappear, re-oriented, under the new spelling.
+* **(d) build collision:** the row is a [build collision](#build-collisions) in either
+  Store, or lands on one, so it holds one of two sources' statistics
+  ([`{python} b['build_collisions']['issue']`](https://github.com/opengwas/opengwasdb/issues/325)).
+* **palindrome, strand ambiguous:** a palindrome whose hg19 source the chain maps both
+  ways. It is counted apart from (a), and only when one orientation holds.
+* **(c) unexplained:** anything else, including a variant that is gone with no lift
+  evidence for why. Any cell here stops the benchmark run.
+
+A new observed cell that no old cell accounts for is (d) at a collision row and (c)
+anywhere else.
+
+### What the lift did, exhaustively
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Observed axis", "Count"],
+    [
+        ["Old observed variants", f"{LIFT['old_observed_variants']:,}"],
+        ["New observed variants", f"{LIFT['new_observed_variants']:,}"],
+        ["Shared (same ALID)", f"{LIFT['shared_observed_variants']:,}"],
+        ["Only in old / only in new", f"{LIFT['old_only']:,} / {LIFT['new_only']:,}"],
+        ["Renamed pairs (complemented alleles, same position)", f"{LIFT['renamed_pairs']:,}"],
+        ["  of which the package's own lift reproduces", f"{LIFT['lift_verified_renamed']:,}"],
+        ["  of which swap the canonical allele (z negated, EAF flipped)", f"{LIFT['renamed_swapping_statistics']:,}"],
+        ["Renamed onto an ALID the new Store already held (a new build collision)", f"{len(LIFT['collapsed'])} (lift reproduces {LIFT['lift_verified_collapsed']})"],
+        ["Dropped (no counterpart) / new without a counterpart", f"{len(LIFT['dropped_old'])} / {len(LIFT['unpaired_new'])}"],
+        ["One-sided variants outside any reverse-strand chain block", f"{len(LIFT['one_sided_outside_reverse_block'])}"],
+        ["Shared variants under a reverse-strand block", f"{LIFT['shared_in_reverse_block']:,}"],
+        ["  palindromes only under reverse blocks: re-oriented", f"{LIFT.get('expected_flip', 0):,}"],
+        ["  palindromes under both orientations, source lifts in reverse: re-oriented", f"{LIFT.get('expected_either_flip', 0):,}"],
+        ["  palindromes under both orientations, source lifts forward: unchanged", f"{LIFT.get('expected_either_same', 0):,}"],
+        ["  palindromes under both orientations, chain cannot decide", f"{LIFT.get('expected_either_ambiguous', 0):,}"],
+        ["  palindromes under both orientations, a build-collision row", f"{LIFT.get('expected_either_collision', 0):,}"],
+        ["  non-palindromes also under a forward block: unchanged", f"{LIFT.get('expected_same', 0):,}"],
+        ["  non-palindromes only under reverse blocks (should not exist)", f"{LIFT.get('expected_unrenamed_reverse', 0):,}"],
+        ["**Re-oriented by opengwas/opengwasdb#288, in all**", f"**{LIFT['expected_reoriented_total']:,}** (lift reproduces {LIFT['lift_verified_flip']:,})"],
+    ],
+))
+```
+
+The two observed axes were compared in full: every variant of each parent's variant
+table. Which chain block each variant lies under is read from the hg19 → hg38 chain
+(`{python} Path(LIFT['chain']).name`, sha256 `{python} LIFT['chain_sha256'][:12]`…).
+
+* A rename or a reverse-only palindrome counts as reproduced when the package's own
+  `lifted_rows` takes the old spelling, read back to hg19 through the reverse block, to
+  the new spelling on the reverse strand.
+* A palindrome under blocks of both orientations is decided by lifting its hg19
+  `source_alid` (from the old parent) through the chain, never by which orientation its
+  cells fit.
+
+The run stops if any reproduction falls short, or if a variant only one Store carries
+lies outside every reverse-strand block.
+
+### Cells
+
+```{python}
+#| echo: false
+#| output: asis
+d = FID["design"]
+rows = []
+names = {"random_windows": "Seeded random windows",
+         "targeted": "Every observed variant the lift could touch, and every collision row"}
+cat_rows = [("identical", "identical"), ("reoriented", "(a) re-oriented"),
+            ("renamed", "(b) present in only one Store (renamed)"),
+            ("collision", "(d) build collision"), ("collision_new_only", "(d) build collision, observed only in new"),
+            ("palindrome_ambiguous", "palindrome, strand ambiguous"),
+            ("unexplained", "(c) unexplained"), ("unexplained_new_only", "(c) observed only in new")]
+for key in ("random_windows", "targeted"):
+    st = FID["strata"][key]
+    rows.append([f"**{names[key]}**", f"{st['old_observed_variants']:,} variants", f"**{st['old_observed_cells']:,}** old observed cells"])
+    for cat, label in cat_rows:
+        rows.append([f"  {label}", f"{st['variants'].get(cat, 0):,}", f"{st['cells'].get(cat, 0):,}"])
+    rows.append([f"  of the (d) cells, reproduced by the other Store", "", f"{st['d_build_collision_agreeing']:,}"])
+print(md_table(["Stratum / category", "Variants", "Cells"], rows))
+print("""
+
+**"Of the (d) cells, reproduced by the other Store"** counts the (d) cells whose counterpart in
+the new Store agrees with the old cell, re-oriented where the lift implies. It is
+informative, not a verdict. A collision both Stores share and resolve to the same source
+reproduces; a collision that keeps the other source in one Store does not, and nor does
+the cell of the source a collision dropped.""")
+rw = FID["strata"]["random_windows"]
+print(f"""
+
+**How large the sample is.** The seeded stratum draws {d['n_windows_drawn']:,} non-overlapping
+windows of {d['window_old_observed_rows']} consecutive old observed variants (seed {d['seed']}),
+giving {rw['old_observed_variants']:,} variants. That is
+{pct(rw['old_observed_variants'], d['old_observed_axis'])} of the old observed axis, and
+{rw['old_observed_cells']:,} observed cells across all {d['shared_analyses']:,} shared
+Analyses. Each window is read by position on both Stores, so a variant only one Store
+spells that way is inside it too. With none unexplained, the rule of three bounds the
+rate of variants carrying an unexplained difference below
+{3 / rw['old_observed_variants']:.1e} (95%). The second stratum is not a sample: it covers
+every observed variant the lift could have touched and every build-collision row of
+either Store.
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+tol = d["tolerance"]
+rows = []
+for key in ("random_windows", "targeted"):
+    st = FID["strata"][key]
+    bi = st["bit_identical_among_identical"]
+    n = st["cells"].get("identical", 0)
+    rows.append([names[key], f"{pct(bi.get('z', 0), n)}", f"{pct(bi.get('se', 0), n)}", f"{pct(bi.get('eaf', 0), n)}",
+                 f"{st['max_gap']['se_log']:.6f}", f"{st['max_gap']['eaf_logit']:.6f}"])
+print(md_table(["Identical cells", "z bit-identical", "SE bit-identical", "EAF bit-identical", "max \\|Δ log SE\\|", "max \\|Δ logit EAF\\|"], rows))
+print(f"""
+
+**Why SE and EAF are compared with a tolerance.** z is `int16_fixed`, an exact code, so
+it is compared bit for bit and matches in every identical cell. SE and EAF are
+`int8_residual`: each Store codes a value as a residual against its own baseline, and
+the baselines move with membership. The EAF baseline is the median over a Store's
+Analyses. So each Store decodes within half a quantisation step of the source value,
+and two Stores can differ by up to one step: {tol['se_log']:.6f} in log SE and
+{tol['eaf_logit']:.6f} in logit EAF. A frequency also carries float32 rounding, which
+near 0 or 1 adds up to {tol['eaf_rounding_per_value']} to its logit. That matters for the
+rare variants the lift flipped close to 1. The widest gaps above sit right at that bound.
+Any real difference is far larger: a wrong orientation moves the logit by
+2 |logit(f)|.
+""")
+```
+
+## Caveats
+
+- **Both Stores carry build collisions.** `{python} collisions_line('new')`, and
+  `{python} collisions_line('old')`, hold one of two colliding source variants'
+  statistics (`{python} BC['issue']`). A lookup of one of these rows returns one
+  source's association, often under the other source's rsid, with no warning. The
+  fidelity check counts their cells as (d), apart from (c). Its "0 unexplained" holds
+  only beside them.
+- **Imputed cells differ because the panels differ.** UKB EUR LD against HGDP+1KGP EUR.
+  The two Stores' imputed values, panel rows, regional imputed points and the all- and
+  imputed-condition MR estimates are not expected to agree, and no section treats a
+  difference there as a defect. Only observed cells are held to identity.
+- **Timings come from a shared host.** The node runs other builds. Each Store's column
+  waited for the 1-minute load to fall below the gate, and every shape records its load
+  average, but the columns ran one after the other, so a load change between them lands
+  on one Store. The page cache is warm and uncontrolled: "first call" means the shape's first
+  call, not a cold disk read.
+- **Format and content are not separated here.** The new Store is bigger and differently
+  shaped. The opengwas/opengwasdb#246 reference rows (the same data in both shapes) are where the format
+  effect alone can be read.
+- **The fidelity check is by ALID.** It examines the shared Analyses only. The
+  `{python} b['membership']['added']` added Analyses have no counterpart to compare.
+- **The panel provenance comes from step records, not the manifest.** See the warning
+  under *The two Stores*.
+- **Two MR pairs are proxies**, as flagged above.
+
+```{python}
+#| echo: false
+#| output: asis
+CROSS = ["phewas", "phewas_shared_analyses", "random_lookup_10_variants_100_analyses"]
+
+
+def cell(timings, store, shape):
+    t = timings.get(store, {}).get(shape)
+    return "—" if t is None else f"{fmt_ms(t['median_ms'])} ({fmt_ms(t['min_ms'])}–{fmt_ms(t['max_ms'])})"
+
+
+current = {st["label"]: {t["query"]: {"median_ms": t["median_ms"], "min_ms": min(t["warm_ms"]),
+                                      "max_ms": max(t["warm_ms"])} for t in st["timings"]}
+           for st in qa["stores"]}
+runs = [(r["label"], r["commit"], r["timings"]) for r in b["earlier_runs"]]
+runs.append(("this run", b["commit"], current))
+if len(runs) > 1:
+    first, last = runs[0][2], runs[-1][2]
+    a, z = first["new"]["phewas"], last["new"]["phewas"]
+    apart = a["max_ms"] < z["min_ms"] or z["max_ms"] < a["min_ms"]
+    print(f"""
+**Lookup timings moved between this report's runs, on the new Store only.** PheWAS on the
+new Store took {fmt_ms(a['median_ms'])} in {runs[0][0]} and {fmt_ms(z['median_ms'])} in this
+run. The old Store went from {fmt_ms(first['old']['phewas']['median_ms'])} to
+{fmt_ms(last['old']['phewas']['median_ms'])}. The two runs' warm ranges on the new Store
+{'do not overlap' if apart else 'overlap'}: {fmt_ms(a['min_ms'])}–{fmt_ms(a['max_ms'])} against
+{fmt_ms(z['min_ms'])}–{fmt_ms(z['max_ms'])}. So the within-run spread understates lookup-time
+uncertainty on a shared host. Read the medians below as one draw each.
+
+{md_table(["Run", "commit", "new: phewas", "old: phewas", "new: phewas, shared", "old: phewas, shared", "new: lookup 10×100", "old: lookup 10×100"],
+          [[label, f"`{commit}`"] + [cell(t, s, shape) for shape in CROSS for s in LABELS] for label, commit, t in runs],
+          ["---", "---"] + ["---:"] * 6)}
+
+Earlier runs are read from their own committed query-time artifacts (`earlier_runs`, with
+each file's sha256).
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+w = b["wall_seconds"]
+print(f"Measured at `{b['commit']}` on {b['measured_at'][:19]} UTC "
+      f"(opengwasdb fingerprint `{b['opengwasdb_fingerprint'][:12]}`). "
+      f"The benchmark ran for {w['total'] / 60:.1f} min in total "
+      + ", ".join(f"{k.replace('_', ' ')} {v / 60:.1f} min" for k, v in w.items() if k != "total")
+      + f". Load average {b['loadavg_start'][0]:.1f} at the start, {b['loadavg_end'][0]:.1f} at the end.")
+```

@@ -421,6 +421,8 @@ def expected_rsids_by_routed_key(
     rsid_by_site: Mapping[_SiteKeyT, str],
     routing: Mapping[str, str],
     key: Callable[[_SiteKeyT], str],
+    *,
+    drop_disputed: bool = False,
 ) -> dict[str, str]:
     """The oracle for a *raw* candidate map routed through a build's key function.
 
@@ -431,12 +433,42 @@ def expected_rsids_by_routed_key(
     sharing that preparation by construction could not see (issue #255 round 4).
 
     Takes the first non-empty rsid per routed ALID, exactly as
-    `expected_rsids_by_routing` does for an already-keyed map.
+    `expected_rsids_by_routing` does for an already-keyed map. With
+    ``drop_disputed`` -- a build run under ``--on-rsid-conflict drop`` -- a
+    variant that any key whose sites name more than one rsid routes to expects
+    no name at all (issue #306).
     """
+    if drop_disputed:
+        return _expected_without_disputed_keys(rsid_by_site, routing, key)
     expected: dict[str, str] = {}
     for site, rsid in rsid_by_site.items():
         alid = routing.get(key(site))
         if alid and rsid and alid not in expected:
+            expected[alid] = rsid
+    return expected
+
+
+def _expected_without_disputed_keys(
+    rsid_by_site: Mapping[_SiteKeyT, str],
+    routing: Mapping[str, str],
+    key: Callable[[_SiteKeyT], str],
+) -> dict[str, str]:
+    """`expected_rsids_by_routed_key` when a disputed variant names nothing.
+
+    Finds the disputed keys itself rather than taking the build's list, so a
+    build that missed one -- and kept a name its sources disagree on -- fails
+    the comparison. Any ALID a disputed key routes to expects no name, whatever
+    another key routed there says. Each key's first name is kept in the order
+    its first named site came, which is the raw `(rank, site)` order restricted
+    to named sites, so the first key routed to an ALID is the one the raw walk
+    finds.
+    """
+    first_name, disputed = _first_names_and_disputed_keys(rsid_by_site, key)
+    unnamed = {routing.get(routed) for routed in disputed}
+    expected: dict[str, str] = {}
+    for routed, rsid in first_name.items():
+        alid = routing.get(routed)
+        if alid and alid not in expected and alid not in unnamed:
             expected[alid] = rsid
     return expected
 
@@ -460,6 +492,21 @@ def expected_rsids_by_routing(
         if alid and rsid and alid not in expected:
             expected[alid] = rsid
     return expected
+
+
+def _first_names_and_disputed_keys(
+    rsid_by_site: Mapping[_SiteKeyT, str], key: Callable[[_SiteKeyT], str]
+) -> tuple[dict[str, str], set[str]]:
+    """Each key's first name in raw order, and the keys named more than one way."""
+    first_name: dict[str, str] = {}
+    disputed: set[str] = set()
+    for site, rsid in rsid_by_site.items():
+        if not rsid:
+            continue
+        routed = key(site)
+        if first_name.setdefault(routed, rsid) != rsid:
+            disputed.add(routed)
+    return first_name, disputed
 
 
 def warn_reference_left_rows_blank(reference: VariantReference) -> None:

@@ -77,3 +77,83 @@ Analysis with none can still be built honestly by retaining every row.
 - **The stores sibling must emit `maf_threshold` on resolver evidence and
   `NaN` otherwise**, and must stop excluding a declared-INFO Analysis with no
   usable scores (opengwasdb-stores #176).
+
+## Amendment: a MAF floor admits only rows whose MAF it can read (opengwasdb#331)
+
+Decision 3 said a row with no usable frequency is **retained** and counted
+`maf_missing`. That is wrong for a `filtered` policy, and the review that
+prompted it found real input: the forensic audit of OGS-00011 (opengwasdb-stores
+#371) found 192,435,653 associations and 101,098,177 off-panel variants admitted
+as `maf_missing`, 83% of the off-panel variants from five publications whose
+`effect_allele_frequency` is `0.0` or blank across tens of millions of
+monomorphic and ultra-rare rows. A declared floor is a statement that the Store
+holds common variation; a row whose frequency cannot be read cannot demonstrate
+that, and retaining it defeated the filter exactly where it mattered.
+
+`admit_rows` therefore reads a source frequency as evidence when it is finite
+and inside `[0, 1]`, and drops a row under `filtered` when it has none. Exactly
+`0.0` and exactly `1.0` are frequencies inside that domain: their MAF is `0`,
+which is below any positive threshold, so a `filtered` policy drops them for the
+filter's own reason. `0` (`disabled`) and an undeclared column (`unavailable`)
+still drop nothing, and a row they keep keeps its frequency.
+
+This amends decision 3's retention clause only. The domain of a *stored*
+association's effect allele frequency is still ADR 0036's: `stats.parse_af`
+reports no EAF for exactly `0` and exactly `1`, so in the pipeline those cells
+reach `admit_rows` as "no usable frequency" and are dropped as such, counted
+`maf_missing` rather than below-threshold. A caller that hands `admit_rows` a
+raw `0.0` or `1.0` gets the below-threshold disposition; no reader does that
+today and this amendment does not change `parse_af`.
+
+Consequences, which are the point of writing it down:
+
+- **`maf_rows_missing` now counts rows a declared floor dropped.** It keeps its
+  meaning as a disposition among observed rows -- no usable frequency -- and
+  gains a consequence. `maf_rows_below_threshold` keeps counting only rows a
+  threshold was actually compared against, so the two are never both true of one
+  row and neither is a synonym for "retained".
+- **A common-variant Store built from a source that reports no frequency at all
+  now admits nothing.** That is the declared contract rather than a regression:
+  an Analysis that declares a floor over a file with no frequency column cannot
+  satisfy it, and the record says so through its counts and its empty store
+  rather than through a full one.
+- **opengwasdb-stores must read `maf_rows_missing` as rows the floor dropped**,
+  and must not present it as a retained-but-unjudged tally.
+- **`parse_af` is deliberately unchanged.** Reversing ADR 0036's amendment would
+  store a frequency of `0` for every monomorphic association -- a Store-format
+  change (spec §EAF: no EAF means no frequency) with consequences in ancestry,
+  phenotype-SD and EAF encoding, none of which this admission fix is about. The
+  two rules answer different questions, and the cost of keeping them apart is
+  only that the pipeline reports these rows as `maf_missing` rather than
+  below-threshold.
+
+### Scope: which builds apply it
+
+The rule is applied where a build streams per-Association rows into a Store that
+carries off-panel variation and consults an Analysis's declared policy: the
+Hybrid builder's Pass 2, and the resolver that writes each Analysis's record.
+Two builds are outside it, deliberately:
+
+- **Standalone Dense (`build-dense-vcf`)** writes a fixed reference-panel axis
+  (ADR 0009; the query facade's contract, ADR 0033): every stored cell is a panel
+  variant, and an off-panel row is not admitted at all, so there is no admission
+  decision for a MAF floor to make. Its axis is the panel's, not the source's.
+- **The Ragged builders** (`build-ragged-ssf`, `build-ragged-besd`) do not call
+  `admit_rows` and ignore a declared `maf_threshold` entirely. That is unchanged
+  by this amendment and is said here so no reader assumes a Ragged release was
+  filtered by a column it never read.
+
+A single-pass Hybrid build with `--variant-reference` (OGS-00011's shape) has no
+Pass 1 harvest, so a rejected row's off-panel variant cannot reach the shared
+axis at all: only an admitted association's key does. A two-pass build keeps the
+variant on the axis and drops its association (issue #255) -- the axis is Pass
+1's harvest, not the admitted rows.
+
+### Checkpoint records
+
+`CHECKPOINT_FORMAT_VERSION` moves to 2. A format-1 checkpoint's Pass 2 spills
+were written under the old retention rule and can hold the rows this amendment
+drops, and nothing in the spills records which rule wrote them. A resume
+therefore refuses a format-1 record outright rather than publish an unfiltered
+Store from it: a resumed build may not reinterpret records its writer did not
+mean (ADR 0023).

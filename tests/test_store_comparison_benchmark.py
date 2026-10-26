@@ -289,7 +289,9 @@ def test_timed_shape_times_a_slow_shape_once_after_its_warm_up(monkeypatch):
     shape is timed once even though `reps` is 5.
     """
     calls: list[int] = []
-    ticks = iter([0.0, 5.0, 10.0, 20.0])
+    # Warm-up start, its query's start and end (`first_call_ms`), warm-up end;
+    # then the timed call's start, its query's start, and its end.
+    ticks = iter([0.0, 0.0, 4.0, 5.0, 10.0, 10.0, 20.0])
     monkeypatch.setattr(time, "perf_counter", lambda: next(ticks))
 
     def shape() -> dict[str, np.ndarray]:
@@ -465,3 +467,121 @@ def test_footprint_refuses_a_du_whose_directory_accounting_it_cannot_tell(monkey
 
     with pytest.raises(SystemExit, match="directories"):
         benchmark_store_comparison._du_counts_directory_apparent_bytes()
+
+
+def test_timed_shape_reports_the_first_call_and_every_warm_call():
+    """A report must be able to show the first call apart from the warm spread (#312)."""
+    timed = _timed_shape(lambda: _result([1.0, 2.0]), 3, limit_s=0.0, slow_shape_s=0.0)
+
+    assert timed["first_call_ms"] >= 0.0
+    assert timed["warmup_ms"] >= timed["first_call_ms"]  # the warm-up also digests
+    assert len(timed["warm_ms"]) == timed["repetitions"] == 3
+    assert round(timed["median_ms"], 3) == sorted(timed["warm_ms"])[1]
+
+
+class _SelectionQuery:
+    """Records the calls the optional shapes make; resolves what it is told to."""
+
+    def __init__(self, resolvable: int | None = None) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+        self.resolvable = resolvable
+        self._variant_axis = self
+
+    def _record(self, name: str, *args: object, **kwargs: object) -> dict[str, np.ndarray]:
+        self.calls.append((name, args, kwargs))
+        return _result([1.0])
+
+    def top_hits(self, **kwargs: object) -> dict[str, np.ndarray]:
+        return self._record("top_hits", **kwargs)
+
+    def analysis(self, *args: object, **kwargs: object) -> dict[str, np.ndarray]:
+        return self._record("analysis", *args, **kwargs)
+
+    def lookup(self, *args: object) -> dict[str, np.ndarray]:
+        return self._record("lookup", *args)
+
+    def analyses_table(self) -> dict[int, dict[str, str]]:
+        return {0: {"analysis_id": "e"}, 1: {"analysis_id": "a"}}
+
+    def indices_by_identifiers(self, alids: list[str]) -> np.ndarray:
+        n = len(alids) if self.resolvable is None else self.resolvable
+        return np.arange(n)
+
+
+_SELECTION = {
+    "exposure_analysis_id": "e",
+    "phewas_alid": "1:5:A:C",
+    "region": {"chrom": "1", "start": 1, "end": 10},
+    "random_alids": ["1:2:A:G"],
+    "random_analyses": ["a"],
+    "regional_alids": ["1:3:C:T", "1:4:A:T"],
+}
+
+
+def test_optional_shapes_follow_the_selection_and_nothing_else():
+    """The extra shapes travel in the selection, so a probe builds what the parent timed."""
+    q = _SelectionQuery()
+    assert benchmark_store_comparison._optional_shapes(q, _SELECTION) == {}
+
+    shapes = benchmark_store_comparison._optional_shapes(
+        q, {**_SELECTION, "observed_only_shapes": True, "shared_analyses": ["e", "a"]}
+    )
+    assert sorted(shapes) == [
+        "bulk_observed_only", "phewas_shared_analyses", "regional_shared",
+        "tophits_observed_only",
+    ]
+    for fn in shapes.values():
+        fn()
+    assert ("analysis", ("e",), {"observed_only": True}) in q.calls
+    assert ("lookup", (["1:5:A:C"], ["e", "a"]), {}) in q.calls
+    assert ("lookup", (["1:3:C:T", "1:4:A:T"], ["e", "a"]), {}) in q.calls
+    top = next(kwargs for name, _, kwargs in q.calls if name == "top_hits")
+    assert top["observed_only"] is True and top["analysis_id"] == "e"
+
+
+def test_check_selection_resolves_refuses_a_store_missing_a_variant_or_analysis():
+    benchmark_store_comparison.check_selection_resolves(_SelectionQuery(), _SELECTION, "ok")
+    with pytest.raises(SystemExit, match="1 of 4 variants"):
+        benchmark_store_comparison.check_selection_resolves(
+            _SelectionQuery(resolvable=3), _SELECTION, "short"
+        )
+    with pytest.raises(SystemExit, match="1 Analyses"):
+        benchmark_store_comparison.check_selection_resolves(
+            _SelectionQuery(), {**_SELECTION, "shared_analyses": ["e", "missing"]}, "short"
+        )
+
+
+def test_parser_takes_a_selection_file_and_the_different_results_opt_in(tmp_path):
+    args = _parser().parse_args([
+        "--store", "new=/x", "--store", "old=/y", "--selection", str(tmp_path / "s.json"),
+        "--allow-different-results",
+    ])
+    assert args.selection == tmp_path / "s.json"
+    assert args.allow_different_results is True
+    defaults = _parser().parse_args(["--store", "v=/x"])
+    assert defaults.selection is None and defaults.allow_different_results is False
+
+
+def test_selection_beside_an_explicit_anchor_is_an_error(tmp_path):
+    """`--selection` brings its own anchors; one given beside it would be silently ignored."""
+    selection = ["--store", "new=/x", "--selection", str(tmp_path / "s.json")]
+    for anchor in (["--exposure", DEFAULT_EXPOSURE], ["--phewas-alid", "1:1:A:C"],
+                   ["--region", "19:1-2"]):
+        with pytest.raises(SystemExit):
+            benchmark_store_comparison.parse_args([*selection, *anchor])
+    assert benchmark_store_comparison.parse_args(selection).explicit_anchors == []
+    alone = benchmark_store_comparison.parse_args(["--store", "v=/x", "--exposure", "e"])
+    assert alone.exposure == "e" and alone.explicit_anchors == ["--exposure"]
+
+
+def test_selection_resolution_runs_only_for_a_caller_selection(monkeypatch, tmp_path):
+    """The default path must not warm the ALID index before its timed shapes."""
+    calls: list[str] = []
+    monkeypatch.setattr(benchmark_store_comparison, "check_selection_resolves",
+                        lambda q, selection, label: calls.append(label))
+    default = argparse.Namespace(selection=None)
+    caller = argparse.Namespace(selection=tmp_path / "s.json")
+    assert benchmark_store_comparison.check_caller_selection(None, {}, default, "a") is False
+    assert calls == []
+    assert benchmark_store_comparison.check_caller_selection(None, {}, caller, "b") is True
+    assert calls == ["b"]

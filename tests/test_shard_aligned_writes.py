@@ -657,3 +657,11 @@ def test_the_dense_se_exception_tables_are_written_once(tmp_path: Path) -> None:
         assert written.get(name), (name, written)
         assert set(written[name].values()) == {1}, (name, written[name])
     assert list(np.asarray(root["se_exception_index"][:])) == [5, 150_000, 240_000]
+    # The residual rewrite must resolve each array's Blosc `typesize` from its
+    # own dtype, not the float32 scratch plane it replaced (issue #326).
+    assert int(root["se"].compressors[0].typesize) == 1, (
+        root["se"].compressors[0].typesize
+    )
+    assert int(root["se_exception_index"].compressors[0].typesize) == 8, (
+        root["se_exception_index"].compressors[0].typesize
+    )

@@ -46,10 +46,8 @@ from opengwasdb.completion.checkpoint import (
 )
 from opengwasdb.completion.ld_panel import (
     LDBlock,
-    blocks_over_variants,
     canonical_panel_alid,
     check_panel_has_chromosomes,
-    find_blocks,
 )
 from opengwasdb.completion.manifest import (
     build_completion_provenance,
@@ -57,6 +55,11 @@ from opengwasdb.completion.manifest import (
 )
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
+from opengwasdb.completion.regions import (
+    blocks_for_analysis,
+    has_trait_position,
+    trait_less_blocks,
+)
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
 from opengwasdb.encoding import (
     EAF_BASELINE,
@@ -551,10 +554,6 @@ def _read_source_state(
     )
 
 
-def _has_trait_position(a: Analysis) -> bool:
-    return bool(a.trait_chr) and bool(a.trait_bp)
-
-
 def _imputable_analyses(state: _SourceState) -> list[tuple[int, Analysis]]:
     """Every Analysis, or -- under the ancestry-match filter (ADR 0028) --
     only those the filter admits. The others are left observed-only: Phase 3's
@@ -576,47 +575,23 @@ def _gene_target_less_blocks(
     gene_target_less = [
         (i, a)
         for i, a in _imputable_analyses(state)
-        if not _has_trait_position(a)
+        if not has_trait_position(a)
     ]
     if not gene_target_less:
         return {}
-    analyses_by_alid: dict[str, list[int]] = {}
-    chromosomes: set[str] = set()
-    for i, _a in gene_target_less:
-        for vi in src_csr.variant_indices(i).tolist():
-            analyses_by_alid.setdefault(state.src_alids[vi], []).append(i)
-            chromosomes.add(state.src_variants[vi].chromosome)
+    held = {
+        i: [
+            (state.src_alids[vi], state.src_variants[vi].chromosome)
+            for vi in src_csr.variant_indices(i).tolist()
+        ]
+        for i, _a in gene_target_less
+    }
+    chromosomes = {chromosome for pairs in held.values() for _alid, chromosome in pairs}
     print(
         f"  {len(gene_target_less):,} analyses have no Trait position; scanning "
         f"{len(chromosomes)} chromosome(s) of panel blocks for regions they hold"
     )
-    return blocks_over_variants(ld_dir, ancestry, analyses_by_alid, sorted(chromosomes))
-
-
-def _cis_window_blocks(
-    a: Analysis, ld_dir: Path, ancestry: str, cis_window_bp: int
-) -> list[LDBlock]:
-    """The LD blocks touching one Analysis's cis window around its Trait
-    position."""
-    start = max(1, int(a.trait_bp) - cis_window_bp)
-    end = int(a.trait_bp) + cis_window_bp
-    return find_blocks(ld_dir, ancestry, a.trait_chr, start, end)
-
-
-def _blocks_for_analysis(
-    i: int,
-    a: Analysis,
-    own_variant_blocks: dict[int, list[LDBlock]],
-    ld_dir: Path,
-    ancestry: str,
-    cis_window_bp: int,
-) -> list[LDBlock]:
-    """An Analysis's completable blocks: its cis window where it has a Trait
-    position, the blocks it already holds enough observations in otherwise
-    (issue #102)."""
-    if _has_trait_position(a):
-        return _cis_window_blocks(a, ld_dir, ancestry, cis_window_bp)
-    return own_variant_blocks.get(i, [])
+    return trait_less_blocks(held, ld_dir, ancestry)
 
 
 def _canonical_alids(block: LDBlock) -> list[str | None]:
@@ -648,7 +623,9 @@ def _scan_block_maps(
     analysis_to_blocks: dict[int, list[str]] = {}
 
     for i, a in _imputable_analyses(state):
-        blocks = _blocks_for_analysis(i, a, own_variant_blocks, ld_dir, ancestry, cis_window_bp)
+        blocks = blocks_for_analysis(
+            a, own_variant_blocks.get(i, []), ld_dir, ancestry, cis_window_bp
+        )
         analysis_to_blocks[i] = [b.block_id for b in blocks]
         for block in blocks:
             block_to_analyses.setdefault(block.block_id, []).append(i)

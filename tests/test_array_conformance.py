@@ -481,6 +481,13 @@ def test_every_built_array_matches_the_seam_policy(conformance_stores: list[_Bui
             assert actual_compressor == expected_compressor, (
                 f"{where}: {role} compressor {actual_compressor} != {expected_compressor}"
             )
+            # A codec resolved against a scratch plane must never leak that
+            # plane's `typesize` onto an array of another dtype (issue #326).
+            if expected_compressor is not None:
+                assert codecs[0].typesize == array.dtype.itemsize, (
+                    f"{where}: {role} Blosc typesize {codecs[0].typesize} "
+                    f"!= dtype itemsize {array.dtype.itemsize}"
+                )
             assert len(tuple(array.filters or ())) == 0, f"{where}: filters {array.filters}"
             if role is ArrayRole.DENSE_STATISTIC_PLANE:
                 expected_fill = (

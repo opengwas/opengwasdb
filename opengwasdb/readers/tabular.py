@@ -41,6 +41,7 @@ from opengwasdb.variants.normalise import (
     normalise_allele,
     normalise_chromosome,
 )
+from opengwasdb.variants.rsid import normalise_rsid
 
 if TYPE_CHECKING:
     # Only ever a signature annotation here; the value itself comes from the
@@ -366,9 +367,10 @@ def _fallback_rsid(
     second_alias: int | None,
     separator: str | None = None,
 ) -> str:
+    """The first alias cell that names an rs identifier, normalised (issue #306)."""
     for index in (first_alias, second_alias):
-        candidate = _alias_cell(row, index, separator)
-        if candidate.startswith("rs"):
+        candidate = normalise_rsid(_alias_cell(row, index, separator))
+        if candidate:
             return candidate
     return ""
 
