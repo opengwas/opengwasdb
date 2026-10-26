@@ -18,6 +18,15 @@ results differ between stores -- different values, order, dtype, length or NaN
 positions -- fails the run with a non-zero exit and writes no artifact; results
 are never sorted or normalised to make them agree.
 
+Two Store Releases holding *different* data -- a rebuild against the release
+it replaces (#312) -- cannot pass that check, so two opt-ins exist for them,
+both recorded in the artifact: `--selection FILE` times a caller-resolved
+selection (the ALIDs and Analyses both stores carry, and optionally the region's
+ALIDs, the shared-Analysis twins of `phewas`/`regional` and the observed-only
+shapes), and `--allow-different-results` records which shapes differed instead
+of refusing. Every store is still refused if the selection does not resolve on
+it, so a smaller query is never timed as the same one.
+
 Usage:
   pixi run -e dev python benchmarks/benchmark_store_comparison.py \
       --store v2-c1000=/data/opengwasdb/stores/OGS-00009/store.opengwasdb \
@@ -58,7 +67,6 @@ from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._quiet import wait_for_quiet as _wait_for_quiet
 from benchmarks._rss import run_probe
-from benchmarks.benchmark_ukbb_dense import _median_ms
 from opengwasdb.query.facade import _empty_result
 
 # Selection anchors, matching the OGS-00009 report (benchmark_ukbb_dense.py):
@@ -158,16 +166,91 @@ def _patterns_for_store(
     The random ALIDs and Analysis ids are passed in rather than drawn here, so
     every store is timed on the identical identifiers. The region is resolved
     against this store's axis by the shared builder; any resulting difference
-    between stores is caught by the identity check rather than hidden.
+    between stores is caught by the identity check rather than hidden. A
+    caller-supplied selection may pin the region's ALIDs too and opt into the
+    extra shapes of `_optional_shapes`.
     """
-    return _query_shapes.common_query_patterns(
+    patterns = _query_shapes.common_query_patterns(
         q,
         exposure=selection["exposure_analysis_id"],
         phewas_alid=selection["phewas_alid"],
         region=_region_tuple(selection),
         random_alids=selection["random_alids"],
         random_analyses=selection["random_analyses"],
+        regional=selection.get("regional_alids"),
     )
+    return {**patterns, **_optional_shapes(q, selection)}
+
+
+def _optional_shapes(
+    q: Any, selection: dict[str, Any]
+) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
+    """Shapes a `--selection` file opts into, beyond the seven (#312).
+
+    They travel in the selection, not as flags, so an RSS probe -- which
+    receives only the selection -- builds exactly the shapes the parent timed.
+    `observed_only_shapes` adds the `observed_only=True` twins of top hits and
+    bulk a Reference-Completed release answers (the OGS-00010 report's two).
+    `shared_analyses` adds PheWAS and the region restricted to those Analyses:
+    `phewas` and `regional` span every Analysis a store holds, so two releases
+    with different membership answer them at different widths, and these twins
+    ask both the same question.
+    """
+    exposure = selection["exposure_analysis_id"]
+    shapes: dict[str, Callable[[], dict[str, np.ndarray]]] = {}
+    if selection.get("observed_only_shapes"):
+        shapes["tophits_observed_only"] = lambda: q.top_hits(
+            analysis_id=exposure, threshold=_query_shapes.GENOME_WIDE, observed_only=True
+        )
+        shapes["bulk_observed_only"] = lambda: q.analysis(exposure, observed_only=True)
+    shared = selection.get("shared_analyses")
+    if shared:
+        regional = selection.get("regional_alids") or _query_shapes.regional_alids(
+            q._variant_axis, _region_tuple(selection)
+        )
+        shapes["phewas_shared_analyses"] = lambda: q.lookup([selection["phewas_alid"]], shared)
+        shapes["regional_shared"] = lambda: q.lookup(regional, shared)
+    return shapes
+
+
+def check_caller_selection(
+    q: Any, selection: dict[str, Any], args: argparse.Namespace, label: str
+) -> bool:
+    """Run `check_selection_resolves` for a `--selection` file only.
+
+    A resolved selection is drawn from the first store and checked by the
+    identity check. Resolving its identifiers here would warm the ALID index
+    before the timed shapes, and the committed default-path timings were taken
+    without that warm-up.
+    """
+    if not args.selection:
+        return False
+    check_selection_resolves(q, selection, label)
+    return True
+
+
+def check_selection_resolves(q: Any, selection: dict[str, Any], label: str) -> None:
+    """Refuse a store on which the selection's identifiers do not all resolve.
+
+    A lookup drops an identifier it cannot resolve, so a store missing one of
+    the selection's variants or Analyses would time a smaller query and report
+    it as the same one. With identical stores the identity check catches that;
+    under `--allow-different-results` this is what does.
+    """
+    analyses = {row["analysis_id"] for row in q.analyses_table().values()}
+    wanted = [selection["exposure_analysis_id"], *selection["random_analyses"],
+              *selection.get("shared_analyses", [])]
+    missing_analyses = sorted(set(wanted) - analyses)
+    alids = sorted({selection["phewas_alid"], *selection["random_alids"],
+                    *selection.get("regional_alids", [])})
+    resolved = len(np.unique(q._variant_axis.indices_by_identifiers(alids)))
+    if missing_analyses or resolved != len(alids):
+        raise SystemExit(
+            f"[{label}] the selection does not resolve on this store: "
+            f"{len(alids) - resolved} of {len(alids)} variants and "
+            f"{len(missing_analyses)} Analyses are missing (first: "
+            f"{missing_analyses[:3]}); refusing to time a smaller query as the same one"
+        )
 
 
 def _resolve_selection(
@@ -401,40 +484,33 @@ def _timed_shape(
 ) -> dict[str, Any]:
     """Time one shape after a shared warm-up, digesting that warm-up.
 
-    With no limit and no slow threshold this is `_median_ms` exactly (one
-    untimed warm-up, then `reps` timed calls), which is what the committed
-    OGS-00009 baseline used. With `limit_s` set it aborts a call that runs
-    longer and returns a `timed_out` record instead of a timing (#252's
-    1500 s Hybrid limit); with `slow_shape_s` set a shape whose warm-up is
-    slower than the threshold is timed once, as #252's harness did for the
-    O(overflow) 2.18 shapes. A timed-out shape carries no digest, so the
-    identity check cannot silently compare an empty result.
+    With no limit and no slow threshold this is the `_median_ms` protocol the
+    committed OGS-00009 baseline used: one warm-up, then `reps` timed calls,
+    the median and p95 taken the same way. The warm-up is timed too and
+    reported apart from the warm calls -- `first_call_ms` is the query alone,
+    `warmup_ms` adds digesting it -- and every warm call is kept in `warm_ms`,
+    so a report can show the first call and the spread (#312). With `limit_s`
+    set it aborts a call that runs longer and returns a `timed_out` record
+    instead of a timing (#252's 1500 s Hybrid limit); with `slow_shape_s` set a
+    shape whose warm-up is slower than the threshold is timed once, as #252's
+    harness did for the O(overflow) 2.18 shapes. A timed-out shape carries no
+    digest, so the identity check cannot silently compare an empty result.
     """
     digests: dict[str, str] = {}
     counts: list[int] = []
+    first_call_ms: list[float] = []
     calls = 0
 
     def instrumented() -> dict[str, np.ndarray]:
         nonlocal calls
+        started = time.perf_counter()
         result = fn()
         calls += 1
         if calls == 1:
+            first_call_ms.append((time.perf_counter() - started) * 1000.0)
             digests.update(result_digests(result))
         counts.append(len(result["z"]))
         return result
-
-    if not limit_s and not slow_shape_s:
-        median_ms, p95_ms, count = _median_ms(instrumented, reps)
-        _check_counts(counts)
-        return {
-            "timed_out": False,
-            "median_ms": median_ms,
-            "p95_ms": p95_ms,
-            "result_count": count,
-            "digests": digests,
-            "repetitions": reps,
-            "warmup_ms": None,
-        }
 
     warmup_start = time.perf_counter()
     try:
@@ -459,6 +535,7 @@ def _timed_shape(
                 "result_count": None,
             }
     _check_counts(counts)
+    warm_ms = [round(ms, 3) for ms in times]
     times.sort()
     return {
         "timed_out": False,
@@ -468,6 +545,8 @@ def _timed_shape(
         "digests": digests,
         "repetitions": repetitions,
         "warmup_ms": round(warmup_ms, 3),
+        "first_call_ms": round(first_call_ms[0], 3),
+        "warm_ms": warm_ms,
     }
 
 
@@ -572,12 +651,17 @@ def _measure_store(
     try:
         dataset = _dataset_block(q, plan)
         effective_reader = effective_reader_settings(_dense_plane_root(q))
+        check_caller_selection(q, selection, args, spec.label)
         patterns = _patterns_for_store(q, selection)
         timings: list[dict[str, Any]] = []
         digests: dict[str, dict[str, str]] = {}
         limit_hits: list[str] = []
         after_limit_hit = False
         for name, fn in patterns.items():
+            # The 1-, 5- and 15-minute load around every shape, not only the
+            # column: the node is shared, and a build starting mid-column lands
+            # on some shapes and not others (#312).
+            shape_load_before = [round(x, 2) for x in os.getloadavg()]
             timed = _timed_shape(
                 fn,
                 args.reps,
@@ -603,7 +687,11 @@ def _measure_store(
                 "p95_ms": round(timed["p95_ms"], 3),
                 "repetitions": timed["repetitions"],
                 "warmup_ms": timed["warmup_ms"],
+                "first_call_ms": timed["first_call_ms"],
+                "warm_ms": timed["warm_ms"],
                 "result_count": timed["result_count"],
+                "load_average_before": shape_load_before,
+                "load_average_after": [round(x, 2) for x in os.getloadavg()],
             }
             if after_limit_hit:
                 # A SIGALRM abandons an in-flight Zarr 3 read on its event-loop
@@ -655,11 +743,17 @@ def _probe_store(
     spec: StoreSpec, selection: dict[str, Any], shapes: list[str], args: argparse.Namespace
 ) -> list[dict[str, Any]]:
     """One fresh interpreter per shape, because a shape's peak is not readable after it."""
+    # A `--selection` file is passed on by path: its region ALIDs and shared
+    # Analyses can outgrow the kernel's 128 KiB limit on one argv string.
+    source = (
+        ["--selection", str(args.selection)]
+        if args.selection
+        else ["--selection-json", json.dumps(selection)]
+    )
     extra = [
         "--store",
         f"{spec.label}={spec.path}",
-        "--selection-json",
-        json.dumps(selection),
+        *source,
         "--shape-limit-s",
         str(args.shape_limit_s),
     ]
@@ -923,6 +1017,11 @@ def _selection_from_json(text: str | None) -> dict[str, Any]:
     return selection
 
 
+def _selection_from_file(path: Path) -> dict[str, Any]:
+    """A caller-resolved selection (`--selection`), validated like a probe's."""
+    return _selection_from_json(Path(path).read_text(encoding="utf-8"))
+
+
 def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]:
     """Measure one shape's RSS in this fresh interpreter.
 
@@ -932,7 +1031,11 @@ def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]
     and collected before the baseline is sampled.
     """
     spec = _single_store(args)
-    selection = _selection_from_json(args.selection_json)
+    selection = (
+        _selection_from_file(args.selection)
+        if args.selection
+        else _selection_from_json(args.selection_json)
+    )
     q, _plan = _query_shapes.open_benchmark_store(spec.path)
     try:
         with _time_limit(args.shape_limit_s):
@@ -943,6 +1046,30 @@ def _measure_shape_rss(args: argparse.Namespace, shape: str) -> dict[str, float]
         return {"query": shape, "timed_out": True, "limit_s": args.shape_limit_s}
     finally:
         q.close()
+
+
+class _AnchorAction(argparse.Action):
+    """Store an anchor option and remember that it was given.
+
+    `--selection` brings its own anchors, so an anchor given beside it would be
+    silently ignored; `parse_args` refuses the pair instead. The defaults alone
+    cannot tell an explicit value from an unset one.
+    """
+
+    def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
+                 values: Any, option_string: str | None = None) -> None:
+        setattr(namespace, self.dest, values)
+        namespace.explicit_anchors = [*namespace.explicit_anchors, option_string]
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """The harness's arguments, refusing anchor options beside `--selection` (#312)."""
+    parser = _parser()
+    args = parser.parse_args(argv)
+    if args.selection and args.explicit_anchors:
+        parser.error(f"--selection supplies the anchors; {', '.join(args.explicit_anchors)} "
+                     "would be ignored")
+    return args
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -956,8 +1083,10 @@ def _parser() -> argparse.ArgumentParser:
         help="a labelled Store Release; repeat for every store being compared",
     )
     ap.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    ap.set_defaults(explicit_anchors=[])
     ap.add_argument(
         "--exposure",
+        action=_AnchorAction,
         default=DEFAULT_EXPOSURE,
         metavar="ANALYSIS_ID",
         help=f"the Analysis the shapes are anchored on (default {DEFAULT_EXPOSURE!r}, "
@@ -965,6 +1094,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--phewas-alid",
+        action=_AnchorAction,
         default=DEFAULT_PHEWAS_ALID,
         metavar="ALID",
         help="pin the PheWAS variant instead of deriving it from the exposure's "
@@ -972,6 +1102,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--region",
+        action=_AnchorAction,
         type=_parse_region,
         default=DEFAULT_REGION,
         metavar="CHROM:START-END",
@@ -990,6 +1121,22 @@ def _parser() -> argparse.ArgumentParser:
         "--selection-json",
         default=None,
         help="internal: the once-resolved selection an RSS probe must reuse",
+    )
+    ap.add_argument(
+        "--selection",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="time this caller-resolved selection (JSON) instead of resolving one from "
+        "the first store; it may add `regional_alids`, `shared_analyses` and "
+        "`observed_only_shapes` (#312). Takes precedence over the anchor options",
+    )
+    ap.add_argument(
+        "--allow-different-results",
+        action="store_true",
+        help="record, rather than refuse, stores whose results differ -- for Store "
+        "Releases holding different data, where the identity check cannot hold; the "
+        "artifact says which shapes differed (#312)",
     )
     ap.add_argument(
         "--shape-limit-s",
@@ -1013,15 +1160,20 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    args = _parser().parse_args()
+    args = parse_args()
     if _query_shapes.emit_rss_probe(args, _measure_shape_rss):
         return
 
     stores = _validated_stores(args)
-    selection = _resolve_selection(
-        stores[0], exposure=args.exposure, phewas_alid=args.phewas_alid, region=args.region
-    )
-    print(f"selection resolved from {stores[0].label}: {json.dumps(selection, sort_keys=True)}")
+    if args.selection:
+        selection = _selection_from_file(args.selection)
+        print(f"selection read from {args.selection}", flush=True)
+    else:
+        selection = _resolve_selection(
+            stores[0], exposure=args.exposure, phewas_alid=args.phewas_alid, region=args.region
+        )
+        print(f"selection resolved from {stores[0].label}: "
+              f"{json.dumps(selection, sort_keys=True)}")
 
     reference_label = stores[0].label
     all_digests: list[dict[str, dict[str, str]]] = []
@@ -1042,13 +1194,15 @@ def main() -> None:
             "the run is not evidence"
         )
     reference_digests = {shape: all_digests[0][shape] for shape in common}
+    differing: dict[str, dict[str, list[str]]] = {}
     for spec, digests in zip(stores[1:], all_digests[1:], strict=True):
-        assert_identical(
-            reference_label,
-            reference_digests,
-            spec.label,
-            {shape: digests[shape] for shape in common},
-        )
+        candidate = {shape: digests[shape] for shape in common}
+        if args.allow_different_results:
+            differing[spec.label] = differing_shapes(reference_digests, candidate)
+            print(f"identity recorded, not required: {spec.label} differs from "
+                  f"{reference_label} in {sorted(differing[spec.label])}", flush=True)
+            continue
+        assert_identical(reference_label, reference_digests, spec.label, candidate)
         print(f"identity check passed: {spec.label} matches {reference_label}", flush=True)
 
     result = {
@@ -1061,8 +1215,18 @@ def main() -> None:
             "shapes": sorted(common),
             "shapes_not_compared": sorted(measured - common),
             "arrays_per_shape": list(RESULT_ARRAY_NAMES),
-            "identical": True,
+            "required": not args.allow_different_results,
+            "identical": not any(differing.values()),
+            "differing_shapes": differing,
         },
+        # The selection itself is recorded above; a `--selection` file is
+        # usually temporary, so its digest is kept rather than its path.
+        "selection_source": (
+            {"sha256": hashlib.sha256(Path(args.selection).read_bytes()).hexdigest(),
+             "recorded_as": "selection"}
+            if args.selection
+            else "resolved"
+        ),
         "environment": _environment_block(records[0]["effective_reader"]),
         "harness_file": _harness_fingerprint(),
         **provenance(),

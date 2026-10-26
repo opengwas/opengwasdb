@@ -673,6 +673,139 @@ the reference for both the selection and the identity check. The script
 refuses a duplicate label, a missing store directory, an exposure Analysis
 with no genome-wide hits, or a partial random selection.
 
+**Stores holding different data (#312).** A rebuild set beside the release it
+replaces cannot pass the identity check, so two opt-ins exist, and neither
+changes a run that uses neither:
+
+* `--selection FILE` times a caller-resolved selection (JSON, the keys the
+  harness records under `selection`) instead of resolving one from the first
+  store. Three optional keys travel with it, so an RSS probe builds the same
+  shapes: `regional_alids` pins the region's ALIDs for `regional_one_analysis`;
+  `shared_analyses` adds `phewas_shared_analyses` and `regional_shared`, the
+  `phewas`/`regional` questions asked of those Analyses only; and
+  `observed_only_shapes` adds `tophits_observed_only` and `bulk_observed_only`.
+* `--allow-different-results` records which shapes' results differed, under
+  `identity.differing_shapes`, with `identity.required: false`, instead of
+  refusing to write the artifact.
+
+With `--selection`, every store is refused when the selection's variants or
+Analyses do not all resolve on it, so a smaller query is never timed as the same
+one. The check runs only then: on the default path it would warm the ALID index
+before the timed shapes. An anchor option (`--exposure`, `--phewas-alid`,
+`--region`) given beside `--selection` is an error, not a silent override. The
+artifact records the selection under `selection`, and `selection_source` records
+its file's sha256 rather than a path that may be temporary. Every timing
+row now also carries `first_call_ms` (the warm-up call alone, without digesting
+it), `warm_ms` (each timed call, in order) and the 1-, 5- and 15-minute load
+average before and after the shape. The median and p95 are computed as before.
+
+---
+
+### `benchmark_ogs00009_vs_ogs00010.py` (#312)
+
+Compares the rebuilt ukb-b Reference-Completed Store **OGS-00009** (format
+0.2.0, 2,514 Analyses, completed against the UKB EUR LD panel) with the
+**OGS-00010** it replaces (format 0.1.0, 2,024 Analyses, HGDP+1KGP EUR panel),
+before the old Stores are deleted. The two differ in membership, panel, hg19
+lift (#288), format and identity model at once, so each section holds the
+others fixed where it can:
+
+1. **identity and provenance** from each manifest and its step records. The
+   panel is read from `records/complete.json`, because `ld_panel_id` is a
+   constant (`eur-hg38-gpm`) in both manifests;
+2. **the observed axes, exhaustively**: each Store's Observed-Only parent's
+   variant table is its observed axis.
+   - Every variant only one Store carries is paired with its strand-complemented
+     spelling: renamed, or collapsed onto an existing ALID.
+   - Each variant is placed under the hg19 → hg38 chain's forward or reverse
+     blocks, and each pair is verified with the package's own `lifted_rows`.
+   - A palindrome under blocks of both orientations is oriented by lifting its
+     hg19 `source_alid` (from the old parent) through the chain, never by
+     which orientation its cells fit. One the chain maps both ways is counted
+     as "palindrome, strand ambiguous", not (a).
+
+   The run stops if a one-sided variant lies outside every reverse-strand
+   block, or a reproduction count falls short;
+3. **observed-cell fidelity**, by ALID over the shared Analyses, on two strata:
+   - every observed variant the lift could touch, plus every build-collision
+     row of either Store and its counterpart;
+   - 1,000 seeded windows of 500 consecutive old observed variants
+     (`--fidelity-*`).
+
+   Every old observed cell gets one category:
+   - identical;
+   - (a) re-oriented by #288;
+   - (b) present in only one Store (renamed);
+   - (d) build collision, opengwas/opengwasdb#325;
+   - palindrome, strand ambiguous;
+   - (c) unexplained, including a variant gone with no lift evidence.
+
+   Any (c) cell, or any new observed cell no old one accounts for outside a
+   collision row, stops the run and writes the partial result beside the
+   output. z is compared bit for bit. SE and EAF are compared within both
+   Stores' half quantisation steps, plus float32 rounding of a frequency near
+   0 or 1;
+4. **build collisions** (`benchmarks/_build_collisions.py`), read from each
+   Store on its own, because a collision both Stores share is invisible to the
+   diff:
+   - Every row with a blank `source_alid` in the Observed-Only parent is
+     confirmed on the published axis under the same rsid.
+   - Its hg19 sources are reconstructed from a source GWAS-VCF
+     (`--source-manifest`) with that Store's own lift: the installed package
+     when the build revision's lift files are blob-identical to HEAD, otherwise
+     a `git archive` of that revision's self-contained `liftover.py` under
+     `--lift-workdir`.
+   - Whose statistics the row holds is decided from the source VCFs of two
+     Analyses.
+   - Where the row's variant stands in the other Store is looked up on that
+     Store's whole axis: observed, in its own spelling or #288's complement,
+     then panel-only. The record says whether the other Store has it, under
+     which rsid, and whether it collides there too.
+
+   The run stops if a row's statistics match neither source. An archived lift
+   is re-extracted whenever the workdir copy is not the revision's blob.
+   `--earlier-queries LABEL=PATH` (repeatable) copies an earlier run's warm
+   timings into `earlier_runs`, with that file's sha256 and commit, so the
+   report can show how far lookup timings moved between runs on a shared host;
+5. **MR positive controls** (`benchmark_ogs00010_completed.mr_condition`) on
+   both Stores. The run stops if an observed-only estimate changes sign or
+   significance;
+6. **regional profiles** (`benchmark_ogs00010_completed.window_profile`) around
+   each exposure's strongest imputed hit in each Store, and APOE, coded
+   observed / imputed / panel-only / missing;
+7. **structure**: `compare_store_releases.discover_arrays`, which now reads
+   Zarr v2 `.zarray` arrays as well as v3. Each Dense plane's stored Blosc
+   `typesize` is set against its element size. Where they differ, 200 seeded
+   inner chunks are re-encoded both ways, so the report can say what the
+   setting costs: 0.2.0 SE planes inherit typesize 4 from their float32
+   scratch plane (`encoding.se._rewrite_arrays`);
+8. **query time and size**: `benchmark_store_comparison.py` run as a
+   subprocess on both Stores, with `--selection` (ALIDs both completed axes
+   carry, the shared Analyses, the region's shared ALIDs, observed-only shapes)
+   and `--allow-different-results`. Its footprint gives the size section's bytes
+   per cell.
+
+**Output files written to `docs/benchmark-output/`:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_ogs00009_vs_ogs00010.json` | The comparison artifact (sections 1-6 and the size section) |
+| `opengwasdb_ogs00009_vs_ogs00010_queries.json` | The store-comparison harness's artifact for both Stores |
+| `opengwasdb_ogs00009_vs_ogs00010.qmd` / `.html` | The rendered report; it also reads #246's same-data shape comparison for the format-only effect |
+
+**Usage** (run from the repo root, on the machine holding the stores; every
+path is a default):
+
+```bash
+pixi run -e dev python benchmarks/benchmark_ogs00009_vs_ogs00010.py --reps 7
+cd docs/benchmark-output && pixi run -e report quarto render \
+    opengwasdb_ogs00009_vs_ogs00010.qmd
+```
+
+The defaults name the two parents' archived trees under
+`/data/opengwasdb/stores/OGS-00009/replaced/`, so the run reproduces only
+while those exist.
+
 ---
 
 ### `benchmark_ogs00011_hybrid.py` (#252)

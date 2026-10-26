@@ -357,10 +357,8 @@ def observed_cell_fidelity(
     }
 
 
-def region_imputation_profile(
-    q: Any, analysis_id: str, cols: dict[str, Any]
-) -> dict[str, Any]:
-    """2 Mb window centred on the analysis's strongest imputed genome-wide hit.
+def window_profile(q: Any, analysis_id: str, chrom: str, start: int, end: int) -> dict[str, Any]:
+    """Every axis variant in ``chrom:start-end`` with one Analysis's cell.
 
     Covers EVERY variant of the completed axis in the window: axis rows are a
     contiguous slice of the genomic-sorted table, so the plot data is one
@@ -368,16 +366,9 @@ def region_imputation_profile(
     region column -- real cells keep their z/se and observed/imputed status,
     rows whose cell is still NaN (off-panel or imputation-failed) are
     reported with status ``missing`` and zero statistics. The plot cannot
-    silently drop the third class.
+    silently drop the third class. Shared with the OGS-00009/OGS-00010
+    comparison, which profiles the same window on two Stores (#312).
     """
-    imp = np.flatnonzero(cols["status"] == "imputed")
-    if imp.size == 0:
-        raise SystemExit(f"{analysis_id}: no imputed genome-wide hits to centre a region on")
-    ci = imp[int(np.argmax(np.abs(cols["z"][imp])))]
-    chrom = str(cols["chrom"][ci])
-    start = max(1, int(cols["pos"][ci]) - REGION_HALF_WINDOW)
-    end = int(cols["pos"][ci]) + REGION_HALF_WINDOW
-
     axis = q._variant_axis
     rows = axis.range_indices(chrom, start, end).astype("int64")
     if rows.size and not np.array_equal(rows, np.arange(rows.min(), rows.min() + rows.size)):
@@ -408,6 +399,34 @@ def region_imputation_profile(
     z[offset] = region["z"]
     se[offset] = region["se"]
     status[offset] = region["association_status"]
+    return {
+        "rows": rows,
+        "alid": ident["alid"],
+        "position": ident["position"],
+        "z": z,
+        "se": se,
+        "status": status,
+    }
+
+
+def strongest_imputed_hit(cols: dict[str, Any], analysis_id: str) -> int:
+    """The row of `cols` holding the Analysis's strongest imputed genome-wide hit."""
+    imp = np.flatnonzero(cols["status"] == "imputed")
+    if imp.size == 0:
+        raise SystemExit(f"{analysis_id}: no imputed genome-wide hits to centre a region on")
+    return int(imp[int(np.argmax(np.abs(cols["z"][imp])))])
+
+
+def region_imputation_profile(
+    q: Any, analysis_id: str, cols: dict[str, Any]
+) -> dict[str, Any]:
+    """2 Mb window centred on the analysis's strongest imputed genome-wide hit."""
+    ci = strongest_imputed_hit(cols, analysis_id)
+    chrom = str(cols["chrom"][ci])
+    start = max(1, int(cols["pos"][ci]) - REGION_HALF_WINDOW)
+    end = int(cols["pos"][ci]) + REGION_HALF_WINDOW
+    window = window_profile(q, analysis_id, chrom, start, end)
+    status, z, se = window["status"], window["z"], window["se"]
 
     return {
         "analysis_id": analysis_id,
@@ -417,12 +436,12 @@ def region_imputation_profile(
         "center_alid": str(cols["alid"][ci]),
         "center_pos": int(cols["pos"][ci]),
         "center_z": float(cols["z"][ci]),
-        "n_points": int(rows.size),
+        "n_points": int(window["rows"].size),
         "n_observed": int((status == "observed").sum()),
         "n_imputed": int((status == "imputed").sum()),
         "n_missing": int((status == "missing").sum()),
         "points": {
-            "pos": [int(p) for p in ident["position"]],
+            "pos": [int(p) for p in window["position"]],
             "z": [_g4(float(v)) for v in z],
             "se": [_g4(float(v)) for v in se],
             "status": [str(s) for s in status],
