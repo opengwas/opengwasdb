@@ -375,11 +375,10 @@ python3 quality/bin/gate.py --changed
 
 This is the normal development loop and the agent Stop hook runs the same
 command. It judges untracked files and the diff from the top-level `base_ref`
-(`origin/dev` here, until the cutover names `origin/main`), applying the
-configured source, language and exclusion scope before each check. It therefore
-reports what the current branch adds to its target branch, rather than
-resurfacing accepted repository-wide debt or changes already merged since the
-last release.
+(`origin/main`), applying the configured source, language and exclusion scope
+before each check. It therefore reports what the current branch adds to its
+target branch, rather than resurfacing accepted repository-wide debt or changes
+already merged since the last release.
 
 `--changed` is deliberately not a whole-repository certification. Run
 `python3 quality/bin/gate.py` when reconciling the repository baseline, and
@@ -421,10 +420,6 @@ the imported guide:
   against the pull request's base (`GITHUB_BASE_REF`) and then the default
   branch; the `base_ref` in `quality.json` makes a local run reproduce CI, the
   same reason `scripts/check_changelog.py` is run with `--base-ref origin/main`.
-  `quality.json` still says `origin/dev`, which is the branch changes merged
-  into before the cutover; setting it to `origin/main` is a step in that
-  cutover (opengwas/opengwasdb#333), and until it is done a local `--changed`
-  run is scoped against the old integration branch.
 - **A clone overlapping a changed line can never be accepted by the density
   baseline.** The density is one repository-wide share (duplicated significant
   lines over all significant lines) held by a baseline that only lowers. It

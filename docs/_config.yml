@@ -1,0 +1,6 @@
+# GitHub Pages builds this directory with Jekyll. The `.qmd` files are Quarto
+# sources: each has its rendered `.html` beside it, which is the page to read.
+# Jekyll would run their code (`{{ }}`, `{% %}`) through Liquid and fail the
+# whole build, so it leaves them out.
+exclude:
+  - "*.qmd"
