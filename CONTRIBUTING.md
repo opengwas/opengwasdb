@@ -54,6 +54,16 @@ feature branch  ->  main
 opengwas/opengwasdb#333 merged it into `main`. Feature branches now target
 `main`.)
 
+**A release run reconciles, it does not just react.** GitHub keeps one pending
+run per concurrency group and discards the rest, so three quick merges cannot
+be trusted to produce three runs. Each run therefore publishes every
+first-parent commit after the newest `v*` tag that has no tag yet, and any
+tagged commit whose GitHub Release was never created, oldest first. Publication
+is two steps — push the tag, create the Release — and each is skipped when it
+is already done, so a run that dies halfway is finished by the next push or by
+re-running the workflow. A tag is never moved: if one exists on another commit,
+the run stops and says so.
+
 **A pull request adds a changelog fragment instead of editing
 `CHANGELOG.md`.** `changelog.d/<slug>.<type>.md` holds what a user would
 notice, and the fragments of the pull request that merges are that version's
@@ -443,12 +453,15 @@ The same checks run locally:
 pixi run -e dev python scripts/check_baselines.py
 pixi run -e dev python quality/bin/gate.py
 pixi run -e dev python scripts/check_changelog.py --base-ref origin/main
-pixi run -e dev python scripts/release.py --previous-tag "$(git describe --tags --abbrev=0 --match 'v*')" \
+pixi run -e dev python scripts/release.py plan --repository opengwas/opengwasdb
+pixi run -e dev python scripts/release.py next --previous-tag v0.3.0 \
     --fragment changelog.d/<slug>.<type>.md
 ```
 
-That last line is the release dry run: it prints the version this merge would
-be tagged with and, with `--notes-out`, writes the notes.
+The last two are the release dry runs, and neither writes anything. `plan`
+lists every merge `main` is owed a version for, the version each would get and
+which of the two publication steps is still missing. `next` answers the same
+question for a single merge, from the previous tag you name.
 
 The tooling-baseline script checks counts, not diffs — it catches a regression
 but not a change that fixes one finding while adding another. The diff recipe

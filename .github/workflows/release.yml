@@ -1,9 +1,16 @@
 name: Release
 
-# Every merge to `main` is a version. This workflow tags the pushed commit and
-# publishes a GitHub Release whose notes are the changelog fragments that pull
-# request added, and it never commits to `main`: the version comes from the tag,
-# through hatch-vcs (issue #333, CONTRIBUTING "Branches and releases").
+# Every merge to `main` is a version. This workflow tags it and publishes a
+# GitHub Release whose notes are the changelog fragments that merge added, and
+# it never commits to `main`: the version comes from the tag, through hatch-vcs
+# (issue #333, CONTRIBUTING "Branches and releases").
+#
+# It decides nothing itself. `scripts/release.py plan` reconciles what `main` is
+# owed -- every first-parent commit after the newest `v*` tag that has no tag
+# yet, and any tagged commit whose Release was never created -- and
+# `scripts/release.py publish` does the two steps each still needs, skipping the
+# ones already done. Both live in a tested script because a rule spread over
+# YAML is a rule nothing can test.
 on:
   push:
     branches: [main]
@@ -13,104 +20,39 @@ on:
 permissions:
   contents: write
 
-# Serialised, never cancelled: two merges in quick succession must be two
-# consecutive versions on their own commits, and a cancelled run would leave a
-# merge untagged with nothing that retries it. `cancel-in-progress: false` makes
-# the second run wait for the first rather than skipping it.
+# Serialised so two runs never tag at once, and never cancelled: a cancelled run
+# would leave a merge unpublishable until the next push, which is why the plan
+# reconciles rather than trusting this queue to deliver one run per merge.
 concurrency:
   group: release-main
   cancel-in-progress: false
 
 jobs:
   release:
-    name: tag and publish
+    name: reconcile, tag and publish
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          # The version is computed from the tags, and the fragments from a diff
-          # against the previous commit: both need history.
+          # The tags order the releases, and each commit's fragments are read
+          # from the diff against its parent: both need full history.
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Is this commit already released?
-        id: existing
-        run: |
-          # A re-run, or a commit the owner tagged by hand, is already a
-          # version. Releasing it again would bump past it and publish empty
-          # notes, so the run stops here and says which tag it found.
-          tag=$(git describe --tags --exact-match HEAD --match 'v*' 2>/dev/null || true)
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          if [ -n "$tag" ]; then echo "HEAD is already tagged ${tag}; nothing to release."; fi
-
-      - name: Find the pull request this commit merged
-        id: pr
-        if: steps.existing.outputs.tag == ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # A merge commit names its pull request here, and so does a squash
-          # merge. An empty answer is a push with no pull request, which the
-          # script is told about -- it does not guess one.
-          number=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
-            --jq '[.[] | select(.merged_at != null)][0].number // empty')
-          subject=$(git log -1 --format=%s)
-          {
-            echo "number=${number}"
-            echo "subject<<SUBJECT_END"
-            echo "${subject}"
-            echo "SUBJECT_END"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Plan the version and the notes
+      - name: Plan every merge that is owed a release
         id: plan
-        if: steps.existing.outputs.tag == ''
-        env:
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
-          COMMIT_SUBJECT: ${{ steps.pr.outputs.subject }}
-        run: |
-          set -euo pipefail
-          previous=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
-          : > "${RUNNER_TEMP}/fragments.txt"
-          if git rev-parse --verify --quiet 'HEAD^1^{commit}' > /dev/null; then
-            # Added by this push only: an old fragment is never edited or
-            # deleted, so the ones this merge brought are exactly what its notes
-            # are.
-            git diff --diff-filter=A --name-only HEAD^1 HEAD -- changelog.d/ \
-              | grep -v '^changelog.d/README.md$' >> "${RUNNER_TEMP}/fragments.txt" || true
-          fi
-          args=(
-            --previous-tag "${previous}"
-            --fragments-from "${RUNNER_TEMP}/fragments.txt"
-            --commit-subject "${COMMIT_SUBJECT}"
-            --repository "${GITHUB_REPOSITORY}"
-            --notes-out "${RUNNER_TEMP}/notes.md"
-          )
-          if [ -n "${PR_NUMBER}" ]; then args+=(--pr-number "${PR_NUMBER}"); fi
-          version=$(python3 scripts/release.py "${args[@]}")
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "Releasing ${previous:-nothing} -> ${version}"
-
-      - name: Tag the commit and publish the release
-        if: steps.existing.outputs.tag == ''
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.plan.outputs.version }}
         run: |
-          set -euo pipefail
-          tag="v${VERSION}"
-          # The tag is the version, so it is the one thing this workflow must not
-          # invent twice: if it already exists, the release exists.
-          if git rev-parse --quiet --verify "refs/tags/${tag}" > /dev/null; then
-            echo "::error::${tag} already exists; refusing to move a published tag."
-            exit 1
-          fi
-          git config user.name 'opengwasdb release'
-          git config user.email 'release@opengwas.io'
-          git tag --annotate "${tag}" --message "Release ${tag}" "${GITHUB_SHA}"
-          git push origin "refs/tags/${tag}"
-          gh release create "${tag}" \
-            --verify-tag \
-            --title "${tag}" \
-            --notes-file "${RUNNER_TEMP}/notes.md"
+          python3 scripts/release.py plan \
+            --repository "${GITHUB_REPOSITORY}" \
+            --json-out "${RUNNER_TEMP}/plan.json"
+
+      - name: Tag and publish what the plan says is still owed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/release.py publish \
+            --plan "${RUNNER_TEMP}/plan.json" \
+            --repository "${GITHUB_REPOSITORY}"

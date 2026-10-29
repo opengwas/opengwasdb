@@ -57,9 +57,11 @@ fragment types a pull request added and picks the strongest bump:
 - only `fixed` or `internal`, or no fragment at all → the patch number moves
   (`0.3.0` → `0.3.1`).
 
-`.github/workflows/release.yml` runs that script on the merge to `main`, tags
-the merge commit `vX.Y.Z` and publishes a GitHub Release whose notes are the
-fragments, with a link to the pull request. It never commits to `main`.
+`.github/workflows/release.yml` runs that script on a push to `main`, tags the
+merge commit `vX.Y.Z` and publishes a GitHub Release whose notes are the
+fragments, with a link to the pull request. It never commits to `main`, it never
+moves a tag, and every run also finishes merges an earlier run could not publish
+(a failed `gh release create` is retried, not skipped).
 
 ## While `dev` still exists
 
