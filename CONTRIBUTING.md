@@ -58,13 +58,23 @@ opengwas/opengwasdb#333 merged it into `main`. Feature branches now target
 run per concurrency group and discards the rest, so three quick merges cannot
 be trusted to produce three runs. Each run therefore publishes every
 first-parent commit after the newest `v*` tag that has no tag yet, and any
-tagged commit whose GitHub Release was never created, oldest first. Publication
-is two steps — push the tag, create the Release — and each is skipped when it
-is already done, so a run that dies halfway is finished by the next push or by
-re-running the workflow. A tag is never moved: if one exists on another commit,
-the run stops and says so. A burst is a handful of merges; a run that finds more
-than 20 owed stops instead of publishing them, because a whole merged branch is
-not a burst — at the cutover the merge commit is tagged before it is pushed.
+tagged commit whose Release is missing and whose tag is newer than the newest
+Release there is — never the whole tag history, so the cutover repairs its own
+tag and not one for every version the project ever made. Oldest first.
+Publication is two steps — push the tag, create the Release — and each is
+skipped when it is already done, so a run that dies halfway is finished by the
+next push or by re-running the workflow. A tag is never moved: if one exists on
+another commit, the run stops and says so. A burst is a handful of merges; a run
+that finds more than 20 owed stops instead of publishing them, because a whole
+merged branch is not a burst — at the cutover the merge commit is tagged before
+it is pushed.
+
+**The remote is the truth, and each commit's notes are its own.** Tags are read
+from the remote (`git ls-remote --tags`), so a push that never reached it does
+not count as published and a retry finishes it, and a tag that names another
+commit ends the run rather than being moved. A commit's fragments are read from
+that commit's tree (`git show <commit>:<path>`), so a later edit cannot change
+what an earlier Release said.
 
 **A pull request adds a changelog fragment instead of editing
 `CHANGELOG.md`.** `changelog.d/<slug>.<type>.md` holds what a user would

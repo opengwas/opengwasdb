@@ -3,8 +3,11 @@
   pending run per concurrency group and discards the rest, so three quick merges
   could leave the middle one untagged with nothing to retry it; each run now
   publishes every first-parent commit after the newest `v*` tag that has no tag
-  of its own, and any tagged commit whose GitHub Release was never created,
-  oldest first. Pushing the tag and creating the Release are separate idempotent
+  of its own, and any tagged commit whose GitHub Release is missing and whose
+  tag is newer than the newest Release there is, oldest first. The remote's tags
+  are the truth — a tag a failed push left behind is pushed on the retry, and a
+  tag that names another commit ends the run — and each commit's notes are read
+  from that commit's tree, so a later edit cannot rewrite an earlier Release. Pushing the tag and creating the Release are separate idempotent
   steps, so a run that dies between them is finished by the next one, and a tag
   is never moved. A push to `main` with no pull request keeps its fragments —
   they set the bump and appear in the notes beside the commit subject, rather

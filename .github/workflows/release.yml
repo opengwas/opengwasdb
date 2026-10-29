@@ -15,10 +15,12 @@ on:
   push:
     branches: [main]
 
-# `contents: write` is what pushes a tag and creates a release. Nothing here
-# needs any other scope.
+# `contents: write` is what pushes a tag and creates a release;
+# `pull-requests: read` is what `gh api …/commits/<sha>/pulls` needs, and an
+# installation token gets nothing it was not granted. Nothing else is.
 permissions:
   contents: write
+  pull-requests: read
 
 # Serialised so two runs never tag at once, and never cancelled: a cancelled run
 # would leave a merge unpublishable until the next push, which is why the plan

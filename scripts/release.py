@@ -18,17 +18,23 @@ previous tag the same rule runs from `0.0.0`, so the first fix is `0.0.1`.
 GitHub keeps one pending run per concurrency group and discards the rest, so
 three quick merges can leave the middle one untagged with nothing to retry it.
 Each run therefore publishes *every* first-parent commit after the newest `v*`
-tag that has no tag of its own, and any tagged commit that never got its
-Release, oldest first. A lost run is caught up by the next one.
+tag that has no tag of its own, and any tagged commit whose Release is missing
+and is newer than the newest Release there is, oldest first. A lost run is
+caught up by the next one, and the cutover's tag is repaired without inventing
+Releases for tags from before this workflow existed.
 
 **Resumption.** Publication is two steps per commit -- push the tag, create the
-Release -- and each is skipped when it is already done. A run that dies between
-them leaves a tag with no Release, and the next run creates it instead of
-concluding from the tag that the release exists.
+Release -- and each is skipped when the *remote* says it is already done. A run
+that dies between them, or a push that never reached the remote, leaves a tag
+without its Release, and the next run finishes it rather than concluding from a
+local tag that the release exists.
 
-Nothing here treats a git failure as an absence. `git tag --list 'v*'` answers
-"no tags yet" with an empty list and a broken repository with an error, and the
-error stops the run: an empty answer would publish `0.0.1` over a real history.
+Nothing here treats a git failure as an absence. `git ls-remote --tags origin`
+answers "no tags yet" with an empty list and an unreadable remote with an error,
+and the error stops the run: an empty answer would publish `0.0.1` over a real
+history. Nor does anything read the working tree for a commit's notes: a
+fragment is read with `git show <commit>:<path>`, so a later edit cannot change
+what an earlier Release said.
 
 Run it by hand, read-only, to see what a merge would release:
 
@@ -42,6 +48,7 @@ import json
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -90,11 +97,16 @@ class Fragment:
 
 @dataclass(frozen=True)
 class Merge:
-    """What one commit on `main` contributes to a release."""
+    """What one commit on `main` contributes to a release.
+
+    The fragments are values, not paths: the planner must never read the
+    working tree, or a note edited after the fact would rewrite an earlier
+    release. Whoever gathers the facts reads them from the commit's own tree.
+    """
 
     commit: str
     subject: str
-    fragments: list[str] = field(default_factory=list)
+    fragments: list[Fragment] = field(default_factory=list)
     pr_number: int | None = None
     #: A `v*` tag already on this commit, when its Release was never created.
     tag: str | None = None
@@ -164,22 +176,40 @@ def fragment_kind(path: Path) -> str:
     return match["kind"]
 
 
-def read_fragments(paths: list[Path]) -> list[Fragment]:
-    """The fragments at these paths, in the order given.
+def _parse_fragments(paths: list[str], read: Callable[[str], str]) -> list[Fragment]:
+    """Parse fragments, reading each one however the caller can.
 
     An empty fragment is refused rather than dropped: a bullet with nothing in
     it would publish a release whose notes silently omit a change.
     """
     fragments = []
     for path in paths:
-        if path.name == FRAGMENT_README:
+        if Path(path).name == FRAGMENT_README:
             continue
-        kind = fragment_kind(path)
-        text = path.read_text(encoding="utf-8").strip()
+        kind = fragment_kind(Path(path))
+        text = read(path).strip()
         if not text:
             raise ReleaseError(f"{path}: the fragment is empty")
-        fragments.append(Fragment(path=str(path), kind=kind, text=text))
+        fragments.append(Fragment(path=path, kind=kind, text=text))
     return fragments
+
+
+def read_fragments(paths: list[Path]) -> list[Fragment]:
+    """Fragments from the working tree -- a dry run of not-yet-committed notes."""
+    return _parse_fragments(
+        [str(path) for path in paths],
+        lambda path: Path(path).read_text(encoding="utf-8"),
+    )
+
+
+def read_commit_fragments(commit: str, paths: list[str]) -> list[Fragment]:
+    """Fragments as they were in `commit`'s tree, never as they are now.
+
+    A fragment is never edited, but that is a rule people keep rather than
+    something git enforces: reading the working tree let a copy edit in a later
+    commit silently change what an earlier version's Release said.
+    """
+    return _parse_fragments(paths, lambda path: _git("show", f"{commit}:{path}"))
 
 
 def _bodies(fragments: list[Fragment]) -> str:
@@ -228,7 +258,7 @@ def _plan_one(
     tags: dict[str, str],
     repository: str,
 ) -> PlannedRelease:
-    fragments = read_fragments([Path(path) for path in merge.fragments])
+    fragments = merge.fragments
     notes = build_notes(
         fragments=fragments,
         pr_number=merge.pr_number,
@@ -279,15 +309,23 @@ def _plan_one(
 def plan_releases(
     *, tags: dict[str, str], merges: list[Merge], repository: str = REPOSITORY
 ) -> list[PlannedRelease]:
-    """The versions for these merges, oldest first, numbered from the newest tag."""
-    previous = latest_tag(tags)
+    """The versions for these merges, oldest first, numbered from the newest tag.
+
+    Only a *new* version raises the base. A resumed tag takes its own version
+    and leaves the base alone: repairing an older missing Release must never
+    renumber the next merge below what the remote already published
+    (standards review, finding 3: `v0.3.0` released plus a missing `v0.2.0`
+    Release gave the next merge `0.2.1`).
+    """
+    base = latest_tag(tags)
     planned = []
     for merge in merges:
         release = _plan_one(
-            previous_tag=previous, merge=merge, tags=tags, repository=repository
+            previous_tag=base, merge=merge, tags=tags, repository=repository
         )
         planned.append(release)
-        previous = release.tag
+        if merge.tag is None:
+            base = release.tag
     return planned
 
 
@@ -323,10 +361,55 @@ def _gh(*args: str, stdin: str | None = None) -> str:
     return completed.stdout
 
 
-def tag_commits() -> dict[str, str]:
-    """Every `v*` tag and the commit it points at; `{}` when there are none."""
-    names = [name.strip() for name in _git("tag", "--list", "v*").splitlines() if name.strip()]
-    return {name: _git("rev-list", "-n", "1", name).strip() for name in names}
+def _git_quiet(*args: str) -> str | None:
+    """Run git, answering `None` for a question whose answer is "there is none".
+
+    Only `rev-parse --verify --quiet` is asked this way: it returns 1 for a ref
+    that does not exist, which is an answer, and not a failure.
+    """
+    completed = subprocess.run(["git", *args], capture_output=True, text=True)
+    if completed.returncode == 0:
+        return completed.stdout
+    return None
+
+
+def remote_tags(remote: str = "origin") -> dict[str, str]:
+    """The `v*` tags the remote has, and the commit each points at.
+
+    The remote is the truth, not the local clone: a plan built from local tags
+    cannot tell a tag that was pushed from one a failed push left behind, and it
+    cannot see a tag somebody else created. A tag push or a Release that the
+    remote never received did not happen.
+
+    `git ls-remote --tags` prints the tag object's own sha for an annotated tag
+    and its peeled commit as a second line, `<sha>\trefs/tags/v1.2.3^{}`; the
+    commit is what a Release is about, so the peeled line wins.
+    """
+    listed = _git("ls-remote", "--tags", remote)
+    commits: dict[str, str] = {}
+    for line in listed.splitlines():
+        if not line.strip():
+            continue
+        sha, _, ref = line.partition("\t")
+        name = ref.removeprefix("refs/tags/")
+        peeled = name.endswith("^{}")
+        name = name.removesuffix("^{}")
+        if not is_release_tag(name):
+            continue
+        if peeled or name not in commits:
+            commits[name] = sha.strip()
+    return commits
+
+
+def is_release_tag(name: str) -> bool:
+    """Whether `name` is a `vX.Y.Z` tag -- the only kind that is a version."""
+    return bool(TAG_PATTERN.match(name))
+
+
+def local_tag_commit(tag: str) -> str | None:
+    """The commit the local clone's `tag` names, or `None` when it has none."""
+    found = _git_quiet("rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}")
+    return found.strip() if found else None
 
 
 def first_parent_history() -> list[str]:
@@ -368,15 +451,31 @@ def _untagged_after_newest(
     return {commit for commit in _after_newest(commits, tags) if commit not in tagged}
 
 
-def _tagged_without_release(
-    tagged: dict[str, str], released: set[str], known: set[str]
-) -> set[str]:
-    """Tagged commits whose GitHub Release does not exist: the resume set."""
-    return {
-        commit
-        for commit, tag in tagged.items()
-        if tag not in released and commit in known
-    }
+def _newest_and_missing(
+    tags: dict[str, str], released: set[str]
+) -> tuple[list[tuple[tuple[int, int, int], str]], list[tuple[tuple[int, int, int], str]]]:
+    """(missing, existing) tags, each as (version, tag), for the resume rule."""
+    missing = [(parse_tag(tag), tag) for tag in tags if tag not in released]
+    existing = [(parse_tag(tag), tag) for tag in tags if tag in released]
+    return missing, existing
+
+
+def resume_tags(tags: dict[str, str], released: set[str]) -> set[str]:
+    """The tags whose missing Release is worth creating, and no older ones.
+
+    Only tags newer than the newest existing Release are repaired, so the first
+    run after the cutover creates the cutover's Release and not one for every
+    tag the project ever made. A repository with no Releases at all resumes
+    just its newest tag -- the cutover's -- for the same reason: a tag from
+    2026 whose history predates fragments is not worth a Release now.
+    """
+    missing, existing = _newest_and_missing(tags, released)
+    if not missing:
+        return set()
+    if not existing:
+        return {max(missing)[1]}
+    newest_release = max(existing)[0]
+    return {tag for version, tag in missing if version > newest_release}
 
 
 def pending(
@@ -385,14 +484,26 @@ def pending(
     """The commits that need something published, oldest first.
 
     A commit needs a release when it is a first-parent commit after the newest
-    tag and has no tag of its own, or when it has a tag whose Release does not
-    exist. Everything else is already published.
+    tag and has no tag of its own, or when it carries a tag whose Release is
+    missing and is newer than the newest Release there is. Everything else is
+    already published.
     """
     commits = first_parent_history() if history is None else history
     tagged = {commit: tag for tag, commit in tags.items()}
     owed = _untagged_after_newest(commits, tagged, tags)
-    owed |= _tagged_without_release(tagged, released, set(commits))
+    owed |= _resumed_commits(tags, released, set(commits))
     return [commit for commit in commits if commit in owed]
+
+
+def _resumed_commits(
+    tags: dict[str, str], released: set[str], known: set[str]
+) -> set[str]:
+    """The commits carrying a resumed tag, when the commit is on this line."""
+    return {
+        tags[tag]
+        for tag in resume_tags(tags, released)
+        if tags[tag] in known
+    }
 
 
 def released_tags(repository: str) -> set[str]:
@@ -426,44 +537,91 @@ def pull_request(commit: str, repository: str) -> int | None:
 # ── Publication ─────────────────────────────────────────────────────────────
 
 
+def _create_tag(tag: str, commit: str) -> None:
+    """Annotate `commit` as `tag`, with an identity of its own.
+
+    The tag's identity comes from here rather than from the runner's git config,
+    so a published tag reads the same wherever it was created (`git -c …` must
+    precede the subcommand).
+    """
+    _git(
+        "-c",
+        "user.name=opengwasdb release",
+        "-c",
+        "user.email=release@opengwas.io",
+        "tag",
+        "--annotate",
+        tag,
+        "--message",
+        f"Release {tag}",
+        commit,
+    )
+
+
+def _ensure_remote_tag(release: PlannedRelease, remote_commit: str | None) -> bool:
+    """Leave the tag on the remote at this release's commit; True if pushed.
+
+    Three states, and only one of them is allowed to do nothing: the remote
+    already has the tag on the right commit, the remote has no tag and either
+    the clone has none or has one on the right commit (a push that failed leaves
+    exactly that), or the tag names another commit — on the remote, or locally —
+    which is refused rather than moved.
+    """
+    if remote_commit is not None:
+        if remote_commit != release.commit:
+            raise ReleaseError(
+                f"{release.tag} exists on the remote at {remote_commit}, not at "
+                f"{release.commit}; a published tag is never moved"
+            )
+        return False
+    local_commit = local_tag_commit(release.tag)
+    if local_commit is not None and local_commit != release.commit:
+        raise ReleaseError(
+            f"{release.tag} exists locally at {local_commit}, not at "
+            f"{release.commit}; it is never moved by this script"
+        )
+    if local_commit is None:
+        _create_tag(release.tag, release.commit)
+    _git("push", "origin", f"refs/tags/{release.tag}")
+    return True
+
+
+def _require_remote_tag(release: PlannedRelease) -> None:
+    """Refuse to describe a tag the remote does not have at this commit.
+
+    `gh release create --verify-tag` checks that the tag exists, not which
+    commit it names, so the commit is checked here, from the remote, before
+    anything is published about it.
+    """
+    remote_commit = remote_tags().get(release.tag)
+    if remote_commit != release.commit:
+        raise ReleaseError(
+            f"{release.tag} is at {remote_commit} on the remote, not at "
+            f"{release.commit}; refusing to create a Release for it"
+        )
+
+
 def publish(
     plan: list[PlannedRelease], *, repository: str = REPOSITORY
 ) -> list[str]:
     """Do whatever each planned release still needs, oldest first.
 
-    Both steps are idempotent and separate: an existing tag on the right commit
-    is left alone, an existing tag on another commit is refused, and the
-    Release is created only when it is missing. A failure part-way leaves the
-    steps already done in place and the rest for the next run.
+    Both steps are idempotent and separate, and both ask the remote rather than
+    this clone: a tag that a failed push left behind is pushed on the retry, a
+    tag that names another commit is refused, and the Release is created only
+    once the remote's tag names the planned commit. A failure part-way leaves
+    the steps already done in place and the rest for the next run.
     """
     done = []
     for release in plan:
-        existing = tag_commits()
-        on_commit = existing.get(release.tag)
-        if on_commit is not None and on_commit != release.commit:
-            raise ReleaseError(
-                f"{release.tag} already exists on {on_commit}, not on "
-                f"{release.commit}; a published tag is never moved"
-            )
-        if release.needs_tag and on_commit is None:
-            # The tag's identity comes from here rather than from the runner's
-            # git config, so a published tag reads the same wherever it was
-            # created (`git -c …` must precede the subcommand).
-            _git(
-                "-c",
-                "user.name=opengwasdb release",
-                "-c",
-                "user.email=release@opengwas.io",
-                "tag",
-                "--annotate",
-                release.tag,
-                "--message",
-                f"Release {release.tag}",
-                release.commit,
-            )
-            _git("push", "origin", f"refs/tags/{release.tag}")
-            done.append(f"tagged {release.tag} on {release.commit}")
+        remote_commit = remote_tags().get(release.tag)
+        pushed = False
+        if release.needs_tag or remote_commit is None:
+            pushed = _ensure_remote_tag(release, remote_commit)
+            if pushed:
+                done.append(f"tagged {release.tag} on {release.commit}")
         if release.needs_release:
+            _require_remote_tag(release)
             _gh(
                 "release",
                 "create",
@@ -487,19 +645,25 @@ def collect(
     repository: str,
     commits: list[str] | None = None,
 ) -> list[PlannedRelease]:
-    """Discover what is owed, gather each commit's facts, and plan it."""
+    """Discover what is owed, gather each commit's facts, and plan it.
+
+    Each commit's fragments are read from that commit's tree, and its tag from
+    the remote: the facts are about the commit, not about the clone as it is
+    now.
+    """
     if commits is None:
         commits = pending(tags=tags, released=released)
+    tags_of = {value: key for key, value in tags.items()}
     merges = []
     for commit in commits:
-        subject, fragments = commit_facts(commit)
+        subject, paths = commit_facts(commit)
         merges.append(
             Merge(
                 commit=commit,
                 subject=subject,
-                fragments=fragments,
+                fragments=read_commit_fragments(commit, paths),
                 pr_number=pull_request(commit, repository),
-                tag={value: key for key, value in tags.items()}.get(commit),
+                tag=tags_of.get(commit),
             )
         )
     return plan_releases(tags=tags, merges=merges, repository=repository)
@@ -585,9 +749,9 @@ def _run_next(args: argparse.Namespace) -> int:
         merge=Merge(
             commit="",
             subject=args.commit_subject,
-            fragments=[
-                str(path) for path in _fragment_paths(args.fragment, args.fragments_from)
-            ],
+            fragments=read_fragments(
+                _fragment_paths(args.fragment, args.fragments_from)
+            ),
             pr_number=args.pr_number,
         ),
         tags={},
@@ -600,7 +764,7 @@ def _run_next(args: argparse.Namespace) -> int:
 
 
 def _run_plan(args: argparse.Namespace) -> int:
-    tags = tag_commits()
+    tags = remote_tags()
     released = released_tags(args.repository)
     commits = pending(tags=tags, released=released)
     if len(commits) > args.max_releases:

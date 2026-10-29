@@ -142,7 +142,7 @@ def _merge(
     return release.Merge(
         commit=commit,
         subject=subject,
-        fragments=[str(p) for p in fragments],
+        fragments=release.read_fragments(list(fragments)),
         pr_number=pr_number,
         tag=tag,
     )
@@ -238,6 +238,28 @@ def test_a_push_without_a_pull_request_still_uses_its_fragments(
 # ── Reconciliation: which merges are owed a release ─────────────────────────
 
 
+def test_numbering_never_goes_down_to_repair_an_older_release(tmp_path: Path) -> None:
+    """The base is the highest `v*` version, whatever older Releases are repaired.
+
+    A resumed tag must not become the base for the next new merge: with
+    `v0.3.0` released and `v0.2.0` without a Release, the new merge is
+    `0.3.1`, not `0.2.1`.
+    """
+    fix = _fragment(tmp_path, "1-a.fixed.md", "- Fixed one.\n")
+    planned = release.plan_releases(
+        tags={"v0.2.0": "2" * 40, "v0.3.0": "3" * 40},
+        merges=[
+            _merge(commit="2" * 40, fragments=[], tag="v0.2.0"),
+            _merge(commit="4" * 40, fragments=[fix]),
+        ],
+        repository=REPO,
+    )
+    assert [(p.tag, p.needs_tag) for p in planned] == [
+        ("v0.2.0", False),
+        ("v0.3.1", True),
+    ]
+
+
 def test_three_untagged_merges_are_three_versions_in_ancestry_order(
     tmp_path: Path,
 ) -> None:
@@ -331,6 +353,7 @@ def _commit(root: Path, message: str) -> str:
 
 @pytest.fixture
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A clone with an `origin`, because the remote's tags are the truth."""
     root = tmp_path / "repo"
     (root / "changelog.d").mkdir(parents=True)
     (root / "changelog.d" / "README.md").write_text("how to write one\n", encoding="utf-8")
@@ -344,9 +367,21 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     ):
         _git(root, "config", name, value)
     _commit(root, "base")
-    _git(root, "tag", "--annotate", "v0.3.0", "--message", "Release v0.3.0")
+    (root / "opengwasdb" / "pkg.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _commit(root, "second")
+    remote = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    _git(root, "remote", "add", "origin", str(remote))
+    _git(root, "push", "-q", "-u", "origin", "main")
+    _tag(root, "v0.3.0")
     monkeypatch.chdir(root)
     return root
+
+
+def _tag(root: Path, name: str, commit: str = "HEAD") -> None:
+    """Tag `commit` and push the tag, so the remote carries it."""
+    _git(root, "tag", "--annotate", name, "--message", f"Release {name}", commit)
+    _git(root, "push", "-q", "origin", "refs/tags/" + name)
 
 
 def _add(root: Path, name: str, text: str, message: str) -> str:
@@ -355,10 +390,11 @@ def _add(root: Path, name: str, text: str, message: str) -> str:
     return _commit(root, message)
 
 
-def test_tags_are_read_from_v_star_only(repo: Path) -> None:
+def test_remote_tags_are_read_from_v_star_only(repo: Path) -> None:
     """A stray `99.0.0` is not a version, and must not become one."""
     _git(repo, "tag", "99.0.0")
-    assert list(release.tag_commits()) == ["v0.3.0"]
+    _git(repo, "push", "-q", "origin", "refs/tags/99.0.0")
+    assert list(release.remote_tags()) == ["v0.3.0"]
 
 
 def test_a_git_failure_is_an_error_not_an_empty_answer(
@@ -369,7 +405,57 @@ def test_a_git_failure_is_an_error_not_an_empty_answer(
     outside.mkdir()
     monkeypatch.chdir(outside)
     with pytest.raises(release.ReleaseError, match="git"):
-        release.tag_commits()
+        release.remote_tags()
+
+
+def test_only_the_newest_tag_is_resumed_when_no_release_exists(repo: Path) -> None:
+    """A repository whose tags all predate the workflow gets one Release, not N.
+
+    At the cutover every tag on the remote is older than this machinery, so
+    resuming them all would publish a Release for each historical tag -- the
+    opposite of "the first run creates exactly the cutover's Release".
+    """
+    _git(repo, "tag", "--annotate", "v0.2.0", "--message", "Release v0.2.0", "HEAD~0")
+    _git(repo, "push", "-q", "origin", "refs/tags/v0.2.0")
+    tags = release.remote_tags()
+
+    pending = release.pending(tags=tags, released=set())
+
+    assert pending == [tags["v0.3.0"]]
+    planned = release.plan_releases(
+        tags=tags,
+        merges=[
+            release.Merge(
+                commit=tags["v0.3.0"], subject="cutover", tag="v0.3.0"
+            )
+        ],
+        repository=REPO,
+    )
+    assert [(p.tag, p.needs_tag, p.needs_release) for p in planned] == [
+        ("v0.3.0", False, True)
+    ]
+
+
+def test_an_older_missing_release_is_left_alone(repo: Path) -> None:
+    """Only tags newer than the newest Release are repaired."""
+    _tag(repo, "v0.2.0", "HEAD~1")  # an old tag whose Release never existed
+    second = _add(repo, "1-a.fixed.md", "- Fixed one.\n", "fix one")
+    _tag(repo, "v0.3.1", second)
+    third = _add(repo, "2-b.fixed.md", "- Fixed two.\n", "fix two")
+    tags = release.remote_tags()
+
+    assert set(tags) == {"v0.2.0", "v0.3.0", "v0.3.1"}
+    assert release.pending(tags=tags, released={"v0.3.0", "v0.3.1"}) == [third]
+    assert release.resume_tags(tags, {"v0.3.0", "v0.3.1"}) == set()
+
+
+def test_the_resume_scope_is_the_newest_release_and_no_older() -> None:
+    tags = {"v0.2.0": "a", "v0.3.0": "b", "v0.3.2": "c"}
+    assert release.resume_tags(tags, {"v0.3.0"}) == {"v0.3.2"}
+    assert release.resume_tags(tags, {"v0.3.0", "v0.3.2"}) == set()
+    # no Release exists at all: only the newest tag, never the whole history
+    assert release.resume_tags(tags, set()) == {"v0.3.2"}
+    assert release.resume_tags({}, set()) == set()
 
 
 def test_pending_lists_every_first_parent_commit_after_the_latest_tag(
@@ -378,7 +464,7 @@ def test_pending_lists_every_first_parent_commit_after_the_latest_tag(
     second = _add(repo, "1-a.fixed.md", "- Fixed one.\n", "fix")
     third = _add(repo, "2-b.added.md", "- Added two.\n", "feature")
     assert release.pending(
-        tags=release.tag_commits(), released={"v0.3.0"}
+        tags=release.remote_tags(), released={"v0.3.0"}
     ) == [second, third]
 
 
@@ -386,9 +472,9 @@ def test_a_tagged_commit_in_the_middle_is_not_published_again(repo: Path) -> Non
     """A merge that already has its tag is not re-released, and the merges after
     it are numbered from it."""
     first = _add(repo, "1-a.fixed.md", "- Fixed one.\n", "fix one")
-    _git(repo, "tag", "--annotate", "v0.3.1", "--message", "Release v0.3.1")
+    _tag(repo, "v0.3.1", first)
     second = _add(repo, "2-b.fixed.md", "- Fixed two.\n", "fix two")
-    tags = release.tag_commits()
+    tags = release.remote_tags()
 
     assert release.pending(tags=tags, released={"v0.3.0", "v0.3.1"}) == [second]
     planned = release.plan_releases(
@@ -401,14 +487,14 @@ def test_a_tagged_commit_in_the_middle_is_not_published_again(repo: Path) -> Non
 
 def test_a_tag_whose_release_is_missing_is_pending(repo: Path) -> None:
     second = _add(repo, "1-a.fixed.md", "- Fixed one.\n", "fix")
-    _git(repo, "tag", "--annotate", "v0.3.1", "--message", "Release v0.3.1")
-    assert release.pending(tags=release.tag_commits(), released={"v0.3.0"}) == [second]
+    _tag(repo, "v0.3.1")
+    assert release.pending(tags=release.remote_tags(), released={"v0.3.0"}) == [second]
 
 
 def test_nothing_is_pending_once_every_merge_is_tagged_and_released(repo: Path) -> None:
     _add(repo, "1-a.fixed.md", "- Fixed one.\n", "fix")
-    _git(repo, "tag", "--annotate", "v0.3.1", "--message", "Release v0.3.1")
-    assert release.pending(tags=release.tag_commits(), released={"v0.3.0", "v0.3.1"}) == []
+    _tag(repo, "v0.3.1")
+    assert release.pending(tags=release.remote_tags(), released={"v0.3.0", "v0.3.1"}) == []
 
 
 def test_pending_refuses_when_the_latest_tag_is_off_the_first_parent_line(
@@ -418,12 +504,13 @@ def test_pending_refuses_when_the_latest_tag_is_off_the_first_parent_line(
     _git(repo, "checkout", "-q", "-b", "side")
     side = _add(repo, "1-a.fixed.md", "- Fixed one.\n", "fix on side")
     _git(repo, "tag", "--annotate", "v0.4.0", "--message", "Release v0.4.0")
+    _git(repo, "push", "-q", "origin", "refs/tags/v0.4.0")
     _git(repo, "checkout", "-q", "main")
     _git(repo, "merge", "-q", "--no-ff", "side", "-m", "merge side")
 
     assert side not in release.first_parent_history()
     with pytest.raises(release.ReleaseError, match="v0.4.0"):
-        release.pending(tags=release.tag_commits(), released=set())
+        release.pending(tags=release.remote_tags(), released=set())
 
 
 def test_commit_facts_read_the_subject_and_the_added_fragments(repo: Path) -> None:
@@ -435,6 +522,29 @@ def test_commit_facts_handle_the_root_commit(repo: Path) -> None:
     """A repository's first commit has no parent to diff against."""
     root = _git(repo, "rev-list", "--max-parents=0", "HEAD")
     assert release.commit_facts(root) == ("base", ["changelog.d/README.md"])
+
+
+def test_the_notes_are_read_from_the_commit_that_added_the_fragment(
+    repo: Path, stub_gh: Path
+) -> None:
+    """A later edit to a fragment must not rewrite an earlier release.
+
+    Fragments are never edited, but that is a rule people keep, not something
+    git enforces: reading the working tree meant a copy edit in a later commit
+    silently changed what an earlier version's Release said.
+    """
+    first = _add(repo, "1-a.fixed.md", "- The original note.\n", "fix one")
+    (repo / "changelog.d" / "1-a.fixed.md").write_text(
+        "- Rewritten much later.\n", encoding="utf-8"
+    )
+    _commit(repo, "rewrite the fragment")
+
+    planned = release.collect(
+        release.remote_tags(), {"v0.3.0"}, REPO, [first]
+    )
+
+    assert "- The original note." in planned[0].notes
+    assert "Rewritten much later" not in planned[0].notes
 
 
 # ── End to end: the `plan` and `publish` commands ───────────────────────────
@@ -498,14 +608,6 @@ def _set_gh_state(state_file: Path, **changes: object) -> None:
     state_file.write_text(json.dumps(state), encoding="utf-8")
 
 
-def _remote(repo: Path) -> Path:
-    """A bare repository the test can push to, so publication is real."""
-    bare = repo.parent / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
-    _git(repo, "remote", "add", "origin", str(bare))
-    return bare
-
-
 def _plan(repo: Path, out: Path) -> list[dict[str, object]]:
     assert release.main(["plan", "--repository", REPO, "--json-out", str(out)]) == 0
     return json.loads(out.read_text(encoding="utf-8"))
@@ -532,7 +634,7 @@ def test_the_plan_resumes_a_tag_whose_release_is_missing(
     repo: Path, stub_gh: Path, tmp_path: Path
 ) -> None:
     _add(repo, "1-a.fixed.md", "- Fixed one.\n", "Fix one (#1)")
-    _git(repo, "tag", "--annotate", "v0.3.1", "--message", "Release v0.3.1")
+    _tag(repo, "v0.3.1")
 
     (entry,) = _plan(repo, tmp_path / "plan.json")
 
@@ -580,7 +682,6 @@ def test_the_plan_accepts_a_burst_up_to_the_limit(
 def test_publish_tags_pushes_and_creates_the_release(
     repo: Path, stub_gh: Path, tmp_path: Path
 ) -> None:
-    bare = _remote(repo)
     commit = _add(repo, "1-a.fixed.md", "- Fixed one.\n", "Fix one (#1)")
     out = tmp_path / "plan.json"
     _plan(repo, out)
@@ -588,11 +689,7 @@ def test_publish_tags_pushes_and_creates_the_release(
     assert release.main(["publish", "--plan", str(out)]) == 0
 
     assert _git(repo, "rev-parse", "v0.3.1^{commit}") == commit
-    pushed = subprocess.run(
-        ["git", "rev-parse", "refs/tags/v0.3.1"],
-        cwd=bare, capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    assert pushed == _git(repo, "rev-parse", "refs/tags/v0.3.1")
+    assert release.remote_tags()["v0.3.1"] == commit
     assert any(call.startswith("release create v0.3.1") for call in _gh_calls(stub_gh))
 
 
@@ -604,7 +701,6 @@ def test_publish_finishes_a_release_the_previous_run_could_not_create(
     This is the partial publication the reviews found: "tag exists" was read as
     "released", so the Release could never be created afterwards.
     """
-    _remote(repo)
     commit = _add(repo, "1-a.fixed.md", "- Fixed one.\n", "Fix one (#1)")
     out = tmp_path / "plan.json"
     _plan(repo, out)
@@ -622,30 +718,74 @@ def test_publish_finishes_a_release_the_previous_run_could_not_create(
     assert any(call.startswith("release create v0.3.1") for call in _gh_calls(stub_gh))
 
 
-def test_publish_refuses_to_move_a_tag_on_another_commit(
+def _handwritten_plan(out: Path, **overrides: object) -> Path:
+    entry = {
+        "commit": "9" * 40,
+        "subject": "elsewhere",
+        "pr_number": None,
+        "version": "0.3.1",
+        "tag": "v0.3.1",
+        "notes": "- Something.\n",
+        "needs_tag": True,
+        "needs_release": True,
+    }
+    entry.update(overrides)
+    out.write_text(json.dumps([entry]), encoding="utf-8")
+    return out
+
+
+def test_publish_pushes_a_tag_a_failed_push_left_behind(
     repo: Path, stub_gh: Path, tmp_path: Path
 ) -> None:
-    _remote(repo)
-    _add(repo, "1-a.fixed.md", "- Fixed one.\n", "Fix one (#1)")
-    _git(repo, "tag", "--annotate", "v0.3.1", "--message", "already here")
+    """A push that failed leaves the tag locally; the retry must still push it.
+
+    Otherwise the Release cannot be created (`gh release create` needs the tag
+    on the remote, and `--verify-tag` would fail), and every retry concludes
+    from the *local* tag that there is nothing to do.
+    """
+    commit = _add(repo, "1-a.fixed.md", "- Fixed one.\n", "Fix one (#1)")
+    _git(repo, "tag", "--annotate", "v0.3.1", "--message", "Release v0.3.1")
+    # the remote does not have it: this is what a failed `git push` leaves behind
     out = tmp_path / "plan.json"
-    out.write_text(
-        json.dumps(
-            [
-                {
-                    "commit": "9" * 40,
-                    "subject": "elsewhere",
-                    "pr_number": None,
-                    "version": "0.3.1",
-                    "tag": "v0.3.1",
-                    "notes": "- Something.\n",
-                    "needs_tag": True,
-                    "needs_release": True,
-                }
-            ]
-        ),
-        encoding="utf-8",
-    )
+    (entry,) = _plan(repo, out)
+    assert (entry["needs_tag"], entry["commit"]) == (True, commit)
+
+    assert release.main(["publish", "--plan", str(out)]) == 0
+
+    assert release.remote_tags()["v0.3.1"] == commit
+    assert any(call.startswith("release create v0.3.1") for call in _gh_calls(stub_gh))
+
+
+def test_publish_refuses_a_remote_tag_on_another_commit(
+    repo: Path, stub_gh: Path, tmp_path: Path
+) -> None:
+    """The remote tag's commit decides, and a Release is never created for it.
+
+    `--verify-tag` checks existence, not which commit the tag names, so a plan
+    that named the wrong commit would otherwise publish that commit's notes
+    under a published tag.
+    """
+    _add(repo, "1-a.fixed.md", "- Fixed one.\n", "Fix one (#1)")
+    _git(repo, "tag", "--annotate", "v0.3.1", "--message", "somewhere else")
+    _git(repo, "push", "-q", "origin", "refs/tags/v0.3.1")
+    # Only the remote has it now, so a clone-local check cannot see the problem.
+    _git(repo, "tag", "--delete", "v0.3.1")
+
+    out = _handwritten_plan(tmp_path / "plan.json")
 
     assert release.main(["publish", "--plan", str(out)]) == 1
+    assert not any(call.startswith("release create") for call in _gh_calls(stub_gh))
+
+
+def test_publish_refuses_a_local_tag_on_another_commit(
+    repo: Path, stub_gh: Path, tmp_path: Path
+) -> None:
+    """A stale local tag is pushed only when it names the planned commit."""
+    _add(repo, "1-a.fixed.md", "- Fixed one.\n", "Fix one (#1)")
+    _git(repo, "tag", "--annotate", "v0.3.1", "--message", "already here")
+
+    out = _handwritten_plan(tmp_path / "plan.json")
+
+    assert release.main(["publish", "--plan", str(out)]) == 1
+    assert "v0.3.1" not in release.remote_tags()
     assert not any(call.startswith("release create") for call in _gh_calls(stub_gh))
