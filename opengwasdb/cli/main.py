@@ -73,6 +73,7 @@ from opengwasdb.variants.windows import (
     DEFAULT_REDUCTION_BATCH_SIZE,
     DEFAULT_WINDOW_SIZE_MB,
 )
+from opengwasdb.version import __version__
 
 logging.basicConfig(
     level=logging.INFO,
@@ -451,6 +452,7 @@ def info(
             "completion_state": manifest.completion_state.value,
             "reference_assembly": manifest.reference_assembly,
             "encoding": manifest.encoding.to_manifest(),
+            "opengwasdb_version": __version__,
         }
         typer.echo(json.dumps(payload, sort_keys=True))
         return
@@ -478,6 +480,11 @@ def info(
     typer.echo(
         f"encoding: z={encoding.z.kind}{scale}, se={encoding.se.kind}, eaf={eaf}{n}"
     )
+    # The package version, not the store's: it names the build that will read
+    # this release, which is what a bug report needs and what a release
+    # checkout and a nightly one differ in (issue #333). Last, so the lines a
+    # walkthrough quotes above it keep their order.
+    typer.echo(f"opengwasdb_version: {__version__}")
 
 
 @app.command("validate")
