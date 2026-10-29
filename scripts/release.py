@@ -67,6 +67,12 @@ FRAGMENT_PATTERN = re.compile(
 FRAGMENT_README = "README.md"
 #: `git diff` needs a tree for a commit with no parent; this is git's own empty one.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+#: How many merges one run may publish. A lost run is caught up here, but a
+#: whole merged branch is not a burst of lost runs: at the cutover `dev` is 64
+#: first-parent commits past the last tag, and replaying them would publish 64
+#: patch versions and no `0.3.0`. Above this many, the run stops and asks for a
+#: tag instead.
+MAX_PLANNED_RELEASES = 20
 
 
 class ReleaseError(ValueError):
@@ -475,9 +481,15 @@ def publish(
     return done
 
 
-def collect(tags: dict[str, str], released: set[str], repository: str) -> list[PlannedRelease]:
+def collect(
+    tags: dict[str, str],
+    released: set[str],
+    repository: str,
+    commits: list[str] | None = None,
+) -> list[PlannedRelease]:
     """Discover what is owed, gather each commit's facts, and plan it."""
-    commits = pending(tags=tags, released=released)
+    if commits is None:
+        commits = pending(tags=tags, released=released)
     merges = []
     for commit in commits:
         subject, fragments = commit_facts(commit)
@@ -557,6 +569,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     planning.add_argument("--repository", default=REPOSITORY)
     planning.add_argument("--json-out", type=Path, default=None)
+    planning.add_argument("--max-releases", type=int, default=MAX_PLANNED_RELEASES)
 
     publishing = commands.add_parser(
         "publish", help="tag and release what a plan says is still owed"
@@ -587,7 +600,18 @@ def _run_next(args: argparse.Namespace) -> int:
 
 
 def _run_plan(args: argparse.Namespace) -> int:
-    plan = collect(tag_commits(), released_tags(args.repository), args.repository)
+    tags = tag_commits()
+    released = released_tags(args.repository)
+    commits = pending(tags=tags, released=released)
+    if len(commits) > args.max_releases:
+        raise ReleaseError(
+            f"{len(commits)} merges are owed a version, more than the "
+            f"{args.max_releases} one run will publish. If this is the cutover "
+            f"-- the first push of the integration branch into main -- tag the "
+            f"merge commit before pushing main, so the history before it is not "
+            f"replayed as versions; otherwise re-run with --max-releases."
+        )
+    plan = collect(tags, released, args.repository, commits)
     _print_plan(plan)
     if args.json_out is not None:
         args.json_out.write_text(_plan_json(plan), encoding="utf-8")

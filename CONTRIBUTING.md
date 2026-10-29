@@ -62,7 +62,9 @@ tagged commit whose GitHub Release was never created, oldest first. Publication
 is two steps — push the tag, create the Release — and each is skipped when it
 is already done, so a run that dies halfway is finished by the next push or by
 re-running the workflow. A tag is never moved: if one exists on another commit,
-the run stops and says so.
+the run stops and says so. A burst is a handful of merges; a run that finds more
+than 20 owed stops instead of publishing them, because a whole merged branch is
+not a burst — at the cutover the merge commit is tagged before it is pushed.
 
 **A pull request adds a changelog fragment instead of editing
 `CHANGELOG.md`.** `changelog.d/<slug>.<type>.md` holds what a user would

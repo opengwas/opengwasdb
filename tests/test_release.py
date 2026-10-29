@@ -543,6 +543,40 @@ def test_the_plan_resumes_a_tag_whose_release_is_missing(
     )
 
 
+def test_the_plan_refuses_to_release_a_history_before_a_cutover(
+    repo: Path, stub_gh: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A cutover replays a whole merged branch, and that is not 64 versions.
+
+    `dev` is 571 commits ahead of the last tag; the first push of it into `main`
+    would make every first-parent commit after `v0.2.0` "owed a release". The
+    plan refuses a burst larger than `--max-releases` and says what to do: tag
+    the merge commit before pushing `main`.
+    """
+    for index in range(3):
+        _add(repo, f"{index}-a.fixed.md", "- Fixed one.\n", f"fix {index}")
+
+    assert release.main(
+        ["plan", "--repository", REPO, "--max-releases", "2"]
+    ) == 1
+    error = capsys.readouterr().err
+    assert "cutover" in error
+    assert "3" in error
+
+
+def test_the_plan_accepts_a_burst_up_to_the_limit(
+    repo: Path, stub_gh: Path, tmp_path: Path
+) -> None:
+    for index in range(2):
+        _add(repo, f"{index}-a.fixed.md", "- Fixed one.\n", f"fix {index}")
+    out = tmp_path / "plan.json"
+
+    assert release.main(
+        ["plan", "--repository", REPO, "--max-releases", "2", "--json-out", str(out)]
+    ) == 0
+    assert len(json.loads(out.read_text(encoding="utf-8"))) == 2
+
+
 def test_publish_tags_pushes_and_creates_the_release(
     repo: Path, stub_gh: Path, tmp_path: Path
 ) -> None:
