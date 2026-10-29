@@ -83,6 +83,20 @@ def test_a_fragment_not_committed_yet_still_counts(
     assert changelog.main(["--base-ref", "main"]) == 0
 
 
+def test_a_staged_fragment_counts(repo: Path) -> None:
+    """Staging a fragment is part of writing it, so it counts before the commit.
+
+    Untracked fragments counted but a staged one did not, which is the state
+    `git add` leaves a file in and the one an author runs the check from.
+    """
+    _write(repo, SOURCE, "VALUE = 2\n")
+    _commit(repo, "change")
+    _write(repo, FRAGMENT)
+    _git(repo, "add", FRAGMENT)
+
+    assert changelog.main(["--base-ref", "main"]) == 0
+
+
 def test_source_changes_without_a_fragment_are_refused(
     repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
