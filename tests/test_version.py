@@ -1,23 +1,33 @@
 """The package version comes from the git tag (issue #333).
 
-Every merge to `main` is tagged `vX.Y.Z`, and `hatch-vcs` turns that tag into
-the distribution's version at build time. So the only version this package may
-report is the installed distribution's: a release checkout reports the tag, a
-checkout past the tag reports a development version past it, and a run with no
-installed metadata reports a fallback that cannot be mistaken for a release.
+Every merge to `main` is tagged `vX.Y.Z`, and `hatch-vcs` turns the tag into
+the distribution's version at build time. Two things can therefore be wrong and
+are checked here separately:
 
-The tests below read the *installed* distribution, which pixi built from this
-checkout with hatch-vcs, rather than building a throwaway repository: a build
-inside a test needs a network fetch of the build backend, and the fact under
-test -- that the tag reaches the metadata -- is the same either way.
+* **The reader.** `opengwasdb.version` reports what the installed distribution
+  says, and `0.0.0+unknown` when nothing is installed. A synthetic
+  `*.dist-info` on `sys.path` proves the first without depending on this
+  checkout's environment; the second is the fallback that replaced a literal
+  that could be mistaken for a release.
+* **The tag rule.** The configured `git describe` command, run in a throwaway
+  repository, picks a `v*` tag and ignores a stray one, and the configured
+  `tag_regex` turns the tag on `HEAD` into its version.
+
+The build itself is not run here. It needs the build backend from the network
+and the cleat gate caps a test call at two seconds, so the build → metadata
+step is checked in CI instead (`.github/workflows/ci.yml`, "installed version"),
+where `pixi` installs the editable package from the tagged checkout and a
+cached environment cannot answer for it.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 import tomllib
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
+from typing import Any
 
 from packaging.version import Version
 
@@ -27,27 +37,28 @@ from opengwasdb import version as version_module
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _git(*args: str) -> str:
-    completed = subprocess.run(
-        ["git", *args], cwd=_REPO_ROOT, capture_output=True, text=True, check=True
-    )
-    return completed.stdout.strip()
+def _raw_options() -> Any:
+    """`[tool.hatch.version.raw-options]` as TOML parses it.
 
-
-def _latest_tag() -> str:
-    """The newest `v*` tag, or a failure that says what is missing.
-
-    No skip: the tag is what the version is supposed to come from, so a clone
-    without tags cannot show that it does. CI checks out with `fetch-depth: 0`
-    and `fetch-tags: true` for exactly this reason.
+    `tomllib` gives a nested tree of `str`, `list` and `dict`, so the value is
+    `Any`; the tests below index into it and assert what they find, which is
+    what a table of options needs.
     """
-    try:
-        return _git("describe", "--tags", "--abbrev=0", "--match", "v*")
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise AssertionError(
-            f"this clone has no v* tag to compare the installed version against "
-            f"({error}); fetch the tags, e.g. `git fetch --tags origin`"
-        ) from error
+    config = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return config["tool"]["hatch"]["version"]["raw-options"]
+
+
+def _describe_command() -> list[str]:
+    return list(_raw_options()["scm"]["git"]["describe_command"])
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+# ── The reader ──────────────────────────────────────────────────────────────
 
 
 def test_the_package_reports_the_installed_distribution_version() -> None:
@@ -57,35 +68,20 @@ def test_the_package_reports_the_installed_distribution_version() -> None:
     assert version_module.installed_version() == installed_metadata_version("opengwasdb")
 
 
-def test_a_tag_on_head_is_the_version_and_a_commit_past_it_is_newer() -> None:
-    """The acceptance criterion, checked against the real tag and HEAD.
+def test_the_reader_reports_a_distribution_that_did_not_exist_at_import_time(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The version is read, not compiled in: a distribution found on `sys.path`
+    is what is reported, whatever this checkout's own metadata says."""
+    dist_info = tmp_path / "opengwasdb-9.9.9.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: opengwasdb\nVersion: 9.9.9\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
 
-    With `v0.3.0` on `HEAD` the package reports `0.3.0`; one commit past it, a
-    development version greater than `0.3.0`.
-
-    What this cannot catch is an *editable* install whose metadata was built
-    from an earlier commit: it reports a real development version of an older
-    commit, not a wrong release, and the freshness it lacks is a property of
-    the environment rather than of the version rule. `opengwasdb_git_hash`
-    records the commit beside it for exactly that reason (issue #333's audit).
-    """
-    tag = _latest_tag()
-    reported = Version(version_module.installed_version())
-    tagged = Version(tag.removeprefix("v"))
-    head_is_tagged = _git("rev-parse", "HEAD") == _git("rev-parse", f"{tag}^{{commit}}")
-    if head_is_tagged:
-        assert reported == tagged, (
-            f"HEAD is {tag} but the installed metadata says {reported}; "
-            "reinstall the environment (pixi install -e dev)"
-        )
-    else:
-        assert reported > tagged, (
-            f"the last tag is {tag} and HEAD is past it, but the installed "
-            f"metadata says {reported}; reinstall the environment"
-        )
-        # A development version past the tag, and nothing else: the `.devN`
-        # distance is setuptools-scm's, and the local segment names the commit.
-        assert reported.is_devrelease
+    assert version_module.installed_version() == "9.9.9"
 
 
 def test_the_fallback_is_a_version_no_release_can_claim(monkeypatch) -> None:
@@ -107,32 +103,6 @@ def test_the_fallback_parses_and_sorts_below_every_release() -> None:
     assert fallback.public == "0.0.0"
     assert fallback.local == "unknown"
     assert fallback < Version("0.0.1")
-
-
-def test_pyproject_takes_the_version_from_tags_with_the_same_fallback() -> None:
-    """The build config and the runtime fallback are one value, not two.
-
-    A wheel built without git metadata carries `fallback_version`; a process
-    without installed metadata reads `FALLBACK_VERSION`. If they disagreed, the
-    same unknown build would report two versions (issue #333).
-    """
-    config = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    project = config["project"]
-    assert project["dynamic"] == ["version"]
-    assert "version" not in project, "a static version shadows the tag"
-
-    hatch_version = config["tool"]["hatch"]["version"]
-    assert hatch_version["source"] == "vcs"
-    raw_options = hatch_version["raw-options"]
-    assert raw_options["fallback_version"] == version_module.FALLBACK_VERSION
-    assert raw_options["tag_regex"] == r"^v(?P<version>.*)$"
-    # setuptools-scm's default node-and-date: a clean checkout carries the
-    # commit alone (`+g1a2b3c4`), so the version is stable for as long as the
-    # code is; only a dirty tree gains a date. The version is hashed into a
-    # resolution record's fingerprint, which decides whether that record may
-    # be resumed, so a date on every build would invalidate unfinished work
-    # daily without a code change.
-    assert raw_options["local_scheme"] == "node-and-date"
 
 
 def test_a_resolved_manifest_record_reports_the_installed_version() -> None:
@@ -171,3 +141,95 @@ def test_no_release_shaped_fallback_constant_remains() -> None:
     from opengwasdb.build import resolve_manifest
 
     assert not hasattr(resolve_manifest, "OPENGWASDB_PACKAGE_VERSION")
+
+
+# ── The tag rule ────────────────────────────────────────────────────────────
+
+
+def test_pyproject_takes_the_version_from_tags_with_the_same_fallback() -> None:
+    """The build config and the runtime fallback are one value, not two.
+
+    A wheel built without git metadata carries `fallback_version`; a process
+    without installed metadata reads `FALLBACK_VERSION`. If they disagreed, the
+    same unknown build would report two versions (issue #333).
+    """
+    config = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = config["project"]
+    assert project["dynamic"] == ["version"]
+    assert "version" not in project, "a static version shadows the tag"
+
+    hatch_version = config["tool"]["hatch"]["version"]
+    assert hatch_version["source"] == "vcs"
+    options = hatch_version["raw-options"]
+    assert options["fallback_version"] == version_module.FALLBACK_VERSION
+    assert options["tag_regex"] == r"^v(?P<version>.*)$"
+    # setuptools-scm's default node-and-date: a clean checkout carries the
+    # commit alone (`+g1a2b3c4`), so the version is stable for as long as the
+    # code is; only a dirty tree gains a date. The version is hashed into a
+    # resolution record's fingerprint, which decides whether that record may
+    # be resumed, so a date on every build would invalidate unfinished work
+    # daily without a code change.
+    assert options["local_scheme"] == "node-and-date"
+
+
+def test_git_describe_is_restricted_to_release_tags() -> None:
+    """Parsing `v*` is not enough: `git describe` must not *select* another tag.
+
+    A stray `99.0.0` tag on `HEAD` made the build fail with "Can't parse version
+    from tag '99.0.0'" (spec review, finding 3): `tag_regex` restricts parsing
+    only, and the default describe glob accepts it. The configured command is
+    run here, in a throwaway repository, because that command is what decides.
+    """
+    command = _describe_command()
+    assert "--match" in command
+    assert command[command.index("--match") + 1] == "v*"
+
+
+def test_the_configured_describe_ignores_a_stray_tag(tmp_path: Path) -> None:
+    root = _tagged_repository(tmp_path)
+
+    described = subprocess.run(
+        _describe_command(), cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    assert described.startswith("v0.2.0-1-g"), described
+    assert "99.0.0" not in described
+
+
+def test_without_its_match_the_command_would_take_the_stray_tag(
+    tmp_path: Path,
+) -> None:
+    """The negative that makes the test above mean something."""
+    root = _tagged_repository(tmp_path)
+    unfiltered = [arg for arg in _describe_command() if arg not in {"--match", "v*"}]
+
+    described = subprocess.run(
+        unfiltered, cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+    assert described.startswith("99.0.0-0-g"), described
+
+
+def test_the_tag_on_head_parses_to_its_version(tmp_path: Path) -> None:
+    """A tag on `HEAD` is the version, through the configured regex."""
+    root = _tagged_repository(tmp_path)
+    exact = _git(root, "describe", "--tags", "--exact-match", "v0.2.0")
+    match = re.compile(str(_raw_options()["tag_regex"])).match(exact)
+    assert match is not None
+    assert match["version"] == "0.2.0"
+
+
+def _tagged_repository(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "config", "user.email", "test@example.com")
+    _git(root, "config", "user.name", "Test")
+    (root / "file.txt").write_text("one\n", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "one")
+    _git(root, "tag", "--annotate", "v0.2.0", "--message", "Release v0.2.0")
+    (root / "file.txt").write_text("two\n", encoding="utf-8")
+    _git(root, "commit", "-q", "-am", "two")
+    _git(root, "tag", "99.0.0")
+    return root
