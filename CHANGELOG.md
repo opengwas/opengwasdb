@@ -1,14 +1,29 @@
 # Changelog
 
-All notable changes to the `opengwasdb` package.
+All notable changes to the `opengwasdb` package, up to and including `0.3.0`.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Versioning is described in [`CONTRIBUTING.md`](CONTRIBUTING.md#versioning) —
-in particular, **the package version and a Store Release's `format_version`
-are different things** and move independently. See the compatibility table at
-the end of this file.
+Versioning is described in [`CONTRIBUTING.md`](CONTRIBUTING.md#versioning).
 
-## [Unreleased]
+**From `0.3.0`, every pull request merged to `main` is a version.**
+`.github/workflows/release.yml` tags the merge `vX.Y.Z`, and that version's
+notes are the changelog fragments the pull request added under
+[`changelog.d/`](changelog.d/README.md), published as a
+[GitHub Release](https://github.com/opengwas/opengwasdb/releases). Those
+releases are where the notes for every version after this one live; this file
+is the history up to `0.3.0` and is not edited for later versions.
+
+**The package version and a Store Release's `format_version` are different
+things** and move independently. [The compatibility
+table](docs/store-format-compatibility.md) says which formats each package
+version writes and reads; a pull request that moves the format updates it in
+the same change.
+
+## [0.3.0]
+
+The first version tagged from `main` — the cutover. It contains everything
+below. A cut dated 2026-09-12 was also called `0.3.0` but was never tagged;
+its entries are kept, unchanged, under `### Cut on 2026-09-12, never tagged`.
 
 ### Added
 
@@ -1603,12 +1618,15 @@ the end of this file.
   (see ADR 0043 for the shared-filesystem caveat). The two-rename atomic
   replacement and its rollback are unchanged.
 
-## [0.3.0] — 2026-09-12
+### Cut on 2026-09-12, never tagged
 
-Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
-`main`, at which point it is cut into a version.
+A version was cut here on 2026-09-12 — `pyproject.toml` said `0.3.0` and this
+section was dated — but the tag was never pushed, so no release carried these
+entries. They ship in the tagged `0.3.0` above. The paragraph that stood here
+("work lands on `dev` and appears here under *Unreleased* until `dev` merges
+to `main`") described the process this change replaces.
 
-### Changed
+#### Changed
 
 - **`format_version` is reset to `0.1.0`, and the pre-release formats are no
   longer readable** (#143, ADR 0041). The format reached `3.0` before the
@@ -1693,7 +1711,7 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   every other build command. `--workers` remains accepted as an alias so
   existing callers keep working.
 
-### Fixed
+#### Fixed
 
 - **The complexity gate's changed-file mode widened its configured scope**
   (#166). `gate.py --changed` now diffs against the shared `base_ref`, rather
@@ -1856,7 +1874,7 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   reachable by exact scan over its position. `validate_store` rejects an index
   holding a key shared by two variants, so an affected store says so.
 
-### Changed
+#### Changed
 
 - **The complexity ratchet's scope and baseline were reconciled** (baseline
   reconciliation). Test code and benchmark drivers were being ratcheted as if
@@ -1962,7 +1980,7 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   halves (**1,359 MB → 679 MB on FinnGen**) and 0.21% of variants resolve by
   exact scan instead of binary search.
 
-### Added
+#### Added
 
 - **The format-3.0 SE passes report their own wall time** (#144). Migrating a
   Dense release to format 3.0 takes four full passes over the `se` plane — the
@@ -2331,7 +2349,7 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
 - `CLAUDE.md` — a short orientation file for AI coding sessions, pointing at the
   same standards rather than restating them.
 
-### Changed
+#### Changed
 
 - **Ancestry assignment reads any Source Format, not only GWAS-VCF** (#115).
   `assign_from_source` resolves the reader through
@@ -2369,7 +2387,7 @@ Work lands on `dev` and appears here under *Unreleased* until `dev` merges to
   `opengwasdb-stores` holds docs depending on this package's CLI surface, and
   a pre-merge checklist.
 
-### Fixed
+#### Fixed
 
 - **Reference Completion refuses a panel no Analysis matches, instead of
   completing to nothing** (#98, ADR 0039 §2). `derive_impute_analysis_ids`
@@ -2497,53 +2515,9 @@ user would notice across the whole history to date.
 - Existing Store Releases predate every build-time fix above and must be
   rebuilt to gain them (#117).
 
-## Store format compatibility
+The package version and a Store Release's `format_version` are independent;
+[the compatibility table](docs/store-format-compatibility.md) says which
+formats each version writes and reads.
 
-The package version and the store `format_version` are independent. A store
-records the `format_version` it was written against; the package records which
-it can read.
-
-| package | writes format_version | reads |
-|---|---|---|
-| 0.2.0 | 0.1 | 0.1 |
-| 0.3.0 | 0.1.0 | 0.1.0 only |
-| Unreleased (next) | 0.2.0 from every builder and the converter | 0.1.0, 0.2.0 |
-
-The two `format_version` values in that table are different formats despite
-reading alike: `0.1` is the pre-release format 0.2.0 wrote, and `0.1.0` is the
-reset (#143, ADR 0041). Nothing on `dev` reads `0.1`, and the shapes cannot be
-confused by a reader — only by a person reading this table, which is why it
-says so here.
-
-The `Unreleased` row is the state #247 leaves: every builder writes 0.2.0 (Zarr
-v3 with sharding, the shapes ADR 0058 decided) and the converter writes the same
-format from a 0.1.0 source, so a build and a conversion of the same release
-carry the same layout. `0.1.0` (Zarr v2) stays readable; a 0.1.0 source is no
-longer writable, which is why completion refuses it and names the converter.
-Deleting the v2 reader is a later decision (ADR 0057).
-
-**#298 renames one manifest value without moving `format_version`, under spec
-§21.0.** A release written since it says `association_coverage: gwas` where an
-earlier build said `full`; the two spell one fact, every release built before it
-stays readable (`full` is read as `gwas`), and no array, encoding or required
-entry changes. Before format `1.0`, a change confined to a manifest vocabulary is
-applied by editing the existing Stores' metadata in place — here, a sweep in
-`opengwasdb-stores` — and does not move the version, so this is a pre-release
-rule rather than a reading of §21.1. It costs the other direction: a package
-built *before* #298 does not know `gwas` and refuses such a release by name, and
-that refusal is the accepted price of one vocabulary across the three
-repositories and the published Stores (spec §21.0, §21.2; ADR 0064 §5).
-
-The `full` read is **transitional** (ADR 0064 §5a): it stays until no published
-Store says `full` and no supported pin writes it, and is then removed.
-
-**#302 adds an optional plane without moving `format_version` or the
-`encoding` block's `version`.** A release without per-association sample sizes
-declares no `encoding.n` and is byte-identical to one written before; one with
-them carries `ragged/n` and `ragged/by_variant/n`. A package built before #302
-reads the latter as it always read a Ragged release, without `n`, but its
-validator refuses `ragged/by_variant/n` as an unregistered array (ADR 0067).
-
-[Unreleased]: https://github.com/opengwas/opengwasdb/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/opengwas/opengwasdb/compare/v0.2.0...v0.3.0
+[0.3.0]: https://github.com/opengwas/opengwasdb/releases/tag/v0.3.0
 [0.2.0]: https://github.com/opengwas/opengwasdb/releases/tag/v0.2.0
