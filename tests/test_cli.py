@@ -344,6 +344,7 @@ def test_cli_info_and_validate_format_json(tmp_path, source_path):
     assert set(info_data) == {
         "store_id", "release_id", "format_version", "primary_layout",
         "association_coverage", "completion_state", "reference_assembly", "encoding",
+        "opengwasdb_version",
     }
     assert info_data["store_id"] == "cf"
     assert info_data["release_id"] == "ov1"

@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "opengwasdb"
-version = "0.3.0"
+dynamic = ["version"]
 description = "Standalone storage and query engine for OpenGWAS-scale summary statistic stores"
 readme = "README.md"
 # zarr-python 3.4 (the version #244 moves to) requires Python >=3.12 and
@@ -41,6 +41,46 @@ dev = [
 
 [project.scripts]
 opengwasdb = "opengwasdb.cli.main:app"
+
+# -----------------------------------------------------------------------------
+# Version from tags (issue #333).
+#
+# Every merge to `main` is tagged vX.Y.Z by `.github/workflows/release.yml`, and
+# the package reads its version from that tag: a release checkout reports
+# `0.3.0`; a checkout past the tag reports `0.3.1.dev4+g1a2b3c4`; a checkout
+# with no git metadata at all reports `0.0.0+unknown`, which cannot be mistaken
+# for a release (see `opengwasdb/version.py`).
+#
+# `tag_regex` is pinned to `v*` rather than left at setuptools-scm's default,
+# which would also accept a bare `0.3.0` tag: one tag convention, checked.
+# `fallback_version` is the value used when there is no repository to read, and
+# it is the same sentinel `opengwasdb.version.FALLBACK_VERSION` carries, so a
+# wheel built without git metadata and a run without installed metadata agree
+# (tests/test_version.py holds the two together).
+#
+# The local scheme is setuptools-scm's default, `node-and-date`, on purpose:
+# a clean checkout past the tag carries the commit alone (`+g1a2b3c4`), so the
+# version is stable for as long as the code is, while a dirty working tree
+# gains the date (`+g1a2b3c4.d20261029`) to say the build is not from that
+# commit. Pinning that here keeps the intent visible; there is no
+# node-only scheme to choose instead.
+# -----------------------------------------------------------------------------
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+fallback_version = "0.0.0+unknown"
+tag_regex = "^v(?P<version>.*)$"
+local_scheme = "node-and-date"
+
+# `tag_regex` restricts what can be *parsed*; it does not restrict what `git
+# describe` *selects*. A stray tag such as `99.0.0` on `HEAD` was chosen by
+# describe's default glob and then failed to parse, so the build died instead of
+# using the newest `v*` tag (issue #333 review). The match glob is therefore
+# configured too, and tests/test_version.py runs this exact command in a
+# throwaway repository to show it ignores the stray tag.
+[tool.hatch.version.raw-options.scm.git]
+describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--abbrev=40", "--match", "v*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

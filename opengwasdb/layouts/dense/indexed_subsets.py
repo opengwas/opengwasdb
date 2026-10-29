@@ -112,6 +112,7 @@ from opengwasdb.store.open import (
     zarr_format_for_version,
 )
 from opengwasdb.variants import VariantAxis, parse_canonical_alid
+from opengwasdb.version import installed_version
 
 log = logging.getLogger(__name__)
 
@@ -665,18 +666,6 @@ def _check_assembly(manifest: StoreManifest, requested: str) -> str:
     return wanted
 
 
-def _builder_version() -> str:
-    """The installed package version, or the constant this build ships with."""
-    from importlib.metadata import PackageNotFoundError, version
-
-    from opengwasdb.build.resolve_manifest import OPENGWASDB_PACKAGE_VERSION
-
-    try:
-        return version("opengwasdb")
-    except PackageNotFoundError:
-        return OPENGWASDB_PACKAGE_VERSION
-
-
 def _physical_write_unit(array: Any) -> int:
     """The variant-axis width at which one write covers one whole store file.
 
@@ -1116,7 +1105,7 @@ def _build_attributes(
         ATTR_ABSENT_COUNT: int(resolved.absent),
         ATTR_OVERFLOW_ONLY_COUNT: int(overflow_only.count),
         ATTR_OVERFLOW_ONLY_SAMPLE: list(overflow_only.sample),
-        ATTR_BUILDER_VERSION: _builder_version(),
+        ATTR_BUILDER_VERSION: installed_version(),
         ATTR_CREATED_AT: dt.datetime.now(dt.UTC).isoformat(),
         ATTR_ORDER: _SUBSET_ORDER,
     }

@@ -39,39 +39,84 @@ Three habits follow, and they are not negotiable:
 ## Branches and releases
 
 ```
-feature branch  ->  dev  ->  main
+feature branch  ->  main
 ```
 
-- **`main`** is released code. Every commit on `main` is a tagged version.
-- **`dev`** is the integration branch. All work lands here first.
-- **Feature branches** come off `dev` and merge back into it, one issue or one
-  coherent change each.
+- **`main`** is the released code, and **every pull request merged into it is
+  a version.** `.github/workflows/release.yml` tags the merge `vX.Y.Z` and
+  publishes a GitHub Release; nothing else is committed to `main` for a
+  release.
+- **Feature branches** come off `main` and merge back into it, one issue or
+  one coherent change each. An orchestrated epic merges as one pull request,
+  so an epic is one version.
 
-Merging `dev` into `main` **cuts a version**: bump `pyproject.toml`, move the
-`Unreleased` section of `CHANGELOG.md` into a dated entry, tag `vX.Y.Z`, push
-the tag. Nothing lands on `main` except through `dev`.
+(`dev` was the integration branch until the cutover in
+opengwas/opengwasdb#333 merged it into `main`. Feature branches now target
+`main`.)
 
-Before that merge, the documentation must describe the code being released —
+**A release run reconciles, it does not just react.** GitHub keeps one pending
+run per concurrency group and discards the rest, so three quick merges cannot
+be trusted to produce three runs. Each run therefore publishes every
+first-parent commit after the newest `v*` tag that has no tag yet, and any
+tagged commit whose Release is missing and whose tag is newer than the newest
+Release there is — never the whole tag history, so the cutover repairs its own
+tag and not one for every version the project ever made. Oldest first.
+Publication is two steps — push the tag, create the Release — and each is
+skipped when it is already done, so a run that dies halfway is finished by the
+next push or by re-running the workflow. A tag is never moved: if one exists on
+another commit, the run stops and says so. A burst is a handful of merges; a run
+that finds more than 20 owed stops instead of publishing them, because a whole
+merged branch is not a burst — at the cutover the merge commit is tagged before
+it is pushed.
+
+**The remote is the truth, and each commit's notes are its own.** Tags are read
+from the remote (`git ls-remote --tags`), so a push that never reached it does
+not count as published and a retry finishes it, and a tag that names another
+commit ends the run rather than being moved. A commit's fragments are read from
+that commit's tree (`git show <commit>:<path>`), so a later edit cannot change
+what an earlier Release said.
+
+**A pull request adds a changelog fragment instead of editing
+`CHANGELOG.md`.** `changelog.d/<slug>.<type>.md` holds what a user would
+notice, and the fragments of the pull request that merges are that version's
+release notes — so parallel pull requests never edit one shared section of the
+file and never conflict. [`changelog.d/README.md`](changelog.d/README.md) says
+what to write; a change with no user-visible effect carries the
+**`no-changelog`** label on the pull request instead.
+
+Before a merge, the documentation must describe the code being released —
 see [Documentation](#documentation) for the checklist and what regenerates
 what.
 
 ### Versioning
 
 The package follows [Semantic Versioning](https://semver.org). Below `1.0.0`
-the minor number carries breaking changes:
+the minor number carries breaking changes, and the fragment type decides the
+bump: `scripts/release.py` takes the strongest type the pull request added.
 
-| change | bump |
-|---|---|
-| breaking API, CLI, or store-format change | minor (`0.2.0` → `0.3.0`) |
-| new capability, backwards compatible | minor |
-| fix or internal change only | patch (`0.2.0` → `0.2.1`) |
+| fragment type | change | bump |
+|---|---|---|
+| `breaking` | breaking API, CLI, or store-format change | minor (`0.2.0` → `0.3.0`) |
+| `added` | new capability, backwards compatible | minor |
+| `changed` | existing behaviour changes | minor |
+| `fixed` | fix only | patch (`0.2.0` → `0.2.1`) |
+| `internal` | real but invisible to a user of the package | patch |
+
+A pull request that adds no fragment at all is a patch: the workflow still
+releases it, and the release notes say why they are empty. There is no
+`Unreleased` section to date and no version to bump by hand; the version comes
+from the tags (`hatch-vcs`, `opengwasdb.version`), so a checkout past the last
+tag reports a development version such as `0.3.1.dev4+g1a2b3c4`, and only a
+tagged commit reports a release.
 
 **The package version and a Store Release's `format_version` are different
 things and move independently.** A Store Release records the format it was
 written against; the package records which formats it can read. A package
-release may change neither, one, or both. `CHANGELOG.md` carries the
-compatibility table, and it is not optional — without it there is no way to
-tell which builder produced a given store.
+release may change neither, one, or both.
+[`docs/store-format-compatibility.md`](docs/store-format-compatibility.md)
+carries the compatibility table, and it is not optional — without it there is
+no way to tell which builder produced a given store. A pull request that moves
+the format updates that page in the same change.
 
 ---
 
@@ -137,14 +182,23 @@ pixi run typecheck
 pixi run -e dev test
 ```
 
+**The version an editable install reports is frozen when it is built.** The
+package's version comes from the tags (issue #333), so a working tree that has
+moved past the commit it was installed from keeps reporting that earlier
+commit's version, and `pixi install` will not refresh it. When the version
+matters — reading an `info` line, comparing two builds — refresh it with
+`pixi reinstall --locked -e dev opengwasdb`; `opengwasdb_git_hash` in a
+resolution record is the field that always names the commit the record came
+from.
+
 Both carry pre-existing findings. **The rule is that a change adds none** —
 compare against the baseline rather than aiming for a clean run:
 
-| | enforced (`.baselines.json`) | on `dev` |
+| | enforced (`.baselines.json`) | measured 29 Oct 2026, head of `dev` |
 |---|---|---|
-| `pixi run -e dev lint` | 61 errors | 60 |
-| `pixi run -e dev typecheck` | 40 errors | 33 |
-| `pixi run -e dev test` | — | 953 passed, 1 skipped |
+| `pixi run -e dev lint` | 60 errors | 57 |
+| `pixi run -e dev typecheck` | 37 errors | 35 |
+| `pixi run -e dev test` | — | 2793 passed, 1 skipped |
 
 `.baselines.json` carries the enforced numbers and is the only place they are
 stated; this table repeats them so the two can be seen to agree. Both columns
@@ -221,7 +275,8 @@ stopped working when the project moved to Pixi. Neither would fail a test.
 |---|---|---|
 | `docs/spec/store-format.md` | any change to the store format, envelope, or a validation rule | by hand, **in the same commit as the code** |
 | `docs/adr/` | a decision that supersedes an earlier one | banner on the old ADR naming its successor; new ADR |
-| `CHANGELOG.md` | every user-visible change | add under `Unreleased` as you go |
+| `CHANGELOG.md` | nothing after the cutover — it is the history up to `0.3.0` | do not edit it; add `changelog.d/<slug>.<type>.md` instead |
+| `docs/store-format-compatibility.md` | a change to `format_version`, or to the formats the package writes or reads | add the row **in the same commit as the code** |
 | `README.md` | status, quickstart, or tooling drift | by hand |
 | `CONTRIBUTING.md` tooling baselines | any change to the ruff/mypy/test counts | re-measure at the version being cut |
 | `benchmarks/*.py`, `docs/benchmark-output/*.json` | encoding, layout, chunking, or query-path changes | **re-run the scripts** — see `benchmarks/README.md` |
@@ -320,15 +375,16 @@ python3 quality/bin/gate.py --changed
 
 This is the normal development loop and the agent Stop hook runs the same
 command. It judges untracked files and the diff from the top-level `base_ref`
-(`origin/dev` here), applying the configured source, language and exclusion
-scope before each check. It therefore reports what the current branch adds to
-`dev`, rather than resurfacing accepted repository-wide debt or changes already
-merged since the last release.
+(`origin/dev` here, until the cutover names `origin/main`), applying the
+configured source, language and exclusion scope before each check. It therefore
+reports what the current branch adds to its target branch, rather than
+resurfacing accepted repository-wide debt or changes already merged since the
+last release.
 
 `--changed` is deliberately not a whole-repository certification. Run
 `python3 quality/bin/gate.py` when reconciling the repository baseline, and
 `python3 quality/bin/gate.py --strict` for an integration gate after that
-baseline is known to match `dev`.
+baseline is known to match `main`.
 
 #### The changed-file and duplication scopes
 
@@ -358,17 +414,17 @@ the imported guide:
   defaults already skip the same class of tree (`.venv`, `vendor`,
   `node_modules`, build output); `.claude` and `.pixi` are this repository's
   instances of it.
-- **Changed lines are compared against `origin/dev`, the branch a change
-  merges into.** The changed-lines judgment asks which clones this change
-  introduced or touched, and in `feature → dev → main` the answer is the
-  delta a feature branch adds to dev — `main` only ever receives a version
-  cut of dev. Without a configured base the check diffs against the last
-  release (the merge-base with `origin/main`), which counts every line dev
-  has merged since the cut as "changed": a branch touching only clean lines
-  would fail on clones that were already reviewed and merged. CI on a pull
-  request to dev reaches the right base by itself (`GITHUB_BASE_REF=dev`);
-  the `base_ref` in `quality.json` makes a local run reproduce CI, the same
-  reason `scripts/check_changelog.py` is run with `--base-ref origin/dev`.
+- **Changed lines are compared against the branch a change merges into.**
+  The changed-lines judgment asks which clones this change introduced or
+  touched, and the answer is the delta a feature branch adds to `main` — the
+  branch every pull request targets. Without a configured base the check diffs
+  against the pull request's base (`GITHUB_BASE_REF`) and then the default
+  branch; the `base_ref` in `quality.json` makes a local run reproduce CI, the
+  same reason `scripts/check_changelog.py` is run with `--base-ref origin/main`.
+  `quality.json` still says `origin/dev`, which is the branch changes merged
+  into before the cutover; setting it to `origin/main` is a step in that
+  cutover (opengwas/opengwasdb#333), and until it is done a local `--changed`
+  run is scoped against the old integration branch.
 - **A clone overlapping a changed line can never be accepted by the density
   baseline.** The density is one repository-wide share (duplicated significant
   lines over all significant lines) held by a baseline that only lowers. It
@@ -387,37 +443,49 @@ the imported guide:
 
 ### Enforced by CI
 
-`.github/workflows/ci.yml` runs on every pull request and every push to `dev`
-or `main`:
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`
+(and to `dev` until the cutover removes it):
 
 | check | script | fails when |
 |---|---|---|
 | tooling baselines | `scripts/check_baselines.py` | ruff or mypy findings exceed `.baselines.json` |
 | cleat quality gates | `quality/bin/gate.py` | any configured non-strict repository gate fails |
 | tests | `pixi run -e dev test` | any test fails |
-| changelog | `scripts/check_changelog.py` | a PR changes `opengwasdb/` without touching the `Unreleased` section |
+| changelog | `scripts/check_changelog.py` | a PR changes `opengwasdb/` without adding a `changelog.d/<slug>.<type>.md` fragment, or adds one the release cannot read |
 
-The changelog check compares the *extracted* `Unreleased` section before and
-after, so editing an older entry does not satisfy it. Apply the
-**`no-changelog`** label to a pull request whose change genuinely has no
-user-visible effect.
+The check reads the *added* files under `changelog.d/`, so editing an existing
+fragment or `CHANGELOG.md` does not satisfy it. Apply the **`no-changelog`**
+label to a pull request whose change genuinely has no user-visible effect; the
+label excuses the absence of a note, not a note whose name or body the release
+cannot read. Both arrivals are tested in `tests/test_check_changelog.py`.
 
 The same checks run locally:
 
 ```bash
 pixi run -e dev python scripts/check_baselines.py
 pixi run -e dev python quality/bin/gate.py
-pixi run -e dev python scripts/check_changelog.py --base-ref origin/dev
+pixi run -e dev python scripts/check_changelog.py --base-ref origin/main
+pixi run -e dev python scripts/release.py plan --repository opengwas/opengwasdb
+pixi run -e dev python scripts/release.py next --previous-tag v0.3.0 \
+    --fragment changelog.d/<slug>.<type>.md
 ```
+
+The last two are the release dry runs, and neither writes anything. `plan`
+lists every merge `main` is owed a version for, the version each would get and
+which of the two publication steps is still missing. `next` answers the same
+question for a single merge, from the previous tag you name.
 
 The tooling-baseline script checks counts, not diffs — it catches a regression
 but not a change that fixes one finding while adding another. The diff recipe
 above remains the right local check.
 
-### Before merging `dev` to `main`
+### Before merging a pull request
 
-- [ ] `CHANGELOG.md` `Unreleased` covers every user-visible change, with a row
-      added to the format-compatibility table if `format_version` moved.
+- [ ] A `changelog.d/<slug>.<type>.md` fragment says what a user would notice,
+      and its type is the bump this change deserves — or the `no-changelog`
+      label says there is nothing to notice.
+- [ ] `docs/store-format-compatibility.md` has a row for this version if
+      `format_version`, or which formats are written or read, moved.
 - [ ] Spec and ADRs describe the code as it now is; superseded ADRs carry a
       banner.
 - [ ] Benchmarks re-run if anything they measure changed — or explicitly dated.

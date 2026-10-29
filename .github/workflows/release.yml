@@ -1,0 +1,60 @@
+name: Release
+
+# Every merge to `main` is a version. This workflow tags it and publishes a
+# GitHub Release whose notes are the changelog fragments that merge added, and
+# it never commits to `main`: the version comes from the tag, through hatch-vcs
+# (issue #333, CONTRIBUTING "Branches and releases").
+#
+# It decides nothing itself. `scripts/release.py plan` reconciles what `main` is
+# owed -- every first-parent commit after the newest `v*` tag that has no tag
+# yet, and any tagged commit whose Release was never created -- and
+# `scripts/release.py publish` does the two steps each still needs, skipping the
+# ones already done. Both live in a tested script because a rule spread over
+# YAML is a rule nothing can test.
+on:
+  push:
+    branches: [main]
+
+# `contents: write` is what pushes a tag and creates a release;
+# `pull-requests: read` is what `gh api …/commits/<sha>/pulls` needs, and an
+# installation token gets nothing it was not granted. Nothing else is.
+permissions:
+  contents: write
+  pull-requests: read
+
+# Serialised so two runs never tag at once, and never cancelled: a cancelled run
+# would leave a merge unpublishable until the next push, which is why the plan
+# reconciles rather than trusting this queue to deliver one run per merge.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: reconcile, tag and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The tags order the releases, and each commit's fragments are read
+          # from the diff against its parent: both need full history.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Plan every merge that is owed a release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/release.py plan \
+            --repository "${GITHUB_REPOSITORY}" \
+            --json-out "${RUNNER_TEMP}/plan.json"
+
+      - name: Tag and publish what the plan says is still owed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/release.py publish \
+            --plan "${RUNNER_TEMP}/plan.json" \
+            --repository "${GITHUB_REPOSITORY}"

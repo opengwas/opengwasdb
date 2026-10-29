@@ -91,11 +91,11 @@ from opengwasdb.readers.gwas_ssf import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_vcf import GWAS_VCF_CAPABILITY, GwasVcfReader, load_liftover
 from opengwasdb.readers.interface import SourceReader
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
+from opengwasdb.version import installed_version
 
 logger = logging.getLogger(__name__)
 
 RECORD_SCHEMA_VERSION = 1
-OPENGWASDB_PACKAGE_VERSION = "0.3.0"
 
 __all__ = [
     "ManifestResolutionSummary",
@@ -516,12 +516,15 @@ def read_resolve_manifest(
 
 
 def _get_opengwasdb_version() -> str:
-    try:
-        from importlib.metadata import version
+    """The installed package version, or the honest fallback (issue #333).
 
-        return version("opengwasdb")
-    except Exception:
-        return OPENGWASDB_PACKAGE_VERSION
+    This value is written into every record, into the index and, through
+    `_MEASUREMENT_IDENTITY_KEYS`, into each Analysis's fingerprint digest, so a
+    version that merely looks like a release is a record that lies about which
+    build made it. `installed_version` answers `0.0.0+unknown` when there is
+    no installed distribution, which no release can be mistaken for.
+    """
+    return installed_version()
 
 
 def _get_git_hash() -> str:

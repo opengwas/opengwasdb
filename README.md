@@ -31,7 +31,8 @@ The design baseline lives in:
 - [docs/adr/](./docs/adr/) — decisions and their consequences
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — how work moves through the repository
 
-Work lands on `dev`; every merge to `main` cuts a tagged version.
+Work lands through a pull request to `main`; **every merge is a tagged
+version**, noted by its `changelog.d/` fragments.
 
 ## Getting started
 
@@ -56,7 +57,7 @@ For a one-off script or REPL, use `pixi run -e dev python <script>.py`
 rather than invoking a bare interpreter.
 
 The package is still a normal `pip install`-able library for downstream
-consumers (`pyproject.toml` + hatchling): `pip install -e ".[dev]"` continues
-to work if you'd rather manage the environment yourself, but it won't provide
-`bcftools` — install that separately in that case.
+consumers (`pyproject.toml` + hatchling + hatch-vcs): `pip install -e ".[dev]"`
+continues to work if you'd rather manage the environment yourself, but it won't
+provide `bcftools`. The version comes from the `v*` tags; clone with them.
 

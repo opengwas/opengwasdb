@@ -30,10 +30,13 @@ explanation reads as "not done".
 - [ ] Verified against real data where available, with the numbers in the
       commit message.
 
-**Docs** — see [CONTRIBUTING.md](../blob/dev/CONTRIBUTING.md#documentation)
+**Docs** — see [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md#documentation)
 
-- [ ] `CHANGELOG.md` `Unreleased` updated (CI enforces this for changes under
-      `opengwasdb/`; the `no-changelog` label is the escape hatch).
+- [ ] `changelog.d/<slug>.<type>.md` added (CI enforces this for changes under
+      `opengwasdb/`; the `no-changelog` label is the escape hatch). Its type
+      sets the version bump.
+- [ ] `docs/store-format-compatibility.md` updated if `format_version`, or the
+      formats written or read, moved.
 - [ ] Spec and ADRs match the code; superseded ADRs carry a banner.
 - [ ] Benchmarks re-run if anything they measure changed — or explicitly dated
       in the document.

@@ -30,13 +30,17 @@ pixi run -e report …        # Quarto + Jupyter, for .qmd benchmark documents
 
 ## Branches
 
-`feature → dev → main`. **Work on `dev`; never commit to `main` directly.**
-Every commit on `main` is a tagged version, cut by merging `dev`.
+`feature → main`. **Work on a feature branch; never commit to `main`
+directly.** Every pull request merged into `main` is tagged `vX.Y.Z`, with the
+`changelog.d/` fragments it added as the release notes
+(`.github/workflows/release.yml`).
 
 ## Before you finish a change
 
-- [ ] `CHANGELOG.md` `Unreleased` updated — CI fails a PR that changes
-      `opengwasdb/` without it (`no-changelog` label to exempt).
+- [ ] A `changelog.d/<slug>.<type>.md` fragment added — CI fails a PR that
+      changes `opengwasdb/` without a readable one (`no-changelog` exempts).
+      The type sets the bump: `breaking`/`added`/`changed` minor, else patch.
+- [ ] `docs/store-format-compatibility.md` updated if `format_version` moved.
 - [ ] No new ruff or mypy findings. Baselines are in `.baselines.json`
       (60 / 37); `pixi run -e dev python scripts/check_baselines.py`.
 - [ ] New tests **observed to fail** against the unfixed code. A test that
@@ -54,7 +58,8 @@ Every commit on `main` is a tagged version, cut by merging `dev`.
 | [docs/spec/store-format.md](./docs/spec/store-format.md) | the store contract |
 | [docs/adr/](./docs/adr/) | decisions and their consequences; supersede, never silently contradict |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | standards, in full |
-| [CHANGELOG.md](./CHANGELOG.md) | history, and the package ↔ `format_version` compatibility table |
+| [CHANGELOG.md](./CHANGELOG.md) | history up to `0.3.0`; later notes are the GitHub Releases |
+| [docs/store-format-compatibility.md](./docs/store-format-compatibility.md) | the package ↔ `format_version` compatibility table |
 
 The package version and a Store Release's `format_version` are different
 things and move independently.
