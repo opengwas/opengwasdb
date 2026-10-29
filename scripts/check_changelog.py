@@ -1,27 +1,51 @@
 #!/usr/bin/env python3
-"""Fail when a change to `opengwasdb/` leaves CHANGELOG.md's Unreleased section untouched.
+"""Fail when a pull request changes `opengwasdb/` without adding a fragment.
 
-`CONTRIBUTING.md` says every user-visible change is recorded under
-`Unreleased` as it lands, so that cutting a version is a matter of dating a
-section rather than reconstructing two months of history from the log. That is
-a convention until something checks it.
+Every merge to `main` is a version whose release notes are the changelog
+fragments that pull request added, so a change to the package without a
+fragment is a version with nothing to say. A pull request adds
+`changelog.d/<slug>.<type>.md`, where the type is one of `breaking`, `added`,
+`changed`, `fixed` or `internal`; `changelog.d/README.md` explains what to
+write in one.
 
-Checking merely that `CHANGELOG.md` was *modified* would pass on a typo fix in
-an old entry, so this compares the extracted `Unreleased` section before and
-after: the section itself has to differ.
+Two things are checked, in this order:
+
+1. Every fragment the branch *adds* must be readable: `<slug>.<type>.md`,
+   directly under `changelog.d/`, with a type `scripts/release.py` can
+   classify and a body that is not empty. A file the release cannot classify
+   would fail after the merge, in a run nobody is watching, so it is refused
+   here instead.
+2. If the branch also changes `opengwasdb/`, it must add at least one such
+   fragment. `no-changelog` exempts a pull request from this requirement --
+   not from the first check, because the label says "no notes are needed", not
+   "no note may be read".
+
+Editing `CHANGELOG.md` no longer satisfies anything: it holds the history up
+to the cutover, and new entries are the GitHub Releases the workflow publishes.
 
 Runs locally as well as in CI:
 
-    pixi run -e dev python scripts/check_changelog.py --base-ref origin/dev
+    pixi run -e dev python scripts/check_changelog.py --base-ref origin/main
+
+and with `--labels`, as CI runs it, to see the exemption:
+
+    pixi run -e dev python scripts/check_changelog.py --base-ref origin/main \
+        --labels no-changelog
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
+from pathlib import Path
 
-CHANGELOG = "CHANGELOG.md"
+FRAGMENTS_DIR = "changelog.d/"
+FRAGMENT_TYPES = ("breaking", "added", "changed", "fixed", "internal")
+FRAGMENT_PATTERN = re.compile(
+    r"^(?P<slug>.+)\.(?P<kind>" + "|".join(FRAGMENT_TYPES) + r")\.md$"
+)
 WATCHED = ("opengwasdb/",)
 SKIP_LABEL = "no-changelog"
 
@@ -37,55 +61,126 @@ def changed_files(base_ref: str) -> list[str]:
     return [p for p in _git("diff", "--name-only", merge_base, "HEAD").splitlines() if p]
 
 
-def unreleased_section(text: str) -> str:
-    """The `## [Unreleased]` block, up to the next `## [` heading.
+def added_files(base_ref: str) -> list[str]:
+    """Files this branch creates, which is what a fragment has to be."""
+    merge_base = _git("merge-base", base_ref, "HEAD").strip()
+    return [
+        p
+        for p in _git(
+            "diff", "--diff-filter=A", "--name-only", merge_base, "HEAD"
+        ).splitlines()
+        if p
+    ]
 
-    Returns "" when the heading is absent, which makes a CHANGELOG that has
-    lost its Unreleased section compare unequal to one that has it -- the
-    right answer, since that is itself a problem.
+
+def added_fragments(base_ref: str) -> list[str]:
+    """The files this branch adds under `changelog.d/`, which claim to be notes.
+
+    Every added file there counts, whatever its extension: a note named
+    `333-a.fixed.markdown` would otherwise be ignored in silence and the merge
+    would publish a version without it. `README.md` is the one file that is not
+    a fragment. Files not committed yet count too, so a local run before the
+    first commit of a fragment does not fail a pull request that is fine.
     """
-    lines = text.splitlines()
-    try:
-        start = next(i for i, ln in enumerate(lines) if ln.startswith("## [Unreleased]"))
-    except StopIteration:
-        return ""
-    rest = lines[start + 1 :]
-    end = next((i for i, ln in enumerate(rest) if ln.startswith("## [")), len(rest))
-    return "\n".join(rest[:end]).strip()
+    added = set(added_files(base_ref))
+    added.update(
+        path
+        for path in _git("ls-files", "--others", "--exclude-standard").splitlines()
+        if path
+    )
+    return sorted(
+        path
+        for path in added
+        if path.startswith(FRAGMENTS_DIR) and path != f"{FRAGMENTS_DIR}README.md"
+    )
 
 
-def file_at(ref: str, path: str) -> str:
-    try:
-        return _git("show", f"{ref}:{path}")
-    except subprocess.CalledProcessError:
-        return ""
+def fragment_errors(fragments: list[str]) -> list[str]:
+    """Why each fragment cannot be read, empty when they all can."""
+    errors = []
+    for fragment in fragments:
+        name = Path(fragment).name
+        match = FRAGMENT_PATTERN.match(name)
+        if match is None:
+            errors.append(
+                f"    {fragment}: not named `<slug>.<type>.md` with type one of "
+                f"{', '.join(FRAGMENT_TYPES)}"
+            )
+            continue
+        if Path(fragment).parent != Path(FRAGMENTS_DIR.rstrip("/")):
+            errors.append(f"    {fragment}: fragments live directly under {FRAGMENTS_DIR}")
+            continue
+        try:
+            text = Path(fragment).read_text(encoding="utf-8").strip()
+        except OSError as error:
+            errors.append(f"    {fragment}: cannot be read ({error})")
+            continue
+        if not text:
+            errors.append(f"    {fragment}: the fragment is empty")
+    return errors
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base-ref", required=True, help="branch this change targets, e.g. origin/dev")
-    args = ap.parse_args()
+def _watched(paths: list[str]) -> list[str]:
+    return [p for p in paths if p.startswith(WATCHED)]
 
-    changed = changed_files(args.base_ref)
-    watched = [p for p in changed if p.startswith(WATCHED)]
+
+def _listed(paths: list[str]) -> str:
+    shown = "".join(f"    {p}\n" for p in paths[:10])
+    if len(paths) > 10:
+        shown += f"    ... and {len(paths) - 10} more\n"
+    return shown
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--base-ref", required=True, help="branch this change targets, e.g. origin/main"
+    )
+    parser.add_argument(
+        "--labels",
+        default="",
+        help="the pull request's labels, comma separated, as CI passes them",
+    )
+    args = parser.parse_args(argv)
+    labels = {label.strip() for label in args.labels.split(",") if label.strip()}
+
+    fragments = added_fragments(args.base_ref)
+    errors = fragment_errors(fragments)
+    if errors:
+        print(
+            f"changelog.d/: {len(errors)} fragment(s) cannot be read:\n"
+            + "\n".join(errors)
+            + f"\n\nSee {FRAGMENTS_DIR}README.md for the file name and body a "
+            "fragment needs.",
+            file=sys.stderr,
+        )
+        return 1
+
+    watched = _watched(changed_files(args.base_ref))
     if not watched:
-        print(f"No changes under {'/'.join(WATCHED)} — changelog entry not required.")
+        print(f"No changes under {'/'.join(WATCHED)} — a fragment is not required.")
         return 0
-
-    merge_base = _git("merge-base", args.base_ref, "HEAD").strip()
-    before = unreleased_section(file_at(merge_base, CHANGELOG))
-    after = unreleased_section(open(CHANGELOG, encoding="utf-8").read())
-
-    if before != after:
-        print(f"CHANGELOG.md Unreleased section updated alongside {len(watched)} source file(s).")
+    if fragments:
+        print(
+            f"{len(fragments)} changelog fragment(s) added under {FRAGMENTS_DIR} "
+            f"alongside {len(watched)} source file(s)."
+        )
+        return 0
+    if SKIP_LABEL in labels:
+        print(
+            f"{len(watched)} source file(s) changed and no fragment was added, "
+            f"exempted by the '{SKIP_LABEL}' label."
+        )
         return 0
 
     print(
-        f"{CHANGELOG}: the Unreleased section is unchanged, but this branch changes "
-        f"{len(watched)} file(s) under {'/'.join(WATCHED)}:\n"
-        + "".join(f"    {p}\n" for p in watched[:10])
-        + (f"    ... and {len(watched) - 10} more\n" if len(watched) > 10 else "")
-        + "\nAdd an entry under '## [Unreleased]' describing what a user would notice.\n"
+        f"this change alters {len(watched)} file(s) under {'/'.join(WATCHED)} "
+        "but adds no changelog fragment:\n"
+        + _listed(watched)
+        + f"\nAdd {FRAGMENTS_DIR}<slug>.<type>.md — type one of "
+        f"{', '.join(FRAGMENT_TYPES)} — describing what a user would notice;\n"
+        f"{FRAGMENTS_DIR}README.md says what a fragment should say, and its type "
+        "sets the version bump.\n"
         f"If this change genuinely has no user-visible effect, apply the "
         f"'{SKIP_LABEL}' label to the pull request.",
         file=sys.stderr,

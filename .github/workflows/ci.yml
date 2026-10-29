@@ -17,6 +17,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The package's version comes from the `v*` tags (issue #333), so a
+          # tagless clone builds `0.1.dev1+...` and tests/test_version.py --
+          # which compares the installed version to `git describe` -- fails.
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: prefix-dev/setup-pixi@v0.8.1
         with:
@@ -35,20 +41,24 @@ jobs:
         run: pixi run -e dev test
 
   changelog:
-    name: changelog entry
+    name: changelog fragment
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: >-
-      github.event_name == 'pull_request' &&
-      !contains(github.event.pull_request.labels.*.name, 'no-changelog')
+    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
         with:
           # The gate diffs against the merge base, which needs real history.
           fetch-depth: 0
 
-      - name: Unreleased section updated alongside source changes
+      # The labels reach the check as `--labels`, so the `no-changelog`
+      # exemption is decided and tested in scripts/check_changelog.py rather
+      # than by skipping the job: a skipped job cannot report why.
+      - name: A fragment added alongside source changes
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
           git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
           python scripts/check_changelog.py \
-            --base-ref "origin/${{ github.event.pull_request.base.ref }}"
+            --base-ref "origin/${{ github.event.pull_request.base.ref }}" \
+            --labels "$LABELS"
