@@ -1,6 +1,6 @@
 {
   "project": "opengwasdb",
-  "base_ref": "origin/dev",
+  "base_ref": "origin/main",
   "doc_size": [
     {
       "file": "CLAUDE.md",
