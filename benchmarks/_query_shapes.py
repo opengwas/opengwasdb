@@ -86,6 +86,82 @@ def regional_alids(axis: Any, region: tuple[str, int, int]) -> list[str]:
     ]
 
 
+def resolve_dense_alids(dense_axis: Any, n_dense_variants: int) -> list[str]:
+    """The random-lookup variant ALIDs drawn from a Hybrid's Dense Component.
+
+    The variant half of `resolve_axis_selections`, against the panel's own axis
+    rather than the shared one: an off-axis ALID has no Dense row, so a draw
+    over the shared axis would silently ask a smaller question than the shared
+    shapes do. The draw itself -- `default_rng(0)`, `RANDOM_AXIS_SIZE` variants
+    -- is the same, so a re-run reproduces it.
+    """
+    rng = np.random.default_rng(0)
+    return [
+        record.alid
+        for record in (
+            dense_axis.by_index(int(v))
+            for v in rng.choice(n_dense_variants, size=RANDOM_AXIS_SIZE, replace=False)
+        )
+        if record is not None
+    ]
+
+
+def dense_axis_size(q: Any) -> int:
+    """How many variants the Dense Component holds: the panel map's length."""
+    panel = getattr(q, "_dense_to_shared", None)
+    if panel is not None:
+        return int(len(panel))
+    return int(q._dense._variant_axis.n_variants)
+
+
+def dense_component_query_patterns(
+    q: Any,
+    *,
+    exposure: str,
+    region: tuple[str, int, int],
+    random_analyses: list[str],
+    dense_random_alids: list[str] | None = None,
+) -> dict[str, Callable[[], dict[str, np.ndarray]]]:
+    """The four shapes only a Hybrid Store's Dense Component can answer.
+
+    A Hybrid lookup is not a panel lookup: it resolves every identifier on the
+    shared axis and searches each requested Analysis's Overflow segment as
+    well, and a Hybrid regional PheWAS walks a window that only partly lies on
+    the panel. Both are what a Hybrid costs, and neither is what a reader who
+    queries the reference axis alone pays -- the Dense Component is the whole
+    answer for them. These twins ask the same exposure, region and Analyses
+    of the component directly (`q._dense`), so a report can put the two beside
+    each other instead of attributing the shared-axis and Overflow work to the
+    panel.
+
+    Returns `{}` when `q` has no Dense Component (a Dense or Ragged Store):
+    there is no second number to report there. A Dense or Ragged Store's plain
+    `lookup`/`range_phewas` already is the panel query.
+
+    `dense_random_alids` pins the variant draw. The generic two-Store harness
+    resolves it once against its first store and passes it here, so an RSS
+    probe and a second store ask for the identical identifiers rather than a
+    fresh draw -- `resolve_dense_alids` would reproduce the draw, but only for
+    a store whose panel is the same size.
+    """
+    dense = getattr(q, "_dense", None)
+    if dense is None:
+        return {}
+    if dense_random_alids is None:
+        dense_random_alids = resolve_dense_alids(dense._variant_axis, dense_axis_size(q))
+    regional = regional_alids(dense._variant_axis, region)
+    return {
+        "regional_dense_only": lambda: dense.range_phewas(*region),
+        "regional_one_analysis_dense_only": lambda: dense.lookup(regional, [exposure]),
+        "random_lookup_10_variants_100_analyses_dense_only": lambda: dense.lookup(
+            dense_random_alids[:LOOKUP_NARROW_AXIS_SIZE], random_analyses
+        ),
+        "random_lookup_100_variants_10_analyses_dense_only": lambda: dense.lookup(
+            dense_random_alids, random_analyses[:LOOKUP_NARROW_AXIS_SIZE]
+        ),
+    }
+
+
 def common_query_patterns(
     q: Any,
     *,

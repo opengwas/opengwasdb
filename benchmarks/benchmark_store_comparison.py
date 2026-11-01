@@ -8,7 +8,10 @@ records for OGS-00009 on zarr 2.18. For every labelled store it records the
 on-disk footprint, the seven query shapes of the OGS-00009/OGS-00016 reports
 (timings and fresh-interpreter peak RSS), and the run environment; and it
 refuses to publish an artifact unless every store returns IDENTICAL results for
-every shape.
+every shape. A Hybrid store adds four `_dense_only` twins of the region and
+random-lookup shapes, timed on its Dense Component alone, so the table can say
+what a panel-only reader pays as well as what the Hybrid costs (`_query_shapes`
+documents why the two differ).
 
 A fast wrong answer must not reach the comparison table. The selections
 (exposure Analysis, PheWAS variant, region, seeded random draws) are resolved
@@ -168,7 +171,10 @@ def _patterns_for_store(
     against this store's axis by the shared builder; any resulting difference
     between stores is caught by the identity check rather than hidden. A
     caller-supplied selection may pin the region's ALIDs too and opt into the
-    extra shapes of `_optional_shapes`.
+    extra shapes of `_optional_shapes`. A Hybrid store adds the four Dense-only
+    twins of `_query_shapes.dense_component_query_patterns` (names ending
+    `_dense_only`), built from the selection's `dense_random_alids` rather than
+    from a fresh draw.
     """
     patterns = _query_shapes.common_query_patterns(
         q,
@@ -179,7 +185,44 @@ def _patterns_for_store(
         random_analyses=selection["random_analyses"],
         regional=selection.get("regional_alids"),
     )
-    return {**patterns, **_optional_shapes(q, selection)}
+    dense_only = _query_shapes.dense_component_query_patterns(
+        q,
+        exposure=selection["exposure_analysis_id"],
+        region=_region_tuple(selection),
+        random_analyses=selection["random_analyses"],
+        dense_random_alids=selection.get("dense_random_alids"),
+    )
+    return {**patterns, **dense_only, **_optional_shapes(q, selection)}
+
+
+def dense_only_alids(q: Any) -> list[str] | None:
+    """The Dense-only random ALIDs a Hybrid store can answer, else None.
+
+    A Dense or Ragged Store has no separate Dense Component to time, so its
+    selection carries no `dense_random_alids` and its shapes are unchanged.
+    """
+    dense = getattr(q, "_dense", None)
+    if dense is None:
+        return None
+    alids = _query_shapes.resolve_dense_alids(
+        dense._variant_axis, _query_shapes.dense_axis_size(q)
+    )
+    if len(alids) != _query_shapes.RANDOM_AXIS_SIZE:
+        raise SystemExit(
+            f"resolved {len(alids)} of {_query_shapes.RANDOM_AXIS_SIZE} Dense-only "
+            "random-lookup variants; a partial selection is not the selection the "
+            "report names."
+        )
+    return alids
+
+
+def _resolve_dense_only_alids(spec: StoreSpec) -> list[str] | None:
+    """`dense_only_alids` for a store this process has not opened yet."""
+    q, _plan = _query_shapes.open_benchmark_store(spec.path)
+    try:
+        return dense_only_alids(q)
+    finally:
+        q.close()
 
 
 def _optional_shapes(
@@ -308,7 +351,7 @@ def _resolve_selection(
                 f"{_query_shapes.RANDOM_AXIS_SIZE} random-lookup variants; a partial "
                 "selection is not the selection the report names."
             )
-        return {
+        selection = {
             "exposure_analysis_id": exposure,
             "phewas_alid": record_alid,
             "region": {"chrom": region[0], "start": region[1], "end": region[2]},
@@ -322,6 +365,14 @@ def _resolve_selection(
                 "n_analyses": len(analyses),
             },
         }
+        # A Hybrid store is also timed on its Dense Component alone, so the
+        # panel's identifiers join the selection here -- resolved once, like
+        # every other identifier, and reused by the RSS probe and by every
+        # later store.
+        dense_alids = dense_only_alids(q)
+        if dense_alids is not None:
+            selection["dense_random_alids"] = dense_alids
+        return selection
     finally:
         q.close()
 
@@ -1168,6 +1219,13 @@ def main() -> None:
     if args.selection:
         selection = _selection_from_file(args.selection)
         print(f"selection read from {args.selection}", flush=True)
+        # A caller's selection may predate the Dense-only shapes; resolve their
+        # identifiers against the first store rather than letting each store --
+        # and each RSS probe -- draw its own.
+        if "dense_random_alids" not in selection:
+            dense_alids = _resolve_dense_only_alids(stores[0])
+            if dense_alids is not None:
+                selection["dense_random_alids"] = dense_alids
     else:
         selection = _resolve_selection(
             stores[0], exposure=args.exposure, phewas_alid=args.phewas_alid, region=args.region
