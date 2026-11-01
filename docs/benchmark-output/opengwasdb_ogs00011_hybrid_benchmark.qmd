@@ -111,6 +111,60 @@ def shape_label(name):
     return SHAPE_LABEL.get(name, name.replace("_", " "))
 
 
+DENSE_ONLY_SUFFIX = "_dense_only"
+SHARED_SHAPES = [
+    "tophits",
+    "phewas",
+    "regional",
+    "regional_one_analysis",
+    "random_lookup_10_variants_100_analyses",
+    "random_lookup_100_variants_10_analyses",
+    "bulk",
+]
+PAIRED_SHAPES = [
+    "regional",
+    "regional_one_analysis",
+    "random_lookup_10_variants_100_analyses",
+    "random_lookup_100_variants_10_analyses",
+]
+STRATA = {
+    "both_observed": "both cells observed",
+    "both_imputed": "both cells imputed",
+    "mixed": "one cell observed, one imputed",
+}
+STRATUM_COLOUR = {
+    "both_observed": "#52616b",
+    "both_imputed": "#c43c39",
+    "mixed": "#b07c2a",
+}
+
+
+def is_dense_only(name):
+    return name.endswith(DENSE_ONLY_SUFFIX)
+
+
+def dense_twin(name):
+    return name + DENSE_ONLY_SUFFIX
+
+
+def memory_label(name):
+    """The shape's name, marked when the probe read the Dense Component alone."""
+    if is_dense_only(name):
+        return f"{shape_label(name[: -len(DENSE_ONLY_SUFFIX)])} (Dense-only)"
+    return shape_label(name)
+
+
+def stratum_of(instrument):
+    """Which observed/imputed stratum an instrument's two cells put it in."""
+    exp_observed = instrument["status_exp"] == "observed"
+    out_observed = instrument["status_out"] == "observed"
+    if exp_observed and out_observed:
+        return "both_observed"
+    if not exp_observed and not out_observed:
+        return "both_imputed"
+    return "mixed"
+
+
 # The Dense Component has a cell for every panel variant in every Analysis;
 # the Overflow adds the observed off-axis associations on top of those cells.
 n_dense_cells = dataset["n_panel_variants"] * dataset["n_analyses"]
@@ -362,7 +416,8 @@ shapes the Hybrid layout exists for.""")
 ```{python}
 #| echo: false
 #| output: asis
-ordered = sorted(b["timings"], key=lambda row: row["median_ms"])
+ordered = sorted((row for row in b["timings"] if not is_dense_only(row["query"])),
+                 key=lambda row: row["median_ms"])
 print(md_table(
     ["Shape", "Median", "p95", "Reps", "Rows returned"],
     [
@@ -384,7 +439,122 @@ which none of these did. The span from the cheapest shape to the dearest is
 {dearest['median_ms'] / cheapest['median_ms']:,.0f}×, and it follows the size of the answer
 rather than a fixed cost per call: {cheapest['result_count']:,} rows against
 {dearest['result_count']:,}.
+
+The four Dense-only twins the harness also times are not in this table. They ask
+four of these same questions of the Dense Component alone, and are set against
+their Hybrid calls under *Hybrid against its Dense Component* below.
 """)
+```
+
+### Hybrid against its Dense Component
+
+```{python}
+#| echo: false
+#| output: asis
+missing = [name for name in PAIRED_SHAPES if dense_twin(name) not in timings]
+rows = []
+for name in PAIRED_SHAPES:
+    if dense_twin(name) not in timings:
+        continue
+    hybrid, dense = timings[name], timings[dense_twin(name)]
+    rows.append([
+        shape_label(name),
+        f"**{fmt_ms(hybrid['median_ms'])}**",
+        f"{hybrid['result_count']:,}",
+        f"**{fmt_ms(dense['median_ms'])}**",
+        f"{dense['result_count']:,}",
+        f"{hybrid['median_ms'] / dense['median_ms']:.2f}×",
+    ])
+print(md_table(
+    ["Question", "Hybrid median", "Hybrid rows", "Dense-only median",
+     "Dense-only rows", "Hybrid ÷ Dense-only"], rows))
+if missing:
+    print("\n_Not timed on the Dense Component alone: "
+          + ", ".join(f"`{name}`" for name in missing) + "_")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+regional_hybrid, regional_dense = timings["regional"], timings[dense_twin("regional")]
+one_hybrid, one_dense = (timings["regional_one_analysis"],
+                         timings[dense_twin("regional_one_analysis")])
+wide_hybrid, wide_dense = (timings["random_lookup_10_variants_100_analyses"],
+                           timings[dense_twin("random_lookup_10_variants_100_analyses")])
+tall_hybrid, tall_dense = (timings["random_lookup_100_variants_10_analyses"],
+                           timings[dense_twin("random_lookup_100_variants_10_analyses")])
+print(f"""A Hybrid lookup does more than a panel lookup, and the gap between the two
+sets of columns is what it charges for the difference. It resolves every
+identifier the call is given — variant ALIDs and rsids, and the Analyses it is
+asked about — on the shared axis of {dataset['n_variants']:,} variants; it then
+searches each named
+Analysis's Ragged Overflow segment in turn, {n_traits:,} of them when the
+question is a window across the whole Store; and a regional PheWAS merges the
+two components' rows and re-indexes them into one genomic order. The Dense-only
+column is the same question asked of the reference axis'
+{dataset['n_panel_variants']:,} panel variants and nothing else — the price a
+reader pays who wants panel variants only.
+
+The ratios are not one number called "the Overflow's cost". `regional` is
+*faster* through the Hybrid — {fmt_ms(regional_hybrid['median_ms'])} against
+{fmt_ms(regional_dense['median_ms'])} — on
+{regional_hybrid['result_count'] - regional_dense['result_count']:,} *more* rows,
+so the twin is not the Hybrid's time minus the Overflow's: the two calls walk
+different axes and return different row sets. `regional_one_analysis` returns
+{one_hybrid['result_count']:,} cells either way, and its
+{one_hybrid['median_ms'] / one_dense['median_ms']:.1f}× is the resolve and the
+single segment search almost alone, on {fmt_ms(one_hybrid['median_ms'])}. The two
+random lookups are the pair the Dense-only shapes were documented to caution
+about: their Dense draws are *panel* variants, which carry a cell in nearly
+every Analysis, so they return {wide_dense['result_count']:,} and
+{tall_dense['result_count']:,} rows against the Hybrid draws'
+{wide_hybrid['result_count']:,} and {tall_hybrid['result_count']:,}, and the
+ratio there compares two different questions.""")
+```
+
+The seven questions this Store shares with OGS-00009, the release whose report
+these numbers can be read beside, have been timed there too — though not as a
+controlled comparison:
+
+```{python}
+#| echo: false
+#| output: asis
+COMPARISON = "opengwasdb_store_comparison_ogs00009_zarr3.json"
+comparison = json.loads((HERE / COMPARISON).read_text())
+store9 = next(store for store in comparison["stores"] if store["label"] == "zarr3")
+timings9 = {row["query"]: row for row in store9["timings"]}
+rows = []
+for name in SHARED_SHAPES:
+    other = timings9.get(name)
+    if other is None:
+        rows.append([shape_label(name), f"{fmt_ms(timings[name]['median_ms'])}", "—", "—"])
+        continue
+    rows.append([
+        shape_label(name),
+        f"{fmt_ms(timings[name]['median_ms'])}",
+        f"{fmt_ms(other['median_ms'])}",
+        f"{timings[name]['median_ms'] / other['median_ms']:.2f}×",
+    ])
+print(md_table(["Shared shape", "OGS-00011 Hybrid", "OGS-00009 Dense", "Ratio"], rows))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+sel9 = comparison["selection"]
+region9 = sel9["region"]
+ds9 = store9["dataset"]
+print(f"""OGS-00009's numbers are the committed `{COMPARISON}` (store
+`{store9['label']}`), measured on {comparison['measured_at'][:10]}
+(`measured_at`). The selections and the data differ: {ds9['n_analyses']:,}
+Analyses against {n_traits:,}, {ds9['n_variants']:,} variants against
+{dataset['n_variants']:,}, a chr{region9['chrom']}:{region9['start']:,}–
+{region9['end']:,} window against chr{region['chrom']}:{region['start']:,}–
+{region['end']:,}, `{sel9['exposure_analysis_id']}` instead of
+`{selection['exposure']}` as the whole-Analysis read, and a Store in the
+`{ds9['completion_state']}` state against a `{dataset['completion_state']}` one.
+The table therefore shows the scale the Hybrid carries — and that its extra work
+is affordable on a release three times as wide — not a controlled comparison.""")
 ```
 
 ### The three Hybrid-only shapes
@@ -500,7 +670,7 @@ print(md_table(
     ["Shape", "Baseline", "Peak", "Query cost", "Rows"],
     [
         [
-            shape_label(row["query"]),
+            memory_label(row["query"]),
             fmt_mb(row["baseline_mb"]),
             fmt_mb(row["peak_mb"]),
             f"**{fmt_mb(row['delta_mb'])}**",
@@ -517,11 +687,30 @@ Opening the Store costs {min(baselines):,.0f}–{max(baselines):,.0f} MB whichev
 follows, and that figure does not scale with the release: {n_traits:,} Analyses and
 {billions(n_associations)} associations available cost about as much resident memory
 as a text editor, because nothing is read until it is asked for. Query cost then
-follows result size, from {fmt_mb(lightest['delta_mb'])} ({shape_label(lightest['query'])})
-to {fmt_mb(heaviest['delta_mb'])} ({shape_label(heaviest['query'])}). Targeted queries are safe to run
+follows result size, from {fmt_mb(lightest['delta_mb'])} ({memory_label(lightest['query'])})
+to {fmt_mb(heaviest['delta_mb'])} ({memory_label(heaviest['query'])}). Targeted queries are safe to run
 concurrently and on modest hardware; whole-Analysis reads have to be budgeted —
 {for_hundred_gb:,} concurrent reads at the heaviest shape's cost would already ask
 for 100 GB.
+""")
+dense_probes = [name for name in PAIRED_SHAPES if dense_twin(name) in memory]
+if dense_probes:
+    regional_memory, regional_dense_memory = memory["regional"], memory[dense_twin("regional")]
+    narrow_memory, narrow_dense_memory = (memory["random_lookup_10_variants_100_analyses"],
+                                          memory[dense_twin("random_lookup_10_variants_100_analyses")])
+    print(f"""
+The four Dense-only probes are in that table too, marked as such: the same
+questions asked of the reference axis alone. Their cost does not simply drop,
+because what they read is a panel draw and a panel draw returns a cell in nearly
+every Analysis — {narrow_dense_memory['result_count']:,} rows against the Hybrid
+draw's {narrow_memory['result_count']:,} for the ten-variant shape, and
+{fmt_mb(narrow_dense_memory['delta_mb'])} against {fmt_mb(narrow_memory['delta_mb'])}
+of resident memory. The regional probe goes the same way: the component alone
+peaks {fmt_mb(regional_dense_memory['delta_mb'])} above baseline against the
+Hybrid call's {fmt_mb(regional_memory['delta_mb'])}, on
+{regional_dense_memory['result_count']:,} and {regional_memory['result_count']:,}
+rows. Query cost follows result size here too, so the Dense Component is not the
+lighter path for every shape.
 """)
 ```
 
@@ -596,11 +785,18 @@ for entry in phewas:
         [[row["analysis_id"], row["label"], f"{row['z']:+,.2f}"] for row in entry["top"]],
     ))
     print()
+    if entry["rsid"] == "rs7903146":
+        print("""The first row of that table is not a result. `GCST002047`
+(educational attainment, college completion) holds odds ratios in its source
+`beta` column rather than log-odds: at this variant the source gives beta 1.001,
+standard error 0.011 and p 0.96, so the stored z of −91 is an artefact of reading
+an odds ratio as a log-odds effect. The rows below it are the list to read.
+""")
 print(f"""Both profiles are what the literature predicts. rs7903146 is the TCF7L2
 type 2 diabetes variant, and every Analysis in its list except educational
-attainment is a type 2 diabetes or glycaemic trait; educational attainment has the
-largest |z| of the eight, which is the usual signature of a very large sample
-rather than a competing mechanism. rs429358 is the APOE ε4 allele, and its list
+attainment is a type 2 diabetes or glycaemic trait; educational attainment is at
+the top of the list only through the mislabelled column described above, so that
+row is not evidence about this variant at all. rs429358 is the APOE ε4 allele, and its list
 is Alzheimer's disease and related dementias, LDL and non-HDL cholesterol, and
 C-reactive protein. Neither variant is special-cased in the Store: both are
 ordinary panel variants and each PheWAS is one call across all
@@ -645,6 +841,139 @@ both lookups per instrument, takes {sum(pair['elapsed_s'] for pair in mr):,.2f} 
 """)
 ```
 
+An instrument is imputed when at least one of its two cells was filled by
+Reference Completion rather than read from a source file. Counted that way, and
+by which side was filled:
+
+```{python}
+#| echo: false
+#| output: asis
+for pair in mr:
+    detail = {}
+    for instrument in pair["instruments"]:
+        key = (instrument["status_exp"], instrument["status_out"])
+        detail[key] = detail.get(key, 0) + 1
+    imputed = sum(count for key, count in detail.items() if "imputed" in key)
+    parts = []
+    if detail.get(("observed", "imputed")):
+        parts.append(f"{detail[('observed', 'imputed')]:,} observed on the exposure and "
+                     "imputed on the outcome")
+    if detail.get(("imputed", "observed")):
+        parts.append(f"{detail[('imputed', 'observed')]:,} the other way round")
+    if detail.get(("imputed", "imputed")):
+        parts.append(f"{detail[('imputed', 'imputed')]:,} imputed on both")
+    print(f"- `{pair['exposure_id']}` → `{pair['outcome_id']}`: **{imputed:,} of "
+          f"{pair['n_instruments']:,}** instruments are imputed — " + "; ".join(parts) + ".")
+print("""
+On the side that was filled, an instrument's β and se are the values the
+completion step stored, not numbers that Analysis's source file reported. The
+instrument itself is still a variant on the shared axis, resolved and read the
+same way as any other.""")
+```
+
+```{python}
+#| echo: false
+#| fig-cap: "Per-instrument exposure (x) and outcome (y) effects for the three pairs, coloured by whether each cell was observed or filled in by Reference Completion, with ±1 se bars kept light. The solid line is the all-instrument IVW slope through the origin; each dashed line, in its stratum's colour, is that stratum's own IVW slope where a stratum has an estimate."
+import numpy as np
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(len(mr), 1, figsize=(8.4, 3.7 * len(mr)), squeeze=False)
+for ax, pair in zip(axes[:, 0], mr):
+    bx = np.array([i["beta_exp"] for i in pair["instruments"]], dtype=float)
+    by = np.array([i["beta_out"] for i in pair["instruments"]], dtype=float)
+    sx = np.array([i["se_exp"] for i in pair["instruments"]], dtype=float)
+    sy = np.array([i["se_out"] for i in pair["instruments"]], dtype=float)
+    names = np.array([stratum_of(i) for i in pair["instruments"]])
+    for key, description in STRATA.items():
+        selected = names == key
+        if not selected.any():
+            continue
+        ax.errorbar(bx[selected], by[selected], xerr=sx[selected], yerr=sy[selected],
+                    fmt="none", ecolor=STRATUM_COLOUR[key], elinewidth=0.6,
+                    capsize=0, alpha=0.35, zorder=1)
+        ax.scatter(bx[selected], by[selected], s=18, color=STRATUM_COLOUR[key],
+                   alpha=0.85, linewidths=0, zorder=2,
+                   label=f"{description} ({selected.sum():,})")
+    span = np.array([bx.min(), bx.max()]) * 1.06
+    ax.plot(span, pair["ivw_beta"] * span, "-", color="#1f2933", lw=1.8, zorder=3,
+            label=f"all {pair['n_instruments']:,} instruments, β = {pair['ivw_beta']:.2f}")
+    for key in STRATA:
+        estimate = pair["strata"].get(key)
+        if estimate is None:
+            continue
+        ax.plot(span, estimate["beta"] * span, "--", color=STRATUM_COLOUR[key],
+                lw=1.1, zorder=2)
+    ax.axhline(0, color="#c3c2b7", lw=0.8, zorder=0)
+    ax.axvline(0, color="#c3c2b7", lw=0.8, zorder=0)
+    ax.set_xlabel("exposure effect, β per allele")
+    ax.set_ylabel("outcome effect, β per allele")
+    ax.set_title(f"{labels.get(pair['exposure_id'], pair['exposure_id'])} → "
+                 f"{labels.get(pair['outcome_id'], pair['outcome_id'])}", fontsize=10)
+    ax.legend(frameon=False, fontsize=7.5, loc="upper left")
+fig.tight_layout()
+plt.show()
+```
+
+```{python}
+#| echo: false
+#| output: asis
+for pair in mr:
+    counts = {}
+    for instrument in pair["instruments"]:
+        counts[stratum_of(instrument)] = counts.get(stratum_of(instrument), 0) + 1
+    imputed = sum(count for key, count in counts.items() if key != "both_observed")
+    print(f"**{labels.get(pair['exposure_id'], pair['exposure_id'])} → "
+          f"{labels.get(pair['outcome_id'], pair['outcome_id'])}** — "
+          f"`{pair['exposure_id']}` → `{pair['outcome_id']}`, "
+          f"{pair['n_instruments']:,} instruments of which {imputed:,} imputed\n")
+    rows = []
+    for key, description in STRATA.items():
+        estimate = pair["strata"].get(key)
+        if estimate is None:
+            rows.append([description, f"{counts.get(key, 0):,}", "—", "—", "—",
+                         "no estimate (< 3 instruments)"])
+            continue
+        rows.append([
+            description,
+            f"{estimate['n']:,}",
+            f"{estimate['beta']:+.3f}",
+            f"{estimate['se']:.4f}",
+            f"{estimate['se_fixed']:.4f}",
+            f"{estimate['p']:.2g}",
+        ])
+    print(md_table(["Stratum", "n", "IVW β", "se (random effects)", "se (fixed)", "p"], rows))
+    print()
+deviation = max(
+    abs(pair["strata"]["both_observed"]["beta"] - pair["ivw_beta"]) / pair["ivw_beta"]
+    for pair in mr
+)
+imputed_estimates = [(pair, key, pair["strata"][key]) for pair in mr
+                     for key in ("both_imputed", "mixed")
+                     if pair["strata"].get(key) is not None]
+beta_ratios = [abs(estimate["beta"]) / pair["strata"]["both_observed"]["beta"]
+               for pair, _, estimate in imputed_estimates]
+negative = [pair for pair, _, estimate in imputed_estimates if estimate["beta"] < 0]
+se_ratios = [estimate["se"] / pair["strata"]["both_observed"]["se"]
+             for pair, _, estimate in imputed_estimates]
+significant = [(pair, key) for pair, key, estimate in imputed_estimates
+               if estimate["p"] < 0.05]
+if significant:
+    clearing = ("the only one to clear p < 0.05 is "
+                + ", ".join(f"{labels.get(pair['exposure_id'], pair['exposure_id'])} → "
+                            f"{labels.get(pair['outcome_id'], pair['outcome_id'])}'s "
+                            f"{STRATA[key]} stratum" for pair, key in significant))
+else:
+    clearing = "none of them clears p < 0.05"
+print(f"""The both-observed stratum reproduces the all-instrument estimate in every
+pair — within {deviation:.0%} of it — which is what the plot should show: the
+instruments whose two cells both come from source files carry the signal. The
+{len(imputed_estimates)} imputed strata that have an estimate are weaker, with
+|β| at {min(beta_ratios):.2f}× to {max(beta_ratios):.2f}× the observed stratum's
+({len(negative)} of them negative), and less certain, with standard errors
+{min(se_ratios):.1f}× to {max(se_ratios):.1f}× larger; {clearing}. Their slopes
+are the dashed lines that do not coincide with the solid one.""")
+```
+
 ::: {.callout-warning}
 ## This is not a causal estimate
 
@@ -669,6 +998,107 @@ They are not an epidemiological result:
 What the Store contributes here is that all three pairs read one coordinate
 system, in one process, in seconds.
 :::
+
+### Regional windows
+
+Three ±500 kb windows, one per gene, each read for the single Analysis that owns
+the trait: every shared-axis variant in the window is looked up through the
+Hybrid path, so a plot holds panel cells and off-axis cells together. Grey is a
+cell the source reported, red one Reference Completion filled in, and a triangle
+one only the Ragged Overflow holds.
+
+```{python}
+#| echo: false
+import numpy as np
+import matplotlib.pyplot as plt
+
+regional = b["regional_windows"]
+for window in regional:
+    rows = window["rows"]
+    position = np.array([row[0] for row in rows], dtype=float) / 1e6
+    neglog10_p = np.array([row[1] for row in rows], dtype=float)
+    status = np.array([row[2] for row in rows])
+    component = np.array([row[3] for row in rows])
+    observed = (status == "observed") & (component == "dense")
+    imputed = status == "imputed"
+    overflow = component == "overflow"
+    lead_position = int(window["lead_alid"].split(":")[1]) / 1e6
+    lead_index = int(np.argmin(np.abs(position - lead_position)))
+    fig, ax = plt.subplots(figsize=(8.6, 4.3))
+    ax.scatter(position[observed], neglog10_p[observed], s=11, color="#52616b",
+               alpha=0.55, linewidths=0,
+               label=f"observed on the panel ({observed.sum():,})")
+    ax.scatter(position[imputed], neglog10_p[imputed], s=17, color="#c43c39",
+               alpha=0.8, linewidths=0,
+               label=f"imputed by Reference Completion ({imputed.sum():,})")
+    if overflow.any():
+        ax.scatter(position[overflow], neglog10_p[overflow], s=38, marker="^",
+                   facecolors="none", edgecolors="#1f2933", linewidths=0.9,
+                   label=f"Overflow cell, observed off the panel ({overflow.sum():,})")
+    ax.scatter([position[lead_index]], [neglog10_p[lead_index]], s=190, marker="*",
+               facecolors="none", edgecolors="#111827", linewidths=1.3, zorder=5,
+               label=f"lead variant, {window['gene']}")
+    ax.annotate(window["gene"], (position[lead_index], neglog10_p[lead_index]),
+                xytext=(10, -16), textcoords="offset points", fontsize=9.5,
+                arrowprops={"arrowstyle": "-", "color": "#111827", "lw": 0.7})
+    ax.set_xlabel(f"chr{window['chromosome']} position (Mb, GRCh38)")
+    ax.set_ylabel("−log10 p")
+    ax.set_title(f"{window['gene']} — {labels.get(window['analysis_id'], '')} "
+                 f"({window['analysis_id']})", fontsize=10)
+    ax.legend(frameon=False, fontsize=8, loc="upper right")
+    fig.tight_layout()
+    plt.show()
+```
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for window in regional:
+    rows.append([
+        f"**{window['gene']}**",
+        f"`{window['analysis_id']}` {labels.get(window['analysis_id'], '')}",
+        f"chr{window['chromosome']}:{window['start']:,}–{window['end']:,}",
+        f"{window['n_observed']:,}",
+        f"{window['n_imputed']:,}",
+        f"{window['elapsed_s']:,.2f} s",
+    ])
+print(md_table(
+    ["Gene", "Analysis", "Window", "Observed rows", "Imputed rows", "Elapsed"], rows))
+print()
+for window in regional:
+    measurements = window["rows"]
+    lead_position = int(window["lead_alid"].split(":")[1])
+    observed = [row for row in measurements if row[2] == "observed"]
+    imputed = [row for row in measurements if row[2] == "imputed"]
+    overflow = [row for row in measurements if row[3] == "overflow"]
+    above_observed = [row[0] for row in observed if row[1] >= SIGNIFICANT]
+    above_imputed = [row for row in imputed if row[1] >= SIGNIFICANT]
+    worst_gap = max(min(abs(row[0] - anchor) for anchor in above_observed)
+                    for row in above_imputed)
+    strongest = max(imputed, key=lambda row: row[1])
+    lead = max(observed, key=lambda row: row[1])
+    overflow_clause = (
+        f", plus {len(overflow):,} Overflow cells (triangles) the Analysis observed "
+        "off the panel"
+        if overflow else ", with no Overflow cells in the window"
+    )
+    print(f"- **{window['gene']}** (`{window['analysis_id']}`, "
+          f"{labels.get(window['analysis_id'], '')}) — {window['n_observed']:,} observed "
+          f"and {window['n_imputed']:,} imputed cells{overflow_clause}; "
+          f"{len(above_imputed):,} imputed and {len(above_observed):,} observed cells clear "
+          f"p < 5×10⁻⁸, every imputed one has an observed one within "
+          f"{worst_gap / 1e3:,.1f} kb, and the strongest imputed cell "
+          f"({strongest[1]:,.1f}) is {abs(strongest[0] - lead_position) / 1e3:,.1f} kb "
+          f"from the lead ({lead[1]:,.1f}), so the filled cells trace the observed "
+          "association rather than adding a peak of their own.")
+print("""
+That is what to look for in each plot: the red points should sit on the same
+peaks as the blue ones, at the shoulder heights the completed values predict, and
+not form isolated towers away from an observed signal. Where triangles appear,
+they should fall inside the same association, since the Overflow holds what that
+Analysis observed off the panel rather than a different signal.""")
+```
 
 ## Limitations
 
@@ -697,6 +1127,13 @@ print(f"""- **Warm page cache.** Each shape is timed after one warm-up call, so 
   cells where z and se are both finite, so those eight associations do not come
   back from a lookup. Read them from the `se` plane, or from the erratum, not from
   a lookup.
+- **Two Analyses carry mislabelled effect columns.** `GCST002047`
+  (educational attainment, college completion) stores odds ratios where beta
+  belongs, and `GCST004461` (low-grade serous ovarian cancer) stores log-odds in
+  its `odds_ratio` column, so taking its log a second time inflates z — its
+  source p of 0.32 at rs569167217 is stored as z 12.4. Both are being raised with
+  the owner, and their stored statistics should not be used until they are
+  rebuilt.
 - **Memory sampling resolution.** The peak sampler polls every 5 ms, so an
   allocation spike shorter than that inside a sub-millisecond query can be
   missed. That affects the shapes whose cost is about a megabyte anyway; the
