@@ -1,0 +1,1 @@
+- **The Ragged and Hybrid top-hit paths read a tier's arrays through one helper.** `RaggedStoreQuery.top_hits` and `HybridStoreQuery._overflow_top_hits` each read `variant_index`, `analysis_index`, `z`, `se` and `eaf` (falling back to the CSR's own eaf) with the same five lines; both now call `_read_ragged_top_hits`. Each array is still read once, and results are unchanged.

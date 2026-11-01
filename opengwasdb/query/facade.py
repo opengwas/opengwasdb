@@ -161,6 +161,19 @@ def _top_hits_result(
     return columns
 
 
+def _read_ragged_top_hits(
+    reader: DenseTopHitReader, bounds: tuple[int, int], csr: RaggedCSRReader
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """A Ragged top-hit tier's variant_index, analysis_index, z, se and eaf
+    over `bounds`; eaf falls back to the CSR's own when the tier has none."""
+    vi = reader.read("variant_index", bounds, "int32")
+    ai = reader.read("analysis_index", bounds, "int32")
+    z = reader.read("z", bounds, "float32")
+    se = reader.read("se", bounds, "float32")
+    eaf = reader.read_or("eaf", bounds, "float32", lambda: csr.eaf_pairs(vi, ai))
+    return vi, ai, z, se, eaf
+
+
 def _empty_rho_result() -> dict[str, np.ndarray]:
     return {
         "analysis_id_a": np.empty(0, dtype=object),
@@ -1058,14 +1071,10 @@ class RaggedStoreQuery:
                 if analysis_index is None or not reader.has("analysis_offsets"):
                     return self._empty()
             bounds = reader.bounds(analysis_index)
-            vi = reader.read("variant_index", bounds, "int32")
-            ai = reader.read("analysis_index", bounds, "int32")
-            z = reader.read("z", bounds, "float32")
-            se = reader.read("se", bounds, "float32")
+            vi, ai, z, se, eaf = _read_ragged_top_hits(reader, bounds, self._csr)
             imp = reader.read_or(
                 "imputed", bounds, "uint8", lambda: np.zeros(len(vi), dtype=np.uint8)
             )
-            eaf = reader.read_or("eaf", bounds, "float32", lambda: self._csr.eaf_pairs(vi, ai))
             # The tiers carry no `n`; each hit is resolved back to its CSR cell,
             # the way an index without `eaf` is (ADR 0067).
             n = self._csr.n_pairs(vi, ai) if self._has_n else None
@@ -1526,11 +1535,7 @@ class HybridStoreQuery:
         if analysis_index is not None and not reader.has("analysis_offsets"):
             return _empty_result()
         bounds = reader.bounds(analysis_index)
-        vi = reader.read("variant_index", bounds, "int32")
-        ai = reader.read("analysis_index", bounds, "int32")
-        z = reader.read("z", bounds, "float32")
-        se = reader.read("se", bounds, "float32")
-        eaf = reader.read_or("eaf", bounds, "float32", lambda: self._csr.eaf_pairs(vi, ai))
+        vi, ai, z, se, eaf = _read_ragged_top_hits(reader, bounds, self._csr)
         return {
             "variant_index": vi,
             "analysis_index": ai,
