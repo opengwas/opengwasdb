@@ -80,6 +80,20 @@ def _make_ld_panel(tmp_path: Path) -> Path:
     return root
 
 
+def write_manifest(tmp_path: Path, sources: list[tuple[Path, str, str]]) -> Path:
+    """A Hybrid build manifest: one row per `(vcf, trait_id, trait_name)`."""
+    rows = "".join(
+        f"{trait_id}\t{vcf}\t{name}\t1000\tsd\tdeclared_standardised\n"
+        for vcf, trait_id, name in sources
+    )
+    manifest = tmp_path / "manifest.tsv"
+    manifest.write_text(
+        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method\n" + rows,
+        encoding="utf-8",
+    )
+    return manifest
+
+
 def _build_source(tmp_path: Path) -> Path:
     trait_a = _vcf(
         tmp_path, "trait_a",
@@ -100,12 +114,8 @@ def _build_source(tmp_path: Path) -> Path:
             # NOTE: 1:1500000 missing → 1:1564620 is an imputation target for trait_c
         ],
     )
-    manifest = tmp_path / "manifest.tsv"
-    manifest.write_text(
-        "trait_id\tfile_path\ttrait_name\tn\tstored_effect_scale\toriginal_sd_method\n"
-        f"trait_a\t{trait_a}\tTrait A\t1000\tsd\tdeclared_standardised\n"
-        f"trait_c\t{trait_c}\tTrait C\t1000\tsd\tdeclared_standardised\n",
-        encoding="utf-8",
+    manifest = write_manifest(
+        tmp_path, [(trait_a, "trait_a", "Trait A"), (trait_c, "trait_c", "Trait C")]
     )
     panel = tmp_path / "panel.txt"
     panel.write_text("\n".join(PANEL_ALIDS) + "\n", encoding="utf-8")

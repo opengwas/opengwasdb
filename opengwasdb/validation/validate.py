@@ -135,6 +135,7 @@ def validate_store(
     _validate_zarr_format(
         store.data_path, manifest.format_version, errors, label="data.zarr"
     )
+    _warn_about_infinite_ragged_se(store, warnings)
 
     if manifest.primary_layout is PrimaryStorageLayout.RAGGED:
         _validate_ragged_store(store, errors)
@@ -145,13 +146,13 @@ def validate_store(
 
     if manifest.primary_layout is PrimaryStorageLayout.HYBRID:
         _validate_nested_component_format(store_path, errors)
-        _validate_hybrid_store(store, errors)
+        warnings.extend(_validate_hybrid_store(store, errors).warnings)
         _validate_eaf_orientation(store, errors, warnings)
         if source is not None:
             errors.append("source-fidelity check is only supported for dense stores")
         return ValidationResult(errors=errors, warnings=warnings)
 
-    _validate_dense_store(store, errors)
+    warnings.extend(_validate_dense_store(store, errors).warnings)
     _validate_eaf_orientation(store, errors, warnings)
     if source is not None and not errors:
         _validate_source_fidelity(
@@ -164,6 +165,119 @@ def validate_store(
             chain_file=chain_file,
         )
     return ValidationResult(errors=errors, warnings=warnings)
+
+
+# --- an infinite se is a value: reported, never a failure (issues #337, #338) ---
+
+#: Analyses one infinite-se warning names. The count says how much of the release is
+#: affected; five ids say where to start reading it.
+INFINITE_SE_ANALYSES_NAMED = 5
+
+#: The `se` plane a Dense validator is reading, by the envelope it was given: a Hybrid
+#: release's Dense Component is a Dense release at `<store>/dense` (spec §16), so a
+#: warning naming plain `data.zarr` would leave the reader looking in the wrong one.
+_DENSE_SE_LABELS = {
+    DENSE_ENVELOPE: "data.zarr/se",
+    HYBRID_DENSE_COMPONENT_ENVELOPE: "dense/data.zarr/se",
+}
+
+
+def _warn_about_infinite_ragged_se(store: OpenGWASDBStore, warnings: list[str]) -> None:
+    """Warn about the infinite `se` cells of every Ragged component of this release.
+
+    An SE above a `float16` plane's range is narrowed to `+inf` beside a finite Z
+    (issue #338). Spec §15 makes that cell present, so the release is valid and the
+    Observed-View Check compares it -- but `beta = z * se` reads as infinity, and
+    nothing else in a Store says so (issue #337).
+
+    A Dense plane is not read here: `_validate_dense_store` counts it in the band
+    pass it already runs over that plane, which costs no second read. A Ragged
+    Store Release's plane and a Hybrid release's Overflow have no such pass, so
+    they are read windowed here -- and only when the plane is floating-point,
+    because `+inf` is a value no integer plane can hold.
+    """
+    try:
+        for group, label in _ragged_se_planes(store):
+            _report_infinite_se(
+                warnings, label, _csr_infinite_se_counts(group), store.analyses_path
+            )
+    except (OSError, ValueError, KeyError, IndexError):
+        # A release whose arrays cannot be read is a failure its layout's own validator
+        # reports in as many words; a warning is not the place to say so twice.
+        return
+
+
+def _ragged_se_planes(store: OpenGWASDBStore) -> Iterator[tuple[Any, str]]:
+    """Each of a release's Ragged `se` planes, with the label a warning should name it by."""
+    layout = store.manifest.primary_layout
+    if layout in (PrimaryStorageLayout.HYBRID, PrimaryStorageLayout.RAGGED):
+        yield store.arrays(mode="r")["ragged"], "data.zarr/ragged/se"
+
+
+def _csr_infinite_se_counts(group: Any) -> np.ndarray:
+    """Per Analysis, how many cells of a stored Ragged or Overflow `se` plane are infinite.
+
+    Read in `_INDEX_WINDOW` cells, so the sequence is never resident, and not at all
+    from an integer plane: `+inf` is a value only a floating-point plane can hold, so
+    a residual `int8` plane has no cell for this to find, and skipping it costs
+    nothing rather than a full read that cannot succeed.
+    """
+    offsets = np.asarray(group["offsets"][:], dtype=np.int64)
+    counts = np.zeros(max(len(offsets) - 1, 0), dtype=np.int64)
+    n_assoc = int(offsets[-1]) if len(offsets) else 0
+    if not np.issubdtype(group["se"].dtype, np.floating):
+        return counts
+    for lo in range(0, n_assoc, _INDEX_WINDOW):
+        window = np.asarray(group["se"][lo : min(lo + _INDEX_WINDOW, n_assoc)])
+        hits = np.flatnonzero(np.isinf(window)) + lo
+        if hits.size:
+            # `offsets` bounds each Analysis's segment, so the last boundary at or before
+            # a position names the Analysis holding it.
+            np.add.at(counts, np.searchsorted(offsets, hits, side="right") - 1, 1)
+    return counts
+
+
+def _report_infinite_se(
+    warnings: list[str],
+    label: str,
+    per_analysis: np.ndarray,
+    analyses_path: Path | None,
+) -> None:
+    """Warn about one plane's infinite `se` cells, naming the count and first Analyses."""
+    total = int(per_analysis.sum())
+    if not total:
+        return
+    named = _first_infinite_analyses(per_analysis, analyses_path)
+    message = (
+        f"{total} cell(s) of {label} hold an infinite se: a source standard error above "
+        "the plane's range is stored as +inf, so beta = z * se reads as infinity although "
+        "the source value was finite (issue #338)"
+    )
+    if named:
+        message += f". The first Analyses holding one: {', '.join(map(repr, named))}"
+    warnings.append(message)
+
+
+def _first_infinite_analyses(
+    per_analysis: np.ndarray, analyses_path: Path | None
+) -> list[str]:
+    """The `analysis_id` of up to `INFINITE_SE_ANALYSES_NAMED` Analyses holding an infinite se."""
+    holding = np.flatnonzero(per_analysis)[:INFINITE_SE_ANALYSES_NAMED].tolist()
+    if not holding or analyses_path is None:
+        return []
+    ids = _analysis_ids(analyses_path)
+    return [ids[i] for i in holding if i in ids]
+
+
+def _analysis_ids(analyses_path: Path) -> dict[int, str]:
+    """`analysis_index` -> `analysis_id`, for naming an Analysis a warning is about."""
+    ids: dict[int, str] = {}
+    for row in read_analyses(analyses_path).rows:
+        try:
+            ids[int(row.get("analysis_index", ""))] = str(row.get("analysis_id", ""))
+        except ValueError:
+            continue  # a malformed row is already reported by _validate_analyses_tsv
+    return ids
 
 
 def _validate_nested_component_format(store_path: Path, errors: list[str]) -> None:
@@ -770,9 +884,12 @@ def _validate_dense_store(
 ) -> ValidationResult:
     """Validate a Dense Store Release (spec §3) in fail-safe seams.
 
-    ``_validate_dense_store`` is a thin orchestrator: the envelope first, then
-    the guarded metadata/array seams once its guarded reads are safe to run.
+    ``_validate_dense_store`` is a thin orchestrator: the envelope first, then the
+    guarded metadata/array seams once their reads are safe. Its warnings come back in
+    the result, which is how a Hybrid's Dense Component reaches the caller (#337).
     """
+    warnings: list[str] = []
+    label = _DENSE_SE_LABELS.get(envelope, "data.zarr/se")
     if not _validate_dense_envelope(store, envelope, errors):
         return ValidationResult(errors=errors)
     manifest = store.manifest
@@ -803,7 +920,7 @@ def _validate_dense_store(
                     manifest.encoding,
                     imputed_arr,
                     on_panel_arr,
-                    store.analyses_path,
+                    store.analyses_path, warnings, label,
                 )
             if not errors:
                 _validate_top_hits(root, errors, manifest.encoding)
@@ -820,7 +937,7 @@ def _validate_dense_store(
             )
     except Exception as exc:  # noqa: BLE001 - validators should report actionable failures
         errors.append(f"validation failed: {exc}")
-    return ValidationResult(errors=errors)
+    return ValidationResult(errors=errors, warnings=warnings)
 
 
 def _validate_completion_metadata(
@@ -2056,32 +2173,26 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
             f"(got {dense_store.manifest.primary_layout.value})"
         )
         return ValidationResult(errors=errors)
-    # One plan for both components (issue #119). They partition one Analysis's
-    # associations, so a result assembled from both is only coherent if they
-    # were encoded the same way -- and each component carries its own manifest,
-    # so nothing but this check couples them.
-    #
-    # `eaf_reference` is the one field that legitimately differs: it records a
-    # physical fact about the component that declares it, and only the Dense
-    # Component has imputed cells for a reference frequency to describe
-    # (ADR 0037 §4). Compared with it normalised away, so a real disagreement
-    # about the *encoding* still fails.
-    if dense_store.manifest.encoding.with_eaf_reference(False) != manifest.encoding:
-        errors.append(
-            "the Dense Component and the Hybrid release declare different statistic "
-            f"encodings ({dense_store.manifest.encoding.to_manifest()} vs "
-            f"{manifest.encoding.to_manifest()}); both components of a Hybrid release "
-            "are written under one plan"
-        )
+    # One plan for both components (issue #119): they partition one Analysis's
+    # associations, so a result assembled from both is only coherent if they were
+    # encoded the same way, and nothing but this check couples the two manifests.
+    encoding_error = _component_encoding_error(dense_store, manifest.encoding)
+    if encoding_error is not None:
+        errors.append(encoding_error)
         return ValidationResult(errors=errors)
     before = len(errors)
-    _validate_dense_store(dense_store, errors, envelope=HYBRID_DENSE_COMPONENT_ENVELOPE)
+    # The component's warnings are this release's warnings: an infinite `se` cell in
+    # its Dense Component is the same finding as one in a standalone Dense release
+    # (issues #337, #338), and it reaches the caller only through this result.
+    warnings = _validate_dense_store(
+        dense_store, errors, envelope=HYBRID_DENSE_COMPONENT_ENVELOPE
+    ).warnings
     if len(errors) > before:
-        return ValidationResult(errors=errors)
+        return ValidationResult(errors=errors, warnings=warnings)
     # 1b. The outer recordings must describe the component just validated.
     _validate_hybrid_recordings(store, dense_store, errors)
     if errors:
-        return ValidationResult(errors=errors)
+        return ValidationResult(errors=errors, warnings=warnings)
 
     # 2. Shared union table structural checks.
     try:
@@ -2094,24 +2205,47 @@ def _validate_hybrid_store(store: OpenGWASDBStore, errors: list[str]) -> Validat
                 variant_axis.close()
     except Exception as exc:  # noqa: BLE001
         errors.append(f"hybrid shared-table validation failed: {exc}")
-        return ValidationResult(errors=errors)
+        return ValidationResult(errors=errors, warnings=warnings)
     if errors:
-        return ValidationResult(errors=errors)
+        return ValidationResult(errors=errors, warnings=warnings)
 
     # 3. Ragged Overflow structural checks + observed-only invariant.
     _validate_overflow(store_path, ragged_path, n_shared, errors, manifest.encoding)
     if errors:
-        return ValidationResult(errors=errors)
+        return ValidationResult(errors=errors, warnings=warnings)
     # 4. Hybrid cross-component invariants (coverage + disjoint partition).
     _validate_hybrid_invariants(store_path, dense_dir, n_shared, errors)
     if errors:
-        return ValidationResult(errors=errors)
+        return ValidationResult(errors=errors, warnings=warnings)
 
     # 5. Overflow top-hit addressing and CSR consistency.
     data_root = store.arrays(mode="r")
     if "top_hits" in data_root:
         _validate_ragged_top_hits(store_path, data_root, errors)
-    return ValidationResult(errors=errors)
+    return ValidationResult(errors=errors, warnings=warnings)
+
+
+def _component_encoding_error(
+    dense_store: OpenGWASDBStore, release: StoreEncoding
+) -> str | None:
+    """Why a Hybrid release's two components disagree about their statistic encoding.
+
+    They partition one Analysis's associations, so a result assembled from both is
+    only coherent if they were written under one plan -- and each component carries
+    its own manifest, so nothing but this check couples them. `eaf_reference` is the
+    one field that legitimately differs: it records a physical fact about the
+    component that declares it, and only the Dense Component has imputed cells for a
+    reference frequency to describe (ADR 0037 §4). Compared with it normalised away,
+    so a real disagreement about the *encoding* still fails.
+    """
+    encoding = dense_store.manifest.encoding
+    if encoding.with_eaf_reference(False) == release:
+        return None
+    return (
+        "the Dense Component and the Hybrid release declare different statistic "
+        f"encodings ({encoding.to_manifest()} vs {release.to_manifest()}); both "
+        "components of a Hybrid release are written under one plan"
+    )
 
 
 def _validate_overflow_structure(
@@ -3238,14 +3372,10 @@ def _imputed_declaration_matches_arrays(
 
 
 def _validate_dense_arrays(
-    root: Any,
-    n_variants: int,
-    n_analyses: int,
-    errors: list[str],
-    encoding: StoreEncoding,
-    imputed_arr: Any = None,
-    on_panel: np.ndarray | None = None,
-    analyses_path: Path | None = None,
+    root: Any, n_variants: int, n_analyses: int, errors: list[str],
+    encoding: StoreEncoding, imputed_arr: Any = None,
+    on_panel: np.ndarray | None = None, analyses_path: Path | None = None,
+    warnings: list[str] | None = None, label: str = "data.zarr/se",
 ) -> None:
     """Stream the dense z/se (and, for a completed store, imputed) matrices in
     row-bands and run every matrix-touching content check in one pass.
@@ -3304,7 +3434,7 @@ def _validate_dense_arrays(
             errors,
         ):
             return
-    _report_dense_band_flags(errors, findings)
+    _report_dense_band_flags(errors, findings, warnings, analyses_path, label)
     if imputed_arr is not None and analyses_path is not None:
         _imputed_declaration_matches_arrays(analyses_path, findings.imputed_per_analysis, errors)
     _report_dense_eaf_range(errors, findings)
@@ -3381,14 +3511,15 @@ def _dense_eaf_side_lengths(root: Any, n_variants: int, errors: list[str]) -> No
 class _DenseBandState:
     """What one streamed band pass has found so far (issue 045).
 
-    The state seam the row-band loop feeds: one field per independent flag, and
-    one list per side-table whose positions the report seams reconcile. Each
-    ``_latch_*`` helper below owns exactly one flag or one list, so no check
-    sets another check's flag as a side effect.
+    The state seam the row-band loop feeds: one field per independent flag or
+    counter, and one list per side-table whose positions the report seams
+    reconcile. Each ``_latch_*`` helper below owns exactly one field or one list,
+    so no check sets another check's flag as a side effect.
     """
 
     n_analyses: int
     imputed_per_analysis: np.ndarray = field(init=False)
+    infinite_se_per_analysis: np.ndarray = field(init=False)
     overflow_positions: list[np.ndarray] = field(default_factory=list)
     eaf_exception_positions: list[np.ndarray] = field(default_factory=list)
     se_exception_positions: list[np.ndarray] = field(default_factory=list)
@@ -3403,6 +3534,7 @@ class _DenseBandState:
 
     def __post_init__(self) -> None:
         self.imputed_per_analysis = np.zeros(self.n_analyses, dtype=np.int64)
+        self.infinite_se_per_analysis = np.zeros(self.n_analyses, dtype=np.int64)
 
 
 def _validate_dense_band(
@@ -3448,6 +3580,10 @@ def _validate_dense_band(
             _band_marked_positions(se_arr[r0:r1], SE_EXCEPTION, r0, n_analyses)
         )
     _latch_negative_se(findings, se_band)
+    # Only a floating-point plane can hold an infinity; a residual `int8` plane's decoded
+    # values are finite by construction, so there is nothing there to count.
+    if not encoding.se.is_residual:
+        _latch_infinite_se(findings, se_band)
     if eaf_arr is not None and encoding.eaf.is_residual:
         findings.eaf_exception_positions.append(
             _band_marked_positions(eaf_arr[r0:r1], EAF_EXCEPTION, r0, n_analyses)
@@ -3474,6 +3610,19 @@ def _latch_negative_se(findings: _DenseBandState, se_band: np.ndarray) -> None:
     if findings.neg_se:
         return
     findings.neg_se = bool(np.any(np.isfinite(se_band) & (se_band < 0)))
+
+
+def _latch_infinite_se(findings: _DenseBandState, se_band: np.ndarray) -> None:
+    """Count each Analysis's infinite se cells: a value, reported, never a failure.
+
+    A source SE above `float16`'s maximum is narrowed to `+inf` beside a finite Z
+    (issue #338). Spec §15 makes that cell present, so the release is valid -- but
+    `beta = z * se` reads as infinity, and nothing else in a Store says so, so it
+    is counted from the band the pass has already decoded and reported as a
+    warning (issue #337). No plane is read a second time for this: the cost is one
+    `isinf` pass over a band that is already resident, about 0.8 ns a cell.
+    """
+    findings.infinite_se_per_analysis += np.isinf(se_band).sum(axis=0, dtype=np.int64)
 
 
 def _latch_dense_missingness(
@@ -3561,8 +3710,23 @@ def _latch_dense_off_panel_imputed(
         findings.off_panel_imputed = True
 
 
-def _report_dense_band_flags(errors: list[str], findings: _DenseBandState) -> None:
-    """The independent value flags the band latches set, in a fixed order."""
+def _report_dense_band_flags(
+    errors: list[str],
+    findings: _DenseBandState,
+    warnings: list[str] | None,
+    analyses_path: Path | None,
+    label: str,
+) -> None:
+    """The independent value flags the band latches set, in a fixed order.
+
+    The one finding a release may keep -- an infinite `se` cell (issues #337, #338) --
+    is a warning rather than an error, appended here so the band pass reports it
+    without a second read of the plane.
+    """
+    if warnings is not None:
+        _report_infinite_se(
+            warnings, label, findings.infinite_se_per_analysis, analyses_path
+        )
     if findings.neg_se:
         errors.append("se contains negative finite values")
     if findings.missingness:

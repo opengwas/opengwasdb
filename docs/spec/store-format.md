@@ -1761,7 +1761,10 @@ Validators MUST check at least:
 - `reference_assembly` is single-valued across the release;
 - canonical variant identity is valid and unique within the Store Variant Table;
 - signed statistics have been normalised to canonical allele orientation;
-- `se >= 0` for all finite SE values;
+- `se >= 0` for all finite SE values, and a **warning** — not a failure — when a Store holds an
+  infinite `se`, naming the cell count and up to five Analyses holding one: an SE above a
+  `float16` plane's range is stored as `+inf` beside a finite Z, so `beta = z × se` reads as
+  infinity although the source value was finite (issues #337, #338);
 - Z and SE missingness is consistent, each read through its own plane's missing marker (§6a, §15);
 - each statistic plane's dtype matches the `encoding` the manifest declares, and a plane with a declared `kind` this build does not implement fails the release rather than being decoded (§6a);
 - every out-of-range Z cell has an entry in the plane's overflow table, and the table describes no other cell (§6a) — a lost entry is the *largest* |z| in the store, which is the one value that must never read as something plausible instead;

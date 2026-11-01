@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import gzip
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+from opengwasdb.encoding import DenseSePlane
 from opengwasdb.layouts.dense.rho import build_dense_rho
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
@@ -319,6 +321,139 @@ def test_validator_rejects_negative_ragged_se(ragged_store_path):
 
     assert not result.ok
     assert "se contains negative finite values" in result.errors
+
+
+def _infinite_se_warnings(result) -> list[str]:
+    return [warning for warning in result.warnings if "infinite se" in warning]
+
+
+def test_validator_warns_about_an_infinite_dense_se(dense_store_path):
+    """An SE above float16's range is `+inf` beside a finite Z: a warning, not an error.
+
+    `beta = z * se` reads as infinity although the source value was finite (issue
+    #338), and nothing else in a Store says so. The cell is present under spec §15,
+    so the release stays valid and the warning names the count and the Analysis
+    (issue #337).
+
+    Mutation that makes this fail: drop `_latch_infinite_se` from `_validate_dense_band`
+    (no warning is counted), or stop reporting the band pass's warning.
+    """
+    root = open_store(dense_store_path).arrays(mode="a")
+    assert root["se"].dtype == np.dtype("float16")  # fixture sanity
+    root["se"][0, 0] = float("inf")
+
+    result = validate_store(dense_store_path)
+
+    assert result.ok, result.errors
+    warnings = _infinite_se_warnings(result)
+    assert len(warnings) == 1, result.warnings
+    assert "1 cell(s) of data.zarr/se" in warnings[0]
+    assert "'a1'" in warnings[0]
+
+
+def test_validator_warns_about_an_infinite_ragged_se(ragged_store_path):
+    """An infinite SE in a Ragged plane's CSR, where no band pass reads it.
+
+    Mutation that makes this fail: drop the Ragged plane from `_ragged_se_planes`, or
+    scan the plane with the Analysis boundaries ignored (the id would be wrong).
+    """
+    ragged = open_store(ragged_store_path).arrays(mode="a")["ragged"]
+    index = ragged["by_variant"]
+    assert ragged["se"].dtype == np.dtype("float16")  # fixture sanity
+    assert int(ragged["offsets"][-1]) == int(index["offsets"][-1]) == 2  # two associations
+    # Both copies of the cell move: the Analysis-sorted CSR and the variant-centric
+    # index hold the same cell (spec §11.1), so writing one alone is an error of its own.
+    variant = int(ragged["variant_index"][0])
+    hold = slice(int(index["offsets"][variant]), int(index["offsets"][variant + 1]))
+    assert list(np.asarray(index["analysis_index"][hold])) == [0]  # fixture sanity: one Analysis
+    ragged["se"][0] = np.float16(np.inf)
+    index["se"][hold.start] = np.float16(np.inf)
+
+    result = validate_store(ragged_store_path)
+
+    assert result.ok, result.errors
+    warnings = _infinite_se_warnings(result)
+    assert len(warnings) == 1, result.warnings
+    assert "1 cell(s) of data.zarr/ragged/se" in warnings[0]
+    assert "'t1'" in warnings[0]
+
+
+def _hybrid_store_with_both_components(tmp_path: Path) -> Path:
+    """An Observed-Only Hybrid holding one Dense Component association and one Overflow one.
+
+    Two Analyses over the one panel variant, plus `1:2000000` off the panel in `trait_a`.
+    Every effect is tiny, so nothing here is a top-hit and writing an infinite SE moves no
+    index: the finding under test is the warning, not an index disagreement.
+    """
+    import test_hybrid_completion as thc
+
+    trait_a = thc._vcf(tmp_path, "trait_a", [
+        "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.002:0.5\n",
+        "1\t2000000\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.002:0.5\n",  # off-panel: the Overflow
+    ])
+    trait_c = thc._vcf(tmp_path, "trait_c", [
+        "1\t100000\t.\tA\tG\t.\tPASS\t.\tES:SE\t0.002:0.5\n",
+    ])
+    manifest = thc.write_manifest(
+        tmp_path, [(trait_a, "trait_a", "Trait A"), (trait_c, "trait_c", "Trait C")]
+    )
+    panel = tmp_path / "panel.txt"
+    panel.write_text("1:100000:A:G\n", encoding="utf-8")
+    store = tmp_path / "hybrid.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        manifest, store, reference_panel=panel, store_id="hyb", release_id="v1"
+    )
+    return store
+
+
+def test_validator_warns_about_an_infinite_se_in_both_hybrid_components(tmp_path):
+    """One infinite SE cell in each component: two warnings, each naming its own plane.
+
+    Mutation that makes this fail: dropping the Overflow plane from
+    `_ragged_se_planes` (one warning), dropping the band-pass latch from
+    `_validate_dense_band` or the component's warnings from the Hybrid's result (one
+    warning), yielding or reporting a plane twice (three), or labelling both planes
+    alike (the label assertions).
+    """
+    store = _hybrid_store_with_both_components(tmp_path)
+    component = open_store(store).dense_component()
+    dense_se = DenseSePlane.open(component.arrays(mode="r+"), component.manifest.encoding)
+    assert component.manifest.encoding.se.kind == "float16"  # fixture sanity
+    rows, cols = np.array([0]), np.array([1])  # trait_c observes the one panel variant
+    assert np.isfinite(dense_se.points(rows, cols)[0])  # fixture sanity: an observed cell
+    dense_se.patch(rows, cols, np.array([np.inf], dtype=np.float32))
+    ragged = open_store(store).arrays(mode="r+")["ragged"]
+    assert ragged["se"].dtype == np.dtype("float16")  # fixture sanity
+    overflow = int(ragged["offsets"][0])  # trait_a's off-panel association comes first
+    assert int(ragged["variant_index"][overflow]) != 0  # fixture sanity: a real Overflow row
+    ragged["se"][overflow] = np.float16(np.inf)
+    index = ragged["by_variant"]
+    variant = int(ragged["variant_index"][overflow])
+    hold = slice(int(index["offsets"][variant]), int(index["offsets"][variant + 1]))
+    index["se"][hold.start] = np.float16(np.inf)
+
+    result = validate_store(store)
+
+    assert result.ok, result.errors
+    warnings = _infinite_se_warnings(result)
+    assert len(warnings) == 2, result.warnings
+    # Order-independent: the Overflow is read before the release's own validators run.
+    by_plane = {warning.split(" hold ")[0]: warning for warning in warnings}
+    assert set(by_plane) == {
+        "1 cell(s) of data.zarr/ragged/se", "1 cell(s) of dense/data.zarr/se",
+    }
+    assert "'trait_a'" in by_plane["1 cell(s) of data.zarr/ragged/se"]
+    assert "'trait_c'" in by_plane["1 cell(s) of dense/data.zarr/se"]
+
+
+def test_a_store_without_an_infinite_se_gets_no_infinite_se_warning(
+    dense_store_path, ragged_store_path
+):
+    # The warning is about the arrays, not about the layout: a release that holds no
+    # infinite cell must not be told it does.
+    assert validate_store(dense_store_path).ok
+    assert _infinite_se_warnings(validate_store(dense_store_path)) == []
+    assert _infinite_se_warnings(validate_store(ragged_store_path)) == []
 
 
 def test_validator_rejects_ragged_analyses_row_count_mismatch(ragged_store_path):

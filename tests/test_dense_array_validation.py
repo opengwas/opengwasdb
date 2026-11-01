@@ -426,7 +426,7 @@ def test_band_flag_reporter_emits_latched_flags_in_fixed_order():
     findings.off_panel_imputed = True
     errors: list[str] = []
 
-    _report_dense_band_flags(errors, findings)
+    _report_dense_band_flags(errors, findings, None, None, "data.zarr/se")
 
     assert errors == [
         "se contains negative finite values",
@@ -436,6 +436,24 @@ def test_band_flag_reporter_emits_latched_flags_in_fixed_order():
         "imputed=1 cells have NaN se values",
         "off-panel (on_panel=0) rows have imputed=1 cells — off-panel is never imputable",
     ]
+
+
+def test_band_flag_reporter_warns_about_an_infinite_se_rather_than_failing():
+    """The one band-pass finding a release may keep is a warning, not an error (issue #337).
+
+    Mutation that makes this fail: report the count as an error, never report it, or
+    count it anywhere but the band the pass already decoded.
+    """
+    findings = _band_state()
+    findings.infinite_se_per_analysis[0] = 2
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    _report_dense_band_flags(errors, findings, warnings, None, "data.zarr/se")
+
+    assert errors == []
+    assert len(warnings) == 1, warnings
+    assert warnings[0].startswith("2 cell(s) of data.zarr/se hold an infinite se")
 
 
 def test_eaf_range_reporter_is_a_separate_seam_from_the_band_flags():
