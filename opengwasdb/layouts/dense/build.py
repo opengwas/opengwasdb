@@ -31,7 +31,6 @@ from opengwasdb.layouts.dense.constants import (
     dense_layout_records,
     dense_provenance_block,
 )
-from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, read_top_hit_counts
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, analyses_table_from_records, write_analyses
@@ -95,6 +94,12 @@ def write_analyses_tsv(output_path: Path, analyses: list[Analysis]) -> Path:
     output_path = Path(output_path)
     table = analyses_table_from_records(analyses)
     path = write_analyses(output_path / "analyses.tsv", table)
+    # Imported here rather than at module scope: `opengwasdb.overview` reads
+    # Indexed Variant Subsets through `layouts.dense.indexed_subsets`, which
+    # runs this package's `__init__`, which imports this module -- a
+    # module-scope import of `write_overview_html` closes that cycle (#57).
+    from opengwasdb.overview import write_overview_html
+
     write_overview_html(output_path, table)
     return path
 
