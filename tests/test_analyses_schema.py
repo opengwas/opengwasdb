@@ -4,6 +4,7 @@ from opengwasdb.model.analyses import (
     REQUIRED_COLUMNS,
     AnalysesTable,
     ColumnClass,
+    analysis_label,
     classify_column,
     read_analyses,
     to_json_schema,
@@ -117,6 +118,23 @@ def test_extra_columns_pass_through_unchanged(tmp_path):
     assert validate_analyses(reread) == []
     assert reread.rows[0]["inclusion_reason"] == "pilot batch"
     assert reread.rows[0]["an_unrecognised_future_column"] == "surprise"
+
+
+def test_analysis_label_prefers_the_row_label_over_its_id():
+    row = {"analysis_id": "ieu-a-7", "analysis_label": "Body mass index"}
+
+    assert analysis_label(row) == "Body mass index"
+
+
+def test_analysis_label_falls_back_to_the_id_when_the_label_is_blank():
+    # A blank label is "no label was supplied", not a label of ``""`` -- the
+    # one display label `analyses_table()`/overview.html have always shown.
+    assert analysis_label({"analysis_id": "a2", "analysis_label": ""}) == "a2"
+
+
+def test_analysis_label_falls_back_to_the_id_when_the_column_is_absent():
+    # A release whose analyses.tsv predates ADR 0034 carries no label column.
+    assert analysis_label({"analysis_id": "a3"}) == "a3"
 
 
 def test_classify_column_shared_core():
