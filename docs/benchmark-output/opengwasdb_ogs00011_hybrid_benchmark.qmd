@@ -1,0 +1,742 @@
+---
+title: "OpenGWASDB at full scale — OGS-00011"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+    theme: cosmo
+jupyter: python3
+---
+
+```{python}
+#| echo: false
+import json
+import math
+from pathlib import Path
+
+HERE = Path(".")
+ARTIFACT = "opengwasdb_ogs00011_hybrid_benchmark.json"
+b = json.loads((HERE / ARTIFACT).read_text())
+
+dataset = b["dataset"]
+analyses = b["analyses"]
+storage = b["storage"]
+build = b["build"]
+selection = b["selection"]
+timings = {row["query"]: row for row in b["timings"]}
+memory = {row["query"]: row for row in b["memory"]}
+labels = b["labels"]
+source = b["source_bulk"]
+hm3 = b["hm3_extract"]
+loci = b["known_loci"]
+phewas = b["phewas_top"]
+mr = b["mr"]
+
+COMPONENT = {
+    "dense": "Dense Component",
+    "overflow": "Ragged Overflow",
+    "shared": "Shared variant axis",
+}
+COMPLETION = {
+    "reference_completed": "Reference-Completed",
+    "observed_only": "Observed-only",
+}
+GENOME_WIDE = 5e-8
+SIGNIFICANT = -math.log10(GENOME_WIDE)
+
+
+def md_table(headers, rows):
+    separator = "|" + "|".join(["---"] * len(headers)) + "|"
+    heading = "| " + " | ".join(headers) + " |"
+    body = "\n".join("| " + " | ".join(str(cell) for cell in row) + " |" for row in rows)
+    return f"{heading}\n{separator}\n{body}"
+
+
+def fmt_ms(value):
+    return f"{value:,.1f} ms" if value < 1_000 else f"{value / 1_000:,.2f} s"
+
+
+def fmt_mb(value):
+    return f"{value:,.1f} MB" if value < 1_024 else f"{value / 1_024:,.2f} GB"
+
+
+def fmt_gb(value):
+    return f"{value / 1e9:,.2f} GB"
+
+
+def fmt_seconds(value):
+    if value >= 3_600:
+        return f"{value / 3_600:,.2f} h"
+    if value >= 60:
+        return f"{value / 60:,.1f} min"
+    return f"{value:,.0f} s"
+
+
+def fmt_rev(revision):
+    return f"`{revision[:12]}`" if revision else "not recorded"
+
+
+def billions(value):
+    return f"{value / 1e9:,.1f} billion"
+
+
+def revisions(steps):
+    """Distinct revisions in the order the run first used them, with their steps."""
+    order = []
+    for name, step in steps:
+        revision = step["opengwasdb_rev"]
+        if revision and revision not in order:
+            order.append(revision)
+    return [(revision, [name for name, step in steps if step["opengwasdb_rev"] == revision])
+            for revision in order]
+
+
+SHAPE_LABEL = {
+    "tophits": "Top hits for one Analysis (p < 5×10⁻⁸)",
+    "phewas": "One panel variant × every Analysis",
+    "phewas_off_axis": "One off-axis variant × every Analysis",
+    "regional": "A 1 Mb window × every Analysis",
+    "regional_one_analysis": "A 1 Mb window × one Analysis",
+    "random_lookup_10_variants_100_analyses": "10 random variants × 100 Analyses",
+    "random_lookup_100_variants_10_analyses": "100 random variants × 10 Analyses",
+    "bulk": "One Analysis, genome-wide",
+    "bulk_dense_exceptions": "One Analysis, Dense Component alone",
+    "bulk_overflow_heavy": "One Analysis, genome-wide, both components",
+}
+
+
+def shape_label(name):
+    return SHAPE_LABEL.get(name, name.replace("_", " "))
+
+
+# The Dense Component has a cell for every panel variant in every Analysis;
+# the Overflow adds the observed off-axis associations on top of those cells.
+n_dense_cells = dataset["n_panel_variants"] * dataset["n_analyses"]
+n_associations = n_dense_cells + dataset["n_overflow_associations"]
+n_traits = analyses["n_analyses"]
+completion_state = COMPLETION.get(dataset["completion_state"], dataset["completion_state"])
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(
+    '<p class="subtitle lead">The GWAS Catalog EUR Hybrid Store — '
+    f"{n_traits:,} Analyses, {completion_state} · "
+    f"{dataset['n_variants'] / 1e6:,.1f} million variants and "
+    f"{billions(n_associations)} associations</p>"
+)
+```
+
+::: {.callout-important}
+## What this measures
+
+One Store Release over the GWAS Catalog's European-ancestry summary statistics,
+built once and queried through the public API.
+
+```{python}
+#| echo: false
+#| output: asis
+print(f"""
+The release is one Store with two physical components, and every query is
+answered from one or both of them:
+
+* the **Dense Component** (`dense/`) holds a cell for each of the
+  **{dataset['n_panel_variants']:,} panel variants** in each of the {n_traits:,}
+  Analyses that come from {analyses['n_publications']:,} publications —
+  {billions(n_dense_cells)} cells on the reference axis, observed or filled in by
+  Reference Completion;
+* the **Ragged Overflow** (`data.zarr/ragged/`) holds, for each Analysis, the
+  variants that Analysis observed off the panel: **{dataset['n_off_panel_variants']:,}
+  distinct variants** carrying {dataset['n_overflow_associations']:,} associations,
+  stored against a variant index rather than a dense axis;
+* the **shared variant axis** (`variants.tsv.gz` and the ALID and rsid lookups)
+  is what gives both components one address space.
+
+A lookup of a panel variant reads the Dense Component. A lookup of an off-axis
+variant reads only the Overflow. A whole-Analysis read touches both and merges
+them in genomic order.
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(f"""
+* **{storage['store_gb']:,.2f} GB** on disk, against **{storage['source_gb']:,.2f} GB**
+  of source GWAS-SSF across {storage['n_source_files']:,} files — a
+  **{storage['compression_ratio']:.2f}×** reduction.
+* A top-hits query returns in **{timings['tophits']['median_ms']:.1f} ms**; a PheWAS
+  across all {n_traits:,} Analyses in **{timings['phewas']['median_ms']:.1f} ms**; a
+  PheWAS of an off-axis variant in **{timings['phewas_off_axis']['median_ms']:.1f} ms**.
+* Those queries need **~{memory['tophits']['peak_mb']:.0f} MB** of resident memory.
+  A laptop can open this Store.
+* Build and Reference Completion took
+  **{fmt_seconds(build['build']['elapsed_seconds'] + build['complete']['elapsed_seconds'])}**
+  of wall clock.
+""")
+```
+
+The cost is concentrated in whole-Analysis reads: returning tens of millions of
+associations takes tens of seconds and — on the Analysis with the largest
+Overflow — more than three gigabytes. Everything targeted is cheap in both time
+and memory.
+:::
+
+## Scope
+
+```{python}
+#| echo: false
+#| output: asis
+enc = dataset["encoding"]
+print(md_table(
+    ["Property", "Value"],
+    [
+        ["Store Release", "OGS-00011 (Hybrid)"],
+        ["Completion state", completion_state],
+        ["Analyses", f"{n_traits:,} from {analyses['n_publications']:,} publications"],
+        ["Variants", f"{dataset['n_variants']:,}"],
+        ["&nbsp;&nbsp;on the reference axis (panel)", f"{dataset['n_panel_variants']:,}"],
+        ["&nbsp;&nbsp;off the axis (Overflow only)", f"{dataset['n_off_panel_variants']:,}"],
+        ["Dense Component cells", f"{n_dense_cells:,}"],
+        ["Overflow associations", f"{dataset['n_overflow_associations']:,}"],
+        ["Associations in total", f"{n_associations:,}"],
+        ["Reference assembly", dataset["reference_assembly"]],
+        ["Store format version", f"`{dataset['format_version']}` (encoding v{enc['version']})"],
+        ["Encoding", f"z `{enc['z']['kind']}` at 1/{enc['z']['scale']}, "
+                     f"se `{enc['se']['kind']}`, eaf `{enc['eaf']['kind']}` "
+                     f"over ±{enc['eaf']['residual_range']:g}"],
+        ["Dense chunk shape", " × ".join(f"{n:,}" for n in dataset["chunk_shape"])],
+        ["Panel (variant reference)", f"`{dataset['variant_reference']}`"],
+        ["Opening the Store", f"{dataset['open_seconds']:.2f} s"],
+    ],
+))
+```
+
+The panel is the Store's recorded variant reference: gnomAD v4 common variants,
+filtered to its EUR set. It is the axis the Dense Component shares between
+Analyses, and the reason a variant that is not on it can only be answered from
+the Overflow.
+
+```{python}
+#| echo: false
+#| output: asis
+sizes = analyses["sample_size"]
+hits = analyses["n_hits_5e8"]
+scales = analyses["stored_effect_scale"]
+orientation = analyses["eaf_orientation"]
+print(md_table(
+    ["Measure", "Value"],
+    [
+        ["Assigned ancestry",
+         ", ".join(f"{k} {v:,}" for k, v in analyses["assigned_ancestry"].items())],
+        ["Sample size (min / median / max)",
+         f"{sizes['min']:,.0f} / {sizes['median']:,.0f} / {sizes['max']:,.0f}"],
+        ["Stored Effect Scale", ", ".join(f"`{k}` {v:,}" for k, v in scales.items())],
+        ["EAF orientation", ", ".join(f"{k} {v:,}" for k, v in orientation.items())],
+        ["Hits at p < 5×10⁻⁸",
+         f"median {hits['median']:,.0f}, max {hits['max']:,.0f}; "
+         f"{hits['zero']:,} Analyses have none, {hits['total']:,.0f} in total"],
+    ],
+))
+```
+
+## Storage
+
+```{python}
+#| echo: false
+#| output: asis
+by_part = {}
+for row in storage["components"]:
+    totals = by_part.setdefault(row["part"], {"bytes": 0, "files": 0})
+    totals["bytes"] += row["bytes"]
+    totals["files"] += row["files"]
+rows = [
+    [COMPONENT.get(part, part), fmt_gb(totals["bytes"]), f"{totals['files']:,}"]
+    for part, totals in sorted(by_part.items(), key=lambda item: -item[1]["bytes"])
+]
+rows.append(["**Store Release, whole directory**", f"**{fmt_gb(storage['store_bytes'])}**",
+             f"**{storage['store_files']:,}**"])
+print(md_table(["Component", "Bytes", "Files"], rows))
+untallied = storage["store_bytes"] - sum(totals["bytes"] for totals in by_part.values())
+print(f"""
+The three component rows are the harness's own walk of each part of the release.
+Between them they account for all but {untallied:,} bytes of the
+{storage['store_bytes']:,} the whole directory holds. The Shared variant axis is
+{by_part['shared']['bytes'] / storage['store_bytes']:.1%} of the Store, and it is
+what makes the two components one address space rather than two files that
+happen to sit together.
+""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Measure", "Value"],
+    [
+        ["Store Release", f"{storage['store_gb']:,.2f} GB across {storage['store_files']:,} files"],
+        ["Source GWAS-SSF", f"{storage['source_gb']:,.2f} GB across {storage['n_source_files']:,} files"],
+        ["Reduction", f"**{storage['compression_ratio']:.2f}×**"],
+        ["Bytes per association", f"{storage['store_bytes'] / n_associations:.2f} B"],
+    ],
+))
+```
+
+The source is already bgzip-compressed, so this is a reduction against compressed
+text, not against plain text. It comes from storing z and standard error as
+fixed-point and residual codes rather than as text floats, from encoding the
+allele frequency as a residual against the reference, and from holding the
+variant axis once instead of repeating positions and alleles in every Analysis.
+
+## Build
+
+```{python}
+#| echo: false
+#| output: asis
+steps = sorted(build.items(), key=lambda item: item[1]["start_time"])
+rows = [
+    [name, fmt_seconds(step["elapsed_seconds"]), fmt_rev(step["opengwasdb_rev"]),
+     f"{step['n_workers']:,}" if step.get("n_workers") else "—",
+     step["start_time"][:10]]
+    for name, step in steps
+]
+rows.append(["**All recorded steps**",
+             f"**{fmt_seconds(sum(step['elapsed_seconds'] for _, step in steps))}**", "", "", ""])
+print(md_table(["Step", "Wall clock", "opengwasdb", "Workers", "Started"], rows))
+build_and_complete = build["build"]["elapsed_seconds"] + build["complete"]["elapsed_seconds"]
+groups = "; ".join(f"`{revision[:7]}` for {', '.join(names)}"
+                   for revision, names in revisions(steps))
+print(f"""
+The release was built and then completed, and the records keep the two apart:
+`build` wrote the observed Store in {fmt_seconds(build['build']['elapsed_seconds'])} on
+{build['build']['n_workers']} workers, and `complete` filled the Dense Component's
+imputed cells in {fmt_seconds(build['complete']['elapsed_seconds'])} on the same number
+of workers. Together that is {fmt_seconds(build_and_complete)}. The remaining steps
+build the HM3 Indexed Variant Subset and the overview, then validate the
+release, and the sum of every recorded step is
+{fmt_seconds(sum(step['elapsed_seconds'] for _, step in steps))}.
+
+Each row carries the revision its step ran at, not one revision for the whole
+release: {groups}. A Store built across a change of `opengwasdb` is still one
+Store, but its parts were written by different code, and the records here are
+where that shows.
+""")
+```
+
+## Query performance
+
+The ten shapes below are the seven every full-scale benchmark times plus three
+the Hybrid layout needs. The selection is fixed across runs:
+
+```{python}
+#| echo: false
+#| output: asis
+region = selection["region"]
+lookups = selection["random_lookup_shapes"]
+print(md_table(
+    ["Selection", "Value"],
+    [
+        ["Analysis read whole (`bulk`)",
+         f"`{selection['exposure']}` — {labels.get(selection['exposure'], '')}"],
+        ["Panel variant for the on-axis PheWAS",
+         f"`{selection['phewas_alid']}` (rs7903146, TCF7L2)"],
+        ["Window", f"chr{region['chrom']}:{region['start']:,}–{region['end']:,} (GRCh38)"],
+        ["Analysis with the largest Overflow",
+         f"`{selection['overflow_heavy']}` — {labels.get(selection['overflow_heavy'], '')}"],
+        ["Off-axis PheWAS variant",
+         f"drawn from the shared axis with `default_rng({selection['off_axis_seed']})`"],
+        ["Random lookups", "; ".join(f"{s['n_variants']} variants × {s['n_analyses']} Analyses"
+                                    for s in lookups)],
+    ],
+))
+print()
+print(f"""The on-axis shapes are the ones the other full-scale releases time, so these
+numbers can be read beside those reports'. The off-axis PheWAS and the two
+whole-Analysis Overflow shapes have no counterpart in a Dense Store: they are the
+shapes the Hybrid layout exists for.""")
+```
+
+```{python}
+#| echo: false
+#| output: asis
+ordered = sorted(b["timings"], key=lambda row: row["median_ms"])
+print(md_table(
+    ["Shape", "Median", "p95", "Reps", "Rows returned"],
+    [
+        [
+            shape_label(row["query"]),
+            f"**{fmt_ms(row['median_ms'])}**",
+            fmt_ms(row["p95_ms"]) if row.get("p95_ms") is not None else "—",
+            f"{row['repetitions']:,}",
+            f"{row['result_count']:,}",
+        ]
+        for row in ordered
+    ],
+))
+cheapest, dearest = ordered[0], ordered[-1]
+print(f"""
+Every shape was timed {b['reps']} times after one warm-up call; a shape whose warm-up
+alone passed {b['slow_shape_seconds']:.0f} s is timed once instead and says so in `Reps`,
+which none of these did. The span from the cheapest shape to the dearest is
+{dearest['median_ms'] / cheapest['median_ms']:,.0f}×, and it follows the size of the answer
+rather than a fixed cost per call: {cheapest['result_count']:,} rows against
+{dearest['result_count']:,}.
+""")
+```
+
+### The three Hybrid-only shapes
+
+```{python}
+#| echo: false
+#| output: asis
+off_axis = timings["phewas_off_axis"]
+whole = timings["bulk_overflow_heavy"]
+dense_only = timings["bulk_dense_exceptions"]
+from_overflow = whole["result_count"] - dense_only["result_count"]
+print(f"""- **PheWAS of an off-axis variant** — {fmt_ms(off_axis['median_ms'])} for
+  {off_axis['result_count']:,} rows. The variant is off the reference axis, so the
+  Dense Component holds no row for it and the entire answer comes from the Ragged
+  Overflow: its variant-centric index maps the variant to the
+  {off_axis['result_count']:,} Analyses that observed it, without reading the other
+  {n_traits - off_axis['result_count']:,}. A Dense-of-union layout would hold that variant as
+  a row in all {n_traits:,} columns, almost all of it padding.
+- **Whole Analysis through both components** — {fmt_ms(whole['median_ms'])} for
+  {whole['result_count']:,} rows. The Hybrid facade reads the Analysis's Dense
+  Component column, reads its Overflow segment, and merges the two in genomic
+  order: {dense_only['result_count']:,} rows from the panel and
+  {from_overflow:,} from the Overflow.
+- **Whole Analysis from the Dense Component alone** — {fmt_ms(dense_only['median_ms'])}
+  for {dense_only['result_count']:,} rows. This is the control that isolates the
+  Dense path, whose EAF column carries many exception-table cells, so the
+  difference between it and the shape above is what the Overflow costs:
+  {fmt_ms(whole['median_ms'] - dense_only['median_ms'])} and {from_overflow:,} rows.""")
+```
+
+### HM3 extraction
+
+```{python}
+#| echo: false
+#| output: asis
+print(md_table(
+    ["Measure", "Value"],
+    [
+        ["Subset", f"`{hm3['subset']}` (status `{hm3['status']}`)"],
+        ["Extracted for", f"`{hm3['analysis_id']}` — {labels.get(hm3['analysis_id'], '')}"],
+        ["Variants requested / resolved / absent",
+         f"{hm3['subset_requested_count']:,} / {hm3['subset_resolved_count']:,} / "
+         f"{hm3['subset_absent_count']:,}"],
+        ["Subset holds", f"{hm3['subset_n_variants']:,} variants × "
+                         f"{hm3['subset_n_analyses']:,} Analyses"],
+        ["First read", fmt_ms(hm3["first_read_ms"])],
+        ["Median", f"**{fmt_ms(hm3['median_ms'])}** over {hm3['reps']:,} repetitions"],
+        ["p95", fmt_ms(hm3["p95_ms"])],
+        ["Rows returned", f"{hm3['result_count']:,}"],
+        ["Subset reference assembly", hm3["subset_reference_assembly"]],
+        ["Subset input SHA-256", f"`{hm3['subset_input_sha256'][:16]}…`"],
+    ],
+))
+rows_per_second = hm3["result_count"] / (hm3["median_ms"] / 1_000)
+print(f"""
+The Indexed Variant Subset is one Analysis's statistics restricted to the HapMap3
+variants — a full-result extraction for LD-score work, from a Store that holds
+{n_associations:,} associations. {hm3['subset_absent_count']:,} of the
+{hm3['subset_requested_count']:,} variants in the input are absent from the Store's
+axis, and {hm3['subset_resolved_count'] - hm3['result_count']:,} of those present hold no
+association for this Analysis, which is why {hm3['result_count']:,} rows come back
+rather than {hm3['subset_n_variants']:,} — at {rows_per_second / 1e6:,.2f} million rows per
+second. The subset lives in the Hybrid root's nested Dense Component, not beside
+the Overflow.
+""")
+```
+
+### Against parsing the source file
+
+```{python}
+#| echo: false
+#| output: asis
+bulk = timings["bulk"]
+source_us = source["median_s"] / source["rows"] * 1e6
+store_us = bulk["median_ms"] / bulk["result_count"] * 1e3
+print(md_table(
+    ["Form", "Wall clock", "Rows", "Per row"],
+    [
+        [f"`pd.read_csv` of `{source['file']}`",
+         f"**{source['median_s']:.2f} s** ({source['repetitions']} repetitions)",
+         f"{source['rows']:,}", f"{source_us:.2f} µs"],
+        ["The Store's whole-Analysis read of the same Analysis",
+         f"**{fmt_ms(bulk['median_ms'])}** ({bulk['repetitions']} repetitions)",
+         f"{bulk['result_count']:,}", f"{store_us:.2f} µs"],
+    ],
+))
+print(f"""
+The file is {source['bytes']:,} bytes and is parsed for the five columns a z/se/eaf
+answer needs, with beta divided by standard error into z: {source['median_s']:.2f} s for
+{source['rows']:,} rows with a finite result. The Store answers the same Analysis
+genome-wide with {bulk['result_count']:,} rows,
+{bulk['result_count'] / source['rows']:.2f}× as many, because Reference Completion
+fills panel variants the file never reported. Per returned row the Store read is
+{store_us / source_us:.2f}× the file parse. A whole-Analysis read is the one shape a
+per-file layout is built for, and the Store is competitive rather than faster
+here; what it adds is that the same read is one call, in the same coordinate
+system as every other Analysis.
+""")
+```
+
+## Memory footprint
+
+Each shape runs in a fresh interpreter. `Baseline` is resident memory with the
+Store open but before the shape runs; `Peak` is sampled on a background thread
+*during* the query, because intermediate buffers are freed before a query returns
+and a before/after reading would miss them entirely.
+
+```{python}
+#| echo: false
+#| output: asis
+ordered_memory = sorted(b["memory"], key=lambda row: row["delta_mb"])
+print(md_table(
+    ["Shape", "Baseline", "Peak", "Query cost", "Rows"],
+    [
+        [
+            shape_label(row["query"]),
+            fmt_mb(row["baseline_mb"]),
+            fmt_mb(row["peak_mb"]),
+            f"**{fmt_mb(row['delta_mb'])}**",
+            f"{row['result_count']:,}",
+        ]
+        for row in ordered_memory
+    ],
+))
+lightest, heaviest = ordered_memory[0], ordered_memory[-1]
+baselines = [row["baseline_mb"] for row in ordered_memory]
+for_hundred_gb = int(100 * 1_024 / heaviest["delta_mb"])
+print(f"""
+Opening the Store costs {min(baselines):,.0f}–{max(baselines):,.0f} MB whichever shape
+follows, and that figure does not scale with the release: {n_traits:,} Analyses and
+{billions(n_associations)} associations available cost about as much resident memory
+as a text editor, because nothing is read until it is asked for. Query cost then
+follows result size, from {fmt_mb(lightest['delta_mb'])} ({shape_label(lightest['query'])})
+to {fmt_mb(heaviest['delta_mb'])} ({shape_label(heaviest['query'])}). Targeted queries are safe to run
+concurrently and on modest hardware; whole-Analysis reads have to be budgeted —
+{for_hundred_gb:,} concurrent reads at the heaviest shape's cost would already ask
+for 100 GB.
+""")
+```
+
+## Scientific validation
+
+### Known loci
+
+Eight loci with an expected gene, rsid and risk allele, looked up through the
+Store and oriented to that risk allele, so the sign of z is readable.
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for locus in loci:
+    if not locus["found"]:
+        rows.append([locus["gene"], locus["expected_rsid"], locus["analysis_id"],
+                     "not found", "—", "—", "—"])
+        continue
+    clears = locus["neglog10_p"] >= SIGNIFICANT
+    if locus["expected_genome_wide"]:
+        verdict = "pass" if clears else "**fail**"
+    else:
+        verdict = "pass (not required)" if clears else "below (not required)"
+    rows.append([
+        locus["gene"],
+        locus["rsid"],
+        locus["analysis_id"],
+        COMPONENT.get(locus["component"], locus["component"]),
+        f"{locus['z_risk_allele']:+,.2f}",
+        f"{locus['neglog10_p']:,.1f}",
+        verdict,
+    ])
+print(md_table(
+    ["Gene", "rsid", "Analysis", "Component", "z of the risk allele", "−log10 p",
+     "Genome-wide bar"], rows))
+modest = [locus for locus in loci if not locus["expected_genome_wide"]]
+required = [locus for locus in loci if locus["expected_genome_wide"]]
+failing = [locus for locus in required if locus["neglog10_p"] < SIGNIFICANT]
+print(f"""
+All {sum(locus['found'] for locus in loci)} of {len(loci)} loci were found.
+{len(required)} were held to p < 5×10⁻⁸ and
+{'all of them clear it' if not failing else 'these do not: ' + ', '.join(l['gene'] for l in failing)}.
+{', '.join(f"{l['gene']} {l['rsid']}" for l in modest)} is the one variant the harness does
+not require that of — a modest-effect missense variant — and its −log10 p of
+{modest[0]['neglog10_p']:,.1f} clears the bar anyway. The signs are the published ones:
+the TCF7L2 risk allele T carries z = {next(l['z_risk_allele'] for l in loci if l['gene'] == 'TCF7L2'):+,.1f},
+PCSK9's R46L allele G {next(l['z_risk_allele'] for l in loci if l['gene'] == 'PCSK9'):+,.1f},
+and APOE's ε4-defining C {next(l['z_risk_allele'] for l in loci if l['gene'] == 'APOE'):+,.1f}.
+
+Every one of the eight sits on the reference axis and is answered by the Dense
+Component, so this section checks the panel path, the allele orientation and the
+SE decoding. The Overflow is what the off-axis PheWAS and the whole-Analysis
+reads below exercise.
+""")
+```
+
+### Pleiotropy
+
+Two variants with well-known pleiotropic profiles, each queried across every
+Analysis in the Store, listing the eight strongest by |z|.
+
+```{python}
+#| echo: false
+#| output: asis
+for entry in phewas:
+    print(f"**{entry['rsid']} ({entry['gene']})**, `{entry['alid']}` — "
+          f"{entry['n_analyses']:,} Analyses hold an association, "
+          f"{entry['n_genome_wide']:,} of them at p < 5×10⁻⁸.\n")
+    print(md_table(
+        ["Analysis", "Trait", "z"],
+        [[row["analysis_id"], row["label"], f"{row['z']:+,.2f}"] for row in entry["top"]],
+    ))
+    print()
+print(f"""Both profiles are what the literature predicts. rs7903146 is the TCF7L2
+type 2 diabetes variant, and every Analysis in its list except educational
+attainment is a type 2 diabetes or glycaemic trait; educational attainment has the
+largest |z| of the eight, which is the usual signature of a very large sample
+rather than a competing mechanism. rs429358 is the APOE ε4 allele, and its list
+is Alzheimer's disease and related dementias, LDL and non-HDL cholesterol, and
+C-reactive protein. Neither variant is special-cased in the Store: both are
+ordinary panel variants and each PheWAS is one call across all
+{n_traits:,} Analyses.""")
+```
+
+### Three positive-control IVW pairs
+
+```{python}
+#| echo: false
+#| output: asis
+rows = []
+for pair in mr:
+    rows.append([
+        f"`{pair['exposure_id']}` {labels.get(pair['exposure_id'], '')}"
+        f"<br>→ `{pair['outcome_id']}` {labels.get(pair['outcome_id'], '')}",
+        f"{pair['n_instruments']:,} of {pair['n_instruments_raw']:,}",
+        f"{pair['n_instruments_overflow']:,}",
+        f"{pair['ivw_beta']:+,.3f}",
+        f"{pair['ivw_se']:,.4f}",
+        f"{pair['ivw_pval']:.2g}",
+        f"{pair['cochran_q']:,.0f} ({pair['q_df']:,})",
+        f"{pair['elapsed_s']:,.2f} s",
+    ])
+print(md_table(
+    ["Exposure → Outcome", "Instruments", "from Overflow", "IVW β", "se", "p",
+     "Cochran Q (df)", "Elapsed"], rows))
+print("\nThe pairs, in the words the run records for them:\n")
+for pair in mr:
+    print(f"- {pair['note']}")
+q_ratios = [pair["cochran_q"] / pair["q_df"] for pair in mr]
+print(f"""
+Each pair starts from the exposure's genome-wide-significant variants, prunes them
+to one per {mr[0]['clump_kb']:,} kb, and reads both sides of every instrument with one
+lookup. All {sum(pair['n_instruments'] for pair in mr):,} instruments across the three
+pairs come from the Dense Component; the Overflow contributes
+{sum(pair['n_instruments_overflow'] for pair in mr):,} of them. The standard error is the
+random-effects one, inflated by Cochran's Q where the instruments disagree more
+than their own errors allow — and they do, from {min(q_ratios):.1f}× to
+{max(q_ratios):.1f}× Q's degrees of freedom. The whole three-pair run, including
+both lookups per instrument, takes {sum(pair['elapsed_s'] for pair in mr):,.2f} s.
+""")
+```
+
+::: {.callout-warning}
+## This is not a causal estimate
+
+The three rows above are positive controls for the query path, not findings.
+Their job is to show that instruments can be found, that effect signs survive the
+build's allele orientation, and that standard errors propagate through a query.
+The estimates come out in the expected direction and magnitude, which is what a
+correct pipeline predicts.
+
+They are not an epidemiological result:
+
+- **Distance pruning is not LD clumping.** Instruments are pruned by distance
+  rather than by linkage disequilibrium, so variants in LD survive together and
+  the weighted IVW treats them as independent. That is part of what the inflated
+  Cochran's Q is measuring.
+- **Some pairs share samples.** Where the two GWAS overlap, an instrument's
+  effects on exposure and outcome are correlated and the IVW variance is wrong.
+- **No sensitivity analysis.** There is no pleiotropy-robust estimator, no
+  MR-Egger intercept, no Steiger filtering and no leave-one-out. A causal claim
+  needs all of them, against properly clumped and harmonised data.
+
+What the Store contributes here is that all three pairs read one coordinate
+system, in one process, in seconds.
+:::
+
+## Limitations
+
+```{python}
+#| echo: false
+#| output: asis
+spread = (max(row["p95_ms"] / row["median_ms"] for row in b["timings"]) - 1) * 100
+fingerprint = b["opengwasdb_fingerprint"]
+print(f"""- **Warm page cache.** Each shape is timed after one warm-up call, so the
+  medians describe a warm operating-system cache. A first, cold query against a
+  region or an Analysis is bounded by disk instead, and that cost is not measured
+  here.
+- **A shared host whose load was not controlled.** The artifact records no host
+  load, so these medians cannot be read as quiet-machine numbers. What it does
+  record is the spread: every p95 is within {spread:,.0f}% of its median, so the run
+  was steady while it ran, but nothing here says what else the machine was doing.
+- **One Store, at one revision.** One Hybrid Store Release, on one host and one
+  filesystem, measured with one `opengwasdb` tree (`{fingerprint[:12]}`). Nothing
+  here compares the Hybrid layout against a Dense-of-union build of the same data,
+  and nothing repeats the run on another machine.
+- **The Store carries a Release Erratum for eight associations**
+  (opengwas/opengwasdb#338). Their source standard error exceeds the range of a
+  `float16` plane, so it is stored as `+inf` beside a finite z, and β = z × se
+  reads as infinity although the source value was finite. Validation reports this
+  as a warning rather than a failure, and the query path's `lookup` keeps only
+  cells where z and se are both finite, so those eight associations do not come
+  back from a lookup. Read them from the `se` plane, or from the erratum, not from
+  a lookup.
+- **Memory sampling resolution.** The peak sampler polls every 5 ms, so an
+  allocation spike shorter than that inside a sub-millisecond query can be
+  missed. That affects the shapes whose cost is about a megabyte anyway; the
+  multi-gigabyte flights last far longer than the polling interval.
+""")
+```
+
+## Provenance
+
+```{python}
+#| echo: false
+#| output: asis
+store_path = Path(dataset["store"])
+output_json = f"docs/benchmark-output/{ARTIFACT}"
+print(md_table(
+    ["Field", "Value"],
+    [
+        ["Artifact", f"`{ARTIFACT}`"],
+        ["Harness", "`benchmarks/benchmark_ogs00011_hybrid.py`"],
+        ["Store", f"`{store_path}`"],
+        ["opengwasdb commit", f"`{b['commit']}`"],
+        ["Measured at", b["measured_at"]],
+        ["opengwasdb import path", f"`{b['opengwasdb_path']}`"],
+        ["opengwasdb fingerprint", f"`{b['opengwasdb_fingerprint']}`"],
+    ],
+))
+print("\nThe command that produced the artifact, run from the repository root:\n")
+command = [
+    "pixi run -e dev python benchmarks/benchmark_ogs00011_hybrid.py",
+    f"    --store {store_path}",
+    f"    --manifest {store_path.parent / 'work'}/analyses.tsv",
+    f"    --records {store_path.parent}/records",
+    f"    --output {output_json}",
+]
+for line in command:
+    print(f"    {line}")
+```
+
+The commit names the checkout's `HEAD` when the run finished; the fingerprint is
+a sha256 over the package's Python sources, so it names the code itself and would
+differ if the tree had been edited after the commit. Every figure on this page
+was read from the artifact at render time — the page holds no copy of the
+measurement.

@@ -812,13 +812,37 @@ while those exist.
 
 Benchmarks the GWAS-Catalog-EUR Hybrid Store Release **OGS-00011**: the seven
 shared query shapes plus an off-axis PheWAS and the largest-Overflow bulk read,
-five known-locus checks, two pleiotropic PheWAS and three IVW Mendelian
+eight known-locus checks, two pleiotropic PheWAS and three IVW Mendelian
 randomisation pairs. It runs the same fresh-interpreter RSS probe as
 `benchmark_ukbb_dense.py` and `benchmark_finngen_dense.py`, and shares its
 Analysis-summary, storage, selection, known-locus and pleiotropic-PheWAS report
 helpers with that harness through `benchmarks/_hybrid_report.py`.
 `benchmarks/measure_hybrid_component_split.py` measures how each Analysis
 splits between the two components.
+
+**Artifacts from the OGS-00011 full-scale run:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_ogs00011_hybrid_benchmark.json` | The measurement: storage by component against the source GWAS-SSF, the build's step records, ten timed query shapes with p95, repetitions and row counts, per-shape peak RSS from the fresh-interpreter probe, the HM3 extract, the same Analysis's source-file parse for comparison, eight known loci with the component that answered each, two pleiotropic PheWAS and three IVW pairs, plus the commit, time, and `opengwasdb` path and fingerprint. |
+| `opengwasdb_ogs00011_hybrid_benchmark.qmd` | The report's source. It reads the JSON beside it and computes every figure on the page from it. |
+| `opengwasdb_ogs00011_hybrid_benchmark.html` | The rendered report, self-contained (`embed-resources: true`) with the code hidden. |
+
+The command that produced the JSON:
+
+```bash
+pixi run -e dev python benchmarks/benchmark_ogs00011_hybrid.py \
+    --store /data/opengwasdb/stores/OGS-00011/store.opengwasdb \
+    --manifest /data/opengwasdb/stores/OGS-00011/work/analyses.tsv \
+    --records /data/opengwasdb/stores/OGS-00011/records \
+    --output docs/benchmark-output/opengwasdb_ogs00011_hybrid_benchmark.json
+```
+
+and the report, rendered from `docs/benchmark-output`:
+
+```bash
+cd docs/benchmark-output && pixi run -e report quarto render opengwasdb_ogs00011_hybrid_benchmark.qmd
+```
 
 `benchmarks/ogs00011_ab.py` is the committed before/after entry point: for each
 shape it runs the before tree and then the after tree back to back, each in a
