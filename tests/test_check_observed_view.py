@@ -327,24 +327,48 @@ def test_a_different_analyses_order_fails(tmp_path, pair):
     assert verdict["failures"] == ["analyses_mismatch"]
 
 
-# --- an infinite value is a value (issue #337) -----------------------------
+# --- a source SE above float16's range may become missing (issues #337, #338) ----------
 
-# A source SE above float16's maximum (65,504) passes the reader's finite, non-negative
-# check and is then narrowed to `+inf` beside a finite Z (issue #338). Spec §15 makes such
-# a cell present, so the check must compare it, not call it missing (issue #337).
+# A release written before #338 can hold `+inf` beside a finite Z, from an SE above
+# float16's maximum (65,504). Completion now stores that cell as missing, in z and se
+# together, and counts it; the check must accept exactly that transition and no other
+# change to an observed cell.
 INFINITE_SE_ALID = "1:1000000:A:G"
 
 
-def _with_an_infinite_se(root: Path) -> tuple[Path, Path]:
-    """The fixture pair with one source SE above float16's range, so both Stores hold `+inf`.
+def drop_n_missing_se_column(store: Path) -> None:
+    """Make `store` look like a release written before #338: no `n_missing_se_out_of_range`."""
+    from opengwasdb.model.analyses import AnalysesTable, read_analyses, write_analyses
 
-    Completion copies an observed cell unchanged, so the infinite cell lands on both sides;
-    what a Dense plane narrows it to is the `+inf` a query reads back.
-    """
-    fields = [row.split("\t") for row in ROWS]
-    assert (fields[2][0], fields[2][4], fields[2][5]) == ("a1", "1", "1000000")
-    fields[2][9] = "100000"
-    return _build_pair(root, ["\t".join(row) for row in fields], tdc._make_ld_panel(root))
+    path = store / "analyses.tsv"
+    table = read_analyses(path)
+    kept = tuple(c for c in table.fieldnames if c != "n_missing_se_out_of_range")
+    rows = tuple({c: row[c] for c in kept} for row in table.rows)
+    write_analyses(path, AnalysesTable(fieldnames=kept, rows=rows))
+
+
+def plant_infinite_se(store: Path, alid: str, column: int) -> None:
+    """Write `+inf` into one stored SE, as a pre-#338 float16 plane held it."""
+    root = open_store(store).arrays(mode="r+")
+    assert root["se"].dtype == np.dtype("float16"), "the fixture must narrow SE to float16"
+    root["se"][_row_of(store, alid), column] = np.float16(np.inf)
+    drop_n_missing_se_column(store)
+
+
+def _with_an_infinite_se(root: Path) -> tuple[Path, Path]:
+    """The fixture pair whose source holds one `+inf` SE, completed by the current build."""
+    source = root / "associations.tsv"
+    source.write_text(HEADER + "\n" + "\n".join(ROWS) + "\n", encoding="utf-8")
+    observed, completed = root / "obs.opengwasdb", root / "comp.opengwasdb"
+    build_dense_observed_from_sources(
+        [source], observed, store_id="test", release_id="obs-v1", reference_assembly="GRCh38"
+    )
+    plant_infinite_se(observed, INFINITE_SE_ALID, 0)
+    complete_dense_store(
+        observed, completed, tdc._make_ld_panel(root), ancestry="EUR", min_cor=0.0,
+        release_id="comp-v1",
+    )
+    return observed, completed
 
 
 @pytest.fixture(scope="module")
@@ -362,23 +386,30 @@ def infinite_se_pair(tmp_path: Path, _infinite_se_pair_seed: tuple[Path, Path]):
 
 
 def _stored_cell(store: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Where the fixture's infinite cell sits: `a1` (analysis_index 0) at 1:1000000.
-
-    Resolved from the variant axis rather than with `_cell`, because `lookup` returns
-    finite associations only, so the query path is not how this cell is read back.
-    """
+    """Where the fixture's cell sits: `a1` (analysis_index 0) at 1:1000000, read below the query."""
     rows, cols = np.array([_row_of(store, INFINITE_SE_ALID)]), np.array([0])
     z = float(_plane(store, DenseZPlane).points(rows, cols)[0])
     se = float(_plane(store, DenseSePlane).points(rows, cols)[0])
     return np.array([z]), np.array([se])
 
 
-def test_an_infinite_se_copied_identically_passes_and_is_counted(tmp_path, infinite_se_pair):
+def _recorded(store: Path) -> dict[str, str]:
+    from opengwasdb.model.analyses import read_analysis_records
+
+    return {
+        a.analysis_id: a.n_missing_se_out_of_range
+        for a in read_analysis_records(store / "analyses.tsv")
+    }
+
+
+def test_a_source_infinite_se_stored_as_missing_passes_and_is_counted(tmp_path, infinite_se_pair):
     observed, completed = infinite_se_pair
     z, se = _stored_cell(observed)
     assert np.isfinite(z[0]) and np.isinf(se[0]), "fixture must hold a finite Z beside +inf SE"
-    assert np.array_equal(_stored_cell(completed)[0], z)
-    assert np.array_equal(_stored_cell(completed)[1], se)
+    # The completed release holds that cell as missing, in z and se together, and counts it.
+    z_after, se_after = _stored_cell(completed)
+    assert np.isnan(z_after[0]) and np.isnan(se_after[0])
+    assert _recorded(completed) == {"a1": "1", "a2": "0"}
     out = tmp_path / "verdict.json"
 
     result = _run(observed, completed, out)
@@ -386,13 +417,39 @@ def test_an_infinite_se_copied_identically_passes_and_is_counted(tmp_path, infin
     assert result.exit_code == 0, result.output
     verdict = _verdict(result, out)
     assert verdict["passed"] is True and verdict["failures"] == []
-    assert verdict["totals"]["parent_observed"] == N_OBSERVED
-    assert verdict["totals"]["infinite_cells"] == 2, "one cell on each side"
+    assert verdict["totals"]["parent_observed"] == N_OBSERVED - 1, "the cell is set aside"
+    assert verdict["totals"]["source_se_out_of_range"] == 1
+    assert verdict["totals"]["infinite_cells"] == 1, "the source's cell alone"
 
 
-def test_an_infinite_se_the_target_holds_differently_fails(tmp_path, infinite_se_pair):
+def test_a_source_infinite_se_the_completed_counts_do_not_account_for_fails(
+    tmp_path, infinite_se_pair
+):
     observed, completed = infinite_se_pair
-    rows, cols = np.array([_row_of(completed, INFINITE_SE_ALID)]), np.array([0])
+    from opengwasdb.model.analyses import AnalysesTable, read_analyses, write_analyses
+
+    table = read_analyses(completed / "analyses.tsv")
+    rows = tuple({**row, "n_missing_se_out_of_range": "0"} for row in table.rows)
+    write_analyses(completed / "analyses.tsv", AnalysesTable(table.fieldnames, rows))
+    out = tmp_path / "verdict.json"
+
+    result = _run(observed, completed, out)
+
+    assert result.exit_code == 1, result.output
+    verdict = _verdict(result, out)
+    assert verdict["totals"]["se_out_of_range_unaccounted"] == 1
+    assert "se_out_of_range_unaccounted" in verdict["failures"]
+
+
+def test_one_extra_changed_observed_cell_still_fails_beside_a_masked_one(
+    tmp_path, infinite_se_pair
+):
+    """Only the over-range cell may change: another observed cell that does fails as before."""
+    observed, completed = infinite_se_pair
+    rows, cols = np.array([_row_of(completed, INFINITE_SE_ALID)]), np.array([1])
+    assert np.isfinite(float(_plane(completed, DenseSePlane).points(rows, cols)[0])), (
+        "fixture must observe a2 at 1:1000000"
+    )
     _plane(completed, DenseSePlane).patch(rows, cols, np.array([0.15], dtype=np.float32))
     out = tmp_path / "verdict.json"
 
@@ -401,8 +458,7 @@ def test_an_infinite_se_the_target_holds_differently_fails(tmp_path, infinite_se
     assert result.exit_code == 1, result.output
     verdict = _verdict(result, out)
     assert verdict["totals"]["se_mismatch"] == 1
-    assert "se_mismatch" in verdict["failures"]
-    assert verdict["totals"]["infinite_cells"] == 1, "the source's cell alone"
+    assert verdict["totals"]["se_out_of_range_unaccounted"] == 0
 
 
 # --- seam 3: refusals ------------------------------------------------------

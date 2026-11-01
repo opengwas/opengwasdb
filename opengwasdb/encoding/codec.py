@@ -53,6 +53,7 @@ from opengwasdb.encoding.plan import (
     EafBaselineError,
     StoreEncoding,
 )
+from opengwasdb.encoding.se_range import require_se_in_range
 from opengwasdb.store.arrays import (
     EXCEPTION_TABLE_CHUNK,
     ArrayRole,
@@ -928,6 +929,10 @@ class StoreCodec:
         exceptions: SeExceptionBuilder | None = None,
     ) -> np.ndarray:
         v = np.asarray(values, dtype=np.float64)
+        # Before either branch: a float16 plane would store +inf and a residual
+        # plane an exact exception, so whether the association survived would
+        # depend on the encoding the build happened to pick (issue #338).
+        require_se_in_range(v, writer="StoreCodec.encode_se")
         if not self.encoding.se.is_residual:
             return v.astype(np.float16)
         prediction = self._se_prediction(eaf, analysis_index, coefficients)

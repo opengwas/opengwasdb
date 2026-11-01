@@ -8,7 +8,8 @@ package release may move neither, one, or both numbers.
 | package | writes `format_version` | reads |
 |---|---|---|
 | 0.2.0 | 0.1 | 0.1 |
-| 0.3.0 and later (every merge to `main` is a version) | 0.2.0 from every builder and the converter | 0.1.0, 0.2.0 |
+| 0.3.0 – the release before #338 | 0.2.0 from every builder and the converter | 0.1.0, 0.2.0 |
+| the release that merges #338 and later | 0.2.1 from every builder and the converter | 0.1.0, 0.2.0, 0.2.1 |
 
 The two `format_version` values in that table are different formats despite
 reading alike: `0.1` is the pre-release format 0.2.0 wrote, and `0.1.0` is the
@@ -49,6 +50,18 @@ declares no `encoding.n` and is byte-identical to one written before; one with
 them carries `ragged/n` and `ragged/by_variant/n`. A package built before #302
 reads the latter as it always read a Ragged release, without `n`, but its
 validator refuses `ragged/by_variant/n` as an unregistered array (ADR 0067).
+
+**#338 moves `format_version` from 0.2.0 to 0.2.1** (ADR 0068; spec §21.1 lists
+a new `analyses.tsv` column as a patch). `analyses.tsv` gains
+`n_missing_se_out_of_range`, **required** from 0.2.1 and optional below it; and an
+association whose SE exceeds float16's maximum (65,504) is stored as missing, in
+`z` and `se` together, where it used to be `+inf` beside a finite `z`. Both are
+the same series: a `0.2.0` release still reads, without a warning, and Reference
+Completion writes into it in place, keeping `0.2.0`. A package built *before*
+#338 reads a `0.2.1` release with a warning and ignores the column. The converter
+writes `0.2.1`, writes the count as `0` after scanning the `se` planes, and
+**refuses** a `0.1.0` source that holds an SE above the range, which must be
+rebuilt.
 
 ## Keeping this page true
 

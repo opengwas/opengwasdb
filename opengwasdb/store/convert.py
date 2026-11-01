@@ -60,9 +60,16 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.encoding.codec import SE_EXCEPTION_VALUE
+from opengwasdb.encoding.se_range import SE_MAX_STORED, se_out_of_range
 from opengwasdb.index.sqlite import connect, get_metadata, set_metadata
 from opengwasdb.layouts.dense.overview import write_overview_html
-from opengwasdb.model.analyses import read_analyses
+from opengwasdb.model.analyses import (
+    N_MISSING_SE_OUT_OF_RANGE_COLUMN,
+    AnalysesTable,
+    read_analyses,
+    write_analyses,
+)
 from opengwasdb.model.manifest import normalise_coverage
 from opengwasdb.store.arrays import (
     COMPRESSOR_RECORD,
@@ -85,6 +92,7 @@ from opengwasdb.store.arrays import (
 from opengwasdb.store.open import (
     CURRENT_FORMAT_VERSION,
     OpenGWASDBStore,
+    is_writable_series,
 )
 from opengwasdb.validation import validate_store
 
@@ -213,10 +221,10 @@ def _refuse_unconvertible(source: Path) -> list[_Component]:
         raise ConversionError(f"{source}: no manifest.json; this is not a Store Release")
     for path in manifests:
         version = str(json.loads(path.read_text(encoding="utf-8")).get("format_version"))
-        if version == CURRENT_FORMAT_VERSION:
+        if is_writable_series(version):
             raise ConversionError(
-                f"{path}: format_version is already {CURRENT_FORMAT_VERSION!r}; this "
-                "release is already converted (issue #245)"
+                f"{path}: format_version is {version!r}, in the series this converter writes "
+                f"({CURRENT_FORMAT_VERSION!r}); this release is already converted (issue #245)"
             )
         if version != SOURCE_FORMAT_VERSION:
             raise ConversionError(
@@ -241,6 +249,74 @@ def _refuse_unconvertible(source: Path) -> list[_Component]:
             "converting half of one would be refused one directory down (spec §16)."
         )
     return _components(layout)
+
+
+#: Elements read at a time when scanning a plane for an out-of-range SE.
+_SCAN_SLAB_ELEMENTS = 1 << 26
+
+
+def _refuse_se_out_of_range(source: Path, components: list[_Component]) -> None:
+    """Refuse a source whose SE planes hold a cell above float16's range (issue #338).
+
+    A 0.1.0 release written before #338 may hold `+inf` in a float16 `se` plane,
+    or a finite float32 exception beyond the range in a residual plane's table.
+    The release format now stores such an association as *missing*, in z and se
+    together, and this converter moves raw codes bit-exact: it cannot drop an
+    association without rewriting its z, its exception tables, its top-hit tiers
+    and, for a Ragged release, its offsets. So it refuses, naming the count,
+    rather than write a 0.2.1 release holding a value that format forbids -- or
+    silently differ from a rebuild (#249). Rebuild from the sources instead.
+    """
+    found: dict[str, int] = {}
+    for component in components:
+        root = open_group(source / component.zarr_rel, "r")
+        for path in _array_paths(root):
+            if path.rsplit("/", 1)[-1] not in ("se", SE_EXCEPTION_VALUE):
+                continue
+            array = root[path]
+            if np.dtype(array.dtype).kind != "f":
+                continue
+            count = _count_out_of_range(array)
+            if count:
+                found[f"{component.zarr_rel}/{path}"] = count
+    if found:
+        listing = ", ".join(f"{path}: {count}" for path, count in sorted(found.items()))
+        raise ConversionError(
+            f"{source}: {sum(found.values())} standard error(s) above float16's maximum "
+            f"{SE_MAX_STORED:g} ({listing}). Format {CURRENT_FORMAT_VERSION} stores such an "
+            "association as missing (issue #338, ADR 0068) and this converter copies stored "
+            "codes without re-encoding them, so it cannot convert this release faithfully. "
+            "Rebuild it from its sources; nothing was written."
+        )
+
+
+def _count_out_of_range(array: Any) -> int:
+    """The cells of one float array above float16's range, scanned in slabs."""
+    total = 0
+    n_rows = int(array.shape[0]) if array.ndim else 0
+    if not n_rows:
+        return 0
+    row_cells = max(1, int(np.prod(array.shape[1:], dtype=np.int64)))
+    step = max(1, _SCAN_SLAB_ELEMENTS // row_cells)
+    for lo in range(0, n_rows, step):
+        total += int(np.count_nonzero(se_out_of_range(np.asarray(array[lo : lo + step]))))
+    return total
+
+
+def _record_zero_missing_se(staged_path: Path, components: list[_Component]) -> None:
+    """Write `n_missing_se_out_of_range` = 0 into every component's `analyses.tsv`.
+
+    The scan above found no such cell, so zero is the measured count -- not a
+    default for a column the source never had (spec §7a). Done on the table, so
+    every other column, registry-only ones included, passes through unchanged.
+    """
+    for component in components:
+        path = (staged_path / component.zarr_rel).parent / "analyses.tsv"
+        table = read_analyses(path)
+        column = N_MISSING_SE_OUT_OF_RANGE_COLUMN
+        fieldnames = table.fieldnames if column in table.fieldnames else (*table.fieldnames, column)
+        rows = tuple({**row, column: "0"} for row in table.rows)
+        write_analyses(path, AnalysesTable(fieldnames=fieldnames, rows=rows))
 
 
 def _array_paths(root: Any, prefix: str = "") -> Iterator[str]:
@@ -1102,9 +1178,13 @@ def _stage_and_convert(
     long-running half, are one function each.  Staging publishes by rename on
     clean exit and discards everything on any exception.
     """
+    started = time.perf_counter()
+    _refuse_se_out_of_range(source, components)
+    _log_phase("scanned the se planes for out-of-range values", started)
     with OpenGWASDBStore.staging(destination) as staged:
         started = time.perf_counter()
         _reflink_copy(source, staged.path, [component.zarr_rel for component in components])
+        _record_zero_missing_se(staged.path, components)
         _log_phase("copied the release envelope", started)
         started = time.perf_counter()
         plans_by_component, source_roots = _create_components(

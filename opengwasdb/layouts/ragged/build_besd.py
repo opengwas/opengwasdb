@@ -33,7 +33,7 @@ from opengwasdb.build.liftover import (
     require_lifted_alleles_match_reference,
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
-from opengwasdb.layouts.dense.build import add_hit_counts
+from opengwasdb.layouts.dense.build import add_build_counts
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.besd_eaf import (
@@ -214,7 +214,7 @@ def _build_besd_release(
     csr, encoding, scopes = _ingest_besd(prefix, axis, staged.path, sample_sizes)
     analyses, eaf_report = _stamp_probe_scopes(analyses, scopes, axis, eaf_report)
     # Phase 5 — indexes and manifest output.
-    _write_besd_outputs(staged, analyses, encoding)
+    _write_besd_outputs(staged, analyses, encoding, csr.n_missing_se_out_of_range)
     _write_manifest(
         staged,
         request.store_id,
@@ -412,13 +412,18 @@ def _verify_eaf(axis: _EsiAxis, request: _BesdBuildRequest) -> EafOrientationRep
 
 
 def _write_besd_outputs(
-    staged: StagedRelease, analyses: list[Analysis], encoding: StoreEncoding
+    staged: StagedRelease,
+    analyses: list[Analysis],
+    encoding: StoreEncoding,
+    n_missing_se: list[int],
 ) -> None:
     """The top-hit indexes and `analyses.tsv` a BESD build finishes with."""
     print("Building top-hit indexes ...")
     build_ragged_top_hit_indexes(staged.path, encoding=encoding)
     print("Writing analyses.tsv ...")
-    write_analysis_records(staged.path / "analyses.tsv", add_hit_counts(staged.path, analyses))
+    write_analysis_records(
+        staged.path / "analyses.tsv", add_build_counts(staged.path, analyses, n_missing_se)
+    )
 
 
 def _read_sources(prefix: Path) -> tuple[list[SnpRecord], list[ProbeRecord]]:

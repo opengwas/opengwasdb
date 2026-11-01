@@ -55,6 +55,7 @@ from opengwasdb.encoding import (
     combine_eaf_measurements,
     optimise_dense_se_joint,
 )
+from opengwasdb.encoding.se_range import mask_se_out_of_range
 from opengwasdb.encoding.timing import format_duration
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import (
@@ -82,6 +83,7 @@ from opengwasdb.layouts.dense.build_vcf import (
     _write_dense_bands,
     _write_index,
     column_map_provenance,
+    read_spill_n_missing_se,
     survey_eaf_spills,
 )
 from opengwasdb.layouts.dense.constants import (
@@ -166,7 +168,7 @@ from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_p
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
-from opengwasdb.model.analyses import Analysis
+from opengwasdb.model.analyses import Analysis, with_n_missing_se
 from opengwasdb.model.enums import (
     AssociationCoverage,
     CompletionState,
@@ -677,8 +679,21 @@ def _spill_hybrid_column(
     encoding could not represent."""
     d_rows, d_z, d_se, d_eaf = dense
     o_idx, o_z, o_se, o_eaf = overflow
+    # The Dense Component's rows are masked here, in z and se together, and the
+    # count travels in the spill. The Overflow's are not retained by
+    # `RaggedCSRWriter.add_analysis`, which counts them (issue #338, ADR 0068).
+    d_z, d_se, n_missing_se = mask_se_out_of_range(d_z, d_se)
     for suffix, arrs in (
-        ("", {"rows": d_rows, "z": d_z, "se": d_se, "eaf": d_eaf}),
+        (
+            "",
+            {
+                "rows": d_rows,
+                "z": d_z,
+                "se": d_se,
+                "eaf": d_eaf,
+                "n_missing_se": np.int64(n_missing_se),
+            },
+        ),
         (".ovf", {"variant_index": o_idx, "z": o_z, "se": o_se, "eaf": o_eaf}),
     ):
         final = spill_dir / f"{col_idx}{suffix}.npz"
@@ -984,6 +999,9 @@ class _DenseWritten:
     all_z: np.ndarray
     all_se: np.ndarray
     column_has_eaf: np.ndarray
+    #: Per-Analysis Dense Component associations masked for an SE above
+    #: float16's range (issue #338); the Overflow counts its own.
+    n_missing_se: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -2560,6 +2578,8 @@ def _write_dense_component_bands(
 ) -> _DenseWritten:
     """Phase - the Dense band write, reusing the dense builder's band-streamer
     and top-hit harvest."""
+    # Read before the band write, which unlinks each column's spill.
+    n_missing_se = read_spill_n_missing_se(prepared.spill_dir, prepared.n_analyses)
     all_rows, all_cols, all_z, all_se, column_has_eaf = _write_dense_bands(
         prepared.dense_staged,
         prepared.spill_dir,
@@ -2577,6 +2597,7 @@ def _write_dense_component_bands(
         all_z=all_z,
         all_se=all_se,
         column_has_eaf=column_has_eaf,
+        n_missing_se=n_missing_se,
     )
 
 
@@ -2807,6 +2828,20 @@ def _maf_provenance(
     }
 
 
+def _root_analyses(prepared: _PreparedBuild, components: _ComponentResult) -> list[Analysis]:
+    """The root `analyses.tsv` rows: both components' counts summed onto each Analysis.
+
+    Top-Hit Counts add the Overflow's onto the Dense Component's (ADR 0032), and so does
+    `n_missing_se_out_of_range` (issue #338); the Dense Component's own table, written
+    earlier, counts only its cells (issue #107).
+    """
+    both_components = with_n_missing_se(
+        components.analyses, components.csr.n_missing_se_out_of_range, add=True
+    )
+    dense_counted = add_hit_counts(prepared.dense_dir, both_components)
+    return add_hit_counts(prepared.staged.path, dense_counted)
+
+
 def _write_shared_metadata(
     prepared: _PreparedBuild,
     components: _ComponentResult,
@@ -2840,8 +2875,7 @@ def _write_shared_metadata(
         column_map=column_map_provenance(prepared.manifest_rows),
         association_coverage=options.association_coverage,
     )
-    dense_counted = add_hit_counts(prepared.dense_dir, components.analyses)
-    shared_analyses = add_hit_counts(prepared.staged.path, dense_counted)
+    shared_analyses = _root_analyses(prepared, components)
     _write_index(
         prepared.staged,
         prepared.partition.shared_sorted,
@@ -3173,6 +3207,7 @@ def _dense_bands_phase(
             all_z=dense.all_z,
             all_se=dense.all_se,
             column_has_eaf=dense.column_has_eaf,
+            n_missing_se=dense.n_missing_se,
         )
         record_plates(
             state.path, (f"{col}.ovf.npz" for col in range(prepared.n_analyses))
@@ -3190,6 +3225,7 @@ def _recorded_hits(state: CheckpointState) -> _DenseWritten:
         all_z=arrays["all_z"],
         all_se=arrays["all_se"],
         column_has_eaf=arrays["column_has_eaf"],
+        n_missing_se=arrays["n_missing_se"],
     )
 
 
@@ -3213,7 +3249,10 @@ def _tail_phase(
     checkpointed run precisely so the CSR can be re-assembled here.
     """
     overflow = _assemble_overflow(prepared, options, consume_spills=state is None)
-    analyses = _stamp_analyses(prepared, dense, overflow, evidence)
+    # The Dense Component's own count; the root adds the Overflow's.
+    analyses = with_n_missing_se(
+        _stamp_analyses(prepared, dense, overflow, evidence), dense.n_missing_se
+    )
     _write_overflow_eaf_plane(prepared, plan, overflow)
     encoding, se_coefficients = _fit_joint_se(prepared, plan, overflow, options)
     eaf_provenance = _finish_dense_component(

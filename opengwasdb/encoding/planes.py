@@ -39,6 +39,7 @@ from opengwasdb.encoding.codec import (
     positions_rows_cols,
 )
 from opengwasdb.encoding.plan import EafBaselineError, StoreEncoding
+from opengwasdb.encoding.se_range import require_se_in_range
 from opengwasdb.store.arrays import (
     ArrayRole,
     component_variant_chunk,
@@ -343,6 +344,7 @@ class DenseSePlane:
     def patch(self, rows: np.ndarray, cols: np.ndarray, values: np.ndarray) -> None:
         """Patch physical SE cells and keep their exact-exception table aligned."""
         rows, cols = np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
+        require_se_in_range(values, writer="DenseSePlane.patch")
         if not self._codec.encoding.se.is_residual:
             write_shard_cells(self._array, rows, cols, np.asarray(values, dtype=np.float16))
             return
@@ -1069,6 +1071,7 @@ def _write_se_plane(
     written by one route and its exception table by another.
     """
     data = np.asarray(values, dtype=np.float32)
+    require_se_in_range(data, writer="_write_se_plane")
     if not codec.encoding.se.is_residual:
         _write_se_arrays(
             group,

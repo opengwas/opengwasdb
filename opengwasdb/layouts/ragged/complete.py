@@ -73,6 +73,7 @@ from opengwasdb.encoding import (
     write_eaf_reference,
     write_se_csr,
 )
+from opengwasdb.encoding.se_range import mask_se_out_of_range, se_out_of_range
 from opengwasdb.layouts.dense.build import add_hit_counts
 from opengwasdb.layouts.ragged.by_variant import build_variant_index, recorded_provenance
 from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
@@ -82,6 +83,7 @@ from opengwasdb.model.analyses import (
     ancestry_impute_mask,
     read_analysis_records,
     reset_top_hit_counts,
+    with_n_missing_se,
     write_analysis_records,
 )
 from opengwasdb.model.manifest import StoreManifest
@@ -152,6 +154,9 @@ class _ObservedAlidMaps:
     z_by_alid: dict[str, float]
     se_by_alid: dict[str, float]
     eaf_by_alid: dict[str, float]
+    #: How many of the Analysis's observed rows carry an SE above float16's
+    #: range and were masked to missing rows (issue #338).
+    n_masked_se: int = 0
 
 
 def _observed_alid_maps(obs: Any, src_alids: list[str]) -> _ObservedAlidMaps:
@@ -163,11 +168,17 @@ def _observed_alid_maps(obs: Any, src_alids: list[str]) -> _ObservedAlidMaps:
     obs_alid_to_z: dict[str, float] = {}
     obs_alid_to_se: dict[str, float] = {}
     obs_alid_to_eaf: dict[str, float] = {}
+    # An observed row with an SE above float16's range becomes a missing row:
+    # z and se NaN, and no frequency (the shape of every explicit missing row
+    # here). The block reader and the assembly both fold through this, so the
+    # imputation and the release agree on which rows are missing (issue #338).
+    z_masked, se_masked, n_masked = mask_se_out_of_range(obs.z, obs.se)
+    eaf_masked = np.where(se_out_of_range(obs.se), np.nan, obs.eaf)
     for vi_old, z_val, se_val, eaf_val in zip(
         obs.variant_index.tolist(),
-        obs.z.tolist(),
-        obs.se.tolist(),
-        obs.eaf.tolist(),
+        z_masked.tolist(),
+        se_masked.tolist(),
+        eaf_masked.tolist(),
         strict=True,
     ):
         alid = src_alids[vi_old]
@@ -178,6 +189,7 @@ def _observed_alid_maps(obs: Any, src_alids: list[str]) -> _ObservedAlidMaps:
         z_by_alid=obs_alid_to_z,
         se_by_alid=obs_alid_to_se,
         eaf_by_alid=obs_alid_to_eaf,
+        n_masked_se=n_masked,
     )
 
 
@@ -435,6 +447,9 @@ class _AnalysisCompleted:
     imp: np.ndarray
     n_imputed: int
     n_missing: int
+    #: Rows this completion stored as missing for an SE above float16's range:
+    #: observed rows it masked plus imputed ones it left missing (issue #338).
+    n_missing_se: int = 0
 
 
 @dataclass
@@ -450,6 +465,7 @@ class _CompletedCsr:
     imp: list[np.ndarray]
     total_imputed: int
     total_missing: int
+    n_missing_se: list[int]
 
 
 @dataclass
@@ -782,10 +798,15 @@ def _run_pending_blocks(
 
 def _merge_checkpoint_rows(
     blocks_dir: Path, dst_db: sqlite3.Connection
-) -> tuple[dict[int, dict[str, tuple[float, float]]], int]:
+) -> tuple[dict[int, dict[str, tuple[float, float]]], int, dict[int, int]]:
     """Phase 3 merge: read every block checkpoint -- written this run or
     resumed from disk -- into `completion_quality` rows (batched) and the
-    per-Analysis fill maps the CSR assembly layers onto the observed rows."""
+    per-Analysis fill maps the CSR assembly layers onto the observed rows.
+
+    A fill whose SE exceeds float16's range is left missing (issue #338): it is
+    dropped here, where the block's fills and its quality rows are read
+    together, so the CSR, `completion_quality` and the returned per-Analysis
+    count of such fills cannot disagree."""
     print("Merging block results from checkpoints...")
     fills_by_analysis: dict[int, dict[str, tuple[float, float]]] = {}
     quality_batch: list[tuple[int, str, float | None, int, int]] = []
@@ -805,17 +826,32 @@ def _merge_checkpoint_rows(
             quality_count += len(quality_batch)
             quality_batch.clear()
 
+    left_missing: dict[int, int] = {}
     for ckpt in sorted(blocks_dir.glob("*.npz")):
         block_result = read_block_checkpoint(ckpt)
+        dropped: dict[int, int] = {}
+        for alid, ai, z, se in block_result.fills:
+            if bool(se_out_of_range(np.asarray([se]))[0]):
+                dropped[ai] = dropped.get(ai, 0) + 1
+                continue
+            fills_by_analysis.setdefault(ai, {})[alid] = (z, se)
         for ai, pearson_r, n_imp, n_miss in block_result.quality_rows:
-            quality_batch.append((ai, block_result.block_id, pearson_r, n_imp, n_miss))
+            left = dropped.get(ai, 0)
+            if left > n_imp:
+                raise ValueError(
+                    f"block {block_result.block_id}: {left} imputed rows of analysis {ai} exceed "
+                    f"float16's SE range but the block reports only {n_imp} imputed"
+                )
+            quality_batch.append(
+                (ai, block_result.block_id, pearson_r, n_imp - left, n_miss + left)
+            )
             if len(quality_batch) >= quality_batch_size:
                 _flush_quality()
-        for alid, ai, z, se in block_result.fills:
-            fills_by_analysis.setdefault(ai, {})[alid] = (z, se)
+        for ai, n in dropped.items():
+            left_missing[ai] = left_missing.get(ai, 0) + n
     _flush_quality()
     print(f"Wrote {quality_count:,} completion quality rows")
-    return fills_by_analysis, quality_count
+    return fills_by_analysis, quality_count, left_missing
 
 
 def _checkpoint_and_assemble(
@@ -847,8 +883,8 @@ def _checkpoint_and_assemble(
         thresh=thresh,
         region_cap_bp=region_cap_bp,
     )
-    fills_by_analysis, _ = _merge_checkpoint_rows(checkpoint_dir / "blocks", dst_db)
-    csr = _assemble_completed_csr(plan, axis, fills_by_analysis)
+    fills_by_analysis, _, left_missing = _merge_checkpoint_rows(checkpoint_dir / "blocks", dst_db)
+    csr = _assemble_completed_csr(plan, axis, fills_by_analysis, left_missing)
     dst_db.commit()
     dst_db.close()
     print(f"Completion done: {csr.total_imputed:,} imputed, {csr.total_missing:,} missing")
@@ -875,14 +911,18 @@ def _passthrough_analysis(obs: Any, src_idx_remap: list[int]) -> _AnalysisComple
     """An Analysis no completable block touches: its source association list
     remapped onto the merged axis, every row marked observed."""
     vi = np.array([src_idx_remap[v] for v in obs.variant_index.tolist()], dtype=np.int32)
+    # Masked rows stay as explicit missing rows (issue #338), as in `_observed_alid_maps`.
+    z, se, n_masked = mask_se_out_of_range(obs.z.astype(np.float32), obs.se.astype(np.float32))
+    eaf = np.where(se_out_of_range(obs.se), np.nan, np.asarray(obs.eaf)).astype(np.float32)
     return _AnalysisCompleted(
         vi=vi,
-        z=obs.z.astype(np.float32),
-        se=obs.se.astype(np.float32),
-        eaf=np.asarray(obs.eaf, dtype=np.float32),
+        z=z,
+        se=se,
+        eaf=eaf,
         imp=np.zeros(len(vi), dtype=np.uint8),
         n_imputed=0,
         n_missing=0,
+        n_missing_se=n_masked,
     )
 
 
@@ -910,7 +950,7 @@ def _block_cells(
         if vi is None:
             continue
         seen_alids.add(alid)
-        if alid in obs_alid_to_z:
+        if alid in obs_alid_to_z and not np.isnan(obs_alid_to_z[alid]):
             cells.append(
                 _CsrCell(vi, obs_alid_to_z[alid], obs_alid_to_se[alid], obs_alid_to_eaf[alid], 0)
             )
@@ -997,13 +1037,16 @@ def _completed_analysis(
     cells += _carried_cells(
         observed.z_by_alid, observed.se_by_alid, observed.eaf_by_alid, seen_alids, new_alid_to_idx
     )
-    return _sort_cells(cells, n_imputed, n_missing)
+    return replace(
+        _sort_cells(cells, n_imputed, n_missing), n_missing_se=observed.n_masked_se
+    )
 
 
 def _assemble_completed_csr(
     plan: _BlockPlan,
     axis: _MergedAxis,
     fills_by_analysis: dict[int, dict[str, tuple[float, float]]],
+    left_missing: dict[int, int],
 ) -> _CompletedCsr:
     """Phase 3 assembly: one completed row block per Analysis -- remapped
     observed rows plus fills, sorted by variant index -- and the flat offsets
@@ -1015,6 +1058,7 @@ def _assemble_completed_csr(
     all_eaf: list[np.ndarray] = []
     all_imp: list[np.ndarray] = []
     offsets: list[int] = [0]
+    n_missing_se: list[int] = []
     total_imputed = 0
     total_missing = 0
 
@@ -1035,6 +1079,7 @@ def _assemble_completed_csr(
         all_eaf.append(completed.eaf)
         all_imp.append(completed.imp)
         offsets.append(offsets[-1] + len(completed.vi))
+        n_missing_se.append(completed.n_missing_se + left_missing.get(ai, 0))
         total_imputed += completed.n_imputed
         total_missing += completed.n_missing
 
@@ -1053,6 +1098,7 @@ def _assemble_completed_csr(
         imp=all_imp,
         total_imputed=total_imputed,
         total_missing=total_missing,
+        n_missing_se=n_missing_se,
     )
 
 
@@ -1224,6 +1270,7 @@ def _write_top_hits_and_analyses(
     staged: StagedRelease,
     state: _SourceState,
     encode_plan: _EncodePlan,
+    csr: _CompletedCsr,
     *,
     ancestry: str,
 ) -> None:
@@ -1237,26 +1284,32 @@ def _write_top_hits_and_analyses(
     print("Writing analyses.tsv...")
     with staged.index_connection() as quality_db:
         quality_rollup = completion_quality_rollup(quality_db, state.n_analyses)
+    # The source's recorded count carries forward (blank reads as zero) and this
+    # completion's own is added (issue #338).
     dst_analyses = reset_top_hit_counts(
-        [
-            replace(
-                a,
-                completed_against=(
-                    ancestry if state.impute_mask is None or bool(state.impute_mask[i]) else ""
-                ),
-                # An Analysis that gained imputed cells in a release carrying
-                # reference EAF now stores a frequency for them, whatever its
-                # source reported (ADR 0037 §4), so `eaf_scope` follows what
-                # the release holds rather than being copied forward.
-                eaf_scope=completed_eaf_scope(
-                    a, quality_rollup[i], encode_plan.eaf_reference is not None
-                ),
-                completion_median_pearson_r=quality_rollup[i].median_pearson_r,
-                completion_n_imputed_total=quality_rollup[i].n_imputed_total,
-                completion_n_missing_total=quality_rollup[i].n_missing_total,
-            )
-            for i, a in enumerate(state.src_analyses)
-        ]
+        with_n_missing_se(
+            [
+                replace(
+                    a,
+                    completed_against=(
+                        ancestry if state.impute_mask is None or bool(state.impute_mask[i]) else ""
+                    ),
+                    # An Analysis that gained imputed cells in a release carrying
+                    # reference EAF now stores a frequency for them, whatever its
+                    # source reported (ADR 0037 §4), so `eaf_scope` follows what
+                    # the release holds rather than being copied forward.
+                    eaf_scope=completed_eaf_scope(
+                        a, quality_rollup[i], encode_plan.eaf_reference is not None
+                    ),
+                    completion_median_pearson_r=quality_rollup[i].median_pearson_r,
+                    completion_n_imputed_total=quality_rollup[i].n_imputed_total,
+                    completion_n_missing_total=quality_rollup[i].n_missing_total,
+                )
+                for i, a in enumerate(state.src_analyses)
+            ],
+            csr.n_missing_se,
+            add=True,
+        )
     )
     write_analysis_records(
         staged.path / "analyses.tsv", add_hit_counts(staged.path, dst_analyses)
@@ -1359,7 +1412,7 @@ def _run_completion(
         )
         encode_plan = _encode_plan(src, ld_dir, ancestry, manifest, axis)
         _write_completed_zarr(staged, encode_plan, csr, state.n_analyses, len(axis.variants))
-        _write_top_hits_and_analyses(staged, state, encode_plan, ancestry=ancestry)
+        _write_top_hits_and_analyses(staged, state, encode_plan, csr, ancestry=ancestry)
         staged.write_manifest(
             _completed_manifest(
                 manifest,

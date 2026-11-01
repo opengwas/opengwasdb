@@ -114,7 +114,11 @@ def _empty_result(*, with_n: bool = False) -> dict[str, np.ndarray]:
 
 def _status_array(imputed_flags: np.ndarray, z_vals: np.ndarray, se_vals: np.ndarray) -> np.ndarray:
     """Derive association_status strings from imputed mask, z, and se (ADR-0013:
-    finite Z and SE means observed/imputed; NaN Z *or* SE means missing)."""
+    finite Z and SE means observed/imputed; NaN Z *or* SE means missing).
+
+    A non-finite SE is missing, which is now the build's rule too: an SE above float16's
+    range is stored as missing (z and se both NaN), never as `+inf` (issue #338, ADR 0068).
+    A release written before it may still hold `+inf`, and is read the same way."""
     out = np.where(imputed_flags == 1, "imputed", "observed").astype(object)
     out[~(np.isfinite(z_vals) & np.isfinite(se_vals))] = "missing"
     return out
@@ -529,6 +533,8 @@ class StoreQuery:
         z_block = self._z.block(row_indices, col_indices)
         eaf_read = self._eaf.read_block(row_indices, col_indices, want_imputed=True)
         se_block = self._se.block(row_indices, col_indices, eaf=eaf_read.values)
+        # A non-finite SE is missing: the build's rule too since #338 (an SE above
+        # float16's range is stored as missing), and the reading of an older `+inf`.
         mask = np.isfinite(z_block) & np.isfinite(se_block)
         rows_rel, cols_rel = np.where(mask)
         rows = np.array([row_indices[r] for r in rows_rel], dtype="int32")

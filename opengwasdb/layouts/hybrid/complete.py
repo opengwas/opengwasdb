@@ -47,6 +47,7 @@ from opengwasdb.encoding import (
     DenseZPlane,
     StoreEncoding,
 )
+from opengwasdb.encoding.se_range import mask_se_out_of_range, se_out_of_range
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.build_vcf import _sorted_alids, _write_index
 from opengwasdb.layouts.dense.complete import complete_dense_store
@@ -64,7 +65,7 @@ from opengwasdb.layouts.ragged.zarr_csr import (
     RaggedCSRReader,
     RaggedCSRWriter,
 )
-from opengwasdb.model.analyses import Analysis, read_analysis_records
+from opengwasdb.model.analyses import Analysis, read_analysis_records, with_n_missing_se
 from opengwasdb.model.enums import (
     CompletionState,
     PrimaryStorageLayout,
@@ -153,6 +154,9 @@ class _SharedAxis:
     n_panel: int
     n_off_panel: int
     n_imputed: int
+    #: Per Analysis, the crossover associations the fold stored as missing for an
+    #: SE above float16's range (issue #338).
+    n_masked_crossovers: np.ndarray
 
 
 def _open_observed_hybrid_source(source_path: Path) -> StoreManifest:
@@ -214,9 +218,10 @@ def complete_hybrid_store(
         # Phase 3: shared index/variant table/dense_to_shared map, then the
         # overflow CSR rebuilt on the remapped indices.
         analyses = _read_analyses(dense.dir)
-        n_overflow = _write_shared_tables_and_overflow(
+        n_overflow, n_overflow_dropped = _write_shared_tables_and_overflow(
             staged, src, src_manifest, dense, axis, overflow, analyses
         )
+        analyses = _root_analyses(analyses, src, overflow, axis, n_overflow_dropped)
         # Phase 4: manifest, overflow top hits and the shared rollups.
         _finalize_completed_hybrid(
             staged, src_manifest, release_id, analyses, axis, overflow, n_overflow
@@ -341,7 +346,7 @@ def _remap_shared_axis(
         if len(overflow_alids)
         else np.empty(0, dtype=bool)
     )
-    n_reclaimed_imputed = _fold_panel_crossovers(
+    n_reclaimed_imputed, n_masked_crossovers = _fold_panel_crossovers(
         dense.dir,
         dense.alid_to_row,
         overflow.offsets,
@@ -377,6 +382,7 @@ def _remap_shared_axis(
         n_panel=len(dense.alids),
         n_off_panel=len(union) - len(dense.alids),
         n_imputed=n_imputed,
+        n_masked_crossovers=n_masked_crossovers,
     )
 
 
@@ -391,7 +397,7 @@ def _write_shared_tables_and_overflow(
     axis: _SharedAxis,
     overflow: _SourceOverflow,
     analyses: list[Analysis],
-) -> int:
+) -> tuple[int, list[int]]:
     """Write the shared index, variant table and dense_to_shared map on the
     completed axis, then rebuild the overflow CSR on its remapped shared
     indices minus the folded crossovers. Returns the overflow association
@@ -428,7 +434,51 @@ def _write_shared_tables_and_overflow(
         se_coefficients=_shared_se_coefficients(dense.dir, src_manifest.encoding),
     )
     build_variant_index(staged.path, n_axis=axis.n_shared)
-    return csr.n_associations
+    return csr.n_associations, csr.n_missing_se_out_of_range
+
+
+def _root_analyses(
+    dense_analyses: list[Analysis],
+    src: Path,
+    overflow: _SourceOverflow,
+    axis: _SharedAxis,
+    n_overflow_dropped: list[int],
+) -> list[Analysis]:
+    """The root's rows: the completed Dense Component's, with the Overflow's missing-SE share.
+
+    The root counts both components (the Dense Component's own table counts only its
+    cells; issue #107): the completed Dense count, the Overflow associations the source
+    recorded, those the rebuild did not retain, and the crossovers the fold stored as
+    missing (issue #338).
+    """
+    overflow_share = (
+        _source_overflow_n_missing_se(src, overflow.n_analyses)
+        + np.asarray(n_overflow_dropped, dtype=np.int64)
+        + axis.n_masked_crossovers
+    )
+    return with_n_missing_se(dense_analyses, overflow_share, add=True)
+
+
+def _source_overflow_n_missing_se(src: Path, n_analyses: int) -> np.ndarray:
+    """Per Analysis, the Overflow associations the source release recorded as missing.
+
+    The source's root table counts both components and its Dense Component's
+    counts only its own, so the Overflow's share is the difference. Blank reads
+    as zero here -- a source with no such column stored every such SE in its
+    planes, and completion counts those it finds -- and a Dense Component that
+    records more than the root is refused (issue #338).
+    """
+    root = read_analysis_records(src / "analyses.tsv")
+    dense = read_analysis_records(dense_component_path(src) / "analyses.tsv")
+    counts = np.zeros(n_analyses, dtype=np.int64)
+    for i, (r, d) in enumerate(zip(root, dense, strict=True)):
+        counts[i] = int(r.n_missing_se_out_of_range or 0) - int(d.n_missing_se_out_of_range or 0)
+    if (counts < 0).any():
+        raise ValueError(
+            f"{src}: a Dense Component records more n_missing_se_out_of_range than its "
+            "Hybrid root, which counts both components"
+        )
+    return counts
 
 
 def _remapped_analysis_arrays(
@@ -538,6 +588,19 @@ def _finalize_completed_hybrid(
     )
 
 
+def _mask_crossovers(
+    src_z: np.ndarray,
+    src_se: np.ndarray,
+    crossover_idx: np.ndarray,
+    col_idx: np.ndarray,
+    n_analyses: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The crossovers' z and se with an SE above float16's range masked, and the count per Analysis."""
+    z_vals, se_vals, _ = mask_se_out_of_range(src_z[crossover_idx], src_se[crossover_idx])
+    over = se_out_of_range(src_se[crossover_idx])
+    return z_vals, se_vals, np.bincount(col_idx[over], minlength=n_analyses)
+
+
 def _fold_panel_crossovers(
     dense_dir: Path,
     dense_alid_to_row: dict[str, int],
@@ -549,7 +612,7 @@ def _fold_panel_crossovers(
     is_crossover: np.ndarray,
     encoding: StoreEncoding,
     dense_encoding: StoreEncoding,
-) -> int:
+) -> tuple[int, np.ndarray]:
     """Write every crossover association's real observed value into the
     completed Dense Component at ``(dense_row, analysis)``, marked
     ``imputed=0``, in place of whatever dense completion computed there.
@@ -559,12 +622,13 @@ def _fold_panel_crossovers(
     ``src_se``/``src_eaf``); ``offsets`` partitions that flat array by analysis, exactly
     as ``RaggedCSRReader`` exposes it. Returns how many of the overwritten
     cells were previously marked imputed, so the caller can correct the
-    reported imputed count -- see the module docstring (issue #99).
+    reported imputed count (issue #99), and, per Analysis, how many crossovers
+    were stored missing for an SE above float16's range (issue #338).
     """
-    if not is_crossover.any():
-        return 0
-
     n_analyses = len(offsets) - 1
+    if not is_crossover.any():
+        return 0, np.zeros(n_analyses, dtype=np.int64)
+
     assoc_ai = np.repeat(np.arange(n_analyses), np.diff(offsets))
     crossover_idx = np.flatnonzero(is_crossover)
 
@@ -574,8 +638,7 @@ def _fold_panel_crossovers(
         count=len(crossover_idx),
     )
     col_idx = assoc_ai[crossover_idx].astype(np.int64)
-    z_vals = src_z[crossover_idx].astype(np.float32)
-    se_vals = src_se[crossover_idx].astype(np.float32)
+    z_vals, se_vals, n_masked = _mask_crossovers(src_z, src_se, crossover_idx, col_idx, n_analyses)
     eaf_vals = src_eaf[crossover_idx].astype(np.float32)
 
     root = open_group_for_write(dense_dir / "data.zarr", "a")
@@ -597,7 +660,7 @@ def _fold_panel_crossovers(
     if "eaf" in root:
         DenseEafPlane.open(root, dense_encoding).patch(row_idx, col_idx, eaf_vals)
     DenseSePlane.open(root, dense_encoding).patch(row_idx, col_idx, se_vals)
-    return n_reclaimed
+    return n_reclaimed, n_masked.astype(np.int64)
 
 
 def _chunk_shape(manifest: StoreManifest) -> tuple[int, int]:

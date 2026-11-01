@@ -74,6 +74,9 @@ from opengwasdb.validation.observed_view import (
     _store_record,
     count_infinite_cells,
     count_partial_cells,
+    parent_over_range,
+    se_out_of_range_allowance,
+    unaccounted_se_out_of_range,
 )
 from opengwasdb.variants import VariantAxis, is_indexable_alid
 
@@ -98,8 +101,10 @@ FAILING_COUNTERS = (
     "z_se_missingness_mismatch",
     "target_variants_unordered",
     "quality_blocks_not_in_regions",
+    "se_out_of_range_unaccounted",
 )
 _INFORMATIONAL_COUNTERS = (
+    "source_se_out_of_range",
     "observed_in_source",
     "imputed",
     "nan_rows",
@@ -456,8 +461,14 @@ def _sample_and_compare(
     totals = dict.fromkeys(_TOTAL_KEYS, 0)
     max_diff = dict.fromkeys(_DIFF_PLANES, 0.0)
     listing: list[dict[str, Any]] = []
+    allowance = se_out_of_range_allowance(pair.source_path, pair.target_path)
     for i in sampled:
         counts, diffs = _compare_analysis(pair, axis, sample, i)
+        # Per Analysis: a sampled source association over float16's SE range is accounted
+        # for only by its own Analysis's count (issue #338).
+        counts["se_out_of_range_unaccounted"] = unaccounted_se_out_of_range(
+            np.asarray([counts["source_se_out_of_range"]]), allowance[i : i + 1]
+        )
         for key in totals:
             totals[key] += counts[key]
         for plane in _DIFF_PLANES:
@@ -558,6 +569,18 @@ def _locate(
     return target_vi[order][slot] == mapped, at, lambda values: values[at]
 
 
+def _imputed_placement(
+    is_imputed: np.ndarray, target_vi: np.ndarray, region: np.ndarray, admitted: bool
+) -> dict[str, int]:
+    """Imputed rows in an Analysis that was not admitted, and outside its retained regions."""
+    return {
+        "imputed_in_non_admitted": 0 if admitted else int(is_imputed.sum()),
+        "imputed_outside_retained": (
+            int((is_imputed & ~np.isin(target_vi, region)).sum()) if admitted else 0
+        ),
+    }
+
+
 def _check_analysis(
     pair: _Pair,
     axis: _AxisMap,
@@ -581,7 +604,9 @@ def _check_analysis(
     present, at, gather = _locate(target_vi, mapped)
 
     imputed = raw_imputed.astype(np.uint8)
-    source_observed = _observed(source_cells)
+    # The one observed row that may leave the observed view: an SE above float16's range (#338).
+    over = parent_over_range(source_cells)
+    source_observed = _observed(source_cells) & ~over
     target_observed = _observed(target_cells)
     both = source_observed & present
     matched = np.zeros(len(target_vi), dtype=bool)
@@ -589,6 +614,8 @@ def _check_analysis(
     clean = (raw_imputed == 0) & target_observed
     is_imputed = raw_imputed == 1
     counts = {
+        "source_se_out_of_range": int(over.sum()),
+        "se_out_of_range_unaccounted": 0,  # decided per Analysis in the caller
         "observed_in_source": int(source_observed.sum()),
         "imputed": int(is_imputed.sum()),
         # Neither z nor se present and not imputed: NaN, read through each plane's
@@ -606,10 +633,7 @@ def _check_analysis(
         ),
         "observed_marked_imputed": int((both & (gather(imputed) != 0)).sum()),
         "target_observed_not_in_source": int((clean & ~matched).sum()),
-        "imputed_in_non_admitted": 0 if admitted else int(is_imputed.sum()),
-        "imputed_outside_retained": (
-            int((is_imputed & ~np.isin(target_vi, region)).sum()) if admitted else 0
-        ),
+        **_imputed_placement(is_imputed, target_vi, region, admitted),
     }
     diffs: dict[str, float] = {}
     for plane in _DIFF_PLANES:

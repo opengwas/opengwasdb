@@ -36,7 +36,8 @@ completed axis interleaves the three inserted rows:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from shutil import copytree
 
@@ -159,16 +160,22 @@ def _complete(observed: Path, root: Path) -> Path:
     return completed
 
 
-@pytest.fixture(scope="module")
-def _pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
-    root = tmp_path_factory.mktemp("hybrid-pair")
-    # The geometry of `test_check_observed_view._small_chunked_pair`. The Stores carry it
-    # once written, so it is patched only while they are built.
+@contextmanager
+def _small_chunk_geometry() -> Iterator[None]:
+    """The geometry of `test_check_observed_view._small_chunked_pair`. The Stores carry it
+    once written, so it is patched only while they are built."""
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(arrays_module, "DENSE_SHARD_SHAPE", (4, 2))
         patch.setattr(arrays_module, "DENSE_CHUNK_SHAPE", (2, 1))
         patch.setattr(dense_complete, "DEFAULT_CHUNK_SHAPE", (2, 1))
         patch.setattr(dense_complete, "_BAND_ROWS", 6)
+        yield
+
+
+@pytest.fixture(scope="module")
+def _pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    root = tmp_path_factory.mktemp("hybrid-pair")
+    with _small_chunk_geometry():
         observed = _build_observed(root, chunk_shape=(2, 1))
         return observed, _complete(observed, root)
 
@@ -293,7 +300,8 @@ def test_a_completed_hybrid_with_crossovers_passes_with_hand_counted_totals(tmp_
         "child_associations": N_OVERFLOW - N_CROSSOVERS,
     }
     assert overflow["all_analyses"] == dict.fromkeys(
-        ("observed_in_both", "imputed_cells", "analyses_count_mismatch"), 0
+        ("observed_in_both", "imputed_cells", "analyses_count_mismatch",
+         "se_out_of_range_unaccounted"), 0
     )
     crossovers = verdict["crossovers"]
     assert (crossovers["n"], crossovers["rows"]) == (N_CROSSOVERS, N_CROSSOVER_ROWS)
@@ -612,12 +620,14 @@ def test_an_overflow_observation_moved_onto_an_existing_dense_row_fails(tmp_path
     }
 
 
-# --- an infinite value is a value (issue #337) ------------------------------
+# --- an SE above float16's range may become missing (issues #337, #338) -----------------
 
-# 102,000 in trait_a is an ordinary Overflow association: off-panel in the LD panel, so it
-# stays in the Overflow through completion, and an SE of `+inf` there is a value the check
-# must compare rather than read as missing (issue #337, spec §15).
+# 102,000 in trait_a is an ordinary Overflow association (off-panel in the LD panel, so it
+# stays in the Overflow through completion) and 101,000 in trait_a is a crossover. Written
+# before #338, a source could hold `+inf` in either; completion now stores both as missing
+# and counts them, and the check must accept exactly that.
 INFINITE_SE_CELL = (102_000, "trait_a")
+INFINITE_CROSSOVER_CELL = (101_000, "trait_a")
 
 
 def _write_infinite_se(store: Path, position: int, analysis: str) -> None:
@@ -631,12 +641,55 @@ def _overflow_se(store: Path, position: int, analysis: str) -> float:
     return float(_overflow(store)["se"][_overflow_position(store, position, analysis)])
 
 
-def test_an_infinite_overflow_se_copied_identically_passes_and_is_counted(tmp_path, pair):
-    observed, completed = pair
-    for store in (observed, completed):
-        _write_infinite_se(store, *INFINITE_SE_CELL)
+def _recorded(store: Path) -> dict[str, str]:
+    from opengwasdb.model.analyses import read_analysis_records
+
+    return {
+        a.analysis_id: a.n_missing_se_out_of_range
+        for a in read_analysis_records(store / "analyses.tsv")
+    }
+
+
+@pytest.fixture(scope="module")
+def _infinite_pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    """The pair whose source holds `+inf` at one Overflow cell and one crossover cell."""
+    from test_check_observed_view import drop_n_missing_se_column
+
+    root = tmp_path_factory.mktemp("hybrid-infinite-pair")
+    with _small_chunk_geometry():
+        observed = _build_observed(root, chunk_shape=(2, 1))
+        for cell in (INFINITE_SE_CELL, INFINITE_CROSSOVER_CELL):
+            _write_infinite_se(observed, *cell)
+        # As a release written before #338 looks: no count column, at either level.
+        drop_n_missing_se_column(observed)
+        drop_n_missing_se_column(observed / "dense")
+        return observed, _complete(observed, root)
+
+
+@pytest.fixture
+def infinite_pair(tmp_path: Path, _infinite_pair_seed: tuple[Path, Path]) -> tuple[Path, Path]:
+    return (
+        copytree(_infinite_pair_seed[0], tmp_path / "obs.opengwasdb"),
+        copytree(_infinite_pair_seed[1], tmp_path / "comp.opengwasdb"),
+    )
+
+
+def test_source_infinite_overflow_and_crossover_se_stored_as_missing_pass(tmp_path, infinite_pair):
+    observed, completed = infinite_pair
     assert np.isinf(_overflow_se(observed, *INFINITE_SE_CELL))
-    assert np.isinf(_overflow_se(completed, *INFINITE_SE_CELL))
+    assert np.isinf(_overflow_se(observed, *INFINITE_CROSSOVER_CELL))
+    # The Overflow cell is no longer held; the crossover's Dense cell is missing, and its
+    # z and se agree (spec §15). The root counts both, the Dense Component only its own.
+    shared = _shared_row(completed, INFINITE_SE_CELL[0])
+    column = ANALYSES.index(INFINITE_SE_CELL[1])
+    group = _overflow(completed)
+    lo, hi = (int(v) for v in group["offsets"][column : column + 2])
+    assert shared not in set(np.asarray(group["variant_index"][lo:hi]).tolist())
+    rows, cols = _dense_cell(completed, *INFINITE_CROSSOVER_CELL)
+    assert np.isnan(float(_dense_plane(completed, DenseZPlane).points(rows, cols)[0]))
+    assert np.isnan(float(_dense_plane(completed, DenseSePlane).points(rows, cols)[0]))
+    assert _recorded(completed) == {"trait_a": "2", "trait_b": "0", "trait_c": "0"}
+    assert _recorded(completed / "dense") == {"trait_a": "0", "trait_b": "0", "trait_c": "0"}
     out = tmp_path / "verdict.json"
 
     result = _run(observed, completed, out)
@@ -644,22 +697,50 @@ def test_an_infinite_overflow_se_copied_identically_passes_and_is_counted(tmp_pa
     assert result.exit_code == 0, result.output
     verdict = _verdict(result, out)
     assert verdict["passed"] is True and verdict["failures"] == []
+    assert verdict["components"]["overflow"]["totals"]["source_se_out_of_range"] == 1
+    # Both planted cells sit in the source Overflow.
     assert verdict["components"]["overflow"]["totals"]["infinite_cells"] == 2
 
 
-def test_a_source_infinite_overflow_se_the_target_lacks_fails(tmp_path, pair):
-    observed, completed = pair
-    _write_infinite_se(observed, *INFINITE_SE_CELL)
-    _rewrite_overflow(completed, _without("trait_a", _shared_row(completed, 102_000)))
+def test_a_source_infinite_overflow_se_the_completed_counts_omit_fails(tmp_path, infinite_pair):
+    from opengwasdb.model.analyses import AnalysesTable, read_analyses, write_analyses
+
+    observed, completed = infinite_pair
+    table = read_analyses(completed / "analyses.tsv")
+    rows = tuple({**row, "n_missing_se_out_of_range": "0"} for row in table.rows)
+    write_analyses(completed / "analyses.tsv", AnalysesTable(table.fieldnames, rows))
 
     verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
 
-    assert "overflow.observed_missing_in_child" in verdict["failures"]
-    assert verdict["components"]["overflow"]["totals"]["observed_missing_in_child"] == 1
-    assert verdict["components"]["overflow"]["totals"]["infinite_cells"] == 1
+    assert "overflow.se_out_of_range_unaccounted" in verdict["failures"]
+    assert verdict["components"]["overflow"]["all_analyses"]["se_out_of_range_unaccounted"] == 2
 
 
-# --- a crossover with only one of Z and SE, and one that is infinite --------
+def test_one_extra_changed_cell_still_fails_beside_the_masked_ones(tmp_path, infinite_pair):
+    observed, completed = infinite_pair
+    _change_a_dense_observation(completed)
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert "dense.z_mismatch" in verdict["failures"]
+
+
+def test_a_source_overflow_infinite_se_the_target_lacks_without_the_rule_fails(tmp_path, pair):
+    """The old fixture, source holding `+inf`, now built through a target that kept it observed:
+    a completed cell that is neither missing nor imputed there is a failure."""
+    observed, completed = pair
+    _write_infinite_se(observed, *INFINITE_SE_CELL)
+    from test_check_observed_view import drop_n_missing_se_column
+
+    drop_n_missing_se_column(observed)
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    # The cell is set aside and uncounted by `completed`, which recorded none.
+    assert "overflow.se_out_of_range_unaccounted" in verdict["failures"]
+
+
+# --- a crossover with only one of Z and SE --------
 
 # 101,000 in trait_a is a crossover: the panel extends the Dense axis by it, so completion
 # folds the Overflow association into the Dense Component and the Dense part sets the cell
@@ -699,29 +780,6 @@ def test_a_completed_crossover_with_se_and_no_z_fails_on_the_crossover_counter(t
     assert verdict["crossovers"]["totals"]["z_se_missingness_mismatch"] == 1
     assert "crossovers.z_se_missingness_mismatch" in verdict["failures"]
     assert verdict["components"]["dense"]["totals"]["z_se_missingness_mismatch"] == 0
-
-
-def test_an_infinite_crossover_se_copied_identically_passes_and_is_counted(tmp_path, pair):
-    """An infinite SE on a crossover is a value on both sides, and never a failure.
-
-    Mutation that makes this fail: drop `infinite_cells` from `_crossover_tally` (the Dense
-    part sees the cell only as the NaN it was set aside as), or read an infinite SE as
-    missing (`crossovers.se_mismatch` and `observed_missing_in_child` then fire).
-    """
-    observed, completed = pair
-    _overflow(observed)["se"][_overflow_position(observed, *CROSSOVER_CELL)] = np.inf
-    rows, cols = _dense_cell(completed, *CROSSOVER_CELL)
-    _dense_plane(completed, DenseSePlane).patch(rows, cols, np.array([np.inf], np.float32))
-    assert np.isinf(float(_dense_plane(completed, DenseSePlane).points(rows, cols)[0]))
-    out = tmp_path / "verdict.json"
-
-    result = _run(observed, completed, out)
-
-    assert result.exit_code == 0, result.output
-    verdict = _verdict(result, out)
-    assert verdict["passed"] is True and verdict["failures"] == []
-    assert verdict["crossovers"]["totals"]["infinite_cells"] == 2
-    assert verdict["components"]["dense"]["totals"]["infinite_cells"] == 0
 
 
 # --- seam 3: refusals --------------------------------------------------------

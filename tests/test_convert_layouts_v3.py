@@ -416,9 +416,9 @@ def test_hybrid_identity(hybrid_source: Path, hybrid_converted: Path):
     _assert_hybrid_spans_both_components(hybrid_converted)
     verify_conversion(hybrid_source, hybrid_converted)
     _assert_identity(hybrid_source, hybrid_converted)
-    assert json.loads((hybrid_converted / "manifest.json").read_text())["format_version"] == "0.2.0"
+    assert json.loads((hybrid_converted / "manifest.json").read_text())["format_version"] == "0.2.1"
     nested = json.loads((hybrid_converted / "dense" / "manifest.json").read_text())
-    assert nested["format_version"] == "0.2.0"
+    assert nested["format_version"] == "0.2.1"
     assert (hybrid_converted / "dense" / "data.zarr" / "z" / "zarr.json").is_file()
 
 

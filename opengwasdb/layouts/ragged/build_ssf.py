@@ -33,7 +33,7 @@ from opengwasdb.build.eaf_orientation import (
     select_sites,
 )
 from opengwasdb.encoding import EncodingMeasurements, StoreEncoding
-from opengwasdb.layouts.dense.build import add_hit_counts
+from opengwasdb.layouts.dense.build import add_build_counts
 from opengwasdb.layouts.ragged import RAGGED_REFERENCE_ASSEMBLY, RaggedBuildResult
 from opengwasdb.layouts.ragged.analyses import molecular_analysis
 from opengwasdb.layouts.ragged.by_variant import build_variant_index
@@ -342,6 +342,7 @@ def _build_ssf_release(
         staged,
         analytes,
         eaf_scopes,
+        csr.n_missing_se_out_of_range,
         encoding=encoding,
         eaf_report=eaf_report,
         stored_effect_scale=request.stored_effect_scale,
@@ -576,6 +577,7 @@ def _write_indexes_and_metadata(
     staged: StagedRelease,
     analytes: list[AnalyteInput],
     eaf_scopes: list[str],
+    n_missing_se: list[int],
     *,
     encoding: StoreEncoding,
     eaf_report: EafOrientationReport,
@@ -611,7 +613,9 @@ def _write_indexes_and_metadata(
     ]
     write_analysis_records(
         staged.path / "analyses.tsv",
-        add_hit_counts(staged.path, apply_orientation_evidence(analyses, eaf_report)),
+        add_build_counts(
+            staged.path, apply_orientation_evidence(analyses, eaf_report), n_missing_se
+        ),
     )
 
 

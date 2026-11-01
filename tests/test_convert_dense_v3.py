@@ -281,7 +281,7 @@ def test_a_conversion_never_writes_the_retired_coverage_spelling(
     converted = convert_release(stamped, tmp_path / "converted-from-full.opengwasdb")
 
     written = json.loads((converted / "manifest.json").read_text())
-    assert written["format_version"] == "0.2.0"
+    assert written["format_version"] == "0.2.1"
     assert written["association_coverage"] == "gwas"
 
 
@@ -801,8 +801,11 @@ def test_completion_accepts_a_0_2_0_source(converted_dense_store: Path):
     (`tests/test_format_version.py`).
     """
     version = store_open.open_store(converted_dense_store).manifest.format_version
-    assert version == "0.2.0"
+    assert version == "0.2.1"
     assert store_open.check_writable_format_version(version) == version
+    # And a 0.2.0 release, the version this build wrote from #247 to #338, still completes
+    # in place and keeps its version (#338).
+    assert store_open.check_writable_format_version("0.2.0") == "0.2.0"
 
 
 # ── the seam's shard policy is the one authority ─────────────────────────────
@@ -850,3 +853,37 @@ def test_the_converted_arrays_read_through_the_seam(converted_dense_store: Path)
     assert zarr.__version__.startswith("3")
     root = open_group(converted_dense_store / "data.zarr", "r")
     assert np.asarray(root["z"][:2, :2]).shape == (2, 2)
+
+
+# ── an SE above float16's range (#338) ───────────────────────────────────────
+
+
+def test_a_conversion_records_a_measured_zero_missing_se_per_analysis(
+    converted_dense_store: Path,
+):
+    """The source's se planes were scanned and held no cell above 65,504, so every Analysis
+    records 0 -- a count, not a blank, which is what a 0.2.1 release requires (spec §7a)."""
+    from opengwasdb.model.analyses import read_analysis_records
+
+    records = read_analysis_records(converted_dense_store / "analyses.tsv")
+    assert len(records) == N_ANALYSES
+    assert {r.n_missing_se_out_of_range for r in records} == {"0"}
+    assert validate_store(converted_dense_store).ok
+
+
+def test_a_conversion_refuses_a_source_holding_an_se_above_float16s_range(
+    nan_fill_source: Path, tmp_path: Path
+):
+    """A pre-#338 plane may hold `+inf`; the converter cannot drop that association faithfully."""
+    import zarr
+
+    source = _copy_release(nan_fill_source, tmp_path / "inf-source.opengwasdb")
+    se = zarr.open_group(str(source / "data.zarr"), mode="r+")["se"]
+    assert se.dtype == np.dtype("float16"), "fixture must be a float16 plane"
+    se[0, 0] = np.float16(np.inf)
+    destination = tmp_path / "converted.opengwasdb"
+
+    with pytest.raises(ConversionError, match=r"1 standard error\(s\) above float16's maximum"):
+        convert_release(source, destination)
+
+    assert not destination.exists(), "nothing was published"

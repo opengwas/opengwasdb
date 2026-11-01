@@ -55,6 +55,7 @@ from opengwasdb.encoding import (
     positions_row_band,
     write_eaf_baseline,
 )
+from opengwasdb.encoding.se_range import mask_se_out_of_range
 from opengwasdb.encoding.timing import log_phase
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import (
@@ -75,7 +76,7 @@ from opengwasdb.layouts.dense.top_hits import (
     z_critical,
 )
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
-from opengwasdb.model.analyses import Analysis, PassthroughMetadata
+from opengwasdb.model.analyses import Analysis, PassthroughMetadata, with_n_missing_se
 from opengwasdb.model.enums import (
     AssociationCoverage,
     EafScope,
@@ -497,11 +498,31 @@ def _spill_column(
 
     Top hits are NOT harvested here — they are harvested during the band-write
     phase from the *stored* float16 values, so the index matches exactly what a
-    query reads back from the ``z`` array (issue 046)."""
+    query reads back from the ``z`` array (issue 046).
+
+    An SE above float16's range is masked here, in ``z`` and ``se`` together --
+    the one place both are in hand -- and counted in the spill, so every later
+    pass sees the masked column (issue #338, ADR 0068)."""
+    z, se, n_missing_se = mask_se_out_of_range(z, se)
     final = spill_dir / f"{col_idx}.npz"
     tmp = spill_dir / f"{col_idx}.tmp.npz"
-    np.savez(tmp, rows=rows, z=z, se=se, eaf=eaf)
+    np.savez(tmp, rows=rows, z=z, se=se, eaf=eaf, n_missing_se=np.int64(n_missing_se))
     tmp.replace(final)
+
+
+def read_spill_n_missing_se(
+    spill_dir: Path, n_analyses: int, *, suffix: str = ""
+) -> np.ndarray:
+    """Per-Analysis count of associations a spill masked for an out-of-range SE.
+
+    Reads the ``n_missing_se`` each spill recorded; a spill that is absent or
+    does not carry one raises, never reads as zero (issue #338).
+    """
+    counts = np.zeros(n_analyses, dtype=np.int64)
+    for c in range(n_analyses):
+        with np.load(spill_dir / f"{c}{suffix}.npz") as data:
+            counts[c] = int(data["n_missing_se"])
+    return counts
 
 
 #: One Pass 2 task: column index, source file, SE divisor, reader capability,
@@ -1746,6 +1767,8 @@ class _EncodedBands:
     encoding: StoreEncoding
     hits: _HitCandidates
     column_has_eaf: np.ndarray
+    #: Per-Analysis associations masked for an SE above float16's range (#338).
+    n_missing_se: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -2304,6 +2327,7 @@ def _write_encoded_bands(
     dtype: str,
     pass2_start: float,
     n_workers: int,
+    n_missing_se: np.ndarray,
 ) -> _EncodedBands:
     """Create the statistic arrays and fill them from the spills.
 
@@ -2344,6 +2368,7 @@ def _write_encoded_bands(
         encoding=encoding,
         hits=_HitCandidates(rows=rows, cols=cols, z=z, se=se),
         column_has_eaf=column_has_eaf,
+        n_missing_se=n_missing_se,
     )
 
 
@@ -2381,6 +2406,7 @@ def _spill_verify_and_encode(
             n_workers,
             pass2_start,
         )
+        n_missing_se = read_spill_n_missing_se(spill_dir, len(prepared.axis.analyses))
         eaf_survey, eaf_report = _survey_and_verify_eaf(
             spill_dir,
             manifest_rows,
@@ -2399,6 +2425,7 @@ def _spill_verify_and_encode(
             dtype,
             pass2_start,
             n_workers,
+            n_missing_se,
         )
     finally:
         shutil.rmtree(spill_dir, ignore_errors=True)
@@ -2447,8 +2474,11 @@ def _finalize_store(
         staged.path, encoded.hits.rows, encoded.hits.cols, encoded.hits.z, encoded.hits.se,
         encoded.encoding, n_workers=n_workers,
     )
-    analyses = apply_orientation_evidence(
-        _apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
+    analyses = with_n_missing_se(
+        apply_orientation_evidence(
+            _apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
+        ),
+        encoded.n_missing_se,
     )
     write_analyses_tsv(staged.path, add_hit_counts(staged.path, analyses))
 

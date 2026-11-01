@@ -38,6 +38,7 @@ from typing import Any, NamedTuple, assert_never
 import numpy as np
 
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.encoding.se_range import se_out_of_range
 from opengwasdb.layouts.dense.complete import completion_band_rows
 from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
@@ -72,8 +73,10 @@ FAILING_COUNTERS = (
     "inserted_observed_cells",
     "imputed_mask_invalid",
     "z_se_missingness_mismatch",
+    "se_out_of_range_unaccounted",
 )
 _INFORMATIONAL_COUNTERS = (
+    "source_se_out_of_range",
     "missing_now_imputed",
     "inserted_rows",
     "parent_rows_without_finite",
@@ -215,6 +218,33 @@ def check_observed_view(
     assert_never(layout)
 
 
+def se_out_of_range_allowance(source_path: Path, target_path: Path) -> np.ndarray:
+    """Per Analysis, how many source cells completion may have stored as missing (#338).
+
+    A source cell whose SE exceeds float16's range cannot be stored, so the
+    completed release holds it as missing and counts it in
+    `n_missing_se_out_of_range`; that count carries the source's own forward, so
+    the number completion itself added is the difference (a blank source count --
+    a release written before the column -- reads as zero, as completion does).
+    It is the *most* such cells a check may meet: it also covers an imputed cell
+    that completion left missing for the same reason, which is not a source cell.
+    """
+    source = read_analysis_records(Path(source_path) / "analyses.tsv")
+    target = read_analysis_records(Path(target_path) / "analyses.tsv")
+    if len(source) != len(target):
+        return np.zeros(len(target), dtype=np.int64)  # analyses_mismatch reports it
+    delta = [
+        int(t.n_missing_se_out_of_range or 0) - int(s.n_missing_se_out_of_range or 0)
+        for s, t in zip(source, target, strict=True)
+    ]
+    return np.maximum(np.asarray(delta, dtype=np.int64), 0)
+
+
+def unaccounted_se_out_of_range(sampled: np.ndarray, allowance: np.ndarray) -> int:
+    """Sampled source cells over the range that the completed counts do not account for."""
+    return int(np.maximum(sampled - allowance, 0).sum())
+
+
 def _pair_layout(source_path: Path, target_path: Path) -> PrimaryStorageLayout:
     """The layout the two Stores share: a pair of two layouts has nothing to line up."""
     source = _open_checked(source_path, "source", CompletionState.OBSERVED_ONLY)
@@ -250,7 +280,8 @@ def _check_dense(
     if axis.ok and analyses["identical"]:
         record.update(
             _sample_and_compare(
-                axis, pair.parent, pair.child, (chunk_rows, band_rows), seed, n_random
+                axis, pair.parent, pair.child, (chunk_rows, band_rows), seed, n_random,
+                se_out_of_range_allowance(pair.source_path, pair.target_path),
             )
         )
     else:
@@ -575,6 +606,7 @@ def _sample_and_compare(
     geometry: tuple[int, int],
     seed: int,
     n_random: int,
+    allowance: np.ndarray,
 ) -> dict[str, Any]:
     chunk_rows, band_rows = geometry
     bands = _choose_bands(
@@ -585,10 +617,12 @@ def _sample_and_compare(
     max_diff = dict.fromkeys(_DIFF_PLANES, 0.0)
     listing: list[dict[str, Any]] = []
     dirty: list[int] = []
+    over_by_analysis = np.zeros(parent.n_analyses, dtype=np.int64)
     for band in sorted(bands):
         r0, r1 = band * chunk_rows, min((band + 1) * chunk_rows, parent.n_rows)
         span = _child_span(axis.source_to_target, r0, r1, child.n_rows)
-        counts, diffs = _check_band(axis.source_to_target[r0:r1], (r0, r1), span, parent, child)
+        counts, diffs, over = _check_band(axis.source_to_target[r0:r1], (r0, r1), span, parent, child)
+        over_by_analysis += over
         for key in totals:
             totals[key] += counts[key]
         for plane in _DIFF_PLANES:
@@ -598,6 +632,9 @@ def _sample_and_compare(
         listing.append(
             {"band": band, "parent_rows": [r0, r1], "strata": sorted(bands[band])}
         )
+    # Per Analysis, then summed: a sampled source cell over the range is accounted for
+    # only by its own Analysis's count, not by another's (issue #338).
+    totals["se_out_of_range_unaccounted"] = unaccounted_se_out_of_range(over_by_analysis, allowance)
     return {
         "bands_checked": len(bands),
         "bands_by_stratum": {s: sum(s in strata for strata in bands.values()) for s in STRATA},
@@ -640,7 +677,7 @@ def _check_band(
     span: tuple[int, int],
     parent: _Planes,
     child: _Planes,
-) -> tuple[dict[str, int], dict[str, float]]:
+) -> tuple[dict[str, int], dict[str, float], np.ndarray]:
     """Compare one source chunk-row with the completed span it owns (see `_child_span`)."""
     (r0, r1), (c0, c1) = source_rows, span
     assert child.imputed is not None  # checked before sampling began
@@ -650,7 +687,7 @@ def _check_band(
 
 def _compare(
     parent: _Cells, child: _Cells, raw_imputed: np.ndarray, local: np.ndarray
-) -> tuple[dict[str, int], dict[str, float]]:
+) -> tuple[dict[str, int], dict[str, float], np.ndarray]:
     """The cell checks. `local` maps each source row to its row within the span.
 
     Missingness and the imputed mask's domain are checked *before* cells are
@@ -660,7 +697,13 @@ def _compare(
     imputed = raw_imputed.astype(np.uint8)
     mapped = _Cells(child.z[local], child.se[local], child.eaf[local])
     mapped_imputed = imputed[local]
-    observed = _observed(parent)
+    # A source cell whose SE exceeds float16's range is the one observed cell that
+    # may become missing (issue #338): it is set aside here, counted per Analysis,
+    # and the completed counts must account for it. It is not compared, and a
+    # completed cell that is neither missing nor imputed there still fails as
+    # `missing_became_observed`.
+    over = parent_over_range(parent)
+    observed = _observed(parent) & ~over
     child_observed = _observed(mapped)
     inserted = np.ones(len(imputed), dtype=bool)
     inserted[local] = False
@@ -668,6 +711,8 @@ def _compare(
     counts = {
         "cells_compared": int(parent.z.size),
         "parent_observed": int(observed.sum()),
+        "source_se_out_of_range": int(over.sum()),
+        "se_out_of_range_unaccounted": 0,  # decided per Analysis over the whole sample
         "imputed_mask_invalid": int(((raw_imputed != 0) & (raw_imputed != 1)).sum()),
         "z_se_missingness_mismatch": count_partial_cells(parent) + count_partial_cells(child),
         "infinite_cells": count_infinite_cells(parent) + count_infinite_cells(child),
@@ -684,7 +729,12 @@ def _compare(
         counts[f"{plane}_mismatch"], diffs[plane] = _plane_difference(
             getattr(parent, plane)[observed], getattr(mapped, plane)[observed]
         )
-    return counts, diffs
+    return counts, diffs, over.sum(axis=0).astype(np.int64)
+
+
+def parent_over_range(cells: _Cells) -> np.ndarray:
+    """Cells holding a Z beside an SE above float16's range (issue #338)."""
+    return ~np.isnan(cells.z) & se_out_of_range(cells.se)
 
 
 def _observed(cells: _Cells) -> np.ndarray:

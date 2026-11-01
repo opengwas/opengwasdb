@@ -104,7 +104,7 @@ def test_the_readable_formats_are_the_two_the_epic_carries():
     """Format 0.2.0 is readable since #245 (Zarr v3 with sharding, the
     converter's output), alongside 0.1.0 which every builder still writes.  A
     third entry is a decision, not an accident."""
-    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (0,)}
+    assert dict(store_open.SUPPORTED_FORMAT_VERSIONS) == {(0, 1): (0,), (0, 2): (1,)}
 
 
 def test_each_readable_series_has_one_zarr_on_disk_format():
@@ -181,14 +181,27 @@ def test_the_converter_writes_the_current_version_and_reads_0_1_0():
     """#247 made the converter's target the builders' version: one constant.
 
     The converter reads `SOURCE_FORMAT_VERSION` (0.1.0, Zarr v2) and writes
-    `CURRENT_FORMAT_VERSION` (0.2.0).  Anything else would let a built store and
+    `CURRENT_FORMAT_VERSION` (0.2.1).  Anything else would let a built store and
     a converted store declare different formats while both carry Zarr v3
     sharding, which is exactly the identity #249 checks.
     """
     from opengwasdb.store import convert
 
-    assert convert.CURRENT_FORMAT_VERSION == store_open.CURRENT_FORMAT_VERSION == "0.2.0"
+    assert convert.CURRENT_FORMAT_VERSION == store_open.CURRENT_FORMAT_VERSION == "0.2.1"
     assert convert.SOURCE_FORMAT_VERSION == "0.1.0"
+
+
+def test_0_2_0_reads_without_a_warning_and_completes_in_place(caplog):
+    """#338 moved the version to 0.2.1 within the 0.2 series: 0.2.0 is not newer, so it
+    reads quietly, and it is the same series, so completion may write into it."""
+    assert store_open.CURRENT_FORMAT_VERSION == "0.2.1"
+    assert store_open.SUPPORTED_FORMAT_VERSIONS[(0, 2)] == (1,)
+    with caplog.at_level("WARNING"):
+        store_open.check_format_version("0.2.0")
+        store_open.check_format_version("0.2.1")
+    assert not caplog.records
+    assert store_open.check_writable_format_version("0.2.0") == "0.2.0"
+    assert store_open.check_writable_format_version("0.2.1") == "0.2.1"
 
 
 def test_0_1_0_is_readable_but_not_writable():
@@ -211,8 +224,8 @@ def test_a_readable_but_unwritable_version_is_refused(monkeypatch):
     guards arrives with a second readable version, not before, and a guard
     that has never been executed is a guess.
     """
-    monkeypatch.setattr(store_open, "CURRENT_FORMAT_VERSION", "0.1.1")
-    monkeypatch.setattr(store_open, "SUPPORTED_FORMAT_VERSIONS", {(0, 1): (1,)})
+    monkeypatch.setattr(store_open, "CURRENT_FORMAT_VERSION", "0.3.0")
+    monkeypatch.setattr(store_open, "SUPPORTED_FORMAT_VERSIONS", {(0, 1): (0,), (0, 3): (0,)})
 
     store_open.check_format_version("0.1.0")  # still readable
     with pytest.raises(store_open.UnsupportedFormatVersion, match="reads but cannot write"):

@@ -686,12 +686,13 @@ def test_fold_panel_crossovers_overwrites_an_already_imputed_cell(tmp_path):
     overflow_alids = np.array([OFF_PANEL_ALID], dtype=object)
     is_crossover = np.array([True])
 
-    n_reclaimed = _fold_panel_crossovers(
+    n_reclaimed, n_masked = _fold_panel_crossovers(
         dense_dir, dense_alid_to_row, offsets, src_z, src_se, src_eaf,
         overflow_alids, is_crossover, encoding=encoding, dense_encoding=encoding,
     )
 
     assert n_reclaimed == 1
+    assert n_masked.tolist() == [0]  # SE 0.3: nothing above float16's range (#338)
     written = zarr.open_group(str(dense_dir / "data.zarr"), mode="r")
     assert float(DenseZPlane.open(written, encoding).points([1], [0])[0]) == pytest.approx(
         -4.0, rel=1e-3

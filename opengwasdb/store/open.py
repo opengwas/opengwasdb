@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 #: four pre-reset versions are not in it and are not readable -- see
 #: `PRE_RESET_FORMAT_VERSIONS`.
 SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingProxyType(
-    {(0, 1): (0,), (0, 2): (0,)}
+    {(0, 1): (0,), (0, 2): (1,)}
 )
 
 #: format_version stamped on releases written by this build. A build writes
@@ -51,12 +51,15 @@ SUPPORTED_FORMAT_VERSIONS: Mapping[tuple[int, ...], tuple[int, ...]] = MappingPr
 #: (ADR 0041 §3): supporting the *writing* of historical formats would mean
 #: keeping every retired encoder alive and tested, for a use case nobody has.
 #:
-#: `0.2.0` since #247: Zarr v3 with the sharding codec (ADR 0057), at the Dense
-#: inner chunk and shard shapes ADR 0058 decided. The builders write it through
+#: `0.2.1` since #338 (ADR 0068): the `analyses.tsv` column
+#: `n_missing_se_out_of_range` is required, and an SE above float16's range is
+#: stored as missing. `0.2.0` (#247) stays readable and, by Reference Completion,
+#: writable in place: it is the same series, with the same Zarr v3 layout (ADR
+#: 0057) at the Dense inner chunk and shard shapes ADR 0058 decided. The builders write it through
 #: `opengwasdb.store.arrays`, and the converter writes it from a `0.1.0` source
 #: (`opengwasdb.store.convert.SOURCE_FORMAT_VERSION`); `0.1.0` stays readable
 #: until a later decision deletes the v2 reader (ADR 0057).
-CURRENT_FORMAT_VERSION = "0.2.0"
+CURRENT_FORMAT_VERSION = "0.2.1"
 
 #: The Zarr on-disk format each readable release series is stored in.  The
 #: series-to-layout coupling is part of the format contract, so it lives beside
@@ -215,6 +218,15 @@ def _series_text(series: tuple[int, ...]) -> str:
     return ".".join(str(part) for part in series)
 
 
+def is_writable_series(version: str) -> bool:
+    """Whether `version` is in the series this build writes (`0.2.x` today).
+
+    A series fixes the physical layout, so completing a `0.2.0` release in place
+    writes arrays this build can write, whatever remainder it keeps (spec §21.3).
+    """
+    return split_format_version(version)[0] == split_format_version(CURRENT_FORMAT_VERSION)[0]
+
+
 def check_writable_format_version(version: str, *, source: str = "release") -> str:
     """Return `version` if this build can write it; raise otherwise (ADR 0038 §4).
 
@@ -227,18 +239,19 @@ def check_writable_format_version(version: str, *, source: str = "release") -> s
     lies about its own encoding, which is the failure class this project exists
     to avoid.
 
-    It is live since #247: this build writes `0.2.0` (Zarr v3 with sharding), so
-    completing a `0.1.0` source -- Zarr v2, written by every build before this
-    one -- is refused here.  The refusal names the conversion tool, because a
+    It is live since #247: this build writes the `0.2` series (Zarr v3 with
+    sharding), so completing a `0.1.0` source -- Zarr v2, written by every build
+    before this one -- is refused here, while a `0.2.0` source completes in
+    place and stays `0.2.0` (#338).  The refusal names the conversion tool, because a
     Dense 0.1.0 release whose values are right can be converted rather than
     rebuilt (ADR 0057 §3).  Convert, then complete; converting later is not
     possible, because completion writes into the source's arrays.
     """
     check_format_version(version, source=source)
-    if version != CURRENT_FORMAT_VERSION:
+    if not is_writable_series(version):
         raise UnsupportedFormatVersion(
             f"{source} is format_version={version!r}, which this build reads but cannot "
-            f"write (it writes {CURRENT_FORMAT_VERSION!r}). Completion preserves its "
+            f"write (it writes the {CURRENT_FORMAT_VERSION!r} series). Completion preserves its "
             "source's format rather than re-encoding it (ADR 0038 §4), so this release "
             "cannot be completed by this build. The one order that works is: convert the "
             f"0.1.0 source to {CURRENT_FORMAT_VERSION} with "

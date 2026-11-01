@@ -43,8 +43,10 @@ from opengwasdb.layouts.dense.top_hits import threshold_key, z_critical
 from opengwasdb.layouts.hybrid.layout import dense_component_path, dense_to_shared_path
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.model.analyses import (
+    N_MISSING_SE_OUT_OF_RANGE_COLUMN,
     RETIRED_ANALYSIS_COLUMNS,
     TOP_HIT_COUNT_COLUMNS,
+    AnalysesTable,
     read_analyses,
 )
 from opengwasdb.model.enums import (
@@ -78,6 +80,7 @@ from opengwasdb.store.open import (
     OpenGWASDBStore,
     UnsupportedFormatVersion,
     open_store,
+    parse_format_version,
     zarr_format_for_version,
 )
 from opengwasdb.validation.sample_size import validate_n_plan, validate_ragged_n
@@ -902,7 +905,7 @@ def _validate_dense_store(
                 _validate_sqlite(connection, n_variants, errors)
             finally:
                 variant_axis.close()
-            n_analyses = _validate_analyses_tsv(store.analyses_path, errors)
+            n_analyses = _validate_analyses_of(store, errors)
             root = store.arrays(mode="r")
             imputed_arr = None
             on_panel_arr = None
@@ -1321,7 +1324,7 @@ def _validate_ragged_analyses(
     CSR's offsets bound, and a leftover SQLite `analyses` table is a failure
     rather than a harmless relic (ADR 0034, issue #72).
     """
-    n_analyses_tsv = _validate_analyses_tsv(store.analyses_path, errors)
+    n_analyses_tsv = _validate_analyses_of(store, errors)
     if n_analyses_tsv != n_analyses_csr:
         errors.append(
             f"analyses.tsv has {n_analyses_tsv} rows but "
@@ -2600,6 +2603,56 @@ def _validate_eaf_orientation(
                 f"analysis {analysis_id!r} records eaf_orientation={outcome!r} in "
                 f"analyses.tsv but {entry.get('outcome')!r} in manifest.json provenance"
             )
+
+
+#: The first `format_version` whose `analyses.tsv` must carry
+#: `n_missing_se_out_of_range` (issue #338, spec §7a); below it the column is
+#: optional and an absent or empty value reads as unknown, never zero.
+N_MISSING_SE_REQUIRED_FROM = (0, 2, 1)
+
+
+def _validate_analyses_of(store: OpenGWASDBStore, errors: list[str]) -> int:
+    """`analyses.tsv`'s own checks plus the release-version-dependent ones; its row count."""
+    n = _validate_analyses_tsv(store.analyses_path, errors)
+    _validate_n_missing_se_column(
+        read_analyses(store.analyses_path), store.manifest.format_version, errors
+    )
+    return n
+
+
+def _validate_n_missing_se_column(
+    table: AnalysesTable, format_version: str, errors: list[str]
+) -> None:
+    """The count of associations stored as missing for an SE above float16's range.
+
+    Required, with a non-negative integer on every row, from format 0.2.1; below
+    it the column may be absent or empty (unknown), but a value present must still
+    be a non-negative integer.
+    """
+    column = N_MISSING_SE_OUT_OF_RANGE_COLUMN
+    required = parse_format_version(format_version) >= N_MISSING_SE_REQUIRED_FROM
+    if column not in table.fieldnames:
+        if required:
+            errors.append(
+                f"analyses.tsv is missing {column}, required from format_version "
+                f"{'.'.join(map(str, N_MISSING_SE_REQUIRED_FROM))} (spec §7a, issue #338); "
+                f"this release is {format_version}"
+            )
+        return
+    for row in table.rows:
+        problem = _n_missing_se_problem(row.get(column, ""), required)
+        if problem:
+            errors.append(f"analysis {row.get('analysis_id', '')!r} has {column} {problem}")
+
+
+def _n_missing_se_problem(value: str, required: bool) -> str:
+    """Why `value` is not an acceptable `n_missing_se_out_of_range`, or an empty string."""
+    if not value:
+        required_why = "empty; a release at 0.2.1 or later records an integer for every Analysis"
+        return required_why if required else ""
+    if not (value.isascii() and value.isdigit()):
+        return f"{value!r}; expected a non-negative integer"
+    return ""
 
 
 def _validate_analyses_tsv(analyses_path: Path, errors: list[str]) -> int:

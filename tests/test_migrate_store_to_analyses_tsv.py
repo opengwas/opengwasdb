@@ -30,6 +30,16 @@ _spec.loader.exec_module(migrate_module)
 _OLD_SIDECAR_FIELDS = ["trait_id", "assigned_ancestry", "completed_against"]
 
 
+def _stamp_as_written_before_338(store_path: Path) -> None:
+    """A release with an old `analyses.tsv` layout predates every later column, so it is
+    stamped as the last release written before `n_missing_se_out_of_range` became required
+    (#338): the migration cannot know that count and does not write it."""
+    manifest_path = store_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["format_version"] = "0.2.0"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
 def _revert_to_old_layout(store_path: Path, ancestry: dict[str, str] | None = None) -> None:
     """Convert a freshly-built (post-#22) store back into the pre-#22 layout:
     a SQLite `analyses` table instead of `analyses.tsv`, and (optionally) an
@@ -37,6 +47,7 @@ def _revert_to_old_layout(store_path: Path, ancestry: dict[str, str] | None = No
     table = read_analyses(store_path / "analyses.tsv")
     (store_path / "analyses.tsv").unlink()
     (store_path / "overview.html").unlink()
+    _stamp_as_written_before_338(store_path)
 
     connection = sqlite3.connect(store_path / "index.sqlite")
     try:
@@ -208,6 +219,7 @@ def _revert_to_pre_adr0034_tsv(store_path: Path) -> None:
     `analysis_label` defaulted to `analysis_id` rather than genuinely
     resolved -- matching every real store built in that window (e.g. the
     2026-08-05 `ukb-b-c128-completed` production store)."""
+    _stamp_as_written_before_338(store_path)
     table = read_analyses(store_path / "analyses.tsv")
     old_fields = [
         "analysis_index", "analysis_id", "phenotype_id", "phenotype_label", "analysis_label",

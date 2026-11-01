@@ -67,6 +67,12 @@ from opengwasdb.encoding import (
     write_eaf_baseline,
     write_eaf_reference,
 )
+from opengwasdb.encoding.se_range import (
+    mask_se,
+    mask_se_grid,
+    mask_se_out_of_range,
+    se_out_of_range,
+)
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.build import add_hit_counts, write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
@@ -81,6 +87,7 @@ from opengwasdb.model.analyses import (
     read_analyses,
     read_analysis_records,
     reset_top_hit_counts,
+    with_n_missing_se,
 )
 from opengwasdb.model.enums import (
     AssociationCoverage,
@@ -181,6 +188,10 @@ def _make_reader(task: _BlockTask):
         if matched_local:
             z_obs[matched_local, :] = src_plane.rows(np.asarray(matched_src))
             se_obs[matched_local, :] = src_se_plane.rows(np.asarray(matched_src))
+            # An observed cell with an SE above float16's range is missing in
+            # the completed release (issue #338), so the imputation neither
+            # conditions on it nor leaves it out of its targets.
+            z_obs, se_obs, _ = mask_se_out_of_range(z_obs, se_obs)
 
         def read(ai: int) -> tuple[np.ndarray, np.ndarray]:
             return z_obs[:, ai], se_obs[:, ai]
@@ -364,6 +375,10 @@ class _CompletedArrays:
     n_missing_off_panel_total: int
     n_missing_imputation_failed: int
     total_imputed: int
+    #: Per Analysis, what completion itself stored as missing for an SE above
+    #: float16's range: observed cells it masked plus imputed cells it left
+    #: missing (issue #338). The source's own recorded count is added later.
+    n_missing_se: np.ndarray
 
 
 def _read_source_axis(src: Path, impute_analysis_ids: set[str] | None) -> _SourceAxis:
@@ -608,7 +623,7 @@ def _merge_checkpoint_fills(
     ld_dir: Path,
     ancestry: str,
     source_encoding: StoreEncoding,
-) -> tuple[StoreEncoding, bool, tuple[int, int], Path]:
+) -> tuple[StoreEncoding, bool, tuple[int, int], Path, np.ndarray]:
     """Resolve every block checkpoint's fills to union rows and shard them by
     output row-band on disk, creating the empty completed planes alongside.
     The final zarr writer then reads only the shard for the band it is
@@ -640,17 +655,24 @@ def _merge_checkpoint_fills(
         eaf_reference=eaf_reference,
     )
     band_rows = completion_band_rows(_dense_shard_rows(staged, effective_chunks))
-    fill_shard_dir, quality_count = _shard_checkpoint_fills_by_band(
+    fill_shard_dir, quality_count, n_imputed_left_missing = _shard_checkpoint_fills_by_band(
         blocks_dir,
         staged,
         union_alids_s,
         union_rows_s,
         axis.n_variants,
         band_rows,
+        axis.n_analyses,
         impute_mask=axis.impute_mask,
     )
     print(f"Wrote {quality_count:,} completion quality rows")
-    return encoding, eaf_reference is not None, effective_chunks, fill_shard_dir
+    return (
+        encoding,
+        eaf_reference is not None,
+        effective_chunks,
+        fill_shard_dir,
+        n_imputed_left_missing,
+    )
 
 
 def _stream_completed_arrays(
@@ -665,10 +687,15 @@ def _stream_completed_arrays(
     """Phase 3 — stream the completed z/se/imputed matrix out of the sharded
     checkpoints into row-band writes (issue 044), returning the counts the
     metadata phases must state."""
-    encoding, eaf_reference_present, effective_chunks, fill_shard_dir = _merge_checkpoint_fills(
-        staged, axis, blocks_dir, ld_dir, ancestry, source_encoding
-    )
+    (
+        encoding,
+        eaf_reference_present,
+        effective_chunks,
+        fill_shard_dir,
+        n_imputed_left_missing,
+    ) = _merge_checkpoint_fills(staged, axis, blocks_dir, ld_dir, ancestry, source_encoding)
     print("Writing data.zarr (band-streamed)...")
+    n_masked_observed = np.zeros(axis.n_analyses, dtype=np.int64)
     n_missing_off_panel, n_missing_imputation_failed, total_imputed = _write_completed_bands(
         staged,
         src_root,
@@ -681,6 +708,7 @@ def _stream_completed_arrays(
         source_encoding,
         encoding,
         impute_mask=axis.impute_mask,
+        n_masked_observed=n_masked_observed,
     )
     shutil.rmtree(fill_shard_dir, ignore_errors=True)
     n_missing_off_panel_total = int(n_missing_off_panel.sum())
@@ -696,6 +724,7 @@ def _stream_completed_arrays(
         n_missing_off_panel_total=n_missing_off_panel_total,
         n_missing_imputation_failed=n_missing_imputation_failed,
         total_imputed=total_imputed,
+        n_missing_se=n_masked_observed + n_imputed_left_missing,
     )
 
 
@@ -812,22 +841,24 @@ def _completed_analysis_rows(
     print("Writing analyses.tsv...")
     with staged.index_connection() as dst_db:
         quality_rollup = completion_quality_rollup(dst_db, axis.n_analyses)
-    return reset_top_hit_counts(
-        [
-            replace(
-                a,
-                completed_against=ancestry if axis.impute_mask is None or axis.impute_mask[i] else "",
-                # `eaf_scope` is derived from what the release actually holds, not
-                # copied forward -- the declaration disagreeing with the arrays is
-                # the defect that got through review on #106 (ADR 0037 §4).
-                eaf_scope=completed_eaf_scope(a, quality_rollup[i], arrays.eaf_reference_present),
-                completion_median_pearson_r=quality_rollup[i].median_pearson_r,
-                completion_n_imputed_total=quality_rollup[i].n_imputed_total,
-                completion_n_missing_total=str(int(arrays.n_missing_off_panel[i])),
-            )
-            for i, a in enumerate(axis.src_analyses)
-        ]
-    )
+    completed = [
+        replace(
+            a,
+            completed_against=ancestry if axis.impute_mask is None or axis.impute_mask[i] else "",
+            # `eaf_scope` is derived from what the release actually holds, not
+            # copied forward -- the declaration disagreeing with the arrays is
+            # the defect that got through review on #106 (ADR 0037 §4).
+            eaf_scope=completed_eaf_scope(a, quality_rollup[i], arrays.eaf_reference_present),
+            completion_median_pearson_r=quality_rollup[i].median_pearson_r,
+            completion_n_imputed_total=quality_rollup[i].n_imputed_total,
+            completion_n_missing_total=str(int(arrays.n_missing_off_panel[i])),
+        )
+        for i, a in enumerate(axis.src_analyses)
+    ]
+    # The source's recorded count carries forward (blank reads as zero: a source
+    # with no such column stored every such SE in its plane, and completion
+    # counted those it found), plus what this completion masked (issue #338).
+    return reset_top_hit_counts(with_n_missing_se(completed, arrays.n_missing_se, add=True))
 
 
 def _finalise_release(
@@ -978,6 +1009,65 @@ def _insert_completion_quality_batch(
     db.commit()
 
 
+_Fills = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+
+
+def _resolved_block_fills(
+    d: Any,
+    union_alids_s: np.ndarray,
+    union_rows_s: np.ndarray,
+    n_variants: int,
+    impute_mask: np.ndarray | None,
+) -> _Fills | None:
+    """One checkpoint's fills as ``(row, analysis, z, se)`` on the union axis, or ``None``.
+
+    ALIDs the union axis does not carry and rows outside it are dropped, and so
+    are the fills of an Analysis the ancestry-match filter excludes.
+    """
+    f_alid = d["f_alid"]
+    if not len(f_alid):
+        return None
+    if f_alid.dtype.kind == "U":
+        f_alid = f_alid.astype(ALID_DTYPE)
+
+    idx = np.minimum(np.searchsorted(union_alids_s, f_alid), len(union_alids_s) - 1)
+    matched = union_alids_s[idx] == f_alid
+    if not matched.any():
+        return None
+
+    rows = union_rows_s[idx[matched]].astype(np.int32, copy=False)
+    in_bounds = (rows >= 0) & (rows < n_variants)
+    if not in_bounds.any():
+        return None
+
+    rows = rows[in_bounds]
+    ai = d["f_ai"][matched].astype(np.int32, copy=False)[in_bounds]
+    z = d["f_z"][matched].astype(np.float32, copy=False)[in_bounds]
+    se = d["f_se"][matched].astype(np.float32, copy=False)[in_bounds]
+    if impute_mask is not None:
+        keep = impute_mask[ai]
+        if not keep.any():
+            return None
+        rows, ai, z, se = rows[keep], ai[keep], z[keep], se[keep]
+    return rows, ai, z, se
+
+
+def _without_out_of_range_se(
+    fills: _Fills | None, n_analyses: int
+) -> tuple[_Fills | None, np.ndarray]:
+    """`fills` without the cells whose SE exceeds float16's range, and the count per Analysis."""
+    none = np.zeros(n_analyses, dtype=np.int64)
+    if fills is None:
+        return None, none
+    rows, ai, z, se = fills
+    bad = se_out_of_range(se)
+    if not bad.any():
+        return fills, none
+    dropped = np.bincount(ai[bad], minlength=n_analyses).astype(np.int64)
+    keep = ~bad
+    return (rows[keep], ai[keep], z[keep], se[keep]), dropped
+
+
 def _shard_checkpoint_fills_by_band(
     blocks_dir: Path,
     staged: StagedRelease,
@@ -985,8 +1075,9 @@ def _shard_checkpoint_fills_by_band(
     union_rows_s: np.ndarray,
     n_variants: int,
     band_rows: int,
+    n_analyses: int,
     impute_mask: np.ndarray | None = None,
-) -> tuple[Path, int]:
+) -> tuple[Path, int, np.ndarray]:
     """Resolve checkpoint fills into raw row-band shard files.
 
     Checkpoints store fill rows by ALID because the union variant axis is built
@@ -1012,55 +1103,48 @@ def _shard_checkpoint_fills_by_band(
     quality_count = 0
     quality_batch: list[tuple[int, str, float | None, int, int]] = []
     quality_batch_size = 100_000
+    n_dropped = np.zeros(n_analyses, dtype=np.int64)
 
     with staged.index_connection() as dst_db:
         for ckpt in sorted(blocks_dir.glob("*.npz")):
             with np.load(ckpt, allow_pickle=False) as d:
                 bid = str(d["block_id"][0])
+                fills = _resolved_block_fills(
+                    d, union_alids_s, union_rows_s, n_variants, impute_mask
+                )
+                # An imputed cell whose SE exceeds float16's range is left
+                # missing (issue #338): dropped here, once, where the worker's
+                # candidate fills become the release's, so the arrays, the
+                # `completion_quality` rows and the count cannot disagree.
+                fills, dropped = _without_out_of_range_se(fills, n_analyses)
+                n_dropped += dropped
                 for ai, p, ni, nm in zip(
                     d["q_ai"], d["q_pearson"], d["q_nimp"], d["q_nmiss"], strict=True
                 ):
                     if impute_mask is not None and not impute_mask[int(ai)]:
                         continue
+                    left = int(dropped[int(ai)])
+                    if left > int(ni):
+                        raise ValueError(
+                            f"block {bid}: {left} imputed cells of analysis {int(ai)} exceed "
+                            f"float16's SE range but the block reports only {int(ni)} imputed"
+                        )
                     quality_batch.append(
                         (
                             int(ai),
                             bid,
                             None if not np.isfinite(p) else float(p),
-                            int(ni),
-                            int(nm),
+                            int(ni) - left,
+                            int(nm) + left,
                         )
                     )
                     quality_count += 1
                     if len(quality_batch) >= quality_batch_size:
                         _insert_completion_quality_batch(dst_db, quality_batch)
                         quality_batch.clear()
-
-                f_alid = d["f_alid"]
-                if not len(f_alid):
+                if fills is None:
                     continue
-                if f_alid.dtype.kind == "U":
-                    f_alid = f_alid.astype(ALID_DTYPE)
-
-                idx = np.minimum(np.searchsorted(union_alids_s, f_alid), len(union_alids_s) - 1)
-                matched = union_alids_s[idx] == f_alid
-                if not matched.any():
-                    continue
-
-                rows = union_rows_s[idx[matched]].astype(np.int32, copy=False)
-                in_bounds = (rows >= 0) & (rows < n_variants)
-                if not in_bounds.any():
-                    continue
-
-                rows = rows[in_bounds]
-                ai = d["f_ai"][matched].astype(np.int32, copy=False)[in_bounds]
-                z = d["f_z"][matched].astype(np.float32, copy=False)[in_bounds]
-                se = d["f_se"][matched].astype(np.float32, copy=False)[in_bounds]
-                if impute_mask is not None:
-                    keep = impute_mask[ai]
-                    if not keep.any():
-                        continue
-                    rows, ai, z, se = rows[keep], ai[keep], z[keep], se[keep]
+                rows, ai, z, se = fills
                 band_ids = rows // band_rows
 
                 for band_index in np.unique(band_ids):
@@ -1075,7 +1159,7 @@ def _shard_checkpoint_fills_by_band(
 
         _insert_completion_quality_batch(dst_db, quality_batch)
 
-    return fill_shard_dir, quality_count
+    return fill_shard_dir, quality_count, n_dropped
 
 
 def _create_completed_planes(
@@ -1269,9 +1353,32 @@ def _apply_fill_shard_records(
     return filled
 
 
+def _seed_masked_z(
+    zb: np.ndarray,
+    valid: np.ndarray,
+    srows: np.ndarray,
+    src_planes: tuple[DenseZPlane, DenseSePlane],
+    n_masked_observed: np.ndarray,
+) -> None:
+    """Seed a band's source rows from the source's z, masking an SE above float16's range.
+
+    An observed cell with such an SE is missing in the completed release, in z and se
+    alike (issue #338); it is counted per Analysis into `n_masked_observed`, in place. The
+    se pass masks the same cells.
+    """
+    if not len(valid):
+        return
+    src_plane, src_se_plane = src_planes
+    z_rows, _, masked = mask_se_grid(
+        src_plane.rows(srows), src_se_plane.rows(np.asarray(srows, dtype=np.int64))
+    )
+    zb[valid, :] = z_rows
+    n_masked_observed += masked
+
+
 def _write_completed_z_bands(
     root: Any,
-    src_plane: DenseZPlane,
+    src_planes: tuple[DenseZPlane, DenseSePlane],
     out_to_src: np.ndarray,
     on_panel: np.ndarray,
     fill_shard_dir: Path,
@@ -1282,6 +1389,7 @@ def _write_completed_z_bands(
     band_rows: int,
     n_missing_off_panel: np.ndarray,
     impute_mask: np.ndarray | None,
+    n_masked_observed: np.ndarray,
 ) -> tuple[int, int]:
     """Seed z from the source, apply the fills, and write the z + imputed
     bands, one row-band at a time. Missingness is accounted here, in the pass
@@ -1304,8 +1412,7 @@ def _write_completed_z_bands(
         imp_band = np.zeros((r1 - r0, n_analyses), dtype=np.uint8)
 
         valid, srows = _band_source_rows(out_to_src, r0, r1)
-        if len(valid):
-            zb[valid, :] = src_plane.rows(srows)
+        _seed_masked_z(zb, valid, srows, src_planes, n_masked_observed)
 
         _count_band_off_panel_missing(n_missing_off_panel, zb, on_panel, r0, r1)
 
@@ -1354,7 +1461,7 @@ def _write_completed_se_bands(
 
         valid, srows = _band_source_rows(out_to_src, r0, r1)
         if len(valid):
-            sb[valid, :] = src_se_plane.rows(np.asarray(srows, dtype=np.int64))
+            sb[valid, :] = mask_se(src_se_plane.rows(np.asarray(srows, dtype=np.int64)))
 
         _apply_fill_shard_records(
             sb, None, _fill_shard_path(fill_shard_dir, band_index), r0, "se"
@@ -1464,6 +1571,8 @@ def _write_completed_bands(
     source_encoding: StoreEncoding,
     encoding: StoreEncoding,
     impute_mask: np.ndarray | None = None,
+    *,
+    n_masked_observed: np.ndarray,
 ) -> tuple[np.ndarray, int, int]:
     """Seed z/se from the source, apply the imputed fills, and write
     z/se/imputed one row-band at a time, in cohesive phases: the z pass seeds
@@ -1493,24 +1602,14 @@ def _write_completed_bands(
 
     n_missing_off_panel = np.zeros(n_analyses, dtype=np.int64)
 
-    src_se_plane = DenseSePlane.open(src_root, source_encoding)
     # Source z is read decoded and written re-encoded, through the same plan --
     # completion moves values between two planes, it does not reinterpret them.
     src_plane = DenseZPlane.open(src_root, source_encoding)
+    src_se_plane = DenseSePlane.open(src_root, source_encoding)
 
     total_imputed, n_missing_imputation_failed = _write_completed_z_bands(
-        root,
-        src_plane,
-        out_to_src,
-        on_panel,
-        fill_shard_dir,
-        codec,
-        overflow,
-        n_variants,
-        n_analyses,
-        band_rows,
-        n_missing_off_panel,
-        impute_mask,
+        root, (src_plane, src_se_plane), out_to_src, on_panel, fill_shard_dir, codec, overflow,
+        n_variants, n_analyses, band_rows, n_missing_off_panel, impute_mask, n_masked_observed,
     )
     overflow.table().write(root)
 

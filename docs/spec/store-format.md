@@ -1,13 +1,14 @@
 # OpenGWASDB Store Format Specification
 
 Status: draft  
-Format version described: `0.2.0` (Zarr v3 with sharding, §10a; what every builder writes)  
-Also readable: `0.1.0` (Zarr v2); nothing else (§21)
+Format version described: `0.2.1` (Zarr v3 with sharding, §10a; what every builder writes)  
+Also readable: `0.2.0` and `0.1.0` (Zarr v2); nothing else (§21)
 
 This document defines the contract for valid OpenGWASDB Store Releases. It
-describes `format_version` **0.2.0** (§10a: Zarr v3 with the sharding codec),
-what every builder writes since #247, and **0.1.0** (Zarr v2), which a reader
-still reads and a builder no longer writes. Everything below that is not
+describes `format_version` **0.2.1** (§10a: Zarr v3 with the sharding codec),
+what every builder writes since #338 (`0.2.0`, written from #247 to #338, reads
+the same and differs only where §6a, §7a and §21.2 say), and **0.1.0** (Zarr
+v2), which a reader still reads and a builder no longer writes. Everything below that is not
 about the physical layout holds for both versions: statistic planes carry a
 declared encoding (§6a), `z` is `int16` fixed point rather than `float16`, `eaf`
 is a per-variant baseline plus a per-cell `int8` logit residual rather than a
@@ -503,6 +504,22 @@ names it (§20). Zero SE,
 non-finite predictions, and out-of-range residuals are exact exceptions, never
 clips.
 
+**An SE above float16's maximum is missing, whatever the encoding (issue #338,
+ADR 0068).** `SE_MAX_STORED = 65,504`, `float16`'s largest finite value. An
+association whose SE is **strictly above** it is stored as **missing**: both
+its `z` and its `se` carry the plane's Missing Marker (§15), and it is counted in
+`n_missing_se_out_of_range` (§7a). The rule does not depend on the plane's kind:
+an `int8_residual` plane could hold such a value in its exception table, but then
+whether an association survived would depend on which encoding the build chose
+after measuring, so the rule is applied to the data before the encoding is
+measured. In a Ragged component "missing" is "not retained" -- the way an
+unusable source row is -- and a Reference-Completed Ragged sequence, which stores
+explicit missing rows, stores one. An SE of exactly 65,504 is kept. The encoders
+refuse an SE above the bound rather than write `+inf`: a build path that forgot
+the rule fails loudly. A release written before `0.2.1` may hold `+inf` in a
+`float16` plane (§20 warns about each); Reference Completion applies the rule to
+those cells (§12).
+
 **Residual SE is all-or-nothing per component, and that verdict is reached
 before the fit and the measurements.** One Analysis whose cells carry a finite
 SE and no frequency, or from which the fit yields no coefficients — fewer than
@@ -763,6 +780,7 @@ completed_against   (Reference-Completed releases only; null when unimputed)
 completion_median_pearson_r   (Reference-Completed releases only)
 completion_n_imputed_total
 completion_n_missing_total
+n_missing_se_out_of_range   (store-only; associations stored as missing because their SE exceeds 65,504, float16's maximum; §6a)
 eaf_orientation      (see §9.1; `passed`, `failed` or `unverified`; blank only on a store built before the check existed)
 eaf_orientation_r    (the observed correlation; blank when none was computed)
 eaf_orientation_n    (variants the correlation was computed over)
@@ -770,6 +788,18 @@ n_hits_5e8   (count of associations at p <= 5e-8, genome-wide significant)
 n_hits_5e6   (count of associations at p <= 5e-6, suggestive)
 n_hits_5e4   (count of associations at p <= 5e-4, nominal)
 ```
+
+**`n_missing_se_out_of_range` (issue #338, ADR 0068)** is the number of the
+Analysis's associations stored as missing because their SE exceeded 65,504
+(§6a): observed source associations and, after Reference Completion, imputed
+cells completion left missing for the same reason. It is **required** in the
+`analyses.tsv` of a release at `format_version` 0.2.1 or later -- every row an
+integer, validation fails a release whose header lacks it or whose value is not a
+non-negative integer -- and **optional** below it, where an absent or empty value
+reads as *unknown*, never as 0. In a Hybrid release the root table counts both
+components and the Dense Component's own table counts only its cells (as
+`n_hits_*` do, issue #107). Completion carries the source's recorded count
+forward (an absent value counts as 0 -- see §12) and adds its own.
 
 Every column beyond `analysis_index`/`analysis_id` MAY be blank for an
 individual row when genuinely unknown or not applicable — a phenotype-level
@@ -1529,6 +1559,20 @@ There is no Z-only completion mode.
 
 Completion preserves every observed association exactly: a source-observed cell has the same decoded Z, SE and EAF in the Reference-Completed release and is not marked imputed, and no source-missing cell is observed in it. In a Hybrid release a Dense cell becomes observed only as a crossover, a source Overflow association moved into the Dense Component when the LD panel extends its axis; it holds what that component's own codec gives for the source value. `check-observed-view` (§20.4) re-derives that from the two releases' arrays.
 
+**One exception, and only one (issue #338, ADR 0068).** Completion re-encodes the
+`se` plane, which cannot hold a value above 65,504 (§6a), so it applies the missing-SE
+rule to the source's own cells too: a source-observed association whose SE exceeds
+65,504 -- `+inf` in a `0.2.0` `float16` plane -- becomes missing in the completed
+release, in `z` and `se` together, and is imputed there like any missing cell. An
+imputed cell whose SE would exceed 65,504 is left missing, not imputed, and
+`completion_quality` does not count it as imputed. The completed release's
+`n_missing_se_out_of_range` is the source's recorded count (absent or empty counts
+as 0: a release without the column stored every such SE in its plane, and completion
+counts the cells it finds there) plus the observed cells it masked plus the imputed
+cells it left missing. The observed-view check accepts that transition and no other:
+it sets such source cells aside, and the completed counts must account for every one
+it samples.
+
 ## 13. LD Reference Panel requirements
 
 An LD Reference Panel used for Reference Completion MUST define:
@@ -1764,7 +1808,8 @@ Validators MUST check at least:
 - `se >= 0` for all finite SE values, and a **warning** — not a failure — when a Store holds an
   infinite `se`, naming the cell count and up to five Analyses holding one: an SE above a
   `float16` plane's range is stored as `+inf` beside a finite Z, so `beta = z × se` reads as
-  infinity although the source value was finite (issues #337, #338);
+  infinity although the source value was finite (issues #337, #338). A release at `0.2.1` or later should hold none, since the build stores such an association as missing (§6a); the warning remains for a `0.2.0` release and is not yet an error;
+- `n_missing_se_out_of_range` is present with a non-negative integer on every row from `format_version` 0.2.1, and a value present below it is a non-negative integer (§7a);
 - Z and SE missingness is consistent, each read through its own plane's missing marker (§6a, §15);
 - each statistic plane's dtype matches the `encoding` the manifest declares, and a plane with a declared `kind` this build does not implement fails the release rather than being decoded (§6a);
 - every out-of-range Z cell has an entry in the plane's overflow table, and the table describes no other cell (§6a) — a lost entry is the *largest* |z| in the store, which is the one value that must never read as something plausible instead;
@@ -2205,7 +2250,7 @@ For a release at `M.m.p`, a reader that fully understands that release series up
 
 Accepting a newer remainder follows from the definition of a compatible change: if an older reader could not read it correctly, the change was incompatible and was classified wrong. The warning is what makes such a misclassification visible instead of silently returning partial data.
 
-This build reads two series, `0.1` (Zarr v2, readable but no longer written) and `0.2` (Zarr v3 with sharding, §10a, what every builder writes since #247). `0.2.0` is the only 0.2 release and `0.1.0` the only 0.1 release; a second remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
+This build reads two series, `0.1` (Zarr v2, readable but no longer written) and `0.2` (Zarr v3 with sharding, §10a, what every builder writes since #247). `0.2.0` and `0.2.1` are the two 0.2 releases (the second added the required `analyses.tsv` column `n_missing_se_out_of_range` and the missing-SE rule of §6a, issue #338, ADR 0068; a reader of 0.2.1 reads 0.2.0 without a warning) and `0.1.0` the only 0.1 release; a further remainder in either series is a decision, not an accident. A 0.2 release is a different physical layout, not a different decoding: a reader decodes a 0.2 plane exactly as §6a says and gets the same values as the 0.1 release it was converted from.
 
 A reader meeting a feature it does not implement — an encoding kind, an index type, or a value in a controlled vocabulary it does not know — MUST reject the release rather than guess or fall back. Before `1.0.0` that refusal is exactly what a §21.0 vocabulary change produces in an older package: the "MUST accept a newer remainder" rows above govern a release whose *content* a reader understands, and §21.0 is the pre-release substitute for the version bump those rows would otherwise require.
 
@@ -2215,7 +2260,7 @@ Future format versions may add fields, arrays, or indexes, but MUST preserve exp
 
 A build writes exactly one `format_version` and reads every series it implements. There is no facility for writing an older format: a store that needs to be in an older format already exists in that format.
 
-**Since #247**, this build writes `0.2.0` from every builder and from the converter (§21.4), whose target is `CURRENT_FORMAT_VERSION` — the same constant the builders read — and whose source version is `SOURCE_FORMAT_VERSION = "0.1.0"`. A built release and a converted release therefore declare the same format and carry the same Zarr v3 sharded layout — which is what lets #249 check their identity. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0` source cannot be Reference-Completed by this build: **the one executable order is to convert the `0.1.0` source to `0.2.0` and then complete the converted release** (or rebuild it). Completion refuses a `0.1.0` source and names the conversion tool. A converted `0.2.0` release is writable, so it can then be completed in place.
+**Since #247** this build writes the `0.2` series, and **since #338** it writes `0.2.1` from every builder and from the converter (§21.4), whose target is `CURRENT_FORMAT_VERSION` — the same constant the builders read — and whose source version is `SOURCE_FORMAT_VERSION = "0.1.0"`. A built release and a converted release therefore declare the same format and carry the same Zarr v3 sharded layout — which is what lets #249 check their identity. `0.1.0` stays readable; deleting the v2 reader is a later decision (ADR 0057). Because completion writes into its source's arrays and keeps its `format_version`, a `0.1.0` source cannot be Reference-Completed by this build: **the one executable order is to convert the `0.1.0` source to the current `0.2` series and then complete the converted release** (or rebuild it). Completion refuses a `0.1.0` source and names the conversion tool. A `0.2.0` or `0.2.1` release is writable (the same series, the same layout), so it can be completed in place and keeps its own version.
 
 ### 21.4 I have an old store — now what?
 
@@ -2228,7 +2273,7 @@ association data and no Analytical Metadata, and every edited Store is
 re-validated.
 
 1. **Rebuild** — the default. Sources are retained and builds are reproducible, and a rebuild also picks up every build-time fix since the store was made.
-2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.0` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already `0.2.0` (including a Hybrid with one component already converted), and a Hybrid without its nested Dense Component. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
+2. **Migrate** — where a mechanical transformation is sufficient and a rebuild is disproportionate. `scripts/convert_store_to_0_2_0.py` (`opengwasdb.store.convert`, issues #245 and #248) derives a new `0.2.1` release from a `0.1.0` one at an explicit `--into` path: every array is re-written as Zarr v3 with the sharding codec holding the same stored codes, so no value is re-encoded, and `n_missing_se_out_of_range` is written as `0` after a scan of every `se` plane found no cell above 65,504. A source that holds one -- a `0.1.0` release written before #338 may hold `+inf` -- is **refused**, naming the count: the converter copies stored codes and cannot drop an association (its `z`, tables, top-hit tiers and Ragged offsets) faithfully, so it will not write a `0.2.1` release holding a value that format forbids; rebuild it from its sources. It accepts every layout whose arrays the role table names — Dense Observed-Only and Reference-Completed, Ragged Observed-Only and Reference-Completed, and Hybrid — and refuses an array or group it cannot name a role for, a source that is already in the `0.2` series (including a Hybrid with one component already converted), and a Hybrid without its nested Dense Component. A Hybrid release is two Store Releases, so both of its manifests and both of its `data.zarr` trees are converted; a half-converted Hybrid is invalid under §20. Like every derived release it never writes its source, mints a fresh `release_id` and `created_at`, records the source `release_id` and the new layout in a `zarr_v3_conversion` provenance block per component, regenerates `overview.html` where the layout carries one, and publishes by rename only after the staged copy is verified **bit-identical** to its source and validates with no errors. It reads no source VCF, so conversion rather than a rebuild is the migration route for a store whose values are right and whose layout is old (ADR 0057). `scripts/restamp_store_to_0_1_0.py` (issue #143) derives a new `0.1.0` release from a `3.0` one at an explicit `--into` path. It reads no array: the reset renumbered the format and deleted the pre-release decoders, and did not change the bytes a build writes, so a `3.0` release already holds what `0.1.0` describes. It exists for `ukb-b`, where a rebuild is 13h30m (issue #148); the pilots are rebuilt. It refuses `0.1`, `1.0` and `2.0`, whose planes are genuinely different encodings. Like every derived release it mints a fresh `release_id` and `created_at` rather than inheriting the source's, regenerates `overview.html` — which embeds `release_id` in its header (ADR 0032) — so the release's own page agrees with its new identity (issue #164), and builds the destination in a staging directory, publishing it by rename only when the staged copy validates with **no** errors — an error string identical to one the source already carried is never subtracted (issue #164). Its source release is never written. `scripts/migrate_store_to_analyses_tsv.py` predates this policy: it rewrites `analyses.tsv` in place, which is outside the Provenance Amendment exception. Its targets are stores that should be rebuilt instead (ADR 0038 §5).
 3. **Rejected** — a store whose series this build does not implement cannot be read, and no amount of validation makes it readable. Every pre-reset release is in this category, and says so by name.
 
 There is no support window for older remainders: a known series reads every remainder within it.

@@ -146,3 +146,45 @@ def test_to_json_schema_encodes_the_superset_property():
     assert schema["required"] == list(REQUIRED_COLUMNS)
     assert "log_or" in schema["properties"]["stored_effect_scale"]["enum"]
     assert "sd" in schema["properties"]["stored_effect_scale"]["enum"]
+
+
+def test_n_missing_se_out_of_range_round_trips_and_absent_is_unknown(tmp_path):
+    """A written count survives; a file without the column reads as blank, never 0 (#338)."""
+    from opengwasdb.model.analyses import (
+        Analysis,
+        read_analysis_records,
+        write_analysis_records,
+    )
+
+    path = tmp_path / "analyses.tsv"
+    write_analysis_records(
+        path,
+        [
+            Analysis(analysis_id="a", n_missing_se_out_of_range="5"),
+            Analysis(analysis_id="b", n_missing_se_out_of_range="0"),
+        ],
+    )
+    assert [a.n_missing_se_out_of_range for a in read_analysis_records(path)] == ["5", "0"]
+
+    old = tmp_path / "old.tsv"
+    old.write_text("analysis_index\tanalysis_id\n0\ta\n")
+    assert [a.n_missing_se_out_of_range for a in read_analysis_records(old)] == [""]
+    assert classify_column("n_missing_se_out_of_range") is ColumnClass.STORE_ONLY
+
+
+def test_validate_n_missing_se_must_be_a_non_negative_integer():
+    for bad in ("-1", "1.5", "x"):
+        errors = validate_analyses(
+            _table(
+                [*_MINIMAL_ROW, "n_missing_se_out_of_range"],
+                [{**_MINIMAL_ROW, "n_missing_se_out_of_range": bad}],
+            )
+        )
+        assert any("n_missing_se_out_of_range" in e for e in errors), bad
+    ok = validate_analyses(
+        _table(
+            [*_MINIMAL_ROW, "n_missing_se_out_of_range"],
+            [{**_MINIMAL_ROW, "n_missing_se_out_of_range": "3"}],
+        )
+    )
+    assert ok == []

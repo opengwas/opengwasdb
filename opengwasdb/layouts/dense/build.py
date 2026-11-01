@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from opengwasdb.encoding import (
     write_eaf_baseline,
     write_se_dense,
 )
+from opengwasdb.encoding.se_range import mask_se_grid
 from opengwasdb.index import initialise_schema, set_metadata
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
@@ -34,7 +36,12 @@ from opengwasdb.layouts.dense.constants import (
 from opengwasdb.layouts.dense.overview import write_overview_html
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, read_top_hit_counts
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
-from opengwasdb.model.analyses import Analysis, analyses_table_from_records, write_analyses
+from opengwasdb.model.analyses import (
+    Analysis,
+    analyses_table_from_records,
+    with_n_missing_se,
+    write_analyses,
+)
 from opengwasdb.model.enums import (
     AssociationCoverage,
     EafOrientationOutcome,
@@ -86,6 +93,14 @@ def add_hit_counts(store_path: str | Path, analyses: list[Analysis]) -> list[Ana
     ]
 
 
+def add_build_counts(
+    store_path: str | Path, analyses: list[Analysis], n_missing_se: Sequence[int]
+) -> list[Analysis]:
+    """`analyses` with the per-Analysis counts a build writes: associations stored as
+    missing for an SE above float16's range (issue #338), then Top-Hit Counts."""
+    return add_hit_counts(store_path, with_n_missing_se(analyses, n_missing_se))
+
+
 def write_analyses_tsv(output_path: Path, analyses: list[Analysis]) -> Path:
     """Write ``analyses.tsv`` + ``overview.html`` -- the sole source of truth
     for Analytical Metadata (ADR 0030, issue #22; unified schema, ADR 0034),
@@ -128,6 +143,10 @@ def build_dense_observed_store(
         variants = _collect_variants(records)
         analyses = _collect_analyses(records)
         z, se, eaf = _scatter_records(records, variants, analyses)
+        # Before the encoding is measured, so the plan sees the masked data
+        # (issue #338, ADR 0068).
+        z, se, n_missing_se = mask_se_grid(z, se)
+        analyses = with_n_missing_se(analyses, n_missing_se)
 
         # The encoding plan is decided once, here, and read back from the
         # manifest by everything downstream (ADR 0037, issue #119).

@@ -976,13 +976,13 @@ def _recover_interrupted_install(ragged: Path) -> None:
 def _augment_target(store_path: str | Path, force: bool) -> tuple[Any, Path, Path]:
     """Open the release and settle the preconditions for an in-place augment."""
     from opengwasdb.store import open_store
-    from opengwasdb.store.open import CURRENT_FORMAT_VERSION
+    from opengwasdb.store.open import CURRENT_FORMAT_VERSION, is_writable_series
 
     store = open_store(store_path)
-    if store.manifest.format_version != CURRENT_FORMAT_VERSION:
+    if not is_writable_series(store.manifest.format_version):
         raise VariantIndexError(
             f"{store_path}: format_version is {store.manifest.format_version!r}; the index "
-            f"is added to a {CURRENT_FORMAT_VERSION} release. Convert a 0.1.0 release "
+            f"is added to a release of the {CURRENT_FORMAT_VERSION} series. Convert a 0.1.0 release "
             "first with scripts/convert_store_to_0_2_0.py, as completion does."
         )
     ragged = store.data_path / "ragged"

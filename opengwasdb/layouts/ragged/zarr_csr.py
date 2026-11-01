@@ -33,6 +33,7 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.encoding.plan import N_MISSING
 from opengwasdb.encoding.planes import write_se_coefficients
+from opengwasdb.encoding.se_range import require_se_in_range, se_out_of_range
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store.arrays import ArrayRole, array_length
@@ -121,6 +122,9 @@ class RaggedCSRWriter:
         #: will never write (ADR 0067).
         self._ns: list[np.ndarray | None] = []
         self._offsets: list[int] = [0]
+        #: Per Analysis, the associations `add_analysis` did not retain because
+        #: their SE exceeds float16's range (issue #338, ADR 0068).
+        self._n_missing_se: list[int] = []
         #: The baseline this writer has already derived, or `None` before the
         #: first ask. `None` can only mean "not derived": a derivation under a
         #: residual plan always returns an array, so it is never the answer.
@@ -155,6 +159,7 @@ class RaggedCSRWriter:
         declares one.
         """
         vi = np.asarray(variant_index, dtype=np.int32)
+        z, se, eaf, n, vi = self._retain_in_range(vi, z, se, eaf, n)
         # Every builder sorts an Analysis's associations by variant_index before
         # adding them (build_besd, build_ssf, Hybrid's `_assemble_overflow_column`
         # and completion's `_remapped_analysis_arrays` all argsort). The variant-
@@ -189,6 +194,41 @@ class RaggedCSRWriter:
         # can move one: a held baseline must never outlive the cells it came
         # from. Only `add_analysis` changes those cells.
         self._derived_baseline = None
+
+    def _retain_in_range(
+        self,
+        vi: np.ndarray,
+        z: np.ndarray,
+        se: np.ndarray,
+        eaf: np.ndarray | None,
+        n: np.ndarray | None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray]:
+        """Drop the associations whose SE exceeds float16's range, and count them.
+
+        A Ragged Observed-Only sequence holds only associations, so "missing" is
+        "not retained" -- the way an unusable source row is not (issue #338,
+        ADR 0068). Every Ragged builder reaches the plane through this method,
+        where an Analysis's `z` and `se` are in hand together.
+        """
+        se = np.asarray(se)
+        out_of_range = se_out_of_range(se)
+        count = int(np.count_nonzero(out_of_range))
+        self._n_missing_se.append(count)
+        if not count:
+            return z, se, eaf, n, vi
+        keep = ~out_of_range
+        return (
+            np.asarray(z)[keep],
+            se[keep],
+            None if eaf is None else np.asarray(eaf)[keep],
+            None if n is None else np.asarray(n)[keep],
+            vi[keep],
+        )
+
+    @property
+    def n_missing_se_out_of_range(self) -> list[int]:
+        """Per Analysis (in `add_analysis` order), associations not retained for SE range."""
+        return list(self._n_missing_se)
 
     @property
     def n_analyses(self) -> int:
@@ -548,7 +588,9 @@ class RaggedCSRWriter:
         plane = self._plane(root, "se", total, encoding.se.dtype)
         if not encoding.se.is_residual:
             for lo, hi in self._flat_regions(total, region_cells):
-                plane[lo:hi] = self._gather_region(offsets, lo, hi)[2].astype(np.float16)
+                region = self._gather_region(offsets, lo, hi)[2]
+                require_se_in_range(region, writer="_write_se_streamed")
+                plane[lo:hi] = region.astype(np.float16)
             return
         coefficients = (
             se_coefficients

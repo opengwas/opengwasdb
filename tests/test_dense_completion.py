@@ -1155,6 +1155,7 @@ class TestCompletedBandWriter:
                 encoding,
                 encoding,
                 impute_mask=impute_mask,
+                n_masked_observed=np.zeros(n_analyses, dtype=np.int64),
             )
         return dst, encoding, n_analyses, counters
 

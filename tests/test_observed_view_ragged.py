@@ -115,10 +115,7 @@ def _build_source(
     return observed
 
 
-@pytest.fixture(scope="module")
-def _pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, Path]:
-    root = tmp_path_factory.mktemp("observed-view-ragged")
-    observed = _build_source(root, SOURCES)
+def _complete_with_rich_panel(observed: Path, root: Path) -> tuple[Path, Path, Path]:
     panel = trc._make_rich_ld_panel(root)
     completed = root / "comp.opengwasdb"
     complete_ragged_store(
@@ -126,6 +123,13 @@ def _pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, Pa
         release_id="comp-v1",
     )
     return observed, completed, panel
+
+
+@pytest.fixture(scope="module")
+def _pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, Path]:
+    root = tmp_path_factory.mktemp("observed-view-ragged")
+    observed = _build_source(root, SOURCES)
+    return _complete_with_rich_panel(observed, root)
 
 
 @pytest.fixture(scope="module")
@@ -341,11 +345,10 @@ def test_an_imputed_mask_value_other_than_0_or_1_fails(tmp_path, pair):
     _failing(pair, tmp_path, "imputed_mask_invalid")
 
 
-# --- an infinite value is a value (issue #337) -----------------------------
+# --- an SE above float16's range may become missing (issues #337, #338) -------------
 
-# `eur_rich`'s 1:900000, whose SE a float16 plane narrows to `+inf` above its range; the
-# cell is present on both sides, so the check must compare it rather than call it missing
-# (issue #337, spec §15).
+# `eur_rich`'s 1:900000, whose SE a pre-#338 float16 plane narrowed to `+inf`. Completion now
+# stores that association as a missing row, counts it, and the check must accept exactly that.
 INFINITE_SE_CELL = (0, "1:900000:A:G")
 
 
@@ -356,20 +359,61 @@ def _write_infinite_se(store: Path, analysis_index: int, alid: str) -> None:
     se[_flat(store, analysis_index, alid)] = np.inf
 
 
-def test_an_infinite_ragged_se_copied_identically_passes_and_is_counted(tmp_path, pair):
-    observed, completed, _ = pair
-    for store in (observed, completed):
-        _write_infinite_se(store, *INFINITE_SE_CELL)
-    assert np.isinf(float(_target_group(observed)["se"][_flat(observed, *INFINITE_SE_CELL)]))
-    assert np.isinf(
-        float(_target_group(completed)["se"][_flat(completed, *INFINITE_SE_CELL)])
+@pytest.fixture(scope="module")
+def _infinite_pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, Path]:
+    """The pair whose source holds `+inf` at one association, completed by the current build."""
+    from test_check_observed_view import drop_n_missing_se_column
+
+    root = tmp_path_factory.mktemp("observed-view-ragged-infinite")
+    observed = _build_source(root, SOURCES)
+    _write_infinite_se(observed, *INFINITE_SE_CELL)
+    drop_n_missing_se_column(observed)  # as a release written before #338 looks
+    return _complete_with_rich_panel(observed, root)
+
+
+@pytest.fixture
+def infinite_pair(tmp_path: Path, _infinite_pair_seed):
+    observed, completed, panel = _infinite_pair_seed
+    return (
+        shutil.copytree(observed, tmp_path / "obs.opengwasdb"),
+        shutil.copytree(completed, tmp_path / "comp.opengwasdb"),
+        shutil.copytree(panel, tmp_path / "panel"),
     )
 
-    result, verdict = _check(pair, tmp_path)
+
+def test_a_source_infinite_ragged_se_stored_as_missing_passes_and_is_counted(
+    tmp_path, infinite_pair
+):
+    observed, completed, _ = infinite_pair
+    assert np.isinf(float(_target_group(observed)["se"][_flat(observed, *INFINITE_SE_CELL)]))
+    # The completed release holds that row as a missing row (z and se NaN) -- or imputes
+    # it -- and counts it for its Analysis.
+    row = _flat(completed, *INFINITE_SE_CELL)
+    assert not np.isinf(float(_target_group(completed)["se"][row]))
+    counts = {
+        a.analysis_id: a.n_missing_se_out_of_range
+        for a in read_analysis_records(completed / "analyses.tsv")
+    }
+    assert counts["eur_rich"] == "1" and set(counts.values()) <= {"0", "1"}
+    assert sum(int(v) for v in counts.values()) == 1
+
+    result, verdict = _check(infinite_pair, tmp_path)
 
     assert result.exit_code == 0, result.output
     assert verdict["passed"] is True and verdict["failures"] == []
-    assert verdict["totals"]["infinite_cells"] == 2
+    assert verdict["totals"]["source_se_out_of_range"] == 1
+    assert verdict["totals"]["infinite_cells"] == 1, "the source's cell alone"
+
+
+def test_a_source_infinite_ragged_se_the_completed_counts_omit_fails(tmp_path, infinite_pair):
+    from opengwasdb.model.analyses import AnalysesTable, read_analyses, write_analyses
+
+    observed, completed, panel = infinite_pair
+    table = read_analyses(completed / "analyses.tsv")
+    rows = tuple({**row, "n_missing_se_out_of_range": "0"} for row in table.rows)
+    write_analyses(completed / "analyses.tsv", AnalysesTable(table.fieldnames, rows))
+
+    _failing(infinite_pair, tmp_path, "se_out_of_range_unaccounted")
 
 
 # --- seam 3: refusals ------------------------------------------------------

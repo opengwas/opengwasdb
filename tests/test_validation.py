@@ -421,7 +421,9 @@ def test_validator_warns_about_an_infinite_se_in_both_hybrid_components(tmp_path
     assert component.manifest.encoding.se.kind == "float16"  # fixture sanity
     rows, cols = np.array([0]), np.array([1])  # trait_c observes the one panel variant
     assert np.isfinite(dense_se.points(rows, cols)[0])  # fixture sanity: an observed cell
-    dense_se.patch(rows, cols, np.array([np.inf], dtype=np.float32))
+    # Written below the codec, as the other planted infinities are: `patch` refuses an SE
+    # above float16's range now (issue #338), and this test plants what an old build wrote.
+    component.arrays(mode="r+")["se"][0, 1] = np.float16(np.inf)
     ragged = open_store(store).arrays(mode="r+")["ragged"]
     assert ragged["se"].dtype == np.dtype("float16")  # fixture sanity
     overflow = int(ragged["offsets"][0])  # trait_a's off-panel association comes first
@@ -879,3 +881,59 @@ def test_validator_rejects_rho_variant_index_length_mismatch(dense_store_path):
 
     assert not result.ok
     assert any("rho variant_index has" in error for error in result.errors)
+
+
+# --- `n_missing_se_out_of_range` is required from 0.2.1 (issue #338) -------------
+
+
+def _drop_column(store: Path) -> None:
+    from opengwasdb.model.analyses import AnalysesTable, read_analyses, write_analyses
+
+    table = read_analyses(store / "analyses.tsv")
+    kept = tuple(c for c in table.fieldnames if c != "n_missing_se_out_of_range")
+    write_analyses(
+        store / "analyses.tsv",
+        AnalysesTable(kept, tuple({c: row[c] for c in kept} for row in table.rows)),
+    )
+
+
+def _set_format_version(store: Path, version: str) -> None:
+    import json
+
+    path = store / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["format_version"] = version
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_a_0_2_1_release_without_the_missing_se_column_is_invalid(dense_store_path):
+    assert validate_store(dense_store_path).ok  # fixture sanity: it has the column
+    _drop_column(dense_store_path)
+
+    result = validate_store(dense_store_path)
+
+    assert not result.ok
+    assert any("missing n_missing_se_out_of_range" in e and "0.2.1" in e for e in result.errors)
+
+
+def test_a_0_2_0_release_without_the_missing_se_column_is_valid(dense_store_path):
+    _drop_column(dense_store_path)
+    _set_format_version(dense_store_path, "0.2.0")
+
+    result = validate_store(dense_store_path)
+
+    assert result.ok, result.errors
+
+
+def test_a_missing_se_count_that_is_not_a_non_negative_integer_is_invalid(dense_store_path):
+    from opengwasdb.model.analyses import read_analyses, write_analyses
+
+    for bad in ("-1", "1.5", ""):
+        table = read_analyses(dense_store_path / "analyses.tsv")
+        table.rows[0]["n_missing_se_out_of_range"] = bad
+        write_analyses(dense_store_path / "analyses.tsv", table)
+
+        result = validate_store(dense_store_path)
+
+        assert not result.ok, bad
+        assert any("n_missing_se_out_of_range" in e for e in result.errors), bad

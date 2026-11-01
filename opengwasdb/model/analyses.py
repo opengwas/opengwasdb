@@ -25,7 +25,7 @@ draft spelling -- see `opengwasdb.model.enums`.
 from __future__ import annotations
 
 import csv
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
@@ -96,6 +96,12 @@ EAF_ORIENTATION_COLUMNS: tuple[str, ...] = (
     "eaf_orientation_n",
 )
 
+# Per-Analysis count of associations stored as missing because their SE exceeded
+# float16's maximum (issue #338, ADR 0068, spec §7a). Required in the
+# `analyses.tsv` of a release written at format 0.2.1 or later and optional
+# below it, where an absent or empty value reads as unknown, never as 0.
+N_MISSING_SE_OUT_OF_RANGE_COLUMN = "n_missing_se_out_of_range"
+
 # Produced during or after the build; must not be required of a release
 # manifest, which is generated before a build runs.
 STORE_ONLY_COLUMNS: tuple[str, ...] = (
@@ -103,6 +109,7 @@ STORE_ONLY_COLUMNS: tuple[str, ...] = (
     "completion_median_pearson_r",
     "completion_n_imputed_total",
     "completion_n_missing_total",
+    N_MISSING_SE_OUT_OF_RANGE_COLUMN,
     *EAF_ORIENTATION_COLUMNS,
     *TOP_HIT_COUNT_COLUMNS,
 )
@@ -265,11 +272,33 @@ def validate_analyses(table: AnalysesTable) -> list[str]:
                     f"analysis {analysis_id!r} has invalid {column} {value!r}; "
                     f"expected one of {allowed}"
                 )
-        _validate_case_control_counts(row, analysis_id, fieldnames, errors)
+        _validate_counts(row, analysis_id, fieldnames, errors)
         _validate_info_policy(row, analysis_id, errors)
         _validate_maf_policy(row, analysis_id, errors)
 
     return errors
+
+
+def _validate_counts(
+    row: dict[str, str], analysis_id: str, fieldnames: set[str], errors: list[str]
+) -> None:
+    """The per-Analysis counts a row carries: case/control counts and `n_missing_se_out_of_range`."""
+    _validate_case_control_counts(row, analysis_id, fieldnames, errors)
+    _validate_n_missing_se(row, analysis_id, fieldnames, errors)
+
+
+def _validate_n_missing_se(
+    row: dict[str, str], analysis_id: str, fieldnames: set[str], errors: list[str]
+) -> None:
+    """A recorded count is a non-negative integer; blank means unknown (issue #338)."""
+    if N_MISSING_SE_OUT_OF_RANGE_COLUMN not in fieldnames:
+        return
+    value = row.get(N_MISSING_SE_OUT_OF_RANGE_COLUMN, "")
+    if value and not (value.isascii() and value.isdigit()):
+        errors.append(
+            f"analysis {analysis_id!r} has {N_MISSING_SE_OUT_OF_RANGE_COLUMN} {value!r}; "
+            "expected a non-negative integer"
+        )
 
 
 def _validate_required_values(
@@ -395,12 +424,7 @@ ANALYSIS_COLUMNS: tuple[str, ...] = (
     "publication_pmid",
     "consortium",
     "first_author",
-    "completed_against",
-    "completion_median_pearson_r",
-    "completion_n_imputed_total",
-    "completion_n_missing_total",
-    *EAF_ORIENTATION_COLUMNS,
-    *TOP_HIT_COUNT_COLUMNS,
+    *STORE_ONLY_COLUMNS,
 )
 
 # Columns a prior `analyses.tsv` schema carried that this one deliberately
@@ -482,6 +506,10 @@ class Analysis:
     completion_median_pearson_r: str = ""
     completion_n_imputed_total: str = ""
     completion_n_missing_total: str = ""
+    # Associations stored as missing for an SE above float16's range (issue
+    # #338). Blank means unknown -- a release written before the column -- and
+    # is never read as zero.
+    n_missing_se_out_of_range: str = ""
     # EAF orientation evidence (issue #115). Blank on an Analysis no build-time
     # check ever ran over -- which validation treats as a store that predates
     # the check, not as one that passed it.
@@ -611,6 +639,7 @@ def _analysis_row(index: int, a: Analysis, fieldnames: tuple[str, ...]) -> dict[
         "completion_median_pearson_r": a.completion_median_pearson_r,
         "completion_n_imputed_total": a.completion_n_imputed_total,
         "completion_n_missing_total": a.completion_n_missing_total,
+        "n_missing_se_out_of_range": a.n_missing_se_out_of_range,
         "eaf_orientation": a.eaf_orientation,
         "eaf_orientation_r": a.eaf_orientation_r,
         "eaf_orientation_n": a.eaf_orientation_n,
@@ -662,6 +691,7 @@ def _analysis_from_row(row: dict[str, str], fieldnames: tuple[str, ...]) -> Anal
         completion_median_pearson_r=row.get("completion_median_pearson_r", ""),
         completion_n_imputed_total=row.get("completion_n_imputed_total", ""),
         completion_n_missing_total=row.get("completion_n_missing_total", ""),
+        n_missing_se_out_of_range=row.get("n_missing_se_out_of_range", ""),
         eaf_orientation=row.get("eaf_orientation", ""),
         eaf_orientation_r=row.get("eaf_orientation_r", ""),
         eaf_orientation_n=row.get("eaf_orientation_n", ""),
@@ -701,6 +731,29 @@ def read_analysis_records(path: str | Path) -> list[Analysis]:
     """Read `analyses.tsv` at `path` back into `Analysis` records, in file order."""
     table = read_analyses(path)
     return [_analysis_from_row(row, table.fieldnames) for row in table.rows]
+
+
+def with_n_missing_se(
+    analyses: list[Analysis], counts: Sequence[int] | np.ndarray, *, add: bool = False
+) -> list[Analysis]:
+    """`analyses` with `n_missing_se_out_of_range` set from `counts` (one per Analysis).
+
+    With ``add=True`` the counts are added onto what each Analysis already
+    carries, a blank acting as zero: a Hybrid's Dense Component and Ragged
+    Overflow partition an Analysis's associations, so each contributes its own
+    (issue #338, the way `add_hit_counts` accumulates).
+    """
+    if len(counts) != len(analyses):
+        raise ValueError(f"{len(counts)} counts for {len(analyses)} analyses")
+    return [
+        replace(
+            a,
+            n_missing_se_out_of_range=str(
+                int(c) + (int(a.n_missing_se_out_of_range or 0) if add else 0)
+            ),
+        )
+        for a, c in zip(analyses, counts, strict=True)
+    ]
 
 
 def reset_top_hit_counts(analyses: list[Analysis]) -> list[Analysis]:
