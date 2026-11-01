@@ -618,6 +618,29 @@ recorded in the artifact. `--skip-rss` drops the per-shape RSS probes (roughly
 halving the run); each probe re-invokes the script in a fresh interpreter with
 the same selection passed on the command line.
 
+**A Hybrid store adds four Dense-only shapes.** A Hybrid answers a lookup in
+three parts: the Dense Component's cells, the resolve of every requested
+identifier on the shared variant axis, and a search of each requested Analysis's
+Ragged Overflow segment. Only the first is what a reader who queries the
+reference axis alone pays, so a Hybrid column also times that part on its own
+(names end `_dense_only`, read from `q._dense`, never through the Hybrid):
+
+| Shape | What it reads |
+|---|---|
+| `regional_dense_only` | the window × every Analysis, from the Dense Component's own `range_phewas` |
+| `regional_one_analysis_dense_only` | the window's **panel** ALIDs × the exposure |
+| `random_lookup_10_variants_100_analyses_dense_only` | 10 panel variants × the 100 random Analyses |
+| `random_lookup_100_variants_10_analyses_dense_only` | 100 panel variants × 10 of those Analyses |
+
+The panel identifiers are drawn with the same `default_rng(0)` over the
+component's own axis (`_query_shapes.resolve_dense_alids`), resolved once
+against the first store and recorded in the selection as `dense_random_alids`,
+so an RSS probe and every other store read the identical identifiers. A Dense or
+Ragged store gets no such shapes and its artifact is unchanged: there its plain
+`lookup`/`range_phewas` already is the panel query. Because the shapes exist
+only on Hybrid columns, comparing a Hybrid with a Dense store lists them under
+`identity.shapes_not_compared` rather than pretending they agree.
+
 The environment block records the zarr/numcodecs/numpy/python versions, the
 installed `opengwasdb` commit, host, `nproc`, the 1-minute load average before
 and after each store's run, the cache condition, and the **effective reader
@@ -679,11 +702,14 @@ changes a run that uses neither:
 
 * `--selection FILE` times a caller-resolved selection (JSON, the keys the
   harness records under `selection`) instead of resolving one from the first
-  store. Three optional keys travel with it, so an RSS probe builds the same
+  store. Four optional keys travel with it, so an RSS probe builds the same
   shapes: `regional_alids` pins the region's ALIDs for `regional_one_analysis`;
   `shared_analyses` adds `phewas_shared_analyses` and `regional_shared`, the
-  `phewas`/`regional` questions asked of those Analyses only; and
-  `observed_only_shapes` adds `tophits_observed_only` and `bulk_observed_only`.
+  `phewas`/`regional` questions asked of those Analyses only;
+  `observed_only_shapes` adds `tophits_observed_only` and `bulk_observed_only`;
+  and `dense_random_alids` pins the Dense-only shapes' panel variants. A
+  selection without `dense_random_alids` is resolved against the first store
+  when that store is Hybrid.
 * `--allow-different-results` records which shapes' results differed, under
   `identity.differing_shapes`, with `identity.required: false`, instead of
   refusing to write the artifact.
@@ -811,14 +837,84 @@ while those exist.
 ### `benchmark_ogs00011_hybrid.py` (#252)
 
 Benchmarks the GWAS-Catalog-EUR Hybrid Store Release **OGS-00011**: the seven
-shared query shapes plus an off-axis PheWAS and the largest-Overflow bulk read,
-five known-locus checks, two pleiotropic PheWAS and three IVW Mendelian
-randomisation pairs. It runs the same fresh-interpreter RSS probe as
+shared query shapes plus an off-axis PheWAS, the largest-Overflow bulk read and
+the four Dense-only twins, eight known-locus checks, two pleiotropic PheWAS,
+three IVW Mendelian randomisation pairs with observed/imputed strata, and three
+regional windows. It runs the same fresh-interpreter RSS probe as
 `benchmark_ukbb_dense.py` and `benchmark_finngen_dense.py`, and shares its
-Analysis-summary, storage, selection, known-locus and pleiotropic-PheWAS report
-helpers with that harness through `benchmarks/_hybrid_report.py`.
+Analysis-summary, storage, selection, known-locus, pleiotropic-PheWAS and IVW
+report helpers with that harness through `benchmarks/_hybrid_report.py`.
 `benchmarks/measure_hybrid_component_split.py` measures how each Analysis
 splits between the two components.
+
+**Dense-only shapes.** A Hybrid lookup also resolves every identifier on the
+shared variant axis and searches each requested Analysis's Overflow segment, so
+a Hybrid lookup time is not what a reader who queries only the reference (panel)
+variants pays. `_query_shapes.dense_component_query_patterns` adds the four
+shapes that ask the same questions of `q._dense` alone, and `_patterns` times
+them beside the common ones:
+
+| Shape | What it reads |
+|---|---|
+| `regional_dense_only` | the TCF7L2 window × every Analysis, from the Dense Component |
+| `regional_one_analysis_dense_only` | the window's panel ALIDs × `GCST006867` |
+| `random_lookup_10_variants_100_analyses_dense_only` | 10 panel variants × the 100 random Analyses |
+| `random_lookup_100_variants_10_analyses_dense_only` | 100 panel variants × 10 of those Analyses |
+
+Their 100 variants are drawn with `default_rng(0)` from the Dense axis (panel
+size `len(q._dense_to_shared)`), not from the shared axis: an off-axis ALID has
+no Dense row and would silently shorten the query.
+
+**MR strata.** Each `mr` entry's headline keys (`ivw_beta`, `ivw_se`,
+`ivw_se_fixed`, `ivw_pval`, `cochran_q`, `q_df`, `n_instruments`,
+`n_instruments_overflow`, `sign_concordant_fraction`, `median_instrument_F`)
+describe the instruments `instrument_filter` names: `both_observed` by default,
+because an imputed cell's z is shrunk towards zero and understates the effect,
+falling back to `all` only when fewer than three instruments are observed on
+both sides (`_hybrid_report.default_mr_estimate`). `all_instruments` holds the
+same estimate over every instrument, with `n_overflow`, and `strata` holds it
+for `both_observed`, `both_imputed` and `mixed` (one side observed, the other
+imputed), `null` for a stratum holding fewer than three instruments. Every
+estimate is `_hybrid_report.ivw`, with the meaning the other full-scale MR
+reports give these names: beta = Σ(bx·by/sy²)/Σ(bx²/sy²), `se_fixed` =
+√(1/Σ(bx²/sy²)), `se` the multiplicative random-effects SE (`se_fixed` ×
+max(1, √(Q/df))), and `p` the two-sided normal p from `se`. Every instrument
+carries `beta_exp`, `se_exp`, `beta_out`, `se_out`, `status_exp`,
+`status_out` and the `component` that holds it. `n_instruments_raw` and
+`clump_kb` describe the instrument selection, `elapsed_s` the whole pair.
+
+**`regional_windows`.** One profile per `REGIONAL_LOCI` entry — TCF7L2 in
+`GCST006867`, FTO in `GCST90029007`, PCSK9 in `GCST90239658`, each a ±500 kb
+window around its lead variant. Every shared-axis ALID in the window is looked
+up for that one Analysis (`lookup`, so the Hybrid path the report measures), and
+the record is `{analysis_id, gene, lead_alid, chromosome, start, end, n_observed,
+n_imputed, rows, elapsed_s}` where each row is
+`[position, neglog10_p, status, component]` — the p from the `log_ndtr` form that
+stays finite at huge z, so a peak is never flattened by a naive tail.
+
+**Artifacts from the OGS-00011 full-scale run:**
+
+| File | Description |
+|---|---|
+| `opengwasdb_ogs00011_hybrid_benchmark.json` | The measurement: storage by component against the source GWAS-SSF, the build's step records, fourteen timed query shapes (the seven shared, four Dense-only, an off-axis PheWAS, the largest-Overflow bulk read and its Dense control) with p95, repetitions and row counts, per-shape peak RSS from the fresh-interpreter probe, the HM3 extract, the same Analysis's source-file parse for comparison, eight known loci with the component that answered each, two pleiotropic PheWAS, three IVW pairs with their observed/imputed strata, three ±500 kb regional windows, plus the commit, time, and `opengwasdb` path and fingerprint. |
+| `opengwasdb_ogs00011_hybrid_benchmark.qmd` | The report's source. It reads the JSON beside it and computes every figure on the page from it. |
+| `opengwasdb_ogs00011_hybrid_benchmark.html` | The rendered report, self-contained (`embed-resources: true`) with the code hidden. |
+
+The command that produced the JSON:
+
+```bash
+pixi run -e dev python benchmarks/benchmark_ogs00011_hybrid.py \
+    --store /data/opengwasdb/stores/OGS-00011/store.opengwasdb \
+    --manifest /data/opengwasdb/stores/OGS-00011/work/analyses.tsv \
+    --records /data/opengwasdb/stores/OGS-00011/records \
+    --output docs/benchmark-output/opengwasdb_ogs00011_hybrid_benchmark.json
+```
+
+and the report, rendered from `docs/benchmark-output`:
+
+```bash
+cd docs/benchmark-output && pixi run -e report quarto render opengwasdb_ogs00011_hybrid_benchmark.qmd
+```
 
 `benchmarks/ogs00011_ab.py` is the committed before/after entry point: for each
 shape it runs the before tree and then the after tree back to back, each in a

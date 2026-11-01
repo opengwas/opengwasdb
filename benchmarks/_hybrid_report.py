@@ -11,6 +11,11 @@ without one being a near-copy of the other (issue #252 review round 1).
 The harness-specific half stays with each harness: which store, which loci,
 which MR pairs and which extra fields its report carries. The functions here
 return the common part and take an `extra` mapping for a harness's own fields.
+
+The MR half is here for the same reason: `ivw` is the one IVW estimate and
+`mr_strata` the one split of a run into observed/imputed strata, so a
+harness reporting a stratum beside its whole-set estimate cannot accidentally
+use two conventions for the same quantity.
 """
 
 from __future__ import annotations
@@ -20,7 +25,16 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scipy.special import log_ndtr
+from scipy.special import erfc, log_ndtr
+
+# A stratum of an MR run is only estimated when it holds at least this many
+# instruments: a two-instrument "estimate" is the ratio of two ratios, and
+# reporting it beside a stratum of ninety invites reading it as one.
+MIN_STRATUM_INSTRUMENTS = 3
+
+# The observed/imputed strata an MR run is split into, by the Association
+# Status of the exposure cell and of the outcome cell of each instrument.
+MR_STRATA = ("both_observed", "both_imputed", "mixed")
 
 
 def analysis_rows(store: Path) -> list[dict[str, str]]:
@@ -96,6 +110,17 @@ def selection_summary(
     return out
 
 
+def neglog10_p(z: float) -> float:
+    """-log10 of the two-sided p for a z, computed in the log domain.
+
+    `1 - ndtr(|z|)` underflows to 0 at around z = 38, where this store's
+    strongest hits live, and loses its significant digits long before that;
+    `log_ndtr` keeps both. Shared so a regional profile and a locus check
+    cannot disagree about what a p-value is.
+    """
+    return float(-(log_ndtr(-abs(z)) + np.log(2.0)) / np.log(10.0))
+
+
 def oriented_locus(q: Any, alid: str, analysis_id: str, risk_allele: str) -> dict[str, Any] | None:
     """One locus lookup, oriented to its published risk allele, or None if absent.
 
@@ -120,7 +145,100 @@ def oriented_locus(q: Any, alid: str, analysis_id: str, risk_allele: str) -> dic
         "beta_risk_allele": sign * z * se,
         "z_risk_allele": sign * z,
         "risk_allele_frequency": eaf if record.effect_allele == risk_allele else 1.0 - eaf,
-        "neglog10_p": float(-(log_ndtr(-abs(z)) + np.log(2.0)) / np.log(10.0)),
+        "neglog10_p": neglog10_p(z),
+    }
+
+
+def ivw(instruments: list[dict[str, Any]]) -> dict[str, float]:
+    """Inverse-variance-weighted estimate over `instruments`, as the full-scale MR reports it.
+
+    beta = sum(bx*by/sy^2) / sum(bx^2/sy^2) and se_fixed = sqrt(1 / sum(bx^2/sy^2)).
+    `se` is the multiplicative random-effects SE, se_fixed * max(1, sqrt(Q/df))
+    with Cochran's Q over the instruments' ratio estimates, and `p` is the
+    two-sided normal p from it: the convention `benchmark_finngen_dense.run_mr`
+    reports as `ivw_se`/`ivw_pval`, so this store's MR reads beside the other
+    full-scale reports. One function for a stratum and for the whole set keeps
+    the two comparable.
+
+    `instruments` carry `beta_exp` and `beta_out`/`se_out`; an empty list has
+    no estimate and raises rather than returning a NaN a report would print.
+    """
+    if not instruments:
+        raise ValueError("ivw needs at least one instrument")
+    bx = np.array([float(i["beta_exp"]) for i in instruments])
+    by = np.array([float(i["beta_out"]) for i in instruments])
+    sy = np.array([float(i["se_out"]) for i in instruments])
+    precision = bx**2 / sy**2
+    beta = float(np.sum(bx * by / sy**2) / np.sum(precision))
+    se_fixed = float(np.sqrt(1.0 / np.sum(precision)))
+    q_stat = float(np.sum(precision * (by / bx - beta) ** 2))
+    df = len(instruments) - 1
+    se = se_fixed * max(1.0, float(np.sqrt(q_stat / df))) if df > 0 else se_fixed
+    return {
+        "beta": beta,
+        "se": se,
+        "se_fixed": se_fixed,
+        "p": float(erfc(abs(beta / se) / np.sqrt(2.0))),
+        "cochran_q": q_stat,
+        "q_df": df,
+        "n": len(instruments),
+    }
+
+
+def instrument_stratum(status_exp: str, status_out: str) -> str | None:
+    """Which observed/imputed stratum one instrument belongs to, if any.
+
+    An `observed`/`imputed` pair is `mixed`; `observed`/`observed` and
+    `imputed`/`imputed` are their own strata. Anything else -- a `missing`
+    cell, or a status this build does not know -- belongs to no stratum and is
+    reported only in the whole-set estimate.
+    """
+    if status_exp == status_out == "observed":
+        return "both_observed"
+    if status_exp == status_out == "imputed":
+        return "both_imputed"
+    if {status_exp, status_out} == {"observed", "imputed"}:
+        return "mixed"
+    return None
+
+
+def default_mr_estimate(
+    instruments: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]], dict[str, float]]:
+    """The instrument filter, instruments and IVW estimate an MR reports by default.
+
+    On a Reference-Completed Store an imputed cell's z is shrunk towards zero, so
+    an instrument with one understates its effect. The default is therefore the
+    `both_observed` instruments; only when they number fewer than
+    `MIN_STRATUM_INSTRUMENTS` does it fall back to `all`, and the filter says so.
+    """
+    observed = [
+        i for i in instruments
+        if instrument_stratum(str(i["status_exp"]), str(i["status_out"])) == "both_observed"
+    ]
+    if len(observed) >= MIN_STRATUM_INSTRUMENTS:
+        return "both_observed", observed, ivw(observed)
+    return "all", instruments, ivw(instruments)
+
+
+def mr_strata(instruments: list[dict[str, Any]]) -> dict[str, dict[str, float] | None]:
+    """The IVW estimate of each observed/imputed stratum, or None when too small.
+
+    The same `ivw` as the whole-set estimate, over each instrument's exposure
+    and outcome Association Status. A stratum holding fewer than
+    `MIN_STRATUM_INSTRUMENTS` is `None` rather than a wide estimate that would
+    be read as a result.
+    """
+    buckets: dict[str, list[dict[str, Any]]] = {name: [] for name in MR_STRATA}
+    for instrument in instruments:
+        name = instrument_stratum(
+            str(instrument["status_exp"]), str(instrument["status_out"])
+        )
+        if name is not None:
+            buckets[name].append(instrument)
+    return {
+        name: (ivw(bucket) if len(bucket) >= MIN_STRATUM_INSTRUMENTS else None)
+        for name, bucket in buckets.items()
     }
 
 
