@@ -486,11 +486,11 @@ tall_hybrid, tall_dense = (timings["random_lookup_100_variants_10_analyses"],
 print(f"""A Hybrid lookup does more than a panel lookup, and the gap between the two
 sets of columns is what it charges for the difference. It resolves every
 identifier the call is given — variant ALIDs and rsids, and the Analyses it is
-asked about — on the shared axis of {dataset['n_variants']:,} variants; it then
-searches each named
-Analysis's Ragged Overflow segment in turn, {n_traits:,} of them when the
-question is a window across the whole Store; and a regional PheWAS merges the
-two components' rows and re-indexes them into one genomic order. The Dense-only
+asked about — on the shared axis of {dataset['n_variants']:,} variants; for a
+lookup of named Analyses it then searches each of those Analyses' Ragged
+Overflow segments in turn. A regional PheWAS across every Analysis instead reads
+the Overflow's by-variant index once, then merges the two components' rows into
+one genomic order. The Dense-only
 column is the same question asked of the reference axis'
 {dataset['n_panel_variants']:,} panel variants and nothing else — the price a
 reader pays who wants panel variants only.
@@ -502,10 +502,11 @@ The ratios are not one number called "the Overflow's cost". `regional` is
 so the twin is not the Hybrid's time minus the Overflow's: the two calls walk
 different axes and return different row sets. `regional_one_analysis` returns
 {one_hybrid['result_count']:,} cells either way, and its
-{one_hybrid['median_ms'] / one_dense['median_ms']:.1f}× is the resolve and the
-single segment search almost alone, on {fmt_ms(one_hybrid['median_ms'])}. The two
-random lookups are the pair the Dense-only shapes were documented to caution
-about: their Dense draws are *panel* variants, which carry a cell in nearly
+{one_hybrid['median_ms'] / one_dense['median_ms']:.1f}× is almost entirely
+identifier resolution: the Hybrid lookup resolves each of the window's ALIDs on
+the shared axis one at a time before it reads any cell, and the one Overflow
+segment it then searches is small. The two random lookups compare different
+questions: their Dense draws are *panel* variants, which carry a cell in nearly
 every Analysis, so they return {wide_dense['result_count']:,} and
 {tall_dense['result_count']:,} rows against the Hybrid draws'
 {wide_hybrid['result_count']:,} and {tall_hybrid['result_count']:,}, and the
@@ -553,8 +554,9 @@ Analyses against {n_traits:,}, {ds9['n_variants']:,} variants against
 {region['end']:,}, `{sel9['exposure_analysis_id']}` instead of
 `{selection['exposure']}` as the whole-Analysis read, and a Store in the
 `{ds9['completion_state']}` state against a `{dataset['completion_state']}` one.
-The table therefore shows the scale the Hybrid carries — and that its extra work
-is affordable on a release three times as wide — not a controlled comparison.""")
+The table therefore shows orders of magnitude, not a controlled comparison: the
+one-Analysis window and the 10 × 100 lookup stand out, and the Dense-only twins
+above show how much of that is the Hybrid's own work.""")
 ```
 
 ### The three Hybrid-only shapes
@@ -971,7 +973,14 @@ instruments whose two cells both come from source files carry the signal. The
 |β| at {min(beta_ratios):.2f}× to {max(beta_ratios):.2f}× the observed stratum's
 ({len(negative)} of them negative), and less certain, with standard errors
 {min(se_ratios):.1f}× to {max(se_ratios):.1f}× larger; {clearing}. Their slopes
-are the dashed lines that do not coincide with the solid one.""")
+are the dashed lines that do not coincide with the solid one.
+
+This is what summary-statistic imputation predicts. An imputed z is the
+expected value given the observed variants around it, shrunk towards zero by
+the imputation's uncertainty, so an instrument with an imputed cell understates
+its effect, and most imputed instruments here have an observed exposure and an
+imputed outcome. An MR on a Reference-Completed Store should report the
+both-observed estimate beside the all-instrument one.""")
 ```
 
 ::: {.callout-warning}
@@ -1120,7 +1129,8 @@ print(f"""- **Warm page cache.** Each shape is timed after one warm-up call, so 
   here compares the Hybrid layout against a Dense-of-union build of the same data,
   and nothing repeats the run on another machine.
 - **The Store carries a Release Erratum for eight associations**
-  (opengwas/opengwasdb#338). Their source standard error exceeds the range of a
+  (opengwas/opengwasdb-stores#401; the builder's narrowing is
+  opengwas/opengwasdb#338). Their source standard error exceeds the range of a
   `float16` plane, so it is stored as `+inf` beside a finite z, and β = z × se
   reads as infinity although the source value was finite. Validation reports this
   as a warning rather than a failure, and the query path's `lookup` keeps only
