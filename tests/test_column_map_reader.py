@@ -164,7 +164,10 @@ def _finngen_crafted(tmp_path: Path) -> Path:
             "chrom\tpos\tref\talt\trsids\tnearest_genes\tpval\tmlogp\tbeta\tsebeta\taf_alt\n"
             "1\t100\tG\tA\trs100,rs101\tGENE1\t0.1\t1\t0.5\t0.2\t0.3\n"
             "1\t200\ta\tg\t.\tGENE2\t0.1\t1\t-0.5\t0.2\t0.6\n"
-            "23\t300\tA\tC\trs300\tGENEX\t0.1\t1\t0.1\t0\t0.1\n"
+            # An unusable standard error and no p-value: the dedicated reader drops
+            # the row, and so does the map. With a usable `pval` the map recovers
+            # a standard error from it (ADR 0055); see the test below.
+            "23\t300\tA\tC\trs300\tGENEX\tNA\t1\t0.1\t0\t0.1\n"
             "1\t400\tA\tC\trs400\tG\t0.1\t1\tNA\t0.5\tNA\n"
             "1\tbad\tA\tG\trs500\tG\t0.1\t1\t1.0\t0.5\t0.2\n"
             "1\t600\tA\tN\trs600\tG\t0.1\t1\t1.0\t0.5\t0.2\n"
@@ -204,6 +207,28 @@ def test_the_finngen_built_in_map_reads_what_the_finngen_reader_reads(
     mapped = ColumnMapReader(path, load_column_map("finngen-r13"), StoredEffectScale.LOG_OR)
 
     assert _finngen_streams(mapped) == reference
+
+
+def test_the_finngen_map_recovers_a_standard_error_from_pval_where_sebeta_is_unusable(
+    tmp_path: Path,
+) -> None:
+    """The one deliberate difference from the dedicated reader (ADR 0069).
+
+    Mapping `pval` for the effect-consistency check also enables ADR 0055's
+    recovery, as it does for every mapped GWAS-SSF source.
+    """
+    path = tmp_path / "recover.tsv"
+    path.write_text(
+        "#chrom\tpos\tref\talt\trsids\tpval\tbeta\tsebeta\taf_alt\n"
+        "1\t100\tG\tA\trs1\t0.05\t0.5\t0\t0.3\n",
+        encoding="utf-8",
+    )
+    mapped = ColumnMapReader(path, load_column_map("finngen-r13"), StoredEffectScale.LOG_OR)
+
+    (row,) = mapped.stream_associations()
+
+    assert row.se == pytest.approx(0.5 / 1.959964, rel=1e-5)
+    assert list(FinnGenR13Reader(path).stream_associations()) == []
 
 
 def test_the_finngen_map_takes_the_first_of_several_rsids(tmp_path: Path) -> None:

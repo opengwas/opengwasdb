@@ -228,6 +228,7 @@ def _tabular_row(
     except VariantNormalisationError:
         return None
     statistics = _row_statistics(row, source, sample_size_column)
+    cells = _row_cells(row, source, sample_size_column)
     return TabularRow(
         chromosome=ori.variant.chromosome,
         position=ori.variant.position,
@@ -246,6 +247,7 @@ def _tabular_row(
         effect_from_odds_ratio_fallback=statistics.effect_from_odds_ratio_fallback,
         se_from_ci=statistics.se_from_ci,
         se_from_p_value=statistics.se_from_p_value,
+        p_value=cells.p_value,
     )
 
 
