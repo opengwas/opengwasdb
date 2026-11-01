@@ -1,4 +1,15 @@
-"""Statistic helpers shared by builders, validators, and query adapters."""
+"""Statistic helpers for the places a statistic is read or derived.
+
+`parse_af` is the one rule every source path shares -- the three readers and the
+builders that read allele frequency -- because three copies of it is three
+chances for one to drift (ADR 0036). `Z_975` and the
+`inverse_normal_denominator(s)` pair are shared by exactly two readers,
+`readers/effect_source.py` and `readers/tabular.py`, which derive a standard
+error from an effect and a p-value. `p_value_from_z` has one caller, the
+validator, and `log10_p_two_sided` one, the query resolver; they live here
+rather than beside that caller so the scalar and array forms of one rule stay
+in one file.
+"""
 
 from __future__ import annotations
 
@@ -55,12 +66,6 @@ def parse_af(value: str | float | None) -> float | None:
     return af if math.isfinite(af) and 0.0 < af < 1.0 else None
 
 
-def beta_from_z_se(z: float, se: float) -> float:
-    """Derive beta from the canonical stored statistic pair."""
-
-    return z * se
-
-
 def p_value_from_z(z: float) -> float:
     """Return the two-sided normal p-value implied by a Z score."""
 
@@ -100,9 +105,3 @@ def log10_p_two_sided(z: np.ndarray) -> np.ndarray:
     abs_z = np.abs(np.asarray(z, dtype="float64"))
     result: np.ndarray = (math.log(2.0) + _scipy_stats.norm.logsf(abs_z)) / _LN10
     return result
-
-
-def finite_pair(z: float, se: float) -> bool:
-    """True when both canonical statistics are finite and therefore queryable."""
-
-    return math.isfinite(z) and math.isfinite(se)
