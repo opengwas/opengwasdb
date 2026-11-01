@@ -65,15 +65,11 @@ from opengwasdb.layouts.dense.build import (
 from opengwasdb.layouts.dense.constants import (
     DEFAULT_CHUNK_SHAPE,
     DEFAULT_DTYPE,
-    TOP_HIT_THRESHOLDS,
     dense_index_metadata,
     dense_layout_records,
     dense_provenance_block,
 )
-from opengwasdb.layouts.dense.top_hits import (
-    write_top_hit_indexes_for_store,
-    z_critical,
-)
+from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, PassthroughMetadata
 from opengwasdb.model.enums import (
@@ -104,6 +100,7 @@ from opengwasdb.readers.interface import SourceVariant
 from opengwasdb.readers.registry import known_capabilities, resolve_reader
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.top_hits import TOP_HIT_THRESHOLDS, z_critical
 from opengwasdb.variants import CanonicalVariant, write_variant_axis
 from opengwasdb.variants.normalise import chromosome_sort_key, normalise_chromosome
 from opengwasdb.variants.reference import (

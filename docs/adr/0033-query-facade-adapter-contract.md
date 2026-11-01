@@ -39,7 +39,9 @@ one implements explicit rather than implicit:
 2. **`top_hits()` ordering is genomic order** — sorted by
    `(analysis_index, variant_index)` — on every adapter and every internal
    path, matching the `group.attrs["order"]` the top-hit index itself is
-   built with (`layouts/dense/top_hits.py`, `layouts/ragged/top_hits.py`).
+   built with (`opengwasdb/top_hits.py`, which every layout's builder writes
+   through; it was `layouts/dense/top_hits.py` and `layouts/ragged/top_hits.py`
+   until issue #53).
    The Ragged full-scan fallback previously sorted by descending `|z|` and
    ignored `analysis_id`; both are fixed in `facade.py` so the same call
    returns the same shape of answer regardless of which physical path served

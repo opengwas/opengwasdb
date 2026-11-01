@@ -346,8 +346,8 @@ class TestCompletionFiles:
         # (ADR 0032) must reflect *this* store's post-completion top-hit
         # index, not be carried forward (or double-counted) from the
         # pre-completion source's counts.
-        from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
         from opengwasdb.model.analyses import read_analyses
+        from opengwasdb.top_hits import read_top_hit_counts
 
         rows = sorted(
             read_analyses(completed_store / "analyses.tsv").rows,
@@ -365,7 +365,7 @@ class TestCompletionFiles:
         added onto -- completion recomputes each Top-Hit Count from the
         completed store's own top-hit index (ADR 0032), which is the mirror
         of the Ragged overwrite test for the same seam."""
-        from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
+        from opengwasdb.top_hits import read_top_hit_counts
 
         analyses_path = observed_store / "analyses.tsv"
         table = read_analyses(analyses_path)
@@ -630,7 +630,7 @@ class TestValidation:
         assert any("missing z" in e for e in result.errors), result.errors
 
     def test_corrupt_top_hit_imputed_index_fails(self, completed_store):
-        from opengwasdb.layouts.dense.top_hits import threshold_key
+        from opengwasdb.top_hits import threshold_key
 
         root = open_store(completed_store).arrays(mode="r+")
         group = root[f"top_hits/{threshold_key(5e-4)}"]
@@ -830,7 +830,7 @@ class TestQuery:
         q.close()
 
     def test_top_hit_index_stores_imputed_flags(self, completed_store):
-        from opengwasdb.layouts.dense.top_hits import threshold_key
+        from opengwasdb.top_hits import threshold_key
 
         root = open_store(completed_store).arrays(mode="r")
         group = root[f"top_hits/{threshold_key(5e-4)}"]
@@ -898,7 +898,7 @@ class TestQuery:
         q.close()
 
     def test_top_hits_falls_back_without_indexed_imputed_flags(self, completed_store):
-        from opengwasdb.layouts.dense.top_hits import threshold_key
+        from opengwasdb.top_hits import threshold_key
 
         q = query_store(completed_store)
         indexed = q.top_hits(threshold=5e-4)
@@ -915,7 +915,7 @@ class TestQuery:
             np.testing.assert_array_equal(indexed[name], fallback[name])
 
     def test_top_hits_falls_back_without_indexed_frequency(self, completed_store):
-        from opengwasdb.layouts.dense.top_hits import threshold_key
+        from opengwasdb.top_hits import threshold_key
 
         q = query_store(completed_store)
         indexed = q.top_hits(threshold=5e-4)

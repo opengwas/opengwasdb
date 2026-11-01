@@ -1,4 +1,5 @@
-"""Ragged top-hit index builder — mirrors opengwasdb/layouts/dense/top_hits.py."""
+"""Ragged top-hit harvest: scan the CSR for candidate cells and hand them to the
+Top-Hit Index module (`opengwasdb.top_hits`), which owns the format."""
 
 from __future__ import annotations
 
@@ -6,25 +7,17 @@ import logging
 from pathlib import Path
 
 import numpy as np
-import zarr
-from numcodecs import Blosc
 
+from opengwasdb import top_hits
 from opengwasdb.encoding import StoreEncoding
 from opengwasdb.encoding.timing import log_phase
-from opengwasdb.layouts.dense.constants import TOP_HIT_THRESHOLDS
-from opengwasdb.layouts.dense.top_hits import (
-    TOP_HIT_CHUNK_SIZE,
-    threshold_key,
-    write_threshold_tier,
-    z_critical,
-)
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRReader
 from opengwasdb.store.arrays import (
     array_length,
-    compressor,
     open_group_for_write,
     require_group,
 )
+from opengwasdb.top_hits import TOP_HIT_THRESHOLDS
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +61,7 @@ def _slice_analysis_indices(offsets: np.ndarray, lo: int, hi: int) -> np.ndarray
 
 def _read_ragged_columns(
     store_path: Path, encoding: StoreEncoding | None
-) -> tuple[dict[str, np.ndarray], np.ndarray, int]:
+) -> tuple[dict[str, np.ndarray], int]:
     """Decode every CSR association into the dense builder's parallel columns.
 
     The materialising reference the streamed path must agree with: this is what
@@ -97,7 +90,7 @@ def _read_ragged_columns(
         columns["imputed"] = csr._root["imputed"][:].astype(np.uint8)
     if csr._eaf_plane.can_report_frequencies:
         columns["eaf"] = csr.eaf_at(np.arange(len(vi_all), dtype=np.int64))
-    return columns, np.abs(z_all), n_analyses
+    return columns, n_analyses
 
 
 def _gather_slice_candidates(
@@ -150,11 +143,11 @@ def _collect_ragged_candidates(
     csr: RaggedCSRReader,
     thresholds: tuple[float, ...],
     slice_cells: int,
-) -> tuple[dict[str, np.ndarray], np.ndarray, int]:
+) -> tuple[dict[str, np.ndarray], int]:
     """Every cell clearing the loosest tier, gathered slice by slice.
 
     The component is never decoded whole. Each slice contributes only the cells
-    whose decoded ``|z|`` clears ``z_critical(max(thresholds))`` -- a tiny
+    whose decoded ``|z|`` clears ``top_hits.z_critical(max(thresholds))`` -- a tiny
     fraction of a real component -- and the downstream tier write sorts that
     candidate set, not a plane (issue #233).
 
@@ -167,7 +160,7 @@ def _collect_ragged_candidates(
     total = array_length(csr._variant_index)
     offsets = np.asarray(csr._offsets[:], dtype=np.int64)
     n_analyses = len(offsets) - 1
-    loosest = z_critical(max(thresholds))
+    loosest = top_hits.z_critical(max(thresholds))
     has_imputed = "imputed" in csr._root
     has_eaf = csr._eaf_plane.can_report_frequencies
 
@@ -193,7 +186,7 @@ def _collect_ragged_candidates(
             parts[name].append(values)
 
     columns = _concat_candidate_parts(parts)
-    return columns, np.abs(columns["z"]), n_analyses
+    return columns, n_analyses
 
 
 def build_ragged_top_hit_indexes(
@@ -205,8 +198,8 @@ def build_ragged_top_hit_indexes(
 ) -> None:
     """Build ranked top-hit arrays for each configured p-value threshold.
 
-    Writes to data.zarr/top_hits/<key>/ using the same schema as the dense
-    builder so the query facade and validator can share one code path.
+    Writes to data.zarr/top_hits/<key>/ through `opengwasdb.top_hits`, the one
+    owner of the format every layout shares.
 
     Thresholding is on the **stored** z, decoded through the store's own codec:
     an index built from unrounded values would name hits the store itself
@@ -230,29 +223,8 @@ def build_ragged_top_hit_indexes(
     )
     csr = RaggedCSRReader(store_path, encoding)
     with log_phase(log, "Ragged top-hit scan"):
-        columns, abs_z, n_analyses = _collect_ragged_candidates(csr, thresholds, slice_cells)
+        columns, n_analyses = _collect_ragged_candidates(csr, thresholds, slice_cells)
 
     root = open_group_for_write(store_path / "data.zarr", "a")
     top = require_group(root, "top_hits")
-    comp = compressor()
-    # The same parallel-array contract the dense builder writes, so both layouts
-    # produce one schema and the facade and validator keep one code path.
-    _write_ragged_tiers(top, thresholds, columns, abs_z, n_analyses, comp)
-    top.attrs["thresholds"] = list(thresholds)
-
-
-def _write_ragged_tiers(
-    top: zarr.Group,
-    thresholds: tuple[float, ...],
-    columns: dict[str, np.ndarray],
-    abs_z: np.ndarray,
-    n_analyses: int,
-    compressor: Blosc,
-) -> None:
-    """Select, rank and write one tier per threshold, logging each."""
-    for threshold in thresholds:
-        with log_phase(log, f"Ragged top-hit tier {threshold_key(threshold)}"):
-            n_hits = write_threshold_tier(
-                top, threshold, columns, abs_z, n_analyses, TOP_HIT_CHUNK_SIZE, compressor
-            )
-        log.info("%s: %d hits", threshold_key(threshold), n_hits)
+    top_hits.write_index(top, columns, thresholds, n_analyses)

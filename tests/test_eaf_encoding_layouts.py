@@ -37,7 +37,7 @@ from opengwasdb.encoding import (
 )
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import complete_dense_store
-from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, threshold_key
+from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.layout import dense_component_path
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
@@ -53,6 +53,7 @@ from opengwasdb.query import query_store
 from opengwasdb.repair import repair_eaf_chunks
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import open_store
+from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 
 # Eight variants across four Analyses. The frequencies agree closely between

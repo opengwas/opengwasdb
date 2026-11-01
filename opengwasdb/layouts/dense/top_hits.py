@@ -1,9 +1,9 @@
-"""Dense top-hit index builder."""
+"""Dense top-hit harvest: scan the stored matrix for candidate cells and hand
+them to the Top-Hit Index module (`opengwasdb.top_hits`), which owns the format."""
 
 from __future__ import annotations
 
 import logging
-import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -11,235 +11,16 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
-import zarr
-from numcodecs import Blosc
-from scipy.special import erfc, erfcinv  # type: ignore[import-untyped]
 
+from opengwasdb import top_hits
 from opengwasdb.build.ordered_pool import ordered_map
 from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane, StoreEncoding
 from opengwasdb.encoding.timing import PhaseTimer, log_phase, log_progress
-from opengwasdb.layouts.dense.constants import TOP_HIT_THRESHOLDS
-from opengwasdb.model.analyses import TOP_HIT_COUNT_COLUMNS
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.store import arrays as store_arrays
-from opengwasdb.store.arrays import ArrayRole
-
-#: Re-exported from the seam, which owns the role's default layout, so the
-#: writer default and the `TOP_HIT_INDEX` policy cannot disagree.
-TOP_HIT_CHUNK_SIZE = store_arrays.TOP_HIT_CHUNK_SIZE
+from opengwasdb.top_hits import TOP_HIT_CHUNK_SIZE, TOP_HIT_THRESHOLDS
 
 log = logging.getLogger(__name__)
-
-# Positional pairing of TOP_HIT_THRESHOLDS with the analyses.tsv column each
-# tier persists to (model.analyses.TOP_HIT_COUNT_COLUMNS). A dict, not a zip
-# over the caller's own `thresholds`, so read_top_hit_counts accepts any
-# subset of TOP_HIT_THRESHOLDS rather than silently requiring exactly three.
-_THRESHOLD_COLUMNS = dict(zip(TOP_HIT_THRESHOLDS, TOP_HIT_COUNT_COLUMNS, strict=True))
-
-
-class DenseTopHitReader:
-    """Address one threshold tier without exposing its physical arrays.
-
-    Each of the tier's arrays is opened at most once per reader (#244).
-    zarr-python 3 reads an array's metadata from the store on every
-    ``group[name]`` and every ``name in group`` -- about 1 ms each on a local
-    store -- and one top-hit query touches up to seven arrays, so a reader that
-    reopened them per field spent more time on metadata than on hits (OGS-00009:
-    21 ms as it was, 5.8 ms opened once).  A Store Release does not change while
-    it is queried, so an opened array stays valid for the reader's lifetime.
-    """
-
-    def __init__(self, group: zarr.Group):
-        self.group = group
-        self._arrays: dict[str, zarr.Array | None] = {}
-
-    def _array(self, name: str) -> zarr.Array | None:
-        """The tier's array `name`, or None when this index predates it."""
-        if name not in self._arrays:
-            try:
-                self._arrays[name] = self.group[name]
-            except KeyError:
-                self._arrays[name] = None
-        return self._arrays[name]
-
-    def _required(self, name: str) -> zarr.Array:
-        array = self._array(name)
-        if array is None:
-            raise KeyError(f"top-hit tier {self.group.path!r} has no {name!r} array")
-        return array
-
-    def has(self, name: str) -> bool:
-        """Whether this tier's index carries the array `name`."""
-        return self._array(name) is not None
-
-    def bounds(self, analysis_index: int | None) -> tuple[int, int]:
-        if analysis_index is None:
-            return 0, int(self._required("z").shape[0])
-        offsets = self._required("analysis_offsets")
-        if analysis_index < 0 or analysis_index + 1 >= int(offsets.shape[0]):
-            return 0, 0
-        pair = offsets[analysis_index : analysis_index + 2]
-        return int(pair[0]), int(pair[1])
-
-    def read(self, name: str, bounds: tuple[int, int], dtype: str) -> np.ndarray:
-        start, stop = bounds
-        return np.asarray(self._required(name)[start:stop], dtype=dtype)
-
-    def read_or(
-        self,
-        name: str,
-        bounds: tuple[int, int],
-        dtype: str,
-        fallback: Callable[[], np.ndarray],
-    ) -> np.ndarray:
-        """Read an indexed result field, or derive it for an older index."""
-        if self.has(name):
-            return self.read(name, bounds, dtype)
-        return np.asarray(fallback(), dtype=dtype)
-
-
-class TopHitTiers:
-    """A store's top-hit threshold tiers, each opened once and kept (#244).
-
-    A query facade holds one, so a repeated top-hit query reuses the tier group
-    and the arrays its `DenseTopHitReader` already opened instead of reading
-    their metadata from the store again.
-    """
-
-    def __init__(self, root: zarr.Group):
-        self._root = root
-        self._readers: dict[str, DenseTopHitReader | None] = {}
-
-    def reader(self, threshold: float) -> DenseTopHitReader | None:
-        """The tier for `threshold`, or None when the store has no such tier."""
-        key = threshold_key(threshold)
-        if key not in self._readers:
-            try:
-                self._readers[key] = DenseTopHitReader(self._root[f"top_hits/{key}"])
-            except KeyError:
-                self._readers[key] = None
-        return self._readers[key]
-
-
-def read_top_hit_counts(
-    store_path: str | Path,
-    n_analyses: int,
-    thresholds: tuple[float, ...] = TOP_HIT_THRESHOLDS,
-) -> dict[str, list[int]]:
-    """Per-Analysis hit counts for each threshold tier, from an already-built
-    top-hit index (``build_top_hit_indexes``/``write_top_hit_indexes``/
-    ``build_ragged_top_hit_indexes`` -- all three share this schema). Keyed by
-    the ``analyses.tsv`` column each tier persists to (ADR 0032), in
-    ``analysis_index`` order.
-
-    ``n_analyses`` is needed for the fallback path below, not just for
-    sizing a zero-filled result: real pre-issue-#22-era stores (e.g. ukb-b)
-    have a top-hit index that predates the ``analysis_offsets`` array this
-    function otherwise reads directly, so it falls back to counting the
-    flat ``analysis_index`` array by hand for those.
-    """
-    root = store_arrays.open_group(Path(store_path) / "data.zarr")
-    top = root["top_hits"]
-    counts: dict[str, list[int]] = {}
-    for threshold in thresholds:
-        column = _THRESHOLD_COLUMNS[threshold]
-        group = top[threshold_key(threshold)]
-        if "analysis_offsets" in group:
-            offsets = np.asarray(group["analysis_offsets"], dtype=np.int64)
-            counts[column] = (offsets[1:] - offsets[:-1]).tolist()
-        else:
-            analysis_index = np.asarray(group["analysis_index"], dtype=np.int64)
-            counts[column] = np.bincount(analysis_index, minlength=n_analyses)[:n_analyses].tolist()
-    return counts
-
-
-def threshold_key(threshold: float) -> str:
-    """Stable Zarr group key for a p-value threshold."""
-
-    return f"p_{threshold:.0e}".replace("-", "_").replace("+", "")
-
-
-def z_critical(threshold: float) -> float:
-    """|z| cutoff equivalent to two-sided p <= threshold.
-
-    The stored p-value is ``p = erfc(|z| / sqrt(2))`` (see the query facade and
-    the old scalar ``p_value_from_z``), so ``p <= threshold`` is exactly
-    ``|z| >= sqrt(2) * erfcinv(threshold)``. Thresholding on ``|z|`` lets the
-    hot path avoid computing a p-value for every cell.
-    """
-
-    return math.sqrt(2.0) * float(erfcinv(threshold))
-
-
-# The dtype each top-hit index array is written as. One table, so a tier's
-# optional arrays (`imputed`, `eaf`) cannot acquire a different dtype from the
-# required ones by being written at a separate call site.
-_TIER_DTYPES = {
-    "variant_index": "uint32",
-    "analysis_index": "uint32",
-    "abs_z": "float32",
-    "z": "float32",
-    "se": "float32",
-    "p_value": "float64",
-    "imputed": "uint8",
-    "eaf": "float32",
-}
-
-
-def write_threshold_tier(
-    top: zarr.Group,
-    threshold: float,
-    columns: dict[str, np.ndarray],
-    abs_z: np.ndarray,
-    n_analyses: int,
-    chunk_size: int,
-    compressor: Blosc,
-) -> int:
-    """Select, rank and write the one tier for `threshold`; return its hit count.
-
-    `columns` holds every parallel array the caller has, required and optional
-    alike; each is filtered, ordered and written by the same three lines, so an
-    array cannot be dropped from one of those steps and not the others.
-    """
-    key = threshold_key(threshold)
-    group = store_arrays.create_group(top, key)
-
-    keep = abs_z >= z_critical(threshold)
-    kept = {name: values[keep] for name, values in columns.items()}
-    kept["abs_z"] = abs_z[keep]
-    kept["p_value"] = erfc(kept["abs_z"].astype("float64") / math.sqrt(2.0))
-
-    order = np.lexsort((kept["variant_index"], kept["analysis_index"]))
-    kept = {name: values[order] for name, values in kept.items()}
-
-    offsets = np.empty(n_analyses + 1, dtype="uint64")
-    offsets[0] = 0
-    np.cumsum(
-        np.bincount(kept["analysis_index"], minlength=n_analyses),
-        dtype=np.uint64,
-        out=offsets[1:],
-    )
-    store_arrays.create_array(
-        group,
-        "analysis_offsets",
-        ArrayRole.TOP_HIT_ANALYSIS_OFFSETS,
-        data=offsets,
-        dtype="uint64",
-        compressor=compressor,
-    )
-    for name, values in kept.items():
-        store_arrays.create_array(
-            group,
-            name,
-            ArrayRole.TOP_HIT_INDEX,
-            data=values,
-            dtype=_TIER_DTYPES[name],
-            compressor=compressor,
-            hint=chunk_size,
-        )
-    group.attrs["threshold"] = threshold
-    group.attrs["order"] = "analysis_index,variant_index"
-    return int(len(kept["variant_index"]))
 
 
 def write_top_hit_indexes(
@@ -275,16 +56,12 @@ def write_top_hit_indexes(
         columns["imputed"] = np.asarray(imputed, dtype="uint8")
     if eaf is not None:
         columns["eaf"] = np.asarray(eaf, dtype="float32")
-    abs_z = np.abs(columns["z"]).astype("float32")
 
     root = store_arrays.open_group_for_write(Path(store_path) / "data.zarr", "a")
     top = store_arrays.require_group(root, "top_hits")
-    n_analyses = int(root["z"].shape[1])
-    comp = store_arrays.compressor()
-
-    for threshold in thresholds:
-        write_threshold_tier(top, threshold, columns, abs_z, n_analyses, chunk_size, comp)
-    top.attrs["thresholds"] = list(thresholds)
+    top_hits.write_index(
+        top, columns, thresholds, int(root["z"].shape[1]), chunk_size, store_arrays.compressor()
+    )
 
 
 def _concat_or_empty(parts: list[np.ndarray], dtype: type) -> np.ndarray:
@@ -458,7 +235,7 @@ def build_top_hit_indexes(
             eaf_plane,
             int(z_plane.array.shape[0]),
             max(int(z_plane.array.chunks[0]), 250_000),
-            z_critical(max(thresholds)),
+            top_hits.z_critical(max(thresholds)),
             n_workers,
         )
     _write_scan_harvest(store_path, parts, thresholds, imputed_arr, eaf_plane, timer)

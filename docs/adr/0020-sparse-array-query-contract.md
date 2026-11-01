@@ -43,7 +43,8 @@ where *k* is the number of finite cells in the result set:
 ```
 
 This format is the prior art already used by the internal top-hit index
-(built in `opengwasdb/layouts/dense/top_hits.py`), so it is a natural fit.
+(written by `opengwasdb/top_hits.py`; it was `layouts/dense/top_hits.py` until
+issue #53), so it is a natural fit.
 
 Two metadata accessors are added:
 - `variants_table() → dict[int, dict]` keyed by `variant_index`

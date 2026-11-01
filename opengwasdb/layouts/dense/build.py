@@ -32,7 +32,7 @@ from opengwasdb.layouts.dense.constants import (
     dense_provenance_block,
 )
 from opengwasdb.layouts.dense.overview import write_overview_html
-from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes, read_top_hit_counts
+from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
 from opengwasdb.layouts.release_manifest import observed_only_release_manifest
 from opengwasdb.model.analyses import Analysis, analyses_table_from_records, write_analyses
 from opengwasdb.model.enums import (
@@ -44,6 +44,7 @@ from opengwasdb.model.enums import (
 )
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import OpenGWASDBStore, StagedRelease
+from opengwasdb.top_hits import read_top_hit_counts
 from opengwasdb.variants import (
     VARIANT_AXIS_FORMAT,
     VARIANT_OFFSETS_FILENAME,

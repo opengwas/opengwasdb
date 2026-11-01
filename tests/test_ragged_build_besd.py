@@ -338,8 +338,8 @@ def test_top_hit_counts_in_analyses_tsv_match_top_hit_index(tmp_path):
     """Issue #73: Ragged builds persist per-Analysis Top-Hit Counts in
     analyses.tsv, matching what the store's own top-hit index actually
     contains -- not zero, not stale."""
-    from opengwasdb.layouts.dense.top_hits import read_top_hit_counts
     from opengwasdb.model.analyses import read_analyses
+    from opengwasdb.top_hits import read_top_hit_counts
 
     out = _build_store(tmp_path)
 

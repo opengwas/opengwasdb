@@ -35,13 +35,11 @@ from opengwasdb.encoding.planes import (
 from opengwasdb.encoding.se import OverflowCells, optimise_dense_se_joint
 from opengwasdb.layouts.dense.build import build_dense_observed_store
 from opengwasdb.layouts.dense.complete import complete_dense_store
-from opengwasdb.layouts.dense.top_hits import (
-    threshold_key,
-    write_top_hit_indexes_for_store,
-)
+from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.model.manifest import StoreManifest
 from opengwasdb.query import query_store
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
+from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 from opengwasdb.variants import CanonicalVariant
 

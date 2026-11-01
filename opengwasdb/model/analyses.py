@@ -79,7 +79,7 @@ SHARED_CORE_COLUMNS: tuple[str, ...] = (
 
 # Top-Hit Count columns (ADR 0032, store-format spec §7a): one persisted
 # per-Analysis count per threshold tier in
-# opengwasdb.layouts.dense.constants.TOP_HIT_THRESHOLDS (5e-8/5e-6/5e-4, in
+# opengwasdb.top_hits.TOP_HIT_THRESHOLDS (5e-8/5e-6/5e-4, in
 # that order). Not imported from there to keep this module layout-independent
 # -- it is also the schema opengwasdb-stores validates manifests against.
 TOP_HIT_COUNT_COLUMNS: tuple[str, ...] = ("n_hits_5e8", "n_hits_5e6", "n_hits_5e4")

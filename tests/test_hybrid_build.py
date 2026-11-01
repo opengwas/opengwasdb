@@ -34,7 +34,6 @@ from store_assertions import assert_same_band_arrays, assert_same_top_hits
 from opengwasdb.ancestry.reference import AncestryReference
 from opengwasdb.build.resolve import AnalysisRequest, resolve_analysis
 from opengwasdb.build.resolve_manifest import load_variant_reference
-from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.layouts.hybrid import build as hybrid_build
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.key_runs import HG38, KeyRun, column_run, read_run
@@ -52,6 +51,7 @@ from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.readers.gwas_ssf import GwasSsfReader
 from opengwasdb.store.arrays import ArrayRole, compressor, create_array
 from opengwasdb.store.open import open_store
+from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 
 HG19_POS_1 = 100_000

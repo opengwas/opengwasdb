@@ -27,11 +27,11 @@ from residual_fixtures import write_gwas_vcf_with_eaf
 from store_assertions import assert_same_band_arrays, assert_same_top_hits
 
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
-from opengwasdb.layouts.dense.top_hits import threshold_key
 from opengwasdb.model.analyses import read_analyses
 from opengwasdb.query import query_store
 from opengwasdb.readers import GWAS_SSF_CAPABILITY
 from opengwasdb.store.open import open_store
+from opengwasdb.top_hits import threshold_key
 from opengwasdb.validation import validate_store
 from opengwasdb.variants.reference import read_variant_reference, write_variant_reference
 
@@ -1040,10 +1040,8 @@ class TestTopHitHarvest:
 
     def test_harvest_matches_full_scan(self, tmp_path):
         """Top hits harvested during Pass 2 must equal a full-matrix rescan."""
-        from opengwasdb.layouts.dense.top_hits import (
-            build_top_hit_indexes,
-            threshold_key,
-        )
+        from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes
+        from opengwasdb.top_hits import threshold_key
 
         # trait z-scores: 4.0 and 5.0 clear the loosest tier; 3.0 does not.
         vcf1 = _make_vcf(
@@ -1087,7 +1085,7 @@ class TestTopHitHarvest:
         exactly -- as decoded through the store's own encoding (ADR 0037) --
         so the index agrees with what a query reads from `z`, and the store
         validates cleanly."""
-        from opengwasdb.layouts.dense.top_hits import threshold_key
+        from opengwasdb.top_hits import threshold_key
 
         vcf = _make_vcf(
             tmp_path,
@@ -1997,7 +1995,7 @@ def _assert_dense_stores_data_identical(reference: Path, candidate: Path) -> Non
     """
     import gzip
 
-    from opengwasdb.layouts.dense.top_hits import threshold_key
+    from opengwasdb.top_hits import threshold_key
     from opengwasdb.variants.axis import iter_variant_records
 
     with gzip.open(reference / "variants.tsv.gz", "rt", encoding="utf-8") as a:
