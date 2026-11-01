@@ -46,8 +46,3 @@ def get_metadata(connection: sqlite3.Connection, key: str, default: Any = None) 
     if row is None:
         return default
     return json.loads(row["value"])
-
-
-def count_rows(connection: sqlite3.Connection, table: str) -> int:
-    row = connection.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
-    return int(row["n"])
