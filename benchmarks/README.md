@@ -869,12 +869,11 @@ no Dense row and would silently shorten the query.
 `ivw_pval`, `ivw_se_fixed`, `cochran_q`, `q_df`, `sign_concordant_fraction`,
 `median_instrument_F`, `n_instruments`, `n_instruments_raw`,
 `n_instruments_overflow`, `clump_kb`, `elapsed_s`) still describe the estimate
-over **all** instruments, now computed by `_hybrid_report.ivw` — fixed-effect
-IVW (beta = Σ(bx·by/sy²)/Σ(bx²/sy²), se = √(1/Σ(bx²/sy²)), two-sided normal p) —
-the same function every stratum uses. The random-effects SE the earlier
-artifact reported as `ivw_se` is kept beside it as `ivw_se_random`, so
-heterogeneity is still visible; `ivw_se` and `ivw_pval` are now the fixed-effect
-pair. Every instrument carries `beta_exp`, `se_exp`, `beta_out`, `se_out`,
+over **all** instruments, now computed by `_hybrid_report.ivw`, the same
+function every stratum uses, with the meaning the other full-scale MR reports
+give them: beta = Σ(bx·by/sy²)/Σ(bx²/sy²), `ivw_se_fixed` = √(1/Σ(bx²/sy²)),
+`ivw_se` the multiplicative random-effects SE (`ivw_se_fixed` × max(1, √(Q/df))),
+and `ivw_pval` the two-sided normal p from `ivw_se`. Every instrument carries `beta_exp`, `se_exp`, `beta_out`, `se_out`,
 `status_exp`, `status_out` and the `component` that holds it, and `strata` holds
 the same IVW estimate for `both_observed`, `both_imputed` and `mixed` (one side
 observed, the other imputed), with `null` for a stratum holding fewer than three

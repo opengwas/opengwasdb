@@ -373,13 +373,11 @@ def mr_instruments(
 def mr_with_components(q: Any, by_id: dict[str, int], exposure: str, outcome: str) -> dict:
     """One IVW pair end to end, each instrument tagged with its component.
 
-    The whole-set estimate is `_hybrid_report.ivw` -- fixed-effect, the same
-    function every stratum uses -- so `ivw_beta`, `ivw_se` and `ivw_pval`
-    describe all instruments under one convention. The random-effects SE the
-    earlier artifact reported as `ivw_se` is kept beside it as `ivw_se_random`
-    (and `cochran_q`/`q_df` are unchanged), so the heterogeneity it inflates for
-    is still visible rather than dropped. `strata` is the same estimate per
-    observed/imputed stratum, `None` where a stratum has fewer than
+    The whole-set estimate is `_hybrid_report.ivw`, the same function every
+    stratum uses, so `ivw_beta`, `ivw_se` (multiplicative random-effects),
+    `ivw_se_fixed` and `ivw_pval` keep the meaning the other full-scale MR
+    reports give them. `strata` is the same estimate per observed/imputed
+    stratum, `None` where a stratum has fewer than
     `_report.MIN_STRATUM_INSTRUMENTS`.
     """
     started = time.perf_counter()
@@ -394,13 +392,7 @@ def mr_with_components(q: Any, by_id: dict[str, int], exposure: str, outcome: st
     overall = _report.ivw(instruments)
     be = np.array([i["beta_exp"] for i in instruments])
     bo = np.array([i["beta_out"] for i in instruments])
-    so = np.array([i["se_out"] for i in instruments])
     se_exp = np.array([i["se_exp"] for i in instruments])
-    weight = be**2 / so**2
-    ratio = bo / be
-    q_stat = float(np.sum(weight * (ratio - overall["beta"]) ** 2))
-    df = len(instruments) - 1
-    se_random = overall["se"] * max(1.0, float(np.sqrt(q_stat / df))) if df > 0 else overall["se"]
     return {
         "exposure_id": exposure, "outcome_id": outcome, "clump_kb": CLUMP_KB,
         "n_instruments_raw": n_raw, "n_instruments": len(instruments),
@@ -408,9 +400,8 @@ def mr_with_components(q: Any, by_id: dict[str, int], exposure: str, outcome: st
             i["component"] == "overflow" for i in instruments
         ),
         "ivw_beta": overall["beta"], "ivw_se": overall["se"],
-        "ivw_pval": overall["p"], "ivw_se_fixed": overall["se"],
-        "ivw_se_random": se_random,
-        "cochran_q": q_stat, "q_df": df,
+        "ivw_se_fixed": overall["se_fixed"], "ivw_pval": overall["p"],
+        "cochran_q": overall["cochran_q"], "q_df": overall["q_df"],
         "sign_concordant_fraction": float(np.mean(np.sign(be) == np.sign(bo))),
         "median_instrument_F": float(np.median((be / se_exp) ** 2)),
         "elapsed_s": elapsed_s,

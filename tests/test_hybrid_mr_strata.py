@@ -37,8 +37,8 @@ def test_ivw_recovers_a_proportional_effect():
 
 def test_ivw_se_and_p_match_a_weighted_least_squares_fit_through_the_origin():
     instruments = _instruments(
-        beta_exp=[0.10, 0.20, 0.30, 0.05], beta_out=[0.04, 0.09, 0.16, 0.01],
-        se_out=[0.01, 0.03, 0.02, 0.05],
+        beta_exp=[0.10, 0.20, 0.30, 0.05], beta_out=[0.10, 0.02, 0.20, 0.06],
+        se_out=[0.01, 0.01, 0.02, 0.01],
     )
     design = np.array([[i["beta_exp"]] for i in instruments])
     outcome = np.array([i["beta_out"] for i in instruments])
@@ -47,11 +47,29 @@ def test_ivw_se_and_p_match_a_weighted_least_squares_fit_through_the_origin():
     beta = float(np.linalg.solve(normal_matrix, design.T @ (outcome * weights))[0])
     se = float(np.sqrt(np.linalg.inv(normal_matrix)[0, 0]))
 
+    residuals = (outcome - beta * design[:, 0]) * np.sqrt(weights)
+    q_stat = float(residuals @ residuals)
+    se_random = se * max(1.0, math.sqrt(q_stat / 3))
+
     estimate = _hybrid_report.ivw(instruments)
     assert estimate["beta"] == pytest.approx(beta)
-    assert estimate["se"] == pytest.approx(se)
-    assert estimate["p"] == pytest.approx(math.erfc(abs(beta / se) / math.sqrt(2.0)))
+    assert estimate["se_fixed"] == pytest.approx(se)
+    assert estimate["cochran_q"] == pytest.approx(q_stat)
+    assert estimate["q_df"] == 3
+    assert estimate["se"] == pytest.approx(se_random)
+    assert estimate["se"] > estimate["se_fixed"]  # these instruments are heterogeneous
+    assert estimate["p"] == pytest.approx(math.erfc(abs(beta / se_random) / math.sqrt(2.0)))
     assert estimate["n"] == 4
+
+
+def test_ivw_se_is_the_fixed_se_when_instruments_agree():
+    """Q/df below 1 never shrinks the SE below the fixed-effect one."""
+    instruments = _instruments(
+        beta_exp=[0.10, 0.20, 0.30], beta_out=[0.05, 0.10, 0.15], se_out=[0.01, 0.03, 0.02]
+    )
+    estimate = _hybrid_report.ivw(instruments)
+    assert estimate["cochran_q"] == pytest.approx(0.0, abs=1e-12)
+    assert estimate["se"] == pytest.approx(estimate["se_fixed"])
 
 
 def test_mr_strata_split_by_status_and_a_small_stratum_is_none():

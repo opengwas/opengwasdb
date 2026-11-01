@@ -12,8 +12,8 @@ The harness-specific half stays with each harness: which store, which loci,
 which MR pairs and which extra fields its report carries. The functions here
 return the common part and take an `extra` mapping for a harness's own fields.
 
-The MR half is here for the same reason: `ivw` is the one fixed-effect estimate
-and `mr_strata` the one split of a run into observed/imputed strata, so a
+The MR half is here for the same reason: `ivw` is the one IVW estimate and
+`mr_strata` the one split of a run into observed/imputed strata, so a
 harness reporting a stratum beside its whole-set estimate cannot accidentally
 use two conventions for the same quantity.
 """
@@ -150,12 +150,15 @@ def oriented_locus(q: Any, alid: str, analysis_id: str, risk_allele: str) -> dic
 
 
 def ivw(instruments: list[dict[str, Any]]) -> dict[str, float]:
-    """Fixed-effect inverse-variance-weighted estimate over `instruments`.
+    """Inverse-variance-weighted estimate over `instruments`, as the full-scale MR reports it.
 
-    beta = sum(bx*by/sy^2) / sum(bx^2/sy^2), se = sqrt(1 / sum(bx^2/sy^2)), and
-    a two-sided normal p. The exposure's own SE does not enter a fixed-effect
-    weight; the outcome's does. One function for a stratum and for the whole
-    set is what makes the two comparable numbers rather than two conventions.
+    beta = sum(bx*by/sy^2) / sum(bx^2/sy^2) and se_fixed = sqrt(1 / sum(bx^2/sy^2)).
+    `se` is the multiplicative random-effects SE, se_fixed * max(1, sqrt(Q/df))
+    with Cochran's Q over the instruments' ratio estimates, and `p` is the
+    two-sided normal p from it: the convention `benchmark_finngen_dense.run_mr`
+    reports as `ivw_se`/`ivw_pval`, so this store's MR reads beside the other
+    full-scale reports. One function for a stratum and for the whole set keeps
+    the two comparable.
 
     `instruments` carry `beta_exp` and `beta_out`/`se_out`; an empty list has
     no estimate and raises rather than returning a NaN a report would print.
@@ -167,11 +170,17 @@ def ivw(instruments: list[dict[str, Any]]) -> dict[str, float]:
     sy = np.array([float(i["se_out"]) for i in instruments])
     precision = bx**2 / sy**2
     beta = float(np.sum(bx * by / sy**2) / np.sum(precision))
-    se = float(np.sqrt(1.0 / np.sum(precision)))
+    se_fixed = float(np.sqrt(1.0 / np.sum(precision)))
+    q_stat = float(np.sum(precision * (by / bx - beta) ** 2))
+    df = len(instruments) - 1
+    se = se_fixed * max(1.0, float(np.sqrt(q_stat / df))) if df > 0 else se_fixed
     return {
         "beta": beta,
         "se": se,
+        "se_fixed": se_fixed,
         "p": float(erfc(abs(beta / se) / np.sqrt(2.0))),
+        "cochran_q": q_stat,
+        "q_df": df,
         "n": len(instruments),
     }
 
