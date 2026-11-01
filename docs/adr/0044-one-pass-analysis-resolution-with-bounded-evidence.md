@@ -1,5 +1,10 @@
 # One-pass pre-build Analysis resolution, with evidence bounded by configuration
 
+> **Amended by [ADR 0069](0069-refuse-an-effect-that-contradicts-its-sources-p-value.md)**
+> in one respect: "no verdict is produced here" no longer holds without
+> exception. The resolver now fails an Analysis whose stored z-score contradicts
+> its source's own p-value. Every other decision below stands.
+
 Phase B writes an Analysis's Assigned Ancestry and its
 `original_sd`/`original_sd_method` into `analyses.tsv` before a Release Bundle is
 accepted (ADR 0029; `opengwasdb-stores`' Phase B/Phase A split). Two stages
