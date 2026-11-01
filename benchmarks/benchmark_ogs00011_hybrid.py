@@ -10,13 +10,20 @@ Ragged Overflow for each Analysis's off-axis variants, so it adds:
 * two Hybrid shapes: a PheWAS of an off-axis variant, which can only be
   answered from the Overflow, and the bulk read of the Analysis with the
   largest Overflow;
+* the four Dense-only twins of the region and random-lookup shapes, so the
+  report can say what a reader who queries only the reference axis pays rather
+  than attributing every Hybrid overhead to the Dense Component;
 * storage by component, with file counts, against the source GWAS-SSF files;
 * the build's own step records;
 * the bulk shape against a single `pd.read_csv` of the same Analysis's source;
 * known-locus checks, each naming the component that answered;
 * PheWAS of two pleiotropic variants across all Analyses;
 * three IVW Mendelian randomisation pairs run end to end through the store,
-  each instrument tagged with the component that holds it.
+  each instrument tagged with the component that holds it, and each estimate
+  reported for every instrument and separately for the observed/imputed
+  strata;
+* a ±500 kb regional profile around three lead variants, every row carrying
+  the Association Status and the component that answered it.
 
 How each Analysis splits between the components is measured separately by
 `measure_hybrid_component_split.py`, whose TSV the report plots.
@@ -49,8 +56,8 @@ from benchmarks import _hybrid_report as _report
 from benchmarks import _query_shapes
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import run_probe
-from benchmarks.benchmark_finngen_dense import run_mr
-from benchmarks.benchmark_ukbb_dense import _dir_bytes
+from benchmarks.benchmark_finngen_dense import CLUMP_KB
+from benchmarks.benchmark_ukbb_dense import _clump, _dir_bytes
 from opengwasdb.query import query_store
 
 # Type 2 diabetes (Xue 2018) and TCF7L2, the FinnGen benchmark's exposure and
@@ -96,6 +103,16 @@ PHEWAS_VARIANTS = [
     ("19:44908684:C:T", "rs429358", "APOE"),
 ]
 
+# One regional profile per lead variant, each a window of this half-width either
+# side of it: the three loci the MR pairs and known-locus checks already name,
+# so a profile can be read against an estimate the harness reports anyway.
+REGIONAL_WINDOW_KB = 500
+REGIONAL_LOCI = [
+    {"analysis_id": "GCST006867", "gene": "TCF7L2", "lead_alid": "10:112998590:C:T"},
+    {"analysis_id": "GCST90029007", "gene": "FTO", "lead_alid": "16:53786615:A:T"},
+    {"analysis_id": "GCST90239658", "gene": "PCSK9", "lead_alid": "1:55039974:G:T"},
+]
+
 # A shape whose warm-up takes longer than this is timed once, not `--reps`
 # times. The off-axis Overflow scan makes some shapes take minutes per call on
 # this store; repeating them would add hours and measure nothing new. Each
@@ -129,10 +146,20 @@ def _off_axis_alid(q: Any, n_variants: int) -> str:
 def _patterns(q: Any, store: Path) -> dict[str, Any]:
     analyses = q.analyses_table()
     n_variants = _n_shared_variants(store)
-    patterns = _query_shapes.build_query_patterns(
-        q, analyses, n_variants, len(analyses),
-        exposure=EXPOSURE, phewas_alid=PHEWAS_ALID, region=REGION,
+    random_alids, random_analyses = _query_shapes.resolve_axis_selections(
+        q._variant_axis, analyses, n_variants, len(analyses)
     )
+    patterns = _query_shapes.common_query_patterns(
+        q,
+        exposure=EXPOSURE, phewas_alid=PHEWAS_ALID, region=REGION,
+        random_alids=random_alids, random_analyses=random_analyses,
+    )
+    # The same region, exposure and Analyses asked of the Dense Component alone:
+    # what a reader who only queries the reference axis pays, beside the Hybrid
+    # answer the common shapes time.
+    patterns.update(_query_shapes.dense_component_query_patterns(
+        q, exposure=EXPOSURE, region=REGION, random_analyses=random_analyses,
+    ))
     off_axis = _off_axis_alid(q, n_variants)
     patterns["phewas_off_axis"] = lambda: q.phewas(off_axis)
     patterns["bulk_overflow_heavy"] = lambda: q.analysis(OVERFLOW_HEAVY)
@@ -295,17 +322,149 @@ def phewas_top(q: Any, table: dict[int, dict[str, Any]], n: int = 8) -> list[dic
     return _report.phewas_top(q, table, PHEWAS_VARIANTS, n)
 
 
+def mr_instruments(
+    q: Any, by_id: dict[str, int], exposure: str, outcome: str
+) -> tuple[list[dict], int]:
+    """Distance-clumped instruments, each keeping both sides' Association Status.
+
+    Instrument selection is the one the FinnGen harness's `run_mr` makes: the
+    exposure's genome-wide significant top hits, `_clump` at `CLUMP_KB`, then
+    one lookup for both Analyses. What is added here is the status of the
+    exposure cell and of the outcome cell beside each instrument, which is what
+    lets one run be split into observed and imputed strata at all -- the status
+    is a property of the cell, and a batch estimate throws it away.
+
+    Returns the instruments and how many raw hits the clump started from.
+    """
+    hits = q.top_hits(analysis_id=exposure, threshold=_query_shapes.GENOME_WIDE)
+    raw = []
+    for vi, z, se in zip(hits["variant_index"], hits["z"], hits["se"], strict=True):
+        record = q._variant_axis.by_index(int(vi))
+        if record is not None:
+            raw.append({"alid": record.alid, "chrom": record.chromosome,
+                        "pos": int(record.position), "z_exp": float(z),
+                        "se_exp": float(se)})
+    clumped = _clump(raw, CLUMP_KB)
+    look = q.lookup([c["alid"] for c in clumped], [exposure, outcome])
+    per: dict[int, dict[str, Any]] = {}
+    for vi, ai, z, se, status in zip(
+        look["variant_index"], look["analysis_index"], look["z"], look["se"],
+        look["association_status"], strict=True,
+    ):
+        cell = per.setdefault(int(vi), {})
+        side = "exp" if int(ai) == by_id[exposure] else "out"
+        cell[f"z_{side}"], cell[f"se_{side}"], cell[f"status_{side}"] = (
+            float(z), float(se), str(status)
+        )
+    instruments = []
+    for vi, cell in per.items():
+        if {"z_exp", "z_out"} <= cell.keys():
+            record = q._variant_axis.by_index(vi)
+            instruments.append({
+                "alid": record.alid, "chrom": record.chromosome,
+                "pos": int(record.position),
+                "beta_exp": cell["z_exp"] * cell["se_exp"], "se_exp": cell["se_exp"],
+                "beta_out": cell["z_out"] * cell["se_out"], "se_out": cell["se_out"],
+                "status_exp": cell["status_exp"], "status_out": cell["status_out"],
+            })
+    return instruments, len(raw)
+
+
 def mr_with_components(q: Any, by_id: dict[str, int], exposure: str, outcome: str) -> dict:
+    """One IVW pair end to end, each instrument tagged with its component.
+
+    The whole-set estimate is `_hybrid_report.ivw` -- fixed-effect, the same
+    function every stratum uses -- so `ivw_beta`, `ivw_se` and `ivw_pval`
+    describe all instruments under one convention. The random-effects SE the
+    earlier artifact reported as `ivw_se` is kept beside it as `ivw_se_random`
+    (and `cochran_q`/`q_df` are unchanged), so the heterogeneity it inflates for
+    is still visible rather than dropped. `strata` is the same estimate per
+    observed/imputed stratum, `None` where a stratum has fewer than
+    `_report.MIN_STRATUM_INSTRUMENTS`.
+    """
     started = time.perf_counter()
-    result = run_mr(q, by_id, exposure, outcome)
-    result["elapsed_s"] = round(time.perf_counter() - started, 2)
-    for instrument in result["instruments"]:
+    instruments, n_raw = mr_instruments(q, by_id, exposure, outcome)
+    if not instruments:
+        raise SystemExit(f"{exposure} -> {outcome}: no instruments; refusing an empty MR")
+    for instrument in instruments:
         record = q._variant_axis.by_identifier(instrument["alid"])
         instrument["component"] = _component_of(q, record.variant_index)
-    result["n_instruments_overflow"] = sum(
-        i["component"] == "overflow" for i in result["instruments"]
-    )
-    return result
+    elapsed_s = round(time.perf_counter() - started, 2)
+
+    overall = _report.ivw(instruments)
+    be = np.array([i["beta_exp"] for i in instruments])
+    bo = np.array([i["beta_out"] for i in instruments])
+    so = np.array([i["se_out"] for i in instruments])
+    se_exp = np.array([i["se_exp"] for i in instruments])
+    weight = be**2 / so**2
+    ratio = bo / be
+    q_stat = float(np.sum(weight * (ratio - overall["beta"]) ** 2))
+    df = len(instruments) - 1
+    se_random = overall["se"] * max(1.0, float(np.sqrt(q_stat / df))) if df > 0 else overall["se"]
+    return {
+        "exposure_id": exposure, "outcome_id": outcome, "clump_kb": CLUMP_KB,
+        "n_instruments_raw": n_raw, "n_instruments": len(instruments),
+        "n_instruments_overflow": sum(
+            i["component"] == "overflow" for i in instruments
+        ),
+        "ivw_beta": overall["beta"], "ivw_se": overall["se"],
+        "ivw_pval": overall["p"], "ivw_se_fixed": overall["se"],
+        "ivw_se_random": se_random,
+        "cochran_q": q_stat, "q_df": df,
+        "sign_concordant_fraction": float(np.mean(np.sign(be) == np.sign(bo))),
+        "median_instrument_F": float(np.median((be / se_exp) ** 2)),
+        "elapsed_s": elapsed_s,
+        "instruments": instruments,
+        "strata": _report.mr_strata(instruments),
+    }
+
+
+def _window(lead_alid: str) -> tuple[str, int, int]:
+    """The `REGIONAL_WINDOW_KB` window either side of a lead ALID's position."""
+    chromosome, position, *_alleles = lead_alid.split(":")
+    half = REGIONAL_WINDOW_KB * 1000
+    return (chromosome, int(position) - half, int(position) + half)
+
+
+def regional_windows(q: Any) -> list[dict[str, Any]]:
+    """One regional profile per `REGIONAL_LOCI` entry, timed end to end.
+
+    Every shared-axis ALID in the window is looked up for the one Analysis, the
+    Hybrid question the report's regional shapes ask of a whole store. Each row
+    is `[position, neglog10_p, status, component]`, so the plot says which cells
+    the Dense Component answered and which came from the Overflow; the counts
+    are the observed/imputed split the owner asked to see beside the estimate.
+    """
+    out = []
+    for locus in REGIONAL_LOCI:
+        chromosome, start, end = _window(locus["lead_alid"])
+        started = time.perf_counter()
+        alids = _query_shapes.regional_alids(q._variant_axis, (chromosome, start, end))
+        result = q.lookup(alids, [locus["analysis_id"]])
+        rows = []
+        n_observed = n_imputed = 0
+        for vi, z, status in zip(
+            result["variant_index"], result["z"], result["association_status"], strict=True
+        ):
+            record = q._variant_axis.by_index(int(vi))
+            status = str(status)
+            n_observed += int(status == "observed")
+            n_imputed += int(status == "imputed")
+            rows.append([
+                int(record.position),
+                round(_report.neglog10_p(float(z)), 3),
+                status,
+                _component_of(q, int(vi)),
+            ])
+        out.append({
+            "analysis_id": locus["analysis_id"], "gene": locus["gene"],
+            "lead_alid": locus["lead_alid"], "chromosome": chromosome,
+            "start": start, "end": end,
+            "n_observed": n_observed, "n_imputed": n_imputed,
+            "rows": rows,
+            "elapsed_s": round(time.perf_counter() - started, 2),
+        })
+    return out
 
 
 def _require_selected_analyses(by_id: dict[str, int]) -> None:
@@ -317,6 +476,7 @@ def _require_selected_analyses(by_id: dict[str, int]) -> None:
     selected = {EXPOSURE, OVERFLOW_HEAVY}
     selected |= {analysis for analysis, *_ in KNOWN_LOCI}
     selected |= {analysis for pair in MR_PAIRS for analysis in pair[:2]}
+    selected |= {locus["analysis_id"] for locus in REGIONAL_LOCI}
     absent = sorted(selected - set(by_id))
     if absent:
         raise SystemExit(f"the store holds no Analysis {', '.join(absent)}; update the selection")
@@ -385,6 +545,18 @@ def main() -> None:
         print(f"MR {r['exposure_id']} -> {r['outcome_id']}: beta={r['ivw_beta']:.3f} "
               f"se={r['ivw_se']:.3f} p={r['ivw_pval']:.1e} n={r['n_instruments']} "
               f"(overflow {r['n_instruments_overflow']}) in {r['elapsed_s']} s", flush=True)
+        for stratum, estimate in r["strata"].items():
+            shown = ("too few instruments" if estimate is None
+                     else f"beta={estimate['beta']:.3f} se={estimate['se']:.3f} "
+                          f"p={estimate['p']:.1e} n={estimate['n']}")
+            print(f"    {stratum:14s} {shown}", flush=True)
+
+    windows = regional_windows(q)
+    for window in windows:
+        print(f"regional {window['gene']:8s} {window['analysis_id']:14s} "
+              f"{window['chromosome']}:{window['start']}-{window['end']} "
+              f"rows={len(window['rows'])} observed={window['n_observed']} "
+              f"imputed={window['n_imputed']} in {window['elapsed_s']} s", flush=True)
 
     # A Hybrid root's HM3 index lives in its nested Dense Component (#271).
     hm3_extract = _query_shapes.report_hm3_extract(
@@ -425,6 +597,7 @@ def main() -> None:
         "known_loci": loci,
         "phewas_top": phewas_top(q, table),
         "mr": mr,
+        "regional_windows": windows,
         "labels": {
             a: table[by_id[a]]["analysis_label"]
             for a in {x for pair in MR_PAIRS for x in pair[:2]} | {EXPOSURE, OVERFLOW_HEAVY}
