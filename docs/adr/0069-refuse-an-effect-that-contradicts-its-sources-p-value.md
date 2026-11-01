@@ -160,10 +160,13 @@ agrees with `beta / sebeta` to the digits it prints. The threshold stands.
   which it had not: without it every FinnGen Analysis silently skipped the check.
   Mapping it changes the map's checksum, which is part of every Resolution Record
   read through it (ADR 0063), so FinnGen records are recomputed by `--resume`.
-  It also enables ADR 0055's recovery for the map: a row whose `sebeta` is
-  unusable but whose `pval` is usable now gets a standard error derived from it,
-  where the dedicated reader dropped the row (and, as for any such row, it is
-  excluded from the check).
+  It also gives the map ADR 0055's recovery, which amends that ADR's decision 5:
+  a Column Map that declares `p_value` (now including `finngen-r13`) derives a
+  standard error from it for a row whose `sebeta` is unusable, where the dedicated
+  `FinnGenR13Reader` does not and drops the row (such a row is excluded from the
+  check). Measured on real data the difference is inert: 0 such rows in 40 random
+  R13 endpoints at 1,000,000 rows each (40,000,000 rows), and 0 in 5 of them read
+  whole (106,632,171 rows).
 - **GWAS-VCF and BESD are not checked yet.** Their records say
   `skip_reason = no_source_p_value`. Reading VCF `LP` is deferred, as is any
   check for BESD, whose per-probe statistics carry no p-value in the metrics

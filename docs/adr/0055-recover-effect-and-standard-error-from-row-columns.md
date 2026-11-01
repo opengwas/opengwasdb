@@ -1,5 +1,11 @@
 # Recover a row's effect and standard error from its own columns
 
+> **Amended by [ADR 0069](0069-refuse-an-effect-that-contradicts-its-sources-p-value.md)**
+> in decision 5 ("GWAS-SSF only"): the built-in `finngen-r13` Column Map now
+> declares `p_value`, so a Column Map that declares `p_value` gets the p-value
+> standard-error recovery. The dedicated `FinnGenR13Reader` still does not. On 40
+> real FinnGen R13 endpoints the difference is inert (0 rows).
+
 A full OGS-00011 resolve found 476 Analyses with no build-eligible row — no row
 carrying a finite beta and a positive standard error. 212 of those report both
 quantities in columns the reader never opened: a `beta` that is `NA` on every
