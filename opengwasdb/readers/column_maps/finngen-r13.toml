@@ -20,7 +20,7 @@ frequency = "af_alt"
 [optional_columns]
 rsid = "rsids"
 # SAIGE's saddle-point p-value: read by the resolver's effect-consistency check
-# (ADR 0069), never to derive a standard error unless `sebeta` is absent.
+# (ADR 0069), never to derive a standard error unless `sebeta` is unusable.
 p_value = "pval"
 
 [conventions]

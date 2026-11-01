@@ -167,6 +167,11 @@ agrees with `beta / sebeta` to the digits it prints. The threshold stands.
   check). Measured on real data the difference is inert: 0 such rows in 40 random
   R13 endpoints at 1,000,000 rows each (40,000,000 rows), and 0 in 5 of them read
   whole (106,632,171 rows).
+- **ADR 0063's parity claim has one carve-out.** The built-in `finngen-r13` map
+  and the dedicated `FinnGenR13Reader` no longer read every row identically: a
+  row with an unusable `sebeta` and a usable `pval` is read by the map and
+  dropped by the reader. 0 of 146.6M real rows are affected; ADR 0063 carries the
+  amendment, and `tests/test_column_map_reader.py` names the carve-out.
 - **GWAS-VCF and BESD are not checked yet.** Their records say
   `skip_reason = no_source_p_value`. Reading VCF `LP` is deferred, as is any
   check for BESD, whose per-probe statistics carry no p-value in the metrics
