@@ -416,6 +416,12 @@ def _blank_a_crossover(store: Path) -> None:
     _dense_plane(store, DenseZPlane).patch(rows, cols, np.array([np.nan], dtype=np.float32))
 
 
+def _z_without_se_on_an_overflow_association(store: Path) -> None:
+    # 102,000 in trait_a keeps its Z and loses its SE: the two missing markers must agree
+    # (spec §15), which the Overflow's own counters decide.
+    _overflow(store)["se"][_overflow_position(store, 102_000, "trait_a")] = np.nan
+
+
 def _failed_verdict(observed: Path, completed: Path, out: Path, *extra: str) -> dict:
     """Run the CLI on a pair that must fail, and the verdict it still wrote."""
     result = _run(observed, completed, out, *extra)
@@ -435,6 +441,7 @@ def _failed_verdict(observed: Path, completed: Path, out: Path, *extra: str) -> 
         (_alter_a_crossover, "crossovers.z_mismatch"),
         (_flag_a_crossover_imputed, "crossovers.observed_marked_imputed"),
         (_blank_a_crossover, "crossovers.observed_missing_in_child"),
+        (_z_without_se_on_an_overflow_association, "overflow.z_se_missingness_mismatch"),
     ],
     ids=lambda value: getattr(value, "__name__", value),
 )
@@ -603,6 +610,118 @@ def test_an_overflow_observation_moved_onto_an_existing_dense_row_fails(tmp_path
         "dense.missing_became_observed": 1, "dense.inserted_observed_cells": 0,
         "overflow.observed_missing_in_child": 1, "overflow.analyses_count_mismatch": 1,
     }
+
+
+# --- an infinite value is a value (issue #337) ------------------------------
+
+# 102,000 in trait_a is an ordinary Overflow association: off-panel in the LD panel, so it
+# stays in the Overflow through completion, and an SE of `+inf` there is a value the check
+# must compare rather than read as missing (issue #337, spec §15).
+INFINITE_SE_CELL = (102_000, "trait_a")
+
+
+def _write_infinite_se(store: Path, position: int, analysis: str) -> None:
+    """Store `+inf` as one Overflow association's SE, which a float16 plane above its range does."""
+    se = _overflow(store)["se"]
+    assert se.dtype == np.dtype("float16"), "the fixture must narrow SE to float16"
+    se[_overflow_position(store, position, analysis)] = np.inf
+
+
+def _overflow_se(store: Path, position: int, analysis: str) -> float:
+    return float(_overflow(store)["se"][_overflow_position(store, position, analysis)])
+
+
+def test_an_infinite_overflow_se_copied_identically_passes_and_is_counted(tmp_path, pair):
+    observed, completed = pair
+    for store in (observed, completed):
+        _write_infinite_se(store, *INFINITE_SE_CELL)
+    assert np.isinf(_overflow_se(observed, *INFINITE_SE_CELL))
+    assert np.isinf(_overflow_se(completed, *INFINITE_SE_CELL))
+    out = tmp_path / "verdict.json"
+
+    result = _run(observed, completed, out)
+
+    assert result.exit_code == 0, result.output
+    verdict = _verdict(result, out)
+    assert verdict["passed"] is True and verdict["failures"] == []
+    assert verdict["components"]["overflow"]["totals"]["infinite_cells"] == 2
+
+
+def test_a_source_infinite_overflow_se_the_target_lacks_fails(tmp_path, pair):
+    observed, completed = pair
+    _write_infinite_se(observed, *INFINITE_SE_CELL)
+    _rewrite_overflow(completed, _without("trait_a", _shared_row(completed, 102_000)))
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert "overflow.observed_missing_in_child" in verdict["failures"]
+    assert verdict["components"]["overflow"]["totals"]["observed_missing_in_child"] == 1
+    assert verdict["components"]["overflow"]["totals"]["infinite_cells"] == 1
+
+
+# --- a crossover with only one of Z and SE, and one that is infinite --------
+
+# 101,000 in trait_a is a crossover: the panel extends the Dense axis by it, so completion
+# folds the Overflow association into the Dense Component and the Dense part sets the cell
+# aside. The paired-marker rule is then the crossover check's to enforce (spec §15).
+CROSSOVER_CELL = (101_000, "trait_a")
+
+
+def test_a_source_crossover_with_z_and_no_se_fails_on_the_crossover_counter(tmp_path, pair):
+    """The source Overflow's crossover cell keeps its Z and loses its SE.
+
+    Mutation that makes this fail: drop the `z_se_missingness_mismatch` accumulation from
+    `_check_crossovers` — the Dense part has set the cell aside and counts nothing, so
+    every `z_se_missingness_mismatch` stays zero and only `se_mismatch` fails.
+    """
+    observed, completed = pair
+    assert _overflow_se(observed, *CROSSOVER_CELL) > 0.0  # fixture sanity: an observed cell
+    _overflow(observed)["se"][_overflow_position(observed, *CROSSOVER_CELL)] = np.nan
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert verdict["crossovers"]["totals"]["z_se_missingness_mismatch"] == 1
+    assert "crossovers.z_se_missingness_mismatch" in verdict["failures"]
+    assert verdict["components"]["dense"]["totals"]["z_se_missingness_mismatch"] == 0
+
+
+def test_a_completed_crossover_with_se_and_no_z_fails_on_the_crossover_counter(tmp_path, pair):
+    """The completed Dense cell keeps its SE and loses its Z, the other orientation.
+
+    Mutation that makes this fail: count only the source side of a crossover, or neither.
+    """
+    observed, completed = pair
+    rows, cols = _dense_cell(completed, *CROSSOVER_CELL)
+    _dense_plane(completed, DenseZPlane).patch(rows, cols, np.array([np.nan], np.float32))
+
+    verdict = _failed_verdict(observed, completed, tmp_path / "verdict.json")
+
+    assert verdict["crossovers"]["totals"]["z_se_missingness_mismatch"] == 1
+    assert "crossovers.z_se_missingness_mismatch" in verdict["failures"]
+    assert verdict["components"]["dense"]["totals"]["z_se_missingness_mismatch"] == 0
+
+
+def test_an_infinite_crossover_se_copied_identically_passes_and_is_counted(tmp_path, pair):
+    """An infinite SE on a crossover is a value on both sides, and never a failure.
+
+    Mutation that makes this fail: drop `infinite_cells` from `_crossover_tally` (the Dense
+    part sees the cell only as the NaN it was set aside as), or read an infinite SE as
+    missing (`crossovers.se_mismatch` and `observed_missing_in_child` then fire).
+    """
+    observed, completed = pair
+    _overflow(observed)["se"][_overflow_position(observed, *CROSSOVER_CELL)] = np.inf
+    rows, cols = _dense_cell(completed, *CROSSOVER_CELL)
+    _dense_plane(completed, DenseSePlane).patch(rows, cols, np.array([np.inf], np.float32))
+    assert np.isinf(float(_dense_plane(completed, DenseSePlane).points(rows, cols)[0]))
+    out = tmp_path / "verdict.json"
+
+    result = _run(observed, completed, out)
+
+    assert result.exit_code == 0, result.output
+    verdict = _verdict(result, out)
+    assert verdict["passed"] is True and verdict["failures"] == []
+    assert verdict["crossovers"]["totals"]["infinite_cells"] == 2
+    assert verdict["components"]["dense"]["totals"]["infinite_cells"] == 0
 
 
 # --- seam 3: refusals --------------------------------------------------------
