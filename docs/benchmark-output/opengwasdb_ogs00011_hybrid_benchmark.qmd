@@ -510,7 +510,12 @@ questions: their Dense draws are *panel* variants, which carry a cell in nearly
 every Analysis, so they return {wide_dense['result_count']:,} and
 {tall_dense['result_count']:,} rows against the Hybrid draws'
 {wide_hybrid['result_count']:,} and {tall_hybrid['result_count']:,}, and the
-ratio there compares two different questions.""")
+ratio there compares two different questions.
+
+Bringing the one-Analysis window and the named-Analysis lookups close to their
+Dense-only twins is opengwas/opengwasdb#340: the identifier resolution is
+opengwas/opengwasdb#341 and the per-Analysis Overflow search
+opengwas/opengwasdb#342.""")
 ```
 
 The seven questions this Store shares with OGS-00009, the release whose report
@@ -815,17 +820,27 @@ for pair in mr:
     rows.append([
         f"`{pair['exposure_id']}` {labels.get(pair['exposure_id'], '')}"
         f"<br>→ `{pair['outcome_id']}` {labels.get(pair['outcome_id'], '')}",
-        f"{pair['n_instruments']:,} of {pair['n_instruments_raw']:,}",
-        f"{pair['n_instruments_overflow']:,}",
+        f"{pair['n_instruments']:,} / {pair['all_instruments']['n']:,} of "
+        f"{pair['n_instruments_raw']:,}",
+        f"{pair['all_instruments']['n_overflow']:,}",
         f"{pair['ivw_beta']:+,.3f}",
         f"{pair['ivw_se']:,.4f}",
         f"{pair['ivw_pval']:.2g}",
         f"{pair['cochran_q']:,.0f} ({pair['q_df']:,})",
+        f"{pair['all_instruments']['beta']:+,.3f} ({pair['all_instruments']['se']:,.4f})",
         f"{pair['elapsed_s']:,.2f} s",
     ])
+filters = {pair["instrument_filter"] for pair in mr}
 print(md_table(
-    ["Exposure → Outcome", "Instruments", "from Overflow", "IVW β", "se", "p",
-     "Cochran Q (df)", "Elapsed"], rows))
+    ["Exposure → Outcome", "Instruments (both observed / all, of candidates)",
+     "from Overflow (all)", "IVW β", "se", "p", "Cochran Q (df)",
+     "IVW β over all instruments (se)", "Elapsed"], rows))
+print(f"""
+The IVW β, se, p and Cochran Q are over the instruments observed on both sides
+(`instrument_filter`: {', '.join(f'`{f}`' for f in sorted(filters))}): on a
+Reference-Completed Store an imputed cell understates its effect, as the strata
+below show, so the estimate a reader should take is the one from observed cells.
+The estimate over every instrument is beside it.""")
 print("\nThe pairs, in the words the run records for them:\n")
 for pair in mr:
     print(f"- {pair['note']}")
@@ -833,9 +848,9 @@ q_ratios = [pair["cochran_q"] / pair["q_df"] for pair in mr]
 print(f"""
 Each pair starts from the exposure's genome-wide-significant variants, prunes them
 to one per {mr[0]['clump_kb']:,} kb, and reads both sides of every instrument with one
-lookup. All {sum(pair['n_instruments'] for pair in mr):,} instruments across the three
+lookup. All {sum(pair['all_instruments']['n'] for pair in mr):,} instruments across the three
 pairs come from the Dense Component; the Overflow contributes
-{sum(pair['n_instruments_overflow'] for pair in mr):,} of them. The standard error is the
+{sum(pair['all_instruments']['n_overflow'] for pair in mr):,} of them. The standard error is the
 random-effects one, inflated by Cochran's Q where the instruments disagree more
 than their own errors allow — and they do, from {min(q_ratios):.1f}× to
 {max(q_ratios):.1f}× Q's degrees of freedom. The whole three-pair run, including
@@ -865,7 +880,7 @@ for pair in mr:
     if detail.get(("imputed", "imputed")):
         parts.append(f"{detail[('imputed', 'imputed')]:,} imputed on both")
     print(f"- `{pair['exposure_id']}` → `{pair['outcome_id']}`: **{imputed:,} of "
-          f"{pair['n_instruments']:,}** instruments are imputed — " + "; ".join(parts) + ".")
+          f"{pair['all_instruments']['n']:,}** instruments are imputed — " + "; ".join(parts) + ".")
 print("""
 On the side that was filled, an instrument's β and se are the values the
 completion step stored, not numbers that Analysis's source file reported. The
@@ -897,8 +912,9 @@ for ax, pair in zip(axes[:, 0], mr):
                    alpha=0.85, linewidths=0, zorder=2,
                    label=f"{description} ({selected.sum():,})")
     span = np.array([bx.min(), bx.max()]) * 1.06
-    ax.plot(span, pair["ivw_beta"] * span, "-", color="#1f2933", lw=1.8, zorder=3,
-            label=f"all {pair['n_instruments']:,} instruments, β = {pair['ivw_beta']:.2f}")
+    every = pair["all_instruments"]
+    ax.plot(span, every["beta"] * span, "-", color="#1f2933", lw=1.8, zorder=3,
+            label=f"all {every['n']:,} instruments, β = {every['beta']:.2f}")
     for key in STRATA:
         estimate = pair["strata"].get(key)
         if estimate is None:
@@ -927,7 +943,7 @@ for pair in mr:
     print(f"**{labels.get(pair['exposure_id'], pair['exposure_id'])} → "
           f"{labels.get(pair['outcome_id'], pair['outcome_id'])}** — "
           f"`{pair['exposure_id']}` → `{pair['outcome_id']}`, "
-          f"{pair['n_instruments']:,} instruments of which {imputed:,} imputed\n")
+          f"{pair['all_instruments']['n']:,} instruments of which {imputed:,} imputed\n")
     rows = []
     for key, description in STRATA.items():
         estimate = pair["strata"].get(key)
@@ -946,7 +962,8 @@ for pair in mr:
     print(md_table(["Stratum", "n", "IVW β", "se (random effects)", "se (fixed)", "p"], rows))
     print()
 deviation = max(
-    abs(pair["strata"]["both_observed"]["beta"] - pair["ivw_beta"]) / pair["ivw_beta"]
+    abs(pair["strata"]["both_observed"]["beta"] - pair["all_instruments"]["beta"])
+    / pair["all_instruments"]["beta"]
     for pair in mr
 )
 imputed_estimates = [(pair, key, pair["strata"][key]) for pair in mr
@@ -979,8 +996,9 @@ This is what summary-statistic imputation predicts. An imputed z is the
 expected value given the observed variants around it, shrunk towards zero by
 the imputation's uncertainty, so an instrument with an imputed cell understates
 its effect, and most imputed instruments here have an observed exposure and an
-imputed outcome. An MR on a Reference-Completed Store should report the
-both-observed estimate beside the all-instrument one.""")
+imputed outcome. That is why the table at the top of this section takes the
+both-observed instruments as its estimate and shows the all-instrument one
+beside it.""")
 ```
 
 ::: {.callout-warning}
@@ -1141,9 +1159,10 @@ print(f"""- **Warm page cache.** Each shape is timed after one warm-up call, so 
   (educational attainment, college completion) stores odds ratios where beta
   belongs, and `GCST004461` (low-grade serous ovarian cancer) stores log-odds in
   its `odds_ratio` column, so taking its log a second time inflates z — its
-  source p of 0.32 at rs569167217 is stored as z 12.4. Both are being raised with
-  the owner, and their stored statistics should not be used until they are
-  rebuilt.
+  source p of 0.32 at rs569167217 is stored as z 12.4. Both are recorded in
+  opengwas/opengwasdb-stores#403, with the resolution-time check that would have
+  caught them in opengwas/opengwasdb#345; their stored statistics should not be
+  used until they are rebuilt.
 - **Memory sampling resolution.** The peak sampler polls every 5 ms, so an
   allocation spike shorter than that inside a sub-millisecond query can be
   missed. That affects the shapes whose cost is about a megabyte anyway; the

@@ -2246,7 +2246,7 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <p>A lookup of a panel variant reads the Dense Component. A lookup of an off-axis variant reads only the Overflow. A whole-Analysis read touches both and merges them in genomic order.</p>
 <ul>
 <li><strong>166.56 GB</strong> on disk, against <strong>1,511.69 GB</strong> of source GWAS-SSF across 3,169 files — a <strong>9.08×</strong> reduction.</li>
-<li>A top-hits query returns in <strong>15.7 ms</strong>; a PheWAS across all 3,169 Analyses in <strong>90.6 ms</strong>; a PheWAS of an off-axis variant in <strong>18.2 ms</strong>.</li>
+<li>A top-hits query returns in <strong>15.7 ms</strong>; a PheWAS across all 3,169 Analyses in <strong>118.0 ms</strong>; a PheWAS of an off-axis variant in <strong>17.8 ms</strong>.</li>
 <li>Those queries need <strong>~276 MB</strong> of resident memory. A laptop can open this Store.</li>
 <li>Build and Reference Completion took <strong>47.25 h</strong> of wall clock.</li>
 </ul>
@@ -2325,7 +2325,7 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 </tr>
 <tr class="odd">
 <td>Opening the Store</td>
-<td>0.39 s</td>
+<td>0.31 s</td>
 </tr>
 </tbody>
 </table>
@@ -2599,76 +2599,76 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <tr class="odd">
 <td>Top hits for one Analysis (p &lt; 5×10⁻⁸)</td>
 <td><strong>15.7 ms</strong></td>
-<td>15.9 ms</td>
+<td>16.0 ms</td>
 <td>5</td>
 <td>8,471</td>
 </tr>
 <tr class="even">
 <td>One off-axis variant × every Analysis</td>
-<td><strong>18.2 ms</strong></td>
-<td>18.4 ms</td>
+<td><strong>17.8 ms</strong></td>
+<td>18.3 ms</td>
 <td>5</td>
 <td>51</td>
 </tr>
 <tr class="odd">
 <td>One panel variant × every Analysis</td>
-<td><strong>90.6 ms</strong></td>
-<td>91.9 ms</td>
+<td><strong>118.0 ms</strong></td>
+<td>121.8 ms</td>
 <td>5</td>
 <td>3,166</td>
 </tr>
 <tr class="even">
 <td>100 random variants × 10 Analyses</td>
-<td><strong>1.73 s</strong></td>
-<td>1.75 s</td>
+<td><strong>1.77 s</strong></td>
+<td>1.83 s</td>
 <td>5</td>
 <td>239</td>
 </tr>
 <tr class="odd">
 <td>10 random variants × 100 Analyses</td>
-<td><strong>1.73 s</strong></td>
-<td>1.74 s</td>
+<td><strong>2.62 s</strong></td>
+<td>2.72 s</td>
 <td>5</td>
 <td>119</td>
 </tr>
 <tr class="even">
 <td>A 1 Mb window × one Analysis</td>
-<td><strong>2.72 s</strong></td>
-<td>2.73 s</td>
+<td><strong>2.73 s</strong></td>
+<td>2.74 s</td>
 <td>5</td>
 <td>3,000</td>
 </tr>
 <tr class="odd">
 <td>A 1 Mb window × every Analysis</td>
-<td><strong>3.01 s</strong></td>
-<td>3.02 s</td>
+<td><strong>3.03 s</strong></td>
+<td>3.25 s</td>
 <td>5</td>
 <td>10,291,241</td>
 </tr>
 <tr class="even">
-<td>One Analysis, genome-wide</td>
-<td><strong>20.81 s</strong></td>
-<td>24.14 s</td>
-<td>5</td>
-<td>9,869,010</td>
-</tr>
-<tr class="odd">
 <td>One Analysis, Dense Component alone</td>
-<td><strong>21.71 s</strong></td>
-<td>23.90 s</td>
+<td><strong>21.48 s</strong></td>
+<td>24.87 s</td>
 <td>5</td>
 <td>11,190,536</td>
 </tr>
+<tr class="odd">
+<td>One Analysis, genome-wide</td>
+<td><strong>23.67 s</strong></td>
+<td>25.33 s</td>
+<td>5</td>
+<td>9,869,010</td>
+</tr>
 <tr class="even">
 <td>One Analysis, genome-wide, both components</td>
-<td><strong>25.86 s</strong></td>
-<td>26.36 s</td>
+<td><strong>26.75 s</strong></td>
+<td>27.89 s</td>
 <td>5</td>
 <td>26,207,009</td>
 </tr>
 </tbody>
 </table>
-<p>Every shape was timed 5 times after one warm-up call; a shape whose warm-up alone passed 60 s is timed once instead and says so in <code>Reps</code>, which none of these did. The span from the cheapest shape to the dearest is 1,649×, and it follows the size of the answer rather than a fixed cost per call: 8,471 rows against 26,207,009.</p>
+<p>Every shape was timed 5 times after one warm-up call; a shape whose warm-up alone passed 60 s is timed once instead and says so in <code>Reps</code>, which none of these did. The span from the cheapest shape to the dearest is 1,709×, and it follows the size of the answer rather than a fixed cost per call: 8,471 rows against 26,207,009.</p>
 <p>The four Dense-only twins the harness also times are not in this table. They ask four of these same questions of the Dense Component alone, and are set against their Hybrid calls under <em>Hybrid against its Dense Component</em> below.</p>
 <section id="hybrid-against-its-dense-component" class="level3">
 <h3 class="anchored" data-anchor-id="hybrid-against-its-dense-component">Hybrid against its Dense Component</h3>
@@ -2694,40 +2694,41 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <tbody>
 <tr class="odd">
 <td>A 1 Mb window × every Analysis</td>
-<td><strong>3.01 s</strong></td>
+<td><strong>3.03 s</strong></td>
 <td>10,291,241</td>
-<td><strong>3.48 s</strong></td>
+<td><strong>3.89 s</strong></td>
 <td>9,784,502</td>
-<td>0.87×</td>
+<td>0.78×</td>
 </tr>
 <tr class="even">
 <td>A 1 Mb window × one Analysis</td>
-<td><strong>2.72 s</strong></td>
+<td><strong>2.73 s</strong></td>
 <td>3,000</td>
-<td><strong>72.6 ms</strong></td>
+<td><strong>106.2 ms</strong></td>
 <td>3,000</td>
-<td>37.51×</td>
+<td>25.70×</td>
 </tr>
 <tr class="odd">
 <td>10 random variants × 100 Analyses</td>
-<td><strong>1.73 s</strong></td>
+<td><strong>2.62 s</strong></td>
 <td>119</td>
-<td><strong>590.8 ms</strong></td>
+<td><strong>887.1 ms</strong></td>
 <td>899</td>
-<td>2.94×</td>
+<td>2.95×</td>
 </tr>
 <tr class="even">
 <td>100 random variants × 10 Analyses</td>
-<td><strong>1.73 s</strong></td>
+<td><strong>1.77 s</strong></td>
 <td>239</td>
-<td><strong>1.27 s</strong></td>
+<td><strong>1.35 s</strong></td>
 <td>765</td>
-<td>1.36×</td>
+<td>1.31×</td>
 </tr>
 </tbody>
 </table>
 <p>A Hybrid lookup does more than a panel lookup, and the gap between the two sets of columns is what it charges for the difference. It resolves every identifier the call is given — variant ALIDs and rsids, and the Analyses it is asked about — on the shared axis of 48,069,918 variants; for a lookup of named Analyses it then searches each of those Analyses’ Ragged Overflow segments in turn. A regional PheWAS across every Analysis instead reads the Overflow’s by-variant index once, then merges the two components’ rows into one genomic order. The Dense-only column is the same question asked of the reference axis’ 14,267,257 panel variants and nothing else — the price a reader pays who wants panel variants only.</p>
-<p>The ratios are not one number called “the Overflow’s cost”. <code>regional</code> is <em>faster</em> through the Hybrid — 3.01 s against 3.48 s — on 506,739 <em>more</em> rows, so the twin is not the Hybrid’s time minus the Overflow’s: the two calls walk different axes and return different row sets. <code>regional_one_analysis</code> returns 3,000 cells either way, and its 37.5× is almost entirely identifier resolution: the Hybrid lookup resolves each of the window’s ALIDs on the shared axis one at a time before it reads any cell, and the one Overflow segment it then searches is small. The two random lookups compare different questions: their Dense draws are <em>panel</em> variants, which carry a cell in nearly every Analysis, so they return 899 and 765 rows against the Hybrid draws’ 119 and 239, and the ratio there compares two different questions.</p>
+<p>The ratios are not one number called “the Overflow’s cost”. <code>regional</code> is <em>faster</em> through the Hybrid — 3.03 s against 3.89 s — on 506,739 <em>more</em> rows, so the twin is not the Hybrid’s time minus the Overflow’s: the two calls walk different axes and return different row sets. <code>regional_one_analysis</code> returns 3,000 cells either way, and its 25.7× is almost entirely identifier resolution: the Hybrid lookup resolves each of the window’s ALIDs on the shared axis one at a time before it reads any cell, and the one Overflow segment it then searches is small. The two random lookups compare different questions: their Dense draws are <em>panel</em> variants, which carry a cell in nearly every Analysis, so they return 899 and 765 rows against the Hybrid draws’ 119 and 239, and the ratio there compares two different questions.</p>
+<p>Bringing the one-Analysis window and the named-Analysis lookups close to their Dense-only twins is opengwas/opengwasdb#340: the identifier resolution is opengwas/opengwasdb#341 and the per-Analysis Overflow search opengwas/opengwasdb#342.</p>
 <p>The seven questions this Store shares with OGS-00009, the release whose report these numbers can be read beside, have been timed there too — though not as a controlled comparison:</p>
 <table class="caption-top table">
 <thead>
@@ -2747,39 +2748,39 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 </tr>
 <tr class="even">
 <td>One panel variant × every Analysis</td>
-<td>90.6 ms</td>
+<td>118.0 ms</td>
 <td>21.2 ms</td>
-<td>4.26×</td>
+<td>5.56×</td>
 </tr>
 <tr class="odd">
 <td>A 1 Mb window × every Analysis</td>
-<td>3.01 s</td>
+<td>3.03 s</td>
 <td>1.66 s</td>
-<td>1.81×</td>
+<td>1.82×</td>
 </tr>
 <tr class="even">
 <td>A 1 Mb window × one Analysis</td>
-<td>2.72 s</td>
+<td>2.73 s</td>
 <td>51.3 ms</td>
-<td>53.10×</td>
+<td>53.26×</td>
 </tr>
 <tr class="odd">
 <td>10 random variants × 100 Analyses</td>
-<td>1.73 s</td>
+<td>2.62 s</td>
 <td>97.8 ms</td>
-<td>17.74×</td>
+<td>26.77×</td>
 </tr>
 <tr class="even">
 <td>100 random variants × 10 Analyses</td>
-<td>1.73 s</td>
+<td>1.77 s</td>
 <td>572.1 ms</td>
-<td>3.02×</td>
+<td>3.10×</td>
 </tr>
 <tr class="odd">
 <td>One Analysis, genome-wide</td>
-<td>20.81 s</td>
+<td>23.67 s</td>
 <td>21.87 s</td>
-<td>0.95×</td>
+<td>1.08×</td>
 </tr>
 </tbody>
 </table>
@@ -2788,9 +2789,9 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <section id="the-three-hybrid-only-shapes" class="level3">
 <h3 class="anchored" data-anchor-id="the-three-hybrid-only-shapes">The three Hybrid-only shapes</h3>
 <ul>
-<li><strong>PheWAS of an off-axis variant</strong> — 18.2 ms for 51 rows. The variant is off the reference axis, so the Dense Component holds no row for it and the entire answer comes from the Ragged Overflow: its variant-centric index maps the variant to the 51 Analyses that observed it, without reading the other 3,118. A Dense-of-union layout would hold that variant as a row in all 3,169 columns, almost all of it padding.</li>
-<li><strong>Whole Analysis through both components</strong> — 25.86 s for 26,207,009 rows. The Hybrid facade reads the Analysis’s Dense Component column, reads its Overflow segment, and merges the two in genomic order: 11,190,536 rows from the panel and 15,016,473 from the Overflow.</li>
-<li><strong>Whole Analysis from the Dense Component alone</strong> — 21.71 s for 11,190,536 rows. This is the control that isolates the Dense path, whose EAF column carries many exception-table cells, so the difference between it and the shape above is what the Overflow costs: 4.16 s and 15,016,473 rows.</li>
+<li><strong>PheWAS of an off-axis variant</strong> — 17.8 ms for 51 rows. The variant is off the reference axis, so the Dense Component holds no row for it and the entire answer comes from the Ragged Overflow: its variant-centric index maps the variant to the 51 Analyses that observed it, without reading the other 3,118. A Dense-of-union layout would hold that variant as a row in all 3,169 columns, almost all of it padding.</li>
+<li><strong>Whole Analysis through both components</strong> — 26.75 s for 26,207,009 rows. The Hybrid facade reads the Analysis’s Dense Component column, reads its Overflow segment, and merges the two in genomic order: 11,190,536 rows from the panel and 15,016,473 from the Overflow.</li>
+<li><strong>Whole Analysis from the Dense Component alone</strong> — 21.48 s for 11,190,536 rows. This is the control that isolates the Dense path, whose EAF column carries many exception-table cells, so the difference between it and the shape above is what the Overflow costs: 5.27 s and 15,016,473 rows.</li>
 </ul>
 </section>
 <section id="hm3-extraction" class="level3">
@@ -2821,15 +2822,15 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 </tr>
 <tr class="odd">
 <td>First read</td>
-<td>703.4 ms</td>
+<td>687.5 ms</td>
 </tr>
 <tr class="even">
 <td>Median</td>
-<td><strong>692.8 ms</strong> over 5 repetitions</td>
+<td><strong>675.3 ms</strong> over 5 repetitions</td>
 </tr>
 <tr class="odd">
 <td>p95</td>
-<td>699.7 ms</td>
+<td>691.3 ms</td>
 </tr>
 <tr class="even">
 <td>Rows returned</td>
@@ -2845,7 +2846,7 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 </tr>
 </tbody>
 </table>
-<p>The Indexed Variant Subset is one Analysis’s statistics restricted to the HapMap3 variants — a full-result extraction for LD-score work, from a Store that holds 46,959,341,611 associations. 152 of the 1,206,903 variants in the input are absent from the Store’s axis, and 7,542 of those present hold no association for this Analysis, which is why 1,188,389 rows come back rather than 1,195,931 — at 1.72 million rows per second. The subset lives in the Hybrid root’s nested Dense Component, not beside the Overflow.</p>
+<p>The Indexed Variant Subset is one Analysis’s statistics restricted to the HapMap3 variants — a full-result extraction for LD-score work, from a Store that holds 46,959,341,611 associations. 152 of the 1,206,903 variants in the input are absent from the Store’s axis, and 7,542 of those present hold no association for this Analysis, which is why 1,188,389 rows come back rather than 1,195,931 — at 1.76 million rows per second. The subset lives in the Hybrid root’s nested Dense Component, not beside the Overflow.</p>
 </section>
 <section id="against-parsing-the-source-file" class="level3">
 <h3 class="anchored" data-anchor-id="against-parsing-the-source-file">Against parsing the source file</h3>
@@ -2867,19 +2868,19 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <tbody>
 <tr class="odd">
 <td><code>pd.read_csv</code> of <code>30054458-GCST006867-EFO_0001360.h.tsv.gz</code></td>
-<td><strong>6.54 s</strong> (3 repetitions)</td>
+<td><strong>6.35 s</strong> (3 repetitions)</td>
 <td>5,030,727</td>
-<td>1.30 µs</td>
+<td>1.26 µs</td>
 </tr>
 <tr class="even">
 <td>The Store’s whole-Analysis read of the same Analysis</td>
-<td><strong>20.81 s</strong> (5 repetitions)</td>
+<td><strong>23.67 s</strong> (5 repetitions)</td>
 <td>9,869,010</td>
-<td>2.11 µs</td>
+<td>2.40 µs</td>
 </tr>
 </tbody>
 </table>
-<p>The file is 232,792,798 bytes and is parsed for the five columns a z/se/eaf answer needs, with beta divided by standard error into z: 6.54 s for 5,030,727 rows with a finite result. The Store answers the same Analysis genome-wide with 9,869,010 rows, 1.96× as many, because Reference Completion fills panel variants the file never reported. Per returned row the Store read is 1.62× the file parse. A whole-Analysis read is the one shape a per-file layout is built for, and the Store is competitive rather than faster here; what it adds is that the same read is one call, in the same coordinate system as every other Analysis.</p>
+<p>The file is 232,792,798 bytes and is parsed for the five columns a z/se/eaf answer needs, with beta divided by standard error into z: 6.35 s for 5,030,727 rows with a finite result. The Store answers the same Analysis genome-wide with 9,869,010 rows, 1.96× as many, because Reference Completion fills panel variants the file never reported. Per returned row the Store read is 1.90× the file parse. A whole-Analysis read is the one shape a per-file layout is built for, and the Store is competitive rather than faster here; what it adds is that the same read is one call, in the same coordinate system as every other Analysis.</p>
 </section>
 </section>
 <section id="memory-footprint" class="level2">
@@ -2905,106 +2906,106 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <tbody>
 <tr class="odd">
 <td>Top hits for one Analysis (p &lt; 5×10⁻⁸)</td>
-<td>274.8 MB</td>
-<td>276.0 MB</td>
-<td><strong>1.3 MB</strong></td>
+<td>274.3 MB</td>
+<td>275.5 MB</td>
+<td><strong>1.2 MB</strong></td>
 <td>8,471</td>
 </tr>
 <tr class="even">
 <td>One off-axis variant × every Analysis</td>
-<td>272.9 MB</td>
-<td>277.3 MB</td>
-<td><strong>4.5 MB</strong></td>
+<td>274.2 MB</td>
+<td>279.6 MB</td>
+<td><strong>5.4 MB</strong></td>
 <td>51</td>
 </tr>
 <tr class="odd">
 <td>One panel variant × every Analysis</td>
-<td>273.0 MB</td>
-<td>290.7 MB</td>
-<td><strong>17.7 MB</strong></td>
+<td>273.1 MB</td>
+<td>290.4 MB</td>
+<td><strong>17.3 MB</strong></td>
 <td>3,166</td>
 </tr>
 <tr class="even">
 <td>A 1 Mb window × one Analysis (Dense-only)</td>
-<td>279.7 MB</td>
-<td>300.1 MB</td>
-<td><strong>20.3 MB</strong></td>
+<td>274.2 MB</td>
+<td>292.5 MB</td>
+<td><strong>18.3 MB</strong></td>
 <td>3,000</td>
 </tr>
 <tr class="odd">
 <td>A 1 Mb window × one Analysis</td>
-<td>276.9 MB</td>
-<td>306.6 MB</td>
-<td><strong>29.7 MB</strong></td>
+<td>272.6 MB</td>
+<td>298.5 MB</td>
+<td><strong>25.9 MB</strong></td>
 <td>3,000</td>
 </tr>
 <tr class="even">
 <td>10 random variants × 100 Analyses</td>
-<td>274.7 MB</td>
-<td>330.7 MB</td>
-<td><strong>56.0 MB</strong></td>
+<td>275.6 MB</td>
+<td>331.0 MB</td>
+<td><strong>55.5 MB</strong></td>
 <td>119</td>
 </tr>
 <tr class="odd">
 <td>100 random variants × 10 Analyses (Dense-only)</td>
-<td>277.8 MB</td>
-<td>382.1 MB</td>
-<td><strong>104.3 MB</strong></td>
+<td>275.0 MB</td>
+<td>370.7 MB</td>
+<td><strong>95.7 MB</strong></td>
 <td>765</td>
 </tr>
 <tr class="even">
 <td>100 random variants × 10 Analyses</td>
-<td>272.4 MB</td>
-<td>461.9 MB</td>
-<td><strong>189.5 MB</strong></td>
+<td>275.9 MB</td>
+<td>460.1 MB</td>
+<td><strong>184.2 MB</strong></td>
 <td>239</td>
 </tr>
 <tr class="odd">
 <td>10 random variants × 100 Analyses (Dense-only)</td>
-<td>271.5 MB</td>
-<td>528.5 MB</td>
-<td><strong>257.0 MB</strong></td>
+<td>275.5 MB</td>
+<td>533.7 MB</td>
+<td><strong>258.2 MB</strong></td>
 <td>899</td>
 </tr>
 <tr class="even">
 <td>A 1 Mb window × every Analysis</td>
-<td>277.0 MB</td>
-<td>1.56 GB</td>
-<td><strong>1.29 GB</strong></td>
+<td>275.1 MB</td>
+<td>1.57 GB</td>
+<td><strong>1.30 GB</strong></td>
 <td>10,291,241</td>
 </tr>
 <tr class="odd">
-<td>One Analysis, genome-wide</td>
-<td>273.2 MB</td>
-<td>1.56 GB</td>
-<td><strong>1.29 GB</strong></td>
-<td>9,869,010</td>
-</tr>
-<tr class="even">
 <td>A 1 Mb window × every Analysis (Dense-only)</td>
-<td>273.8 MB</td>
+<td>276.2 MB</td>
 <td>1.58 GB</td>
 <td><strong>1.31 GB</strong></td>
 <td>9,784,502</td>
 </tr>
+<tr class="even">
+<td>One Analysis, genome-wide</td>
+<td>275.7 MB</td>
+<td>1.63 GB</td>
+<td><strong>1.36 GB</strong></td>
+<td>9,869,010</td>
+</tr>
 <tr class="odd">
 <td>One Analysis, Dense Component alone</td>
-<td>282.6 MB</td>
-<td>1.66 GB</td>
+<td>275.8 MB</td>
+<td>1.65 GB</td>
 <td><strong>1.38 GB</strong></td>
 <td>11,190,536</td>
 </tr>
 <tr class="even">
 <td>One Analysis, genome-wide, both components</td>
-<td>272.6 MB</td>
-<td>3.54 GB</td>
-<td><strong>3.27 GB</strong></td>
+<td>280.1 MB</td>
+<td>3.47 GB</td>
+<td><strong>3.19 GB</strong></td>
 <td>26,207,009</td>
 </tr>
 </tbody>
 </table>
-<p>Opening the Store costs 272–283 MB whichever shape follows, and that figure does not scale with the release: 3,169 Analyses and 47.0 billion associations available cost about as much resident memory as a text editor, because nothing is read until it is asked for. Query cost then follows result size, from 1.3 MB (Top hits for one Analysis (p &lt; 5×10⁻⁸)) to 3.27 GB (One Analysis, genome-wide, both components). Targeted queries are safe to run concurrently and on modest hardware; whole-Analysis reads have to be budgeted — 30 concurrent reads at the heaviest shape’s cost would already ask for 100 GB.</p>
-<p>The four Dense-only probes are in that table too, marked as such: the same questions asked of the reference axis alone. Their cost does not simply drop, because what they read is a panel draw and a panel draw returns a cell in nearly every Analysis — 899 rows against the Hybrid draw’s 119 for the ten-variant shape, and 257.0 MB against 56.0 MB of resident memory. The regional probe goes the same way: the component alone peaks 1.31 GB above baseline against the Hybrid call’s 1.29 GB, on 9,784,502 and 10,291,241 rows. Query cost follows result size here too, so the Dense Component is not the lighter path for every shape.</p>
+<p>Opening the Store costs 273–280 MB whichever shape follows, and that figure does not scale with the release: 3,169 Analyses and 47.0 billion associations available cost about as much resident memory as a text editor, because nothing is read until it is asked for. Query cost then follows result size, from 1.2 MB (Top hits for one Analysis (p &lt; 5×10⁻⁸)) to 3.19 GB (One Analysis, genome-wide, both components). Targeted queries are safe to run concurrently and on modest hardware; whole-Analysis reads have to be budgeted — 31 concurrent reads at the heaviest shape’s cost would already ask for 100 GB.</p>
+<p>The four Dense-only probes are in that table too, marked as such: the same questions asked of the reference axis alone. Their cost does not simply drop, because what they read is a panel draw and a panel draw returns a cell in nearly every Analysis — 899 rows against the Hybrid draw’s 119 for the ten-variant shape, and 258.2 MB against 55.5 MB of resident memory. The regional probe goes the same way: the component alone peaks 1.31 GB above baseline against the Hybrid call’s 1.30 GB, on 9,784,502 and 10,291,241 rows. Query cost follows result size here too, so the Dense Component is not the lighter path for every shape.</p>
 </section>
 <section id="scientific-validation" class="level2">
 <h2 class="anchored" data-anchor-id="scientific-validation">Scientific validation</h2>
@@ -3229,67 +3230,73 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <h3 class="anchored" data-anchor-id="three-positive-control-ivw-pairs">Three positive-control IVW pairs</h3>
 <table class="caption-top table">
 <colgroup>
-<col style="width: 12%">
-<col style="width: 12%">
-<col style="width: 12%">
-<col style="width: 12%">
-<col style="width: 12%">
-<col style="width: 12%">
-<col style="width: 12%">
-<col style="width: 12%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
+<col style="width: 11%">
 </colgroup>
 <thead>
 <tr class="header">
 <th>Exposure → Outcome</th>
-<th>Instruments</th>
-<th>from Overflow</th>
+<th>Instruments (both observed / all, of candidates)</th>
+<th>from Overflow (all)</th>
 <th>IVW β</th>
 <th>se</th>
 <th>p</th>
 <th>Cochran Q (df)</th>
+<th>IVW β over all instruments (se)</th>
 <th>Elapsed</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
 <td><code>GCST90239658</code> Low density lipoprotein cholesterol levels<br>→ <code>GCST003116</code> Coronary artery disease</td>
-<td>451 of 97,501</td>
+<td>423 / 451 of 97,501</td>
 <td>0</td>
-<td>+0.534</td>
-<td>0.0406</td>
-<td>1.6e-39</td>
-<td>1,320 (450)</td>
-<td>19.89 s</td>
+<td>+0.543</td>
+<td>0.0423</td>
+<td>1e-37</td>
+<td>1,286 (422)</td>
+<td>+0.534 (0.0406)</td>
+<td>19.63 s</td>
 </tr>
 <tr class="even">
 <td><code>GCST90029007</code> Body mass index<br>→ <code>GCST006867</code> Type 2 diabetes</td>
-<td>662 of 82,973</td>
+<td>504 / 662 of 82,973</td>
 <td>0</td>
-<td>+0.888</td>
-<td>0.0425</td>
-<td>5.5e-97</td>
-<td>2,868 (661)</td>
-<td>18.11 s</td>
+<td>+0.978</td>
+<td>0.0513</td>
+<td>5.3e-81</td>
+<td>2,473 (503)</td>
+<td>+0.888 (0.0425)</td>
+<td>17.84 s</td>
 </tr>
 <tr class="odd">
 <td><code>GCST90310294</code> Systolic blood pressure<br>→ <code>GCST003116</code> Coronary artery disease</td>
-<td>654 of 109,155</td>
+<td>636 / 654 of 109,155</td>
 <td>0</td>
-<td>+0.669</td>
-<td>0.0480</td>
-<td>3.9e-44</td>
-<td>1,624 (653)</td>
-<td>22.50 s</td>
+<td>+0.682</td>
+<td>0.0485</td>
+<td>8.5e-45</td>
+<td>1,584 (635)</td>
+<td>+0.669 (0.0480)</td>
+<td>22.79 s</td>
 </tr>
 </tbody>
 </table>
+<p>The IVW β, se, p and Cochran Q are over the instruments observed on both sides (<code>instrument_filter</code>: <code>both_observed</code>): on a Reference-Completed Store an imputed cell understates its effect, as the strata below show, so the estimate a reader should take is the one from observed cells. The estimate over every instrument is beside it.</p>
 <p>The pairs, in the words the run records for them:</p>
 <ul>
 <li>LDL cholesterol (GLGC) -&gt; coronary artery disease (CARDIoGRAMplusC4D): the canonical positive control</li>
 <li>BMI (UK Biobank) -&gt; type 2 diabetes (DIAGRAM/UKB): a large, well-replicated causal effect; samples overlap</li>
 <li>systolic blood pressure (MVP) -&gt; coronary artery disease: a well-replicated causal effect</li>
 </ul>
-<p>Each pair starts from the exposure’s genome-wide-significant variants, prunes them to one per 1,000 kb, and reads both sides of every instrument with one lookup. All 1,767 instruments across the three pairs come from the Dense Component; the Overflow contributes 0 of them. The standard error is the random-effects one, inflated by Cochran’s Q where the instruments disagree more than their own errors allow — and they do, from 2.5× to 4.3× Q’s degrees of freedom. The whole three-pair run, including both lookups per instrument, takes 60.50 s.</p>
+<p>Each pair starts from the exposure’s genome-wide-significant variants, prunes them to one per 1,000 kb, and reads both sides of every instrument with one lookup. All 1,767 instruments across the three pairs come from the Dense Component; the Overflow contributes 0 of them. The standard error is the random-effects one, inflated by Cochran’s Q where the instruments disagree more than their own errors allow — and they do, from 2.5× to 4.9× Q’s degrees of freedom. The whole three-pair run, including both lookups per instrument, takes 60.26 s.</p>
 <p>An instrument is imputed when at least one of its two cells was filled by Reference Completion rather than read from a source file. Counted that way, and by which side was filled:</p>
 <ul>
 <li><code>GCST90239658</code> → <code>GCST003116</code>: <strong>28 of 451</strong> instruments are imputed — 26 observed on the exposure and imputed on the outcome; 2 imputed on both.</li>
@@ -3297,7 +3304,7 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <li><code>GCST90310294</code> → <code>GCST003116</code>: <strong>18 of 654</strong> instruments are imputed — 5 observed on the exposure and imputed on the outcome; 5 the other way round; 8 imputed on both.</li>
 </ul>
 <p>On the side that was filled, an instrument’s β and se are the values the completion step stored, not numbers that Analysis’s source file reported. The instrument itself is still a variant on the shared axis, resolved and read the same way as any other.</p>
-<div id="a25beb68" class="cell" data-execution_count="24">
+<div id="bf7d6de4" class="cell" data-execution_count="24">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
@@ -3449,7 +3456,7 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 </tbody>
 </table>
 <p>The both-observed stratum reproduces the all-instrument estimate in every pair — within 10% of it — which is what the plot should show: the instruments whose two cells both come from source files carry the signal. The 5 imputed strata that have an estimate are weaker, with |β| at 0.24× to 0.63× the observed stratum’s (1 of them negative), and less certain, with standard errors 1.2× to 10.9× larger; the only one to clear p &lt; 0.05 is Body mass index → Type 2 diabetes’s one cell observed, one imputed stratum. Their slopes are the dashed lines that do not coincide with the solid one.</p>
-<p>This is what summary-statistic imputation predicts. An imputed z is the expected value given the observed variants around it, shrunk towards zero by the imputation’s uncertainty, so an instrument with an imputed cell understates its effect, and most imputed instruments here have an observed exposure and an imputed outcome. An MR on a Reference-Completed Store should report the both-observed estimate beside the all-instrument one.</p>
+<p>This is what summary-statistic imputation predicts. An imputed z is the expected value given the observed variants around it, shrunk towards zero by the imputation’s uncertainty, so an instrument with an imputed cell understates its effect, and most imputed instruments here have an observed exposure and an imputed outcome. That is why the table at the top of this section takes the both-observed instruments as its estimate and shows the all-instrument one beside it.</p>
 <div class="callout callout-style-default callout-warning callout-titled">
 <div class="callout-header d-flex align-content-center">
 <div class="callout-icon-container">
@@ -3474,7 +3481,7 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <section id="regional-windows" class="level3">
 <h3 class="anchored" data-anchor-id="regional-windows">Regional windows</h3>
 <p>Three ±500 kb windows, one per gene, each read for the single Analysis that owns the trait: every shared-axis variant in the window is looked up through the Hybrid path, so a plot holds panel cells and off-axis cells together. Grey is a cell the source reported, red one Reference Completion filled in, and a triangle one only the Ragged Overflow holds.</p>
-<div id="2b044ff8" class="cell" data-execution_count="26">
+<div id="de121419" class="cell" data-execution_count="26">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -3523,7 +3530,7 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <td>chr10:112,498,590–113,498,590</td>
 <td>1,363</td>
 <td>1,635</td>
-<td>5.72 s</td>
+<td>5.68 s</td>
 </tr>
 <tr class="even">
 <td><strong>FTO</strong></td>
@@ -3531,7 +3538,7 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <td>chr16:53,286,615–54,286,615</td>
 <td>3,148</td>
 <td>402</td>
-<td>6.62 s</td>
+<td>6.55 s</td>
 </tr>
 <tr class="odd">
 <td><strong>PCSK9</strong></td>
@@ -3539,7 +3546,7 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <td>chr1:54,539,974–55,539,974</td>
 <td>4,597</td>
 <td>152</td>
-<td>8.39 s</td>
+<td>7.90 s</td>
 </tr>
 </tbody>
 </table>
@@ -3558,7 +3565,7 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 <li><strong>A shared host whose load was not controlled.</strong> The artifact records no host load, so these medians cannot be read as quiet-machine numbers. What it does record is the spread: every p95 is within 16% of its median, so the run was steady while it ran, but nothing here says what else the machine was doing.</li>
 <li><strong>One Store, at one revision.</strong> One Hybrid Store Release, on one host and one filesystem, measured with one <code>opengwasdb</code> tree (<code>e8938731ac79</code>). Nothing here compares the Hybrid layout against a Dense-of-union build of the same data, and nothing repeats the run on another machine.</li>
 <li><strong>The Store carries a Release Erratum for eight associations</strong> (opengwas/opengwasdb-stores#401; the builder’s narrowing is opengwas/opengwasdb#338). Their source standard error exceeds the range of a <code>float16</code> plane, so it is stored as <code>+inf</code> beside a finite z, and β = z × se reads as infinity although the source value was finite. Validation reports this as a warning rather than a failure, and the query path’s <code>lookup</code> keeps only cells where z and se are both finite, so those eight associations do not come back from a lookup. Read them from the <code>se</code> plane, or from the erratum, not from a lookup.</li>
-<li><strong>Two Analyses carry mislabelled effect columns.</strong> <code>GCST002047</code> (educational attainment, college completion) stores odds ratios where beta belongs, and <code>GCST004461</code> (low-grade serous ovarian cancer) stores log-odds in its <code>odds_ratio</code> column, so taking its log a second time inflates z — its source p of 0.32 at rs569167217 is stored as z 12.4. Both are being raised with the owner, and their stored statistics should not be used until they are rebuilt.</li>
+<li><strong>Two Analyses carry mislabelled effect columns.</strong> <code>GCST002047</code> (educational attainment, college completion) stores odds ratios where beta belongs, and <code>GCST004461</code> (low-grade serous ovarian cancer) stores log-odds in its <code>odds_ratio</code> column, so taking its log a second time inflates z — its source p of 0.32 at rs569167217 is stored as z 12.4. Both are recorded in opengwas/opengwasdb-stores#403, with the resolution-time check that would have caught them in opengwas/opengwasdb#345; their stored statistics should not be used until they are rebuilt.</li>
 <li><strong>Memory sampling resolution.</strong> The peak sampler polls every 5 ms, so an allocation spike shorter than that inside a sub-millisecond query can be missed. That affects the shapes whose cost is about a megabyte anyway; the multi-gigabyte flights last far longer than the polling interval.</li>
 </ul>
 </section>
@@ -3590,11 +3597,11 @@ The GWAS Catalog EUR Hybrid Store — 3,169 Analyses, Reference-Completed · 48.
 </tr>
 <tr class="even">
 <td>opengwasdb commit</td>
-<td><code>8aefcd4</code></td>
+<td><code>ba42a75</code></td>
 </tr>
 <tr class="odd">
 <td>Measured at</td>
-<td>2026-11-01T14:19:32.541738+00:00</td>
+<td>2026-11-01T15:14:12.160027+00:00</td>
 </tr>
 <tr class="even">
 <td>opengwasdb import path</td>
