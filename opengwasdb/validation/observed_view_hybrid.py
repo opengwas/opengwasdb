@@ -70,13 +70,14 @@ from opengwasdb.validation.observed_view import (
     _observed,
     _open_checked,
     _Pair,
-    _partial_cells,
     _plane_difference,
     _Planes,
     _refuse_if_incoherent,
     _sample_and_compare,
     _shard_rows,
     _unsampled_record,
+    count_infinite_cells,
+    count_partial_cells,
 )
 from opengwasdb.variants import VariantAxis
 
@@ -91,7 +92,12 @@ OVERFLOW_FAILING = (
     "missing_became_observed",
     "z_se_missingness_mismatch",
 )
-_OVERFLOW_INFORMATIONAL = ("parent_associations", "crossovers", "child_associations")
+_OVERFLOW_INFORMATIONAL = (
+    "parent_associations",
+    "crossovers",
+    "child_associations",
+    "infinite_cells",
+)
 _EVERY_ANALYSIS_FAILING = ("observed_in_both", "imputed_cells", "analyses_count_mismatch")
 CROSSOVER_FAILING = (
     "z_mismatch",
@@ -99,6 +105,7 @@ CROSSOVER_FAILING = (
     "eaf_mismatch",
     "observed_marked_imputed",
     "observed_missing_in_child",
+    "z_se_missingness_mismatch",
 )
 
 
@@ -454,7 +461,9 @@ class _Tally:
 
 
 def _crossover_tally() -> _Tally:
-    return _Tally(CROSSOVER_FAILING)
+    # `infinite_cells` is informational: a crossover is compared as it is, and an
+    # infinite value is a value (issue #337).
+    return _Tally((*CROSSOVER_FAILING, "infinite_cells"))
 
 
 def _check_crossovers(pair: _HybridPair, crossovers: _Crossovers) -> dict[str, Any]:
@@ -478,6 +487,13 @@ def _check_crossovers(pair: _HybridPair, crossovers: _Crossovers) -> dict[str, A
         expected = codec.round_trip(rows, cols, source)
         tally.totals["observed_missing_in_child"] += int((~_observed(found)).sum())
         tally.totals["observed_marked_imputed"] += int((imputed != 0).sum())
+        tally.totals["infinite_cells"] += count_infinite_cells(source) + count_infinite_cells(found)
+        # A crossover is the one kind of cell the Dense part cannot check: it is set
+        # aside there (`_CrossoversSetAside`), so the paired-marker rule is enforced
+        # here or nowhere (issue #337, spec §15).
+        tally.totals["z_se_missingness_mismatch"] += (
+            count_partial_cells(source) + count_partial_cells(found)
+        )
         tally.add_planes(expected, found)
         shift.add_planes(source, expected)
     return {
@@ -619,7 +635,11 @@ def _compare_analysis(pair: _HybridPair, axes: _HybridAxes, analysis: int, tally
         "child_associations": len(child.variant_index),
         "observed_missing_in_child": len(kept) - len(p),
         "missing_became_observed": len(off_dense) - len(c),
-        "z_se_missingness_mismatch": _partial_cells(parent.cells) + _partial_cells(child.cells),
+        "z_se_missingness_mismatch": (
+            count_partial_cells(parent.cells) + count_partial_cells(child.cells)
+        ),
+        # Present-but-infinite cells on both sides: reported, never a failure (issue #337).
+        "infinite_cells": count_infinite_cells(parent.cells) + count_infinite_cells(child.cells),
     }
     for key, value in counts.items():
         tally.totals[key] += value

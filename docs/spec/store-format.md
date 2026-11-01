@@ -1945,13 +1945,15 @@ replaces its Store under the same id, so this check gates the swap.
   span starts after the previous chunk-row's last mapped row and ends at its own, the first
   starts at row 0 and the last runs to the end. Every `TARGET` row, inserted panel rows
   included, is therefore in exactly one chunk-row's span, and sampling every chunk-row examines
-  every `TARGET` row. Per chunk-row, over its span: each source-observed cell (finite Z and SE)
-  has identical decoded Z, SE and EAF (NaN equals NaN) and is not marked imputed; no
+  every `TARGET` row. Per chunk-row, over its span: each source-observed cell (Z and SE both
+  present, read through each plane's missing marker, §15) has identical decoded Z, SE and EAF
+  (NaN equals NaN) and is not marked imputed; no
   source-missing cell is observed with `imputed == 0`; and no inserted panel row carries an
   observed cell with `imputed == 0`. Before cells are classified, every sampled `imputed` value
   must be 0 or 1 (`imputed_mask_invalid`) and every sampled cell, in `SOURCE` or `TARGET`
-  and on inserted rows, must have Z and SE both finite or both missing
-  (`z_se_missingness_mismatch`, §20).
+  and on inserted rows, must have Z and SE both present or both missing
+  (`z_se_missingness_mismatch`, §20). An infinite value is a value: `inf` equals `inf`, and
+  `inf` against a number is a `*_mismatch`.
 - **Verdict.** One JSON object, written to `--output` (which must be in an existing directory)
   and printed on `stdout`. `seed` is required so every verdict is reproducible from its record.
 
@@ -1973,19 +1975,22 @@ replaces its Store under the same id, so this check gates the swap.
   `totals` sums over the sampled chunk-rows. Informational fields never fail the check:
   - `cells_compared` (informational): sampled `SOURCE` rows × Analyses. It excludes inserted
     `TARGET` rows, which `inserted_rows` counts, so it is comparable across spans.
-  - `parent_observed` (informational): the sampled `SOURCE` cells with finite Z and SE.
+  - `parent_observed` (informational): the sampled `SOURCE` cells with Z and SE both present.
   - `inserted_rows` (informational): the inserted `TARGET` rows (not mapped from any `SOURCE`
     row) in the sampled spans.
-  - `missing_now_imputed` (informational): source-missing cells that `TARGET` holds finite and
-    flagged imputed, which is what completion is for.
+  - `missing_now_imputed` (informational): source-missing cells that `TARGET` holds present
+    (Z and SE both present) and flagged imputed, which is what completion is for.
   - `parent_rows_without_finite` (informational): sampled `SOURCE` rows with no observed cell.
+  - `infinite_cells` (informational): the sampled cells, in `SOURCE` or `TARGET`, whose Z or
+    SE is present and infinite. They are reported and never fail the check: a source SE above
+    the plane's range is stored as `+inf` (issues #337, #338).
   - Failing, each over the sampled cells: `z_mismatch`, `se_mismatch`, `eaf_mismatch` (a
     source-observed cell whose decoded value differs, NaN equal to NaN);
     `observed_marked_imputed`; `observed_missing_in_child`; `missing_became_observed`
     (a source-missing cell observed with `imputed == 0`); `inserted_observed_cells`;
     `imputed_mask_invalid` (an `imputed` value outside 0 and 1);
     `z_se_missingness_mismatch` (a cell, in `SOURCE` or `TARGET`, with only one of Z and SE
-    finite).
+    missing).
 
   A nonzero failing
   counter, `parent_rows_unmapped > 0`, an order that is not preserved, and differing Analyses
@@ -2036,15 +2041,20 @@ replaces its Store under the same id, so this check gates the swap.
   | `components.overflow` | `axis` (the shared-axis map, with `child_dense_rows_unshared` and `child_dense_order_preserved`), `n_parent_associations`, `n_child_associations`, `analyses_checked`, `analyses`, `analyses_with_mismatch`, `totals`, `max_abs_diff`, `all_analyses` |
   | `crossovers` | `n` associations on `rows` Dense rows (null when the comparison was skipped), `totals`, `max_abs_diff` (`TARGET` against the round trip) and `reencoding_max_abs_diff` (the round trip against `SOURCE`; informational) |
 
-  `components.overflow.totals` sums over the sampled Analyses: `parent_associations`,
-  `crossovers` and `child_associations` are informational; `z_mismatch`, `se_mismatch`,
+  `components.overflow.totals` sums over the sampled Analyses, each side's cells counted as
+  the Dense part counts them: `parent_associations`, `crossovers`, `child_associations` and
+  `infinite_cells` are informational; `z_mismatch`, `se_mismatch`,
   `eaf_mismatch` (a matched association whose decoded value differs, NaN equal to NaN),
   `observed_missing_in_child` (a `SOURCE` association that `TARGET`'s Overflow lacks),
   `missing_became_observed` (a `TARGET` association that `SOURCE` lacks) and
   `z_se_missingness_mismatch` fail. `components.overflow.all_analyses` covers every Analysis and
   all fail: `observed_in_both`, `imputed_cells`, and `analyses_count_mismatch` (Analyses whose
-  count is not `SOURCE`'s less its crossovers). `crossovers.totals` all fail: `z_mismatch`,
-  `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_child`.
+  count is not `SOURCE`'s less its crossovers). `crossovers.totals` counts `infinite_cells`
+  (informational) and the rest all fail: `z_mismatch`,
+  `se_mismatch`, `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_child` and
+  `z_se_missingness_mismatch` (a crossover cell, in the `SOURCE` Overflow or the `TARGET` Dense
+  Component, with only one of Z and SE missing — the Dense part cannot see it, because a
+  crossover is set aside there).
   `failures` names each nonzero failing counter with the part that counted it
   (`dense.inserted_observed_cells`, `overflow.observed_in_both`, `crossovers.z_mismatch`), and
   `dense.parent_rows_unmapped`, `dense.order_not_preserved`, the same two for `overflow.` (the
@@ -2075,14 +2085,15 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   `default_rng((seed, 1))` beyond that), `largest` (the 5 with most associations), `empty` (up to
   5 with none) and `trait_less` (the first 5 without a Trait position). An Analysis is
   *not admitted* when its `TARGET` `completed_against` is empty (ADR 0028).
-- **Per Analysis.** Each source-observed association (finite Z and SE) is in `TARGET` with
-  identical decoded Z, SE and EAF (NaN equal to NaN) and `imputed == 0`; `TARGET` holds no
-  association with finite Z and SE and `imputed == 0` that `SOURCE` lacks
-  (`target_observed_not_in_source`); every `imputed` value is 0 or 1; every imputed association
-  lies inside one of the Analysis's **retained regions**; a non-admitted Analysis holds no imputed
-  cell (`imputed_in_non_admitted`). Rows that are neither observed nor imputed (NaN: panel
-  positions inside a region that completion could not fill) are counted as `nan_rows` and fail
-  nothing.
+- **Per Analysis.** Each source-observed association (Z and SE both present, §15) is in
+  `TARGET` with identical decoded Z, SE and EAF (NaN equal to NaN) and `imputed == 0`;
+  `TARGET` holds no association with Z and SE both present and `imputed == 0` that `SOURCE`
+  lacks (`target_observed_not_in_source`); every `imputed` value is 0 or 1; every imputed
+  association lies inside one of the Analysis's **retained regions**; a non-admitted Analysis
+  holds no imputed cell (`imputed_in_non_admitted`). Rows that are neither observed nor imputed
+  (NaN, read through each plane's missing marker: panel positions inside a region that
+  completion could not fill) are counted as `nan_rows` and fail nothing; an infinite value is
+  not one of them.
 - **Retained regions need the LD panel.** A release stores no region coordinates, only block ids
   and counts in `completion_quality`; block extents live in the panel. The check rebuilds each
   sampled admitted Analysis's blocks as `complete-ragged` chose them (ADR 0014, ADR 0039): the
@@ -2093,8 +2104,9 @@ never by index. The exit codes, the required `--seed` and the verdict's `seed`, 
   must equal `provenance.completion.ancestry` when given. There is no panel-free fallback.
   A `completion_quality` block the rebuilt regions lack is `quality_blocks_not_in_regions`, so a
   panel other than the one used is noticed. `--ld-panel` for a Dense or Hybrid pair is refused.
-- **Totals.** `observed_in_source`, `imputed`, `nan_rows` and `regions` (retained
-  Analysis-by-block regions) are informational. Failing: `z_mismatch`, `se_mismatch`,
+- **Totals.** `observed_in_source`, `imputed`, `nan_rows`, `regions` (retained
+  Analysis-by-block regions) and `infinite_cells` (present-but-infinite cells, in `SOURCE` or
+  `TARGET`, which never fail the check) are informational. Failing: `z_mismatch`, `se_mismatch`,
   `eaf_mismatch`, `observed_marked_imputed`, `observed_missing_in_target`,
   `target_observed_not_in_source`, `imputed_outside_retained`, `imputed_in_non_admitted`,
   `imputed_mask_invalid`, `z_se_missingness_mismatch`, `target_variants_unordered` (an Analysis's

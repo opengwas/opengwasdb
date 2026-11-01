@@ -70,9 +70,10 @@ from opengwasdb.validation.observed_view import (
     _map_axis,
     _observed,
     _open_checked,
-    _partial_cells,
     _plane_difference,
     _store_record,
+    count_infinite_cells,
+    count_partial_cells,
 )
 from opengwasdb.variants import VariantAxis, is_indexable_alid
 
@@ -98,7 +99,13 @@ FAILING_COUNTERS = (
     "target_variants_unordered",
     "quality_blocks_not_in_regions",
 )
-_INFORMATIONAL_COUNTERS = ("observed_in_source", "imputed", "nan_rows", "regions")
+_INFORMATIONAL_COUNTERS = (
+    "observed_in_source",
+    "imputed",
+    "nan_rows",
+    "regions",
+    "infinite_cells",
+)
 _TOTAL_KEYS = (*_INFORMATIONAL_COUNTERS, *FAILING_COUNTERS)
 _DIFF_PLANES = ("z", "se", "eaf")
 
@@ -584,9 +591,15 @@ def _check_analysis(
     counts = {
         "observed_in_source": int(source_observed.sum()),
         "imputed": int(is_imputed.sum()),
-        "nan_rows": int((~np.isfinite(tgt.z) & ~np.isfinite(tgt.se) & (raw_imputed == 0)).sum()),
+        # Neither z nor se present and not imputed: NaN, read through each plane's
+        # missing marker (spec §15), so an infinite value is not counted as an empty row.
+        "nan_rows": int((np.isnan(tgt.z) & np.isnan(tgt.se) & (raw_imputed == 0)).sum()),
         "imputed_mask_invalid": int(((raw_imputed != 0) & (raw_imputed != 1)).sum()),
-        "z_se_missingness_mismatch": _partial_cells(source_cells) + _partial_cells(target_cells),
+        "z_se_missingness_mismatch": (
+            count_partial_cells(source_cells) + count_partial_cells(target_cells)
+        ),
+        # Present-but-infinite cells on both sides: reported, never a failure (issue #337).
+        "infinite_cells": count_infinite_cells(source_cells) + count_infinite_cells(target_cells),
         "target_variants_unordered": int((np.diff(target_vi) <= 0).sum()),
         "observed_missing_in_target": int(
             (source_observed & ~(present & gather(target_observed))).sum()

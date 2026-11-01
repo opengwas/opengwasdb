@@ -77,6 +77,7 @@ _INFORMATIONAL_COUNTERS = (
     "missing_now_imputed",
     "inserted_rows",
     "parent_rows_without_finite",
+    "infinite_cells",
 )
 _TOTAL_KEYS = ("cells_compared", "parent_observed", *FAILING_COUNTERS, *_INFORMATIONAL_COUNTERS)
 _DIFF_PLANES = ("z", "se", "eaf")
@@ -103,7 +104,7 @@ class ObservedViewVerdict:
 
 
 class _Cells(NamedTuple):
-    """Decoded statistics of a row band; NaN is missing."""
+    """Decoded statistics of a row band; a plane's missing marker is missing (spec §15)."""
 
     z: np.ndarray
     se: np.ndarray
@@ -668,7 +669,8 @@ def _compare(
         "cells_compared": int(parent.z.size),
         "parent_observed": int(observed.sum()),
         "imputed_mask_invalid": int(((raw_imputed != 0) & (raw_imputed != 1)).sum()),
-        "z_se_missingness_mismatch": _partial_cells(parent) + _partial_cells(child),
+        "z_se_missingness_mismatch": count_partial_cells(parent) + count_partial_cells(child),
+        "infinite_cells": count_infinite_cells(parent) + count_infinite_cells(child),
         "observed_marked_imputed": int((mapped_imputed[observed] != 0).sum()),
         "observed_missing_in_child": int((~child_observed[observed]).sum()),
         "missing_became_observed": int((child_observed & ~observed & (mapped_imputed == 0)).sum()),
@@ -686,14 +688,26 @@ def _compare(
 
 
 def _observed(cells: _Cells) -> np.ndarray:
-    """An observed cell has a finite Z and SE; EAF is carried, not what makes it observed."""
-    observed: np.ndarray = np.isfinite(cells.z) & np.isfinite(cells.se)
+    """An observed cell has a present Z and SE; EAF is carried, not what makes it observed.
+
+    Present is the complement of the plane's missing marker, which is NaN once
+    decoded (spec §15, ADR 0038 §6). Deliberately not `isfinite`: an infinite
+    value is a value, and a cell holding one is compared like any other rather
+    than read as missing -- which is what failed a completion that reproduced
+    its source's eight infinite SE cells (issue #337).
+    """
+    observed: np.ndarray = ~(np.isnan(cells.z) | np.isnan(cells.se))
     return observed
 
 
-def _partial_cells(cells: _Cells) -> int:
-    """Cells with a Z but no SE, or the reverse: their missingness must agree (spec section 20)."""
-    return int((np.isfinite(cells.z) != np.isfinite(cells.se)).sum())
+def count_partial_cells(cells: _Cells) -> int:
+    """Cells with only one of Z and SE missing: their markers must agree (spec §15)."""
+    return int((np.isnan(cells.z) != np.isnan(cells.se)).sum())
+
+
+def count_infinite_cells(cells: _Cells) -> int:
+    """Cells whose Z or SE is present and infinite: reported, never a failure (issue #337)."""
+    return int((np.isinf(cells.z) | np.isinf(cells.se)).sum())
 
 
 def _plane_difference(parent: np.ndarray, child: np.ndarray) -> tuple[int, float]:
@@ -701,9 +715,12 @@ def _plane_difference(parent: np.ndarray, child: np.ndarray) -> tuple[int, float
 
     A NaN against a number is a mismatch the count carries and the gap cannot,
     so `max_abs_diff` of 0.0 never stands in for agreement: `passed` and the
-    counts decide that.
+    counts decide that. An infinite value is compared as it is -- `inf == inf`
+    agrees and `inf` against a number does not -- and the `inf - inf` the gap
+    arithmetic would warn about is silenced here rather than reaching `stderr`.
     """
     equal = (parent == child) | (np.isnan(parent) & np.isnan(child))
-    gap = np.abs(parent.astype(np.float64) - child.astype(np.float64))
+    with np.errstate(invalid="ignore"):
+        gap = np.abs(parent.astype(np.float64) - child.astype(np.float64))
     gap = gap[np.isfinite(gap)]
     return int((~equal).sum()), float(gap.max()) if gap.size else 0.0

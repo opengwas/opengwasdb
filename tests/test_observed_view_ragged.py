@@ -267,6 +267,14 @@ def test_a_changed_observed_z_fails(tmp_path, pair):
     _failing(pair, tmp_path, "z_mismatch")
 
 
+def test_a_ragged_z_without_an_se_fails(tmp_path, pair):
+    """A source association keeping its Z and losing its SE: the markers must agree (§15)."""
+    _, completed, _ = pair
+    _target_group(completed)["se"][_flat(completed, 0, "1:900000:A:G")] = np.nan
+
+    _failing(pair, tmp_path, "z_se_missingness_mismatch")
+
+
 def test_a_changed_observed_eaf_fails(tmp_path, pair):
     _, completed, _ = pair
     position = _flat(completed, 0, "1:900000:A:G")
@@ -331,6 +339,37 @@ def test_an_imputed_mask_value_other_than_0_or_1_fails(tmp_path, pair):
     _target_group(completed)["imputed"][_flat(completed, 0, "1:900000:A:G")] = 2
 
     _failing(pair, tmp_path, "imputed_mask_invalid")
+
+
+# --- an infinite value is a value (issue #337) -----------------------------
+
+# `eur_rich`'s 1:900000, whose SE a float16 plane narrows to `+inf` above its range; the
+# cell is present on both sides, so the check must compare it rather than call it missing
+# (issue #337, spec §15).
+INFINITE_SE_CELL = (0, "1:900000:A:G")
+
+
+def _write_infinite_se(store: Path, analysis_index: int, alid: str) -> None:
+    """Store `+inf` as one Ragged association's SE, which a float16 plane above its range does."""
+    se = _target_group(store)["se"]
+    assert se.dtype == np.dtype("float16"), "the fixture must narrow SE to float16"
+    se[_flat(store, analysis_index, alid)] = np.inf
+
+
+def test_an_infinite_ragged_se_copied_identically_passes_and_is_counted(tmp_path, pair):
+    observed, completed, _ = pair
+    for store in (observed, completed):
+        _write_infinite_se(store, *INFINITE_SE_CELL)
+    assert np.isinf(float(_target_group(observed)["se"][_flat(observed, *INFINITE_SE_CELL)]))
+    assert np.isinf(
+        float(_target_group(completed)["se"][_flat(completed, *INFINITE_SE_CELL)])
+    )
+
+    result, verdict = _check(pair, tmp_path)
+
+    assert result.exit_code == 0, result.output
+    assert verdict["passed"] is True and verdict["failures"] == []
+    assert verdict["totals"]["infinite_cells"] == 2
 
 
 # --- seam 3: refusals ------------------------------------------------------

@@ -327,6 +327,84 @@ def test_a_different_analyses_order_fails(tmp_path, pair):
     assert verdict["failures"] == ["analyses_mismatch"]
 
 
+# --- an infinite value is a value (issue #337) -----------------------------
+
+# A source SE above float16's maximum (65,504) passes the reader's finite, non-negative
+# check and is then narrowed to `+inf` beside a finite Z (issue #338). Spec §15 makes such
+# a cell present, so the check must compare it, not call it missing (issue #337).
+INFINITE_SE_ALID = "1:1000000:A:G"
+
+
+def _with_an_infinite_se(root: Path) -> tuple[Path, Path]:
+    """The fixture pair with one source SE above float16's range, so both Stores hold `+inf`.
+
+    Completion copies an observed cell unchanged, so the infinite cell lands on both sides;
+    what a Dense plane narrows it to is the `+inf` a query reads back.
+    """
+    fields = [row.split("\t") for row in ROWS]
+    assert (fields[2][0], fields[2][4], fields[2][5]) == ("a1", "1", "1000000")
+    fields[2][9] = "100000"
+    return _build_pair(root, ["\t".join(row) for row in fields], tdc._make_ld_panel(root))
+
+
+@pytest.fixture(scope="module")
+def _infinite_se_pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    return _with_an_infinite_se(tmp_path_factory.mktemp("observed-view-infinite"))
+
+
+@pytest.fixture
+def infinite_se_pair(tmp_path: Path, _infinite_se_pair_seed: tuple[Path, Path]):
+    observed, completed = _infinite_se_pair_seed
+    return (
+        copytree(observed, tmp_path / "obs.opengwasdb"),
+        copytree(completed, tmp_path / "comp.opengwasdb"),
+    )
+
+
+def _stored_cell(store: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Where the fixture's infinite cell sits: `a1` (analysis_index 0) at 1:1000000.
+
+    Resolved from the variant axis rather than with `_cell`, because `lookup` returns
+    finite associations only, so the query path is not how this cell is read back.
+    """
+    rows, cols = np.array([_row_of(store, INFINITE_SE_ALID)]), np.array([0])
+    z = float(_plane(store, DenseZPlane).points(rows, cols)[0])
+    se = float(_plane(store, DenseSePlane).points(rows, cols)[0])
+    return np.array([z]), np.array([se])
+
+
+def test_an_infinite_se_copied_identically_passes_and_is_counted(tmp_path, infinite_se_pair):
+    observed, completed = infinite_se_pair
+    z, se = _stored_cell(observed)
+    assert np.isfinite(z[0]) and np.isinf(se[0]), "fixture must hold a finite Z beside +inf SE"
+    assert np.array_equal(_stored_cell(completed)[0], z)
+    assert np.array_equal(_stored_cell(completed)[1], se)
+    out = tmp_path / "verdict.json"
+
+    result = _run(observed, completed, out)
+
+    assert result.exit_code == 0, result.output
+    verdict = _verdict(result, out)
+    assert verdict["passed"] is True and verdict["failures"] == []
+    assert verdict["totals"]["parent_observed"] == N_OBSERVED
+    assert verdict["totals"]["infinite_cells"] == 2, "one cell on each side"
+
+
+def test_an_infinite_se_the_target_holds_differently_fails(tmp_path, infinite_se_pair):
+    observed, completed = infinite_se_pair
+    rows, cols = np.array([_row_of(completed, INFINITE_SE_ALID)]), np.array([0])
+    _plane(completed, DenseSePlane).patch(rows, cols, np.array([0.15], dtype=np.float32))
+    out = tmp_path / "verdict.json"
+
+    result = _run(observed, completed, out)
+
+    assert result.exit_code == 1, result.output
+    verdict = _verdict(result, out)
+    assert verdict["totals"]["se_mismatch"] == 1
+    assert "se_mismatch" in verdict["failures"]
+    assert verdict["totals"]["infinite_cells"] == 1, "the source's cell alone"
+
+
 # --- seam 3: refusals ------------------------------------------------------
 
 
