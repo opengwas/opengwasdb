@@ -58,9 +58,11 @@ from opengwasdb.query import query_store
 EXPOSURE = "GCST006867"
 PHEWAS_ALID = "10:112998590:C:T"  # rs7903146, TCF7L2; on the reference axis
 REGION = ("10", 112_500_000, 113_500_000)
-# The Analysis with the largest Ragged Overflow (75.7 M off-axis associations,
-# a whole-genome-sequencing BMI study), per the component-split measurement.
-OVERFLOW_HEAVY = "GCST90502911"
+# The Analysis with the largest Ragged Overflow, read from the Overflow's CSR
+# offsets: 15.0 M off-axis associations, prostate cancer. The earlier choice,
+# GCST90502911 (a whole-genome-sequencing BMI study, 75.7 M), left the Store
+# when Analyses with no MAF floor were excluded (opengwas/opengwasdb-stores#203).
+OVERFLOW_HEAVY = "GCST90274713"
 # The first off-axis variant `default_rng(1)` draws from the shared axis: an
 # arbitrary off-axis PheWAS rather than one chosen for being fast or slow.
 OFF_AXIS_SEED = 1
@@ -306,6 +308,20 @@ def mr_with_components(q: Any, by_id: dict[str, int], exposure: str, outcome: st
     return result
 
 
+def _require_selected_analyses(by_id: dict[str, int]) -> None:
+    """Refuse to run when an Analysis the selection names is not in the store.
+
+    A whole-Analysis read of an absent Analysis returns no rows rather than
+    raising, so a stale selection would time an empty read and report it.
+    """
+    selected = {EXPOSURE, OVERFLOW_HEAVY}
+    selected |= {analysis for analysis, *_ in KNOWN_LOCI}
+    selected |= {analysis for pair in MR_PAIRS for analysis in pair[:2]}
+    absent = sorted(selected - set(by_id))
+    if absent:
+        raise SystemExit(f"the store holds no Analysis {', '.join(absent)}; update the selection")
+
+
 def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--store", type=Path, required=True)
@@ -322,6 +338,7 @@ def main() -> None:
     open_seconds = time.perf_counter() - started_open
     table = q.analyses_table()
     by_id = {row["analysis_id"]: index for index, row in table.items()}
+    _require_selected_analyses(by_id)
     n_analyses, n_variants = len(table), _n_shared_variants(args.store)
     manifest = json.loads((args.store / "manifest.json").read_text())
     hybrid = manifest["provenance"]["hybrid"]
