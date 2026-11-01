@@ -54,6 +54,7 @@ from opengwasdb.build.effect_consistency import (
     DEFAULT_EFFECT_CONSISTENCY_POLICY,
     EffectConsistency,
     EffectConsistencyPolicy,
+    check_sample_bound,
 )
 from opengwasdb.build.liftover import normalise_build
 from opengwasdb.build.phenotype_sd_pipeline import load_af_reference
@@ -1332,10 +1333,14 @@ def _assemble_index(
 
 
 def _validate_resolution_params(
-    evidence_sample: int, n_workers: int, records_dir: Path | str
+    evidence_sample: int,
+    n_workers: int,
+    records_dir: Path | str,
+    effect_consistency_policy: EffectConsistencyPolicy = DEFAULT_EFFECT_CONSISTENCY_POLICY,
 ) -> Path:
     if evidence_sample <= 0:
         raise ValueError(f"evidence_sample must be positive, got {evidence_sample!r}")
+    check_sample_bound(evidence_sample, effect_consistency_policy)
     if n_workers <= 0:
         raise ValueError(f"n_workers must be positive, got {n_workers!r}")
     out_dir = Path(records_dir)
@@ -1654,7 +1659,9 @@ def resolve_analyses_manifest(
     if max_ancestry_sites is not None or max_rows is not None:
         scan_limit = ScanLimit(max_rows=max_rows, max_ancestry_sites=max_ancestry_sites)
         scan_limit.validate()
-    out_dir = _validate_resolution_params(evidence_sample, n_workers, records_dir)
+    out_dir = _validate_resolution_params(
+        evidence_sample, n_workers, records_dir, effect_consistency_policy
+    )
     loaded_map = as_column_map(column_map)
     rows = read_resolve_manifest(
         manifest_path,

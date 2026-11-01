@@ -59,6 +59,7 @@ from opengwasdb.build.effect_consistency import (
     ConsistencySample,
     EffectConsistency,
     EffectConsistencyPolicy,
+    check_sample_bound,
 )
 from opengwasdb.build.hash_sample import HashSample
 from opengwasdb.build.info_score_filter import declared_score_state
@@ -1143,6 +1144,7 @@ def resolve_analysis(
         raise ValueError(
             f"evidence_sample must be a positive row count, got {evidence_sample!r}"
         )
+    check_sample_bound(evidence_sample, request.effect_consistency_policy)
     if scan_limit is not None:
         scan_limit.validate()
     if not isinstance(reader, MetricsReader):

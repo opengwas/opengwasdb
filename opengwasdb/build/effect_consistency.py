@@ -43,6 +43,7 @@ __all__ = [
     "ConsistencySample",
     "EffectConsistency",
     "EffectConsistencyPolicy",
+    "check_sample_bound",
     "log10_two_sided_p",
 ]
 
@@ -113,6 +114,21 @@ class EffectConsistency:
     refused: bool = False
 
 
+def check_sample_bound(evidence_sample: int, policy: EffectConsistencyPolicy) -> None:
+    """Refuse a sample bound that can never reach the policy's minimum.
+
+    A bound below `min_compared_rows` would skip every Analysis as `too_few_rows`
+    without saying the configuration was the reason, so it raises where the two
+    first meet.
+    """
+    if evidence_sample < policy.min_compared_rows:
+        raise ValueError(
+            f"evidence_sample ({evidence_sample}) is below the effect-consistency "
+            f"min_compared_rows ({policy.min_compared_rows}): no Analysis could ever be "
+            "checked. Raise evidence_sample or lower min_compared_rows."
+        )
+
+
 def log10_two_sided_p(z: np.ndarray) -> np.ndarray:
     """log10 of the two-sided normal p-value for `z`, computed in log space."""
     return (_LN2 + norm.logsf(np.abs(z))) / _LN10
@@ -143,7 +159,7 @@ class ConsistencySample:
     def measure(self, policy: EffectConsistencyPolicy) -> EffectConsistency:
         considered = self._sample.offered
         retained = self._sample.retained()
-        skip = self._skip(considered, policy)
+        skip = self._skip(considered, len(retained), policy)
         if skip is not None:
             return EffectConsistency(considered, 0, False, None, None, skip)
         z = np.array([row[0] for row in retained])
@@ -159,11 +175,13 @@ class ConsistencySample:
             refused=median_abs > policy.max_median_abs_delta,
         )
 
-    def _skip(self, considered: int, policy: EffectConsistencyPolicy) -> ConsistencySkip | None:
+    def _skip(
+        self, considered: int, compared: int, policy: EffectConsistencyPolicy
+    ) -> ConsistencySkip | None:
         if self.n_with_source_p == 0:
             return ConsistencySkip.NO_SOURCE_P_VALUE
         if considered == 0:
             return ConsistencySkip.ALL_SE_FROM_P_VALUE
-        if considered < policy.min_compared_rows:
+        if compared < policy.min_compared_rows:
             return ConsistencySkip.TOO_FEW_ROWS
         return None

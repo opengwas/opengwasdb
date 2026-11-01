@@ -24,12 +24,18 @@ from test_resolve import _write_panel as _write_resolve_panel
 from test_resolve_manifest import _write_panel as _write_manifest_panel
 
 from opengwasdb.ancestry.reference import AncestryReference
-from opengwasdb.build.effect_consistency import ConsistencySkip, EffectConsistencyPolicy
+from opengwasdb.build.effect_consistency import (
+    ConsistencySample,
+    ConsistencySkip,
+    EffectConsistencyPolicy,
+)
 from opengwasdb.build.resolve import AnalysisRequest, AnalysisResolution, resolve_analysis
 from opengwasdb.build.resolve_manifest import resolve_analyses_manifest
 from opengwasdb.model.enums import OriginalSdMethod, StoredEffectScale
+from opengwasdb.readers.column_map import COLUMN_MAP_CAPABILITY, as_column_map
 from opengwasdb.readers.gwas_ssf import _METRICS_COLUMNS, GwasSsfReader
-from opengwasdb.readers.tabular import stream_projected_metric_chunks
+from opengwasdb.readers.registry import resolve_reader
+from opengwasdb.readers.tabular import MetricsChunk, stream_projected_metric_chunks
 
 N_ROWS = 120
 _SE = 0.05
@@ -103,6 +109,19 @@ def _log_odds_in_odds_ratio_file(tmp_path: Path) -> Path:
             "standard_error": [f"{_SE:.10g}"] * N_ROWS,
             "p_value": [f"{v:.6g}" for v in _two_sided_p(z)],
         },
+    )
+
+
+def _chunk_of_wrong_scale_rows(n: int) -> MetricsChunk:
+    """`n` rows whose stored z (20) contradicts their source p (0.5) wildly."""
+    return MetricsChunk(
+        alid=np.array([f"1:{1000 + i}:A:C" for i in range(n)], dtype=object),
+        flipped=np.zeros(n, dtype=bool),
+        palindromic=np.zeros(n, dtype=bool),
+        af_alt=np.full(n, 0.3),
+        beta=np.full(n, 1.0),
+        se=np.full(n, 0.05),
+        p_value=np.full(n, 0.5),
     )
 
 
@@ -224,12 +243,44 @@ def test_the_measurement_is_a_hand_checkable_literal_on_a_tiny_source(tmp_path: 
 def test_the_sample_is_bounded_and_says_so(tmp_path: Path, panel):
     path = _beta_file(tmp_path)
     _assert_meaningful(path)
+    policy = EffectConsistencyPolicy(min_compared_rows=10)
 
-    measured = _resolve(path, panel, evidence_sample=40).diagnostics.effect_consistency
+    measured = _resolve(
+        path, panel, policy=policy, evidence_sample=40
+    ).diagnostics.effect_consistency
 
     assert measured is not None
     assert measured.n_rows_considered == N_ROWS
     assert measured.n_rows_compared == 40 and measured.sampled
+
+
+def test_a_verdict_needs_the_minimum_rows_actually_compared_not_merely_offered():
+    # 120 comparable rows offered, one retained by a bound of 1: a median of one
+    # row must not refuse an Analysis under a minimum of 50.
+    sample = ConsistencySample(1)
+    sample.admit(_chunk_of_wrong_scale_rows(N_ROWS))
+
+    measured = sample.measure(EffectConsistencyPolicy())
+
+    assert measured.n_rows_considered == N_ROWS
+    assert measured.skip_reason is ConsistencySkip.TOO_FEW_ROWS
+    assert not measured.refused and measured.median_abs_delta is None
+
+
+def test_a_sample_bound_below_the_minimum_is_refused_loudly(tmp_path: Path, panel):
+    path = _beta_file(tmp_path)
+    with pytest.raises(ValueError, match=r"evidence_sample.*\b1\b.*min_compared_rows.*\b50\b"):
+        _resolve(path, panel, evidence_sample=1)
+
+
+def test_the_manifest_run_refuses_a_sample_bound_below_the_minimum(tmp_path: Path):
+    reference, groups, _ = _write_manifest_panel(tmp_path / "reference")
+    manifest = _manifest(tmp_path, {"X": _beta_file(tmp_path)})
+    with pytest.raises(ValueError, match=r"evidence_sample.*min_compared_rows"):
+        resolve_analyses_manifest(
+            manifest, tmp_path / "records", ancestry_reference=reference,
+            ancestry_groups=groups, reference_build="GRCh38", n_workers=1, evidence_sample=10,
+        )
 
 
 def test_implied_p_survives_a_z_where_the_naive_form_underflows(tmp_path: Path, panel):
@@ -251,6 +302,53 @@ def test_implied_p_survives_a_z_where_the_naive_form_underflows(tmp_path: Path, 
     # By hand: ln p = ln 2 - z²/2 - ln(z√(2π)) = 0.693 - 9384.5 - 5.839 = -9389.65,
     # so log10 p = -4077.87; the reported 5e-324 is log10 = -323.31. Δ = -3754.56.
     assert measured.median_delta == pytest.approx(-3754.56, abs=0.1)
+
+
+# --- a FinnGen-mapped source ---------------------------------------------------
+
+
+def _finngen_file(tmp_path: Path, *, beta_holds: str = "beta") -> Path:
+    """A FinnGen R13 endpoint file: `pval` beside `beta` and `sebeta`."""
+    beta = _Z * _SE
+    shown = np.exp(beta) if beta_holds == "odds_ratio" else beta
+    lines = ["#chrom\tpos\tref\talt\trsids\tnearest_genes\tpval\tmlogp\tbeta\tsebeta\taf_alt"]
+    for index in range(N_ROWS):
+        p = _two_sided_p(_Z[index : index + 1])[0]
+        lines.append(
+            f"1\t{1000 + index}\tC\tA\t\tG\t{p:.6g}\t0\t{shown[index]:.10g}\t{_SE}\t0.3"
+        )
+    path = tmp_path / f"finngen_{beta_holds}.tsv"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _resolve_finngen(path: Path, panel: AncestryReference) -> AnalysisResolution:
+    request = AnalysisRequest(
+        "FG1", path, 20_000.0, OriginalSdMethod.ESTIMATED_FROM_SOURCE_MAF, StoredEffectScale.SD
+    )
+    reader = resolve_reader(
+        COLUMN_MAP_CAPABILITY, path, StoredEffectScale.SD, column_map=as_column_map("finngen-r13")
+    )
+    return resolve_analysis(request, reader=reader, reference=panel, gates=_GATES)
+
+
+def test_a_finngen_source_with_a_mislabelled_effect_is_refused(tmp_path: Path, panel):
+    path = _finngen_file(tmp_path, beta_holds="odds_ratio")
+    result = _resolve_finngen(path, panel)
+
+    measured = result.diagnostics.effect_consistency
+    assert measured is not None
+    assert measured.skip_reason is None, "the FinnGen map must carry `pval` to the check"
+    assert measured.refused and result.error
+
+
+def test_a_clean_finngen_source_is_compared_and_passes(tmp_path: Path, panel):
+    result = _resolve_finngen(_finngen_file(tmp_path), panel)
+
+    assert result.error == ""
+    measured = result.diagnostics.effect_consistency
+    assert measured is not None and measured.skip_reason is None
+    assert measured.n_rows_compared == N_ROWS and not measured.refused
 
 
 # --- skips are recorded ------------------------------------------------------

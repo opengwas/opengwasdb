@@ -29,11 +29,11 @@ bottom-`k`-by-`site_hash` sample, `k` = the resolver's `evidence_sample`
 |---|---|
 | refused | median \|Δ\| `>` `max_median_abs_delta` (default **1.0**): the resolution fails, the record's `status` is `controlled_failure`, and `error` names the median \|Δ\|, the median signed Δ, the row count and the threshold. |
 | compared | otherwise; the measurement is recorded. |
-| skipped | `skip_reason` says why, and nothing is refused: `no_source_p_value` (no admitted row has a usable p-value: no column, none in `(0, 1]`, or a reader that carries none: GWAS-VCF and BESD), `all_se_from_p_value`, or `too_few_rows` (fewer than `min_compared_rows`, default **50**, comparable rows). |
+| skipped | `skip_reason` says why, and nothing is refused: `no_source_p_value` (no admitted row has a usable p-value: no column, none in `(0, 1]`, or a reader that carries none: GWAS-VCF and BESD), `all_se_from_p_value`, or `too_few_rows` (fewer than `min_compared_rows`, default **50**, rows *compared*: in the bounded sample). |
 
 A caller overrides both with `EffectConsistencyPolicy` (`AnalysisRequest
 .effect_consistency_policy`; `resolve_analyses_manifest(effect_consistency_policy=)`).
-There is no CLI flag.
+An `evidence_sample` below `min_compared_rows` raises `ValueError` (it could never reach a verdict). There is no CLI flag.
 
 ## Resolution Record fields
 
@@ -59,4 +59,4 @@ scanned (an unreadable or unsupported source); otherwise an object:
 The p-value reaches the check through the metrics projection:
 `MetricsChunk.p_value` / `TabularMetricsRow.p_value`, the finite source value or
 `NaN`/`None`, with no range rule, identical in the row-wise and blocked
-projections. Column-map collections supply it through their `p_value` column.
+projections. Column-map collections supply it through their `p_value` column (`gwas-ssf`: `p_value`; `finngen-r13`: `pval`).

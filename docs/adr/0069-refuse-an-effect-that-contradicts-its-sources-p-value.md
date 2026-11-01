@@ -63,14 +63,17 @@ reason, when:
   is not checked. A column that is entirely blank is the same fact as no column.
 - `all_se_from_p_value` — every row with a source p-value had its standard error
   derived from it.
-- `too_few_rows` — fewer comparable rows than the minimum (50).
+- `too_few_rows` — fewer than the minimum (50) rows *compared*, that is, in the
+  bounded sample the verdict is drawn from, not merely seen.
 
 **The policy is a documented default a caller may override.**
 `EffectConsistencyPolicy(max_median_abs_delta=1.0, min_compared_rows=50)` on
 `AnalysisRequest`, and the keyword `effect_consistency_policy` on
 `resolve_analyses_manifest`. Both numbers are bound into every record's
 `resolution_config.effect_consistency` fingerprint, as `maf_threshold` is: a
-record resolved under one policy is never resumed under another. There is no CLI
+record resolved under one policy is never resumed under another. A sample bound below `min_compared_rows` could never reach a verdict, so
+`resolve_analysis` and `resolve_analyses_manifest` raise a `ValueError` naming
+both numbers rather than skip every Analysis as `too_few_rows`. There is no CLI
 flag; the resolver CLI does not pass resolver tolerances through.
 
 ## Why this amends ADR 0044
@@ -107,6 +110,7 @@ way the numbers differ from a whole-file resolve. The three named sources were a
 | `GCST006867` (clean, named) | 0.00145 (full file, 5,052,917 comparable rows, 20,000 sampled) |
 | random 200 sources: 151 comparable, 44 no p-value, 5 all-SE-from-p | median 1.4e-4, p90 3.6e-3, **p99 0.126, max 0.177** |
 | all 4,783: 3,767 comparable, 963 no p-value, 53 all-SE-from-p, 1 other failure | 3,763 below 1: p99 0.181, **max 0.346** |
+| 40 random FinnGen R13 endpoints (all comparable; first 1M rows each; SAIGE p) | max **5.5e-7**, none skipped or refused |
 | `GCST004461` (log-odds in `odds_ratio`) | **247** (full file, 5,864,147 rows); 249 (1M rows), 231 (200k rows) |
 | `GCST002047` (odds ratios in `beta`) | **1,732** (full file, 2,314,363 rows); 1,724 (1M rows), 1,585 (200k rows) |
 | `GCST90503316` (odds ratios in `beta`; found by this check) | 813 |
@@ -135,6 +139,12 @@ verdict for any study with a few hundred variants.
 The two sources found by this check were not known to be wrong before it ran; an
 owner reading the stores should see them (opengwasdb-stores#403's class).
 
+**FinnGen.** R13's p-values are SAIGE's, so clean FinnGen sources might have sat
+further from a Wald z than GWAS Catalog ones. They do not: on 40 random endpoint
+files (`/data/opengwasdb/raw/finngen-r13/releases/r13-full/source/`, 1,000,000
+rows each) the largest median |Δ| is 5.5e-7, because FinnGen's published `pval`
+agrees with `beta / sebeta` to the digits it prints. The threshold stands.
+
 ## Consequences
 
 - **The resolver refuses Analyses it used to accept.** Four of OGS-00011's
@@ -146,6 +156,14 @@ owner reading the stores should see them (opengwasdb-stores#403's class).
   resumable (their fingerprint digest changes), exactly as ADR 0054's additions
   did: `--resume` recomputes. `record_schema_version` stays `1` under that
   module's additive-field rule.
+- **The built-in `finngen-r13` Column Map now maps `pval`** (`p_value_form = "p"`),
+  which it had not: without it every FinnGen Analysis silently skipped the check.
+  Mapping it changes the map's checksum, which is part of every Resolution Record
+  read through it (ADR 0063), so FinnGen records are recomputed by `--resume`.
+  It also enables ADR 0055's recovery for the map: a row whose `sebeta` is
+  unusable but whose `pval` is usable now gets a standard error derived from it,
+  where the dedicated reader dropped the row (and, as for any such row, it is
+  excluded from the check).
 - **GWAS-VCF and BESD are not checked yet.** Their records say
   `skip_reason = no_source_p_value`. Reading VCF `LP` is deferred, as is any
   check for BESD, whose per-probe statistics carry no p-value in the metrics
