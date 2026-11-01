@@ -95,3 +95,24 @@ def test_neglog10_p_stays_significant_where_a_naive_tail_would_not():
 
     assert 1.0 - ndtr(40.0) == 0.0
     assert _hybrid_report.neglog10_p(40.0) == pytest.approx(350.0, abs=1.0)
+
+
+def test_the_default_estimate_is_the_both_observed_instruments():
+    observed = _instruments([0.10, 0.20, 0.30], [0.05, 0.10, 0.15], [0.01, 0.03, 0.02])
+    imputed = _instruments([0.10, 0.20], [0.00, 0.01], [0.01, 0.01], "observed", "imputed")
+    instrument_filter, chosen, estimate = _hybrid_report.default_mr_estimate(observed + imputed)
+
+    assert instrument_filter == "both_observed"
+    assert chosen == observed
+    assert estimate == _hybrid_report.ivw(observed)
+    assert estimate["beta"] == pytest.approx(0.5)
+
+
+def test_the_default_falls_back_to_all_instruments_when_too_few_are_observed():
+    observed = _instruments([0.10, 0.20], [0.05, 0.10], [0.01, 0.03])
+    imputed = _instruments([0.10, 0.20], [0.00, 0.01], [0.01, 0.01], "imputed", "imputed")
+    instrument_filter, chosen, estimate = _hybrid_report.default_mr_estimate(observed + imputed)
+
+    assert instrument_filter == "all"
+    assert len(chosen) == 4
+    assert estimate == _hybrid_report.ivw(observed + imputed)

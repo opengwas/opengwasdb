@@ -373,12 +373,13 @@ def mr_instruments(
 def mr_with_components(q: Any, by_id: dict[str, int], exposure: str, outcome: str) -> dict:
     """One IVW pair end to end, each instrument tagged with its component.
 
-    The whole-set estimate is `_hybrid_report.ivw`, the same function every
-    stratum uses, so `ivw_beta`, `ivw_se` (multiplicative random-effects),
-    `ivw_se_fixed` and `ivw_pval` keep the meaning the other full-scale MR
-    reports give them. `strata` is the same estimate per observed/imputed
-    stratum, `None` where a stratum has fewer than
-    `_report.MIN_STRATUM_INSTRUMENTS`.
+    The headline estimate (`ivw_beta`, `ivw_se` -- multiplicative random-effects
+    --, `ivw_se_fixed`, `ivw_pval`, `n_instruments`) is over the instruments
+    `instrument_filter` names: `both_observed` by default
+    (`_report.default_mr_estimate`), because an imputed cell understates its
+    effect. `all_instruments` is the same estimate over every instrument, and
+    `strata` per observed/imputed stratum, `None` where a stratum has fewer
+    than `_report.MIN_STRATUM_INSTRUMENTS`. All use `_report.ivw`.
     """
     started = time.perf_counter()
     instruments, n_raw = mr_instruments(q, by_id, exposure, outcome)
@@ -389,16 +390,16 @@ def mr_with_components(q: Any, by_id: dict[str, int], exposure: str, outcome: st
         instrument["component"] = _component_of(q, record.variant_index)
     elapsed_s = round(time.perf_counter() - started, 2)
 
-    overall = _report.ivw(instruments)
-    be = np.array([i["beta_exp"] for i in instruments])
-    bo = np.array([i["beta_out"] for i in instruments])
-    se_exp = np.array([i["se_exp"] for i in instruments])
+    instrument_filter, chosen, overall = _report.default_mr_estimate(instruments)
+    every = _report.ivw(instruments)
+    be = np.array([i["beta_exp"] for i in chosen])
+    bo = np.array([i["beta_out"] for i in chosen])
+    se_exp = np.array([i["se_exp"] for i in chosen])
     return {
         "exposure_id": exposure, "outcome_id": outcome, "clump_kb": CLUMP_KB,
-        "n_instruments_raw": n_raw, "n_instruments": len(instruments),
-        "n_instruments_overflow": sum(
-            i["component"] == "overflow" for i in instruments
-        ),
+        "n_instruments_raw": n_raw, "instrument_filter": instrument_filter,
+        "n_instruments": len(chosen),
+        "n_instruments_overflow": sum(i["component"] == "overflow" for i in chosen),
         "ivw_beta": overall["beta"], "ivw_se": overall["se"],
         "ivw_se_fixed": overall["se_fixed"], "ivw_pval": overall["p"],
         "cochran_q": overall["cochran_q"], "q_df": overall["q_df"],
@@ -406,6 +407,10 @@ def mr_with_components(q: Any, by_id: dict[str, int], exposure: str, outcome: st
         "median_instrument_F": float(np.median((be / se_exp) ** 2)),
         "elapsed_s": elapsed_s,
         "instruments": instruments,
+        "all_instruments": {
+            **every,
+            "n_overflow": sum(i["component"] == "overflow" for i in instruments),
+        },
         "strata": _report.mr_strata(instruments),
     }
 
@@ -533,9 +538,11 @@ def main() -> None:
             print(f"{row['gene']:10s} {row['expected_rsid']:11s} NOT FOUND", flush=True)
     mr = [mr_with_components(q, by_id, e, o) | {"note": note} for e, o, note in MR_PAIRS]
     for r in mr:
-        print(f"MR {r['exposure_id']} -> {r['outcome_id']}: beta={r['ivw_beta']:.3f} "
-              f"se={r['ivw_se']:.3f} p={r['ivw_pval']:.1e} n={r['n_instruments']} "
-              f"(overflow {r['n_instruments_overflow']}) in {r['elapsed_s']} s", flush=True)
+        print(f"MR {r['exposure_id']} -> {r['outcome_id']} ({r['instrument_filter']}): "
+              f"beta={r['ivw_beta']:.3f} se={r['ivw_se']:.3f} p={r['ivw_pval']:.1e} "
+              f"n={r['n_instruments']} (overflow {r['n_instruments_overflow']}); all "
+              f"{r['all_instruments']['n']}: beta={r['all_instruments']['beta']:.3f} "
+              f"in {r['elapsed_s']} s", flush=True)
         for stratum, estimate in r["strata"].items():
             shown = ("too few instruments" if estimate is None
                      else f"beta={estimate['beta']:.3f} se={estimate['se']:.3f} "

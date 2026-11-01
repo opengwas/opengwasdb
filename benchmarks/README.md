@@ -865,19 +865,23 @@ Their 100 variants are drawn with `default_rng(0)` from the Dense axis (panel
 size `len(q._dense_to_shared)`), not from the shared axis: an off-axis ALID has
 no Dense row and would silently shorten the query.
 
-**MR strata.** Each `mr` entry's top-level keys (`ivw_beta`, `ivw_se`,
-`ivw_pval`, `ivw_se_fixed`, `cochran_q`, `q_df`, `sign_concordant_fraction`,
-`median_instrument_F`, `n_instruments`, `n_instruments_raw`,
-`n_instruments_overflow`, `clump_kb`, `elapsed_s`) still describe the estimate
-over **all** instruments, now computed by `_hybrid_report.ivw`, the same
-function every stratum uses, with the meaning the other full-scale MR reports
-give them: beta = Σ(bx·by/sy²)/Σ(bx²/sy²), `ivw_se_fixed` = √(1/Σ(bx²/sy²)),
-`ivw_se` the multiplicative random-effects SE (`ivw_se_fixed` × max(1, √(Q/df))),
-and `ivw_pval` the two-sided normal p from `ivw_se`. Every instrument carries `beta_exp`, `se_exp`, `beta_out`, `se_out`,
-`status_exp`, `status_out` and the `component` that holds it, and `strata` holds
-the same IVW estimate for `both_observed`, `both_imputed` and `mixed` (one side
-observed, the other imputed), with `null` for a stratum holding fewer than three
-instruments.
+**MR strata.** Each `mr` entry's headline keys (`ivw_beta`, `ivw_se`,
+`ivw_se_fixed`, `ivw_pval`, `cochran_q`, `q_df`, `n_instruments`,
+`n_instruments_overflow`, `sign_concordant_fraction`, `median_instrument_F`)
+describe the instruments `instrument_filter` names: `both_observed` by default,
+because an imputed cell's z is shrunk towards zero and understates the effect,
+falling back to `all` only when fewer than three instruments are observed on
+both sides (`_hybrid_report.default_mr_estimate`). `all_instruments` holds the
+same estimate over every instrument, with `n_overflow`, and `strata` holds it
+for `both_observed`, `both_imputed` and `mixed` (one side observed, the other
+imputed), `null` for a stratum holding fewer than three instruments. Every
+estimate is `_hybrid_report.ivw`, with the meaning the other full-scale MR
+reports give these names: beta = Σ(bx·by/sy²)/Σ(bx²/sy²), `se_fixed` =
+√(1/Σ(bx²/sy²)), `se` the multiplicative random-effects SE (`se_fixed` ×
+max(1, √(Q/df))), and `p` the two-sided normal p from `se`. Every instrument
+carries `beta_exp`, `se_exp`, `beta_out`, `se_out`, `status_exp`,
+`status_out` and the `component` that holds it. `n_instruments_raw` and
+`clump_kb` describe the instrument selection, `elapsed_s` the whole pair.
 
 **`regional_windows`.** One profile per `REGIONAL_LOCI` entry — TCF7L2 in
 `GCST006867`, FTO in `GCST90029007`, PCSK9 in `GCST90239658`, each a ±500 kb

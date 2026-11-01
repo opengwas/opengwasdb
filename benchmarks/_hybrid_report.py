@@ -202,6 +202,25 @@ def instrument_stratum(status_exp: str, status_out: str) -> str | None:
     return None
 
 
+def default_mr_estimate(
+    instruments: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]], dict[str, float]]:
+    """The instrument filter, instruments and IVW estimate an MR reports by default.
+
+    On a Reference-Completed Store an imputed cell's z is shrunk towards zero, so
+    an instrument with one understates its effect. The default is therefore the
+    `both_observed` instruments; only when they number fewer than
+    `MIN_STRATUM_INSTRUMENTS` does it fall back to `all`, and the filter says so.
+    """
+    observed = [
+        i for i in instruments
+        if instrument_stratum(str(i["status_exp"]), str(i["status_out"])) == "both_observed"
+    ]
+    if len(observed) >= MIN_STRATUM_INSTRUMENTS:
+        return "both_observed", observed, ivw(observed)
+    return "all", instruments, ivw(instruments)
+
+
 def mr_strata(instruments: list[dict[str, Any]]) -> dict[str, dict[str, float] | None]:
     """The IVW estimate of each observed/imputed stratum, or None when too small.
 
