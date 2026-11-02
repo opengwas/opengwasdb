@@ -45,6 +45,7 @@ from typing import Any
 
 import numpy as np
 
+from opengwasdb.associations import Cells, CsrReader, Inspection
 from opengwasdb.completion.ld_panel import (
     LDBlock,
     LdPanelNotFoundError,
@@ -56,7 +57,7 @@ from opengwasdb.completion.regions import (
     has_trait_position,
     trait_less_blocks,
 )
-from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH, RaggedCSRReader
+from opengwasdb.layouts.ragged.zarr_csr import RAGGED_ZARR_PATH
 from opengwasdb.model.analyses import Analysis, read_analysis_records
 from opengwasdb.model.enums import CompletionState
 from opengwasdb.store import arrays as store_arrays
@@ -168,8 +169,8 @@ class _Pair:
     target_path: Path
     source: OpenGWASDBStore
     target: OpenGWASDBStore
-    source_reader: RaggedCSRReader
-    target_reader: RaggedCSRReader
+    source_reader: CsrReader
+    target_reader: CsrReader
     n_source_rows: int
     n_target_rows: int
 
@@ -199,10 +200,10 @@ def _open_group(path: Path, role: str) -> Any:
         raise ObservedViewRefused(f"{role} store {path} cannot be opened: {exc!r}") from exc
 
 
-def _reader(path: Path, role: str) -> RaggedCSRReader:
+def _reader(path: Path, role: str) -> CsrReader:
     """The reader, which opens every array and decodes the encoding's side tables."""
     try:
-        return RaggedCSRReader(path)
+        return CsrReader.open(path, source=f"{role} store {path}")
     except Exception as exc:
         raise ObservedViewRefused(f"{role} store {path} cannot be opened: {exc!r}") from exc
 
@@ -363,7 +364,7 @@ def _held_associations(
     pair: _Pair, indices: Sequence[int]
 ) -> dict[int, list[tuple[str, str]]]:
     """The `(ALID, chromosome)` of every source association of the given Analyses."""
-    rows = {i: pair.source_reader.variant_indices(i) for i in indices}
+    rows = {i: pair.source_reader.structure.variant_indices(i) for i in indices}
     wanted = sorted({int(v) for r in rows.values() for v in r})
     with closing(VariantAxis(pair.source_path)) as axis:
         records = axis.by_indices(wanted)
@@ -526,10 +527,11 @@ def _failures(record: dict[str, Any], axis: _AxisMap) -> list[str]:
     return failures
 
 
-def _decoded(reader: RaggedCSRReader, analysis: int, path: Path) -> Any:
-    """An Analysis's decoded cells; one that cannot be decoded cannot be compared."""
+def _decoded(reader: CsrReader, analysis: int, path: Path) -> Inspection:
+    """An Analysis's decoded cells, invalid ones included; one that cannot be decoded
+    cannot be compared."""
     try:
-        return reader.get_analysis(analysis)
+        return reader.inspect(Cells.analysis(analysis))
     except Exception as exc:
         raise ObservedViewRefused(
             f"store {path} analysis {analysis} cannot be decoded: {exc}"

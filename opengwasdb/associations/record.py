@@ -77,6 +77,12 @@ def states(
     return out
 
 
+def present(z: np.ndarray, se: np.ndarray) -> np.ndarray:
+    """Which decoded cells are present: neither Z nor SE is missing, whatever the flag."""
+    found: np.ndarray = states(np.isnan(z), np.isnan(se)) == State.OBSERVED
+    return found
+
+
 def classify(z: np.ndarray, se: np.ndarray, flags: np.ndarray | None = None) -> np.ndarray:
     """Each decoded cell's `State`: a decoded plane reads NaN exactly at its marker."""
     return states(np.isnan(z), np.isnan(se), flags)
@@ -100,6 +106,8 @@ class Tally:
     imputed_z_missing: int = 0
     #: Flagged imputed where SE is missing.
     imputed_se_missing: int = 0
+    #: Flags other than 0 and 1, whatever the cell's markers.
+    flags_not_binary: int = 0
 
     @classmethod
     def of(
@@ -110,7 +118,12 @@ class Tally:
         counts = np.bincount(
             states(z_missing, se_missing, flags).ravel().astype(np.intp), minlength=len(State)
         )
-        imputed = None if flags is None else np.asarray(flags) == 1
+        imputed: np.ndarray | None = None
+        not_binary = 0
+        if flags is not None:
+            raw = np.asarray(flags)
+            imputed = raw == 1
+            not_binary = int(np.count_nonzero(~imputed & (raw != 0)))
         return cls(
             by_state=tuple(int(c) for c in counts),
             z_only_missing=int(np.count_nonzero(z_missing & ~se_missing)),
@@ -119,6 +132,7 @@ class Tally:
             imputed_se_missing=(
                 0 if imputed is None else int(np.count_nonzero(imputed & se_missing))
             ),
+            flags_not_binary=not_binary,
         )
 
     def __add__(self, other: Tally) -> Tally:
@@ -128,6 +142,7 @@ class Tally:
             se_only_missing=self.se_only_missing + other.se_only_missing,
             imputed_z_missing=self.imputed_z_missing + other.imputed_z_missing,
             imputed_se_missing=self.imputed_se_missing + other.imputed_se_missing,
+            flags_not_binary=self.flags_not_binary + other.flags_not_binary,
         )
 
     def count(self, state: State) -> int:

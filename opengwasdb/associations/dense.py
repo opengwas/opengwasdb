@@ -33,6 +33,13 @@ class _Grid(NamedTuple):
     elementwise: bool
 
 
+def _contiguous(rows: np.ndarray) -> bool:
+    """Whether `rows` is one ascending run, which reads as a band, not a block."""
+    return bool(len(rows)) and int(rows[-1]) - int(rows[0]) + 1 == len(rows) and bool(
+        np.all(np.diff(rows) == 1)
+    )
+
+
 class DenseGridReader:
     """Reads associations from a `n_variants × n_analyses` grid.
 
@@ -159,7 +166,11 @@ class DenseGridReader:
         else:
             block = self._eaf.read_rows(rows, want_imputed=True)
             z = self._z.rows(rows)
-            se = self._se.rows(rows, eaf=block.values)
+            se = (
+                self._se.band(int(rows[0]), int(rows[-1]) + 1, eaf=block.values)
+                if _contiguous(rows)
+                else self._se.rows(rows, eaf=block.values)
+            )
             values, flags = np.asarray(block.values), block.imputed
         cols = np.arange(self.n_analyses, dtype=np.int64)
         return _Grid(rows, cols, z, se, values, flags, analysis_major=False, elementwise=False)

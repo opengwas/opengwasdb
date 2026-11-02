@@ -37,7 +37,7 @@ from typing import Any, NamedTuple, assert_never
 
 import numpy as np
 
-from opengwasdb.encoding import DenseEafPlane, DenseSePlane, DenseZPlane
+from opengwasdb.associations import Cells, DenseGridReader, State, Tally, present
 from opengwasdb.layouts.dense.complete import completion_band_rows
 from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.model.enums import CompletionState, PrimaryStorageLayout
@@ -104,37 +104,52 @@ class ObservedViewVerdict:
 
 
 class _Cells(NamedTuple):
-    """Decoded statistics of a row band; a plane's missing marker is missing (spec §15)."""
+    """Decoded statistics of a row band; a plane's missing marker is missing (spec §15).
+
+    `flags` is the band's imputed mask as stored, when the read carried one.
+    """
 
     z: np.ndarray
     se: np.ndarray
     eaf: np.ndarray
+    flags: np.ndarray | None = None
 
 
 class _Planes:
-    """One Store's Dense planes, opened once for reading."""
+    """One Store's Dense grid, opened once for reading."""
 
     def __init__(self, store: OpenGWASDBStore) -> None:
         root = store.arrays(mode="r")
-        encoding = store.manifest.encoding
-        self.z = DenseZPlane.open(root, encoding)
-        self.se = DenseSePlane.open(root, encoding)
-        self.eaf = DenseEafPlane.open(root, encoding)
-        self.imputed = root["imputed"] if "imputed" in root else None
+        self.z_array = root["z"]
+        self.reader = DenseGridReader.open(
+            root, store.manifest.encoding, source=f"Dense Store Release {store.path}"
+        )
+
+    @property
+    def has_imputed(self) -> bool:
+        return self.reader.has_imputed
 
     def read(self, r0: int, r1: int) -> _Cells:
-        # SE is residual-coded against EAF, so it is decoded with the very EAF
-        # block read for these rows rather than letting it read its own.
-        eaf = self.eaf.read_band(r0, r1).values
-        return _Cells(self.z.band(r0, r1), self.se.band(r0, r1, eaf=eaf), eaf)
+        """Rows `[r0, r1)` of every Analysis, decoded, with the imputed mask read with them.
+
+        Every cell, invalid ones included: the check counts what a query would refuse.
+        """
+        found = self.reader.inspect(Cells.variants(np.arange(r0, r1)))
+        shape = (r1 - r0, self.n_analyses)
+        return _Cells(
+            found.z.reshape(shape),
+            found.se.reshape(shape),
+            found.eaf.reshape(shape),
+            None if found.flags is None else found.flags.reshape(shape),
+        )
 
     @property
     def n_rows(self) -> int:
-        return int(self.z.array.shape[0])
+        return int(self.z_array.shape[0])
 
     @property
     def n_analyses(self) -> int:
-        return int(self.z.array.shape[1])
+        return int(self.z_array.shape[1])
 
 
 @dataclass(frozen=True)
@@ -243,8 +258,8 @@ def _check_dense(
     pair = _open_pair(source_path, target_path)
     analyses = _analyses_record(pair)
     axis = _map_axis(pair.source_path, pair.target_path, pair.parent.n_rows, pair.child.n_rows)
-    chunk_rows = int(inner_chunk_of(pair.parent.z.array)[0])
-    band_rows = completion_band_rows(_shard_rows(pair.child.z.array))
+    chunk_rows = int(inner_chunk_of(pair.parent.z_array)[0])
+    band_rows = completion_band_rows(_shard_rows(pair.child.z_array))
     record = _header_record(pair, seed, n_random, analyses, axis, (chunk_rows, band_rows))
     axis_seconds = time.time() - started
     if axis.ok and analyses["identical"]:
@@ -284,7 +299,7 @@ def _open_pair(source_path: Path, target_path: Path) -> _Pair:
     parent, child = _Planes(source), _Planes(target)
     _refuse_if_incoherent(source_path, parent, "source")
     _refuse_if_incoherent(target_path, child, "target")
-    if child.imputed is None:
+    if not child.has_imputed:
         raise ObservedViewRefused(f"target store {target_path} has no `imputed` mask to check")
     return _Pair(source_path, target_path, source, target, parent, child)
 
@@ -643,9 +658,9 @@ def _check_band(
 ) -> tuple[dict[str, int], dict[str, float]]:
     """Compare one source chunk-row with the completed span it owns (see `_child_span`)."""
     (r0, r1), (c0, c1) = source_rows, span
-    assert child.imputed is not None  # checked before sampling began
-    raw_imputed = np.asarray(child.imputed[c0:c1])
-    return _compare(parent.read(r0, r1), child.read(c0, c1), raw_imputed, rows - c0)
+    found = child.read(c0, c1)
+    assert found.flags is not None  # checked before sampling began
+    return _compare(parent.read(r0, r1), found, found.flags, rows - c0)
 
 
 def _compare(
@@ -696,13 +711,13 @@ def _observed(cells: _Cells) -> np.ndarray:
     than read as missing -- which is what failed a completion that reproduced
     its source's eight infinite SE cells (issue #337).
     """
-    observed: np.ndarray = ~(np.isnan(cells.z) | np.isnan(cells.se))
+    observed: np.ndarray = present(cells.z, cells.se)
     return observed
 
 
 def count_partial_cells(cells: _Cells) -> int:
     """Cells with only one of Z and SE missing: their markers must agree (spec §15)."""
-    return int((np.isnan(cells.z) != np.isnan(cells.se)).sum())
+    return Tally.of(np.isnan(cells.z), np.isnan(cells.se)).count(State.PARTIAL)
 
 
 def count_infinite_cells(cells: _Cells) -> int:

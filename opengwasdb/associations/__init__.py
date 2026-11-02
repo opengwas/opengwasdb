@@ -22,6 +22,7 @@ from opengwasdb.associations.record import (
     Status,
     Tally,
     classify,
+    present,
     states,
 )
 from opengwasdb.associations.subset import SubsetReader
@@ -39,5 +40,6 @@ __all__ = [
     "SubsetReader",
     "Tally",
     "classify",
+    "present",
     "states",
 ]

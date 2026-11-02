@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from opengwasdb.associations.cells import Cells
 from opengwasdb.associations.record import Associations, Inspection, Status
-from opengwasdb.layouts.dense.indexed_subsets import IndexedSubset, open_indexed_subset
+
+if TYPE_CHECKING:
+    from opengwasdb.layouts.dense.indexed_subsets import IndexedSubset
 
 
 class SubsetReader:
@@ -28,6 +31,10 @@ class SubsetReader:
 
     @classmethod
     def open(cls, store_path: str | Path, name: str) -> SubsetReader:
+        # Imported here: the subset module's own validation classifies cells
+        # through this package, so a module-level import would be circular.
+        from opengwasdb.layouts.dense.indexed_subsets import open_indexed_subset
+
         return cls(
             open_indexed_subset(store_path, name),
             source=f"Indexed Variant Subset {name!r} of {store_path}",

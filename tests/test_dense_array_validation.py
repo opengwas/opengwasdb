@@ -35,11 +35,10 @@ from opengwasdb.validation.validate import (
     _dense_required_planes,
     _DenseBandState,
     _flatten_band_positions,
+    _count_dense_imputed,
     _latch_dense_eaf_range,
-    _latch_dense_imputed_content,
-    _latch_dense_imputed_missingness,
-    _latch_dense_missingness,
     _latch_dense_off_panel_imputed,
+    _latch_dense_states,
     _latch_negative_se,
     _read_top_hit_arrays,
     _report_dense_band_flags,
@@ -227,49 +226,50 @@ def test_negative_se_latch_fires_on_one_bad_band():
     assert findings.neg_se is True
 
 
-def test_missingness_latch_needs_z_and_se_to_agree_cell_by_cell():
+def test_state_latch_needs_z_and_se_to_agree_cell_by_cell():
     se = np.array([[1.0, np.nan], [np.nan, 2.0]], dtype=np.float32)
     z_missing = np.array([[True, False], [False, True]])
     findings = _band_state()
 
-    _latch_dense_missingness(findings, z_missing, se)
+    _latch_dense_states(findings, z_missing, se, None)
 
     assert findings.missingness is True
 
     consistent = _band_state()
     se_ok = np.array([[np.nan, 1.0], [2.0, np.nan]], dtype=np.float32)
-    _latch_dense_missingness(consistent, z_missing, se_ok)
+    _latch_dense_states(consistent, z_missing, se_ok, None)
     assert consistent.missingness is False
 
 
-def test_imputed_content_latches_non_binary_and_counts_imputed_cells():
+def test_state_latch_flags_a_mask_value_other_than_0_or_1_wherever_it_sits():
+    """A 2 beside a partial cell still latches the mask's own finding."""
     findings = _band_state()
-    band = np.array([[0, 1], [2, 1]], dtype=np.uint8)
+    z_missing = np.array([[False, True]])
+    se = np.array([[1.0, 1.0]], dtype=np.float32)
 
-    imp_mask = _latch_dense_imputed_content(findings, band, 0, 2)
+    _latch_dense_states(findings, z_missing, se, np.array([[0, 2]], dtype=np.uint8))
 
     assert findings.imp_not_binary is True
-    assert findings.imputed_per_analysis.tolist() == [0, 2]
-    assert imp_mask is not None
-    assert imp_mask.tolist() == [[False, True], [False, True]]
+    assert findings.missingness is True
 
 
 def test_imputed_counts_accumulate_across_bands():
     findings = _band_state()
-    _latch_dense_imputed_content(findings, np.array([[1, 0]], dtype=np.uint8), 0, 1)
-    _latch_dense_imputed_content(findings, np.array([[0, 1]], dtype=np.uint8), 0, 1)
+    first = _count_dense_imputed(findings, np.array([[1, 0]], dtype=np.uint8))
+    _count_dense_imputed(findings, np.array([[0, 1]], dtype=np.uint8))
 
     assert findings.imputed_per_analysis.tolist() == [1, 1]
-    assert findings.imp_not_binary is False
+    assert first is not None and first.tolist() == [[True, False]]
+    assert _count_dense_imputed(findings, None) is None
 
 
-def test_imputed_missingness_latches_on_missing_z_or_nan_se():
+def test_state_latch_reads_missing_z_or_missing_se_on_imputed_cells():
     findings = _band_state()
-    imp_mask = np.array([[True, True]])
+    flags = np.array([[1, 1]], dtype=np.uint8)
     z_missing = np.array([[True, False]])
-    se = np.array([[1.0, np.nan]], dtype=np.float32)
+    se = np.array([[np.nan, np.nan]], dtype=np.float32)
 
-    _latch_dense_imputed_missingness(findings, z_missing, se, imp_mask)
+    _latch_dense_states(findings, z_missing, se, flags)
 
     assert findings.imp_nan_z is True
     assert findings.imp_nan_se is True
@@ -277,9 +277,27 @@ def test_imputed_missingness_latches_on_missing_z_or_nan_se():
     clean = _band_state()
     se_ok = np.array([[1.0, 2.0]], dtype=np.float32)
     z_present = np.array([[False, False]])
-    _latch_dense_imputed_missingness(clean, z_present, se_ok, imp_mask)
+    _latch_dense_states(clean, z_present, se_ok, flags)
     assert clean.imp_nan_z is False
     assert clean.imp_nan_se is False
+
+
+def test_state_latch_reads_an_infinite_imputed_se_as_present():
+    """An infinite value is a value (spec §15, ADR 0068); the warning counts it."""
+    findings = _band_state()
+
+    _latch_dense_states(
+        findings,
+        np.array([[False]]),
+        np.array([[np.inf]], dtype=np.float32),
+        np.array([[1]], dtype=np.uint8),
+    )
+
+    assert (findings.imp_nan_se, findings.imp_nan_z, findings.missingness) == (
+        False,
+        False,
+        False,
+    )
 
 
 def test_off_panel_latch_requires_an_off_panel_row_with_an_imputed_cell():

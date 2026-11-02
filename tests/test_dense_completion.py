@@ -574,6 +574,30 @@ class TestValidation:
             "imputed=1 cells have NaN se values" in e for e in result.errors
         ), result.errors
 
+    def test_an_imputed_cell_with_an_infinite_se_is_warned_not_failed(self, completed_store):
+        # An infinite value is a value (spec §15, ADR 0068): an imputed cell with a
+        # present Z and SE = +inf is a valid imputed association, so the band pass
+        # warns about the infinity (#337) instead of reading it as a missing SE.
+        # The fixture imputed nothing, so one present on-panel cell is flagged, as
+        # `test_corrupt_imputed_nan_se_fails` does; the completion-count rules that
+        # flag disagrees with are not what this test is about.
+        root = open_store(completed_store).arrays(mode="r+")
+        on_panel_rows = np.where(root["on_panel"][:] == 1)[0]
+        se = root["se"][:]
+        present = np.argwhere(~np.isnan(se[on_panel_rows]))
+        assert len(present) > 0  # the fixture must hold a present on-panel cell
+        r, c = int(on_panel_rows[present[0][0]]), int(present[0][1])
+        imputed = root["imputed"][:]
+        imputed[r, c] = 1
+        root["imputed"][:] = imputed
+        se[r, c] = np.inf
+        root["se"][:] = se
+
+        result = validate_store(completed_store)
+
+        assert not any("NaN se values" in e for e in result.errors), result.errors
+        assert any("infinite se" in w for w in result.warnings), result.warnings
+
     def test_corrupt_eaf_reference_length_fails(self, completed_store):
         # issue #113's shape for a Reference-Completed release with no plane:
         # every imputed cell reads eaf_reference, so a short one hands some
